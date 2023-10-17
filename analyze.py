@@ -1,5 +1,5 @@
 ## something
-import recovar_config
+import recovar.config 
 import logging
 import numpy as np
 from recovar import output as o
@@ -61,8 +61,9 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
     if zdim is None and len(results['zs']) > 1:
         logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --z-dim=4")
+        raise Exception("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --z-dim=4")
     elif zdim is None:
-        zdim = next(iter(results['zs']))
+        zdim = list(results['zs'].keys())[0]
         logger.info(f"using zdim={zdim}")
 
     if q is None and n_std is None:
@@ -77,8 +78,8 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     if output_folder is None:
         output_folder = recovar_result_dir + '/output/'
 
-    if zdim is None and len(results['zs']) > 1:
-        logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --z-dim=4")
+    # if zdim is None and len(results['zs']) > 1:
+    #     logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --z-dim=4")
 
     if zdim not in results['zs']:
         logger.error("z-dim not found in results. Options are:" + ','.join(str(e) for e in results['zs'].keys()))

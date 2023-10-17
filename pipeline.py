@@ -1,4 +1,5 @@
-import recovar.config
+# If you want to extend and use recovar, you should import this first
+import recovar.config 
 import jax.numpy as jnp
 import numpy as np
 

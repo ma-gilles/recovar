@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import jax, functools, time
 
-from recovar import core, regularization
+from recovar import core, regularization, constants
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 
@@ -80,20 +80,18 @@ def get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, mean_pri
         
     
     if recompute_prior:
-        priors, fscs_this = regularization.prior_iteration_batch(lhs_l[0], lhs_l[1], rhs_l[0], rhs_l[1], np.zeros((num_reconstructions,3)), mean_prior[None].repeat(num_reconstructions,0) , False,  cryos[0].volume_shape, 3 )
-        
+        priors, fscs_this = regularization.prior_iteration_batch(lhs_l[0], lhs_l[1], rhs_l[0], rhs_l[1], np.zeros((num_reconstructions,3)), mean_prior[None].repeat(num_reconstructions,0) , False,  cryos[0].volume_shape, 3 ) 
     else:
         priors = mean_prior[None]
-    
+        logger.info("Not recomputing prior?? Make sure this is what you want")
     priors = np.array(priors)
-    reconstructions = np.array( jnp.where(jnp.abs(lhs) < 1e-8, 0, rhs / (lhs + 1 / priors ) ))
-
+    reconstructions = np.array( jnp.where(jnp.abs(lhs) < constants.ROOT_EPSILON, 0, rhs / (lhs + 1 / priors ) ))
     end_time = time.time()
     logger.info(f"time to compute reweighted conformations: {end_time- st_time}")
     
     half_maps = []
     for s in range(2):
-        half_maps.append(np.array( jnp.where(jnp.abs(lhs_l[s]) < 1e-8, 0, rhs_l[s] / (lhs_l[s] + 1 / priors ) )))
+        half_maps.append(np.array( jnp.where(jnp.abs(lhs_l[s]) < constants.ROOT_EPSILON, 0, rhs_l[s] / (lhs_l[s] + 1 / priors ) )))
     
     return reconstructions, half_maps
 

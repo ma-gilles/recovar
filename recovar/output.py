@@ -243,8 +243,8 @@ def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, cov_noi
 
     return centers
 
-def compute_and_save_reweighted(dataset_loader, means,  path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = None, recompute_prior = False, volume_mask = None):
-    trajectory_prior, halfmaps = embedding.generate_conformation_from_reweighting(dataset_loader, means, cov_noise, zs, cov_zs, path_subsampled, batch_size = 100, disc_type = 'linear_interp', likelihood_threshold = likelihood_threshold, recompute_prior = True, volume_mask = volume_mask)
+def compute_and_save_reweighted(dataset_loader, means,  path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = None, recompute_prior = True, volume_mask = None):
+    trajectory_prior, halfmaps = embedding.generate_conformation_from_reweighting(dataset_loader, means, cov_noise, zs, cov_zs, path_subsampled, batch_size = 100, disc_type = 'linear_interp', likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, volume_mask = volume_mask)
     save_volumes(trajectory_prior, output_folder +  'prior')
     # pickle.dump(halfmaps,open(output_folder +  'prior_fsc.pkl', 'wb'))
     dump_halfmaps(halfmaps, output_folder)
