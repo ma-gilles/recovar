@@ -5,11 +5,11 @@ CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html#) are required to
 
 Here is a set of commands which runs on our university cluster (Della), but may need to be tweaked to run on other clusters.
 
-    # module load cudatoolkit/12.2 cudnn/cuda-11.x/8.2.0 # You need to install or load cuda before installing jax
+    # module load cudatoolkit/12.2 # You need to load or install CUDA before installing JAX
     conda create --name recovar python=3.9
     conda activate recovar
-    pip -y install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
-    pip -y install cryodrgn mrcfile scikit-fmm prody finufft scikit-image tensorflow-cpu matplotlib-scalebar dataframe-image umap-learn[plot] sklearn
+    pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html # You may need to pass ax[cuda11_pip] if you use cuda v11
+    pip install cryodrgn mrcfile scikit-fmm prody finufft scikit-image tensorflow-cpu matplotlib-scalebar dataframe-image umap-learn[plot] sklearn
     git clone https://github.com/ma-gilles/recovar.git
 
 

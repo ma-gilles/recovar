@@ -1,7 +1,4 @@
 import logging
-from jax.config import config
-config.update("jax_enable_x64", True)
-config.update('jax_disable_jit', False)
 import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt

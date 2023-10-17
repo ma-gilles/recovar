@@ -1,4 +1,5 @@
 ## something
+import recovar_config
 import logging
 import numpy as np
 from recovar import output as o

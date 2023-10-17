@@ -1,16 +1,8 @@
-import logging
-import os
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".90"
-import tensorflow.config
-tensorflow.config.experimental.set_visible_devices([], "GPU")
-from jax.config import config
-config.update("jax_enable_x64", True)
-
-import jax
+import recovar.config
 import jax.numpy as jnp
 import numpy as np
 
-import os, argparse, time, pickle
+import os, argparse, time, pickle, logging
 from recovar import output as o
 from recovar import dataset, homogeneous, embedding, principal_components, latent_density, mask, plot_utils, utils, constants
 from recovar.fourier_transform_utils import fourier_transform_utils
@@ -125,6 +117,7 @@ def add_args(parser: argparse.ArgumentParser):
 
 
 def standard_recovar_pipeline(args):
+    # import pdb; pdb.set_trace()
     st_time = time.time()
 
     o.mkdir_safe(args.outdir)
