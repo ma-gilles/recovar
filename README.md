@@ -1,7 +1,7 @@
 # RECOVAR: Regularized covariance estimation for cryo-EM heterogeneity analysis
 
 ## Installation
-CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html#) are required to run this code. See information about JAX installation here [JAX](https://jax.readthedocs.io/en/latest/installation.html).
+CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html#) are required to run this code. See information about JAX installation [here](https://jax.readthedocs.io/en/latest/installation.html).
 
 Here is a set of commands which runs on our university cluster (Della), but may need to be tweaked to run on other clusters.
 
