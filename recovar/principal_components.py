@@ -17,16 +17,14 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
     covariance_cols, picked_frequencies = covariance_estimation.compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, disc_type = disc_type, radius = constants.COLUMN_RADIUS)
     logger.info("memory after covariance estimation")
     utils.report_memory_device(logger=logger)
-    logger.info(f"covariance_cols dtype: {covariance_cols['est_mask'].dtype}")
 
     # First approximation of eigenvalue decomposition
     u,s = get_cov_svds(covariance_cols, picked_frequencies, volume_shape, vol_batch_size, gpu_memory_to_use )
-    logger.info(f"u dtype: {u['real'].dtype}")
 
     zss = {}
     u['rescaled'],s['rescaled'], zss['init'] = rescale_eigs(cryos, u['real'],s['real'], means['combined'], volume_mask, cov_noise, basis_size = constants.N_PCS_TO_COMPUTE, gpu_memory_to_use = gpu_memory_to_use, use_mask = True)
 
-    logger.info(f"u after rescale dtype: {u['rescaled'].dtype}")
+    # logger.info(f"u after rescale dtype: {u['rescaled'].dtype}")
     logger.info("memory after rescaling")
     utils.report_memory_device(logger=logger)
     if (options['contrast'] == "contrast_qr"):
@@ -41,11 +39,11 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
 
 
 def get_cov_svds(covariance_cols, picked_frequencies, volume_shape,  vol_batch_size, gpu_memory_to_use ):
-    n_components = covariance_cols["est_mask"].shape[-1]
     u = {}; s = {}    
 
     u['real'], s['real'] = randomized_real_svd_of_columns_with_s_guess(covariance_cols["est_mask"],  picked_frequencies, volume_shape, vol_batch_size, test_size = constants.RANDOMIZED_SKETCH_SIZE, gpu_memory_to_use = gpu_memory_to_use )
 
+    # n_components = covariance_cols["est_mask"].shape[-1]
     # u['real'], s['real'] = real_svd3(covariance_cols["est_mask"],  picked_frequencies, volume_shape, vol_batch_size, n_components = n_components)
     # Will cause out of memory problems.
     # if volume_shape[0] <= 128:
