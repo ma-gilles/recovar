@@ -56,10 +56,22 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
     
     basis_size = u.shape[-1] if basis_size == -1 else basis_size
 
-    # batch_size = ( gpu_memory - utils.get_size_in_gb(basis))
-    batch_size = int((2**24)*8 /( cryos[0].grid_size**2 * np.max([basis_size, 8]) ) * gpu_memory / 38 ) 
+    from recovar import utils
+    # left_over_memory = utils.memory - utils.get_size_in_gb(basis)
+    left_over_memory = ( utils.get_gpu_memory_total() - utils.get_size_in_gb(basis))
+    # batch_size = int(left_over_memory/ 
+    #                 ((cryos[0].grid_size**2 * contrast_grid.size * basis_size
+    #                 + cryos[0].grid_size * contrast_grid.size * basis_size**2) * utils.get_size_in_gb(cryos[0].get_image(0)) )/3)
+    assert(left_over_memory > 0, "GPU memory too small?")
+    batch_size = int(left_over_memory/ ( 
+        (cryos[0].grid_size**2 * contrast_grid.size * basis_size
+        + contrast_grid.size * basis_size**2)
+        *8/1e9 )/ 20)
 
+    batch_size_old = int((2**24)*8 /( cryos[0].grid_size**2 * np.max([basis_size, 8]) ) * gpu_memory / 38 ) 
     logger.info(f"z batch size? {batch_size}")
+    # logger.info(f"z batch size old {batch_size_old}")
+    # import pdb; pdb.set_trace()
 
     zs = [None]*2; cov_zs = [None]*2; est_contrasts = [None]*2
     for cryo_idx,cryo in enumerate(cryos):

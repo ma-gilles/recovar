@@ -5,7 +5,7 @@ import numpy as np
 
 import os, argparse, time, pickle, logging
 from recovar import output as o
-from recovar import dataset, homogeneous, embedding, principal_components, latent_density, mask, plot_utils, utils, constants
+from recovar import dataset, homogeneous, embedding, principal_components, latent_density, mask, plot_utils, utils, constants, embedding
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 
