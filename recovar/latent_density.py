@@ -132,7 +132,7 @@ def compute_latent_space_density_on_curve(zs, cov_zs, path,  latent_space_bounds
     n_images = zs.shape[0]
     # batch_size_x = np.max([int(15 / (get_size_in_gb(grids_flat) * cov_zs.shape[1]**2)), 1])
     
-    summed_probs = compute_probs_in_batch(zs, cov_zs, grids_flat)
+    summed_probs = compute_probs_in_batch(grids_flat, zs, cov_zs)
 
     summed_probs_sq = summed_probs.reshape(grids[0].shape)
     end_time = time.time()

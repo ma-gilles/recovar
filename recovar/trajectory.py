@@ -200,7 +200,7 @@ def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, dens
             plt.imshow(density, aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
 
         g_st_on_slice = np.array([ 0 , g_st[dim] ])
-        distances = latent_density.get_cum_curvelength(current_path_z)
+        distances = get_cum_curvelength(current_path_z)
         g_end_on_slice = np.array([ distances.size-1, g_end[dim] ])
 
         latent_space_bounds_slice = np.array([ [distances[0], distances[-1]], latent_space_bounds[dim]])

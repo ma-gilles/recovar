@@ -5,7 +5,7 @@ import numpy as np
 
 import os, argparse, time, pickle, logging
 from recovar import output as o
-from recovar import dataset, homogeneous, embedding, principal_components, latent_density, mask, plot_utils, utils, constants, embedding
+from recovar import dataset, homogeneous, embedding, principal_components, latent_density, mask, plot_utils, utils, constants
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 
@@ -220,14 +220,6 @@ def make_algorithm_options(args):
     }
     return options
         
-# def parse_inputs(args):
-#     dataset_loader_dict = make_dataset_loader_dict(args)
-#     options = make_algorithm_options(args)
-#     output_folder_loc = args.outdir
-#     ind_split = dataset.get_split_indices(dataset_loader_dict['particles_file'], ind_file = args.ind)
-#     input_mask = args.mask
-#     return dataset_loader_dict, ind_split, options, output_folder_loc, input_mask
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
