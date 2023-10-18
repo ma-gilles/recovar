@@ -272,7 +272,7 @@ def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path, like
     likelihoods = ld.compute_latent_quadratic_forms(path_subsampled, zs, cov_zs)
     vmax = np.max(likelihoods)
     vmin = np.max([np.min(likelihoods),  1e-8 *np.max(likelihoods)])
-    print(vmax, vmin)
+    # print(vmax, vmin)
     plt.ioff()
     for k in range(likelihoods.shape[1]):
         fig, ax = plt.subplots(figsize = (8,8))
@@ -369,7 +369,7 @@ def make_trajectory_plots(dataset_loader, density, u, means, zs, cov_zs, cov_noi
                                             use_log_density = False)
 
     path_z_subsampled = trajectory.subsample_path(path_z, n_pts = n_vols_along_path)    
-    print('after path', time.time() - st_time)
+    logger.info(f"after path {time.time() - st_time}")
     mkdir_safe(output_folder + 'density/')
     path_subsampled = trajectory.subsample_path(path_z, n_pts = n_vols_along_path)
     plot_trajectories_over_density(density, None,latent_space_bounds,  colors = None, plot_folder = output_folder + 'density/', cmap = 'inferno')
@@ -380,10 +380,7 @@ def make_trajectory_plots(dataset_loader, density, u, means, zs, cov_zs, cov_noi
 
     st_time = time.time()
     compute_and_save_volumes_from_z(dataset_loader, means, u, path_subsampled, zs, cov_zs, cov_noise, output_folder  , likelihood_threshold = likelihood_threshold, compute_reproj = compute_reproj)
-    print('vol time', time.time() - st_time)
-
-    print('before loglikelihood', time.time() - st_time)
-    print('after all plots', time.time() - st_time)
+    logger.info(f"vol time {time.time() - st_time}")
     
     x = ld.compute_weights_of_conformation_2(path_z, zs, cov_zs,likelihood_threshold = likelihood_threshold)
     summed_weights = np.sum(x, axis =0)
@@ -396,7 +393,7 @@ def make_trajectory_plots(dataset_loader, density, u, means, zs, cov_zs, cov_noi
 
     if plot_llh:
         plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path = output_folder, likelihood_threshold = likelihood_threshold  )
-    print('after all plots', time.time() - st_time)
+    logger.info(f"after all plots {time.time() - st_time}")
     return path_z
 
 
@@ -448,7 +445,7 @@ def plot_trajectories_over_scatter(trajectories,  subsampled = None, colors = No
             plt.savefig(save_filepath, bbox_inches='tight')
             
     traj_dim = trajectories[0].shape[1] if trajectories is not None else 4
-    print(traj_dim)
+    # print(traj_dim)
     for k1 in range(np.min([traj_dim,3])):
         for k2 in range(k1+1, traj_dim):
             plot_traj_along_axes([k1, k2])            
@@ -461,5 +458,5 @@ def umap_latent_space(zs):
     st_time = time.time()
     mapper = umap.UMAP(n_components = 2).fit(zs)
     umap.plot.points(mapper ) 
-    print("time to umap:", time.time() - st_time)
+    logger.info(f"time to umap: {time.time() - st_time}")
     return mapper

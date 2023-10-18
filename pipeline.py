@@ -148,6 +148,11 @@ def standard_recovar_pipeline(args):
     # Compute mean
     means, mean_prior, _, _ = homogeneous.get_mean_conformation(cryos, 5*batch_size, cov_noise , valid_idx, disc_type, use_noise_level_prior = False, grad_n_iter = 5)
     
+    mean_real = ftu.get_idft3(means['combined'].reshape(cryos[0].volume_shape))
+    if np.sum(mean_real.real) < 0:
+        logger.warning('sum(mean) < 0! PROBABLY CHECK/UNCHECK --uninvert-data')
+
+
     if means['combined'].dtype == cryo.dtype:
         logger.warning(f"mean estimate is in type: {means['combined'].dtype}")
         means['combined'] = means['combined'].astype(cryo.dtype)

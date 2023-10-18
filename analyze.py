@@ -105,7 +105,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         o.mkdir_safe(path_folder)
 
         o.make_trajectory_plots_from_results(results, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =zdim, compute_reproj = False, likelihood_threshold = likelihood_threshold)        
-        print('path ', pair_idx)
+        logger.info(f"path {pair_idx} done")
         
     kmeans_res = { 'centers': centers.tolist(), 'pairs' : pairs }
     pickle.dump(kmeans_res, open(output_folder + 'trajectory_endpoints.pkl', 'wb'))
@@ -122,7 +122,7 @@ def pick_pairs(centers, n_pairs):
     # Pick some pairs that are far in the first few principal components.
     zdim = centers.shape[-1]
     pairs = []
-    max_k = np.max([n_pairs//2, zdim])
+    max_k = np.min([n_pairs//2, zdim])
     for k in range(max_k):
         i_idx = np.argmax(centers[:,k])
         j_idx = np.argmin(centers[:,k])
@@ -144,4 +144,4 @@ def pick_pairs(centers, n_pairs):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
-    analyze(args.result_dir, args.outdir, args.zdim, args.n_clusters, args.n_trajectories, args.skip_umap, args.q, args.n_std )
+    analyze(args.result_dir, output_folder = args.outdir, zdim=  args.zdim, n_clusters = args.n_clusters, n_paths= args.n_trajectories, skip_umap = args.skip_umap, q=args.q, n_std=args.n_std )
