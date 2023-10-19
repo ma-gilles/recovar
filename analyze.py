@@ -62,6 +62,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     if zdim is None and len(results['zs']) > 1:
         logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --z-dim=4")
         raise Exception("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --z-dim=4")
+    
     elif zdim is None:
         zdim = list(results['zs'].keys())[0]
         logger.info(f"using zdim={zdim}")
@@ -82,6 +83,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     #     logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --z-dim=4")
 
     if zdim not in results['zs']:
+        
         logger.error("z-dim not found in results. Options are:" + ','.join(str(e) for e in results['zs'].keys()))
 
     cryos = dataset.load_dataset_from_args(results['input_args'])
@@ -118,16 +120,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 def pick_pairs(centers, n_pairs):
     # We try to pick some pairs that cover the latent space in some way.
     # This probably could be improved
-
-    # Pick some pairs that are far in the first few principal components.
-    zdim = centers.shape[-1]
-    pairs = []
-    max_k = np.min([n_pairs//2, zdim])
-    for k in range(max_k):
-        i_idx = np.argmax(centers[:,k])
-        j_idx = np.argmin(centers[:,k])
-        pairs.append([i_idx, j_idx])
-    
+    #     
     # Pick some pairs that are far away from each other.
     X = distance_matrix(centers[:,:], centers[:,:])
     for _ in range(n_pairs//2):
@@ -137,6 +130,17 @@ def pick_pairs(centers, n_pairs):
         X[j_idx, :] = 0 
         X[:, j_idx] = 0 
         pairs.append([i_idx, j_idx])
+
+
+    # Pick some pairs that are far in the first few principal components.
+    zdim = centers.shape[-1]
+    pairs = []
+    max_k = np.min([n_pairs//2, zdim])
+    for k in range(max_k):
+        i_idx = np.argmax(centers[:,k])
+        j_idx = np.argmin(centers[:,k])
+        pairs.append([i_idx, j_idx])
+
 
     return pairs
 

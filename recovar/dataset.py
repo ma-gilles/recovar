@@ -287,7 +287,7 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
     # Translation might NOT BE PROPERLY SCALED!!!
     
     voxel_sizes = ctf_params[:,0]
-    assert(np.all(np.isclose(voxel_sizes - voxel_sizes[0], 0)))
+    assert np.all(np.isclose(voxel_sizes - voxel_sizes[0], 0))
     voxel_size = float(voxel_sizes[0])
     CTF_fun = core.compute_ctf_cryodgrn_wrapper
     return CryoEMDataset( 3 * [dataset.D], dataset, voxel_size,

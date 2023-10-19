@@ -114,8 +114,8 @@ def plot_trajectories_over_density(density, trajectories, latent_space_bounds,  
     
     compute_density = False
     if density is None:
-        assert(zs is not None)
-        assert(cov_zs is not None)
+        assert zs is not None
+        assert cov_zs is not None 
         compute_density = True
         
     
@@ -317,7 +317,7 @@ def load_results_new(datadir):
 
 def make_trajectory_plots_from_results(results, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =10, compute_reproj = False, likelihood_threshold = None):
 
-    assert(((z_st is not None) and (z_end is not None)) or (gt_volumes is not None), 'either z_st and z_end should be passed, or gt_volumes')
+    assert (((z_st is not None) and (z_end is not None)) or (gt_volumes is not None)), 'either z_st and z_end should be passed, or gt_volumes'
 
     # results = load_results_new(results['output_dir'])
     cryos = dataset.load_dataset_from_args(results['input_args']) if cryos is None else cryos

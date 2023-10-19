@@ -12,24 +12,8 @@ logger = logging.getLogger(__name__)
 
 def masking_options(volume_mask_option, means, volume_shape, input_mask, dtype_real = np.float32, mask_dilation_iter = 0):
     if isinstance(volume_mask_option, str):
-        if volume_mask_option == 'from_halfmaps':
-            volume_mask = make_mask_from_half_maps(means, smax = 3 )
-            kernel_size = 3
-            logger.info('Softening mask')
-            dilated_volume_mask = binary_dilation(volume_mask,iterations=6)
-            volume_mask = soften_volume_mask(volume_mask, kernel_size)
-            dilated_volume_mask = soften_volume_mask(dilated_volume_mask, kernel_size)
-            logger.info('using mask computed from mean')
-        elif volume_mask_option == 'sphere':
-            volume_mask = get_radial_mask(volume_shape)
-            dilated_volume_mask = get_radial_mask(volume_shape)
-            logger.info('using spherical mask')
-        elif volume_mask_option == 'none':
-            volume_mask = np.ones(volume_shape)
-            dilated_volume_mask = volume_mask
-            logger.info('using no mask')
-        elif volume_mask_option == 'input':
-            assert(input_mask != None, 'set volume_mask_option = input, but no mask passed')
+        if volume_mask_option == 'input' or input_mask is not None :
+            assert input_mask is not None, 'set volume_mask_option = input, but no mask passed'
             input_mask = utils.load_mrc(input_mask) 
             logger.info('Using input mask')
 
@@ -46,8 +30,24 @@ def masking_options(volume_mask_option, means, volume_shape, input_mask, dtype_r
             volume_mask = soften_volume_mask(input_mask, kernel_size)
             dilated_volume_mask = binary_dilation(input_mask,iterations=6)
             dilated_volume_mask = soften_volume_mask(dilated_volume_mask, kernel_size)
+        elif volume_mask_option == 'from_halfmaps':
+            volume_mask = make_mask_from_half_maps(means, smax = 3 )
+            kernel_size = 3
+            logger.info('Softening mask')
+            dilated_volume_mask = binary_dilation(volume_mask,iterations=6)
+            volume_mask = soften_volume_mask(volume_mask, kernel_size)
+            dilated_volume_mask = soften_volume_mask(dilated_volume_mask, kernel_size)
+            logger.info('using mask computed from mean')
+        elif volume_mask_option == 'sphere':
+            volume_mask = get_radial_mask(volume_shape)
+            dilated_volume_mask = get_radial_mask(volume_shape)
+            logger.info('using spherical mask')
+        elif volume_mask_option == 'none':
+            volume_mask = np.ones(volume_shape)
+            dilated_volume_mask = volume_mask
+            logger.info('using no mask')
     else:
-        assert(False, 'mask option not recognized')
+        assert False, 'mask option not recognized'
     return volume_mask.astype(dtype_real), dilated_volume_mask.astype(dtype_real)
 
 def make_mask_from_half_maps(means, smax = 3 ):

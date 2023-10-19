@@ -106,7 +106,7 @@ def compute_latent_space_density_on_curve(zs, cov_zs, path,  latent_space_bounds
     
     type_used = np.float32
     # pca_dim = zs.shape[1] if pca_dim is None # Should add one more dimension to the path
-    assert(zs.shape[1] == pca_dim+1)
+    assert zs.shape[1] == pca_dim+1
 
     # Computes a 2D density on a [path(t) x zs[path.shape[1]]] grid.
     for k in [pca_dim]:

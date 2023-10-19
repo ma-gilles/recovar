@@ -132,7 +132,7 @@ def generate_synthetic_spectrum_of_molecule(radius, grid_size, voxel_size = 1, a
     atom_shape_fn = (lambda x : gaussian_atom_shape_fn(x,1)) if atom_shape_fn is None else atom_shape_fn
     N_atoms = choose_number_of_atoms(radius) if N_atoms is None else N_atoms
 
-    assert( radius < (grid_size/ 2 * voxel_size ) )  
+    assert radius < (grid_size/ 2 * voxel_size ) 
 
     atom_coords = get_random_points_in_unit_ball(N_atoms) * radius 
     # fourier_transform = get_fourier_transform_of_molecules_on_k_grid(atom_coords, np.ones(N_atoms) , grid_size, voxel_size )
