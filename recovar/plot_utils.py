@@ -1,5 +1,6 @@
 from matplotlib import colors as mcolors
 from matplotlib_scalebar.scalebar import ScaleBar
+import matplotlib
 import warnings
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,19 +12,16 @@ from recovar import regularization, utils
 colors = dict(mcolors.BASE_COLORS, **mcolors.CSS4_COLORS)
 names_to_show = { "diagonal": "diagonal", "wilson": "Wilson", "diagonal masked": "diagonal masked", "wilson masked": "Wilson masked" }
 colors_name = { "diagonal": "cornflowerblue", "wilson": "lightsalmon", "diagonal masked": "blue", "wilson masked": "orangered"  }
-
+plt.rcParams['text.usetex'] = True
 
 def plot_cov_results(u,s, savefile = None):
     
-    import matplotlib
-
     plt.rcParams.update({
-        "text.usetex": True,
-        "font.family": "sans-serif",
-        "font.sans-serif": "Helvetica",
+        # "text.usetex": True,
+        # "font.family": "serif",
+        # "font.sans-serif": "Helvetica",
     })
-    font = {'family' : 'normal',
-            'weight' : 'bold',
+    font = {'weight' : 'bold',
             'size'   : 22}
 
     matplotlib.rc('font', **font)
@@ -31,7 +29,7 @@ def plot_cov_results(u,s, savefile = None):
 
     m_idx = 0 
     #s['parallel_analysis'] *= 0.8
-    plt.figure(figsize = (12,12))
+    plt.figure(figsize = (6,6))
     
     
     for key in s.keys():
@@ -39,7 +37,7 @@ def plot_cov_results(u,s, savefile = None):
         if "+" in key:
             continue
 
-        plt.plot(np.arange(1,s[key][:16].size+1), s[key][:16],  "-"+m[m_idx], label = key, alpha = 0.5, ms = 15)
+        plt.plot(np.arange(1,s[key][:25].size+1), s[key][:25],  "-"+m[m_idx], label = key, alpha = 0.5, ms = 15)
         m_idx = (m_idx + 1) % len(m)
         plt.yscale('log')
         plt.legend()
@@ -56,26 +54,9 @@ def plot_cov_results(u,s, savefile = None):
     plt.legend()
     if savefile is not None:
         plt.savefig(savefile + 's.png')
-    
-#     plt.figure(figsize = (10,10))
-#     angles = {}
-#     gt_key = "gt_col"
-#     if gt_key in u:        
-#         key_gt = gt_key
-#         m_idx = 0
-#         for key in u.keys():
-#             if key == key_gt:
-#                 continue
-#             pkey = key  
-#             max_subspace_size = np.min([15, u[key].shape[-1]])
-#             angles[key] = utils.subspace_angles(u[key], u[key_gt], max_subspace_size)
-#             plt.plot( np.arange(1,1+len(angles[key])), angles[key], "-"+m[m_idx], label = pkey, alpha = 0.5,  ms = 15)
-#             m_idx = (m_idx + 1) % len(m)
-#         plt.legend()
-#         if savefile is not None:
-#             plt.savefig(savefile + 'u_gt_col.png')
+
     angles ={}
-    plt.figure(figsize = (10,10))
+    plt.figure(figsize = (6,6))
     m = np.repeat(["o", "s", "D", "*", 'x', '>'], 3, 0)
     gt_key = "gt"
     if gt_key in u:
@@ -95,16 +76,12 @@ def plot_cov_results(u,s, savefile = None):
         if savefile is not None:
             plt.savefig(savefile + 'u.png')
 
-
-            
     return angles
 
-
-### PLOTTING
-def plot_mean_result(cryo, means, mean_prior, cov_noise):
+def plot_mean_result(cryo, means, cov_noise):
     # Check power spectrums
     volume_shape = cryo.volume_shape
-    plt.figure(figsize = (8,8))
+    plt.figure(figsize = (6,6))
 
     for mean_key in means.keys():
         if "1" in mean_key or 'prior' in mean_key:
@@ -115,11 +92,13 @@ def plot_mean_result(cryo, means, mean_prior, cov_noise):
     noise_level = np.ones_like(PS) * cov_noise
     plt.semilogy( noise_level , '--', label = "noise", ms =15 )
 
-    PS_prior = regularization.average_over_shells(  mean_prior , volume_shape)
+    PS_prior = regularization.average_over_shells(  means["prior"] , volume_shape)
     plt.semilogy( PS_prior , '-.', label = "prior", ms = 15)
     plt.legend()
 
     # GSFSC
+    plot_fsc_function_paper_simple()
+
     score = cryo.plot_FSC(means["corrected0"], means["corrected1"], threshold = 1/7 )
     
     # GSFSC
@@ -139,81 +118,53 @@ def plot_mean_result(cryo, means, mean_prior, cov_noise):
         plt.title('ground truth')
         plt.colorbar()
 
+def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = None, threshold = 1/7, filename = None, volume_mask = None, name = ""):
+    plt.figure(figsize=(6, 5))
+    grid_size = volume_shape[0]
+    input_ax_is_none = ax is None
+    ax = plt.gca() if input_ax_is_none else ax
 
-def plot_latent_space(xs, n_things=3, use_gt_label = False, outliers= None, use_real_x = False, gt_labels = None, one_fig_for_each = False, n_clusters = None):
-    from sklearn.cluster import KMeans
-    # import sklearn
-    # from sklearn.svm import LinearSVC
-    # from sklearn.pipeline import make_pipeline
-    # from sklearn.preprocessing import StandardScaler
-    # from sklearn.datasets import make_classification
+    if volume_mask is not None:
+        image1 = ftu.get_idft3(image1.reshape(volume_shape))
+        image2 = ftu.get_idft3(image2.reshape(volume_shape))
+        image1 = ftu.get_dft3(image1 * volume_mask)
+        image2 = ftu.get_dft3(image2 * volume_mask)
 
-    if gt_labels is None:
-        gt_labels = image_assignment 
-    n_clusters = n_clusters if n_clusters is not None else np.max([10, n_gt_molecules])
-    # n_clusters = 13
-    basis_size = xs.shape[-1]
-    if use_real_x:
-        xs_split = xs
-    else:
-        xs_split = jnp.concatenate([ xs.real, xs.imag], axis =-1)
+    # get_fsc_gpu
+    if curve is None:
+        curve = FSC(np.array(image1).reshape(volume_shape), np.array(image2).reshape(volume_shape))
     
-    kmeans = KMeans(n_clusters=n_clusters).fit(xs_split)
-    centers = kmeans.cluster_centers_
-    
-    if use_real_x:
-        center_coords = centers.T
-    else:
-        center_real = centers[:,:basis_size]
-        center_imag = centers[:,basis_size:]
-        center_coords = np.array((center_real + center_imag * 1j).T)
-    # center_vols = np.array(basis) @ center_coords + np.array(basis_mean[:,None])
-    # import pdb; pdb.set_trace()
-    start_idx = 1 if use_real_x else 0
-    for offset in range(start_idx,n_things):
-        idx = 0
-        def pick_first_dim(x):
-            return x[...,idx+0].real
+    # Huuuh why is there a 1/2 here??
+    freq = ftu.get_1d_frequency_grid(grid_size, voxel_size = voxel_size, scaled = True)
+    freq = freq[freq >= 0 ]
+    freq = freq[:grid_size//2 ]
+    max_idx = min(curve.size, freq.size)
+    line, = ax.plot(freq[:max_idx], curve[:max_idx],  linewidth = 2 )
+    color = line.get_color()
+    score = fsc_score(curve, grid_size, voxel_size, threshold = threshold)
 
-        def pick_second_dim(x):
-            return x[...,idx+offset].real
+    label = name + " "+ "{:.2f}".format(1 / score)+ "\AA"
+    n_dots_in_line = 20
+    ax.plot(np.ones(n_dots_in_line) * score, np.linspace(0,1, n_dots_in_line), "-", color = color, label= label)
+    ax.plot(freq, threshold * np.ones(freq.size), "k--")
 
-        if True:
+    if input_ax_is_none:
+        ax.xaxis.grid(color='gray', linestyle='dashed')
+        ax.yaxis.grid(color='gray', linestyle='dashed')
 
-            markers= [ 'o', '+', '>', 's', '.', 'x']
-            bound = 0.1
-            xlims = [ np.percentile(pick_first_dim(xs), bound),  np.percentile(pick_first_dim(xs), 100-bound) ]
-            ylims = [ np.percentile(pick_second_dim(xs), bound),  np.percentile(pick_second_dim(xs), 100-bound) ]
+        plt.plot(freq, threshold * np.ones(freq.size), "k--")
+        plt.ylim([0, 1.02])
+        plt.xlim([0, np.max(freq)])
+        plt.yticks(fontsize=20) 
+        plt.xticks(fontsize=10) 
+        # plt.legend("AA{-1}) = "+"{:.2f}".format(threshold))
+        # plt.title("FSC("  + "{:.2f}".format(1 / score)  + "AA{-1}) = "+ "{:.2f}".format(threshold))
+    ax.legend()
 
-            plt.figure()
-            n_plots = n_clusters# n_gt_molecules if use_gt_label else n_clusters
-            for k in range(n_plots):
-                if one_fig_for_each:
-                    plt.figure()
-                    plt.title(str(k))
-                # plt.figure()
-                if use_gt_label:
-                    k_pts = gt_labels ==k # gt_labels[k]
-                else:
-                    k_pts = kmeans.labels_ == k
-                    
-                plt.scatter(pick_first_dim(xs[k_pts]), pick_second_dim(xs[k_pts]),alpha=0.1, marker = markers[k%len(markers)] ,  label = 'cluster ' + str(k) )
-                plt.xlim(xlims )
-                plt.ylim(ylims )
+    if filename is not None:
+        plt.savefig(filename )
+    return ax, score
 
-            plt.xlabel("real(U1)")
-            plt.ylabel("real(U2)")
-
-            
-            # plt.plot( pick_first_dim(gt_coords.T) , pick_second_dim(gt_coords.T), 'ro', label = "gt_coords")
-            if outliers is not None:
-                plt.scatter(pick_first_dim(xs[outliers]), pick_second_dim(xs[outliers]), alpha= 1, marker = 'x' ,  label = 'outliers?' )
-
-            center_coords_t = center_coords.T
-            plt.plot( pick_first_dim(center_coords_t) , pick_second_dim(center_coords_t), 'kx', label = "centers")
-            plt.legend()
-
-    return kmeans
 
 def plotly_scatter(points_to_plot, opacity = 0.1):
 
@@ -405,7 +356,6 @@ def plot_fsc_function_paper(fsc_curves, global_name, names, grid_size, voxel_siz
         if save_to_file:
             export_legend(legend, filename = global_name + "legend.pdf")
         plt.show()
-
 
 
 def export_legend(legend, filename="legend.png", expand=[-5,-5,5,5]):

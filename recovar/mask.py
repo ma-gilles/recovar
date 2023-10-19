@@ -14,7 +14,11 @@ def masking_options(volume_mask_option, means, volume_shape, input_mask, dtype_r
     if isinstance(volume_mask_option, str):
         if volume_mask_option == 'from_halfmaps':
             volume_mask = make_mask_from_half_maps(means, smax = 3 )
-            dilated_volume_mask = volume_mask
+            kernel_size = 3
+            logger.info('Softening mask')
+            dilated_volume_mask = binary_dilation(volume_mask,iterations=6)
+            volume_mask = soften_volume_mask(volume_mask, kernel_size)
+            dilated_volume_mask = soften_volume_mask(dilated_volume_mask, kernel_size)
             logger.info('using mask computed from mean')
         elif volume_mask_option == 'sphere':
             volume_mask = get_radial_mask(volume_shape)

@@ -126,7 +126,7 @@ def standard_recovar_pipeline(args):
     logger.info(args)
     ind_split = dataset.figure_out_halfsets(args)
     dataset_loader_dict = dataset.make_dataset_loader_dict(args)
-    options = make_algorithm_options(args)
+    options = utils.make_algorithm_options(args)
 
     cryos = dataset.get_split_datasets_from_dict(dataset_loader_dict, ind_split)
     cryo = cryos[0]
@@ -150,6 +150,10 @@ def standard_recovar_pipeline(args):
     
     mean_real = ftu.get_idft3(means['combined'].reshape(cryos[0].volume_shape))
     if np.sum(mean_real.real) < 0:
+        # for key in ['combined', 'init0', 'init1', 'corrected0', 'corrected1']:
+        #     means[key] =- means[key]
+        # for cryo in cryos:
+        #     cryo.image_stack.uninvert_data = not cryo.image_stack.uninvert_data
         logger.warning('sum(mean) < 0! PROBABLY CHECK/UNCHECK --uninvert-data')
 
 
@@ -157,7 +161,6 @@ def standard_recovar_pipeline(args):
         logger.warning(f"mean estimate is in type: {means['combined'].dtype}")
         means['combined'] = means['combined'].astype(cryo.dtype)
 
-    plot_utils.plot_mean_result(cryo, means, mean_prior, cov_noise)
     logger.info(f"mean computed in {time.time() - st_time}")
 
     # Compute mask
@@ -174,6 +177,7 @@ def standard_recovar_pipeline(args):
                                                                 cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
                                                                 contrast_grid = None, contrast_option = options['contrast'] )
         logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
+
     logger.info(f"embedding time: {time.time() - st_time}")
 
     utils.report_memory_device()
@@ -216,14 +220,6 @@ def standard_recovar_pipeline(args):
 
     return means, u, s, volume_mask, dilated_volume_mask, cov_noise 
 
-
-
-def make_algorithm_options(args):
-    options = {'volume_mask_option': args.mask_option,
-    'zs_dim_to_test': args.zdim,
-    'contrast' : args.contrast
-    }
-    return options
         
 
 if __name__ == "__main__":

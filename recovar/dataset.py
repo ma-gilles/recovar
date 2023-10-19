@@ -258,35 +258,7 @@ class CryoEMDataset:
 
 
     def plot_FSC(self, image1 = None, image2 = None, filename = None, threshold = 0.5, curve = None, ax = None):
-        from recovar.plot_utils import fsc_score
-        plt.figure(figsize=(6, 5))
-        ax = plt.gca() if ax is None else ax
-        # get_fsc_gpu
-        if curve is None:
-            curve = plot_utils.FSC(np.array(image1).reshape(self.volume_shape), np.array(image2).reshape(self.volume_shape))
-            # from covariance_comput
-            # curve = ccf.get_fsc_gpu(image1, image2, self.volume_shape)
-        freq = ftu.get_1d_frequency_grid(2*self.grid_size, voxel_size = 0.5*self.voxel_size, scaled = True)
-        freq = freq[freq >= 0 ]
-        freq = freq[:self.grid_size//2 ]
-        max_idx = min(curve.size, freq.size)
-        plt.plot(freq[:max_idx], curve[:max_idx],  linewidth = 2 )
-        score = fsc_score(curve, self.grid_size, self.voxel_size, threshold = threshold)
-
-        n_dots_in_line = 20
-        plt.plot(np.ones(n_dots_in_line) * score, np.linspace(0,1, n_dots_in_line), "k-")
-
-        ax.xaxis.grid(color='gray', linestyle='dashed')
-        ax.yaxis.grid(color='gray', linestyle='dashed')
-
-        plt.plot(freq, threshold * np.ones(freq.size), "k--")
-        plt.ylim([0, 1.02])
-        plt.xlim([0, np.max(freq)])
-        plt.yticks(fontsize=20) 
-        plt.xticks(fontsize=20) 
-        plt.title("FSC("  + "{:.2f}".format(1 / score)  + "AA{-1}) = "+ "{:.2f}".format(threshold))
-        if filename is not None:
-            plt.savefig(filename )
+        score = plot_utils.plot_fsc_new(image1, image2, self.volume_shape, self.voxel_size,  curve = curve, ax = ax, threshold = threshold, filename = filename)
         return score
     
 

@@ -94,3 +94,11 @@ def get_column_batch_size(grid_size, gpu_memory):
 
 def get_latent_density_batch_size(test_pts,zdim, gpu_memory):
     return np.max([int(gpu_memory/3 * (get_size_in_gb(test_pts) * zdim**2)), 1])
+
+
+def make_algorithm_options(args):
+    options = {'volume_mask_option': args.mask_option,
+    'zs_dim_to_test': args.zdim,
+    'contrast' : args.contrast
+    }
+    return options
