@@ -106,7 +106,7 @@ def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_s
     masked_mean = ( ftu.get_idft3(mean.reshape(volume_shape)) * volume_mask.reshape(volume_shape) ).reshape(-1).real
     masked_mean /= np.linalg.norm(masked_mean)
     
-    # Gram-Schmidt the mean
+    # Project out the mean
     u_m_proj = u_real - masked_mean[:,None] @  (np.conj(masked_mean).T @ u_real )[None]
     cov_chol = u_m_proj * np.sqrt(s)
 

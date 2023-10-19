@@ -60,10 +60,11 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
     # batch_size = int(left_over_memory/ 
     #                 ((cryos[0].grid_size**2 * contrast_grid.size * basis_size
     #                 + cryos[0].grid_size * contrast_grid.size * basis_size**2) * utils.get_size_in_gb(cryos[0].get_image(0)) )/3)
+    
     assert(left_over_memory > 0, "GPU memory too small?")
     batch_size = int(left_over_memory/ ( 
         (cryos[0].grid_size**2 * contrast_grid.size * basis_size
-        + contrast_grid.size * basis_size**2)
+        + 4 * contrast_grid.size * basis_size**2)
         *8/1e9 )/ 20)
 
     batch_size_old = int((2**24)*8 /( cryos[0].grid_size**2 * np.max([basis_size, 8]) ) * gpu_memory / 38 ) 
