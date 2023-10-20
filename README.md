@@ -14,7 +14,7 @@ Here is a set of commands which runs on our university cluster (Della), but may 
     python -m ipykernel install --user --name=recovar # if you want to use jupyter notebooks
 
 
-[Jump to TLDR](https://github.com/ma-gilles/recovar#tldr-wip)
+[Jump to TLDR](#tldr)
 
 
 ## I. Preprocessing (copied from [CryoDRGN](https://github.com/ml-struct-bio/cryodrgn#2-parse-image-poses-from-a-consensus-homogeneous-reconstructiqqon))
@@ -201,7 +201,11 @@ It will run k-means, generate volumes corresponding to the centers, generate tra
 ## V. Visualizing results
 ### Output structure
 
-Assuming you have run the pipeline.py and analyze.py, you will have the following output. If you are running on a remote server, I would advise you only copy the [output_dir]/output locally, since the model file will be huge. You can then visualize volumes in ChimeraX.
+Assuming you have run the pipeline.py and analyze.py, the output will be saved in the format below (click on the arrow). If you are running on a remote server, I would advise you only copy the [output_dir]/output locally, since the model file will be huge. You can then visualize volumes in ChimeraX.
+
+
+<details><summary>Output file structure</summary>
+
 
     [output_dir]
     ├── model
@@ -244,6 +248,7 @@ Assuming you have run the pipeline.py and analyze.py, you will have the followin
     │       ├── variance10.mrc # compute variance from rank 10 approximation
     │       └── ...
     └── run.log
+</details>
 
 
 ### Visualization in jupyter notebook
@@ -260,7 +265,8 @@ TODO
 I hope some developpers may find parts of the code useful for their own projects. See [this notebook](recovar_coding_tutorial.ipynb) for a short tutorial.
 
 
-## TLDR (WIP - Untested)
+## TLDR
+ (WIP - Untested)
 A very short example illustrating the steps to run the code on EMPIAR-10076. Read above for more details:
 
     # Downloaded poses from here: https://github.com/zhonge/cryodrgn_empiar.git
@@ -293,6 +299,7 @@ A very short example illustrating the steps to run the code on EMPIAR-10076. Rea
 ## Limitations
 
 - *Symmetry*: there is currently no support for symmetry. If you got your poses through symmetric refinement, it will probably not work. If you make a symmetry expansion of the particles stack, it should probably work but I have not tested it.
+* *Memory*: you need a lot of memory to run this. For a stack of images of size 256, you probably need 400 GB+.
 - *Other ones, probably?*
 
 ## Contact
