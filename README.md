@@ -14,6 +14,8 @@ Here is a set of commands which runs on our university cluster (Della), but may 
     python -m ipykernel install --user --name=recovar # if you want to use jupyter notebooks
 
 
+[Jump to TLDR](https://github.com/ma-gilles/recovar#tldr-wip)
+
 
 ## I. Preprocessing (copied from [CryoDRGN](https://github.com/ml-struct-bio/cryodrgn#2-parse-image-poses-from-a-consensus-homogeneous-reconstructiqqon))
 
@@ -257,20 +259,17 @@ TODO
 
 I hope some developpers may find parts of the code useful for their own projects. See [this notebook](recovar_coding_tutorial.ipynb) for a short tutorial.
 
-Note: there is not support for symmetry. 
 
-
-## TLDR (WIP)
+## TLDR (WIP - Untested)
 A very short example illustrating the steps to run the code on EMPIAR-10076. Read above for more details:
 
     # Downloaded poses from here: https://github.com/zhonge/cryodrgn_empiar.git
-    # You can for example, achieve this by doing
     git clone https://github.com/zhonge/cryodrgn_empiar.git
     cd cryodrgn_empiar/empiar10076/inputs/
 
-    # Download data from here. https://www.ebi.ac.uk/empiar/EMPIAR-10076/ with your favorite method.
+    # Download particles stack from here. https://www.ebi.ac.uk/empiar/EMPIAR-10076/ with your favorite method.
     # My method of choice is to use https://www.globus.org/ 
-    # Downloaded poses from here: 
+    # Move the data into cryodrgn_empiar/empiar10076/inputs/
 
     conda activate recovar
     # Downsample images to D=256
@@ -279,7 +278,6 @@ A very short example illustrating the steps to run the code on EMPIAR-10076. Rea
     # Extract pose and ctf information from cryoSPARC refinement
     cryodrgn parse_ctf_csparc cryosparc_P4_J33_004_particles.cs -o ctf.pkl
     cryodrgn parse_pose_csparc cryosparc_P4_J33_004_particles.cs -D 320 -o poses.pkl
-
     
     # run recovar
     python [recovar_dir]/pipeline.py particles.256.mrcs --ctf --ctf.pkl -poses poses.pkl --o recovar_test 
@@ -295,6 +293,7 @@ A very short example illustrating the steps to run the code on EMPIAR-10076. Rea
 ## Limitations
 
 - *Symmetry*: there is currently no support for symmetry. If you got your poses through symmetric refinement, it will probably not work. If you make a symmetry expansion of the particles stack, it should probably work but I have not tested it.
+- *Other ones, probably?*
 
 ## Contact
 
