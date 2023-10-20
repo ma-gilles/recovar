@@ -196,14 +196,105 @@ It will run k-means, generate volumes corresponding to the centers, generate tra
 
 </details>
 
+## V. Visualizing results
+### Output structure
 
-## V. Generating trajectories
+Assuming you have run the pipeline.py and analyze.py, you will have the following output. If you are running on a remote server, I would advise you only copy the [output_dir]/output locally, since the model file will be huge. You can then visualize volumes in ChimeraX.
+
+    [output_dir]
+    ├── model
+    │   ├── halfsets.pkl # indices of half sets
+    │   └── results.pkl # all results, should only be used by analye.py
+    ├── output
+    │   ├── analysis_4
+    │   │   ├── kmeans_40
+    │   │   │   ├── centers_01no_annotate.png
+    │   │   │   ├── centers_01.png
+    │   │   │   ├── ...
+    │   │   │   ├── centers.pkl # centers in zformat
+    │   │   │   ├── path0
+    │   │   │   │   ├── density
+    │   │   │   │   │   ├── density_01.png
+    │   │   │   │   │   └── ...
+    │   │   │   │   ├── density_01.png
+    │   │   │   │   ├── ...
+    │   │   │   │   ├── path_density_t.png
+    │   │   │   │   ├── path.json
+    │   │   │   │   ├── reweight_000.mrc # reweighted reconstructions
+    │   │   │   │   ├── ...
+    │   │   │   │   ├── reweight_halfmap0_000.mrc # halfmaps for each reconstruction
+    │   │   │   │   └── ...
+    │   │   │   ├── path1
+    │   │   │   │   ├── ...
+    │   │   │   ├── reweight_000.mrc # volume reconstruction of kmeans 
+    │   │   │   ├── ...
+    │   │   │   ├── reweight_halfmap1_039.mrc # also halfmaps
+    │   │   │   └── trajectory_endpoints.pkl # end points of trajectory used 
+    │   │   └── umap_embedding.pkl 
+    │   └── volumes
+    │       ├── dilated_mask.mrc
+    │       ├── eigen_neg000.mrc # Eigenvectors
+    │       ├── ...
+    │       ├── eigen_pos000.mrc # Negative of eigenvectors. Useful to Chimera visualization to have the two separated, although they clearly contain the same observation
+    │       ├── ...
+    │       ├── mask.mrc # mask used 
+    │       ├── mean.mrc # computed mean
+    │       ├── variance10.mrc # compute variance from rank 10 approximation
+    │       └── ...
+    └── run.log
 
 
+### Visualization in jupyter notebook
 
-## VI. Using/extending the code
+You can visualize the results using [this notebook](adapted_cryoDRGN_viz.ipynb), which will result, including the FSC of the mean estimation to give you an on an upper bound of the resolution you can expect, decay of eigenvalues to help you pick the right `zdim`, and standard clustering visualization (borrowed from the cryoDRGN output).
+
+
+## VI. Generating trajectories
+
+TODO
+
+## VII. Using/extending the code
 
 I hope some developpers may find parts of the code useful for their own projects. See [this notebook](recovar_coding_tutorial.ipynb) for a short tutorial.
+
+Note: there is not support for symmetry. 
+
+
+## TLDR (WIP)
+A very short example illustrating the steps to run the code on EMPIAR-10076. Read above for more details:
+
+    # Downloaded poses from here: https://github.com/zhonge/cryodrgn_empiar.git
+    # You can for example, achieve this by doing
+    git clone https://github.com/zhonge/cryodrgn_empiar.git
+    cd cryodrgn_empiar/empiar10076/inputs/
+
+    # Download data from here. https://www.ebi.ac.uk/empiar/EMPIAR-10076/ with your favorite method.
+    # My method of choice is to use https://www.globus.org/ 
+    # Downloaded poses from here: 
+
+    conda activate recovar
+    # Downsample images to D=256
+    cryodrgn downsample Parameters.star -D 256 -o particles.256.mrcs --chunk 50000
+
+    # Extract pose and ctf information from cryoSPARC refinement
+    cryodrgn parse_ctf_csparc cryosparc_P4_J33_004_particles.cs -o ctf.pkl
+    cryodrgn parse_pose_csparc cryosparc_P4_J33_004_particles.cs -D 320 -o poses.pkl
+
+    
+    # run recovar
+    python [recovar_dir]/pipeline.py particles.256.mrcs --ctf --ctf.pkl -poses poses.pkl --o recovar_test 
+
+    # run analysis
+    python [recovar_dir]/analysis.py recovar_test --zdim=20 
+
+    # Open notebook adapted_cryoDRGN_viz.ipynb
+    # Change the recovar_result_dir = '[path_to_this_dir]/recovar_test' and 
+
+
+
+## Limitations
+
+- *Symmetry*: there is currently no support for symmetry. If you got your poses through symmetric refinement, it will probably not work. If you make a symmetry expansion of the particles stack, it should probably work but I have not tested it.
 
 ## Contact
 

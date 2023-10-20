@@ -32,9 +32,10 @@ def resample_trajectory(gt_vols, n_vols_along_path = 6):
 
 
 def mkdir_safe(folder):
-    isExist = os.path.exists(folder)
-    if not isExist:
-        os.mkdir(folder)
+    os.makedirs(folder, exist_ok = True)
+    # isExist = os.path.exists(folder)
+    # if not isExist:
+    #     os.mkdir(folder)
 
     
 def save_volume(vol, path, volume_shape, from_ft = True):
@@ -196,13 +197,13 @@ def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us
         variance_real = utils.estimate_variance(u_real.T, s['rescaled'][:n_eigs])
         save_volume(variance_real, output_folder + 'volumes/' + 'variance' + str(n_eigs), volume_shape, from_ft = False)
 
-def kmeans_analysis_from_dict(output_folder, results, cryos, likelihood_threshold,  n_clusters = 20, generate_volumes = True, zdim =-1):
+def kmeans_analysis_from_dict(output_folder, results, cryos, likelihood_threshold,  n_clusters = 20, generate_volumes = True, zdim =-1, compute_reproj = False):
     from recovar import dataset
 
     cryos = dataset.load_dataset_from_args(results['input_args']) if cryos is None else cryos
-    return kmeans_analysis(output_folder, cryos, results['means'], results['u']['rescaled'], results['zs'][zdim], results['cov_zs'][zdim], results['cov_noise'], likelihood_threshold,  n_clusters = n_clusters, generate_volumes = generate_volumes)
+    return kmeans_analysis(output_folder, cryos, results['means'], results['u']['rescaled'], results['zs'][zdim], results['cov_zs'][zdim], results['cov_noise'], likelihood_threshold,  n_clusters = n_clusters, generate_volumes = generate_volumes, compute_reproj = compute_reproj)
     
-def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, cov_noise, likelihood_threshold,  n_clusters = 20, generate_volumes = True):
+def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, cov_noise, likelihood_threshold,  n_clusters = 20, generate_volumes = True, compute_reproj = False):
 
     import cryodrgn.analysis as cryodrgn_analysis
     #key = 'zs12'
@@ -239,21 +240,19 @@ def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, cov_noi
     
     if generate_volumes:
         likelihood_threshold = ld.get_log_likelihood_threshold(k = zs.shape[-1]) if likelihood_threshold is None else likelihood_threshold
-        compute_and_save_volumes_from_z(dataset_loader, means, u, centers, zs, cov_zs, cov_noise, output_folder , likelihood_threshold = likelihood_threshold)
+        compute_and_save_volumes_from_z(dataset_loader, means, u, centers, zs, cov_zs, cov_noise, output_folder , likelihood_threshold = likelihood_threshold, compute_reproj= compute_reproj)
 
     return centers
 
 def compute_and_save_reweighted(dataset_loader, means,  path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = None, recompute_prior = True, volume_mask = None):
     trajectory_prior, halfmaps = embedding.generate_conformation_from_reweighting(dataset_loader, means, cov_noise, zs, cov_zs, path_subsampled, batch_size = 100, disc_type = 'linear_interp', likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, volume_mask = volume_mask)
-    save_volumes(trajectory_prior, output_folder +  'prior')
-    # pickle.dump(halfmaps,open(output_folder +  'prior_fsc.pkl', 'wb'))
+    save_volumes(trajectory_prior, output_folder +  'reweight_')
     dump_halfmaps(halfmaps, output_folder)
 
 def dump_halfmaps(half_maps, output_folder):
-    save_volumes(half_maps[0], output_folder +  'halfmap1_')
-    save_volumes(half_maps[1], output_folder +  'halfmap2_')
-
-        
+    save_volumes(half_maps[0], output_folder +  'reweight_halfmap0_')
+    save_volumes(half_maps[1], output_folder +  'reweight_halfmap1_')
+    
 def compute_and_save_volumes_from_z(dataset_loader, means, u,  path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = None, recompute_prior = True, compute_reproj = True ):
         
     mkdir_safe(output_folder)
@@ -262,7 +261,7 @@ def compute_and_save_volumes_from_z(dataset_loader, means, u,  path_subsampled, 
     if compute_reproj:
         n_eigs = zs.shape[1]
         trajectory_reproj = embedding.generate_conformation_from_reprojection(path_subsampled, means['combined'], u[:,:n_eigs] )
-        save_volumes(trajectory_reproj, output_folder +  'reproj')
+        save_volumes(trajectory_reproj, output_folder +  'reproj_')
 
     
 def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path, likelihood_threshold = 1e-5 ):

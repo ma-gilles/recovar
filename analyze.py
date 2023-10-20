@@ -55,7 +55,7 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
-def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40, n_paths = 6, skip_umap = False, q = None, n_std = None):
+def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40, n_paths = 6, skip_umap = False, q = None, n_std = None, compute_reproj = False):
 
     results = o.load_results_new(recovar_result_dir + '/')
 
@@ -77,7 +77,8 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         likelihood_threshold = latent_density.get_log_likelihood_threshold(q=q, k = zdim)
 
     if output_folder is None:
-        output_folder = recovar_result_dir + '/output/'
+        output_folder = recovar_result_dir + '/output/analysis_' + str(zdim)  + '/'
+
 
     # if zdim is None and len(results['zs']) > 1:
     #     logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --z-dim=4")
@@ -88,11 +89,13 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
     cryos = dataset.load_dataset_from_args(results['input_args'])
 
-    # DO THIS
+    logger.warning('Contrast in reweighting not implemented!! FIX THIS')
+    # DO THIS 
     # for cryos_idx,cryo in enumerate(cryos):
     #     cryo.CTF_params[:,-1] = results['est_contrasts'][zdim][]
 
-    output_folder_kmeans = output_folder + 'kmeans'+str(zdim)+'_'+ str(n_clusters) + '/'        
+    output_folder_kmeans = output_folder + 'kmeans'+'_'+ str(n_clusters) + '/'    
+    o.mkdir_safe(output_folder_kmeans)    
     centers = o.kmeans_analysis_from_dict(output_folder_kmeans, results, cryos, likelihood_threshold,  n_clusters = 40, generate_volumes = True, zdim =zdim)
     pickle.dump(centers, open(output_folder_kmeans + 'centers.pkl', 'wb'))
 
@@ -106,11 +109,11 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         path_folder = output_folder_kmeans + 'path' + str(pair_idx) + '/'        
         o.mkdir_safe(path_folder)
 
-        o.make_trajectory_plots_from_results(results, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =zdim, compute_reproj = False, likelihood_threshold = likelihood_threshold)        
+        o.make_trajectory_plots_from_results(results, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =zdim, compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold)        
         logger.info(f"path {pair_idx} done")
         
     kmeans_res = { 'centers': centers.tolist(), 'pairs' : pairs }
-    pickle.dump(kmeans_res, open(output_folder + 'trajectory_endpoints.pkl', 'wb'))
+    pickle.dump(kmeans_res, open(output_folder_kmeans + 'trajectory_endpoints.pkl', 'wb'))
 
     if not skip_umap:
         mapper = o.umap_latent_space(results['zs'][zdim])
@@ -122,6 +125,7 @@ def pick_pairs(centers, n_pairs):
     # This probably could be improved
     #     
     # Pick some pairs that are far away from each other.
+    pairs = []
     X = distance_matrix(centers[:,:], centers[:,:])
     for _ in range(n_pairs//2):
         i_idx,j_idx = np.unravel_index(np.argmax(X), X.shape)
