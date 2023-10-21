@@ -19,7 +19,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
     utils.report_memory_device(logger=logger)
 
     # First approximation of eigenvalue decomposition
-    u,s = get_cov_svds(covariance_cols, picked_frequencies, volume_shape, vol_batch_size, gpu_memory_to_use )
+    u,s = get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use )
 
     zss = {}
     u['rescaled'],s['rescaled'], zss['init'] = rescale_eigs(cryos, u['real'],s['real'], means['combined'], volume_mask, cov_noise, basis_size = constants.N_PCS_TO_COMPUTE, gpu_memory_to_use = gpu_memory_to_use, use_mask = True)
@@ -39,10 +39,10 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
     return u, s
 
 
-def get_cov_svds(covariance_cols, picked_frequencies, volume_shape,  vol_batch_size, gpu_memory_to_use ):
+def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,  vol_batch_size, gpu_memory_to_use ):
     u = {}; s = {}    
 
-    u['real'], s['real'] = randomized_real_svd_of_columns_with_s_guess(covariance_cols["est_mask"],  picked_frequencies, volume_shape, vol_batch_size, test_size = constants.RANDOMIZED_SKETCH_SIZE, gpu_memory_to_use = gpu_memory_to_use )
+    u['real'], s['real'] = randomized_real_svd_of_columns_with_s_guess(covariance_cols["est_mask"],  picked_frequencies, volume_mask, volume_shape, vol_batch_size, test_size = constants.RANDOMIZED_SKETCH_SIZE, gpu_memory_to_use = gpu_memory_to_use )
 
     # n_components = covariance_cols["est_mask"].shape[-1]
     # u['real'], s['real'] = real_svd3(covariance_cols["est_mask"],  picked_frequencies, volume_shape, vol_batch_size, n_components = n_components)
@@ -519,7 +519,7 @@ def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_
     return Q_F_C_F
 
 
-def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_shape, vol_batch_size, test_size = 300, gpu_memory_to_use= 40):
+def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, test_size = 300, gpu_memory_to_use= 40):
     st_time = time.time()
 
     # memory_to_use = utils.get_gpu_memory_total() - 5
@@ -533,6 +533,10 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_sha
 
     st_time = time.time()
     Q = right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use ).real.astype(np.float32)
+    
+    ## Do masking here ?
+    Q *= volume_mask.reshape(-1,1)
+    
 
     logger.info(f"right matvec {time.time() - st_time}")
     utils.report_memory_device(logger=logger)
@@ -541,6 +545,10 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_sha
     Q = np.array(Q) # I don't know why but not doing this causes massive slowdowns sometimes?
     logger.info(f"QR time: {time.time() - st_time}")
 
+    # 
+    Q *= volume_mask.reshape(-1,1)
+
+    
     C_F_t_2 = left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
     utils.report_memory_device(logger=logger)
     logger.info(f"left matvec {time.time() - st_time}")
@@ -560,7 +568,14 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_sha
     return np.array(UU), np.array(S_fd), np.array(V)
 
 
-def svd_of_small_matrix(columns, picked_frequency_indices, volume_shape, vol_batch_size, gpu_memory_to_use):
+def svd_of_small_matrix(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use):
+    
+    # Explicitely apply mask to columns:
+    columns_real = linalg.batch_idft3(columns, volume_shape, vol_batch_size)
+    columns_real *= volume_mask.reshape(-1,1)#[...,None]
+    columns = linalg.batch_dft3(columns_real, volume_shape, vol_batch_size)
+
+
     # Make symmetric columns
     columns_flipped, minus_indices, good_idx = make_symmetric_columns_cpu(columns, picked_frequency_indices, volume_shape)
     all_frequency_indices = np.concatenate([picked_frequency_indices, minus_indices[good_idx]])
@@ -581,11 +596,11 @@ def svd_of_small_matrix(columns, picked_frequency_indices, volume_shape, vol_bat
     return ssmall.astype(columns.dtype).real
 
 
-def randomized_real_svd_of_columns_with_s_guess(columns, picked_frequency_indices, volume_shape, vol_batch_size, test_size = 300, gpu_memory_to_use = 40):
+def randomized_real_svd_of_columns_with_s_guess(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, test_size = 300, gpu_memory_to_use = 40):
 
-    u,s,_ = randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_shape, vol_batch_size, test_size, gpu_memory_to_use)
+    u,s,_ = randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, test_size, gpu_memory_to_use)
 
-    s_small = svd_of_small_matrix(columns, picked_frequency_indices, volume_shape, vol_batch_size, gpu_memory_to_use)
+    s_small = svd_of_small_matrix(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use)
 
     # Guess eigenvalue with rank 1 estimate
     n_components = s.size

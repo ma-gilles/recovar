@@ -47,7 +47,10 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, 
     covariance_cols = {}
     cols2 = []
     for col_idx in range(picked_frequencies.size):
-        cols2.append(np.array(regularization.covariance_update_col_with_mask(H_comb[col_idx], B_comb[col_idx], prior[col_idx], volume_mask, valid_idx, volume_shape)))
+        # cols2.append(np.array(regularization.covariance_update_col_with_mask(H_comb[col_idx], B_comb[col_idx], prior[col_idx], volume_mask, valid_idx, volume_shape)))
+        cols2.append(np.array(regularization.covariance_update_col(H_comb[col_idx], B_comb[col_idx], prior[col_idx]) * valid_idx ))
+
+        
     logger.info(f"cov update time: {time.time() - st_time2}")
 
     covariance_cols["est_mask"] = np.stack(cols2, axis =-1).astype(cryo.dtype)
