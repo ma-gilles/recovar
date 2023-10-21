@@ -109,6 +109,12 @@ def sum_over_other(x, use_axis = [0,1]):
     xk = np.sum(x, axis = tuple(other_axes))
     return xk
 
+def plot_trajectories_over_density_from_result(results, trajectories, subsampled, zdim ):
+    latent_space_bounds = ld.compute_latent_space_bounds(results['zs'][zdim])
+    plot_trajectories_over_density(results['density'], trajectories, latent_space_bounds,  subsampled = subsampled, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = results['zs'][zdim], cov_zs = results['cov_zs'][zdim] )
+    return
+
+
 def plot_trajectories_over_density(density, trajectories, latent_space_bounds,  subsampled = None, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = None, cov_zs = None ):
     colors = ['k', 'cornflowerblue'] if colors is None else colors
     path_exists = trajectories is not None
@@ -242,10 +248,15 @@ def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, cov_noi
         likelihood_threshold = ld.get_log_likelihood_threshold(k = zs.shape[-1]) if likelihood_threshold is None else likelihood_threshold
         compute_and_save_volumes_from_z(dataset_loader, means, u, centers, zs, cov_zs, cov_noise, output_folder , likelihood_threshold = likelihood_threshold, compute_reproj= compute_reproj)
 
-    return centers
+    return centers, labels
 
-def compute_and_save_reweighted(dataset_loader, means,  path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = None, recompute_prior = True, volume_mask = None):
-    trajectory_prior, halfmaps = embedding.generate_conformation_from_reweighting(dataset_loader, means, cov_noise, zs, cov_zs, path_subsampled, batch_size = 100, disc_type = 'linear_interp', likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, volume_mask = volume_mask)
+def compute_and_save_reweighted(cryos, means,  path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = None, recompute_prior = True, volume_mask = None):
+
+    #batch_size = 
+    memory_to_use = utils.get_gpu_memory_total() - path_subsampled.shape[0] * utils.get_size_in_gb(means['combined']) * 2
+    batch_size = 5 * utils.get_image_batch_size(cryos[0].grid_size, memory_to_use)
+    logger.info(f"batch size in reweighting: {batch_size}")
+    trajectory_prior, halfmaps = embedding.generate_conformation_from_reweighting(cryos, means, cov_noise, zs, cov_zs, path_subsampled, batch_size = batch_size, disc_type = 'linear_interp', likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, volume_mask = volume_mask)
     save_volumes(trajectory_prior, output_folder +  'reweight_')
     dump_halfmaps(halfmaps, output_folder)
 

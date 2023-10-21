@@ -96,8 +96,9 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
     output_folder_kmeans = output_folder + 'kmeans'+'_'+ str(n_clusters) + '/'    
     o.mkdir_safe(output_folder_kmeans)    
-    centers = o.kmeans_analysis_from_dict(output_folder_kmeans, results, cryos, likelihood_threshold,  n_clusters = 40, generate_volumes = True, zdim =zdim)
-    pickle.dump(centers, open(output_folder_kmeans + 'centers.pkl', 'wb'))
+    centers, labels = o.kmeans_analysis_from_dict(output_folder_kmeans, results, cryos, likelihood_threshold,  n_clusters = 40, generate_volumes = True, zdim =zdim)
+    kmeans_result = { 'centers' : centers, 'labels': labels  }
+    pickle.dump(kmeans_result, open(output_folder_kmeans + 'centers.pkl', 'wb'))
 
     pairs = pick_pairs(centers, n_paths)
     for pair_idx in range(len(pairs)):
