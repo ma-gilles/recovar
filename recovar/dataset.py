@@ -237,9 +237,9 @@ class CryoEMDataset:
         return im
 
     def get_slice_real(self, X, to_real_fn = np.real, axis = 0):
-        im = to_real_fn(ftu.get_idft2(X.reshape(self.volume_shape)))
+        im = to_real_fn(ftu.get_idft3(X.reshape(self.volume_shape)))
         im2 = jnp.take(im, self.grid_size//2, axis = axis)
-        return im2
+        return to_real_fn(im2)
 
     def get_image(self, i ):
         image = self.image_stack.get(i)[None]

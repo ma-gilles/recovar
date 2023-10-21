@@ -253,10 +253,14 @@ Assuming you have run the pipeline.py and analyze.py, the output will be saved i
 
 ### Visualization in jupyter notebook
 
-You can visualize the results using [this notebook](adapted_cryoDRGN_viz.ipynb), which will result, including the FSC of the mean estimation to give you an on an upper bound of the resolution you can expect, decay of eigenvalues to help you pick the right `zdim`, and standard clustering visualization (borrowed from the cryoDRGN output).
+You can visualize the results using [this notebook](adapted_cryoDRGN_viz.ipynb), which will show a bunch of results including 
+* the FSC of the mean estimation to give you an on an upper bound of the resolution you can expect
+* decay of eigenvalues to help you pick the right `zdim`
+*  and standard clustering visualization (borrowed from the cryoDRGN output).
 
 
 ## VI. Generating trajectories
+
 
 TODO
 

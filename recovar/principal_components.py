@@ -31,10 +31,11 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
         c_time = time.time()
         u['rescaled'],s['rescaled'] = knock_out_mean_component_2(u['rescaled'], s['rescaled'],means['combined'], volume_mask, volume_shape, vol_batch_size)
         logger.info(f"knock out time: {time.time() - c_time}")
-
         if u['rescaled'].dtype != cryos[0].dtype:
             logger.warning(f"u['rescaled'].dtype: {u['rescaled'].dtype}")
 
+            
+            
     return u, s
 
 

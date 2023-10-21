@@ -14,7 +14,70 @@ names_to_show = { "diagonal": "diagonal", "wilson": "Wilson", "diagonal masked":
 colors_name = { "diagonal": "cornflowerblue", "wilson": "lightsalmon", "diagonal masked": "blue", "wilson masked": "orangered"  }
 plt.rcParams['text.usetex'] = True
 
-def plot_cov_results(u,s, savefile = None):
+def plot_summary(results,cryos):
+    plt.rcParams.update({
+        # "text.usetex": True,
+        # "font.family": "serif",
+        # "font.sans-serif": "Helvetica",
+    })
+    font = {'weight' : 'bold',
+            'size'   : 22}
+    matplotlib.rc('font', **font)
+
+    n_plots = 5
+    fig, axs = plt.subplots(6, n_plots, figsize = (6*3, n_plots * 3))
+    global is_first
+    is_first = True
+    
+    def plot_vol(vol, n_plot, from_ft = True, cmap = 'viridis', name ="", symmetric = False):
+        if not from_ft:
+            vol = ftu.get_dft3(vol.reshape(cryos[0].volume_shape)).reshape(-1)
+        global is_first
+        axs[0, n_plot].set_title(name)
+        for k in range(3):
+            img = cryos[0].get_proj(vol, axis =k )
+            
+            if symmetric:
+                vmax = np.max(np.abs(img))
+                axs[k, n_plot].imshow(img , cmap=matplotlib.colormaps[cmap], vmin = -vmax, vmax = vmax)
+            else:
+                axs[k, n_plot].imshow(img , cmap=matplotlib.colormaps[cmap])
+            axs[k, n_plot].set_xticklabels([])
+            axs[k, n_plot].set_yticklabels([])
+            if is_first:
+                axs[k, n_plot].set_ylabel(f"projection {k}")#, fontsize = 20)
+
+        for k in range(3,6):
+            img = cryos[0].get_slice_real(vol, axis =k-3 )
+            
+            if symmetric:
+                vmax = np.max(np.abs(img))
+                axs[k, n_plot].imshow(img , cmap=matplotlib.colormaps[cmap], vmin = -vmax, vmax = vmax)
+            else:
+                axs[k, n_plot].imshow(img , cmap=matplotlib.colormaps[cmap])
+            axs[k, n_plot].set_xticklabels([])
+            axs[k, n_plot].set_yticklabels([])
+            
+            if is_first:
+                axs[k, n_plot].set_ylabel(f"slice {k-3}")#, fontsize = 20)
+
+        is_first = False
+            
+
+    plot_vol(results['means']['combined'], 0, from_ft = True, name = 'mean')
+    plot_vol(results['volume_mask'], 1, from_ft = False,name = 'mask')
+    plot_vol(results['u']['rescaled'][:,0], 2, from_ft = True, cmap = 'seismic' ,name = 'eigen0', symmetric = True)
+    plot_vol(results['u']['rescaled'][:,1], 3, from_ft = True, cmap = 'seismic' ,name = 'eigen1', symmetric = True)
+    plot_vol(results['u']['rescaled'][:,2], 4, from_ft = True, cmap = 'seismic' ,name = 'eigen2', symmetric = True)
+
+    plt.subplots_adjust(wspace=0, hspace=0)
+
+    
+    return
+    
+
+
+def plot_cov_results(u,s, max_eig = 25, savefile = None):
     
     plt.rcParams.update({
         # "text.usetex": True,
@@ -31,26 +94,27 @@ def plot_cov_results(u,s, savefile = None):
     #s['parallel_analysis'] *= 0.8
     plt.figure(figsize = (6,6))
     
-    
+    names_to_plot = dict(zip(list(s.keys()), list(s.keys())))
+    names_to_plot['real'] = 'init'            
+    names_to_plot['rescaled'] = 'SVD'
+                        
     for key in s.keys():
         # for key in used_keys:
         if "+" in key:
             continue
 
-        plt.plot(np.arange(1,s[key][:25].size+1), s[key][:25],  "-"+m[m_idx], label = key, alpha = 0.5, ms = 15)
+        plt.plot(np.arange(1,s[key][:max_eig].size+1), s[key][:max_eig],  "-"+m[m_idx], label = names_to_plot[key], alpha = 0.5, ms = 15)
         m_idx = (m_idx + 1) % len(m)
         plt.yscale('log')
         plt.legend()
         # plt.savefig(output_folder + 'plots/eigenvals.pdf')
         
     if 'parallel_analysis' in s:
-        plt.semilogy(np.ones_like(s[key][:20]) * s['parallel_analysis'][0], "-"+m[m_idx], label = "par0", alpha = 0.5, ms = 15)
+        plt.semilogy(np.ones_like(s[key][:max_eig]) * s['parallel_analysis'][0], "-"+m[m_idx], label = "par0", alpha = 0.5, ms = 15)
 
-    if 'rescaled' in s:
-        plt.ylim([ s['rescaled'][15]/10 , 5*np.max(s['rescaled']) ])
-    # else:
-    #     plt.ylim([ s['SVD'][15]/10 , 5*np.max(s['SVD']) ])
-
+    # ax.xaxis.grid(color='gray', linestyle='dashed')
+    # ax.yaxis.grid(color='gray', linestyle='dashed')        
+    plt.title('eigenvalues')
     plt.legend()
     if savefile is not None:
         plt.savefig(savefile + 's.png')
@@ -77,6 +141,21 @@ def plot_cov_results(u,s, savefile = None):
             plt.savefig(savefile + 'u.png')
 
     return angles
+
+def plot_mean_fsc(results,cryos):
+    ax, score = plot_fsc_new(results['means']['corrected0'], results['means']['corrected1'], cryos[0].volume_shape, cryos[0].voxel_size,  curve = None, ax = None, threshold = 1/7, filename = None, name = "unmasked")
+    ax, score_masked = plot_fsc_new(results['means']['corrected0'], results['means']['corrected1'], cryos[0].volume_shape, cryos[0].voxel_size,  curve = None, ax = ax, threshold = 1/7, filename = None, volume_mask = results['volume_mask'], name = "masked")
+    plt.rcParams.update({
+        # "text.usetex": True,
+        # "font.family": "serif",
+        # "font.sans-serif": "Helvetica",
+    })
+    font = {'weight' : 'bold',
+            'size'   : 22}
+
+    ax.set_title("mean estimation", fontsize=20)
+    return ax
+    
 
 def plot_mean_result(cryo, means, cov_noise):
     # Check power spectrums
@@ -118,6 +197,8 @@ def plot_mean_result(cryo, means, cov_noise):
         plt.title('ground truth')
         plt.colorbar()
 
+        
+        
 def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = None, threshold = 1/7, filename = None, volume_mask = None, name = ""):
     plt.figure(figsize=(6, 5))
     grid_size = volume_shape[0]
