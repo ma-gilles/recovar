@@ -16,6 +16,8 @@ Here is a set of commands which runs on our university cluster (Della), but may 
 
 [Jump to TLDR](#tldr)
 
+[See what output format looks like](simple_heterogeneity_output_example.ipynb)
+
 
 ## I. Preprocessing (copied from [CryoDRGN](https://github.com/ml-struct-bio/cryodrgn#2-parse-image-poses-from-a-consensus-homogeneous-reconstructiqqon))
 
@@ -253,7 +255,7 @@ Assuming you have run the pipeline.py and analyze.py, the output will be saved i
 
 ### Visualization in jupyter notebook
 
-You can visualize the results using [this notebook](adapted_cryoDRGN_viz.ipynb), which will show a bunch of results including 
+You can visualize the results using [this notebook](output_visualization.ipynb), which will show a bunch of results including 
 * the FSC of the mean estimation to give you an on an upper bound of the resolution you can expect
 * decay of eigenvalues to help you pick the right `zdim`
 *  and standard clustering visualization (borrowed from the cryoDRGN output).
@@ -321,7 +323,7 @@ A very short example illustrating the steps to run the code on EMPIAR-10076. Rea
     # run analysis
     python [recovar_dir]/analysis.py recovar_test --zdim=20 
 
-    # Open notebook adapted_cryoDRGN_viz.ipynb
+    # Open notebook output_visualization.ipynb
     # Change the recovar_result_dir = '[path_to_this_dir]/recovar_test' and 
 
 
