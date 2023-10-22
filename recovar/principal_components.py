@@ -112,7 +112,15 @@ def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_s
     cov_chol = u_m_proj * np.sqrt(s)
 
     # Reorthogonalize
-    new_u, new_s, _ = linalg.thin_svd_in_blocks(cov_chol)
+    # Replaced by a slower but stable.
+    # new_u, new_s, _ = linalg.thin_svd_in_blocks(cov_chol)
+
+    cov_chol = jax.device_put(cov_chol, device=jax.devices("cpu")[0])
+    new_u, new_s, _ = jnp.linalg.svd(cov_chol)
+    new_u = np.array(new_u) 
+    new_s = np.array(new_s)
+
+
     ones_vol = np.ones_like(masked_mean)
     ones_vol /= np.linalg.norm(ones_vol)
 

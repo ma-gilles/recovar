@@ -324,6 +324,12 @@ A very short example illustrating the steps to run the code on EMPIAR-10076. Rea
     # Open notebook output_visualization.ipynb
     # Change the recovar_result_dir = '[path_to_this_dir]/recovar_test' and 
 
+Note that this isn't exactly the one in the paper. Run this analyze command to the one in the paper (runs on filtered stack from cryoDRGN, and uses a predefined mask):
+
+    # Download mask
+    git clone https://github.com/ma-gilles/recovar_masks.git
+
+    python ~/recovar/pipeline.py particles.256.mrcs --ctf ctf.pkl --poses poses.pkl -o test-mask --mask recovar_masks/mask_10076.mrc --ind filtered.ind.pkl
 
 
 ## Limitations

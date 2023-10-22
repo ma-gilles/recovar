@@ -14,6 +14,73 @@ names_to_show = { "diagonal": "diagonal", "wilson": "Wilson", "diagonal masked":
 colors_name = { "diagonal": "cornflowerblue", "wilson": "lightsalmon", "diagonal masked": "blue", "wilson masked": "orangered"  }
 plt.rcParams['text.usetex'] = True
 
+
+def plot_summary_t(results,cryos, n_eigs = 3):
+    plt.rcParams.update({
+        # "text.usetex": True,
+        # "font.family": "serif",
+        # "font.sans-serif": "Helvetica",
+    })
+    font = {'weight' : 'bold',
+            'size'   : 22}
+    matplotlib.rc('font', **font)
+
+    n_plots = 2 + n_eigs
+    fig, axs = plt.subplots(n_plots, 6, figsize = ( 6*3, n_plots * 3))#, 6*3))
+    global is_first
+    is_first = True
+    
+    def plot_vol(vol, n_plot, from_ft = True, cmap = 'viridis', name ="", symmetric = False):
+        if not from_ft:
+            vol = ftu.get_dft3(vol.reshape(cryos[0].volume_shape)).reshape(-1)
+        global is_first
+        
+        axs[n_plot,0].set_ylabel(name)
+
+        for k in range(3):
+
+            img = cryos[0].get_proj(vol, axis =k )
+            
+            if symmetric:
+                vmax = np.max(np.abs(img))
+                axs[n_plot,k].imshow(img , cmap=matplotlib.colormaps[cmap], vmin = -vmax, vmax = vmax)
+            else:
+                axs[n_plot,k].imshow(img , cmap=matplotlib.colormaps[cmap])
+            axs[n_plot,k].set_xticklabels([])
+            axs[n_plot,k].set_yticklabels([])
+            if is_first:            
+                axs[n_plot,k].set_title(f"projection {k}")
+
+                # axs[n_plot,k].set_ylabel(name)#f"projection {k}")#, fontsize = 20)
+
+        for k in range(3,6):
+
+            img = cryos[0].get_slice_real(vol, axis =k-3 )
+            
+            if symmetric:
+                vmax = np.max(np.abs(img))
+                axs[n_plot,k].imshow(img , cmap=matplotlib.colormaps[cmap], vmin = -vmax, vmax = vmax)
+            else:
+                axs[n_plot,k].imshow(img , cmap=matplotlib.colormaps[cmap])
+            axs[n_plot,k].set_xticklabels([])
+            axs[n_plot,k].set_yticklabels([])
+            
+            if is_first:            
+                axs[n_plot,k].set_title(f"slice {k-3}")#, fontsize = 20)
+
+        is_first = False
+        return
+
+    plot_vol(results['means']['combined'], 0, from_ft = True, name = 'mean')
+    plot_vol(results['volume_mask'], 1, from_ft = False,name = 'mask')
+    for k in range(n_eigs):
+        plot_vol(results['u']['rescaled'][:,k], k+2, from_ft = True, cmap = 'seismic' ,name = f"PC {k}", symmetric = True)
+
+    plt.subplots_adjust(wspace=0, hspace=0)
+
+    
+    return
+
 def plot_summary(results,cryos, n_eigs = 3):
     plt.rcParams.update({
         # "text.usetex": True,
