@@ -33,11 +33,6 @@ Here is a set of commands which runs on our university cluster (Della), but may 
     python -m ipykernel install --user --name=recovar # if you want to use jupyter notebooks
 
 
-[Jump to TLDR](#tldr)
-
-[See what output format looks like](simple_heterogeneity_output_example.ipynb)
-
-
 ## I. Preprocessing 
 
 The input layer of RECOVAR is borrowed directly from the excellent [cryoDRGN toolbox](https://cryodrgn.cs.princeton.edu/). 
