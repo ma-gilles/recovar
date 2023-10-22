@@ -206,7 +206,10 @@ def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us
 def kmeans_analysis_from_dict(output_folder, results, cryos, likelihood_threshold,  n_clusters = 20, generate_volumes = True, zdim =-1, compute_reproj = False):
     from recovar import dataset
 
-    cryos = dataset.load_dataset_from_args(results['input_args']) if cryos is None else cryos
+    if cryos is None:
+        cryos = dataset.load_dataset_from_args(results['input_args']) if cryos is None else cryos
+        embedding.set_contrasts_in_cryos(cryos, results['contrasts'][zdim])
+
     return kmeans_analysis(output_folder, cryos, results['means'], results['u']['rescaled'], results['zs'][zdim], results['cov_zs'][zdim], results['cov_noise'], likelihood_threshold,  n_clusters = n_clusters, generate_volumes = generate_volumes, compute_reproj = compute_reproj)
     
 def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, cov_noise, likelihood_threshold,  n_clusters = 20, generate_volumes = True, compute_reproj = False):
@@ -254,15 +257,13 @@ def compute_and_save_reweighted(cryos, means,  path_subsampled, zs, cov_zs, cov_
 
     #batch_size = 
     memory_to_use = utils.get_gpu_memory_total() - path_subsampled.shape[0] * utils.get_size_in_gb(means['combined']) * 2
-    batch_size = 5 * utils.get_image_batch_size(cryos[0].grid_size, memory_to_use)
+    batch_size = 2 * utils.get_image_batch_size(cryos[0].grid_size, memory_to_use)
     logger.info(f"batch size in reweighting: {batch_size}")
     trajectory_prior, halfmaps = embedding.generate_conformation_from_reweighting(cryos, means, cov_noise, zs, cov_zs, path_subsampled, batch_size = batch_size, disc_type = 'linear_interp', likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, volume_mask = volume_mask)
     save_volumes(trajectory_prior, output_folder +  'reweight_')
-    dump_halfmaps(halfmaps, output_folder)
+    save_volumes(halfmaps[0], output_folder +  'reweight_halfmap0_')
+    save_volumes(halfmaps[1], output_folder +  'reweight_halfmap1_')
 
-def dump_halfmaps(half_maps, output_folder):
-    save_volumes(half_maps[0], output_folder +  'reweight_halfmap0_')
-    save_volumes(half_maps[1], output_folder +  'reweight_halfmap1_')
     
 def compute_and_save_volumes_from_z(dataset_loader, means, u,  path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = None, recompute_prior = True, compute_reproj = True ):
         
@@ -330,7 +331,11 @@ def make_trajectory_plots_from_results(results, output_folder, cryos = None, z_s
     assert (((z_st is not None) and (z_end is not None)) or (gt_volumes is not None)), 'either z_st and z_end should be passed, or gt_volumes'
 
     # results = load_results_new(results['output_dir'])
-    cryos = dataset.load_dataset_from_args(results['input_args']) if cryos is None else cryos
+    if cryos is None:
+        cryos = dataset.load_dataset_from_args(results['input_args']) if cryos is None else cryos
+        embedding.set_contrasts_in_cryos(cryos, results['contrasts'][basis_size])
+
+    # cryos = dataset.load_dataset_from_args(results['input_args']) if cryos is None else cryos
     latent_space_bounds = ld.compute_latent_space_bounds(results['zs'][basis_size])
     
     return make_trajectory_plots(

@@ -3,7 +3,7 @@ import recovar.config
 import logging
 import numpy as np
 from recovar import output as o
-from recovar import dataset, utils, latent_density
+from recovar import dataset, utils, latent_density, embedding
 from scipy.spatial import distance_matrix
 import pickle
 import os, argparse
@@ -30,11 +30,11 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--n-clusters", metavar=int, default=40, help="mask options: from_halfmaps (default), input, sphere, none"
+        "--n-clusters", metavar=int, default=40, help="number of k-means clusters (default 40)"
     )
 
     parser.add_argument(
-        "--n-trajectories", type=int, default=6, dest="n_trajectories", help="how many trajectories to compute between k-means clusters"
+        "--n-trajectories", type=int, default=6, dest="n_trajectories", help="number of trajectories to compute between k-means clusters (default 6)"
     )
 
     parser.add_argument(
@@ -88,11 +88,12 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         logger.error("z-dim not found in results. Options are:" + ','.join(str(e) for e in results['zs'].keys()))
 
     cryos = dataset.load_dataset_from_args(results['input_args'])
+    embedding.set_contrasts_in_cryos(cryos, results['contrasts'][zdim])
 
-    logger.warning('Contrast in reweighting not implemented!! FIX THIS')
+    # logger.warning('Contrast in reweighting not implemented!! FIX THIS')
     # DO THIS 
     # for cryos_idx,cryo in enumerate(cryos):
-    #     cryo.CTF_params[:,-1] = results['est_contrasts'][zdim][]
+    #     cryo.CTF_params[:,-1] = results['contrasts'][zdim][]
 
     output_folder_kmeans = output_folder + 'kmeans'+'_'+ str(n_clusters) + '/'    
     o.mkdir_safe(output_folder_kmeans)    
@@ -128,7 +129,9 @@ def pick_pairs(centers, n_pairs):
     # Pick some pairs that are far away from each other.
     pairs = []
     X = distance_matrix(centers[:,:], centers[:,:])
+
     for _ in range(n_pairs//2):
+
         i_idx,j_idx = np.unravel_index(np.argmax(X), X.shape)
         X[i_idx, :] = 0 
         X[:, i_idx] = 0 
@@ -136,10 +139,8 @@ def pick_pairs(centers, n_pairs):
         X[:, j_idx] = 0 
         pairs.append([i_idx, j_idx])
 
-
     # Pick some pairs that are far in the first few principal components.
     zdim = centers.shape[-1]
-    pairs = []
     max_k = np.min([n_pairs//2, zdim])
     for k in range(max_k):
         i_idx = np.argmax(centers[:,k])

@@ -113,12 +113,10 @@ When the input images (.mrcs), poses (.pkl), and CTF parameters (.pkl) have been
 
 
 <details><summary><code>$ python pipeline.py -h</code></summary>
-
-    usage: pipeline.py [-h] -o OUTDIR [--zdim ZDIM] --poses POSES --ctf pkl [--mask mrc]
-    [--mask-option <class 'str'>] [--mask-dilate-iter MASK_DILATE_ITER]
-    [--contrast <class 'str'>] [--ind PKL] [--uninvert-data] [--datadir DATADIR]
-    [--n-images N_IMAGES] [--padding PADDING] [--halfsets HALFSETS]
-    particles
+    usage: pipeline.py [-h] -o OUTDIR [--zdim ZDIM] --poses POSES --ctf pkl [--mask mrc] [--mask-option <class 'str'>] [--mask-dilate-iter MASK_DILATE_ITER]
+                    [--correct-contrast] [--ind PKL] [--uninvert-data UNINVERT_DATA] [--datadir DATADIR] [--n-images N_IMAGES] [--padding PADDING]
+                    [--halfsets HALFSETS]
+                    particles
 
     positional arguments:
     particles             Input particles (.mrcs, .star, .cs, or .txt)
@@ -135,14 +133,13 @@ When the input images (.mrcs), poses (.pkl), and CTF parameters (.pkl) have been
                             mask options: from_halfmaps (default), input, sphere, none
     --mask-dilate-iter MASK_DILATE_ITER
                             mask options how many iters to dilate input mask (only used for input mask)
-    --contrast <class 'str'>
-                            contrast options: none (option), contrast_qr
+    --correct-contrast    estimate and correct for amplitude scaling (contrast) variation across images
 
     Dataset loading:
     --ind PKL             Filter particles by these indices
-    --uninvert-data       Do not invert data sign
-    --datadir DATADIR     Path prefix to particle stack if loading relative paths from a .star or .cs
-                            file
+    --uninvert-data UNINVERT_DATA
+                            Invert data sign: options: true, false, automatic (default). automatic will swap signs if sum(estimated mean) < 0
+    --datadir DATADIR     Path prefix to particle stack if loading relative paths from a .star or .cs file
     --n-images N_IMAGES   Number of images to use (should only use for quick run)
     --padding PADDING     Real-space padding
     --halfsets HALFSETS   Path to a file with indices of split dataset (.pkl).
@@ -161,7 +158,7 @@ Additional parameters which are typically set include:
 * `--mask-option` to specify which mask to use
 * `--mask` to specify the mask path (`.mrc`)
 * `--dilate-mask-iter` to specify a number of dilation of mask
-* `--uninvert-data`, Use if particles are dark on light (negative stain format)
+<!-- * `--uninvert-data`, Use if particles are dark on light (negative stain format) -->
 
 
 ## IV. Analyzing results

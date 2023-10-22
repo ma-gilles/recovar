@@ -63,9 +63,15 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
 
     assert left_over_memory > 0, "GPU memory too small?"
     batch_size = int(left_over_memory/ ( 
-        (cryos[0].grid_size**2 * contrast_grid.size * basis_size
-        + 4 * contrast_grid.size * basis_size**2)
+        (cryos[0].grid_size**2  * basis_size
+        + 1 * contrast_grid.size * basis_size**2 )
         *8/1e9 )/ 20)
+
+    # batch_size = int(left_over_memory/ ( 
+    #     (cryos[0].grid_size**2 * contrast_grid.size * basis_size
+    #     + 4 * contrast_grid.size * basis_size**2 )
+    #     *8/1e9 )/ 20)
+
 
     batch_size_old = int((2**24)*8 /( cryos[0].grid_size**2 * np.max([basis_size, 8]) ) * gpu_memory / 38 ) 
     print("new batch:",batch_size, "old batch:", batch_size_old)
@@ -288,3 +294,8 @@ def solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, 
 batch_over_contrast_solve_contrast_linear_system = jax.vmap(solve_contrast_linear_system, in_axes = ( None, None, None, None, None, 0) )
 batch_over_images_and_contrast_solve_contrast_linear_system = jax.vmap(batch_over_contrast_solve_contrast_linear_system, in_axes = ( 0, 0,0,None,0, None) )
 
+def set_contrasts_in_cryos(cryos, contrasts):
+    running_idx = 0 
+    for i in range(2): # Untested
+        cryos[i].CTF_params[:,8] *= contrasts[running_idx:running_idx+cryos[i].n_images]
+        running_idx += cryos[i].n_images

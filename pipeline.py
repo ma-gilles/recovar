@@ -18,8 +18,6 @@ def add_args(parser: argparse.ArgumentParser):
         help="Input particles (.mrcs, .star, .cs, or .txt)",
     )
 
-    def list_of_ints(arg):
-        return list(map(int, arg.split(',')))
 
     parser.add_argument(
         "-o",
@@ -28,6 +26,10 @@ def add_args(parser: argparse.ArgumentParser):
         required=True,
         help="Output directory to save model",
     )
+
+    def list_of_ints(arg):
+        return list(map(int, arg.split(',')))
+
     parser.add_argument('--zdim', type=list_of_ints, default=[4,10,20], help="Dimension of latent variable")
 
     # parser.add_argument(
@@ -52,7 +54,10 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--contrast", metavar=str, default="none", help="contrast options: none (option), contrast_qr"
+        "--correct-contrast",
+        dest = "correct_contrast",
+        action="store_true",
+        help="estimate and correct for amplitude scaling (contrast) variation across images "
     )
     
     group = parser.add_argument_group("Dataset loading")
@@ -62,11 +67,12 @@ def add_args(parser: argparse.ArgumentParser):
         metavar="PKL",
         help="Filter particles by these indices",
     )
+
     group.add_argument(
         "--uninvert-data",
         dest="uninvert_data",
-        action="store_true",
-        help="Do not invert data sign",
+        default = "automatic",
+        help="Invert data sign: options: true, false, automatic (default). automatic will swap signs if sum(estimated mean) < 0",
     )
 
     # Should probably add these options
@@ -125,6 +131,7 @@ def standard_recovar_pipeline(args):
     logger.addHandler(logging.FileHandler(f"{args.outdir}/run.log"))
     logger.info(args)
     ind_split = dataset.figure_out_halfsets(args)
+
     dataset_loader_dict = dataset.make_dataset_loader_dict(args)
     options = utils.make_algorithm_options(args)
 
@@ -149,15 +156,25 @@ def standard_recovar_pipeline(args):
     means, mean_prior, _, _ = homogeneous.get_mean_conformation(cryos, 5*batch_size, cov_noise , valid_idx, disc_type, use_noise_level_prior = False, grad_n_iter = 5)
     
     mean_real = ftu.get_idft3(means['combined'].reshape(cryos[0].volume_shape))
-    if np.sum(mean_real.real) < 0:
-        # for key in ['combined', 'init0', 'init1', 'corrected0', 'corrected1']:
-        #     means[key] =- means[key]
-        # for cryo in cryos:
-        #     cryo.image_stack.uninvert_data = not cryo.image_stack.uninvert_data
-        logger.warning('sum(mean) < 0! PROBABLY CHECK/UNCHECK --uninvert-data')
 
+    uninvert_check = np.sum((mean_real.real**3 * cryos[0].get_volume_radial_mask(cryos[0].grid_size//3).reshape(cryos[0].volume_shape))) < 0
+    if args.uninvert_data == 'automatic':
+        # Check if in real space, things towards the middle are mostly positive or negative
+        if uninvert_check:
+        # if np.sum(mean_real.real**3 * cryos[0].get_volume_mask() ) < 0:
+            for key in ['combined', 'init0', 'init1', 'corrected0', 'corrected1']:
+                means[key] =- means[key]
+            for cryo in cryos:
+                cryo.image_stack.mult = -1 * cryo.image_stack.mult
+            args.uninvert_data = "true"
+            logger.warning('sum(mean) < 0! swapping sign of data (uninvert-data = true)')
+        else:
+            logger.info('setting (uninvert-data = false)')
+            args.uninvert_data = "false"
+    elif uninvert_check:
+        logger.warning('sum(mean) < 0! Data probably needs to be inverted! set --uninvert-data=true (or automatic)')
 
-    if means['combined'].dtype == cryo.dtype:
+    if means['combined'].dtype != cryo.dtype:
         logger.warning(f"mean estimate is in type: {means['combined'].dtype}")
         means['combined'] = means['combined'].astype(cryo.dtype)
 
@@ -202,7 +219,7 @@ def standard_recovar_pipeline(args):
 
     result = { 'means':means, 'u': u, 's':s, 'volume_mask' : volume_mask,
                'dilated_volume_mask': dilated_volume_mask,
-                'zs': zs, 'cov_zs' : cov_zs , 'est_contrasts': est_contrasts, 'cov_noise': cov_noise,
+                'zs': zs, 'cov_zs' : cov_zs , 'contrasts': est_contrasts, 'cov_noise': cov_noise,
                 'input_args' : args,
                 'latent_space_bounds' : np.array(latent_space_bounds), 
                 'density': np.array(density)}

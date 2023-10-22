@@ -14,7 +14,7 @@ names_to_show = { "diagonal": "diagonal", "wilson": "Wilson", "diagonal masked":
 colors_name = { "diagonal": "cornflowerblue", "wilson": "lightsalmon", "diagonal masked": "blue", "wilson masked": "orangered"  }
 plt.rcParams['text.usetex'] = True
 
-def plot_summary(results,cryos):
+def plot_summary(results,cryos, n_eigs = 3):
     plt.rcParams.update({
         # "text.usetex": True,
         # "font.family": "serif",
@@ -24,7 +24,67 @@ def plot_summary(results,cryos):
             'size'   : 22}
     matplotlib.rc('font', **font)
 
-    n_plots = 5
+    n_plots = 2 + n_eigs
+    fig, axs = plt.subplots(6, n_plots, figsize = (6*3, n_plots * 3))
+    global is_first
+    is_first = True
+    
+    def plot_vol(vol, n_plot, from_ft = True, cmap = 'viridis', name ="", symmetric = False):
+        if not from_ft:
+            vol = ftu.get_dft3(vol.reshape(cryos[0].volume_shape)).reshape(-1)
+        global is_first
+        axs[0, n_plot].set_title(name)
+        for k in range(3):
+            img = cryos[0].get_proj(vol, axis =k )
+            
+            if symmetric:
+                vmax = np.max(np.abs(img))
+                axs[k, n_plot].imshow(img , cmap=matplotlib.colormaps[cmap], vmin = -vmax, vmax = vmax)
+            else:
+                axs[k, n_plot].imshow(img , cmap=matplotlib.colormaps[cmap])
+            axs[k, n_plot].set_xticklabels([])
+            axs[k, n_plot].set_yticklabels([])
+            if is_first:
+                axs[k, n_plot].set_ylabel(f"projection {k}")#, fontsize = 20)
+
+        for k in range(3,6):
+            img = cryos[0].get_slice_real(vol, axis =k-3 )
+            
+            if symmetric:
+                vmax = np.max(np.abs(img))
+                axs[k, n_plot].imshow(img , cmap=matplotlib.colormaps[cmap], vmin = -vmax, vmax = vmax)
+            else:
+                axs[k, n_plot].imshow(img , cmap=matplotlib.colormaps[cmap])
+            axs[k, n_plot].set_xticklabels([])
+            axs[k, n_plot].set_yticklabels([])
+            
+            if is_first:
+                axs[k, n_plot].set_ylabel(f"slice {k-3}")#, fontsize = 20)
+
+        is_first = False
+        return
+
+    plot_vol(results['means']['combined'], 0, from_ft = True, name = 'mean')
+    plot_vol(results['volume_mask'], 1, from_ft = False,name = 'mask')
+    for k in range(n_eigs):
+        plot_vol(results['u']['rescaled'][:,k], k+2, from_ft = True, cmap = 'seismic' ,name = f"eigen{k}", symmetric = True)
+
+    plt.subplots_adjust(wspace=0, hspace=0)
+
+    
+    return
+    
+def plot_volume_sequence(volumes,cryos):
+    plt.rcParams.update({
+        # "text.usetex": True,
+        # "font.family": "serif",
+        # "font.sans-serif": "Helvetica",
+    })
+    font = {'weight' : 'bold',
+            'size'   : 22}
+    matplotlib.rc('font', **font)
+
+    n_plots = len(volumes)
     fig, axs = plt.subplots(6, n_plots, figsize = (6*3, n_plots * 3))
     global is_first
     is_first = True
@@ -63,19 +123,16 @@ def plot_summary(results,cryos):
 
         is_first = False
             
-
-    plot_vol(results['means']['combined'], 0, from_ft = True, name = 'mean')
-    plot_vol(results['volume_mask'], 1, from_ft = False,name = 'mask')
-    plot_vol(results['u']['rescaled'][:,0], 2, from_ft = True, cmap = 'seismic' ,name = 'eigen0', symmetric = True)
-    plot_vol(results['u']['rescaled'][:,1], 3, from_ft = True, cmap = 'seismic' ,name = 'eigen1', symmetric = True)
-    plot_vol(results['u']['rescaled'][:,2], 4, from_ft = True, cmap = 'seismic' ,name = 'eigen2', symmetric = True)
+    for vol_idx,vol in enumerate(volumes):
+        plot_vol(results['means']['combined'], vol_idx, from_ft = True, name = f"vol{vol_idx}")
 
     plt.subplots_adjust(wspace=0, hspace=0)
-
     
     return
     
-
+    
+    
+    
 
 def plot_cov_results(u,s, max_eig = 25, savefile = None):
     

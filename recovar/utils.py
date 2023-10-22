@@ -99,6 +99,6 @@ def get_latent_density_batch_size(test_pts,zdim, gpu_memory):
 def make_algorithm_options(args):
     options = {'volume_mask_option': args.mask_option,
     'zs_dim_to_test': args.zdim,
-    'contrast' : args.contrast
+    'contrast' : "contrast_qr" if args.correct_contrast else "none"
     }
     return options

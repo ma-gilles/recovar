@@ -3,7 +3,7 @@ import recovar.config
 import logging
 import numpy as np
 from recovar import output as o
-from recovar import dataset, utils, latent_density
+from recovar import dataset, utils, latent_density, embedding
 from scipy.spatial import distance_matrix
 import pickle
 import os, argparse
@@ -71,6 +71,7 @@ def compute_trajectory(results, zdim, z_st, z_end, output_folder, n_vols_along_p
 
     # Load dataset if not loaded
     cryos = dataset.load_dataset_from_args(results['input_args']) if cryos is None else cryos
+    embedding.set_contrasts_in_cryos(cryos, results['contrasts'][zdim])
 
 
     path_folder = output_folder       

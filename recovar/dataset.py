@@ -358,8 +358,16 @@ def make_dataset_loader_dict(args):
                             'datadir': args.datadir,
                             'n_images' : args.n_images,
                             'ind_file': args.ind,
-                            'padding' : args.padding,
-                            'uninvert_data' : args.uninvert_data}
+                            'padding' : args.padding }
+    
+    
+    if args.uninvert_data == "automatic" or  args.uninvert_data == "false":
+        dataset_loader_dict['uninvert_data'] = False
+    elif args.uninvert_data == "true":
+        dataset_loader_dict['uninvert_data'] = True
+    else:
+        raise Exception("input uninvert-data option is wrong. Should be automatic, true or false ")
+    
     return dataset_loader_dict
 
 def figure_out_halfsets(args):
