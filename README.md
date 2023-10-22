@@ -12,7 +12,7 @@ Running RECOVAR:
 
 [TLDR](#tldr)
 
-Peak at what output looks like on a [synthetic dataset](output_visualization_synthetic.ipynb) and [real dataset](output_visualization_empiar10076.ipynb).
+Peak at what output looks like on a [synthetic dataset](output_visualization_simple_synthetic.ipynb) and [real dataset](output_visualization_empiar10076.ipynb).
 
 Also:
 [using the source code](#using-the-source-code), 
@@ -20,7 +20,7 @@ Also:
 [contact](#contact)
 
 ## Installation 
-CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html#) are required to run this code. See information about JAX installation [here](https://jax.readthedocs.io/en/latest/installation.html).
+To run this code, CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html#) are required. See information about JAX installation [here](https://jax.readthedocs.io/en/latest/installation.html).
 
 Here is a set of commands which runs on our university cluster (Della), but may need to be tweaked to run on other clusters.
 
@@ -79,7 +79,7 @@ The maximum recommended image size is D=256, so we also recommend downsampling y
 
     $ cryodrgn downsample [input particle stack] -D 256 -o particles.256.mrcs
 
-The input file format can be a single `.mrcs` file, a `.txt` file containing paths to multiple `.mrcs` files, a RELION `.star` file, or a cryoSPARC `.cs` file. For the latter two options, if the relative paths to the `.mrcs` are broken, the argument `--datadir` can be used to supply the path to where the `.mrcs` files are located.
+The input file format can be a single `.mrcs` file, a `.txt` file containing paths to multiple `.mrcs` files, a RELION `.star` file, or a cryoSPARC `.cs` file. For the latter two options, if the relative paths to the `.mrcs` are broken, the argument `--datadir` can supply the path to where the `.mrcs` files are located.
 
 If there are memory issues with downsampling large particle stacks, add the `--chunk 10000` argument to save images as separate `.mrcs` files of 10k images.
 
@@ -114,14 +114,14 @@ Example usage for a .cs file:
 
 ## II. Specifying a real-space mask
 
-A real space mask is important to boost SNR. Most consensus reconstruction software output a mask, which you can use as input (`--mask-option=input`). Make sure the mask is not too tight, you can use the input `--dilate-mask-iter` to expand the mask if needed. You may also want to use a focusing mask to focus on heterogeneity on one part of the protein, [click here](https://guide.cryosparc.com/processing-data/tutorials-and-case-studies/mask-selection-and-generation-in-ucsf-chimera) to find instructions to generate one with Chimera.
+A real space mask is important to boost SNR. Most consensus reconstruction software output a mask, which you can use as input (`--mask-option=input`). Make sure the mask is not too tight; you can use the input `--dilate-mask-iter` to expand the mask if needed. You may also want to use a focusing mask to focus on heterogeneity in one part of the volume [click here](https://guide.cryosparc.com/processing-data/tutorials-and-case-studies/mask-selection-and-generation-in-ucsf-chimera) to find instructions to generate one with Chimera.
 
 If you don't input a mask, the software will estimate one using the two halfmap means ( `--mask-option=from-halfmaps`). You may also want to run with a loose spherical mask (option `--mask-option=sphere`) and use the computed variance map to observe which parts have large variance.
 
 
 ## III. Running RECOVAR pipeline
 
-When the input images (.mrcs), poses (.pkl), and CTF parameters (.pkl) have been prepared, RECOVAR can be run with following command:
+When the input images (.mrcs), poses (.pkl), and CTF parameters (.pkl) have been prepared, RECOVAR can be run with the following command:
 
     $ python [recovar_directory]/pipeline.py particles.128.mrcs -o output_test --ctf ctf.pkl --poses poses.pkl
 
@@ -168,21 +168,21 @@ The required arguments are:
 * `--ctf`, ctf parameters (`.pkl`), unless phase-flipped images are used
 * `-o`, a clean output directory for saving results
 
-Additional parameters which are typically set include:
+Additional parameters that are typically set include:
 * `--zdim`, dimensions of PCA to use for embedding, can submit one integer (`--zdim=20`) or a or a command separated list (`--zdim=10,50,100`). Default (`--zdim=4,10,20`).
 * `--mask-option` to specify which mask to use
 * `--mask` to specify the mask path (`.mrc`)
-* `--dilate-mask-iter` to specify a number of dilation of mask
+* `--dilate-mask-iter` to specify the number of dilation iterationof mask (default=0)
 <!-- * `--uninvert-data`, Use if particles are dark on light (negative stain format) -->
 
 
 ## IV. Analyzing results
 
-After the pipeline is run, you can find the mean, eigenvectors, variance maps and embeddings in the `outdir/results` directory, where outdir the option given above by `-o`. You can run some standard analysis by running 
+After the pipeline is run, you can find the mean, eigenvectors, variance maps, and embeddings in the `outdir/results` directory, where outdir is the option given above by `-o`. You can run some standard analysis by running:
 
     python analyze.py [outdir] --zdim=10
 
-It will run k-means, generate volumes corresponding to the centers, generate trajectories between pairs of cluster centers and run UMAP. See more input details below.
+It will run k-means, generate volumes corresponding to the centers, generate trajectories between pairs of cluster centers, and run UMAP. See more input details below.
 
 
 <details><summary><code>$ python analyze.py -h</code></summary>
@@ -215,7 +215,7 @@ It will run k-means, generate volumes corresponding to the centers, generate tra
 ## V. Visualizing results
 ### Output structure
 
-Assuming you have run the pipeline.py and analyze.py, the output will be saved in the format below (click on the arrow). If you are running on a remote server, I would advise you only copy the [output_dir]/output locally, since the model file will be huge. You can then visualize volumes in ChimeraX.
+Assuming you have run the pipeline.py and analyze.py, the output will be saved in the format below (click on the arrow). If you are running on a remote server, I suggest you only copy the [output_dir]/output locally, since the model file will be huge. You can then visualize volumes in ChimeraX.
 
 
 <details><summary>Output file structure</summary>
@@ -223,51 +223,51 @@ Assuming you have run the pipeline.py and analyze.py, the output will be saved i
 
     [output_dir]
     ├── model
-    │   ├── halfsets.pkl # indices of half sets
-    │   └── results.pkl # all results, should only be used by analye.py
+    │   ├── halfsets.pkl # indices of half sets
+    │   └── results.pkl # all results, should only be used by analye.py
     ├── output
-    │   ├── analysis_4
-    │   │   ├── kmeans_40
-    │   │   │   ├── centers_01no_annotate.png
-    │   │   │   ├── centers_01.png
-    │   │   │   ├── ...
-    │   │   │   ├── centers.pkl # centers in zformat
-    │   │   │   ├── path0
-    │   │   │   │   ├── density
-    │   │   │   │   │   ├── density_01.png
-    │   │   │   │   │   └── ...
-    │   │   │   │   ├── density_01.png
-    │   │   │   │   ├── ...
-    │   │   │   │   ├── path_density_t.png
-    │   │   │   │   ├── path.json
-    │   │   │   │   ├── reweight_000.mrc # reweighted reconstructions
-    │   │   │   │   ├── ...
-    │   │   │   │   ├── reweight_halfmap0_000.mrc # halfmaps for each reconstruction
-    │   │   │   │   └── ...
-    │   │   │   ├── path1
-    │   │   │   │   ├── ...
-    │   │   │   ├── reweight_000.mrc # volume reconstruction of kmeans 
-    │   │   │   ├── ...
-    │   │   │   ├── reweight_halfmap1_039.mrc # also halfmaps
-    │   │   │   └── trajectory_endpoints.pkl # end points of trajectory used 
-    │   │   └── umap_embedding.pkl 
-    │   └── volumes
-    │       ├── dilated_mask.mrc
-    │       ├── eigen_neg000.mrc # Eigenvectors
-    │       ├── ...
-    │       ├── eigen_pos000.mrc # Negative of eigenvectors. Useful to Chimera visualization to have the two separated, although they clearly contain the same observation
-    │       ├── ...
-    │       ├── mask.mrc # mask used 
-    │       ├── mean.mrc # computed mean
-    │       ├── variance10.mrc # compute variance from rank 10 approximation
-    │       └── ...
+    │   ├── analysis_4
+    │   │   ├── kmeans_40
+    │   │   │   ├── centers_01no_annotate.png
+    │   │   │   ├── centers_01.png
+    │   │   │   ├── ...
+    │   │   │   ├── centers.pkl # centers in zformat
+    │   │   │   ├── path0
+    │   │   │   │   ├── density
+    │   │   │   │   │   ├── density_01.png
+    │   │   │   │   │   └── ...
+    │   │   │   │   ├── density_01.png
+    │   │   │   │   ├── ...
+    │   │   │   │   ├── path_density_t.png
+    │   │   │   │   ├── path.json
+    │   │   │   │   ├── reweight_000.mrc # reweighted reconstructions
+    │   │   │   │   ├── ...
+    │   │   │   │   ├── reweight_halfmap0_000.mrc # halfmaps for each reconstruction
+    │   │   │   │   └── ...
+    │   │   │   ├── path1
+    │   │   │   │   ├── ...
+    │   │   │   ├── reweight_000.mrc # volume reconstruction of kmeans 
+    │   │   │   ├── ...
+    │   │   │   ├── reweight_halfmap1_039.mrc # also halfmaps
+    │   │   │   └── trajectory_endpoints.pkl # end points of trajectory used 
+    │   │   └── umap_embedding.pkl 
+    │   └── volumes
+    │       ├── dilated_mask.mrc
+    │       ├── eigen_neg000.mrc # Eigenvectors
+    │       ├── ...
+    │       ├── eigen_pos000.mrc # Negative of eigenvectors. Useful to Chimera visualization to have the two separated, although they clearly contain the same observation
+    │       ├── ...
+    │       ├── mask.mrc # mask used 
+    │       ├── mean.mrc # computed mean
+    │       ├── variance10.mrc # compute variance from rank 10 approximation
+    │       └── ...
     └── run.log
 </details>
 
 
 ### Visualization in jupyter notebook
 
-You can visualize the results using [this notebook](output_visualization.ipynb), which will show a bunch of results including 
+You can visualize the results using [this notebook](output_visualization.ipynb), which will show a bunch of results including:
 * the FSC of the mean estimation to give you an on an upper bound of the resolution you can expect
 * decay of eigenvalues to help you pick the right `zdim`
 *  and standard clustering visualization (borrowed from the cryoDRGN output).
@@ -306,7 +306,7 @@ Usage example:
 
 ## TLDR
  (WIP - Untested)
-A very short example illustrating the steps to run the code on EMPIAR-10076. Read above for more details:
+A short example illustrating the steps to run the code on EMPIAR-10076. Read above for more details:
 
     # Downloaded poses from here: https://github.com/zhonge/cryodrgn_empiar.git
     git clone https://github.com/zhonge/cryodrgn_empiar.git
@@ -333,24 +333,24 @@ A very short example illustrating the steps to run the code on EMPIAR-10076. Rea
     # Open notebook output_visualization.ipynb
     # Change the recovar_result_dir = '[path_to_this_dir]/recovar_test' and 
 
-Note that this isn't exactly the one in the paper. Run this analyze command to the one in the paper (runs on filtered stack from cryoDRGN, and uses a predefined mask):
+Note that this is different from the one in the paper. Run the following pipeline command to get the one in the paper (runs on the filtered stack from the cryoDRGN paper, and uses a predefined mask):
 
     # Download mask
     git clone https://github.com/ma-gilles/recovar_masks.git
 
     python ~/recovar/pipeline.py particles.256.mrcs --ctf ctf.pkl --poses poses.pkl -o test-mask --mask recovar_masks/mask_10076.mrc --ind filtered.ind.pkl
 
-Output should be the same as [this notebook](output_visualization_empiar10076.ipynb).
+The output should be the same as [this notebook](output_visualization_empiar10076.ipynb).
 
 ## Using the source code
 
-I hope some developpers may find parts of the code useful for their own projects. See [this notebook](recovar_coding_tutorial.ipynb) for a short tutorial.
+I hope some developers find parts of the code useful for their projects. See [this notebook](recovar_coding_tutorial.ipynb) for a short tutorial.
 
 
 
 ## Limitations
 
-- *Symmetry*: there is currently no support for symmetry. If you got your poses through symmetric refinement, it will probably not work. If you make a symmetry expansion of the particles stack, it should probably work but I have not tested it.
+- *Symmetry*: there is currently no support for symmetry. If you got your poses through symmetric refinement, it will probably not work. It should probably work if you make a symmetry expansion of the particle stack, but I have not tested it.
 * *Memory*: you need a lot of memory to run this. For a stack of images of size 256, you probably need 400 GB+.
 - *Other ones, probably?*
 
