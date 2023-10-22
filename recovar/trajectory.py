@@ -51,9 +51,10 @@ def find_trajectory_in_grid(density, g_st, g_end, latent_space_bounds, eps = 1e-
     dx = get_grid_spacing(latent_space_bounds, density)
     logger.info(f"dx {dx}")
     path = gradient_descent_nd(travel_time, g_st, g_end, dx,  step_size = 0.25, n_theta = 10, max_steps = max_steps )
-    if density.ndim == 2:
-        plt.imshow(density, aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
-        plt.imshow(np.log(travel_time), aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
+
+    # if density.ndim == 2:
+    #     plt.imshow(density, aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
+    #     plt.imshow(np.log(travel_time), aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
     
     while path is None:
         if eps > 0.1:

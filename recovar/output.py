@@ -256,7 +256,7 @@ def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, cov_noi
 def compute_and_save_reweighted(cryos, means,  path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = None, recompute_prior = True, volume_mask = None):
 
     #batch_size = 
-    memory_to_use = utils.get_gpu_memory_total() - path_subsampled.shape[0] * utils.get_size_in_gb(means['combined']) * 2
+    memory_to_use = utils.get_gpu_memory_total() - path_subsampled.shape[0] * utils.get_size_in_gb(means['combined']) * 6
     batch_size = 2 * utils.get_image_batch_size(cryos[0].grid_size, memory_to_use)
     logger.info(f"batch size in reweighting: {batch_size}")
     trajectory_prior, halfmaps = embedding.generate_conformation_from_reweighting(cryos, means, cov_noise, zs, cov_zs, path_subsampled, batch_size = batch_size, disc_type = 'linear_interp', likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, volume_mask = volume_mask)
