@@ -113,10 +113,11 @@ When the input images (.mrcs), poses (.pkl), and CTF parameters (.pkl) have been
 
 
 <details><summary><code>$ python pipeline.py -h</code></summary>
+
     usage: pipeline.py [-h] -o OUTDIR [--zdim ZDIM] --poses POSES --ctf pkl [--mask mrc] [--mask-option <class 'str'>] [--mask-dilate-iter MASK_DILATE_ITER]
                     [--correct-contrast] [--ind PKL] [--uninvert-data UNINVERT_DATA] [--datadir DATADIR] [--n-images N_IMAGES] [--padding PADDING]
-                    [--halfsets HALFSETS]
-                    particles
+                        [--halfsets HALFSETS]
+                        particles
 
     positional arguments:
     particles             Input particles (.mrcs, .star, .cs, or .txt)
