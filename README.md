@@ -345,6 +345,7 @@ Note that this isn't exactly the one in the paper. Run this analyze command to t
 
     python ~/recovar/pipeline.py particles.256.mrcs --ctf ctf.pkl --poses poses.pkl -o test-mask --mask recovar_masks/mask_10076.mrc --ind filtered.ind.pkl
 
+Output should be the same as [this notebook](output_visualization_empiar10076.ipynb).
 
 ## Using the source code
 
