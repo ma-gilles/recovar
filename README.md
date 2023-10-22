@@ -1,6 +1,23 @@
 # RECOVAR: Regularized covariance estimation for cryo-EM heterogeneity analysis
 
-## Installation
+[Installation](#installation)
+
+Running RECOVAR:
+* [1. Preprocessing](#i-preprocessing)
+* [2. Specifying a mask](#ii-specifying-a-real-space-mask)
+* [3. Running the pipeline](#iii-running-recovar-pipeline)
+* [4. Analyzing results](#iv-analyzing-results)
+* [5. Visualizing results](#v-visualizing-results)
+* [6. Generating trajectories](#vi-generating-additional-trajectories)
+
+[TLDR](#tldr)
+
+Also:
+[Using the source code](#using-the-source-code), 
+[limitations](#limitations), 
+[contact](#contact)
+
+## Installation 
 CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html#) are required to run this code. See information about JAX installation [here](https://jax.readthedocs.io/en/latest/installation.html).
 
 Here is a set of commands which runs on our university cluster (Della), but may need to be tweaked to run on other clusters.
@@ -19,7 +36,7 @@ Here is a set of commands which runs on our university cluster (Della), but may 
 [See what output format looks like](simple_heterogeneity_output_example.ipynb)
 
 
-## I. Preprocessing (copied from [CryoDRGN](https://github.com/ml-struct-bio/cryodrgn#2-parse-image-poses-from-a-consensus-homogeneous-reconstructiqqon))
+## I. Preprocessing 
 
 The input layer of RECOVAR is borrowed directly from the excellent [cryoDRGN toolbox](https://cryodrgn.cs.princeton.edu/). 
 Particles, poses and CTF must be prepared in the same way, and below is copy-pasted part of 
@@ -105,7 +122,7 @@ A real space mask is important to boost SNR. Most consensus reconstruction softw
 If you don't input a mask, the software will estimate one using the two halfmap means ( `--mask-option=from-halfmaps`). You may also want to run with a loose spherical mask (option `--mask-option=sphere`) and use the computed variance map to observe which parts have large variance.
 
 
-## III. Running RECOVAR
+## III. Running RECOVAR pipeline
 
 When the input images (.mrcs), poses (.pkl), and CTF parameters (.pkl) have been prepared, RECOVAR can be run with following command:
 
@@ -290,11 +307,6 @@ Usage example:
 
 
 
-## VII. Using/extending the source code
-
-I hope some developpers may find parts of the code useful for their own projects. See [this notebook](recovar_coding_tutorial.ipynb) for a short tutorial.
-
-
 ## TLDR
  (WIP - Untested)
 A very short example illustrating the steps to run the code on EMPIAR-10076. Read above for more details:
@@ -330,6 +342,12 @@ Note that this isn't exactly the one in the paper. Run this analyze command to t
     git clone https://github.com/ma-gilles/recovar_masks.git
 
     python ~/recovar/pipeline.py particles.256.mrcs --ctf ctf.pkl --poses poses.pkl -o test-mask --mask recovar_masks/mask_10076.mrc --ind filtered.ind.pkl
+
+
+## Using the source code
+
+I hope some developpers may find parts of the code useful for their own projects. See [this notebook](recovar_coding_tutorial.ipynb) for a short tutorial.
+
 
 
 ## Limitations
