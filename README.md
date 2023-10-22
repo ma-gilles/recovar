@@ -12,8 +12,10 @@ Running RECOVAR:
 
 [TLDR](#tldr)
 
+Peak at what output looks like on a [synthetic dataset](output_visualization_synthetic.ipynb) and [real dataset](output_visualization_empiar10076.ipynb).
+
 Also:
-[Using the source code](#using-the-source-code), 
+[using the source code](#using-the-source-code), 
 [limitations](#limitations), 
 [contact](#contact)
 
