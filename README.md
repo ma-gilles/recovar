@@ -290,7 +290,7 @@ Usage example:
 
 
 
-## VII. Using/extending the code
+## VII. Using/extending the source code
 
 I hope some developpers may find parts of the code useful for their own projects. See [this notebook](recovar_coding_tutorial.ipynb) for a short tutorial.
 
