@@ -114,9 +114,9 @@ def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_s
     # Reorthogonalize
     # Replaced by a slower but stable.
     # new_u, new_s, _ = linalg.thin_svd_in_blocks(cov_chol)
-
     cov_chol = jax.device_put(cov_chol, device=jax.devices("cpu")[0])
-    new_u, new_s, _ = jnp.linalg.svd(cov_chol)
+    new_u, new_s, _ = jnp.linalg.svd(cov_chol, full_matrices = False)
+
     new_u = np.array(new_u) 
     new_s = np.array(new_s)
 

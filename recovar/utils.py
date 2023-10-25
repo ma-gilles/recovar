@@ -1,10 +1,12 @@
+import logging
 import jax
 import numpy as np
 import mrcfile, os , psutil
-
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jax.numpy)
     
+logger = logging.getLogger(__name__)
+
 def find_angle_between_subspaces(v1,v2, max_rank):
     ss = np.conj(v1[:,:max_rank]).T @ v2[:,:max_rank]
     s,v,d = np.linalg.svd(ss)
@@ -94,6 +96,19 @@ def get_column_batch_size(grid_size, gpu_memory):
 
 def get_latent_density_batch_size(test_pts,zdim, gpu_memory):
     return np.max([int(gpu_memory/3 * (get_size_in_gb(test_pts) * zdim**2)), 1])
+
+def get_embedding_batch_size(basis, image_size, contrast_grid, zdim, gpu_memory):
+
+    left_over_memory = ( gpu_memory - get_size_in_gb(basis))
+    assert left_over_memory > 0, "GPU memory too small?"
+
+    batch_size = int(left_over_memory/ ( (image_size  * np.max([zdim, 4]) + contrast_grid.size * zdim**2 ) *8/1e9 )/ 20)
+
+    if batch_size < 1:
+        logger.warning('GPU may be too small for the default parameters. Trying anyway')
+        return 1
+
+    return batch_size
 
 
 def make_algorithm_options(args):

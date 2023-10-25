@@ -56,26 +56,28 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
     
     basis_size = u.shape[-1] if basis_size == -1 else basis_size
 
-    left_over_memory = ( utils.get_gpu_memory_total() - utils.get_size_in_gb(basis))
-    # batch_size = int(left_over_memory/ 
-    #                 ((cryos[0].grid_size**2 * contrast_grid.size * basis_size
-    #                 + cryos[0].grid_size * contrast_grid.size * basis_size**2) * utils.get_size_in_gb(cryos[0].get_image(0)) )/3)
+    batch_size = utils.get_embedding_batch_size(basis, cryos[0].image_size, contrast_grid, basis_size, gpu_memory)
 
-    assert left_over_memory > 0, "GPU memory too small?"
-    batch_size = int(left_over_memory/ ( 
-        (cryos[0].grid_size**2  * basis_size
-        + 1 * contrast_grid.size * basis_size**2 )
-        *8/1e9 )/ 20)
+    # left_over_memory = ( utils.get_gpu_memory_total() - utils.get_size_in_gb(basis))
+    # # batch_size = int(left_over_memory/ 
+    # #                 ((cryos[0].grid_size**2 * contrast_grid.size * basis_size
+    # #                 + cryos[0].grid_size * contrast_grid.size * basis_size**2) * utils.get_size_in_gb(cryos[0].get_image(0)) )/3)
+
+    # assert left_over_memory > 0, "GPU memory too small?"
+
+    # batch_size = int(left_over_memory/ ( 
+    #     (cryos[0].image_size  * np.max([basis_size, 4])
+    #     + 1 * contrast_grid.size * basis_size**2 )
+    #     *8/1e9 )/ 20)
 
     # batch_size = int(left_over_memory/ ( 
     #     (cryos[0].grid_size**2 * contrast_grid.size * basis_size
     #     + 4 * contrast_grid.size * basis_size**2 )
     #     *8/1e9 )/ 20)
 
-
-    batch_size_old = int((2**24)*8 /( cryos[0].grid_size**2 * np.max([basis_size, 8]) ) * gpu_memory / 38 ) 
-    print("new batch:",batch_size, "old batch:", batch_size_old)
-    logger.info(f"z batch size? {batch_size}")
+    # batch_size_old = int((2**24)*8 /( cryos[0].grid_size**2 * np.max([basis_size, 8]) ) * gpu_memory / 38 ) 
+    # print("new batch:",batch_size, "old batch:", batch_size_old)
+    logger.info(f"embedding batch size? {batch_size}")
     # logger.info(f"z batch size old {batch_size_old}")
     # import pdb; pdb.set_trace()
 
