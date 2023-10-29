@@ -14,12 +14,15 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
     volume_shape = cryos[0].volume_shape
     vol_batch_size = utils.get_vol_batch_size(cryos[0].grid_size, gpu_memory_to_use)
 
-    covariance_cols, picked_frequencies = covariance_estimation.compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, disc_type = disc_type, radius = constants.COLUMN_RADIUS)
+    covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, disc_type = disc_type, radius = constants.COLUMN_RADIUS)
     logger.info("memory after covariance estimation")
     utils.report_memory_device(logger=logger)
 
     # First approximation of eigenvalue decomposition
     u,s = get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use )
+
+
+
 
     zss = {}
     u['rescaled'],s['rescaled'], zss['init'] = rescale_eigs(cryos, u['real'],s['real'], means['combined'], volume_mask, cov_noise, basis_size = constants.N_PCS_TO_COMPUTE, gpu_memory_to_use = gpu_memory_to_use, use_mask = True)
@@ -29,14 +32,20 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
     utils.report_memory_device(logger=logger)
     if (options['contrast'] == "contrast_qr"):
         c_time = time.time()
+        # Going to keep a copy around for debugging purposes. Probably should delete at some point to reduce memory 
+        u['rescaled_no_contrast'] = u['rescaled'].copy()
+        s['rescaled_no_contrast'] = s['rescaled'].copy()
+
         u['rescaled'],s['rescaled'] = knock_out_mean_component_2(u['rescaled'], s['rescaled'],means['combined'], volume_mask, volume_shape, vol_batch_size)
+
+
         logger.info(f"knock out time: {time.time() - c_time}")
         if u['rescaled'].dtype != cryos[0].dtype:
             logger.warning(f"u['rescaled'].dtype: {u['rescaled'].dtype}")
 
             
             
-    return u, s
+    return u, s, covariance_cols, picked_frequencies, column_fscs
 
 
 def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,  vol_batch_size, gpu_memory_to_use ):

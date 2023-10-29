@@ -37,7 +37,7 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, 
     utils.report_memory_device(logger = logger)
 
 
-    H_comb, B_comb, prior, _ = compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, cov_noise, mask_final, volume_shape,  gpu_memory, prior_iterations = 3, keep_intermediate = keep_intermediate, reg_init_multiplier = constants.REG_INIT_MULTIPLIER, substract_shell_mean = substract_shell_mean, shift_fsc = shift_fsc)
+    H_comb, B_comb, prior, fscs = compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, cov_noise, mask_final, volume_shape,  gpu_memory, prior_iterations = 3, keep_intermediate = keep_intermediate, reg_init_multiplier = constants.REG_INIT_MULTIPLIER, substract_shell_mean = substract_shell_mean, shift_fsc = shift_fsc)
     del Hs, Bs
 
     H_comb = np.stack(H_comb).astype(dtype = cryo.dtype)
@@ -57,7 +57,7 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, 
     del H_comb, B_comb, prior
     logger.info(f"reg time: {time.time() - st_time}")
     utils.report_memory_device(logger = logger)
-    return covariance_cols, picked_frequencies
+    return covariance_cols, picked_frequencies, np.asarray(fscs)
 
 
 def compute_both_H_B(cryos, mean, dilated_volume_mask, picked_frequencies, gpu_memory, cov_noise, disc_type, parallel_analysis ):
@@ -181,7 +181,8 @@ def compute_H_B_inner(centered_images, ones_mapped, CTF_val_on_grid_stacked, pla
     delta_at_freq = jnp.zeros(volume_size, dtype = centered_images.dtype )
     delta_at_freq = delta_at_freq.at[picked_freq_index].set(1) 
     delta_at_freq_mapped = core.forward_model(delta_at_freq, CTF_val_on_grid_stacked, plane_indices_on_grid_stacked) 
-    
+
+    # I can't remember why I decided this wasn't a good idea.
     # Apply mask
     # delta_at_freq_mapped = apply_image_masks(delta_at_freq_mapped, image_mask, image_shape)
 
@@ -206,6 +207,50 @@ def compute_H_B_inner(centered_images, ones_mapped, CTF_val_on_grid_stacked, pla
     return H_freq_idx, B_freq_idx
 
 batch_compute_H_B_inner = jax.vmap(compute_H_B_inner, in_axes = (None, None, None, None, None, 0, None))
+
+
+# Probably should delete the other version after debugging.
+# @functools.partial(jax.jit, static_argnums = [6])    
+def compute_H_B_inner_mask(centered_images, ones_mapped, CTF_val_on_grid_stacked, plane_indices_on_grid_stacked, cov_noise, picked_freq_index, image_mask, image_shape, volume_size):
+
+    mask = plane_indices_on_grid_stacked == picked_freq_index
+    v = centered_images * jnp.conj(CTF_val_on_grid_stacked)  
+
+    ## NOT THERE ARE SOME -1 ENTRIES. BUT THEY GET GIVEN A 0 WEIGHT. IN THEORY, JAX JUST IGNORES THEM ANYWAY BUT SHOULD FIX THIS. 
+
+    # C_n
+    mult = jnp.sum(v * mask, axis = -1)
+    w = v * jnp.conj(mult[:,None])
+    C_n = core.sum_batch_P_adjoint_mat_vec(volume_size, w, plane_indices_on_grid_stacked) 
+
+    # E_n
+    delta_at_freq = jnp.zeros(volume_size, dtype = centered_images.dtype )
+    delta_at_freq = delta_at_freq.at[picked_freq_index].set(1) 
+    delta_at_freq_mapped = core.forward_model(delta_at_freq, CTF_val_on_grid_stacked, plane_indices_on_grid_stacked) 
+    
+    # Apply mask
+    delta_at_freq_mapped = covariance_core.apply_image_masks(delta_at_freq_mapped, image_mask, image_shape)
+
+    delta_at_freq_mapped *= cov_noise
+
+    # Apply mask again conjugate == apply image mask since mask is real?
+    delta_at_freq_mapped = covariance_core.apply_image_masks(delta_at_freq_mapped, image_mask, image_shape)
+    
+    delta_at_freq_mapped = delta_at_freq_mapped  * jnp.conj(CTF_val_on_grid_stacked)
+    E_n = core.sum_batch_P_adjoint_mat_vec(volume_size, delta_at_freq_mapped, plane_indices_on_grid_stacked)
+    B_freq_idx = C_n - E_n
+
+    # H
+    v = ones_mapped * jnp.conj(CTF_val_on_grid_stacked)  
+    mult = jnp.sum(v * mask, axis = -1)
+    w = v * jnp.conj(mult[:,None])
+
+    # Pick out only columns j for which V[idx,j] is not zero
+    H_freq_idx = core.sum_batch_P_adjoint_mat_vec(volume_size, w, plane_indices_on_grid_stacked)
+    
+    # H_zeros = H_freq_idx == 0 
+    return H_freq_idx, B_freq_idx
+
 
 # @functools.partial(jax.jit, static_argnums = [5])    
 def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency_indices, batch_size, cov_noise, diag_prior, disc_type, parallel_analysis = False, jax_random_key = 0, batch_over_H_B = False, soften_mask = 3 ):
@@ -248,7 +293,6 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
             # images *=  np.exp(1j* np.random.rand(*(images.shape)) * 2 * np.pi) 
             
         images = covariance_core.apply_image_masks(images, image_mask, experiment_dataset.image_shape)  
-        del image_mask
 
         batch_CTF = experiment_dataset.CTF_fun( experiment_dataset.CTF_params[batch_image_ind],
                                                experiment_dataset.image_shape,
@@ -260,16 +304,41 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
         all_one_volume = jnp.ones(experiment_dataset.volume_size, dtype = experiment_dataset.dtype)
         ones_mapped = core.forward_model(all_one_volume, batch_CTF, batch_grid_pt_vec_ind_of_images)
         
-        f_jit = jax.jit(compute_H_B_inner, static_argnums = [6])
+        apply_noise_mask = True
+        if apply_noise_mask:
+            f_jit = jax.jit(compute_H_B_inner_mask, static_argnums = [7,8])
+        else:
+            f_jit = jax.jit(compute_H_B_inner, static_argnums = [6])
 
         for (k, picked_freq_idx) in enumerate(picked_frequency_indices):
             
             if (k % 50 == 49) and (k > 0):
-                # There seemed to be some strange JAX memory leak, so this could fix it?
-                f_jit._clear_cache() # Maybe this? 
+                # print( k, " cols comp.")
+                f_jit._clear_cache() # Maybe this?
                 
-            H_k, B_k =  f_jit(images, ones_mapped, batch_CTF, batch_grid_pt_vec_ind_of_images, cov_noise, picked_freq_idx, volume_size)
+            if apply_noise_mask:
+                ### CHANGE NOISE ESTIMATE HERE?
+                H_k, B_k =  f_jit(images, ones_mapped, batch_CTF, batch_grid_pt_vec_ind_of_images, cov_noise, picked_freq_idx, image_mask, experiment_dataset.image_shape, volume_size)
+            else:
+                H_k, B_k =  f_jit(images, ones_mapped, batch_CTF, batch_grid_pt_vec_ind_of_images, cov_noise, picked_freq_idx, volume_size)
                 
+        # use_noise_mask = True
+        # if use_noise_mask:
+        #     f_jit = jax.jit(compute_H_B_inner, static_argnums = [6])
+        # else:
+        #     f_jit = jax.jit(compute_H_B_inner, static_argnums = [6])
+
+        # for (k, picked_freq_idx) in enumerate(picked_frequency_indices):
+            
+        #     if (k % 50 == 49) and (k > 0):
+        #         # There seemed to be some strange JAX memory leak, so this could fix it?
+        #         f_jit._clear_cache() # Maybe this? 
+            
+        #     if use_noise_mask:
+        #         H_k, B_k =  f_jit(images, ones_mapped, batch_CTF, batch_grid_pt_vec_ind_of_images, cov_noise, picked_freq_idx, volume_size)
+        #     else:
+        #         H_k, B_k =  f_jit(images, ones_mapped, batch_CTF, batch_grid_pt_vec_ind_of_images, cov_noise, picked_freq_idx, volume_size)
+
             _cpu = jax.devices("cpu")[0]
 
             if batch_over_H_B:
@@ -280,7 +349,7 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
             else:
                 H[k] += H_k.real.astype(experiment_dataset.dtype_real)
                 B[k] += B_k
-                
+        del image_mask
         del images, ones_mapped, batch_CTF, batch_grid_pt_vec_ind_of_images
         
     H = np.stack(H, axis =1)#, dtype=H[0].dtype)

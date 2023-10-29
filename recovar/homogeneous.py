@@ -21,7 +21,8 @@ def get_mean_conformation(cryos, batch_size, cov_noise = None, valid_idx = None,
     
     cryo = cryos[0]
     valid_idx = cryo.get_valid_frequency_indices() if valid_idx is None else valid_idx
-    cov_noise = estimate_noise_variance(cryos, batch_size) if cov_noise is None else cov_noise
+    if cov_noise is None:
+        cov_noise, _ = estimate_noise_variance(cryos, batch_size) 
     
     image_weights = image_weight_parse(image_weights, dtype = cryos[0].dtype_real)
     means = {}
@@ -73,10 +74,10 @@ def get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, mean_pri
     rhs_l = []
     for cryo_idx, cryo in enumerate(cryos):
         lhs_t, rhs_t = compute_mean_volume(cryo, cov_noise,  mean_prior, batch_size, disc_type = disc_type, n_iter = 1, return_lhs_rhs = True, mean_estimate = mean , image_weights = image_weights[cryo_idx].astype(cryo.dtype_real) )
-        lhs_l.append(lhs_t)
+        lhs_l.append(jnp.real(lhs_t).astype(cryo.dtype_real))
         rhs_l.append(rhs_t)
-        lhs +=  lhs_t
-        rhs +=  rhs_t
+        # lhs +=  lhs_t
+        # rhs +=  rhs_t
         
     
     if recompute_prior:
@@ -84,14 +85,26 @@ def get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, mean_pri
     else:
         priors = mean_prior[None]
         logger.info("Not recomputing prior?? Make sure this is what you want")
+
+    # Dump on CPU
     priors = np.array(priors)
-    reconstructions = np.array( jnp.where(jnp.abs(lhs) < constants.ROOT_EPSILON, 0, rhs / (lhs + 1 / priors ) ))
+    lhs_l[0] = np.array(lhs_l[0] )
+    lhs_l[1] = np.array(lhs_l[1] )
+    rhs_l[0] = np.array(rhs_l[0] )
+    rhs_l[1] = np.array(rhs_l[1] )
+
+    half_maps = []
+
+    for s in range(2):
+        half_maps.append(np.array( np.where(np.abs(lhs_l[s]) < constants.ROOT_EPSILON, 0, rhs_l[s] / (lhs_l[s] + 1 / priors ) )))
+
+    # Add second to first
+    lhs_l[0] += lhs_l[1]
+    rhs_l[0] += rhs_l[1]
+    reconstructions = np.array( np.where(np.abs(lhs_l[0]) < constants.ROOT_EPSILON, 0, rhs_l[0] / (lhs_l[0] + 1 / priors ) ))
     end_time = time.time()
     logger.info(f"time to compute reweighted conformations: {end_time- st_time}")
     
-    half_maps = []
-    for s in range(2):
-        half_maps.append(np.array( jnp.where(jnp.abs(lhs_l[s]) < constants.ROOT_EPSILON, 0, rhs_l[s] / (lhs_l[s] + 1 / priors ) )))
     
     return reconstructions, half_maps
 
@@ -164,14 +177,26 @@ def solve_least_squares_mean_iteration(experiment_dataset , cov_diag_prior, cov_
 def estimate_noise_variance(experiment_dataset, batch_size):
     sum_sq = 0
     
+    
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+    # all_shell_avgs = []
+
     for batch, _ in data_generator:
         batch = experiment_dataset.image_stack.process_images(batch)
         sum_sq += np.sum(np.abs(batch)**2, axis =0)
-        
+
+        # shell_avgs = np.abs(batch)**2
+        # batch_average_over_shells
+        # shell_avgs = regularization.batch_average_over_shells(shell_avgs, experiment_dataset.image_shape)
+        # all_shell_avgs.append(shell_avgs)
+
+
     mean_PS =  sum_sq / experiment_dataset.n_images    
     cov_noise_mask = np.median(mean_PS)
-    return cov_noise_mask.astype(experiment_dataset.dtype_real)
+
+    average_image_PS = regularization.average_over_shells(mean_PS, experiment_dataset.image_shape)
+
+    return cov_noise_mask.astype(experiment_dataset.dtype_real), np.array(average_image_PS).astype(experiment_dataset.dtype_real)
     
 
 @functools.partial(jax.jit, static_argnums = [7,8,9,10,11,12])    
@@ -198,4 +223,3 @@ def compute_batch_mean_rhs(images, rotation_matrices, translations, CTF_params, 
     return mean_rhs, diag_mean
 
 batch_over_weights_sum_adj_forward_model = jax.vmap(core.sum_adj_forward_model, in_axes = (None,0, None,None))
-
