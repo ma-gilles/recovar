@@ -14,8 +14,18 @@ names_to_show = { "diagonal": "diagonal", "wilson": "Wilson", "diagonal masked":
 colors_name = { "diagonal": "cornflowerblue", "wilson": "lightsalmon", "diagonal masked": "blue", "wilson masked": "orangered"  }
 plt.rcParams['text.usetex'] = True
 
+def plot_noise_profile(results):
+    plt.figure(figsize = (8,8))
+    yy = results['noise_var']
+    if results['input_args'].ignore_zero_frequency:
+        yy[0] =0 
+    plt.errorbar(x = np.arange(results['noise_var'].size), y=yy, yerr=2*results['std_noise_var'], capsize=3, alpha = 0.5, label = 'estimated noise power spectrum')
+    plt.errorbar(x = np.arange(results['image_PS'].size), y=results['image_PS'], yerr=2*results['std_image_PS'], capsize=3, alpha = 0.5, label = 'image power spectrum')
+    plt.legend()
+    
+    return
 
-def plot_summary_t(results,cryos, n_eigs = 3):
+def plot_summary_t(results,cryos, n_eigs = 3, u_key = "rescaled"):
     plt.rcParams.update({
         # "text.usetex": True,
         # "font.family": "serif",
@@ -74,7 +84,7 @@ def plot_summary_t(results,cryos, n_eigs = 3):
     plot_vol(results['means']['combined'], 0, from_ft = True, name = 'mean')
     plot_vol(results['volume_mask'], 1, from_ft = False,name = 'mask')
     for k in range(n_eigs):
-        plot_vol(results['u']['rescaled'][:,k], k+2, from_ft = True, cmap = 'seismic' ,name = f"PC {k}", symmetric = True)
+        plot_vol(results['u'][u_key][:,k], k+2, from_ft = True, cmap = 'seismic' ,name = f"PC {k}", symmetric = True)
 
     plt.subplots_adjust(wspace=0, hspace=0)
 

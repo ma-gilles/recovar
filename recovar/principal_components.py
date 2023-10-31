@@ -3,29 +3,48 @@ import jax.numpy as jnp
 import numpy as np
 import jax, time
 
-from recovar import core, covariance_estimation, embedding, plot_utils, linalg, constants, utils
+from recovar import core, covariance_estimation, embedding, plot_utils, linalg, constants, utils, noise
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 
 logger = logging.getLogger(__name__)
 
-def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use, disc_type = 'linear_interp', radius = 5):
+def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use, noise_model,  disc_type = 'linear_interp', radius = 5):
 
     volume_shape = cryos[0].volume_shape
     vol_batch_size = utils.get_vol_batch_size(cryos[0].grid_size, gpu_memory_to_use)
 
-    covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, disc_type = disc_type, radius = constants.COLUMN_RADIUS)
+    covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, noise_model, disc_type = disc_type, radius = constants.COLUMN_RADIUS)
     logger.info("memory after covariance estimation")
     utils.report_memory_device(logger=logger)
 
+
+    if options['ignore_zero_frequency']:
+        zero_freq_index = np.asarray(core.frequencies_to_vec_indices( np.array([0,0,0]), cryos[0].volume_shape)).astype(int)
+        zero_freq_in_picked_freq = np.where(picked_frequencies == zero_freq_index)[0].astype(int)
+
+        # Set covariances with frequency 0 to 0.
+        # I am not this if this is a good idea...
+        # covariance_cols['est_mask'][:,zero_freq_in_picked_freq] *= 0 
+        # covariance_cols['est_mask'][zero_freq_index,:] *= 0 
+
     # First approximation of eigenvalue decomposition
-    u,s = get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use )
-
-
+    u,s = get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use, options['ignore_zero_frequency'])
+    
+    # Let's see?
+    if noise_model == "white":
+        cov_noise = cov_noise
+    else:
+        # This probably should be moved into embedding
+        if options['ignore_zero_frequency']:
+            # Make the noise in 0th frequency gigantic. Effectively, this ignore this frequency when fitting.
+            logger.info('ignoring zero frequency')
+            cov_noise[0] *=1e16
+        cov_noise = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].image_shape))
 
 
     zss = {}
-    u['rescaled'],s['rescaled'], zss['init'] = rescale_eigs(cryos, u['real'],s['real'], means['combined'], volume_mask, cov_noise, basis_size = constants.N_PCS_TO_COMPUTE, gpu_memory_to_use = gpu_memory_to_use, use_mask = True)
+    u['rescaled'],s['rescaled'], zss['init'] = rescale_eigs(cryos, u['real'],s['real'], means['combined'], volume_mask, cov_noise, basis_size = constants.N_PCS_TO_COMPUTE, gpu_memory_to_use = gpu_memory_to_use, use_mask = True, ignore_zero_frequency = options['ignore_zero_frequency'])
 
     # logger.info(f"u after rescale dtype: {u['rescaled'].dtype}")
     logger.info("memory after rescaling")
@@ -36,8 +55,10 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
         u['rescaled_no_contrast'] = u['rescaled'].copy()
         s['rescaled_no_contrast'] = s['rescaled'].copy()
 
-        u['rescaled'],s['rescaled'] = knock_out_mean_component_2(u['rescaled'], s['rescaled'],means['combined'], volume_mask, volume_shape, vol_batch_size)
-
+        mean_used = means['combined']
+        # if options['ignore_zero_frequency']:
+        #     mean_used[...,zero_freq_index] = 0
+        u['rescaled'],s['rescaled'] = knock_out_mean_component_2(u['rescaled'], s['rescaled'],mean_used, volume_mask, volume_shape, vol_batch_size, options['ignore_zero_frequency'])
 
         logger.info(f"knock out time: {time.time() - c_time}")
         if u['rescaled'].dtype != cryos[0].dtype:
@@ -48,10 +69,10 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
     return u, s, covariance_cols, picked_frequencies, column_fscs
 
 
-def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,  vol_batch_size, gpu_memory_to_use ):
+def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,  vol_batch_size, gpu_memory_to_use, ignore_zero_frequency ):
     u = {}; s = {}    
 
-    u['real'], s['real'] = randomized_real_svd_of_columns_with_s_guess(covariance_cols["est_mask"],  picked_frequencies, volume_mask, volume_shape, vol_batch_size, test_size = constants.RANDOMIZED_SKETCH_SIZE, gpu_memory_to_use = gpu_memory_to_use )
+    u['real'], s['real'] = randomized_real_svd_of_columns_with_s_guess(covariance_cols["est_mask"],  picked_frequencies, volume_mask, volume_shape, vol_batch_size, test_size = constants.RANDOMIZED_SKETCH_SIZE, gpu_memory_to_use = gpu_memory_to_use, ignore_zero_frequency = ignore_zero_frequency )
 
     # n_components = covariance_cols["est_mask"].shape[-1]
     # u['real'], s['real'] = real_svd3(covariance_cols["est_mask"],  picked_frequencies, volume_shape, vol_batch_size, n_components = n_components)
@@ -59,11 +80,10 @@ def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,
     # if volume_shape[0] <= 128:
     #     u['real4'], s['real4'] = real_svd4(covariance_cols["est_mask"],  picked_frequencies, volume_shape, vol_batch_size, n_components = n_components)
     plot_utils.plot_cov_results(u,s)
-
     return u, s
 
 
-def rescale_eigs(cryos,u,s, mean, volume_mask, cov_noise, basis_size = 200, gpu_memory_to_use= 40, use_mask = True):
+def rescale_eigs(cryos,u,s, mean, volume_mask, cov_noise, basis_size = 200, gpu_memory_to_use= 40, use_mask = True, ignore_zero_frequency = False):
     # Implements the approximate SVD from the paper
 
     rescale_time = time.time()    
@@ -76,7 +96,7 @@ def rescale_eigs(cryos,u,s, mean, volume_mask, cov_noise, basis_size = 200, gpu_
                                       cov_noise, cryos, mask,gpu_memory_to_use,  'linear_interp',
                                     contrast_grid = None, contrast_option = contrast_option,
                                     to_real = True, parallel_analysis = False, 
-                                    compute_covariances = False )    
+                                    compute_covariances = False, ignore_zero_frequency = ignore_zero_frequency )    
     
     st_time = time.time()
     _, sz, vz = np.linalg.svd(zs12, full_matrices = False)
@@ -101,7 +121,7 @@ def rescale_eigs(cryos,u,s, mean, volume_mask, cov_noise, basis_size = 200, gpu_
     return u_rescaled, s_rescaled[:basis_size], zs12
 
 
-def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_size):
+def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_size,ignore_zero_frequency):
     # This assumes s has been kept around
     # cov == u s u^*
     # Want to compute eigendecomposition of the projection onto complement of mean:
@@ -116,6 +136,15 @@ def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_s
     masked_mean = ( ftu.get_idft3(mean.reshape(volume_shape)) * volume_mask.reshape(volume_shape) ).reshape(-1).real
     masked_mean /= np.linalg.norm(masked_mean)
     
+    # Make it orthogonal to mask
+    if ignore_zero_frequency:
+        # knockout volume_mask direction stuff?
+        norm_volume_mask = volume_mask.reshape(-1) / np.linalg.norm(volume_mask)
+        # substract component in direction of mask?
+        # Apply matrix (I - mask mask.T / \|mask^2\| ) 
+        masked_mean -= norm_volume_mask * (norm_volume_mask.T @ masked_mean)
+
+
     # Project out the mean
     u_m_proj = u_real - masked_mean[:,None] @  (np.conj(masked_mean).T @ u_real )[None]
     cov_chol = u_m_proj * np.sqrt(s)
@@ -280,6 +309,7 @@ def real_svd4(columns, picked_frequencies, volume_shape, vol_batch_size, n_compo
     all_frequency_indices = np.concatenate([picked_frequencies, minus_indices[good_idx]])
 
     all_columns = np.concatenate([columns, columns_flipped[:,good_idx]], axis =-1)
+
     print("make all columns", time.time() - st_time)
     st_time = time.time()
     print('memory used:', utils.get_process_memory_used())
@@ -536,8 +566,9 @@ def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_
     return Q_F_C_F
 
 
-def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, test_size = 300, gpu_memory_to_use= 40):
+def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, test_size = 300, gpu_memory_to_use= 40, ignore_zero_frequency = False):
     st_time = time.time()
+
 
     # memory_to_use = utils.get_gpu_memory_total() - 5
     utils.report_memory_device(logger=logger)
@@ -553,7 +584,13 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     
     ## Do masking here ?
     Q *= volume_mask.reshape(-1,1)
-    
+
+    if ignore_zero_frequency:
+        # knockout volume_mask direction stuff?
+        norm_volume_mask = volume_mask.reshape(-1) / np.linalg.norm(volume_mask)
+        # substract component in direction of mask?
+        # Apply matrix (I - mask mask.T / \|mask^2\| ) 
+        Q -= np.outer(norm_volume_mask, (norm_volume_mask.T @ Q))
 
     logger.info(f"right matvec {time.time() - st_time}")
     utils.report_memory_device(logger=logger)
@@ -561,6 +598,8 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     Q,_ = jnp.linalg.qr(Q)
     Q = np.array(Q) # I don't know why but not doing this causes massive slowdowns sometimes?
     logger.info(f"QR time: {time.time() - st_time}")
+
+    # In principle, should apply (I - mask mask.T / \|mask\|^2 )  again, but should already be orthogonal
 
     # 
     Q *= volume_mask.reshape(-1,1)
@@ -585,11 +624,18 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     return np.array(UU), np.array(S_fd), np.array(V)
 
 
-def svd_of_small_matrix(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use):
+def svd_of_small_matrix(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use, ignore_zero_frequency):
     
     # Explicitely apply mask to columns:
     columns_real = linalg.batch_idft3(columns, volume_shape, vol_batch_size)
     columns_real *= volume_mask.reshape(-1,1)#[...,None]
+    if ignore_zero_frequency:
+        # knockout volume_mask direction stuff?
+        norm_volume_mask = volume_mask.reshape(-1) / np.linalg.norm(volume_mask)
+        # substract component in direction of mask?
+        # Apply matrix (I - mask mask.T / \|mask^2\| ) 
+        columns_real -= np.outer(norm_volume_mask, (norm_volume_mask.T @ columns_real))
+
     columns = linalg.batch_dft3(columns_real, volume_shape, vol_batch_size)
 
 
@@ -613,14 +659,25 @@ def svd_of_small_matrix(columns, picked_frequency_indices, volume_mask, volume_s
     return ssmall.astype(columns.dtype).real
 
 
-def randomized_real_svd_of_columns_with_s_guess(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, test_size = 300, gpu_memory_to_use = 40):
+def randomized_real_svd_of_columns_with_s_guess(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, ignore_zero_frequency,  test_size = 300, gpu_memory_to_use = 40):
 
-    u,s,_ = randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, test_size, gpu_memory_to_use)
+    u,s,_ = randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, test_size, gpu_memory_to_use, ignore_zero_frequency=ignore_zero_frequency)
 
-    s_small = svd_of_small_matrix(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use)
+    # Is this a more reasonable estimate?
+    # guess_from_s_factor = False
+    # if guess_from_s_factor:
+    #     # s-factor
+    #     Su_norms = np.linalg.norm(u[:,picked_frequency_indices], axis=0)
+    #     s_guess = s * Su_norms
+    #     s_guess = np.minimum.accumulate(s_guess)
+    #     return u, s_guess
+
+    s_small = svd_of_small_matrix(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use, ignore_zero_frequency)
 
     # Guess eigenvalue with rank 1 estimate
     n_components = s.size
     s_guess =  s[:n_components]**2 / s_small[:n_components]
+
+    # Is this a terrible idea?
     s_guess = np.minimum.accumulate(s_guess)
     return u , s_guess

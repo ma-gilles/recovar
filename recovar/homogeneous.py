@@ -87,11 +87,14 @@ def get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, mean_pri
         logger.info("Not recomputing prior?? Make sure this is what you want")
 
     # Dump on CPU
-    priors = np.array(priors)
-    lhs_l[0] = np.array(lhs_l[0] )
-    lhs_l[1] = np.array(lhs_l[1] )
-    rhs_l[0] = np.array(rhs_l[0] )
-    rhs_l[1] = np.array(rhs_l[1] )
+
+    # I have no idea why all of the sudden this broke. Something about JAX -> np?
+    priors = np.abs(np.array(priors)) + constants.EPSILON
+
+    lhs_l[0] = np.array(lhs_l[0], dtype = lhs_l[0].dtype )
+    lhs_l[1] = np.array(lhs_l[1], dtype = lhs_l[1].dtype )
+    rhs_l[0] = np.array(rhs_l[0], dtype = rhs_l[0].dtype )
+    rhs_l[1] = np.array(rhs_l[1], dtype = rhs_l[1].dtype )
 
     half_maps = []
 
@@ -101,10 +104,9 @@ def get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, mean_pri
     # Add second to first
     lhs_l[0] += lhs_l[1]
     rhs_l[0] += rhs_l[1]
-    reconstructions = np.array( np.where(np.abs(lhs_l[0]) < constants.ROOT_EPSILON, 0, rhs_l[0] / (lhs_l[0] + 1 / priors ) ))
+    reconstructions = np.array( np.where( np.abs(lhs_l[0]) < constants.ROOT_EPSILON, 0, rhs_l[0] / (lhs_l[0] + 1 / priors ) ))
     end_time = time.time()
     logger.info(f"time to compute reweighted conformations: {end_time- st_time}")
-    
     
     return reconstructions, half_maps
 

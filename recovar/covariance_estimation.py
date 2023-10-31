@@ -3,13 +3,13 @@ import jax.numpy as jnp
 import numpy as np
 import jax, time
 
-from recovar import core, covariance_core, regularization, utils, constants
+from recovar import core, covariance_core, regularization, utils, constants, noise
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 
 logger = logging.getLogger(__name__)
 
-def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, disc_type = 'linear_interp', radius = 5):
+def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, noise_model = "white", disc_type = 'linear_interp', radius = 5):
 
     cryo = cryos[0]
     volume_shape = cryos[0].volume_shape
@@ -29,15 +29,25 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, 
 
     # image_batch_size = utils.get_image_batch_size(cryo.grid_size, )
 
+    if noise_model == "white":
+        image_noise_var = cov_noise
+    elif noise_model == "radial":
+        image_noise_var = noise.make_radial_noise(cov_noise, cryos[0].image_shape)
+
     utils.report_memory_device(logger = logger)
 
-    Hs, Bs = compute_both_H_B(cryos, means["combined"], mask_ls, picked_frequencies, gpu_memory, cov_noise, disc_type, parallel_analysis = False)
+    Hs, Bs = compute_both_H_B(cryos, means["combined"], mask_ls, picked_frequencies, gpu_memory, image_noise_var, disc_type, parallel_analysis = False)
     st_time = time.time()
 
     utils.report_memory_device(logger = logger)
 
 
-    H_comb, B_comb, prior, fscs = compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, cov_noise, mask_final, volume_shape,  gpu_memory, prior_iterations = 3, keep_intermediate = keep_intermediate, reg_init_multiplier = constants.REG_INIT_MULTIPLIER, substract_shell_mean = substract_shell_mean, shift_fsc = shift_fsc)
+    if noise_model == "white":
+        volume_noise_var = cov_noise
+    elif noise_model == "radial":
+        volume_noise_var = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].volume_shape))
+
+    H_comb, B_comb, prior, fscs = compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, volume_noise_var, mask_final, volume_shape,  gpu_memory, prior_iterations = 3, keep_intermediate = keep_intermediate, reg_init_multiplier = constants.REG_INIT_MULTIPLIER, substract_shell_mean = substract_shell_mean, shift_fsc = shift_fsc)
     del Hs, Bs
 
     H_comb = np.stack(H_comb).astype(dtype = cryo.dtype)

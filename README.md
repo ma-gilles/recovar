@@ -351,8 +351,10 @@ I hope some developers find parts of the code useful for their projects. See [th
 ## Limitations
 
 - *Symmetry*: there is currently no support for symmetry. If you got your poses through symmetric refinement, it will probably not work. It should probably work if you make a symmetry expansion of the particle stack, but I have not tested it.
-* *Memory*: you need a lot of memory to run this. For a stack of images of size 256, you probably need 400 GB+.
-- *Other ones, probably?*
+- *Memory*: you need a lot of memory to run this. For a stack of images of size 256, you probably need 400 GB+.
+- *ignore-zero-frequency*: I haven't thought much about the best way to do this. I would advise against using it for now.
+- *Importing mask from other software*: there might be axes index conventions which are different across software. Should be pretty to easy to see if this is the case by trying it and looking at output from [this notebook](recovar_coding_tutorial.ipynb)
+- *Other ones, probably?*: if you run into issues, please let me know. 
 
 ## Contact
 

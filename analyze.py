@@ -1,4 +1,3 @@
-## something
 import recovar.config 
 import logging
 import numpy as np
@@ -30,7 +29,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--n-clusters", metavar=int, default=40, help="number of k-means clusters (default 40)"
+        "--n-clusters", dest= "n_clusters", type=int, default=40, help="number of k-means clusters (default 40)"
     )
 
     parser.add_argument(
@@ -45,7 +44,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--q", metavar=float, default=None, help="quantile used for reweighting (default = 0.95)"
+        "--q",  type =float, default=None, help="quantile used for reweighting (default = 0.95)"
     )
 
     parser.add_argument(
@@ -75,6 +74,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         likelihood_threshold = n_std
     else: 
         likelihood_threshold = latent_density.get_log_likelihood_threshold(q=q, k = zdim)
+        logger.info(f"using input q={q} from input ")
 
     if output_folder is None:
         output_folder = recovar_result_dir + '/output/analysis_' + str(zdim)  + '/'
@@ -84,7 +84,6 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     #     logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --z-dim=4")
 
     if zdim not in results['zs']:
-        
         logger.error("z-dim not found in results. Options are:" + ','.join(str(e) for e in results['zs'].keys()))
 
     cryos = dataset.load_dataset_from_args(results['input_args'])
@@ -97,28 +96,47 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
     output_folder_kmeans = output_folder + 'kmeans'+'_'+ str(n_clusters) + '/'    
     o.mkdir_safe(output_folder_kmeans)    
-    centers, labels = o.kmeans_analysis_from_dict(output_folder_kmeans, results, cryos, likelihood_threshold,  n_clusters = 40, generate_volumes = True, zdim =zdim)
+    centers, labels = o.kmeans_analysis_from_dict(output_folder_kmeans, results, cryos, likelihood_threshold,  n_clusters = n_clusters, generate_volumes = True, zdim =zdim)
     kmeans_result = { 'centers' : centers, 'labels': labels  }
     pickle.dump(kmeans_result, open(output_folder_kmeans + 'centers.pkl', 'wb'))
 
-    pairs = pick_pairs(centers, n_paths)
-    for pair_idx in range(len(pairs)):
+    if zdim > 1:
+        pairs = pick_pairs(centers, n_paths)
+        for pair_idx in range(len(pairs)):
 
-        pair = pairs[pair_idx]
-        z_st = centers[pair[0],:]
-        z_end = centers[pair[1],:]
+            pair = pairs[pair_idx]
+            z_st = centers[pair[0],:]
+            z_end = centers[pair[1],:]
 
-        path_folder = output_folder_kmeans + 'path' + str(pair_idx) + '/'        
-        o.mkdir_safe(path_folder)
+            path_folder = output_folder_kmeans + 'path' + str(pair_idx) + '/'        
+            o.mkdir_safe(path_folder)
 
-        o.make_trajectory_plots_from_results(results, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =zdim, compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold)        
-        logger.info(f"path {pair_idx} done")
-        
+            o.make_trajectory_plots_from_results(results, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =zdim, compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold)        
+            logger.info(f"path {pair_idx} done")
+    else:
+        n_vols_along_path = 80 
+        q = 3
+
+        pairs = np.percentile(results['zs'][zdim], [q, 100-q])
+        z_st = pairs[0]
+        z_end = pairs[1]
+        z_points = np.linspace(z_st, z_end, n_vols_along_path)
+        pairs = [ [z_points[0], z_points[40-1]], [z_points[40], z_points[80-1]] ]
+
+        for pair_idx in range(len(pairs)):
+            z_st = pairs[pair_idx][0][...,None,None]
+            z_end = pairs[pair_idx][1][...,None,]
+            path_folder = output_folder_kmeans + 'path' + str(pair_idx) + '/'        
+            o.mkdir_safe(path_folder)
+            o.make_trajectory_plots_from_results(results, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = 40, plot_llh = False, basis_size =zdim, compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold)        
+            logger.info(f"path {pair_idx} done")
+
     kmeans_res = { 'centers': centers.tolist(), 'pairs' : pairs }
     pickle.dump(kmeans_res, open(output_folder_kmeans + 'trajectory_endpoints.pkl', 'wb'))
 
     if not skip_umap:
         mapper = o.umap_latent_space(results['zs'][zdim])
+
         pickle.dump(mapper.embedding_, open(output_folder + 'umap_embedding.pkl', 'wb'))
 
 
