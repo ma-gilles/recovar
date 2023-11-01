@@ -66,7 +66,7 @@ def plot_on_same_scale(cs, xs, labels,plot_folder, ):
     plt.savefig(save_filepath, bbox_inches='tight')
 
 
-def plot_two_twings_with_diff_scale(cs, xs, labels,plot_folder= None): 
+def plot_two_twings_with_diff_scale(cs, xs, labels,plot_folder): 
     matplotlib.rc('xtick', labelsize=20) 
     matplotlib.rc('ytick', labelsize=20) 
 
@@ -93,10 +93,9 @@ def plot_two_twings_with_diff_scale(cs, xs, labels,plot_folder= None):
     ax2.tick_params(axis='y', labelcolor=color)
 
     fig.tight_layout()  # otherwise the right y-label is slightly clipped
-    if plot_folder is not None:
-        save_filepath = plot_folder + 'path_density_t.png'
-        #if save_to_file:
-        plt.savefig(save_filepath, bbox_inches='tight')
+    save_filepath = plot_folder + 'path_density_t.png'
+    #if save_to_file:
+    plt.savefig(save_filepath, bbox_inches='tight')
     plt.show()
 
     
@@ -219,8 +218,7 @@ def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, cov_noi
     #key = 'zs12'
     #zs = results[key]
     #cov_zs = results['cov_' + key]
-    reorder = zs.shape[1] != 1
-    labels, centers = cryodrgn_analysis.cluster_kmeans(zs, n_clusters, reorder = reorder)
+    labels, centers = cryodrgn_analysis.cluster_kmeans(zs, n_clusters, reorder = True)
     
     import os
     try:
@@ -246,7 +244,7 @@ def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, cov_noi
 
     for k in range(1,zs.shape[-1]):
         plot_axes(axes = [0,k])
-    if zs.shape[-1] > 2:
+    if zs.shape[-1] > 1:
         plot_axes(axes = [1,2])
     
     if generate_volumes:
@@ -473,8 +471,7 @@ def umap_latent_space(zs):
     import umap.plot
     import time
     st_time = time.time()
-    n_components = np.min([zs.shape[1], 2])
-    mapper = umap.UMAP(n_components = n_components).fit(zs)
-    umap.plot.points(mapper) 
+    mapper = umap.UMAP(n_components = 2).fit(zs)
+    umap.plot.points(mapper ) 
     logger.info(f"time to umap: {time.time() - st_time}")
     return mapper

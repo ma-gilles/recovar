@@ -162,17 +162,11 @@ def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, dens
             g[k] = np.min([g[k], num_points-1])
         return g
     ## This is not used.
-
-
     g_st_in_bound = check_in_bound(g_st, num_points)
-    g_end_in_bound = check_in_bound(g_end, num_points)        
+    g_end_in_bound = check_in_bound(g_end, num_points)
+
 
     low_dim = density_low_dim.ndim
-
-    if low_dim > max_dim:
-        # Integrate over other dimensions
-        other_axes = np.arange(max_dim, low_dim)
-        density_low_dim = np.sum(density_low_dim, axis = tuple(other_axes))
 
     current_path_grid = find_trajectory_in_grid(density_low_dim,
                                             g_st_in_bound[:low_dim],
@@ -180,7 +174,6 @@ def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, dens
                                             latent_space_bounds[:low_dim], 
                                             eps = density_eps, 
                                             use_log_density = use_log_density)
-
     grid_to_z_curr_dim, z_to_grid_curr_dim = latent_density.get_grid_z_mappings(latent_space_bounds[:low_dim], num_points)
     current_path_z = grid_to_z_curr_dim(current_path_grid)
     # resample.

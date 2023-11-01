@@ -91,10 +91,6 @@ def average_over_shells(input_vec, volume_shape, frequency_shift = 0 ):
     return jax_scipy_nd_image_mean(input_vec.reshape(-1), labels = labels, index = indices)    
 
 
-batch_average_over_shells = jax.vmap(average_over_shells, in_axes = (0,None,None))
-
-
-
 def jax_scipy_nd_image_mean(input, labels=None, index=None):
     if input.dtype == 'complex64':
         input = input.astype('complex128') #jax.numpy.bincount complex64 version seems to be bugged.

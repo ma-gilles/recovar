@@ -11,7 +11,6 @@ from scipy.ndimage import binary_dilation
 logger = logging.getLogger(__name__)
 
 def masking_options(volume_mask_option, means, volume_shape, input_mask, dtype_real = np.float32, mask_dilation_iter = 0):
-    
     if isinstance(volume_mask_option, str):
         if volume_mask_option == 'input' or input_mask is not None :
             assert input_mask is not None, 'set volume_mask_option = input, but no mask passed'
@@ -21,7 +20,7 @@ def masking_options(volume_mask_option, means, volume_shape, input_mask, dtype_r
             if mask_dilation_iter > 0:
                 logger.info('thresholding and dilating input mask')
                 input_mask = input_mask > 0.99
-                input_mask = binary_dilation(input_mask,iterations=mask_dilation_iter)
+                input_mask = binary_dilation(input_mask,iterations=mask_dilation_iter)       
 
             if input_mask.shape[0] != volume_shape[0]:
                 input_mask = skimage.transform.rescale( input_mask, volume_shape[0]/input_mask.shape[0])
@@ -31,25 +30,13 @@ def masking_options(volume_mask_option, means, volume_shape, input_mask, dtype_r
             volume_mask = soften_volume_mask(input_mask, kernel_size)
             dilated_volume_mask = binary_dilation(input_mask,iterations=6)
             dilated_volume_mask = soften_volume_mask(dilated_volume_mask, kernel_size)
-            
         elif volume_mask_option == 'from_halfmaps':
-            
-            smax = np.ceil(3/128 * volume_shape[0])
-            iter_d = np.ceil(3/128 * volume_shape[0]).astype(int)
-            volume_mask = make_mask_from_half_maps(means, smax = smax, iter_d = iter_d )
-            if mask_dilation_iter > 0:
-                logger.info('thresholding and dilating estimated mask further')
-                volume_mask = volume_mask > 0.99
-                volume_mask = binary_dilation(volume_mask,iterations=mask_dilation_iter)
-            
-            kernel_size = np.ceil(3/128 * volume_shape[0]).astype(int)
-            iterations = np.ceil(6*volume_shape[0] /128).astype(int)
-            
+            volume_mask = make_mask_from_half_maps(means, smax = 3 )
+            kernel_size = 3
             logger.info('Softening mask')
-            dilated_volume_mask = binary_dilation(volume_mask,iterations=iterations)
+            dilated_volume_mask = binary_dilation(volume_mask,iterations=6)
             volume_mask = soften_volume_mask(volume_mask, kernel_size)
             dilated_volume_mask = soften_volume_mask(dilated_volume_mask, kernel_size)
-            
             logger.info('using mask computed from mean')
         elif volume_mask_option == 'sphere':
             volume_mask = get_radial_mask(volume_shape)
@@ -61,19 +48,14 @@ def masking_options(volume_mask_option, means, volume_shape, input_mask, dtype_r
             logger.info('using no mask')
     else:
         assert False, 'mask option not recognized'
-    return np.asarray(volume_mask).astype(dtype_real), np.asarray(dilated_volume_mask).astype(dtype_real)
+    return volume_mask.astype(dtype_real), dilated_volume_mask.astype(dtype_real)
 
-def make_mask_from_half_maps(means, smax = 3, iter_d = 3 ):
+def make_mask_from_half_maps(means, smax = 3 ):
     # from emda.ext.maskmap_class import MaskedMaps
     ftu = fourier_transform_utils(np)
     x = MaskedMaps()
     x.smax = smax
-    x.iter = iter_d
-    
     vol_shape = utils.guess_vol_shape_from_vol_size(means['corrected0'].size)
-    
-    # Maybe should make command line arguments for this.
-
     x.arr1 = ftu.get_idft3(means['corrected0'].reshape(vol_shape)).real
     x.arr2 = ftu.get_idft3(means['corrected1'].reshape(vol_shape)).real
     x.generate_mask()
@@ -165,7 +147,7 @@ class MaskedMaps:
         ccmap_binary = (ccmap >= 1e-3).astype(int)
         dilate = binary_dilation(ccmap_binary, iterations=self.iter)
         mask = make_soft(dilate, kern_rad=2)
-        return mask * (mask >= 1e-3) 
+        return mask * (mask >= 1e-3)      
 
 
 def threshold_map(arr, prob = 0.99, dthresh=None):
@@ -188,8 +170,7 @@ def make_soft(dilated_mask, kern_rad=3):
 
 
 
-## from realsp_local.py in EMDA. 
-# This is mysterious. Idk what this is.
+## from realsp_local.py in EMDA
 def get_3d_realspcorrelation(half1, half2, kern, mask=None):
     import scipy.signal
     from scipy.stats import mode

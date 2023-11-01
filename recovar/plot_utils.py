@@ -346,32 +346,25 @@ def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = N
     max_idx = min(curve.size, freq.size)
     line, = ax.plot(freq[:max_idx], curve[:max_idx],  linewidth = 2 )
     color = line.get_color()
-    
-    if threshold is not None:
-        score = fsc_score(curve, grid_size, voxel_size, threshold = threshold)
+    score = fsc_score(curve, grid_size, voxel_size, threshold = threshold)
 
-        label = name + " "+ "{:.2f}".format(1 / score)+ "\AA"
-        n_dots_in_line = 20
-        ax.plot(np.ones(n_dots_in_line) * score, np.linspace(0,1, n_dots_in_line), "-", color = color, label= label)
-        ax.plot(freq, threshold * np.ones(freq.size), "k--")
-        plt.plot(freq, threshold * np.ones(freq.size), "k--")
-    else:
-        score = None
-
-    ax.xaxis.grid(color='gray', linestyle='dashed')
-    ax.yaxis.grid(color='gray', linestyle='dashed')
+    label = name + " "+ "{:.2f}".format(1 / score)+ "\AA"
+    n_dots_in_line = 20
+    ax.plot(np.ones(n_dots_in_line) * score, np.linspace(0,1, n_dots_in_line), "-", color = color, label= label)
+    ax.plot(freq, threshold * np.ones(freq.size), "k--")
 
     if input_ax_is_none:
+        ax.xaxis.grid(color='gray', linestyle='dashed')
+        ax.yaxis.grid(color='gray', linestyle='dashed')
 
+        plt.plot(freq, threshold * np.ones(freq.size), "k--")
         plt.ylim([0, 1.02])
         plt.xlim([0, np.max(freq)])
         plt.yticks(fontsize=20) 
         plt.xticks(fontsize=10) 
         # plt.legend("AA{-1}) = "+"{:.2f}".format(threshold))
         # plt.title("FSC("  + "{:.2f}".format(1 / score)  + "AA{-1}) = "+ "{:.2f}".format(threshold))
-        if threshold is not None:  
-            plt.plot(freq, threshold * np.ones(freq.size), "k--")
-            ax.legend()
+    ax.legend()
 
     if filename is not None:
         plt.savefig(filename )

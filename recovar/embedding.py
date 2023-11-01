@@ -41,20 +41,10 @@ def generate_conformation_from_reprojection(xs, mean, u ):
     return ((mean[...,None] + u @ xs.T)[0]).T
     
 
-def compute_per_image_embedding_from_result(result, zdim, gpu_memory = None):
-    gpu_memory = utils.get_gpu_memory_total() if gpu_memory is None else gpu_memory
-    options = utils.make_algorithm_options(results['input_args'])
-    cryos = dataset.load_dataset_from_args(results['input_args'])
-    
-    return get_per_image_embedding(result['means']['combined'], result['u']['rescaled'], result['s']['rescaled'], zdim, result['cov_noise'], cryos, result['volume_mask'], gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = options["contrast"], to_real = True, parallel_analysis = False, compute_covariances = True )
-
-
-
-
 def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True ):
     
     st_time = time.time()    
-    basis = np.asarray(u[:, :basis_size]) 
+    basis = np.array(u[:, :basis_size]) 
     eigenvalues = (s + constants.ROOT_EPSILON)
     use_contrast = "contrast" in contrast_option
     logger.info(f"using contrast? {use_contrast}")
@@ -67,6 +57,26 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
     basis_size = u.shape[-1] if basis_size == -1 else basis_size
 
     batch_size = utils.get_embedding_batch_size(basis, cryos[0].image_size, contrast_grid, basis_size, gpu_memory)
+
+    # left_over_memory = ( utils.get_gpu_memory_total() - utils.get_size_in_gb(basis))
+    # # batch_size = int(left_over_memory/ 
+    # #                 ((cryos[0].grid_size**2 * contrast_grid.size * basis_size
+    # #                 + cryos[0].grid_size * contrast_grid.size * basis_size**2) * utils.get_size_in_gb(cryos[0].get_image(0)) )/3)
+
+    # assert left_over_memory > 0, "GPU memory too small?"
+
+    # batch_size = int(left_over_memory/ ( 
+    #     (cryos[0].image_size  * np.max([basis_size, 4])
+    #     + 1 * contrast_grid.size * basis_size**2 )
+    #     *8/1e9 )/ 20)
+
+    # batch_size = int(left_over_memory/ ( 
+    #     (cryos[0].grid_size**2 * contrast_grid.size * basis_size
+    #     + 4 * contrast_grid.size * basis_size**2 )
+    #     *8/1e9 )/ 20)
+
+    # batch_size_old = int((2**24)*8 /( cryos[0].grid_size**2 * np.max([basis_size, 8]) ) * gpu_memory / 38 ) 
+    # print("new batch:",batch_size, "old batch:", batch_size_old)
     logger.info(f"embedding batch size? {batch_size}")
     # logger.info(f"z batch size old {batch_size_old}")
     # import pdb; pdb.set_trace()
@@ -98,10 +108,10 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
 # @functools.partial(jax.jit, static_argnums = [5])    
 def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True ):
     
-    basis = basis.T.astype(experiment_dataset.dtype)
+    basis = basis.T
         
     # Make sure variables used in every iteration are on gpu.
-    basis = jnp.asarray(basis)
+    basis = jnp.array(basis).astype(experiment_dataset.dtype)
     volume_mask = jnp.array(volume_mask).astype(experiment_dataset.dtype_real)
     mean_estimate = jnp.array(mean_estimate).astype(experiment_dataset.dtype)
     eigenvalues = jnp.array(eigenvalues).astype(experiment_dataset.dtype)
