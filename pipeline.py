@@ -234,7 +234,6 @@ def standard_recovar_pipeline(args):
     else:
         cov_noise = noise_var
 
-
     # noise_var, std_noise_var, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
 
     # Compute principal components
@@ -270,7 +269,9 @@ def standard_recovar_pipeline(args):
 
         #re-rescale
         # rescale_eigs
-        rerescale = args.rerescale
+        rerescale = False
+        print('rerescale option is off')
+        #rerescale = args.rerescale
         if rerescale:
             u[f"rescaled_{zdim}"],s[f"rescaled_{zdim}"], _ = principal_components.rescale_eigs(cryos, u['rescaled'],s['rescaled'], means['combined'], volume_mask, image_cov_noise, basis_size = zdim, gpu_memory_to_use = utils.get_gpu_memory_total(), use_mask = True, ignore_zero_frequency = options['ignore_zero_frequency'])
 
@@ -278,6 +279,21 @@ def standard_recovar_pipeline(args):
                                                                     image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
                                                                     contrast_grid = None, contrast_option = options['contrast'],
                                                                     ignore_zero_frequency = options['ignore_zero_frequency'] )
+            
+            var_zs = np.var(zs[zdim], axis =0)
+            mean_cov_zs = np.diag(np.mean(cov_zs[zdim], axis=0))
+            mean_cov_zs_unregged = np.diag(np.mean(cov_zs[zdim] - np.diag(1/s[f"rescaled_{zdim}"]) , axis=0))
+            # predicted
+
+            pred_eigs = var_zs/mean_cov_zs_unregged**2 * mean_cov_zs**2
+            s[f"rescaled_{zdim}_guess"] = pred_eigs
+            # Estimate eigenvalues:
+
+            zs[zdim], cov_zs[zdim], est_contrasts[zdim] = embedding.get_per_image_embedding(means['combined'], u[f"rescaled_{zdim}"], s[f"rescaled_{zdim}"] , zdim,
+                                                                    image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
+                                                                    contrast_grid = None, contrast_option = options['contrast'],
+                                                                    ignore_zero_frequency = options['ignore_zero_frequency'] )
+
         else:
             zs[zdim], cov_zs[zdim], est_contrasts[zdim] = embedding.get_per_image_embedding(means['combined'], u['rescaled'], ss , zdim,
                                                                     image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',

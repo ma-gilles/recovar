@@ -17,7 +17,15 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
     covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, noise_model, disc_type = disc_type, radius = constants.COLUMN_RADIUS)
     logger.info("memory after covariance estimation")
     utils.report_memory_device(logger=logger)
-
+    
+    # from recovar import utils, core
+    # Set variances to 0 ?
+    # for k in range(covariance_cols['est_mask'].shape[-1]):
+    #     covariance_cols['est_mask'][picked_frequencies[k],k]=0 #.append((cols[picked_frequencies[k],k]).real)
+    # print('WARNING SETTING VARIANCES TO 0!!!! THIS IS ONLY TO DEBUG')
+    # print('WARNING SETTING VARIANCES TO 0!!!! THIS IS ONLY TO DEBUG')
+    # print('WARNING SETTING VARIANCES TO 0!!!! THIS IS ONLY TO DEBUG')
+    # print('WARNING SETTING VARIANCES TO 0!!!! THIS IS ONLY TO DEBUG')
 
     if options['ignore_zero_frequency']:
         zero_freq_index = np.asarray(core.frequencies_to_vec_indices( np.array([0,0,0]), cryos[0].volume_shape)).astype(int)
@@ -115,6 +123,7 @@ def rescale_eigs(cryos,u,s, mean, volume_mask, cov_noise, basis_size = 200, gpu_
                   np.ones_like(u_rescaled[zero_freq,:]))
     u_rescaled /= ip
     
+
     # Estimate eigenvalues from singular values
     s_rescaled = sz**2/ zs12.shape[0]
     logger.info(f"rescale time, {time.time() - rescale_time}")
@@ -591,6 +600,7 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
         # substract component in direction of mask?
         # Apply matrix (I - mask mask.T / \|mask^2\| ) 
         Q -= np.outer(norm_volume_mask, (norm_volume_mask.T @ Q))
+        logger.info('ignoring zero frequency')
 
     logger.info(f"right matvec {time.time() - st_time}")
     utils.report_memory_device(logger=logger)

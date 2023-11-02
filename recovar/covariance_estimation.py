@@ -316,8 +316,10 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
         
         apply_noise_mask = True
         if apply_noise_mask:
+            print('using noise mask is on')
             f_jit = jax.jit(compute_H_B_inner_mask, static_argnums = [7,8])
         else:
+            print('using noise mask is off')
             f_jit = jax.jit(compute_H_B_inner, static_argnums = [6])
 
         for (k, picked_freq_idx) in enumerate(picked_frequency_indices):
