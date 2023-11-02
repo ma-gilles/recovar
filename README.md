@@ -37,7 +37,7 @@ Here is a set of commands which runs on our university cluster (Della), but may 
 
 ## I. Preprocessing 
 
-The input layer of RECOVAR is borrowed directly from the excellent [cryoDRGN toolbox](https://cryodrgn.cs.princeton.edu/). 
+The input interface of RECOVAR is borrowed directly from the excellent [cryoDRGN toolbox](https://cryodrgn.cs.princeton.edu/). 
 Particles, poses and CTF must be prepared in the same way, and below is copy-pasted part of 
 [cryoDRGN's documentation](https://github.com/ml-struct-bio/cryodrgn#2-parse-image-poses-from-a-consensus-homogeneous-reconstructiqqon).
 CryoDRGN is a dependency, so you should be able to run the commands below after ``conda activate recovar``.
