@@ -39,20 +39,20 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
     # First approximation of eigenvalue decomposition
     u,s = get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use, options['ignore_zero_frequency'])
     
-    # Let's see?
-    if noise_model == "white":
-        cov_noise = cov_noise
-    else:
-        # This probably should be moved into embedding
-        if options['ignore_zero_frequency']:
-            # Make the noise in 0th frequency gigantic. Effectively, this ignore this frequency when fitting.
-            logger.info('ignoring zero frequency')
-            cov_noise[0] *=1e16
-        cov_noise = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].image_shape))
-
+    # # Let's see?
+    # if noise_model == "white":
+    #     cov_noise = cov_noise
+    # else:
+    #     # This probably should be moved into embedding
+    if options['ignore_zero_frequency']:
+        # Make the noise in 0th frequency gigantic. Effectively, this ignore this frequency when fitting.
+        logger.info('ignoring zero frequency')
+        cov_noise[0] *=1e16
+        
+    image_cov_noise = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].image_shape))
 
     zss = {}
-    u['rescaled'],s['rescaled'], zss['init'] = rescale_eigs(cryos, u['real'],s['real'], means['combined'], volume_mask, cov_noise, basis_size = constants.N_PCS_TO_COMPUTE, gpu_memory_to_use = gpu_memory_to_use, use_mask = True, ignore_zero_frequency = options['ignore_zero_frequency'])
+    u['rescaled'],s['rescaled'], zss['init'] = rescale_eigs(cryos, u['real'],s['real'], means['combined'], volume_mask, image_cov_noise, basis_size = constants.N_PCS_TO_COMPUTE, gpu_memory_to_use = gpu_memory_to_use, use_mask = True, ignore_zero_frequency = options['ignore_zero_frequency'])
 
     # logger.info(f"u after rescale dtype: {u['rescaled'].dtype}")
     logger.info("memory after rescaling")

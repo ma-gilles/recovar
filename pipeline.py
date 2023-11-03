@@ -225,16 +225,22 @@ def standard_recovar_pipeline(args):
     
     noise_time = time.time()
     # Probably should rename all of this...
-    noise_var, std_noise_var, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
-    logger.info(f"noise time estimate is {time.time() - noise_time}")
+    noise_var_outside_mask, std_noise_var, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
+    logger.info(f"time to estimate noise is {time.time() - noise_time}")
+
+    # I believe that some versino of this is how relion/cryosparc infer the noise, but it seems like it would only be correct for homogeneous
+    # datasets
+    ub_noise_var, std_ub_noise_var, _, _ =  noise.estimate_radial_noise_upper_bound_from_inside_mask(cryo, means['combined'], dilated_volume_mask, batch_size)
+    noise_time = time.time()
+    logger.info(f"time to upper bound noise is {time.time() - noise_time}")
+    noise_var = np.where(noise_var_outside_mask >  ub_noise_var, ub_noise_var, noise_var_outside_mask)
 
     # Noise statistic
     if noise_model == "white":
-        cov_noise = cov_noise
+        cov_noise = np.ones_like(noise_var)*cov_noise
     else:
         cov_noise = noise_var
 
-    # noise_var, std_noise_var, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
 
     # Compute principal components
     u,s, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, disc_type = 'linear_interp', radius = constants.COLUMN_RADIUS) 
@@ -244,18 +250,13 @@ def standard_recovar_pipeline(args):
         logger.info('ignoring zero frequency')
         noise_var[0] *=1e16
 
-    # 
-    if noise_model == "white":
-        image_cov_noise = cov_noise
-    else:
-        image_cov_noise = np.asarray(noise.make_radial_noise(noise_var, cryos[0].image_shape))
+    image_cov_noise = np.asarray(noise.make_radial_noise(noise_var, cryos[0].image_shape))
 
     if not args.keep_intermediate:
         del u['real']
         if 'rescaled_no_contrast' in u:
             del u['rescaled_no_contrast']
         covariance_cols = None
-
 
     # Compute embeddings
     zs = {}; cov_zs = {}; est_contrasts = {}        
@@ -266,7 +267,6 @@ def standard_recovar_pipeline(args):
             print('BUMP EIGS BIG TIME')
         else:
             ss = s['rescaled']
-
         #re-rescale
         # rescale_eigs
         rerescale = False
@@ -301,12 +301,85 @@ def standard_recovar_pipeline(args):
                                                                     ignore_zero_frequency = options['ignore_zero_frequency'] )
         logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
 
-        # if zdim ==1:
-        #     zs[-1], cov_zs[-1], est_contrasts[-1] = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled'] + 1e16 , zdim,
-        #                                                             image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
-        #                                                             contrast_grid = None, contrast_option = options['contrast'],
-        #                                                             ignore_zero_frequency = options['ignore_zero_frequency'] )
 
+    ### STUFF TO DEL
+    ## Rerun from noise model of residual?
+    rerun = False
+    if rerun:
+        ndim = np.max(options['zs_dim_to_test'])
+        cov_noise, cov_noise_std = noise.estimate_noise_from_heterogeneity_residuals_inside_mask(cryo, dilated_volume_mask, means['combined'], u['rescaled'][:,:ndim], est_contrasts[zdim], zs[zdim], 1000, disc_type = 'linear_interp')
+        # image_cov_noise = cov_noise
+        cov_noise_second = cov_noise.copy()
+
+        image_cov_noise = np.asarray(noise.make_radial_noise(noise_var, cryos[0].image_shape))
+
+        # Noise statistic
+        # if noise_model == "white":
+        #     cov_noise = np.ones_like(noise_var)*cov_noise
+        # else:
+        #     cov_noise = noise_var
+        # image_cov_noise = np.asarray(noise.make_radial_noise(noise_var, cryos[0].image_shape))
+
+
+        # Compute principal components
+        u,s, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, disc_type = 'linear_interp', radius = constants.COLUMN_RADIUS) 
+
+        if options['ignore_zero_frequency']:
+            # Make the noise in 0th frequency gigantic. Effectively, this ignore this frequency when fitting.
+            logger.info('ignoring zero frequency')
+            noise_var[0] *=1e16
+
+
+        if not args.keep_intermediate:
+            del u['real']
+            if 'rescaled_no_contrast' in u:
+                del u['rescaled_no_contrast']
+            covariance_cols = None
+
+        # Compute embeddings
+        zs = {}; cov_zs = {}; est_contrasts = {}        
+        for zdim in options['zs_dim_to_test']:
+            z_time = time.time()
+            if zdim ==1:
+                ss =  s['rescaled'] + 1e16
+                print('BUMP EIGS BIG TIME')
+            else:
+                ss = s['rescaled']
+            #re-rescale
+            # rescale_eigs
+            rerescale = False
+            print('rerescale option is off')
+            #rerescale = args.rerescale
+            if rerescale:
+                u[f"rescaled_{zdim}"],s[f"rescaled_{zdim}"], _ = principal_components.rescale_eigs(cryos, u['rescaled'],s['rescaled'], means['combined'], volume_mask, image_cov_noise, basis_size = zdim, gpu_memory_to_use = utils.get_gpu_memory_total(), use_mask = True, ignore_zero_frequency = options['ignore_zero_frequency'])
+
+                zs[zdim], cov_zs[zdim], est_contrasts[zdim] = embedding.get_per_image_embedding(means['combined'], u[f"rescaled_{zdim}"], s[f"rescaled_{zdim}"] , zdim,
+                                                                        image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
+                                                                        contrast_grid = None, contrast_option = options['contrast'],
+                                                                        ignore_zero_frequency = options['ignore_zero_frequency'] )
+                
+                var_zs = np.var(zs[zdim], axis =0)
+                mean_cov_zs = np.diag(np.mean(cov_zs[zdim], axis=0))
+                mean_cov_zs_unregged = np.diag(np.mean(cov_zs[zdim] - np.diag(1/s[f"rescaled_{zdim}"]) , axis=0))
+                # predicted
+
+                pred_eigs = var_zs/mean_cov_zs_unregged**2 * mean_cov_zs**2
+                s[f"rescaled_{zdim}_guess"] = pred_eigs
+                # Estimate eigenvalues:
+
+                zs[zdim], cov_zs[zdim], est_contrasts[zdim] = embedding.get_per_image_embedding(means['combined'], u[f"rescaled_{zdim}"], s[f"rescaled_{zdim}"] , zdim,
+                                                                        image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
+                                                                        contrast_grid = None, contrast_option = options['contrast'],
+                                                                        ignore_zero_frequency = options['ignore_zero_frequency'] )
+
+            else:
+                zs[zdim], cov_zs[zdim], est_contrasts[zdim] = embedding.get_per_image_embedding(means['combined'], u['rescaled'], ss , zdim,
+                                                                        image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
+                                                                        contrast_grid = None, contrast_option = options['contrast'],
+                                                                        ignore_zero_frequency = options['ignore_zero_frequency'] )
+            logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
+
+    ### END OF DEL
 
     logger.info(f"embedding time: {time.time() - st_time}")
 
@@ -336,6 +409,8 @@ def standard_recovar_pipeline(args):
                 'input_args' : args,
                 'latent_space_bounds' : np.array(latent_space_bounds), 
                 'density': np.array(density),
+                'noise_var_outside_mask' : np.array(noise_var_outside_mask),
+                'ub_noise_var' : np.array(ub_noise_var),
                 'noise_var' : np.array(noise_var),
                 'std_noise_var' : np.array(std_noise_var),
                 'image_PS' : np.array(image_PS),
@@ -344,6 +419,8 @@ def standard_recovar_pipeline(args):
                 'covariance_cols': covariance_cols, 
                 'picked_frequencies' : picked_frequencies }
     
+    if rerun:
+        result['cov_noise_second'] = cov_noise_second
 
     with open(output_model_folder + 'results.pkl', 'wb') as f :
         pickle.dump(result, f)

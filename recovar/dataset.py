@@ -177,6 +177,7 @@ class CryoEMDataset:
         self.grid_size = volume_shape[0]
         self.volume_size = np.prod(volume_shape)
 
+
         self.image_stack = image_stack
         self.image_shape = tuple(image_stack.image_shape)
         self.image_size = np.prod(image_stack.image_shape)
@@ -192,6 +193,7 @@ class CryoEMDataset:
 
         self.dtype = dtype
         self.dtype_real = dtype(0).real.dtype
+        self.CTF_dtype = self.dtype_real # this might changed in the future for Ewald sphere
         # Note that images are stored in float 32 but rotations are stored in float 64.
         # There seems to be a JAX-bug with float 32 when doing the nearest neighbor approximation...
         self.rotation_dtype = rotation_dtype
@@ -204,7 +206,7 @@ class CryoEMDataset:
     
     def CTF_fun(self,*args):
         # Force dtype
-        return self.CTF_fun_inp(*args).astype(self.dtype)
+        return self.CTF_fun_inp(*args).astype(self.CTF_dtype)
 
     def get_valid_frequency_indices(self):
         return np.array(self.get_volume_radial_mask(self.grid_size//2 - 1))

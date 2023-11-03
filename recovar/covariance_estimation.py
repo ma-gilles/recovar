@@ -29,10 +29,13 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, 
 
     # image_batch_size = utils.get_image_batch_size(cryo.grid_size, )
 
-    if noise_model == "white":
-        image_noise_var = cov_noise
-    elif noise_model == "radial":
-        image_noise_var = noise.make_radial_noise(cov_noise, cryos[0].image_shape)
+    # if noise_model == "white":
+    #     image_noise_var = cov_noise
+    # elif noise_model == "radial":
+    #     image_noise_var = noise.make_radial_noise(cov_noise, cryos[0].image_shape)
+    # else:
+    #     assert False, "wrong noise model"
+    image_noise_var = noise.make_radial_noise(cov_noise, cryos[0].image_shape)
 
     utils.report_memory_device(logger = logger)
 
@@ -42,10 +45,10 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, 
     utils.report_memory_device(logger = logger)
 
 
-    if noise_model == "white":
-        volume_noise_var = cov_noise
-    elif noise_model == "radial":
-        volume_noise_var = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].volume_shape))
+    # if noise_model == "white":
+    #     volume_noise_var = cov_noise
+    # elif noise_model == "radial":
+    volume_noise_var = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].volume_shape))
 
     H_comb, B_comb, prior, fscs = compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, volume_noise_var, mask_final, volume_shape,  gpu_memory, prior_iterations = 3, keep_intermediate = keep_intermediate, reg_init_multiplier = constants.REG_INIT_MULTIPLIER, substract_shell_mean = substract_shell_mean, shift_fsc = shift_fsc)
     del Hs, Bs
@@ -275,6 +278,13 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
     jax_random_key = jax.random.PRNGKey(jax_random_key)
     mean_estimate = jnp.array(mean_estimate)
 
+    apply_noise_mask = False
+    if apply_noise_mask:
+        logger.warning('USING NOISE MASK IS ON')
+    else:
+        logger.warning('USING NOISE MASK IS OFF')
+
+
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
     for images, batch_image_ind in data_generator:
         image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
@@ -314,12 +324,9 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
         all_one_volume = jnp.ones(experiment_dataset.volume_size, dtype = experiment_dataset.dtype)
         ones_mapped = core.forward_model(all_one_volume, batch_CTF, batch_grid_pt_vec_ind_of_images)
         
-        apply_noise_mask = True
         if apply_noise_mask:
-            print('using noise mask is on')
             f_jit = jax.jit(compute_H_B_inner_mask, static_argnums = [7,8])
         else:
-            print('using noise mask is off')
             f_jit = jax.jit(compute_H_B_inner, static_argnums = [6])
 
         for (k, picked_freq_idx) in enumerate(picked_frequency_indices):
