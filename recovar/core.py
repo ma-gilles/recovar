@@ -123,11 +123,9 @@ def get_rotated_plane_coords(rotation_matrix, image_shape, voxel_size, scaled = 
 batch_get_rotated_plane_coords = jax.vmap(get_rotated_plane_coords, in_axes = (0, None, None, None))
 
 # @functools.partial(jax.jit, static_argnums = [4,5,6,7,8])    
-def get_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type):
-    
-    if disc_type == "linear_interp" or disc_type =="nearest":
-        order = 1 if disc_type == "linear_interp" else 0
-        return map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, order)
+def get_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type):    
+    order = 1 if disc_type == "linear_interp" else 0
+    return map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, order)
     
 @functools.partial(jax.jit, static_argnums = [2,3,4,5])    
 def map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, order):

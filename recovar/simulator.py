@@ -5,7 +5,7 @@ from recovar import core, dataset, noise
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 from recovar import utils
-import jax.scipy
+import jax.scipy.spatial.transform
 import os
 import mrcfile, pickle
 import matplotlib.pyplot as plt
@@ -59,8 +59,8 @@ def generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  
     # if not sample_trans:
     #     sample_trans = 0 * sample_trans # in theory, distribution of rotations doesn't matter, but it can make the particle leave the image and such
         # However, when using masks, it is unclear that this is necessarily true, since the mask may exit the image or something.
-
-    return sample_ctf_params, sample_rots, sample_trans
+    # import pdb; pdb.set_trace()
+    return sample_ctf_params[...,1:], sample_rots, sample_trans
 
 def get_params_generator(dataset_params_fn ):
     def params_generator(n_images, grid_size):
@@ -71,13 +71,16 @@ def get_params_generator(dataset_params_fn ):
 def random_sampling_scheme(n_images, grid_size, seed =0 ):
     dataset_params_fn = load_first_dataset_params
     ctf_params, _, _ = generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  )
-    rotations = uniform_rotation_sampling(n_images, seed = seed )
+    rotations = uniform_rotation_sampling(n_images, grid_size, seed = seed )
     translations = np.zeros([n_images,2])
     return ctf_params, rotations, translations
 
 def uniform_rotation_sampling(n_images, grid_size, seed = 0 ):
-    key = jax.random.PRNGKey(seed)
-    rotations = np.array(jax.scipy.spatial.transform.Rotation(key, n_images))
+    from scipy.spatial.transform import Rotation
+    # Rotation.random(type cls, num=None, random_state=None)
+    # key = jax.random.PRNGKey(seed)
+    # rotations = np.array(jax.scipy.spatial.transform.Rotation.random(key, n_images))
+    rotations = Rotation.random(n_images).as_matrix()
     return rotations
 
 ## The two main generators
