@@ -105,7 +105,7 @@ class ExperimentReconstruction():
 def generate_ground_truth_volumes(image_option, volume_params, grid_size, voxel_size, padding):
     if "from_mrc" in image_option:
         # gt_volumes =  generate_volumes_from_mrcs(volume_params)
-        gt_volumes, voxel_size = generate_volumes_from_cryodrgn_mrcs(volume_params, grid_size, padding)
+        gt_volumes, voxel_size = generate_volumes_from_mrcs(volume_params, grid_size, padding)
 
     elif "from_pdb" in image_option:
         import generate_synthetic_molecule as gsm
@@ -113,76 +113,7 @@ def generate_ground_truth_volumes(image_option, volume_params, grid_size, voxel_
 
     return gt_volumes, voxel_size
 
-def generate_volumes_from_cryodrgn_mrcs(mrc_names, grid_size_i = None, padding= 0 ):
-    Xs_vec = []
-    first_vol = True
-    # grid_size = grid_size_i
-    # grid_size = grid_size - padding
-    for mrc_name in mrc_names:
-        data, header =  mrc.parse_mrc(mrc_name)
-        data = np.transpose(data, (2,1,0))
-        voxel_size = header.fields['xlen'] / header.fields['nx']
-        mrc_grid_size = header.fields['nx']
-        
-        if grid_size_i is None:
-            grid_size = mrc_grid_size
-        else:
-            grid_size = grid_size_i - padding
 
-            
-        if first_vol:
-            first_vol = False
-            first_voxel_size = voxel_size
-        else:
-            assert( first_voxel_size == voxel_size)
-            
-#         data_padded = np.zeros_like(data, shape = np.array(data.shape) + padding )
-#         half_pad = padding//2
-#         data_padded[half_pad:data.shape[0] + half_pad,half_pad:data.shape[1] + half_pad,half_pad:data.shape[2] + half_pad] = data
-
-        # Zero out grid_sizes outside radius
-        X = ftu.get_dft3(data)
-        # Downsample
-        if mrc_grid_size > grid_size:
-            diff_size = mrc_grid_size - grid_size 
-            half_diff_size = diff_size//2
-            X = X[half_diff_size:-half_diff_size,half_diff_size:-half_diff_size,half_diff_size:-half_diff_size ]
-            X = np.array(X)
-            X[0,:,:] = 0 
-            X[:,0,:] = 0 
-            X[:,:,0] = 0 
-            X = jnp.asarray(X)
-        elif mrc_grid_size < grid_size:
-            diff_size = grid_size - mrc_grid_size 
-            half_diff_size = diff_size//2            
-            X_new = np.zeros( 3*[grid_size] , dtype = X.dtype )
-            X_new[half_diff_size:-half_diff_size,half_diff_size:-half_diff_size,half_diff_size:-half_diff_size ] = X
-            X = jnp.asarray(X_new)
-
-            
-        
-        # Pad in real space.
-        X = ftu.get_idft3(X)
-        X_padded = np.zeros_like(X, shape = np.array(X.shape) + padding )
-        half_pad = padding//2
-        X_padded[half_pad:X.shape[0] + half_pad,half_pad:X.shape[1] + half_pad,half_pad:X.shape[2] + half_pad] = X
-        
-        # Back to FT space
-        X_padded = ftu.get_dft3(X_padded)
-
-        Xs_vec.append(np.array(X_padded.reshape(-1)))
-    voxel_size = voxel_size / grid_size * mrc_grid_size
-
-    return np.stack(Xs_vec), voxel_size
-
-
-def generate_random_rotations(n_images):
-    rotation_matrices = [] 
-    for rot_idx in range(n_images):
-        random_rot = Rotation.random()
-        rotation_matrices.append(random_rot.as_matrix())
-    rotation_matrices = jnp.array(rotation_matrices)
-    return rotation_matrices
 
 
 def get_gt_reconstruction(grid_size, voxel_size, padding, exp_name, valid_indices ):
@@ -211,48 +142,3 @@ def get_col_covariance(Xs, X_mean, vec_indices, prob_of_X):
 
     return cov
 
-
-
-# def generate_fake_dataset(exp_name, on_della, cryos, gt_reconstruction, contrast_half_interval = 0.0, load_clean_images = False, disc_type = "linear_interp", use_nufft = False, jax_rand_key = 0, noise_multiplier = 1, input_contrast = None  ):
-#     cov_noise = np.array([78090.81])
-#     datadir, vol_datadir, fake_vol_exp_name, fake_vol_datadir, indf, label_file, cov_noise, uninvert_data, ctf_pose_datadir = dataset_params.get_dataset_params(exp_name, on_della)
-    
-#     synthetic_cov_noise = cov_noise * noise_multiplier
-#     all_contrasts = [] 
-#     for cryo_idx, cryo in enumerate(cryos):
-
-#         vol_datadir = fake_vol_datadir if fake_vol_datadir is not None else vol_datadir    
-#         exp_name = fake_vol_exp_name if fake_vol_exp_name is not None else exp_name    
-
-#         volume_params, image_option = gsp.get_synthetic_dataset_input(exp_name, vol_datadir)  
-            
-#         im_assign = gt_reconstruction.image_assignment[cryo.dataset_indices] 
-        
-
-#         if load_clean_images:
-#             with open(exp_name + "_synthetic_clean" + str(cryo.grid_size - padding) + ".pkl", "rb") as f:
-#                 clean_images = pickle.load(f)
-#                 if n_images is not None:
-#                     clean_images = clean_images[random_ind]
-#         else:
-
-#             clean_images, _ = gsp.generate_synthetic_clean_images(volume_params, image_option, im_assign, 
-#                                                                                         cryo.rotation_matrices, cryo.image_stack.D, 
-#                                                                                         cryo.voxel_size, use_nufft, 
-#                                                                   padding = cryo.image_stack.padding, disc_type = disc_type, gt_reconstruction = gt_reconstruction)
-            
-#         if input_contrast is not None:
-#             contrast = input_contrast[cryo.dataset_indices]
-#         else:    
-#             assert(contrast_half_interval >= 0)
-#             assert(contrast_half_interval < 1)
-#             contrast = np.random.uniform(1 - contrast_half_interval, 1 + contrast_half_interval, cryo.n_images)
-#         all_contrasts.append(contrast)
-            
-#         clean_images *= contrast[...,None]
-#         jax_rand_key, subkey = jax.random.split(jax_rand_key)
-#         image_stack = gsp.generate_fake_data_from_experiment(cryo, volume_params, image_option, im_assign, use_nufft, synthetic_cov_noise, rand_key = subkey, clean_images = clean_images, padding = cryo.padding, disc_type = disc_type )
-#         cryo.image_stack = image_stack
-#     all_contrasts = np.concatenate(all_contrasts)
-#     return all_contrasts, synthetic_cov_noise
-#     # return

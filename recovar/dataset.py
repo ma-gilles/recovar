@@ -178,17 +178,26 @@ class CryoEMDataset:
         self.volume_size = np.prod(volume_shape)
 
 
-        self.image_stack = image_stack
-        self.image_shape = tuple(image_stack.image_shape)
-        self.image_size = np.prod(image_stack.image_shape)
-        self.n_images = image_stack.N
+        # Allows for passing None as image_stack (for simulation)
+        if image_stack is None:
+            self.image_stack = None
+            self.image_shape = tuple(2*[self.grid_size])
+            self.image_size = np.prod(self.image_shape)
+            self.n_images = CTF_params.shape[0]
+            self.padding = 0 
+        else:
+            self.image_stack = image_stack
+            self.image_shape = tuple(image_stack.image_shape)
+            self.image_size = np.prod(image_stack.image_shape)
+            self.n_images = image_stack.N
+            self.padding = image_stack.padding
 
         self.rotation_matrices = np.array(rotation_matrices.astype(rotation_dtype))
         self.translations = np.array(translations)
         self.CTF_params = np.array(CTF_params)
 
         self.CTF_fun_inp = CTF_fun
-        self.hpad = self.image_stack.padding//2
+        self.hpad = self.padding//2
         self.volume_mask_threshold = 4 * self.grid_size / 128 # At around 128 resolution, 4 seems good, so scale up accordingly. This probably should have a less heuristic value here. This is assuming the mask is scaled between [0,1]
 
         self.dtype = dtype
@@ -198,7 +207,6 @@ class CryoEMDataset:
         # There seems to be a JAX-bug with float 32 when doing the nearest neighbor approximation...
         self.rotation_dtype = rotation_dtype
 
-        self.padding = image_stack.padding
         self.dataset_indices = dataset_indices
 
     def get_dataset_generator(self, batch_size, num_workers = 0):

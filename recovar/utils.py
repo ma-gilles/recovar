@@ -2,7 +2,7 @@ import logging
 import jax
 import jax.numpy as jnp
 import numpy as np
-import mrcfile, os , psutil
+import mrcfile, os , psutil, pickle
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jax.numpy)
     
@@ -127,3 +127,12 @@ def make_algorithm_options(args):
     'ignore_zero_frequency' : args.ignore_zero_frequency 
     }
     return options
+
+
+def pickle_dump(object, file):
+    with open(file, "wb") as f:
+        pickle.dump(object, f)
+
+def pickle_load( file):
+    with open(file, "rb") as f:
+        return pickle.load(f)

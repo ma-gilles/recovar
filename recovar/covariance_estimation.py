@@ -278,7 +278,7 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
     jax_random_key = jax.random.PRNGKey(jax_random_key)
     mean_estimate = jnp.array(mean_estimate)
 
-    apply_noise_mask = False
+    apply_noise_mask = True
     if apply_noise_mask:
         logger.warning('USING NOISE MASK IS ON')
     else:
