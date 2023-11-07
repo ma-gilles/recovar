@@ -23,7 +23,7 @@ Also:
 
 ## Installation 
 To run this code, CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html#) are required. See information about JAX installation [here](https://jax.readthedocs.io/en/latest/installation.html).
-
+Assuming you already have CUDA, installation should take < 5 minutes.
 Here is a set of commands which runs on our university cluster (Della), but may need to be tweaked to run on other clusters.
 
     # module load cudatoolkit/12.2 # You need to load or install CUDA before installing JAX
@@ -33,6 +33,8 @@ Here is a set of commands which runs on our university cluster (Della), but may 
     pip install cryodrgn mrcfile scikit-fmm prody finufft scikit-image tensorflow-cpu matplotlib-scalebar dataframe-image umap-learn[plot] sklearn
     git clone https://github.com/ma-gilles/recovar.git
     python -m ipykernel install --user --name=recovar # if you want to use jupyter notebooks
+
+
 
 
 ## I. Preprocessing 
@@ -308,7 +310,7 @@ Usage example:
 
 ## TLDR
  (WIP - Untested)
-A short example illustrating the steps to run the code on EMPIAR-10076. Read above for more details:
+A short example illustrating the steps to run the code on EMPIAR-10076. Assuming you have downloaded the code and have a GPU, the code should take less than an hour to run, and less than 10 minutes if you downsample to 128 instead (exact running time depends on your hardware). and  Read above for more details:
 
     # Downloaded poses from here: https://github.com/zhonge/cryodrgn_empiar.git
     git clone https://github.com/zhonge/cryodrgn_empiar.git
