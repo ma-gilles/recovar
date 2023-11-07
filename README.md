@@ -30,7 +30,7 @@ Here is a set of commands which runs on our university cluster (Della), but may 
     conda create --name recovar python=3.9
     conda activate recovar
     pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html # You may need to pass ax[cuda11_pip] if you use cuda v11
-    pip install cryodrgn mrcfile scikit-fmm prody finufft scikit-image tensorflow-cpu matplotlib-scalebar dataframe-image umap-learn[plot] sklearn
+    pip install cryodrgn mrcfile scikit-fmm prody finufft scikit-image tensorflow-cpu matplotlib-scalebar dataframe-image umap-learn[plot] sklearn pustil
     git clone https://github.com/ma-gilles/recovar.git
     python -m ipykernel install --user --name=recovar # if you want to use jupyter notebooks
 
