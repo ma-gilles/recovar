@@ -34,12 +34,12 @@ Here is a set of commands which runs on our university cluster (Della), but may 
     git clone https://github.com/ma-gilles/recovar.git
     python -m ipykernel install --user --name=recovar # if you want to use jupyter notebooks
 
-
+The code was tested on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
 
 
 ## I. Preprocessing 
 
-The input interface of RECOVAR is borrowed directly from the excellent [cryoDRGN toolbox](https://cryodrgn.cs.princeton.edu/). 
+The input interface of RECOVAR is borrowed directly from the ex)cellent [cryoDRGN toolbox](https://cryodrgn.cs.princeton.edu/). 
 Particles, poses and CTF must be prepared in the same way, and below is copy-pasted part of 
 [cryoDRGN's documentation](https://github.com/ml-struct-bio/cryodrgn#2-parse-image-poses-from-a-consensus-homogeneous-reconstructiqqon).
 CryoDRGN is a dependency, so you should be able to run the commands below after ``conda activate recovar``.
