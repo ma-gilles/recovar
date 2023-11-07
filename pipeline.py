@@ -304,7 +304,7 @@ def standard_recovar_pipeline(args):
 
     ### STUFF TO DEL
     ## Rerun from noise model of residual?
-    rerun = False
+    rerun = True
     if rerun:
         ndim = np.max(options['zs_dim_to_test'])
         cov_noise, cov_noise_std = noise.estimate_noise_from_heterogeneity_residuals_inside_mask(cryo, dilated_volume_mask, means['combined'], u['rescaled'][:,:ndim], est_contrasts[zdim], zs[zdim], 1000, disc_type = 'linear_interp')

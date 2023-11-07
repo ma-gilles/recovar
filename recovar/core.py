@@ -192,7 +192,6 @@ def compute_ctf_crydgrn(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfacto
     cs = cs * 10**7
     dfang = dfang * jnp.pi / 180
     phase_shift = phase_shift * jnp.pi / 180
-    
     # lam = sqrt(h^2/(2*m*e*Vr)); Vr = V + (e/(2*m*c^2))*V^2
     lam = 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
     x = freqs[...,0]

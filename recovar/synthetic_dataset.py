@@ -115,7 +115,6 @@ def generate_ground_truth_volumes(image_option, volume_params, grid_size, voxel_
 
 
 
-
 def get_gt_reconstruction(grid_size, voxel_size, padding, exp_name, valid_indices ):
     datadir, vol_datadir, fake_vol_exp_name, fake_vol_datadir, indf, label_file, cov_noise_inp, uninvert_data, ctf_pose_datadir = preprocessed_datasets.get_dataset_params(exp_name, on_della=True)
     gt_reconstruction = ExperimentReconstruction(grid_size, voxel_size, padding, exp_name, datadir, fake_vol_datadir,

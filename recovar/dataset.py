@@ -128,7 +128,10 @@ class LazyMRCDataMod(torch.utils.data.Dataset):
 
     def get_dataset_generator(self, batch_size, num_workers = 0):
         return NumpyLoader(self, batch_size=batch_size, shuffle=False, num_workers = num_workers)
-
+    
+    
+    
+    
 def get_num_images_in_dataset(mrc_path):
     particles = dataset.load_particles(mrc_path, True)
     return len(particles)
@@ -271,6 +274,11 @@ class CryoEMDataset:
         score = plot_utils.plot_fsc_new(image1, image2, self.volume_shape, self.voxel_size,  curve = curve, ax = ax, threshold = threshold, filename = filename)
         return score
     
+    def get_image_mask(self, indices, mask, binary = True, soften = -1):
+        indices = np.asarray(indices).astype(int)
+        from recovar import covariance_core # Not sure I want this depency to exist... Could make some circular imports
+        return covariance_core.get_per_image_tight_mask(mask, self.rotation_matrices[indices], self.image_stack.mask, self.volume_mask_threshold, self.image_shape, self.volume_shape, self.grid_size, self.padding, disc_type = 'linear_interp',  binary = binary, soften = soften)
+
 
 
 def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False):
@@ -415,5 +423,5 @@ def get_default_dataset_option():
                             'uninvert_data' : False}
     return dataset_loader_dict
 
-def load_dataset_from_dict(dataset_loader_dict):
-    return load_cryodrgn_dataset(**dataset_loader_dict)
+def load_dataset_from_dict(dataset_loader_dict, lazy = True):
+    return load_cryodrgn_dataset(**dataset_loader_dict, lazy = lazy)

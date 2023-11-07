@@ -67,10 +67,10 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
 
     return proj_mask
 
-def get_per_image_tight_mask_cryo(mask, indices, cryo, disc_type  , binary = True, use_extra_padding =True, soften = 3):
-    # pad = 0 if use_extra_padding else 1
-    image_masks = get_per_image_tight_mask(mask, cryo.rotation_matrices[indices], cryo.image_stack.mask, cryo.volume_mask_threshold, cryo.image_shape, cryo.volume_shape, cryo.grid_size, cryo.padding, disc_type,  binary = binary, soften = soften)
-    return image_masks
+# def get_per_image_tight_mask_cryo(mask, indices, cryo, disc_type  , binary = True, use_extra_padding =True, soften = 3):
+#     # pad = 0 if use_extra_padding else 1
+#     image_masks = get_per_image_tight_mask(mask, cryo.rotation_matrices[indices], cryo.image_stack.mask, cryo.volume_mask_threshold, cryo.image_shape, cryo.volume_shape, cryo.grid_size, cryo.padding, disc_type,  binary = binary, soften = soften)
+#     return image_masks
 
 
 @functools.partial(jax.jit, static_argnums = [2])    

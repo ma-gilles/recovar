@@ -160,7 +160,7 @@ def get_noise_model(option, grid_size):
         return utils.pickle_load(noise_file)
 
 
-def generate_synthetic_dataset(output_folder, volume_folder_input, outlier_file_input, n_images, grid_size = 128,
+def generate_synthetic_dataset(output_folder, voxel_size,  volume_folder_input, outlier_file_input, n_images, grid_size = 128,
                                volume_distribution = None,  dataset_params_option = "dataset1", noise_level = 1, 
                                noise_model = "radial1", put_extra_particles = True, percent_outliers = 0.1, 
                                volume_radius = 0.9, volume_file_root = "", noise_scale_std = 0.3, contrast_std =0.3 ):
@@ -178,10 +178,9 @@ def generate_synthetic_dataset(output_folder, volume_folder_input, outlier_file_
     noise_variance = get_noise_model(noise_model, grid_size) / 50000 * noise_level
 
     # import pdb; pdb.set_trace()
-    main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size = generate_simulated_dataset(volumes, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume )
-
-
-    # import pdb; pdb.set_trace()
+    main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume )
+    simulation_info['volume_folder_input'] = volume_folder_input
+    simulation_info['grid_size'] = grid_size
 
     #
     with mrcfile.new(output_folder + '/particles.'+str(grid_size)+'.mrcs',overwrite=True) as mrc:
@@ -201,19 +200,24 @@ def load_volumes_from_folder(input_folder, grid_size, file_root = ""):
     files = []
     while(os.path.isfile(make_file(idx))):
         files.append(make_file(idx))
+        # import pdb; pdb.set_trace()
         idx+=1
     volumes, voxel_size = generate_volumes_from_mrcs(files, grid_size, padding= 0 )
     volumes /= np.mean(np.linalg.norm(volumes, axis =(-1)))
     return volumes
 
 
-def generate_simulated_dataset(volumes, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None ):
-
+def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None ):
+    
+    # voxel_size = 
     volume_shape = utils.guess_vol_shape_from_vol_size(volumes[0].size)
     grid_size = volume_shape[0]
 
     ctf_params, rots, trans = dataset_param_generator(n_images, grid_size)
-    voxel_size = ctf_params[0,0]
+
+    # ctf_params[:,:2] *=0
+    # ctf_params[:,4] *=0 
+    # voxel_size = ctf_params[0,0]
     trans *=0 
     per_image_contrast, per_image_noise_scale = generate_contrast_params(n_images, noise_scale_std, contrast_std )
 
@@ -221,9 +225,12 @@ def generate_simulated_dataset(volumes, volume_distribution, n_images, noise_var
 
     CTF_fun = core.compute_ctf_cryodgrn_wrapper
     main_dataset = dataset.CryoEMDataset( volume_shape, None, voxel_size,
-                              rots, trans, ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = None)
-    batch_size = utils.get_image_batch_size(grid_size, utils.get_gpu_memory_total())
+                              rots, trans, ctf_params, CTF_fun = CTF_fun, dataset_indices = None)
+    batch_size = 5 * utils.get_image_batch_size(grid_size, utils.get_gpu_memory_total())
 
+    # plt.imshow(main_dataset.get_CTF_image(0)); plt.colorbar()
+    # plt.show();
+    # import pdb; pdb.set_trace()
     # simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = 'linear_interp', mrc_file = None )
 
     main_image_stack = simulate_data(main_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = 'linear_interp', mrc_file = None )
@@ -307,8 +314,8 @@ def save_ctf_params(outdir, D: int, ctf_params, voxel_size):
     ctf_params_all[:,2:] = ctf_params
     ctf_params_all[:,0] = D
     ctf_params_all[:,1] = voxel_size
-    pickle.dump(ctf_params_all, open(outdir + '/ctf_params_all.pkl', "wb"))
-
+    # Throw away B factor and contrast, because that's what cryodrgn loader wants. Probably should change this.
+    utils.pickle_dump(ctf_params_all[:,:9], outdir + '/ctf.pkl')
     return 
 
 
@@ -316,7 +323,10 @@ def save_ctf_params(outdir, D: int, ctf_params, voxel_size):
 def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = 'linear_interp', mrc_file = None, pad_before_translate = False ):
     
     key = jax.random.PRNGKey(seed)
-    noise_image = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape).reshape(experiment_dataset.image_shape)
+    # A little bit of a hack to account for the fact that noise is complex but goes to real
+    noise_variance_mod = noise_variance.copy()
+    # noise_variance_mod[1:] = 2 * noise_variance_mod[1:] 
+    noise_image = noise.make_radial_noise(noise_variance_mod, experiment_dataset.image_shape).reshape(experiment_dataset.image_shape)
 
     if mrc_file is None:
         output_array = np.empty([experiment_dataset.n_images, *experiment_dataset.image_shape] )
@@ -375,7 +385,6 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 
 
 
-
             # import pdb; pdb.set_trace()
             images_batch = ftu.get_idft2(images_batch.reshape([-1, *experiment_dataset.image_shape])).real
             plotting = False
@@ -383,7 +392,6 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
             if pad_before_translate:
                 from recovar import padding
                 padded_images = padding.pad_images_spatial_domain(images_batch,experiment_dataset.grid_size)
-                # import pdb; pdb.set_trace()
                 if plotting:
                     import matplotlib.pyplot as plt
                     plt.imshow(padded_images[0])
@@ -392,26 +400,30 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 padded_images = jax.numpy.roll(padded_images, -np.round(experiment_dataset.translations[indices]).astype(int)[:,0], axis =-1 )
                 padded_images = jax.numpy.roll(padded_images, -np.round(experiment_dataset.translations[indices]).astype(int)[:,1], axis =-2 )
                 if plotting:
-                    import matplotlib.pyplot as plt
                     plt.imshow(padded_images[0])
                     plt.show()
 
                 images_batch = padding.unpad_images_spatial_domain(padded_images, experiment_dataset.grid_size)
                 if plotting:
-                    import matplotlib.pyplot as plt
                     plt.imshow(images_batch[0])
                     plt.show()
 
 
             key, subkey = jax.random.split(key)
-            noise_batch = jax.random.normal(subkey, images_batch.shape ) #/ jnp.sqrt(np.prod(experiment_dataset.image_stack.unpadded_image_shape))
-            noise_batch *= jnp.sqrt(noise_image)
+            # noise_batch[0]
+            # noise_batch = jax.random.normal(subkey, images_batch.shape ) / jnp.sqrt(experiment_dataset.image_size)
+            # noise_batch_ft = ftu.get_dft2(noise_batch.reshape([-1, *experiment_dataset.image_shape]))
+            # noise_batch_ft *= jnp.sqrt(noise_image)
+            # noise_batch = ftu.get_idft2(noise_batch_ft.reshape([-1, *experiment_dataset.image_shape])).real
+
+            # noise_batch *= jnp.sqrt(noise_image) 
             # import matplotlib.pyplot as plt
             # plt.imshow(images_batch[0])
             # plt.show()
             # For noise to be real, we need the symmetry to hold.
             # Or just be sloppy and take out imag part? Is this right?
-            noise_batch = ftu.get_idft2(noise_batch.reshape([-1, *experiment_dataset.image_shape])).real
+            # noise_batch = ftu.get_idft2(noise_batch.reshape([-1, *experiment_dataset.image_shape])).real
+            noise_batch = make_noise_batch(subkey, noise_image, images_batch.shape)
             noise_batch *= per_image_noise_scale[indices][...,None,None]
             images_batch *= per_image_contrast[indices][...,None,None]
             output_array[indices] = np.array(images_batch + noise_batch)
@@ -426,6 +438,14 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
     else:
         return output_array 
 
+
+def make_noise_batch(subkey, noise_image, images_batch_shape):
+    image_size = images_batch_shape[-1] * images_batch_shape[-2]
+    noise_batch = jax.random.normal(subkey, images_batch_shape ) / jnp.sqrt(image_size)
+    noise_batch_ft = ftu.get_dft2(noise_batch.reshape(images_batch_shape))
+    noise_batch_ft *= jnp.sqrt(noise_image)
+    noise_batch = ftu.get_idft2(noise_batch_ft.reshape(images_batch_shape)).real
+    return noise_batch
 
 
 
