@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import jax, functools, time
 
-from recovar import core, regularization, constants
+from recovar import core, regularization, constants, noise
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 
@@ -22,15 +22,22 @@ def get_mean_conformation(cryos, batch_size, cov_noise = None, valid_idx = None,
     cryo = cryos[0]
     valid_idx = cryo.get_valid_frequency_indices() if valid_idx is None else valid_idx
     if cov_noise is None:
-        cov_noise, _ = estimate_noise_variance(cryos, batch_size) 
-    
+        cov_noise, signal_var = noise.estimate_noise_variance(cryo, batch_size)
+        signal_var = np.max(signal_var)
+    else:
+        _, signal_var = noise.estimate_noise_variance(cryo, batch_size)
+        signal_var = np.max(signal_var)
+
+    regularization_init = jnp.ones(cryo.volume_size, dtype = cryo.dtype_real) * signal_var
+
+
     image_weights = image_weight_parse(image_weights, dtype = cryos[0].dtype_real)
     means = {}
 
     # This is kind of a stupid way to code this. Should probably rewrite next 3 forloops
     st_time = time.time()
     for cryo_idx,cryo in enumerate(cryos):
-        means["init" +str(cryo_idx) ] = np.array(compute_mean_volume(cryo, cov_noise,  jnp.ones(cryo.volume_size, dtype = cryo.dtype_real) * 1e18, batch_size, disc_type = disc_type, n_iter = 1, image_weights = image_weights[cryo_idx]))
+        means["init" +str(cryo_idx) ] = np.array(compute_mean_volume(cryo, cov_noise,  regularization_init, batch_size, disc_type = disc_type, n_iter = 1, image_weights = image_weights[cryo_idx]))
         
     mean_prior, fsc, _ = regularization.compute_relion_prior(cryos, cov_noise, means["init0"], means["init1"], batch_size)
     for cryo_idx, cryo in enumerate(cryos):
@@ -175,30 +182,6 @@ def solve_least_squares_mean_iteration(experiment_dataset , cov_diag_prior, cov_
 
     X_mean = jnp.where(jnp.abs(diag_mean) < 1e-8, 0, mean_rhs / (diag_mean + 1 / cov_diag_prior ) )
     return X_mean
-
-def estimate_noise_variance(experiment_dataset, batch_size):
-    sum_sq = 0
-    
-    
-    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
-    # all_shell_avgs = []
-
-    for batch, _ in data_generator:
-        batch = experiment_dataset.image_stack.process_images(batch)
-        sum_sq += np.sum(np.abs(batch)**2, axis =0)
-
-        # shell_avgs = np.abs(batch)**2
-        # batch_average_over_shells
-        # shell_avgs = regularization.batch_average_over_shells(shell_avgs, experiment_dataset.image_shape)
-        # all_shell_avgs.append(shell_avgs)
-
-
-    mean_PS =  sum_sq / experiment_dataset.n_images    
-    cov_noise_mask = np.median(mean_PS)
-
-    average_image_PS = regularization.average_over_shells(mean_PS, experiment_dataset.image_shape)
-
-    return cov_noise_mask.astype(experiment_dataset.dtype_real), np.array(average_image_PS).astype(experiment_dataset.dtype_real)
     
 
 @functools.partial(jax.jit, static_argnums = [7,8,9,10,11,12])    

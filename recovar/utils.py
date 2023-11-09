@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import mrcfile, os , psutil, pickle
 from recovar.fourier_transform_utils import fourier_transform_utils
+from recovar import core
 ftu = fourier_transform_utils(jax.numpy)
     
 logger = logging.getLogger(__name__)
@@ -136,3 +137,17 @@ def pickle_dump(object, file):
 def pickle_load( file):
     with open(file, "rb") as f:
         return pickle.load(f)
+
+    
+def get_variances(covariance_cols, picked_frequencies = None):
+    # picked_frequencies = np.array(covariance_core.get_picked_frequencies(volume_shape, radius = constants.COLUMN_RADIUS, use_half = True))
+
+    volume_shape = guess_vol_shape_from_vol_size(covariance_cols.shape[-1])
+    # freqs = core.vec_indices_to_frequencies(picked_frequencies, volume_shape)
+
+    # Probably a better way to do this...
+    variances = np.zeros(picked_frequencies.size, covariance_cols.dtype)
+    for k in range(picked_frequencies.size):
+        variances[k] = covariance_cols[picked_frequencies[k], k]
+
+    return variances

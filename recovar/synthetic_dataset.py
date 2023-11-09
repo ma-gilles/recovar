@@ -2,106 +2,117 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pickle
-from scipy.spatial.transform import Rotation 
-
-from recovar import core, utils
+from recovar import core, utils, simulator, linalg, mask, constants
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 ftu_np = fourier_transform_utils(np)
-import preprocessed_datasets
 
 # Maybe should take out these dependencies?
 from cryodrgn import mrc
 
-class ExperimentReconstruction():
-    def __init__(self, grid_size, voxel_size, padding, exp_name, datadir, vol_datadir, label_file = None, valid_indices = None ):
-        volume_params, image_option = preprocessed_datasets.get_synthetic_dataset_input(exp_name, vol_datadir)   
-        Xs_vec, voxel_size = generate_ground_truth_volumes(image_option, volume_params, grid_size, voxel_size, padding)
-        # cryo.image_stack.D, cryo.voxel_size, cryo.padding)
+def load_heterogeneous_reconstruction(simulation_info_file, volumes_path_root = None):
+    if isinstance(simulation_info_file, dict):
+        simulation_info = simulation_info_file 
+    else:
+        simulation_info = utils.pickle_load(simulation_info_file)
+
+    volumes_path_root = simulation_info['volumes_path_root'] if volumes_path_root is None else volumes_path_root
+
+    volumes = simulator.load_volumes_from_folder(volumes_path_root, simulation_info['grid_size'] , simulation_info['trailing_zero_format_in_vol_name'] )
+
+    return HeterogeneousVolumeDistribution(volumes, simulation_info['image_assignment'], simulation_info['per_image_contrast'] )
+
+
+
+class HeterogeneousVolumeDistribution():
+    def __init__(self, volumes, image_assignments,  contrasts, valid_indices = None, vol_batch_size = None ):
+
+        self.volume_shape = utils.guess_vol_shape_from_vol_size(volumes.shape[-1])
+        self.vol_batch_size = utils.get_vol_batch_size(self.volume_shape[0], utils.get_gpu_memory_total()) if vol_batch_size is None else vol_batch_size
+        self.volumes = volumes
+        # self.volumes = linalg.batch_dft3(volumes, self.volume_shape, self.vol_batch_size)
+        valid_indices = mask.get_radial_mask(self.volume_shape, radius = None) if valid_indices is None else valid_indices
+        self.valid_indices = valid_indices.reshape(-1)
+        self.volumes *= self.valid_indices[None,:]
+        self.image_assignments = image_assignments
+        self.contrasts = contrasts
         
-        Xs_vec = np.array(Xs_vec, dtype = 'complex128')
-        volume_shape = tuple(3*[grid_size])
-        
-        # Make sure it's real!?!
-        # Is this necessary?
-        # Xs_vec = ftu_np.get_dft3(ftu_np.get_idft3(Xs_vec.reshape([-1, *volume_shape])).real)
-        # Xs_vec = Xs_vec.reshape([Xs_vec.shape[0], -1])
-        self.volumes = Xs_vec
-                
         # Get Image assignment
-        if label_file is not None:
-            with open( label_file, "rb") as f:
-                self.image_assignment = pickle.load(f)
-        else:
-            self.image_assignment = None
-        self.valid_indices = valid_indices
-        
         self.probs_of_state = None
+        self.percent_outliers = None
+        self.compute_probs_of_state()
+
+
         self.mean = None
         self.covariance_cols = None
 
-    def filter_indices_(self, indices):
-        print("IMPLEMENT THIS")
-        
     def get_probs_of_state(self):
         # if self.probs_of_state is None:
         self.compute_probs_of_state()
         return self.probs_of_state
 
     def get_mean(self):
-        # if self.mean is None:
-        self.compute_mean_conformation()
+        if self.mean is None:
+            self.compute_mean_conformation()
         return self.mean
-    
-    def get_covariance_cols(self, picked_frequencies, contrast_var =0   ):
-        # if self.covariance_cols is None:
-        #     self.compute_covariance_columns(picked_frequencies)        
-        #self.compute_covariance_columns(picked_frequencies, contrast_var = contrast_var )
-        u,s = self.get_covariance_eigendecomposition(contrast_variance = contrast_var)
-        cov = (u * s) @ (np.conj(u[picked_frequencies,:]).T)
-        return cov
     
     def compute_probs_of_state(self):        
         n_gt_molecules = self.volumes.shape[0]
+
         probs_of_molecule = np.zeros(n_gt_molecules, dtype = np.float32).real
-        if self.image_assignment is None:
-            probs_of_molecule = np.ones(n_gt_molecules) / n_gt_molecules
-        else:
-            for k in range(n_gt_molecules):
-                probs_of_molecule[k] = np.sum(self.image_assignment[self.valid_indices] == k) / self.image_assignment[self.valid_indices].size
-                
-        if np.abs(np.sum(probs_of_molecule)  - 1) > 1e-5:
-            print("sum of probs not 1!!")
-            
+        for k in range(n_gt_molecules):
+            probs_of_molecule[k] = np.sum(self.image_assignments == k) 
+        
+        probs_of_molecule /= np.sum(probs_of_molecule)
         self.probs_of_state = probs_of_molecule
+        self.percent_outliers = np.sum(self.image_assignments == -1) / self.image_assignments.size
     
     def compute_mean_conformation(self):
         self.mean = np.array(np.sum( self.volumes * self.get_probs_of_state()[:,None], axis = 0 ))
     
-    def compute_covariance_columns(self, picked_frequencies, valid_idx =1, contrast_variance = 0  ):
-        vols = np.sqrt(1 + contrast_variance) *  valid_idx * ( self.volumes - self.get_mean()[None,:] ) * np.sqrt(self.get_probs_of_state()[:,None])        
-        if contrast_variance > 0:
-            vols = np.concatenate( [ np.sqrt(contrast_variance) * self.get_mean()[None] * valid_idx, vols ])
-        vols = vols.T
+    def get_covariance_columns(self, picked_frequencies, contrasted = False ):
+        vols = self.get_covariance_square_root(contrasted)
         return vols @ np.conj(vols[picked_frequencies,:]).T 
-    
-    def get_svd(self, contrast_variance = 0 , valid_idx = 1):
-        vols = np.sqrt(1 + contrast_variance) *  np.array(valid_idx) * ( self.volumes - self.get_mean()[None,:] ) * np.sqrt(self.get_probs_of_state()[:,None])
+
+
+    def get_covariance_square_root(self, contrasted):
+        contrast_variance = np.var(self.contrasts[self.image_assignments !=-1]) if contrasted else 0
+
+        vols = np.sqrt(1 + contrast_variance)  * ( self.volumes - self.get_mean()[None,:] ) * np.sqrt(self.get_probs_of_state()[:,None])
+
         if contrast_variance > 0:
-            vols = np.concatenate( [ np.sqrt(contrast_variance) * self.get_mean()[None] * valid_idx, vols ])
-        u,s,v = np.linalg.svd(vols.T, full_matrices = False)
+            vols = np.concatenate( [ np.sqrt(contrast_variance) * self.get_mean()[None] , vols ])
+        return vols.T
+
+    def get_vol_svd(self, contrasted = False):
+
+        vols = self.get_covariance_square_root( contrasted)
+        u,s,v = np.linalg.svd(vols, full_matrices = False)
+
         return u,s,v
 
-    def get_covariance_eigendecomposition(self, contrast_variance = 0, valid_idx = 1):
-        u,s,v = self.get_svd(contrast_variance = contrast_variance, valid_idx = valid_idx)
-        
-        zero_freq = core.frequencies_to_vec_indices( jnp.array([[0,0,0]] ), utils.guess_vol_shape_from_vol_size(self.volumes[0].size))
+    def get_covariance_eigendecomposition(self, contrasted = False):
+        u,s,_ = self.get_vol_svd(contrasted)
+        zero_freq = core.frequencies_to_vec_indices( jnp.array([[0,0,0]] ), self.volume_shape)
         # u[zero_freq] == np.sum(Fu)== < Fu, 1 > 
-        ip = u[zero_freq,:] / np.abs(u[zero_freq,:])
+        # ip = u[zero_freq,:] / np.abs(u[zero_freq,:])
+        ip = np.where(np.abs(u[zero_freq,:])  > constants.ROOT_EPSILON, u[zero_freq,:] / np.abs(u[zero_freq,:]), 1 )
         u /= ip
-
         return u, s**2
     
+    def get_fourier_variances(self, contrasted = False):
+        vols = self.get_covariance_square_root(contrasted)
+        return np.linalg.norm(vols, axis=-1)**2
+
+    def get_spatial_variances(self, contrasted = False):
+        vols = self.get_covariance_square_root(contrasted)
+        vols = linalg.get_batch_idft3(vols, self.volume_shape, self.vol_batch_size)
+        return np.linalg.norm(vols, axis=-1)**2
+
+
+
+
+
 def generate_ground_truth_volumes(image_option, volume_params, grid_size, voxel_size, padding):
     if "from_mrc" in image_option:
         # gt_volumes =  generate_volumes_from_mrcs(volume_params)
@@ -121,8 +132,8 @@ def get_gt_reconstruction(grid_size, voxel_size, padding, exp_name, valid_indice
                                                      label_file = label_file, valid_indices = valid_indices)
     return gt_reconstruction
 
-def get_col_covariance_for_one_X_one_index(X, Xmean, vec_index, np = jnp):
-    return (X - Xmean) * np.conj(X[vec_index] - Xmean[vec_index])
+def get_col_covariance_for_one_X_one_index(X, Xmean, vec_index):
+    return (X - Xmean) * jnp.conj(X[vec_index] - Xmean[vec_index])
 
 get_col_covariance_for_one_X_many_index = jax.vmap(get_col_covariance_for_one_X_one_index, in_axes = (None, None, 0 ) )
 get_col_covariance_for_many_X_one_index = jax.vmap(get_col_covariance_for_one_X_one_index, in_axes = (0, None, None ) )
@@ -137,7 +148,7 @@ def get_col_covariance(Xs, X_mean, vec_indices, prob_of_X):
     
     Xs_j = jnp.array(Xs)
     for v_idx,v in enumerate(vec_indices):
-        cov[:,v_idx] = jnp.sum(prob_of_X[...,None] * get_col_covariance_for_one_X_one_index(Xs_j, X_mean, v, np = jnp ), axis =0)
+        cov[:,v_idx] = jnp.sum(prob_of_X[...,None] * get_col_covariance_for_many_X_one_index(Xs_j, X_mean, v ), axis =0)
 
     return cov
 

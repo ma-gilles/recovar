@@ -93,7 +93,7 @@ def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape):
 @functools.partial(jax.jit, static_argnums = [5,6,7,8,9,10])    
 def get_centered_images(images, mean, CTF_params, rotation_matrices, translations, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type  ):    
     translated_images = core.translate_images(images, translations, image_shape)
-    centered_images = translated_images - get_projected_image(mean, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type)
+    centered_images = translated_images - core.get_projected_image(mean, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type)
     return centered_images
 
 def check_mask(mask):
@@ -103,10 +103,6 @@ def check_mask(mask):
     return no_mask
 
 batch_forward_model = jax.vmap(core.forward_model, in_axes = (0, None, None))
-
-def get_projected_image(mean, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):
-    slices = core.get_slices(mean, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)
-    return slices
 
 @functools.partial(jax.jit, static_argnums = [3,4,5,6,7,8])    
 def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):

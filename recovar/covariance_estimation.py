@@ -42,6 +42,30 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, 
     Hs, Bs = compute_both_H_B(cryos, means["combined"], mask_ls, picked_frequencies, gpu_memory, image_noise_var, disc_type, parallel_analysis = False)
     st_time = time.time()
 
+
+    ## DEL ALL THIS
+    H_comb = Hs[0].T
+    B_comb = Bs[0].T
+
+    covariance_cols = {}
+    cols2 = []
+    for col_idx in range(picked_frequencies.size):
+        # cols2.append(np.array(regularization.covariance_update_col_with_mask(H_comb[col_idx], B_comb[col_idx], prior[col_idx], volume_mask, valid_idx, volume_shape)))
+        cols2.append(np.array(regularization.covariance_update_col(H_comb[col_idx], B_comb[col_idx],  B_comb[col_idx]*0 + np.inf) * valid_idx ))
+    logger.warning("TOOK OUT PRIOR STUFF. PROBABLY ")
+    logger.warning("TOOK OUT PRIOR STUFF. PROBABLY ")
+    logger.warning("TOOK OUT PRIOR STUFF. PROBABLY ")
+    logger.warning("TOOK OUT PRIOR STUFF. PROBABLY ")
+
+        
+    # logger.info(f"cov update time: {time.time() - st_time2}")
+
+    covariance_cols["est_mask"] = np.stack(cols2, axis =-1).astype(cryo.dtype)
+    utils.pickle_dump(covariance_cols, "/home/mg6942/mytigress/synthetic_clean_white/cols_one.pkl")
+    assert False
+    ## DEL ALL THIS -- END
+
+
     utils.report_memory_device(logger = logger)
 
 
@@ -61,12 +85,15 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, 
     cols2 = []
     for col_idx in range(picked_frequencies.size):
         # cols2.append(np.array(regularization.covariance_update_col_with_mask(H_comb[col_idx], B_comb[col_idx], prior[col_idx], volume_mask, valid_idx, volume_shape)))
-        cols2.append(np.array(regularization.covariance_update_col(H_comb[col_idx], B_comb[col_idx], prior[col_idx]) * valid_idx ))
+        logger.warning("TOOK OUT PRIOR STUFF. PROBABLY ")
+        cols2.append(np.array(regularization.covariance_update_col(H_comb[col_idx], B_comb[col_idx], prior[col_idx]*0 + np.inf) * valid_idx ))
 
         
     logger.info(f"cov update time: {time.time() - st_time2}")
 
     covariance_cols["est_mask"] = np.stack(cols2, axis =-1).astype(cryo.dtype)
+    utils.pickle_dump(covariance_cols, "/home/mg6942/mytigress/synthetic_clean_white/cols.pkl")
+
     del H_comb, B_comb, prior
     logger.info(f"reg time: {time.time() - st_time}")
     utils.report_memory_device(logger = logger)
@@ -92,13 +119,13 @@ def compute_H_B_in_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gp
     image_batch_size = utils.get_image_batch_size(cryo.grid_size, gpu_memory)
     column_batch_size = utils.get_column_batch_size(cryo.grid_size, gpu_memory)
 
-    if batch_over_image_only:
-        return compute_H_B(cryo, mean, dilated_volume_mask,
-                                                                 picked_frequencies,
-                                                                 int(image_batch_size ), (cov_noise),
-                                                                 None , disc_type = disc_type,
-                                                                 parallel_analysis = parallel_analysis,
-                                                                 jax_random_key = 0, batch_over_H_B = True)
+    # if batch_over_image_only:
+    #     return compute_H_B(cryo, mean, dilated_volume_mask,
+    #                                                              picked_frequencies,
+    #                                                              int(image_batch_size ), (cov_noise),
+    #                                                              None , disc_type = disc_type,
+    #                                                              parallel_analysis = parallel_analysis,
+    #                                                              jax_random_key = 0, batch_over_H_B = True)
     
 
     H = np.empty( [cryo.volume_size, picked_frequencies.size] , dtype = cryo.dtype)
@@ -135,8 +162,6 @@ def compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, co
     for cryo_idx in range(len(Hs)):
         Hs[cryo_idx] = Hs[cryo_idx].T
         Bs[cryo_idx] = Bs[cryo_idx].T
-    fsc_priors = [] 
-    H_combined = []; B_combined = []; 
     
     # Column-wise regularize 
     shifts = core.vec_indices_to_frequencies(picked_frequencies, volume_shape) * (shift_fsc)
@@ -146,7 +171,6 @@ def compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, co
     H_combined = [None] * n_freqs
     B_combined = [None] * n_freqs
     fscs = [None] * n_freqs
-
 
     batch_size = utils.get_column_batch_size(volume_shape[0], gpu_memory) // 4
 
@@ -222,12 +246,14 @@ def compute_H_B_inner(centered_images, ones_mapped, CTF_val_on_grid_stacked, pla
 batch_compute_H_B_inner = jax.vmap(compute_H_B_inner, in_axes = (None, None, None, None, None, 0, None))
 
 
+
+
 # Probably should delete the other version after debugging.
 # @functools.partial(jax.jit, static_argnums = [6])    
 def compute_H_B_inner_mask(centered_images, ones_mapped, CTF_val_on_grid_stacked, plane_indices_on_grid_stacked, cov_noise, picked_freq_index, image_mask, image_shape, volume_size):
 
     mask = plane_indices_on_grid_stacked == picked_freq_index
-    v = centered_images * jnp.conj(CTF_val_on_grid_stacked)  
+    v = centered_images * jnp.conj(CTF_val_on_grid_stacked)
 
     ## NOT THERE ARE SOME -1 ENTRIES. BUT THEY GET GIVEN A 0 WEIGHT. IN THEORY, JAX JUST IGNORES THEM ANYWAY BUT SHOULD FIX THIS. 
 
@@ -254,13 +280,13 @@ def compute_H_B_inner_mask(centered_images, ones_mapped, CTF_val_on_grid_stacked
     B_freq_idx = C_n - E_n
 
     # H
-    v = ones_mapped * jnp.conj(CTF_val_on_grid_stacked)  
+    v = ones_mapped * jnp.conj(CTF_val_on_grid_stacked)
     mult = jnp.sum(v * mask, axis = -1)
     w = v * jnp.conj(mult[:,None])
 
     # Pick out only columns j for which V[idx,j] is not zero
     H_freq_idx = core.sum_batch_P_adjoint_mat_vec(volume_size, w, plane_indices_on_grid_stacked)
-    
+    # import pdb; pdb.set_trace()
     # H_zeros = H_freq_idx == 0 
     return H_freq_idx, B_freq_idx
 
@@ -278,22 +304,39 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
     jax_random_key = jax.random.PRNGKey(jax_random_key)
     mean_estimate = jnp.array(mean_estimate)
 
+    print('noise in HB:', cov_noise)
+
     apply_noise_mask = True
     if apply_noise_mask:
         logger.warning('USING NOISE MASK IS ON')
+        logger.warning('USING NOISE MASK IS ON')
+        logger.warning('USING NOISE MASK IS ON')
+        logger.warning('USING NOISE MASK IS ON')
     else:
+        logger.warning('USING NOISE MASK IS OFF')
+        logger.warning('USING NOISE MASK IS OFF')
+        logger.warning('USING NOISE MASK IS OFF')
         logger.warning('USING NOISE MASK IS OFF')
 
 
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
     for images, batch_image_ind in data_generator:
+
+        # mean_estimate*=0 
+
         image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
                                               experiment_dataset.rotation_matrices[batch_image_ind], 
                                               experiment_dataset.image_stack.mask, 
                                               experiment_dataset.volume_mask_threshold, 
                                               experiment_dataset.image_shape, 
                                               experiment_dataset.volume_shape, experiment_dataset.grid_size, 
-                                            experiment_dataset.padding, disc_type, soften = soften_mask )
+                                            experiment_dataset.padding, disc_type, soften = soften_mask ) * 0 + 1
+        logger.warning('MASK IS OFF!!')
+        logger.warning('MASK IS OFF!!')
+        logger.warning('MASK IS OFF!!')
+        logger.warning('MASK IS OFF!!')
+        disc_type = 'nearest'
+        logger.warning('CHANGING DISC!!')
 
         images = experiment_dataset.image_stack.process_images(images)
         images = covariance_core.get_centered_images(images, mean_estimate,
@@ -311,7 +354,8 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
             jax_random_key, subkey = jax.random.split(jax_random_key)
             images *= (np.random.randint(0, 2, images.shape)*2 - 1)
             # images *=  np.exp(1j* np.random.rand(*(images.shape)) * 2 * np.pi) 
-            
+        # images3 = covariance_core.apply_image_masks(images2, image_mask, experiment_dataset.image_shape)  
+
         images = covariance_core.apply_image_masks(images, image_mask, experiment_dataset.image_shape)  
 
         batch_CTF = experiment_dataset.CTF_fun( experiment_dataset.CTF_params[batch_image_ind],
@@ -325,6 +369,8 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
         ones_mapped = core.forward_model(all_one_volume, batch_CTF, batch_grid_pt_vec_ind_of_images)
         
         if apply_noise_mask:
+            # logger.warning('XXXXX')
+            # logger.warning('XXXX')
             f_jit = jax.jit(compute_H_B_inner_mask, static_argnums = [7,8])
         else:
             f_jit = jax.jit(compute_H_B_inner, static_argnums = [6])
@@ -337,26 +383,13 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
                 
             if apply_noise_mask:
                 ### CHANGE NOISE ESTIMATE HERE?
+                # logger.warning('XXXXX')
+                # logger.warning('XXXX')
+                # H_k, B_k =  f_jit(3*ones_mapped, ones_mapped, batch_CTF, batch_grid_pt_vec_ind_of_images, cov_noise*0, picked_freq_idx, image_mask, experiment_dataset.image_shape, volume_size)
+
                 H_k, B_k =  f_jit(images, ones_mapped, batch_CTF, batch_grid_pt_vec_ind_of_images, cov_noise, picked_freq_idx, image_mask, experiment_dataset.image_shape, volume_size)
             else:
                 H_k, B_k =  f_jit(images, ones_mapped, batch_CTF, batch_grid_pt_vec_ind_of_images, cov_noise, picked_freq_idx, volume_size)
-                
-        # use_noise_mask = True
-        # if use_noise_mask:
-        #     f_jit = jax.jit(compute_H_B_inner, static_argnums = [6])
-        # else:
-        #     f_jit = jax.jit(compute_H_B_inner, static_argnums = [6])
-
-        # for (k, picked_freq_idx) in enumerate(picked_frequency_indices):
-            
-        #     if (k % 50 == 49) and (k > 0):
-        #         # There seemed to be some strange JAX memory leak, so this could fix it?
-        #         f_jit._clear_cache() # Maybe this? 
-            
-        #     if use_noise_mask:
-        #         H_k, B_k =  f_jit(images, ones_mapped, batch_CTF, batch_grid_pt_vec_ind_of_images, cov_noise, picked_freq_idx, volume_size)
-        #     else:
-        #         H_k, B_k =  f_jit(images, ones_mapped, batch_CTF, batch_grid_pt_vec_ind_of_images, cov_noise, picked_freq_idx, volume_size)
 
             _cpu = jax.devices("cpu")[0]
 

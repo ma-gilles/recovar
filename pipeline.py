@@ -179,7 +179,7 @@ def standard_recovar_pipeline(args):
     logger.info(f"number of images: {cryos[0].n_images + cryos[1].n_images}")
     utils.report_memory_device(logger=logger)
 
-    cov_noise, _ = homogeneous.estimate_noise_variance(cryos[0], batch_size)
+    cov_noise, _ = noise.estimate_noise_variance(cryos[0], batch_size)
 
     # I need to rewrite the reweighted so it can use the more general noise distribution, but for now I'll go with that. 
     cov_noise_init = cov_noise
@@ -226,15 +226,30 @@ def standard_recovar_pipeline(args):
     noise_time = time.time()
     # Probably should rename all of this...
     noise_var_outside_mask, std_noise_var, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
+
+    if args.mask_option is not None:
+        noise_var_outside_mask, per_pixel_noise,_ =  noise.estimate_noise_variance_from_outside_mask_v2(cryo, dilated_volume_mask, batch_size)
+
+        cov_noise = noise.estimate_white_noise_variance_from_mask(cryo, dilated_volume_mask, batch_size)
+        cov_noise_white_second = cov_noise.copy()
+    else:
+        cov_noise_white_second = cov_noise_init
+        noise_var_outside_mask = cov_noise_init * np.ones_like(noise_var_outside_mask)
+
     logger.info(f"time to estimate noise is {time.time() - noise_time}")
 
     # I believe that some versino of this is how relion/cryosparc infer the noise, but it seems like it would only be correct for homogeneous
     # datasets
     ub_noise_var, std_ub_noise_var, _, _ =  noise.estimate_radial_noise_upper_bound_from_inside_mask(cryo, means['combined'], dilated_volume_mask, batch_size)
+
+    ub_noise_var, _,_ =  noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(cryo, means['combined'], dilated_volume_mask, batch_size)
+
+    # noise_var_outside_mask, per_pixel_noise =  noise.estimate_noise_variance_from_outside_mask_v2(cryo, dilated_volume_mask, batch_size)
+
     noise_time = time.time()
     logger.info(f"time to upper bound noise is {time.time() - noise_time}")
     noise_var = np.where(noise_var_outside_mask >  ub_noise_var, ub_noise_var, noise_var_outside_mask)
-
+    noise_var = noise_var_outside_mask
     # Noise statistic
     if noise_model == "white":
         cov_noise = np.ones_like(noise_var)*cov_noise
@@ -301,13 +316,19 @@ def standard_recovar_pipeline(args):
                                                                     ignore_zero_frequency = options['ignore_zero_frequency'] )
         logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
 
-
+    ndim = np.max(options['zs_dim_to_test'])
+    cov_noise, _,_ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(cryo, dilated_volume_mask, means['combined'], u['rescaled'][:,:ndim], est_contrasts[zdim], zs[zdim], batch_size//10, disc_type = 'linear_interp')
+    cov_noise_second = cov_noise.copy()
     ### STUFF TO DEL
     ## Rerun from noise model of residual?
-    rerun = True
+    rerun = False
     if rerun:
         ndim = np.max(options['zs_dim_to_test'])
-        cov_noise, cov_noise_std = noise.estimate_noise_from_heterogeneity_residuals_inside_mask(cryo, dilated_volume_mask, means['combined'], u['rescaled'][:,:ndim], est_contrasts[zdim], zs[zdim], 1000, disc_type = 'linear_interp')
+
+        # cov_noise, cov_noise_std = noise.estimate_noise_from_heterogeneity_residuals_inside_mask(cryo, dilated_volume_mask, means['combined'], u['rescaled'][:,:ndim], est_contrasts[zdim], zs[zdim], batch_size//10, disc_type = 'linear_interp')
+
+        # cov_noise, _,_ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(cryo, dilated_volume_mask, means['combined'], u['rescaled'][:,:ndim], est_contrasts[zdim], zs[zdim], batch_size//10, disc_type = 'linear_interp')
+
         # image_cov_noise = cov_noise
         cov_noise_second = cov_noise.copy()
 
@@ -379,6 +400,7 @@ def standard_recovar_pipeline(args):
                                                                         ignore_zero_frequency = options['ignore_zero_frequency'] )
             logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
 
+    rerun = True
     ### END OF DEL
 
     logger.info(f"embedding time: {time.time() - st_time}")
@@ -417,7 +439,8 @@ def standard_recovar_pipeline(args):
                 'std_image_PS' : np.array(std_image_PS),
                 'column_fscs': column_fscs, 
                 'covariance_cols': covariance_cols, 
-                'picked_frequencies' : picked_frequencies }
+                'picked_frequencies' : picked_frequencies,
+                 'cov_noise_white_second' : cov_noise_white_second }
     
     if rerun:
         result['cov_noise_second'] = cov_noise_second
@@ -432,6 +455,9 @@ def standard_recovar_pipeline(args):
     o.save_volume(volume_mask, output_folder + 'volumes/' + 'mask', volume_shape, from_ft = False)
     o.save_volume(dilated_volume_mask, output_folder + 'volumes/' + 'dilated_mask', volume_shape, from_ft = False)
     logger.info(f"total time: {time.time() - st_time}")
+    
+    from analyze import analyze
+    analyze(args.outdir, output_folder = None, zdim=  np.max(options['zs_dim_to_test']), n_clusters = 40, n_paths= 4, skip_umap = False, q=None, n_std=None )
 
     return means, u, s, volume_mask, dilated_volume_mask, cov_noise 
 

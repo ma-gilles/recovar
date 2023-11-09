@@ -14,6 +14,13 @@ from cryodrgn.pose import PoseTracker
 from pathlib import Path
 xx = Path(__file__).resolve()
 
+
+import logging
+    
+logger = logging.getLogger(__name__)
+
+
+
 data_path = os.path.join(os.path.dirname(__file__),'data/')
 
 # Two generators that load ctf and poses from real datasets
@@ -160,12 +167,12 @@ def get_noise_model(option, grid_size):
         return utils.pickle_load(noise_file)
 
 
-def generate_synthetic_dataset(output_folder, voxel_size,  volume_folder_input, outlier_file_input, n_images, grid_size = 128,
+def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, outlier_file_input, n_images, grid_size = 128,
                                volume_distribution = None,  dataset_params_option = "dataset1", noise_level = 1, 
                                noise_model = "radial1", put_extra_particles = True, percent_outliers = 0.1, 
-                               volume_radius = 0.9, volume_file_root = "", noise_scale_std = 0.3, contrast_std =0.3 ):
+                               volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, disc_type = 'linear_interp' ):
     
-    volumes = load_volumes_from_folder(volume_folder_input, grid_size, volume_file_root )
+    volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name )
     vol_shape = utils.guess_vol_shape_from_vol_size(volumes.shape[-1])
     # import matplotlib.pyplot as plt
     # plt.imshow(ftu.get_idft3(volumes[0].reshape(vol_shape)).real.sum(axis=0))
@@ -178,9 +185,11 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volume_folder_input, 
     noise_variance = get_noise_model(noise_model, grid_size) / 50000 * noise_level
 
     # import pdb; pdb.set_trace()
-    main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume )
-    simulation_info['volume_folder_input'] = volume_folder_input
+    main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type )
+    simulation_info['volumes_path_root'] = volumes_path_root
     simulation_info['grid_size'] = grid_size
+    simulation_info['trailing_zero_format_in_vol_name'] = trailing_zero_format_in_vol_name
+    simulation_info['disc_type'] = disc_type
 
     #
     with mrcfile.new(output_folder + '/particles.'+str(grid_size)+'.mrcs',overwrite=True) as mrc:
@@ -193,9 +202,16 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volume_folder_input, 
     utils.pickle_dump(simulation_info, output_folder + '/simulation_info.pkl' )
     return main_image_stack, simulation_info
 
-def load_volumes_from_folder(input_folder, grid_size, file_root = ""):
-    def make_file(k):
-        return os.path.join(input_folder,  f"{file_root}{k}.mrc")
+def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name = False):
+
+    if trailing_zero_format_in_vol_name:
+        def make_file(k):
+            return os.path.join(volumes_path_root,   format(k, '04d')+".mrc")
+    else:
+        def make_file(k):
+            return os.path.join(volumes_path_root,  f"{k}.mrc")
+
+    
     idx =0 
     files = []
     while(os.path.isfile(make_file(idx))):
@@ -207,7 +223,7 @@ def load_volumes_from_folder(input_folder, grid_size, file_root = ""):
     return volumes
 
 
-def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None ):
+def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp' ):
     
     # voxel_size = 
     volume_shape = utils.guess_vol_shape_from_vol_size(volumes[0].size)
@@ -232,8 +248,10 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     # plt.show();
     # import pdb; pdb.set_trace()
     # simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = 'linear_interp', mrc_file = None )
-
-    main_image_stack = simulate_data(main_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = 'linear_interp', mrc_file = None )
+    # logger.warning("USING NEAREST")
+    # disc_type = 'nearest'
+    # disc_type = 'linear_interp'
+    main_image_stack = simulate_data(main_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = disc_type, mrc_file = None )
 
     if put_extra_particles:
         # Make other particles with same ctf but different rots
@@ -248,10 +266,10 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         # Move the center by around twice the radius
         trans_2 *= 2 * volume_radius * volume_shape[0]//2
         other_particles_dataset = dataset.CryoEMDataset( volume_shape, None, voxel_size,
-                                rots_2, trans_2, ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = None)
+                                rots_2, trans_2, ctf_params, CTF_fun = CTF_fun, dataset_indices = None)
 
         # No noise in this stack.
-        extra_particles_image_stack = simulate_data(other_particles_dataset, volumes,  noise_variance * 0 ,  batch_size, image_assignments, per_image_noise_scale_2, per_image_noise_scale, seed =0, disc_type = 'linear_interp', mrc_file = None, pad_before_translate= True )
+        extra_particles_image_stack = simulate_data(other_particles_dataset, volumes,  noise_variance * 0 ,  batch_size, image_assignments, per_image_noise_scale_2, per_image_noise_scale, seed =0, disc_type = disc_type, mrc_file = None, pad_before_translate= True )
 
         main_image_stack += extra_particles_image_stack
 
@@ -262,15 +280,14 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         # Make sure they are on the same scale
 
         outlier_volume  = outlier_volume / np.linalg.norm(outlier_volume) * np.mean(np.linalg.norm(volumes,axis=(-1)))
-        # import pdb; pdb.set_trace()
         n_outlier_images = np.round(percent_outliers * n_images).astype(int)
         ctf_params_3, rots_3, trans_3 = dataset_param_generator(n_outlier_images, grid_size)
         outlier_contrast, outlier_noise_scale = generate_contrast_params(n_outlier_images, noise_scale_std, contrast_std )
 
         outlier_particle_dataset = dataset.CryoEMDataset( volume_shape, None, voxel_size,
-                                rots_3, trans_3, ctf_params_3[:,1:], CTF_fun = CTF_fun, dataset_indices = None)
+                                rots_3, trans_3, ctf_params_3, CTF_fun = CTF_fun, dataset_indices = None)
         
-        outlier_particle_image_stack = simulate_data(outlier_particle_dataset, outlier_volume[None],  noise_variance ,  batch_size, np.zeros(n_outlier_images, dtype = int), outlier_noise_scale, outlier_contrast, seed =1, disc_type = 'linear_interp', mrc_file = None )
+        outlier_particle_image_stack = simulate_data(outlier_particle_dataset, outlier_volume[None],  noise_variance ,  batch_size, np.zeros(n_outlier_images, dtype = int), outlier_noise_scale, outlier_contrast, seed =1, disc_type = disc_type, mrc_file = None )
 
         ind_outliers = np.random.choice(n_images, n_outlier_images, replace =False)
         main_image_stack[ind_outliers] = outlier_particle_image_stack

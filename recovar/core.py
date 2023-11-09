@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import functools
+from jax import vjp
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jax.numpy)
 
@@ -45,6 +46,8 @@ def sum_batch_P_adjoint_mat_vec(volume_size, image_vecs, plane_indices_on_grids)
     volume_vec = jnp.zeros(volume_size, dtype = image_vecs.dtype)
     volume_vec = volume_vec.at[plane_indices_on_grids.reshape(-1)].add((image_vecs).reshape(-1))
     return volume_vec
+
+
 
 nosum_batch_P_adjoint_mat_vec = jax.vmap( sum_batch_P_adjoint_mat_vec, in_axes = (None, 0,0)) 
 
@@ -121,6 +124,33 @@ def get_rotated_plane_coords(rotation_matrix, image_shape, voxel_size, scaled = 
     return rotated_plane
 
 batch_get_rotated_plane_coords = jax.vmap(get_rotated_plane_coords, in_axes = (0, None, None, None))
+
+@functools.partial(jax.jit, static_argnums=[3,4,5,6,7,8])
+def forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):
+    slices = get_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)
+    return slices
+
+# A JAXed version of the adjoint. This is actually slightly slower but will run with disc_type = 'linear_interp'
+@functools.partial(jax.jit, static_argnums=[3,4,5,6,7,8])
+def adjoint_forward_model_from_map(slices, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):  
+    volume_size = np.prod(volume_shape)
+    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type)
+    _, u = vjp(f,jnp.zeros(volume_size, dtype = slices.dtype ))
+    return u(slices)
+
+
+# Compute A^TAx (the forward, then its adjoint). For JAX reasons, this should be about 2x faster than doing each call separately.
+@functools.partial(jax.jit, static_argnums=[3, 4,5,6,7,8])
+def compute_A_t_Av_forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):    
+    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type)
+    y, u = vjp(f,volume)
+    return u(y)
+
+
+
+def get_projected_image(mean, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):
+    slices = get_slices(mean, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)
+    return slices
 
 
 
@@ -217,3 +247,18 @@ def compute_ctf_cryodgrn_wrapper(CTF_params, image_shape, voxel_size):
     return batch_compute_ctf_crydgrn(psi, CTF_params)
 
 
+# A JAXed version of the adjoint. This is actually slightly slower but will run with disc_type = 'linear_interp'
+@functools.partial(jax.jit, static_argnums=[4,5,6,7,8])
+def adjoint_ewald_sphere_forward_model(images_real, images_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, lam, disc_type):  
+    volume_size = np.prod(volume_shape)
+    f = lambda volume_real, volume_imag : forward_model(volume_real, volume_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, lam, disc_type )
+    y, u = vjp(f,jnp.zeros(volume_size, dtype = images_real.dtype ), jnp.zeros(volume_size, dtype = images_real.dtype ))
+    return u((images_real, images_imag))
+
+
+# Compute A^TAx (the forward, then its adjoint). For JAX reasons, this should be about 2x faster than doing each call separately.
+@functools.partial(jax.jit, static_argnums=[4,5,6,7,8])
+def compute_A_t_Av_ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, lam, disc_type):    
+    f = lambda volume_real, volume_imag : ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, lam, disc_type )
+    y, u = vjp(f,volume_real, volume_imag)
+    return u(y)
