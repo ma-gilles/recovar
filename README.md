@@ -358,6 +358,19 @@ I hope some developers find parts of the code useful for their projects. See [th
 * *Memory*: you need a lot of memory to run this. For a stack of images of size 256, you probably need 400 GB+.
 - *Other ones, probably?*
 
+## Citation
+
+If you use this software for analysis, please cite:
+
+    @article{gilles2023bayesian,
+      title={A Bayesian Framework for Cryo-EM Heterogeneity Analysis using Regularized Covariance Estimation},
+      author={Gilles, Marc Aurele T and Singer, Amit},
+      journal={bioRxiv},
+      pages={2023--10},
+      year={2023},
+      publisher={Cold Spring Harbor Laboratory}
+    }
+
 ## Contact
 
 You can reach me (Marc) at mg6942@princeton.edu with questions or comments.
