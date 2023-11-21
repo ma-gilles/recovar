@@ -440,6 +440,9 @@ def FSC(image1, image2, r_dict = None):
     bin_fsc = np.where( bot > 0 , top / bot_pos, 0)
     return bin_fsc
 
+
+
+
 def fsc_score(fsc_curve, grid_size, voxel_size, threshold = 0.5 ):
     # First index below 0.5
     freq = ftu.get_1d_frequency_grid(2*grid_size, voxel_size = 0.5*voxel_size, scaled = True)

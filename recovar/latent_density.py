@@ -84,7 +84,7 @@ def compute_probs_in_batch(test_pts, zs, cov_zs):
     logger.info(f"batch size in latent computation: {batch_size_x}")
     
     for k in range(0, int(np.ceil(n_images/batch_size_x))):
-        batch_st, batch_end = get_batch(n_images, batch_size_x, k)
+        batch_st, batch_end = utils.get_batch_of_indices(n_images, batch_size_x, k)
         summed_probs += compute_sum_exp_residuals( test_pts, zs[batch_st:batch_end].real, cov_zs[batch_st:batch_end], scale_zs[batch_st:batch_end] )
 
     return summed_probs
@@ -179,8 +179,8 @@ def compute_latent_quadratic_forms_in_batch(test_pts, zs, cov_zs):
     utils
     batch_size_x = utils.get_latent_density_batch_size(test_pts, zs.shape[-1], utils.get_gpu_memory_total() ) 
 
-    for k in range(0, int(np.ceil(n_images/batch_size_x))):
-        batch_st, batch_end = get_batch(n_images, batch_size_x, k)
+    for k in range(0, get_number_of_index_batch(n_images, batch_size_x)):
+        batch_st, batch_end = utils.get_batch_of_indices(n_images, batch_size_x, k)
         quads[batch_st:batch_end,:] = compute_latent_quadratic_forms( test_pts.real, zs[batch_st:batch_end].real, cov_zs[batch_st:batch_end])
     return quads
 
@@ -194,9 +194,3 @@ def compute_det_cov_xs(cov_xs):
     # we exp(vs_i) / exp(vs_j) = exp(vs_i - vs_j)
     vs_subs_min = vs - jnp.max(vs)
     return jnp.exp(vs_subs_min)
-
-def get_batch(n_images, batch_size, k):
-    batch_st = int(k * batch_size)
-    batch_end = int(np.min( [(k+1) * batch_size, n_images] ))
-    return batch_st, batch_end
-

@@ -75,12 +75,19 @@ def get_params_generator(dataset_params_fn ):
     return params_generator
 
 ## A uniform pose generator
-def random_sampling_scheme(n_images, grid_size, seed =0 ):
+def random_sampling_scheme(n_images, grid_size, seed =0, uniform = True ):
     dataset_params_fn = load_first_dataset_params
     ctf_params, _, _ = generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  )
-    rotations = uniform_rotation_sampling(n_images, grid_size, seed = seed )
+    if uniform:
+        rotations = uniform_rotation_sampling(n_images, grid_size, seed = seed )
+    else:
+        rotations = nonuniform_rotation_sampling(n_images, grid_size, seed = seed )
     translations = np.zeros([n_images,2])
     return ctf_params, rotations, translations
+
+
+
+
 
 def uniform_rotation_sampling(n_images, grid_size, seed = 0 ):
     from scipy.spatial.transform import Rotation
@@ -90,12 +97,29 @@ def uniform_rotation_sampling(n_images, grid_size, seed = 0 ):
     rotations = Rotation.random(n_images).as_matrix()
     return rotations
 
+def nonuniform_rotation_sampling(n_images, grid_size, seed = 0 ):
+    from scipy.spatial.transform import Rotation 
+    rotation_matrices = [] 
+    xs = []
+    for rot_idx in range(n_images):
+        y = np.random.randn(1)*np.pi *0.1
+        x = np.random.randn(1)*np.pi 
+        random_rot = Rotation.from_euler('xyz', [y[0],x[0],0 ] )
+        rotation_matrices.append(random_rot.as_matrix())
+        xs.append(x)
+    rotation_matrices = np.array(rotation_matrices)
+    return rotation_matrices
+
+
 ## The two main generators
 def get_pose_ctf_generator(option):
     if option == "uniform":
         return random_sampling_scheme
     elif option == "dataset1":
         return get_params_generator(load_first_dataset_params)
+    elif option == "nonuniform":
+        f = lambda x,y=0,z=0: random_sampling_scheme(x, y, z, uniform = False )
+        return f
     else:
         return get_params_generator(load_second_dataset_params)
 
@@ -206,10 +230,13 @@ def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_
 
     if trailing_zero_format_in_vol_name:
         def make_file(k):
-            return os.path.join(volumes_path_root,   format(k, '04d')+".mrc")
+            # return os.path.join(volumes_path_root,   format(k, '04d')+".mrc")
+            return volumes_path_root + format(k, '04d')+".mrc"
+
     else:
         def make_file(k):
-            return os.path.join(volumes_path_root,  f"{k}.mrc")
+            return volumes_path_root + f"{k}.mrc"
+            # return os.path.join(volumes_path_root,  f"{k}.mrc")
 
     
     idx =0 
@@ -447,8 +474,9 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 
 
             # import pdb; pdb.set_trace()
+    logger.info("Discretizing with: " + disc_type)
 
-
+    logger.info("Done generating data")
 
     if mrc_file is not None:
         return mrc_file

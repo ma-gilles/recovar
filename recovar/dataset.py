@@ -195,9 +195,6 @@ class CryoEMDataset:
             self.n_images = image_stack.N
             self.padding = image_stack.padding
 
-        self.rotation_matrices = np.array(rotation_matrices.astype(rotation_dtype))
-        self.translations = np.array(translations)
-        self.CTF_params = np.array(CTF_params)
 
         self.CTF_fun_inp = CTF_fun
         self.hpad = self.padding//2
@@ -209,6 +206,10 @@ class CryoEMDataset:
         # Note that images are stored in float 32 but rotations are stored in float 64.
         # There seems to be a JAX-bug with float 32 when doing the nearest neighbor approximation...
         self.rotation_dtype = rotation_dtype
+        self.rotation_matrices = np.array(rotation_matrices.astype(rotation_dtype))
+        self.translations = np.array(translations)
+        self.CTF_params = np.array(CTF_params.astype(self.CTF_dtype))
+
 
         self.dataset_indices = dataset_indices
 
@@ -219,8 +220,9 @@ class CryoEMDataset:
         # Force dtype
         return self.CTF_fun_inp(*args).astype(self.CTF_dtype)
 
-    def get_valid_frequency_indices(self):
-        return np.array(self.get_volume_radial_mask(self.grid_size//2 - 1))
+    def get_valid_frequency_indices(self,rad = None):
+        rad = self.grid_size//2 -1 if rad is None else rad
+        return np.array(self.get_volume_radial_mask(rad))
 
 
     #### All functions below are only just for plotting/debugging

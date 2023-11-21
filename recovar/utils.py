@@ -48,7 +48,13 @@ def get_process_memory_used():
     return int(mem_info.rss / 1e9)
 
 def get_gpu_memory_total(device =0):
-    return int(jax.local_devices()[device].memory_stats()['bytes_limit']/1e9)
+    if jax_has_gpu():
+        return int(jax.local_devices()[device].memory_stats()['bytes_limit']/1e9)
+    else:
+        logger.warning("GPU not found. Using default value of 80GB")
+        return int(80e9)
+    
+
 
 def get_gpu_memory_used(device =0):
     return int(jax.local_devices()[device].memory_stats()['bytes_in_use']/1e9)
@@ -151,3 +157,21 @@ def get_variances(covariance_cols, picked_frequencies = None):
         variances[k] = covariance_cols[picked_frequencies[k], k]
 
     return variances
+
+def get_number_of_index_batch(n_images, batch_size):
+    return int(np.ceil(n_images/batch_size))
+
+def get_batch_of_indices(n_images, batch_size, k):
+    batch_st = int(k * batch_size)
+    batch_end = int(np.min( [(k+1) * batch_size, n_images] ))
+    return batch_st, batch_end
+
+
+
+
+def jax_has_gpu():
+    try:
+        _ = jax.device_put(jax.numpy.ones(1), device=jax.devices('gpu')[0])
+        return True
+    except:
+        return False

@@ -6,6 +6,7 @@ import jax, functools, time
 from recovar import core, regularization, constants, noise
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
+from recovar import utils
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,7 @@ def get_mean_conformation(cryos, batch_size, cov_noise = None, valid_idx = None,
         signal_var = np.max(signal_var)
 
     regularization_init = jnp.ones(cryo.volume_size, dtype = cryo.dtype_real) * signal_var
-
-
+    logger.info("regularization init done")
     image_weights = image_weight_parse(image_weights, dtype = cryos[0].dtype_real)
     means = {}
 
@@ -70,6 +70,7 @@ def get_mean_conformation(cryos, batch_size, cov_noise = None, valid_idx = None,
     return means, mean_prior, fsc, lhs
 
 
+
 def get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, mean_prior, mean ,image_weights, recompute_prior = True, volume_mask = None ):
     image_weights = image_weight_parse(image_weights, dtype = cryos[0].dtype_real)
 
@@ -86,7 +87,6 @@ def get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, mean_pri
         # lhs +=  lhs_t
         # rhs +=  rhs_t
         
-    
     if recompute_prior:
         priors, fscs_this = regularization.prior_iteration_batch(lhs_l[0], lhs_l[1], rhs_l[0], rhs_l[1], np.zeros((num_reconstructions,3)), mean_prior[None].repeat(num_reconstructions,0) , False,  cryos[0].volume_shape, 3 ) 
     else:
@@ -154,14 +154,15 @@ def solve_least_squares_mean_iteration(experiment_dataset , cov_diag_prior, cov_
     for batch, indices in data_generator:
         
         # Only place where image mask is used ?
-        batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = True)
+        print('TOOK OUT IMAGE MASK IN MEAN!!! PUT IT BACK??')
+        batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
         
         if image_weights is None:
             image_weights_batch = jnp.ones((1,batch.shape[0]), dtype = experiment_dataset.dtype_real )
         else:
             image_weights_batch = image_weights[...,indices]
             
-        mean_rhs_this, diag_mean_this = compute_batch_mean_rhs(batch,
+        mean_rhs_this, diag_mean_this = compute_mean_least_squares_rhs_lhs(batch,
                                          experiment_dataset.rotation_matrices[indices], 
                                          experiment_dataset.translations[indices], 
                                          experiment_dataset.CTF_params[indices], 
@@ -185,7 +186,7 @@ def solve_least_squares_mean_iteration(experiment_dataset , cov_diag_prior, cov_
     
 
 @functools.partial(jax.jit, static_argnums = [7,8,9,10,11,12])    
-def compute_batch_mean_rhs(images, rotation_matrices, translations, CTF_params, mean_estimate, noise_variance, image_weights, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun ):
+def compute_mean_least_squares_rhs_lhs(images, rotation_matrices, translations, CTF_params, mean_estimate, noise_variance, image_weights, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun ):
     volume_size = np.prod(np.array(volume_shape))
     grid_point_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
@@ -208,3 +209,131 @@ def compute_batch_mean_rhs(images, rotation_matrices, translations, CTF_params, 
     return mean_rhs, diag_mean
 
 batch_over_weights_sum_adj_forward_model = jax.vmap(core.sum_adj_forward_model, in_axes = (None,0, None,None))
+
+def compute_weight_matrix_inner(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun ):
+    volume_size = np.prod(np.array(volume_shape))
+    # grid_point_vec_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
+    # grid_points_coords = core.batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size )
+    # # Discretized grid points
+    # # This could be done more efficiently
+    # grid_points_coords_nearest = core.round_to_int(grid_points_coords)
+    # differences = grid_points_coords - grid_points_coords_nearest
+    # C_mat = jnp.concatenate([jnp.ones_like(differences[...,0:1]), differences], axis = -1)
+    # CTF = CTF_fun( CTF_params, image_shape, voxel_size)
+    # C_mat *= CTF[...,None]
+    C_mat, grid_point_vec_indices = make_C_mat(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun)
+    # This is going to be stroed twice as much stuff as it needs to be
+    C_mat_outer = batch_batch_outer(C_mat).reshape([C_mat.shape[0], C_mat.shape[1], C_mat.shape[2]*C_mat.shape[2]])#.transpose([2,0,1])
+    RR = core.batch_over_vol_summed_adjoint_projections_nearest(volume_size, C_mat_outer, grid_point_vec_indices)
+    # mean_rhs = batch_over_weights_sum_adj_forward_model(volume_size, corrected_images , CTF, grid_point_indices)
+    return RR
+
+def make_C_mat(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun):
+    grid_point_vec_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
+    grid_points_coords = core.batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size )
+    # Discretized grid points
+    # This could be done more efficiently
+    grid_points_coords_nearest = core.round_to_int(grid_points_coords)
+    differences = grid_points_coords - grid_points_coords_nearest
+    C_mat = jnp.concatenate([jnp.ones_like(differences[...,0:1]), differences], axis = -1)
+    CTF = CTF_fun( CTF_params, image_shape, voxel_size)
+    C_mat *= CTF[...,None]
+    return C_mat, grid_point_vec_indices
+
+batch_outer = jax.vmap(lambda x: jnp.outer(x,x), in_axes = (0))
+batch_batch_outer = jax.vmap(batch_outer, in_axes = (0))
+
+## Mean functions
+def compute_discretization_weights(experiment_dataset, prior, batch_size, order=1 ):
+    order = 1   # Only implemented for order 1 but could generalize
+    rr_size = 3*order + 1
+    RR = jnp.zeros((experiment_dataset.volume_size, (rr_size)**2 ))
+    # batch_size = utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total()) * 3
+
+    for i in range(utils.get_number_of_index_batch(experiment_dataset.n_images, batch_size)):
+        batch_st, batch_end = utils.get_batch_of_indices(experiment_dataset.n_images, batch_size, i)
+        # Make sure mean_estimate is size # volume_size ?
+        RR_this = compute_weight_matrix_inner(experiment_dataset.rotation_matrices[batch_st:batch_end], experiment_dataset.CTF_params[batch_st:batch_end], experiment_dataset.voxel_size, experiment_dataset.volume_shape, experiment_dataset.image_shape, experiment_dataset.grid_size, experiment_dataset.CTF_fun)        
+        RR += RR_this
+
+    RR = RR.reshape([experiment_dataset.volume_size, rr_size, rr_size])
+    weights, good_weights = batch_solve_for_weights(RR, prior)
+    # If bad weights, just do Weiner filtering with 0th order disc
+    # good_weights = (good_weights*0).astype(bool)
+
+    other_weights = jnp.zeros_like(weights)
+    # weiner_weights = jnp.where(RR[:,0,0] > 0, 1/RR[:,0,0], jnp.zeros_like(RR[:,0,0]))
+    weiner_weights = 1 / (RR[...,0,0] + prior)#jnp.where(RR[:,0,0] > 0, 1/RR[:,0,0], jnp.zeros_like(RR[:,0,0]))
+    other_weights = other_weights.at[...,0].set(weiner_weights)
+
+    # weights = jnp.where(good_weights, weights, other_weights)
+    weights = weights.at[~good_weights].set(other_weights[~good_weights])
+    return weights, good_weights, RR
+
+def solve_for_weights(RR, prior):
+    e1 = jnp.zeros(RR.shape[0])
+    e1 = e1.at[0].set(RR[0,0] / (RR[0,0] + prior))
+    # Maybe could just check for conditioning
+    v = jax.scipy.linalg.solve(RR, e1, lower=False, assume_a='pos')
+    # Probably should replace with numpy.linalg.eigvalsh
+    good_v = jnp.linalg.cond(RR) < 1e2
+    # good_v = jnp.min(jnp.diag(RR)) > constants.ROOT_EPSILON
+    return v, good_v
+
+
+batch_solve_for_weights = jax.vmap(solve_for_weights, in_axes = (0,0))
+
+batch_dot = jax.vmap(jnp.dot, in_axes = (0,0))
+batch_batch_dot = jax.vmap(batch_dot, in_axes = (0,0))
+
+# @functools.partial(jax.jit, static_argnums = [7,8,9,10,11,12])    
+def compute_mean_least_squares_rhs_lhs_with_weights(images, precomp_weights, rotation_matrices, translations, CTF_params, mean_estimate, noise_variance, image_weights, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun ):
+
+    # Now use weights: w_i = C.^T v
+    C_mat, grid_point_indices = make_C_mat(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun)
+    precomp_weights_on_pixel = core.batch_slice_volume(precomp_weights,grid_point_indices)
+
+    weights = batch_batch_dot(C_mat, precomp_weights_on_pixel)
+
+
+    volume_size = np.prod(np.array(volume_shape))
+    # grid_point_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
+    corrected_images = core.translate_images(images, translations, image_shape)    
+    # corrected_images = corrected_images * image_weights[...,None] / noise_variance[None]
+
+    estimate = core.summed_adjoint_projections_nearest(volume_size, corrected_images * weights, grid_point_indices)
+    lhs = core.summed_adjoint_projections_nearest(volume_size, weights, grid_point_indices)
+
+    return estimate, lhs
+
+# Solves the linear system Dx = b.
+def solve_least_squares_mean_iteration_second_order(experiment_dataset , prior, cov_noise,  batch_size, mean_estimate, image_weights = None, disc_type = None, return_lhs_rhs = False ):
+    # all_one_volume = jnp.ones(volume_size)
+    estimate =0;  lhs = 0 
+    # Need to take out RR
+    weights, good_weights, RR = compute_discretization_weights(experiment_dataset, prior, batch_size, order=1 )
+
+    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+    for batch, indices in data_generator:
+        
+        # Only place where image mask is used ?
+        batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
+                    
+        estimate_this, lhs_this = compute_mean_least_squares_rhs_lhs_with_weights(batch,
+                                         weights,
+                                         experiment_dataset.rotation_matrices[indices], 
+                                         experiment_dataset.translations[indices], 
+                                         experiment_dataset.CTF_params[indices], 
+                                         mean_estimate,
+                                         cov_noise,
+                                         None,
+                                         experiment_dataset.voxel_size, 
+                                         experiment_dataset.volume_shape, 
+                                         experiment_dataset.image_shape, 
+                                         experiment_dataset.grid_size, 
+                                         disc_type,
+                                         experiment_dataset.CTF_fun)
+        estimate += estimate_this
+        lhs += lhs_this
+
+    return estimate, good_weights, lhs

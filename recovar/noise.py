@@ -28,15 +28,14 @@ def estimate_noise_variance(experiment_dataset, batch_size):
 
     for batch, _ in data_generator:
         batch = experiment_dataset.image_stack.process_images(batch)
-        sum_sq += np.sum(np.abs(batch)**2, axis =0)
+        sum_sq += jnp.sum(np.abs(batch)**2, axis =0)
 
-
-    mean_PS =  sum_sq / experiment_dataset.n_images    
-    cov_noise_mask = np.median(mean_PS)
+    mean_PS =  sum_sq / experiment_dataset.n_images
+    cov_noise_mask = jnp.median(mean_PS)
 
     average_image_PS = regularization.average_over_shells(mean_PS, experiment_dataset.image_shape)
 
-    return cov_noise_mask.astype(experiment_dataset.dtype_real), np.array(average_image_PS).astype(experiment_dataset.dtype_real)
+    return np.asarray(cov_noise_mask.astype(experiment_dataset.dtype_real)), np.asarray(np.array(average_image_PS).astype(experiment_dataset.dtype_real))
     
 
 def estimate_white_noise_variance_from_mask(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp'):

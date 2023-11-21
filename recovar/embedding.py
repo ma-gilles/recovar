@@ -175,7 +175,7 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
     batch = process_fn(batch)
     batch = core.translate_images(batch, translations , image_shape)
 
-    projected_mean = covariance_core.get_projected_image(mean_estimate,
+    projected_mean = core.get_projected_image(mean_estimate,
                                          CTF_params,
                                          rotation_matrices, 
                                          image_shape, 
