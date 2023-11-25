@@ -70,6 +70,14 @@ def get_mean_conformation(cryos, batch_size, cov_noise = None, valid_idx = None,
     return means, mean_prior, fsc, lhs
 
 
+def estimate_derivative_norm(volume):
+    # Compute gradient of volume
+    grad = jnp.gradient(volume)
+    grad_norm = jnp.linalg.norm(grad, axis = 0)
+    return grad
+
+
+
 
 def get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, mean_prior, mean ,image_weights, recompute_prior = True, volume_mask = None ):
     image_weights = image_weight_parse(image_weights, dtype = cryos[0].dtype_real)
@@ -210,25 +218,34 @@ def compute_mean_least_squares_rhs_lhs(images, rotation_matrices, translations, 
 
 batch_over_weights_sum_adj_forward_model = jax.vmap(core.sum_adj_forward_model, in_axes = (None,0, None,None))
 
-def compute_weight_matrix_inner(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun ):
+# def compute_weight_matrix_inner(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun ):
+#     volume_size = np.prod(np.array(volume_shape))
+#     C_mat, grid_point_vec_indices = make_C_mat(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun)
+#     # This is going to be stroed twice as much stuff as it needs to be
+#     C_mat_outer = batch_batch_outer(C_mat).reshape([C_mat.shape[0], C_mat.shape[1], C_mat.shape[2]*C_mat.shape[2]])#.transpose([2,0,1])
+#     RR = core.batch_over_vol_summed_adjoint_projections_nearest(volume_size, C_mat_outer, grid_point_vec_indices)
+#     return RR
+
+def compute_weight_matrix_inner(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun, grid_dist, max_dist ):
     volume_size = np.prod(np.array(volume_shape))
-    # grid_point_vec_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
-    # grid_points_coords = core.batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size )
-    # # Discretized grid points
-    # # This could be done more efficiently
-    # grid_points_coords_nearest = core.round_to_int(grid_points_coords)
-    # differences = grid_points_coords - grid_points_coords_nearest
-    # C_mat = jnp.concatenate([jnp.ones_like(differences[...,0:1]), differences], axis = -1)
-    # CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    # C_mat *= CTF[...,None]
-    C_mat, grid_point_vec_indices = make_C_mat(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun)
+    # C_mat, grid_point_vec_indices = make_C_mat_many_gridpoints(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun, grid_dist, max_dist)
     # This is going to be stroed twice as much stuff as it needs to be
-    C_mat_outer = batch_batch_outer(C_mat).reshape([C_mat.shape[0], C_mat.shape[1], C_mat.shape[2]*C_mat.shape[2]])#.transpose([2,0,1])
-    RR = core.batch_over_vol_summed_adjoint_projections_nearest(volume_size, C_mat_outer, grid_point_vec_indices)
-    # mean_rhs = batch_over_weights_sum_adj_forward_model(volume_size, corrected_images , CTF, grid_point_indices)
+    if grid_dist is None:
+        C_mat, grid_point_indices = make_C_mat(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun)
+    else:
+        C_mat, grid_point_indices = make_C_mat_many_gridpoints(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun, grid_dist, max_dist)
+
+
+    C_mat_outer = broadcast_outer(C_mat)
+
+
+    RR = core.batch_over_vol_summed_adjoint_projections_nearest(volume_size, C_mat_outer.reshape(-1,C_mat.shape[-2]*C_mat.shape[-1] ), grid_point_indices.reshape(-1))
     return RR
 
+
+
 def make_C_mat(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun):
+
     grid_point_vec_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
     grid_points_coords = core.batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size )
     # Discretized grid points
@@ -238,13 +255,37 @@ def make_C_mat(rotation_matrices, CTF_params, voxel_size, volume_shape, image_sh
     C_mat = jnp.concatenate([jnp.ones_like(differences[...,0:1]), differences], axis = -1)
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
     C_mat *= CTF[...,None]
+
     return C_mat, grid_point_vec_indices
+
+
+def make_C_mat_many_gridpoints(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun, grid_dist, max_dist):
+    grid_points_coords = core.batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size )
+    near_frequencies = core.find_frequencies_within_grid_dist(grid_points_coords, grid_dist)
+    differences = near_frequencies - grid_points_coords[...,None,:]
+    distances = jnp.linalg.norm(differences, axis = -1)
+    valid_points = (distances <= max_dist) * core.check_vol_indices_in_bound(near_frequencies,volume_shape[0])
+    near_frequencies_vec_indices = core.vol_indices_to_vec_indices(near_frequencies, volume_shape)
+    
+    # This could be done more efficiently
+
+    C_mat = jnp.concatenate([jnp.ones_like(differences[...,0:1]), differences], axis = -1)
+    CTF = CTF_fun( CTF_params, image_shape, voxel_size)
+    C_mat *= CTF[...,None,None]
+    C_mat = C_mat * valid_points[...,None]
+
+    C_mat_veced = C_mat#.reshape([C_mat.shape[0]* C_mat.shape[1]*C_mat.shape[2], C_mat.shape[3]]) 
+    
+    near_frequencies_vec_indices = near_frequencies_vec_indices#.reshape(-1)
+
+    return C_mat_veced, near_frequencies_vec_indices
+
 
 batch_outer = jax.vmap(lambda x: jnp.outer(x,x), in_axes = (0))
 batch_batch_outer = jax.vmap(batch_outer, in_axes = (0))
 
 ## Mean functions
-def compute_discretization_weights(experiment_dataset, prior, batch_size, order=1 ):
+def compute_discretization_weights(experiment_dataset, prior, batch_size, order=1, grid_dist = None, max_dist = None ):
     order = 1   # Only implemented for order 1 but could generalize
     rr_size = 3*order + 1
     RR = jnp.zeros((experiment_dataset.volume_size, (rr_size)**2 ))
@@ -253,7 +294,7 @@ def compute_discretization_weights(experiment_dataset, prior, batch_size, order=
     for i in range(utils.get_number_of_index_batch(experiment_dataset.n_images, batch_size)):
         batch_st, batch_end = utils.get_batch_of_indices(experiment_dataset.n_images, batch_size, i)
         # Make sure mean_estimate is size # volume_size ?
-        RR_this = compute_weight_matrix_inner(experiment_dataset.rotation_matrices[batch_st:batch_end], experiment_dataset.CTF_params[batch_st:batch_end], experiment_dataset.voxel_size, experiment_dataset.volume_shape, experiment_dataset.image_shape, experiment_dataset.grid_size, experiment_dataset.CTF_fun)        
+        RR_this = compute_weight_matrix_inner(experiment_dataset.rotation_matrices[batch_st:batch_end], experiment_dataset.CTF_params[batch_st:batch_end], experiment_dataset.voxel_size, experiment_dataset.volume_shape, experiment_dataset.image_shape, experiment_dataset.grid_size, experiment_dataset.CTF_fun, grid_dist, max_dist)        
         RR += RR_this
 
     RR = RR.reshape([experiment_dataset.volume_size, rr_size, rr_size])
@@ -262,11 +303,8 @@ def compute_discretization_weights(experiment_dataset, prior, batch_size, order=
     # good_weights = (good_weights*0).astype(bool)
 
     other_weights = jnp.zeros_like(weights)
-    # weiner_weights = jnp.where(RR[:,0,0] > 0, 1/RR[:,0,0], jnp.zeros_like(RR[:,0,0]))
-    weiner_weights = 1 / (RR[...,0,0] + prior)#jnp.where(RR[:,0,0] > 0, 1/RR[:,0,0], jnp.zeros_like(RR[:,0,0]))
+    weiner_weights = 1 / (RR[...,0,0] + prior)
     other_weights = other_weights.at[...,0].set(weiner_weights)
-
-    # weights = jnp.where(good_weights, weights, other_weights)
     weights = weights.at[~good_weights].set(other_weights[~good_weights])
     return weights, good_weights, RR
 
@@ -283,18 +321,33 @@ def solve_for_weights(RR, prior):
 
 batch_solve_for_weights = jax.vmap(solve_for_weights, in_axes = (0,0))
 
-batch_dot = jax.vmap(jnp.dot, in_axes = (0,0))
+broadcas = jax.vmap(jnp.dot, in_axes = (0,0))
 batch_batch_dot = jax.vmap(batch_dot, in_axes = (0,0))
 
+
+def broadcast_dot(x,y):
+    return jax.lax.batch_matmul(jnp.conj(x[...,None,:]),y[...,:,None])[...,0,0]
+
+def broadcast_outer(x,y):
+    return jax.lax.batch_matmul(x[...,:,None],jnp.conj(y[...,None,:]))
+
+
+# def broadcast_dot(x,y):
+#     return jnp.dot(x,y)
+
+
 # @functools.partial(jax.jit, static_argnums = [7,8,9,10,11,12])    
-def compute_mean_least_squares_rhs_lhs_with_weights(images, precomp_weights, rotation_matrices, translations, CTF_params, mean_estimate, noise_variance, image_weights, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun ):
+def compute_mean_least_squares_rhs_lhs_with_weights(images, precomp_weights, rotation_matrices, translations, CTF_params, mean_estimate, noise_variance, image_weights, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun, grid_dist, max_dist ):
 
     # Now use weights: w_i = C.^T v
-    C_mat, grid_point_indices = make_C_mat(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun)
+    if grid_dist is None:
+        C_mat, grid_point_indices = make_C_mat(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun)
+    else:
+        C_mat, grid_point_indices = make_C_mat_many_gridpoints(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun, grid_dist, max_dist)
+
     precomp_weights_on_pixel = core.batch_slice_volume(precomp_weights,grid_point_indices)
 
-    weights = batch_batch_dot(C_mat, precomp_weights_on_pixel)
-
+    weights = broadcast_dot(C_mat, precomp_weights_on_pixel)
 
     volume_size = np.prod(np.array(volume_shape))
     # grid_point_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
@@ -307,11 +360,11 @@ def compute_mean_least_squares_rhs_lhs_with_weights(images, precomp_weights, rot
     return estimate, lhs
 
 # Solves the linear system Dx = b.
-def solve_least_squares_mean_iteration_second_order(experiment_dataset , prior, cov_noise,  batch_size, mean_estimate, image_weights = None, disc_type = None, return_lhs_rhs = False ):
+def solve_least_squares_mean_iteration_second_order(experiment_dataset , prior, cov_noise,  batch_size, mean_estimate, image_weights = None, disc_type = None, return_lhs_rhs = False, grid_dist = None, max_dist = None ):
     # all_one_volume = jnp.ones(volume_size)
     estimate =0;  lhs = 0 
     # Need to take out RR
-    weights, good_weights, RR = compute_discretization_weights(experiment_dataset, prior, batch_size, order=1 )
+    weights, good_weights, RR = compute_discretization_weights(experiment_dataset, prior, batch_size, order=1, grid_dist = grid_dist, max_dist = max_dist )
 
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
     for batch, indices in data_generator:
@@ -332,7 +385,8 @@ def solve_least_squares_mean_iteration_second_order(experiment_dataset , prior, 
                                          experiment_dataset.image_shape, 
                                          experiment_dataset.grid_size, 
                                          disc_type,
-                                         experiment_dataset.CTF_fun)
+                                         experiment_dataset.CTF_fun,
+                                         grid_dist,max_dist)
         estimate += estimate_this
         lhs += lhs_this
 

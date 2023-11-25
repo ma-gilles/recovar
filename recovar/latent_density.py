@@ -79,7 +79,7 @@ def compute_probs_in_batch(test_pts, zs, cov_zs):
     summed_probs = jnp.zeros_like(test_pts[:,0])
     
     n_images = zs.shape[0]
-    batch_size_x = np.max([int(15 / (get_size_in_gb(test_pts) * cov_zs.shape[1]**2)), 1])
+    batch_size_x = np.max([int(15 / (utils.get_size_in_gb(test_pts) * cov_zs.shape[1]**2)), 1])
     
     logger.info(f"batch size in latent computation: {batch_size_x}")
     
@@ -179,13 +179,10 @@ def compute_latent_quadratic_forms_in_batch(test_pts, zs, cov_zs):
     utils
     batch_size_x = utils.get_latent_density_batch_size(test_pts, zs.shape[-1], utils.get_gpu_memory_total() ) 
 
-    for k in range(0, get_number_of_index_batch(n_images, batch_size_x)):
+    for k in range(0, utils.get_number_of_index_batch(n_images, batch_size_x)):
         batch_st, batch_end = utils.get_batch_of_indices(n_images, batch_size_x, k)
         quads[batch_st:batch_end,:] = compute_latent_quadratic_forms( test_pts.real, zs[batch_st:batch_end].real, cov_zs[batch_st:batch_end])
     return quads
-
-def get_size_in_gb(x):
-    return x.size * x.itemsize / 1e9
 
 @jax.jit
 def compute_det_cov_xs(cov_xs):

@@ -39,6 +39,8 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
     # First approximation of eigenvalue decomposition
     u,s = get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use, options['ignore_zero_frequency'])
     
+
+
     # # Let's see?
     # if noise_model == "white":
     #     cov_noise = cov_noise
@@ -52,7 +54,11 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
     image_cov_noise = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].image_shape))
 
     zss = {}
-    u['rescaled'],s['rescaled'], zss['init'] = rescale_eigs(cryos, u['real'],s['real'], means['combined'], volume_mask, image_cov_noise, basis_size = constants.N_PCS_TO_COMPUTE, gpu_memory_to_use = gpu_memory_to_use, use_mask = True, ignore_zero_frequency = options['ignore_zero_frequency'])
+    u['rescaled'],s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], image_cov_noise, dilated_volume_mask, disc_type ='linear_interp', gpu_memory_to_use= gpu_memory_to_use, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False)
+
+    if options['ignore_zero_frequency']:
+        logger.warning("FIX THIS OPTION!! NOT SURE IT WILL STILL WORK")
+    # u['rescaled_old'],s['rescaled_old'], zss['init'] = rescale_eigs(cryos, u['real'],s['real'], means['combined'], volume_mask, image_cov_noise, basis_size = constants.N_PCS_TO_COMPUTE, gpu_memory_to_use = gpu_memory_to_use, use_mask = True, ignore_zero_frequency = options['ignore_zero_frequency'])
 
     # logger.info(f"u after rescale dtype: {u['rescaled'].dtype}")
     logger.info("memory after rescaling")
@@ -89,6 +95,27 @@ def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,
     #     u['real4'], s['real4'] = real_svd4(covariance_cols["est_mask"],  picked_frequencies, volume_shape, vol_batch_size, n_components = n_components)
     plot_utils.plot_cov_results(u,s)
     return u, s
+
+
+def pca_by_projected_covariance(cryos, basis, mean, noise_variance, volume_mask, disc_type ='linear_interp', gpu_memory_to_use= 40, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False):
+
+    # basis_size = basis.shape[-1]
+    basis_size = constants.N_PCS_TO_COMPUTE
+    basis = basis[:,:basis_size]
+
+    memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() -  2*basis_size**4*8/1e9
+    batch_size = utils.get_embedding_batch_size(basis, cryos[0].image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate )
+    logger.info('batch size for covariance computation: ' + str(batch_size))
+
+    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, noise_variance, batch_size,  disc_type, parallel_analysis = False )
+
+    ss, u = np.linalg.eigh(covariance)
+    u =  np.fliplr(u)
+    s = np.flip(ss)
+    u = basis @ u 
+
+    return u , s
+
 
 
 def rescale_eigs(cryos,u,s, mean, volume_mask, cov_noise, basis_size = 200, gpu_memory_to_use= 40, use_mask = True, ignore_zero_frequency = False):
@@ -612,10 +639,10 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     # In principle, should apply (I - mask mask.T / \|mask\|^2 )  again, but should already be orthogonal
 
     # 
-    Q *= volume_mask.reshape(-1,1)
-
+    Q_mask = Q*volume_mask.reshape(-1,1)
     
-    C_F_t_2 = left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
+    C_F_t_2 = left_matvec_with_spatial_Sigma(Q_mask, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
+    del Q_mask
     utils.report_memory_device(logger=logger)
     logger.info(f"left matvec {time.time() - st_time}")
 

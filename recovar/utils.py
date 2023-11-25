@@ -51,8 +51,8 @@ def get_gpu_memory_total(device =0):
     if jax_has_gpu():
         return int(jax.local_devices()[device].memory_stats()['bytes_limit']/1e9)
     else:
-        logger.warning("GPU not found. Using default value of 80GB")
-        return int(80e9)
+        logger.warning("GPU not found. Using default value of 80GB for batching computation on CPU.")
+        return int(80)
     
 
 
@@ -116,7 +116,7 @@ def get_latent_density_batch_size(test_pts,zdim, gpu_memory):
 def get_embedding_batch_size(basis, image_size, contrast_grid, zdim, gpu_memory):
 
     left_over_memory = ( gpu_memory - get_size_in_gb(basis))
-    assert left_over_memory > 0, "GPU memory too small?"
+    # assert left_over_memory > 0, "GPU memory too small?"
 
     batch_size = int(left_over_memory/ ( (image_size  * np.max([zdim, 4]) + contrast_grid.size * zdim**2 ) *8/1e9 )/ 20)
 

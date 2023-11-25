@@ -10,7 +10,10 @@ ftu = fourier_transform_utils(jax.numpy)
 
 @functools.partial(jax.jit, static_argnums=[1])
 def vol_indices_to_vec_indices(vol_indices, vol_shape):
-    return jnp.ravel_multi_index(vol_indices.T, vol_shape, mode = 'clip')
+    og_shape = vol_indices.shape
+    vol_indices = vol_indices.reshape(-1, vol_indices.shape[-1])
+    return jnp.ravel_multi_index(vol_indices.T, vol_shape, mode = 'clip').reshape(og_shape[:-1])
+    # return jnp.ravel_multi_index(vol_indices.T, vol_shape, mode = 'clip')
 
 def vec_indices_to_vol_indices(vec_indices, vol_shape):
     vol_indices = jnp.unravel_index(vec_indices, vol_shape)
@@ -26,6 +29,60 @@ def frequencies_to_vol_indices(vol_indices, vol_shape):
     vol_shape = jnp.array(vol_shape)
     mid_grid =  (vol_shape//2 +  (vol_shape%2 ==1) * 1).astype(int)
     return vol_indices + mid_grid
+
+def check_frequencies_in_bound(frequencies,grid_size):
+    return jnp.prod((frequencies >= -grid_size/2 ) * (frequencies < grid_size/2), axis = -1).astype(bool)
+
+def check_vol_indices_in_bound(vol_indices,grid_size):
+    return jnp.prod((vol_indices >= 0 ) * (vol_indices < grid_size ), axis = -1).astype(bool)
+
+
+@functools.partial(jax.jit, static_argnums=[1])
+def find_frequencies_within_grid_dist(coords, max_grid_dist: int ):
+    # k 
+    dim = coords.shape[-1]
+
+    # Closest ind
+    # closest_point = round_to_int(coord)
+    if dim ==2:
+        neighbors = jnp.mgrid[-max_grid_dist:max_grid_dist+1,-max_grid_dist:max_grid_dist+1]
+    else:
+        neighbors = jnp.mgrid[-max_grid_dist:max_grid_dist+1,-max_grid_dist:max_grid_dist+1,-max_grid_dist:max_grid_dist+1]
+
+    neighbors = neighbors.reshape(dim, -1).T
+
+    coords_ndim = coords.ndim
+    neighbors = neighbors.reshape( (coords_ndim-1) * [1]  + list(neighbors.shape))
+    neighbors += coords[...,None,:]
+    neighbors = round_to_int(neighbors)
+    return neighbors
+
+## This could be improved...
+# @functools.partial(jax.jit, static_argnums=[1])
+# def find_nearest_k_frequencies(coord, k: int ):
+#     # (1 + n)^2 (1 + 4 n + 2 n^2)
+#     # 1/2 (-1 + k^(1/3))
+#     #  
+#     neighbors = find_frequencies_within_grid_dist(coord, max_grid_dist: int )
+#     distances = jnp.linalg.norm(neighbors - coord, axis = 0)
+#     # Now find k smallest distances
+#     distances_at_best, indices = jax.lax.top_k(-distances, k)
+    # return
+
+batch_find_frequencies_within_grid_dist= jax.vmap(find_frequencies_within_grid_dist, in_axes = (0, None))
+batch_batch_find_frequencies_within_grid_dist= jax.vmap(batch_find_frequencies_within_grid_dist, in_axes = (0, None))
+
+
+# def find_frequencies_within_dist(coord, max_grid_dist):
+#     dim = coord.shape[-1]
+#     k = max_grid_dist * 2**dim - 1
+#     return find_k_nearest_frequencies(coord, k )
+
+def distance_to_max_grid_dist(dist):
+    return np.ceil(dist).astype(int)
+
+## If I want max dist of h. I should go +/-k in all directions. That is a grid of (2k+1)**3 
+
 
 def vec_indices_to_frequencies(vec_indices, vol_shape):
     return vol_indices_to_frequencies(vec_indices_to_vol_indices(vec_indices, vol_shape), vol_shape)

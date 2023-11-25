@@ -106,10 +106,17 @@ batch_forward_model = jax.vmap(core.forward_model, in_axes = (0, None, None))
 
 @functools.partial(jax.jit, static_argnums = [3,4,5,6,7,8])    
 def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):
-    
     batch_grid_pt_vec_ind_of_images = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
     batch_CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    projected_mean =  batch_forward_model(mean, batch_CTF, batch_grid_pt_vec_ind_of_images) 
-        
+    projected_mean =  batch_forward_model(mean, batch_CTF, batch_grid_pt_vec_ind_of_images)         
     return projected_mean
+
+
+batch_over_vol_get_projected_image = jax.vmap(core.get_projected_image, in_axes = (0, None, None, None, None, None, None, None, None))
+# def batch_over_vol_get_projected_image(mean, cryo):
+
+#     get_projected_image
+#     return batch_over_vol_forward_model(mean, cryo.CTF_params, cryo.rotation_matrices, cryo.image_shape, cryo.volume_shape, cryo.grid_size, cryo.voxel_size, cryo.CTF_fun, cryo.disc_type)
+
+
 
