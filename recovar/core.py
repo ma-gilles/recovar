@@ -342,22 +342,6 @@ def map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_sha
 
 
 
-# This can only run on CPU.
-def get_nufft_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size ):
-    plane_coords_mol = batch_get_rotated_plane_coords(rotation_matrices, image_shape, voxel_size, True) 
-    clean_image_mol = compute_volume_projections_with_nufft(volume, plane_coords_mol, voxel_size)
-    return clean_image_mol
-
-def compute_volume_projections_with_nufft(volume, plane_coords, voxel_size):
-    # This is here because I don't want to impose the dependencies for nufft. If you want to run this, you should 
-    # pip install finufft
-    import recovar.generate_synthetic_molecule as gsm
-    # plane_coords = cu.get_unrotated_plane_coords(image_shape, voxel_size, scaled =True )
-    plane_coords_vec = np.array(plane_coords.reshape(-1, 3)).astype(np.float64)
-    X_ims = gsm.get_fourier_transform_of_volume_at_freq_coords(np.array(volume).astype(np.complex128), plane_coords_vec, voxel_size )
-    X_ims = X_ims.reshape(plane_coords.shape[:-1])
-    return X_ims
-    
 
 ## CTF functions.
 

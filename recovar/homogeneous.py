@@ -63,11 +63,69 @@ def get_mean_conformation(cryos, batch_size, cov_noise = None, valid_idx = None,
     mean_prior = np.array(mean_prior)
     means["combined"] = np.array( jnp.where(jnp.abs(lhs) < 1e-8, 0, rhs / (lhs + 1 / mean_prior ) ))
     means["prior"] = mean_prior
-    
+    means["lhs"] = lhs/2
+
     end_time = time.time()
     logger.info(f"time to compute means: {end_time- st_time}")
 
     return means, mean_prior, fsc, lhs
+
+
+def predict_optimal_h_value(summed_grad_terms ,summed_squared_weights, noise_variance, grad_norm, max_dist=1,order =1 ):
+    
+    # A random divided by 10 term here...
+    normalized_c1 = (grad_norm * summed_grad_terms )**2 / 10
+    normalized_c2 =  noise_variance* (summed_squared_weights * max_dist**3)
+    h = 1/((2*normalized_c1/ (3* normalized_c2)))**(1/5)
+    lower_bound = 0.5
+    h = np.where(h > lower_bound, h,  np.ones_like(h)* lower_bound)
+    return h
+
+def compute_gradient_norm(x):
+    gradients = np.gradient(x)
+    gradients = np.stack(gradients, axis=0)
+    grad_norm = np.linalg.norm(gradients, axis = (0), ord=2)
+    # grad_norm2 = scipy.ndimage.maximum_filter(grad_norm, size =2)
+    return grad_norm
+
+def compute_with_adapative_discretization(cryo, mean_lhs, mean_prior, mean_estimate, noise_variance, batch_size):
+
+    # lhs, rhs = solve_least_squares_mean_iteration(cryo , np.inf, 1,  1000, None, image_weights = None, disc_type = 'nearest', return_lhs_rhs = True )
+    # x = (rhs[0]/(lhs[0] + 1 /tau_prior))
+    bias_fac = (mean_lhs/ (mean_lhs + 1/mean_prior)).real
+    grad_norm = compute_gradient_norm(mean_estimate.reshape(cryo.volume_shape)).reshape(-1)
+    grad_norm_radial_mod = regularization.average_over_shells(grad_norm**1, cryo.volume_shape)/ np.sqrt(regularization.average_over_shells(bias_fac, cryo.volume_shape))
+    grad_norm_est = utils.make_radial_image(grad_norm_radial_mod, cryo.volume_shape)
+    vol, h_adapt = adaptive_discretization(cryo, grad_norm_est, mean_prior/ noise_variance, noise_variance,batch_size)
+    # vol, h_adapt, prior = adaptive_discretization(cryo, grad_norm_est, mean_prior, noise_variance)
+
+    return vol, h_adapt
+
+def adaptive_discretization(cryo, grad_norm, prior, noise_variance, batch_size):
+    
+    summed_squared_weights = {}
+    xs = {}
+    summed_grad_terms = {}
+    order =0
+    dist = 1
+    batch_size = np.ceil(batch_size/ (1*2 + 1)**3 /3).astype(int)
+
+    # A first pass to compute optimal h
+    xs[(order, dist)], _, summed_squared_weights[(order, dist)], _, _, summed_grad_terms[(order, dist)], bias_fac = solve_least_squares_mean_iteration_second_order(
+    cryo ,prior * 0, 1e-8,  batch_size, None, image_weights = None, disc_type = None, return_lhs_rhs = False, 
+    grid_dist = np.ceil(dist), max_dist=dist*np.ones(cryo.volume_size), order = order  )
+        
+    h_adapt = predict_optimal_h_value(summed_grad_terms[(order, dist)] ,summed_squared_weights[(order, dist)], noise_variance, grad_norm, max_dist=1,order =order )
+    
+    # The actual computation
+    max_grid_dist = 3 if cryo.grid_size < 256 else 2
+    dist = 'a'
+    batch_size = np.ceil(batch_size/ (max_grid_dist*2 + 1)**3 /3).astype(int)
+    xs[(order, dist)], _, summed_squared_weights[(order, dist)], _, _ , summed_grad_terms[(order, dist)], _ = solve_least_squares_mean_iteration_second_order(
+    cryo ,1/prior, 1e-8,  batch_size, None, image_weights = None, disc_type = None, return_lhs_rhs = False, 
+    grid_dist = max_grid_dist, max_dist=h_adapt, order = order  )
+    
+    return xs[(order, dist)], h_adapt
 
 
 def estimate_derivative_norm(volume):
@@ -78,8 +136,7 @@ def estimate_derivative_norm(volume):
 
 
 
-
-def get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, mean_prior, mean ,image_weights, recompute_prior = True, volume_mask = None ):
+def get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, mean_prior, mean ,image_weights, recompute_prior = True, volume_mask = None, adaptive = False ):
     image_weights = image_weight_parse(image_weights, dtype = cryos[0].dtype_real)
 
     st_time = time.time()
@@ -117,12 +174,28 @@ def get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, mean_pri
         half_maps.append(np.array( np.where(np.abs(lhs_l[s]) < constants.ROOT_EPSILON, 0, rhs_l[s] / (lhs_l[s] + 1 / priors ) )))
 
     # Add second to first
-    lhs_l[0] += lhs_l[1]
-    rhs_l[0] += rhs_l[1]
-    reconstructions = np.array( np.where( np.abs(lhs_l[0]) < constants.ROOT_EPSILON, 0, rhs_l[0] / (lhs_l[0] + 1 / priors ) ))
+    # lhs_l[0] += lhs_l[1]
+    # rhs_l[0] += rhs_l[1]
+    reconstructions = np.array( np.where( np.abs(lhs_l[0] + lhs_l[1]) < constants.ROOT_EPSILON, 0, (rhs_l[0] + rhs_l[1])/ ((lhs_l[0] + lhs_l[1]) + 1 / priors ) ))
     end_time = time.time()
     logger.info(f"time to compute reweighted conformations: {end_time- st_time}")
     
+    if adaptive:
+        adaptive_reconstructions_halfmaps = np.zeros([2 , *reconstructions.shape])
+        # Do one by one for now...
+        # Initial contrasts
+        initial_contrasts = [ cryo.CTF_params[:,8]  for cryo in cryos]
+
+        for k in range(num_reconstructions):
+            for cryo_idx, cryo in enumerate(cryos):
+                # Instead of passing weights... this should do the same.
+                cryo.CTF_params[:,8] = initial_contrasts[cryo_idx] * image_weights[cryo_idx][k]
+                adaptive_reconstructions_halfmaps[cryo_idx][k] = compute_with_adapative_discretization(cryo, lhs_l[cryo_idx][k], priors[k], reconstructions[k], cov_noise, batch_size)
+        
+        reconstructions = np.mean(adaptive_reconstructions_halfmaps, axis=0)
+
+        return reconstructions, [adaptive_reconstructions_halfmaps[0], adaptive_reconstructions_halfmaps[1]]
+
     return reconstructions, half_maps
 
 
@@ -235,11 +308,10 @@ def compute_weight_matrix_inner(rotation_matrices, CTF_params, voxel_size, volum
     else:
         C_mat, grid_point_indices = make_C_mat_many_gridpoints(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun, grid_dist, max_dist)
 
+    C_mat_outer = broadcast_outer(C_mat, C_mat)
 
-    C_mat_outer = broadcast_outer(C_mat)
 
-
-    RR = core.batch_over_vol_summed_adjoint_projections_nearest(volume_size, C_mat_outer.reshape(-1,C_mat.shape[-2]*C_mat.shape[-1] ), grid_point_indices.reshape(-1))
+    RR = core.batch_over_vol_summed_adjoint_projections_nearest(volume_size, C_mat_outer.reshape(-1,C_mat_outer.shape[-2]*C_mat_outer.shape[-1] ), grid_point_indices.reshape(-1))
     return RR
 
 
@@ -262,9 +334,16 @@ def make_C_mat(rotation_matrices, CTF_params, voxel_size, volume_shape, image_sh
 def make_C_mat_many_gridpoints(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun, grid_dist, max_dist):
     grid_points_coords = core.batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size )
     near_frequencies = core.find_frequencies_within_grid_dist(grid_points_coords, grid_dist)
-    differences = near_frequencies - grid_points_coords[...,None,:]
+    differences =  grid_points_coords[...,None,:] - near_frequencies
     distances = jnp.linalg.norm(differences, axis = -1)
-    valid_points = (distances <= max_dist) * core.check_vol_indices_in_bound(near_frequencies,volume_shape[0])
+    near_frequencies_vec_indices = core.vol_indices_to_vec_indices(near_frequencies, volume_shape)
+
+    # if a
+    max_dist_this = max_dist[near_frequencies_vec_indices.reshape(-1)].reshape(near_frequencies_vec_indices.shape)
+    # print(jnp.std(max_dist_this),jnp.mean(max_dist_this) )
+    # import pdb; pdb.set_trace()
+    valid_points = (distances < max_dist_this) * core.check_vol_indices_in_bound(near_frequencies,volume_shape[0])
+
     near_frequencies_vec_indices = core.vol_indices_to_vec_indices(near_frequencies, volume_shape)
     
     # This could be done more efficiently
@@ -286,9 +365,10 @@ batch_batch_outer = jax.vmap(batch_outer, in_axes = (0))
 
 ## Mean functions
 def compute_discretization_weights(experiment_dataset, prior, batch_size, order=1, grid_dist = None, max_dist = None ):
-    order = 1   # Only implemented for order 1 but could generalize
-    rr_size = 3*order + 1
-    RR = jnp.zeros((experiment_dataset.volume_size, (rr_size)**2 ))
+
+    order_t = 1   # Only implemented for order 1 but could generalize
+    rr_size = 3*order_t + 1
+    RR = jnp.zeros((experiment_dataset.volume_size, (rr_size)**2 ), dtype = experiment_dataset.dtype_real)
     # batch_size = utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total()) * 3
 
     for i in range(utils.get_number_of_index_batch(experiment_dataset.n_images, batch_size)):
@@ -301,12 +381,20 @@ def compute_discretization_weights(experiment_dataset, prior, batch_size, order=
     weights, good_weights = batch_solve_for_weights(RR, prior)
     # If bad weights, just do Weiner filtering with 0th order disc
     # good_weights = (good_weights*0).astype(bool)
+    bias_multiple = RR[...,0,0] /(RR[...,0,0] + prior)
 
     other_weights = jnp.zeros_like(weights)
     weiner_weights = 1 / (RR[...,0,0] + prior)
     other_weights = other_weights.at[...,0].set(weiner_weights)
-    weights = weights.at[~good_weights].set(other_weights[~good_weights])
-    return weights, good_weights, RR
+    if order ==0:
+        weights = other_weights
+        print('here')
+    else:
+        weights = weights.at[~good_weights].set(other_weights[~good_weights])
+
+    ### THROW AWAY RR
+    RR = None
+    return weights, good_weights, RR, bias_multiple
 
 def solve_for_weights(RR, prior):
     e1 = jnp.zeros(RR.shape[0])
@@ -314,16 +402,15 @@ def solve_for_weights(RR, prior):
     # Maybe could just check for conditioning
     v = jax.scipy.linalg.solve(RR, e1, lower=False, assume_a='pos')
     # Probably should replace with numpy.linalg.eigvalsh
-    good_v = jnp.linalg.cond(RR) < 1e2
+    good_v = jnp.linalg.cond(RR) < 1e4
     # good_v = jnp.min(jnp.diag(RR)) > constants.ROOT_EPSILON
     return v, good_v
 
 
 batch_solve_for_weights = jax.vmap(solve_for_weights, in_axes = (0,0))
 
-broadcas = jax.vmap(jnp.dot, in_axes = (0,0))
-batch_batch_dot = jax.vmap(batch_dot, in_axes = (0,0))
-
+# broadcas = jax.vmap(jnp.dot, in_axes = (0,0))
+# batch_batch_dot = jax.vmap(batch_dot, in_axes = (0,0))
 
 def broadcast_dot(x,y):
     return jax.lax.batch_matmul(jnp.conj(x[...,None,:]),y[...,:,None])[...,0,0]
@@ -336,43 +423,57 @@ def broadcast_outer(x,y):
 #     return jnp.dot(x,y)
 
 
-# @functools.partial(jax.jit, static_argnums = [7,8,9,10,11,12])    
+@functools.partial(jax.jit, static_argnums = [7,8,9,10,11,12,13,14])    
 def compute_mean_least_squares_rhs_lhs_with_weights(images, precomp_weights, rotation_matrices, translations, CTF_params, mean_estimate, noise_variance, image_weights, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun, grid_dist, max_dist ):
+
+
+    corrected_images = core.translate_images(images, translations, image_shape)    
 
     # Now use weights: w_i = C.^T v
     if grid_dist is None:
         C_mat, grid_point_indices = make_C_mat(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun)
     else:
         C_mat, grid_point_indices = make_C_mat_many_gridpoints(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun, grid_dist, max_dist)
+        corrected_images = corrected_images[...,None]
 
     precomp_weights_on_pixel = core.batch_slice_volume(precomp_weights,grid_point_indices)
-
     weights = broadcast_dot(C_mat, precomp_weights_on_pixel)
+    
+    residuals = weights[...,None] * C_mat
+    volume_size = np.prod((volume_shape))
 
-    volume_size = np.prod(np.array(volume_shape))
-    # grid_point_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
-    corrected_images = core.translate_images(images, translations, image_shape)    
-    # corrected_images = corrected_images * image_weights[...,None] / noise_variance[None]
+    res_summed = jnp.linalg.norm(residuals[...,1:], axis=-1).reshape(-1)
+    residuals_summed2 = core.summed_adjoint_projections_nearest(volume_size, res_summed.reshape(-1)**1, grid_point_indices.reshape(-1))
+
+    res_summed = jnp.abs(residuals[...,0])
+
+    residuals_summed1 = core.summed_adjoint_projections_nearest(volume_size, res_summed.reshape(-1)**1, grid_point_indices.reshape(-1))
+
+
+    C_squared = jnp.abs(C_mat[...,0])**2
+    C_squared_summed = core.summed_adjoint_projections_nearest(volume_size, C_squared.reshape(-1)**1, grid_point_indices.reshape(-1))
 
     estimate = core.summed_adjoint_projections_nearest(volume_size, corrected_images * weights, grid_point_indices)
-    lhs = core.summed_adjoint_projections_nearest(volume_size, weights, grid_point_indices)
+    summed_weights_squared = core.summed_adjoint_projections_nearest(volume_size, weights**2, grid_point_indices)
+    return estimate, summed_weights_squared, residuals_summed1, residuals_summed2, C_squared_summed
 
-    return estimate, lhs
+# def compute_residuals():
+
 
 # Solves the linear system Dx = b.
-def solve_least_squares_mean_iteration_second_order(experiment_dataset , prior, cov_noise,  batch_size, mean_estimate, image_weights = None, disc_type = None, return_lhs_rhs = False, grid_dist = None, max_dist = None ):
+def solve_least_squares_mean_iteration_second_order(experiment_dataset , prior, cov_noise,  batch_size, mean_estimate, image_weights = None, disc_type = None, return_lhs_rhs = False, grid_dist = None, max_dist = None, order=1 ):
     # all_one_volume = jnp.ones(volume_size)
-    estimate =0;  lhs = 0 
+    estimate =0;  summed_weights_squared = 0 ; residuals_summed1 = 0; residuals_summed2 = 0; residuals_summed3 = 0
     # Need to take out RR
-    weights, good_weights, RR = compute_discretization_weights(experiment_dataset, prior, batch_size, order=1, grid_dist = grid_dist, max_dist = max_dist )
-
-    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+    weights, good_weights, RR, bias_multiple = compute_discretization_weights(experiment_dataset, prior, batch_size, order=order, grid_dist = grid_dist, max_dist = max_dist )
+    logger.info(f"batch size in second order: {batch_size}")
+    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
     for batch, indices in data_generator:
         
         # Only place where image mask is used ?
         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
                     
-        estimate_this, lhs_this = compute_mean_least_squares_rhs_lhs_with_weights(batch,
+        estimate_this, summed_weights_squared_this, residuals_summed_this1, residuals_summed_this2, residuals_summed_this3  = compute_mean_least_squares_rhs_lhs_with_weights(batch,
                                          weights,
                                          experiment_dataset.rotation_matrices[indices], 
                                          experiment_dataset.translations[indices], 
@@ -388,6 +489,11 @@ def solve_least_squares_mean_iteration_second_order(experiment_dataset , prior, 
                                          experiment_dataset.CTF_fun,
                                          grid_dist,max_dist)
         estimate += estimate_this
-        lhs += lhs_this
+        summed_weights_squared += summed_weights_squared_this
+        residuals_summed1 += residuals_summed_this1
+        residuals_summed2 += residuals_summed_this2
+        residuals_summed3 += residuals_summed_this3
 
-    return estimate, good_weights, lhs
+    # residuals_summed3 = jnp.linalg.norm(residuals_summed3[:,1:], axis=-1)
+
+    return estimate, good_weights, summed_weights_squared, weights, residuals_summed1, residuals_summed2, bias_multiple

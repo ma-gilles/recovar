@@ -13,6 +13,7 @@ from cryodrgn import mrc, ctf
 from cryodrgn.pose import PoseTracker
 from pathlib import Path
 xx = Path(__file__).resolve()
+import recovar.generate_synthetic_molecule as gsm
 
 
 import logging
@@ -47,6 +48,18 @@ def load_second_dataset_params(grid_size):
     poses_file = os.path.join(data_path, 'poses_10180.pkl')
     return get_dataset_params(n_images, grid_size, ctf_file, poses_file)
 
+
+def set_constant_ctf(ctf_params_data):
+    # Set constant CTF
+    ctf_params_data[:,0] = 0
+    ctf_params_data[:,1] = 0
+    # ctf_params_data[:,2] = 0.0
+    # ctf_params_data[:,3] = 0.0
+    ctf_params_data[:,4] = 0.0
+    ctf_params_data[:,5] = -1
+    # ctf_params_data[:,4] = 0.0
+    return ctf_params_data
+
 def generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  ):
     
     ctf_params_data, rots_data, trans_data = dataset_params_fn(grid_size)
@@ -67,7 +80,13 @@ def generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  
     #     sample_trans = 0 * sample_trans # in theory, distribution of rotations doesn't matter, but it can make the particle leave the image and such
         # However, when using masks, it is unclear that this is necessarily true, since the mask may exit the image or something.
     # import pdb; pdb.set_trace()
-    return sample_ctf_params[...,1:], sample_rots, sample_trans
+
+    sample_ctf_params = sample_ctf_params[...,1:]
+    # import pdb; pdb.set_trace()
+
+    # sample_ctf_params = set_constant_ctf(sample_ctf_params)
+    # import pdb; pdb.set_trace()
+    return sample_ctf_params, sample_rots, sample_trans
 
 def get_params_generator(dataset_params_fn ):
     def params_generator(n_images, grid_size):
@@ -363,9 +382,17 @@ def save_ctf_params(outdir, D: int, ctf_params, voxel_size):
     return 
 
 
+
+
 # Solves the linear system Dx = b.
-def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = 'linear_interp', mrc_file = None, pad_before_translate = False ):
-    
+def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = 'linear_interp', mrc_file = None, pad_before_translate = False, Bfactor=100 ):
+
+    if disc_type == "pdb":
+        gt_vols = [gsm.generate_volume_from_atoms(vol, voxel_size = experiment_dataset.voxel_size,  grid_size = experiment_dataset.grid_size,  freq_coords = None, jax_backend = False).reshape(-1) for vol in volumes ]
+        B_fac_vols = [Bfactorize_vol(volume, experiment_dataset.voxel_size, Bfactor, experiment_dataset.volume_shape) for volume in gt_vols]
+        gt_vols_norm = np.mean(np.linalg.norm(B_fac_vols, axis =(-1)))
+        print(gt_vols_norm)
+
     key = jax.random.PRNGKey(seed)
     # A little bit of a hack to account for the fact that noise is complex but goes to real
     noise_variance_mod = noise_variance.copy()
@@ -412,8 +439,9 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                                                  experiment_dataset.image_shape, 
                                                  experiment_dataset.grid_size, 
                                                  disc_type,
-                                                 experiment_dataset.CTF_fun)
+                                                 experiment_dataset.CTF_fun) / gt_vols_norm
                 
+
             else:
                 images_batch = simulate_data_batch(volumes[vol_idx],
                                                  experiment_dataset.rotation_matrices[indices], 
@@ -427,12 +455,9 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                                                  experiment_dataset.CTF_fun)
 
 
-
-
-            # import pdb; pdb.set_trace()
             images_batch = ftu.get_idft2(images_batch.reshape([-1, *experiment_dataset.image_shape])).real
             plotting = False
-            
+            # import pdb; pdb.set_trace()
             if pad_before_translate:
                 from recovar import padding
                 padded_images = padding.pad_images_spatial_domain(images_batch,experiment_dataset.grid_size)
@@ -509,24 +534,67 @@ def simulate_data_batch(volume, rotation_matrices, translations, CTF_params, vox
 def simulate_nufft_data_batch(volume, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun ):
     
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    corrected_images = core.get_nufft_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size) * CTF
+    corrected_images = get_nufft_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size) * CTF
     
     # Translate back.
     translated_images = core.translate_images(corrected_images, -translations, image_shape)
     return translated_images
 
 
-
-def simulate_nufft_data_batch_from_pdb(atom_group, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun ):
+def simulate_nufft_data_batch_from_pdb(atom_group, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun, Bfactor=100 ):
     
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)    
     plane_coords_mol =  core.batch_get_rotated_plane_coords(rotation_matrices, image_shape, voxel_size, True) 
-    slices = core.compute_projections_with_nufft(atom_group, plane_coords_mol, voxel_size)
+    slices = compute_projections_with_nufft(atom_group, plane_coords_mol, voxel_size)
 
     corrected_images = slices * CTF
     # Translate back.
     translated_images = core.translate_images(corrected_images, -translations, image_shape)
+    translated_images = Bfactorize_images(translated_images, Bfactor, plane_coords_mol)
     return translated_images
 
 
+def compute_projections_with_nufft(atom_group, plane_coords, voxel_size):
+    # plane_coords = cu.get_unrotated_plane_coords(image_shape, voxel_size, scaled =True )
 
+    plane_coords_vec = np.array(plane_coords.reshape(-1, 3)).astype(np.float64)
+    X_ims = np.array(gsm.generate_potential_at_freqs_from_atoms(atom_group, voxel_size, plane_coords_vec).astype(np.complex64))
+    # print(np.max(np.abs(atom_group.getCoords())))
+    if np.isnan(np.sum(X_ims)):
+        import pdb; pdb.set_trace()
+    X_ims = X_ims.reshape(plane_coords.shape[:-1])
+    return X_ims
+
+
+# This can only run on CPU.
+def get_nufft_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size ):
+    plane_coords_mol = core.batch_get_rotated_plane_coords(rotation_matrices, image_shape, voxel_size, True) 
+    clean_image_mol = compute_volume_projections_with_nufft(volume, plane_coords_mol, voxel_size)
+    return clean_image_mol
+
+def compute_volume_projections_with_nufft(volume, plane_coords, voxel_size):
+    # This is here because I don't want to impose the dependencies for nufft. If you want to run this, you should 
+    # pip install finufft
+    # plane_coords = cu.get_unrotated_plane_coords(image_shape, voxel_size, scaled =True )
+    plane_coords_vec = np.array(plane_coords.reshape(-1, 3)).astype(np.float64)
+    X_ims = gsm.get_fourier_transform_of_volume_at_freq_coords(np.array(volume).astype(np.complex128), plane_coords_vec, voxel_size )
+    X_ims = X_ims.reshape(plane_coords.shape[:-1])
+
+    return X_ims
+    
+
+def get_B_factor_scaling(volume_shape, voxel_size, B_factor):
+    vol_idx = np.arange(np.prod(volume_shape))
+    freqs = core.vec_indices_to_frequencies(vol_idx, volume_shape) / ( volume_shape[0] * voxel_size)
+    freq_norms = np.linalg.norm(freqs, axis =-1)**2
+    B_fac_scaling = np.exp(-B_factor*freq_norms/4) 
+    return B_fac_scaling
+
+def Bfactorize_vol(volume, voxel_size, Bfactor, volume_shape):
+    B_fac_scaling = get_B_factor_scaling(volume_shape, voxel_size, Bfactor)
+    return  volume * B_fac_scaling
+
+def Bfactorize_images(images, Bfactor, plane_coords_mol):
+    freq_norms = jnp.linalg.norm(plane_coords_mol, axis =-1)**2
+    B_fac_scaling = jnp.exp(-Bfactor*freq_norms/4) 
+    return  images * B_fac_scaling

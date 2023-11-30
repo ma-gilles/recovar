@@ -188,9 +188,11 @@ def standard_recovar_pipeline(args):
 
     # Compute mean
     means, mean_prior, _, _ = homogeneous.get_mean_conformation(cryos, 5*batch_size, cov_noise , valid_idx, disc_type, use_noise_level_prior = False, grad_n_iter = 5)
-    
-    mean_real = ftu.get_idft3(means['combined'].reshape(cryos[0].volume_shape))
+    for cryo_idx, cryo in enumerate(cryos):
+        means['adaptive' + str(cryo_idx)], means['adaptive' + str(cryo_idx)+'_h'] = homogeneous.compute_with_adapative_discretization(cryo, means['lhs'], means['prior'], means['combined'], cov_noise, 1*batch_size)
+        # import pdb; pdb.set_trace()
 
+    mean_real = ftu.get_idft3(means['combined'].reshape(cryos[0].volume_shape))
 
     ## DECIDE IF WE SHOULD UNINVERT DATA
     uninvert_check = np.sum((mean_real.real**3 * cryos[0].get_volume_radial_mask(cryos[0].grid_size//3).reshape(cryos[0].volume_shape))) < 0
