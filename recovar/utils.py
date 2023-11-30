@@ -16,9 +16,13 @@ def find_angle_between_subspaces(v1,v2, max_rank):
     return np.sqrt( 1 - v[-1]**2)
 
 
-def subspace_angles(u ,v, max_rank = None):
+def subspace_angles(u ,v, max_rank = None, check_orthogonalize = False):
     max_rank = u.shape[-1] if max_rank is None else max_rank
     corr = np.zeros(max_rank)
+    if check_orthogonalize:
+        u,_ = np.linalg.qr(u)
+        v,_ = np.linalg.qr(v)
+
     for k in range(1,max_rank+1):
         if k > u.shape[-1]:
             corr[k-1] = 1
