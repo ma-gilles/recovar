@@ -44,8 +44,17 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
+        "--adaptive",
+        action="store_true",
+        help="whether to use the adapative discretization scheme in reweighing to compute trajectory volumes"
+    )
+
+
+    parser.add_argument(
         "--q",  type =float, default=None, help="quantile used for reweighting (default = 0.95)"
     )
+
+
 
     parser.add_argument(
         "--n-std", metavar=float, type=float, default=None, help="number of standard deviations to use for reweighting (don't set q and this parameter, only one of them)"
@@ -54,7 +63,7 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
-def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40, n_paths = 6, skip_umap = False, q = None, n_std = None, compute_reproj = False):
+def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40, n_paths = 6, skip_umap = False, q = None, n_std = None, compute_reproj = False, adaptive= False):
 
     results = o.load_results_new(recovar_result_dir + '/')
 
@@ -111,7 +120,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
             path_folder = output_folder_kmeans + 'path' + str(pair_idx) + '/'        
             o.mkdir_safe(path_folder)
 
-            o.make_trajectory_plots_from_results(results, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =zdim, compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold)        
+            o.make_trajectory_plots_from_results(results, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =zdim, compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold, adaptive = adaptive)        
             logger.info(f"path {pair_idx} done")
     else:
         n_vols_along_path = 80 
@@ -128,7 +137,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
             z_end = pairs[pair_idx][1][...,None,]
             path_folder = output_folder_kmeans + 'path' + str(pair_idx) + '/'        
             o.mkdir_safe(path_folder)
-            o.make_trajectory_plots_from_results(results, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = 40, plot_llh = False, basis_size =zdim, compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold)        
+            o.make_trajectory_plots_from_results(results, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = 40, plot_llh = False, basis_size =zdim, compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold, adaptive = adaptive)        
             logger.info(f"path {pair_idx} done")
 
     kmeans_res = { 'centers': centers.tolist(), 'pairs' : pairs }
@@ -172,4 +181,4 @@ def pick_pairs(centers, n_pairs):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
-    analyze(args.result_dir, output_folder = args.outdir, zdim=  args.zdim, n_clusters = args.n_clusters, n_paths= args.n_trajectories, skip_umap = args.skip_umap, q=args.q, n_std=args.n_std )
+    analyze(args.result_dir, output_folder = args.outdir, zdim=  args.zdim, n_clusters = args.n_clusters, n_paths= args.n_trajectories, skip_umap = args.skip_umap, q=args.q, n_std=args.n_std , args.adaptive)

@@ -335,7 +335,7 @@ def load_results_new(datadir):
 
 
 
-def make_trajectory_plots_from_results(results, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =10, compute_reproj = False, likelihood_threshold = None):
+def make_trajectory_plots_from_results(results, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =10, compute_reproj = False, likelihood_threshold = None, adaptive = False):
 
     assert (((z_st is not None) and (z_end is not None)) or (gt_volumes is not None)), 'either z_st and z_end should be passed, or gt_volumes'
 
@@ -352,11 +352,11 @@ def make_trajectory_plots_from_results(results, output_folder, cryos = None, z_s
         results['zs'][basis_size], results['cov_zs'][basis_size], results['cov_noise'], 
         z_st, z_end, latent_space_bounds, output_folder, 
         gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = plot_llh, basis_size =basis_size, 
-        compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold)
+        compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold, adaptive = adaptive)
 
 
 
-def make_trajectory_plots(dataset_loader, density, u, means, zs, cov_zs, cov_noise, z_st, z_end, latent_space_bounds, output_folder, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =10, compute_reproj = False, likelihood_threshold = None):
+def make_trajectory_plots(dataset_loader, density, u, means, zs, cov_zs, cov_noise, z_st, z_end, latent_space_bounds, output_folder, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =10, compute_reproj = False, likelihood_threshold = None, adaptive = False):
     import time
     st_time = time.time()
     
@@ -409,7 +409,7 @@ def make_trajectory_plots(dataset_loader, density, u, means, zs, cov_zs, cov_noi
         path_subsampled = path_z_subsampled
 
     st_time = time.time()
-    compute_and_save_volumes_from_z(dataset_loader, means, u, path_subsampled, zs, cov_zs, cov_noise, output_folder  , likelihood_threshold = likelihood_threshold, compute_reproj = compute_reproj, adaptive = True)
+    compute_and_save_volumes_from_z(dataset_loader, means, u, path_subsampled, zs, cov_zs, cov_noise, output_folder  , likelihood_threshold = likelihood_threshold, compute_reproj = compute_reproj, adaptive = adaptive)
     logger.info(f"vol time {time.time() - st_time}")
     
     x = ld.compute_weights_of_conformation_2(path_z, zs, cov_zs,likelihood_threshold = likelihood_threshold)
