@@ -138,7 +138,7 @@ def add_args(parser: argparse.ArgumentParser):
     group.add_argument(
             "--keep-intermediate",
             dest = "keep_intermediate",
-            action="store_false",
+            action="store_true",
             help="saves some intermediate result. Probably only useful for debugging"
         )
 
@@ -186,12 +186,20 @@ def standard_recovar_pipeline(args):
     valid_idx = cryo.get_valid_frequency_indices()
     noise_model = args.noise_model
 
+
     # Compute mean
     means, mean_prior, _, _ = homogeneous.get_mean_conformation(cryos, 5*batch_size, cov_noise , valid_idx, disc_type, use_noise_level_prior = False, grad_n_iter = 5)
-    for cryo_idx, cryo in enumerate(cryos):
-        means['adaptive' + str(cryo_idx)], means['adaptive' + str(cryo_idx)+'_h'] = homogeneous.compute_with_adapative_discretization(cryo, means['lhs'], means['prior'], means['combined'], cov_noise, 1*batch_size)
-        # import pdb; pdb.set_trace()
+    use_adaptive = False
 
+    if use_adaptive:
+        for cryo_idx, cryo in enumerate(cryos):
+            means['adaptive' + str(cryo_idx)], means['adaptive' + str(cryo_idx)+'_h'] = homogeneous.compute_with_adaptive_discretization(cryo, means['lhs'], means['prior'], means['combined'], cov_noise, 1*batch_size)
+            # import pdb; pdb.set_trace()
+        means['combined'] = (means['adaptive' + str(0)] + means['adaptive' + str(1)])/2
+
+    means['indices'] = [cryo.dataset_indices for cryo in cryos ]
+    utils.pickle_dump(means, args.outdir + '/means.pkl')
+    
     mean_real = ftu.get_idft3(means['combined'].reshape(cryos[0].volume_shape))
 
     ## DECIDE IF WE SHOULD UNINVERT DATA
@@ -251,6 +259,13 @@ def standard_recovar_pipeline(args):
     noise_time = time.time()
     logger.info(f"time to upper bound noise is {time.time() - noise_time}")
     noise_var = np.where(noise_var_outside_mask >  ub_noise_var, ub_noise_var, noise_var_outside_mask)
+
+    logger.warning("doing funky noise business")
+    noise_var = np.where(noise_var_outside_mask >  cov_noise_init, noise_var_outside_mask, np.ones_like(cov_noise_init))
+
+    # noise_var_ = np.where(noise_var_outside_mask >  ub_noise_var, ub_noise_var, noise_var_outside_mask)
+
+
     noise_var = noise_var_outside_mask
     # Noise statistic
     if noise_model == "white":

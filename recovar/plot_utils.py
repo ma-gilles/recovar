@@ -14,13 +14,15 @@ names_to_show = { "diagonal": "diagonal", "wilson": "Wilson", "diagonal masked":
 colors_name = { "diagonal": "cornflowerblue", "wilson": "lightsalmon", "diagonal masked": "blue", "wilson masked": "orangered"  }
 plt.rcParams['text.usetex'] = True
 
-def plot_noise_profile(results):
+def plot_noise_profile(results, yscale = 'linear'):
     plt.figure(figsize = (8,8))
     yy = results['noise_var']
     if results['input_args'].ignore_zero_frequency:
         yy[0] =0 
     plt.errorbar(x = np.arange(results['noise_var'].size), y=yy, yerr=2*results['std_noise_var'], capsize=3, alpha = 0.5, label = 'estimated noise power spectrum')
     plt.errorbar(x = np.arange(results['image_PS'].size), y=results['image_PS'], yerr=2*results['std_image_PS'], capsize=3, alpha = 0.5, label = 'image power spectrum')
+    plt.plot(np.arange(results['image_PS'].size), results['cov_noise']*np.ones_like(results['image_PS']))
+    plt.yscale(yscale)
     plt.legend()
     
     return
@@ -211,7 +213,7 @@ def plot_volume_sequence(volumes,cryos):
     
     
 
-def plot_cov_results(u,s, max_eig = 25, savefile = None):
+def plot_cov_results(u,s, max_eig = 40, savefile = None):
     
     plt.rcParams.update({
         # "text.usetex": True,
@@ -349,6 +351,7 @@ def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = N
     if curve is None:
         curve = FSC(np.array(image1).reshape(volume_shape), np.array(image2).reshape(volume_shape))
     
+    # import pdb; pdb.set_trace()
     # Huuuh why is there a 1/2 here??
     freq = ftu.get_1d_frequency_grid(grid_size, voxel_size = voxel_size, scaled = True)
     freq = freq[freq >= 0 ]

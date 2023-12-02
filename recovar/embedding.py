@@ -9,7 +9,6 @@ ftu = fourier_transform_utils(jnp)
 
 logger = logging.getLogger(__name__)
 
-
 def split_weights(weight, cryos):
     start_idx = 0
     weights = []
@@ -19,10 +18,15 @@ def split_weights(weight, cryos):
         start_idx = end_idx
     return weights
 
-def generate_conformation_from_reweighting(cryos, means, cov_noise, zs, cov_zs, latent_points, batch_size, disc_type, likelihood_threshold = None, recompute_prior = True, volume_mask = None ):    
+def generate_conformation_from_reweighting(cryos, means, cov_noise, zs, cov_zs, latent_points, batch_size, disc_type, likelihood_threshold = None, recompute_prior = True, volume_mask = None, adaptive = False ):    
     
-    likelihood_threshold = latent_density.get_log_likelihood_threshold(k = zs.shape[-1])
+    likelihood_threshold = latent_density.get_log_likelihood_threshold(k = zs.shape[-1]) if likelihood_threshold is None else likelihood_threshold
+
     weights = latent_density.compute_weights_of_conformation_2(latent_points, zs, cov_zs,likelihood_threshold = likelihood_threshold )
+    print("likelihood_threshold:", likelihood_threshold)
+
+    print(np.sum(weights,axis=0))
+    print(np.sum(weights))
 
     all_weights_0 = []
     all_weights_1 = []
@@ -34,7 +38,7 @@ def generate_conformation_from_reweighting(cryos, means, cov_noise, zs, cov_zs, 
 
     image_weights = [np.array(all_weights_0),np.array(all_weights_1)] 
 
-    reconstructions, fscs = homogeneous.get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, means['prior'], means['combined']*0 , image_weights, recompute_prior = recompute_prior, volume_mask = volume_mask)
+    reconstructions, fscs = homogeneous.get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, means['prior'], means['combined']*0 , image_weights, recompute_prior = recompute_prior, volume_mask = volume_mask, adaptive = adaptive)
     return reconstructions, fscs
     
 def generate_conformation_from_reprojection(xs, mean, u ):

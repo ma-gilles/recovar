@@ -48,7 +48,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--n-std", metavar=float, default=None, help="number of standard deviations to use for reweighting (don't set q and this parameter, only one of them)"
+        "--n-std", metavar=float, type=float, default=None, help="number of standard deviations to use for reweighting (don't set q and this parameter, only one of them)"
     )
 
     return parser

@@ -114,6 +114,8 @@ def pca_by_projected_covariance(cryos, basis, mean, noise_variance, volume_mask,
     s = np.flip(ss)
     u = basis @ u 
 
+    s = np.where(s >0 , s, np.ones_like(s)*constants.EPSILON)
+    
     return u , s
 
 
