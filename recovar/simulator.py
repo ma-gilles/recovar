@@ -13,14 +13,12 @@ from cryodrgn import mrc, ctf
 from cryodrgn.pose import PoseTracker
 from pathlib import Path
 xx = Path(__file__).resolve()
-import recovar.generate_synthetic_molecule as gsm
+import recovar.simulate_scattering_potential as gsm
 
 
 import logging
     
 logger = logging.getLogger(__name__)
-
-
 
 data_path = os.path.join(os.path.dirname(__file__),'data/')
 
@@ -301,7 +299,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
 
     image_assignments = np.random.choice(np.arange(volumes.shape[0]), size = n_images,  p = volume_distribution)
 
-    CTF_fun = core.compute_ctf_cryodgrn_wrapper
+    CTF_fun = core.evaluate_ctf_wrapper
     main_dataset = dataset.CryoEMDataset( volume_shape, None, voxel_size,
                               rots, trans, ctf_params, CTF_fun = CTF_fun, dataset_indices = None)
     batch_size = 5 * utils.get_image_batch_size(grid_size, utils.get_gpu_memory_total())
@@ -539,7 +537,7 @@ def make_noise_batch(subkey, noise_image, images_batch_shape):
 def simulate_data_batch(volume, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun ):
     
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    corrected_images = core.get_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF
+    corrected_images = core.slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF
     # import pdb; pdb.set_trace()
     # Translate back.
     translated_images = core.translate_images(corrected_images, -translations, image_shape)

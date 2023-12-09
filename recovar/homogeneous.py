@@ -308,8 +308,8 @@ def compute_mean_least_squares_rhs_lhs(images, rotation_matrices, translations, 
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
     translated_images = core.translate_images(images, translations, image_shape)
     if disc_type != "nearest" and mean_estimate is not None:
-        grad_correction = (core.get_slices(mean_estimate, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) \
-                        - core.get_slices(mean_estimate, rotation_matrices, image_shape, volume_shape, grid_size, "nearest")) * CTF
+        grad_correction = (core.slice_volume_by_map(mean_estimate, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) \
+                        - core.slice_volume_by_map(mean_estimate, rotation_matrices, image_shape, volume_shape, grid_size, "nearest")) * CTF
         corrected_images = translated_images - grad_correction
     else:
         corrected_images = translated_images
@@ -334,7 +334,7 @@ batch_over_weights_sum_adj_forward_model = jax.vmap(core.sum_adj_forward_model, 
 #     C_mat, grid_point_vec_indices = make_C_mat(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun)
 #     # This is going to be stroed twice as much stuff as it needs to be
 #     C_mat_outer = batch_batch_outer(C_mat).reshape([C_mat.shape[0], C_mat.shape[1], C_mat.shape[2]*C_mat.shape[2]])#.transpose([2,0,1])
-#     RR = core.batch_over_vol_summed_adjoint_projections_nearest(volume_size, C_mat_outer, grid_point_vec_indices)
+#     RR = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_size, C_mat_outer, grid_point_vec_indices)
 #     return RR
 
 @functools.partial(jax.jit, static_argnums = [3,4,5,6,7])    
@@ -350,7 +350,7 @@ def compute_weight_matrix_inner(rotation_matrices, CTF_params, voxel_size, volum
     C_mat_outer = broadcast_outer(C_mat, C_mat)
 
 
-    # RR = core.batch_over_vol_summed_adjoint_projections_nearest(volume_size, C_mat_outer.reshape(-1,C_mat_outer.shape[-2]*C_mat_outer.shape[-1] ), grid_point_indices.reshape(-1))
+    # RR = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_size, C_mat_outer.reshape(-1,C_mat_outer.shape[-2]*C_mat_outer.shape[-1] ), grid_point_indices.reshape(-1))
     # return RR
     return batch_compute_weight_matrix_inner_last_step(C_mat_outer, grid_point_indices, image_weights, valid_points, volume_size)
 
@@ -359,7 +359,7 @@ def compute_weight_matrix_inner_last_step( C_mat_outer, grid_point_indices, imag
     C_mat_outer = multiply_along_axis(C_mat_outer,image_weights, 0 ) * valid_points[...,None,None]
 
     # C_mat_outer *= image_weights
-    RR = core.batch_over_vol_summed_adjoint_projections_nearest(volume_size, C_mat_outer.reshape(-1,C_mat_outer.shape[-2]*C_mat_outer.shape[-1] ), grid_point_indices.reshape(-1))
+    RR = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_size, C_mat_outer.reshape(-1,C_mat_outer.shape[-2]*C_mat_outer.shape[-1] ), grid_point_indices.reshape(-1))
     return RR
 
 batch_compute_weight_matrix_inner_last_step = jax.vmap(compute_weight_matrix_inner_last_step, in_axes = (None,None,0, 0, None))
@@ -532,15 +532,15 @@ def compute_mean_least_squares_rhs_lhs_with_weights(images, precomp_weights, rot
 
 
     # res_summed = jnp.linalg.norm(residuals[...,1:], axis=-1).reshape(-1)
-    # residuals_summed2 = core.summed_adjoint_projections_nearest(volume_size, res_summed.reshape(-1)**1, grid_point_indices.reshape(-1))
+    # residuals_summed2 = core.summed_adjoint_slice_by_nearest(volume_size, res_summed.reshape(-1)**1, grid_point_indices.reshape(-1))
 
     # res_summed = jnp.abs(residuals[...,0])
 
-    # residuals_summed1 = core.summed_adjoint_projections_nearest(volume_size, res_summed.reshape(-1)**1, grid_point_indices.reshape(-1))
-    # C_squared_summed = core.summed_adjoint_projections_nearest(volume_size, C_squared.reshape(-1)**1, grid_point_indices.reshape(-1))
+    # residuals_summed1 = core.summed_adjoint_slice_by_nearest(volume_size, res_summed.reshape(-1)**1, grid_point_indices.reshape(-1))
+    # C_squared_summed = core.summed_adjoint_slice_by_nearest(volume_size, C_squared.reshape(-1)**1, grid_point_indices.reshape(-1))
 
-    # estimate = core.summed_adjoint_projections_nearest(volume_size, corrected_images * weights, grid_point_indices)
-    # summed_weights_squared = core.summed_adjoint_projections_nearest(volume_size, weights**2, grid_point_indices)
+    # estimate = core.summed_adjoint_slice_by_nearest(volume_size, corrected_images * weights, grid_point_indices)
+    # summed_weights_squared = core.summed_adjoint_slice_by_nearest(volume_size, weights**2, grid_point_indices)
 
     # return estimate, summed_weights_squared, residuals_summed1, residuals_summed2, C_squared_summed
     # return compute_mean_least_squares_rhs_lhs_with_weights(image_weights, weights, residuals, C_squared, grid_point_indices, corrected_images, volume_size )
@@ -565,16 +565,16 @@ def compute_mean_least_squares_rhs_lhs_with_weights_last_step(image_weights, wei
 
 
     res_summed = jnp.linalg.norm(residuals[...,1:], axis=-1).reshape(-1)
-    residuals_summed2 = core.summed_adjoint_projections_nearest(volume_size, res_summed.reshape(-1)**1, grid_point_indices.reshape(-1))
+    residuals_summed2 = core.summed_adjoint_slice_by_nearest(volume_size, res_summed.reshape(-1)**1, grid_point_indices.reshape(-1))
 
     res_summed = jnp.abs(residuals[...,0]) 
 
-    residuals_summed1 = core.summed_adjoint_projections_nearest(volume_size, res_summed.reshape(-1)**1, grid_point_indices.reshape(-1))
+    residuals_summed1 = core.summed_adjoint_slice_by_nearest(volume_size, res_summed.reshape(-1)**1, grid_point_indices.reshape(-1))
 
-    C_squared_summed = core.summed_adjoint_projections_nearest(volume_size, C_squared.reshape(-1)**1, grid_point_indices.reshape(-1))
+    C_squared_summed = core.summed_adjoint_slice_by_nearest(volume_size, C_squared.reshape(-1)**1, grid_point_indices.reshape(-1))
 
-    estimate = core.summed_adjoint_projections_nearest(volume_size, corrected_images * weights, grid_point_indices)
-    summed_weights_squared = core.summed_adjoint_projections_nearest(volume_size, weights**2, grid_point_indices)
+    estimate = core.summed_adjoint_slice_by_nearest(volume_size, corrected_images * weights, grid_point_indices)
+    summed_weights_squared = core.summed_adjoint_slice_by_nearest(volume_size, weights**2, grid_point_indices)
     return estimate, summed_weights_squared, residuals_summed1, residuals_summed2, C_squared_summed
 
 batch_compute_mean_least_squares_rhs_lhs_with_weights_last_step = jax.vmap(compute_mean_least_squares_rhs_lhs_with_weights_last_step, in_axes = (0, 0, 0, 0, None, None, None, None))

@@ -12,6 +12,9 @@ from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(np)
 FINUFFT_EPS = 1e-8
 
+# This code simulated the scattering potential of a molecule using a nufft, and the
+# atomic positions, and the atomic shape function that was experimentally determined in a paper
+# 
 
 ## The real space grid is always defined
 # [ -N/2,- N/2 +1 ......, -N/2 + N-1] * voxel_size
@@ -314,7 +317,7 @@ def get_random_points_in_unit_ball(N):
     return random_in_sphere
 
 
-def generate_synthetic_molecule_on_grid(radius, N, voxel_size = 1):
+def simulate_scattering_potential_on_grid(radius, N, voxel_size = 1):
     N_atoms = choose_number_of_atoms(radius)
     coords = get_random_points_in_unit_ball(N_atoms) * radius
     coords_on_grid = (np.round(coords/voxel_size) + N/2).astype(int)
@@ -357,17 +360,6 @@ def generate_molecule_spectrum_from_pdb_id(molecule, voxel_size, grid_size, forc
     return ft_mol
 
 
-### CTF functions - OLD, DON'T USE THESE
-def CTF_1D(k, defocus, wavelength, Cs, alpha, B):
-    return np.sin(-np.pi*wavelength*defocus * k**2 + np.pi/2 * Cs * wavelength**3 * k **4  - alpha) * np.exp(- B * k**2 / 4)
-
-def CTF(psi, defocus, wavelength, Cs, alpha, B):
-    k = np.linalg.norm(psi, axis = -1)
-    return CTF_1D(k, defocus, wavelength, Cs, alpha, B)
-
-def get_CTF_on_grid(image_shape, voxel_size, defocus, wavelength, Cs, alpha, B):
-    psi = ftu.get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled = True)
-    return CTF(psi, defocus, wavelength, Cs, alpha, B)
 
 def voltage_to_wavelength(voltage):
     # Borrowed from ASPIRE https://github.com/ComputationalCryoEM/ASPIRE-Python
@@ -377,15 +369,4 @@ def voltage_to_wavelength(voltage):
     :return: float, The electron wavelength in nm.
     """
     return 12.2643247 / np.sqrt(voltage * 1e3 + 0.978466 * voltage ** 2)
-
-
-
-def main():
-    radius = 25
-    directory = "/Users/marcaurele/Documents/datasets/synthetic_pdb_data_" + str(radius)
-    
-    
-    
-if __name__ == "__main__":
-    main()
 

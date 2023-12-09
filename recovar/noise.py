@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 # Neither solution implemented here are very satisfying. Guessing noise in presence of heterogeneity is not trivial, since the residual doesn't seem like the correct way to do it.
 # It makes me think we should have "noise pickers".
 
-# Assume white noise, and guess variance of noise by looking at high frequency, assuming noise dominates over there
 
 # Perhaps it should be mean at low freq and median at high freq?
 mean_fn = np.mean
@@ -42,8 +41,6 @@ def estimate_white_noise_variance_from_mask(experiment_dataset, volume_mask, bat
     _, predicted_pixel_variances, _ = estimate_noise_variance_from_outside_mask_v2(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp')
     return np.median(predicted_pixel_variances)
 
-
-    
 
 
 

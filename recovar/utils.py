@@ -168,7 +168,6 @@ def get_batch_of_indices(n_images, batch_size, k):
 
 
 
-
 def jax_has_gpu():
     try:
         _ = jax.device_put(jax.numpy.ones(1), device=jax.devices('gpu')[0])

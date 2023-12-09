@@ -1,7 +1,7 @@
 import numpy 
 
-# I did this so I could swap backends between numpy and jax.numpy easily.
-# Unclear whether it's of any use anymore
+# I did this a long time ago I could swap backends between numpy and jax.numpy easily.
+# Unclear whether it's of any use anymore, and it makes the import very wonky.
 class fourier_transform_utils:
     def __init__(self, numpy_backend = numpy) -> None:
         self.np = numpy_backend

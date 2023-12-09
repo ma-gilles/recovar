@@ -142,6 +142,8 @@ def set_standard_mask(D, dtype):
     
 # Image loader functions - supposed to give quick access to images to GPU
 
+# I don't remember why I use two different loaders here.
+
 # This might work. 
 def numpy_collate(batch):
   if isinstance(batch[0], np.ndarray):
@@ -172,7 +174,7 @@ class NumpyLoader(torch.utils.data.DataLoader):
     
 # A dataset class, that includes images and all other information
 class CryoEMDataset:
-    def __init__(self, volume_shape, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.compute_ctf_cryodgrn_wrapper, dtype = np.complex64, rotation_dtype = np.float64, dataset_indices = None  ):
+    def __init__(self, volume_shape, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.evaluate_ctf_wrapper, dtype = np.complex64, rotation_dtype = np.float64, dataset_indices = None  ):
 
         self.voxel_size = voxel_size
 
@@ -282,7 +284,7 @@ class CryoEMDataset:
         return covariance_core.get_per_image_tight_mask(mask, self.rotation_matrices[indices], self.image_stack.mask, self.volume_mask_threshold, self.image_shape, self.volume_shape, self.grid_size, self.padding, disc_type = 'linear_interp',  binary = binary, soften = soften)
 
 
-
+# Loads dataset that are stored in the cryoDRGN format
 def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False):
     
     # if ind is None:
@@ -309,21 +311,9 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
     voxel_sizes = ctf_params[:,0]
     assert np.all(np.isclose(voxel_sizes - voxel_sizes[0], 0))
     voxel_size = float(voxel_sizes[0])
-    CTF_fun = core.compute_ctf_cryodgrn_wrapper
+    CTF_fun = core.evaluate_ctf_wrapper
     return CryoEMDataset( 3 * [dataset.D], dataset, voxel_size,
                               np.array(posetracker.rots), np.array(posetracker.trans), ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind)
-
-# def get_dataset_from_result_dict(result_dict, lazy = False):
-#     return get_split_datasets(result_dict['particles_file'],
-#                               result_dict['poses_file'],
-#                               result_dict['ctf_file'],
-#                               result_dict['datadir'],
-#                               result_dict['uninvert_data'],
-#                               result_dict['ind_file'],
-#                               result_dict['padding'],
-#                               result_dict['n_images'],
-#                               result_dict['ind_split'],
-#                               lazy = lazy)
 
 def get_split_datasets_from_dict(dataset_loader_dict, ind_split, lazy = False):
     return get_split_datasets(**dataset_loader_dict, ind_split=ind_split, lazy =lazy)
@@ -337,8 +327,6 @@ def get_split_datasets(particles_file, poses_file, ctf_file, datadir,
         cryos.append(load_cryodrgn_dataset(particles_file, poses_file, ctf_file , datadir = datadir, n_images = n_images, ind = ind, lazy = lazy, padding = padding, uninvert_data = uninvert_data))
     
     return cryos
-
-
 
 
 def get_split_indices(particles_file, ind_file = None):

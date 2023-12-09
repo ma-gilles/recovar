@@ -23,10 +23,9 @@ def generate_conformation_from_reweighting(cryos, means, cov_noise, zs, cov_zs, 
     likelihood_threshold = latent_density.get_log_likelihood_threshold(k = zs.shape[-1]) if likelihood_threshold is None else likelihood_threshold
 
     weights = latent_density.compute_weights_of_conformation_2(latent_points, zs, cov_zs,likelihood_threshold = likelihood_threshold )
-    print("likelihood_threshold:", likelihood_threshold)
-
-    print(np.sum(weights,axis=0))
-    print(np.sum(weights))
+    logger.info(f"likelihood_threshold: {likelihood_threshold}")
+    logger.info(f"weights per state: {np.array2string(np.sum(weights,axis=0))}")
+    logger.info(f"summed weights {np.sum(weights)}")
 
     all_weights_0 = []
     all_weights_1 = []

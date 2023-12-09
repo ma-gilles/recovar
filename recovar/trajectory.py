@@ -88,6 +88,7 @@ def find_trajectory_in_latent_space(density, z_st, z_end, z_to_grid, grid_to_z, 
 def evaluate_function_off_grid(density, pts):
     return scipy.ndimage.map_coordinates(density, pts.T, order = 1, cval = np.finfo(np.float64).max )
 
+# NOTE that this is not used for optimization purposes. It is used to find the curve which is orthogonal to the level curves of the solution of the Eikonal equation.
 def gradient_descent_nd(travel_time, x_st, x_end, dx, step_size = 0.25, n_theta = 10, max_steps = 2000, ):
     
     def f_lambda(pts):

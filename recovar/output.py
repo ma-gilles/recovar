@@ -25,18 +25,9 @@ def resample_trajectory(gt_vols, n_vols_along_path = 6):
     return indices_along_path
 
 
-# def make_output_folders(output_folder):
-#     subdirs = ['plots/', 'paths/', 'volumes/', 'kmeans/', 'kmeans12/']            
-#     mkdir_safe(output_folder)
-#     [mkdir_safe(output_folder + sub) for sub in subdirs]
-
 
 def mkdir_safe(folder):
     os.makedirs(folder, exist_ok = True)
-    # isExist = os.path.exists(folder)
-    # if not isExist:
-    #     os.mkdir(folder)
-
     
 def save_volume(vol, path, volume_shape, from_ft = True):
     if from_ft:
@@ -57,7 +48,6 @@ def plot_on_same_scale(cs, xs, labels,plot_folder, ):
     k = 0 
 
     for curve in cs:
-        
         plt.plot(np.linspace(0,1, curve.size), curve / np.max(curve), label = labels[k], lw = 4)
         k+=1
     plt.legend()

@@ -10,6 +10,9 @@ from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(np)
 from recovar import regularization, utils
 colors = dict(mcolors.BASE_COLORS, **mcolors.CSS4_COLORS)
+
+# I copy pasted this from an older project. Most of this is probably useless
+
 names_to_show = { "diagonal": "diagonal", "wilson": "Wilson", "diagonal masked": "diagonal masked", "wilson masked": "Wilson masked" }
 colors_name = { "diagonal": "cornflowerblue", "wilson": "lightsalmon", "diagonal masked": "blue", "wilson masked": "orangered"  }
 plt.rcParams['text.usetex'] = True
@@ -594,58 +597,6 @@ def export_legend(legend, filename="legend.png", expand=[-5,-5,5,5]):
     bbox = bbox.transformed(fig.dpi_scale_trans.inverted())
     fig.savefig(filename, dpi="figure", bbox_inches=bbox)
 
-def make_images_for_paper(denoised_images, clean_image, noisy_image, mask, grid_size, voxel_size, paper_save_directory, experiment_name, log_SNR, save_to_file):
-        
-    global_name = paper_save_directory  + experiment_name + "_" + str(log_SNR)
-
-    from fourier_transform_utils import get_inverse_fourier_transform, get_fourier_transform
-    ### BELOW THIS IS PLOTTING.
-    fsc_curves = {};   resolutions = {}
-    fsc_curves_masked = {}; 
-    names_to_plot = ["diagonal", "wilson"]
-    clean_image_ft = get_fourier_transform(clean_image, voxel_size)
-
-    for name in names_to_plot:
-        denoised_images_ft = get_fourier_transform(denoised_images[name], voxel_size)
-        fsc_curves[name] = FSC(denoised_images_ft, clean_image_ft)
-
-        denoised_masked_ft = get_fourier_transform(denoised_images[name] * mask, voxel_size)
-        fsc_curves_masked[name] = FSC(denoised_masked_ft,clean_image_ft)
-
-        score = fsc_score(fsc_curves_masked[name], grid_size, voxel_size)
-        resolutions[name] = 1/score
-
-
-    names_in_denoised = ["diagonal", "wilson"]
-    images_to_plot = {}
-    for name in names_in_denoised:
-        images_to_plot[name] = denoised_images[name]
-    images_to_plot["clean"] = clean_image
-
-    plot_all_images_for_paper(images_to_plot, 1,  global_name, scale_image_name = "clean", voxel_size = voxel_size, save_to_file=save_to_file)
-    plot_all_images_for_paper({"noisy": noisy_image}, 1, global_name,  scale_image_name = "noisy",voxel_size = voxel_size, save_to_file=save_to_file)
-
-
-    fsc_curves_to_plot = {}
-    plot_names = { "diagonal": "diagonal", "wilson" : "wilson" } #, "wilson_cheat_fixf": "wilson with estimated g"}
-
-    for name in plot_names:
-        fsc_curves_to_plot[plot_names[name]] = fsc_curves[name]
-
-    for name in plot_names:
-        fsc_curves_to_plot[plot_names[name] + " masked"] = fsc_curves_masked[name]
-
-    plot_fsc_function_paper(fsc_curves_to_plot , global_name, names_in_denoised, grid_size, voxel_size,   save_to_file)
-
-
-    kk = pd.DataFrame(resolutions, ["resolution"])
-    score_df = kk.T
-    score_df
-    df_styled = score_df.style.highlight_min(subset = ["resolution"], color = "green")
-    #plt.savefig('mytable.png')
-    display(df_styled)
-    if save_to_file:
-        dfi.export(df_styled, paper_save_directory + experiment_name + "scores_table"+ str(log_SNR) + ".png")
 
 
 # Plotting for sample figures

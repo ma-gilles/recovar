@@ -10,10 +10,12 @@ logger = logging.getLogger(__name__)
 def get_log_likelihood_threshold(k = 4, q=0.954499736104):
     return chi2.ppf(q,df=k)
 
-def compute_weights_of_conformation_2(latent_points, zs, cov_zs,likelihood_threshold = 1e-5 ):
+def compute_weights_of_conformation_2(latent_points, zs, cov_zs,likelihood_threshold ):
     log_likelihoods = compute_latent_quadratic_forms_in_batch(latent_points, zs, cov_zs)
     weights = np.array(1.0 * ( log_likelihoods <= likelihood_threshold))
     return weights
+
+# Handling change between latent space and the grid 
 
 def pca_coord_to_grid(x, bounds, num_points, to_int = False):
     v =  (x - bounds[:,0] ) / ( bounds[:,1]  - bounds[:,0] ) * (num_points - 1)    
@@ -39,6 +41,7 @@ def get_z_to_grid(bounds, num_points ):
 def get_grid_z_mappings(bounds, num_points):
     return get_grid_to_z(bounds, num_points ), get_z_to_grid(bounds, num_points )
 
+# Computes density in pca_dim_max dimensions on grid
 def compute_latent_space_density(zs, cov_zs, pca_dim_max = 4, num_points = 50):
     
     if zs.shape[1] != pca_dim_max:
