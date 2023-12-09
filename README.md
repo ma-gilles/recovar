@@ -34,13 +34,8 @@ Here is a set of commands which runs on our university cluster (Della), but may 
     git clone https://github.com/ma-gilles/recovar.git
     python -m ipykernel install --user --name=recovar # if you want to use jupyter notebooks
 
-For a newer, and pretty stable version of the code, also checkout this commit:
-
-    git pull
-    git checkout f319a7d97585a6b99c9d14a1afa38f32dd945f5e
 
 The code was tested on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
-
 
 The code for the paper was run on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
 
