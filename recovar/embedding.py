@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import functools, time, jax
 
-from recovar import core, covariance_core, latent_density, homogeneous, constants, utils
+from recovar import core, covariance_core, latent_density, homogeneous, constants, utils, dataset
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 
@@ -46,8 +46,8 @@ def generate_conformation_from_reprojection(xs, mean, u ):
 
 def compute_per_image_embedding_from_result(result, zdim, gpu_memory = None):
     gpu_memory = utils.get_gpu_memory_total() if gpu_memory is None else gpu_memory
-    options = utils.make_algorithm_options(results['input_args'])
-    cryos = dataset.load_dataset_from_args(results['input_args'])
+    options = utils.make_algorithm_options(result['input_args'])
+    cryos = dataset.load_dataset_from_args(result['input_args'])
     
     return get_per_image_embedding(result['means']['combined'], result['u']['rescaled'], result['s']['rescaled'], zdim, result['cov_noise'], cryos, result['volume_mask'], gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = options["contrast"], to_real = True, parallel_analysis = False, compute_covariances = True )
 

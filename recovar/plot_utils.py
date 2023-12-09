@@ -6,8 +6,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import dataframe_image as dfi
 import pandas as pd
+import jax.numpy as jnp
 from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(np)
+ftu = fourier_transform_utils(jnp)
 from recovar import regularization, utils
 colors = dict(mcolors.BASE_COLORS, **mcolors.CSS4_COLORS)
 
@@ -213,8 +214,7 @@ def plot_volume_sequence(volumes,cryos):
     return
     
     
-    
-    
+
 
 def plot_cov_results(u,s, max_eig = 40, savefile = None):
     
@@ -251,27 +251,24 @@ def plot_cov_results(u,s, max_eig = 40, savefile = None):
     if 'parallel_analysis' in s:
         plt.semilogy(np.ones_like(s[key][:max_eig]) * s['parallel_analysis'][0], "-"+m[m_idx], label = "par0", alpha = 0.5, ms = 15)
 
-    # ax.xaxis.grid(color='gray', linestyle='dashed')
-    # ax.yaxis.grid(color='gray', linestyle='dashed')        
     plt.title('eigenvalues')
     plt.legend()
     if savefile is not None:
         plt.savefig(savefile + 's.png')
 
-    angles ={}
-    plt.figure(figsize = (6,6))
-    m = np.repeat(["o", "s", "D", "*", 'x', '>'], 3, 0)
     gt_key = "gt"
+    angles ={}
     if gt_key in u:
-        key_gt = gt_key
+        plt.figure(figsize = (6,6))
+        m = np.repeat(["o", "s", "D", "*", 'x', '>'], 3, 0)
         m_idx = 0
         for key in u.keys():
-            if key == key_gt:
+            if key == gt_key:
                 continue
             pkey = key  
 
             max_subspace_size = np.min([15, u[key].shape[-1]])
-            angles[key] = utils.subspace_angles(u[key], u[key_gt], max_subspace_size)
+            angles[key] = utils.subspace_angles(u[key], u[gt_key], max_subspace_size)
             plt.plot( np.arange(1,1+len(angles[key])), angles[key], "-"+m[m_idx], label = pkey, alpha = 0.5,  ms = 15)
             m_idx = (m_idx + 1) % len(m)
         plt.ylim([-0.05,1.05])
@@ -282,6 +279,7 @@ def plot_cov_results(u,s, max_eig = 40, savefile = None):
     return angles
 
 def plot_mean_fsc(results,cryos):
+
     ax, score = plot_fsc_new(results['means']['corrected0'], results['means']['corrected1'], cryos[0].volume_shape, cryos[0].voxel_size,  curve = None, ax = None, threshold = 1/7, filename = None, name = "unmasked")
     ax, score_masked = plot_fsc_new(results['means']['corrected0'], results['means']['corrected1'], cryos[0].volume_shape, cryos[0].voxel_size,  curve = None, ax = ax, threshold = 1/7, filename = None, volume_mask = results['volume_mask'], name = "masked")
     plt.rcParams.update({
@@ -339,10 +337,11 @@ def plot_mean_result(cryo, means, cov_noise):
         
         
 def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = None, threshold = 1/7, filename = None, volume_mask = None, name = ""):
-    plt.figure(figsize=(6, 5))
     grid_size = volume_shape[0]
     input_ax_is_none = ax is None
-    ax = plt.gca() if input_ax_is_none else ax
+    if input_ax_is_none:
+        plt.figure(figsize=(6, 5))
+        ax = plt.gca() 
 
     if volume_mask is not None:
         image1 = ftu.get_idft3(image1.reshape(volume_shape))
@@ -370,7 +369,6 @@ def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = N
         n_dots_in_line = 20
         ax.plot(np.ones(n_dots_in_line) * score, np.linspace(0,1, n_dots_in_line), "-", color = color, label= label)
         ax.plot(freq, threshold * np.ones(freq.size), "k--")
-        plt.plot(freq, threshold * np.ones(freq.size), "k--")
     else:
         score = None
 
@@ -385,9 +383,9 @@ def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = N
         plt.xticks(fontsize=10) 
         # plt.legend("AA{-1}) = "+"{:.2f}".format(threshold))
         # plt.title("FSC("  + "{:.2f}".format(1 / score)  + "AA{-1}) = "+ "{:.2f}".format(threshold))
-        if threshold is not None:  
-            plt.plot(freq, threshold * np.ones(freq.size), "k--")
-            ax.legend()
+    if threshold is not None:  
+        ax.plot(freq, threshold * np.ones(freq.size), "k--")
+        ax.legend()
 
     if filename is not None:
         plt.savefig(filename )
@@ -430,22 +428,9 @@ def compute_and_plot_fsc(image1, image2, volume_shape = None, voxel_size =1):
     
 ### PLOTTING STUFF
 def FSC(image1, image2, r_dict = None):
-    # Old verison from me:
-    r_dict = ftu.compute_index_dict(image1.shape) if r_dict is None else r_dict
-    top_img = image1 * np.conj(image2)
-    top = ftu.compute_spherical_average(top_img, r_dict)
-    
-    # if np.linalg.norm(np.imag(top)) / np.linalg.norm(np.real(top)) > 1e-6:
-        #warnings.message("FDC not real. Normalized error:" + str( np.linalg.norm(np.imag(top)) / np.linalg.norm(np.real(top))))
-        # warnings.warn("FDC not real. Normalized error:" + str( np.linalg.norm(np.imag(top)) / np.linalg.norm(np.real(top))))
-        # print("FDC not real. Normalized error:", np.linalg.norm(np.imag(top)) / np.linalg.norm(np.real(top)))
-    top = np.real(top)
-    bot = np.sqrt(ftu.compute_spherical_average(np.abs(image1)**2, r_dict) * ftu.compute_spherical_average(np.abs(image2)**2, r_dict) )
-    # To get rid of annoying warning.
-    bot_pos = np.where( np.abs(bot) > 0, bot, 1)
-    bin_fsc = np.where( bot > 0 , top / bot_pos, 0)
-    return bin_fsc
-
+    from recovar import regularization
+    fsc = regularization.get_fsc_gpu(image1, image2, image1.shape, False, frequency_shift = 0 )
+    return fsc
 
 
 
