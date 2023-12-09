@@ -1,5 +1,7 @@
 # RECOVAR: Regularized covariance estimation for cryo-EM heterogeneity analysis
 
+[See preprint here](https://www.biorxiv.org/content/10.1101/2023.10.28.564422v1)
+
 [Installation](#installation)
 
 Running RECOVAR:
@@ -21,16 +23,23 @@ Also:
 
 ## Installation 
 To run this code, CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html#) are required. See information about JAX installation [here](https://jax.readthedocs.io/en/latest/installation.html).
-
+Assuming you already have CUDA, installation should take < 5 minutes.
 Here is a set of commands which runs on our university cluster (Della), but may need to be tweaked to run on other clusters.
 
     # module load cudatoolkit/12.2 # You need to load or install CUDA before installing JAX
     conda create --name recovar python=3.9
     conda activate recovar
     pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html # You may need to pass ax[cuda11_pip] if you use cuda v11
-    pip install cryodrgn mrcfile scikit-fmm prody finufft scikit-image tensorflow-cpu matplotlib-scalebar dataframe-image umap-learn[plot] sklearn
+    pip install cryodrgn mrcfile scikit-fmm prody finufft scikit-image tensorflow-cpu matplotlib-scalebar dataframe-image umap-learn[plot] scikit-learn psutil
     git clone https://github.com/ma-gilles/recovar.git
     python -m ipykernel install --user --name=recovar # if you want to use jupyter notebooks
+
+For a newer, and pretty stable version of the code, also checkout this commit:
+
+    git pull
+    git checkout f319a7d97585a6b99c9d14a1afa38f32dd945f5e
+
+The code was tested on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
 
 
 The code for the paper was run on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
@@ -40,7 +49,7 @@ The code for the paper was run on [this commit](https://github.com/ma-gilles/rec
 
 ## I. Preprocessing 
 
-The input layer of RECOVAR is borrowed directly from the excellent [cryoDRGN toolbox](https://cryodrgn.cs.princeton.edu/). 
+The input interface of RECOVAR is borrowed directly from the ex)cellent [cryoDRGN toolbox](https://cryodrgn.cs.princeton.edu/). 
 Particles, poses and CTF must be prepared in the same way, and below is copy-pasted part of 
 [cryoDRGN's documentation](https://github.com/ml-struct-bio/cryodrgn#2-parse-image-poses-from-a-consensus-homogeneous-reconstructiqqon).
 CryoDRGN is a dependency, so you should be able to run the commands below after ``conda activate recovar``.
@@ -375,6 +384,19 @@ If you use this software for analysis, please cite:
     }
 
 
+
+## Citation
+
+If you use this software for analysis, please cite:
+
+    @article{gilles2023bayesian,
+      title={A Bayesian Framework for Cryo-EM Heterogeneity Analysis using Regularized Covariance Estimation},
+      author={Gilles, Marc Aurele T and Singer, Amit},
+      journal={bioRxiv},
+      pages={2023--10},
+      year={2023},
+      publisher={Cold Spring Harbor Laboratory}
+    }
 
 ## Contact
 
