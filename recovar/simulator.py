@@ -121,12 +121,28 @@ def nonuniform_rotation_sampling(n_images, grid_size, seed = 0 ):
     rotation_matrices = [] 
     xs = []
     for rot_idx in range(n_images):
-        y = np.random.randn(1)*np.pi *0.1
-        x = np.random.randn(1)*np.pi 
+
+        y = np.random.randn(1)*np.pi * 0.02 + np.pi/2
+        x = np.random.randn(1)*np.pi * 0.1 + np.pi/2
+
         random_rot = Rotation.from_euler('xyz', [y[0],x[0],0 ] )
         rotation_matrices.append(random_rot.as_matrix())
         xs.append(x)
+
+    # rotation_matrices[0] = Rotation.from_euler('xyz', [0,0,0] ).as_matrix()
+    # rotation_matrices[1] = Rotation.from_euler('xyz', [0,np.pi/2,0] ).as_matrix()
+    # rotation_matrices[2] = Rotation.from_euler('xyz', [np.pi/2,0,0] ).as_matrix()
+    # rotation_matrices[3] = Rotation.from_euler('xyz', [0,0,np.pi/2] ).as_matrix()
+    # rotation_matrices[4] = Rotation.from_euler('xyz', [0,0,0] ).as_matrix()
+    # rotation_matrices[5] = Rotation.from_euler('xyz', [0,np.pi,0] ).as_matrix()
+    # rotation_matrices[6] = Rotation.from_euler('xyz', [np.pi,0,0] ).as_matrix()
+    # rotation_matrices[7] = Rotation.from_euler('xyz', [0,0,np.pi] ).as_matrix()
+
     rotation_matrices = np.array(rotation_matrices)
+    # uniform_rots = uniform_rotation_sampling(n_images, grid_size, seed = seed)
+    # rand_pick = np.random.randint(0, n_images, n_images//10)
+    # rotation_matrices[rand_pick,:] = uniform_rots[rand_pick,:]
+
     return rotation_matrices
 
 

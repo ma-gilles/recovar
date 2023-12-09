@@ -119,7 +119,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
             path_folder = output_folder_kmeans + 'path' + str(pair_idx) + '/'        
             o.mkdir_safe(path_folder)
-
+            print("HERE")
             o.make_trajectory_plots_from_results(results, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =zdim, compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold, adaptive = adaptive)        
             logger.info(f"path {pair_idx} done")
     else:
@@ -181,4 +181,4 @@ def pick_pairs(centers, n_pairs):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
-    analyze(args.result_dir, output_folder = args.outdir, zdim=  args.zdim, n_clusters = args.n_clusters, n_paths= args.n_trajectories, skip_umap = args.skip_umap, q=args.q, n_std=args.n_std , args.adaptive)
+    analyze(args.result_dir, output_folder = args.outdir, zdim=  args.zdim, n_clusters = args.n_clusters, n_paths= args.n_trajectories, skip_umap = args.skip_umap, q=args.q, n_std=args.n_std , adaptive = args.adaptive)

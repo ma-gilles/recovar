@@ -30,6 +30,12 @@ def frequencies_to_vol_indices(vol_indices, vol_shape):
     mid_grid =  (vol_shape//2 +  (vol_shape%2 ==1) * 1).astype(int)
     return vol_indices + mid_grid
 
+def vec_indices_to_frequencies(vec_indices, vol_shape):
+    return vol_indices_to_frequencies(vec_indices_to_vol_indices(vec_indices, vol_shape), vol_shape)
+
+def frequencies_to_vec_indices(frequencies, vol_shape):
+    return vol_indices_to_vec_indices(frequencies_to_vol_indices(frequencies, vol_shape), vol_shape)
+
 def check_frequencies_in_bound(frequencies,grid_size):
     return jnp.prod((frequencies >= -grid_size/2 ) * (frequencies < grid_size/2), axis = -1).astype(bool)
 
@@ -37,6 +43,7 @@ def check_vol_indices_in_bound(vol_indices,grid_size):
     return jnp.prod((vol_indices >= 0 ) * (vol_indices < grid_size ), axis = -1).astype(bool)
 
 
+## Some similar function used for adaptive discretization: find nearby gridpoints
 @functools.partial(jax.jit, static_argnums=[1])
 def find_frequencies_within_grid_dist(coords, max_grid_dist: int ):
     # k 
@@ -81,23 +88,14 @@ batch_batch_find_frequencies_within_grid_dist= jax.vmap(batch_find_frequencies_w
 def distance_to_max_grid_dist(dist):
     return np.ceil(dist).astype(int)
 
-## If I want max dist of h. I should go +/-k in all directions. That is a grid of (2k+1)**3 
 
-
-def vec_indices_to_frequencies(vec_indices, vol_shape):
-    return vol_indices_to_frequencies(vec_indices_to_vol_indices(vec_indices, vol_shape), vol_shape)
-
-def frequencies_to_vec_indices(frequencies, vol_shape):
-    return vol_indices_to_vec_indices(frequencies_to_vol_indices(frequencies, vol_shape), vol_shape)
 
 @jax.jit
-def slice_volume(volume_vec, plane_indices_on_grid):
+def slice_volume_by_nearest(volume_vec, plane_indices_on_grid):
     return volume_vec[plane_indices_on_grid] 
 
 # Used to project the mean
-batch_slice_volume = jax.vmap(slice_volume, (None, 0))
-# batch_slice_volumes = jax.vmap(slice_volume, (None, 0))
-
+batch_slice_volume_by_nearest = jax.vmap(slice_volume_by_nearest, (None, 0))
 
 # Computes \sum_i S_i v_i where S_i: N^2 -> N^3 is sparse, v_i \in N^2
 @functools.partial(jax.jit, static_argnums=0)
@@ -124,7 +122,7 @@ def sum_adj_forward_model(volume_size, images, CTF_val_on_grid_stacked, plane_in
 
 @jax.jit
 def forward_model(volume_vec, CTF_val_on_grid_stacked, plane_indices_on_grid_stacked):
-    return batch_slice_volume(volume_vec, plane_indices_on_grid_stacked) * CTF_val_on_grid_stacked
+    return batch_slice_volume_by_nearest(volume_vec, plane_indices_on_grid_stacked) * CTF_val_on_grid_stacked
 
 
 @jax.jit
