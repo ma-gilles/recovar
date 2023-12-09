@@ -824,8 +824,11 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     volume_mask = jnp.array(volume_mask).astype(experiment_dataset.dtype_real)
     mean_estimate = jnp.array(mean_estimate).astype(experiment_dataset.dtype)
     jax_random_key = jax.random.PRNGKey(0)
+
     lhs =0
     rhs =0 
+    summed_batch_kron_cpu = jax.jit(summed_batch_kron, backend='cpu')
+
 
     for experiment_dataset in experiment_datasets:
         data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
@@ -849,7 +852,9 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
                                                                             experiment_dataset.image_stack.process_images,
                                                                         experiment_dataset.CTF_fun, parallel_analysis = parallel_analysis,
                                                                         jax_random_key =jax_random_key)
-
+            #
+            # lhs += summed_batch_kron_cpu(lhs_this)
+            
             lhs +=lhs_this
             rhs +=rhs_this
         del lhs_this, rhs_this
@@ -942,6 +947,10 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
     return lhs, rhs
     
 batch_kron = jax.vmap(jnp.kron, in_axes=(0,0))
+
+def summed_batch_kron(X):
+    return jnp.sum(batch_kron(X,X), axis=0)
+
 batch_x_T_y = jax.vmap(  lambda x,y : jnp.conj(x).T @ y, in_axes = (0,0))
 
 def summed_outer_products(AU_t_images):

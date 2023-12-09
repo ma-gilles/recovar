@@ -250,3 +250,5 @@ def compute_masked_fscs(H0, B0, H1, B1, prior, volume_shape, volume_mask):
     _, fsc, _ = compute_fsc_prior_gpu_v2(volume_shape, volumes1_masked, volumes2_masked, H0 , prior, frequency_shift = 0)
 
     return fsc
+
+batch_average_over_shells = jax.vmap(average_over_shells, in_axes = (0,None,None))
