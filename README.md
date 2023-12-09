@@ -33,6 +33,11 @@ Here is a set of commands which runs on our university cluster (Della), but may 
     python -m ipykernel install --user --name=recovar # if you want to use jupyter notebooks
 
 
+The code for the paper was run on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
+
+
+
+
 ## I. Preprocessing 
 
 The input layer of RECOVAR is borrowed directly from the excellent [cryoDRGN toolbox](https://cryodrgn.cs.princeton.edu/). 
@@ -306,7 +311,7 @@ Usage example:
 
 ## TLDR
  (WIP - Untested)
-A short example illustrating the steps to run the code on EMPIAR-10076. Read above for more details:
+A short example illustrating the steps to run the code on EMPIAR-10076. Assuming you have downloaded the code and have a GPU, the code should take less than an hour to run, and less than 10 minutes if you downsample to 128 instead (exact running time depends on your hardware). and  Read above for more details:
 
     # Downloaded poses from here: https://github.com/zhonge/cryodrgn_empiar.git
     git clone https://github.com/zhonge/cryodrgn_empiar.git
@@ -347,7 +352,6 @@ The output should be the same as [this notebook](output_visualization_empiar1007
 I hope some developers find parts of the code useful for their projects. See [this notebook](recovar_coding_tutorial.ipynb) for a short tutorial.
 
 
-
 ## Limitations
 
 - *Symmetry*: there is currently no support for symmetry. If you got your poses through symmetric refinement, it will probably not work. It should probably work if you make a symmetry expansion of the particle stack, but I have not tested it.
@@ -355,6 +359,22 @@ I hope some developers find parts of the code useful for their projects. See [th
 - *ignore-zero-frequency*: I haven't thought much about the best way to do this. I would advise against using it for now.
 - *Importing mask from other software*: there might be axes index conventions which are different across software. Should be pretty to easy to see if this is the case by trying it and looking at output from [this notebook](recovar_coding_tutorial.ipynb)
 - *Other ones, probably?*: if you run into issues, please let me know. 
+
+
+## Citation
+
+If you use this software for analysis, please cite:
+
+    @article{gilles2023bayesian,
+      title={A Bayesian Framework for Cryo-EM Heterogeneity Analysis using Regularized Covariance Estimation},
+      author={Gilles, Marc Aurele T and Singer, Amit},
+      journal={bioRxiv},
+      pages={2023--10},
+      year={2023},
+      publisher={Cold Spring Harbor Laboratory}
+    }
+
+
 
 ## Contact
 
