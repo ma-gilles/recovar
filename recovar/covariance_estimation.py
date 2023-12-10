@@ -828,6 +828,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     lhs =0
     rhs =0 
     summed_batch_kron_cpu = jax.jit(summed_batch_kron, backend='cpu')
+    logger.info(f"batch size in compute_projected_covariance {batch_size}")
 
 
     for experiment_dataset in experiment_datasets:
@@ -852,12 +853,11 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
                                                                             experiment_dataset.image_stack.process_images,
                                                                         experiment_dataset.CTF_fun, parallel_analysis = parallel_analysis,
                                                                         jax_random_key =jax_random_key)
-            #
+            # lhs_this = jax.device_put(lhs_this, jax.devices("cpu")[0])
             # lhs += summed_batch_kron_cpu(lhs_this)
-            
-            lhs +=lhs_this
-            rhs +=rhs_this
-        del lhs_this, rhs_this
+            lhs += lhs_this
+            rhs += rhs_this
+        # del lhs_this, rhs_this
     del basis
     # Deallocate some memory?
 
@@ -897,7 +897,7 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
     batch = process_fn(batch)
     batch = core.translate_images(batch, translations , image_shape)
 
-    projected_mean = core.get_projected_image(mean_estimate,
+    projected_mean = core.forward_model_from_map(mean_estimate,
                                          CTF_params,
                                          rotation_matrices, 
                                          image_shape, 
@@ -913,7 +913,7 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
     batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
     projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, image_shape)
 
-    AUs = covariance_core.batch_over_vol_get_projected_image(basis,
+    AUs = covariance_core.batch_over_vol_forward_model_from_map(basis,
                                          CTF_params, 
                                          rotation_matrices,
                                          image_shape, 
@@ -943,6 +943,7 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
 
     rhs = outer_products - UALambdaAUs
     rhs = rhs.real.astype(CTF_params.dtype)
+    # return AU_t_AU, rhs
     lhs = jnp.sum(batch_kron(AU_t_AU, AU_t_AU), axis=0)
     return lhs, rhs
     

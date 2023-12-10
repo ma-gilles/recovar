@@ -53,7 +53,6 @@ def compute_per_image_embedding_from_result(result, zdim, gpu_memory = None):
 
 
 
-
 def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True, ignore_zero_frequency = False ):
     
     st_time = time.time()    
@@ -175,7 +174,7 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, eigenv
     batch = process_fn(batch)
     batch = core.translate_images(batch, translations , image_shape)
 
-    projected_mean = core.get_projected_image(mean_estimate,
+    projected_mean = core.forward_model_from_map(mean_estimate,
                                          CTF_params,
                                          rotation_matrices, 
                                          image_shape, 
@@ -289,7 +288,7 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
     batch = process_fn(batch)
     batch = core.translate_images(batch, translations , image_shape)
 
-    projected_mean = core.get_projected_image(mean_estimate,
+    projected_mean = core.forward_model_from_map(mean_estimate,
                                          CTF_params,
                                          rotation_matrices, 
                                          image_shape, 

@@ -317,7 +317,7 @@ def get_average_residual_square_inner(batch, mean_estimate, volume_mask, basis, 
     batch = core.translate_images(batch, translations , image_shape)
     batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
 
-    projected_mean = core.get_projected_image(mean_estimate,
+    projected_mean = core.forward_model_from_map(mean_estimate,
                                          CTF_params,
                                          rotation_matrices, 
                                          image_shape, 
@@ -429,7 +429,7 @@ def get_average_residual_square_inner_v2(batch, mean_estimate, volume_mask, basi
     batch = process_fn(batch)
     batch = core.translate_images(batch, translations , image_shape)
 
-    projected_mean = core.get_projected_image(mean_estimate,
+    projected_mean = core.forward_model_from_map(mean_estimate,
                                          CTF_params,
                                          rotation_matrices, 
                                          image_shape, 

@@ -256,12 +256,15 @@ def adjoint_forward_model_squared_from_map(slices, CTF_params, rotation_matrices
     return u(slices)[0]
 
 
+# @functools.partial(jax.jit, static_argnums=[3,4,5,6,7,8])
+# def forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):
+#     slices = slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)
+#     return slices
 
 
-
-def get_projected_image(mean, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):
-    slices = slice_volume_by_map(mean, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)
-    return slices
+# def forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):
+#     slices = slice_volume_by_map(mean, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)
+#     return slices
 
     
 @functools.partial(jax.jit, static_argnums = [2,3,4,5])    
