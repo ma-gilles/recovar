@@ -45,7 +45,6 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
         
     image_cov_noise = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].image_shape))
 
-    zss = {}
     u['rescaled'],s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], image_cov_noise, dilated_volume_mask, disc_type ='linear_interp', gpu_memory_to_use= gpu_memory_to_use, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False)
 
     if options['ignore_zero_frequency']:
@@ -96,8 +95,14 @@ def pca_by_projected_covariance(cryos, basis, mean, noise_variance, volume_mask,
     basis_size = constants.N_PCS_TO_COMPUTE
     basis = basis[:,:basis_size]
 
+    ####
     memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() -  2*basis_size**4*8/1e9
     batch_size = utils.get_embedding_batch_size(basis, cryos[0].image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate )
+
+    # memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() 
+    # batch_size = utils.get_embedding_batch_size(basis, cryos[0].image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate )
+    # batch_size = batch_size//3
+
     logger.info('batch size for covariance computation: ' + str(batch_size))
 
     covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, noise_variance, batch_size,  disc_type, parallel_analysis = False )
