@@ -45,10 +45,26 @@ class HeterogeneousVolumeDistribution():
         self.probs_of_state = None
         self.percent_outliers = None
         self.compute_probs_of_state()
+        self.u = None
+        self.s = None
 
+        # self.get_u 
 
         self.mean = None
         self.covariance_cols = None
+
+    def get_u(self):
+        if self.u is None:
+            self.compute_u_s()
+        return self.u
+    
+    def get_s(self):    
+        if self.s is None:
+            self.compute_u_s()
+        return self.s
+
+    def compute_u_s(self, contrasted = False):
+        self.u, self.s = self.get_covariance_eigendecomposition(contrasted = contrasted)
 
     def get_probs_of_state(self):
         # if self.probs_of_state is None:
@@ -125,10 +141,7 @@ class HeterogeneousVolumeDistribution():
 #     elif "from_pdb" in image_option:
 #         import simulate_scattering_potential as gsm
 #         gt_volumes = gsm.generate_volumes_from_atom_groups(volume_params, voxel_size, grid_size)
-
 #     return gt_volumes, voxel_size
-
-
 
 # def get_gt_reconstruction(grid_size, voxel_size, padding, exp_name, valid_indices ):
 #     datadir, vol_datadir, fake_vol_exp_name, fake_vol_datadir, indf, label_file, cov_noise_inp, uninvert_data, ctf_pose_datadir = preprocessed_datasets.get_dataset_params(exp_name, on_della=True)
@@ -155,4 +168,6 @@ def get_col_covariance(Xs, X_mean, vec_indices, prob_of_X):
         cov[:,v_idx] = jnp.sum(prob_of_X[...,None] * get_col_covariance_for_many_X_one_index(Xs_j, X_mean, v ), axis =0)
 
     return cov
+
+
 

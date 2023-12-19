@@ -12,9 +12,7 @@ from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(np)
 FINUFFT_EPS = 1e-8
 
-# This code simulated the scattering potential of a molecule using a nufft, and the
-# atomic positions, and the atomic shape function that was experimentally determined in a paper
-# 
+# This code simulated the scattering potential of a molecule using a nufft, and the atomic positions, and the atomic shape function that was experimentally determined in a paper
 
 ## The real space grid is always defined
 # [ -N/2,- N/2 +1 ......, -N/2 + N-1] * voxel_size
@@ -24,8 +22,11 @@ FINUFFT_EPS = 1e-8
 # [ -N/2,- N/2 +1 ......, N/2 -1] / (voxel_size * N )
 # and if  k odd:
 # [ -(N-1)/2 ,- N/2 +1 ......, (N-1)/2] / (voxel_size * N )
+
+# These are the atomic scattering potential coefficients tabulated in:
+# Peng, L-M., et al. "Robust parameterization of elastic and absorptive electron atomic scattering factors." 
+# Acta Crystallographica Section A: Foundations of Crystallography 52.2 (1996): 257-276.
 atom_coeff_path = 'data/atom_coeffs_extended.json'
-#with open('atom_coeffs.json', 'r') as f:
 with open(os.path.join(os.path.dirname(__file__), atom_coeff_path), 'r') as f:
     atom_coeffs = json.load(f)
 
