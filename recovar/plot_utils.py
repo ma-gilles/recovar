@@ -293,6 +293,11 @@ def plot_mean_fsc(results,cryos):
     ax.set_title("mean estimation", fontsize=20)
     return ax
     
+def plot_fsc(cryo, vol1, vol2, mask = None, threshold = 1/7, ax = None):
+    ax, score = plot_fsc_new(vol1, vol2, cryo.volume_shape, cryo.voxel_size,  curve = None, ax = ax, threshold = threshold, filename = None, name = "unmasked", volume_mask = mask)
+    return ax
+    
+    
 
 def plot_mean_result(cryo, means, cov_noise):
     # Check power spectrums

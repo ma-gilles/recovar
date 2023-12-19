@@ -9,12 +9,13 @@ ftu = fourier_transform_utils(jax.numpy)
     
 logger = logging.getLogger(__name__)
 
+
 def make_radial_image(average_image_PS, image_shape, extend_last_frequency = True):
     if extend_last_frequency:
         last_noise_band = average_image_PS[-1]
         average_image_PS = jnp.concatenate( [average_image_PS, last_noise_band * jnp.ones_like(average_image_PS) ] )
     radial_distances = ftu.get_grid_of_radial_distances(image_shape, scaled = False, frequency_shift = 0).astype(int).reshape(-1)
-    prior = average_image_PS[radial_distances]
+    prior = jnp.asarray(average_image_PS)[radial_distances]
     return prior
 
 def find_angle_between_subspaces(v1,v2, max_rank):
