@@ -1,6 +1,6 @@
 # RECOVAR: Regularized covariance estimation for cryo-EM heterogeneity analysis
 
-[See preprint here](https://www.biorxiv.org/content/10.1101/2023.10.28.564422v1)
+[See preprint here](https://www.biorxiv.org/content/10.1101/2023.10.28.564422v1) and recorded talk [here](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s)
 
 [Installation](#installation)
 
