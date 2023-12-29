@@ -146,8 +146,8 @@ def precompute_kernel_stuff(images, rotation_matrices, translations, CTF_params,
 
 # Should this all just be vmapped instead of vmapping each piece? Not really sure.
 # It allocate XWX a bunch of time if I do?
-@functools.partial(jax.jit, static_argnums = [4,7,8])
-def compute_estimate_from_precompute_one(XWX, Z, F, alpha, max_grid_dist, grid_distances, frequencies, volume_shape, pol_degree =1):
+@functools.partial(jax.jit, static_argnums = [4,7,8, 10])
+def compute_estimate_from_precompute_one(XWX, Z, F, alpha, max_grid_dist, grid_distances, frequencies, volume_shape, pol_degree, signal_variance, use_regularization):
 
     # Might have to cast this back to frequencies vs indices frequencies
     near_frequencies = core.find_frequencies_within_grid_dist(frequencies, max_grid_dist)
@@ -176,7 +176,15 @@ def compute_estimate_from_precompute_one(XWX, Z, F, alpha, max_grid_dist, grid_d
     # Guess this is kinda dumb?
     F_summed_neighbor = batch_summed_over_indices(F, near_frequencies_vec_indices, valid_points)
 
-    y_and_deriv = batch_solve_for_m(XWX_summed_neighbor,F_summed_neighbor)
+    # alpha_summed = batch_summed_over_indices(alpha, near_frequencies_vec_indices, valid_points)
+
+    if use_regularization:
+        # frequency_indices = core.vol_indices_to_vec_indices(frequencies, volume_shape[0])
+        regularization = 1 / signal_variance#[frequency_indices]
+    else:
+        regularization = jnp.zeros(frequencies.shape[0], dtype = XWX_summed_neighbor.dtype)
+
+    y_and_deriv = batch_solve_for_m(XWX_summed_neighbor,F_summed_neighbor, regularization )
     
     # values_on_grid = linalg.broadcast_dot( weights, F_summed_neighbor)
 
@@ -209,8 +217,8 @@ batch_Z_grab = jax.vmap(Z_grab, in_axes = (None,0,0,0))
 
 
 @jax.jit
-def solve_for_m(XWX, f):
-    # e1 = jnp.zeros(XWX.shape[0])
+def solve_for_m(XWX, f, regularization):
+    XWX = XWX.at[0,0].add(regularization)
     v = jax.scipy.linalg.solve(XWX, f, lower=False, assume_a='pos')
     # Probably should replace with numpy.linalg.eigvalsh
     good_v = (jnp.linalg.cond(XWX) < 1e4) * (jnp.abs(XWX[0,0]) > 1e-4)
@@ -219,11 +227,9 @@ def solve_for_m(XWX, f):
 
     v = jnp.where(jnp.isnan(v), jnp.zeros_like(v),v )
 
-
-    # good_v = jnp.min(jnp.diag(RR)) > constants.ROOT_EPSILON
     return v, good_v
 
-batch_solve_for_m = jax.vmap(solve_for_m, in_axes = (0,0))
+batch_solve_for_m = jax.vmap(solve_for_m, in_axes = (0,0,0))
 
 
 # @jax.jit
@@ -240,7 +246,9 @@ batch_solve_for_m = jax.vmap(solve_for_m, in_axes = (0,0))
 
 # Should this be set by cross validation?
 
-def adaptive_disc(experiment_dataset, cov_noise,  batch_size, pol_degree=0, h =1):
+def adaptive_disc(experiment_dataset, cov_noise,  batch_size, pol_degree=0, h =1, signal_variance=None):
+
+    use_regularization = signal_variance is not None
     
     XWX, Z, F, alpha = 0,0,0,0
     # Need to take out RR
@@ -296,7 +304,8 @@ def adaptive_disc(experiment_dataset, cov_noise,  batch_size, pol_degree=0, h =1
     for k in range(n_batches):
         ind_st, ind_end = utils.get_batch_of_indices(experiment_dataset.volume_size, batch_size, k)
         n_pix = ind_end - ind_st
-        reconstruction[ind_st:ind_end], good_pixels[ind_st:ind_end] = compute_estimate_from_precompute_one(XWX, Z, F, alpha, h_max, h_ar[ind_st:ind_end], threed_frequencies[ind_st:ind_end], experiment_dataset.volume_shape, pol_degree =pol_degree)
+        signal_variance_this = signal_variance[ind_st:ind_end] if use_regularization else None
+        reconstruction[ind_st:ind_end], good_pixels[ind_st:ind_end] = compute_estimate_from_precompute_one(XWX, Z, F, alpha, h_max, h_ar[ind_st:ind_end], threed_frequencies[ind_st:ind_end], experiment_dataset.volume_shape, pol_degree =pol_degree, signal_variance=signal_variance_this, use_regularization = use_regularization)
     logger.info(f"Done with kernel estimate")
     return reconstruction, good_pixels, np.asarray(density_over_noise)
 
@@ -331,13 +340,12 @@ def compute_residuals(experiment_dataset, weights,  batch_size, pol_degree ):
         # Only place where image mask is used ?
         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
 
-        # Only place where image mask is used ?
         residuals_t, summed_n_t = compute_residuals_batch(batch, weights,
-                                             experiment_dataset.rotation_matrices[indices],
+                                            experiment_dataset.rotation_matrices[indices],
                                             experiment_dataset.translations[indices], 
                                             experiment_dataset.CTF_params[indices], 
-                                                experiment_dataset.volume_shape, 
-                                                experiment_dataset.image_shape, experiment_dataset.grid_size, experiment_dataset.CTF_fun, experiment_dataset.voxel_size, pol_degree )
+                                            experiment_dataset.volume_shape, 
+                                            experiment_dataset.image_shape, experiment_dataset.grid_size, experiment_dataset.CTF_fun, experiment_dataset.voxel_size, pol_degree )
         residuals += residuals_t
         summed_n += summed_n_t
 
