@@ -264,7 +264,7 @@ Assuming you have run the pipeline.py and analyze.py, the output will be saved i
     │       ├── dilated_mask.mrc
     │       ├── eigen_neg000.mrc # Eigenvectors
     │       ├── ...
-    │       ├── eigen_pos000.mrc # Negative of eigenvectors. Useful to Chimera visualization to have the two separated, although they clearly contain the same observation
+    │       ├── eigen_pos000.mrc # Negative of eigenvectors. Useful for Chimera visualization to have the two separated, even though they contain the same information
     │       ├── ...
     │       ├── mask.mrc # mask used 
     │       ├── mean.mrc # computed mean
@@ -277,9 +277,9 @@ Assuming you have run the pipeline.py and analyze.py, the output will be saved i
 ### Visualization in jupyter notebook
 
 You can visualize the results using [this notebook](output_visualization.ipynb), which will show a bunch of results including:
-* the FSC of the mean estimation to give you an on an upper bound of the resolution you can expect
+* the FSC of the mean estimation, which you can interpret as an upper bound of the resolution you can expect. 
 * decay of eigenvalues to help you pick the right `zdim`
-*  and standard clustering visualization (borrowed from the cryoDRGN output).
+* and standard clustering visualization (borrowed from the cryoDRGN output).
 
 
 ## VI. Generating additional trajectories
@@ -312,9 +312,8 @@ Usage example:
 </details>
 
 
-
 ## TLDR
- (WIP - Untested)
+ <!-- (WIP - Untested) -->
 A short example illustrating the steps to run the code on EMPIAR-10076. Assuming you have downloaded the code and have a GPU, the code should take less than an hour to run, and less than 10 minutes if you downsample to 128 instead (exact running time depends on your hardware). and  Read above for more details:
 
     # Downloaded poses from here: https://github.com/zhonge/cryodrgn_empiar.git
@@ -356,7 +355,7 @@ The output should be the same as [this notebook](output_visualization_empiar1007
 I hope some developers find parts of the code useful for their projects. See [this notebook](recovar_coding_tutorial.ipynb) for a short tutorial.
 
 Some of the features which may be of interest:
-- The basic building block operations of cryo-EM efficiently, in batch and on GPU: shift images, slice volumes, do the adjoint slicing, apply CTF. See [recovar.core](recovar/core.py).
+- The basic building block operations of cryo-EM efficiently, in batch and on GPU: shift images, slice volumes, do the adjoint slicing, apply CTF. See [recovar.core](recovar/core.py). Though I have not tried it, all of these operations should be differentiable thus you could use JAX's autodiff.
 
 - A heterogeneity dataset simulator that includes variations in contrast, realistic CTF and pose distribution (loaded from real dataset), junk proteins, outliers, etc. See [recovar.simulator](recovar/simulator.py).
 

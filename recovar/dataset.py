@@ -409,9 +409,11 @@ def get_default_dataset_option():
                             'n_images' : -1,
                             'ind': None,
                             'padding' : 0,
-                            'lazy': False,
+                            # 'lazy': False,
                             'uninvert_data' : False}
     return dataset_loader_dict
 
 def load_dataset_from_dict(dataset_loader_dict, lazy = True):
+    # if dataset_loader_dict['lazy']:
+    #     return load_cryodrgn_dataset(**dataset_loader_dict, lazy = lazy)
     return load_cryodrgn_dataset(**dataset_loader_dict, lazy = lazy)
