@@ -172,6 +172,7 @@ def get_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size):
     unrotated_plane_indices = get_unrotated_plane_grid_points(image_shape)
 
     rotated_plane = jnp.matmul(unrotated_plane_indices, rotation_matrix, precision = jax.lax.Precision.HIGHEST)
+    # I have no idea why there is a random +1 here
     rotated_coords = rotated_plane + jnp.floor(1.0 * grid_size/2)
     
     # rotated_indices = vol_indices_to_vec_indices(rotated_indices, volume_shape)

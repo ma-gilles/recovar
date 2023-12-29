@@ -944,6 +944,8 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
     rhs = outer_products - UALambdaAUs
     rhs = rhs.real.astype(CTF_params.dtype)
     # return AU_t_AU, rhs
+    # Perhaps this should use: jax.lax.fori_loop. This is a lot of memory.
+    # Or maybe jax.lax.reduce ?
     lhs = jnp.sum(batch_kron(AU_t_AU, AU_t_AU), axis=0)
     return lhs, rhs
     

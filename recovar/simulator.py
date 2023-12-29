@@ -414,10 +414,11 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
     noise_image = noise.make_radial_noise(noise_variance_mod, experiment_dataset.image_shape).reshape(experiment_dataset.image_shape)
 
     if mrc_file is None:
-        output_array = np.empty([experiment_dataset.n_images, *experiment_dataset.image_shape] )
+        output_array = np.empty([experiment_dataset.n_images, *experiment_dataset.image_shape], dtype = experiment_dataset.dtype_real )
     else:
         output_array = mrc_file.data
 
+    n_images_done =0 
     for vol_idx in range(len(volumes)):
         img_indices = np.nonzero(image_assignments == vol_idx)[0]
         n_images = img_indices.size
@@ -511,6 +512,10 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
             images_batch *= per_image_contrast[indices][...,None,None]
             output_array[indices] = np.array(images_batch + noise_batch)
 
+
+            n_images_done += indices.size
+            # if n_images_done % 1000 == 0:
+            logger.info(f"Batch {k}: Generated {n_images_done} images so far")
 
             # import pdb; pdb.set_trace()
     logger.info("Discretizing with: " + disc_type)
