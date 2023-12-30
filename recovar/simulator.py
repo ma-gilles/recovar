@@ -291,6 +291,11 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
 
     ctf_params, rots, trans = dataset_param_generator(n_images, grid_size)
 
+    if "ewald" in disc_type:
+        phase_shift = np.arcsin(ctf_params[:,5]) / np.pi * 180
+        ctf_params[:,5] = 0
+        ctf_params[:,6] = phase_shift
+
     # ctf_params[:,:2] *=0
     # ctf_params[:,4] *=0 
     # voxel_size = ctf_params[0,0]
@@ -455,8 +460,22 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                                                  experiment_dataset.grid_size, 
                                                  disc_type,
                                                  experiment_dataset.CTF_fun) / gt_vols_norm
-                
-
+            elif "ewald" in disc_type:
+                disc_type_e = disc_type.split("_")[1]
+                from recovar import ewald
+                # lam = ewald.volt_to_wavelength(experiment_dataset.CTF_params[0,3])
+                images_batch_real, images_batch_real_imag = ewald.ewald_sphere_forward_model(
+                        volumes[vol_idx].real, 
+                        volumes[vol_idx].imag, 
+                        experiment_dataset.rotation_matrices[indices], 
+                        experiment_dataset.CTF_params[indices],
+                        experiment_dataset.image_shape,
+                        experiment_dataset.volume_shape, 
+                        experiment_dataset.voxel_size, disc_type_e )
+                images_batch = images_batch_real + 1j * images_batch_real_imag
+                images_batch = core.translate_images(images_batch,
+                        -experiment_dataset.translations[indices],
+                        experiment_dataset.image_shape)
             else:
                 images_batch = simulate_data_batch(volumes[vol_idx],
                                                  experiment_dataset.rotation_matrices[indices], 
@@ -472,7 +491,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 
             images_batch = ftu.get_idft2(images_batch.reshape([-1, *experiment_dataset.image_shape])).real
             plotting = False
-            # import pdb; pdb.set_trace()
+
             if pad_before_translate:
                 from recovar import padding
                 padded_images = padding.pad_images_spatial_domain(images_batch,experiment_dataset.grid_size)
@@ -494,19 +513,6 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 
 
             key, subkey = jax.random.split(key)
-            # noise_batch[0]
-            # noise_batch = jax.random.normal(subkey, images_batch.shape ) / jnp.sqrt(experiment_dataset.image_size)
-            # noise_batch_ft = ftu.get_dft2(noise_batch.reshape([-1, *experiment_dataset.image_shape]))
-            # noise_batch_ft *= jnp.sqrt(noise_image)
-            # noise_batch = ftu.get_idft2(noise_batch_ft.reshape([-1, *experiment_dataset.image_shape])).real
-
-            # noise_batch *= jnp.sqrt(noise_image) 
-            # import matplotlib.pyplot as plt
-            # plt.imshow(images_batch[0])
-            # plt.show()
-            # For noise to be real, we need the symmetry to hold.
-            # Or just be sloppy and take out imag part? Is this right?
-            # noise_batch = ftu.get_idft2(noise_batch.reshape([-1, *experiment_dataset.image_shape])).real
             noise_batch = make_noise_batch(subkey, noise_image, images_batch.shape)
             noise_batch *= per_image_noise_scale[indices][...,None,None]
             images_batch *= per_image_contrast[indices][...,None,None]

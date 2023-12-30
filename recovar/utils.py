@@ -167,6 +167,12 @@ def get_batch_of_indices(n_images, batch_size, k):
     batch_end = int(np.min( [(k+1) * batch_size, n_images] ))
     return batch_st, batch_end
 
+def get_batch_of_indices_arange(n_images, batch_size, k):
+    batch_st = int(k * batch_size)
+    batch_end = int(np.min( [(k+1) * batch_size, n_images] ))
+    return np.arange(batch_st, batch_end)
+
+
 def jax_has_gpu():
     try:
         _ = jax.device_put(jax.numpy.ones(1), device=jax.devices('gpu')[0])
