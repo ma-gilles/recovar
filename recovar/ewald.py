@@ -243,12 +243,13 @@ BATCH COMPUTATION
 '''
 
 def compute_ewald_LS_matvec_in_batches(experiment_dataset, input_volume_real, input_volume_imag, batch_size, disc_type, signal_variance, noise_variance  ):
-    
+
     logger.info(f"batch size in second order: {batch_size}")
 
     vol_real, vol_imag = 0, 0
 
-    # \sum_i A_i^T A_i v
+    # \sum_i A_i^T (1/sigma_i^2) A_i v
+    # in batches
     n_batches = utils.get_number_of_index_batch(experiment_dataset.n_images, batch_size)
     for k in range(n_batches):
         indices = utils.get_batch_of_indices_arange(experiment_dataset.n_images, batch_size, k)
@@ -282,6 +283,7 @@ def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, n
 
     vol_real, vol_imag = 0, 0
 
+    # Compute \sum_i A_i^T y_i / sigma_i^2
     for batch, indices in data_generator:
         # Only place where image mask is used ?
         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
