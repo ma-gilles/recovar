@@ -378,11 +378,13 @@ def compute_contrast_residual_fast_2(xs, AU_t_images, image_norms_sq, AU_t_Amean
 batch_compute_contrast_residual_fast_2 = jax.vmap(compute_contrast_residual_fast_2, in_axes = (0,0,0,0,0,0,0,None, 0, None))
 
 
+### TODO MAKE SURE THERE IS NO BUG HERE
 @jax.jit
 def solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, noise_variance, contrast):
     A = (contrast **2) * AU_t_AU  +  jnp.diag(1 / eigenvalues )
     b = contrast * ( AU_t_images - contrast * AU_t_Amean ) 
-    sol = jnp.linalg.solve(A, b)    
+    sol = jnp.linalg.solve(A, b)
+    # I am scared of what this does, jax seems to do weird things with solving complex systems
     return sol
 
 batch_over_contrast_solve_contrast_linear_system = jax.vmap(solve_contrast_linear_system, in_axes = ( None, None, None, None, None, 0) )
