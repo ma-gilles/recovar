@@ -365,7 +365,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         "per_image_contrast" : per_image_contrast,
         "per_image_noise_scale" : per_image_noise_scale,
         "image_assignment" : image_assignments,
-        "noise_variance": noise_variance,
+        "noise_variance": noise_variance.astype(np.float32),
         "voxel_size": voxel_size,
     }
 
