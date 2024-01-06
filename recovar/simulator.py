@@ -7,17 +7,15 @@ ftu = fourier_transform_utils(jnp)
 from recovar import utils
 import jax.scipy.spatial.transform
 import os
-import mrcfile, pickle
+import mrcfile
 import matplotlib.pyplot as plt
 from cryodrgn import mrc, ctf
 from cryodrgn.pose import PoseTracker
 from pathlib import Path
 xx = Path(__file__).resolve()
 import recovar.simulate_scattering_potential as gsm
-
-
 import logging
-    
+CONSTANT_CTF=False
 logger = logging.getLogger(__name__)
 
 data_path = os.path.join(os.path.dirname(__file__),'data/')
@@ -81,8 +79,8 @@ def generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  
 
     sample_ctf_params = sample_ctf_params[...,1:]
     # import pdb; pdb.set_trace()
-
-    # sample_ctf_params = set_constant_ctf(sample_ctf_params)
+    if CONSTANT_CTF:
+        sample_ctf_params = set_constant_ctf(sample_ctf_params)
     # import pdb; pdb.set_trace()
     return sample_ctf_params, sample_rots, sample_trans
 
