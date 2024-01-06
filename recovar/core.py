@@ -61,7 +61,8 @@ def find_frequencies_within_grid_dist(coords, max_grid_dist: int ):
     coords_ndim = coords.ndim
     neighbors = neighbors.reshape( (coords_ndim-1) * [1]  + list(neighbors.shape))
     neighbors += coords[...,None,:]
-    neighbors = round_to_int(neighbors)
+    if coords.dtype.kind == 'f':
+        neighbors = round_to_int(neighbors)
     return neighbors
 
 ## This could be improved...
