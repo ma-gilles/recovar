@@ -152,14 +152,14 @@ def compute_estimate_from_precompute_one(XWX, F, max_grid_dist, grid_distances, 
     XWX_summed_neighbor = undo_keep_upper_triangular(XWX_summed_neighbor, differences_zero.shape[-1])
 
     # NOTE I think Z is just the first row of XWX
-    Z = XWX[...,:,0:1]
+    Z = XWX[...,:differences_zero.shape[-1]]
     Z_summed_neighbor = batch_Z_grab(Z, near_frequencies_vec_indices, valid_points, differences_zero)
 
     # Rank 3 update. Z is real so no need for np.conj
     XWX_summed_neighbor += Z_summed_neighbor + jnp.swapaxes(Z_summed_neighbor, -1, -2 )
 
     ### NOTE THAT ALPHA === XWX[0,0]. TAKE OUT ALPHA
-    alpha = XWX[...,0:1,0]
+    alpha = XWX[...,0]
     XWX_summed_neighbor += batch_summed_scaled_outer(alpha, near_frequencies_vec_indices, differences_zero, valid_points)
 
 
@@ -354,7 +354,7 @@ def test_multiple_disc(experiment_dataset, cross_validation_dataset, cov_noise, 
 
     batch_size =int(utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total() - utils.get_size_in_gb(weights) ) * 5 / np.prod(weights.shape[1:]))
 
-    residuals, residuals_n = compute_residuals_many_weights(cross_validation_dataset, weights,  batch_size, max_pol_degree )
+    residuals, _ = compute_residuals_many_weights(cross_validation_dataset, weights,  batch_size, max_pol_degree )
     residuals_averaged = regularization.batch_average_over_shells(residuals.T, experiment_dataset.volume_shape,0)
 
     index_array = jnp.argmin(residuals_averaged, axis = 0)
@@ -421,7 +421,6 @@ def compute_weights_from_precompute(experiment_dataset, XWX, F, signal_variance,
         # if jnp.isinf(reconstruction[ind_st:ind_end]).any():
         if problems.any():
             # logger.warning(f"Issues in linalg solve? Problems for {problems.sum() / problems.size} pixels, pol_degree={pol_degree}, h={h}, reg={use_regularization}")
-
         # if problems.any():
             if msgs < 10: 
                 msgs +=1
