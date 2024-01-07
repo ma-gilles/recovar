@@ -118,6 +118,25 @@ def summed_adjoint_slice_by_nearest(volume_size, image_vecs, plane_indices_on_gr
     return volume_vec
 
 
+# # Computes \sum_i S_i v_i where S_i: N^2 -> N^3 is sparse, v_i \in N^2
+# @functools.partial(jax.jit, static_argnums=0)
+# def summed_adjoint_slice_by_nearest(volume_size, image_vecs, plane_indices_on_grids, volume_vec = None):
+#     if volume_vec is None:
+#         volume_vec = jnp.zeros(volume_size, dtype = image_vecs.dtype)
+#     volume_vec = volume_vec.at[plane_indices_on_grids.reshape(-1)].add((image_vecs).reshape(-1))
+#     return volume_vec
+
+# batch_over_vol_summed_adjoint_slice_by_nearest = jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, -1,None, -1), out_axes = ( -1))
+
+
+# Computes \sum_i S_i v_i where S_i: N^2 -> N^3 is sparse, v_i \in N^2
+@functools.partial(jax.jit, static_argnums=0)
+def summed_adjoint_slice_by_nearest(volume_size, image_vecs, plane_indices_on_grids):
+    volume_vec = jnp.zeros(volume_size, dtype = image_vecs.dtype)
+    volume_vec = volume_vec.at[plane_indices_on_grids.reshape(-1)].add((image_vecs).reshape(-1))
+    return volume_vec
+
+
 batch_over_vol_summed_adjoint_slice_by_nearest = jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, -1,None), out_axes = ( -1))
 
 nosummed_adjoint_slice_by_nearest = jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, 0,0)) 

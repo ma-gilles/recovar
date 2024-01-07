@@ -12,38 +12,12 @@ logger = logging.getLogger(__name__)
 
 # This is a highly experimental feature.
 
-# def make_X_mat_many_gridpoints(rotation_matrices, volume_shape, image_shape, grid_size, grid_dist, max_dist, pol_degree=1):
-
-#     grid_points_coords = core.batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size )
-#     near_frequencies = core.find_frequencies_within_grid_dist(grid_points_coords, grid_dist)
-#     differences =  grid_points_coords[...,None,:] - near_frequencies
-#     distances = jnp.linalg.norm(differences, axis = -1)
-#     near_frequencies_vec_indices = core.vol_indices_to_vec_indices(near_frequencies, volume_shape)
-
-#     # if a
-#     max_dist_this = max_dist[...,near_frequencies_vec_indices.reshape(-1)].reshape([max_dist.shape[0], *near_frequencies_vec_indices.shape])
-#     valid_points = (distances < max_dist_this) * core.check_vol_indices_in_bound(near_frequencies,volume_shape[0])
-#     near_frequencies_vec_indices = core.vol_indices_to_vec_indices(near_frequencies, volume_shape)
-    
-#     # This could be done more efficiently
-#     if pol_degree==1:
-#         C_mat = jnp.concatenate([jnp.ones_like(differences[...,0:1]), differences], axis = -1)
-#         C_mat = C_mat #* valid_points[...,None]
-#     else:
-#         C_mat = C_mat #* valid_points[...]
-    
-#     near_frequencies_vec_indices = near_frequencies_vec_indices #.reshape(-1)
-
-#     return C_mat, near_frequencies_vec_indices, valid_points
-
-
 ## Low level functions
 def make_X_mat(rotation_matrices, volume_shape, image_shape, grid_size, pol_degree = 0, dtype = np.float32):
 
     grid_point_vec_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
     if pol_degree ==0:
         return jnp.ones(grid_point_vec_indices.shape, dtype = dtype )[...,None], grid_point_vec_indices
-
 
     grid_points_coords = core.batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size ).astype(dtype)
     # Discretized grid points
@@ -52,7 +26,7 @@ def make_X_mat(rotation_matrices, volume_shape, image_shape, grid_size, pol_degr
     differences = grid_points_coords - grid_points_coords_nearest
 
     if pol_degree==1:
-        X_mat = jnp.concatenate([jnp.ones_like(differences[...,0:1]), differences**1], axis = -1)
+        X_mat = jnp.concatenate([jnp.ones_like(differences[...,0:1]), differences**2], axis = -1)
         return X_mat, grid_point_vec_indices
 
     differences_squared = linalg.broadcast_outer(differences, differences)
@@ -61,11 +35,6 @@ def make_X_mat(rotation_matrices, volume_shape, image_shape, grid_size, pol_degr
 
     return X_mat, grid_point_vec_indices
 
-# def keep_upper_triangular2(XWX):
-#     if XWX.shape[-1] == 1:
-#         return XWX[...,0]
-#     else:
-#         return jnp.concatenate([XWX[...,0,0:], XWX[...,1,1:], XWX[...,2,2:], XWX[...,3,3:]], axis=-1)
     
 def keep_upper_triangular(XWX):
     iu1 = np.triu_indices(XWX.shape[-1])
@@ -123,7 +92,7 @@ def get_differences_zero(pol_degree, differences):
     if pol_degree ==0:
         differences_zero = jnp.zeros_like(differences[...,0:1])
     elif pol_degree==1:
-        differences_zero = jnp.concatenate([jnp.zeros_like(differences[...,0:1]), differences], axis = -1)
+        differences_zero = jnp.concatenate([jnp.zeros_like(differences[...,0:1]), differences**2], axis = -1)
     elif pol_degree==2:
         differences_squared = linalg.broadcast_outer(differences, differences)
         differences_squared = keep_upper_triangular(differences_squared)
@@ -268,9 +237,7 @@ def precompute_kernel(experiment_dataset, cov_noise,  batch_size, pol_degree=0):
                                 experiment_dataset.CTF_fun,
                                 cov_noise_image, pol_degree = pol_degree)
         XWX += XWX_this
-        # Z += Z_this
         F += F_this
-        # alpha += alpha_this
 
     logger.info(f"Done with precompute of kernel")
     return XWX, F
