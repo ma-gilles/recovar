@@ -40,12 +40,11 @@ def keep_upper_triangular(XWX):
     iu1 = np.triu_indices(XWX.shape[-1])
     return XWX[...,iu1[0], iu1[1]]
 
-def undo_keep_upper_triangular_one(XWX, n):
+def undo_keep_upper_triangular_one(XWX):
     # m = n(n+1)/2
     # n = (sqrt(8m+1) -1)/2
     m = XWX.shape[-1]
     n = np.round((np.sqrt(8*m+1) -1)/2).astype(int)
-
 
     triu_indices = jnp.triu_indices(n)
     matrix = jnp.empty((n,n), dtype = XWX.dtype)
@@ -55,10 +54,10 @@ def undo_keep_upper_triangular_one(XWX, n):
     matrix = matrix.at[i_lower[0], i_lower[1]].set(matrix.T[i_lower[0], i_lower[1]])
     return matrix
 
-undo_keep_upper_triangular = jax.vmap(undo_keep_upper_triangular_one, in_axes = (0,None), out_axes = 0)
+undo_keep_upper_triangular = jax.vmap(undo_keep_upper_triangular_one, in_axes = (0), out_axes = 0)
 
 @functools.partial(jax.jit, static_argnums = [5,6,7,8, 10])    
-def precompute_kernel_one_batch(images, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun, noise_variance, pol_degree =0):
+def precompute_kernel_one_batch(images, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun, noise_variance, pol_degree =0, XWX = None, F = None):
 
     # Precomp piece
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
@@ -66,27 +65,26 @@ def precompute_kernel_one_batch(images, rotation_matrices, translations, CTF_par
     ctf_over_noise_variance = CTF**2 / noise_variance
 
     X, grid_point_indices = make_X_mat(rotation_matrices, volume_shape, image_shape, grid_size, pol_degree = pol_degree)
+    grid_point_indices, good_idx = vec_index_to_half_vec_index(grid_point_indices, volume_shape, flip_positive = True)
+    X = X * good_idx[...,None]
+
+    half_volume_size = np.prod(volume_shape_to_half_volume_shape(volume_shape))
 
     # XWX
-    XWX = linalg.broadcast_outer(X * ctf_over_noise_variance[...,None] , X)
-    XWX = keep_upper_triangular(XWX)
-    XWX_summed = core.batch_over_vol_summed_adjoint_slice_by_nearest(
-        volume_size, XWX,
-        grid_point_indices.reshape(-1))
+    XWX_b = linalg.broadcast_outer(X * ctf_over_noise_variance[...,None] , X)
+    XWX_b = keep_upper_triangular(XWX_b)
+    XWX = core.batch_over_vol_summed_adjoint_slice_by_nearest(
+        half_volume_size, XWX_b,
+        grid_point_indices.reshape(-1), XWX)
     
-    # Z
-    # Z  = X * ctf_over_noise_variance[...,None]
-    # Z_summed = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_size, Z, grid_point_indices.reshape(-1))
-
     # F
     images = core.translate_images(images, translations, image_shape) 
     # In my formalism, images === images / CTF soo I guess this is right
-    F = X * (images * CTF / noise_variance)[...,None] 
-    F_summed = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_size, F, grid_point_indices.reshape(-1))
+    F_b = X * (images * CTF / noise_variance)[...,None] 
 
-    # alpha
-    # alpha_summed = core.summed_adjoint_slice_by_nearest(volume_size, ctf_over_noise_variance, grid_point_indices.reshape(-1))
-    return XWX_summed, F_summed
+    F = core.batch_over_vol_summed_adjoint_slice_by_nearest(half_volume_size, F_b, grid_point_indices.reshape(-1),F)
+
+    return XWX, F
 
 def get_differences_zero(pol_degree, differences):
     if pol_degree ==0:
@@ -116,27 +114,33 @@ def compute_estimate_from_precompute_one(XWX, F, max_grid_dist, grid_distances, 
     near_frequencies_vec_indices = core.vol_indices_to_vec_indices(near_frequencies, volume_shape)
     valid_points = (distances <= grid_distances[...,None] )* core.check_vol_indices_in_bound(near_frequencies,volume_shape[0])
 
-    
-    XWX_summed_neighbor = batch_summed_over_indices(XWX, near_frequencies_vec_indices, valid_points)
-    XWX_summed_neighbor = undo_keep_upper_triangular(XWX_summed_neighbor, differences_zero.shape[-1])
+    near_frequencies_vec_indices, negative_frequencies = vec_index_to_half_vec_index(near_frequencies_vec_indices, volume_shape, flip_positive = True)
 
-    # NOTE I think Z is just the first row of XWX
+    XWX_summed_neighbor = batch_summed_over_indices(XWX, near_frequencies_vec_indices, valid_points)
+    XWX_summed_neighbor = undo_keep_upper_triangular(XWX_summed_neighbor)
+
     Z = XWX[...,:differences_zero.shape[-1]]
     Z_summed_neighbor = batch_Z_grab(Z, near_frequencies_vec_indices, valid_points, differences_zero)
 
     # Rank 3 update. Z is real so no need for np.conj
     XWX_summed_neighbor += Z_summed_neighbor + jnp.swapaxes(Z_summed_neighbor, -1, -2 )
 
-    ### NOTE THAT ALPHA === XWX[0,0]. TAKE OUT ALPHA
     alpha = XWX[...,0]
     XWX_summed_neighbor += batch_summed_scaled_outer(alpha, near_frequencies_vec_indices, differences_zero, valid_points)
 
 
     # Guess this is kinda dumb?
-    F_summed_neighbor = batch_summed_over_indices(F, near_frequencies_vec_indices, valid_points)
+    F_summed_neighbor = batch_summed_over_indices(F, near_frequencies_vec_indices, valid_points * negative_frequencies)
 
-    F0_summed_neighbor = batch_Z_grab(F[...,0:1], near_frequencies_vec_indices, valid_points, differences_zero)[...,0,:]
-    F_summed_neighbor += F0_summed_neighbor
+    F_summed_neighbor_conj = batch_summed_over_indices(jnp.conj(F), near_frequencies_vec_indices, valid_points * ~negative_frequencies)
+    F_summed_neighbor += F_summed_neighbor_conj
+
+
+    F0_summed_neighbor = batch_Z_grab(F[...,0:1], near_frequencies_vec_indices, valid_points * negative_frequencies, differences_zero)[...,0,:]
+
+    F0_summed_neighbor_conj = batch_Z_grab(jnp.conj(F[...,0:1]), near_frequencies_vec_indices, valid_points * ~negative_frequencies, differences_zero)[...,0,:]
+
+    F_summed_neighbor += F0_summed_neighbor + F0_summed_neighbor_conj
 
     if use_regularization:
         regularization = 1 / signal_variance
@@ -177,17 +181,27 @@ def one_Z_grab(Z,near_frequencies_vec_indices, valid_points, differences  ):
 batch_one_Z_grab = jax.vmap(one_Z_grab, in_axes = (None,0,0,0))
 
 @jax.jit
+def cond_from_flat_one(XWX):
+    XWX = undo_keep_upper_triangular_one(XWX)
+    return jnp.linalg.cond(XWX)
+
+cond_from_flat = jax.vmap(cond_from_flat_one, in_axes = (0))
+
+
+@jax.jit
 def solve_for_m(XWX, f, regularization):
-    
+
+    # regularization_expanded = make_regularization_from_reduced(regularization)
+    # XWX += jnp.diag(regularization_expanded)
+
     XWX = XWX.at[0,0].add(regularization)
-    # XWX += jnp.diag(regularization)
     
     dtype_to_solve = np.float64
     vreal = jax.scipy.linalg.solve(XWX.astype(dtype_to_solve), f.real.astype(dtype_to_solve), lower=False, assume_a='pos')
     vimag = jax.scipy.linalg.solve(XWX.astype(dtype_to_solve), f.imag.astype(dtype_to_solve), lower=False, assume_a='pos')
 
     v = vreal + 1j * vimag
-    good_v = jnp.linalg.cond(XWX) < 1e8
+    good_v = jnp.linalg.cond(XWX) < 1e4
 
     e1 = jnp.zeros_like(v)
     e1 = e1.at[0].set(f[0]/XWX[0,0])
@@ -212,21 +226,87 @@ def solve_for_m(XWX, f, regularization):
 
 batch_solve_for_m = jax.vmap(solve_for_m, in_axes = (0,0,0))
 
+def volume_shape_to_half_volume_shape(volume_shape):
+    return (volume_shape[0]//2 + 1, volume_shape[1], volume_shape[2] )
+
+def half_volume_shape_to_volume_shape(volume_shape): 
+    volume_shape[0] = volume_shape[0] * 2
+    return ((volume_shape[0]-1)*2, *volume_shape[1:])
+
+## NOTE There is something weird and jitting this. Compilation takes a very long time. Check it out.
+@functools.partial(jax.jit, static_argnums = [1,2])
+def vec_index_to_half_vec_index(indices, volume_shape, flip_positive = False):
+    vol_indices_full = core.vec_indices_to_vol_indices(indices, volume_shape)
+
+    grid_size = volume_shape[0]
+    negative_frequencies = vol_indices_full[...,0] < (grid_size // 2 + 1) 
+    # import pdb; pdb.set_trace()
+    if flip_positive:
+        frequencies = core.vol_indices_to_frequencies(vol_indices_full, volume_shape)
+        # flipped_first = jnp.where(frequencies, -frequencies , frequencies)
+        frequencies_flipped = jnp.where(frequencies[...,0:1] > 0, -frequencies , frequencies)
+        vol_indices_full_flipped = core.frequencies_to_vol_indices(frequencies_flipped, volume_shape)
+
+    # vfirst = frequencies_flipped
+    # vec_indices = core.frequencies_to_vec_indices(vfirst, volume_shape)
+    # bad_idx = (vol_indices_full_flipped ==grid_size).any(axis=-1)    
+    # vol_indices_full2 = core.vec_indices_to_frequencies(vec_indices, volume_shape)
+
+    # vfirst = vol_indices_full_flipped
+    # vec_indices = core.vol_indices_to_vec_indices(vfirst, volume_shape)
+    # bad_idx = (vol_indices_full_flipped ==grid_size).any(axis=-1)    
+    # vol_indices_full2 = core.vec_indices_to_vol_indices(vec_indices, volume_shape)
+
+    # print(np.concatenate([vfirst, vol_indices_full2, bad_idx[...,None]], axis=-1))
+    # print('b')
+    # print(np.concatenate([frequencies, frequencies_flipped, bad_idx[...,None]], axis=-1))
+
+    # print(np.linalg.norm((vol_indices_full2 - vfirst)[~bad_idx]))
+    # import pdb; pdb.set_trace()
+    if flip_positive:
+        vol_indices_full = vol_indices_full_flipped
+    in_bound = core.check_vol_indices_in_bound(vol_indices_full, grid_size)
+
+    vec_indices = core.vol_indices_to_vec_indices(vol_indices_full, volume_shape)
+    vec_indices = jnp.where(in_bound, vec_indices, -1*jnp.ones_like(vec_indices))
+    # vec_indices = jnp
+
+    return vec_indices, negative_frequencies#, in_bound
+
+def half_vec_index_to_vec_index(indices_half, volume_shape):
+    # For indices with negative frequencies, return -1 (out of bound, not used)
+    vol_indices_half = core.vec_indices_to_vol_indices(indices_half, volume_shape_to_half_volume_shape(volume_shape))
+    indices = core.vol_indices_to_vec_indices(vol_indices_half, volume_shape)
+    bad_indices = indices_half == -1
+    indices = indices.at[bad_indices].set(-1)
+    return indices
+
+
 # Should this be set by cross validation?
 
 def precompute_kernel(experiment_dataset, cov_noise,  batch_size, pol_degree=0):    
     XWX, F = 0,0
+    # print(utils.report_memory_device())
+    half_volume_size = np.prod(volume_shape_to_half_volume_shape(experiment_dataset.volume_shape))
+
+    XWX = jnp.zeros((half_volume_size, small_gram_matrix_size(pol_degree) ), dtype = np.float32)
+    F = jnp.zeros((half_volume_size, get_feature_size(pol_degree) ), dtype = np.complex64)
+
+    batch_size = int(utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total() - 2* utils.get_size_in_gb(XWX) - 2*utils.get_size_in_gb(F)  ) )
+
     # Need to take out RR
     logger.info(f"batch size in precompute kernel: {batch_size}")
+    # batch_size = 1
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
     cov_noise_image = noise.make_radial_noise(cov_noise, experiment_dataset.image_shape)
 
-
+    # print(utils.report_memory_device())
+    idx = 0 
     for batch, indices in data_generator:
-        
+        # utils.get_size_in_gb(XWX)
         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
-    
-        XWX_this, F_this = precompute_kernel_one_batch(batch,
+        # print(utils.report_memory_device())
+        XWX, F = precompute_kernel_one_batch(batch,
                                 experiment_dataset.rotation_matrices[indices], 
                                 experiment_dataset.translations[indices], 
                                 experiment_dataset.CTF_params[indices], 
@@ -235,9 +315,10 @@ def precompute_kernel(experiment_dataset, cov_noise,  batch_size, pol_degree=0):
                                 experiment_dataset.image_shape, 
                                 experiment_dataset.grid_size, 
                                 experiment_dataset.CTF_fun,
-                                cov_noise_image, pol_degree = pol_degree)
-        XWX += XWX_this
-        F += F_this
+                                cov_noise_image, pol_degree = pol_degree, XWX = XWX, F = F)
+        # utils.report_memory_device(logger=logger)
+        # print("idx",  idx)
+        idx+=1
 
     logger.info(f"Done with precompute of kernel")
     return XWX, F
@@ -256,22 +337,22 @@ def get_default_discretization_params(grid_size):
 
     return params
             
-def get_num_params(pol_degree):
+# def get_num_params(pol_degree):
 
-    if pol_degree ==0:
-        return 4
-    elif pol_degree ==1:
-        return 20
-    elif pol_degree ==2:
-        return 10
-    else:
-        raise NotImplementedError
+#     if pol_degree ==0:
+#         return 1
+#     elif pol_degree ==1:
+#         return 4
+#     elif pol_degree ==2:
+#         return 10
+#     else:
+#         raise NotImplementedError
 
 def small_gram_matrix_size(pol_degree):
     feature_size = get_feature_size(pol_degree)
     return (feature_size * (feature_size+1))//2
 
-def big_grad_matrix_size(pol_degree):
+def big_gram_matrix_size(pol_degree):
     return get_feature_size(pol_degree)**2
 
 def get_feature_size(pol_degree):
@@ -284,18 +365,17 @@ def get_feature_size(pol_degree):
     return pol_degree
 
 
-
-
 def test_multiple_disc(experiment_dataset, cross_validation_dataset, cov_noise,  batch_size, discretization_params, signal_variance, return_all = False):
 
     discretization_params = get_default_discretization_params(experiment_dataset.grid_size) if discretization_params is None else discretization_params
 
     max_pol_degree = np.max([ pol_degree for pol_degree, _, _ in discretization_params ])
 
-    num_params = small_gram_matrix_size(max_pol_degree) + 2 * get_feature_size(max_pol_degree) + 1
-    # num_params = 4 if max_pol_degree == 0 else 20
+    # In floats
+    num_params = small_gram_matrix_size(max_pol_degree) //2 + 2 * get_feature_size(max_pol_degree) 
 
-    batch_size = int(utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total() -  num_params * experiment_dataset.volume_size * 8 / 1e9 ) / 2)#/ np.prod(weights.shape[1:])).astype(int)
+    batch_size = -1# int(utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total() -  num_params * experiment_dataset.volume_size * 4 / 1e9 ) / 2)#/ np.prod(weights.shape[1:])).astype(int)
+    logger.info(f"batch size in test_multiple_disc: {batch_size}")
 
     XWX, F = precompute_kernel(experiment_dataset, cov_noise.astype(np.float32),  batch_size, pol_degree=max_pol_degree)
     n_disc_test = len(discretization_params)
@@ -306,6 +386,7 @@ def test_multiple_disc(experiment_dataset, cross_validation_dataset, cov_noise, 
     valid_weights = np.zeros((n_disc_test, experiment_dataset.volume_size), dtype = bool)
 
     XWX = np.asarray(XWX)
+    utils.report_memory_device(logger=logger)
 
     for idx, (pol_degree, h, reg) in enumerate(discretization_params):
         logger.info(f"computing discretization with params: degree={pol_degree}, h={h}, reg={reg}")
@@ -316,6 +397,7 @@ def test_multiple_disc(experiment_dataset, cross_validation_dataset, cov_noise, 
 
     logger.info(f"Done computing params")
     weights = weights.swapaxes(0,1)
+    utils.report_memory_device(logger=logger)
 
     del XWX, F
 
@@ -331,12 +413,25 @@ def test_multiple_disc(experiment_dataset, cross_validation_dataset, cov_noise, 
     weights_opt = jnp.take_along_axis(weights[...,0], np.expand_dims(index_array_vol, axis=-1), axis=-1)
 
     logger.info("Done with adaptive disc")
-    
+    utils.report_memory_device(logger=logger)
+
     if return_all:
         return np.asarray(weights_opt), np.asarray(disc_choices), np.asarray(residuals_averaged), np.asarray(weights), discretization_params # XWX, Z, F, alpha
     else:
         return np.asarray(weights_opt), np.asarray(disc_choices), np.asarray(residuals_averaged)
 
+
+def make_regularization_from_reduced(regularization_reduced):
+    # signal variance, deriv_variance, hessian_variance
+    if regularization_reduced.shape[-1] == 1:
+        return regularization_reduced
+    if regularization_reduced.shape[-1] == 2:
+        return jnp.concatenate([regularization_reduced[...,0:1], 
+                                jnp.repeat(regularization_reduced[...,1:2], repeats =3) ])
+    if regularization_reduced.shape[-1] == 3:
+        return jnp.concatenate([regularization_reduced[...,0:1], 
+                                jnp.repeat(regularization_reduced[...,1:2], repeats =3),
+                                jnp.repeat(regularization_reduced[...,2:3], repeats =6) ])
 
 
 def compute_weights_from_precompute(experiment_dataset, XWX, F, signal_variance, pol_degree, h):
@@ -352,35 +447,42 @@ def compute_weights_from_precompute(experiment_dataset, XWX, F, signal_variance,
         h_max = int(np.max(h))
         h_ar = h.astype(int) * 1.0
 
-    # if pol_degree ==0:
     feature_size = get_feature_size(pol_degree)
-    # og_feature_size = 4
 
-    XWX = undo_keep_upper_triangular(XWX, 0)
-    XWX = XWX[...,:feature_size, :feature_size]
-    XWX = keep_upper_triangular(XWX)
+    # import pdb; pdb.set_trace()
+    if XWX.shape[-1] != small_gram_matrix_size(pol_degree):
+        # XWX = undo_keep_upper_triangular(XWX, 0)
+        # XWX = XWX[...,:feature_size, :feature_size]
+        # XWX = keep_upper_triangular(XWX)
+        XWX = XWX[...,0:1]
+        F = F[...,:feature_size]
 
-    # Z = Z[...,:feature_size]
-    F = F[...,:feature_size]
+    # n_pol_param = small_gram_matrix_size(pol_degree) + 2 * get_feature_size(pol_degree) + 1
+    memory_per_pixel = (2*h_max +1)**3 * big_gram_matrix_size(pol_degree) * 2 * 8 * 4
+    # batch_size = int(utils.get_gpu_memory_total() / (memory_per_pixel * 16 * 20/ 1e9))
+    # n_batches = np.ceil(experiment_dataset.volume_size / batch_size).astype(int)
 
-    n_pol_param = small_gram_matrix_size(pol_degree) + 2 * get_feature_size(pol_degree) + 1
-    # n_pol_param = 1 if pol_degree == 0 else 10
-    memory_per_pixel = (2*h_max +1)**3 * n_pol_param
-    batch_size = int(utils.get_gpu_memory_total() / (memory_per_pixel * 16 * 20/ 1e9))
+    batch_size = int((utils.get_gpu_memory_total() -  utils.get_size_in_gb(XWX) - utils.get_size_in_gb(F)  )/ (memory_per_pixel   /1e9  )  ) 
     n_batches = np.ceil(experiment_dataset.volume_size / batch_size).astype(int)
+
 
     weight_size = get_feature_size(pol_degree)
     reconstruction = np.zeros((experiment_dataset.volume_size, weight_size), dtype = np.complex64)
     good_pixels = np.zeros((experiment_dataset.volume_size), dtype = bool)
     logger.info(f"KE batch size: {batch_size}")
     msgs = 0
+
+    XWX = jnp.asarray(XWX)
+    F = jnp.asarray(F)
     for k in range(n_batches):
         ind_st, ind_end = utils.get_batch_of_indices(experiment_dataset.volume_size, batch_size, k)
         n_pix = ind_end - ind_st
         signal_variance_this = signal_variance[ind_st:ind_end] if use_regularization else None
         reconstruction[ind_st:ind_end], good_pixels[ind_st:ind_end], problems = compute_estimate_from_precompute_one(XWX, F, h_max, h_ar[ind_st:ind_end], threed_frequencies[ind_st:ind_end], experiment_dataset.volume_shape, pol_degree =pol_degree, signal_variance=signal_variance_this, use_regularization = use_regularization)
-        
-        # if problems.any():
+        if k < 3:
+            utils.report_memory_device(logger=logger)
+            print(k)
+        # if problems.any():   
         #     logger.warning(f"Issues in linalg solve? Problems for {problems.sum() / problems.size} pixels, pol_degree={pol_degree}, h={h}, reg={use_regularization}")
 
         if jnp.isnan(reconstruction[ind_st:ind_end]).any():
@@ -476,7 +578,7 @@ def compute_residuals_batch_many_weights(images, weights, rotation_matrices, tra
     residuals = jnp.abs(translated_images[...,None] - predicted_phi * CTF[...,None])**2
     
     volume_size = np.prod(volume_shape)
-    summed_residuals = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_size, residuals, gridpoint_indices.reshape(-1))
+    summed_residuals = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_size, residuals, gridpoint_indices.reshape(-1), None)
 
     summed_n = core.summed_adjoint_slice_by_nearest(volume_size, jnp.ones_like(residuals[...,0]), gridpoint_indices.reshape(-1))
 
@@ -538,22 +640,19 @@ def compute_residuals_many_weights(experiment_dataset, weights,  batch_size, pol
 
 #     return h
 
-# def compute_gradient_norm(x):
-#     gradients = jnp.gradient(x)
-#     gradients = jnp.stack(gradients, axis=0)
-#     grad_norm = jnp.linalg.norm(gradients, axis = (0), ord=2)
-#     # grad_norm2 = scipy.ndimage.maximum_filter(grad_norm, size =2)
-#     return grad_norm
+def compute_gradient_norm_squared(x):
+    gradients = jnp.gradient(x)
+    gradients = jnp.stack(gradients, axis=0)
+    grad_norm = jnp.linalg.norm(gradients, axis = (0), ord=2)**2
+    # grad_norm2 = scipy.ndimage.maximum_filter(grad_norm, size =2)
+    return grad_norm
 
-# def compute_hessian_norm(x):
-#     # x = x.reshape(volume_shape)
-#     gradients = jnp.gradient(x)
-#     # gradients = jnp.stack(gradients, axis=0)
+def compute_hessian_norm_squared(x):
+    # x = x.reshape(volume_shape)
+    gradients = jnp.gradient(x)
+    # gradients = jnp.stack(gradients, axis=0)
 
-#     hessians = [jnp.gradient(dx) for dx in gradients ]
-#     hessians = np.stack(hessians, axis=0)
-#     return jnp.linalg.norm(hessians, axis = (0,1), ord =2)
+    hessians = [jnp.gradient(dx) for dx in gradients ]
+    hessians = np.stack(hessians, axis=0)
+    return jnp.linalg.norm(hessians, axis = (0,1), ord =2)**2
 
-
-# batch_compute_gradient_norm = jax.vmap(compute_gradient_norm, in_axes = (0,))
-# batch_make_radial_image = jax.vmap(utils.make_radial_image, in_axes = (0, None, None))

@@ -239,17 +239,20 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, ou
     dataset_param_generator = get_pose_ctf_generator(dataset_params_option)
     noise_variance = get_noise_model(noise_model, grid_size) / 50000 * noise_level
 
+    # mrcf = mrcfile.new(output_folder + '/particles.'+str(grid_size)+'.mrcs',overwrite=True)
+    mrc_file = mrcfile.new_mmap( output_folder + '/particles.'+str(grid_size)+'.mrcs', shape=(n_images, grid_size, grid_size), mrc_mode=2, overwrite = True)
+
     # import pdb; pdb.set_trace()
-    main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type )
+    main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file )
     simulation_info['volumes_path_root'] = volumes_path_root
     simulation_info['grid_size'] = grid_size
     simulation_info['trailing_zero_format_in_vol_name'] = trailing_zero_format_in_vol_name
     simulation_info['disc_type'] = disc_type
 
     #
-    with mrcfile.new(output_folder + '/particles.'+str(grid_size)+'.mrcs',overwrite=True) as mrc:
-        mrc.set_data(main_image_stack.astype(np.float32))
-        mrc.voxel_size = voxel_size
+    # with mrcfile.new(output_folder + '/particles.'+str(grid_size)+'.mrcs',overwrite=True) as mrc:
+    #     mrc.set_data(main_image_stack.astype(np.float32))
+    #     mrc.voxel_size = voxel_size
 
     poses = (rots, trans)
     utils.pickle_dump(poses, output_folder + '/poses.pkl')
@@ -281,7 +284,7 @@ def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_
     return volumes
 
 
-def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp' ):
+def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None ):
     
     # voxel_size = 
     volume_shape = utils.guess_vol_shape_from_vol_size(volumes[0].size)
@@ -314,7 +317,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     # logger.warning("USING NEAREST")
     # disc_type = 'nearest'
     # disc_type = 'linear_interp'
-    main_image_stack = simulate_data(main_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = disc_type, mrc_file = None )
+    main_image_stack = simulate_data(main_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = disc_type, mrc_file = mrc_file )
 
     if put_extra_particles:
         # Make other particles with same ctf but different rots
