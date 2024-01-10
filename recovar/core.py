@@ -10,9 +10,12 @@ ftu = fourier_transform_utils(jax.numpy)
 
 @functools.partial(jax.jit, static_argnums=[1])
 def vol_indices_to_vec_indices(vol_indices, vol_shape):
+    # good_idx = check_vol_indices_in_bound(vol_indices,vol_shape[0])
     og_shape = vol_indices.shape
     vol_indices = vol_indices.reshape(-1, vol_indices.shape[-1])
-    return jnp.ravel_multi_index(vol_indices.T, vol_shape, mode = 'clip').reshape(og_shape[:-1])
+    vec_indices = jnp.ravel_multi_index(vol_indices.T, vol_shape, mode = 'clip').reshape(og_shape[:-1])
+
+    return vec_indices#jnp.where(good_idx, vec_indices, -1)
     # return jnp.ravel_multi_index(vol_indices.T, vol_shape, mode = 'clip')
 
 def vec_indices_to_vol_indices(vec_indices, vol_shape):
@@ -22,12 +25,13 @@ def vec_indices_to_vol_indices(vec_indices, vol_shape):
 
 def vol_indices_to_frequencies(vol_indices, vol_shape):
     vol_shape = jnp.array(vol_shape)
-    mid_grid =  (vol_shape//2 +  (vol_shape%2 ==1) * 1).astype(int)
+    # ((vol_shape - (vol_shape%2 ==1))//2 * 1)
+    mid_grid =  ((vol_shape - (vol_shape%2 ==1))//2 * 1).astype(int)
     return vol_indices - mid_grid
 
 def frequencies_to_vol_indices(vol_indices, vol_shape):
     vol_shape = jnp.array(vol_shape)
-    mid_grid =  (vol_shape//2 +  (vol_shape%2 ==1) * 1).astype(int)
+    mid_grid =  ((vol_shape - (vol_shape%2 ==1))//2 * 1).astype(int)
     return vol_indices + mid_grid
 
 def vec_indices_to_frequencies(vec_indices, vol_shape):
@@ -41,6 +45,10 @@ def check_frequencies_in_bound(frequencies,grid_size):
 
 def check_vol_indices_in_bound(vol_indices,grid_size):
     return jnp.prod((vol_indices >= 0 ) * (vol_indices < grid_size ), axis = -1).astype(bool)
+
+def check_vec_indices_in_bound(vec_indices,grid_size):
+    return ((vec_indices < grid_size**3 ) * vec_indices >= 0).astype(bool)
+
 
 
 ## Some similar function used for adaptive discretization: find nearby gridpoints
@@ -118,26 +126,31 @@ def summed_adjoint_slice_by_nearest(volume_size, image_vecs, plane_indices_on_gr
     return volume_vec
 
 
-# # Computes \sum_i S_i v_i where S_i: N^2 -> N^3 is sparse, v_i \in N^2
-# @functools.partial(jax.jit, static_argnums=0)
-# def summed_adjoint_slice_by_nearest(volume_size, image_vecs, plane_indices_on_grids, volume_vec = None):
-#     if volume_vec is None:
-#         volume_vec = jnp.zeros(volume_size, dtype = image_vecs.dtype)
-#     volume_vec = volume_vec.at[plane_indices_on_grids.reshape(-1)].add((image_vecs).reshape(-1))
-#     return volume_vec
-
-# batch_over_vol_summed_adjoint_slice_by_nearest = jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, -1,None, -1), out_axes = ( -1))
-
-
 # Computes \sum_i S_i v_i where S_i: N^2 -> N^3 is sparse, v_i \in N^2
 @functools.partial(jax.jit, static_argnums=0)
-def summed_adjoint_slice_by_nearest(volume_size, image_vecs, plane_indices_on_grids):
-    volume_vec = jnp.zeros(volume_size, dtype = image_vecs.dtype)
+def summed_adjoint_slice_by_nearest(volume_size, image_vecs, plane_indices_on_grids, volume_vec = None):
+    if volume_vec is None:
+        volume_vec = jnp.zeros(volume_size, dtype = image_vecs.dtype)
     volume_vec = volume_vec.at[plane_indices_on_grids.reshape(-1)].add((image_vecs).reshape(-1))
     return volume_vec
 
+batch_over_vol_summed_adjoint_slice_by_nearest = jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, -1,None, -1), out_axes = ( -1))
 
-batch_over_vol_summed_adjoint_slice_by_nearest = jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, -1,None), out_axes = ( -1))
+
+# def batch_over_vol_summed_adjoint_slice_by_nearest_add():
+#     return jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, -1,None, -1), out_axes = ( -1))
+# batch_over_vol_summed_adjoint_slice_by_nearest = jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, -1,None, -1), out_axes = ( -1))
+
+
+# # Computes \sum_i S_i v_i where S_i: N^2 -> N^3 is sparse, v_i \in N^2
+# @functools.partial(jax.jit, static_argnums=0)
+# def summed_adjoint_slice_by_nearest(volume_size, image_vecs, plane_indices_on_grids):
+#     volume_vec = jnp.zeros(volume_size, dtype = image_vecs.dtype)
+#     volume_vec = volume_vec.at[plane_indices_on_grids.reshape(-1)].add((image_vecs).reshape(-1))
+#     return volume_vec
+
+
+# batch_over_vol_summed_adjoint_slice_by_nearest = jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, -1,None), out_axes = ( -1))
 
 nosummed_adjoint_slice_by_nearest = jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, 0,0)) 
 
