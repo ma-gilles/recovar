@@ -99,23 +99,38 @@ def jax_scipy_nd_image_mean(input, labels=None, index=None):
 
 def jax_scipy_nd_image_mean_inner(input, labels=None, index=None):
     # A jittable simplified scipy.ndimage.mean method
+    # numpy = np
+    # unique_labels = index #, new_labels = numpy.unique(labels, return_inverse=True)
+    # new_labels = labels
+    
+    # # counts = numpy.bincount(new_labels,length = index.size )
+    # counts = numpy.bincount(new_labels)#,length = index.size )
+
+    # # sums = numpy.bincount(new_labels, weights=input.ravel(),length = index.size )
+    # sums = numpy.bincount(new_labels, weights=input.ravel())#,length = index.size )
+
+
     numpy = jnp
     unique_labels = index #, new_labels = numpy.unique(labels, return_inverse=True)
     new_labels = labels
     
+    # counts = numpy.bincount(new_labels,length = index.size )
     counts = numpy.bincount(new_labels,length = index.size )
+
+    # sums = numpy.bincount(new_labels, weights=input.ravel(),length = index.size )
     sums = numpy.bincount(new_labels, weights=input.ravel(),length = index.size )
-    
+
+
     idxs = numpy.searchsorted(unique_labels, index)
     # make all of idxs valid
-    idxs = jnp.where( idxs >= int(unique_labels.size), 0, idxs)
+    idxs = numpy.where( idxs >= int(unique_labels.size), 0, idxs)
 
     found = (unique_labels[idxs] == index)
     counts = counts[idxs]
-    counts = jnp.where(found, counts, 0)
+    counts = numpy.where(found, counts, 0)
     sums = sums[idxs]
 
-    sums = jnp.where(sums, sums, 0)
+    sums = numpy.where(sums, sums, 0)
     return sums / counts
 
 
