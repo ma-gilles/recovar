@@ -468,7 +468,9 @@ def fsc_score(fsc_curve, grid_size, voxel_size, threshold = 0.5 ):
         
     # Linearly interpolate
     from scipy import interpolate
+    fsc_curve = np.where(np.isnan(fsc_curve), 0, fsc_curve)
     f = interpolate.interp1d( np.array([fsc_curve[idx], fsc_curve[idx+1]]), np.array([freq[idx], freq[idx+1]]) )
+    
     return np.min([f(threshold), 2 * voxel_size])
 
 
