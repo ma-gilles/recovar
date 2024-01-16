@@ -1,4 +1,4 @@
-import logging
+import logging, functools
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -9,7 +9,7 @@ ftu = fourier_transform_utils(jax.numpy)
     
 logger = logging.getLogger(__name__)
 
-
+@functools.partial(jax.jit, static_argnums = [1,2])    
 def make_radial_image(average_image_PS, image_shape, extend_last_frequency = True):
     if extend_last_frequency:
         last_noise_band = average_image_PS[-1]
@@ -17,6 +17,9 @@ def make_radial_image(average_image_PS, image_shape, extend_last_frequency = Tru
     radial_distances = ftu.get_grid_of_radial_distances(image_shape, scaled = False, frequency_shift = 0).astype(int).reshape(-1)
     prior = jnp.asarray(average_image_PS)[radial_distances]
     return prior
+
+batch_make_radial_image = jax.vmap(make_radial_image, in_axes = (0,None,None))
+
 
 def find_angle_between_subspaces(v1,v2, max_rank):
     ss = np.conj(v1[:,:max_rank]).T @ v2[:,:max_rank]
