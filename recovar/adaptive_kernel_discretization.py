@@ -141,7 +141,6 @@ def precompute_kernel_one_batch(images, rotation_matrices, translations, CTF_par
 
     # Precomp piece
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    volume_size = np.prod(volume_shape)
     ctf_over_noise_variance = CTF**2 / noise_variance
 
     X, grid_point_indices = make_X_mat(rotation_matrices, volume_shape, image_shape, grid_size, pol_degree = pol_degree)
@@ -178,43 +177,8 @@ def get_differences_zero(pol_degree, differences):
         assert(NotImplementedError)
     return differences_zero
 
-
-# Should this all just be vmapped instead of vmapping each piece? Not really sure.
-# It allocate XWX a bunch of time if I do?
-@functools.partial(jax.jit, static_argnums = [2,5,6,8])
-def compute_estimate_from_precompute_one(XWX, F, max_grid_dist, grid_distances, frequencies, volume_shape, pol_degree, signal_variance, use_regularization):
-
-    if use_regularization:
-        regularization = 1 / signal_variance
-    else:
-        dim = pol_degree + 1
-        regularization = jnp.zeros((frequencies.shape[0], dim), dtype = XWX.dtype)
-
-    
-    # if max_grid_dist == -1:
-    #     print("here")
-    #     frequencies_vec_indices = core.vol_indices_to_vec_indices(frequencies.astype(int), volume_shape)
-    #     # frequencies_vec_indices, negative_frequencies = vec_index_to_half_vec_index(frequencies_vec_indices, volume_shape, flip_positive = True)
-
-    #     XWX_undo = undo_keep_upper_triangular(XWX[frequencies_vec_indices])
-
-    #     if use_regularization:
-    #         regularization_expanded = make_regularization_from_reduced(regularization)
-    #         XWX_undo += jnp.diag(regularization_expanded)
-
-    #     f = F[frequencies_vec_indices]
-    #     vreal = jnp.linalg.solve(XWX_undo, f.real)#, lower=False, assume_a='pos')
-    #     vimag = jnp.linalg.solve(XWX_undo, f.imag)#, lower=False, assume_a='pos')
-
-    #     y_and_deriv = vreal + 1j * vimag
-
-    #     # y_and_deriv, good_v, problems = batch_solve_for_m(XWX_undo, F[frequencies_vec_indices], regularization )
-    #     # y_and_deriv = jnp.where(negative_frequencies[...,None], y_and_deriv, jnp.conj(y_and_deriv))
-    #     good_v = jnp.ones_like(y_and_deriv[...,0], dtype = bool)
-    #     problems = jnp.zeros_like(y_and_deriv[...,0], dtype = bool)
-
-    #     return y_and_deriv, good_v, problems
-
+@functools.partial(jax.jit, static_argnums = [2,5,6])
+def compute_summed_XWX_F(XWX, F, max_grid_dist, grid_distances, frequencies, volume_shape, pol_degree):
 
     # Might have to cast this back to frequencies vs indices frequencies
     near_frequencies = core.find_frequencies_within_grid_dist(frequencies, max_grid_dist)
@@ -226,9 +190,8 @@ def compute_estimate_from_precompute_one(XWX, F, max_grid_dist, grid_distances, 
     near_frequencies_vec_indices = core.vol_indices_to_vec_indices(near_frequencies, volume_shape)
 
     ## TODO SHOULD I PUT THIS BACK?
-    # valid_points = (distances <= (grid_distances[...,None] + 0.5) )* core.check_vol_indices_in_bound(near_frequencies,volume_shape[0])
-    valid_points = core.check_vol_indices_in_bound(near_frequencies,volume_shape[0])
-
+    valid_points = (distances <= (grid_distances[...,None] + 0.5) )* core.check_vol_indices_in_bound(near_frequencies,volume_shape[0])
+    # valid_points = core.check_vol_indices_in_bound(near_frequencies,volume_shape[0])
 
     near_frequencies_vec_indices, negative_frequencies = vec_index_to_half_vec_index(near_frequencies_vec_indices, volume_shape, flip_positive = True)
 
@@ -252,11 +215,31 @@ def compute_estimate_from_precompute_one(XWX, F, max_grid_dist, grid_distances, 
     F0_summed_neighbor = batch_Z_grab(F[...,0:1], near_frequencies_vec_indices, valid_points * negative_frequencies, differences_zero)[...,0,:]
     F0_summed_neighbor_conj = batch_Z_grab(jnp.conj(F[...,0:1]), near_frequencies_vec_indices, valid_points * ~negative_frequencies, differences_zero)[...,0,:]
     F_summed_neighbor += F0_summed_neighbor + F0_summed_neighbor_conj
+    return XWX_summed_neighbor, F_summed_neighbor
 
 
-    y_and_deriv, good_v, problems = batch_solve_for_m(XWX_summed_neighbor,F_summed_neighbor, regularization )
+# Should this all just be vmapped instead of vmapping each piece? Not really sure.
+# It allocate XWX a bunch of time if I do?
+@functools.partial(jax.jit, static_argnums = [2,5,6,8, 9])
+def compute_estimate_from_precompute_one(XWX, F, max_grid_dist, grid_distances, frequencies_vol_indices, volume_shape, pol_degree, prior_inverse_covariance, prior_option, return_XWX_F):
+    XWX_summed_neighbor,F_summed_neighbor = compute_summed_XWX_F(XWX, F, max_grid_dist, grid_distances, frequencies_vol_indices, volume_shape, pol_degree)
+    y_and_deriv, good_v, problems = compute_estimate_from_XWX_F_summed_one(XWX_summed_neighbor, F_summed_neighbor, frequencies_vol_indices, prior_inverse_covariance, prior_option, volume_shape)
+    if return_XWX_F:
+        return y_and_deriv, good_v, problems, keep_upper_triangular(XWX_summed_neighbor), F_summed_neighbor
+    else:
+        return y_and_deriv, good_v, problems, None, None
 
+def compute_estimate_from_XWX_F_summed_one(XWX_summed_neighbor, F_summed_neighbor, frequencies_vol_indices, prior_inverse_covariance, prior_option, volume_shape):
+    vec_indices = core.vol_indices_to_vec_indices(frequencies_vol_indices.astype(int), volume_shape)
+    prior_inverse_covariance = get_prior_from_options(prior_inverse_covariance, prior_option, vec_indices, volume_shape )
+    y_and_deriv, good_v, problems = batch_solve_for_m(XWX_summed_neighbor,F_summed_neighbor, prior_inverse_covariance )
     return y_and_deriv, good_v, problems
+
+
+def compute_estimate_from_XWX_F_summed_one(XWX_summed_neighbor, F_summed_neighbor, frequencies_vol_indices, prior_inverse_covariance, prior_option, volume_shape):
+
+
+    return
 
 
 def summed_scaled_outer(alpha, indices, differences_zero, valid_points):
@@ -294,21 +277,56 @@ def cond_from_flat_one(XWX):
 
 cond_from_flat = jax.vmap(cond_from_flat_one, in_axes = (0))
 
+# @jax.jit
+# def solve_for_m(XWX, f, regularization):
+
+#     # regularization_expanded = make_regularization_from_reduced(regularization)
+#     # XWX += jnp.diag(regularization_expanded)
+#     XWX += regularization
+#     # XWX = XWX.at[0,0].add(regularization)
+    
+#     dtype_to_solve = np.float64
+#     vreal = jax.scipy.linalg.solve(XWX.astype(dtype_to_solve), f.real.astype(dtype_to_solve), lower=False, assume_a='pos')
+#     vimag = jax.scipy.linalg.solve(XWX.astype(dtype_to_solve), f.imag.astype(dtype_to_solve), lower=False, assume_a='pos')
+#     # vreal = jnp.linalg.solve(XWX, f.real)#, lower=False, assume_a='pos')
+#     # vimag = jnp.linalg.solve(XWX, f.imag)#, lower=False, assume_a='pos')
+
+#     v = vreal + 1j * vimag
+#     good_v = jnp.linalg.cond(XWX) < 1e4
+
+#     e1 = jnp.zeros_like(v)
+#     e1 = e1.at[0].set(f[0]/XWX[0,0])
+
+#     v = jnp.where(good_v, v, e1)
+#     v = jnp.where(XWX[0,0] > 0, v, jnp.zeros_like(v))
+#     v = v.astype(np.complex64) ## 128!!?!? CHANGE MAYBE??
+#     # v = v.astype(np.complex128) ## 128!!?!? CHANGE MAYBE??
+
+#     # If condition number is bad, do degree 0 approx?
+#     # v = jnp.where(good_v, v, jnp.zeros_like(v))
+#     # res = jnp.linalg.norm(XWX @v - f)**1 / jnp.linalg.norm(f)**1#, axis = -1)
+
+#     bad_indices = jnp.isnan(v).any(axis=-1) + jnp.isinf(v).any(axis=-1)
+#     problem = bad_indices * good_v
+
+#     # problem = (res > 1e-6) * good_v
+#     v = jnp.where(bad_indices, jnp.zeros_like(v), v)
+
+#     return v, good_v, problem
 
 @jax.jit
-def solve_for_m(XWX, f, regularization):
+def solve_for_m_complex(XWX, f, regularization):
 
-    regularization_expanded = make_regularization_from_reduced(regularization)
-    XWX += jnp.diag(regularization_expanded)
+    # regularization_expanded = make_regularization_from_reduced(regularization)
+    # XWX += jnp.diag(regularization_expanded)
+    XWX += regularization
     # XWX = XWX.at[0,0].add(regularization)
     
-    dtype_to_solve = np.float64
-    vreal = jax.scipy.linalg.solve(XWX.astype(dtype_to_solve), f.real.astype(dtype_to_solve), lower=False, assume_a='pos')
-    vimag = jax.scipy.linalg.solve(XWX.astype(dtype_to_solve), f.imag.astype(dtype_to_solve), lower=False, assume_a='pos')
-    # vreal = jnp.linalg.solve(XWX, f.real)#, lower=False, assume_a='pos')
-    # vimag = jnp.linalg.solve(XWX, f.imag)#, lower=False, assume_a='pos')
+    dtype_to_solve = np.complex128
+    v = jax.scipy.linalg.solve(XWX.astype(dtype_to_solve), f.astype(dtype_to_solve), lower=False, assume_a='pos')
+    # vimag = jax.scipy.linalg.solve(XWX.astype(dtype_to_solve), f.imag.astype(dtype_to_solve), lower=False, assume_a='pos')
+    # v = vreal + 1j * vimag
 
-    v = vreal + 1j * vimag
     good_v = jnp.linalg.cond(XWX) < 1e4
 
     e1 = jnp.zeros_like(v)
@@ -331,11 +349,9 @@ def solve_for_m(XWX, f, regularization):
 
     return v, good_v, problem
 
-batch_solve_for_m = jax.vmap(solve_for_m, in_axes = (0,0,0))
-
+batch_solve_for_m = jax.vmap(solve_for_m_complex, in_axes = (0,0,0))
 
 # Should this be set by cross validation?
-
 def precompute_kernel(experiment_dataset, cov_noise, pol_degree=0):    
     XWX, F = 0,0
     # print(utils.report_memory_device())
@@ -401,9 +417,121 @@ def get_feature_size(pol_degree):
     return pol_degree
 
 
-def estimate_signal_variance(experiment_datasets, cov_noise, discretization_params, signal_variance = None, return_all = False):
+def estimate_optimal_covariance_and_volume(init_prior_inverse_covariance, init_prior_covariance_option, discretization_params, XWXs, Fs, volume_shape):
+
+    # prior_option = discretization_params[0][2]
+    h = discretization_params[1]
+    max_pol_degree = discretization_params[0]
+        
+    lhs = (XWXs[0][...,0] + XWXs[1][...,0]) /2
+    lhs = half_volume_to_full_volume(lhs, volume_shape)
+
+    # Polynomial estimates
+    pol_estimates = [None,None]
+    XWX_summed_neighbors = [None,None]
+    F_summed_neighbors = [None,None]
+
+    for k in range(2):
+        # Probably should rewrite this part
+        pol_estimates[k], _, XWX_summed_neighbors[k], F_summed_neighbors[k] = compute_weights_from_precompute(volume_shape, XWXs[k], Fs[k], init_prior_inverse_covariance, max_pol_degree, max_pol_degree, h = h, return_XWX_F = True, prior_option = init_prior_covariance_option)
+
+
+    local_covariances = estimate_local_covariances(XWX_summed_neighbors[0], XWX_summed_neighbors[1], pol_estimates[0], pol_estimates[1], prior_inverse_covariance, init_prior_covariance_option, volume_shape, max_pol_degree)
+
+    # Project onto Hermitian positive definite matrices
+    local_covariances = 0.5*(local_covariances + jnp.conj(local_covariances.swapaxes(1,2)))
+    eigs , U = jnp.linalg.eigh(local_covariances)
+
+    # Make eigenvalues not too small
+    EPS = 1e-4
+    get_inv_s = jax.vmap( lambda eigs :  jnp.where( eigs >  EPS * jnp.max(jnp.abs(eigs)) , 1/eigs, 1/ (EPS * jnp.max(jnp.abs(eigs))) ))
+    s =get_inv_s(eigs)
+    inver_from_svd = jax.vmap( lambda U, s :  (U * s[None]) @ jnp.conj(U).T  , in_axes = (0,0))
+    prior_inverse_covariance = inver_from_svd(U,s)
+
+    # If any are bad, revert to previous one?
+    bad_prior_inverse_covariance = jnp.isnan(prior_inverse_covariance).any(axis=(-1, -2))#.any(axis=-1)
+    prior_inverse_covariance = jnp.where(bad_prior_inverse_covariance, init_prior_inverse_covariance, prior_inverse_covariance)
+
+    # Now solve again with new covariances
+    final_estimates = [None,None]
+    for k in range(2): 
+        final_estimates[k] = compute_estimate_from_XWX_F_summed(XWX_summed_neighbors[k], F_summed_neighbors[k], prior_inverse_covariance, "complete", volume_shape)
+
+    return final_estimates, pol_estimates, prior_inverse_covariance
+
+
+def estimate_signal_variance_two(experiment_datasets, cov_noise, discretization_params, use_reg = True):
     discretization_params = get_default_discretization_params(experiment_datasets[0].grid_size) if discretization_params is None else discretization_params
 
+    # prior_option = discretization_params[0][2]
+    h = discretization_params[0][1]
+    max_pol_degree = np.max([ pol_degree for pol_degree, _, _ in discretization_params ])
+
+    # Precomputation
+    XWXs = [None,None]; Fs = [None,None]
+    for k in range(2):
+        XWXs[k], Fs[k] = precompute_kernel(experiment_datasets[k], 
+                                         cov_noise.astype(np.float32), pol_degree=max_pol_degree)
+        
+    # A crude signal variance estimation
+    gpu_memory = utils.get_gpu_memory_total()
+    batch_size = utils.get_image_batch_size(experiment_datasets[0].grid_size, gpu_memory)
+    if cov_noise is None:
+        cov_noise, signal_var = noise.estimate_noise_variance(experiment_datasets[0], batch_size)
+        signal_var = np.max(signal_var)
+    else:
+        _, signal_var = noise.estimate_noise_variance(experiment_datasets[0], batch_size)
+        signal_var = np.max(signal_var)
+
+
+    for disc_params_this in discretization_params:
+        # pol_deg
+        init_prior_inverse_covariance = 1 / (jnp.ones((experiment_datasets[0].volume_size), dtype = np.float32) * signal_var )# + (0 if use_reg else np.inf))
+        # init_prior_inverse_covariance = np.repeat(init_prior_inverse_covariance[...,None] , max_pol_degree+1, axis=-1)  + (0 if use_reg else np.inf)
+
+        _, _, init_prior_inverse_covariance = estimate_optimal_covariance_and_volume(init_prior_inverse_covariance, "by_degree", (0, disc_params_this[1], "complete"), XWXs, Fs, experiment_datasets[0].volume_shape)
+
+        pol_degree = disc_params_this[0]
+        init_prior_inverse_covariance = np.repeat(init_prior_inverse_covariance[...,None] , pol_degree+1, axis=-1) # + (0 if use_reg else np.inf)
+
+        final_estimates, pol_estimates, prior_inverse_covariance = estimate_optimal_covariance_and_volume(init_prior_inverse_covariance, "by_degree", disc_params_this, XWXs, Fs, experiment_datasets[0].volume_shape)
+
+
+    # residuals to pick best one
+    residuals, _ = compute_residuals_many_weights_in_weight_batch(cross_validation_dataset, weights, max_pol_degree )
+    residuals_averaged = regularization.batch_average_over_shells(residuals.T, experiment_dataset.volume_shape,0)
+
+    # Make choice. Impose that h must be increasing
+    index_array = jnp.argmin(residuals_averaged, axis = 0)
+    index_array_vol = utils.make_radial_image(index_array, experiment_dataset.volume_shape)
+
+    disc_choices = np.array(discretization_params)[index_array]
+    hs_choices = disc_choices[:,1].astype(int)
+    hs_choices = np.maximum.accumulate(hs_choices)
+    disc_choices[:,1] = hs_choices
+
+    weights_opt = jnp.take_along_axis(weights[...,0], np.expand_dims(index_array_vol, axis=-1), axis=-1)
+
+    logger.info("Done with adaptive disc")
+    utils.report_memory_device(logger=logger)
+
+    if return_all:
+        return np.asarray(weights_opt), np.asarray(disc_choices), np.asarray(residuals.T), np.asarray(weights), discretization_params # XWX, Z, F, alpha
+    else:
+        return np.asarray(weights_opt), np.asarray(disc_choices), np.asarray(residuals_averaged)
+
+
+
+    return signal_variance_final, prior_inverse_covariance, local_covariances
+
+
+
+def estimate_signal_variance(experiment_datasets, cov_noise, discretization_params, use_reg = True):
+    discretization_params = get_default_discretization_params(experiment_datasets[0].grid_size) if discretization_params is None else discretization_params
+
+    # prior_option = discretization_params[0][2]
+    h = discretization_params[0][1]
     max_pol_degree = np.max([ pol_degree for pol_degree, _, _ in discretization_params ])
 
     # Precomputation
@@ -421,7 +549,7 @@ def estimate_signal_variance(experiment_datasets, cov_noise, discretization_para
         _, signal_var = noise.estimate_noise_variance(experiment_datasets[0], batch_size)
         signal_var = np.max(signal_var)
     
-    signal_variance = jnp.ones((experiment_datasets[0].volume_size), dtype = np.float32) * signal_var
+    prior_inverse_covariance = 1 / (jnp.ones((experiment_datasets[0].volume_size), dtype = np.float32) * signal_var  + (0 if use_reg else np.inf))#* np.inf #+ ~discretization_params[0][2] * np.inf
     # First estimate signal variance with h = 0, p =0 
     first_estimates = [None,None]
     for k in range(2):
@@ -431,29 +559,131 @@ def estimate_signal_variance(experiment_datasets, cov_noise, discretization_para
 
     lhs = (XWXs[0][...,0] + XWXs[1][...,0]) /2
     lhs = half_volume_to_full_volume(lhs, experiment_datasets[0].volume_shape)
-    signal_variance, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(experiment_datasets[0].volume_shape, first_estimates[0], first_estimates[1], lhs , signal_variance, frequency_shift = jnp.array([0,0,0]))
+    prior_inverse_covariance = 1/estimate_signal_variance_from_correlation(first_estimates[0], first_estimates[1], lhs, prior_inverse_covariance, experiment_datasets[0].volume_shape)
 
-    # Set all regularization params to signal_variance
-    signal_variance = np.repeat(signal_variance[...,None], max_pol_degree+1, axis=-1)
+    # Set all regularization params to prior_inverse_covariance
+    prior_inverse_covariance = np.repeat(prior_inverse_covariance[...,None] , max_pol_degree+1, axis=-1)  + (0 if use_reg else np.inf)
 
     # Polynomial estimates
     pol_estimates = [None,None]
+    XWX_summed_neighbors = [None,None]
+    F_summed_neighbors = [None,None]
     for k in range(2):
-        pol_estimates[k], valid_weights_this = compute_weights_from_precompute(experiment_datasets[k], XWXs[k], Fs[k], signal_variance, max_pol_degree, max_pol_degree, h = 0)
+        pol_estimates[k], _, XWX_summed_neighbors[k], F_summed_neighbors[k] = compute_weights_from_precompute(experiment_datasets[k], XWXs[k], Fs[k], prior_inverse_covariance, max_pol_degree, max_pol_degree, h = h, return_XWX_F = True, prior_option = "by_degree")
+
+    local_covariances = estimate_local_covariances(XWX_summed_neighbors[0], XWX_summed_neighbors[1], pol_estimates[0], pol_estimates[1], prior_inverse_covariance, "by_degree", experiment_datasets[0].volume_shape, max_pol_degree)
+
 
     diag_indices = find_diagonal_pol_indices(max_pol_degree)
     degrees = get_degree_of_each_term(max_pol_degree)
-    diagonal_M_terms = (XWXs[0][...,diag_indices] + XWXs[1][...,diag_indices]) /2
+    diagonal_M_terms = (XWX_summed_neighbors[0][...,diag_indices] + XWX_summed_neighbors[1][...,diag_indices]) /2
     diagonal_M_terms = batch_half_volume_to_full_volume(diagonal_M_terms.T, experiment_datasets[0].volume_shape)
 
     # Compute the variance of that term
     num_params = Fs[0].shape[-1]
     signal_variance_final = np.zeros((experiment_datasets[0].volume_size, num_params), dtype = np.float32)
     for i in range(Fs[0].shape[-1]):
-        # signal_variance_final[:,i], _ , _  = regularization.compute_fsc_prior_gpu_v2(experiment_datasets[0].volume_shape, pol_estimates[0][...,i], pol_estimates[1][...,i], diagonal_M_terms[i] , signal_variance[:,degrees[i]], frequency_shift = jnp.array([0,0,0]))
-        signal_variance_final[:,i] = estimate_signal_variance_from_correlation(pol_estimates[0][...,i], pol_estimates[1][...,i], diagonal_M_terms[i], signal_variance[:,degrees[i]], experiment_datasets[0].volume_shape)
+        # signal_variance_final[:,i], _ , _  = regularization.compute_fsc_prior_gpu_v2(experiment_datasets[0].volume_shape, pol_estimates[0][...,i], pol_estimates[1][...,i], diagonal_M_terms[i] , prior_inverse_covariance[:,degrees[i]], frequency_shift = jnp.array([0,0,0]))
+        signal_variance_final[:,i] = estimate_signal_variance_from_correlation(pol_estimates[0][...,i], pol_estimates[1][...,i], diagonal_M_terms[i], prior_inverse_covariance[:,degrees[i]], experiment_datasets[0].volume_shape)
 
-    return signal_variance_final, signal_variance
+    return signal_variance_final, prior_inverse_covariance, local_covariances
+
+
+
+
+
+
+def get_prior_from_options(prior_inverse_covariance, prior_option, vec_indices, volume_shape ):
+    if prior_option == "by_degree":
+        # vec_indices = core.vol_indices_to_vec_indices(frequencies_vol_indices.astype(int), volume_shape)
+        regularization_expanded = make_regularization_from_reduced(prior_inverse_covariance[vec_indices])
+        regularization = batch_diag(regularization_expanded)
+    elif prior_option == "complete":
+        frequencies = core.vec_indices_to_frequencies(vec_indices, volume_shape)
+        radiuses = jnp.round(jnp.linalg.norm(frequencies, axis=-1)).astype(int)
+        # I should probably store the inverse of these of pseudo inverse, which is not great but they are small so should be okay...
+        regularization = prior_inverse_covariance[radiuses]
+    elif prior_option == "none":
+        # dim = pol_degree + 1
+        # dim = get_feature_size(pol_degree)
+        # regularization = jnp.zeros((frequencies.shape[0], dim, dim), dtype = np.float32)
+        regularization = jnp.zeros((frequencies.shape[0],1,1 ), dtype = np.float32)
+    return regularization
+
+batch_kron = jax.vmap(jnp.kron, in_axes=(0,0))
+batch_diag = jax.vmap(jnp.diag, in_axes=(0))
+
+def batch_vec(x):
+    return x.swapaxes(-1,-2).reshape(-1, x.shape[-1]**2)
+
+def batch_unvec(x):
+    n = np.sqrt(x.shape[-1]).astype(int)
+    return x.reshape(-1,n,n).swapaxes(-1,-2)
+
+
+
+def estimate_local_pol_covariances_inner(XWX, estimate_0, estimate_1, prior_inverse_covariance, prior_option, frequency_vec_indices, volume_shape):
+    frequencies = core.vec_indices_to_frequencies(frequency_vec_indices, volume_shape)
+    # if freq is not on the 0-line, can double it (since there is one XWX for each side)
+    doubling = jnp.where(frequencies[...,0] == 0, 1, jnp.sqrt(2))
+    radiuses = jnp.round(jnp.linalg.norm(frequencies, axis=-1)).astype(int)
+
+    prior_inverse_covariance = get_prior_from_options(prior_inverse_covariance, prior_option, frequency_vec_indices, volume_shape )
+    # signal_variance_expanded = make_regularization_from_reduced(prior_inverse_covariance)
+    XWX = undo_keep_upper_triangular(XWX)
+    U = (XWX + prior_inverse_covariance)
+    # This takes frequency_vec_indices.size * gram_size * gram_size memory
+    # K1= jax.scipy.linalg.solve(U, XWX, lower=False,assume_a='pos')
+    K = jax.scipy.linalg.solve(U, XWX, lower=False,assume_a='pos') * doubling[...,None,None]
+    krons = batch_kron(K,K)
+    summed_krons = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_shape[0]//2-1, krons.reshape(krons.shape[0], -1), radiuses, None).reshape([-1, krons.shape[-1], krons.shape[-1] ])
+
+    # vec
+    estimate_covariance = linalg.broadcast_outer(estimate_0 , estimate_1 ).swapaxes(-1,-2).reshape(-1, estimate_0.shape[-1]**2)
+
+    # Get the 
+    estimate_covariance_summed = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_shape[0]//2-1, estimate_covariance.reshape(krons.shape[0], -1), radiuses, None).reshape([-1, estimate_0.shape[-1], estimate_0.shape[-1] ])
+
+    good_v = jnp.where(frequencies[...,0] == 0, 0, 1)
+
+    # Add the hermitian conjugate
+    estimate_covariance = linalg.broadcast_outer(jnp.conj(estimate_0) * good_v[...,None], jnp.conj(estimate_1) * good_v[...,None]).swapaxes(-1,-2).reshape(-1, estimate_0.shape[-1]**2)
+    estimate_covariance_summed += core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_shape[0]//2-1, estimate_covariance.reshape(krons.shape[0], -1), radiuses, None).reshape([-1, estimate_0.shape[-1], estimate_0.shape[-1] ])
+
+    return summed_krons, estimate_covariance_summed
+
+
+def estimate_local_covariances(XWX_0, XWX_1, estimate_0, estimate_1, prior_inverse_covariance, prior_option, volume_shape, pol_degree):
+
+    logger.info("starting local covariances estimation")
+    volume_size = np.prod(volume_shape)
+    half_volume_size = np.prod(volume_shape_to_half_volume_shape(volume_shape))
+    num_params = get_feature_size(pol_degree)
+
+    krons = jnp.zeros((volume_shape[0]//2-1, num_params**2, num_params**2), dtype = XWX_0.dtype)
+    vec_indices = np.arange(half_volume_size)
+    # Covariances of estimates
+    estimate_0 = estimate_0.astype(np.complex64)
+    estimate_1 = estimate_1.astype(np.complex64)
+
+    batch_size = int((utils.get_gpu_memory_total()  )/ ( 4 * num_params**4 * 4 / 1e9 )  ) 
+    n_batches = np.ceil(half_volume_size / batch_size).astype(int)
+    krons, estimate_covariance_averaged = 0,0
+    for k in range(n_batches):
+        ind_st, ind_end = utils.get_batch_of_indices(half_volume_size, batch_size, k)
+        krons_this, covs_this = estimate_local_pol_covariances_inner((XWX_0[ind_st:ind_end] + XWX_1[ind_st:ind_end])/2, estimate_0[ind_st:ind_end], estimate_1[ind_st:ind_end],  prior_inverse_covariance, prior_option, vec_indices[ind_st:ind_end], volume_shape)
+
+        krons += krons_this
+        estimate_covariance_averaged += covs_this
+    
+    # batch_vec()
+    estimated_covariances = jnp.linalg.solve(krons, estimate_covariance_averaged.swapaxes(-1,-2).reshape(krons.shape[0], -1))
+    estimated_covariances = estimated_covariances.reshape([-1, num_params,num_params]).swapaxes(-1,-2)
+    logger.info("end of local covariances estimation")
+
+    return estimated_covariances
+
+
 
 def estimate_signal_variance_from_correlation(vol1, vol2, lhs, prior, volume_shape):
     correlation = jnp.conj(vol1) * vol2
@@ -483,16 +713,15 @@ def get_degree_of_each_term(max_pol_degree):
 
 
 
-def test_multiple_disc(experiment_dataset, cross_validation_dataset, cov_noise,  batch_size, discretization_params, signal_variance, return_all = False):
+def test_multiple_disc(experiment_dataset, cross_validation_dataset, cov_noise,  batch_size, discretization_params, prior_inverse_covariance, return_all = False):
 
     discretization_params = get_default_discretization_params(experiment_dataset.grid_size) if discretization_params is None else discretization_params
 
     max_pol_degree = np.max([ pol_degree for pol_degree, _, _ in discretization_params ])
 
     # Precomputation
-    XWX, F = precompute_kernel(experiment_dataset, cov_noise.astype(np.float32),  batch_size, pol_degree=max_pol_degree)
+    XWX, F = precompute_kernel(experiment_dataset, cov_noise.astype(np.float32), pol_degree=max_pol_degree)
     n_disc_test = len(discretization_params)
-
 
     # Compute weights for each discretization
     weights = np.zeros((n_disc_test, experiment_dataset.volume_size, get_feature_size(max_pol_degree)), dtype = np.complex64)
@@ -502,8 +731,8 @@ def test_multiple_disc(experiment_dataset, cross_validation_dataset, cov_noise, 
     F = np.asarray(F)
     for idx, (pol_degree, h, reg) in enumerate(discretization_params):
         logger.info(f"computing discretization with params: degree={pol_degree}, h={h}, reg={reg}")
-        reg_used = signal_variance if reg else None
-        weights_this, valid_weights_this = compute_weights_from_precompute(experiment_dataset, XWX, F, reg_used, pol_degree, max_pol_degree, h)
+        # reg_used = prior_inverse_covariance if reg else None
+        weights_this, valid_weights_this, _,_ = compute_weights_from_precompute(experiment_dataset, XWX, F, prior_inverse_covariance, pol_degree, max_pol_degree, h, prior_option = reg)
         weights[idx,:,:weights_this.shape[-1]] = weights_this
         valid_weights[idx] = valid_weights_this
 
@@ -522,7 +751,7 @@ def test_multiple_disc(experiment_dataset, cross_validation_dataset, cov_noise, 
     index_array_vol = utils.make_radial_image(index_array, experiment_dataset.volume_shape)
 
     disc_choices = np.array(discretization_params)[index_array]
-    hs_choices = disc_choices[:,1]
+    hs_choices = disc_choices[:,1].astype(int)
     hs_choices = np.maximum.accumulate(hs_choices)
     disc_choices[:,1] = hs_choices
 
@@ -550,17 +779,16 @@ def make_regularization_from_reduced(regularization_reduced):
                                 jnp.repeat(regularization_reduced[...,2:3], repeats =6, axis=-1,total_repeat_length=6) ],
                                 axis = -1)
 
-
-
-def compute_weights_from_precompute(experiment_dataset, XWX, F, signal_variance, pol_degree, max_pol_degree, h):
-    use_regularization = signal_variance is not None
+def compute_weights_from_precompute(volume_shape, XWX, F, prior_inverse_covariance, pol_degree, max_pol_degree, h, return_XWX_F = False, prior_option = "by_degree"):
+    # use_regularization = prior_inverse_covariance is not None
+    volume_size = np.prod(volume_shape)
 
     # NOTE the 1.0x is a weird hack to make sure that JAX doesn't compile store some arrays when compiling. I don't know why it does that.
-    threed_frequencies = core.vec_indices_to_vol_indices(np.arange(experiment_dataset.volume_size), experiment_dataset.volume_shape ) * 1.0
+    threed_frequencies = core.vec_indices_to_vol_indices(np.arange(volume_size), volume_shape ) * 1.0
 
     if type(h) == float or type(h) == int:
         h_max = int(h)
-        h_ar = h*np.ones(experiment_dataset.volume_size)
+        h_ar = h*np.ones(volume_size)
     else:
         h_max = int(np.max(h))
         h_ar = h.astype(int) * 1.0
@@ -572,72 +800,67 @@ def compute_weights_from_precompute(experiment_dataset, XWX, F, signal_variance,
         XWX = XWX[...,triu_indices]
         F = F[...,:feature_size]
 
+    # take out stuff from prior
+    if prior_option == "by_degree":
+        prior_inverse_covariance = prior_inverse_covariance[:,:pol_degree+1]   
+    elif prior_option == "complete":
+        num_params = get_feature_size(pol_degree)
+        prior_inverse_covariance = prior_inverse_covariance[...,:num_params, :num_params]
+    else:
+        prior_inverse_covariance = None
+
     # n_pol_param = small_gram_matrix_size(pol_degree) + 2 * get_feature_size(pol_degree) + 1
     memory_per_pixel = (2*h_max +1)**3 * big_gram_matrix_size(pol_degree) * 2 * 8 * 4
     ## There seems to be a strange bug with JAX. If it just barely runs out of memory, it won't throw an error but the memory will get corrupted and the answer is nonsense. This is an incredibly difficult thing to debug. 
     if h_max == 0:
         memory_per_pixel = (2*1 +1)**3 * big_gram_matrix_size(pol_degree) * 2 * 8 * 4
 
-    # batch_size = int(utils.get_gpu_memory_total() / (memory_per_pixel * 16 * 20/ 1e9))
-    # n_batches = np.ceil(experiment_dataset.volume_size / batch_size).astype(int)
-
-
-    # print('CHANGE BACK TYPE?')
-    # XWX = jnp.asarray(XWX).astype(np.float64)
-    # F = jnp.asarray(F).astype(np.complex128)
-
     XWX = jnp.asarray(XWX)
     F = jnp.asarray(F)
-    batch_size = int((utils.get_gpu_memory_total() -  utils.get_size_in_gb(XWX) - utils.get_size_in_gb(F)  )/ (memory_per_pixel   /1e9  )  ) 
-    n_batches = np.ceil(experiment_dataset.volume_size / batch_size).astype(int)
+    prior_inverse_covariance = jnp.array(prior_inverse_covariance)
 
-    reconstruction = np.zeros((experiment_dataset.volume_size, feature_size), dtype = np.complex64)
-    good_pixels = np.zeros((experiment_dataset.volume_size), dtype = bool)
-    logger.info(f"KE batch size: {batch_size}")
+    reconstruction = np.zeros((volume_size, feature_size), dtype = np.complex64)
+    good_pixels = np.zeros((volume_size), dtype = bool)
     msgs = 0
+    
+    if return_XWX_F:
+        XWX_s = np.zeros_like(XWX)
+        F_s = np.zeros_like(F)
+    else:
+        XWX_s = None
+        F_s = None
+
+    batch_size = int((utils.get_gpu_memory_total() -  utils.get_size_in_gb(XWX) - utils.get_size_in_gb(F)  )/ (memory_per_pixel   /1e9  )  ) 
+    n_batches = np.ceil(volume_size / batch_size).astype(int)
+    logger.info(f"KE batch size: {batch_size}")
 
     for k in range(n_batches):
-        ind_st, ind_end = utils.get_batch_of_indices(experiment_dataset.volume_size, batch_size, k)
-        signal_variance_this = signal_variance[ind_st:ind_end, :pol_degree+1] if use_regularization else None
-        reconstruction[ind_st:ind_end], good_pixels[ind_st:ind_end], problems = compute_estimate_from_precompute_one(XWX, F, h_max, h_ar[ind_st:ind_end], threed_frequencies[ind_st:ind_end], experiment_dataset.volume_shape, pol_degree =pol_degree, signal_variance=signal_variance_this, use_regularization = use_regularization)
+        ind_st, ind_end = utils.get_batch_of_indices(volume_size, batch_size, k)
+        # signal_variance_this = prior_inverse_covariance[ind_st:ind_end, :pol_degree+1] if use_regularization else None
+
+        reconstruction[ind_st:ind_end], good_pixels[ind_st:ind_end], problems, XWX_b, F_b = compute_estimate_from_precompute_one(XWX, F, h_max, h_ar[ind_st:ind_end], threed_frequencies[ind_st:ind_end], volume_shape, pol_degree =pol_degree, prior_inverse_covariance=prior_inverse_covariance, prior_option = prior_option, return_XWX_F = return_XWX_F)
+
+        if return_XWX_F and (ind_st < XWX_s.shape[0]):
+            ind_end_t = np.min([ind_end, XWX_s.shape[0]])
+            # if ind_st <XWX_s.shape[0]
+            XWX_s[ind_st:ind_end_t] = XWX_b[:ind_end_t-ind_st]
+            F_s[ind_st:ind_end_t] = F_b[:ind_end_t-ind_st]
+
         if k < 3:
             utils.report_memory_device(logger=logger)
             print(k)
-        # if problems.any():   
-        #     logger.warning(f"Issues in linalg solve? Problems for {problems.sum() / problems.size} pixels, pol_degree={pol_degree}, h={h}, reg={use_regularization}")
 
         if jnp.isnan(reconstruction[ind_st:ind_end]).any():
-            logger.warning(f"IsNAN {jnp.isnan(reconstruction[ind_st:ind_end]).sum() / reconstruction[ind_st:ind_end].size} pixels, pol_degree={pol_degree}, h={h}, reg={use_regularization}")
-        # if jnp.isinf(reconstruction[ind_st:ind_end]).any():
+            logger.warning(f"IsNAN {jnp.isnan(reconstruction[ind_st:ind_end]).sum() / reconstruction[ind_st:ind_end].size} pixels, pol_degree={pol_degree}, h={h}, reg={prior_option}")
+
         if problems.any():
-            logger.warning(f"Issues in linalg solve? Problems for {problems.sum() / problems.size} pixels, pol_degree={pol_degree}, h={h}, reg={use_regularization}")
             if msgs < 10: 
+                logger.warning(f"Issues in linalg solve? Problems for {problems.sum() / problems.size} pixels, pol_degree={pol_degree}, h={h}, reg={prior_option}")
                 msgs +=1
-                logger.warning(f"isinf {jnp.isinf(reconstruction[ind_st:ind_end]).sum() / reconstruction[ind_st:ind_end].size} pixels, pol_degree={pol_degree}, h={h}, reg={use_regularization}")
+                logger.warning(f"isinf {jnp.isinf(reconstruction[ind_st:ind_end]).sum() / reconstruction[ind_st:ind_end].size} pixels, pol_degree={pol_degree}, h={h}, reg={prior_option}")
 
-            # XWX_undo = undo_keep_upper_triangular(XWX, reconstruction.shape[-1])
-
-            # recon2 , good_v_v, problems_v = batch_solve_for_m(XWX_undo[ind_st:ind_end], F[ind_st:ind_end], 1/signal_variance_this )
-
-            # bad_idx = jnp.isinf(reconstruction[ind_st:ind_end]).any(axis=-1)
-            # bad_indices = np.arange(ind_st, ind_end)[bad_idx]
-            # # bad_indices = np.nonzero(bad_idx)[0]
-            # # import pdb; pdb.set_trace()
-            # vmapcond = jax.vmap(jnp.linalg.cond, in_axes = 0)
-
-            # # print(np.max(vmapcond(XWX_undo[bad_indices])))
-            # x = core.vec_indices_to_frequencies(bad_indices, experiment_dataset.volume_shape)
-            # print(x)
-            # print(np.min(np.linalg.norm(x, axis=-1)))
-            # import pdb; pdb.set_trace()
     logger.info(f"Done with kernel estimate")
-    return reconstruction, good_pixels#, np.asarray(density_over_noise), XWX, F
-
-
-# def adaptive_disc(experiment_dataset, cov_noise,  batch_size, pol_degree=0, h =1, signal_variance=None):
-#     use_regularization = signal_variance is not None
-#     XWX, F = precompute_kernel(experiment_dataset, cov_noise,  batch_size, pol_degree=pol_degree)
-#     return compute_weights_from_precompute(experiment_dataset, XWX, F, signal_variance, pol_degree, h)
+    return reconstruction, good_pixels, XWX_s, F_s
 
 
 @functools.partial(jax.jit, static_argnums = [5,6,7,8,9, 10])    
@@ -738,7 +961,6 @@ def compute_residuals_many_weights_in_weight_batch(experiment_dataset, weights, 
 #     # B_p^2 * 4 h^3  + noise_variance_over_density * R * (-d) * h^(-d-1) = 0 
 #     # Solving for h:
 #     # h = (d * R * density_over_variance / (B_p^2 * 4) )**(1/(4 + d)) 
-
 #     return h
 
 def compute_gradient(x):
