@@ -29,18 +29,18 @@ def resample_trajectory(gt_vols, n_vols_along_path = 6):
 def mkdir_safe(folder):
     os.makedirs(folder, exist_ok = True)
     
-def save_volume(vol, path, volume_shape, from_ft = True):
+def save_volume(vol, path, volume_shape, from_ft = True, voxel_size = None):
     if from_ft:
         vol =  np.real(ftu.get_idft3(vol.reshape(volume_shape)))
     else:
         vol = np.real(vol.reshape(volume_shape))
-    utils.write_mrc(path + '.mrc', vol.astype(np.float32))
+    utils.write_mrc(path + '.mrc', vol.astype(np.float32), voxel_size = voxel_size)
     
-def save_volumes(volumes,  save_path , volume_shape = None, from_ft = True, index_offset=0  ):
+def save_volumes(volumes,  save_path , volume_shape = None, from_ft = True, index_offset=0, voxel_size = None):
     grid_size = np.round((volumes[0].shape[0])**(1/3)).astype(int)
     volume_shape = 3*[grid_size] if volume_shape is None else volume_shape
     for v_idx, vol in enumerate(volumes):
-        save_volume(vol, save_path + format(index_offset + v_idx, '03d') , volume_shape, from_ft = from_ft)
+        save_volume(vol, save_path + format(index_offset + v_idx, '03d') , volume_shape, from_ft = from_ft, voxel_size = voxel_size)
 
 
 def plot_on_same_scale(cs, xs, labels,plot_folder, ):

@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import jax, time
 import functools
-from recovar import core, covariance_core, regularization, utils, constants, noise, homogeneous
+from recovar import core, covariance_core, regularization, utils, constants, noise, homogeneous, linalg
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 
@@ -872,7 +872,9 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     
     logger.info("end of covariance computation - before solve")
     rhs = vec(rhs)
-    covar = jax.scipy.linalg.solve( lhs ,rhs, assume_a='pos')
+
+    # covar = jax.scipy.linalg.solve( lhs ,rhs, assume_a='pos')
+    covar = linalg.batch_linear_solver(lhs, rhs)
     covar = unvec(covar)
     logger.info("end of solve")
 

@@ -91,6 +91,7 @@ def get_params_generator(dataset_params_fn ):
 
 ## A uniform pose generator
 def random_sampling_scheme(n_images, grid_size, seed =0, uniform = True ):
+    np.random.seed(seed)
     dataset_params_fn = load_first_dataset_params
     ctf_params, _, _ = generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  )
     if uniform:
