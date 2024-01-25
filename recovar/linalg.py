@@ -171,3 +171,26 @@ def broadcast_outer(x,y):
 
 def multiply_along_axis(A, B, axis):
     return jnp.swapaxes(jnp.swapaxes(A, axis, -1) * B, -1, axis)
+
+def batch_hermitian_linear_solver(A,b):
+    return solve_by_SVD(A,b)
+
+def batch_linear_solver(A,b):
+    return solve_by_SVD(A,b)
+
+def solve_by_SVD(A,b):
+    U,S,Vh = jax.scipy.linalg.svd(A)
+
+    if b.ndim == A.ndim -1:
+        expand = True
+        b = b[...,None]
+    else:
+        expand = False
+    
+    Uhb = jax.lax.batch_matmul(jnp.conj(U.swapaxes(-1,-2)),b)/ S[...,None]
+    x = jax.lax.batch_matmul(jnp.conj(Vh.swapaxes(-1,-2)),Uhb)
+
+    if expand:
+        x = x[...,0]
+
+    return x

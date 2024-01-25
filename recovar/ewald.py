@@ -27,7 +27,7 @@ PART 1: Coordinate/Ewald Sphere Functions
 ## Get unrotated coordinates for the ewald sphere 
 def get_unrotated_ewald_sphere_coords(image_shape, voxel_size, lam, scaled=True):
     ## Pass scaled = true
-    freqs = ftu.get_k_coordinate_of_each_pixel(image_shape, voxel_size=voxel_size, scaled=True)
+    freqs = ftu.get_k_coordinate_of_each_pixel(image_shape, voxel_size=voxel_size, scaled=True)#.astype(np.float64)
     r = 1/lam
     z = r - jnp.sqrt(r**2 - jnp.linalg.norm(freqs, axis =-1)**2)
     z = z.reshape(-1,1)
@@ -38,9 +38,10 @@ def get_unrotated_ewald_sphere_coords(image_shape, voxel_size, lam, scaled=True)
 ## Get coordinates for the ewald sphere that have the volume represented
 # @functools.partial(jax.jit, static_argnums=[1,2,3])
 def get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam):
-    unrotated_plane_indices = get_unrotated_ewald_sphere_coords(image_shape, voxel_size, lam, scaled = False)
+    unrotated_plane_indices = get_unrotated_ewald_sphere_coords(image_shape, voxel_size, lam, scaled = False).astype(np.float64)
 
     rotated_plane = jnp.matmul(unrotated_plane_indices, rotation_matrix, precision = jax.lax.Precision.HIGHEST)
+    ## CHANGE THIS BACK
     rotated_coords = rotated_plane + jnp.floor(1.0 * grid_size/2)
     return rotated_coords
 
@@ -49,8 +50,12 @@ batch_get_sphere_gridpoint_coords = jax.vmap(get_ewald_sphere_gridpoint_coords, 
 ## Get the slices for ewald sphere
 def get_ewald_sphere_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam, disc_type):
     order = 1 if disc_type == "linear_interp" else 0
+    if order ==1:
+        print("PROBLEM EHRE")
+
     return map_coordinates_on_ewald_sphere(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam, order)
     
+
 # No reason not to do this for forward model, but haven't figured out how to do it for the adjoint 
 # Maps coordinates onto the Ewald sphere
 def map_coordinates_on_ewald_sphere(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam,  order):
@@ -62,13 +67,27 @@ def map_coordinates_on_ewald_sphere(volume, rotation_matrices, image_shape, volu
     slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
     return slices
 
-# Nearest neighbor
-def get_nearest_gridpoint_indices_ewald_sphere(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam):
-    # get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
-    rotated_plane = get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
-    rotated_indices = core.round_to_int(rotated_plane)
-    rotated_indices = core.vol_indices_to_vec_indices(rotated_indices, volume_shape)
-    return rotated_indices
+
+# def map_coordinates_on_ewald_sphere2(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam,  order):
+#     indices = batch_get_nearest_gridpoint_indices_ewald_sphere(rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam)
+#     return core.batch_slice_volume_by_nearest(volume, indices)
+
+# # Nearest neighbor
+# def batch_get_nearest_gridpoint_indices_ewald_sphere(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam):
+#     # get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
+#     rotated_plane = batch_get_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
+#     rotated_indices = core.round_to_int(rotated_plane)
+#     rotated_indices = core.vol_indices_to_vec_indices(rotated_indices, volume_shape)
+#     return rotated_indices
+
+
+# # Nearest neighbor
+# def get_nearest_gridpoint_indices_ewald_sphere(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam):
+#     # get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
+#     rotated_plane = get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
+#     rotated_indices = core.round_to_int(rotated_plane)
+#     rotated_indices = core.vol_indices_to_vec_indices(rotated_indices, volume_shape)
+#     return rotated_indices
 
 # Flips indices
 def get_flipped_indices(image_shape):
@@ -76,8 +95,8 @@ def get_flipped_indices(image_shape):
     minus_freqs = -freqs
     flipped_indices = core.frequencies_to_vec_indices(minus_freqs, image_shape)
     grid_size = image_shape[0]
-    bad_idx = jnp.nonzero(jnp.any(freqs== -grid_size//2 , axis =1),size=image_shape[0]**2)
-    flipped_indices = flipped_indices.at[bad_idx].set(0)
+    bad_idx = jnp.any(freqs== -grid_size//2 , axis =-1)
+    flipped_indices = jnp.where(bad_idx, -1, flipped_indices)
     return flipped_indices
 
 '''
@@ -122,12 +141,13 @@ def ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_
     chi = compute_chi_wrapper(ctf_params, image_shape, voxel_size)
 
     
-    lam = volt_to_wavelength(ctf_params[0,3])
+    lam = volt_to_wavelength(ctf_params[0,3].astype(np.float64))  
 
     # Slice volume on sphere
     vol_real_on_sphere = get_ewald_sphere_slices(volume_real, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  disc_type)
     vol_imag_on_sphere = get_ewald_sphere_slices(volume_imag, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  disc_type)
-    
+    # import pdb; pdb.set_trace()
+
     # Get flipped versions
     flipped_idx = get_flipped_indices(image_shape)
     flipped_vol_real_on_sphere = vol_real_on_sphere[...,flipped_idx]
@@ -140,6 +160,9 @@ def ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_
 
     images_imag = -(vol_real_on_sphere - flipped_vol_real_on_sphere) * jnp.cos(chi) \
                 + (vol_imag_on_sphere - flipped_vol_imag_on_sphere) * jnp.sin(chi) 
+    
+    # images_real = vol_real_on_sphere
+    # images_imag = vol_imag_on_sphere
     # import pdb; pdb.set_trace()
     return 0.5 * images_real, 0.5 * images_imag
 

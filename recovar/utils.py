@@ -76,13 +76,22 @@ def report_memory_device(device=0, logger=None):
 def get_size_in_gb(x):
     return x.size * x.itemsize / 1e9
     
-def write_mrc(file, ar):
+def write_mrc(file, ar, voxel_size = None):
+    # This is to agree with the cryosparc/cryoDRGN convention
+    if ar.ndim == 3:
+        ar = np.transpose(ar, (2,1,0))
     with mrcfile.new(file, overwrite=True) as mrc:
         mrc.set_data(ar.real.astype(np.float32))
+        if voxel_size is not None:
+            mrc.voxel_size = voxel_size
 
 def load_mrc(filepath):
     with mrcfile.open(filepath) as mrc:
         data = mrc.data
+
+    # This is to agree with the cryosparc/cryoDRGN convention
+    if data.ndim == 3:
+        data = np.transpose(data, (2,1,0))
     return data
         
 def symmetrize_ft_volume(vol, volume_shape):
