@@ -18,6 +18,16 @@ names_to_show = { "diagonal": "diagonal", "wilson": "Wilson", "diagonal masked":
 colors_name = { "diagonal": "cornflowerblue", "wilson": "lightsalmon", "diagonal masked": "blue", "wilson masked": "orangered"  }
 plt.rcParams['text.usetex'] = True
 
+def plot_power_spectrum(volume, ax = None):
+    grid_size = volume_shape[0]
+    input_ax_is_none = ax is None
+    if input_ax_is_none:
+        plt.figure(figsize=(6, 5))
+        ax = plt.gca() 
+    avg = utils.average_over_shells(volume, volume.shape)
+    ax.semilogy(avg)
+    return avg
+
 def plot_noise_profile(results, yscale = 'linear'):
     plt.figure(figsize = (8,8))
     yy = results['noise_var']
@@ -293,11 +303,11 @@ def plot_mean_fsc(results,cryos):
     ax.set_title("mean estimation", fontsize=20)
     return ax
     
-def plot_fsc(cryo, vol1, vol2, mask = None, threshold = 1/7, ax = None, voxel_size= None, volume_shape= None, name = "unmasked"):
+def plot_fsc(cryo, vol1, vol2, mask = None, threshold = 1/7, ax = None, voxel_size= None, volume_shape= None, name = "unmasked", fmat = ""):
     voxel_size = cryo.voxel_size if voxel_size is None else voxel_size
     volume_shape = cryo.volume_shape if volume_shape is None else volume_shape
 
-    ax, score = plot_fsc_new(vol1, vol2, volume_shape, voxel_size,  curve = None, ax = ax, threshold = threshold, filename = None, name = name, volume_mask = mask)
+    ax, score = plot_fsc_new(vol1, vol2, volume_shape, voxel_size,  curve = None, ax = ax, threshold = threshold, filename = None, name = name, volume_mask = mask, fmat = fmat)
     return ax
     
     
@@ -344,7 +354,7 @@ def plot_mean_result(cryo, means, cov_noise):
 
         
         
-def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = None, threshold = 1/7, filename = None, volume_mask = None, name = ""):
+def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = None, threshold = 1/7, filename = None, volume_mask = None, name = "", fmat = ""):
     grid_size = volume_shape[0]
     input_ax_is_none = ax is None
     if input_ax_is_none:
@@ -367,7 +377,7 @@ def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = N
     freq = freq[freq >= 0 ]
     freq = freq[:grid_size//2 ]
     max_idx = min(curve.size, freq.size)
-    line, = ax.plot(freq[:max_idx], curve[:max_idx],  linewidth = 2 )
+    line, = ax.plot(freq[:max_idx], curve[:max_idx],  fmat, linewidth = 2 )
     color = line.get_color()
     
     if threshold is not None:

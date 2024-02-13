@@ -78,8 +78,9 @@ def get_size_in_gb(x):
     
 def write_mrc(file, ar, voxel_size = None):
     # This is to agree with the cryosparc/cryoDRGN convention
-    if ar.ndim == 3:
+    if ar.ndim == 3 and np.isclose(ar.shape, ar.shape[0]).all():
         ar = np.transpose(ar, (2,1,0))
+        
     with mrcfile.new(file, overwrite=True) as mrc:
         mrc.set_data(ar.real.astype(np.float32))
         if voxel_size is not None:
@@ -90,7 +91,7 @@ def load_mrc(filepath):
         data = mrc.data
 
     # This is to agree with the cryosparc/cryoDRGN convention
-    if data.ndim == 3:
+    if data.ndim == 3 and np.isclose(data.shape, data.shape[0]).all():
         data = np.transpose(data, (2,1,0))
     return data
         
@@ -124,7 +125,7 @@ def get_column_batch_size(grid_size, gpu_memory):
     return int(50 * ((256/grid_size)**3) * gpu_memory / 38)
 
 def get_latent_density_batch_size(test_pts,zdim, gpu_memory):
-    return np.max([int(gpu_memory/3 * (get_size_in_gb(test_pts) * zdim**2)), 1])
+    return np.max([int(gpu_memory /(3 * (get_size_in_gb(test_pts) * zdim**2))), 1])
 
 def get_embedding_batch_size(basis, image_size, contrast_grid, zdim, gpu_memory):
 

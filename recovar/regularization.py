@@ -190,6 +190,150 @@ def compute_fsc_prior_gpu(volume_shape, image0, image1, bottom_of_fraction = Non
     
     return prior, fsc, prior_avg
 
+def adjust_regularization_relion_style(filter, volume_shape, tau = None, oversampling_factor = 1, max_res_shell = None):
+
+    # Original code copy pasted from https://github.com/3dem/relion/blob/e5c4835894ea7db4ad4f5b0f4861b33269dbcc77/src/backprojector.cpp#L1082
+    # 	if (do_map)
+	# {
+	# 	// Then, add the inverse of tau2-spectrum values to the weight
+	# 	FOR_ALL_ELEMENTS_IN_FFTW_TRANSFORM(Fconv)
+ 	# 	{
+	# 		int r2 = kp * kp + ip * ip + jp * jp;
+	# 		if (r2 < max_r2)
+	# 		{
+	# 			int ires = ROUND(sqrt((RFLOAT)r2) / padding_factor);
+	# 			RFLOAT invw = DIRECT_A3D_ELEM(Fweight, k, i, j);
+
+	# 			RFLOAT invtau2;
+	# 			if (DIRECT_A1D_ELEM(tau2, ires) > 0.)
+	# 			{
+	# 				// Calculate inverse of tau2
+	# 				invtau2 = 1. / (oversampling_correction * tau2_fudge * DIRECT_A1D_ELEM(tau2, ires));
+	# 			}
+	# 			else if (DIRECT_A1D_ELEM(tau2, ires) < 1e-20)
+	# 			{
+	# 				// If tau2 is zero, use small value instead
+	# 				if (invw > 1e-20) invtau2 = 1./ ( 0.001 * invw);
+	# 				else invtau2 = 0.;
+	# 			}
+	# 			else
+	# 			{
+	# 				std::cerr << " tau2= " << tau2 << std::endl;
+	# 				REPORT_ERROR("ERROR BackProjector::reconstruct: Negative or zero values encountered for tau2 spectrum!");
+	# 			}
+
+	# 			// Only for (ires >= minres_map) add Wiener-filter like term
+	# 			if (ires >= minres_map)
+	# 			{
+	# 				// Now add the inverse-of-tau2_class term
+	# 				invw += invtau2;
+	# 				// Store the new weight again in Fweight
+	# 				DIRECT_A3D_ELEM(Fweight, k, i, j) = invw;
+	# 			}
+	# 		}
+	# 	}
+	# } //end if do_map
+
+	# RCTOC(ReconTimer,ReconS_2_5);
+	# if (skip_gridding || max_iter_preweight <= 0)
+	# {
+	# 	RCTIC(ReconTimer,ReconS_3);
+	# 	Fconv.initZeros(); // to remove any stuff from the input volume
+	# 	Projector::decenter(data, Fconv, max_r2);
+
+	# 	// Prevent divisions by zero: set Fweight to at least 1/1000th of the radially averaged weight at that resolution
+	# 	// beyond r_max, set Fweight to at least 1/1000th of the radially averaged weight at r_max;
+	# 	MultidimArray<RFLOAT> radavg_weight(r_max), counter(r_max);
+	# 	const int round_max_r2 = ROUND(r_max * padding_factor * r_max * padding_factor);
+	# 	FOR_ALL_ELEMENTS_IN_FFTW_TRANSFORM(Fweight)
+	# 	{
+	# 		const int r2 = kp * kp + ip * ip + jp * jp;
+	# 		// Note that (r < ires) != (r2 < max_r2), because max_r2 = ROUND(r_max * padding_factor)^2.
+	# 		// We have to use round_max_r2 = ROUND((r_max * padding_factor)^2).
+	# 		// e.g. k = 0, i = 7, j = 28, max_r2 = 841, r_max = 16, padding_factor = 18.
+	# 		if (r2 < round_max_r2)
+	# 		{
+	# 			const int ires = FLOOR(sqrt((RFLOAT)r2) / padding_factor);
+	# 			if (ires >= XSIZE(radavg_weight))
+	# 			{
+	# 				std::cerr << " k= " << k << " i= " << i << " j= " << j << std::endl;
+	# 				std::cerr << " ires= " << ires << " XSIZE(radavg_weight)= " << XSIZE(radavg_weight) << std::endl;
+	# 				REPORT_ERROR("BUG: ires >=XSIZE(radavg_weight) ");
+	# 			}
+	# 			DIRECT_A1D_ELEM(radavg_weight, ires) += DIRECT_A3D_ELEM(Fweight, k, i, j);
+	# 			DIRECT_A1D_ELEM(counter, ires) += 1.;
+	# 		}
+	# 	}
+
+	# 	// Calculate 1/1000th of radial averaged weight
+	# 	FOR_ALL_DIRECT_ELEMENTS_IN_ARRAY1D(radavg_weight)
+	# 	{
+	# 		if (DIRECT_A1D_ELEM(counter, i) > 0. || DIRECT_A1D_ELEM(radavg_weight, i) > 0.)
+	# 		{
+	# 			DIRECT_A1D_ELEM(radavg_weight, i) /= 1000.* DIRECT_A1D_ELEM(counter, i);
+	# 		}
+	# 		else
+	# 		{
+	# 			std::cerr << " counter= " << counter << std::endl;
+	# 			std::cerr << " radavg_weight= " << radavg_weight << std::endl;
+	# 			REPORT_ERROR("BUG: zeros in counter or radavg_weight!");
+	# 		}
+	# 	}
+
+	# 	bool have_warned = false;
+	# 	// perform XMIPP_MAX on all weight elements, and do division of data/weight
+	# 	FOR_ALL_ELEMENTS_IN_FFTW_TRANSFORM(Fweight)
+	# 	{
+	# 		const int r2 = kp * kp + ip * ip + jp * jp;
+	# 		const int ires = FLOOR(sqrt((RFLOAT)r2) / padding_factor);
+	# 		const RFLOAT weight =  XMIPP_MAX(DIRECT_A3D_ELEM(Fweight, k, i, j), DIRECT_A1D_ELEM(radavg_weight, (ires < r_max) ? ires : (r_max - 1)));
+	# 		if (weight == 0.)
+	# 		{
+	# 			if (!have_warned && abs(DIRECT_A3D_ELEM(Fconv, k, i, j)) > 0.)
+	# 			{
+	# 				std::cerr << " WARNING: ignoring divide by zero in skip_gridding: ires = " << ires << " kp = " << kp << " ip = " << ip << " jp = " << jp << std::endl;
+    #                 std::cerr << " Fconv= " << DIRECT_A3D_ELEM(Fconv, k, i, j) << " Fweight= " << DIRECT_A3D_ELEM(Fweight, k, i, j) << " radavg_weight=" <<DIRECT_A1D_ELEM(radavg_weight, (ires < r_max) ? ires : (r_max - 1)) << std::endl;
+	# 				std::cerr << " max_r2 = " << max_r2 << " r_max = " << r_max << " padding_factor = " << padding_factor
+	# 				           << " ROUND(sqrt(max_r2)) = " << ROUND(sqrt(max_r2)) << " ROUND(r_max * padding_factor) = " << ROUND(r_max * padding_factor) << std::endl;
+	# 				have_warned = true;
+	# 			}
+	# 		}
+	# 		else
+	# 		{
+	# 			DIRECT_A3D_ELEM(Fconv, k, i, j) /= weight;
+	# 		}
+	# 	}
+	# }
+
+    # There is an "oversampling" factor of 2 in the FSC, I guess due to the fact that they swap back and forth between a padded and unpadded grid
+    if tau is not None:
+        inv_tau = 1 / (oversampling_factor * tau)
+        # filter_this =  jnp.where(lhs > 1e-20 , 1/ ( 0.001 * jnp.where(filter > 1e-20, filter, 0 )
+        inv_tau = jnp.where( (tau < 1e-20) * (filter > 1e-20 ),  1./ ( 0.001 * filter), inv_tau)
+        inv_tau = jnp.where( (tau < 1e-20) * (filter <= 1e-20 ),  0, inv_tau)
+
+        regularized_filter = filter + inv_tau
+    else:
+        regularized_filter = filter
+
+    # Take max of weight of 1/1000 of spherically averaged weight 
+    # const RFLOAT weight =  XMIPP_MAX(DIRECT_A3D_ELEM(Fweight, k, i, j), DIRECT_A1D_ELEM(radavg_weight, (ires < r_max) ? ires : (r_max - 1)));
+
+    # Compute spherically averaged 
+    avged_reg = average_over_shells(regularized_filter, volume_shape, frequency_shift = 0) / 1000
+    # For the things below that frequency, set them to averaged.
+    
+    if max_res_shell is not None:
+        avged_reg = avged_reg.at[max_res_shell:].set(avged_reg[max_res_shell - 1])
+
+    from recovar import utils
+    avged_reg_volume_shape = utils.make_radial_image(avged_reg, volume_shape)
+
+    regularized_filter = jnp.maximum(regularized_filter, avged_reg_volume_shape)
+    # utils.make_radial
+
+    return regularized_filter
+
 
 @functools.partial(jax.jit, static_argnums = [0,6])    
 def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequency_shift , substract_shell_mean = False ):
