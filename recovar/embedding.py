@@ -68,7 +68,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
     
     basis_size = u.shape[-1] if basis_size == -1 else basis_size
 
-    batch_size = utils.get_embedding_batch_size(basis, cryos[0].image_size, contrast_grid, basis_size, gpu_memory)
+    batch_size = utils.get_embedding_batch_size(basis, cryos[0].image_size, contrast_grid, basis_size, gpu_memory) * 1
     logger.info(f"embedding batch size? {batch_size}")
 
     # It is not so clear whether this step should ever use the mask. But when using the options['ignore_zero_frequency'] option, there is a good reason not to do it
@@ -226,8 +226,6 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, eigenv
     
     return rhs, lhs
     
-
-
 
 
 def summed_outer_products(AU_t_images):

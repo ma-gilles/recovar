@@ -241,7 +241,7 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, ou
     noise_variance = get_noise_model(noise_model, grid_size) / 50000 * noise_level
 
     # mrcf = mrcfile.new(output_folder + '/particles.'+str(grid_size)+'.mrcs',overwrite=True)
-    mrc_file = mrcfile.new_mmap( output_folder + '/particles.'+str(grid_size)+'.mrcs', shape=(n_images, grid_size, grid_size), mrc_mode=2, overwrite = True)
+    mrc_file = None# mrcfile.new_mmap( output_folder + '/particles.'+str(grid_size)+'.mrcs', shape=(n_images, grid_size, grid_size), mrc_mode=2, overwrite = True)
 
     # import pdb; pdb.set_trace()
     main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file )
@@ -250,10 +250,10 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, ou
     simulation_info['trailing_zero_format_in_vol_name'] = trailing_zero_format_in_vol_name
     simulation_info['disc_type'] = disc_type
 
-    #
-    # with mrcfile.new(output_folder + '/particles.'+str(grid_size)+'.mrcs',overwrite=True) as mrc:
-    #     mrc.set_data(main_image_stack.astype(np.float32))
-    #     mrc.voxel_size = voxel_size
+    
+    with mrcfile.new(output_folder + '/particles.'+str(grid_size)+'.mrcs',overwrite=True) as mrc:
+        mrc.set_data(main_image_stack.astype(np.float32))
+        mrc.voxel_size = voxel_size
 
     poses = (rots, trans)
     utils.pickle_dump(poses, output_folder + '/poses.pkl')

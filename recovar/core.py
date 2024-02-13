@@ -170,6 +170,8 @@ def translate_single_image(image, translation, lattice):
     phase_shift = jnp.exp( 1j * -2 * jnp.pi * (lattice @ translation[:,None] ) )[...,0]
     return image.reshape(-1) * phase_shift
 
+
+
 batch_translate = jax.vmap(translate_single_image, in_axes = (0,0, None))
 
 @functools.partial(jax.jit, static_argnums=2)
@@ -177,6 +179,10 @@ def translate_images(image, translation, image_shape):
     twod_lattice = get_unrotated_plane_coords(image_shape, voxel_size =1, scaled = True )[:,:2]
     return batch_translate(image, translation, twod_lattice).astype(image.dtype)
 
+# batch_over_trans_translate_images = jax.vmap(translate_images, in_axes = (None,0, None))
+# batch_over_image_batch_over_trans_translate_images = jax.vmap(batch_over_trans_translate_images, in_axes = (0,0, None))
+
+batch_trans_translate_images = jax.vmap(translate_images, in_axes = (None,-2, None), out_axes = (-2))
 
 def get_unrotated_plane_grid_points(image_shape):
     unrotated_plane_indices =  ftu.get_k_coordinate_of_each_pixel(image_shape, voxel_size = 1, scaled = False)
@@ -337,6 +343,36 @@ def map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_sha
     batch_grid_pt_vec_ind_of_images = batch_grid_pt_vec_ind_of_images.reshape(-1,3).T
     slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
     return slices
+
+# batch volumes
+batch_vol_rot_slice_volume_by_map = jax.vmap(slice_volume_by_map, in_axes = (0, 0, None, None, None, None) )
+
+batch_translate_images = jax.vmap(translate_images, in_axes = (0, 0, None) )
+
+# TODO: Should it be residual of masked?
+# Residual will be 4 dimensional
+# volumes_batch x images_batch x rotations_batch x translations_batch x  
+# @functools.partial(jax.jit, static_argnums = [7,8,9,10,11,12])    
+def compute_residuals_many_poses(volumes, images, rotation_matrices, translations, CTF_params, noise_variance, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun ):
+    
+
+    assert(rotation_matrices.shape[0] == volumes.shape[0])
+    assert(rotation_matrices.shape[1] == images.shape[0])
+
+    assert(translations.shape[0] == volumes.shape[0])
+    assert(translations.shape[1] == images.shape[0])
+
+
+    # n_vols x rotations x image_size
+    projected_volumes = batch_vol_rot_slice_volume_by_map(volumes, rotation_matrices, image_shape, volume_shape, grid_size, disc_type)
+    projected_volumes = projected_volumes * CTF_fun( CTF_params, image_shape, voxel_size)
+
+    translated_images = translate_images(images, translations, image_shape)
+
+    norm_res_squared = jnp.linalg.norm((projected_volumes - translated_images) / jnp.sqrt(noise_variance), axis = (-1))
+    return norm_res_squared
+
+
 
 
 

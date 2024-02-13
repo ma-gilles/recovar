@@ -873,8 +873,8 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     logger.info("end of covariance computation - before solve")
     rhs = vec(rhs)
 
-    # covar = jax.scipy.linalg.solve( lhs ,rhs, assume_a='pos')
-    covar = linalg.batch_linear_solver(lhs, rhs)
+    covar = jax.scipy.linalg.solve( lhs ,rhs, assume_a='pos')
+    # covar = linalg.batch_linear_solver(lhs, rhs)
     covar = unvec(covar)
     logger.info("end of solve")
 
@@ -955,6 +955,13 @@ batch_kron = jax.vmap(jnp.kron, in_axes=(0,0))
 
 def summed_batch_kron(X):
     return jnp.sum(batch_kron(X,X), axis=0)
+
+def summed_batch_kron_scan(X):
+    def fori_loop_body(i, val):
+        return val + jnp.kron(X[i], X[i])
+    summed_kron = jax.lax.fori_loop(0, X.shape[0], fori_loop_body, 0.)
+    return summed_kron
+
 
 batch_x_T_y = jax.vmap(  lambda x,y : jnp.conj(x).T @ y, in_axes = (0,0))
 

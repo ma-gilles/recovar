@@ -181,10 +181,11 @@ def compute_latent_quadratic_forms_in_batch(test_pts, zs, cov_zs):
     n_images = zs.shape[0]
     utils
     batch_size_x = utils.get_latent_density_batch_size(test_pts, zs.shape[-1], utils.get_gpu_memory_total() ) 
-
+    logger.info(f"batch size in latent computation: {batch_size_x}")
     for k in range(0, utils.get_number_of_index_batch(n_images, batch_size_x)):
         batch_st, batch_end = utils.get_batch_of_indices(n_images, batch_size_x, k)
         quads[batch_st:batch_end,:] = compute_latent_quadratic_forms( test_pts.real, zs[batch_st:batch_end].real, cov_zs[batch_st:batch_end])
+
     return quads
 
 @jax.jit
@@ -194,3 +195,5 @@ def compute_det_cov_xs(cov_xs):
     # we exp(vs_i) / exp(vs_j) = exp(vs_i - vs_j)
     vs_subs_min = vs - jnp.max(vs)
     return jnp.exp(vs_subs_min)
+
+

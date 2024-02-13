@@ -173,13 +173,13 @@ def multiply_along_axis(A, B, axis):
     return jnp.swapaxes(jnp.swapaxes(A, axis, -1) * B, -1, axis)
 
 def batch_hermitian_linear_solver(A,b):
-    return solve_by_SVD(A,b)
+    return solve_by_SVD(A,b, hermitian=True)
 
 def batch_linear_solver(A,b):
     return solve_by_SVD(A,b)
 
-def solve_by_SVD(A,b):
-    U,S,Vh = jax.scipy.linalg.svd(A)
+def solve_by_SVD(A,b, hermitian = False):
+    U,S,Vh = jax.numpy.linalg.svd(A, hermitian = False)
 
     if b.ndim == A.ndim -1:
         expand = True
@@ -194,3 +194,5 @@ def solve_by_SVD(A,b):
         x = x[...,0]
 
     return x
+
+
