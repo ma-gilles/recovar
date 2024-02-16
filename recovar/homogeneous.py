@@ -232,6 +232,36 @@ def compute_mean_least_squares_rhs_lhs(images, rotation_matrices, translations, 
     return mean_rhs, diag_mean
 
 
+
+# My understanding of what relion does.
+def relion_style_triangular_kernel(experiment_dataset , cov_noise,  batch_size,  disc_type = 'linear_interp', return_lhs_rhs = False ):
+    
+    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+    Ft_y, Ft_ctf = 0, 0 
+
+    for batch, indices in data_generator:
+        
+        batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
+        Ft_y_b, Ft_ctf_b = relion_style_triangular_kernel_batch(batch, experiment_dataset.CTF_params[indices], experiment_dataset.rotation_matrices[indices], experiment_dataset.translations[indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, experiment_dataset.grid_size, experiment_dataset.voxel_size, experiment_dataset.CTF_fun, disc_type, cov_noise)
+        Ft_y += Ft_y_b
+        Ft_ctf += Ft_ctf_b
+    # To agree with order of other fcns.
+    return Ft_ctf, Ft_y
+
+    # X_mean = jnp.where(jnp.abs(diag_mean) < 1e-8, 0, mean_rhs / (diag_mean + 1 / cov_diag_prior ) )
+    # return X_mean
+
+def relion_style_triangular_kernel_batch(images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type, cov_noise):
+    # images = process_images(images, apply_image_mask = True)
+    images = core.translate_images(images, translations, image_shape)
+    Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type) / cov_noise
+
+    CTF = CTF_fun( CTF_params, image_shape, voxel_size)
+    Ft_ctf = core.adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type) / cov_noise
+
+    return Ft_y, Ft_ctf
+
+
 batch_over_weights_sum_adj_forward_model = jax.vmap(core.sum_adj_forward_model, in_axes = (None,0, None,None))
 
 # def compute_weight_matrix_inner(rotation_matrices, CTF_params, voxel_size, volume_shape, image_shape, grid_size, CTF_fun ):

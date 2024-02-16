@@ -30,6 +30,7 @@ def pad_images_spatial_domain(images, padding):
     images_big = images_big.at[...,padding//2:images_shape[0] + padding//2, padding//2:images_shape[1] + padding//2].set(images)
     return images_big
 
+
 def pad_volume_spatial_domain(images, padding):
     images_shape = images.shape
     padded_image_x = images_shape[0] + padding
@@ -38,6 +39,17 @@ def pad_volume_spatial_domain(images, padding):
     images_big = jnp.zeros_like(images, shape = [padded_image_x, padded_image_y, padded_image_z] )
     images_big = images_big.at[padding//2:images_shape[0] + padding//2, padding//2:images_shape[1] + padding//2,padding//2:images_shape[2] + padding//2].set(images)
     return images_big
+
+def unpad_volume_spatial_domain(volume, padding):
+    return volume[padding//2:volume.shape[0] - padding//2, padding//2:volume.shape[1] - padding//2, padding//2:volume.shape[2] - padding//2]
+
+def unpad_volume_fourier_domain(volume, padded_image_shape, padding):
+    volume = volume.reshape(list(padded_image_shape))
+    volume = ftu.get_idft3(volume)
+    unpadded_volume = unpad_volume_spatial_domain(volume, padding)
+    unpadded_volume = ftu.get_dft3(unpadded_volume).reshape( -1)
+    return unpadded_volume
+
 
 def pad_images_fourier_domain(images, image_shape, padding):
     images = images.reshape([-1] + list(image_shape))
