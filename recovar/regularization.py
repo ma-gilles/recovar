@@ -322,15 +322,12 @@ def adjust_regularization_relion_style(filter, volume_shape, tau = None, oversam
     # Compute spherically averaged 
     avged_reg = average_over_shells(regularized_filter, volume_shape, frequency_shift = 0) / 1000
     # For the things below that frequency, set them to averaged.
-    
     if max_res_shell is not None:
         avged_reg = avged_reg.at[max_res_shell:].set(avged_reg[max_res_shell - 1])
-
     from recovar import utils
     avged_reg_volume_shape = utils.make_radial_image(avged_reg, volume_shape)
 
     regularized_filter = jnp.maximum(regularized_filter, avged_reg_volume_shape)
-    # utils.make_radial
 
     return regularized_filter
 
@@ -411,3 +408,5 @@ def compute_masked_fscs(H0, B0, H1, B1, prior, volume_shape, volume_mask):
     return fsc
 
 batch_average_over_shells = jax.vmap(average_over_shells, in_axes = (0,None,None))
+
+

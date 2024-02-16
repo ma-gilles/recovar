@@ -172,11 +172,32 @@ def broadcast_outer(x,y):
 def multiply_along_axis(A, B, axis):
     return jnp.swapaxes(jnp.swapaxes(A, axis, -1) * B, -1, axis)
 
+
 def batch_hermitian_linear_solver(A,b):
-    return solve_by_SVD(A,b, hermitian=True)
+    return jax.scipy.linalg.solve(A,b, assume_a = 'pos')
 
 def batch_linear_solver(A,b):
-    return solve_by_SVD(A,b)
+    return jax.scipy.linalg.solve(A,b)#, assume_a = 'pos')
+
+# Maybe if problems come again...
+#     if A.ndim ==2:
+#         return lu_solve(A,b)
+#     return batched_solve_lu(A,b)
+
+# def Cholesky_solve(A,b):
+#     # I'll call lineax because it throws a proper error message
+#     return lx.linear_solve(lx.MatrixLinearOperator(A), b, solver=lx.Cholesky()).value
+
+# def lu_solve(A,b):
+#     # I'll call lineax because it throws a proper error message
+#     return lx.linear_solve(lx.MatrixLinearOperator(A), b, solver=lx.LU()).value
+
+# import lineax as lx
+# batched_solve_lu = jax.vmap( lambda matrix, vector: lx.linear_solve(lx.MatrixLinearOperator(matrix), vector, solver=lx.LU()).value)
+# batched_solve_Cholesky = jax.vmap( lambda matrix, vector: lx.linear_solve(lx.MatrixLinearOperator(matrix), vector, solver=lx.Cholesky()).value)
+
+
+
 
 def solve_by_SVD(A,b, hermitian = False):
     U,S,Vh = jax.numpy.linalg.svd(A, hermitian = False)

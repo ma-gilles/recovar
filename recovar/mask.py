@@ -161,6 +161,81 @@ def threshold_map(arr, prob = 0.99, dthresh=None):
     return arr * (arr > thresh)
 
 
+def smooth_circular_mask(image_size, radius, thickness):
+    # Copy pasted from Dynamight https://github.com/3dem/DynaMight/blob/main/dynamight/data/handlers/grid.py
+    y, x = np.meshgrid(
+        np.linspace(-image_size // 2, image_size // 2 - 1, image_size),
+        np.linspace(-image_size // 2, image_size // 2 - 1, image_size)
+    )
+    r = np.sqrt(x ** 2 + y ** 2)
+    band_mask = (radius <= r) & (r <= radius + thickness)
+    r_band_mask = r[band_mask]
+    mask = np.zeros((image_size, image_size))
+    mask[r < radius] = 1
+    mask[band_mask] = np.cos(np.pi * (r_band_mask - radius) / thickness) / 2 + .5
+    mask[radius + thickness < r] = 0
+    return mask
+
+
+
+import numpy as np
+# This is the RELION function translated by chatgpt
+# https://github.com/3dem/relion/blob/e5c4835894ea7db4ad4f5b0f4861b33269dbcc77/src/mask.cpp
+def soft_mask_outside_map(vol, radius=-1, cosine_width=3, Mnoise=None):
+    # vol = np.roll(vol, -np.array(vol.shape) // 2)  # Assuming vol.setXmippOrigin() adjusts the origin
+
+    vol = np.array(vol)
+    if radius < 0:
+        radius = np.max(np.array(vol.shape) // 2)
+
+    radius_p = radius + cosine_width
+    shape = vol.shape
+
+    volume_coords =  ftu.get_k_coordinate_of_each_pixel(shape, voxel_size = 1, scaled = False).reshape(list(shape) + [len(list(shape))]) + 0
+
+    # r, i, j = np.ogrid[:vol.shape[0], :vol.shape[1], :vol.shape[2]]
+    r = jnp.linalg.norm(volume_coords, axis =-1)
+    mask1 = r < radius
+
+
+    mask2 = (r > radius) * (r <= radius_p)
+    mask3 = r > radius_p
+    raised_cos = 0.5 + 0.5 * np.cos(np.pi * (radius_p - r) / cosine_width)
+    mask = np.zeros_like(vol).real
+    mask[mask1] = 1
+    mask[mask2] = 1 - raised_cos[mask2]
+
+
+    if Mnoise is None:
+        sum_bg = np.sum((vol * mask)[mask3 + mask2])
+        sum = np.sum((mask)[mask3 + mask2])
+        avg_bg = sum_bg / sum
+
+        # r_range = np.arange(0, radius)
+        # outside_range = np.arange(radius, radius_p)
+        # raised_cos = 0.5 + 0.5 * np.cos(np.pi * (radius_p - r_range) / cosine_width)
+
+        # sum_bg = np.sum(vol[outside_range, :, :])
+        # sum_bg += np.sum(raised_cos[outside_range, None, None] * vol[outside_range, :, :])
+
+        # sum = np.sum(raised_cos)
+        # sum += len(outside_range)
+
+        # avg_bg = sum_bg / sum
+    else:
+        avg_bg = None
+
+    if Mnoise is None:
+        vol[mask3] = avg_bg
+    else:
+        vol[mask3] = Mnoise[mask3]
+
+    add = Mnoise if Mnoise is not None else avg_bg
+    vol = mask * vol + (1 - mask) * add
+    # vol[mask2] = (1 - raised_cos[mask2]) * vol[mask2] + raised_cos[mask2] * add
+
+    return vol, mask
+
 
 def make_soft(dilated_mask, kern_rad=3):
     # convoluting with gaussian sphere

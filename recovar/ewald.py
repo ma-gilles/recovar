@@ -72,13 +72,13 @@ def map_coordinates_on_ewald_sphere(volume, rotation_matrices, image_shape, volu
 #     indices = batch_get_nearest_gridpoint_indices_ewald_sphere(rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam)
 #     return core.batch_slice_volume_by_nearest(volume, indices)
 
-# # Nearest neighbor
-# def batch_get_nearest_gridpoint_indices_ewald_sphere(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam):
-#     # get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
-#     rotated_plane = batch_get_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
-#     rotated_indices = core.round_to_int(rotated_plane)
-#     rotated_indices = core.vol_indices_to_vec_indices(rotated_indices, volume_shape)
-#     return rotated_indices
+# Nearest neighbor
+def batch_get_nearest_gridpoint_indices_ewald_sphere(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam):
+    # get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
+    rotated_plane = batch_get_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
+    rotated_indices = core.round_to_int(rotated_plane)
+    rotated_indices = core.vol_indices_to_vec_indices(rotated_indices, volume_shape)
+    return rotated_indices
 
 
 # # Nearest neighbor

@@ -41,10 +41,11 @@ class MRCDataMod(torch.utils.data.Dataset):
         self.D = (nx + padding) 
         self.image_size = self.D * self.D
         self.image_shape = (nx + padding, ny + padding)
+
         self.dtype = np.complex64 # ???
         self.unpadded_D = nx
         self.unpadded_image_shape = (nx, ny)
-        self.mask = set_standard_mask(self.D, self.dtype)
+        self.mask = set_standard_mask(self.unpadded_D, self.dtype)
         self.mult = -1 if uninvert_data else 1
         
         # Maybe should do do this on CPU?
@@ -63,7 +64,7 @@ class MRCDataMod(torch.utils.data.Dataset):
     def process_images(self, images, apply_image_mask = False):
         if apply_image_mask:
             images = images * self.mask
-            
+        # logger.warning("CHANGE BACK USE MASK TO FALSE")
         images = pad.padded_dft(images * self.mult,  self.image_size, self.padding)
         return images
 
@@ -88,6 +89,7 @@ class LazyMRCDataMod(torch.utils.data.Dataset):
         assert ny == nx, "Images must be square"
         assert ny % 2 == 0, "Image size must be even. Is this a preprocessed dataset? Use the --preprocessed flag if so."
         
+
         self.mrcfile = mrcfile
         self.datadir = datadir
         self.n_images = N
@@ -171,15 +173,16 @@ class NumpyLoader(torch.utils.data.DataLoader):
     
 # A dataset class, that includes images and all other information
 class CryoEMDataset:
+
     def __init__(self, volume_shape, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.evaluate_ctf_wrapper, dtype = np.complex64, rotation_dtype = np.float64, dataset_indices = None  ):
 
 
-
         self.voxel_size = voxel_size
-        self.volume_shape = tuple(volume_shape)
-        self.grid_size = volume_shape[0]
-        self.volume_size = np.prod(volume_shape)
 
+        self.grid_size = volume_shape[0]
+        self.volume_shape = tuple(volume_shape)
+        self.unpadded_volume_shape = tuple(3*[image_stack.unpadded_D])
+        self.volume_size = np.prod(volume_shape)
         # Allows for passing None as image_stack (for simulation)
         if image_stack is None:
             self.image_stack = None
@@ -194,7 +197,7 @@ class CryoEMDataset:
             self.n_images = image_stack.n_images
             self.padding = image_stack.padding
 
-
+        self.CTF_FUNCTION_OPTION = "cryodrgn_zeroed"
         self.CTF_fun_inp = CTF_fun
         self.hpad = self.padding//2
         self.volume_mask_threshold = 4 * self.grid_size / 128 # At around 128 resolution, 4 seems good, so scale up accordingly. This probably should have a less heuristic value here. This is assuming the mask is scaled between [0,1]
@@ -216,7 +219,7 @@ class CryoEMDataset:
     
     def CTF_fun(self,*args):
         # Force dtype
-        return self.CTF_fun_inp(*args).astype(self.CTF_dtype)
+        return self.CTF_fun_inp(*args, CTF_FUNCTION_OPTION = self.CTF_FUNCTION_OPTION).astype(self.CTF_dtype)
 
     def get_valid_frequency_indices(self,rad = None):
         rad = self.grid_size//2 -1 if rad is None else rad
@@ -300,6 +303,7 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
         dataset = LazyMRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
     else:
         dataset = MRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
+        
     ctf_params = np.array(ctf.load_ctf_for_training(dataset.unpadded_D, ctf_file))
         
     ctf_params = ctf_params if ind is None else ctf_params[ind]
