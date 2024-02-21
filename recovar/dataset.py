@@ -171,18 +171,33 @@ class NumpyLoader(torch.utils.data.DataLoader):
         timeout=timeout,
         worker_init_fn=worker_init_fn)
     
+
 # A dataset class, that includes images and all other information
 class CryoEMDataset:
 
-    def __init__(self, volume_shape, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.evaluate_ctf_wrapper, dtype = np.complex64, rotation_dtype = np.float64, dataset_indices = None  ):
-
+    def __init__(self, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.evaluate_ctf_wrapper, dtype = np.complex64, rotation_dtype = np.float64, dataset_indices = None, grid_size = None, volume_upsampling_factor = 1  ):
+        
+        if image_stack is not None:
+            grid_size = image_stack.D
+        elif grid_size is None:
+            raise ValueError("Must specify grid_size if image_stack is None")
+        
 
         self.voxel_size = voxel_size
+        self.grid_size = image_stack.D
 
-        self.grid_size = volume_shape[0]
-        self.volume_shape = tuple(volume_shape)
-        self.unpadded_volume_shape = tuple(3*[image_stack.unpadded_D])
-        self.volume_size = np.prod(volume_shape)
+        self.volume_upsampling_factor = volume_upsampling_factor
+        self.upsampled_grid_size = self.grid_size * volume_upsampling_factor
+        self.grid_size = grid_size
+
+        self.volume_shape = tuple(3*[self.grid_size ])
+        self.volume_size = np.prod(self.volume_shape)
+
+        self.upsampled_volume_shape = tuple(3*[self.grid_size * volume_upsampling_factor ])
+        self.upsampled_volume_size = np.prod(self.upsampled_volume_shape)
+
+        # self.original_volume_shape = tuple(3*[image_stack.unpadded_D])
+        # self.volume_shape = tuple(3*[image_stack.unpadded_D])
         # Allows for passing None as image_stack (for simulation)
         if image_stack is None:
             self.image_stack = None
@@ -197,7 +212,7 @@ class CryoEMDataset:
             self.n_images = image_stack.n_images
             self.padding = image_stack.padding
 
-        self.CTF_FUNCTION_OPTION = "cryodrgn_zeroed"
+        self.CTF_FUNCTION_OPTION = "cryodrgn"
         self.CTF_fun_inp = CTF_fun
         self.hpad = self.padding//2
         self.volume_mask_threshold = 4 * self.grid_size / 128 # At around 128 resolution, 4 seems good, so scale up accordingly. This probably should have a less heuristic value here. This is assuming the mask is scaled between [0,1]
@@ -214,6 +229,17 @@ class CryoEMDataset:
 
         self.dataset_indices = dataset_indices
 
+    def update_volume_upsampling_factor(self, volume_upsampling_factor):
+
+        self.volume_upsampling_factor = volume_upsampling_factor
+        self.upsampled_grid_size = self.grid_size * volume_upsampling_factor
+        
+        self.upsampled_volume_shape = tuple(3*[self.grid_size * volume_upsampling_factor ])
+        self.upsampled_volume_size = np.prod(self.upsampled_volume_shape)
+
+        return
+
+
     def get_dataset_generator(self, batch_size, num_workers = 0):
         return self.image_stack.get_dataset_generator(batch_size,num_workers = num_workers)
     
@@ -224,6 +250,10 @@ class CryoEMDataset:
     def get_valid_frequency_indices(self,rad = None):
         rad = self.grid_size//2 -1 if rad is None else rad
         return np.array(self.get_volume_radial_mask(rad))
+
+    def get_valid_upsampled_frequency_indices(self,rad = None):
+        rad = self.upsampled_grid_size//2 -1 if rad is None else rad
+        return np.array(self.get_upsampled_volume_radial_mask(rad))
 
 
     #### All functions below are only just for plotting/debugging
@@ -236,6 +266,10 @@ class CryoEMDataset:
 
     def get_volume_radial_mask(self, radius = None):
         return mask.get_radial_mask(self.volume_shape, radius = radius).reshape(-1)
+
+    def get_upsampled_volume_radial_mask(self, radius = None):
+        return mask.get_radial_mask(self.upsampled_volume_shape, radius = radius).reshape(-1)
+
 
     def get_image_radial_mask(self, radius = None):        
         return mask.get_radial_mask(self.image_shape, radius = radius).reshape(-1)
@@ -289,7 +323,7 @@ def subsample_cryoem_dataset(dataset, indices):
     image_stack.particles = dataset.image_stack.particles[indices]
     image_stack.n_images = image_stack.particles.shape[0]
 
-    return CryoEMDataset(dataset.volume_shape, image_stack, dataset.voxel_size, dataset.rotation_matrices[indices], dataset.translations[indices], dataset.CTF_params[indices], CTF_fun = dataset.CTF_fun_inp, dtype = dataset.dtype, rotation_dtype = dataset.rotation_dtype, dataset_indices = dataset.dataset_indices[indices] )
+    return CryoEMDataset( image_stack, dataset.voxel_size, dataset.rotation_matrices[indices], dataset.translations[indices], dataset.CTF_params[indices], CTF_fun = dataset.CTF_fun_inp, dtype = dataset.dtype, rotation_dtype = dataset.rotation_dtype, dataset_indices = dataset.dataset_indices[indices] , volume_upsampling_factor= dataset.volume_upsampling_factor)
 
 
 
@@ -322,7 +356,7 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
     assert np.all(np.isclose(voxel_sizes - voxel_sizes[0], 0))
     voxel_size = float(voxel_sizes[0])
     CTF_fun = core.evaluate_ctf_wrapper
-    return CryoEMDataset( 3 * [dataset.D], dataset, voxel_size,
+    return CryoEMDataset( dataset, voxel_size,
                               np.array(posetracker.rots), np.array(posetracker.trans), ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind)
 
 def get_split_datasets_from_dict(dataset_loader_dict, ind_split, lazy = False):

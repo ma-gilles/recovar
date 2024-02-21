@@ -305,7 +305,7 @@ def plot_mean_fsc(results,cryos):
     
 def plot_fsc(cryo, vol1, vol2, mask = None, threshold = 1/7, ax = None, voxel_size= None, volume_shape= None, name = "unmasked", fmat = ""):
     voxel_size = cryo.voxel_size if voxel_size is None else voxel_size
-    volume_shape = cryo.unpadded_volume_shape if volume_shape is None else volume_shape
+    volume_shape = cryo.volume_shape if volume_shape is None else volume_shape
 
     ax, score = plot_fsc_new(vol1, vol2, volume_shape, voxel_size,  curve = None, ax = ax, threshold = threshold, filename = None, name = name, volume_mask = mask, fmat = fmat)
     return ax

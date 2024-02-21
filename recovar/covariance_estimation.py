@@ -904,7 +904,6 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
                                          rotation_matrices, 
                                          image_shape, 
                                          volume_shape, 
-                                         grid_size, 
                                         voxel_size, 
                                         CTF_fun, 
                                         disc_type                                           
