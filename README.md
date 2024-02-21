@@ -1,6 +1,6 @@
 # RECOVAR: Regularized covariance estimation for cryo-EM heterogeneity analysis
 
-[See preprint here](https://www.biorxiv.org/content/10.1101/2023.10.28.564422v1)
+[See preprint here](https://www.biorxiv.org/content/10.1101/2023.10.28.564422v1) and recorded talk [here](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s)
 
 [Installation](#installation)
 
@@ -34,7 +34,12 @@ Here is a set of commands which runs on our university cluster (Della), but may 
     git clone https://github.com/ma-gilles/recovar.git
     python -m ipykernel install --user --name=recovar # if you want to use jupyter notebooks
 
+
 The code was tested on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
+
+The code for the paper was run on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
+
+
 
 
 ## I. Preprocessing 
@@ -350,13 +355,30 @@ The output should be the same as [this notebook](output_visualization_empiar1007
 
 I hope some developers find parts of the code useful for their projects. See [this notebook](recovar_coding_tutorial.ipynb) for a short tutorial.
 
+Some of the features which may be of interest:
+- The basic building block operations of cryo-EM efficiently, in batch and on GPU: shift images, slice volumes, do the adjoint slicing, apply CTF. See [recovar.core](recovar/core.py).
+
+- A heterogeneity dataset simulator that includes variations in contrast, realistic CTF and pose distribution (loaded from real dataset), junk proteins, outliers, etc. See [recovar.simulator](recovar/simulator.py).
+
+
+- A code to go from atomic positions to volumes or images. Does not run on GPU. Thanks to [prody](http://prody.csb.pitt.edu/), if you have an internet connection, you can generate the volume from only the PDB ID. E.g., you can do `recovar.simulate_scattering_potential.generate_molecule_spectrum_from_pdb_id('6VXX', 2, 256)` to generate the volume of the spike protein with voxel size 2 on a 256^3 grid. Note that this code exactly evaluates the Fourier transform of the potential, thus it is exact in Fourier space, which can produce some oscillations artifact in the spatial domain. 
+
+- If you have come up with a different embedding and would like to generate volumes from reweighting (i.e., solve the homogeneous problem with weights on images), you can do this efficiently using `recovar.homogeneous.get_multiple_conformations`. You would need to load the dataset in the recovar style, see tutorial.
+
+- Some other features that aren't very well separated from the rest of the code, but I think could easily be stripped out: trajectory computation [recovar.trajectory](recovar/trajectory.py), per-image mask generation [recovar.covariance_core](recovar/covariance_core.py), regularization schemes [recovar.regularization](recovar/regularization.py), various noise estimators [recovar.noise](recovar/noise.py).
+
+- Some features that are not there (but soon, hopefully): pose search, symmetry handling.
 
 
 ## Limitations
 
 - *Symmetry*: there is currently no support for symmetry. If you got your poses through symmetric refinement, it will probably not work. It should probably work if you make a symmetry expansion of the particle stack, but I have not tested it.
-* *Memory*: you need a lot of memory to run this. For a stack of images of size 256, you probably need 400 GB+.
-- *Other ones, probably?*
+- *Memory*: you need a lot of memory to run this. For a stack of images of size 256, you probably need 400 GB+.
+- *ignore-zero-frequency*: I haven't thought much about the best way to do this. I would advise against using it for now.
+- *Importing mask from other software*: there might be axes index conventions which are different across software. Should be pretty to easy to see if this is the case by trying it and looking at output from [this notebook](recovar_coding_tutorial.ipynb)
+- *Other ones, probably?*: if you run into issues, please let me know. 
+
+
 
 ## Citation
 

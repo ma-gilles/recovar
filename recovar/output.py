@@ -25,18 +25,9 @@ def resample_trajectory(gt_vols, n_vols_along_path = 6):
     return indices_along_path
 
 
-# def make_output_folders(output_folder):
-#     subdirs = ['plots/', 'paths/', 'volumes/', 'kmeans/', 'kmeans12/']            
-#     mkdir_safe(output_folder)
-#     [mkdir_safe(output_folder + sub) for sub in subdirs]
-
 
 def mkdir_safe(folder):
     os.makedirs(folder, exist_ok = True)
-    # isExist = os.path.exists(folder)
-    # if not isExist:
-    #     os.mkdir(folder)
-
     
 def save_volume(vol, path, volume_shape, from_ft = True):
     if from_ft:
@@ -45,11 +36,11 @@ def save_volume(vol, path, volume_shape, from_ft = True):
         vol = np.real(vol.reshape(volume_shape))
     utils.write_mrc(path + '.mrc', vol.astype(np.float32))
     
-def save_volumes(volumes,  save_path , volume_shape = None, from_ft = True  ):
+def save_volumes(volumes,  save_path , volume_shape = None, from_ft = True, index_offset=0  ):
     grid_size = np.round((volumes[0].shape[0])**(1/3)).astype(int)
     volume_shape = 3*[grid_size] if volume_shape is None else volume_shape
     for v_idx, vol in enumerate(volumes):
-        save_volume(vol, save_path + format(v_idx, '03d') , volume_shape, from_ft = from_ft)
+        save_volume(vol, save_path + format(index_offset + v_idx, '03d') , volume_shape, from_ft = from_ft)
 
 
 def plot_on_same_scale(cs, xs, labels,plot_folder, ):
@@ -57,7 +48,6 @@ def plot_on_same_scale(cs, xs, labels,plot_folder, ):
     k = 0 
 
     for curve in cs:
-        
         plt.plot(np.linspace(0,1, curve.size), curve / np.max(curve), label = labels[k], lw = 4)
         k+=1
     plt.legend()
@@ -66,7 +56,7 @@ def plot_on_same_scale(cs, xs, labels,plot_folder, ):
     plt.savefig(save_filepath, bbox_inches='tight')
 
 
-def plot_two_twings_with_diff_scale(cs, xs, labels,plot_folder): 
+def plot_two_twings_with_diff_scale(cs, xs, labels,plot_folder= None): 
     matplotlib.rc('xtick', labelsize=20) 
     matplotlib.rc('ytick', labelsize=20) 
 
@@ -83,6 +73,7 @@ def plot_two_twings_with_diff_scale(cs, xs, labels,plot_folder):
     x = np.linspace(0,1, cs[0].size) if xs[0] is None else xs[0]/ np.max(xs[0])
     ax1.plot(x, cs[0], color=color)
     ax1.tick_params(axis='y', labelcolor=color)
+    ax1.set_ylim(0, np.max(cs[0]))
 
     ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
 
@@ -90,12 +81,15 @@ def plot_two_twings_with_diff_scale(cs, xs, labels,plot_folder):
     ax2.set_ylabel(labels[1], color=color, fontsize = 20)  # we already handled the x-label with ax1
     x = np.linspace(0,1, cs[1].size) if xs[1] is None else xs[1] / np.max(xs[1])
     ax2.plot(x, cs[1], color=color)
+    ax2.set_ylim(0, np.max(cs[1]))
+
     ax2.tick_params(axis='y', labelcolor=color)
 
     fig.tight_layout()  # otherwise the right y-label is slightly clipped
-    save_filepath = plot_folder + 'path_density_t.png'
-    #if save_to_file:
-    plt.savefig(save_filepath, bbox_inches='tight')
+    if plot_folder is not None:
+        save_filepath = plot_folder + 'path_density_t.png'
+        #if save_to_file:
+        plt.savefig(save_filepath, bbox_inches='tight')
     plt.show()
 
     
@@ -218,7 +212,8 @@ def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, cov_noi
     #key = 'zs12'
     #zs = results[key]
     #cov_zs = results['cov_' + key]
-    labels, centers = cryodrgn_analysis.cluster_kmeans(zs, n_clusters, reorder = True)
+    reorder = zs.shape[1] != 1
+    labels, centers = cryodrgn_analysis.cluster_kmeans(zs, n_clusters, reorder = reorder)
     
     import os
     try:
@@ -232,19 +227,20 @@ def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, cov_noi
         fig.set_figwidth(6)
         ax.set_xticks([], [])
         ax.set_yticks([], [])
-        
-        plt.savefig(output_folder + 'centers_'+str(axes[0]) + str(axes[1])+'.png' )
+        if output_folder is not None:
+            plt.savefig(output_folder + 'centers_'+str(axes[0]) + str(axes[1])+'.png' )
         
         fig,ax = cryodrgn_analysis.scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=False, labels=None, alpha=0.1, s=2)
         fig.set_figheight(6)
         fig.set_figwidth(6)
         ax.set_xticks([], [])
         ax.set_yticks([], [])
-        plt.savefig(output_folder + 'centers_'+str(axes[0]) + str(axes[1])+'no_annotate.png' )
+        if output_folder is not None:
+            plt.savefig(output_folder + 'centers_'+str(axes[0]) + str(axes[1])+'no_annotate.png' )
 
     for k in range(1,zs.shape[-1]):
         plot_axes(axes = [0,k])
-    if zs.shape[-1] > 1:
+    if zs.shape[-1] > 2:
         plot_axes(axes = [1,2])
     
     if generate_volumes:
@@ -253,22 +249,25 @@ def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, cov_noi
 
     return centers, labels
 
-def compute_and_save_reweighted(cryos, means,  path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = None, recompute_prior = True, volume_mask = None):
+
+
+def compute_and_save_reweighted(cryos, means,  path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = None, recompute_prior = True, volume_mask = None, adaptive =False):
 
     #batch_size = 
-    memory_to_use = utils.get_gpu_memory_total() - path_subsampled.shape[0] * utils.get_size_in_gb(means['combined']) * 6
+    memory_to_use = utils.get_gpu_memory_total() - path_subsampled.shape[0] * utils.get_size_in_gb(means['combined']) * 8
+    assert memory_to_use > 0, "reduce number of volumes computed at once"
     batch_size = 2 * utils.get_image_batch_size(cryos[0].grid_size, memory_to_use)
     logger.info(f"batch size in reweighting: {batch_size}")
-    trajectory_prior, halfmaps = embedding.generate_conformation_from_reweighting(cryos, means, cov_noise, zs, cov_zs, path_subsampled, batch_size = batch_size, disc_type = 'linear_interp', likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, volume_mask = volume_mask)
+    trajectory_prior, halfmaps = embedding.generate_conformation_from_reweighting(cryos, means, cov_noise, zs, cov_zs, path_subsampled, batch_size = batch_size, disc_type = 'linear_interp', likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, volume_mask = volume_mask, adaptive=adaptive)
     save_volumes(trajectory_prior, output_folder +  'reweight_')
-    save_volumes(halfmaps[0], output_folder +  'reweight_halfmap0_')
-    save_volumes(halfmaps[1], output_folder +  'reweight_halfmap1_')
+    save_volumes(halfmaps[0], output_folder +  'halfmap0_reweight_')
+    save_volumes(halfmaps[1], output_folder +  'halfmap1_reweight_')
 
     
-def compute_and_save_volumes_from_z(dataset_loader, means, u,  path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = None, recompute_prior = True, compute_reproj = True ):
+def compute_and_save_volumes_from_z(dataset_loader, means, u,  path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = None, recompute_prior = True, compute_reproj = True, adaptive = False ):
         
     mkdir_safe(output_folder)
-    compute_and_save_reweighted(dataset_loader, means, path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior)
+    compute_and_save_reweighted(dataset_loader, means, path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, adaptive = adaptive)
     
     if compute_reproj:
         n_eigs = zs.shape[1]
@@ -326,7 +325,7 @@ def load_results_new(datadir):
 
 
 
-def make_trajectory_plots_from_results(results, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =10, compute_reproj = False, likelihood_threshold = None):
+def make_trajectory_plots_from_results(results, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =10, compute_reproj = False, likelihood_threshold = None, adaptive = False):
 
     assert (((z_st is not None) and (z_end is not None)) or (gt_volumes is not None)), 'either z_st and z_end should be passed, or gt_volumes'
 
@@ -343,11 +342,11 @@ def make_trajectory_plots_from_results(results, output_folder, cryos = None, z_s
         results['zs'][basis_size], results['cov_zs'][basis_size], results['cov_noise'], 
         z_st, z_end, latent_space_bounds, output_folder, 
         gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = plot_llh, basis_size =basis_size, 
-        compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold)
+        compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold, adaptive = adaptive)
 
 
 
-def make_trajectory_plots(dataset_loader, density, u, means, zs, cov_zs, cov_noise, z_st, z_end, latent_space_bounds, output_folder, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =10, compute_reproj = False, likelihood_threshold = None):
+def make_trajectory_plots(dataset_loader, density, u, means, zs, cov_zs, cov_noise, z_st, z_end, latent_space_bounds, output_folder, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =10, compute_reproj = False, likelihood_threshold = None, adaptive = False):
     import time
     st_time = time.time()
     
@@ -379,22 +378,28 @@ def make_trajectory_plots(dataset_loader, density, u, means, zs, cov_zs, cov_noi
     cov_zs = cov_zs[:,:basis_size,:basis_size]
     st_time = time.time()
 
-    path_z = trajectory.compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim=density,
-                                            density_eps = 1e-5, max_dim = basis_size, percentile_bound = 1, num_points = 50, 
-                                            use_log_density = False)
-
-    path_z_subsampled = trajectory.subsample_path(path_z, n_pts = n_vols_along_path)    
-    logger.info(f"after path {time.time() - st_time}")
     mkdir_safe(output_folder + 'density/')
-    path_subsampled = trajectory.subsample_path(path_z, n_pts = n_vols_along_path)
-    plot_trajectories_over_density(density, None,latent_space_bounds,  colors = None, plot_folder = output_folder + 'density/', cmap = 'inferno')
-    if gt_volumes is not None:
-        plot_trajectories_over_density(None, [gt_volumes_z, path_z], latent_space_bounds, subsampled = [gt_volumes_z[gt_subs_idx][1:-1], path_z_subsampled[1:-1] ] , colors = ['k', 'cornflowerblue'], plot_folder = output_folder, cmap = 'inferno', zs = zs, cov_zs = cov_zs) 
+    if basis_size >1:
+        path_z = trajectory.compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim=density,
+                                                density_eps = 1e-5, max_dim = basis_size, percentile_bound = 1, num_points = 50, 
+                                                use_log_density = False)
+        path_z_subsampled = trajectory.subsample_path(path_z, n_pts = n_vols_along_path)    
+
+        logger.info(f"after path {time.time() - st_time}")
+        path_subsampled = path_z_subsampled
+        #trajectory.subsample_path(path_z, n_pts = n_vols_along_path)
+        plot_trajectories_over_density(density, None,latent_space_bounds,  colors = None, plot_folder = output_folder + 'density/', cmap = 'inferno')
+        if gt_volumes is not None:
+            plot_trajectories_over_density(None, [gt_volumes_z, path_z], latent_space_bounds, subsampled = [gt_volumes_z[gt_subs_idx][1:-1], path_z_subsampled[1:-1] ] , colors = ['k', 'cornflowerblue'], plot_folder = output_folder, cmap = 'inferno', zs = zs, cov_zs = cov_zs) 
+        else:
+            plot_trajectories_over_density(None, [path_z],latent_space_bounds,  subsampled = [path_z_subsampled[1:-1] ] , colors = ['cornflowerblue'], plot_folder = output_folder, cmap = 'inferno', same_st_end = False, zs = zs, cov_zs = cov_zs)
     else:
-        plot_trajectories_over_density(None, [path_z],latent_space_bounds,  subsampled = [path_z_subsampled[1:-1] ] , colors = ['cornflowerblue'], plot_folder = output_folder, cmap = 'inferno', same_st_end = False, zs = zs, cov_zs = cov_zs)
+        path_z = np.linspace(z_st, z_end, n_vols_along_path)[...,0]
+        path_z_subsampled = path_z
+        path_subsampled = path_z_subsampled
 
     st_time = time.time()
-    compute_and_save_volumes_from_z(dataset_loader, means, u, path_subsampled, zs, cov_zs, cov_noise, output_folder  , likelihood_threshold = likelihood_threshold, compute_reproj = compute_reproj)
+    compute_and_save_volumes_from_z(dataset_loader, means, u, path_subsampled, zs, cov_zs, cov_noise, output_folder  , likelihood_threshold = likelihood_threshold, compute_reproj = compute_reproj, adaptive = adaptive)
     logger.info(f"vol time {time.time() - st_time}")
     
     x = ld.compute_weights_of_conformation_2(path_z, zs, cov_zs,likelihood_threshold = likelihood_threshold)
@@ -468,10 +473,10 @@ def plot_trajectories_over_scatter(trajectories,  subsampled = None, colors = No
 
 def umap_latent_space(zs):
     import umap
-    import umap.plot
     import time
     st_time = time.time()
-    mapper = umap.UMAP(n_components = 2).fit(zs)
-    umap.plot.points(mapper ) 
+    n_components = np.min([zs.shape[1], 2])
+    mapper = umap.UMAP(n_components = n_components).fit(zs)
+    # umap.plot.points(mapper) 
     logger.info(f"time to umap: {time.time() - st_time}")
     return mapper

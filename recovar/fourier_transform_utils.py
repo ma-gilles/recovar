@@ -1,7 +1,7 @@
 import numpy 
 
-# I did this so I could swap backends between numpy and jax.numpy easily.
-# Unclear whether it's of any use anymore
+# I did this a long time ago I could swap backends between numpy and jax.numpy easily.
+# Unclear whether it's of any use anymore, and it makes the import very wonky.
 class fourier_transform_utils:
     def __init__(self, numpy_backend = numpy) -> None:
         self.np = numpy_backend
@@ -24,7 +24,15 @@ class fourier_transform_utils:
         return self.np.transpose(self.np.vstack([self.np.reshape(g, -1) for g in grids])).astype(one_D_grids[0].dtype)  
 
 
+    def get_dft(self, img):
+        # The First FFTSHIFT accounts for the phase shift difference between DFT and continuous FT.
+        return self.np.fft.fftshift(self.np.fft.fft(self.np.fft.fftshift(img, axes = (-1))), axes = ( -1))
 
+    def get_idft(self, img):
+        return self.np.fft.ifftshift(self.np.fft.ifft(self.np.fft.ifftshift(img, axes = (-1))), axes = (-1 ))
+
+    
+    
     def get_dft2(self, img):
         # The First FFTSHIFT accounts for the phase shift difference between DFT and continuous FT.
         return self.np.fft.fftshift(self.np.fft.fft2(self.np.fft.fftshift(img, axes = (-2,-1))), axes = (-2, -1))
