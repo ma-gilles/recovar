@@ -40,7 +40,7 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
     # Do this in half precision? Shouldn't matter much.
     volume_mask = pad.pad_volume_spatial_domain(volume_mask, extra_padding).real
     mask_ft = ftu.get_dft3(volume_mask).reshape(-1)
-    proj_mask = core.get_slices(mask_ft, rotation_matrices, padded_image_shape,
+    proj_mask = core.slice_volume_by_map(mask_ft, rotation_matrices, padded_image_shape,
                                padded_volume_shape, padded_grid_size, disc_type)
     
     proj_mask = ftu.get_idft2(proj_mask.reshape([-1] + list(padded_image_shape)))
@@ -67,11 +67,6 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
 
     return proj_mask
 
-def get_per_image_tight_mask_cryo(mask, indices, cryo, disc_type  , binary = True, use_extra_padding =True, soften = 3):
-    # pad = 0 if use_extra_padding else 1
-    image_masks = get_per_image_tight_mask(mask, cryo.rotation_matrices[indices], cryo.image_stack.mask, cryo.volume_mask_threshold, cryo.image_shape, cryo.volume_shape, cryo.grid_size, cryo.padding, disc_type,  binary = binary, soften = soften)
-    return image_masks
-
 
 @functools.partial(jax.jit, static_argnums = [2])    
 def apply_image_masks(images, image_masks, image_shape):
@@ -93,7 +88,7 @@ def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape):
 @functools.partial(jax.jit, static_argnums = [5,6,7,8,9,10])    
 def get_centered_images(images, mean, CTF_params, rotation_matrices, translations, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type  ):    
     translated_images = core.translate_images(images, translations, image_shape)
-    centered_images = translated_images - get_projected_image(mean, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type)
+    centered_images = translated_images - core.forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type)
     return centered_images
 
 def check_mask(mask):
@@ -104,16 +99,14 @@ def check_mask(mask):
 
 batch_forward_model = jax.vmap(core.forward_model, in_axes = (0, None, None))
 
-def get_projected_image(mean, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):
-    slices = core.get_slices(mean, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)
-    return slices
-
 @functools.partial(jax.jit, static_argnums = [3,4,5,6,7,8])    
 def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):
-    
     batch_grid_pt_vec_ind_of_images = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
     batch_CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    projected_mean =  batch_forward_model(mean, batch_CTF, batch_grid_pt_vec_ind_of_images) 
-        
+    projected_mean =  batch_forward_model(mean, batch_CTF, batch_grid_pt_vec_ind_of_images)         
     return projected_mean
+
+
+batch_over_vol_forward_model_from_map = jax.vmap(core.forward_model_from_map, in_axes = (0, None, None, None, None, None, None, None, None))
+
 

@@ -6,16 +6,32 @@ import matplotlib.pyplot as plt
 import numpy as np
 import dataframe_image as dfi
 import pandas as pd
+import jax.numpy as jnp
 from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(np)
+ftu = fourier_transform_utils(jnp)
 from recovar import regularization, utils
 colors = dict(mcolors.BASE_COLORS, **mcolors.CSS4_COLORS)
+
+# I copy pasted this from an older project. Most of this is probably useless
+
 names_to_show = { "diagonal": "diagonal", "wilson": "Wilson", "diagonal masked": "diagonal masked", "wilson masked": "Wilson masked" }
 colors_name = { "diagonal": "cornflowerblue", "wilson": "lightsalmon", "diagonal masked": "blue", "wilson masked": "orangered"  }
 plt.rcParams['text.usetex'] = True
 
+def plot_noise_profile(results, yscale = 'linear'):
+    plt.figure(figsize = (8,8))
+    yy = results['noise_var']
+    if results['input_args'].ignore_zero_frequency:
+        yy[0] =0 
+    plt.errorbar(x = np.arange(results['noise_var'].size), y=yy, yerr=2*results['std_noise_var'], capsize=3, alpha = 0.5, label = 'estimated noise power spectrum')
+    plt.errorbar(x = np.arange(results['image_PS'].size), y=results['image_PS'], yerr=2*results['std_image_PS'], capsize=3, alpha = 0.5, label = 'image power spectrum')
+    plt.plot(np.arange(results['image_PS'].size), results['cov_noise']*np.ones_like(results['image_PS']))
+    plt.yscale(yscale)
+    plt.legend()
+    
+    return
 
-def plot_summary_t(results,cryos, n_eigs = 3):
+def plot_summary_t(results,cryos, n_eigs = 3, u_key = "rescaled"):
     plt.rcParams.update({
         # "text.usetex": True,
         # "font.family": "serif",
@@ -74,7 +90,7 @@ def plot_summary_t(results,cryos, n_eigs = 3):
     plot_vol(results['means']['combined'], 0, from_ft = True, name = 'mean')
     plot_vol(results['volume_mask'], 1, from_ft = False,name = 'mask')
     for k in range(n_eigs):
-        plot_vol(results['u']['rescaled'][:,k], k+2, from_ft = True, cmap = 'seismic' ,name = f"PC {k}", symmetric = True)
+        plot_vol(results['u'][u_key][:,k], k+2, from_ft = True, cmap = 'seismic' ,name = f"PC {k}", symmetric = True)
 
     plt.subplots_adjust(wspace=0, hspace=0)
 
@@ -198,10 +214,9 @@ def plot_volume_sequence(volumes,cryos):
     return
     
     
-    
-    
 
-def plot_cov_results(u,s, max_eig = 25, savefile = None):
+
+def plot_cov_results(u,s, max_eig = 40, savefile = None):
     
     plt.rcParams.update({
         # "text.usetex": True,
@@ -236,27 +251,24 @@ def plot_cov_results(u,s, max_eig = 25, savefile = None):
     if 'parallel_analysis' in s:
         plt.semilogy(np.ones_like(s[key][:max_eig]) * s['parallel_analysis'][0], "-"+m[m_idx], label = "par0", alpha = 0.5, ms = 15)
 
-    # ax.xaxis.grid(color='gray', linestyle='dashed')
-    # ax.yaxis.grid(color='gray', linestyle='dashed')        
     plt.title('eigenvalues')
     plt.legend()
     if savefile is not None:
         plt.savefig(savefile + 's.png')
 
-    angles ={}
-    plt.figure(figsize = (6,6))
-    m = np.repeat(["o", "s", "D", "*", 'x', '>'], 3, 0)
     gt_key = "gt"
+    angles ={}
     if gt_key in u:
-        key_gt = gt_key
+        plt.figure(figsize = (6,6))
+        m = np.repeat(["o", "s", "D", "*", 'x', '>'], 3, 0)
         m_idx = 0
         for key in u.keys():
-            if key == key_gt:
+            if key == gt_key:
                 continue
             pkey = key  
 
             max_subspace_size = np.min([15, u[key].shape[-1]])
-            angles[key] = utils.subspace_angles(u[key], u[key_gt], max_subspace_size)
+            angles[key] = utils.subspace_angles(u[key], u[gt_key], max_subspace_size)
             plt.plot( np.arange(1,1+len(angles[key])), angles[key], "-"+m[m_idx], label = pkey, alpha = 0.5,  ms = 15)
             m_idx = (m_idx + 1) % len(m)
         plt.ylim([-0.05,1.05])
@@ -267,6 +279,7 @@ def plot_cov_results(u,s, max_eig = 25, savefile = None):
     return angles
 
 def plot_mean_fsc(results,cryos):
+
     ax, score = plot_fsc_new(results['means']['corrected0'], results['means']['corrected1'], cryos[0].volume_shape, cryos[0].voxel_size,  curve = None, ax = None, threshold = 1/7, filename = None, name = "unmasked")
     ax, score_masked = plot_fsc_new(results['means']['corrected0'], results['means']['corrected1'], cryos[0].volume_shape, cryos[0].voxel_size,  curve = None, ax = ax, threshold = 1/7, filename = None, volume_mask = results['volume_mask'], name = "masked")
     plt.rcParams.update({
@@ -324,10 +337,11 @@ def plot_mean_result(cryo, means, cov_noise):
         
         
 def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = None, threshold = 1/7, filename = None, volume_mask = None, name = ""):
-    plt.figure(figsize=(6, 5))
     grid_size = volume_shape[0]
     input_ax_is_none = ax is None
-    ax = plt.gca() if input_ax_is_none else ax
+    if input_ax_is_none:
+        plt.figure(figsize=(6, 5))
+        ax = plt.gca() 
 
     if volume_mask is not None:
         image1 = ftu.get_idft3(image1.reshape(volume_shape))
@@ -339,6 +353,7 @@ def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = N
     if curve is None:
         curve = FSC(np.array(image1).reshape(volume_shape), np.array(image2).reshape(volume_shape))
     
+    # import pdb; pdb.set_trace()
     # Huuuh why is there a 1/2 here??
     freq = ftu.get_1d_frequency_grid(grid_size, voxel_size = voxel_size, scaled = True)
     freq = freq[freq >= 0 ]
@@ -346,25 +361,31 @@ def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = N
     max_idx = min(curve.size, freq.size)
     line, = ax.plot(freq[:max_idx], curve[:max_idx],  linewidth = 2 )
     color = line.get_color()
-    score = fsc_score(curve, grid_size, voxel_size, threshold = threshold)
+    
+    if threshold is not None:
+        score = fsc_score(curve, grid_size, voxel_size, threshold = threshold)
 
-    label = name + " "+ "{:.2f}".format(1 / score)+ "\AA"
-    n_dots_in_line = 20
-    ax.plot(np.ones(n_dots_in_line) * score, np.linspace(0,1, n_dots_in_line), "-", color = color, label= label)
-    ax.plot(freq, threshold * np.ones(freq.size), "k--")
+        label = name + " "+ "{:.2f}".format(1 / score)+ "\AA"
+        n_dots_in_line = 20
+        ax.plot(np.ones(n_dots_in_line) * score, np.linspace(0,1, n_dots_in_line), "-", color = color, label= label)
+        ax.plot(freq, threshold * np.ones(freq.size), "k--")
+    else:
+        score = None
+
+    ax.xaxis.grid(color='gray', linestyle='dashed')
+    ax.yaxis.grid(color='gray', linestyle='dashed')
 
     if input_ax_is_none:
-        ax.xaxis.grid(color='gray', linestyle='dashed')
-        ax.yaxis.grid(color='gray', linestyle='dashed')
 
-        plt.plot(freq, threshold * np.ones(freq.size), "k--")
         plt.ylim([0, 1.02])
         plt.xlim([0, np.max(freq)])
         plt.yticks(fontsize=20) 
         plt.xticks(fontsize=10) 
         # plt.legend("AA{-1}) = "+"{:.2f}".format(threshold))
         # plt.title("FSC("  + "{:.2f}".format(1 / score)  + "AA{-1}) = "+ "{:.2f}".format(threshold))
-    ax.legend()
+    if threshold is not None:  
+        ax.plot(freq, threshold * np.ones(freq.size), "k--")
+        ax.legend()
 
     if filename is not None:
         plt.savefig(filename )
@@ -407,21 +428,11 @@ def compute_and_plot_fsc(image1, image2, volume_shape = None, voxel_size =1):
     
 ### PLOTTING STUFF
 def FSC(image1, image2, r_dict = None):
-    # Old verison from me:
-    r_dict = ftu.compute_index_dict(image1.shape) if r_dict is None else r_dict
-    top_img = image1 * np.conj(image2)
-    top = ftu.compute_spherical_average(top_img, r_dict)
-    
-    # if np.linalg.norm(np.imag(top)) / np.linalg.norm(np.real(top)) > 1e-6:
-        #warnings.message("FDC not real. Normalized error:" + str( np.linalg.norm(np.imag(top)) / np.linalg.norm(np.real(top))))
-        # warnings.warn("FDC not real. Normalized error:" + str( np.linalg.norm(np.imag(top)) / np.linalg.norm(np.real(top))))
-        # print("FDC not real. Normalized error:", np.linalg.norm(np.imag(top)) / np.linalg.norm(np.real(top)))
-    top = np.real(top)
-    bot = np.sqrt(ftu.compute_spherical_average(np.abs(image1)**2, r_dict) * ftu.compute_spherical_average(np.abs(image2)**2, r_dict) )
-    # To get rid of annoying warning.
-    bot_pos = np.where( np.abs(bot) > 0, bot, 1)
-    bin_fsc = np.where( bot > 0 , top / bot_pos, 0)
-    return bin_fsc
+    from recovar import regularization
+    fsc = regularization.get_fsc_gpu(image1, image2, image1.shape, False, frequency_shift = 0 )
+    return fsc
+
+
 
 def fsc_score(fsc_curve, grid_size, voxel_size, threshold = 0.5 ):
     # First index below 0.5
@@ -571,58 +582,6 @@ def export_legend(legend, filename="legend.png", expand=[-5,-5,5,5]):
     bbox = bbox.transformed(fig.dpi_scale_trans.inverted())
     fig.savefig(filename, dpi="figure", bbox_inches=bbox)
 
-def make_images_for_paper(denoised_images, clean_image, noisy_image, mask, grid_size, voxel_size, paper_save_directory, experiment_name, log_SNR, save_to_file):
-        
-    global_name = paper_save_directory  + experiment_name + "_" + str(log_SNR)
-
-    from fourier_transform_utils import get_inverse_fourier_transform, get_fourier_transform
-    ### BELOW THIS IS PLOTTING.
-    fsc_curves = {};   resolutions = {}
-    fsc_curves_masked = {}; 
-    names_to_plot = ["diagonal", "wilson"]
-    clean_image_ft = get_fourier_transform(clean_image, voxel_size)
-
-    for name in names_to_plot:
-        denoised_images_ft = get_fourier_transform(denoised_images[name], voxel_size)
-        fsc_curves[name] = FSC(denoised_images_ft, clean_image_ft)
-
-        denoised_masked_ft = get_fourier_transform(denoised_images[name] * mask, voxel_size)
-        fsc_curves_masked[name] = FSC(denoised_masked_ft,clean_image_ft)
-
-        score = fsc_score(fsc_curves_masked[name], grid_size, voxel_size)
-        resolutions[name] = 1/score
-
-
-    names_in_denoised = ["diagonal", "wilson"]
-    images_to_plot = {}
-    for name in names_in_denoised:
-        images_to_plot[name] = denoised_images[name]
-    images_to_plot["clean"] = clean_image
-
-    plot_all_images_for_paper(images_to_plot, 1,  global_name, scale_image_name = "clean", voxel_size = voxel_size, save_to_file=save_to_file)
-    plot_all_images_for_paper({"noisy": noisy_image}, 1, global_name,  scale_image_name = "noisy",voxel_size = voxel_size, save_to_file=save_to_file)
-
-
-    fsc_curves_to_plot = {}
-    plot_names = { "diagonal": "diagonal", "wilson" : "wilson" } #, "wilson_cheat_fixf": "wilson with estimated g"}
-
-    for name in plot_names:
-        fsc_curves_to_plot[plot_names[name]] = fsc_curves[name]
-
-    for name in plot_names:
-        fsc_curves_to_plot[plot_names[name] + " masked"] = fsc_curves_masked[name]
-
-    plot_fsc_function_paper(fsc_curves_to_plot , global_name, names_in_denoised, grid_size, voxel_size,   save_to_file)
-
-
-    kk = pd.DataFrame(resolutions, ["resolution"])
-    score_df = kk.T
-    score_df
-    df_styled = score_df.style.highlight_min(subset = ["resolution"], color = "green")
-    #plt.savefig('mytable.png')
-    display(df_styled)
-    if save_to_file:
-        dfi.export(df_styled, paper_save_directory + experiment_name + "scores_table"+ str(log_SNR) + ".png")
 
 
 # Plotting for sample figures

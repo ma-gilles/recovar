@@ -49,7 +49,7 @@ def find_trajectory_in_grid(density, g_st, g_end, latent_space_bounds, eps = 1e-
     
     max_steps = np.linalg.norm(density.shape) * 50
     dx = get_grid_spacing(latent_space_bounds, density)
-    logger.info(f"dx {dx}")
+    # logger.info(f"dx {dx}")
     path = gradient_descent_nd(travel_time, g_st, g_end, dx,  step_size = 0.25, n_theta = 10, max_steps = max_steps )
 
     # if density.ndim == 2:
@@ -88,6 +88,7 @@ def find_trajectory_in_latent_space(density, z_st, z_end, z_to_grid, grid_to_z, 
 def evaluate_function_off_grid(density, pts):
     return scipy.ndimage.map_coordinates(density, pts.T, order = 1, cval = np.finfo(np.float64).max )
 
+# NOTE that this is not used for optimization purposes. It is used to find the curve which is orthogonal to the level curves of the solution of the Eikonal equation.
 def gradient_descent_nd(travel_time, x_st, x_end, dx, step_size = 0.25, n_theta = 10, max_steps = 2000, ):
     
     def f_lambda(pts):

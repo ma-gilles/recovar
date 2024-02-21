@@ -128,7 +128,10 @@ class LazyMRCDataMod(torch.utils.data.Dataset):
 
     def get_dataset_generator(self, batch_size, num_workers = 0):
         return NumpyLoader(self, batch_size=batch_size, shuffle=False, num_workers = num_workers)
-
+    
+    
+    
+    
 def get_num_images_in_dataset(mrc_path):
     particles = dataset.load_particles(mrc_path, True)
     return len(particles)
@@ -138,6 +141,8 @@ def set_standard_mask(D, dtype):
     # return np.ones([D,D], dtype = dtype).real
     
 # Image loader functions - supposed to give quick access to images to GPU
+
+# I don't remember why I use two different loaders here.
 
 # This might work. 
 def numpy_collate(batch):
@@ -169,7 +174,7 @@ class NumpyLoader(torch.utils.data.DataLoader):
     
 # A dataset class, that includes images and all other information
 class CryoEMDataset:
-    def __init__(self, volume_shape, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.compute_ctf_cryodgrn_wrapper, dtype = np.complex64, rotation_dtype = np.float64, dataset_indices = None  ):
+    def __init__(self, volume_shape, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.evaluate_ctf_wrapper, dtype = np.complex64, rotation_dtype = np.float64, dataset_indices = None  ):
 
         self.voxel_size = voxel_size
 
@@ -177,26 +182,37 @@ class CryoEMDataset:
         self.grid_size = volume_shape[0]
         self.volume_size = np.prod(volume_shape)
 
-        self.image_stack = image_stack
-        self.image_shape = tuple(image_stack.image_shape)
-        self.image_size = np.prod(image_stack.image_shape)
-        self.n_images = image_stack.N
 
-        self.rotation_matrices = np.array(rotation_matrices.astype(rotation_dtype))
-        self.translations = np.array(translations)
-        self.CTF_params = np.array(CTF_params)
+        # Allows for passing None as image_stack (for simulation)
+        if image_stack is None:
+            self.image_stack = None
+            self.image_shape = tuple(2*[self.grid_size])
+            self.image_size = np.prod(self.image_shape)
+            self.n_images = CTF_params.shape[0]
+            self.padding = 0 
+        else:
+            self.image_stack = image_stack
+            self.image_shape = tuple(image_stack.image_shape)
+            self.image_size = np.prod(image_stack.image_shape)
+            self.n_images = image_stack.N
+            self.padding = image_stack.padding
+
 
         self.CTF_fun_inp = CTF_fun
-        self.hpad = self.image_stack.padding//2
+        self.hpad = self.padding//2
         self.volume_mask_threshold = 4 * self.grid_size / 128 # At around 128 resolution, 4 seems good, so scale up accordingly. This probably should have a less heuristic value here. This is assuming the mask is scaled between [0,1]
 
         self.dtype = dtype
         self.dtype_real = dtype(0).real.dtype
+        self.CTF_dtype = self.dtype_real # this might changed in the future for Ewald sphere
         # Note that images are stored in float 32 but rotations are stored in float 64.
         # There seems to be a JAX-bug with float 32 when doing the nearest neighbor approximation...
         self.rotation_dtype = rotation_dtype
+        self.rotation_matrices = np.array(rotation_matrices.astype(rotation_dtype))
+        self.translations = np.array(translations)
+        self.CTF_params = np.array(CTF_params.astype(self.CTF_dtype))
 
-        self.padding = image_stack.padding
+
         self.dataset_indices = dataset_indices
 
     def get_dataset_generator(self, batch_size, num_workers = 0):
@@ -204,10 +220,11 @@ class CryoEMDataset:
     
     def CTF_fun(self,*args):
         # Force dtype
-        return self.CTF_fun_inp(*args).astype(self.dtype)
+        return self.CTF_fun_inp(*args).astype(self.CTF_dtype)
 
-    def get_valid_frequency_indices(self):
-        return np.array(self.get_volume_radial_mask(self.grid_size//2 - 1))
+    def get_valid_frequency_indices(self,rad = None):
+        rad = self.grid_size//2 -1 if rad is None else rad
+        return np.array(self.get_volume_radial_mask(rad))
 
 
     #### All functions below are only just for plotting/debugging
@@ -261,8 +278,13 @@ class CryoEMDataset:
         score = plot_utils.plot_fsc_new(image1, image2, self.volume_shape, self.voxel_size,  curve = curve, ax = ax, threshold = threshold, filename = filename)
         return score
     
+    def get_image_mask(self, indices, mask, binary = True, soften = -1):
+        indices = np.asarray(indices).astype(int)
+        from recovar import covariance_core # Not sure I want this depency to exist... Could make some circular imports
+        return covariance_core.get_per_image_tight_mask(mask, self.rotation_matrices[indices], self.image_stack.mask, self.volume_mask_threshold, self.image_shape, self.volume_shape, self.grid_size, self.padding, disc_type = 'linear_interp',  binary = binary, soften = soften)
 
 
+# Loads dataset that are stored in the cryoDRGN format
 def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False):
     
     # if ind is None:
@@ -289,21 +311,9 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
     voxel_sizes = ctf_params[:,0]
     assert np.all(np.isclose(voxel_sizes - voxel_sizes[0], 0))
     voxel_size = float(voxel_sizes[0])
-    CTF_fun = core.compute_ctf_cryodgrn_wrapper
+    CTF_fun = core.evaluate_ctf_wrapper
     return CryoEMDataset( 3 * [dataset.D], dataset, voxel_size,
                               np.array(posetracker.rots), np.array(posetracker.trans), ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind)
-
-# def get_dataset_from_result_dict(result_dict, lazy = False):
-#     return get_split_datasets(result_dict['particles_file'],
-#                               result_dict['poses_file'],
-#                               result_dict['ctf_file'],
-#                               result_dict['datadir'],
-#                               result_dict['uninvert_data'],
-#                               result_dict['ind_file'],
-#                               result_dict['padding'],
-#                               result_dict['n_images'],
-#                               result_dict['ind_split'],
-#                               lazy = lazy)
 
 def get_split_datasets_from_dict(dataset_loader_dict, ind_split, lazy = False):
     return get_split_datasets(**dataset_loader_dict, ind_split=ind_split, lazy =lazy)
@@ -317,8 +327,6 @@ def get_split_datasets(particles_file, poses_file, ctf_file, datadir,
         cryos.append(load_cryodrgn_dataset(particles_file, poses_file, ctf_file , datadir = datadir, n_images = n_images, ind = ind, lazy = lazy, padding = padding, uninvert_data = uninvert_data))
     
     return cryos
-
-
 
 
 def get_split_indices(particles_file, ind_file = None):
@@ -405,5 +413,5 @@ def get_default_dataset_option():
                             'uninvert_data' : False}
     return dataset_loader_dict
 
-def load_dataset_from_dict(dataset_loader_dict):
-    return load_cryodrgn_dataset(**dataset_loader_dict)
+def load_dataset_from_dict(dataset_loader_dict, lazy = True):
+    return load_cryodrgn_dataset(**dataset_loader_dict, lazy = lazy)

@@ -60,6 +60,12 @@ def add_args(parser: argparse.ArgumentParser):
         "--n-vols", dest= "n_vols_along_path", metavar=int, default=6, help="number of volumes produced at regular interval along the path"
     )
 
+    parser.add_argument(
+        "--adaptive",
+        action="store_true",
+        help="whether to use the adapative discretization scheme in reweighing to compute trajectory volumes"
+    )
+
     # parser.add_argument(
     #     "--n-std", metavar=float, default=None, help="number of standard deviations to use for reweighting (don't set q and this parameter, only one of them)"
     # )
@@ -67,7 +73,7 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
-def compute_trajectory(results, zdim, z_st, z_end, output_folder, n_vols_along_path = 6, cryos = None, likelihood_threshold = None):
+def compute_trajectory(results, zdim, z_st, z_end, output_folder, n_vols_along_path = 6, cryos = None, likelihood_threshold = None, adaptive = False):
 
     # Load dataset if not loaded
     cryos = dataset.load_dataset_from_args(results['input_args']) if cryos is None else cryos
@@ -77,7 +83,7 @@ def compute_trajectory(results, zdim, z_st, z_end, output_folder, n_vols_along_p
     path_folder = output_folder       
     o.mkdir_safe(path_folder)
 
-    path_z = o.make_trajectory_plots_from_results(results, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = False, basis_size =zdim, compute_reproj = False, likelihood_threshold = likelihood_threshold)    
+    path_z = o.make_trajectory_plots_from_results(results, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = False, basis_size =zdim, compute_reproj = False, likelihood_threshold = likelihood_threshold,adaptive = adaptive)    
 
     return path_z
 
@@ -95,7 +101,7 @@ def compute_trajectory_from_terminal(args):
     else:
         raise Exception("end point format wrong")
 
-    compute_trajectory(results, args.zdim, z_st, z_end, args.outdir, args.n_vols_along_path, cryos = None, likelihood_threshold = args.q)
+    compute_trajectory(results, args.zdim, z_st, z_end, args.outdir, args.n_vols_along_path, cryos = None, likelihood_threshold = args.q, adaptive = args.adaptive)
     return 
 
 if __name__ == "__main__":

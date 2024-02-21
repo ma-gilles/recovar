@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import functools
+from jax import vjp
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jax.numpy)
 
@@ -9,7 +10,10 @@ ftu = fourier_transform_utils(jax.numpy)
 
 @functools.partial(jax.jit, static_argnums=[1])
 def vol_indices_to_vec_indices(vol_indices, vol_shape):
-    return jnp.ravel_multi_index(vol_indices.T, vol_shape, mode = 'clip')
+    og_shape = vol_indices.shape
+    vol_indices = vol_indices.reshape(-1, vol_indices.shape[-1])
+    return jnp.ravel_multi_index(vol_indices.T, vol_shape, mode = 'clip').reshape(og_shape[:-1])
+    # return jnp.ravel_multi_index(vol_indices.T, vol_shape, mode = 'clip')
 
 def vec_indices_to_vol_indices(vec_indices, vol_shape):
     vol_indices = jnp.unravel_index(vec_indices, vol_shape)
@@ -32,30 +36,99 @@ def vec_indices_to_frequencies(vec_indices, vol_shape):
 def frequencies_to_vec_indices(frequencies, vol_shape):
     return vol_indices_to_vec_indices(frequencies_to_vol_indices(frequencies, vol_shape), vol_shape)
 
+def check_frequencies_in_bound(frequencies,grid_size):
+    return jnp.prod((frequencies >= -grid_size/2 ) * (frequencies < grid_size/2), axis = -1).astype(bool)
+
+def check_vol_indices_in_bound(vol_indices,grid_size):
+    return jnp.prod((vol_indices >= 0 ) * (vol_indices < grid_size ), axis = -1).astype(bool)
+
+
+## Some similar function used for adaptive discretization: find nearby gridpoints
+@functools.partial(jax.jit, static_argnums=[1])
+def find_frequencies_within_grid_dist(coords, max_grid_dist: int ):
+    # k 
+    dim = coords.shape[-1]
+
+    # Closest ind
+    # closest_point = round_to_int(coord)
+    if dim ==2:
+        neighbors = jnp.mgrid[-max_grid_dist:max_grid_dist+1,-max_grid_dist:max_grid_dist+1]
+    else:
+        neighbors = jnp.mgrid[-max_grid_dist:max_grid_dist+1,-max_grid_dist:max_grid_dist+1,-max_grid_dist:max_grid_dist+1]
+
+    neighbors = neighbors.reshape(dim, -1).T
+
+    coords_ndim = coords.ndim
+    neighbors = neighbors.reshape( (coords_ndim-1) * [1]  + list(neighbors.shape))
+    neighbors += coords[...,None,:]
+    neighbors = round_to_int(neighbors)
+    return neighbors
+
+## This could be improved...
+# @functools.partial(jax.jit, static_argnums=[1])
+# def find_nearest_k_frequencies(coord, k: int ):
+#     # (1 + n)^2 (1 + 4 n + 2 n^2)
+#     # 1/2 (-1 + k^(1/3))
+#     #  
+#     neighbors = find_frequencies_within_grid_dist(coord, max_grid_dist: int )
+#     distances = jnp.linalg.norm(neighbors - coord, axis = 0)
+#     # Now find k smallest distances
+#     distances_at_best, indices = jax.lax.top_k(-distances, k)
+    # return
+
+batch_find_frequencies_within_grid_dist= jax.vmap(find_frequencies_within_grid_dist, in_axes = (0, None))
+batch_batch_find_frequencies_within_grid_dist= jax.vmap(batch_find_frequencies_within_grid_dist, in_axes = (0, None))
+
+
+# def find_frequencies_within_dist(coord, max_grid_dist):
+#     dim = coord.shape[-1]
+#     k = max_grid_dist * 2**dim - 1
+#     return find_k_nearest_frequencies(coord, k )
+
+def distance_to_max_grid_dist(dist):
+    return np.ceil(dist).astype(int)
+
+
+# There are two ways to slice volumes. One fast which just uses nearest gridpoints, and one slow which calls map_coordinates, which can use either both nearest and linear interpolation.
 @jax.jit
-def P_mat_vec(volume_vec, plane_indices_on_grid):
+def slice_volume_by_nearest(volume_vec, plane_indices_on_grid):
     return volume_vec[plane_indices_on_grid] 
 
 # Used to project the mean
-batch_P_mat_vec = jax.vmap(P_mat_vec, (None, 0))
+batch_slice_volume_by_nearest = jax.vmap(slice_volume_by_nearest, (None, 0))
+
+# @functools.partial(jax.jit, static_argnums = [4,5,6,7,8])    
+def slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type):    
+    order = 1 if disc_type == "linear_interp" else 0
+    return map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, order)
+    
+
+# ## This is about twice faster. It doesn't do any checking, I guess? 
+# def slice_volume_by_map_nomap(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type):
+#     grid_point_indices = batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
+#     return volume[grid_point_indices] 
+
 
 # Computes \sum_i S_i v_i where S_i: N^2 -> N^3 is sparse, v_i \in N^2
 @functools.partial(jax.jit, static_argnums=0)
-def sum_batch_P_adjoint_mat_vec(volume_size, image_vecs, plane_indices_on_grids):
+def summed_adjoint_slice_by_nearest(volume_size, image_vecs, plane_indices_on_grids):
     volume_vec = jnp.zeros(volume_size, dtype = image_vecs.dtype)
     volume_vec = volume_vec.at[plane_indices_on_grids.reshape(-1)].add((image_vecs).reshape(-1))
     return volume_vec
 
-nosum_batch_P_adjoint_mat_vec = jax.vmap( sum_batch_P_adjoint_mat_vec, in_axes = (None, 0,0)) 
+
+batch_over_vol_summed_adjoint_slice_by_nearest = jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, -1,None), out_axes = ( -1))
+
+nosummed_adjoint_slice_by_nearest = jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, 0,0)) 
 
 @functools.partial(jax.jit, static_argnums=0)
 def sum_adj_forward_model(volume_size, images, CTF_val_on_grid_stacked, plane_indices_on_grid_stacked):
-    return sum_batch_P_adjoint_mat_vec(volume_size, images * jnp.conj(CTF_val_on_grid_stacked), plane_indices_on_grid_stacked)
+    return summed_adjoint_slice_by_nearest(volume_size, images * jnp.conj(CTF_val_on_grid_stacked), plane_indices_on_grid_stacked)
 
 
 @jax.jit
 def forward_model(volume_vec, CTF_val_on_grid_stacked, plane_indices_on_grid_stacked):
-    return batch_P_mat_vec(volume_vec, plane_indices_on_grid_stacked) * CTF_val_on_grid_stacked
+    return batch_slice_volume_by_nearest(volume_vec, plane_indices_on_grid_stacked) * CTF_val_on_grid_stacked
 
 
 @jax.jit
@@ -122,13 +195,106 @@ def get_rotated_plane_coords(rotation_matrix, image_shape, voxel_size, scaled = 
 
 batch_get_rotated_plane_coords = jax.vmap(get_rotated_plane_coords, in_axes = (0, None, None, None))
 
-# @functools.partial(jax.jit, static_argnums = [4,5,6,7,8])    
-def get_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type):
+@functools.partial(jax.jit, static_argnums=[3,4,5,6,7,8])
+def forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):
+    slices = slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)
+    return slices
+
+
+@functools.partial(jax.jit, static_argnums=[3,4,5,6,7,8])
+def forward_model_from_map_and_return_adjoint(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):
+    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type)
+    slices, f_adj = vjp(f,volume)
+    return slices, f_adj
+
+
+# A JAXed version of the adjoint. This is actually slightly slower but will run with disc_type = 'linear_interp'. I probably should just write out an explicit adjoint of linear interpolation...
+@functools.partial(jax.jit, static_argnums=[3,4,5,6,7,8])
+def adjoint_forward_model_from_map(slices, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):  
+    volume_size = np.prod(volume_shape)
+    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type)
+    _, u = vjp(f,jnp.zeros(volume_size, dtype = slices.dtype ))
+    return u(slices)[0]
+
+
+
+# Compute A^TAx (the forward, then its adjoint). For JAX reasons, this should be about 2x faster than doing each call separately.
+@functools.partial(jax.jit, static_argnums=[3,4,5,6,7,8])
+def compute_A_t_Av_forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):    
+    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type)
+    y, u = vjp(f,volume)
+    return u(y)
+
+# These functions below are not really used anymore. Could probably delete them. They could useful for preconditioning of Ewald
+
+# This squared the entries of the forward model. Useful to compute the diagonal of P_i^T_i
+@functools.partial(jax.jit, static_argnums=[3,4,5,6,7,8])
+def forward_model_squared_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):    
+    # slices = map_coordinates_squared_on_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)**2
+    slices = slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)**2
+    return slices
+
+
+# This squared the entries of the forward model. Useful to compute the diagonal of P_i^T_i
+@functools.partial(jax.jit, static_argnums=[3,4,5,6,7,8])
+def forward_model_squared_from_map_and_return_adjoint(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):    
+    f = lambda volume : forward_model_squared_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type)
+    slices, f_adj = vjp(f,volume)
+    return slices, f_adj
+
+    # slices = map_coordinates_squared_on_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)**2
+    # return slices
+
+
+
+@functools.partial(jax.jit, static_argnums=[3,4,5,6,7,8])
+def adjoint_forward_model_squared_from_map(slices, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):  
+    # Not clear to me whether this has to be done everytime I want to adjoint
+    volume_size = np.prod(volume_shape)
+    f = lambda volume : forward_model_squared_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type)
+    _, u = vjp(f,jnp.zeros(volume_size, dtype = slices.dtype ))
+    return u(slices)[0]
+
+
+# @functools.partial(jax.jit, static_argnums=[3,4,5,6,7,8])
+# def forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):
+#     slices = slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)
+#     return slices
+
+
+# def forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):
+#     slices = slice_volume_by_map(mean, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)
+#     return slices
+
     
-    if disc_type == "linear_interp" or disc_type =="nearest":
-        order = 1 if disc_type == "linear_interp" else 0
-        return map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, order)
-    
+@functools.partial(jax.jit, static_argnums = [2,3,4,5])    
+def map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, order):
+    # import pdb; pdb.set_trace()
+    # batch_grid_pt_vec_ind_of_images = batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size )
+    # batch_grid_pt_vec_ind_of_images_og_shape = batch_grid_pt_vec_ind_of_images.shape
+    # batch_grid_pt_vec_ind_of_images = batch_grid_pt_vec_ind_of_images.reshape(-1,3).T
+    batch_grid_pt_vec_ind_of_images, batch_grid_pt_vec_ind_of_images_og_shape = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape, grid_size)
+    slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
+    return slices
+
+
+def rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape, grid_size):
+    batch_grid_pt_vec_ind_of_images = batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size )
+    batch_grid_pt_vec_ind_of_images_og_shape = batch_grid_pt_vec_ind_of_images.shape
+    batch_grid_pt_vec_ind_of_images = batch_grid_pt_vec_ind_of_images.reshape(-1,3).T
+    return batch_grid_pt_vec_ind_of_images, batch_grid_pt_vec_ind_of_images_og_shape
+
+
+from recovar import jax_map_squared
+@functools.partial(jax.jit, static_argnums = [2,3,4,5])    
+def map_coordinates_squared_on_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type):
+    order = 1 if disc_type == "linear_interp" else 0
+    batch_grid_pt_vec_ind_of_images, batch_grid_pt_vec_ind_of_images_og_shape = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape, grid_size)
+    slices = jax_map_squared.map_coordinates_squared(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
+    return slices
+
+
+
 @functools.partial(jax.jit, static_argnums = [2,3,4,5])    
 def map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, order):
     # import pdb; pdb.set_trace()
@@ -139,27 +305,10 @@ def map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_sha
     return slices
 
 
-# This can only run on CPU.
-def get_nufft_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size ):
-    plane_coords_mol = batch_get_rotated_plane_coords(rotation_matrices, image_shape, voxel_size, True) 
-    clean_image_mol = compute_volume_projections_with_nufft(volume, plane_coords_mol, voxel_size)
-    return clean_image_mol
-
-def compute_volume_projections_with_nufft(volume, plane_coords, voxel_size):
-    # This is here because I don't want to impose the dependencies for nufft. If you want to run this, you should 
-    # pip install finufft
-    import generate_synthetic_molecule as gsm
-    # plane_coords = cu.get_unrotated_plane_coords(image_shape, voxel_size, scaled =True )
-    plane_coords_vec = np.array(plane_coords.reshape(-1, 3)).astype(np.float64)
-    X_ims = gsm.get_fourier_transform_of_volume_at_freq_coords(np.array(volume).astype(np.complex128), plane_coords_vec, voxel_size )
-    X_ims = X_ims.reshape(plane_coords.shape[:-1])
-    return X_ims
-    
 
 ## CTF functions.
-
 @jax.jit
-def compute_ctf_crydgrn(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfactor):
+def evaluate_ctf(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfactor):
     '''
     Adapted for JAX from cryoDRGN: https://github.com/zhonge/cryodrgn
     
@@ -183,7 +332,6 @@ def compute_ctf_crydgrn(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfacto
     cs = cs * 10**7
     dfang = dfang * jnp.pi / 180
     phase_shift = phase_shift * jnp.pi / 180
-    
     # lam = sqrt(h^2/(2*m*e*Vr)); Vr = V + (e/(2*m*c^2))*V^2
     lam = 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
     x = freqs[...,0]
@@ -198,14 +346,12 @@ def compute_ctf_crydgrn(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfacto
     return ctf
 
 @jax.jit
-def compute_ctf_crydgrn_packed(freqs, CTF):
-    return compute_ctf_crydgrn(freqs, CTF[0], CTF[1], CTF[2], CTF[3], CTF[4], CTF[5], CTF[6], CTF[7]) * CTF[8]
+def evaluate_ctf_packed(freqs, CTF):
+    return evaluate_ctf(freqs, CTF[0], CTF[1], CTF[2], CTF[3], CTF[4], CTF[5], CTF[6], CTF[7]) * CTF[8]
 
-batch_compute_ctf_crydgrn = jax.vmap(compute_ctf_crydgrn_packed, in_axes = (None, 0))
+batch_evaluate_ctf = jax.vmap(evaluate_ctf_packed, in_axes = (None, 0))
 
 
-def compute_ctf_cryodgrn_wrapper(CTF_params, image_shape, voxel_size):
+def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size):
     psi = get_unrotated_plane_coords(image_shape, voxel_size, scaled = True)[...,:2]
-    return batch_compute_ctf_crydgrn(psi, CTF_params)
-
-
+    return batch_evaluate_ctf(psi, CTF_params)

@@ -10,10 +10,12 @@ logger = logging.getLogger(__name__)
 def get_log_likelihood_threshold(k = 4, q=0.954499736104):
     return chi2.ppf(q,df=k)
 
-def compute_weights_of_conformation_2(latent_points, zs, cov_zs,likelihood_threshold = 1e-5 ):
+def compute_weights_of_conformation_2(latent_points, zs, cov_zs,likelihood_threshold ):
     log_likelihoods = compute_latent_quadratic_forms_in_batch(latent_points, zs, cov_zs)
     weights = np.array(1.0 * ( log_likelihoods <= likelihood_threshold))
     return weights
+
+# Handling change between latent space and the grid 
 
 def pca_coord_to_grid(x, bounds, num_points, to_int = False):
     v =  (x - bounds[:,0] ) / ( bounds[:,1]  - bounds[:,0] ) * (num_points - 1)    
@@ -39,6 +41,7 @@ def get_z_to_grid(bounds, num_points ):
 def get_grid_z_mappings(bounds, num_points):
     return get_grid_to_z(bounds, num_points ), get_z_to_grid(bounds, num_points )
 
+# Computes density in pca_dim_max dimensions on grid
 def compute_latent_space_density(zs, cov_zs, pca_dim_max = 4, num_points = 50):
     
     if zs.shape[1] != pca_dim_max:
@@ -79,12 +82,12 @@ def compute_probs_in_batch(test_pts, zs, cov_zs):
     summed_probs = jnp.zeros_like(test_pts[:,0])
     
     n_images = zs.shape[0]
-    batch_size_x = np.max([int(15 / (get_size_in_gb(test_pts) * cov_zs.shape[1]**2)), 1])
+    batch_size_x = np.max([int(15 / (utils.get_size_in_gb(test_pts) * cov_zs.shape[1]**2)), 1])
     
     logger.info(f"batch size in latent computation: {batch_size_x}")
     
     for k in range(0, int(np.ceil(n_images/batch_size_x))):
-        batch_st, batch_end = get_batch(n_images, batch_size_x, k)
+        batch_st, batch_end = utils.get_batch_of_indices(n_images, batch_size_x, k)
         summed_probs += compute_sum_exp_residuals( test_pts, zs[batch_st:batch_end].real, cov_zs[batch_st:batch_end], scale_zs[batch_st:batch_end] )
 
     return summed_probs
@@ -179,13 +182,10 @@ def compute_latent_quadratic_forms_in_batch(test_pts, zs, cov_zs):
     utils
     batch_size_x = utils.get_latent_density_batch_size(test_pts, zs.shape[-1], utils.get_gpu_memory_total() ) 
 
-    for k in range(0, int(np.ceil(n_images/batch_size_x))):
-        batch_st, batch_end = get_batch(n_images, batch_size_x, k)
+    for k in range(0, utils.get_number_of_index_batch(n_images, batch_size_x)):
+        batch_st, batch_end = utils.get_batch_of_indices(n_images, batch_size_x, k)
         quads[batch_st:batch_end,:] = compute_latent_quadratic_forms( test_pts.real, zs[batch_st:batch_end].real, cov_zs[batch_st:batch_end])
     return quads
-
-def get_size_in_gb(x):
-    return x.size * x.itemsize / 1e9
 
 @jax.jit
 def compute_det_cov_xs(cov_xs):
@@ -194,9 +194,3 @@ def compute_det_cov_xs(cov_xs):
     # we exp(vs_i) / exp(vs_j) = exp(vs_i - vs_j)
     vs_subs_min = vs - jnp.max(vs)
     return jnp.exp(vs_subs_min)
-
-def get_batch(n_images, batch_size, k):
-    batch_st = int(k * batch_size)
-    batch_end = int(np.min( [(k+1) * batch_size, n_images] ))
-    return batch_st, batch_end
-

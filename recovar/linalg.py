@@ -7,6 +7,8 @@ from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 from recovar import utils
 
+# Some functions that do linear algera on batch in GPU. I find it strange that there is not already a decent library to do this, but I couldn't find one.
+
 logger = logging.getLogger(__name__)
 
 def batch_st_end(k, batch_size, n_rows):
@@ -14,7 +16,6 @@ def batch_st_end(k, batch_size, n_rows):
     batch_end = int(np.min( [(k+1) * batch_size, n_rows]))
     return batch_st, batch_end
 
-### SVD FUNCTIONS
 def blockwise_Y_T_X(Y,X, batch_size = None, memory_to_use = 10):
     # X and Y are tall and skinny
     if batch_size is None:
@@ -34,7 +35,6 @@ def blockwise_Y_T_X(Y,X, batch_size = None, memory_to_use = 10):
     return np.array(YX)
 
 
-### SVD FUNCTIONS
 def blockwise_X_T_X(X, batch_size = None, memory_to_use = 10):
     # X
     if batch_size is None:
