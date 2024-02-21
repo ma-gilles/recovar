@@ -177,7 +177,7 @@ def batch_hermitian_linear_solver(A,b):
     return jax.scipy.linalg.solve(A,b, assume_a = 'pos')
 
 def batch_linear_solver(A,b):
-    return jax.scipy.linalg.solve(A,b)#, assume_a = 'pos')
+    return jax.scipy.linalg.solve(A,b)
 
 # Maybe if problems come again...
 #     if A.ndim ==2:

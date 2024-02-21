@@ -179,7 +179,6 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, eigenv
                                          rotation_matrices, 
                                          image_shape, 
                                          volume_shape, 
-                                         grid_size, 
                                         voxel_size, 
                                         CTF_fun, 
                                         disc_type                                           
@@ -194,7 +193,6 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, eigenv
                                          rotation_matrices,
                                          image_shape, 
                                          volume_shape, 
-                                         grid_size, 
                                         voxel_size, 
                                         CTF_fun, 
                                         disc_type )    
@@ -291,7 +289,6 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
                                          rotation_matrices, 
                                          image_shape, 
                                          volume_shape, 
-                                         grid_size, 
                                         voxel_size, 
                                         CTF_fun, 
                                         disc_type                                           
@@ -308,7 +305,6 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
                                          rotation_matrices,
                                          image_shape, 
                                          volume_shape, 
-                                         grid_size, 
                                         voxel_size, 
                                         CTF_fun, 
                                         disc_type )    

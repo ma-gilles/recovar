@@ -527,7 +527,6 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 
             # import pdb; pdb.set_trace()
     logger.info("Discretizing with: " + disc_type)
-
     logger.info("Done generating data")
 
     if mrc_file is not None:
@@ -538,7 +537,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 
 def make_noise_batch(subkey, noise_image, images_batch_shape):
     image_size = images_batch_shape[-1] * images_batch_shape[-2]
-    noise_batch = jax.random.normal(subkey, images_batch_shape ) / jnp.sqrt(image_size)
+    noise_batch = jax.random.normal(subkey, images_batch_shape ) #/ jnp.sqrt(image_size)
     noise_batch_ft = ftu.get_dft2(noise_batch.reshape(images_batch_shape))
     noise_batch_ft *= jnp.sqrt(noise_image)
     noise_batch = ftu.get_idft2(noise_batch_ft.reshape(images_batch_shape)).real
@@ -550,7 +549,7 @@ def make_noise_batch(subkey, noise_image, images_batch_shape):
 def simulate_data_batch(volume, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun ):
     
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    corrected_images = core.slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF
+    corrected_images = core.slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type) * CTF
     # import pdb; pdb.set_trace()
     # Translate back.
     translated_images = core.translate_images(corrected_images, -translations, image_shape)
@@ -568,10 +567,20 @@ def simulate_nufft_data_batch(volume, rotation_matrices, translations, CTF_param
     return translated_images
 
 
+# MOVED HERE BECAUSE ONLY USED HERE
+@functools.partial(jax.jit, static_argnums=[1,2,3])
+def get_rotated_plane_coords(rotation_matrix, image_shape, voxel_size, scaled = True):
+    unrotated_plane_indices = core.get_unrotated_plane_coords(image_shape, voxel_size, scaled = scaled)
+    rotated_plane = unrotated_plane_indices @ rotation_matrix
+    return rotated_plane
+
+batch_get_rotated_plane_coords = jax.vmap(get_rotated_plane_coords, in_axes = (0, None, None, None))
+
+
 def simulate_nufft_data_batch_from_pdb(atom_group, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun, Bfactor=100 ):
     
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)    
-    plane_coords_mol =  core.batch_get_rotated_plane_coords(rotation_matrices, image_shape, voxel_size, True) 
+    plane_coords_mol = batch_get_rotated_plane_coords(rotation_matrices, image_shape, voxel_size, True) 
     slices = compute_projections_with_nufft(atom_group, plane_coords_mol, voxel_size)
 
     corrected_images = slices * CTF
