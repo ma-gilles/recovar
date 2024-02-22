@@ -3,6 +3,11 @@ import jax
 import jax.numpy as jnp
 from recovar import core
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 
 # TODO: Should it be residual of masked?
 # Residual will be 4 dimensional
@@ -11,9 +16,19 @@ import numpy as np
 
 def translations_to_indices(translations, image_shape):
     # Assumes that translations are integers
+    # Does this not work?
     indices = translations + image_shape[0]//2
     vec_indices = indices[...,0] * image_shape[1] + indices[...,1]
+    logger.warning("not sure that this is working as intended")
     return vec_indices
+
+
+def translations_to_indices2(translations, image_shape):
+    # Assumes that translations are integers
+    indices = translations + image_shape[0]//2
+    vec_indices = indices[...,0] + image_shape[1] * indices[...,1]
+    return vec_indices
+
 
 NORM_FFT = "backward"
 
@@ -103,7 +118,6 @@ def compute_residuals_many_poses(volumes, images, rotation_matrices, translation
     return norm_res_squared
 
 
-
 take_vmap = jax.vmap(lambda x, y: jnp.take(x,y, -1), in_axes = (0, 0))
 def batch_take(arr, indices, axis):
     og_shape = arr.shape
@@ -133,12 +147,6 @@ def norm_squared_residuals_from_ft_one_image(many_images, one_image, image_shape
 
 norm_squared_residuals_from_ft = jax.vmap(norm_squared_residuals_from_ft_one_image, in_axes = (0, 0, None))
 
-    # 
-    # # Guess I could do a 2x speed up here for FFTing only one
-    # corr = cross_one_to_many_images(im1, im2)
-
-    # # For a single image, and many projections
-    # return
 
 
 def compute_probability_from_residual_normal_squared_one_image(norm_res_squared):
@@ -150,57 +158,57 @@ def compute_probability_from_residual_normal_squared_one_image(norm_res_squared)
 compute_probability_from_residual_normal_squared = jax.vmap(compute_probability_from_residual_normal_squared_one_image)
 
 
-def sum_up_translations(images, probabilities, translations, image_shape, translation_fn = "fft"):
+def sum_up_translate_one_image(image, probabilities, translations, image_shape, translation_fn = "fft"):
+
     if translation_fn == "fft":
-        images_probs = jnp.zeros( [*translations.shape[-1] , *image_shape])
-        translations_indices = translations_to_indices(translations, image_shape)
-        images_probs = jax.ops.index_update(images_probs, translations_indices, probabilities)
-        # Compute convolution by fft ?
-    else:
-        translated_images = core.batch_trans_translate_images(images, translations, image_shape)[None,:, None] 
-        # Summed up?
-        summed_up_images = jnp.sum(translated_images * probabilities, axis = -1)
-        # Multiply by probs
-        assert(False)
+        image_size = np.prod(image_shape)
+        images_probs = jnp.zeros( image_size, dtype = probabilities.dtype)
+        translations_indices = translations_to_indices2(translations, image_shape)
+        images_probs = images_probs.at[translations_indices].set(probabilities)
+        images_probs = ftu.get_dft2(images_probs.reshape(image_shape))
+        summed_up_images = jnp.conj(image) * images_probs
+    else:  
+        translated_images = core.batch_trans_translate_images(image.reshape(1,-1), translations[None], image_shape)[0]
+        summed_up_images = jnp.sum(translated_images * probabilities[...,None], axis = 0)
+
     return summed_up_images
+
+sum_up_translations = jax.vmap(sum_up_translate_one_image, in_axes = (0,0,0,None, None))
+# def sum_up_translations(images, probabilities, translations, image_shape, translation_fn = "fft"):
+
+#     if translation_fn == "fft":
+#         # Compute sum of images by a convolution 
+#         image_size = np.prod(image_shape)
+#         images_probs = jnp.zeros( [translations.shape[-2] , image_size])
+#         translations_indices = translations_to_indices2(translations, image_shape)
+#         images_probs = images_probs.at[translations_indices].set(probabilities)
+#         images_probs = ftu.get_dft2(images_probs.reshape(image_shape))
+#         summed_up_images = crosscorr_from_ft(images_probs, images_probs, image_shape)
+#     else:
+#         translated_images = core.batch_trans_translate_images(images, translations, image_shape)[None,:, None] 
+#         # Summed up?
+#         summed_up_images = jnp.sum(translated_images * probabilities, axis = -1)
+#         # Multiply by probs
+#         # assert(False)
+
+#     return summed_up_images
 
 
 def backproject_one_image(probabilities, images, rotation_matrices, translations, CTF_params, noise_variance, voxel_size, volume_shape, image_shape, cov_noise, disc_type, CTF_fun, translation_fn = "fft" ):
 
     images /= noise_variance
+    
     # Probability image
-
-    summed_up_images = sum_up_translations(images, probabilities, translations, image_shape, translation_fn)
-    # if translation_fn == "fft":
-    #     images_probs = jnp.zeros( [*translations.shape[-1] , *image_shape])
-    #     translations_indices = translations_to_indices(translations, image_shape)
-    #     images_probs = jax.ops.index_update(images_probs, translations_indices, probabilities)
-    #     # Compute convolution by fft ?
-    # else:
-    #     translated_images = core.batch_trans_translate_images(images, translations, image_shape)[None,:, None] 
-    #     # Summed up?
-    #     summed_up_images = jnp.sum(translated_images * probabilities, axis = -1)
-    #     # Multiply by probs
-    #     assert(False)
-
-    CTF = CTF_fun( CTF_params, image_shape, voxel_size) / noise_variance
-
+    images = sum_up_translations(images, probabilities, translations, image_shape, translation_fn)
+    
     # Ft = F transpose which is probably a confusing name
-    Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) / cov_noise
+    Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
 
-    Ft_ctf = core.adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) / cov_noise
+    # Should there be something about translations in this? Probably?
+    # Probably sum over something?
+    CTF = CTF_fun( CTF_params, image_shape, voxel_size) / noise_variance
+    Ft_ctf = core.adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
 
-    # one_image_summed  = jnp.sum(batch_translate(one_image * CTF * probabilities, translations))
+    return Ft_y, Ft_ctf
 
-    # indices = core.get_nearest_gridpoint_indices(rotation_matrix, image_shape, volume_shape, grid_size)
-    # volume = core.summed_adjoint_slice_by_nearest(volume_size, one_image_summed, indices)
 
-    return volume
-
-def compute_adj_slice(one_image, rotation_matrices, translations, CTF_params, probabilities):
-
-    CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    one_image_summed  = jnp.sum(batch_translate(one_image * CTF * probabilities, translations))
-    indices = core.get_nearest_gridpoint_indices(rotation_matrix, image_shape, volume_shape, grid_size)
-    volume = core.summed_adjoint_slice_by_nearest(volume_size, one_image_summed, indices)
-    return volume
