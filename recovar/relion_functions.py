@@ -85,11 +85,12 @@ import functools, jax
 @functools.partial(jax.jit, static_argnums=[4,5,6,7,8,9])
 def relion_style_triangular_kernel_batch(images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, cov_noise):
     # images = process_images(images, apply_image_mask = True)
-    images = core.translate_images(images, translations, image_shape)
-    Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) / cov_noise
+    
+    images = core.translate_images(images, translations, image_shape) / cov_noise
+    Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
 
-    CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    Ft_ctf = core.adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) / cov_noise
+    CTF = CTF_fun( CTF_params, image_shape, voxel_size) / cov_noise
+    Ft_ctf = core.adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
 
     return Ft_y, Ft_ctf
 

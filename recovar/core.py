@@ -181,7 +181,7 @@ batch_translate = jax.vmap(translate_single_image, in_axes = (0,0, None))
 @functools.partial(jax.jit, static_argnums=2)
 def translate_images(image, translation, image_shape):
     twod_lattice = get_unrotated_plane_coords(image_shape, voxel_size =1, scaled = True )[:,:2]
-    return batch_translate(image, translation, twod_lattice).astype(image.dtype)
+    return batch_translate(image, translation, twod_lattice)#.astype(image.dtype)
 
 
 batch_trans_translate_images = jax.vmap(translate_images, in_axes = (None,-2, None), out_axes = (-2))
@@ -261,6 +261,7 @@ def adjoint_forward_model_from_map(slices, CTF_params, rotation_matrices, image_
 
 
 
+
 # Compute A^TAx (the forward, then its adjoint). For JAX reasons, this should be about 2x faster than doing each call separately.
 @functools.partial(jax.jit, static_argnums=[3,4,5,6,7])
 def compute_A_t_Av_forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):    
@@ -298,6 +299,40 @@ def map_coordinates_squared_on_slices(volume, rotation_matrices, image_shape, vo
     slices = jax_map_squared.map_coordinates_squared(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
     return slices
 
+# Not sure this should be used...
+def slice_by_linear_interp_explicit(volume, rotation_matrices, image_shape, volume_shape, order):
+    batch_grid_pt_vec_ind_of_images = batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape )
+    # Get all 8 grid-points
+    
+    return
+
+# def get_nearby_grid
+def mesh_grid_one(x_grid):
+    z = jnp.meshgrid(low_high, low_high)
+    return jnp.concatenate()
+mesh_grid_coords = jax.vmap(mesh_grid_coords, in_axes=(-1))
+
+
+def get_linear_weights_and_indices(grid_points, volume_shape):
+    x_low = jnp.floor(grid_points).astype(int)
+    x_high = x_low + 1
+    weight_low = grid_points - x_low
+    weight_high = 1 - weight_low
+
+    xs = jnp.concatenate( [x_low, x_high])
+    weights = jnp.concatenate( [weight_low, weight_high])
+
+
+    x_high = jnp.ceil(grid_points).astype(int)
+    x_bounds = jnp.concatenate(x_low, x_high)
+
+    np.meshgrid()
+
+
+
+    # x_high = 1-
+    # x_000 = 
+
 
 
 @functools.partial(jax.jit, static_argnums = [2,3,4])    
@@ -306,6 +341,7 @@ def map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_sha
     batch_grid_pt_vec_ind_of_images = batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape )
     batch_grid_pt_vec_ind_of_images_og_shape = batch_grid_pt_vec_ind_of_images.shape
     batch_grid_pt_vec_ind_of_images = batch_grid_pt_vec_ind_of_images.reshape(-1,3).T
+
     slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
     return slices
 
