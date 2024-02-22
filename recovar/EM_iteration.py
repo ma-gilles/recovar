@@ -150,7 +150,32 @@ def compute_probability_from_residual_normal_squared_one_image(norm_res_squared)
 compute_probability_from_residual_normal_squared = jax.vmap(compute_probability_from_residual_normal_squared_one_image)
 
 
+def backproject_one_image(probabilities, images, rotation_matrices, translations, CTF_params, noise_variance, voxel_size, volume_shape, image_shape, cov_noise, disc_type, CTF_fun, translation_fn = "fft" ):
+    # Probability image
+
+    if translation_fn == "fft":
+        images_probs = jnp.zeros( [*translations.shape[-1] , *image_shape])
+        translations_indices = translations_to_indices(translations, image_shape)
+        images_probs = jax.ops.index_update(images_probs, translations_indices, probabilities)
+        # Compute convolution by fft ?
+    else:
+        assert(False)
+
+    CTF = CTF_fun( CTF_params, image_shape, voxel_size)
+
+    # Ft = F transpose which is probably a confusing name
+    Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) / cov_noise
+
+
+    Ft_ctf = core.adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) / cov_noise
+
+    one_image_summed  = jnp.sum(batch_translate(one_image * CTF * probabilities, translations))
+    indices = core.get_nearest_gridpoint_indices(rotation_matrix, image_shape, volume_shape, grid_size)
+    volume = core.summed_adjoint_slice_by_nearest(volume_size, one_image_summed, indices)
+    return volume
+
 def compute_adj_slice(one_image, rotation_matrices, translations, CTF_params, probabilities):
+
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
     one_image_summed  = jnp.sum(batch_translate(one_image * CTF * probabilities, translations))
     indices = core.get_nearest_gridpoint_indices(rotation_matrix, image_shape, volume_shape, grid_size)
