@@ -30,6 +30,8 @@ def griddingCorrect(vol_in, ori_size, padding_factor, order = 0,):
     else:
         raise ValueError("Order not implemented")
     
+
+
     return vol_out.reshape(og_shape), sinc.reshape(og_shape)
 
 # I think this is the correct Fourier transform of the trilinear interpolator: sinc(x) * sinc(y) * sinc(z)
@@ -97,7 +99,7 @@ def relion_style_triangular_kernel_batch(images, CTF_params, rotation_matrices, 
 
 def adjust_regularization_relion_style(filter, volume_shape, tau = None, oversampling_factor = 1, max_res_shell = None):
 
-    # Original code copy pasted from https://github.com/3dem/relion/blob/e5c4835894ea7db4ad4f5b0f4861b33269dbcc77/src/backprojector.cpp#L1082
+    # Original code here https://github.com/3dem/relion/blob/e5c4835894ea7db4ad4f5b0f4861b33269dbcc77/src/backprojector.cpp#L1082
 
     # There is an "oversampling" factor of 2 in the FSC, I guess due to the fact that they swap back and forth between a padded and unpadded grid
     if tau is not None:
@@ -110,6 +112,8 @@ def adjust_regularization_relion_style(filter, volume_shape, tau = None, oversam
     else:
         regularized_filter = filter
 
+    # This may be a little different b/c I keep things scaled slightly differently. Perhaps should be fixed in fourier_transform_utils
+        
     # Take max of weight of 1/1000 of spherically averaged weight 
     # const RFLOAT weight =  XMIPP_MAX(DIRECT_A3D_ELEM(Fweight, k, i, j), DIRECT_A1D_ELEM(radavg_weight, (ires < r_max) ? ires : (r_max - 1)));
     # Compute spherically averaged 
@@ -127,3 +131,42 @@ def adjust_regularization_relion_style(filter, volume_shape, tau = None, oversam
     regularized_filter = jnp.maximum(regularized_filter, constants.EPSILON)
 
     return regularized_filter
+
+
+
+def post_process_from_filter(cryo, Ft_ctf, F_ty, tau = None, disc_type = 'nearest', use_spherical_mask = True, grid_correct = True, gridding_correct = "square", kernel_width = 1 ):
+    
+    Ft_ctf= Ft_ctf.real
+    F_ty =  F_ty * cryo.get_valid_upsampled_frequency_indices() # Zero-out FT outside sphere
+    
+    # Adjust reg for small values
+    Ft_ctf2 = adjust_regularization_relion_style(Ft_ctf, cryo.upsampled_volume_shape, tau = tau, oversampling_factor = cryo.volume_upsampling_factor, max_res_shell = None)
+    
+    myreliontest = F_ty / Ft_ctf2
+    
+    # Window real space
+    myreliontest = ftu.get_idft3(myreliontest.reshape(cryo.upsampled_volume_shape))
+    from recovar import padding, mask
+
+    myreliontest = padding.unpad_volume_spatial_domain(myreliontest, (cryo.upsampled_grid_size - cryo.grid_size) )
+    
+    # Soft Spherical mask
+    if use_spherical_mask:
+        myreliontest, mask2 = mask.soft_mask_outside_map(myreliontest, cosine_width = 3)
+    
+    # Correct gridding effect
+    if grid_correct:
+        order = 1 if disc_type == 'linear_interp' else 0
+
+        grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
+        myreliontest, sinc = grid_fn(myreliontest.reshape(cryo.volume_shape), cryo.grid_size, cryo.volume_upsampling_factor/kernel_width, order = order)
+        print(cryo.volume_upsampling_factor/kernel_width)
+
+        import matplotlib.pyplot as plt
+        plt.figure()
+        plt.imshow(sinc[sinc.shape[0]//2])
+        plt.colorbar()
+        plt.show()
+    myreliontest = ftu.get_dft3(myreliontest.reshape(cryo.volume_shape))
+
+    return myreliontest

@@ -41,6 +41,73 @@ def plot_noise_profile(results, yscale = 'linear'):
     
     return
 
+def compare_two_volumes(cryo, vol1, vol2):
+    import matplotlib
+    plt.rcParams.update({
+        # "text.usetex": True,
+        # "font.family": "serif",
+        # "font.sans-serif": "Helvetica",
+    })
+    font = {'weight' : 'bold',
+            'size'   : 22}
+    matplotlib.rc('font', **font)
+
+    n_plots = 4
+    fig, axs = plt.subplots(n_plots, 6, figsize = ( 6*3, n_plots * 3))#, 6*3))
+    global is_first
+    is_first = True
+    
+    def plot_vol(vol, n_plot, from_ft = True, cmap = 'viridis', name ="", symmetric = False):
+        if not from_ft:
+            vol = ftu.get_dft3(vol.reshape(cryo.volume_shape)).reshape(-1)
+        global is_first
+        
+        axs[n_plot,0].set_ylabel(name)
+
+        for k in range(3):
+
+            img = cryo.get_proj(vol, axis =k )
+            
+            if symmetric:
+                vmax = np.max(np.abs(img))
+                axs[n_plot,k].imshow(img , cmap=matplotlib.colormaps[cmap], vmin = -vmax, vmax = vmax)
+            else:
+                axs[n_plot,k].imshow(img , cmap=matplotlib.colormaps[cmap])
+            axs[n_plot,k].set_xticklabels([])
+            axs[n_plot,k].set_yticklabels([])
+            if is_first:            
+                axs[n_plot,k].set_title(f"projection {k}")
+
+                # axs[n_plot,k].set_ylabel(name)#f"projection {k}")#, fontsize = 20)
+
+        for k in range(3,6):
+
+            img = cryo.get_slice_real(vol, axis =k-3 )
+            
+            if symmetric:
+                vmax = np.max(np.abs(img))
+                axs[n_plot,k].imshow(img , cmap=matplotlib.colormaps[cmap], vmin = -vmax, vmax = vmax)
+            else:
+                axs[n_plot,k].imshow(img , cmap=matplotlib.colormaps[cmap])
+            axs[n_plot,k].set_xticklabels([])
+            axs[n_plot,k].set_yticklabels([])
+            
+            if is_first:            
+                axs[n_plot,k].set_title(f"slice {k-3}")#, fontsize = 20)
+
+        is_first = False
+        return
+
+    plot_vol(vol1, 0, from_ft = True, name = 'vol1')
+    plot_vol(vol2, 1, from_ft = True,name = 'vol2')
+    vol_diff = ftu.get_idft3((vol1-vol2).reshape(cryo.volume_shape)).reshape(-1)
+    plot_vol(vol_diff,2, from_ft = False,name = 'diff')
+    plot_vol(np.abs(vol_diff),3, from_ft = False,name = '||diff||')
+    
+    plt.subplots_adjust(wspace=0, hspace=0)
+
+    return
+
 def plot_summary_t(results,cryos, n_eigs = 3, u_key = "rescaled"):
     plt.rcParams.update({
         # "text.usetex": True,
@@ -104,7 +171,6 @@ def plot_summary_t(results,cryos, n_eigs = 3, u_key = "rescaled"):
 
     plt.subplots_adjust(wspace=0, hspace=0)
 
-    
     return
 
 def plot_summary(results,cryos, n_eigs = 3):

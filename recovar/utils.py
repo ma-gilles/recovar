@@ -86,13 +86,20 @@ def write_mrc(file, ar, voxel_size = None):
         if voxel_size is not None:
             mrc.voxel_size = voxel_size
 
-def load_mrc(filepath):
+def load_mrc(filepath, return_voxel_size = False):
     with mrcfile.open(filepath) as mrc:
         data = mrc.data
+        if return_voxel_size:
+            voxel_size = mrc.voxel_size
 
     # This is to agree with the cryosparc/cryoDRGN convention
     if data.ndim == 3 and np.isclose(data.shape, data.shape[0]).all():
         data = np.transpose(data, (2,1,0))
+
+    # in order not to break rest of code...    
+    if return_voxel_size:
+        return data, voxel_size 
+    
     return data
         
 def symmetrize_ft_volume(vol, volume_shape):
