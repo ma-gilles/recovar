@@ -8,7 +8,6 @@ ftu = fourier_transform_utils(jax.numpy)
 
 ## Low level functions for cryo-EM. Handling of indexing, slicing, adjoint of slicing, CTF, etc.
 
-
 # Three different representation for a 2x2x2 grid are
 # E.g., vol_indices are [0,0,0], [0,0,1], [0,1,0], [0,1,1], [1,0,0], [1,0,1], [1,1,0], [1,1,1]
 # E.g., vec_indices are 0, 1, 2, 3, 4, 5, 6, 7
@@ -299,34 +298,34 @@ def map_coordinates_squared_on_slices(volume, rotation_matrices, image_shape, vo
     slices = jax_map_squared.map_coordinates_squared(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
     return slices
 
-# Not sure this should be used...
-def slice_by_linear_interp_explicit(volume, rotation_matrices, image_shape, volume_shape, order):
-    batch_grid_pt_vec_ind_of_images = batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape )
-    # Get all 8 grid-points
+# # Not sure this should be used...
+# def slice_by_linear_interp_explicit(volume, rotation_matrices, image_shape, volume_shape, order):
+#     batch_grid_pt_vec_ind_of_images = batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape )
+#     # Get all 8 grid-points
     
-    return
+#     return
 
-# def get_nearby_grid
-def mesh_grid_one(x_grid):
-    z = jnp.meshgrid(low_high, low_high)
-    return jnp.concatenate()
-mesh_grid_coords = jax.vmap(mesh_grid_coords, in_axes=(-1))
-
-
-def get_linear_weights_and_indices(grid_points, volume_shape):
-    x_low = jnp.floor(grid_points).astype(int)
-    x_high = x_low + 1
-    weight_low = grid_points - x_low
-    weight_high = 1 - weight_low
-
-    xs = jnp.concatenate( [x_low, x_high])
-    weights = jnp.concatenate( [weight_low, weight_high])
+# # def get_nearby_grid
+# def mesh_grid_one(x_grid):
+#     z = jnp.meshgrid(low_high, low_high)
+#     return jnp.concatenate()
+# mesh_grid_coords = jax.vmap(mesh_grid_coords, in_axes=(-1))
 
 
-    x_high = jnp.ceil(grid_points).astype(int)
-    x_bounds = jnp.concatenate(x_low, x_high)
+# def get_linear_weights_and_indices(grid_points, volume_shape):
+#     x_low = jnp.floor(grid_points).astype(int)
+#     x_high = x_low + 1
+#     weight_low = grid_points - x_low
+#     weight_high = 1 - weight_low
 
-    np.meshgrid()
+#     xs = jnp.concatenate( [x_low, x_high])
+#     weights = jnp.concatenate( [weight_low, weight_high])
+
+
+#     x_high = jnp.ceil(grid_points).astype(int)
+#     x_bounds = jnp.concatenate(x_low, x_high)
+
+#     np.meshgrid()
 
 
 
@@ -428,47 +427,47 @@ def evaluate_ctf_packed(freqs, CTF):
 
 batch_evaluate_ctf = jax.vmap(evaluate_ctf_packed, in_axes = (None, 0))
 
-CTF_FUNCTION_OPTION = "cryodrgn_antialiasing"
+CTF_FUNCTION_OPTION = "cryodrgn"
 
 def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, CTF_FUNCTION_OPTION ):
-    if CTF_FUNCTION_OPTION == "dynamight":
-        return dynamight_CTF_wrapper(CTF_params, image_shape, voxel_size, 0)
-    if CTF_FUNCTION_OPTION == "cryodrgn_antialiasing":
+    # if CTF_FUNCTION_OPTION == "dynamight":
+    #     return dynamight_CTF_wrapper(CTF_params, image_shape, voxel_size, 0)
+    # if CTF_FUNCTION_OPTION == "cryodrgn_antialiasing":
 
-        grid_size = image_shape[0]
-        large_image_shape = (image_shape[0]*2, image_shape[1]*2)
-        psi = get_unrotated_plane_coords(large_image_shape, voxel_size*1, scaled = True)[...,:2]
-        CTF_large_grid = batch_evaluate_ctf(psi, CTF_params).reshape([CTF_params.shape[0], *large_image_shape])
+    #     grid_size = image_shape[0]
+    #     large_image_shape = (image_shape[0]*2, image_shape[1]*2)
+    #     psi = get_unrotated_plane_coords(large_image_shape, voxel_size*1, scaled = True)[...,:2]
+    #     CTF_large_grid = batch_evaluate_ctf(psi, CTF_params).reshape([CTF_params.shape[0], *large_image_shape])
 
-        CTF_large_grid_ft = ftu.get_dft2(CTF_large_grid)
+    #     CTF_large_grid_ft = ftu.get_dft2(CTF_large_grid)
 
-        # CTF_ft_windowed = padding.unpad_images_spatial_domain(CTF_ft_windowed, image_shape)
-        # CTF_ft_windowed = CTF_large_grid_ft[:,grid_size//2:-grid_size//2,grid_size//2:-grid_size//2]
-        o = 2
-        CTF_ft_windowed = equinox.nn.AvgPool2d(o+o//2,o)(CTF_large_grid_ft)
+    #     # CTF_ft_windowed = padding.unpad_images_spatial_domain(CTF_ft_windowed, image_shape)
+    #     # CTF_ft_windowed = CTF_large_grid_ft[:,grid_size//2:-grid_size//2,grid_size//2:-grid_size//2]
+    #     o = 2
+    #     CTF_ft_windowed = equinox.nn.AvgPool2d(o+o//2,o)(CTF_large_grid_ft)
 
-        CTF = ftu.get_idft2(CTF_ft_windowed) / 4
+    #     CTF = ftu.get_idft2(CTF_ft_windowed) / 4
 
-        CTF2 = CTF_large_grid[:,grid_size//2:-grid_size//2,grid_size//2:-grid_size//2]
+    #     CTF2 = CTF_large_grid[:,grid_size//2:-grid_size//2,grid_size//2:-grid_size//2]
 
-        psi = get_unrotated_plane_coords(image_shape, voxel_size, scaled = True)[...,:2]
-        CTF3 = batch_evaluate_ctf(psi, CTF_params).reshape([CTF_params.shape[0], *image_shape])
+    #     psi = get_unrotated_plane_coords(image_shape, voxel_size, scaled = True)[...,:2]
+    #     CTF3 = batch_evaluate_ctf(psi, CTF_params).reshape([CTF_params.shape[0], *image_shape])
 
-        # Downsample
-        from recovar import padding
+    #     # Downsample
+    #     from recovar import padding
 
-        # CTF_large_grid_ft = padding.unpad_images_spatial_domain(CTF_large_grid_ft, image_shape)
-        # CTF_large_grid_ft = ftu.get_dft2(CTF_large_grid, large_image_shape)
-        # CTF = padding.unpad_images_fourier_domain(CTF_large_grid, large_image_shape, image_shape[0])
-        # import pdb; pdb.set_trace()
-        return CTF
+    #     # CTF_large_grid_ft = padding.unpad_images_spatial_domain(CTF_large_grid_ft, image_shape)
+    #     # CTF_large_grid_ft = ftu.get_dft2(CTF_large_grid, large_image_shape)
+    #     # CTF = padding.unpad_images_fourier_domain(CTF_large_grid, large_image_shape, image_shape[0])
+    #     # import pdb; pdb.set_trace()
+    #     return CTF
     
-    if CTF_FUNCTION_OPTION == "cryodrgn_zeroed":
-        CTF = cryodrgn_CTF(CTF_params, image_shape, voxel_size)
-        CTF = CTF.reshape([CTF_params.shape[0], *image_shape])
-        CTF = CTF.at[:,1::2,:].set(0)
-        CTF = CTF.at[:,:,1::2].set(0)
-        return CTF.reshape([CTF_params.shape[0], -1])
+    # if CTF_FUNCTION_OPTION == "cryodrgn_zeroed":
+    #     CTF = cryodrgn_CTF(CTF_params, image_shape, voxel_size)
+    #     CTF = CTF.reshape([CTF_params.shape[0], *image_shape])
+    #     CTF = CTF.at[:,1::2,:].set(0)
+    #     CTF = CTF.at[:,:,1::2].set(0)
+    #     return CTF.reshape([CTF_params.shape[0], -1])
 
     return cryodrgn_CTF(CTF_params, image_shape, voxel_size)
 

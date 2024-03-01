@@ -61,6 +61,20 @@ def make_mask_from_half_maps(means, smax = 3 ):
     x.generate_mask()
     return x.mask
 
+
+def make_mask_from_gt(gt_map_ft, smax = 3 ):
+    # from emda.ext.maskmap_class import MaskedMaps
+    ftu = fourier_transform_utils(np)
+    x = MaskedMaps()
+    x.smax = smax
+    # x.iter = x.iter +5
+    vol_shape = utils.guess_vol_shape_from_vol_size(gt_map_ft.size)
+    x.arr1 = ftu.get_idft3(gt_map_ft.reshape(vol_shape)).real
+    # x.arr2 = ftu.get_idft3(means['corrected1'].reshape(vol_shape)).real
+    x.generate_mask_from_gt()
+    return x.mask
+
+
 def create_soft_edged_kernel_pxl(r1, shape):
     # Create soft-edged-kernel. r1 is the radius of kernel in pixels
     # This implementation is adapted from EMDA - https://gitlab.com/ccpem/emda
@@ -139,6 +153,16 @@ class MaskedMaps:
         halfcc3d = get_3d_realspcorrelation(self.arr1, self.arr2, kern)
         #self.mask = self.histogram2(halfcc3d, prob=self.prob)
         self.mask = self.thereshol_ccmap(ccmap=halfcc3d)
+
+
+    ## Mine not EMDA. Could be bad.
+    def generate_mask_from_gt(self):
+        kern = create_soft_edged_kernel_pxl(self.smax, self.arr1.shape)
+        self.arr1 = threshold_map(arr=self.arr1, prob=self.prob, dthresh=self.dthresh)
+        self.arr1 = self.arr1> 0
+        dilate = binary_dilation(self.arr1, iterations=self.iter)
+        self.mask = make_soft(dilate, kern_rad=2)
+        # import pdb; pdb.set_trace()
 
 
     def thereshol_ccmap(self, ccmap):

@@ -307,8 +307,8 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     image_assignments = np.random.choice(np.arange(volumes.shape[0]), size = n_images,  p = volume_distribution)
 
     CTF_fun = core.evaluate_ctf_wrapper
-    main_dataset = dataset.CryoEMDataset( volume_shape, None, voxel_size,
-                              rots, trans, ctf_params, CTF_fun = CTF_fun, dataset_indices = None)
+    main_dataset = dataset.CryoEMDataset( None, voxel_size,
+                              rots, trans, ctf_params, CTF_fun = CTF_fun, dataset_indices = None, grid_size = grid_size)
     batch_size = 5 * utils.get_image_batch_size(grid_size, utils.get_gpu_memory_total())
 
     # plt.imshow(main_dataset.get_CTF_image(0)); plt.colorbar()
@@ -537,7 +537,14 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 
 def make_noise_batch(subkey, noise_image, images_batch_shape):
     image_size = images_batch_shape[-1] * images_batch_shape[-2]
-    noise_batch = jax.random.normal(subkey, images_batch_shape ) #/ jnp.sqrt(image_size)
+    # 
+
+    noise_batch = jax.random.normal(subkey, images_batch_shape ) / jnp.sqrt(image_size)
+    
+    # import recovar.fourier_transform_utils
+    # if recovar.fourier_transform_utils.DEFAULT_FFT_NORM == "backward":
+    #     noise_batch = noise_batch /  jnp.sqrt(image_size)
+
     noise_batch_ft = ftu.get_dft2(noise_batch.reshape(images_batch_shape))
     noise_batch_ft *= jnp.sqrt(noise_image)
     noise_batch = ftu.get_idft2(noise_batch_ft.reshape(images_batch_shape)).real
@@ -604,7 +611,7 @@ def compute_projections_with_nufft(atom_group, plane_coords, voxel_size):
 
 # This can only run on CPU.
 def get_nufft_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size ):
-    plane_coords_mol = core.batch_get_rotated_plane_coords(rotation_matrices, image_shape, voxel_size, True) 
+    plane_coords_mol = batch_get_rotated_plane_coords(rotation_matrices, image_shape, voxel_size, True) 
     clean_image_mol = compute_volume_projections_with_nufft(volume, plane_coords_mol, voxel_size)
     return clean_image_mol
 

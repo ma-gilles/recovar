@@ -194,6 +194,9 @@ def get_differences_zero(pol_degree, differences):
         assert(NotImplementedError)
     return differences_zero
 
+def compute_summed_XWX_F_only():
+    return
+
 @functools.partial(jax.jit, static_argnums = [2,5,6])
 def compute_summed_XWX_F(XWX, F, max_grid_dist, grid_distances, frequencies, volume_shape, pol_degree, extra_dimensions = None):
 
@@ -233,6 +236,8 @@ def compute_summed_XWX_F(XWX, F, max_grid_dist, grid_distances, frequencies, vol
     F0_summed_neighbor_conj = batch_Z_grab(jnp.conj(F[...,0:1]), near_frequencies_vec_indices, valid_points * ~negative_frequencies, differences_zero)[...,0,:]
     F_summed_neighbor += F0_summed_neighbor + F0_summed_neighbor_conj
     return XWX_summed_neighbor, F_summed_neighbor
+
+
 
 
 # Should this all just be vmapped instead of vmapping each piece? Not really sure.
@@ -549,6 +554,89 @@ def estimate_volume_from_covariance_and_precompute(init_variance, discretization
     return combined, first_estimates
 
 
+
+
+def estimate_from_relion_style(cryos, discretization_params, XWXs, Fs, volume_shape, tau = None, use_spherical_mask = True, grid_correct = True, gridding_correct = "square" ):
+
+
+    logger.info(f"Starting adaptive disc with params = {discretization_params}")
+    # prior_option = discretization_params[0][2]
+    h = discretization_params[1]
+    pol_degree = discretization_params[0]
+    assert pol_degree == 0, "Only p = 0 supported for now"
+
+    volume_size = np.prod(cryos[0].volume_shape)
+    from recovar import relion_functions
+
+    # Polynomial estimates
+    XWX_summed_neighbors = [None,None]
+    F_summed_neighbors = [None,None]
+    estimates = [None,None]
+    for k in range(2):
+        # Probably should rewrite this part
+        XWX_summed_neighbors[k], F_summed_neighbors[k] = compute_summed_XWX_F_only(volume_shape, XWXs[k], Fs[k], pol_degree, h)
+        XWX_this = half_volume_to_full_volume(XWX_summed_neighbors[k][...,0], volume_shape)
+        F_this = half_volume_to_full_volume(F_summed_neighbors[k][...,0], volume_shape)
+
+        estimates[k] = relion_functions.post_process_from_filter(cryos[0], XWX_this, F_this, disc_type = 'nearest', use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = gridding_correct, kernel_width=h+1)
+
+    return estimates
+
+
+def estimate_multiple_disc_relion_style(experiment_datasets, cov_noise, discretization_params, heterogeneity_distances = None, heterogeneity_bins= None, use_spherical_mask = True, grid_correct = True, gridding_correct = "square" ):
+    
+    cryos = experiment_datasets
+    discretization_params = get_default_discretization_params(experiment_datasets[0].grid_size) if discretization_params is None else discretization_params
+
+    # prior_option = discretization_params[0][2]
+    max_pol_degree = np.max([ pol_degree for pol_degree, _, _ in discretization_params ])
+    assert max_pol_degree == 0, "Only p = 0 supported for now"
+
+    # Precomputation
+    XWXs = [None,None]; Fs = [None,None]
+    for k in range(2):
+        XWXs[k], Fs[k] = precompute_kernel(experiment_datasets[k], 
+                                         cov_noise.astype(np.float32), pol_degree=max_pol_degree, heterogeneity_distances= heterogeneity_distances, heterogeneity_bins = heterogeneity_bins)    
+        # For now just throw away this piece so it doesn't break code.
+        XWXs[k] = XWXs[k][...,0]
+        Fs[k] = Fs[k][...,0]
+
+
+    # final_estimates = 0
+    n_disc_test = len(discretization_params)
+    volume_size = experiment_datasets[0].upsampled_volume_size
+    # # Compute weights for each discretization
+    # final_estimates = np.zeros((n_disc_test, 2, volume_size, get_feature_size(max_pol_degree)), dtype = np.complex64)
+    first_estimates = np.zeros((n_disc_test, 2, volume_size, get_feature_size(max_pol_degree)), dtype = np.complex64)
+
+    first_estimates = n_disc_test * [None]
+    for idx, disc_params_this in enumerate(discretization_params):
+        first_estimates[idx] = estimate_from_relion_style(cryos, disc_params_this, XWXs, Fs, cryos[0].upsampled_volume_shape, tau = None, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = gridding_correct )
+
+
+
+    # final_estimates = final_estimates.transpose(1, 2, 0, 3)
+    first_estimates = np.array(first_estimates)
+    first_estimates = first_estimates.reshape([*first_estimates.shape[:2], -1])
+    first_estimates = first_estimates.swapaxes(0,1)[...,None]
+    first_estimates = first_estimates.swapaxes(1,2)
+
+    # first_estimates = first_estimates.transpose(1, 2, 0, 3)
+    # residuals to pick best one
+    zz = experiment_datasets[1].volume_upsampling_factor
+    experiment_datasets[1].update_volume_upsampling_factor(1)
+    residuals, _ = compute_residuals_many_weights_in_weight_batch(experiment_datasets[1], first_estimates[0], max_pol_degree )
+    experiment_datasets[1].update_volume_upsampling_factor(zz)
+
+    index_array_vol, disc_choices, residuals_averaged = pick_best_params(residuals, discretization_params, experiment_datasets[0].volume_shape)
+
+    # xx = 0.5 * (final_estimates[0][...,0] + final_estimates[1][...,0])
+    weights_opt = jnp.take_along_axis(0.5 * (first_estimates[0][...,0] + first_estimates[1][...,0]), np.expand_dims(index_array_vol, axis=-1), axis=-1)
+
+    utils.report_memory_device(logger=logger)
+    return first_estimates, weights_opt, disc_choices, residuals_averaged
+
+
 def estimate_optimal_covariance_and_volume(init_variance, init_prior_covariance_option, discretization_params, XWXs, Fs, volume_shape, reg_iters = 1):
 
     logger.info(f"Starting adaptive disc with params = {discretization_params}")
@@ -666,13 +754,16 @@ def estimate_optimal_covariance_and_volume(init_variance, init_prior_covariance_
     batch_half_volume_to_full_volume(XWX_summed_neighbors[0].T, volume_shape).T, batch_half_volume_to_full_volume(F_summed_neighbors[0].T,volume_shape).T]
 
 
+def homogeneous_multiple_relion_style(experiment_datasets, cov_noise, signal_variance, discretization_params, return_all, heterogeneity_distances, heterogeneity_bins, residual_threshold = None, residual_num_images = None ):
+
+
+    return
 
 
 def heterogeneous_reconstruction_fixed_variance(experiment_datasets, cov_noise, signal_variance, discretization_params, return_all, heterogeneity_distances, heterogeneity_bins, residual_threshold = None, residual_num_images = None ):
     if residual_threshold is None and residual_num_images is None:
         logger.warning("didn't specify either residual_threshold or residual_num_images, using first bin")
         residual_threshold = heterogeneity_bins[0]
-
 
     discretization_params = get_default_discretization_params(experiment_datasets[0].grid_size) if discretization_params is None else discretization_params
 
@@ -753,6 +844,8 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, cov_noise, 
         return np.asarray(weights_opt), np.asarray(disc_choices), np.asarray(residuals.T), np.asarray(final_estimates), np.asarray(first_estimates), all_params # XWX, Z, F, alpha
     else:
         return np.asarray(weights_opt), np.asarray(disc_choices), np.asarray(residuals_averaged)
+
+
 
 
 
@@ -1227,6 +1320,39 @@ def compute_weights_from_precompute(volume_shape, XWX, F, prior_inverse_covarian
     logger.info(f"Done with kernel estimate")
     return reconstruction, good_pixels, XWX_s, F_s
 
+
+
+def compute_summed_XWX_F_only(volume_shape, XWX, F, pol_degree, h):
+    # use_regularization = prior_inverse_covariance is not None
+    volume_size = np.prod(volume_shape)
+
+    # NOTE the 1.0x is a weird hack to make sure that JAX doesn't compile store some arrays when compiling. I don't know why it does that.
+    threed_frequencies = core.vec_indices_to_vol_indices(np.arange(volume_size), volume_shape ) * 1.0
+    
+    XWX_s = np.zeros_like(XWX)[...,None]
+    F_s = np.zeros_like(F)
+
+    XWX = jnp.asarray(XWX)
+    F = jnp.asarray(F)
+    memory_per_pixel = (2*h +1)**3 * big_gram_matrix_size(pol_degree) * 2 * 8 * 4
+
+    batch_size = int((utils.get_gpu_memory_total() -  utils.get_size_in_gb(XWX) - utils.get_size_in_gb(F)  )/ (memory_per_pixel   /1e9  )  ) 
+    n_batches = np.ceil(volume_size / batch_size).astype(int)
+    logger.info(f"KE batch size: {batch_size}")
+    threed_frequencies = core.vec_indices_to_vol_indices(np.arange(volume_size), volume_shape ) * 1.0
+
+    for k in range(n_batches):
+        ind_st, ind_end = utils.get_batch_of_indices(volume_size, batch_size, k)
+        # signal_variance_this = prior_inverse_covariance[ind_st:ind_end, :pol_degree+1] if use_regularization else None
+
+        # probably should rewrite this to not have extra indices
+        if (ind_st < XWX_s.shape[0]):
+            ind_end_t = np.min([ind_end, XWX_s.shape[0]])
+
+            XWX_s[ind_st:ind_end_t], F_s[ind_st:ind_end_t] = compute_summed_XWX_F(XWX, F, h, h, threed_frequencies[ind_st:ind_end_t], volume_shape, pol_degree)
+
+    logger.info(f"Done with kernel estimate")
+    return XWX_s[...,0], F_s[...]
 
 
 

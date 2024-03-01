@@ -184,7 +184,7 @@ class CryoEMDataset:
         
 
         self.voxel_size = voxel_size
-        self.grid_size = image_stack.D
+        self.grid_size = grid_size
 
         self.volume_upsampling_factor = volume_upsampling_factor
         self.upsampled_grid_size = self.grid_size * volume_upsampling_factor
