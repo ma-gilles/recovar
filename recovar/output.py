@@ -29,7 +29,8 @@ def resample_trajectory(gt_vols, n_vols_along_path = 6):
 def mkdir_safe(folder):
     os.makedirs(folder, exist_ok = True)
     
-def save_volume(vol, path, volume_shape, from_ft = True, voxel_size = None):
+def save_volume(vol, path, volume_shape = None, from_ft = True, voxel_size = None):
+    volume_shape = 3*[utils.guess_grid_size_from_vol_size(vol.size)] if volume_shape is None else volume_shape
     if from_ft:
         vol =  np.real(ftu.get_idft3(vol.reshape(volume_shape)))
     else:
@@ -206,7 +207,7 @@ def kmeans_analysis_from_dict(output_folder, results, cryos, likelihood_threshol
 
     return kmeans_analysis(output_folder, cryos, results['means'], results['u']['rescaled'], results['zs'][zdim], results['cov_zs'][zdim], results['cov_noise'], likelihood_threshold,  n_clusters = n_clusters, generate_volumes = generate_volumes, compute_reproj = compute_reproj)
     
-def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, cov_noise, likelihood_threshold,  n_clusters = 20, generate_volumes = True, compute_reproj = False):
+def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, noise_variance, likelihood_threshold,  n_clusters = 20, generate_volumes = True, compute_reproj = False):
 
     import cryodrgn.analysis as cryodrgn_analysis
     #key = 'zs12'
@@ -245,29 +246,63 @@ def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, cov_noi
     
     if generate_volumes:
         likelihood_threshold = ld.get_log_likelihood_threshold(k = zs.shape[-1]) if likelihood_threshold is None else likelihood_threshold
-        compute_and_save_volumes_from_z(dataset_loader, means, u, centers, zs, cov_zs, cov_noise, output_folder , likelihood_threshold = likelihood_threshold, compute_reproj= compute_reproj)
+        compute_and_save_volumes_from_z(dataset_loader, means, u, centers, zs, cov_zs, noise_variance, output_folder , likelihood_threshold = likelihood_threshold, compute_reproj= compute_reproj)
 
     return centers, labels
 
 
 
-def compute_and_save_reweighted(cryos, means,  path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = None, recompute_prior = True, volume_mask = None, adaptive =False):
+def compute_and_save_reweighted(cryos, means,  path_subsampled, zs, cov_zs, noise_variance, output_folder, likelihood_threshold = None, recompute_prior = True, volume_mask = None, adaptive =False):
 
     #batch_size = 
     memory_to_use = utils.get_gpu_memory_total() - path_subsampled.shape[0] * utils.get_size_in_gb(means['combined']) * 8
     assert memory_to_use > 0, "reduce number of volumes computed at once"
     batch_size = 2 * utils.get_image_batch_size(cryos[0].grid_size, memory_to_use)
     logger.info(f"batch size in reweighting: {batch_size}")
-    trajectory_prior, halfmaps = embedding.generate_conformation_from_reweighting(cryos, means, cov_noise, zs, cov_zs, path_subsampled, batch_size = batch_size, disc_type = 'linear_interp', likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, volume_mask = volume_mask, adaptive=adaptive)
-    save_volumes(trajectory_prior, output_folder +  'reweight_')
-    save_volumes(halfmaps[0], output_folder +  'halfmap0_reweight_')
-    save_volumes(halfmaps[1], output_folder +  'halfmap1_reweight_')
+
+    new_volume_generation = True
+    if new_volume_generation:
+        # from recovar import heterogeneity_volume
+        # for k in range(path_subsampled.shape[0]):
+        #     output_folder = results['input_args'].outdir + "/output/" if output_folder is None else output_folder
+        #     print("Dumping to ", output_folder)
+        #     recovar.output.mkdir_safe(output_folder)
+        #     noise_variance = results['cov_noise']
+        #     latent_points = latent_point[None]
+
+        #     log_likelihoods = recovar.latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], results['zs'][ndim], results['cov_zs'][ndim])[...,0]
+        #     heterogeneity_distances = [ log_likelihoods[:cryos[0].n_images], log_likelihoods[cryos[0].n_images:] ]
+        #     if metric_used == "global":
+        #         make_volumes_kernel_estimate( heterogeneity_distances, cryos, noise_variance, output_folder, ndim, n_bins) 
+        #     else:
+        #         make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder, ndim, n_bins, B_factor, tau = None, n_min_images = 300, metric_used = metric_used)
+
+        #     heterogeneity_volume.make_volumes_kernel_estimate_from_results(path_subsampled[k], results, ndim=ndim, cryos = None, n_bins = 20, ou
+        # put_folder = output_folder, B_factor = 60, metric_used = "locres_auc")
+
+        from recovar import heterogeneity_volume, latent_density
+        for k in range(path_subsampled.shape[0]):
+            output_folder_this = output_folder + "vol" + format(k, '03d') + "/"
+            mkdir_safe(output_folder_this)
+            ndim = zs.shape[-1]
+            n_bins = 30
+            B_factor = 60
+            latent_points = path_subsampled[k][None]
+            log_likelihoods = latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], zs, cov_zs)[...,0]
+            heterogeneity_distances = [ log_likelihoods[:cryos[0].n_images], log_likelihoods[cryos[0].n_images:] ]
+            heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder_this, -1, n_bins, B_factor, tau = None, n_min_images = 300, metric_used = "locres_auc")
+
+    else:
+        trajectory_prior, halfmaps = embedding.generate_conformation_from_reweighting(cryos, means, noise_variance, zs, cov_zs, path_subsampled, batch_size = batch_size, disc_type = 'linear_interp', likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, volume_mask = volume_mask, adaptive=adaptive)
+        save_volumes(trajectory_prior, output_folder +  'reweight_')
+        save_volumes(halfmaps[0], output_folder +  'halfmap0_reweight_')
+        save_volumes(halfmaps[1], output_folder +  'halfmap1_reweight_')
 
     
-def compute_and_save_volumes_from_z(dataset_loader, means, u,  path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = None, recompute_prior = True, compute_reproj = True, adaptive = False ):
+def compute_and_save_volumes_from_z(dataset_loader, means, u,  path_subsampled, zs, cov_zs, noise_variance, output_folder, likelihood_threshold = None, recompute_prior = True, compute_reproj = True, adaptive = False ):
         
     mkdir_safe(output_folder)
-    compute_and_save_reweighted(dataset_loader, means, path_subsampled, zs, cov_zs, cov_noise, output_folder, likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, adaptive = adaptive)
+    compute_and_save_reweighted(dataset_loader, means, path_subsampled, zs, cov_zs, noise_variance, output_folder, likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, adaptive = adaptive)
     
     if compute_reproj:
         n_eigs = zs.shape[1]
@@ -346,7 +381,7 @@ def make_trajectory_plots_from_results(results, output_folder, cryos = None, z_s
 
 
 
-def make_trajectory_plots(dataset_loader, density, u, means, zs, cov_zs, cov_noise, z_st, z_end, latent_space_bounds, output_folder, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =10, compute_reproj = False, likelihood_threshold = None, adaptive = False):
+def make_trajectory_plots(dataset_loader, density, u, means, zs, cov_zs, noise_variance, z_st, z_end, latent_space_bounds, output_folder, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =10, compute_reproj = False, likelihood_threshold = None, adaptive = False):
     import time
     st_time = time.time()
     
@@ -399,7 +434,7 @@ def make_trajectory_plots(dataset_loader, density, u, means, zs, cov_zs, cov_noi
         path_subsampled = path_z_subsampled
 
     st_time = time.time()
-    compute_and_save_volumes_from_z(dataset_loader, means, u, path_subsampled, zs, cov_zs, cov_noise, output_folder  , likelihood_threshold = likelihood_threshold, compute_reproj = compute_reproj, adaptive = adaptive)
+    compute_and_save_volumes_from_z(dataset_loader, means, u, path_subsampled, zs, cov_zs, noise_variance, output_folder  , likelihood_threshold = likelihood_threshold, compute_reproj = compute_reproj, adaptive = adaptive)
     logger.info(f"vol time {time.time() - st_time}")
     
     x = ld.compute_weights_of_conformation_2(path_z, zs, cov_zs,likelihood_threshold = likelihood_threshold)

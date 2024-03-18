@@ -11,7 +11,7 @@ ftu = fourier_transform_utils(jnp)
 #@functools.partial(jax.jit, static_argnums = [7,8,9,10, 11, 12,13])    
 def compute_batch_prior_quantities(rotation_matrices, translations, CTF_params, noise_variance, voxel_size, dtype, volume_shape, image_shape, grid_size, CTF_fun , for_whitening = False):
     volume_size = np.prod(np.array(volume_shape))
-    grid_point_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
+    grid_point_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape )
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
     all_one_volume = jnp.ones(volume_size, dtype = dtype)    
     
@@ -61,6 +61,10 @@ def compute_relion_prior(experiment_datasets, cov_noise, image0, image1, batch_s
         from_noise_level = False
     
     return compute_fsc_prior_gpu(experiment_datasets[0].volume_shape, image0, image1, bottom_of_fraction, estimate_merged_SNR = estimate_merged_SNR, from_noise_level = from_noise_level )
+
+
+def get_fsc(vol1, vol2, volume_shape, substract_shell_mean = False, frequency_shift = 0):
+    return get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean, frequency_shift)
 
 # @functools.partial(jax.jit, static_argnums = [7,8,9,10, 11, 12,13])    
 def get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean = False, frequency_shift = 0):
@@ -164,7 +168,7 @@ def jax_scipy_nd_image_sum(input, labels=None, index=None):
 
     
 def compute_fsc_prior_gpu(volume_shape, image0, image1, bottom_of_fraction = None, estimate_merged_SNR = False, substract_shell_mean = False, frequency_shift = 0, from_noise_level = False):
-    epsilon = constants.EPSILON
+    epsilon = constants.FSC_ZERO_THRESHOLD
     # FSC top:
     fsc = get_fsc_gpu(image0, image1, volume_shape, substract_shell_mean, frequency_shift)
     fsc = jnp.where(fsc > epsilon , fsc, epsilon )
@@ -182,7 +186,7 @@ def compute_fsc_prior_gpu(volume_shape, image0, image1, bottom_of_fraction = Non
         print("used outdated prior!!!! Change this!")
     else:
         bottom_avg = average_over_shells(bottom_of_fraction.real, volume_shape, frequency_shift)        
-        prior_avg = jnp.where( bottom_avg > 0 , SNR / bottom_avg, epsilon )
+        prior_avg = jnp.where( bottom_avg > 0 , SNR / bottom_avg, constants.EPSILON )
     
     # Put back in array
     radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1)
@@ -193,7 +197,7 @@ def compute_fsc_prior_gpu(volume_shape, image0, image1, bottom_of_fraction = Non
 
 @functools.partial(jax.jit, static_argnums = [0,6])    
 def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequency_shift , substract_shell_mean = False ):
-    epsilon = constants.EPSILON
+    epsilon = constants.FSC_ZERO_THRESHOLD
     # FSC top:
     fsc = get_fsc_gpu(image0, image1, volume_shape, substract_shell_mean, frequency_shift)
     fsc = jnp.where(fsc > epsilon , fsc, epsilon )
@@ -208,7 +212,7 @@ def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequenc
     bot = lhs / (lhs + 1/prior)**2
     sum_bot = average_over_shells(bot,  volume_shape, frequency_shift)    
     
-    prior_avg = jnp.where( sum_top > 0 , SNR * sum_bot / sum_top , epsilon )
+    prior_avg = jnp.where( sum_top > 0 , SNR * sum_bot / sum_top , constants.ROOT_EPSILON )
     
     # Put back in array
     radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1)

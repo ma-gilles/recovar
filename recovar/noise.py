@@ -337,7 +337,6 @@ def get_average_residual_square_inner(batch, mean_estimate, volume_mask, basis, 
                                          rotation_matrices,
                                          image_shape, 
                                          volume_shape, 
-                                         grid_size, 
                                         voxel_size, 
                                         CTF_fun, 
                                         disc_type )    
@@ -443,7 +442,6 @@ def get_average_residual_square_inner_v2(batch, mean_estimate, volume_mask, basi
                                          rotation_matrices,
                                          image_shape, 
                                          volume_shape, 
-                                         grid_size, 
                                         voxel_size, 
                                         CTF_fun, 
                                         disc_type )    

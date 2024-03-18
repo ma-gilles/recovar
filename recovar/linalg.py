@@ -217,3 +217,6 @@ def solve_by_SVD(A,b, hermitian = False):
     return x
 
 
+def l2_distance(X,Y):
+    l2_dist = jnp.linalg.norm(X, axis=-1)**2 - 2 * np.conj(X) @ Y.T + jnp.linalg.norm(Y, axis=-1)**2
+    return l2_dist.real

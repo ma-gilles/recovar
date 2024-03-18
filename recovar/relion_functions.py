@@ -30,8 +30,6 @@ def griddingCorrect(vol_in, ori_size, padding_factor, order = 0,):
     else:
         raise ValueError("Order not implemented")
     
-
-
     return vol_out.reshape(og_shape), sinc.reshape(og_shape)
 
 # I think this is the correct Fourier transform of the trilinear interpolator: sinc(x) * sinc(y) * sinc(z)
@@ -43,7 +41,7 @@ def griddingCorrect_square(vol_in, ori_size, padding_factor, order = 0,):
 
     def sinc(ar):
         # ar_scaled = ar / (ori_size * padding_factor)
-        return jnp.where(ar == 0, 1., jnp.sin(jnp.pi * ar) / (jnp.pi * ar))
+        return jnp.where(jnp.abs(ar) < 1e-8, 1., jnp.sin(jnp.pi * ar) / (jnp.pi * ar))
 
     if order ==0:
         kernel = sinc
@@ -84,7 +82,7 @@ def relion_style_triangular_kernel(experiment_dataset , cov_noise,  batch_size, 
     return Ft_ctf, Ft_y
 
 import functools, jax
-@functools.partial(jax.jit, static_argnums=[4,5,6,7,8,9])
+@functools.partial(jax.jit, static_argnums=[4,5,6,7,8])
 def relion_style_triangular_kernel_batch(images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, cov_noise):
     # images = process_images(images, apply_image_mask = True)
     
@@ -97,16 +95,49 @@ def relion_style_triangular_kernel_batch(images, CTF_params, rotation_matrices, 
     return Ft_y, Ft_ctf
 
 
-def adjust_regularization_relion_style(filter, volume_shape, tau = None, oversampling_factor = 1, max_res_shell = None):
+def upscale_tau(tau, padding_factor, volume_shape, tau_is_1d = False):
+
+    if not tau_is_1d:
+        tau = regularization.average_over_shells(tau, volume_shape)
+
+    # int ires = ROUND(sqrt((RFLOAT)r2) / padding_factor);
+    # RFLOAT invw = DIRECT_A3D_ELEM(Fweight, k, i, j);
+
+    # RFLOAT invtau2;
+    # if (DIRECT_A1D_ELEM(tau2, ires) > 0.)
+
+    pixels = ftu.get_k_coordinate_of_each_pixel(np.array(volume_shape)*padding_factor, 1, scaled = False)
+    radius = np.round(np.linalg.norm(pixels, axis = -1) / padding_factor).astype(int)
+    upscaled_tau = tau[radius]
+
+    return upscaled_tau
+
+def adjust_regularization_relion_style(filter, volume_shape, tau = None, padding_factor = 1, max_res_shell = None):
 
     # Original code here https://github.com/3dem/relion/blob/e5c4835894ea7db4ad4f5b0f4861b33269dbcc77/src/backprojector.cpp#L1082
 
-    # There is an "oversampling" factor of 2 in the FSC, I guess due to the fact that they swap back and forth between a padded and unpadded grid
+    # There is an "oversampling" factor of 8 in the FSC, I guess due to the fact that they swap back and forth between a padded and unpadded grid
+
     if tau is not None:
+        oversampling_factor = padding_factor ** (3)
+        og_volume_shape = (volume_shape[0]//padding_factor, volume_shape[1]//padding_factor, volume_shape[2]//padding_factor)
+        tau = upscale_tau(tau, padding_factor, og_volume_shape, tau_is_1d = False)
         inv_tau = 1 / (oversampling_factor * tau)
         # filter_this =  jnp.where(lhs > 1e-20 , 1/ ( 0.001 * jnp.where(filter > 1e-20, filter, 0 )
         inv_tau = jnp.where( (tau < 1e-20) * (filter > 1e-20 ),  1./ ( 0.001 * filter), inv_tau)
         inv_tau = jnp.where( (tau < 1e-20) * (filter <= 1e-20 ),  0, inv_tau)
+
+
+        # This is funky business
+        # print("WARNING CHECK THIS IS CORRECT OVERSAMPLING SOMEHOW?")
+        # tau2 = regularization.average_over_shells(tau, og_volume_shape)
+        # tau3 = regularization.average_over_shells(tau_new, volume_shape)
+        # import pdb; pdb.set_trace()
+        # filter_avg = regularization.average_over_shells(filter, volume_shape)
+        # tau_avg = regularization.average_over_shells(inv_tau, volume_shape)
+        # print(filter_avg/tau_avg)
+        # assert False, ""
+
 
         regularized_filter = filter + inv_tau
     else:
@@ -140,7 +171,7 @@ def post_process_from_filter(cryo, Ft_ctf, F_ty, tau = None, disc_type = 'neares
     F_ty =  F_ty * cryo.get_valid_upsampled_frequency_indices() # Zero-out FT outside sphere
     
     # Adjust reg for small values
-    Ft_ctf2 = adjust_regularization_relion_style(Ft_ctf, cryo.upsampled_volume_shape, tau = tau, oversampling_factor = cryo.volume_upsampling_factor, max_res_shell = None)
+    Ft_ctf2 = adjust_regularization_relion_style(Ft_ctf, cryo.upsampled_volume_shape, tau = tau, padding_factor = cryo.volume_upsampling_factor, max_res_shell = None)
     
     myreliontest = F_ty / Ft_ctf2
     
@@ -160,13 +191,26 @@ def post_process_from_filter(cryo, Ft_ctf, F_ty, tau = None, disc_type = 'neares
 
         grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
         myreliontest, sinc = grid_fn(myreliontest.reshape(cryo.volume_shape), cryo.grid_size, cryo.volume_upsampling_factor/kernel_width, order = order)
-        print(cryo.volume_upsampling_factor/kernel_width)
+        # print(cryo.volume_upsampling_factor/kernel_width)
 
-        import matplotlib.pyplot as plt
-        plt.figure()
-        plt.imshow(sinc[sinc.shape[0]//2])
-        plt.colorbar()
-        plt.show()
+        # import matplotlib.pyplot as plt
+        # plt.figure()
+        # plt.imshow(sinc[sinc.shape[0]//2])
+        # plt.colorbar()
+        # plt.show()
     myreliontest = ftu.get_dft3(myreliontest.reshape(cryo.volume_shape))
+
+    return myreliontest
+
+
+def relion_reconstruct(cryo, noise_variance, batch_size = 100, disc_type = 'linear_interp', use_spherical_mask = True, upsampling_factor = 2, grid_correct = True, gridding_correct = "square", tau = None ):
+
+    og_upsampling = cryo.volume_upsampling_factor
+    cryo.update_volume_upsampling_factor(upsampling_factor)
+
+    Ft_ctf, F_ty = relion_style_triangular_kernel(cryo , noise_variance.astype(np.float32),  batch_size,  disc_type = disc_type, return_lhs_rhs = False )
+
+    myreliontest = post_process_from_filter(cryo, Ft_ctf, F_ty, tau = tau, disc_type = disc_type, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
+    cryo.update_volume_upsampling_factor(og_upsampling)
 
     return myreliontest

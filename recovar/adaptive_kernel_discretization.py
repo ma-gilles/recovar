@@ -471,7 +471,7 @@ def precompute_kernel(experiment_dataset, cov_noise, pol_degree=0, heterogeneity
     logger.info(f"batch size in precompute kernel: {batch_size}")
     # batch_size = 1
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
-    cov_noise_image = noise.make_radial_noise(cov_noise, experiment_dataset.image_shape)
+    cov_noise_image = noise.make_radial_noise(cov_noise, experiment_dataset.image_shape).reshape(-1)
 
     idx = 0 
     for batch, indices in data_generator:
@@ -583,7 +583,7 @@ def estimate_from_relion_style(cryos, discretization_params, XWXs, Fs, volume_sh
     return estimates
 
 
-def estimate_multiple_disc_relion_style(experiment_datasets, cov_noise, discretization_params, heterogeneity_distances = None, heterogeneity_bins= None, use_spherical_mask = True, grid_correct = True, gridding_correct = "square" ):
+def estimate_multiple_disc_relion_style(experiment_datasets, cov_noise, discretization_params, heterogeneity_distances = None, heterogeneity_bins= None, residual_threshold = None, use_spherical_mask = True, grid_correct = True, gridding_correct = "square" ):
     
     cryos = experiment_datasets
     discretization_params = get_default_discretization_params(experiment_datasets[0].grid_size) if discretization_params is None else discretization_params
@@ -595,11 +595,13 @@ def estimate_multiple_disc_relion_style(experiment_datasets, cov_noise, discreti
     # Precomputation
     XWXs = [None,None]; Fs = [None,None]
     for k in range(2):
+        heterogeneity_distances_this = None if heterogeneity_distances is None else heterogeneity_distances[k]
         XWXs[k], Fs[k] = precompute_kernel(experiment_datasets[k], 
-                                         cov_noise.astype(np.float32), pol_degree=max_pol_degree, heterogeneity_distances= heterogeneity_distances, heterogeneity_bins = heterogeneity_bins)    
+                                         cov_noise.astype(np.float32), pol_degree=max_pol_degree, heterogeneity_distances= heterogeneity_distances_this, heterogeneity_bins = heterogeneity_bins)    
         # For now just throw away this piece so it doesn't break code.
-        XWXs[k] = XWXs[k][...,0]
-        Fs[k] = Fs[k][...,0]
+        if heterogeneity_bins is None:
+            XWXs[k] = XWXs[k][...,0]
+            Fs[k] = Fs[k][...,0]
 
 
     # final_estimates = 0
@@ -607,18 +609,78 @@ def estimate_multiple_disc_relion_style(experiment_datasets, cov_noise, discreti
     volume_size = experiment_datasets[0].upsampled_volume_size
     # # Compute weights for each discretization
     # final_estimates = np.zeros((n_disc_test, 2, volume_size, get_feature_size(max_pol_degree)), dtype = np.complex64)
-    first_estimates = np.zeros((n_disc_test, 2, volume_size, get_feature_size(max_pol_degree)), dtype = np.complex64)
+    # first_estimates = np.zeros((n_disc_test, 2, volume_size, get_feature_size(max_pol_degree)), dtype = np.complex64)
 
-    first_estimates = n_disc_test * [None]
+
+
+    # final_estimates = np.zeros((n_disc_test, n_bins, volume_size, get_feature_size(max_pol_degree)), dtype = np.complex64)
+    n_bins = 1 if heterogeneity_bins is None else heterogeneity_bins.size
+    first_estimates = np.zeros((n_disc_test, n_bins,  2, experiment_datasets[0].volume_size), dtype = np.complex64)
+
+    # estimate_volume_from_covariance_and_precompute
+
+    # estimate_volume_from_covariance_and_precompute(init_variance, discretization_params, XWXs, Fs, volume_shape)
     for idx, disc_params_this in enumerate(discretization_params):
-        first_estimates[idx] = estimate_from_relion_style(cryos, disc_params_this, XWXs, Fs, cryos[0].upsampled_volume_shape, tau = None, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = gridding_correct )
+        for b in range(n_bins):
+            # final_estimates[idx,b], first_estimates[idx,b] = estimate_volume_from_covariance_and_precompute(signal_variance, disc_params_this, [XWXs[0][...,b], XWXs[1][...,b] ], [Fs[0][...,b], Fs[1][...,b] ], experiment_datasets[0].upsampled_volume_shape)
+            first, second = estimate_from_relion_style(cryos, disc_params_this, [XWXs[0][...,b], XWXs[1][...,b] ], [Fs[0][...,b], Fs[1][...,b] ], cryos[0].upsampled_volume_shape, tau = None, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = gridding_correct )
+            first_estimates[idx,b,0] = first.reshape(-1)
+            first_estimates[idx,b,1] = second.reshape(-1)
 
 
 
-    # final_estimates = final_estimates.transpose(1, 2, 0, 3)
-    first_estimates = np.array(first_estimates)
-    first_estimates = first_estimates.reshape([*first_estimates.shape[:2], -1])
-    first_estimates = first_estimates.swapaxes(0,1)[...,None]
+    # n_dataset (2) x volume_size (N^3) x n_disc_test x n_bins x feature_size  
+    # import pdb; pdb.set_trace()
+    first_estimates = first_estimates[...,None]
+    first_estimates = first_estimates.transpose(2, 3, 0, 1, 4)
+    first_estimates = first_estimates.reshape([*first_estimates.shape[:2], -1, first_estimates.shape[-1]])
+
+
+    # # residuals to pick best one
+    # from recovar import dataset
+    # # residual_threshold = None
+    # # residual_num_images = 100
+    # # Choose indices to test
+    # residual_threshold = heterogeneity_bins[0]
+
+    # if residual_threshold is not None:
+    #     good_indices = heterogeneity_distances[1] < residual_threshold
+    #     test_dataset = dataset.subsample_cryoem_dataset(experiment_datasets[1], good_indices)
+    # else:
+    #     good_indices = np.argsort(heterogeneity_distances[1])[:residual_num_images]
+    #     test_dataset = dataset.subsample_cryoem_dataset(experiment_datasets[1], good_indices)
+
+    # logger.info("Number of images used for residual computation: " + str(test_dataset.n_images))
+    # upsample_fac = test_dataset.volume_upsampling_factor
+    # test_dataset.update_volume_upsampling_factor(1)
+    # residuals, _ = compute_residuals_many_weights_in_weight_batch(test_dataset, first_estimates[0], max_pol_degree )
+    # # Meshgrid but idk to do it cleanly
+    # all_params = []
+    # for param in discretization_params:
+    #     for bin in heterogeneity_bins:
+    #         all_params.append((*param, bin))
+    # # all_params = np.meshgrid([discretization_params, heterogeneity_bins])
+            
+    # index_array_vol, disc_choices, residuals_averaged = pick_best_params(residuals, all_params, experiment_datasets[0].volume_shape)
+    
+    index_array_vol, disc_choices, residuals_averaged, summed_residuals = pick_best_heterogeneity_from_residual(first_estimates[0,...], experiment_datasets[1], heterogeneity_distances[1], heterogeneity_bins, discretization_params, residual_threshold = residual_threshold , min_number_of_images_in_bin = 50)
+
+    opt_halfmaps = [None, None]
+    opt_halfmaps[0] = jnp.take_along_axis(first_estimates[0,...,0] , np.expand_dims(index_array_vol, axis=-1), axis=-1)
+    opt_halfmaps[1] = jnp.take_along_axis(first_estimates[1,...,0] , np.expand_dims(index_array_vol, axis=-1), axis=-1)
+
+
+    logger.info("Done with adaptive disc")
+    utils.report_memory_device(logger=logger)
+    
+    # if return_all:
+    #     return np.asarray(weights_opt), np.asarray(disc_choices), np.asarray(residuals.T), np.asarray(final_estimates), np.asarray(first_estimates), all_params # XWX, Z, F, alpha
+    # else:
+    return first_estimates, np.asarray(opt_halfmaps), np.asarray(disc_choices), np.asarray(residuals_averaged)
+
+
+
+    first_estimates = first_estimates.swapaxes(0,2)[...,None]
     first_estimates = first_estimates.swapaxes(1,2)
 
     # first_estimates = first_estimates.transpose(1, 2, 0, 3)
@@ -634,7 +696,57 @@ def estimate_multiple_disc_relion_style(experiment_datasets, cov_noise, discreti
     weights_opt = jnp.take_along_axis(0.5 * (first_estimates[0][...,0] + first_estimates[1][...,0]), np.expand_dims(index_array_vol, axis=-1), axis=-1)
 
     utils.report_memory_device(logger=logger)
-    return first_estimates, weights_opt, disc_choices, residuals_averaged
+    return first_estimates, weights_opt, disc_choices, residuals_averaged, summed_residuals
+
+def pick_best_heterogeneity_from_residual(estimates, full_test_dataset, heterogeneity_distances, heterogeneity_bins, discretization_params = None, residual_threshold = None , min_number_of_images_in_bin = 50):
+
+    # Probably should separate this stuff?
+    discretization_params = [(0,0,"")] if discretization_params is None else discretization_params
+
+    max_pol_degree = np.max([ pol_degree for pol_degree, _, _ in discretization_params ])
+
+    if residual_threshold is None:
+        logger.warning("didn't specify either residual_threshold or residual_num_images, using first bin with at least " + str(min_number_of_images_in_bin) + " images")
+        residual_threshold = heterogeneity_bins
+        n_in_bins = np.zeros(heterogeneity_bins.size)
+        for idx, b in enumerate(heterogeneity_bins):
+            n_in_bins[idx] = np.sum(heterogeneity_distances < b)
+        good_bins = n_in_bins >= min_number_of_images_in_bin
+        bin_chosen = np.argmax(good_bins)
+        residual_threshold = heterogeneity_bins[bin_chosen]
+
+        # import pdb; pdb.set_trace()
+
+    # residuals to pick best one
+    from recovar import dataset
+
+    if residual_threshold is not None:
+        good_indices = heterogeneity_distances <= residual_threshold
+        test_dataset = dataset.subsample_cryoem_dataset(full_test_dataset, good_indices)
+
+        assert test_dataset.n_images > 0, "No images in bin"
+
+    logger.info("Number of images used for residual computation: " + str(test_dataset.n_images))
+
+    upsample_fac = test_dataset.volume_upsampling_factor
+    test_dataset.update_volume_upsampling_factor(1)
+    residuals, _ = compute_residuals_many_weights_in_weight_batch(test_dataset, estimates, max_pol_degree, use_linear_interp = True)
+
+    # Meshgrid but idk to do it cleanly
+    all_params = []
+    for param in discretization_params:
+        for bin in range(heterogeneity_bins.size):
+            all_params.append((*param, bin))
+            
+
+    index_array_vol, disc_choices, residuals_averaged = pick_best_params(residuals, all_params, test_dataset.volume_shape)
+
+    summed_residuals = jnp.sum(residuals, axis = 0)
+    # import pdb; pdb.set_trace()
+    # print(summed_residuals.shape)
+    return index_array_vol, disc_choices, residuals_averaged, summed_residuals
+    
+
 
 
 def estimate_optimal_covariance_and_volume(init_variance, init_prior_covariance_option, discretization_params, XWXs, Fs, volume_shape, reg_iters = 1):
@@ -761,6 +873,7 @@ def homogeneous_multiple_relion_style(experiment_datasets, cov_noise, signal_var
 
 
 def heterogeneous_reconstruction_fixed_variance(experiment_datasets, cov_noise, signal_variance, discretization_params, return_all, heterogeneity_distances, heterogeneity_bins, residual_threshold = None, residual_num_images = None ):
+
     if residual_threshold is None and residual_num_images is None:
         logger.warning("didn't specify either residual_threshold or residual_num_images, using first bin")
         residual_threshold = heterogeneity_bins[0]
@@ -817,7 +930,6 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, cov_noise, 
     # residuals to pick best one
     # I guess one way to do this without changed the function is to make CTF 0 for all bad images?
     from recovar import dataset
-
     # Choose indices to test
     if residual_threshold is not None:
         good_indices = heterogeneity_distances[1] < residual_threshold
@@ -825,6 +937,7 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, cov_noise, 
     else:
         good_indices = np.argsort(heterogeneity_distances[1])[:residual_num_images]
         test_dataset = dataset.subsample_cryoem_dataset(experiment_datasets[1], good_indices)
+
     logger.info("Number of images used for residual computation: " + str(test_dataset.n_images))
     residuals, _ = compute_residuals_many_weights_in_weight_batch(test_dataset, first_estimates[0], max_pol_degree )
     # Meshgrid but idk to do it cleanly
@@ -833,7 +946,7 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, cov_noise, 
         for bin in heterogeneity_bins:
             all_params.append((*param, bin))
     # all_params = np.meshgrid([discretization_params, heterogeneity_bins])
-            
+
     index_array_vol, disc_choices, residuals_averaged = pick_best_params(residuals, all_params, experiment_datasets[0].upsampled_volume_shape)
 
     weights_opt = jnp.take_along_axis(final_estimates[...,0] , np.expand_dims(index_array_vol, axis=-1), axis=-1)
@@ -845,6 +958,84 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, cov_noise, 
     else:
         return np.asarray(weights_opt), np.asarray(disc_choices), np.asarray(residuals_averaged)
 
+
+
+def naive_heterogeneity_scheme_relion_style(experiment_dataset, cov_noise, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp'):
+    import gc
+
+    # residuals to pick best one
+    # I guess one way to do this without changed the function is to make CTF 0 for all bad images?
+    estimates = []#heterogeneity_bins.size * [None]
+    lhs, rhs = [], []
+    og_contrast = experiment_dataset.CTF_params[:,8]
+    idx =0 
+    for residual_threshold in heterogeneity_bins:
+        from recovar import dataset
+        good_indices = heterogeneity_distances <= residual_threshold
+        # experiment_dataset.CTF_params[:,8] = og_contrast * good_indices
+        # logger.info("Number of images used for residual computation: " + str(np.sum(good_indices)))
+        # utils.report_memory_device(logger=logger)
+        # from recovar import relion_functions
+        # estimate = relion_functions.relion_reconstruct(experiment_dataset, cov_noise, batch_size, 'linear_interp', use_spherical_mask = True, upsampling_factor = 2, grid_correct = True, gridding_correct = "nosq" )
+
+        test_dataset = dataset.subsample_cryoem_dataset(experiment_dataset, good_indices)
+        # logger.info("Number of images used for residual computation: " + str(np.sum(good_indices)))
+        utils.report_memory_device(logger=logger)
+        from recovar import relion_functions
+        # estimate = relion_functions.relion_reconstruct(test_dataset, cov_noise, batch_size, 'linear_interp', use_spherical_mask = True, upsampling_factor = 2, grid_correct = True, gridding_correct = "nosq" )
+
+        # estimate = relion_functions.relion_reconstruct(test_dataset, cov_noise, batch_size, 'linear_interp', use_spherical_mask = True, upsampling_factor = 2, grid_correct = True, gridding_correct = "square", tau = tau )
+
+        if compute_lhs_rhs:
+            # This uses an upsampling factor of 1, because we want the lhs/rhs on the smaller grid for
+            # doing 
+            # estimate = relion_functions.relion_reconstruct(test_dataset, cov_noise, batch_size, disc_type, use_spherical_mask = False, upsampling_factor = 1, grid_correct = grid_correct, gridding_correct = "square", tau = tau )
+
+            test_dataset.update_volume_upsampling_factor(1)
+            Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(test_dataset , cov_noise.astype(np.float32),  batch_size,  disc_type = disc_type, return_lhs_rhs = False )
+
+            estimate = relion_functions.post_process_from_filter(test_dataset, Ft_ctf, F_ty, tau = tau, disc_type = disc_type, use_spherical_mask = False, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
+
+            lhs.append(np.array(Ft_ctf))
+            rhs.append(np.array(F_ty))
+        else:
+            estimate = relion_functions.relion_reconstruct(test_dataset, cov_noise, batch_size, 'linear_interp', use_spherical_mask = True, upsampling_factor = 2, grid_correct = grid_correct, gridding_correct = "square", tau = tau )
+
+        test_dataset.delete()
+        del test_dataset
+        gc.collect()
+
+        logger.info(f"Number of images used in estimator {idx}: " + str(np.sum(good_indices)))
+        idx+=1
+        estimates.append(np.array(estimate.reshape(-1)))
+
+    estimates = np.array(estimates)
+    if compute_lhs_rhs:
+        return estimates, lhs, rhs
+
+    return estimates
+
+def compute_lhs_rhs(cryo,noise_variance, heterogeneity_distances, residual_threshold, batch_size  = 100, disc_type = 'linear_interp' ):
+    
+    good_indices = heterogeneity_distances <= residual_threshold
+    test_dataset = dataset.subsample_cryoem_dataset(cryo, good_indices)
+    # og_upsampling = cryo.volume_upsampling_factor
+    test_dataset.update_volume_upsampling_factor(1)
+    Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(test_dataset , noise_variance.astype(np.float32),  batch_size,  disc_type = disc_type, return_lhs_rhs = False )
+    # cryo.update_volume_upsampling_factor(og_upsampling)
+
+    return Ft_ctf, F_ty
+
+
+    # residuals, _ = compute_residuals_many_weights_in_weight_batch(test_dataset, first_estimates[0], max_pol_degree )
+    # # Meshgrid but idk to do it cleanly
+    # all_params = []
+    # for param in discretization_params:
+    #     for bin in heterogeneity_bins:
+    #         all_params.append((*param, bin))
+
+
+    # all_params = np.meshgrid([discretization_params, heterogeneity_bins])
 
 
 
@@ -918,8 +1109,8 @@ def pick_best_params(residuals, discretization_params, volume_shape):
     pol_degrees = np.array( [ param[0] for param in discretization_params ])
 
     if np.isclose(pol_degrees, pol_degrees[0]).all():
-        index_array = np.maximum.accumulate(index_array)
-
+        # index_array = np.maximum.accumulate(index_array)
+        index_array = index_array
     else:
         print("PROBLEM HERE")
         print(pol_degrees)
@@ -930,7 +1121,7 @@ def pick_best_params(residuals, discretization_params, volume_shape):
     disc_choices[:,1] = hs_choices
 
     index_array_vol = utils.make_radial_image(index_array, volume_shape)
-
+    # import pdb; pdb.set_trace()
     return index_array_vol, disc_choices, residuals_averaged
 
 
@@ -1267,6 +1458,7 @@ def compute_weights_from_precompute(volume_shape, XWX, F, prior_inverse_covarian
 
     # n_pol_param = small_gram_matrix_size(pol_degree) + 2 * get_feature_size(pol_degree) + 1
     memory_per_pixel = (2*h_max +1)**3 * big_gram_matrix_size(pol_degree) * 2 * 8 * 4
+    ## TODO this should be fixed now. 
     ## There seems to be a strange bug with JAX. If it just barely runs out of memory, it won't throw an error but the memory will get corrupted and the answer is nonsense. This is an incredibly difficult thing to debug. 
     if h_max == 0:
         memory_per_pixel = (2*1 +1)**3 * big_gram_matrix_size(pol_degree) * 2 * 8 * 4
@@ -1357,15 +1549,18 @@ def compute_summed_XWX_F_only(volume_shape, XWX, F, pol_degree, h):
 
 
 
-@functools.partial(jax.jit, static_argnums = [5,6,7,8,9])    
-def compute_residuals_batch_many_weights(images, weights, rotation_matrices, translations, CTF_params, volume_shape, image_shape, CTF_fun, voxel_size, pol_degree ):
+@functools.partial(jax.jit, static_argnums = [5,6,7,8,9, 10])    
+def compute_residuals_batch_many_weights(images, weights, rotation_matrices, translations, CTF_params, volume_shape, image_shape, CTF_fun, voxel_size, pol_degree, use_linear_interp = False ):
 
-    X_mat, gridpoint_indices = make_X_mat(rotation_matrices, volume_shape, image_shape, pol_degree = pol_degree)
-    weights_on_grid = weights[gridpoint_indices]
+    if use_linear_interp:
+        X_mat, gridpoint_indices = make_X_mat(rotation_matrices, volume_shape, image_shape, pol_degree = pol_degree)
+        weights_on_grid = weights[gridpoint_indices]
+        X_mat = jnp.repeat(X_mat[...,None,:], axis = -2, repeats = weights_on_grid.shape[-2])
+        predicted_phi = linalg.broadcast_dot(X_mat, weights_on_grid)
+    else:
+        predicted_phi = core.slice_volume_by_map(weights_on_grid[...,0], rotation_matrices, image_shape, volume_shape, 'linear_interp')
 
-    X_mat = jnp.repeat(X_mat[...,None,:], axis = -2, repeats = weights_on_grid.shape[-2])
 
-    predicted_phi = linalg.broadcast_dot(X_mat, weights_on_grid)
 
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
     translated_images = core.translate_images(images, translations, image_shape)
@@ -1379,7 +1574,9 @@ def compute_residuals_batch_many_weights(images, weights, rotation_matrices, tra
     return summed_residuals, summed_n
 
 
-def compute_residuals_many_weights(experiment_dataset, weights , pol_degree ):
+
+
+def compute_residuals_many_weights(experiment_dataset, weights , pol_degree, use_linear_interp ):
     
     batch_size =int(utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total() - utils.get_size_in_gb(weights) ) * 5 / np.prod(weights.shape[1:]))
 
@@ -1397,14 +1594,14 @@ def compute_residuals_many_weights(experiment_dataset, weights , pol_degree ):
                                             experiment_dataset.CTF_params[indices], 
                                             experiment_dataset.upsampled_volume_shape, 
                                             experiment_dataset.image_shape,
-                                            experiment_dataset.CTF_fun, experiment_dataset.voxel_size, pol_degree )
+                                            experiment_dataset.CTF_fun, experiment_dataset.voxel_size, pol_degree, use_linear_interp )
         residuals += residuals_t
         summed_n += summed_n_t
 
     return residuals , summed_n
 
 
-def compute_residuals_many_weights_in_weight_batch(experiment_dataset, weights, pol_degree ):
+def compute_residuals_many_weights_in_weight_batch(experiment_dataset, weights, pol_degree, use_linear_interp = False ):
     
     # Keep half memory free for other stuff
 
@@ -1418,7 +1615,7 @@ def compute_residuals_many_weights_in_weight_batch(experiment_dataset, weights, 
         ind_st, ind_end = utils.get_batch_of_indices(weights.shape[-2], weight_batch_size, k)
         res, _ = compute_residuals_many_weights(experiment_dataset,
                                                 weights[:,ind_st:ind_end],
-                                                pol_degree )
+                                                pol_degree, use_linear_interp )
         residuals.append(res)
 
     return np.concatenate(residuals, axis = -1), 0

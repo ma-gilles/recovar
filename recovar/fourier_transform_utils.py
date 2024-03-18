@@ -23,8 +23,25 @@ class fourier_transform_utils:
 
     def get_k_coordinate_of_each_pixel(self,image_shape, voxel_size, scaled = True):
         one_D_grids = [ self.get_1d_frequency_grid(sh, voxel_size, scaled) for sh in image_shape ]
+
         grids = self.np.meshgrid(*one_D_grids, indexing="xy")
         return self.np.transpose(self.np.vstack([self.np.reshape(g, -1) for g in grids])).astype(one_D_grids[0].dtype)  
+
+
+    def get_k_coordinate_of_each_pixel_3d(self,image_shape, voxel_size, scaled = True):
+        # Very unfortunate change from xy to ij. FIX THIS 
+        one_D_grids = [ self.get_1d_frequency_grid(sh, voxel_size, scaled) for sh in image_shape ]
+        
+        grids = self.np.meshgrid(*one_D_grids, indexing="ij")
+        return self.np.transpose(self.np.vstack([self.np.reshape(g, -1) for g in grids])).astype(one_D_grids[0].dtype)  
+
+
+    def get_grid_of_radial_distances(self, image_shape, voxel_size = 1, scaled = False, frequency_shift = 0, rounded = True ):
+        result = self.np.linalg.norm(self.get_k_coordinate_of_each_pixel(image_shape, voxel_size = voxel_size, scaled = scaled) - frequency_shift, axis = -1)
+        if rounded:
+            return self.np.round(result).astype(int)
+        else:
+            return result
 
 
     def get_dft(self, img, norm = DEFAULT_FFT_NORM):

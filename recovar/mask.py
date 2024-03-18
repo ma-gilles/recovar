@@ -62,11 +62,13 @@ def make_mask_from_half_maps(means, smax = 3 ):
     return x.mask
 
 
-def make_mask_from_gt(gt_map_ft, smax = 3 ):
+def make_mask_from_gt(gt_map_ft, smax = 3, iter = 10 ):
     # from emda.ext.maskmap_class import MaskedMaps
     ftu = fourier_transform_utils(np)
     x = MaskedMaps()
     x.smax = smax
+    if iter is not None:
+        x.iter = iter
     # x.iter = x.iter +5
     vol_shape = utils.guess_vol_shape_from_vol_size(gt_map_ft.size)
     x.arr1 = ftu.get_idft3(gt_map_ft.reshape(vol_shape)).real
@@ -97,6 +99,17 @@ def create_soft_edged_kernel_pxl(r1, shape):
                                  kern_sphere_soft )
     return kern_sphere_soft / jnp.sum(kern_sphere_soft)
 
+def create_hard_edged_kernel_pxl(r1, shape):
+    
+    # Are these offset by 1 pixel ? or 1/2 or something
+    volume_coords =  ftu.get_k_coordinate_of_each_pixel(shape, voxel_size = 1, scaled = False).reshape(list(shape) + [len(list(shape))]) + 1
+    distances =  jnp.linalg.norm(volume_coords, axis =-1)
+    
+    kern_sphere_soft = jnp.where((distances <= r1), jnp.ones_like(distances), jnp.zeros_like(distances))
+
+    return kern_sphere_soft / jnp.sum(kern_sphere_soft)
+
+
 
 def soften_volume_mask(volume_mask, kernel_size):
 
@@ -118,6 +131,7 @@ def get_radial_mask(shape, radius = None):
     volume_coords =  ftu.get_k_coordinate_of_each_pixel(shape, voxel_size = 1, scaled = False).reshape(list(shape) + [len(list(shape))])
     zero_out_outside_sphere_small =  jnp.linalg.norm(volume_coords, axis =-1) < radius + 1e-7
     return zero_out_outside_sphere_small
+
 
 
 # Standard image masking (Other masking are used, too)
@@ -200,6 +214,21 @@ def smooth_circular_mask(image_size, radius, thickness):
     mask[radius + thickness < r] = 0
     return mask
 
+
+
+def raised_cosine_mask( volume_shape, radius, radius_p, offset):
+    # adapted from relion
+    grid = ftu.get_k_coordinate_of_each_pixel_3d(volume_shape, voxel_size = 1, scaled = False)
+    grid -= offset
+
+    distances =  jnp.linalg.norm(grid, axis =-1)
+    # mask = jnp.zeros(volume_shape)
+    mask = jnp.where(distances < radius, 1, 0)
+    mask = jnp.where((distances >= radius) * (distances < radius_p ), 
+                    0.5 - 0.5 * jnp.cos(np.pi * (radius_p - distances) / (radius_p - radius)),
+                     mask)
+
+    return mask.reshape(volume_shape)
 
 
 import numpy as np
