@@ -18,7 +18,6 @@ def add_args(parser: argparse.ArgumentParser):
         help="Input particles (.mrcs, .star, .cs, or .txt)",
     )
 
-
     parser.add_argument(
         "-o",
         "--outdir",

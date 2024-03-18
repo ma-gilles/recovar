@@ -225,9 +225,28 @@ class CryoEMDataset:
         self.rotation_dtype = rotation_dtype
         self.rotation_matrices = np.array(rotation_matrices.astype(rotation_dtype))
         self.translations = np.array(translations)
+
+        '''
+            0 - dfu (float or Bx1 tensor): DefocusU (Angstrom)
+            1 - dfv (float or Bx1 tensor): DefocusV (Angstrom)
+            2 - dfang (float or Bx1 tensor): DefocusAngle (degrees)
+            3 - volt (float or Bx1 tensor): accelerating voltage (kV)
+            4 - cs (float or Bx1 tensor): spherical aberration (mm)
+            5 - w (float or Bx1 tensor): amplitude contrast ratio
+            6 - phase_shift (float or Bx1 tensor): degrees 
+            7 - bfactor (float or Bx1 tensor): envelope fcn B-factor (Angstrom^2)
+            8 - per-partcile scale
+        '''
         self.CTF_params = np.array(CTF_params.astype(self.CTF_dtype))
 
         self.dataset_indices = dataset_indices
+
+    def delete(self):
+        del self.image_stack.particles
+        del self.image_stack
+        del self.rotation_matrices
+        del self.CTF_params
+        del self.translations
 
     def update_volume_upsampling_factor(self, volume_upsampling_factor):
 
@@ -318,10 +337,16 @@ class CryoEMDataset:
 
 
 def subsample_cryoem_dataset(dataset, indices):
+
     import copy
-    image_stack = copy.deepcopy(dataset.image_stack)
-    image_stack.particles = dataset.image_stack.particles[indices]
-    image_stack.n_images = image_stack.particles.shape[0]
+    image_stack = copy.copy(dataset.image_stack)
+
+    if type(image_stack.particles) is list:
+        image_stack.particles = [dataset.image_stack.particles[i] for i in indices]
+        image_stack.n_images = len(image_stack.particles)#.shape[0]
+    else:
+        image_stack.particles = dataset.image_stack.particles[indices]
+        image_stack.n_images = image_stack.particles.shape[0]
 
     return CryoEMDataset( image_stack, dataset.voxel_size, dataset.rotation_matrices[indices], dataset.translations[indices], dataset.CTF_params[indices], CTF_fun = dataset.CTF_fun_inp, dtype = dataset.dtype, rotation_dtype = dataset.rotation_dtype, dataset_indices = dataset.dataset_indices[indices] , volume_upsampling_factor= dataset.volume_upsampling_factor)
 

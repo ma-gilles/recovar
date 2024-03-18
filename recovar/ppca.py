@@ -16,7 +16,7 @@ def M_step_batch(images, lhs_summed, rhs_summed, mean_batch, covariance_batch, C
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
     ctf_over_noise_variance = CTF**2 / noise_variance
 
-    grid_point_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size)
+    grid_point_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape)
     volume_size = np.prod(volume_shape)
 
     second_moments = covariance_batch + linalg.broadcast_outer(mean_batch, mean_batch) * ctf_over_noise_variance

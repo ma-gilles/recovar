@@ -598,8 +598,7 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
                                                experiment_dataset.voxel_size)
         batch_grid_pt_vec_ind_of_images = core.batch_get_nearest_gridpoint_indices(
             experiment_dataset.rotation_matrices[batch_image_ind],
-            experiment_dataset.image_shape, experiment_dataset.volume_shape, 
-            experiment_dataset.grid_size )
+            experiment_dataset.image_shape, experiment_dataset.volume_shape )
         all_one_volume = jnp.ones(experiment_dataset.volume_size, dtype = experiment_dataset.dtype)
         ones_mapped = core.forward_model(all_one_volume, batch_CTF, batch_grid_pt_vec_ind_of_images)
         
@@ -919,7 +918,6 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
                                          rotation_matrices,
                                          image_shape, 
                                          volume_shape, 
-                                         grid_size, 
                                         voxel_size, 
                                         CTF_fun, 
                                         disc_type )    
@@ -1019,7 +1017,7 @@ def make_C_mat_covariance(rotation_matrices, CTF_params, voxel_size, volume_shap
     # w = v * jnp.conj(mult[:,None])
     # C_n = core.summed_adjoint_slice_by_nearest(volume_size, w, plane_indices_on_grid_stacked) 
 
-    grid_point_vec_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
+    grid_point_vec_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape )
 
     grid_points_coords = core.batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size )
     grid_points_coords_nearest = core.round_to_int(grid_points_coords)

@@ -17,13 +17,59 @@ def image_weight_parse(image_weights, dtype = np.float32):
         return [w.astype(dtype) for w in image_weights]
 
 
-
-def get_mean_conformation(cryos, batch_size, cov_noise = None, valid_idx = None, disc_type ='linear_interp', use_noise_level_prior = False, grad_n_iter = 5, image_weights = None):
+def get_mean_conformation_relion(cryos, batch_size, noise_variance = None, valid_idx = None, disc_type ='linear_interp', use_noise_level_prior = False, grad_n_iter = 5, image_weights = None):
     
     cryo = cryos[0]
     valid_idx = cryo.get_valid_frequency_indices() if valid_idx is None else valid_idx
-    if cov_noise is None:
-        cov_noise, signal_var = noise.estimate_noise_variance(cryo, batch_size)
+    if noise_variance is None:
+        noise_variance, signal_var = noise.estimate_noise_variance(cryo, batch_size)
+        signal_var = np.max(signal_var)
+    else:
+        _, signal_var = noise.estimate_noise_variance(cryo, batch_size)
+        signal_var = np.max(signal_var)
+
+
+    from recovar import relion_functions
+
+    means = dict()
+    lhs = 2 * [None]
+    rhs = 2 * [None]
+    for idx, cryo in enumerate(cryos):
+        means["init" + str(idx)], lhs[idx], rhs[idx] = relion_functions.relion_reconstruct(cryo, noise_variance,batch_size )
+
+    # regularization_init = jnp.ones(cryo.volume_size, dtype = cryo.dtype_real) * signal_var
+    # logger.info("regularization init done")
+    # image_weights = image_weight_parse(image_weights, dtype = cryos[0].dtype_real)
+    # means = {}
+    # # This is kind of a stupid way to code this. Should probably rewrite next 3 forloops
+
+    # Probably should be rewritten around here.
+    if use_noise_level_prior:
+        key = "corrected"
+        mean_prior, fsc, prior_avg = regularization.compute_relion_prior(cryos, noise_variance, means["corrected0"], means["corrected1"], batch_size, estimate_merged_SNR = False)
+        logger.info(f"Using RELION prior")
+    else:    
+        mean_prior, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(cryo.volume_shape, means["corrected0"], means["corrected1"], lhs/2 , mean_prior, frequency_shift = jnp.array([0,0,0]))
+        logger.info(f"Using new prior")
+
+    mean_prior = np.array(mean_prior)
+    means["combined"] = np.array( jnp.where(jnp.abs(lhs) < 1e-8, 0, rhs / (lhs + 1 / mean_prior ) ))
+    means["prior"] = mean_prior
+    means["lhs"] = lhs/2
+
+    end_time = time.time()
+    logger.info(f"time to compute means: {end_time- st_time}")
+
+
+    return 
+
+
+def get_mean_conformation(cryos, batch_size, noise_variance = None, valid_idx = None, disc_type ='linear_interp', use_noise_level_prior = False, grad_n_iter = 5, image_weights = None):
+    
+    cryo = cryos[0]
+    valid_idx = cryo.get_valid_frequency_indices() if valid_idx is None else valid_idx
+    if noise_variance is None:
+        noise_variance, signal_var = noise.estimate_noise_variance(cryo, batch_size)
         signal_var = np.max(signal_var)
     else:
         _, signal_var = noise.estimate_noise_variance(cryo, batch_size)
@@ -37,17 +83,17 @@ def get_mean_conformation(cryos, batch_size, cov_noise = None, valid_idx = None,
     # This is kind of a stupid way to code this. Should probably rewrite next 3 forloops
     st_time = time.time()
     for cryo_idx,cryo in enumerate(cryos):
-        means["init" +str(cryo_idx) ] = np.array(compute_mean_volume(cryo, cov_noise,  regularization_init, batch_size, disc_type = disc_type, n_iter = 1, image_weights = image_weights[cryo_idx]))
+        means["init" +str(cryo_idx) ] = np.array(compute_mean_volume(cryo, noise_variance,  regularization_init, batch_size, disc_type = disc_type, n_iter = 1, image_weights = image_weights[cryo_idx]))
         
-    mean_prior, fsc, _ = regularization.compute_relion_prior(cryos, cov_noise, means["init0"], means["init1"], batch_size)
+    mean_prior, fsc, _ = regularization.compute_relion_prior(cryos, noise_variance, means["init0"], means["init1"], batch_size)
     for cryo_idx, cryo in enumerate(cryos):
-        means["corrected" +str(cryo_idx) ] = np.array(compute_mean_volume(cryo, cov_noise,  mean_prior, batch_size, disc_type = disc_type, n_iter = grad_n_iter, image_weights = image_weights[cryo_idx]))
+        means["corrected" +str(cryo_idx) ] = np.array(compute_mean_volume(cryo, noise_variance,  mean_prior, batch_size, disc_type = disc_type, n_iter = grad_n_iter, image_weights = image_weights[cryo_idx]))
         
-    mean_prior, fsc, _ = regularization.compute_relion_prior(cryos, cov_noise, means["corrected0"], means["corrected1"], batch_size)        
+    mean_prior, fsc, _ = regularization.compute_relion_prior(cryos, noise_variance, means["corrected0"], means["corrected1"], batch_size)        
     
     lhs = 0; rhs = 0 
     for cryo_idx, cryo in enumerate(cryos):
-        lhs_t, rhs_t = compute_mean_volume(cryo, cov_noise,  mean_prior, batch_size, disc_type = disc_type, n_iter = 1, return_lhs_rhs = True, mean_estimate = (means["corrected0"] + means["corrected1"])/2 , image_weights = image_weights[cryo_idx] )
+        lhs_t, rhs_t = compute_mean_volume(cryo, noise_variance,  mean_prior, batch_size, disc_type = disc_type, n_iter = 1, return_lhs_rhs = True, mean_estimate = (means["corrected0"] + means["corrected1"])/2 , image_weights = image_weights[cryo_idx] )
         lhs +=  lhs_t
         rhs +=  rhs_t
             
@@ -55,7 +101,7 @@ def get_mean_conformation(cryos, batch_size, cov_noise = None, valid_idx = None,
     # Probably should be rewritten around here.
     if use_noise_level_prior:
         key = "corrected"
-        mean_prior, fsc, prior_avg = regularization.compute_relion_prior(cryos, cov_noise, means["corrected0"], means["corrected1"], batch_size, estimate_merged_SNR = False)
+        mean_prior, fsc, prior_avg = regularization.compute_relion_prior(cryos, noise_variance, means["corrected0"], means["corrected1"], batch_size, estimate_merged_SNR = False)
         logger.info(f"Using RELION prior")
 
     else:    
@@ -74,7 +120,7 @@ def get_mean_conformation(cryos, batch_size, cov_noise = None, valid_idx = None,
 
 
 
-def get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, mean_prior, mean ,image_weights, recompute_prior = True, volume_mask = None, adaptive = True ):
+def get_multiple_conformations(cryos, noise_variance, disc_type, batch_size, mean_prior, mean ,image_weights, recompute_prior = True, volume_mask = None, adaptive = True ):
     image_weights = image_weight_parse(image_weights, dtype = cryos[0].dtype_real)
 
     st_time = time.time()
@@ -84,7 +130,7 @@ def get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, mean_pri
     lhs_l = []
     rhs_l = []
     for cryo_idx, cryo in enumerate(cryos):
-        lhs_t, rhs_t = compute_mean_volume(cryo, cov_noise,  mean_prior, batch_size, disc_type = disc_type, n_iter = 1, return_lhs_rhs = True, mean_estimate = mean , image_weights = image_weights[cryo_idx].astype(cryo.dtype_real) )
+        lhs_t, rhs_t = compute_mean_volume(cryo, noise_variance,  mean_prior, batch_size, disc_type = disc_type, n_iter = 1, return_lhs_rhs = True, mean_estimate = mean , image_weights = image_weights[cryo_idx].astype(cryo.dtype_real) )
         lhs_l.append(jnp.real(lhs_t).astype(cryo.dtype_real))
         rhs_l.append(rhs_t)
         # lhs +=  lhs_t
@@ -128,10 +174,10 @@ def get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, mean_pri
         #     for cryo_idx, cryo in enumerate(cryos):
         #         # Instead of passing weights... this should do the same.
         #         cryo.CTF_params[:,8] = initial_contrasts[cryo_idx] * image_weights[cryo_idx][k]
-        #         adaptive_reconstructions_halfmaps[cryo_idx,k],_ = compute_with_adaptive_discretization(cryo, lhs_l[cryo_idx][k], priors[k], reconstructions[k], cov_noise, batch_size)
+        #         adaptive_reconstructions_halfmaps[cryo_idx,k],_ = compute_with_adaptive_discretization(cryo, lhs_l[cryo_idx][k], priors[k], reconstructions[k], noise_variance, batch_size)
         from recovar.adaptive_discretization import compute_with_adaptive_discretization
         for cryo_idx, cryo in enumerate(cryos):
-            adaptive_reconstructions_halfmaps[cryo_idx],_ = compute_with_adaptive_discretization(cryo, lhs_l[cryo_idx], priors, reconstructions, cov_noise, batch_size, image_weights[cryo_idx])
+            adaptive_reconstructions_halfmaps[cryo_idx],_ = compute_with_adaptive_discretization(cryo, lhs_l[cryo_idx], priors, reconstructions, noise_variance, batch_size, image_weights[cryo_idx])
 
         reconstructions = np.mean(adaptive_reconstructions_halfmaps, axis=0)
 
@@ -142,7 +188,7 @@ def get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, mean_pri
 
 
 ## Mean functions
-def compute_mean_volume(experiment_dataset, cov_noise, cov_diag_prior, batch_size, disc_type, n_iter = 2, image_weights = None, return_lhs_rhs = False, mean_estimate = None ):
+def compute_mean_volume(experiment_dataset, noise_variance, cov_diag_prior, batch_size, disc_type, n_iter = 2, image_weights = None, return_lhs_rhs = False, mean_estimate = None ):
 
     if disc_type =="nearest":
         n_iter = 1        
@@ -156,7 +202,7 @@ def compute_mean_volume(experiment_dataset, cov_noise, cov_diag_prior, batch_siz
             mean_estimate = mean_estimate.reshape(experiment_dataset.volume_size)
         mean_estimate = solve_least_squares_mean_iteration(experiment_dataset , 
                                             cov_diag_prior,
-                                            cov_noise, 
+                                            noise_variance, 
                                             batch_size, 
                                             mean_estimate = mean_estimate, 
                                             image_weights = image_weights,
@@ -166,7 +212,7 @@ def compute_mean_volume(experiment_dataset, cov_noise, cov_diag_prior, batch_siz
 
 
 # Solves the linear system Dx = b.
-def solve_least_squares_mean_iteration(experiment_dataset , cov_diag_prior, cov_noise,  batch_size, mean_estimate, image_weights = None, disc_type = None, return_lhs_rhs = False ):
+def solve_least_squares_mean_iteration(experiment_dataset , cov_diag_prior, noise_variance,  batch_size, mean_estimate, image_weights = None, disc_type = None, return_lhs_rhs = False ):
     # all_one_volume = jnp.ones(volume_size)
     
     mean_rhs = jnp.zeros(experiment_dataset.volume_size, dtype = experiment_dataset.dtype)
@@ -190,7 +236,7 @@ def solve_least_squares_mean_iteration(experiment_dataset , cov_diag_prior, cov_
                                          experiment_dataset.translations[indices], 
                                          experiment_dataset.CTF_params[indices], 
                                          mean_estimate,
-                                         cov_noise,
+                                         noise_variance,
                                          image_weights_batch,
                                          experiment_dataset.voxel_size, 
                                          experiment_dataset.volume_shape, 
@@ -211,7 +257,7 @@ def solve_least_squares_mean_iteration(experiment_dataset , cov_diag_prior, cov_
 @functools.partial(jax.jit, static_argnums = [7,8,9,10,11,12])    
 def compute_mean_least_squares_rhs_lhs(images, rotation_matrices, translations, CTF_params, mean_estimate, noise_variance, image_weights, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun ):
     volume_size = np.prod(np.array(volume_shape))
-    grid_point_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
+    grid_point_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape )
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
     translated_images = core.translate_images(images, translations, image_shape)
     if disc_type != "nearest" and mean_estimate is not None:

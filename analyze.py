@@ -49,6 +49,10 @@ def add_args(parser: argparse.ArgumentParser):
         help="whether to use the adapative discretization scheme in reweighing to compute trajectory volumes"
     )
 
+    parser.add_argument(
+        "--n-vols-along-path", type=int, default=6, dest="n_vols_along_path", help="number of volumes to compute along each trajectory (default 6)"
+    )
+
 
     parser.add_argument(
         "--q",  type =float, default=None, help="quantile used for reweighting (default = 0.95)"
@@ -105,7 +109,11 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
     output_folder_kmeans = output_folder + 'kmeans'+'_'+ str(n_clusters) + '/'    
     o.mkdir_safe(output_folder_kmeans)    
-    centers, labels = o.kmeans_analysis_from_dict(output_folder_kmeans, results, cryos, likelihood_threshold,  n_clusters = n_clusters, generate_volumes = True, zdim =zdim)
+    logger.addHandler(logging.FileHandler(f"{output_folder_kmeans}/run.log"))
+    logger.info(args)
+
+    print("not generating k means?")
+    centers, labels = o.kmeans_analysis_from_dict(output_folder_kmeans, results, cryos, likelihood_threshold,  n_clusters = n_clusters, generate_volumes = False, zdim =zdim)
     kmeans_result = { 'centers' : centers, 'labels': labels  }
     pickle.dump(kmeans_result, open(output_folder_kmeans + 'centers.pkl', 'wb'))
 
@@ -137,7 +145,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
             z_end = pairs[pair_idx][1][...,None,]
             path_folder = output_folder_kmeans + 'path' + str(pair_idx) + '/'        
             o.mkdir_safe(path_folder)
-            o.make_trajectory_plots_from_results(results, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = 40, plot_llh = False, basis_size =zdim, compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold, adaptive = adaptive)        
+            o.make_trajectory_plots_from_results(results, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = args.n_vols_along_path, plot_llh = False, basis_size =zdim, compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold, adaptive = adaptive)        
             logger.info(f"path {pair_idx} done")
 
     kmeans_res = { 'centers': centers.tolist(), 'pairs' : pairs }
