@@ -8,10 +8,10 @@ ftu = fourier_transform_utils(jax.numpy)
 
 ## Low level functions for cryo-EM. Handling of indexing, slicing, adjoint of slicing, CTF, etc.
 
-# Three different representation for a 2x2x2 grid are
-# E.g., vol_indices are [0,0,0], [0,0,1], [0,1,0], [0,1,1], [1,0,0], [1,0,1], [1,1,0], [1,1,1]
-# E.g., vec_indices are 0, 1, 2, 3, 4, 5, 6, 7
-# E.g., frequencies are [-1, -1, -1], [-1, -1, 0], etc ...
+# Three different representation. E.g. for a 2x2x2 grid  
+# vol_indices are [0,0,0], [0,0,1], [0,1,0], [0,1,1], [1,0,0], [1,0,1], [1,1,0], [1,1,1]
+# vec_indices are 0, 1, 2, 3, 4, 5, 6, 7
+# frequencies are [-1, -1, -1], [-1, -1, 0], etc ...
 
 @functools.partial(jax.jit, static_argnums=[1])
 def vol_indices_to_vec_indices(vol_indices, vol_shape):
@@ -53,6 +53,18 @@ def check_vol_indices_in_bound(vol_indices,grid_size):
 
 def check_vec_indices_in_bound(vec_indices,grid_size):
     return ((vec_indices < grid_size**3 ) * vec_indices >= 0).astype(bool)
+
+
+# This function is meant to handle the heterogeneity case.
+def multi_vol_indices_to_multi_vec_indices(vol_indices, het_indices, vol_shape, het_shape):
+    og_shape = vol_indices.shape
+    vol_indices = jnp.concatenate( [het_indices, vol_indices.reshape(-1, vol_indices.shape[-1]) ], axis=-1)
+    multi_vol_shape = (het_shape, *vol_shape)
+    vec_indices = jnp.ravel_multi_index(vol_indices.T, multi_vol_shape, mode = 'clip').reshape(og_shape[:-1])
+
+    return
+
+
 
 
 
@@ -301,8 +313,7 @@ def map_coordinates_squared_on_slices(volume, rotation_matrices, image_shape, vo
 # # Not sure this should be used...
 # def slice_by_linear_interp_explicit(volume, rotation_matrices, image_shape, volume_shape, order):
 #     batch_grid_pt_vec_ind_of_images = batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape )
-#     # Get all 8 grid-points
-    
+#     # Get all 8 grid-points    
 #     return
 
 # # def get_nearby_grid
@@ -312,18 +323,27 @@ def map_coordinates_squared_on_slices(volume, rotation_matrices, image_shape, vo
 # mesh_grid_coords = jax.vmap(mesh_grid_coords, in_axes=(-1))
 
 
-# def get_linear_weights_and_indices(grid_points, volume_shape):
-#     x_low = jnp.floor(grid_points).astype(int)
-#     x_high = x_low + 1
-#     weight_low = grid_points - x_low
-#     weight_high = 1 - weight_low
+def get_linear_weights_and_indices(grid_points, volume_shape):
+    lower_points = jnp.floor(grid_points).astype(int)
+    
+    all_points = lower_points
 
-#     xs = jnp.concatenate( [x_low, x_high])
-#     weights = jnp.concatenate( [weight_low, weight_high])
+    x_high = x_low + 1
+    weight_low = grid_points - x_low
+    weight_high = 1 - weight_low
+
+    xs = jnp.concatenate( [x_low, x_high])
+    weights = jnp.concatenate( [weight_low, weight_high])
+
+    x_high = jnp.ceil(grid_points).astype(int)
+    x_bounds = jnp.concatenate(x_low, x_high)
 
 
-#     x_high = jnp.ceil(grid_points).astype(int)
-#     x_bounds = jnp.concatenate(x_low, x_high)
+def get_linear_weights_indices_multi_index(grid_points, volume_shape, heterogeneity_bins, heterogeneity_shape  ):
+    volume_indices = a
+
+    return
+
 
 #     np.meshgrid()
 
