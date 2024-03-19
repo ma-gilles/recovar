@@ -124,6 +124,9 @@ def full_volume_to_half_volume(volume, volume_shape):
     half_volume_size = np.prod(half_volume_shape)
     return volume[:half_volume_size]
 
+batch_full_volume_to_half_volume = jax.vmap(full_volume_to_half_volume, in_axes = (0,None), out_axes = 0)
+
+
 def half_vec_index_to_vec_index(indices_half, volume_shape):
     # For indices with negative frequencies, return -1 (out of bound, not used)
     vol_indices_half = core.vec_indices_to_vol_indices(indices_half, volume_shape_to_half_volume_shape(volume_shape))
@@ -178,6 +181,81 @@ def precompute_kernel_one_batch(images, rotation_matrices, translations, CTF_par
 
     F = core.batch_over_vol_summed_adjoint_slice_by_nearest(half_volume_size, F_b, grid_point_indices.reshape(-1),F)
     return XWX, F #.reshape(-1, XWX_b_one_shape[-1], n_bins  ), F.reshape(-1, XWX_b_one_shape[-1], n_bins  )
+
+
+# Should this be set by cross validation?
+def precompute_triangular_kernel(experiment_dataset, noise_variance, pol_degree=0, heterogeneity_distances = None, heterogeneity_bins = None):    
+    XWX, F = 0,0
+    # print(utils.report_memory_device())
+    n_bins = 1 if heterogeneity_bins is None else heterogeneity_bins.size
+
+    half_volume_size = np.prod(volume_shape_to_half_volume_shape(experiment_dataset.upsampled_volume_shape))
+    XWX = jnp.zeros((half_volume_size, small_gram_matrix_size(pol_degree) * n_bins ), dtype = np.float32)
+    F = jnp.zeros((half_volume_size, get_feature_size(pol_degree) *  n_bins), dtype = np.complex64)
+
+    batch_size = int(utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total() - 3 * ( utils.get_size_in_gb(XWX)  + utils.get_size_in_gb(F))  ) )
+
+    # batch_size = 1
+    # Need to take out RR
+    logger.info(f"batch size in precompute kernel: {batch_size}")
+    # batch_size = 1
+    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
+    noise_variance_image = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape).reshape(-1)
+
+    idx = 0 
+    for batch, indices in data_generator:
+        batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
+        # heterogeneity_distances = None if heterogeneity_distances is None else heterogeneity_distances[indices]
+        XWX, F = precompute_triangular_kernel_one_batch(batch,
+                                experiment_dataset.rotation_matrices[indices], 
+                                experiment_dataset.translations[indices], 
+                                experiment_dataset.CTF_params[indices], 
+                                experiment_dataset.voxel_size, 
+                                experiment_dataset.upsampled_volume_shape, 
+                                experiment_dataset.image_shape, 
+                                experiment_dataset.CTF_fun,
+                                noise_variance_image, pol_degree = pol_degree, XWX = XWX, F = F, 
+                                heterogeneity_distances = None if heterogeneity_distances is None else heterogeneity_distances[indices],
+                                heterogeneity_bins = heterogeneity_bins)
+        
+        idx+=1
+
+    XWX = XWX.reshape(-1, small_gram_matrix_size(pol_degree),  n_bins )
+    F = F.reshape(-1, get_feature_size(pol_degree),  n_bins )
+    logger.info(f"Done with precompute of kernel")
+    return np.asarray(XWX), np.asarray(F)
+
+
+@functools.partial(jax.jit, static_argnums = [5,6,7,9])    
+def precompute_triangular_kernel_one_batch(images, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, CTF_fun, noise_variance, pol_degree =0, XWX = None, F = None, heterogeneity_distances = None, heterogeneity_bins = None ):
+
+    if pol_degree > 0:
+        raise NotImplementedError
+    
+    if heterogeneity_bins is not None:
+        # This could be made more efficient, but will skip for now.
+        heterogeneity_bins_this = (heterogeneity_distances[...,None] <= heterogeneity_bins) 
+        n_bins = heterogeneity_bins.size
+    else:
+        heterogeneity_bins_this = jnp.ones((images.shape[0], 1), dtype = np.bool)
+        n_bins = 1
+
+    # print(images.shape)
+    images = core.translate_images(images, translations, image_shape) / noise_variance
+    images = images[...,None] * heterogeneity_bins_this[...,None,:]
+    # print(images.shape)
+
+    Ft_y = batch_im_adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, 'linear_interp') 
+
+    CTF = CTF_fun( CTF_params, image_shape, voxel_size) / noise_variance
+    CTF = CTF[...,None] * heterogeneity_bins_this[...,None,:]
+
+    Ft_ctf = batch_im_adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, 'linear_interp') 
+    # A pretty naive way to do this
+    return XWX + batch_full_volume_to_half_volume(Ft_ctf, volume_shape).T, F + batch_full_volume_to_half_volume(Ft_y, volume_shape).T
+
+batch_im_adjoint_forward_model_from_map = jax.vmap(core.adjoint_forward_model_from_map, in_axes = (-1,None, None, None, None,None, None, None))
+
 
 
 
@@ -456,7 +534,7 @@ def solve_for_m_simple(XWX, f, regularization):
 batch_solve_for_m = jax.vmap(solve_for_m_simple, in_axes = (0,0,0))
 
 # Should this be set by cross validation?
-def precompute_kernel(experiment_dataset, cov_noise, pol_degree=0, heterogeneity_distances = None, heterogeneity_bins = None):    
+def precompute_kernel(experiment_dataset, noise_variance, pol_degree=0, heterogeneity_distances = None, heterogeneity_bins = None):    
     XWX, F = 0,0
     # print(utils.report_memory_device())
     n_bins = 1 if heterogeneity_bins is None else heterogeneity_bins.size
@@ -471,7 +549,7 @@ def precompute_kernel(experiment_dataset, cov_noise, pol_degree=0, heterogeneity
     logger.info(f"batch size in precompute kernel: {batch_size}")
     # batch_size = 1
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
-    cov_noise_image = noise.make_radial_noise(cov_noise, experiment_dataset.image_shape).reshape(-1)
+    noise_variance_image = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape).reshape(-1)
 
     idx = 0 
     for batch, indices in data_generator:
@@ -485,7 +563,7 @@ def precompute_kernel(experiment_dataset, cov_noise, pol_degree=0, heterogeneity
                                 experiment_dataset.upsampled_volume_shape, 
                                 experiment_dataset.image_shape, 
                                 experiment_dataset.CTF_fun,
-                                cov_noise_image, pol_degree = pol_degree, XWX = XWX, F = F, 
+                                noise_variance_image, pol_degree = pol_degree, XWX = XWX, F = F, 
                                 heterogeneity_distances = None if heterogeneity_distances is None else heterogeneity_distances[indices],
                                 heterogeneity_bins = heterogeneity_bins)
         idx+=1
@@ -583,7 +661,9 @@ def estimate_from_relion_style(cryos, discretization_params, XWXs, Fs, volume_sh
     return estimates
 
 
-def estimate_multiple_disc_relion_style(experiment_datasets, cov_noise, discretization_params, heterogeneity_distances = None, heterogeneity_bins= None, residual_threshold = None, use_spherical_mask = True, grid_correct = True, gridding_correct = "square" ):
+
+
+def estimate_multiple_disc_relion_style(experiment_datasets, noise_variance, discretization_params, heterogeneity_distances = None, heterogeneity_bins= None, residual_threshold = None, use_spherical_mask = True, grid_correct = True, gridding_correct = "square" ):
     
     cryos = experiment_datasets
     discretization_params = get_default_discretization_params(experiment_datasets[0].grid_size) if discretization_params is None else discretization_params
@@ -597,7 +677,7 @@ def estimate_multiple_disc_relion_style(experiment_datasets, cov_noise, discreti
     for k in range(2):
         heterogeneity_distances_this = None if heterogeneity_distances is None else heterogeneity_distances[k]
         XWXs[k], Fs[k] = precompute_kernel(experiment_datasets[k], 
-                                         cov_noise.astype(np.float32), pol_degree=max_pol_degree, heterogeneity_distances= heterogeneity_distances_this, heterogeneity_bins = heterogeneity_bins)    
+                                         noise_variance.astype(np.float32), pol_degree=max_pol_degree, heterogeneity_distances= heterogeneity_distances_this, heterogeneity_bins = heterogeneity_bins)    
         # For now just throw away this piece so it doesn't break code.
         if heterogeneity_bins is None:
             XWXs[k] = XWXs[k][...,0]
@@ -866,13 +946,13 @@ def estimate_optimal_covariance_and_volume(init_variance, init_prior_covariance_
     batch_half_volume_to_full_volume(XWX_summed_neighbors[0].T, volume_shape).T, batch_half_volume_to_full_volume(F_summed_neighbors[0].T,volume_shape).T]
 
 
-def homogeneous_multiple_relion_style(experiment_datasets, cov_noise, signal_variance, discretization_params, return_all, heterogeneity_distances, heterogeneity_bins, residual_threshold = None, residual_num_images = None ):
+def homogeneous_multiple_relion_style(experiment_datasets, noise_variance, signal_variance, discretization_params, return_all, heterogeneity_distances, heterogeneity_bins, residual_threshold = None, residual_num_images = None ):
 
 
     return
 
 
-def heterogeneous_reconstruction_fixed_variance(experiment_datasets, cov_noise, signal_variance, discretization_params, return_all, heterogeneity_distances, heterogeneity_bins, residual_threshold = None, residual_num_images = None ):
+def heterogeneous_reconstruction_fixed_variance(experiment_datasets, noise_variance, signal_variance, discretization_params, return_all, heterogeneity_distances, heterogeneity_bins, residual_threshold = None, residual_num_images = None ):
 
     if residual_threshold is None and residual_num_images is None:
         logger.warning("didn't specify either residual_threshold or residual_num_images, using first bin")
@@ -889,13 +969,13 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, cov_noise, 
     XWXs = [None,None]; Fs = [None,None]
     for k in range(2):
         XWXs[k], Fs[k] = precompute_kernel(experiment_datasets[k], 
-                                         cov_noise.astype(np.float32), pol_degree=max_pol_degree, heterogeneity_distances= heterogeneity_distances[k], heterogeneity_bins = heterogeneity_bins)    
+                                         noise_variance.astype(np.float32), pol_degree=max_pol_degree, heterogeneity_distances= heterogeneity_distances[k], heterogeneity_bins = heterogeneity_bins)    
         
     # A crude signal variance estimation
     gpu_memory = utils.get_gpu_memory_total()
     batch_size = utils.get_image_batch_size(experiment_datasets[0].grid_size, gpu_memory)
-    if cov_noise is None:
-        cov_noise, signal_var = noise.estimate_noise_variance(experiment_datasets[0], batch_size)
+    if noise_variance is None:
+        noise_variance, signal_var = noise.estimate_noise_variance(experiment_datasets[0], batch_size)
         signal_var = np.max(signal_var)
     else:
         _, signal_var = noise.estimate_noise_variance(experiment_datasets[0], batch_size)
@@ -960,7 +1040,7 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, cov_noise, 
 
 
 
-def naive_heterogeneity_scheme_relion_style(experiment_dataset, cov_noise, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp'):
+def naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp'):
     import gc
 
     # residuals to pick best one
@@ -976,30 +1056,30 @@ def naive_heterogeneity_scheme_relion_style(experiment_dataset, cov_noise, signa
         # logger.info("Number of images used for residual computation: " + str(np.sum(good_indices)))
         # utils.report_memory_device(logger=logger)
         # from recovar import relion_functions
-        # estimate = relion_functions.relion_reconstruct(experiment_dataset, cov_noise, batch_size, 'linear_interp', use_spherical_mask = True, upsampling_factor = 2, grid_correct = True, gridding_correct = "nosq" )
+        # estimate = relion_functions.relion_reconstruct(experiment_dataset, noise_variance, batch_size, 'linear_interp', use_spherical_mask = True, upsampling_factor = 2, grid_correct = True, gridding_correct = "nosq" )
 
         test_dataset = dataset.subsample_cryoem_dataset(experiment_dataset, good_indices)
         # logger.info("Number of images used for residual computation: " + str(np.sum(good_indices)))
         utils.report_memory_device(logger=logger)
         from recovar import relion_functions
-        # estimate = relion_functions.relion_reconstruct(test_dataset, cov_noise, batch_size, 'linear_interp', use_spherical_mask = True, upsampling_factor = 2, grid_correct = True, gridding_correct = "nosq" )
+        # estimate = relion_functions.relion_reconstruct(test_dataset, noise_variance, batch_size, 'linear_interp', use_spherical_mask = True, upsampling_factor = 2, grid_correct = True, gridding_correct = "nosq" )
 
-        # estimate = relion_functions.relion_reconstruct(test_dataset, cov_noise, batch_size, 'linear_interp', use_spherical_mask = True, upsampling_factor = 2, grid_correct = True, gridding_correct = "square", tau = tau )
+        # estimate = relion_functions.relion_reconstruct(test_dataset, noise_variance, batch_size, 'linear_interp', use_spherical_mask = True, upsampling_factor = 2, grid_correct = True, gridding_correct = "square", tau = tau )
 
         if compute_lhs_rhs:
             # This uses an upsampling factor of 1, because we want the lhs/rhs on the smaller grid for
             # doing 
-            # estimate = relion_functions.relion_reconstruct(test_dataset, cov_noise, batch_size, disc_type, use_spherical_mask = False, upsampling_factor = 1, grid_correct = grid_correct, gridding_correct = "square", tau = tau )
+            # estimate = relion_functions.relion_reconstruct(test_dataset, noise_variance, batch_size, disc_type, use_spherical_mask = False, upsampling_factor = 1, grid_correct = grid_correct, gridding_correct = "square", tau = tau )
 
             test_dataset.update_volume_upsampling_factor(1)
-            Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(test_dataset , cov_noise.astype(np.float32),  batch_size,  disc_type = disc_type, return_lhs_rhs = False )
+            Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(test_dataset , noise_variance.astype(np.float32),  batch_size,  disc_type = disc_type, return_lhs_rhs = False )
 
             estimate = relion_functions.post_process_from_filter(test_dataset, Ft_ctf, F_ty, tau = tau, disc_type = disc_type, use_spherical_mask = False, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
 
             lhs.append(np.array(Ft_ctf))
             rhs.append(np.array(F_ty))
         else:
-            estimate = relion_functions.relion_reconstruct(test_dataset, cov_noise, batch_size, 'linear_interp', use_spherical_mask = True, upsampling_factor = 2, grid_correct = grid_correct, gridding_correct = "square", tau = tau )
+            estimate = relion_functions.relion_reconstruct(test_dataset, noise_variance, batch_size, 'linear_interp', use_spherical_mask = True, upsampling_factor = 2, grid_correct = grid_correct, gridding_correct = "square", tau = tau )
 
         test_dataset.delete()
         del test_dataset
@@ -1014,6 +1094,30 @@ def naive_heterogeneity_scheme_relion_style(experiment_dataset, cov_noise, signa
         return estimates, lhs, rhs
 
     return estimates
+
+
+def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp'):
+
+    # residuals to pick best one
+    # I guess one way to do this without changed the function is to make CTF 0 for all bad images?
+    estimates = []#heterogeneity_bins.size * [None]
+    experiment_dataset.update_volume_upsampling_factor(2)
+    XWX, F = precompute_triangular_kernel(experiment_dataset, noise_variance.astype(np.float32), pol_degree=0, heterogeneity_distances= heterogeneity_distances, heterogeneity_bins = heterogeneity_bins)
+
+    XWX = XWX[:,0,:].T
+    F = F[:,0,:].T
+
+    for idx in range(heterogeneity_bins.size):
+        from recovar import dataset, relion_functions
+
+        estimate = relion_functions.post_process_from_filter(experiment_dataset, half_volume_to_full_volume(XWX[idx], experiment_dataset.volume_shape), half_volume_to_full_volume(F[idx],experiment_dataset.volume_shape), tau = tau, disc_type = disc_type, use_spherical_mask = True, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
+        estimates.append(np.array(estimate.reshape(-1)))
+    estimates = np.array(estimates)
+
+    return estimates
+
+
+
 
 def compute_lhs_rhs(cryo,noise_variance, heterogeneity_distances, residual_threshold, batch_size  = 100, disc_type = 'linear_interp' ):
     
@@ -1041,7 +1145,7 @@ def compute_lhs_rhs(cryo,noise_variance, heterogeneity_distances, residual_thres
 
 
 
-def estimate_variance_and_discretization_params(experiment_datasets, cov_noise, discretization_params, return_all, heterogeneity_distances = None, heterogeneity_bins= None ):
+def estimate_variance_and_discretization_params(experiment_datasets, noise_variance, discretization_params, return_all, heterogeneity_distances = None, heterogeneity_bins= None ):
     discretization_params = get_default_discretization_params(experiment_datasets[0].grid_size) if discretization_params is None else discretization_params
 
     # prior_option = discretization_params[0][2]
@@ -1051,7 +1155,7 @@ def estimate_variance_and_discretization_params(experiment_datasets, cov_noise, 
     XWXs = [None,None]; Fs = [None,None]
     for k in range(2):
         XWXs[k], Fs[k] = precompute_kernel(experiment_datasets[k], 
-                                         cov_noise.astype(np.float32), pol_degree=max_pol_degree, heterogeneity_distances= heterogeneity_distances, heterogeneity_bins = heterogeneity_bins)    
+                                         noise_variance.astype(np.float32), pol_degree=max_pol_degree, heterogeneity_distances= heterogeneity_distances, heterogeneity_bins = heterogeneity_bins)    
         # For now just throw away this piece so it doesn't break code.
         XWXs[k] = XWXs[k][...,0]
         Fs[k] = Fs[k][...,0]
@@ -1059,8 +1163,8 @@ def estimate_variance_and_discretization_params(experiment_datasets, cov_noise, 
     # A crude signal variance estimation
     gpu_memory = utils.get_gpu_memory_total()
     batch_size = utils.get_image_batch_size(experiment_datasets[0].grid_size, gpu_memory)
-    if cov_noise is None:
-        cov_noise, signal_var = noise.estimate_noise_variance(experiment_datasets[0], batch_size)
+    if noise_variance is None:
+        noise_variance, signal_var = noise.estimate_noise_variance(experiment_datasets[0], batch_size)
         signal_var = np.max(signal_var)
     else:
         _, signal_var = noise.estimate_noise_variance(experiment_datasets[0], batch_size)
@@ -1127,7 +1231,7 @@ def pick_best_params(residuals, discretization_params, volume_shape):
 
 
 
-# def estimate_signal_variance(experiment_datasets, cov_noise, discretization_params, use_reg = True):
+# def estimate_signal_variance(experiment_datasets, noise_variance, discretization_params, use_reg = True):
 #     discretization_params = get_default_discretization_params(experiment_datasets[0].grid_size) if discretization_params is None else discretization_params
 
 #     # prior_option = discretization_params[0][2]
@@ -1138,12 +1242,12 @@ def pick_best_params(residuals, discretization_params, volume_shape):
 #     XWXs = [None,None]; Fs = [None,None]
 #     for k in range(2):
 #         XWXs[k], Fs[k] = precompute_kernel(experiment_datasets[k], 
-#                                          cov_noise.astype(np.float32), pol_degree=max_pol_degree)
+#                                          noise_variance.astype(np.float32), pol_degree=max_pol_degree)
     
 #     gpu_memory = utils.get_gpu_memory_total()
 #     batch_size = utils.get_image_batch_size(experiment_datasets[0].grid_size, gpu_memory)
-#     if cov_noise is None:
-#         cov_noise, signal_var = noise.estimate_noise_variance(experiment_datasets[0], batch_size)
+#     if noise_variance is None:
+#         noise_variance, signal_var = noise.estimate_noise_variance(experiment_datasets[0], batch_size)
 #         signal_var = np.max(signal_var)
 #     else:
 #         _, signal_var = noise.estimate_noise_variance(experiment_datasets[0], batch_size)
@@ -1329,14 +1433,14 @@ def get_degree_of_each_term(max_pol_degree):
     assert(NotImplementedError)
 
 # May want to do delte this
-def test_multiple_disc2(experiment_dataset, cov_noise, discretization_params, prior_inverse_covariance):
+def test_multiple_disc2(experiment_dataset, noise_variance, discretization_params, prior_inverse_covariance):
 
     discretization_params = get_default_discretization_params(experiment_dataset.grid_size) if discretization_params is None else discretization_params
 
     max_pol_degree = np.max([ pol_degree for pol_degree, _, _ in discretization_params ])
 
     # Precomputation
-    XWX, F = precompute_kernel(experiment_dataset, cov_noise.astype(np.float32), pol_degree=max_pol_degree)
+    XWX, F = precompute_kernel(experiment_dataset, noise_variance.astype(np.float32), pol_degree=max_pol_degree)
     n_disc_test = len(discretization_params)
 
     # Compute weights for each discretization
@@ -1360,14 +1464,14 @@ def test_multiple_disc2(experiment_dataset, cov_noise, discretization_params, pr
 
 
 
-def test_multiple_disc(experiment_dataset, cross_validation_dataset, cov_noise,  batch_size, discretization_params, prior_inverse_covariance, return_all = False):
+def test_multiple_disc(experiment_dataset, cross_validation_dataset, noise_variance,  batch_size, discretization_params, prior_inverse_covariance, return_all = False):
 
     discretization_params = get_default_discretization_params(experiment_dataset.grid_size) if discretization_params is None else discretization_params
 
     max_pol_degree = np.max([ pol_degree for pol_degree, _, _ in discretization_params ])
 
     # Precomputation
-    XWX, F = precompute_kernel(experiment_dataset, cov_noise.astype(np.float32), pol_degree=max_pol_degree)
+    XWX, F = precompute_kernel(experiment_dataset, noise_variance.astype(np.float32), pol_degree=max_pol_degree)
     n_disc_test = len(discretization_params)
 
     # Compute weights for each discretization
