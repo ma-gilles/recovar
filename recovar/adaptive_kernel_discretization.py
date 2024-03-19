@@ -1116,6 +1116,57 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
 
     return estimates
 
+def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp'):
+
+    # residuals to pick best one
+    # I guess one way to do this without changed the function is to make CTF 0 for all bad images?
+    estimates = []#heterogeneity_bins.size * [None]
+
+    bins = np.concatenate([np.array([0]),heterogeneity_bins])
+    inds = np.digitize(heterogeneity_distances, bins)
+    n_bins = len(inds)
+    half_volume_size = np.prod(volume_shape_to_half_volume_shape(experiment_dataset.volume_shape))
+
+    lhs_all = np.zeros((n_bins, half_volume_size), dtype =experiment_dataset.dtype_real )
+    rhs_all = np.zeros((n_bins, half_volume_size), dtype =experiment_dataset.dtype )
+
+    logger.info(f"batch size in residual computation: {batch_size}")
+    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
+    weights = jnp.asarray(weights)
+    for image_inds, bin_idx in enumerate(inds):
+        data_generator = experiment_dataset.get_dataset_generator(subset = image_inds, batch_size=batch_size)
+        lhs = jnp.zeros(half_volume_size, dtype = experiment_dataset.dtype_real )
+        rhs = jnp.zeros(half_volume_size, dtype = experiment_dataset.dtype )
+        for batch, indices in data_generator:
+            # Only place where image mask is used ?
+            batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
+            Ft_y_b, Ft_ctf_b = relion_functions.relion_style_triangular_kernel_batch(batch,
+                                                                    experiment_dataset.CTF_params[indices], 
+                                                                    experiment_dataset.rotation_matrices[indices], 
+                                                                    experiment_dataset.translations[indices], 
+                                                                    experiment_dataset.image_shape, 
+                                                                    experiment_dataset.upsampled_volume_shape, 
+                                                                    experiment_dataset.voxel_size, 
+                                                                    experiment_dataset.CTF_fun, 
+                                                                    disc_type, 
+                                                                    noise_variance)
+        
+            rhs += Ft_y_b
+            lhs += Ft_ctf_b
+        lhs_all[bin_idx] = lhs
+        rhs_all[bin_idx] = rhs
+    lhs_all = np.cumsum(lhs_all, axis=0)
+    rhs_all = np.cumsum(rhs_all, axis=0)
+
+    for idx in range(heterogeneity_bins.size):
+        from recovar import dataset, relion_functions
+
+        estimate = relion_functions.post_process_from_filter(experiment_dataset, half_volume_to_full_volume(lhs_all[idx], experiment_dataset.volume_shape), half_volume_to_full_volume(rhs_all[idx],experiment_dataset.volume_shape), tau = tau, disc_type = disc_type, use_spherical_mask = True, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
+        estimates.append(np.array(estimate.reshape(-1)))
+
+    estimates = np.array(estimates)
+
+    return estimates
 
 
 

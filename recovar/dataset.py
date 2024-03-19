@@ -71,6 +71,10 @@ class MRCDataMod(torch.utils.data.Dataset):
     def get_dataset_generator(self, batch_size, num_workers = 0):
         return tf.data.Dataset.from_tensor_slices((self.particles,np.arange(self.n_images))).batch(batch_size, num_parallel_calls = tf.data.AUTOTUNE).as_numpy_iterator()
 
+    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
+        return tf.data.Dataset.from_tensor_slices((self.particles[subset_indices], subset_indices)).batch(batch_size, num_parallel_calls = tf.data.AUTOTUNE).as_numpy_iterator()
+
+
 
 class LazyMRCDataMod(torch.utils.data.Dataset):
     # Adapted from cryoDRGN
@@ -129,6 +133,8 @@ class LazyMRCDataMod(torch.utils.data.Dataset):
     def get_dataset_generator(self, batch_size, num_workers = 0):
         return NumpyLoader(self, batch_size=batch_size, shuffle=False, num_workers = num_workers)
     
+    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
+        raise NotImplementedError
     
     
 def get_num_images_in_dataset(mrc_path):
