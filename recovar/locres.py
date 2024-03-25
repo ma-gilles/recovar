@@ -554,6 +554,10 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
 
     locres_maskrad= 0.5 *locres_sampling if locres_maskrad is None else locres_maskrad
     locres_edgwidth = locres_sampling if locres_edgwidth is None else locres_edgwidth
+
+    print("THIS IS CHANGED")
+    # locres_edgwidth = 0
+
     angpix = voxel_size
 
 
@@ -657,9 +661,6 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
             batch = sampling_points[batch_st:batch_end]
             diff = batch_masked_noisy_error(diff_map, noise_variance, batch, maskrad_pix, edgewidth_pix )
             diffs.append(diff)
-            # import pdb; pdb.set_trace()
-            # i_loc_res += jnp.sum(loc_mask * diff[:,None,None,None], axis=0)
-            # i_sum_w += jnp.sum(loc_mask, axis=0)
             if k % 10 ==0:
                 print(k, end = '  ')
 

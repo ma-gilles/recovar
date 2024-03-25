@@ -223,7 +223,7 @@ def get_noise_model(option, grid_size):
         return utils.pickle_load(noise_file)
 
 
-def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, outlier_file_input, n_images, grid_size = 128,
+def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_images, outlier_file_input = None, grid_size = 128,
                                volume_distribution = None,  dataset_params_option = "dataset1", noise_level = 1, 
                                noise_model = "radial1", put_extra_particles = True, percent_outliers = 0.1, 
                                volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, disc_type = 'linear_interp' ):
@@ -373,6 +373,25 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
 
     return main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size
 
+
+def make_small_dataset(output_path = ".", grid_size=128, n_images = 1000):
+    from recovar import simulate_scattering_potential
+    import os
+    this_file_path = os.path.dirname(__file__)
+    atom_coeff_path = 'data/5nrl.cif'
+    splice_path = os.path.join(this_file_path, atom_coeff_path)
+    voxel_size = 2/256 * grid_size
+    volume = simulate_scattering_potential.generate_molecule_spectrum_from_pdb_id(splice_path, voxel_size, grid_size)
+    from recovar import output
+    volume_path_root = output_path + "/gt_volumes/"
+    output.save_volumes(volume[None], volume_path_root)
+
+    generate_synthetic_dataset(output_path + "/dataset/", voxel_size,  volume_path_root, n_images = 1000, grid_size = grid_size)
+
+    # output_dir = os.path.join(this_file_path, atom_coeff_path)
+
+
+    return 
 
 # def generate_data_and_save_to_file(outdir):
 
