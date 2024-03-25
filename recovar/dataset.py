@@ -134,7 +134,10 @@ class LazyMRCDataMod(torch.utils.data.Dataset):
         return NumpyLoader(self, batch_size=batch_size, shuffle=False, num_workers = num_workers)
     
     def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
-        raise NotImplementedError
+        # raise NotImplementedError
+        # Maybe this would work?
+        NumpyLoader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, shuffle=False, num_workers = num_workers)
+        # torch.utils.data.Subset(self, subset_indices)
     
     
 def get_num_images_in_dataset(mrc_path):
@@ -268,6 +271,10 @@ class CryoEMDataset:
     def get_dataset_generator(self, batch_size, num_workers = 0):
         return self.image_stack.get_dataset_generator(batch_size,num_workers = num_workers)
     
+    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
+        return self.image_stack.get_dataset_subset_generator(batch_size, subset_indices, num_workers = num_workers)
+
+
     def CTF_fun(self,*args):
         # Force dtype
         return self.CTF_fun_inp(*args, CTF_FUNCTION_OPTION = self.CTF_FUNCTION_OPTION).astype(self.CTF_dtype)

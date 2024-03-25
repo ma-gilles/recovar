@@ -271,6 +271,12 @@ def adjoint_forward_model_from_map(slices, CTF_params, rotation_matrices, image_
     return u(slices)[0]
 
 
+@functools.partial(jax.jit, static_argnums=[3,4,5,6,7])
+def adjoint_forward_model_from_trilinear(slices, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):  
+
+    return adjoint_slice_volume_by_trilinear(slices * CTF_fun( CTF_params, image_shape, voxel_size), rotation_matrices, image_shape, volume_shape, volume = None)
+
+
 
 
 # Compute A^TAx (the forward, then its adjoint). For JAX reasons, this should be about 2x faster than doing each call separately.
@@ -322,27 +328,52 @@ def map_coordinates_squared_on_slices(volume, rotation_matrices, image_shape, vo
 #     return jnp.concatenate()
 # mesh_grid_coords = jax.vmap(mesh_grid_coords, in_axes=(-1))
 
+def get_stencil(dim):
+    if dim==2:
+        return jnp.array([[0, 0], [0,1], [1,0], [1,1]], dtype = int)
+    if dim==3:
+        return jnp.array([[0, 0, 0], [0, 0,1], [0, 1,0], [0, 1,1], \
+                         [1, 0, 0], [1, 0,1], [1, 1,0], [1, 1,1]] , dtype = int)
 
-def get_linear_weights_and_indices(grid_points, volume_shape):
-    lower_points = jnp.floor(grid_points).astype(int)
-    
-    all_points = lower_points
+def get_trilinear_weights_and_vol_indices(grid_coords, volume_shape):
 
-    x_high = x_low + 1
-    weight_low = grid_points - x_low
-    weight_high = 1 - weight_low
+    # lower_grid_points = jnp.floor(grid_points).astype(int)
+    lower_points_ndim = grid_coords.ndim-1
+    all_grid_points = jnp.floor(grid_coords).astype(int)[...,None,:] + get_stencil(grid_coords.shape[-1]).reshape( [*(lower_points_ndim * [1]), 8,3])
 
-    xs = jnp.concatenate( [x_low, x_high])
-    weights = jnp.concatenate( [weight_low, weight_high])
+    # This feels right, but is it?
+    # all_weights = jnp.linalg.norm(all_grid_points - grid_coords[...,None,:], axis=-1)**2
+    # all_weights /= jnp.linalg.norm(all_weights, axis=-1, keepdims=True)
 
-    x_high = jnp.ceil(grid_points).astype(int)
-    x_bounds = jnp.concatenate(x_low, x_high)
+    # This feels right, but is it?
+    all_weights = jnp.prod(1 - jnp.abs(all_grid_points - grid_coords[...,None,:]), axis=-1).astype(np.float32)#**2
+    # all_weights /= jnp.linalg.norm(all_weights, axis=-1, keepdims=True)
+
+    # Zero-out out of bound for good measure.
+    good_points = check_vol_indices_in_bound(all_grid_points, volume_shape[0])
+    all_weights *= good_points
+    return all_grid_points, all_weights
+
+# @functools.partial(jax.jit, static_argnums = [2,3,4])    
+def slice_volume_by_trilinear(volume, rotation_matrices, image_shape, volume_shape):    
+    grid_coords, grid_coords_og_shape = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
+    grid_points, weights = get_trilinear_weights_and_vol_indices(grid_coords.T, volume_shape)
+    grid_vec_indices = vol_indices_to_vec_indices( grid_points, volume_shape)
+    sliced_volume = jnp.sum(volume[grid_vec_indices.reshape(-1)].reshape(grid_vec_indices.shape) * weights, axis=-1)
+    return sliced_volume.reshape(grid_coords_og_shape[:-1]).astype(volume)
 
 
-def get_linear_weights_indices_multi_index(grid_points, volume_shape, heterogeneity_bins, heterogeneity_shape  ):
-    volume_indices = a
-
-    return
+# @functools.partial(jax.jit, static_argnums = [2,3,4])    
+## UNTESTED
+def adjoint_slice_volume_by_trilinear(images, rotation_matrices, image_shape, volume_shape, volume = None):    
+    grid_coords, _ = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
+    grid_points, weights = get_trilinear_weights_and_vol_indices(grid_coords.T, volume_shape)
+    grid_vec_indices = vol_indices_to_vec_indices( grid_points, volume_shape)
+    if volume is None:
+        volume = jnp.zeros(np.prod(volume_shape), dtype = images.dtype)
+    weights *= images.reshape(-1,1)
+    volume = volume.at[grid_vec_indices.reshape(-1)].set(weights.reshape(-1))
+    return volume
 
 
 #     np.meshgrid()

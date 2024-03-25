@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import jax, functools, time
 
-from recovar import core, regularization, constants, noise, linalg
+from recovar import core, regularization, constants, noise, linalg, relion_functions, dataset
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 from recovar import utils
@@ -1107,37 +1107,42 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
     XWX = XWX[:,0,:].T
     F = F[:,0,:].T
 
+
     for idx in range(heterogeneity_bins.size):
         from recovar import dataset, relion_functions
 
-        estimate = relion_functions.post_process_from_filter(experiment_dataset, half_volume_to_full_volume(XWX[idx], experiment_dataset.volume_shape), half_volume_to_full_volume(F[idx],experiment_dataset.volume_shape), tau = tau, disc_type = disc_type, use_spherical_mask = True, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
+        estimate = relion_functions.post_process_from_filter(experiment_dataset, half_volume_to_full_volume(XWX[idx], experiment_dataset.upsampled_volume_shape), half_volume_to_full_volume(F[idx],experiment_dataset.upsampled_volume_shape), tau = tau, disc_type = disc_type, use_spherical_mask = True, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
         estimates.append(np.array(estimate.reshape(-1)))
     estimates = np.array(estimates)
 
     return estimates
 
-def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp'):
+def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True):
 
     # residuals to pick best one
     # I guess one way to do this without changed the function is to make CTF 0 for all bad images?
     estimates = []#heterogeneity_bins.size * [None]
+    experiment_dataset.update_volume_upsampling_factor(2)
 
-    bins = np.concatenate([np.array([0]),heterogeneity_bins])
+    bins = heterogeneity_bins
     inds = np.digitize(heterogeneity_distances, bins)
-    n_bins = len(inds)
-    half_volume_size = np.prod(volume_shape_to_half_volume_shape(experiment_dataset.volume_shape))
+    n_bins = bins.size
+    half_volume_size = np.prod(volume_shape_to_half_volume_shape(experiment_dataset.upsampled_volume_shape))
 
     lhs_all = np.zeros((n_bins, half_volume_size), dtype =experiment_dataset.dtype_real )
     rhs_all = np.zeros((n_bins, half_volume_size), dtype =experiment_dataset.dtype )
 
-    logger.info(f"batch size in residual computation: {batch_size}")
-    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
-    weights = jnp.asarray(weights)
-    for image_inds, bin_idx in enumerate(inds):
-        data_generator = experiment_dataset.get_dataset_generator(subset = image_inds, batch_size=batch_size)
+    logger.info(f"batch size in het comp: {batch_size}")
+    # data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size)
+    # weights = jnp.asarray(weights)
+    for bin_idx in range(n_bins):
+        image_inds = np.where(inds == bin_idx)[0]
+
+        data_generator = experiment_dataset.get_dataset_subset_generator( batch_size=batch_size, subset_indices = image_inds)
         lhs = jnp.zeros(half_volume_size, dtype = experiment_dataset.dtype_real )
         rhs = jnp.zeros(half_volume_size, dtype = experiment_dataset.dtype )
         for batch, indices in data_generator:
+            # import pdb; pdb.set_trace()
             # Only place where image mask is used ?
             batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
             Ft_y_b, Ft_ctf_b = relion_functions.relion_style_triangular_kernel_batch(batch,
@@ -1151,17 +1156,33 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
                                                                     disc_type, 
                                                                     noise_variance)
         
-            rhs += Ft_y_b
-            lhs += Ft_ctf_b
+            rhs += full_volume_to_half_volume(Ft_y_b, experiment_dataset.upsampled_volume_shape)
+            lhs += full_volume_to_half_volume(Ft_ctf_b, experiment_dataset.upsampled_volume_shape)
+
         lhs_all[bin_idx] = lhs
         rhs_all[bin_idx] = rhs
-    lhs_all = np.cumsum(lhs_all, axis=0)
+
     rhs_all = np.cumsum(rhs_all, axis=0)
+    lhs_all = np.cumsum(lhs_all, axis=0)
+    logger.info(f"done with precomp")
 
     for idx in range(heterogeneity_bins.size):
-        from recovar import dataset, relion_functions
+        estimate = relion_functions.post_process_from_filter(experiment_dataset, 
+            half_volume_to_full_volume(lhs_all[idx], experiment_dataset.upsampled_volume_shape), 
+            half_volume_to_full_volume(rhs_all[idx],experiment_dataset.upsampled_volume_shape),
+            tau = tau, disc_type = disc_type, 
+            use_spherical_mask = True, grid_correct = grid_correct,
+            gridding_correct = "square", kernel_width = 1 )
 
-        estimate = relion_functions.post_process_from_filter(experiment_dataset, half_volume_to_full_volume(lhs_all[idx], experiment_dataset.volume_shape), half_volume_to_full_volume(rhs_all[idx],experiment_dataset.volume_shape), tau = tau, disc_type = disc_type, use_spherical_mask = True, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
+        # estimate = relion_functions.post_process_from_filter_v2( 
+        #     half_volume_to_full_volume(lhs_all[idx], experiment_dataset.upsampled_volume_shape), 
+        #     half_volume_to_full_volume(rhs_all[idx],experiment_dataset.upsampled_volume_shape),
+        #     experiment_dataset.volume_shape, experiment_dataset.volume_upsampling_factor,
+        #     tau = tau, disc_type = disc_type, 
+        #     use_spherical_mask = use_spherical_mask, grid_correct = grid_correct,
+        #     gridding_correct = "square", kernel_width = 1 )
+
+
         estimates.append(np.array(estimate.reshape(-1)))
 
     estimates = np.array(estimates)

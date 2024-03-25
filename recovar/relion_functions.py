@@ -1,6 +1,6 @@
 import numpy as np
 from recovar import core
-from recovar import regularization, constants, utils
+from recovar import regularization, constants, utils, mask
 
 from recovar.fourier_transform_utils import fourier_transform_utils
 import jax.numpy as jnp
@@ -87,10 +87,10 @@ def relion_style_triangular_kernel_batch(images, CTF_params, rotation_matrices, 
     # images = process_images(images, apply_image_mask = True)
     
     images = core.translate_images(images, translations, image_shape) / cov_noise
-    Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+    Ft_y = core.adjoint_forward_model_from_trilinear(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
 
     CTF = CTF_fun( CTF_params, image_shape, voxel_size) / cov_noise
-    Ft_ctf = core.adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+    Ft_ctf = core.adjoint_forward_model_from_trilinear(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
 
     return Ft_y, Ft_ctf
 
@@ -164,12 +164,14 @@ def adjust_regularization_relion_style(filter, volume_shape, tau = None, padding
     return regularized_filter
 
 
-
+# @functools.partial(jax.jit, static_argnums=[4,5,6,7,8])
 def post_process_from_filter(cryo, Ft_ctf, F_ty, tau = None, disc_type = 'nearest', use_spherical_mask = True, grid_correct = True, gridding_correct = "square", kernel_width = 1 ):
     
     Ft_ctf= Ft_ctf.real
     F_ty =  F_ty * cryo.get_valid_upsampled_frequency_indices() # Zero-out FT outside sphere
-    
+
+    # valid_indices = mask.get_radial_mask(upsampled_volume_shape, radius = radius).reshape(-1)
+
     # Adjust reg for small values
     Ft_ctf2 = adjust_regularization_relion_style(Ft_ctf, cryo.upsampled_volume_shape, tau = tau, padding_factor = cryo.volume_upsampling_factor, max_res_shell = None)
     
@@ -201,6 +203,52 @@ def post_process_from_filter(cryo, Ft_ctf, F_ty, tau = None, disc_type = 'neares
     myreliontest = ftu.get_dft3(myreliontest.reshape(cryo.volume_shape))
 
     return myreliontest
+
+
+
+@functools.partial(jax.jit, static_argnums=[2,3,5,6,7,8,9])
+def post_process_from_filter_v2(Ft_ctf, F_ty, og_volume_shape, volume_upsampling_factor, tau = None, disc_type = 'nearest', use_spherical_mask = True, grid_correct = True, gridding_correct = "square", kernel_width = 1 ):
+    
+    Ft_ctf= Ft_ctf.real
+    upsampled_volume_shape = tuple(3*[(og_volume_shape[0]*volume_upsampling_factor)])
+    valid_indices = mask.get_radial_mask(upsampled_volume_shape, radius = upsampled_volume_shape[0]//2-1).reshape(-1)
+    F_ty =  F_ty * valid_indices # Zero-out FT outside sphere
+
+
+    # Adjust reg for small values
+    Ft_ctf2 = adjust_regularization_relion_style(Ft_ctf, upsampled_volume_shape, tau = tau, padding_factor = volume_upsampling_factor, max_res_shell = None)
+    
+    myreliontest = F_ty / Ft_ctf2
+    
+    # Window real space
+    myreliontest = ftu.get_idft3(myreliontest.reshape(upsampled_volume_shape))
+    from recovar import padding, mask
+
+    myreliontest = padding.unpad_volume_spatial_domain(myreliontest, (upsampled_volume_shape[0] - og_volume_shape[0]) )
+    
+    # Soft Spherical mask
+    if use_spherical_mask:
+        myreliontest, mask2 = mask.soft_mask_outside_map(myreliontest, cosine_width = 3)
+    
+    # Correct gridding effect
+    if grid_correct:
+        order = 1 if disc_type == 'linear_interp' else 0
+
+        grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
+        myreliontest, sinc = grid_fn(myreliontest.reshape(og_volume_shape), og_volume_shape[0], volume_upsampling_factor/kernel_width, order = order)
+        # print(cryo.volume_upsampling_factor/kernel_width)
+
+        # import matplotlib.pyplot as plt
+        # plt.figure()
+        # plt.imshow(sinc[sinc.shape[0]//2])
+        # plt.colorbar()
+        # plt.show()
+    myreliontest = ftu.get_dft3(myreliontest.reshape(og_volume_shape))
+
+    return myreliontest
+
+
+batch_post_process_from_filter =  jax.vmap(post_process_from_filter_v2, in_axes = (0, 0, None, None, None, None, None, None, None) )
 
 
 def relion_reconstruct(cryo, noise_variance, batch_size = 100, disc_type = 'linear_interp', use_spherical_mask = True, upsampling_factor = 2, grid_correct = True, gridding_correct = "square", tau = None ):
