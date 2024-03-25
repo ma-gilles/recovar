@@ -124,17 +124,20 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_var
         print("OHHHHHH HERE")
         cryos[k].update_volume_upsampling_factor(1)
 
-        estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins, tau= tau, grid_correct=False, use_spherical_mask=True)
+        estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins, tau= tau, grid_correct=False, use_spherical_mask=False)
         logger.info(f"Computing estimates done")
 
         estimates[k] = ftu.get_idft3(estimates[k].reshape(-1, *cryos[0].volume_shape)).real.astype(np.float32)
 
     cross_validation_estimators = [None, None]
     for k in range(2):
-        cross_validation_estimators[k], lhs[k], rhs[k] = adaptive_kernel_discretization.naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins[0:1], tau= tau, compute_lhs_rhs=True, grid_correct=False)
+        cryos[k].update_volume_upsampling_factor(1)
 
+        cross_validation_estimators[k], lhs[k], rhs[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins[0:1], tau= tau, grid_correct=False, use_spherical_mask=False, return_lhs_rhs=True)
+
+        lhs[k] = adaptive_kernel_discretization.half_volume_to_full_volume(lhs[k][0], cryos[k].volume_shape)
         # Zero out things after Nyquist - these won't be used in CV
-        lhs[k] = (lhs[k][0] * cryos[0].get_valid_frequency_indices()).reshape(cryos[0].volume_shape)
+        lhs[k] = (lhs[k] * cryos[0].get_valid_frequency_indices()).reshape(cryos[0].volume_shape)
 
         cross_validation_estimators[k] = ftu.get_idft3(cross_validation_estimators[k].reshape(cryos[0].volume_shape)).real.astype(np.float32)
 
@@ -144,19 +147,17 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_var
     from_ft = False
 
     ml_choice, ml_errors = choice_most_likely(estimates[0], estimates[1], cross_validation_estimators[0], cross_validation_estimators[1], lhs[0], lhs[1], cryos[0].voxel_size)
-    # choice_most_likely(estimates0, estimates1, target0, target1, noise_variances_target0, noise_variances_target1, voxel_size)
     locres_choice, locres_score, auc_choice, auc_score = choice_best_locres(estimates[0], estimates[1][0], cryos[0].voxel_size)
     
-    estimates = np.asarray(estimates)
-    for k in range(2):
-        for i in range(estimates[k].shape[0]):
-            gridding_correct = "square"
-            grid_fn = relion_functions.griddingCorrect_square if gridding_correct == "square" else relion_functions.griddingCorrect
-            kernel_width = 1
-            order =1
-            estimates[k][i], _ = grid_fn(estimates[k][i].reshape(cryos[0].volume_shape), cryos[0].grid_size, cryos[0].volume_upsampling_factor/kernel_width, order = order)
+    # estimates = np.asarray(estimates)
+    # for k in range(2):
+    #     for i in range(estimates[k].shape[0]):
+    #         gridding_correct = "square"
+    #         grid_fn = relion_functions.griddingCorrect_square if gridding_correct == "square" else relion_functions.griddingCorrect
+    #         kernel_width = 1
+    #         order =1
+    #         estimates[k][i], _ = grid_fn(estimates[k][i].reshape(cryos[0].volume_shape), cryos[0].grid_size, cryos[0].volume_upsampling_factor/kernel_width, order = order)
 
-            # estimates[i] = relion_functions.griddingCorrect
 
     def use_choice_and_filter(choice, name):
 
