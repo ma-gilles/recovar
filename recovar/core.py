@@ -335,17 +335,15 @@ def get_stencil(dim):
         return jnp.array([[0, 0, 0], [0, 0,1], [0, 1,0], [0, 1,1], \
                          [1, 0, 0], [1, 0,1], [1, 1,0], [1, 1,1]] , dtype = int)
 
+
+
 def get_trilinear_weights_and_vol_indices(grid_coords, volume_shape):
 
     # lower_grid_points = jnp.floor(grid_points).astype(int)
     lower_points_ndim = grid_coords.ndim-1
     all_grid_points = jnp.floor(grid_coords).astype(int)[...,None,:] + get_stencil(grid_coords.shape[-1]).reshape( [*(lower_points_ndim * [1]), 8,3])
 
-    # This feels right, but is it?
-    # all_weights = jnp.linalg.norm(all_grid_points - grid_coords[...,None,:], axis=-1)**2
-    # all_weights /= jnp.linalg.norm(all_weights, axis=-1, keepdims=True)
 
-    # This feels right, but is it?
     all_weights = jnp.prod(1 - jnp.abs(all_grid_points - grid_coords[...,None,:]), axis=-1).astype(np.float32)#**2
     # all_weights /= jnp.linalg.norm(all_weights, axis=-1, keepdims=True)
 
@@ -375,13 +373,6 @@ def adjoint_slice_volume_by_trilinear(images, rotation_matrices, image_shape, vo
     volume = volume.at[grid_vec_indices.reshape(-1)].set(weights.reshape(-1))
     return volume
 
-
-#     np.meshgrid()
-
-
-
-    # x_high = 1-
-    # x_000 = 
 
 
 
@@ -481,6 +472,8 @@ batch_evaluate_ctf = jax.vmap(evaluate_ctf_packed, in_axes = (None, 0))
 CTF_FUNCTION_OPTION = "cryodrgn"
 
 def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, CTF_FUNCTION_OPTION ):
+    return cryodrgn_CTF(CTF_params, image_shape, voxel_size)
+
     # if CTF_FUNCTION_OPTION == "dynamight":
     #     return dynamight_CTF_wrapper(CTF_params, image_shape, voxel_size, 0)
     # if CTF_FUNCTION_OPTION == "cryodrgn_antialiasing":
@@ -519,8 +512,7 @@ def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, CTF_FUNCTION_OPTIO
     #     CTF = CTF.at[:,1::2,:].set(0)
     #     CTF = CTF.at[:,:,1::2].set(0)
     #     return CTF.reshape([CTF_params.shape[0], -1])
-
-    return cryodrgn_CTF(CTF_params, image_shape, voxel_size)
+    # return cryodrgn_CTF(CTF_params, image_shape, voxel_size)
 
 def cryodrgn_CTF(CTF_params, image_shape, voxel_size):
     psi = get_unrotated_plane_coords(image_shape, voxel_size, scaled = True)[...,:2]
@@ -539,182 +531,181 @@ def cryodrgn_CTF(CTF_params, image_shape, voxel_size):
 ### CTF functions taken from dynamight and JAXed up, which does anti-aliasing business.
 # See https://github.com/3dem/DynaMight/blob/616360b790febf56edf08aef5d4c414058194376/dynamight/data/handlers/ctf.py#L16
 
+# class ContrastTransferFunction:
+#     def __init__(
+#             self,
+#             voltage: float,
+#             spherical_aberration: float = 0.,
+#             amplitude_contrast: float = 0.,
+#             phase_shift: float = 0.,
+#             b_factor: float = 0.,
+#     ) -> None:
+#         np = jnp
+#         """
+#         Initialization of the CTF parameter for an optics group.
+#         :param voltage: Voltage
+#         :param spherical_aberration: Spherical aberration
+#         :param amplitude_contrast: Amplitude contrast
+#         :param phase_shift: Phase shift
+#         :param b_factor: B-factor
+#         """
 
-class ContrastTransferFunction:
-    def __init__(
-            self,
-            voltage: float,
-            spherical_aberration: float = 0.,
-            amplitude_contrast: float = 0.,
-            phase_shift: float = 0.,
-            b_factor: float = 0.,
-    ) -> None:
-        np = jnp
-        """
-        Initialization of the CTF parameter for an optics group.
-        :param voltage: Voltage
-        :param spherical_aberration: Spherical aberration
-        :param amplitude_contrast: Amplitude contrast
-        :param phase_shift: Phase shift
-        :param b_factor: B-factor
-        """
+#         self.voltage = voltage
+#         self.spherical_aberration = spherical_aberration
+#         self.amplitude_contrast = amplitude_contrast
+#         self.phase_shift = phase_shift
+#         self.b_factor = b_factor
 
-        self.voltage = voltage
-        self.spherical_aberration = spherical_aberration
-        self.amplitude_contrast = amplitude_contrast
-        self.phase_shift = phase_shift
-        self.b_factor = b_factor
+#         # Adjust units
+#         spherical_aberration = spherical_aberration * 1e7
+#         voltage = voltage * 1e3
 
-        # Adjust units
-        spherical_aberration = spherical_aberration * 1e7
-        voltage = voltage * 1e3
+#         # Relativistic wave length
+#         # See http://en.wikipedia.org/wiki/Electron_diffraction
+#         # lambda = h/sqrt(2*m*e) * 1/sqrt(V*(1+V*e/(2*m*c^2)))
+#         # h/sqrt(2*m*e) = 12.2642598 * 10^-10 meters -> 12.2642598 Angstrom
+#         # e/(2*m*c^2)   = 9.78475598 * 10^-7 coulombs/joules
+#         lam = 12.2642598 / np.sqrt(voltage * (1. + voltage * 9.78475598e-7))
 
-        # Relativistic wave length
-        # See http://en.wikipedia.org/wiki/Electron_diffraction
-        # lambda = h/sqrt(2*m*e) * 1/sqrt(V*(1+V*e/(2*m*c^2)))
-        # h/sqrt(2*m*e) = 12.2642598 * 10^-10 meters -> 12.2642598 Angstrom
-        # e/(2*m*c^2)   = 9.78475598 * 10^-7 coulombs/joules
-        lam = 12.2642598 / np.sqrt(voltage * (1. + voltage * 9.78475598e-7))
+#         # Some constants
+#         self.c1 = -np.pi * lam
+#         self.c2 = np.pi / 2. * spherical_aberration * lam ** 3
+#         self.c3 = phase_shift * np.pi / 180.
+#         self.c4 = -b_factor/4.
+#         self.c5 = \
+#             np.arctan(
+#                 amplitude_contrast / np.sqrt(1-amplitude_contrast**2)
+#             )
 
-        # Some constants
-        self.c1 = -np.pi * lam
-        self.c2 = np.pi / 2. * spherical_aberration * lam ** 3
-        self.c3 = phase_shift * np.pi / 180.
-        self.c4 = -b_factor/4.
-        self.c5 = \
-            np.arctan(
-                amplitude_contrast / np.sqrt(1-amplitude_contrast**2)
-            )
-
-        self.xx = {}
-        self.yy = {}
-        self.xy = {}
-        self.n4 = {}
+#         self.xx = {}
+#         self.yy = {}
+#         self.xy = {}
+#         self.n4 = {}
 
 
-    def __call__(
-            self,
-            grid_size: int,
-            pixel_size: float,
-            u,
-            v,
-            angle,
-            h_sym: bool = False,
-            antialiasing: int = 0
-    ) :
-        """
-        Get the CTF in an numpy array, the size of freq_x or freq_y.
-        Generates a Numpy array or a Torch tensor depending on the object type
-        on freq_x and freq_y passed to the constructor.
-        :param u: the U defocus
-        :param v: the V defocus
-        :param angle: the azimuthal angle defocus (degrees)
-        :param antialiasing: Antialiasing oversampling factor (0 = no antialiasing)
-        :param grid_size: the side of the box
-        :param pixel_size: pixel size
-        :param h_sym: Only consider the hermitian half
-        :return: Numpy array or Torch tensor containing the CTF
-        """
-        torch = jnp
+#     def __call__(
+#             self,
+#             grid_size: int,
+#             pixel_size: float,
+#             u,
+#             v,
+#             angle,
+#             h_sym: bool = False,
+#             antialiasing: int = 0
+#     ) :
+#         """
+#         Get the CTF in an numpy array, the size of freq_x or freq_y.
+#         Generates a Numpy array or a Torch tensor depending on the object type
+#         on freq_x and freq_y passed to the constructor.
+#         :param u: the U defocus
+#         :param v: the V defocus
+#         :param angle: the azimuthal angle defocus (degrees)
+#         :param antialiasing: Antialiasing oversampling factor (0 = no antialiasing)
+#         :param grid_size: the side of the box
+#         :param pixel_size: pixel size
+#         :param h_sym: Only consider the hermitian half
+#         :return: Numpy array or Torch tensor containing the CTF
+#         """
+#         torch = jnp
         
-        freq_x, freq_y = self._get_freq(grid_size, pixel_size, h_sym, antialiasing)
-        xx = freq_x**2
-        yy = freq_y**2
-        xy = freq_x * freq_y
-        n4 = (xx + yy)**2  
+#         freq_x, freq_y = self._get_freq(grid_size, pixel_size, h_sym, antialiasing)
+#         xx = freq_x**2
+#         yy = freq_y**2
+#         xy = freq_x * freq_y
+#         n4 = (xx + yy)**2  
 
-        angle = angle * np.pi / 180
-        acos = torch.cos(angle)
-        asin = torch.sin(angle)
-        acos2 = torch.square(acos)
-        asin2 = torch.square(asin)
+#         angle = angle * np.pi / 180
+#         acos = torch.cos(angle)
+#         asin = torch.sin(angle)
+#         acos2 = torch.square(acos)
+#         asin2 = torch.square(asin)
 
-        """
-        Out line of math for following three lines of code
-        Q = [[sin cos] [-sin cos]] sin/cos of the angle
-        D = [[u 0] [0 v]]
-        A = Q^T.D.Q = [[Axx Axy] [Ayx Ayy]]
-        Axx = cos^2 * u + sin^2 * v
-        Ayy = sin^2 * u + cos^2 * v
-        Axy = Ayx = cos * sin * (u - v)
-        defocus = A.k.k^2 = Axx*x^2 + 2*Axy*x*y + Ayy*y^2
-        """
+#         """
+#         Out line of math for following three lines of code
+#         Q = [[sin cos] [-sin cos]] sin/cos of the angle
+#         D = [[u 0] [0 v]]
+#         A = Q^T.D.Q = [[Axx Axy] [Ayx Ayy]]
+#         Axx = cos^2 * u + sin^2 * v
+#         Ayy = sin^2 * u + cos^2 * v
+#         Axy = Ayx = cos * sin * (u - v)
+#         defocus = A.k.k^2 = Axx*x^2 + 2*Axy*x*y + Ayy*y^2
+#         """
 
-        xx_ = (acos2 * u + asin2 * v)[:, None, None] * xx[None, :, :]
-        yy_ = (asin2 * u + acos2 * v)[:, None, None] * yy[None, :, :]
-        xy_ = (acos * asin * (u - v))[:, None, None] * xy[None, :, :]
+#         xx_ = (acos2 * u + asin2 * v)[:, None, None] * xx[None, :, :]
+#         yy_ = (asin2 * u + acos2 * v)[:, None, None] * yy[None, :, :]
+#         xy_ = (acos * asin * (u - v))[:, None, None] * xy[None, :, :]
 
-        gamma = self.c1 * (xx_ + 2. * xy_ + yy_) + self.c2 * n4[None, :, :] - self.c3 - self.c5
-        ctf = -torch.sin(gamma)
-        if self.c4 > 0:
-            ctf *= torch.exp(self.c4 * n4)
+#         gamma = self.c1 * (xx_ + 2. * xy_ + yy_) + self.c2 * n4[None, :, :] - self.c3 - self.c5
+#         ctf = -torch.sin(gamma)
+#         if self.c4 > 0:
+#             ctf *= torch.exp(self.c4 * n4)
 
-        if antialiasing > 0:
-            o = 2**antialiasing
-            # ctf = ctf.unsqueeze(1)  # Add singleton channel
-            # ctf = torch.nn.functional.avg_pool2d(ctf, kernel_size=o+o//2, stride=o)
-            # ctf = ctf.squeeze(1)  # Remove singleton channel
-            import equinox
-            ctf = equinox.nn.AvgPool2d(o+o//2,o)(ctf)
-
-
-
-        return ctf
+#         if antialiasing > 0:
+#             o = 2**antialiasing
+#             # ctf = ctf.unsqueeze(1)  # Add singleton channel
+#             # ctf = torch.nn.functional.avg_pool2d(ctf, kernel_size=o+o//2, stride=o)
+#             # ctf = ctf.squeeze(1)  # Remove singleton channel
+#             import equinox
+#             ctf = equinox.nn.AvgPool2d(o+o//2,o)(ctf)
 
 
-    @staticmethod
-    def _get_freq(
-            grid_size: int,
-            pixel_size: float,
-            h_sym: bool = False,
-            antialiasing: int = 0,
-    ):
-        """
-        Get the inverted frequencies of the Fourier transform of a square or cuboid grid.
-        Can generate both Torch tensors and Numpy arrays.
-        TODO Add 3D
-        :param antialiasing: Antialiasing oversampling factor (0 = no antialiasing)
-        :param grid_size: the side of the box
-        :param pixel_size: pixel size
-        :param h_sym: Only consider the hermitian half
-        :return: two or three numpy arrays or tensors,
-                 containing frequencies along the different axes
-        """
-        np = jnp
-        if antialiasing > 0:
-            o = 2**antialiasing
-            grid_size *= o
-            y_ls = np.linspace(
-                -(grid_size + o) // 2,
-                (grid_size - o) // 2,
-                grid_size + o//2
-            )
-            x_ls = y_ls if not h_sym else np.linspace(0, grid_size // 2, grid_size // 2 + o + 1)
-        else:
-            y_ls = np.linspace(-grid_size // 2, grid_size // 2 - 1, grid_size)
-            x_ls = y_ls if not h_sym else np.linspace(0, grid_size // 2, grid_size // 2 + 1)
 
-        y, x = np.meshgrid((y_ls), (x_ls), indexing = 'ij')
-        freq_x = x / (grid_size * pixel_size)
-        freq_y = y / (grid_size * pixel_size)
+#         return ctf
 
-        return freq_x, freq_y
 
-@functools.partial(jax.jit, static_argnums=[1,2,3])
-def dynamight_CTF_wrapper(CTF_params, image_shape, voxel_size, antialiasing ):
+#     @staticmethod
+#     def _get_freq(
+#             grid_size: int,
+#             pixel_size: float,
+#             h_sym: bool = False,
+#             antialiasing: int = 0,
+#     ):
+#         """
+#         Get the inverted frequencies of the Fourier transform of a square or cuboid grid.
+#         Can generate both Torch tensors and Numpy arrays.
+#         TODO Add 3D
+#         :param antialiasing: Antialiasing oversampling factor (0 = no antialiasing)
+#         :param grid_size: the side of the box
+#         :param pixel_size: pixel size
+#         :param h_sym: Only consider the hermitian half
+#         :return: two or three numpy arrays or tensors,
+#                  containing frequencies along the different axes
+#         """
+#         np = jnp
+#         if antialiasing > 0:
+#             o = 2**antialiasing
+#             grid_size *= o
+#             y_ls = np.linspace(
+#                 -(grid_size + o) // 2,
+#                 (grid_size - o) // 2,
+#                 grid_size + o//2
+#             )
+#             x_ls = y_ls if not h_sym else np.linspace(0, grid_size // 2, grid_size // 2 + o + 1)
+#         else:
+#             y_ls = np.linspace(-grid_size // 2, grid_size // 2 - 1, grid_size)
+#             x_ls = y_ls if not h_sym else np.linspace(0, grid_size // 2, grid_size // 2 + 1)
+
+#         y, x = np.meshgrid((y_ls), (x_ls), indexing = 'ij')
+#         freq_x = x / (grid_size * pixel_size)
+#         freq_y = y / (grid_size * pixel_size)
+
+#         return freq_x, freq_y
+
+# @functools.partial(jax.jit, static_argnums=[1,2,3])
+# def dynamight_CTF_wrapper(CTF_params, image_shape, voxel_size, antialiasing ):
     
-    # assert (jnp.linalg.norm(CTF_params[:, 3:6] - CTF_params[0, 3:6]) < 1e-6)
-        # assert False
+#     # assert (jnp.linalg.norm(CTF_params[:, 3:6] - CTF_params[0, 3:6]) < 1e-6)
+#         # assert False
     
-    ctf_obj = ContrastTransferFunction(
-        CTF_params[0,3], 
-        CTF_params[0,4], 
-        CTF_params[0,5], 
-    )
+#     ctf_obj = ContrastTransferFunction(
+#         CTF_params[0,3], 
+#         CTF_params[0,4], 
+#         CTF_params[0,5], 
+#     )
     
-    zz = ctf_obj(image_shape[0], voxel_size, CTF_params[:,0], CTF_params[:,1], CTF_params[:,2], False, antialiasing)
+#     zz = ctf_obj(image_shape[0], voxel_size, CTF_params[:,0], CTF_params[:,1], CTF_params[:,2], False, antialiasing)
 
-    return -zz.reshape(zz.shape[0], -1)
+#     return -zz.reshape(zz.shape[0], -1)
 
 
 

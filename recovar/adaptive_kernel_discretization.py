@@ -1117,12 +1117,14 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
 
     return estimates
 
-def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True):
+def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False):
 
     # residuals to pick best one
     # I guess one way to do this without changed the function is to make CTF 0 for all bad images?
     estimates = []#heterogeneity_bins.size * [None]
-    experiment_dataset.update_volume_upsampling_factor(2)
+    ## 
+    # print("CHANGE THAT")
+    # experiment_dataset.update_volume_upsampling_factor(1)
 
     bins = heterogeneity_bins
     inds = np.digitize(heterogeneity_distances, bins)
@@ -1171,7 +1173,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
             half_volume_to_full_volume(lhs_all[idx], experiment_dataset.upsampled_volume_shape), 
             half_volume_to_full_volume(rhs_all[idx],experiment_dataset.upsampled_volume_shape),
             tau = tau, disc_type = disc_type, 
-            use_spherical_mask = True, grid_correct = grid_correct,
+            use_spherical_mask = use_spherical_mask, grid_correct = grid_correct,
             gridding_correct = "square", kernel_width = 1 )
 
         # estimate = relion_functions.post_process_from_filter_v2( 
@@ -1186,7 +1188,9 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
         estimates.append(np.array(estimate.reshape(-1)))
 
     estimates = np.array(estimates)
-
+    if return_lhs_rhs:
+        return estimates, lhs_all, rhs_all
+    
     return estimates
 
 

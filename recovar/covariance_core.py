@@ -110,3 +110,15 @@ def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shap
 batch_over_vol_forward_model_from_map = jax.vmap(core.forward_model_from_map, in_axes = (0, None, None, None, None, None, None, None))
 
 
+import jax
+
+# Are there at most 4 or 5 within one dist? or 9?
+def find_points_near_grid(gridpoints, gridpoint_target, max_n_points = 5):
+    max_distances = jnp.max(jnp.abs(gridpoints -  gridpoint_target), axis=-1) #< max_distance
+    _, indices = jax.lax.top_k(max_distances, max_n_points )
+    
+    # I think I can just sum them up?
+    # kernel_weight = gridpoints -  gridpoint_target
+    return indices
+
+
