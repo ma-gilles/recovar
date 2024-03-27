@@ -336,21 +336,26 @@ def get_stencil(dim):
                          [1, 0, 0], [1, 0,1], [1, 1,0], [1, 1,1]] , dtype = int)
 
 
-
+#
 def get_trilinear_weights_and_vol_indices(grid_coords, volume_shape):
-
     # lower_grid_points = jnp.floor(grid_points).astype(int)
     lower_points_ndim = grid_coords.ndim-1
-    all_grid_points = jnp.floor(grid_coords).astype(int)[...,None,:] + get_stencil(grid_coords.shape[-1]).reshape( [*(lower_points_ndim * [1]), 8,3])
+    all_grid_points = jnp.floor(grid_coords)[...,None,:] + get_stencil(grid_coords.shape[-1]).reshape( [*(lower_points_ndim * [1]), 8,3])
 
+    all_weights = (1 - jnp.abs(grid_coords[...,None,:] - all_grid_points )).astype(np.float32)
+    all_weights = jnp.where(all_weights > 0, all_weights, 0)
+    all_weights = jnp.prod(all_weights, axis=-1)
 
-    all_weights = jnp.prod(1 - jnp.abs(all_grid_points - grid_coords[...,None,:]), axis=-1).astype(np.float32)#**2
+    # all_weights = jnp.where(all_weights > 0, all_weights, 0)
+    #**2
     # all_weights /= jnp.linalg.norm(all_weights, axis=-1, keepdims=True)
 
     # Zero-out out of bound for good measure.
     good_points = check_vol_indices_in_bound(all_grid_points, volume_shape[0])
     all_weights *= good_points
-    return all_grid_points, all_weights
+    # assert False
+
+    return all_grid_points.astype(jnp.int32), all_weights
 
 # @functools.partial(jax.jit, static_argnums = [2,3,4])    
 def slice_volume_by_trilinear(volume, rotation_matrices, image_shape, volume_shape):    
@@ -366,11 +371,14 @@ def slice_volume_by_trilinear(volume, rotation_matrices, image_shape, volume_sha
 def adjoint_slice_volume_by_trilinear(images, rotation_matrices, image_shape, volume_shape, volume = None):    
     grid_coords, _ = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
     grid_points, weights = get_trilinear_weights_and_vol_indices(grid_coords.T, volume_shape)
-    grid_vec_indices = vol_indices_to_vec_indices( grid_points, volume_shape)
+    grid_vec_indices = vol_indices_to_vec_indices(grid_points, volume_shape)
+
     if volume is None:
         volume = jnp.zeros(np.prod(volume_shape), dtype = images.dtype)
+
     weights *= images.reshape(-1,1)
-    volume = volume.at[grid_vec_indices.reshape(-1)].set(weights.reshape(-1))
+    volume = volume.at[grid_vec_indices.reshape(-1)].add(weights.reshape(-1))
+
     return volume
 
 
@@ -450,6 +458,8 @@ def evaluate_ctf(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfactor):
     # lam = 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
     # LAMBDA IN RELION
     lam = 12.2642598 / jnp.sqrt(volt * (1. + volt * 9.78475598e-7))
+    # 	lambda=12.2643247 / sqrt(local_kV * (1. + local_kV * 0.978466e-6)); // See http://en.wikipedia.org/wiki/Electron_diffraction
+
     # This causes a CTF difference of about 0.6% at 300 kV, which seems kinda big.
 
     x = freqs[...,0]    

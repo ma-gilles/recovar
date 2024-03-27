@@ -31,7 +31,7 @@ def masking_options(volume_mask_option, means, volume_shape, input_mask, dtype_r
             dilated_volume_mask = binary_dilation(input_mask,iterations=6)
             dilated_volume_mask = soften_volume_mask(dilated_volume_mask, kernel_size)
         elif volume_mask_option == 'from_halfmaps':
-            volume_mask = make_mask_from_half_maps(means, smax = 3 )
+            volume_mask = make_mask_from_half_maps_from_means_dict(means, smax = 3 )
             kernel_size = 3
             logger.info('Softening mask')
             dilated_volume_mask = binary_dilation(volume_mask,iterations=6)
@@ -50,19 +50,29 @@ def masking_options(volume_mask_option, means, volume_shape, input_mask, dtype_r
         assert False, 'mask option not recognized'
     return volume_mask.astype(dtype_real), dilated_volume_mask.astype(dtype_real)
 
-def make_mask_from_half_maps(means, smax = 3 ):
+def make_mask_from_half_maps_from_means_dict(means, smax = 3 ):
     # from emda.ext.maskmap_class import MaskedMaps
-    ftu = fourier_transform_utils(np)
+    # ftu = fourier_transform_utils(np)
+    # x = MaskedMaps()
+    # x.smax = smax
+    vol_shape = utils.guess_vol_shape_from_vol_size(means['corrected0'].size)
+    halfmap1 = ftu.get_idft3(means['corrected0'].reshape(vol_shape)).real
+    halfmap2 = ftu.get_idft3(means['corrected1'].reshape(vol_shape)).real
+    return make_mask_from_half_maps(halfmap1, halfmap2, smax = smax )
+
+
+def make_mask_from_half_maps(halfmap1, halfmap2, smax = 3 ):
+    # from emda.ext.maskmap_class import MaskedMaps
+    # ftu = fourier_transform_utils(np)
     x = MaskedMaps()
     x.smax = smax
-    vol_shape = utils.guess_vol_shape_from_vol_size(means['corrected0'].size)
-    x.arr1 = ftu.get_idft3(means['corrected0'].reshape(vol_shape)).real
-    x.arr2 = ftu.get_idft3(means['corrected1'].reshape(vol_shape)).real
+    x.arr1 = halfmap1
+    x.arr2 = halfmap2
     x.generate_mask()
     return x.mask
 
 
-def make_mask_from_gt(gt_map_ft, smax = 3, iter = 10 ):
+def make_mask_from_gt(gt_map_ft, smax = 3, iter = 10, from_ft = True ):
     # from emda.ext.maskmap_class import MaskedMaps
     ftu = fourier_transform_utils(np)
     x = MaskedMaps()
@@ -71,7 +81,10 @@ def make_mask_from_gt(gt_map_ft, smax = 3, iter = 10 ):
         x.iter = iter
     # x.iter = x.iter +5
     vol_shape = utils.guess_vol_shape_from_vol_size(gt_map_ft.size)
-    x.arr1 = ftu.get_idft3(gt_map_ft.reshape(vol_shape)).real
+    if from_ft:
+        x.arr1 = ftu.get_idft3(gt_map_ft.reshape(vol_shape)).real
+    else:
+        x.arr1 = gt_map_ft.reshape(vol_shape)
     # x.arr2 = ftu.get_idft3(means['corrected1'].reshape(vol_shape)).real
     x.generate_mask_from_gt()
     return x.mask
