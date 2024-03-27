@@ -102,7 +102,7 @@ from recovar import relion_functions
 
 
 
-def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder, ndim, bins, B_factor, tau = None, n_min_images = 50, metric_used = "locres"):
+def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder, ndim, bins, B_factor, tau = None, n_min_images = 50, metric_used = "locres", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None ):
 
     if type(bins) == int:
         heterogeneity_bins = pick_heterogeneity_bins2(ndim, heterogeneity_distances[1], 0.5, n_min_images, n_bins = bins)
@@ -117,23 +117,50 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_var
     # import pdb; pdb.set_trace()
     estimates = [None, None]
     lhs, rhs = [None, None], [None, None]
-
+    cross_validation_estimators = [None, None]
     for k in range(2):
         logger.info(f"Computing estimates start")
         ## 
         print("OHHHHHH HERE")
-        cryos[k].update_volume_upsampling_factor(1)
+        cryos[k].update_volume_upsampling_factor(upsampling_for_ests)
 
-        estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins, tau= tau, grid_correct=False, use_spherical_mask=False)
+        estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins, tau= tau, grid_correct=grid_correct_ests, use_spherical_mask=use_mask_ests)
+
+
+        # print(heterogeneity_distances[k][:10])
+        # estimates2 = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins, tau= tau, grid_correct=False, use_spherical_mask=False)
+
+        # print(heterogeneity_distances[k][:10])
+
+        # estimates3 = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins, tau= tau, grid_correct=False, use_spherical_mask=False)
+
+        # print(np.linalg.norm(estimates3 - estimates[k]) / np.linalg.norm(estimates2))
+
+        # import pdb; pdb.set_trace()
+        # print(np.linalg.norm(estimates3 - estimates[k]) / np.linalg.norm(estimates2))
+
+        # print(np.linalg.norm(estimates3 - estimates2) / np.linalg.norm(estimates2))
+        # print(np.linalg.norm(lhs - lhs2) / np.linalg.norm(lhs2))
+        # print(np.linalg.norm(lhs[0] - lhs2[0]) / np.linalg.norm(lhs2[0]))
+        # # print(np.linalg.norm(lhs[0] - lhs2[0]) / np.linalg.norm(lhs2[0]))
+        # print(np.linalg.norm(rhs[0] - rhs2[0]) / np.linalg.norm(rhs[0]))
+
+        # print(np.linalg.norm(rhs - rhs2) / np.linalg.norm(rhs))
+        # import pdb; pdb.set_trace()
+        # np.linalg.norm(estimates[k][-1] - estimates2[-1]) / np.linalg.norm(estimates2[-1])
+
         logger.info(f"Computing estimates done")
 
-        estimates[k] = ftu.get_idft3(estimates[k].reshape(-1, *cryos[0].volume_shape)).real.astype(np.float32)
-
-    cross_validation_estimators = [None, None]
-    for k in range(2):
+    
+        # cross_validation_estimators[k], lhs[k], rhs[k] =  
+        # 
         cryos[k].update_volume_upsampling_factor(1)
 
         cross_validation_estimators[k], lhs[k], rhs[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins[0:1], tau= tau, grid_correct=False, use_spherical_mask=False, return_lhs_rhs=True)
+        # return_lhs_rhs=True)
+
+
+        estimates[k] = ftu.get_idft3(estimates[k].reshape(-1, *cryos[0].volume_shape)).real.astype(np.float32)
 
         lhs[k] = adaptive_kernel_discretization.half_volume_to_full_volume(lhs[k][0], cryos[k].volume_shape)
         # Zero out things after Nyquist - these won't be used in CV
@@ -141,22 +168,43 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_var
 
         cross_validation_estimators[k] = ftu.get_idft3(cross_validation_estimators[k].reshape(cryos[0].volume_shape)).real.astype(np.float32)
 
+        cryos[k].update_volume_upsampling_factor(upsampling_for_ests)
+
+
+    # for k in range(2):
+    #     cryos[k].update_volume_upsampling_factor(1)
+
+    #     cross_validation_estimators[k], lhs[k], rhs[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins[0:1], tau= tau, grid_correct=False, use_spherical_mask=False, return_lhs_rhs=True)
+
+    #     lhs[k] = adaptive_kernel_discretization.half_volume_to_full_volume(lhs[k][0], cryos[k].volume_shape)
+    #     # Zero out things after Nyquist - these won't be used in CV
+    #     lhs[k] = (lhs[k] * cryos[0].get_valid_frequency_indices()).reshape(cryos[0].volume_shape)
+
+    #     cross_validation_estimators[k] = ftu.get_idft3(cross_validation_estimators[k].reshape(cryos[0].volume_shape)).real.astype(np.float32)
+
 
     logger.info(f"Computing estimates done")
 
     from_ft = False
 
-    ml_choice, ml_errors = choice_most_likely(estimates[0], estimates[1], cross_validation_estimators[0], cross_validation_estimators[1], lhs[0], lhs[1], cryos[0].voxel_size)
-    locres_choice, locres_score, auc_choice, auc_score = choice_best_locres(estimates[0], estimates[1][0], cryos[0].voxel_size)
+    ml_choice, ml_errors = choice_most_likely(estimates[0], estimates[1], cross_validation_estimators[0], cross_validation_estimators[1], lhs[0], lhs[1], cryos[0].voxel_size, locres_sampling=locres_sampling, locres_maskrad=locres_maskrad, locres_edgwidth=locres_edgwidth)
+    # locres_choice, locres_score, auc_choice, auc_score = choice_best_locres(estimates[0], estimates[1][0], cryos[0].voxel_size)
     
-    # estimates = np.asarray(estimates)
-    # for k in range(2):
-    #     for i in range(estimates[k].shape[0]):
-    #         gridding_correct = "square"
-    #         grid_fn = relion_functions.griddingCorrect_square if gridding_correct == "square" else relion_functions.griddingCorrect
-    #         kernel_width = 1
-    #         order =1
-    #         estimates[k][i], _ = grid_fn(estimates[k][i].reshape(cryos[0].volume_shape), cryos[0].grid_size, cryos[0].volume_upsampling_factor/kernel_width, order = order)
+    estimates = np.asarray(estimates)
+    for k in range(2):
+        for i in range(estimates[k].shape[0]):
+            from recovar import mask as mask_fn
+            if use_mask_ests is False:
+                estimates[k][i], _ = mask_fn.soft_mask_outside_map(estimates[k][i].reshape(cryos[0].volume_shape), cosine_width = 3)
+            else:
+                estimates[k][i] = estimates[k][i].reshape(cryos[0].volume_shape)
+
+            if grid_correct_ests is False:                  
+                gridding_correct = "square"
+                grid_fn = relion_functions.griddingCorrect_square if gridding_correct == "square" else relion_functions.griddingCorrect
+                kernel_width = 1
+                order =1
+                estimates[k][i], _ = grid_fn(estimates[k][i].reshape(cryos[0].volume_shape), cryos[0].grid_size, cryos[0].volume_upsampling_factor/kernel_width, order = order)
 
 
     def use_choice_and_filter(choice, name):
@@ -167,9 +215,16 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_var
 
         best_filtered, best_filtered_res, best_auc, fscs, resols = locres.local_resolution(opt_halfmaps[0], opt_halfmaps[1], B_factor, cryos[0].voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = False)
 
+        ## TODO: I am not sure whether local filtering should be done before or after combining
+        recovar.utils.write_mrc(output_folder + name + "optimized_halfmap1_unfiltered.mrc", opt_halfmaps[0], voxel_size = cryos[0].voxel_size)
+
+        recovar.utils.write_mrc(output_folder + name + "optimized_halfmap2_unfiltered.mrc", opt_halfmaps[1] , voxel_size = cryos[0].voxel_size)
+
+        recovar.utils.write_mrc(output_folder + name + "optimized_unfiltered.mrc", (opt_halfmaps[0] + opt_halfmaps[1])/2, voxel_size = cryos[0].voxel_size)
+
         recovar.utils.write_mrc(output_folder + name + "optimized_locres_filtered.mrc", best_filtered, voxel_size = cryos[0].voxel_size)
         recovar.utils.write_mrc(output_folder + name + "optimized_locres.mrc", best_filtered_res, voxel_size = cryos[0].voxel_size)
-        recovar.utils.write_mrc(output_folder + name +"optimized_auc.mrc", best_auc, voxel_size = cryos[0].voxel_size)
+        recovar.utils.write_mrc(output_folder + name + "optimized_auc.mrc", best_auc, voxel_size = cryos[0].voxel_size)
         recovar.utils.write_mrc(output_folder + name + "optimized_choice.mrc", choice, voxel_size = cryos[0].voxel_size)
 
         output_dict = { "heterogeneity_bins" : heterogeneity_bins, "n_images_per_bin" :n_images_per_bin, "fscs" : fscs }
@@ -178,58 +233,34 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_var
 
 
     use_choice_and_filter(ml_choice, "ml_")
-    use_choice_and_filter(locres_choice, "locres_")
-    use_choice_and_filter(auc_choice, "auc_")
+    # use_choice_and_filter(locres_choice, "locres_")
+    # use_choice_and_filter(auc_choice, "auc_")
 
 
     recovar.output.save_volumes(estimates[0], output_folder + "estimates_half1_unfil", cryos[0].volume_shape, voxel_size = cryos[0].voxel_size, from_ft = from_ft)
     recovar.output.save_volumes(estimates[1], output_folder + "estimates_half2_unfil", cryos[0].volume_shape, voxel_size = cryos[0].voxel_size, from_ft = from_ft)
 
     recovar.output.save_volumes(cross_validation_estimators, output_folder + "estimates_CV", cryos[0].volume_shape, voxel_size = cryos[0].voxel_size, from_ft = from_ft)
+
+    # recovar.output.save_volumes(cross_validation_estimators, output_folder + "estimates_CV", cryos[0].volume_shape, voxel_size = cryos[0].voxel_size, from_ft = from_ft)
+
+
     return 
 
 
-# make_volumes_kernel_estimate_from_results(latent_points[0], results, ndim, cryos = None)
-
-def choice_most_likely(estimates0, estimates1, target0, target1, noise_variances_target0, noise_variances_target1, voxel_size):
-    from recovar import locres
-    reload(locres)
+def choice_most_likely(estimates0, estimates1, target0, target1, noise_variances_target0, noise_variances_target1, voxel_size, locres_sampling, locres_maskrad, locres_edgwidth):
 
     n_estimators = estimates0.shape[0]
     errors = np.zeros_like(estimates0)
     for k in range(n_estimators):  
-        errors[k] = locres.expensive_local_error_with_cov(target0, estimates1[k], voxel_size, noise_variances_target0.reshape(target0.shape), locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None)
-        errors[k] += locres.expensive_local_error_with_cov(estimates0[k], target1, voxel_size, noise_variances_target1.reshape(target0.shape), locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None)
+        errors[k] = locres.expensive_local_error_with_cov(target0, estimates1[k], voxel_size, noise_variances_target0.reshape(target0.shape), locres_sampling = locres_sampling, locres_maskrad= locres_maskrad, locres_edgwidth= locres_edgwidth)
+        errors[k] += locres.expensive_local_error_with_cov(estimates0[k], target1, voxel_size, noise_variances_target1.reshape(target0.shape), locres_sampling = locres_sampling, locres_maskrad= locres_maskrad, locres_edgwidth= locres_edgwidth)
 
     choice = np.argmin(errors, axis=0)
     return choice, errors
 
 
-# def choice_best_local_error(estimates0, estimates1, target_idx, voxel_size):
-#     from recovar import locres
-#     reload(locres)
 
-#     n_estimators = estimates0.shape[0]
-#     errors = np.zeros_like(estimates0)
-#     for k in range(n_estimators):        
-#         errors[k] = locres.local_error(estimates0[target_idx], estimates1[k], voxel_size)
-#         errors[k] += locres.local_error(estimates1[k], estimates1[target_idx], voxel_size)
-
-#     choice = np.argmin(errors, axis=0)
-#     return choice, errors
-
-# def choice_most_likely(estimates0, estimates1, target0, target1, noise_variances_target0, noise_variances_target1, voxel_size):
-#     from recovar import locres
-#     reload(locres)
-
-#     n_estimators = estimates0.shape[0]
-#     errors = np.zeros_like(estimates0)
-#     for k in range(n_estimators):  
-#         errors[k] = locres.expensive_local_error_with_cov(target0, estimates1[k], voxel_size, noise_variances_target0.reshape(target0.shape), locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None)
-#         errors[k] += locres.expensive_local_error_with_cov(estimates0[k], target1, voxel_size, noise_variances_target1.reshape(target0.shape), locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None)
-
-#     choice = np.argmin(errors, axis=0)
-#     return choice, errors
 
 
 # def choice_best_locres(estimates0, estimates1, target_idx, voxel_size):
@@ -250,51 +281,3 @@ def choice_best_locres( estimates1, target0, voxel_size):
     choice2 = np.argmax(auc_score, axis=0)
 
     return choice, locressol, choice2, auc_score
-
-
-# def choice_best_fsc_auc(estimates0, estimates1, target_idx, voxel_size):
-#     from recovar import locres
-#     reload(locres)
-
-#     n_estimators = estimates0.shape[0]
-#     locressol = np.zeros_like(estimates0)
-#     for k in range(n_estimators):        
-#         _, _, locressol[k], _, _ = locres.local_resolution(estimates0[target_idx], estimates1[k], 0, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True)
-
-#     choice = np.argmax(locressol, axis=0)
-#     return choice, locressol
-
-
-# def smooth_choice(choice, edgewidth):
-
-
-#     return
-
-
-#     return choice, errors
-
-
-# i_fil, i_loc_res, fscs, local_resols = {}, {}, {}, {}
-# fscs, local_resols = {}, {}
-# fscs_gt, local_resols_gt = {}, {}
-# B_factor = 100
-# i_loc_res = {}
-# i_loc_res_gt = {}
-# i_loc_auc = {}
-# i_loc_auc_gt = {}
-# import jax
-# voxel_size = cryo_dataset.voxel_size
-# use_filter = True
-# errors = {}
-# for k in range(1,11,1):
-#     map1 = recovar.utils.load_mrc(output_folder + "estimates_half1_unfil002.mrc")
-#     map2 = recovar.utils.load_mrc(output_folder + "estimates_half2_unfil"+format(k, '03d')  +".mrc")
-    
-#     from recovar import locres
-#     reload(locres)
-#     _, i_loc_res[k], i_loc_auc[k], fscs[k], local_resols[k] = locres.local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = use_filter)
-
-#     _, i_loc_res_gt[k], i_loc_auc_gt[k], fscs_gt[k], local_resols_gt[k] = locres.local_resolution(target_real, map2, B_factor, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = use_filter, fsc_threshold = 1/2)
-#     # errors[k] = locres.local_error(map1, map2, voxel_size)
-    
-    

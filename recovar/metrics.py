@@ -2,11 +2,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pickle
-from recovar import core, utils, simulator, linalg, mask, constants
+from recovar import core, utils, simulator, linalg, mask, constants, locres
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 ftu_np = fourier_transform_utils(np)
-
+import matplotlib.pyplot as plt
 # Maybe should take out these dependencies?
 from cryodrgn import mrc
 
@@ -53,3 +53,159 @@ def get_all_variance_scores(test_v, U, s):
     return variance, rel_variance, normalized_variance
 
 
+
+# def local_fsc_metric(map1, map2, voxel_size, mask, fsc_threshold=1/7, locres_sampling = 25 ):
+    
+    
+#     fscs, local_resols, i_loc_res, i_loc_auc = locres.local_resolution(map1, map2, 0, voxel_size, locres_sampling = locres_sampling, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = False, use_v2 = True, fsc_threshold = fsc_threshold)
+#     mask = mask > 1e-3
+    
+#     good_resols = i_loc_res[mask]
+#     good_aucs = i_loc_auc[mask]
+    
+    
+#     median_locres = np.median(good_resols)
+#     ninety_pc_locres = np.percentile(good_aucs, 90)
+
+#     median_auc = np.median(good_resols)
+#     ninety_pc_auc = np.percentile(good_aucs, 90)
+
+#     return median_locres, ninety_pc_locres, ninety_pc_auc
+
+
+
+def local_fsc_metric(map1, map2, voxel_size, mask, fsc_threshold=1/7, locres_sampling = 25 ):
+    
+    fscs, local_resols, i_loc_res, i_loc_auc = locres.local_resolution(map1, map2, 0, voxel_size, locres_sampling = locres_sampling, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = False, use_v2 = True, fsc_threshold = fsc_threshold)
+    
+    good_resols = i_loc_res[mask]
+    good_aucs = i_loc_auc[mask]
+    
+    i_loc_res = np.array(i_loc_res)
+    i_loc_res[~mask] = None
+    plt.imshow(i_loc_res[128]); plt.show()
+
+    median_locres = np.median(good_resols)
+    ninety_pc_locres = np.percentile(good_resols, 90)
+
+    median_auc = np.median(good_aucs)
+    ninety_pc_auc = np.percentile(good_aucs, 10)
+    # import pdb; pdb.set_trace()
+    return median_locres, ninety_pc_locres, median_auc, ninety_pc_auc
+
+
+def local_error_metric(map1, map2, voxel_size, mask, normalize_by_map1 = True, locres_sampling = 15 ):
+    
+    errors_gt = locres.local_error(map1, map2, voxel_size, locres_sampling = locres_sampling)
+
+    good_errors = errors_gt[mask]
+
+    median_error = np.median(good_errors) 
+    ninety_pc_error = np.percentile(good_errors, 90)
+
+    if normalize_by_map1:
+        errors_scale = locres.local_error(map1, map2 * 0, voxel_size, locres_sampling = locres_sampling)
+        med_local_norm = np.median(errors_scale[mask])
+        median_error = median_error/ med_local_norm
+        ninety_pc_error = ninety_pc_error/ med_local_norm
+
+    return median_error, ninety_pc_error
+
+
+def masked_l2_difference(gt_map, target_map, voxel_size, mask= None ):
+    
+    if mask is None:
+        mask = gt_mask_fn(gt_map)
+
+    l2_error = np.mean(np.abs((gt_map-target_map)[mask])**2)
+    bias = np.mean((gt_map-target_map)[mask])
+    # variance =  np.var((map1-target)[mask])
+    return l2_error, bias
+
+def gt_mask_fn(gt_map):
+    from recovar import mask as mask_fn
+    mask = mask_fn.make_mask_from_gt(gt_map, smax = 3, iter = 1 , from_ft = False)
+    mask = (mask > 0.5).astype(bool)
+
+    return mask
+
+
+def compute_volume_error_metrics_from_gt(gt_map, estimate_map, voxel_size, mask , partial_mask = None , normalize_by_map1 = True ):
+    
+    if mask is None:
+        mask = gt_mask_fn(gt_map)
+    
+    errors_metrics = {}    
+    errors_metrics['median_locres'], errors_metrics['ninety_pc_locres'], errors_metrics['median_auc'], errors_metrics['ten_pc_auc'] =  local_fsc_metric(estimate_map, gt_map, voxel_size, mask, fsc_threshold=1/2 )
+    errors_metrics['median_error'], errors_metrics['ninety_pc_error'] =  local_error_metric(gt_map , estimate_map, voxel_size, mask)
+    errors_metrics['mask'] = mask
+
+    if partial_mask is not None:
+        errors_metrics['partial_median_locres'], errors_metrics['partial_ninety_pc_locres'], errors_metrics['partial_median_auc'], errors_metrics['partial_ten_pc_auc'] =  local_fsc_metric(estimate_map, gt_map, voxel_size, partial_mask, fsc_threshold=1/2 )
+        errors_metrics['partial_median_error'], errors_metrics['partial_ninety_pc_error'] =  local_error_metric(gt_map, estimate_map, voxel_size, partial_mask)
+        errors_metrics['partial_mask'] = partial_mask
+
+    return errors_metrics
+
+
+def compute_volume_error_metrics_from_halfmaps(estimate1, estimate2, voxel_size, mask , partial_mask = None , normalize_by_map1 = True ):
+    
+    if mask is None:
+        from recovar import mask as mask_fn
+        mask = mask_fn.make_mask_from_half_maps(estimate1, estimate2)
+        mask = (mask > 1e-3).astype(bool)
+    
+    errors_metrics = {}    
+    errors_metrics['median_locres'], errors_metrics['ninety_pc_locres'], errors_metrics['median_auc'], errors_metrics['ten_pc_auc'] =  local_fsc_metric(estimate1, estimate2, voxel_size, mask, fsc_threshold=1/7 )
+    errors_metrics['median_error'], errors_metrics['ninety_pc_error'] =  local_error_metric(estimate1, estimate2, voxel_size, mask)
+    errors_metrics['mask'] = mask
+
+    if partial_mask is not None:
+        errors_metrics['partial_median_locres'], errors_metrics['partial_ninety_pc_locres'], errors_metrics['partial_median_auc'], errors_metrics['partial_ten_pc_auc'] =  local_fsc_metric(estimate1, estimate2, voxel_size, partial_mask, fsc_threshold=1/7 )
+        errors_metrics['partial_median_error'], errors_metrics['partial_ninety_pc_error'] =  local_error_metric(estimate1, estimate2, voxel_size, partial_mask, normalize_by_map1 =False)
+        errors_metrics['partial_mask'] = partial_mask
+
+    return errors_metrics
+
+from recovar import metrics, locres
+import recovar
+import os.path
+
+def evaluate_this_choice(target_real, output_folder, voxel_size, mask = None, partial_mask = None ):
+    
+    mask = gt_mask_fn(target_real) if mask is None else mask
+
+    file = lambda k : output_folder + "estimates_half2_unfil"+format(k, '03d')  +".mrc"
+    k = 0 
+    errors_gt= {}
+    while os.path.isfile(file(k)):
+        map2 = recovar.utils.load_mrc(file(k))
+        errors_gt[k] = locres.local_error(target_real, map2, voxel_size, locres_sampling = 15)
+        # print(f"Doing {k}'s estimate")
+        k = k + 1
+    gt_choice = np.argmin(np.array(list(errors_gt.values())), axis=0)
+
+    choice1 = recovar.utils.load_mrc(output_folder + "ml_optimized_choice.mrc")
+    error_metrics = {}
+    error_metrics["choice_l2_error"], error_metrics["choice_l2_bias"]  = metrics.masked_l2_difference(gt_choice, choice1, voxel_size, mask= mask)
+    if partial_mask is not None:
+        error_metrics["choice_partial_l2_error"], error_metrics["choice_partial_l2_bias"]  = metrics.masked_l2_difference(gt_choice, choice1, voxel_size, mask= partial_mask)
+
+    unfiltered_map = recovar.utils.load_mrc(output_folder + "ml_optimized_unfiltered.mrc")
+    gt_unfilt_metrics = metrics.compute_volume_error_metrics_from_gt(target_real, unfiltered_map, voxel_size, mask= mask, partial_mask = partial_mask )
+    add_dict_with_prefix(error_metrics, gt_unfilt_metrics, "gt_unfilt_")
+
+    filtered_map = recovar.utils.load_mrc(output_folder + "ml_optimized_locres_filtered.mrc")
+    gt_filt_metrics = metrics.compute_volume_error_metrics_from_gt(target_real, filtered_map, voxel_size, mask= mask, partial_mask = partial_mask )
+    add_dict_with_prefix(error_metrics, gt_filt_metrics, "gt_filt_")
+
+    halfmap1 = recovar.utils.load_mrc(output_folder + "ml_optimized_halfmap1_unfiltered.mrc")
+    halfmap2 = recovar.utils.load_mrc(output_folder + "ml_optimized_halfmap2_unfiltered.mrc")
+    halfmap_metrics = metrics.compute_volume_error_metrics_from_halfmaps(halfmap1, halfmap2, voxel_size, mask= mask, partial_mask = partial_mask )
+    add_dict_with_prefix(error_metrics, halfmap_metrics, "halfmap_")
+    
+    return error_metrics
+    
+def add_dict_with_prefix(dict1, dict_to_add, prefix):
+    for key,value in dict_to_add.items():
+        dict1[prefix + key] = value

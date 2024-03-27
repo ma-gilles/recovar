@@ -1122,11 +1122,8 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
     # residuals to pick best one
     # I guess one way to do this without changed the function is to make CTF 0 for all bad images?
     estimates = []#heterogeneity_bins.size * [None]
-    ## 
-    # print("CHANGE THAT")
-    # experiment_dataset.update_volume_upsampling_factor(1)
 
-    bins = heterogeneity_bins
+    bins = heterogeneity_bins.copy()
     inds = np.digitize(heterogeneity_distances, bins)
     n_bins = bins.size
     half_volume_size = np.prod(volume_shape_to_half_volume_shape(experiment_dataset.upsampled_volume_shape))
@@ -1139,7 +1136,6 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
     # weights = jnp.asarray(weights)
     for bin_idx in range(n_bins):
         image_inds = np.where(inds == bin_idx)[0]
-
         data_generator = experiment_dataset.get_dataset_subset_generator( batch_size=batch_size, subset_indices = image_inds)
         lhs = jnp.zeros(half_volume_size, dtype = experiment_dataset.dtype_real )
         rhs = jnp.zeros(half_volume_size, dtype = experiment_dataset.dtype )
@@ -1158,11 +1154,25 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
                                                                     disc_type, 
                                                                     noise_variance)
         
+
+            # Ft_y_b2, Ft_ctf_b2 = relion_functions.relion_style_triangular_kernel_batch_trilinear(batch,
+            #                                                         experiment_dataset.CTF_params[indices], 
+            #                                                         experiment_dataset.rotation_matrices[indices], 
+            #                                                         experiment_dataset.translations[indices], 
+            #                                                         experiment_dataset.image_shape, 
+            #                                                         experiment_dataset.upsampled_volume_shape, 
+            #                                                         experiment_dataset.voxel_size, 
+            #                                                         experiment_dataset.CTF_fun, 
+            #                                                         disc_type, 
+            #                                                         noise_variance)
+            # print(jnp.linalg.norm(Ft_y_b - Ft_y_b2) / jnp.linalg.norm(Ft_y_b))
+
+
             rhs += full_volume_to_half_volume(Ft_y_b, experiment_dataset.upsampled_volume_shape)
             lhs += full_volume_to_half_volume(Ft_ctf_b, experiment_dataset.upsampled_volume_shape)
 
-        lhs_all[bin_idx] = lhs
         rhs_all[bin_idx] = rhs
+        lhs_all[bin_idx] = lhs
 
     rhs_all = np.cumsum(rhs_all, axis=0)
     lhs_all = np.cumsum(lhs_all, axis=0)
@@ -1183,7 +1193,6 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
         #     tau = tau, disc_type = disc_type, 
         #     use_spherical_mask = use_spherical_mask, grid_correct = grid_correct,
         #     gridding_correct = "square", kernel_width = 1 )
-
 
         estimates.append(np.array(estimate.reshape(-1)))
 

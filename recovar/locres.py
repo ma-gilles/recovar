@@ -14,11 +14,12 @@ logger = logging.getLogger(__name__)
 
 ## A copy of the relion local resolution function. See postprocessing.cpp in relion
 
-def integral_fsc(fsc):
+def integral_fsc(fsc, fourier_pixel_size = 1):
     last_idx = find_first_zero_in_bool(fsc>=0)
     good_idx = jnp.where(jnp.arange(fsc.size) <= last_idx, 1, 0)
-    return np.sum(fsc * good_idx) 
-integral_fscs = jax.vmap(integral_fsc)
+    return np.sum(fsc * good_idx) * fourier_pixel_size
+
+integral_fscs = jax.vmap(integral_fsc, in_axes = [0, None])
 
 
 def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = True):
@@ -51,6 +52,7 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
                     sampling_points.append((kk, ii, jj))
     sampling_points = jnp.array(sampling_points).astype(int)
 
+    fourier_pixel_size = 1/(map1.shape[0] * voxel_size)
     # sampling_points = jnp.array(sampling_points).astype(int)[:1]
 
 
@@ -138,7 +140,7 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
                     ift_sum, loc_mask, fsc, local_resol = batch_compute_local_fsc(batch, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold,  use_filter)
 
                     i_fil += jnp.sum(ift_sum * loc_mask, axis=0)
-                    i_loc_auc += jnp.sum(loc_mask * integral_fscs(fsc)[:,None,None,None], axis=0)
+                    i_loc_auc += jnp.sum(loc_mask * integral_fscs(fsc, fourier_pixel_size)[:,None,None,None], axis=0)
 
                     i_loc_res += jnp.sum(loc_mask / local_resol[:,None,None,None], axis=0)
 
@@ -168,8 +170,9 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
     if not use_filter:
         full_mask = mask_fn.raised_cosine_mask(map1.shape, maskrad_pix, maskrad_pix + edgewidth_pix, -1)    
         i_loc_res = make_local_resol_map(sampling_points, 1/local_resols, full_mask)
-        int_fscs = integral_fscs(fscs)
+        int_fscs = integral_fscs(fscs,fourier_pixel_size)
         i_loc_auc = make_auc_map(sampling_points, int_fscs, full_mask)
+        # import pdb; pdb.set_trace()
         return fscs, local_resols, i_loc_res, i_loc_auc
     
     i_fil = jnp.where( i_sum_w > 0,  i_fil / i_sum_w, 0)
@@ -233,7 +236,7 @@ def make_local_resol_map(sampling_points, inv_local_resol, full_mask):
     mask_conv = convolve_mask_at_sampling_points(sampling_points, jnp.ones_like(inv_local_resol), full_mask)
 
     i_loc_res = jnp.where( mask_conv > 1e-8,  mask_conv/ local_resol_conv, 0)
-
+    # import pdb; pdb.set_trace()
     return i_loc_res
 
 
@@ -556,6 +559,7 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
     locres_edgwidth = locres_sampling if locres_edgwidth is None else locres_edgwidth
 
     print("THIS IS CHANGED")
+    # locres_maskrad = 3 * locres_maskrad
     # locres_edgwidth = 0
 
     angpix = voxel_size
@@ -590,11 +594,7 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
     
 
     # for now will do batch of 1.
-    i_fil = 0
-    i_loc_res = 0
-    i_loc_auc = 0
-    i_sum_w = 0 
-    diffs, fscs = [], []
+    diffs = []
     # Put stuff on GPU
     map1 = jnp.asarray(map1)
     map2 = jnp.asarray(map2)
@@ -604,7 +604,7 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
     if np.log2(map1.shape[0]) % 1 != 0:
         raise ValueError("Map size must be a power of 2")
     
-    sqrt_noise_variance_real = ftu.get_idft3(jnp.sqrt(noise_variance))
+    # sqrt_noise_variance_real = ftu.get_idft3(jnp.sqrt(noise_variance))
     radius = maskrad_pix + edgewidth_pix
     multiplier = 2
     want_size = 2*(multiplier*radius)
