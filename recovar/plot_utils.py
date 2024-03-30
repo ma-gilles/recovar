@@ -19,7 +19,6 @@ colors_name = { "diagonal": "cornflowerblue", "wilson": "lightsalmon", "diagonal
 plt.rcParams['text.usetex'] = True
 
 def plot_power_spectrum(volume, ax = None):
-    grid_size = volume_shape[0]
     input_ax_is_none = ax is None
     if input_ax_is_none:
         plt.figure(figsize=(6, 5))

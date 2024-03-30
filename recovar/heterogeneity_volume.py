@@ -15,7 +15,8 @@ def pick_minimum_discretization_size(ndim, log_likelihoods, q = 0.5, min_images 
         disc_latent_dist = recovar.latent_density.get_log_likelihood_threshold(k = ndim, q=0.5)
     else:
         disc_latent_dist = -1
-    return np.max( [ np.sort(log_likelihoods)[min_images], disc_latent_dist] )
+    value = np.max( [ np.sort(log_likelihoods)[min_images], disc_latent_dist] ) # Bump a lil bit
+    return value * ( 1 + 1e-6)
 
 # def pick_heterogeneity_bins(ndim, log_likelihoods, q = 0.5, min_images = 50, n_bins = 11):
 #     disc_latent_dist = pick_minimum_discretization_size(ndim, log_likelihoods, q , min_images )
@@ -110,7 +111,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_var
         heterogeneity_bins = bins
 
     logger.info(f"bins {heterogeneity_bins}")
-    n_images_per_bin = [ np.sum(heterogeneity_distances[1] <= b) for b in heterogeneity_bins ]
+    n_images_per_bin = [ np.sum(heterogeneity_distances[1] < b) for b in heterogeneity_bins ]
     # logger.info(f"images per bin {*n_images_per_bin}")
     print("images per bin", n_images_per_bin)
     # print(n_images_per_bin)
@@ -158,7 +159,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_var
 
         cross_validation_estimators[k], lhs[k], rhs[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins[0:1], tau= tau, grid_correct=False, use_spherical_mask=False, return_lhs_rhs=True)
         # return_lhs_rhs=True)
-
+        # import pdb; pdb.set_trace()
 
         estimates[k] = ftu.get_idft3(estimates[k].reshape(-1, *cryos[0].volume_shape)).real.astype(np.float32)
 
@@ -281,3 +282,5 @@ def choice_best_locres( estimates1, target0, voxel_size):
     choice2 = np.argmax(auc_score, axis=0)
 
     return choice, locressol, choice2, auc_score
+
+

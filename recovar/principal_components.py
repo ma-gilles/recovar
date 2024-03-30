@@ -9,12 +9,17 @@ ftu = fourier_transform_utils(jnp)
 
 logger = logging.getLogger(__name__)
 
-def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use, noise_model,  disc_type = 'linear_interp', radius = 5):
+def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise, volume_mask,
+                                dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use,
+                                noise_model,  
+                                covariance_options = None):
+    
+    covariance_options = covariance_estimation.get_default_covariance_computation_options() if covariance_options is None else covariance_options
 
     volume_shape = cryos[0].volume_shape
     vol_batch_size = utils.get_vol_batch_size(cryos[0].grid_size, gpu_memory_to_use)
 
-    covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, noise_model, disc_type = disc_type, radius = constants.COLUMN_RADIUS)
+    covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, noise_model, covariance_options)
     logger.info("memory after covariance estimation")
     utils.report_memory_device(logger=logger)
     
@@ -31,8 +36,6 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
     # First approximation of eigenvalue decomposition
     u,s = get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use, options['ignore_zero_frequency'])
     
-
-
     # # Let's see?
     # if noise_model == "white":
     #     cov_noise = cov_noise
@@ -45,7 +48,10 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
         
     image_cov_noise = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].image_shape))
 
-    u['rescaled'],s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], image_cov_noise, dilated_volume_mask, disc_type ='linear_interp', gpu_memory_to_use= gpu_memory_to_use, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False)
+    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], image_cov_noise, dilated_volume_mask, disc_type ='linear_interp', gpu_memory_to_use= gpu_memory_to_use, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False)
+
+    u['pa'], s['pa'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], image_cov_noise, dilated_volume_mask, disc_type ='linear_interp', gpu_memory_to_use= gpu_memory_to_use, use_mask = True, parallel_analysis = True ,ignore_zero_frequency = False)
+
 
     if options['ignore_zero_frequency']:
         logger.warning("FIX THIS OPTION!! NOT SURE IT WILL STILL WORK")
@@ -75,7 +81,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
 
 def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,  vol_batch_size, gpu_memory_to_use, ignore_zero_frequency ):
     u = {}; s = {}    
-
+    
     u['real'], s['real'],_ = randomized_real_svd_of_columns(covariance_cols["est_mask"], picked_frequencies, volume_mask, volume_shape, vol_batch_size, test_size=constants.RANDOMIZED_SKETCH_SIZE, gpu_memory_to_use=gpu_memory_to_use, ignore_zero_frequency=ignore_zero_frequency)
 
     # u['real'], s['real'] = randomized_real_svd_of_columns_with_s_guess(covariance_cols["est_mask"],  picked_frequencies, volume_mask, volume_shape, vol_batch_size, test_size = constants.RANDOMIZED_SKETCH_SIZE, gpu_memory_to_use = gpu_memory_to_use, ignore_zero_frequency = ignore_zero_frequency )
@@ -99,22 +105,25 @@ def pca_by_projected_covariance(cryos, basis, mean, noise_variance, volume_mask,
     memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() -  2*basis_size**4*8/1e9
     batch_size = utils.get_embedding_batch_size(basis, cryos[0].image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate )
 
-    # memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() 
-    # batch_size = utils.get_embedding_batch_size(basis, cryos[0].image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate )
-    # batch_size = batch_size//3
-
     logger.info('batch size for covariance computation: ' + str(batch_size))
 
-    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, noise_variance, batch_size,  disc_type, parallel_analysis = False )
+    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, noise_variance, batch_size,  disc_type, parallel_analysis = parallel_analysis )
+
+    # if parallel_analysis:
+    #     r = np.linalg.cholesky(covariance)
+    #     r *= np.random.randint(0,2, size = r.shape)*2 - 1
+    #     covariance = r @ r.T
 
     ss, u = np.linalg.eigh(covariance)
     u =  np.fliplr(u)
     s = np.flip(ss)
     u = basis @ u 
 
-    s = np.where(s >0 , s, np.ones_like(s)*constants.EPSILON)
-    
+    s = np.where(s >0 , s, np.ones_like(s)*constants.EPSILON)   
+ 
     return u , s
+
+
 
 ## EVERYTHING BELOW HERE IS NOT USED IN CURRENT VERSION OF THE CODE. DELETE?
 
@@ -171,6 +180,7 @@ def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_s
     new_u /= np.linalg.norm(new_u, axis =0)
     
     return np.array(new_u.astype(u.dtype)), np.array(new_s.astype(s.dtype)**2)
+
 
 
 # A lot of implementation of the same things, having to do with taking the real SVD of
@@ -730,3 +740,5 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
 #     return u2, s_guess
 
 
+
+# Perhaps a rea

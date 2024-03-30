@@ -141,13 +141,116 @@ def add_args(parser: argparse.ArgumentParser):
             help="saves some intermediate result. Probably only useful for debugging"
         )
 
-
     group.add_argument(
             "--noise-model",
             dest = "noise_model",
             default = "white",
             help="what noise model to use. Options are radial (default) computed from outside the masks, and white computed by power spectrum at high frequencies"
         )
+
+    group.add_argument(
+            "--mean-fn",
+            dest = "mean_fn",
+            default = "old",
+            help="which mean function to use. Options are old (default), triangular, triangular_reg"
+        )
+
+    group = parser.add_argument_group("Covariance estimation options")
+
+
+    group.add_argument(
+            "--covariance-fn",
+            dest = "covariance_fn",
+            default = "noisemask",
+            help="noisemask (default), kernel"
+        )
+
+    group.add_argument(
+            "--covariance-reg-fn",
+            dest = "covariance_reg_fn",
+            default = "old",
+            help="old (default), new"
+        )
+
+    group.add_argument(
+            "--covariance-left-kernel",
+            dest = "covariance_left_kernel",
+            default = "triangular",
+            help="triangular (default), square"
+        )
+
+    group.add_argument(
+            "--covariance-right-kernel",
+            dest = "covariance_right_kernel",
+            default = "triangular",
+            help="triangular (default), square"
+        )
+
+    group.add_argument(
+            "--covariance-left-kernel-width",
+            dest = "covariance_left_kernel_width",
+            default = 1,
+            type=int,
+        )
+
+    group.add_argument(
+            "--covariance-right-kernel-width",
+            dest = "covariance_right_kernel_width",
+            default = 2,
+            type=int,
+        )
+    
+    # options = {
+    #     "covariance_fn": "noisemask",
+    #     "reg_fn": "old",
+    #     "left_kernel": "triangular",
+    #     "right_kernel": "triangular",
+    #     "left_kernel_width": 1,
+    #     "right_kernel_width": 2,
+    #     "shift_fsc": False,
+    #     "substract_shell_mean": False,
+    #     "grid_correct": True,
+    #     "use_spherical_mask": True,
+    #     "use_mask_in_fsc": False,
+    #     "column_radius": 5,
+    # }
+
+    group.add_argument(
+            "--covariance-shift-fsc",
+            dest = "covariance_shift_fsc",
+            action="store_true",
+        )
+
+
+    group.add_argument(
+            "--covariance-substract-shell-mean",
+            dest = "covariance_substract_shell_mean",
+            action="store_true",
+        )
+
+    group.add_argument(
+            "--covariance-grid-correct",
+            dest = "covariance_substract_shell_mean",
+            action="store_true",
+        )
+
+
+
+    group.add_argument(
+            "--covariance-mask-in-fsc",
+            dest = "covariance_mask_in_fsc",
+            action="store_true",
+        )
+
+
+
+    group.add_argument(
+            "--n-covariance-columns",
+            dest = "covariance_reg_fn",
+            default = "old",
+            help="old (default), new"
+        )
+
 
     return parser
     
@@ -185,16 +288,22 @@ def standard_recovar_pipeline(args):
     valid_idx = cryo.get_valid_frequency_indices()
     noise_model = args.noise_model
 
-
     # Compute mean
-    means, mean_prior, _, _ = homogeneous.get_mean_conformation(cryos, 5*batch_size, cov_noise , valid_idx, disc_type, use_noise_level_prior = False, grad_n_iter = 5)
-    use_adaptive = False
+    if args.mean_fn == 'old':
+        means, mean_prior, _, _ = homogeneous.get_mean_conformation(cryos, 5*batch_size, cov_noise , valid_idx, disc_type, use_noise_level_prior = False, grad_n_iter = 5)
+        use_adaptive = False
+    elif args.mean_fn == 'triangular':
+        means, mean_prior, _, _  = homogeneous.get_mean_conformation_relion(cryos, 5*batch_size, noise_variance = cov_noise,  use_regularization = False)
+    elif args.mean_fn == 'triangular_reg':
+        means, mean_prior, _, _  = homogeneous.get_mean_conformation_relion(cryos, 5*batch_size, noise_variance = cov_noise,  use_regularization = True)
+    else:
+        raise ValueError(f"mean function {args.mean_fn} not recognized")
+    
 
-    if use_adaptive:
-        for cryo_idx, cryo in enumerate(cryos):
-            means['adaptive' + str(cryo_idx)], means['adaptive' + str(cryo_idx)+'_h'] = homogeneous.compute_with_adaptive_discretization(cryo, means['lhs'], means['prior'], means['combined'], cov_noise, 1*batch_size)
-            # import pdb; pdb.set_trace()
-        means['combined'] = (means['adaptive' + str(0)] + means['adaptive' + str(1)])/2
+    # if use_adaptive:
+    #     for cryo_idx, cryo in enumerate(cryos):
+    #         means['adaptive' + str(cryo_idx)], means['adaptive' + str(cryo_idx)+'_h'] = homogeneous.compute_with_adaptive_discretization(cryo, means['lhs'], means['prior'], means['combined'], cov_noise, 1*batch_size)
+    #     means['combined'] = (means['adaptive' + str(0)] + means['adaptive' + str(1)])/2
 
     means['indices'] = [cryo.dataset_indices for cryo in cryos ]
     utils.pickle_dump(means, args.outdir + '/means.pkl')
@@ -273,7 +382,7 @@ def standard_recovar_pipeline(args):
 
 
     # Compute principal components
-    u,s, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, disc_type = 'linear_interp', radius = constants.COLUMN_RADIUS) 
+    u,s, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model)
 
     if options['ignore_zero_frequency']:
         # Make the noise in 0th frequency gigantic. Effectively, this ignore this frequency when fitting.
