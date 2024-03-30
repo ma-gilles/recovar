@@ -36,7 +36,7 @@ class HeterogeneousVolumeDistribution():
         self.volumes = volumes
         # self.volumes = linalg.batch_dft3(volumes, self.volume_shape, self.vol_batch_size)
         valid_indices = mask.get_radial_mask(self.volume_shape, radius = None) if valid_indices is None else valid_indices
-        self.valid_indices = valid_indices.reshape(-1)
+        self.valid_indices = np.array(valid_indices.reshape(-1))
         self.volumes *= self.valid_indices[None,:]
         self.image_assignments = image_assignments
         self.contrasts = contrasts
@@ -104,10 +104,17 @@ class HeterogeneousVolumeDistribution():
             vols = np.concatenate( [ np.sqrt(contrast_variance) * self.get_mean()[None] , vols ])
         return vols.T
 
-    def get_vol_svd(self, contrasted = False):
+    def get_vol_svd(self, contrasted = False, real_space = False, random_svd_pcs = None):
 
         vols = self.get_covariance_square_root( contrasted)
-        u,s,v = np.linalg.svd(vols, full_matrices = False)
+
+        if real_space:
+            vols = linalg.batch_idft3(vols, self.volume_shape, self.vol_batch_size).real
+        
+        if random_svd_pcs is None:
+            u,s,v = np.linalg.svd(vols, full_matrices = False)
+        else:
+            u,s,v = linalg.randomized_svd(vols, random_svd_pcs)
 
         return u,s,v
 
@@ -120,6 +127,7 @@ class HeterogeneousVolumeDistribution():
         u /= ip
         return u, s**2
     
+
     def get_fourier_variances(self, contrasted = False):
         vols = self.get_covariance_square_root(contrasted)
         return np.linalg.norm(vols, axis=-1)**2

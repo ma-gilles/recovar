@@ -129,6 +129,13 @@ def slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, di
     return map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_shape, order)
     
 
+@functools.partial(jax.jit, static_argnums=[2,3,4])
+def adjoint_slice_volume_by_map(slices, rotation_matrices, image_shape, volume_shape, disc_type):  
+    volume_size = np.prod(volume_shape)
+    f = lambda volume : slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type)
+    _, u = vjp(f,jnp.zeros(volume_size, dtype = slices.dtype ))
+    return u(slices)[0]
+
 # ## This is about twice faster. It doesn't do any checking, I guess? 
 # def slice_volume_by_map_nomap(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type):
 #     grid_point_indices = batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
@@ -253,6 +260,10 @@ batch_get_gridpoint_coords = jax.vmap(get_gridpoint_coords, in_axes =(0, None, N
 def forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):
     slices = slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)
     return slices
+
+
+
+
 
 
 @functools.partial(jax.jit, static_argnums=[3,4,5,6,7])

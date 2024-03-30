@@ -178,6 +178,10 @@ class MaskedMaps:
         self.arr1 = threshold_map(arr=self.arr1, prob=self.prob, dthresh=self.dthresh)
         self.arr2 = threshold_map(arr=self.arr2, prob=self.prob, dthresh=self.dthresh)
         halfcc3d = get_3d_realspcorrelation(self.arr1, self.arr2, kern)
+        
+        # radial mask stuff
+        halfcc3d *= get_radial_mask(self.arr1.shape)
+
         #self.mask = self.histogram2(halfcc3d, prob=self.prob)
         self.mask = self.thereshol_ccmap(ccmap=halfcc3d)
 
@@ -250,51 +254,42 @@ import numpy as np
 def soft_mask_outside_map(vol, radius=-1, cosine_width=3, Mnoise=None):
     # vol = np.roll(vol, -np.array(vol.shape) // 2)  # Assuming vol.setXmippOrigin() adjusts the origin
 
-    vol = np.array(vol)
+    vol = jnp.asarray(vol)
     if radius < 0:
         radius = np.max(np.array(vol.shape) // 2)
 
     radius_p = radius + cosine_width
     shape = vol.shape
 
+    # Not very clear whether this should be 0 or 1
     volume_coords =  ftu.get_k_coordinate_of_each_pixel(shape, voxel_size = 1, scaled = False).reshape(list(shape) + [len(list(shape))]) + 0
 
     # r, i, j = np.ogrid[:vol.shape[0], :vol.shape[1], :vol.shape[2]]
     r = jnp.linalg.norm(volume_coords, axis =-1)
-    mask1 = r < radius
-
-
+    mask1 = r <= radius
     mask2 = (r > radius) * (r <= radius_p)
     mask3 = r > radius_p
-    raised_cos = 0.5 + 0.5 * np.cos(np.pi * (radius_p - r) / cosine_width)
-    mask = np.zeros_like(vol).real
-    mask[mask1] = 1
-    mask[mask2] = 1 - raised_cos[mask2]
+    raised_cos = 0.5 + 0.5 * jnp.cos(jnp.pi * (radius_p - r) / cosine_width)
+    mask = jnp.zeros_like(vol).real
+    # mask = mask.at[mask1].set(1)
+    mask = jnp.where(mask1, 1, mask)
+    # mask = mask.at[mask2].set(1 - raised_cos[mask2])
+    mask = jnp.where(mask2, 1 - raised_cos, mask)
 
 
     if Mnoise is None:
-        sum_bg = np.sum((vol * mask)[mask3 + mask2])
-        sum = np.sum((mask)[mask3 + mask2])
+        sum_bg = jnp.sum((vol * mask) * (mask3 + mask2))
+        sum = jnp.sum((mask) * (mask3 + mask2))
         avg_bg = sum_bg / sum
-
-        # r_range = np.arange(0, radius)
-        # outside_range = np.arange(radius, radius_p)
-        # raised_cos = 0.5 + 0.5 * np.cos(np.pi * (radius_p - r_range) / cosine_width)
-
-        # sum_bg = np.sum(vol[outside_range, :, :])
-        # sum_bg += np.sum(raised_cos[outside_range, None, None] * vol[outside_range, :, :])
-
-        # sum = np.sum(raised_cos)
-        # sum += len(outside_range)
-
-        # avg_bg = sum_bg / sum
     else:
         avg_bg = None
 
     if Mnoise is None:
-        vol[mask3] = avg_bg
+        # vol = vol.at[mask3].set(avg_bg)
+        vol = jnp.where(mask3, avg_bg, vol)
     else:
-        vol[mask3] = Mnoise[mask3]
+        # vol = vol.at[mask3].set(Mnoise[mask3])
+        vol = jnp.where(mask3, Mnoise, vol)
 
     add = Mnoise if Mnoise is not None else avg_bg
     vol = mask * vol + (1 - mask) * add

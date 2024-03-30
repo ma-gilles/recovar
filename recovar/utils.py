@@ -108,6 +108,13 @@ def symmetrize_ft_volume(vol, volume_shape):
     vol = vol.at[1:,1:,1:].set( 0.5 * (np.conj(np.flip(vol[1:,1:,1:])) + vol[1:,1:,1:]) )
     return vol.reshape(og_volume_shape)
 
+# def symmetrize_ft_image(vol, volume_shape):
+#     og_volume_shape = vol.shape
+#     vol = vol.reshape(volume_shape)
+#     vol = vol.at[1:,1:].set( 0.5 * (np.conj(np.flip(vol[1:,1:])) + vol[1:,1:]) )
+#     return vol.reshape(og_volume_shape)
+
+
 def get_all_dataset_indices(cryos):
     return np.concatenate([cryo.dataset_indices for cryo in cryos])
 
@@ -152,7 +159,8 @@ def make_algorithm_options(args):
     options = {'volume_mask_option': args.mask_option,
     'zs_dim_to_test': args.zdim,
     'contrast' : "contrast_qr" if args.correct_contrast else "none",
-    'ignore_zero_frequency' : args.ignore_zero_frequency 
+    'ignore_zero_frequency' : args.ignore_zero_frequency ,
+
     }
     return options
 

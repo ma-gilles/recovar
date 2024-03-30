@@ -79,6 +79,31 @@ def blockwise_A_X(A, X, batch_size = None, memory_to_use = 10):
         batch_st, batch_end = batch_st_end(k, batch_size, n_rows)
         Z[batch_st:batch_end] = np.array(mat_mat_jit( A[batch_st:batch_end],  X))
     return Z        
+
+
+
+# def blockwise_X_A(X, A, batch_size = None, memory_to_use = 10):
+#     # Blockwise multiply where # A is very tall, and X is square-ish
+
+#     if batch_size is None:
+#         size_of_X = utils.get_size_in_gb(X)
+#         usable_memory = memory_to_use - size_of_X 
+#         size_of_A = utils.get_size_in_gb(A)
+#         n_blocks = np.ceil( 4 * size_of_A / usable_memory).astype(int)
+#         batch_size = np.floor(A.shape[0] / n_blocks)
+        
+#     n_rows = A.shape[0]
+#     # Compute the bottom of fraction.
+#     Z = np.zeros_like(A, shape = [X.shape[0], A.shape[-1]])
+#     utils.report_memory_device(logger =logger)
+#     X = jnp.array(X)
+    
+#     mat_mat_jit = jax.jit( lambda x, y: x @ y)
+#     logging.info(f"A@X in {int(np.ceil(n_rows/batch_size))} blocks") 
+#     for k in range(0, int(np.ceil(n_rows/batch_size))):
+#         batch_st, batch_end = batch_st_end(k, batch_size, n_rows)
+#         Z = np.array(mat_mat_jit(X,  A[batch_st:batch_end] ))
+#     return Z        
             
     
 # These two methods are not used in the main code because they are a bit gross, 
@@ -106,6 +131,8 @@ def thin_svd_in_blocks(X, np = np, memory_to_use = 5, epsilon = 1e-8, n_componen
     
     return np.flip(U, axis =1)[:,:n_components], np.flip(sigma)[:n_components], np.conj(np.flip(V, axis =1))[:,:n_components].T
 
+
+
 def thin_svd(X, np = np, epsilon = 1e-8):
     '''
     For some reason, the built in svd seems to allocate a lot more memory than necessary.
@@ -118,6 +145,29 @@ def thin_svd(X, np = np, epsilon = 1e-8):
     V = Yu
     return np.flip(U, axis =1), np.flip(sigma), np.flip(V, axis =1)
 
+
+def randomized_svd(A, n_pcs = 200):
+    '''
+    For some reason, the built in svd seems to allocate a lot more memory than necessary.
+    '''
+    n_pcs = n_pcs if n_pcs < A.shape[1] else A.shape[1]
+    gauss = np.random.randn(A.shape[1], n_pcs)
+    Agauss = blockwise_A_X(A, gauss, memory_to_use = utils.get_gpu_memory_total()//3)
+    qr_cpu = jax.jit(jnp.linalg.qr, backend='cpu')
+    Q, _ = qr_cpu(Agauss)
+    logger.info("QR done")
+    Y = blockwise_Y_T_X(Q,A) #np.conj(Q).T @ A
+    logger.info("Q^TA done")
+    U, S, Vh = np.linalg.svd(Y)#, full_matrices = True)
+    return Q @ U, S, Vh
+
+    # Y = np.conj(X).T @ X
+    # Ys, Yu = np.linalg.eigh(Y)#, full_matrices = True)
+    # sigma = np.sqrt(np.where(Ys > 0, Ys, 0))
+    # sigma_inv = np.where( sigma > epsilon , 1/ sigma, 0)
+    # U = (X @ Yu) * sigma_inv
+    # V = Yu
+    # return np.flip(U, axis =1), np.flip(sigma), np.flip(V, axis =1)
 
 
 

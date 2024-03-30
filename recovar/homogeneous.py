@@ -17,51 +17,35 @@ def image_weight_parse(image_weights, dtype = np.float32):
         return [w.astype(dtype) for w in image_weights]
 
 
-def get_mean_conformation_relion(cryos, batch_size, noise_variance = None, valid_idx = None, disc_type ='linear_interp', use_noise_level_prior = False, grad_n_iter = 5, image_weights = None):
-    
+def get_mean_conformation_relion(cryos, batch_size, noise_variance = None,  use_regularization = False):
+    st_time = time.time()
+
     cryo = cryos[0]
-    valid_idx = cryo.get_valid_frequency_indices() if valid_idx is None else valid_idx
-    if noise_variance is None:
-        noise_variance, signal_var = noise.estimate_noise_variance(cryo, batch_size)
-        signal_var = np.max(signal_var)
-    else:
-        _, signal_var = noise.estimate_noise_variance(cryo, batch_size)
-        signal_var = np.max(signal_var)
-
-
     from recovar import relion_functions
 
     means = dict()
-    lhs = 2 * [None]
-    rhs = 2 * [None]
+    lhs_l = 2 * [None]
     for idx, cryo in enumerate(cryos):
-        means["init" + str(idx)], lhs[idx], rhs[idx] = relion_functions.relion_reconstruct(cryo, noise_variance,batch_size )
+        means["corrected" + str(idx)], lhs_l[idx] = relion_functions.relion_reconstruct(cryo, noise_variance,batch_size )
+    lhs = (lhs_l[0] + lhs_l[1])/2
 
-    # regularization_init = jnp.ones(cryo.volume_size, dtype = cryo.dtype_real) * signal_var
-    # logger.info("regularization init done")
-    # image_weights = image_weight_parse(image_weights, dtype = cryos[0].dtype_real)
-    # means = {}
-    # # This is kind of a stupid way to code this. Should probably rewrite next 3 forloops
+    mean_prior, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(cryo.volume_shape, means["corrected0"], means["corrected1"], lhs, jnp.ones(cryos[0].volume_size, dtype = cryos[0].dtype_real) * np.inf, frequency_shift = jnp.array([0,0,0]), upsampling_factor = 2)
 
-    # Probably should be rewritten around here.
-    if use_noise_level_prior:
-        key = "corrected"
-        mean_prior, fsc, prior_avg = regularization.compute_relion_prior(cryos, noise_variance, means["corrected0"], means["corrected1"], batch_size, estimate_merged_SNR = False)
-        logger.info(f"Using RELION prior")
-    else:    
-        mean_prior, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(cryo.volume_shape, means["corrected0"], means["corrected1"], lhs/2 , mean_prior, frequency_shift = jnp.array([0,0,0]))
-        logger.info(f"Using new prior")
+    if use_regularization:
+        for idx, cryo in enumerate(cryos):
+            means["corrected" + str(idx)], lhs_l[idx] = relion_functions.relion_reconstruct(cryo, noise_variance,batch_size, tau = mean_prior )
+    lhs = (lhs_l[0] + lhs_l[1])/2
 
+    logger.info(f"Using new prior")
     mean_prior = np.array(mean_prior)
-    means["combined"] = np.array( jnp.where(jnp.abs(lhs) < 1e-8, 0, rhs / (lhs + 1 / mean_prior ) ))
+    means["combined"] = (means["corrected0"] + means["corrected1"])/2
     means["prior"] = mean_prior
-    means["lhs"] = lhs/2
+    means["lhs"] = lhs
 
     end_time = time.time()
     logger.info(f"time to compute means: {end_time- st_time}")
 
-
-    return 
+    return means, mean_prior, fsc, lhs
 
 
 def get_mean_conformation(cryos, batch_size, noise_variance = None, valid_idx = None, disc_type ='linear_interp', use_noise_level_prior = False, grad_n_iter = 5, image_weights = None):

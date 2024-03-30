@@ -52,6 +52,14 @@ def get_all_variance_scores(test_v, U, s):
     normalized_variance = normalized_variance_from_captured_variance(variance, s)
     return variance, rel_variance, normalized_variance
 
+def get_variance_error():
+
+    return
+
+
+def get_covariance_fsc_score():
+    # Maybe summed auc across columns
+    return
 
 
 # def local_fsc_metric(map1, map2, voxel_size, mask, fsc_threshold=1/7, locres_sampling = 25 ):
@@ -137,18 +145,18 @@ def compute_volume_error_metrics_from_gt(gt_map, estimate_map, voxel_size, mask 
     
     errors_metrics = {}    
     errors_metrics['median_locres'], errors_metrics['ninety_pc_locres'], errors_metrics['median_auc'], errors_metrics['ten_pc_auc'] =  local_fsc_metric(estimate_map, gt_map, voxel_size, mask, fsc_threshold=1/2 )
-    errors_metrics['median_error'], errors_metrics['ninety_pc_error'] =  local_error_metric(gt_map , estimate_map, voxel_size, mask)
+    errors_metrics['median_error'], errors_metrics['ninety_pc_error'] =  local_error_metric(gt_map , estimate_map, voxel_size, mask, normalize_by_map1 = normalize_by_map1)
     errors_metrics['mask'] = mask
 
     if partial_mask is not None:
         errors_metrics['partial_median_locres'], errors_metrics['partial_ninety_pc_locres'], errors_metrics['partial_median_auc'], errors_metrics['partial_ten_pc_auc'] =  local_fsc_metric(estimate_map, gt_map, voxel_size, partial_mask, fsc_threshold=1/2 )
-        errors_metrics['partial_median_error'], errors_metrics['partial_ninety_pc_error'] =  local_error_metric(gt_map, estimate_map, voxel_size, partial_mask)
+        errors_metrics['partial_median_error'], errors_metrics['partial_ninety_pc_error'] =  local_error_metric(gt_map, estimate_map, voxel_size, partial_mask,normalize_by_map1 = normalize_by_map1)
         errors_metrics['partial_mask'] = partial_mask
 
     return errors_metrics
 
 
-def compute_volume_error_metrics_from_halfmaps(estimate1, estimate2, voxel_size, mask , partial_mask = None , normalize_by_map1 = True ):
+def compute_volume_error_metrics_from_halfmaps(estimate1, estimate2, voxel_size, mask , partial_mask = None , normalize_by_map1 = False ):
     
     if mask is None:
         from recovar import mask as mask_fn
@@ -157,12 +165,12 @@ def compute_volume_error_metrics_from_halfmaps(estimate1, estimate2, voxel_size,
     
     errors_metrics = {}    
     errors_metrics['median_locres'], errors_metrics['ninety_pc_locres'], errors_metrics['median_auc'], errors_metrics['ten_pc_auc'] =  local_fsc_metric(estimate1, estimate2, voxel_size, mask, fsc_threshold=1/7 )
-    errors_metrics['median_error'], errors_metrics['ninety_pc_error'] =  local_error_metric(estimate1, estimate2, voxel_size, mask)
+    errors_metrics['median_error'], errors_metrics['ninety_pc_error'] =  local_error_metric(estimate1, estimate2, voxel_size, mask, normalize_by_map1 = normalize_by_map1 )
     errors_metrics['mask'] = mask
 
     if partial_mask is not None:
         errors_metrics['partial_median_locres'], errors_metrics['partial_ninety_pc_locres'], errors_metrics['partial_median_auc'], errors_metrics['partial_ten_pc_auc'] =  local_fsc_metric(estimate1, estimate2, voxel_size, partial_mask, fsc_threshold=1/7 )
-        errors_metrics['partial_median_error'], errors_metrics['partial_ninety_pc_error'] =  local_error_metric(estimate1, estimate2, voxel_size, partial_mask, normalize_by_map1 =False)
+        errors_metrics['partial_median_error'], errors_metrics['partial_ninety_pc_error'] =  local_error_metric(estimate1, estimate2, voxel_size, partial_mask, normalize_by_map1 =normalize_by_map1)
         errors_metrics['partial_mask'] = partial_mask
 
     return errors_metrics

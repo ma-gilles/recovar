@@ -1,15 +1,17 @@
 import numpy as np
 from recovar import core
-from recovar import regularization, constants, utils, mask
-
+from recovar import regularization, constants, utils, padding, mask
 from recovar.fourier_transform_utils import fourier_transform_utils
 import jax.numpy as jnp
-ftu = fourier_transform_utils(np)
+ftu = fourier_transform_utils(jnp)
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def griddingCorrect(vol_in, ori_size, padding_factor, order = 0,):
 
     # Correct real-space map by dividing it by the Fourier transform of the interpolator(s)
-    # vol_in.setXmippOrigin()
     pixels = ftu.get_k_coordinate_of_each_pixel(vol_in.shape, 1, scaled = False) + 0.
     og_shape = vol_in.shape
     r = np.linalg.norm(pixels, axis = -1)
@@ -51,7 +53,6 @@ def griddingCorrect_square(vol_in, ori_size, padding_factor, order = 0,):
         raise ValueError("Order not implemented")
 
     kernel_ar = kernel(pixels_rescaled[:,0]) * kernel(pixels_rescaled[:,1]) * kernel(pixels_rescaled[:,2])
-    # kernel_ar = kernel ** (order + 1)
     vol_out = vol_in / kernel_ar.reshape(og_shape)
 
     return vol_out.reshape(og_shape), kernel_ar.reshape(og_shape)
@@ -127,7 +128,7 @@ def upscale_tau(tau, padding_factor, volume_shape, tau_is_1d = False):
     # if (DIRECT_A1D_ELEM(tau2, ires) > 0.)
 
     pixels = ftu.get_k_coordinate_of_each_pixel(np.array(volume_shape)*padding_factor, 1, scaled = False)
-    radius = np.round(np.linalg.norm(pixels, axis = -1) / padding_factor).astype(int)
+    radius = jnp.round(jnp.linalg.norm(pixels, axis = -1) / padding_factor).astype(jnp.int32)
     upscaled_tau = tau[radius]
 
     return upscaled_tau
@@ -157,7 +158,6 @@ def adjust_regularization_relion_style(filter, volume_shape, tau = None, padding
         # tau_avg = regularization.average_over_shells(inv_tau, volume_shape)
         # print(filter_avg/tau_avg)
         # assert False, ""
-
 
         regularized_filter = filter + inv_tau
     else:
@@ -227,13 +227,12 @@ def post_process_from_filter(cryo, Ft_ctf, F_ty, tau = None, disc_type = 'neares
 
 
 @functools.partial(jax.jit, static_argnums=[2,3,5,6,7,8,9])
-def post_process_from_filter_v2(Ft_ctf, F_ty, og_volume_shape, volume_upsampling_factor, tau = None, disc_type = 'nearest', use_spherical_mask = True, grid_correct = True, gridding_correct = "square", kernel_width = 1 ):
+def post_process_from_filter_v2(Ft_ctf, F_ty, og_volume_shape, volume_upsampling_factor, tau = None, kernel = 'triangular', use_spherical_mask = True, grid_correct = True, gridding_correct = "square", kernel_width = 1, volume_mask = None ):
     
     Ft_ctf= Ft_ctf.real
     upsampled_volume_shape = tuple(3*[(og_volume_shape[0]*volume_upsampling_factor)])
     valid_indices = mask.get_radial_mask(upsampled_volume_shape, radius = upsampled_volume_shape[0]//2-1).reshape(-1)
     F_ty =  F_ty * valid_indices # Zero-out FT outside sphere
-
 
     # Adjust reg for small values
     Ft_ctf2 = adjust_regularization_relion_style(Ft_ctf, upsampled_volume_shape, tau = tau, padding_factor = volume_upsampling_factor, max_res_shell = None)
@@ -242,7 +241,6 @@ def post_process_from_filter_v2(Ft_ctf, F_ty, og_volume_shape, volume_upsampling
     
     # Window real space
     myreliontest = ftu.get_idft3(myreliontest.reshape(upsampled_volume_shape))
-    from recovar import padding, mask
 
     myreliontest = padding.unpad_volume_spatial_domain(myreliontest, (upsampled_volume_shape[0] - og_volume_shape[0]) )
     
@@ -250,9 +248,20 @@ def post_process_from_filter_v2(Ft_ctf, F_ty, og_volume_shape, volume_upsampling
     if use_spherical_mask:
         myreliontest, mask2 = mask.soft_mask_outside_map(myreliontest, cosine_width = 3)
     
+    if volume_mask is not None:
+        logger.warning("should probably check whether this is correct") 
+        myreliontest = myreliontest * volume_mask
+
     # Correct gridding effect
     if grid_correct:
-        order = 1 if disc_type == 'linear_interp' else 0
+
+        if kernel == 'triangular':
+            order = 1
+        elif kernel == 'square':
+            order = 0
+        else:
+            raise ValueError("Kernel not implemented")
+        # order = 1 if disc_type == 'linear_interp' else 0
 
         grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
         myreliontest, sinc = grid_fn(myreliontest.reshape(og_volume_shape), og_volume_shape[0], volume_upsampling_factor/kernel_width, order = order)
@@ -278,7 +287,7 @@ def relion_reconstruct(cryo, noise_variance, batch_size = 100, disc_type = 'line
 
     Ft_ctf, F_ty = relion_style_triangular_kernel(cryo , noise_variance.astype(np.float32),  batch_size,  disc_type = disc_type, return_lhs_rhs = False )
 
-    myreliontest = post_process_from_filter(cryo, Ft_ctf, F_ty, tau = tau, disc_type = disc_type, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
+    estimate = post_process_from_filter(cryo, Ft_ctf, F_ty, tau = tau, disc_type = disc_type, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
     cryo.update_volume_upsampling_factor(og_upsampling)
 
-    return myreliontest
+    return estimate, Ft_ctf
