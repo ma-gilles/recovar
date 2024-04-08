@@ -160,7 +160,7 @@ def make_algorithm_options(args):
     'zs_dim_to_test': args.zdim,
     'contrast' : "contrast_qr" if args.correct_contrast else "none",
     'ignore_zero_frequency' : args.ignore_zero_frequency ,
-
+    'keep_intermediate' : args.keep_intermediate ,
     }
     return options
 

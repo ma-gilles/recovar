@@ -42,6 +42,9 @@ def get_mean_conformation_relion(cryos, batch_size, noise_variance = None,  use_
     means["prior"] = mean_prior
     means["lhs"] = lhs
 
+    for key in means:
+        means[key] = np.array(means[key])
+
     end_time = time.time()
     logger.info(f"time to compute means: {end_time- st_time}")
 

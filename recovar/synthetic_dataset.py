@@ -14,7 +14,7 @@ from cryodrgn import mrc
 
 #
 
-def load_heterogeneous_reconstruction(simulation_info_file, volumes_path_root = None):
+def load_heterogeneous_reconstruction(simulation_info_file, volumes_path_root = None, load_volumes = True):
     if isinstance(simulation_info_file, dict):
         simulation_info = simulation_info_file 
     else:
@@ -22,9 +22,13 @@ def load_heterogeneous_reconstruction(simulation_info_file, volumes_path_root = 
 
     volumes_path_root = simulation_info['volumes_path_root'] if volumes_path_root is None else volumes_path_root
 
-    volumes = simulator.load_volumes_from_folder(volumes_path_root, simulation_info['grid_size'] , simulation_info['trailing_zero_format_in_vol_name'] )
+    if load_volumes:
+        volumes = simulator.load_volumes_from_folder(volumes_path_root, simulation_info['grid_size'] , simulation_info['trailing_zero_format_in_vol_name'] )
+    else:
+        volumes
 
     return HeterogeneousVolumeDistribution(volumes, simulation_info['image_assignment'], simulation_info['per_image_contrast'] )
+
 
 
 
@@ -37,7 +41,8 @@ class HeterogeneousVolumeDistribution():
         # self.volumes = linalg.batch_dft3(volumes, self.volume_shape, self.vol_batch_size)
         valid_indices = mask.get_radial_mask(self.volume_shape, radius = None) if valid_indices is None else valid_indices
         self.valid_indices = np.array(valid_indices.reshape(-1))
-        self.volumes *= self.valid_indices[None,:]
+        if self.volumes is not None:
+            self.volumes *= self.valid_indices[None,:]
         self.image_assignments = image_assignments
         self.contrasts = contrasts
         

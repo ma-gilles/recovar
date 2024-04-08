@@ -613,8 +613,8 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
     from skimage.transform import downscale_local_mean
 
     # downsampled_noise_variance = downscale_local_mean(np.array(noise_variance), (actual_size, actual_size, actual_size) )
-    downsampled_noise_variance = noise_variance[::factor,::factor,::factor]
-    newshape = downsampled_noise_variance.shape[0]
+    # downsampled_noise_variance = noise_variance[::factor,::factor,::factor]
+    # newshape = downsampled_noise_variance.shape[0]
     # print(downsampled_noise_variance[newshape//2, newshape//2, newshape//2])
     # print(noise_variance[noise_variance.shape[0]//2, noise_variance.shape[0]//2, noise_variance.shape[0]//2])
 

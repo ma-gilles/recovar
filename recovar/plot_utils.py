@@ -27,8 +27,9 @@ def plot_power_spectrum(volume, ax = None):
     ax.semilogy(avg)
     return avg
 
-def plot_noise_profile(results, yscale = 'linear'):
+def plot_noise_profile(pipeline_output, yscale = 'linear'):
     plt.figure(figsize = (8,8))
+    results = pipeline_output.params
     yy = results['noise_var']
     if results['input_args'].ignore_zero_frequency:
         yy[0] =0 
@@ -107,7 +108,7 @@ def compare_two_volumes(cryo, vol1, vol2):
 
     return
 
-def plot_summary_t(results,cryos, n_eigs = 3, u_key = "rescaled"):
+def plot_summary_t(pipeline_output,cryos, n_eigs = 3, u_key = "rescaled"):
     plt.rcParams.update({
         # "text.usetex": True,
         # "font.family": "serif",
@@ -163,10 +164,12 @@ def plot_summary_t(results,cryos, n_eigs = 3, u_key = "rescaled"):
         is_first = False
         return
 
-    plot_vol(results['means']['combined'], 0, from_ft = True, name = 'mean')
-    plot_vol(results['volume_mask'], 1, from_ft = False,name = 'mask')
+
+    plot_vol(pipeline_output.get('mean'), 0, from_ft = True, name = 'mean')
+    plot_vol(pipeline_output.get('volume_mask'), 1, from_ft = False,name = 'mask')
+    u = pipeline_output.get('u_real')
     for k in range(n_eigs):
-        plot_vol(results['u'][u_key][:,k], k+2, from_ft = True, cmap = 'seismic' ,name = f"PC {k}", symmetric = True)
+        plot_vol(u[k], k+2, from_ft = False, cmap = 'seismic' ,name = f"PC {k}", symmetric = True)
 
     plt.subplots_adjust(wspace=0, hspace=0)
 

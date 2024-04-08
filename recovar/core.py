@@ -123,9 +123,19 @@ def slice_volume_by_nearest(volume_vec, plane_indices_on_grid):
 # Used to project the mean
 batch_slice_volume_by_nearest = jax.vmap(slice_volume_by_nearest, (None, 0))
 
+def decide_order(disc_type):
+    if disc_type == "linear_interp":
+        return 1
+    elif disc_type == "nearest":
+        return 0
+    elif disc_type == "cubic":
+        return 3
+    else:
+        raise ValueError("disc_type must be 'linear_interp', 'nearest', or 'cubic'")
+
 @functools.partial(jax.jit, static_argnums = [2,3,4])    
 def slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type):    
-    order = 1 if disc_type == "linear_interp" else 0
+    order = decide_order(disc_type)
     return map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_shape, order)
     
 
@@ -261,8 +271,7 @@ def forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, v
     slices = slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)
     return slices
 
-
-
+batch_forward_model_from_map = jax.vmap(forward_model_from_map, in_axes = (0, 0, 0, None, None, None, None, None) )
 
 
 
@@ -300,16 +309,23 @@ def compute_A_t_Av_forward_model_from_map(volume, CTF_params, rotation_matrices,
 
 
     
-@functools.partial(jax.jit, static_argnums = [2,3,4])    
-def map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_shape, order):
-    # import pdb; pdb.set_trace()
-    # batch_grid_pt_vec_ind_of_images = batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size )
-    # batch_grid_pt_vec_ind_of_images_og_shape = batch_grid_pt_vec_ind_of_images.shape
-    # batch_grid_pt_vec_ind_of_images = batch_grid_pt_vec_ind_of_images.reshape(-1,3).T
-    batch_grid_pt_vec_ind_of_images, batch_grid_pt_vec_ind_of_images_og_shape = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
+# @functools.partial(jax.jit, static_argnums = [2,3,4])    
+# def map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_shape, order):
+#     # import pdb; pdb.set_trace()
+#     # batch_grid_pt_vec_ind_of_images = batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size )
+#     # batch_grid_pt_vec_ind_of_images_og_shape = batch_grid_pt_vec_ind_of_images.shape
+#     # batch_grid_pt_vec_ind_of_images = batch_grid_pt_vec_ind_of_images.reshape(-1,3).T
+#     batch_grid_pt_vec_ind_of_images, batch_grid_pt_vec_ind_of_images_og_shape = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
     
-    slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
-    return slices
+#     # slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
+
+#     if order ==3:
+#         from recovar import cryojax_map_coordinates
+#         slices = cryojax_map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
+#     else:
+#         slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
+
+#     return slices
 
 
 def rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape):
@@ -374,7 +390,7 @@ def slice_volume_by_trilinear(volume, rotation_matrices, image_shape, volume_sha
     grid_points, weights = get_trilinear_weights_and_vol_indices(grid_coords.T, volume_shape)
     grid_vec_indices = vol_indices_to_vec_indices( grid_points, volume_shape)
     sliced_volume = jnp.sum(volume[grid_vec_indices.reshape(-1)].reshape(grid_vec_indices.shape) * weights, axis=-1)
-    return sliced_volume.reshape(grid_coords_og_shape[:-1]).astype(volume)
+    return sliced_volume.reshape(grid_coords_og_shape[:-1]).astype(volume.dtype)
 
 
 # @functools.partial(jax.jit, static_argnums = [2,3,4])    
@@ -402,7 +418,12 @@ def map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_sha
     batch_grid_pt_vec_ind_of_images_og_shape = batch_grid_pt_vec_ind_of_images.shape
     batch_grid_pt_vec_ind_of_images = batch_grid_pt_vec_ind_of_images.reshape(-1,3).T
 
-    slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
+    if order ==3:
+        from recovar import cryojax_map_coordinates
+        slices = cryojax_map_coordinates.map_coordinates_with_cubic_spline(volume, batch_grid_pt_vec_ind_of_images, mode = 'fill', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
+    else:
+        slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
+
     return slices
 
 # batch volumes

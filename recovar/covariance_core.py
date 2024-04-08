@@ -103,7 +103,7 @@ batch_forward_model = jax.vmap(core.forward_model, in_axes = (0, None, None))
 def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):
     batch_grid_pt_vec_ind_of_images = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape )
     batch_CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    projected_mean =  batch_forward_model(mean, batch_CTF, batch_grid_pt_vec_ind_of_images)         
+    projected_mean =  batch_forward_model(mean, batch_CTF, batch_grid_pt_vec_ind_of_images)
     return projected_mean
 
 
@@ -135,6 +135,14 @@ def triangular_kernel(gridpoints, gridpoint_target, kernel_width = 1):
 # This may use less memory than previous version
 ## TODO: compare the two
 def square_kernel(gridpoints, gridpoint_target, kernel_width = 1):
+    weights = jnp.ones(gridpoints.shape[:-1])
+    # Note that this is a very small loop (3) so it should be fine to jit this 
+    for i in range(gridpoint_target.shape[-1]):
+        weights *= jnp.where(jnp.abs(gridpoints[...,i] - gridpoint_target[i]) < kernel_width/2, 1/ kernel_width, 0) 
+    return weights
+
+
+def sinc_kernel(gridpoints, gridpoint_target, kernel_width = 1):
     weights = jnp.ones(gridpoints.shape[:-1])
     # Note that this is a very small loop (3) so it should be fine to jit this 
     for i in range(gridpoint_target.shape[-1]):
