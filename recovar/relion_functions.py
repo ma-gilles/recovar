@@ -4,7 +4,7 @@ from recovar import regularization, constants, utils, padding, mask
 from recovar.fourier_transform_utils import fourier_transform_utils
 import jax.numpy as jnp
 ftu = fourier_transform_utils(jnp)
-import logging
+import logging, functools, jax
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,6 @@ def relion_style_triangular_kernel(experiment_dataset , cov_noise,  batch_size, 
     # To agree with order of other fcns.
     return Ft_ctf, Ft_y
 
-import functools, jax
 @functools.partial(jax.jit, static_argnums=[4,5,6,7,8])
 def relion_style_triangular_kernel_batch(images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, cov_noise):
     # images = process_images(images, apply_image_mask = True)
@@ -99,7 +98,6 @@ def relion_style_triangular_kernel_batch(images, CTF_params, rotation_matrices, 
     return Ft_y, Ft_ctf
 
 
-import functools, jax
 @functools.partial(jax.jit, static_argnums=[4,5,6,7,8])
 def relion_style_triangular_kernel_batch_trilinear(images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, cov_noise):
     # images = process_images(images, apply_image_mask = True)
@@ -114,6 +112,57 @@ def relion_style_triangular_kernel_batch_trilinear(images, CTF_params, rotation_
     # Ft_ctf = core.adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
 
     return Ft_y, Ft_ctf
+
+
+
+# import functools, jax
+@functools.partial(jax.jit, static_argnums=[5,6,7,8])
+def residual_relion_style_triangular_kernel_batch_trilinear(mean_estimate, images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, cov_noise):
+    # images = process_images(images, apply_image_mask = True)
+    CTF_squared = CTF_fun( CTF_params, image_shape, voxel_size)
+
+    proj_mean = core.slice_volume_by_trilinear(mean_estimate, rotation_matrices, image_shape, volume_shape)
+    images = core.translate_images(images, translations, image_shape) 
+    # import pdb; pdb.set_trace()
+
+    images = images - core.slice_volume_by_trilinear(mean_estimate, rotation_matrices, image_shape, volume_shape) * CTF_squared
+
+    # Maybe apply mask
+
+    images_squared = jnp.abs(images)**2  - cov_noise #* np.sum(mask) # May need to do something with mask
+    CTF_squared = CTF_squared**2
+    #images_squared *= CTF_squared
+
+    Ft_y = core.adjoint_slice_volume_by_trilinear(images_squared, rotation_matrices, image_shape, volume_shape)
+
+    Ft_ctf = core.adjoint_slice_volume_by_trilinear(CTF_squared**2, rotation_matrices, image_shape, volume_shape)
+
+    return Ft_y, Ft_ctf
+
+
+# My understanding of what relion does.
+def residual_relion_style_triangular_kernel(experiment_dataset, mean_estimate, cov_noise,  batch_size, index_subset = None):
+    if index_subset is None:
+        data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+    else:
+        data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = index_subset)
+
+    Ft_y, Ft_ctf = 0, 0 
+    for batch, indices in data_generator:
+        batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
+        Ft_y_b, Ft_ctf_b = residual_relion_style_triangular_kernel_batch_trilinear(mean_estimate, 
+                                                                batch,
+                                                                experiment_dataset.CTF_params[indices], 
+                                                                experiment_dataset.rotation_matrices[indices], 
+                                                                experiment_dataset.translations[indices], 
+                                                                experiment_dataset.image_shape, 
+                                                                experiment_dataset.upsampled_volume_shape, 
+                                                                experiment_dataset.voxel_size, 
+                                                                experiment_dataset.CTF_fun, 
+                                                                cov_noise)
+        Ft_y += Ft_y_b
+        Ft_ctf += Ft_ctf_b
+    return Ft_ctf, Ft_y
 
 
 def upscale_tau(tau, padding_factor, volume_shape, tau_is_1d = False):
@@ -231,7 +280,7 @@ def post_process_from_filter_v2(Ft_ctf, F_ty, og_volume_shape, volume_upsampling
     
     Ft_ctf= Ft_ctf.real
     upsampled_volume_shape = tuple(3*[(og_volume_shape[0]*volume_upsampling_factor)])
-    valid_indices = mask.get_radial_mask(upsampled_volume_shape, radius = upsampled_volume_shape[0]//2-1).reshape(-1)
+    valid_indices = mask.get_radial_mask(upsampled_volume_shape, radius = upsampled_volume_shape[0]//2-1).reshape(-1).astype(Ft_ctf.dtype)
     F_ty =  F_ty * valid_indices # Zero-out FT outside sphere
 
     # Adjust reg for small values
@@ -274,7 +323,7 @@ def post_process_from_filter_v2(Ft_ctf, F_ty, og_volume_shape, volume_upsampling
         # plt.show()
     myreliontest = ftu.get_dft3(myreliontest.reshape(og_volume_shape))
 
-    return myreliontest
+    return myreliontest.astype(F_ty.dtype)
 
 
 batch_post_process_from_filter =  jax.vmap(post_process_from_filter_v2, in_axes = (0, 0, None, None, None, None, None, None, None) )

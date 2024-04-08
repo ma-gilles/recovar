@@ -24,9 +24,17 @@ def get_default_covariance_computation_options():
         "grid_correct": True, # worth trying on/off
         "use_spherical_mask": True,
         "use_mask_in_fsc": True,
+        "column_sampling_scheme": 'high_snr_from_var_est',
         "column_radius": 5,
         "use_combined_mean": True, # doesn't seem to change anything? worth a try
+        "sampling_avoid_in_radius": 2, # doesn't seem to change anything? worth a try
+        "sampling_n_cols": 298, # doesn't seem to change anything? worth a try
+        "n_pcs_to_compute" : 200,
+        "randomized_sketch_size" : 300,
+        "prior_n_iterations" : 20,
+        "randomize_column_sampling": False
     }
+
     return options
 
 def set_covariance_options(args, options):
@@ -36,29 +44,140 @@ def set_covariance_options(args, options):
     return options
 
 
-# def greedy_column_choice(sampling_vec, n_samples, avoid_in_radius = 1):
+from recovar import core
+def greedy_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_radius = 1):
+    if avoid_in_radius < 0 or avoid_in_radius > 20:
+        raise ValueError("avoid_in_radius should be between 0 and 20")
 
-#     n = sampling_vec.size
-#     picked = []
-#     picked_set = set()
-#     for k in range(n):
-#         if sampling_vec[k] == 1:
-#             picked.append(k)
-#             picked_set.add(k)
-#             for j in range(k-avoid_in_radius, k+avoid_in_radius+1):
-#                 if j >= 0 and j < n:
-#                     picked_set.add(j)
-#     return 
+    if n_samples < 1 or n_samples > sampling_vec.size:
+        raise ValueError("n_samples should be between 1 and the size of sampling_vec")
+
+    sorted_idx = jnp.argsort(-sampling_vec)
+    sorted_idx = np.array(sorted_idx)
+    picked_set = set()
+    picked = []
+    n_picked =0 
+    sorted_frequencies = core.vec_indices_to_frequencies(sorted_idx, volume_shape)
+    sorted_frequencies_norm = np.linalg.norm(sorted_frequencies, axis=-1)
+
+    for idx in sorted_idx:
+        if idx not in picked_set:
+            picked_frequency = core.vec_indices_to_frequencies(idx[None], volume_shape)
+            # take things only on the + x side
+            if picked_frequency[0,0] < 0:
+                picked_frequency = -picked_frequency # Take the complex conjugate instead
+                idx = int(core.frequencies_to_vec_indices(picked_frequency, volume_shape)[0])
+            picked.append(idx)
+            n_picked += 1
+            if n_picked >= n_samples:
+                break
+            picked_set.add(idx)
+            # Now take out everything that is close by and their complex conjugates
+
+            nearby_freqs = core.find_frequencies_within_grid_dist(picked_frequency, np.ceil(avoid_in_radius).astype(int) )
+            nearby_freqs = np.array(nearby_freqs)
+            nearby_freqs = nearby_freqs[np.linalg.norm(nearby_freqs - picked_frequency, axis=-1) <= avoid_in_radius]
+            nearby_freqs_negative = -nearby_freqs
+            nearby_vec_indices = core.frequencies_to_vec_indices(nearby_freqs, volume_shape)
+            nearby_negative_vec_indices = core.frequencies_to_vec_indices(nearby_freqs_negative, volume_shape)
+            nearby_vec_indices = np.array(nearby_vec_indices)
+            nearby_negative_vec_indices = np.array(nearby_negative_vec_indices)
+            for k in range(nearby_vec_indices.size):
+                picked_set.add(nearby_vec_indices[k])
+                picked_set.add(nearby_negative_vec_indices[k])
+    
+    picked_frequencies = core.vec_indices_to_frequencies(np.array(picked), volume_shape)
+
+    return np.array(picked), np.array(picked_frequencies)
+
+def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_radius = 1):
+    if avoid_in_radius < 0 or avoid_in_radius > 20:
+        raise ValueError("avoid_in_radius should be between 0 and 20")
+
+    if n_samples < 1 or n_samples > sampling_vec.size:
+        raise ValueError("n_samples should be between 1 and the size of sampling_vec")
+
+    sorted_idx = jnp.argsort(-sampling_vec)
+    sorted_idx = np.array(sorted_idx)
+    picked_set = set()
+    picked = []
+    n_picked =0 
+    sorted_frequencies = core.vec_indices_to_frequencies(sorted_idx, volume_shape)
+    sorted_frequencies_norm = np.linalg.norm(sorted_frequencies, axis=-1)
+    running_vec = sampling_vec.copy().astype(np.float64)
+
+    probs = running_vec/np.sum(running_vec)
+    random_choices = np.random.choice(running_vec.size, size = n_samples * 100, p = probs, replace=False)
+    test_idx =0 
+
+    while n_picked < n_samples:
+        if test_idx >= random_choices.size:
+            random_choices = np.random.choice(running_vec.size, n_samples * 100, p = probs, replace=False)[0]
+            test_idx =0 
+
+        idx = random_choices[test_idx]
+        picked_frequency = core.vec_indices_to_frequencies(idx[None], volume_shape)
+        # take things only on the + x side
+        if picked_frequency[0,0] < 0:
+            picked_frequency = -picked_frequency # Take the complex conjugate instead
+            idx = int(core.frequencies_to_vec_indices(picked_frequency, volume_shape)[0])
+
+        test_idx +=1        
+        if idx in picked_set:
+            continue
+
+        picked.append(idx)
+        n_picked += 1
+        if n_picked >= n_samples:
+            break
+        picked_set.add(idx)
+
+        nearby_freqs = core.find_frequencies_within_grid_dist(picked_frequency, np.ceil(avoid_in_radius).astype(int) )
+        nearby_freqs = np.array(nearby_freqs)
+        nearby_freqs = nearby_freqs[np.linalg.norm(nearby_freqs - picked_frequency, axis=-1) <= avoid_in_radius]
+        nearby_freqs_negative = -nearby_freqs
+        nearby_vec_indices = core.frequencies_to_vec_indices(nearby_freqs, volume_shape)
+        nearby_negative_vec_indices = core.frequencies_to_vec_indices(nearby_freqs_negative, volume_shape)
+        nearby_vec_indices = np.array(nearby_vec_indices)
+        nearby_negative_vec_indices = np.array(nearby_negative_vec_indices)
+        for k in range(nearby_vec_indices.size):
+            picked_set.add(nearby_vec_indices[k])
+            picked_set.add(nearby_negative_vec_indices[k])
+    
+    picked_frequencies = core.vec_indices_to_frequencies(np.array(picked), volume_shape)
+
+    return np.array(picked), np.array(picked_frequencies)
 
 
-def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, noise_model, options):
+def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, noise_model, options, picked_frequencies):
+    
+    image_batch_size = utils.get_image_batch_size(cryos[0].grid_size, gpu_memory)
+    frequency_batch = utils.get_column_batch_size(cryos[0].grid_size, gpu_memory)    
+
+    covariance_cols = []
+    fscs = []
+    for k in range(0, int(np.ceil(picked_frequencies.size/frequency_batch))):
+        batch_st = int(k * frequency_batch)
+        batch_end = int(np.min( [(k+1) * frequency_batch ,picked_frequencies.size  ]))
+        logger.info(f'first batch of col done : {batch_st}, {batch_end}')
+
+        covariance_cols_b, _, fscs_b = compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, noise_model, options, picked_frequencies[batch_st:batch_end])
+        covariance_cols.append(covariance_cols_b['est_mask'])
+        fscs.append(fscs_b)
+
+    covariance_cols = {'est_mask' : np.concatenate(covariance_cols, axis = -1)}
+    fscs = np.concatenate(fscs, axis = 0)
+    return covariance_cols, picked_frequencies, fscs
+
+
+def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, noise_model, options, picked_frequencies):
 
     cryo = cryos[0]
     volume_shape = cryos[0].volume_shape
-    if cryo.grid_size == 16:
-        picked_frequencies = np.arange(cryo.volume_size) 
-    else:
-        picked_frequencies = np.array(covariance_core.get_picked_frequencies(volume_shape, radius = options['column_radius'], use_half = True))
+    # if cryo.grid_size == 16:
+    #     picked_frequencies = np.arange(cryo.volume_size) 
+    # else:
+    #     picked_frequencies = np.array(covariance_core.get_picked_frequencies(volume_shape, radius = options['column_radius'], use_half = True))
 
     # These options should probably be left as is.
     mask_ls = dilated_volume_mask
@@ -77,8 +196,13 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, 
 
     if options["reg_fn"] == "new":
         logger.info("using new covariance reg fn")
+        utils.report_memory_device(logger = logger)
+
         covariance_cols["est_mask"], prior, fscs = compute_covariance_regularization_relion_style(Hs, Bs, mean_prior, picked_frequencies, volume_noise_var, mask_final, volume_shape,  gpu_memory, reg_init_multiplier = constants.REG_INIT_MULTIPLIER, options = options)
         covariance_cols["est_mask"] = covariance_cols["est_mask"].T
+        del Hs, Bs
+        logger.info("after reg fn")
+        utils.report_memory_device(logger = logger)
     elif options["reg_fn"] == "old":
         logger.info("using old covariance reg fn")
         H_comb, B_comb, prior, fscs = compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, volume_noise_var, mask_final, volume_shape,  gpu_memory, prior_iterations = 3, keep_intermediate = keep_intermediate, reg_init_multiplier = constants.REG_INIT_MULTIPLIER, substract_shell_mean = options["substract_shell_mean"], shift_fsc = options["shift_fsc"])
@@ -103,124 +227,134 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, 
 
     return covariance_cols, picked_frequencies, np.asarray(fscs)
 
-# def compute_regularized_covariance_columns_test(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, noise_model = "white", disc_type = 'linear_interp', radius = 5):
-
-#     cryo = cryos[0]
-#     volume_shape = cryos[0].volume_shape
-#     radius = constants.COLUMN_RADIUS if radius is None else radius
-#     if cryo.grid_size == 16:
-#         picked_frequencies = np.arange(cryo.volume_size) 
-#     else:
-#         picked_frequencies = np.array(covariance_core.get_picked_frequencies(volume_shape, radius = radius, use_half = True))
 
 
-#     # These options should probably be left as is.
-#     mask_ls = dilated_volume_mask
-#     mask_final = volume_mask
-#     substract_shell_mean = False 
-#     shift_fsc = False
-#     keep_intermediate = False
-
-#     # image_batch_size = utils.get_image_batch_size(cryo.grid_size, )
-
-#     # if noise_model == "white":
-#     #     image_noise_var = cov_noise
-#     # elif noise_model == "radial":
-#     #     image_noise_var = noise.make_radial_noise(cov_noise, cryos[0].image_shape)
-#     # else:
-#     #     assert False, "wrong noise model"
-#     image_noise_var = noise.make_radial_noise(cov_noise, cryos[0].image_shape)
-
-#     utils.report_memory_device(logger = logger)
-#     disc_type = 'nearest'
-#     Hs, Bs = compute_both_H_B(cryos, means["combined"], mask_ls, picked_frequencies, gpu_memory, image_noise_var, disc_type, parallel_analysis = False, H_B_fn = "noisemask")
-#     st_time = time.time()
-
-#     ## DEL ALL THIS
-#     H_comb = Hs[0].T
-#     B_comb = Bs[0].T
-
-#     covariance_cols = {}
-#     cols2 = []
-#     for col_idx in range(picked_frequencies.size):
-#         # cols2.append(np.array(regularization.covariance_update_col_with_mask(H_comb[col_idx], B_comb[col_idx], prior[col_idx], volume_mask, valid_idx, volume_shape)))
-#         cols2.append(np.array(regularization.covariance_update_col(H_comb[col_idx], B_comb[col_idx],  B_comb[col_idx]*0 + np.inf) * valid_idx ))
-#     logger.warning("TOOK OUT PRIOR STUFF. PROBABLY ")
-#     logger.warning("TOOK OUT PRIOR STUFF. PROBABLY ")
-#     logger.warning("TOOK OUT PRIOR STUFF. PROBABLY ")
-#     logger.warning("TOOK OUT PRIOR STUFF. PROBABLY ")
-    
-        
-#     # logger.info(f"cov update time: {time.time() - st_time2}")
-
-#     covariance_cols["est_mask"] = np.stack(cols2, axis =-1).astype(cryo.dtype)
-#     utils.pickle_dump(covariance_cols, "/home/mg6942/mytigress/synthetic_clean_white/cols_one_"+ disc_type+ "_unfixed.pkl")
+# import functools, jax
+@functools.partial(jax.jit, static_argnums=[5,6,8, 12,13,14,15])
+def variance_relion_style_triangular_kernel_batch_trilinear(mean_estimate, images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, cov_noise, volume_mask, image_mask, volume_mask_threshold, grid_size, padding, soften = 5):
 
 
+    CTF_squared = CTF_fun( CTF_params, image_shape, voxel_size)
 
-#     utils.report_memory_device(logger = logger)
-#     disc_type = 'nearest'
-#     Hs, Bs = compute_both_H_B(cryos, means["combined"], mask_ls, picked_frequencies, gpu_memory, image_noise_var, disc_type, parallel_analysis = False, H_B_fn = "fixed")
-#     st_time = time.time()
+    images = core.translate_images(images, translations, image_shape) 
+    # import pdb; pdb.set_trace()
 
-#     ## DEL ALL THIS
-#     H_comb = Hs[0].T
-#     B_comb = Bs[0].T
+    images = images - core.slice_volume_by_trilinear(mean_estimate, rotation_matrices, image_shape, volume_shape) * CTF_squared
 
-#     covariance_cols = {}
-#     cols2 = []
-#     for col_idx in range(picked_frequencies.size):
-#         # cols2.append(np.array(regularization.covariance_update_col_with_mask(H_comb[col_idx], B_comb[col_idx], prior[col_idx], volume_mask, valid_idx, volume_shape)))
-#         cols2.append(np.array(regularization.covariance_update_col(H_comb[col_idx], B_comb[col_idx],  B_comb[col_idx]*0 + np.inf) * valid_idx ))
-#     logger.warning("TOOK OUT PRIOR STUFF. PROBABLY ")
-#     logger.warning("TOOK OUT PRIOR STUFF. PROBABLY ")
-#     logger.warning("TOOK OUT PRIOR STUFF. PROBABLY ")
-#     logger.warning("TOOK OUT PRIOR STUFF. PROBABLY ")
-    
-        
-#     # logger.info(f"cov update time: {time.time() - st_time2}")
+    # Before masking?
+    Ft_im = core.adjoint_slice_volume_by_trilinear(jnp.abs(images)**2, rotation_matrices, image_shape, volume_shape)
 
-#     covariance_cols["est_mask"] = np.stack(cols2, axis =-1).astype(cryo.dtype)
-#     utils.pickle_dump(covariance_cols, "/home/mg6942/mytigress/synthetic_clean_white/cols_one_"+ disc_type+ "_fixed.pkl")
+    Ft_one = core.adjoint_slice_volume_by_trilinear(jnp.ones_like(images), rotation_matrices, image_shape, volume_shape)
+
+    if volume_mask is not None:
+
+        image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
+                                              rotation_matrices,
+                                              image_mask, 
+                                              volume_mask_threshold,
+                                              image_shape, 
+                                              volume_shape, grid_size, 
+                                              padding, 
+                                              'linear_interp', soften = soften )
+        images = covariance_core.apply_image_masks(images, image_mask, image_shape)
+        cov_noise_white = noise.get_masked_noise_variance_from_noise_variance(image_mask, jnp.ones_like(cov_noise), image_shape)
+        cov_noise = noise.get_masked_noise_variance_from_noise_variance(image_mask, cov_noise, image_shape)
+
+    # Maybe apply mask
+
+    images_squared = jnp.abs(images)**2  - cov_noise.reshape(images.shape) #* np.sum(mask) # May need to do something with mask
+    # summed_images_squared =  jnp.abs(images)**2
+
+    CTF_squared = CTF_squared**2
+    images_squared *= CTF_squared
+
+    Ft_y = core.adjoint_slice_volume_by_trilinear(images_squared, rotation_matrices, image_shape, volume_shape)
+
+    Ft_ctf = core.adjoint_slice_volume_by_trilinear(CTF_squared**2, rotation_matrices, image_shape, volume_shape)
+
+    # Ft_im = core.adjoint_slice_volume_by_trilinear(jnp.abs(images)**2, rotation_matrices, image_shape, volume_shape)
+
+    # Ft_one = core.adjoint_slice_volume_by_trilinear(cov_noise_white, rotation_matrices, image_shape, volume_shape)
+
+    return Ft_y, Ft_ctf, Ft_im, Ft_one
 
 
+### NOTE THIS FUNCTION SHOULD BE REWRITTEN. I HACKED IT TOGETHER
+def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, cov_noise,  batch_size, index_subset = None, volume_mask = None):
+    if index_subset is None:
+        data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+    else:
+        data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = index_subset)
 
-#     assert False
-#     ## DEL ALL THIS -- END
+    Ft_y, Ft_ctf, Ft_im, Ft_one = 0, 0, 0, 0
+    for batch, indices in data_generator:
+        batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
+        Ft_y_b, Ft_ctf_b, Ft_im_b, Ft_one_b = variance_relion_style_triangular_kernel_batch_trilinear(mean_estimate, 
+                                                                batch,
+                                                                experiment_dataset.CTF_params[indices], 
+                                                                experiment_dataset.rotation_matrices[indices], 
+                                                                experiment_dataset.translations[indices], 
+                                                                experiment_dataset.image_shape, 
+                                                                experiment_dataset.upsampled_volume_shape, 
+                                                                experiment_dataset.voxel_size, 
+                                                                experiment_dataset.CTF_fun, 
+                                                                cov_noise,
+                                                                volume_mask,
+                                                                experiment_dataset.image_stack.mask,
+                                                                experiment_dataset.volume_mask_threshold,
+                                                                experiment_dataset.grid_size,
+                                                                experiment_dataset.padding,
+                                                                soften = 5
+                                                                )
+        Ft_y += Ft_y_b
+        Ft_ctf += Ft_ctf_b
+        Ft_im += Ft_im_b
+        Ft_one += Ft_one_b
+
+    return Ft_ctf, Ft_y, Ft_one, Ft_im
 
 
-#     utils.report_memory_device(logger = logger)
+def compute_variance(cryos, mean_estimate, batch_size, volume_mask, noise_variance = None,  use_regularization = False):
+    st_time = time.time()
+
+    cryo = cryos[0]
+    from recovar import relion_functions
+
+    variance = dict()
+    lhs_l = 2 * [None]
+    rhs_l = 2 * [None]
+    noise_p_variance_lhs = 2 * [None]
+    noise_p_variance_rhs = 2 * [None]
+    mean_estimate = mean_estimate.reshape(-1)
+    for idx, cryo in enumerate(cryos):
+        lhs_l[idx], rhs_l[idx], noise_p_variance_lhs[idx] , noise_p_variance_rhs[idx] = variance_relion_style_triangular_kernel(cryo, mean_estimate, noise_variance,  batch_size, index_subset = None, volume_mask = volume_mask)
+
+        lhs_l[idx] = relion_functions.adjust_regularization_relion_style(lhs_l[idx], cryos[0].volume_shape, tau = None, padding_factor = 1, max_res_shell = None)
+        variance["corrected" + str(idx)] = rhs_l[idx] / lhs_l[idx]
+
+    lhs = (lhs_l[0] + lhs_l[1])/2
+    variance_prior, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(cryo.volume_shape, variance["corrected0"], variance["corrected1"], lhs, jnp.ones(cryos[0].volume_size, dtype = cryos[0].dtype_real) * np.inf, frequency_shift = jnp.array([0,0,0]), upsampling_factor = 1, substract_shell_mean = True)
+
+    if use_regularization:
+        for idx, cryo in enumerate(cryos):
+            lhs_l[idx] = relion_functions.adjust_regularization_relion_style(lhs_l[idx], cryos[0].volume_shape, tau = variance_prior, padding_factor = 1, max_res_shell = None)
+            variance["corrected" + str(idx)] = rhs_l[idx] / lhs_l[idx]
+
+    variance_prior = np.array(variance_prior)
+    variance["combined"] = (variance["corrected0"] + variance["corrected1"])/2
+    variance["prior"] = variance_prior
+    variance["lhs"] = lhs
+
+    for key in variance:
+        variance[key] = np.array(variance[key]).real
 
 
-#     # if noise_model == "white":
-#     #     volume_noise_var = cov_noise
-#     # elif noise_model == "radial":
-#     volume_noise_var = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].volume_shape))
+    noise_p_variance_est = ( noise_p_variance_rhs[0] + noise_p_variance_rhs[1]) / (noise_p_variance_lhs[0] + noise_p_variance_lhs[1])
 
-#     H_comb, B_comb, prior, fscs = compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, volume_noise_var, mask_final, volume_shape,  gpu_memory, prior_iterations = 3, keep_intermediate = keep_intermediate, reg_init_multiplier = constants.REG_INIT_MULTIPLIER, substract_shell_mean = substract_shell_mean, shift_fsc = shift_fsc)
-#     del Hs, Bs
+    end_time = time.time()
+    logger.info(f"time to compute means: {end_time- st_time}")
 
-#     H_comb = np.stack(H_comb).astype(dtype = cryo.dtype)
-#     B_comb = np.stack(B_comb).astype(dtype = cryo.dtype)
-
-#     st_time2 = time.time()
-#     covariance_cols = {}
-#     cols2 = []
-#     for col_idx in range(picked_frequencies.size):
-#         # cols2.append(np.array(regularization.covariance_update_col_with_mask(H_comb[col_idx], B_comb[col_idx], prior[col_idx], volume_mask, valid_idx, volume_shape)))
-#         logger.warning("TOOK OUT PRIOR STUFF. PROBABLY ")
-#         cols2.append(np.array(regularization.covariance_update_col(H_comb[col_idx], B_comb[col_idx], prior[col_idx]*0 + np.inf) * valid_idx ))
-
-        
-#     logger.info(f"cov update time: {time.time() - st_time2}")
-
-#     covariance_cols["est_mask"] = np.stack(cols2, axis =-1).astype(cryo.dtype)
-#     utils.pickle_dump(covariance_cols, "/home/mg6942/mytigress/synthetic_clean_white/cols.pkl")
-
-#     del H_comb, B_comb, prior
-#     logger.info(f"reg time: {time.time() - st_time}")
-#     utils.report_memory_device(logger = logger)
-#     return covariance_cols, picked_frequencies, np.asarray(fscs)
+    return variance, variance_prior.real, fsc.real, lhs.real, noise_p_variance_est.real
 
 
 
@@ -239,7 +373,6 @@ def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies, gpu_
     return Hs, Bs
 
 
-
 # AT SOME POINT, I CONVINCED MYSELF THAT IT WAS BETTER FOR MEMORY TRANSFER REASONS TO DO THIS IN BATCHES OVER VOLS, THEN OVER IMAGES. I am not sure anymore.
 # Covariance_cols
 def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gpu_memory, cov_noise, disc_type, parallel_analysis = False, options = None):
@@ -254,7 +387,6 @@ def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequenc
     #                                                              None , disc_type = disc_type,
     #                                                              parallel_analysis = parallel_analysis,
     #                                                              jax_random_key = 0, batch_over_H_B = True)
-    
 
     H = np.empty( [cryo.volume_size, picked_frequencies.size] , dtype = cryo.dtype)
     B = np.empty( [cryo.volume_size, picked_frequencies.size] , dtype = cryo.dtype)
@@ -285,8 +417,6 @@ def compute_covariance_regularization_relion_style(Hs, Bs, mean_prior, picked_fr
     # assert substract_shell_mean == False
     # assert shift_fsc == False
     volume_mask = volume_mask if options["use_mask_in_fsc"] else None
-    if options["use_mask_in_fsc"]:
-        logger.warning("using mask in fsc! Are you sure about that?")
 
     # 
     regularization_init = (mean_prior + 1e-14) * reg_init_multiplier / cov_noise
@@ -294,9 +424,9 @@ def compute_covariance_regularization_relion_style(Hs, Bs, mean_prior, picked_fr
         return regularization_init[None] * regularization_init[picked_frequencies[np.array(k)], None] 
 
     # This should probably be rewritten.
-    for cryo_idx in range(len(Hs)):
-        Hs[cryo_idx] = Hs[cryo_idx].T
-        Bs[cryo_idx] = Bs[cryo_idx].T
+    # for cryo_idx in range(len(Hs)):
+    #     Hs[cryo_idx] = Hs[cryo_idx].T
+    #     Bs[cryo_idx] = Bs[cryo_idx].T
     
     # Column-wise regularize 
     shifts = core.vec_indices_to_frequencies(picked_frequencies, volume_shape) * (options["shift_fsc"])
@@ -311,31 +441,35 @@ def compute_covariance_regularization_relion_style(Hs, Bs, mean_prior, picked_fr
     for k in range(int(np.ceil(n_freqs/batch_size))-1, -1, -1):
         batch_st = int(k * batch_size)
         batch_end = int(np.min( [(k+1) * batch_size, n_freqs]))
-        indices = jnp.arange(batch_st, batch_end)
-        H0_batch = Hs[0][batch_st:batch_end]
-        H1_batch = Hs[1][batch_st:batch_end]
-        B0_batch = Bs[0][batch_st:batch_end]
-        B1_batch = Bs[1][batch_st:batch_end]   
+        indices = np.arange(batch_st, batch_end)
+        H0_batch = Hs[0][:,batch_st:batch_end].T
+        H1_batch = Hs[1][:,batch_st:batch_end].T
+        B0_batch = Bs[0][:,batch_st:batch_end].T
+        B1_batch = Bs[1][:,batch_st:batch_end].T 
 
         combined_cov_col, priors, fscs_this = regularization.prior_iteration_relion_style_batch(H0_batch, H1_batch, B0_batch, B1_batch,
         shifts[indices],
         init_regularization_of_column_k(np.array(indices)), 
         options['substract_shell_mean'], 
         volume_shape, options['left_kernel'], 
-        options['use_spherical_mask'],  options['grid_correct'],  volume_mask)
+        options['use_spherical_mask'],  options['grid_correct'],  volume_mask, options["prior_n_iterations"])
 
         cpus = jax.devices("cpu")
         priors = jax.device_put(priors, cpus[0])
         for k,ind in enumerate(indices):
-            fsc_priors[ind] = priors[k].real
-            fscs[ind] = fscs_this[k]
-            combined_cov_cols[ind] = combined_cov_col[k]
+            if options["prior_n_iterations"] >= 0:
+                fsc_priors[ind] = np.asarray(priors[k].real)
+            fscs[ind] = np.asarray(fscs_this[k])
+            combined_cov_cols[ind] = np.asarray(combined_cov_col[k])
+        del combined_cov_col, priors
 
-    fsc_priors = np.stack(fsc_priors, axis =0).real
+    if options["prior_n_iterations"] >= 0:
+        fsc_priors = np.stack(fsc_priors, axis =0).real
+
     combined_cov_cols = np.stack(combined_cov_cols, axis =0)
 
     # Symmetricize prior    
-    fsc_priors[:,picked_frequencies] = 0.5 * ( fsc_priors[:,picked_frequencies] + fsc_priors[:,picked_frequencies].T ) 
+    # fsc_priors[:,picked_frequencies] = 0.5 * ( fsc_priors[:,picked_frequencies] + fsc_priors[:,picked_frequencies].T ) 
     return combined_cov_cols, fsc_priors, fscs
 
 def compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, cov_noise, volume_mask, volume_shape, gpu_memory,  prior_iterations = 3, keep_intermediate = False, reg_init_multiplier = 1, substract_shell_mean = False, shift_fsc = False):
@@ -1020,6 +1154,9 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
 @functools.partial(jax.jit, static_argnums = [8,9,10,11,12,13,14,16,17,18])    
 def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, noise_variance, process_fn, CTF_fun, parallel_analysis = False, jax_random_key = None):
     
+    if disc_type != 'linear_interp':
+        logger.warning("USING NEAREST NEIGHBOR DISCRETIZATION IN reduce_covariance_est_inner")
+
     # Memory to do this is ~ size(volume_mask) * batch_size
     image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
                                           rotation_matrices,
@@ -1028,8 +1165,8 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
                                           image_shape, 
                                           volume_shape, grid_size, 
                                           padding, 
-                                          disc_type ) * 0 + 1
-    logger.warning("Not using mask in reduce_covariance_est_inner")
+                                          disc_type ) #* 0 + 1
+    logger.warning("USING mask in reduce_covariance_est_inner")
 
     
     batch = process_fn(batch)
@@ -1071,8 +1208,7 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
     #     # random_vals
     #     batch *= random_vals
         # print("here")
-    # import pdb; pdb.set_trace()
-    AU_t_images = batch_x_T_y(AUs, batch)#.block_until_ready()
+    AU_t_images = batch_x_T_y(AUs, batch)
 
     # if parallel_analysis:
     #     random_vals = jax.random.randint(jax_random_key, AU_t_images.shape, 0, 2)*2 - 1

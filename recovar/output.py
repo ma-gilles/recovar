@@ -184,7 +184,7 @@ def plot_trajectories_over_density(density, trajectories, latent_space_bounds,  
         for k2 in range(k1+1, traj_dim):
             plot_traj_along_axes([k1, k2])
 
-def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us_to_save = 20, us_to_var = [4,10,20]):
+def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us_to_save = 50, us_to_var = [4,10,20]):
      
     mkdir_safe(output_folder + 'volumes/')
     save_volumes([ u[...,k] for k in range (us_to_save)], output_folder + 'volumes/' +  'eigen_pos', volume_shape = volume_shape)
@@ -358,6 +358,65 @@ def load_results_new(datadir):
     # grid_to_z, z_to_grid = ld.get_grid_z_mappings(results['latent_space_bounds'], results['density'].shape[0])
     return results#, results['dataset_loader_dict'], grid_to_z, z_to_grid
 
+
+class PipelineOutput:
+    def __init__(self, result_path):
+        self.params = utils.pickle_load(result_path + 'model/params.pkl')
+        self.embedding = None
+        self.embedding_loaded = False
+        self.result_path = result_path
+    def get(self,key):
+        if key in self.params:
+            return self.params[key]
+        elif key in ['zs', 'cov_zs', 'contrasts', 'zs_cont', 'cov_zs_cont', 'est_contrasts_cont']:
+            if self.embedding_loaded:
+                return self.embedding[key]
+            else:
+                self.embedding = utils.pickle_load(self.result_path + 'model/' + 'embeddings' + '.pkl')
+                self.embedding_loaded = True
+                return self.embedding[key]
+        elif key == 'u' or key == 'u_real':
+            n_pcs = 50
+            u = np.zeros([n_pcs, *(self.params['volume_shape'])])
+            for i in range(n_pcs):
+                u[i] = utils.load_mrc(self.result_path + 'output/volumes/' + 'eigen_pos' + format(i, '03d') + '.mrc')
+            if key == 'u_real':
+                return u
+            else:
+                #return self.params['volume_shape'], 10).reshape(n_pcs, -1)
+                return ftu.get_dft3(u).reshape(n_pcs, -1)
+        
+        elif key == 'mean':
+            return ftu.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/' + 'mean' + '.mrc')).reshape(-1)
+        elif key == 'volume_mask':
+            return utils.load_mrc(self.result_path + 'output/volumes/' + 'mask' + '.mrc')
+        elif key == 'dilated_volume_mask':
+            return utils.load_mrc(self.result_path + 'output/volumes/' + 'dilated_mask' + '.mrc')
+        elif key == 'covariance_cols':
+            return utils.load_pickle(self.result_path + 'model/' + 'covariance_cols' + '.pkl')
+        elif key == 'dataset':
+            return dataset.load_dataset_from_args(self.params['input_args'], lazy = False) 
+        elif key == 'lazy_dataset':
+            return dataset.load_dataset_from_args(self.params['input_args'], lazy = True) 
+        else:
+            assert False, "key not found"
+    def keys(self):
+        keys = list(self.params.keys())
+        keys += ['zs', 'cov_zs', 'contrasts', 'u', 'u_real', 'mean', 'volume_mask', 'dilated_volume_mask', 'covariance_cols', 'dataset', 'lazy_dataset']
+        return keys
+
+
+
+
+def load_results_newest(datadir):
+    model_folder = datadir +'model'  + '/'
+    output_folder = datadir +'output'  + '/'
+    with open(model_folder + 'results.pkl', 'rb') as f:
+        results = pickle.load( f)
+    # results['dataset_loader_dict']['compute_ground_truth'] = False
+    # dataset_loader = dataset.get_dataset_loader_from_dict(results['dataset_loader_dict'])
+    # grid_to_z, z_to_grid = ld.get_grid_z_mappings(results['latent_space_bounds'], results['density'].shape[0])
+    return results#, results['dataset_loader_dict'], grid_to_z, z_to_grid
 
 
 def make_trajectory_plots_from_results(results, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =10, compute_reproj = False, likelihood_threshold = None, adaptive = False):

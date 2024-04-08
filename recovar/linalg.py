@@ -31,7 +31,7 @@ def blockwise_Y_T_X(Y,X, batch_size = None, memory_to_use = 10):
     for k in range(0, int(np.ceil(n_rows/batch_size))):
         batch_st, batch_end = batch_st_end(k, batch_size, n_rows)
         YX += square_jit(Y[batch_st:batch_end], X[batch_st:batch_end]) #jnp.conj(Z).T @ Z
-        utils.report_memory_device(logger =logger)
+        # utils.report_memory_device(logger =logger)
     return np.array(YX)
 
 
@@ -63,7 +63,10 @@ def blockwise_A_X(A, X, batch_size = None, memory_to_use = 10):
     if batch_size is None:
         size_of_X = utils.get_size_in_gb(X)
         usable_memory = memory_to_use - size_of_X 
-        size_of_A = utils.get_size_in_gb(A)
+        # max_item_size = A.itemsize if A.itemsize > X.itemsize else X.itemsize
+        max_item_size = (A[0,0] * X[0,0]).itemsize # item size of product
+
+        size_of_A = A.shape[0]* ( np.max([A.shape[1], X.shape[1]])) * max_item_size / 1e9
         n_blocks = np.ceil( 4 * size_of_A / usable_memory).astype(int)
         batch_size = np.floor(A.shape[0] / n_blocks)
         
@@ -158,8 +161,11 @@ def randomized_svd(A, n_pcs = 200):
     logger.info("QR done")
     Y = blockwise_Y_T_X(Q,A) #np.conj(Q).T @ A
     logger.info("Q^TA done")
-    U, S, Vh = np.linalg.svd(Y)#, full_matrices = True)
-    return Q @ U, S, Vh
+    svd_cpu = jax.jit(jnp.linalg.svd, backend='cpu')
+    U, S, Vh = svd_cpu(Y)#, full_matrices = True)
+    QU = blockwise_A_X(Q, U, memory_to_use = utils.get_gpu_memory_total()//3)
+
+    return QU, S, Vh
 
     # Y = np.conj(X).T @ X
     # Ys, Yu = np.linalg.eigh(Y)#, full_matrices = True)

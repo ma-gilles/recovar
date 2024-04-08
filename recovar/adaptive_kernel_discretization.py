@@ -1124,22 +1124,25 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
     estimates = []#heterogeneity_bins.size * [None]
 
     bins = heterogeneity_bins.copy()
-    inds = np.digitize(heterogeneity_distances, bins)
+    inds = np.digitize(heterogeneity_distances, bins, right = True)
     n_bins = bins.size
     half_volume_size = np.prod(volume_shape_to_half_volume_shape(experiment_dataset.upsampled_volume_shape))
 
     lhs_all = np.zeros((n_bins, half_volume_size), dtype =experiment_dataset.dtype_real )
     rhs_all = np.zeros((n_bins, half_volume_size), dtype =experiment_dataset.dtype )
 
-    logger.info(f"batch size in het comp: {batch_size}")
+    # logger.info(f"batch size in het comp: {batch_size}")
     # data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size)
     # weights = jnp.asarray(weights)
     for bin_idx in range(n_bins):
         image_inds = np.where(inds == bin_idx)[0]
+        # print(image_inds.size)
+
         data_generator = experiment_dataset.get_dataset_subset_generator( batch_size=batch_size, subset_indices = image_inds)
         lhs = jnp.zeros(half_volume_size, dtype = experiment_dataset.dtype_real )
         rhs = jnp.zeros(half_volume_size, dtype = experiment_dataset.dtype )
         for batch, indices in data_generator:
+
             # import pdb; pdb.set_trace()
             # Only place where image mask is used ?
             batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
@@ -1176,7 +1179,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
 
     rhs_all = np.cumsum(rhs_all, axis=0)
     lhs_all = np.cumsum(lhs_all, axis=0)
-    logger.info(f"done with precomp")
+    # logger.info(f"done with precomp")
 
     for idx in range(heterogeneity_bins.size):
         estimate = relion_functions.post_process_from_filter(experiment_dataset, 

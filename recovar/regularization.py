@@ -203,11 +203,13 @@ def compute_fsc_prior_gpu(volume_shape, image0, image1, bottom_of_fraction = Non
 def downsample_lhs(lhs, volume_shape, upsampling_factor = 1):
     # Downsample lhs by a factor of 2
     # radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = -1)
-    kernel = jnp.ones( 3 * [2 * upsampling_factor - 1])
+    # lhs_inp_shape = lhs.shape
+    kernel = jnp.ones( 3 * [2 * upsampling_factor - 1], dtype = jnp.float32)
     kernel = kernel / jnp.sum(kernel)
     lhs = jax.scipy.signal.fftconvolve(lhs, kernel, mode = 'same')
     lhs = lhs[::upsampling_factor,::upsampling_factor,::upsampling_factor]
-    return lhs * (2 **len(volume_shape))
+    lhs = jnp.where(lhs > 0, lhs, 0)
+    return (lhs * (2 **len(volume_shape)))
 
 
 @functools.partial(jax.jit, static_argnums = [0,6, 7])    
@@ -225,13 +227,17 @@ def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequenc
     upsampled_volume_shape = tuple([ upsampling_factor * i for i in volume_shape])
     lhs = downsample_lhs(lhs.reshape(upsampled_volume_shape), upsampled_volume_shape, upsampling_factor = upsampling_factor).reshape(-1)
 
-    top = lhs**2 / (lhs + 1/prior)**2
+    if prior is None:
+        top = jnp.ones_like(lhs)
+        bot = 1 / lhs
+    else:
+        top = lhs**2 / (lhs + 1/prior)**2
+        bot = lhs / (lhs + 1/prior)**2
+
     sum_top = average_over_shells(top,  volume_shape, frequency_shift)    
+    sum_bot = average_over_shells(bot,  volume_shape, frequency_shift)
     
-    bot = lhs / (lhs + 1/prior)**2
-    sum_bot = average_over_shells(bot,  volume_shape, frequency_shift)    
-    
-    prior_avg = jnp.where( sum_top > 0 , SNR * sum_bot / sum_top , constants.ROOT_EPSILON )
+    prior_avg = jnp.where( sum_top > 0 , SNR * sum_bot / sum_top , constants.ROOT_EPSILON ).real
     
     # Put back in array
     radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1)
@@ -274,37 +280,44 @@ def prior_iteration(H0, H1, B0, B1, frequency_shift, init_regularization, substr
     return prior, fsc
 
 from recovar import relion_functions
-@functools.partial(jax.jit, static_argnums = [6,7,8,9,10])    
-def prior_iteration_relion_style(H0, H1, B0, B1, frequency_shift, init_regularization, substract_shell_mean, volume_shape, kernel = 'triangular', use_spherical_mask = True, grid_correct = True, volume_mask = None ):
+@functools.partial(jax.jit, static_argnums = [6,7,8,9,10, 12])    
+def prior_iteration_relion_style(H0, H1, B0, B1, frequency_shift, init_regularization, substract_shell_mean, volume_shape, kernel = 'triangular', use_spherical_mask = True, grid_correct = True, volume_mask = None, prior_iterations = 3):
     # assert substract_shell_mean == False
     # assert jnp.linalg.norm(frequency_shift) < 1e-8
 
     H_comb = (H0 +  H1)/2
-    prior = init_regularization
+    prior = init_regularization.real
 
-    # Harcoded iterations because I couldn't figure out to make jit the loop properly...
-    cov_col0 = relion_functions.post_process_from_filter_v2(H0, B0, volume_shape, volume_upsampling_factor = 1, tau = prior, kernel = kernel, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1, volume_mask = volume_mask )
-    cov_col1 = relion_functions.post_process_from_filter_v2(H1, B1, volume_shape, volume_upsampling_factor = 1, tau = prior, kernel = kernel, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 , volume_mask = volume_mask )
-    prior, fsc, _ = compute_fsc_prior_gpu_v2(volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift = frequency_shift, substract_shell_mean = substract_shell_mean)
+    def body_fun(prior, fsc):
+        cov_col0 = relion_functions.post_process_from_filter_v2(H0, B0, volume_shape, volume_upsampling_factor = 1, tau = prior, kernel = kernel, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1, volume_mask = volume_mask )
+        cov_col1 = relion_functions.post_process_from_filter_v2(H1, B1, volume_shape, volume_upsampling_factor = 1, tau = prior, kernel = kernel, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 , volume_mask = volume_mask )
+        prior, fsc, _ = compute_fsc_prior_gpu_v2(volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift = frequency_shift, substract_shell_mean = substract_shell_mean)
+        return prior, fsc
+    
+    ## TODO: Surely there is a better way to do this...
+    def body_fun_no_fsc(i, prior):
+        prior, _ = body_fun(prior, None)
+        return prior
 
-    cov_col0 = relion_functions.post_process_from_filter_v2(H0, B0, volume_shape, volume_upsampling_factor = 1, tau = prior, kernel = kernel, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1, volume_mask = volume_mask )
-    cov_col1 = relion_functions.post_process_from_filter_v2(H1, B1, volume_shape, volume_upsampling_factor = 1, tau = prior, kernel = kernel, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 , volume_mask = volume_mask )
-    prior, fsc, _ = compute_fsc_prior_gpu_v2(volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift = frequency_shift, substract_shell_mean = substract_shell_mean)
-
-
-    cov_col0 = relion_functions.post_process_from_filter_v2(H0, B0, volume_shape, volume_upsampling_factor = 1, tau = prior, kernel = kernel, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1, volume_mask = volume_mask )
-    cov_col1 = relion_functions.post_process_from_filter_v2(H1, B1, volume_shape, volume_upsampling_factor = 1, tau = prior, kernel = kernel, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 , volume_mask = volume_mask )
-    prior, fsc, _ = compute_fsc_prior_gpu_v2(volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift = frequency_shift, substract_shell_mean = substract_shell_mean)
+    if prior_iterations > 0:
+        prior = jax.lax.fori_loop(0, prior_iterations, body_fun_no_fsc, prior)
+        _, fsc = body_fun(prior, None)
+    elif prior_iterations == -1:
+        prior = None
+        _, fsc = body_fun(prior, None)
+    elif prior_iterations == 0:
+        _, fsc = body_fun(prior, None)
+    else:
+        raise ValueError("Prior iterations must be a non-negative integer or -1 (no reg)")
     
     ## NOTE THIS ONE IS NEVER MASKED. IT GETS MASKED LATER. PERHAPS SHOULD BE MASKED HERE
-    cov_col0 = relion_functions.post_process_from_filter_v2(H0 + H1, B0 + B1, volume_shape, volume_upsampling_factor = 1, tau = prior, kernel = kernel, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
-    # prior, fsc, _ = compute_fsc_prior_gpu_v2(volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift = 0)
+    cov_col0 = relion_functions.post_process_from_filter_v2(H0 + H1, B0 + B1, volume_shape, volume_upsampling_factor = 1, tau = prior, kernel = kernel, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1, volume_mask = volume_mask )
 
     return cov_col0.reshape(-1), prior, fsc
 
 
 prior_iteration_batch = jax.vmap(prior_iteration, in_axes = (0,0,0,0, 0, 0, None, None, None) )
-prior_iteration_relion_style_batch = jax.vmap(prior_iteration_relion_style, in_axes = (0,0,0,0, 0, 0, None, None, None, None, None, None))
+prior_iteration_relion_style_batch = jax.vmap(prior_iteration_relion_style, in_axes = (0,0,0,0, 0, 0, None, None, None, None, None, None, None))
 
 
 # def compute_masked_fscs(H0, B0, H1, B1, prior, volume_shape, volume_mask):

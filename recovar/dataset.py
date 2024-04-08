@@ -244,7 +244,7 @@ class CryoEMDataset:
             5 - w (float or Bx1 tensor): amplitude contrast ratio
             6 - phase_shift (float or Bx1 tensor): degrees 
             7 - bfactor (float or Bx1 tensor): envelope fcn B-factor (Angstrom^2)
-            8 - per-partcile scale
+            8 - per-particle scale
         '''
         self.CTF_params = np.array(CTF_params.astype(self.CTF_dtype))
 

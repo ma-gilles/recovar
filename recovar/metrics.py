@@ -194,7 +194,7 @@ def evaluate_this_choice(target_real, output_folder, voxel_size, mask = None, pa
     gt_choice = np.argmin(np.array(list(errors_gt.values())), axis=0)
 
     choice1 = recovar.utils.load_mrc(output_folder + "ml_optimized_choice.mrc")
-    error_metrics = {}
+    error_metrics = {"gt_choice": gt_choice}
     error_metrics["choice_l2_error"], error_metrics["choice_l2_bias"]  = metrics.masked_l2_difference(gt_choice, choice1, voxel_size, mask= mask)
     if partial_mask is not None:
         error_metrics["choice_partial_l2_error"], error_metrics["choice_partial_l2_bias"]  = metrics.masked_l2_difference(gt_choice, choice1, voxel_size, mask= partial_mask)

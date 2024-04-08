@@ -182,6 +182,7 @@ def compute_latent_quadratic_forms_in_batch(test_pts, zs, cov_zs):
     utils
     batch_size_x = utils.get_latent_density_batch_size(test_pts, zs.shape[-1], utils.get_gpu_memory_total() ) 
     logger.info(f"batch size in latent computation: {batch_size_x}")
+    logger.warning("SHOULD THIS BE SCALED?")
     for k in range(0, utils.get_number_of_index_batch(n_images, batch_size_x)):
         batch_st, batch_end = utils.get_batch_of_indices(n_images, batch_size_x, k)
         quads[batch_st:batch_end,:] = compute_latent_quadratic_forms( test_pts.real, zs[batch_st:batch_end].real, cov_zs[batch_st:batch_end])
