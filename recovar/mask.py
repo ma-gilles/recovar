@@ -11,6 +11,7 @@ from scipy.ndimage import binary_dilation
 logger = logging.getLogger(__name__)
 
 def masking_options(volume_mask_option, means, volume_shape, input_mask, dtype_real = np.float32, mask_dilation_iter = 0):
+    dilation_iterations = np.ceil(6 * volume_shape[0] / 128).astype(int)
     if isinstance(volume_mask_option, str):
         if volume_mask_option == 'input' or input_mask is not None :
             assert input_mask is not None, 'set volume_mask_option = input, but no mask passed'
@@ -26,15 +27,17 @@ def masking_options(volume_mask_option, means, volume_shape, input_mask, dtype_r
                 input_mask = skimage.transform.rescale( input_mask, volume_shape[0]/input_mask.shape[0])
 
             kernel_size = 3
-            logger.info('Softening mask')
+            logger.info('Thresholding mask at 0.5 and softening cosine kernel of radius 3 pixels')
+            input_mask = input_mask > 0.5
             volume_mask = soften_volume_mask(input_mask, kernel_size)
-            dilated_volume_mask = binary_dilation(input_mask,iterations=6)
+            dilated_volume_mask = binary_dilation(input_mask,iterations=dilation_iterations)
             dilated_volume_mask = soften_volume_mask(dilated_volume_mask, kernel_size)
         elif volume_mask_option == 'from_halfmaps':
             volume_mask = make_mask_from_half_maps_from_means_dict(means, smax = 3 )
             kernel_size = 3
             logger.info('Softening mask')
-            dilated_volume_mask = binary_dilation(volume_mask,iterations=6)
+
+            dilated_volume_mask = binary_dilation(volume_mask,iterations=dilation_iterations)
             volume_mask = soften_volume_mask(volume_mask, kernel_size)
             dilated_volume_mask = soften_volume_mask(dilated_volume_mask, kernel_size)
             logger.info('using mask computed from mean')
@@ -48,7 +51,7 @@ def masking_options(volume_mask_option, means, volume_shape, input_mask, dtype_r
             logger.info('using no mask')
     else:
         assert False, 'mask option not recognized'
-    return volume_mask.astype(dtype_real), dilated_volume_mask.astype(dtype_real)
+    return np.array(volume_mask.astype(dtype_real)), np.array(dilated_volume_mask.astype(dtype_real))
 
 def make_mask_from_half_maps_from_means_dict(means, smax = 3 ):
     # from emda.ext.maskmap_class import MaskedMaps
@@ -124,19 +127,21 @@ def create_hard_edged_kernel_pxl(r1, shape):
 
 
 
-def soften_volume_mask(volume_mask, kernel_size):
+# def soften_volume_mask(volume_mask, kernel_size):
 
-    image_shape = volume_mask.shape
-    # Soft mask
-    soft_edge_kernel = create_soft_edged_kernel_pxl(kernel_size, image_shape)
+#     image_shape = volume_mask.shape
+#     # Soft mask
+#     soft_edge_kernel = create_soft_edged_kernel_pxl(kernel_size, image_shape)
+#     import jax.scipy
+#     volume_mask = jax.scipy.ndimage.convolve(volume_mask, soft_edge_kernel, mode='full', cval=0.0)
 
-    # Convolve
-    soft_edge_kernel_ft = ftu.get_dft3(soft_edge_kernel)
-    volume_mask_ft = ftu.get_dft3(volume_mask)
+#     # Convolve
+#     # soft_edge_kernel_ft = ftu.get_dft3(soft_edge_kernel)
+#     # volume_mask_ft = ftu.get_dft3(volume_mask)
     
-    volume_mask_ft = volume_mask_ft * soft_edge_kernel_ft
-    volume_mask = ftu.get_idft3(volume_mask_ft).real
-    return np.array(volume_mask)
+#     # volume_mask_ft = volume_mask_ft * soft_edge_kernel_ft
+#     # volume_mask = ftu.get_idft3(volume_mask_ft).real
+#     return np.array(volume_mask)
 
 
 def get_radial_mask(shape, radius = None):
@@ -192,7 +197,7 @@ class MaskedMaps:
         self.arr1 = threshold_map(arr=self.arr1, prob=self.prob, dthresh=self.dthresh)
         self.arr1 = self.arr1> 0
         dilate = binary_dilation(self.arr1, iterations=self.iter)
-        self.mask = make_soft(dilate, kern_rad=2)
+        self.mask = soften_volume_mask(dilate, kern_rad=2)
         # import pdb; pdb.set_trace()
 
 
@@ -201,7 +206,7 @@ class MaskedMaps:
 
         ccmap_binary = (ccmap >= 1e-3).astype(int)
         dilate = binary_dilation(ccmap_binary, iterations=self.iter)
-        mask = make_soft(dilate, kern_rad=2)
+        mask = soften_volume_mask(dilate, kern_rad=2)
         return mask * (mask >= 1e-3)      
 
 
@@ -298,7 +303,7 @@ def soft_mask_outside_map(vol, radius=-1, cosine_width=3, Mnoise=None):
     return vol, mask
 
 
-def make_soft(dilated_mask, kern_rad=3):
+def soften_volume_mask(dilated_mask, kern_rad=3):
     # convoluting with gaussian sphere
     import scipy.signal
     kern_sphere = create_soft_edged_kernel_pxl(kern_rad, dilated_mask.shape)

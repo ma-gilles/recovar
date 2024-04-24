@@ -252,6 +252,13 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
     dataset_param_generator = get_pose_ctf_generator(dataset_params_option)
     noise_variance = get_noise_model(noise_model, grid_size) / 50000 * noise_level
 
+    ## TODO
+    ## Scale noise and volumes so that images have approximately std =1?
+    # noise_image = noise.make_radial_noise(noise_variance_mod, experiment_dataset.image_shape).reshape(experiment_dataset.image_shape)
+    # key, subkey = jax.random.split(key)
+    # noise_batch = make_noise_batch(subkey, noise_image, images_batch.shape)
+
+
     # mrcf = mrcfile.new(output_folder + '/particles.'+str(grid_size)+'.mrcs',overwrite=True)
     mrc_file = None# mrcfile.new_mmap( output_folder + '/particles.'+str(grid_size)+'.mrcs', shape=(n_images, grid_size, grid_size), mrc_mode=2, overwrite = True)
 
@@ -262,15 +269,18 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
     simulation_info['trailing_zero_format_in_vol_name'] = trailing_zero_format_in_vol_name
     simulation_info['disc_type'] = disc_type
 
-    
-    with mrcfile.new(output_folder + '/particles.'+str(grid_size)+'.mrcs',overwrite=True) as mrc:
+    particles_file = output_folder + '/particles.'+str(grid_size)+'.mrcs'
+
+    with mrcfile.new(particles_file ,overwrite=True) as mrc:
         mrc.set_data(main_image_stack.astype(np.float32))
         mrc.voxel_size = voxel_size
-
     poses = (rots.astype(np.float32), trans.astype(np.float32))
     utils.pickle_dump(poses, output_folder + '/poses.pkl')
     save_ctf_params(output_folder, grid_size, ctf_params, voxel_size)
     utils.pickle_dump(simulation_info, output_folder + '/simulation_info.pkl' )
+
+    utils.write_starfile(ctf_params, rots.astype(np.float32), trans.astype(np.float32), voxel_size, grid_size, particles_file, output_folder + '/particles.star', halfset_indices = None)
+
     return main_image_stack, simulation_info
 
 def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name = False):
@@ -309,6 +319,8 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         phase_shift = np.arcsin(ctf_params[:,5]) / np.pi * 180
         ctf_params[:,5] = 0
         ctf_params[:,6] = phase_shift
+
+
 
     # ctf_params[:,:2] *=0
     # ctf_params[:,4] *=0 
@@ -434,6 +446,7 @@ def save_ctf_params(outdir, D: int, ctf_params, voxel_size):
     return 
 
 
+roll_batch = jax.vmap(lambda x,y,z: jax.numpy.roll(x,y,axis = z), in_axes = (0, 0, None))
 
 
 # Solves the linear system Dx = b.
@@ -526,7 +539,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
             images_batch = ftu.get_idft2(images_batch.reshape([-1, *experiment_dataset.image_shape])).real
             
             if pad_before_translate:
-                plotting = False
+                plotting = True
                 # for k in range(images_batch.shape[0]):
                 #     if k > 3:
                 #         break
@@ -536,18 +549,18 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                     import matplotlib.pyplot as plt
                     plt.imshow(padded_images[0])
                     plt.show()
-
-                padded_images = jax.numpy.roll(padded_images, -np.round(experiment_dataset.translations[indices]).astype(int)[:,0], axis =-1 )
-                padded_images = jax.numpy.roll(padded_images, -np.round(experiment_dataset.translations[indices]).astype(int)[:,1], axis =-2 )
+                padded_images = roll_batch(padded_images, -np.round(experiment_dataset.translations[indices]).astype(int)[:,0], -1 )
+                padded_images = roll_batch(padded_images, -np.round(experiment_dataset.translations[indices]).astype(int)[:,1], -2 )
                 if plotting:
                     plt.imshow(padded_images[0])
                     plt.show()
+                images_batch2 = padding.unpad_images_spatial_domain(padded_images, experiment_dataset.grid_size)
 
-                images_batch = padding.unpad_images_spatial_domain(padded_images, experiment_dataset.grid_size)
                 if plotting:
-                    plt.imshow(images_batch[0])
+                    plt.imshow(images_batch2[0]); plt.show()
                     plt.show()
                 # import pdb; pdb.set_trace()
+                images_batch = images_batch2
 
 
             key, subkey = jax.random.split(key)

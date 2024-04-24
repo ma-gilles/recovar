@@ -137,6 +137,7 @@ def half_vec_index_to_vec_index(indices_half, volume_shape):
 
 ## Precompute functions
 
+
 @functools.partial(jax.jit, static_argnums = [5,6,7,9])    
 def precompute_kernel_one_batch(images, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, CTF_fun, noise_variance, pol_degree =0, XWX = None, F = None, heterogeneity_distances = None, heterogeneity_bins = None ):
 
@@ -1134,6 +1135,11 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
     # logger.info(f"batch size in het comp: {batch_size}")
     # data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size)
     # weights = jnp.asarray(weights)
+
+    # print("APPLYING IMAGE MASK!?!")
+    # print("APPLYING IMAGE MASK!?!")
+
+
     for bin_idx in range(n_bins):
         image_inds = np.where(inds == bin_idx)[0]
         # print(image_inds.size)
@@ -1146,6 +1152,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
             # import pdb; pdb.set_trace()
             # Only place where image mask is used ?
             batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
+            # print("APPLYING IMAGE MASK!?!")
             Ft_y_b, Ft_ctf_b = relion_functions.relion_style_triangular_kernel_batch(batch,
                                                                     experiment_dataset.CTF_params[indices], 
                                                                     experiment_dataset.rotation_matrices[indices], 
@@ -1177,8 +1184,31 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
         rhs_all[bin_idx] = rhs
         lhs_all[bin_idx] = lhs
 
-    rhs_all = np.cumsum(rhs_all, axis=0)
-    lhs_all = np.cumsum(lhs_all, axis=0)
+    # A slight improvement would be an almost triangular kernel/ pyramid kernel
+    #    _
+    #  _| |_
+    #_|     |_ 
+    # or almost epachenikov 
+    #
+    use_Epanechnikov = True
+    if use_Epanechnikov:
+        distances = np.zeros(bins.size)
+        # distances[1:] = bins[:-1]
+        distances = bins
+        h_grid = 2 * bins 
+        logger.info("SHOULD THIS BE SQUARE ROOTED?")
+        Epanechnikov = lambda dist : jnp.where( np.abs(dist) < 1, 3/4 * (1- dist**2), 0)
+        h_grid = bins # Skip the first bin
+        rhs_all_presum = rhs_all.copy()
+        lhs_all_presum = lhs_all.copy()
+        for idx in range(1, n_bins):
+            weights = Epanechnikov(jnp.sqrt(distances/h_grid[idx]))#/ (heterogeneity_bins[idx] - heterogeneity_bins[idx-1]))
+            rhs_all[idx] = jnp.sum(weights[:,None] * rhs_all_presum, axis = 0)
+            lhs_all[idx] = jnp.sum(weights[:,None] * lhs_all_presum, axis = 0)
+        # import pdb; pdb.set_trace()
+    else:
+        rhs_all = np.cumsum(rhs_all, axis=0)
+        lhs_all = np.cumsum(lhs_all, axis=0)
     # logger.info(f"done with precomp")
 
     for idx in range(heterogeneity_bins.size):

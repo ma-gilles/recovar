@@ -8,6 +8,7 @@ from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 
 logger = logging.getLogger(__name__)
+USE_CUBIC = True
 
 def split_weights(weight, cryos):
     start_idx = 0
@@ -57,7 +58,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
 
     assert u.shape[0] == cryos[0].volume_size, "input u should be volume_size x basis_size"
     st_time = time.time()    
-    basis = np.asarray(u[:, :basis_size]) 
+    basis = np.asarray(u[:, :basis_size]).T
     eigenvalues = (s + constants.ROOT_EPSILON)
     use_contrast = "contrast" in contrast_option
     logger.info(f"using contrast? {use_contrast}")
@@ -76,26 +77,32 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
     print('CHANGE THIS BACK!!!!!!!!')
     print('CHANGE THIS BACK!!!!!!!!')
     batch_size = batch_size//10
-    from recovar import cryojax_map_coordinates
     # mean = cryojax_map_coordinates.compute_spline_coefficients(mean.reshape(cryos[0].volume_shape))
 
     # It is not so clear whether this step should ever use the mask. But when using the options['ignore_zero_frequency'] option, there is a good reason not to do it
     if ignore_zero_frequency:
         volume_mask = np.ones_like(volume_mask) 
-        
+    
+
+    volume_mask = np.ones_like(volume_mask) 
+
     logger.info(f"ignore_zero_frequency? {ignore_zero_frequency}")
     # logger.info(f"z batch size old {batch_size_old}")
 
-    # if disc_type == 'cubic':
-    #     mean = mean.real
-    #     from recovar import cryojax_map_coordinates
-    #     mean = cryojax_map_coordinates.compute_spline_coefficients(mean)
+    if USE_CUBIC:
+        disc_type = 'cubic'
+        from recovar import cryojax_map_coordinates
+        mean = cryojax_map_coordinates.compute_spline_coefficients(mean.reshape(cryos[0].volume_shape))
+        # vmap_coeffs = jax.vmap(cryojax_map_coordinates.compute_spline_coefficients, in_axes = 0, out_axes = 0)
+        # basis = vmap_coeffs(basis.reshape(-1, *cryos[0].volume_shape))#.reshape(basis.shape)
+        from recovar import covariance_estimation
+        basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, cryos[0].volume_shape, gpu_memory= None)
 
 
     zs = [None]*2; cov_zs = [None]*2; est_contrasts = [None]*2
     for cryo_idx,cryo in enumerate(cryos):
         zs[cryo_idx], cov_zs[cryo_idx], est_contrasts[cryo_idx] = get_coords_in_basis_and_contrast_3(
-            cryo, mean, basis, eigenvalues[:basis.shape[-1]], volume_mask,
+            cryo, mean, basis, eigenvalues[:basis.shape[0]], volume_mask,
             jnp.array(cov_noise) , contrast_grid, batch_size, disc_type, 
             parallel_analysis = parallel_analysis, compute_covariances = compute_covariances, contrast_mean = contrast_mean, contrast_variance = contrast_variance )
 
@@ -119,7 +126,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
 # @functools.partial(jax.jit, static_argnums = [5])    
 def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf):
     
-    basis = basis.T.astype(experiment_dataset.dtype)
+    basis = basis.astype(experiment_dataset.dtype)
         
     # Make sure variables used in every iteration are on gpu.
     basis = jnp.asarray(basis)
@@ -284,7 +291,6 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
     
     return xs_single, contrast_single, cov_batch
 
-
 def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid):
     
     # Memory to do this is ~ size(volume_mask) * batch_size
@@ -295,8 +301,8 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
                                           image_shape, 
                                           volume_shape, grid_size, 
                                           padding, 
-                                          disc_type )
-
+                                          'linear_interp' ) * 0 + 1
+    logger.warning("Not using mask in embedding! Is this what you want?")
     
     batch = process_fn(batch)
     batch = core.translate_images(batch, translations , image_shape)
@@ -311,16 +317,6 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
                                         'cubic'                                           
                                           )
     
-    # projected_mean = core.forward_model_from_map(mean_estimate,
-    #                                      CTF_params,
-    #                                      rotation_matrices, 
-    #                                      image_shape, 
-    #                                      volume_shape, 
-    #                                     voxel_size, 
-    #                                     CTF_fun, 
-    #                                     'cubic'                                           
-    #                                       )
-
     # volume = ftu.get_idft3(mean_estimate.reshape(volume_shape)).real#.reshape(-1)
     # from recovar import simulator
     # # projected_mean = simulator.simulate_nufft_data_batch(volume, rotation_matrices, translations*0, CTF_params, voxel_size, volume_shape, image_shape, image_shape[0], '', CTF_fun )

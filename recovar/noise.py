@@ -363,81 +363,81 @@ def get_average_residual_square_inner(batch, mean_estimate, volume_mask, basis, 
     
 
 
-# @functools.partial(jax.jit, static_argnums = [5])    
-def get_average_residual_square_v3(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp', noise_var = None, index_subset = None):
+# # @functools.partial(jax.jit, static_argnums = [5])    
+# def get_average_residual_square_v3(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp', noise_var = None, index_subset = None):
     
-    # basis_size = basis.shape[-1]
-    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
-    residual = 0 
-    basis = jnp.asarray(basis.T)
-    for batch, batch_image_ind in data_generator:
-        # batch = experiment_dataset.image_stack.process_images(batch)
-        residual += get_residual_square_inner_v2(batch, mean_estimate, volume_mask, 
-                                                                        basis,
-                                                                        experiment_dataset.CTF_params[batch_image_ind],
-                                                                        experiment_dataset.rotation_matrices[batch_image_ind],
-                                                                        experiment_dataset.translations[batch_image_ind],
-                                                                        experiment_dataset.image_stack.mask,
-                                                                        experiment_dataset.volume_mask_threshold,
-                                                                        experiment_dataset.image_shape, 
-                                                                        experiment_dataset.volume_shape, 
-                                                                        experiment_dataset.grid_size, 
-                                                                        experiment_dataset.voxel_size, 
-                                                                        experiment_dataset.padding, 
-                                                                        disc_type, 
-                                                                        experiment_dataset.image_stack.process_images,
-                                                                        experiment_dataset.CTF_fun, 
-                                                                        contrasts[batch_image_ind], basis_coordinates[batch_image_ind], noise_var, averaged_over_shells = False)
-    return residual
+#     # basis_size = basis.shape[-1]
+#     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+#     residual = 0 
+#     basis = jnp.asarray(basis.T)
+#     for batch, batch_image_ind in data_generator:
+#         # batch = experiment_dataset.image_stack.process_images(batch)
+#         residual += get_residual_square_inner_v2(batch, mean_estimate, volume_mask, 
+#                                                                         basis,
+#                                                                         experiment_dataset.CTF_params[batch_image_ind],
+#                                                                         experiment_dataset.rotation_matrices[batch_image_ind],
+#                                                                         experiment_dataset.translations[batch_image_ind],
+#                                                                         experiment_dataset.image_stack.mask,
+#                                                                         experiment_dataset.volume_mask_threshold,
+#                                                                         experiment_dataset.image_shape, 
+#                                                                         experiment_dataset.volume_shape, 
+#                                                                         experiment_dataset.grid_size, 
+#                                                                         experiment_dataset.voxel_size, 
+#                                                                         experiment_dataset.padding, 
+#                                                                         disc_type, 
+#                                                                         experiment_dataset.image_stack.process_images,
+#                                                                         experiment_dataset.CTF_fun, 
+#                                                                         contrasts[batch_image_ind], basis_coordinates[batch_image_ind], noise_var, averaged_over_shells = False)
+#     return residual
 
-@functools.partial(jax.jit, static_argnums = [9,10,11,13,14,15,16,20])
-def get_residual_square_inner_v2(batch, mean_estimate, volume_mask, basis, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, process_fn, CTF_fun, contrasts,basis_coordinates, noise_var, averaged_over_shells = False):
+# @functools.partial(jax.jit, static_argnums = [9,10,11,13,14,15,16,20])
+# def get_residual_square_inner_v2(batch, mean_estimate, volume_mask, basis, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, process_fn, CTF_fun, contrasts,basis_coordinates, noise_var, averaged_over_shells = False):
     
-    if volume_mask is not None:
-        image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
-                                              rotation_matrices,
-                                              image_mask, 
-                                              volume_mask_threshold,
-                                              image_shape, 
-                                              volume_shape, grid_size, 
-                                              padding, 
-                                              disc_type, soften = 5 )
+#     if volume_mask is not None:
+#         image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
+#                                               rotation_matrices,
+#                                               image_mask, 
+#                                               volume_mask_threshold,
+#                                               image_shape, 
+#                                               volume_shape, grid_size, 
+#                                               padding, 
+#                                               disc_type, soften = 5 )
         
-    predicted_vols = contrasts[None] * (( basis @ basis_coordinates.T) + mean_estimate[...,None])
+#     predicted_vols = contrasts[None] * (( basis @ basis_coordinates.T) + mean_estimate[...,None])
 
-    projected_vols = core.batch_forward_model_from_map(predicted_vols.T,
-                                         CTF_params[:,None],
-                                         rotation_matrices[:,None],
-                                         image_shape, 
-                                         volume_shape, 
-                                        voxel_size, 
-                                        CTF_fun, 
-                                        disc_type                                      
-                                          )[:,0]
-    batch = process_fn(batch)
-    batch = core.translate_images(batch, translations , image_shape)
-    diff = batch - projected_vols
-    # import matplotlib.pyplot as plt
-    # plt.imshow(ftu.get_idft2(batch[0].reshape(image_shape)).real)
-    # plt.show()
-    # plt.figure()
-    # plt.imshow(ftu.get_idft2(projected_vols[0].reshape(image_shape)).real)
-    # plt.show()
-    # import pdb; pdb.set_trace()
+#     projected_vols = core.batch_forward_model_from_map(predicted_vols.T,
+#                                          CTF_params[:,None],
+#                                          rotation_matrices[:,None],
+#                                          image_shape, 
+#                                          volume_shape, 
+#                                         voxel_size, 
+#                                         CTF_fun, 
+#                                         disc_type                                      
+#                                           )[:,0]
+#     batch = process_fn(batch)
+#     batch = core.translate_images(batch, translations , image_shape)
+#     diff = batch - projected_vols
+#     # import matplotlib.pyplot as plt
+#     # plt.imshow(ftu.get_idft2(batch[0].reshape(image_shape)).real)
+#     # plt.show()
+#     # plt.figure()
+#     # plt.imshow(ftu.get_idft2(projected_vols[0].reshape(image_shape)).real)
+#     # plt.show()
+#     # import pdb; pdb.set_trace()
 
-    if volume_mask is not None:
-        diff = covariance_core.apply_image_masks(diff, image_mask, image_shape)
+#     if volume_mask is not None:
+#         diff = covariance_core.apply_image_masks(diff, image_mask, image_shape)
 
-    if noise_var is not None:
-        diff = noise_var * diff
+#     if noise_var is not None:
+#         diff = noise_var * diff
 
-    residual_squared = jnp.abs(diff)**2 
+#     residual_squared = jnp.abs(diff)**2 
 
-    if averaged_over_shells:
-        averaged_residual_squared = regularization.batch_average_over_shells(residual_squared, image_shape,0) 
-        return averaged_residual_squared
+#     if averaged_over_shells:
+#         averaged_residual_squared = regularization.batch_average_over_shells(residual_squared, image_shape,0) 
+#         return averaged_residual_squared
     
-    return jnp.sum(residual_squared)
+#     return jnp.sum(residual_squared)
     
 
 def get_average_residual_square_just_mean(experiment_dataset, volume_mask, mean_estimate, batch_size, disc_type = 'linear_interp'):
@@ -456,6 +456,19 @@ def estimate_noise_from_heterogeneity_residuals_inside_mask_v2(experiment_datase
 
 # @functools.partial(jax.jit, static_argnums = [5])    
 def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp'):
+
+    assert basis.shape[0] == experiment_dataset.volume_size, "input u should be volume_size x basis_size"
+    st_time = time.time()    
+    basis = np.asarray(basis[:, :basis_coordinates.shape[-1]]).T
+
+    if disc_type == 'cubic':
+        st_time = time.time()
+        from recovar import cryojax_map_coordinates, covariance_estimation
+        mean_estimate = cryojax_map_coordinates.compute_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
+        basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)
+        logger.info("Time to compute spline coefficients: %f", time.time() - st_time)
+        # basis = basis.T
+
 
     images_estimates = np.empty([experiment_dataset.n_images, *experiment_dataset.image_shape], dtype = experiment_dataset.dtype)
     # basis_size = basis.shape[-1]
@@ -495,49 +508,78 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
     return pred_noise, predicted_pixel_variances, images_estimates
 
 
+
+def basis_times_coords(basis, coords):
+    assert basis.shape[-1] == coords.shape[-1]
+    # basis_shape_inp = basis.shape
+    # summed = basis.reshape((basis.shape[0], -1,)).T @ coords.T
+    return jnp.sum(basis * coords, axis=-1)
+batch_basis_times_coords = jax.vmap(basis_times_coords, in_axes = (None,0))
+
+
+# An atrocious function to do this without allocating too much memory.
+# Basically writes the product of array which would be of size (256,256,256, 10) x (1000,10) where 1000 is n_images, 10 is size of basis and 256 volume size, as a matvec, then reshapes things back.
+def batch_basis_times_coords2(basis, coords):
+
+    assert basis.shape[-1] == coords.shape[-1]
+    basis_shape_inp = basis.shape
+
+    basis = basis.transpose(-1, *np.arange(basis.ndim-1) )
+    basis = basis.reshape((coords.shape[-1], np.prod(basis_shape_inp[:-1])))
+
+    # # Put into a matrix of size n_coeffs x dim of basis
+    # basis = basis.reshape((basis.shape[0], -1,))
+    summed = basis.T @ coords.T
+
+    summed = summed.T
+    summed = summed.reshape(coords.shape[0], *basis_shape_inp[:-1])
+    # summed.transpose(-1, *np.arange(summed.ndim-1) )
+    return summed#.transpose(-1, *np.arange(summed.ndim-1) )
+
+
+
+@functools.partial(jax.jit, static_argnums = [9,10,11,13,14,15,16])
 def get_average_residual_square_inner_v2(batch, mean_estimate, volume_mask, basis, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, process_fn, CTF_fun, contrasts,basis_coordinates):
     
-    # Memory to do this is ~ size(volume_mask) * batch_size
-    image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
-                                          rotation_matrices,
-                                          image_mask, 
-                                          volume_mask_threshold,
-                                          image_shape, 
-                                          volume_shape, grid_size, 
-                                          padding, 
-                                          disc_type, soften =5)
-    # image_mask = image_mask > 0
-    
-    # Invert mask
-    # image_mask = 1 - image_mask
 
+    if volume_mask is not None:
+        image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
+                                              rotation_matrices,
+                                              image_mask, 
+                                              volume_mask_threshold,
+                                              image_shape, 
+                                              volume_shape, grid_size, 
+                                              padding, 
+                                              disc_type, soften = 5 )
+    else:
+        image_mask = jnp.ones_like(batch).real
+    # zz1 = batch_basis_times_coords(basis,basis_coordinates)
+    # zz2 = batch_basis_times_coords2(basis,basis_coordinates)
+    # zz3 = batch_basis_times_coords3(basis,basis_coordinates)
+    # print(jnp.linalg.norm(zz1 -zz2)/ jnp.linalg.norm(zz1))
+    # print(jnp.linalg.norm(zz1 -zz2)/ jnp.linalg.norm(zz2))
+    # print(jnp.linalg.norm(zz2 -zz3)/ jnp.linalg.norm(zz2))
+    # import pdb; pdb.set_trace()
+    
+    if basis.shape[-1] == 0:
+        predicted_vols = contrasts.reshape((contrasts.shape[0], *np.ones(mean_estimate.ndim, dtype = int) ) ) * mean_estimate[None]
+    else:
+        predicted_vols = contrasts.reshape((contrasts.shape[0], *np.ones(mean_estimate.ndim, dtype = int) ) ) * ( batch_basis_times_coords2(basis,basis_coordinates) + mean_estimate[None])
+
+    # Are spline coefficients linear map? Yes!
+    projected_vols = core.batch_forward_model_from_map(predicted_vols,
+                                         CTF_params[:,None],
+                                         rotation_matrices[:,None],
+                                         image_shape, 
+                                         volume_shape, 
+                                        voxel_size, 
+                                        CTF_fun, 
+                                        disc_type                                      
+                                          )[:,0]
+    
     batch = process_fn(batch)
     batch = core.translate_images(batch, translations , image_shape)
-
-    projected_mean = core.forward_model_from_map(mean_estimate,
-                                         CTF_params,
-                                         rotation_matrices, 
-                                         image_shape, 
-                                         volume_shape, 
-                                        voxel_size, 
-                                        CTF_fun, 
-                                        disc_type                                           
-                                          )
-
-    AUs = covariance_core.batch_over_vol_forward_model_from_map(basis,
-                                         CTF_params, 
-                                         rotation_matrices,
-                                         image_shape, 
-                                         volume_shape, 
-                                        voxel_size, 
-                                        CTF_fun, 
-                                        disc_type )    
-    
-    # Apply mask on operator
-    AUs = AUs.transpose(1,2,0)
-    predicted_images = contrasts[...,None] * (jax.lax.batch_matmul(AUs, basis_coordinates[...,None])[...,0] + projected_mean)
-
-    substracted_images = batch - predicted_images
+    substracted_images = batch - projected_vols
 
     return get_masked_image_noise_fractions(substracted_images, image_mask, image_shape)
     

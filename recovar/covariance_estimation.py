@@ -3,12 +3,11 @@ import jax.numpy as jnp
 import numpy as np
 import jax, time
 import functools
-from recovar import core, covariance_core, regularization, utils, constants, noise, homogeneous, linalg
+from recovar import core, covariance_core, regularization, utils, constants, noise, homogeneous, linalg, cryojax_map_coordinates
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 
 logger = logging.getLogger(__name__)
-
 
 def get_default_covariance_computation_options():
 
@@ -32,8 +31,15 @@ def get_default_covariance_computation_options():
         "n_pcs_to_compute" : 200,
         "randomized_sketch_size" : 300,
         "prior_n_iterations" : 20,
-        "randomize_column_sampling": False
+        "randomize_column_sampling": False,
+        "disc_type": 'cubic',
+        "disc_type_u": 'linear_interp',
+        "mask_images_in_proj": True,
+        "mask_images_in_H_B": True,
     }
+    # print('CHANGE THIS BACK !! IN COVAR OPTIONS')
+    # print('CHANGE THIS BACK !! IN COVAR OPTIONS')
+    # print('CHANGE THIS BACK !! IN COVAR OPTIONS')
 
     return options
 
@@ -174,10 +180,6 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, 
 
     cryo = cryos[0]
     volume_shape = cryos[0].volume_shape
-    # if cryo.grid_size == 16:
-    #     picked_frequencies = np.arange(cryo.volume_size) 
-    # else:
-    #     picked_frequencies = np.array(covariance_core.get_picked_frequencies(volume_shape, radius = options['column_radius'], use_half = True))
 
     # These options should probably be left as is.
     mask_ls = dilated_volume_mask
@@ -230,8 +232,8 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, 
 
 
 # import functools, jax
-@functools.partial(jax.jit, static_argnums=[5,6,8, 12,13,14,15])
-def variance_relion_style_triangular_kernel_batch_trilinear(mean_estimate, images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, cov_noise, volume_mask, image_mask, volume_mask_threshold, grid_size, padding, soften = 5):
+@functools.partial(jax.jit, static_argnums=[5,6,8, 12,13,14,15, 16])
+def variance_relion_style_triangular_kernel_batch_trilinear(mean_estimate, images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, cov_noise, volume_mask, image_mask, volume_mask_threshold, grid_size, padding, soften = 5, disc_type= ''):
 
 
     CTF_squared = CTF_fun( CTF_params, image_shape, voxel_size)
@@ -239,7 +241,7 @@ def variance_relion_style_triangular_kernel_batch_trilinear(mean_estimate, image
     images = core.translate_images(images, translations, image_shape) 
     # import pdb; pdb.set_trace()
 
-    images = images - core.slice_volume_by_trilinear(mean_estimate, rotation_matrices, image_shape, volume_shape) * CTF_squared
+    images = images - core.slice_volume_by_map(mean_estimate, rotation_matrices, image_shape, volume_shape, disc_type) * CTF_squared
 
     # Before masking?
     Ft_im = core.adjoint_slice_volume_by_trilinear(jnp.abs(images)**2, rotation_matrices, image_shape, volume_shape)
@@ -280,7 +282,7 @@ def variance_relion_style_triangular_kernel_batch_trilinear(mean_estimate, image
 
 
 ### NOTE THIS FUNCTION SHOULD BE REWRITTEN. I HACKED IT TOGETHER
-def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, cov_noise,  batch_size, index_subset = None, volume_mask = None):
+def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, cov_noise,  batch_size, index_subset = None, volume_mask = None, disc_type= ''):
     if index_subset is None:
         data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
     else:
@@ -304,7 +306,8 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, c
                                                                 experiment_dataset.volume_mask_threshold,
                                                                 experiment_dataset.grid_size,
                                                                 experiment_dataset.padding,
-                                                                soften = 5
+                                                                soften = 5,
+                                                                disc_type = disc_type
                                                                 )
         Ft_y += Ft_y_b
         Ft_ctf += Ft_ctf_b
@@ -314,7 +317,7 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, c
     return Ft_ctf, Ft_y, Ft_one, Ft_im
 
 
-def compute_variance(cryos, mean_estimate, batch_size, volume_mask, noise_variance = None,  use_regularization = False):
+def compute_variance(cryos, mean_estimate, batch_size, volume_mask, noise_variance = None,  use_regularization = False, disc_type = ''):
     st_time = time.time()
 
     cryo = cryos[0]
@@ -325,9 +328,13 @@ def compute_variance(cryos, mean_estimate, batch_size, volume_mask, noise_varian
     rhs_l = 2 * [None]
     noise_p_variance_lhs = 2 * [None]
     noise_p_variance_rhs = 2 * [None]
-    mean_estimate = mean_estimate.reshape(-1)
+
+    if disc_type == 'cubic':
+        mean_estimate = cryojax_map_coordinates.compute_spline_coefficients(mean_estimate.reshape(cryos[0].volume_shape))
+
+
     for idx, cryo in enumerate(cryos):
-        lhs_l[idx], rhs_l[idx], noise_p_variance_lhs[idx] , noise_p_variance_rhs[idx] = variance_relion_style_triangular_kernel(cryo, mean_estimate, noise_variance,  batch_size, index_subset = None, volume_mask = volume_mask)
+        lhs_l[idx], rhs_l[idx], noise_p_variance_lhs[idx] , noise_p_variance_rhs[idx] = variance_relion_style_triangular_kernel(cryo, mean_estimate, noise_variance,  batch_size, index_subset = None, volume_mask = volume_mask, disc_type = disc_type)
 
         lhs_l[idx] = relion_functions.adjust_regularization_relion_style(lhs_l[idx], cryos[0].volume_shape, tau = None, padding_factor = 1, max_res_shell = None)
         variance["corrected" + str(idx)] = rhs_l[idx] / lhs_l[idx]
@@ -377,7 +384,7 @@ def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies, gpu_
 # Covariance_cols
 def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gpu_memory, cov_noise, disc_type, parallel_analysis = False, options = None):
 
-    image_batch_size = utils.get_image_batch_size(cryo.grid_size, gpu_memory)
+    image_batch_size = utils.get_image_batch_size(cryo.grid_size, gpu_memory) // (2 if options['disc_type'] =='cubic' else 1)
     column_batch_size = utils.get_column_batch_size(cryo.grid_size, gpu_memory)
 
     # if batch_over_image_only:
@@ -390,7 +397,6 @@ def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequenc
 
     H = np.empty( [cryo.volume_size, picked_frequencies.size] , dtype = cryo.dtype)
     B = np.empty( [cryo.volume_size, picked_frequencies.size] , dtype = cryo.dtype)
-    # frequency_batch = int(25 * (256 / cryo.grid_size)**3 /2) 
     frequency_batch = column_batch_size
 
     for k in range(0, int(np.ceil(picked_frequencies.size/frequency_batch))):
@@ -782,12 +788,12 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
 
     print('noise in HB:', cov_noise)
 
-    if (disc_type == 'nearest') or (disc_type== 'linear_interp'):
-        disc_type_H = disc_type
-        disc_type_B = disc_type
-    elif disc_type == 'mixed':
-        disc_type_H = 'nearest'
-        disc_type_B = 'linear_interp'
+    # if (disc_type == 'nearest') or (disc_type== 'linear_interp'):
+    #     disc_type_H = disc_type
+    #     disc_type_B = disc_type
+    # elif disc_type == 'mixed':
+    #     disc_type_H = 'nearest'
+    #     disc_type_B = 'linear_interp'
 
 
     use_new_funcs = False
@@ -823,18 +829,28 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
     #     f_jit = jax.jit(compute_H_B_inner, static_argnums = [6])
     #     logger.warning("USING NO NOSIE MASK AND UNFIXED")
 
+    if options['disc_type'] == 'cubic':
+        these_disc = 'cubic'
+        from recovar import cryojax_map_coordinates
+        mean_estimate = cryojax_map_coordinates.compute_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
+    else:
+        these_disc = 'linear_interp'
 
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
     for images, batch_image_ind in data_generator:
         
-        these_disc = 'linear_interp'
+        # these_disc = 'linear_interp'
+        # Probably should swap this to linear interp
         image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
                                               experiment_dataset.rotation_matrices[batch_image_ind], 
                                               experiment_dataset.image_stack.mask, 
                                               experiment_dataset.volume_mask_threshold, 
                                               experiment_dataset.image_shape, 
                                               experiment_dataset.volume_shape, experiment_dataset.grid_size, 
-                                            experiment_dataset.padding, these_disc, soften = soften_mask ) 
+                                            experiment_dataset.padding, 'linear_interp', soften = soften_mask )
+        if not options["mask_images_in_H_B"]:
+            image_mask = jnp.ones_like(image_mask)
+
 
         images = experiment_dataset.image_stack.process_images(images)
         images = covariance_core.get_centered_images(images, mean_estimate,
@@ -1077,13 +1093,23 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
 #     B = np.stack(B, axis =1)#, dtype=B[0].dtype)
 #     return H, B
 
+from recovar import cryojax_map_coordinates
+vmap_compute_spline_coefficients = jax.vmap(cryojax_map_coordinates.compute_spline_coefficients, in_axes = 0, out_axes = 0)
 
+def compute_spline_coeffs_in_batch(basis, volume_shape, gpu_memory= None):
+    gpu_memory = utils.get_gpu_memory_total() if gpu_memory is None else gpu_memory
 
+    vol_batch_size = utils.get_vol_batch_size(volume_shape[0], gpu_memory=gpu_memory)
+    coeffs = []
+    for k in range(0, basis.shape[0], vol_batch_size):
+        coeffs.append(np.array(vmap_compute_spline_coefficients(basis[k:k+vol_batch_size].reshape(-1, *volume_shape))))
+    coeffs = np.concatenate(coeffs, axis = 0)
+    return coeffs
 
 ## REDUCED COVARIANCE COMPUTATION
 
 # @functools.partial(jax.jit, static_argnums = [5])    
-def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volume_mask, noise_variance, batch_size, disc_type, parallel_analysis = False ):
+def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volume_mask, noise_variance, batch_size, disc_type, disc_type_u, parallel_analysis = False, do_mask_images = True ):
     
     experiment_dataset = experiment_datasets[0]
 
@@ -1098,6 +1124,12 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     rhs =0 
     summed_batch_kron_cpu = jax.jit(summed_batch_kron, backend='cpu')
     logger.info(f"batch size in compute_projected_covariance {batch_size}")
+
+    if disc_type == 'cubic':
+        mean_estimate = cryojax_map_coordinates.compute_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
+
+    if disc_type_u == 'cubic':
+        basis = compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)
 
 
     for experiment_dataset in experiment_datasets:
@@ -1119,10 +1151,12 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
                                                                             experiment_dataset.grid_size, 
                                                                             experiment_dataset.voxel_size, 
                                                                             experiment_dataset.padding, 
-                                                                            disc_type, np.array(noise_variance),
+                                                                            disc_type, disc_type_u, np.array(noise_variance),
                                                                             experiment_dataset.image_stack.process_images,
                                                                         experiment_dataset.CTF_fun, parallel_analysis = parallel_analysis,
-                                                                        jax_random_key =subkey)
+                                                                        jax_random_key =subkey, do_mask_images = do_mask_images)
+            
+            # reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, disc_type_u, noise_variance, process_fn, CTF_fun, parallel_analysis = False, jax_random_key = None)
             # lhs_this = jax.device_put(lhs_this, jax.devices("cpu")[0])
             # lhs += summed_batch_kron_cpu(lhs_this)
             lhs += lhs_this
@@ -1151,8 +1185,8 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     return covar
 
 
-@functools.partial(jax.jit, static_argnums = [8,9,10,11,12,13,14,16,17,18])    
-def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, noise_variance, process_fn, CTF_fun, parallel_analysis = False, jax_random_key = None):
+@functools.partial(jax.jit, static_argnums = [8,9,10,11,12,13,14,15,17,18, 19,21])    
+def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, disc_type_u, noise_variance, process_fn, CTF_fun, parallel_analysis = False, jax_random_key = None, do_mask_images = True):
     
     if disc_type != 'linear_interp':
         logger.warning("USING NEAREST NEIGHBOR DISCRETIZATION IN reduce_covariance_est_inner")
@@ -1165,8 +1199,11 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
                                           image_shape, 
                                           volume_shape, grid_size, 
                                           padding, 
-                                          disc_type ) #* 0 + 1
+                                          'linear_interp' ) #* 0 + 1
+    if not do_mask_images:
+        image_mask = jnp.ones_like(image_mask)
     logger.warning("USING mask in reduce_covariance_est_inner")
+    logger.warning("MAKE IMAGE DISC CUBIC?")
 
     
     batch = process_fn(batch)
@@ -1194,7 +1231,7 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
                                          volume_shape, 
                                         voxel_size, 
                                         CTF_fun, 
-                                        disc_type )    
+                                        disc_type_u )    
     # Apply mask on operator
     AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, image_shape )
     AUs = AUs.transpose(1,2,0)

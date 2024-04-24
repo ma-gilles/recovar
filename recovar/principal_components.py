@@ -99,7 +99,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
         
     image_cov_noise = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].image_shape))
 
-    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], image_cov_noise, dilated_volume_mask, disc_type ='linear_interp', gpu_memory_to_use= gpu_memory_to_use, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'])
+    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], image_cov_noise, dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'])
 
     if not options['keep_intermediate']:
         u['real'] = None
@@ -152,7 +152,7 @@ def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,
     return u, s
 
 
-def pca_by_projected_covariance(cryos, basis, mean, noise_variance, volume_mask, disc_type ='linear_interp', gpu_memory_to_use= 40, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = -1 ):
+def pca_by_projected_covariance(cryos, basis, mean, noise_variance, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = -1):
 
     # basis_size = basis.shape[-1]
     basis_size = n_pcs_to_compute
@@ -164,12 +164,7 @@ def pca_by_projected_covariance(cryos, basis, mean, noise_variance, volume_mask,
 
     logger.info('batch size for covariance computation: ' + str(batch_size))
 
-    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, noise_variance, batch_size,  disc_type, parallel_analysis = parallel_analysis )
-
-    # if parallel_analysis:
-    #     r = np.linalg.cholesky(covariance)
-    #     r *= np.random.randint(0,2, size = r.shape)*2 - 1
-    #     covariance = r @ r.T
+    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, noise_variance, batch_size,  disc_type, disc_type_u, parallel_analysis = parallel_analysis, do_mask_images = use_mask )
 
     ss, u = np.linalg.eigh(covariance)
     u =  np.fliplr(u)

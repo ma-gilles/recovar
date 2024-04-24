@@ -7,8 +7,8 @@ import matplotlib, pickle, os, json
 import recovar.latent_density as ld
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
-from recovar import embedding, linalg, trajectory, utils, dataset
-
+from recovar import embedding, linalg, trajectory, utils, dataset, regularization
+import time
 logger = logging.getLogger(__name__)
 
 def get_resampled_distances(gt_vols):
@@ -184,30 +184,31 @@ def plot_trajectories_over_density(density, trajectories, latent_space_bounds,  
         for k2 in range(k1+1, traj_dim):
             plot_traj_along_axes([k1, k2])
 
-def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us_to_save = 50, us_to_var = [4,10,20]):
+def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us_to_save = 50, us_to_var = [4,10,20], voxel_size = None):
      
     mkdir_safe(output_folder + 'volumes/')
-    save_volumes([ u[...,k] for k in range (us_to_save)], output_folder + 'volumes/' +  'eigen_pos', volume_shape = volume_shape)
-    save_volumes([ -u[...,k] for k in range (us_to_save)], output_folder + 'volumes/' +  'eigen_neg', volume_shape = volume_shape)
-    save_volume(mean, output_folder + 'volumes/' + 'mean', volume_shape = volume_shape)
+    save_volumes([ u[...,k] for k in range (us_to_save)], output_folder + 'volumes/' +  'eigen_pos', volume_shape = volume_shape,   voxel_size = voxel_size)
+    save_volumes([ -u[...,k] for k in range (us_to_save)], output_folder + 'volumes/' +  'eigen_neg', volume_shape = volume_shape,   voxel_size = voxel_size)
+    save_volume(mean, output_folder + 'volumes/' + 'mean', volume_shape = volume_shape,   voxel_size = voxel_size)
     
     grid_size = np.round((mean.shape[0])**(1/3)).astype(int)
     vol_batch_size = int((2**24)/ (grid_size**3) )
     for n_eigs in us_to_var:
         u_real = linalg.batch_idft3(u[...,:n_eigs], volume_shape, vol_batch_size ) 
         variance_real = utils.estimate_variance(u_real.T, s['rescaled'][:n_eigs])
-        save_volume(variance_real, output_folder + 'volumes/' + 'variance' + str(n_eigs), volume_shape, from_ft = False)
+        save_volume(variance_real, output_folder + 'volumes/' + 'variance' + str(n_eigs), volume_shape, from_ft = False,   voxel_size = voxel_size)
 
-def kmeans_analysis_from_dict(output_folder, results, cryos, likelihood_threshold,  n_clusters = 20, generate_volumes = True, zdim =-1, compute_reproj = False):
-    from recovar import dataset
+# def kmeans_analysis_from_dict(output_folder, pipeline_output, cryos, likelihood_threshold,  n_clusters = 20, generate_volumes = True, zdim =-1, compute_reproj = False):
+#     from recovar import dataset
 
-    if cryos is None:
-        cryos = dataset.load_dataset_from_args(results['input_args']) if cryos is None else cryos
-        embedding.set_contrasts_in_cryos(cryos, results['contrasts'][zdim])
+#     if cryos is None:
 
-    return kmeans_analysis(output_folder, cryos, results['means'], results['u']['rescaled'], results['zs'][zdim], results['cov_zs'][zdim], results['cov_noise'], likelihood_threshold,  n_clusters = n_clusters, generate_volumes = generate_volumes, compute_reproj = compute_reproj)
+#         cryos = pipeline_output.get('dataset')#(results['input_args']) if cryos is None else cryos
+#         embedding.set_contrasts_in_cryos(cryos, pipeline_output.get('contrasts')[zdim])
+
+#     return kmeans_analysis(output_folder, cryos, pipeline_output.get('mean'), results['u']['rescaled'], results['zs'][zdim], results['cov_zs'][zdim], results['cov_noise'], likelihood_threshold,  n_clusters = n_clusters, generate_volumes = generate_volumes, compute_reproj = compute_reproj)
     
-def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, noise_variance, likelihood_threshold,  n_clusters = 20, generate_volumes = True, compute_reproj = False):
+def kmeans_analysis(output_folder, zs, n_clusters = 20):
 
     import cryodrgn.analysis as cryodrgn_analysis
     #key = 'zs12'
@@ -244,70 +245,111 @@ def kmeans_analysis(output_folder, dataset_loader, means, u, zs, cov_zs, noise_v
     if zs.shape[-1] > 2:
         plot_axes(axes = [1,2])
     
-    if generate_volumes:
-        likelihood_threshold = ld.get_log_likelihood_threshold(k = zs.shape[-1]) if likelihood_threshold is None else likelihood_threshold
-        compute_and_save_volumes_from_z(dataset_loader, means, u, centers, zs, cov_zs, noise_variance, output_folder , likelihood_threshold = likelihood_threshold, compute_reproj= compute_reproj)
-
     return centers, labels
 
 
+def plot_umap(output_folder, zs, centers):
+    import cryodrgn.analysis as cryodrgn_analysis
 
-def compute_and_save_reweighted(cryos, means,  path_subsampled, zs, cov_zs, noise_variance, output_folder, likelihood_threshold = None, recompute_prior = True, volume_mask = None, adaptive =False):
+    def plot_axes(axes = [0,1]):
+        fig,ax = cryodrgn_analysis.scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=True, labels=None, alpha=0.1, s=1)
+        fig.set_figheight(6)
+        fig.set_figwidth(6)
+        ax.set_xticks([], [])
+        ax.set_yticks([], [])
+        if output_folder is not None:
+            plt.savefig(output_folder + 'centers_.png' )
+        
+        fig,ax = cryodrgn_analysis.scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=False, labels=None, alpha=0.1, s=2)
+        fig.set_figheight(6)
+        fig.set_figwidth(6)
+        ax.set_xticks([], [])
+        ax.set_yticks([], [])
+        if output_folder is not None:
+            plt.savefig(output_folder + 'centers_no_annotate.png' )
+
+        import seaborn as sns
+
+        g = sns.jointplot(x=zs[:,0], y=zs[:,1], alpha=.1, s=1)
+        g.set_axis_labels('UMAP1', 'UMAP2')
+        if output_folder is not None:
+
+            plt.savefig(output_folder + 'sns.png' )
+
+
+        g = sns.jointplot(x=zs[:,0], y=zs[:,1], kind='hex')
+        g.set_axis_labels('UMAP1', 'UMAP2')
+        if output_folder is not None:
+            plt.savefig(output_folder + 'sns_hex.png' )
+
+    plot_axes(axes = [0,1])
+
+
+
+
+def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_variance, output_folder, B_factor, n_bins = 30, n_min_images = 100, embedding_option = 'cov_dist', save_all_estimates = False):
 
     #batch_size = 
-    memory_to_use = utils.get_gpu_memory_total() - path_subsampled.shape[0] * utils.get_size_in_gb(means['combined']) * 8
+    memory_to_use = utils.get_gpu_memory_total() - path_subsampled.shape[0] * cryos[0].volume_size * 8 / 1e9 * 8
     assert memory_to_use > 0, "reduce number of volumes computed at once"
     batch_size = 2 * utils.get_image_batch_size(cryos[0].grid_size, memory_to_use)
     logger.info(f"batch size in reweighting: {batch_size}")
 
+    mkdir_safe(output_folder)
+
     new_volume_generation = True
     if new_volume_generation:
-        # from recovar import heterogeneity_volume
-        # for k in range(path_subsampled.shape[0]):
-        #     output_folder = results['input_args'].outdir + "/output/" if output_folder is None else output_folder
-        #     print("Dumping to ", output_folder)
-        #     recovar.output.mkdir_safe(output_folder)
-        #     noise_variance = results['cov_noise']
-        #     latent_points = latent_point[None]
-
-        #     log_likelihoods = recovar.latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], results['zs'][ndim], results['cov_zs'][ndim])[...,0]
-        #     heterogeneity_distances = [ log_likelihoods[:cryos[0].n_images], log_likelihoods[cryos[0].n_images:] ]
-        #     if metric_used == "global":
-        #         make_volumes_kernel_estimate( heterogeneity_distances, cryos, noise_variance, output_folder, ndim, n_bins) 
-        #     else:
-        #         make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder, ndim, n_bins, B_factor, tau = None, n_min_images = 300, metric_used = metric_used)
-
-        #     heterogeneity_volume.make_volumes_kernel_estimate_from_results(path_subsampled[k], results, ndim=ndim, cryos = None, n_bins = 20, ou
-        # put_folder = output_folder, B_factor = 60, metric_used = "locres_auc")
-
         from recovar import heterogeneity_volume, latent_density
         for k in range(path_subsampled.shape[0]):
             output_folder_this = output_folder + "vol" + format(k, '03d') + "/"
             mkdir_safe(output_folder_this)
             ndim = zs.shape[-1]
-            n_bins = 30
-            B_factor = 60
+            # n_bins = 30
             latent_points = path_subsampled[k][None]
-            log_likelihoods = latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], zs, cov_zs)[...,0]
-            heterogeneity_distances = [ log_likelihoods[:cryos[0].n_images], log_likelihoods[cryos[0].n_images:] ]
-            heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder_this, -1, n_bins, B_factor, tau = None, n_min_images = 300, metric_used = "locres_auc")
 
-    else:
-        trajectory_prior, halfmaps = embedding.generate_conformation_from_reweighting(cryos, means, noise_variance, zs, cov_zs, path_subsampled, batch_size = batch_size, disc_type = 'linear_interp', likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, volume_mask = volume_mask, adaptive=adaptive)
-        save_volumes(trajectory_prior, output_folder +  'reweight_')
-        save_volumes(halfmaps[0], output_folder +  'halfmap0_reweight_')
-        save_volumes(halfmaps[1], output_folder +  'halfmap1_reweight_')
+            if embedding_option == 'llh':
+                log_likelihoods = latent_density.compute_latent_log_likelihood(latent_points, zs, cov_zs)[...,0]
+                heterogeneity_distances = log_likelihoods - np.min(log_likelihoods)
+            elif embedding_option == 'cov_dist':
+                cov_zs = cov_zs#*0 + np.eye(dim)
+                heterogeneity_distances = latent_density.compute_latent_quadratic_forms_in_batch(latent_points, zs, cov_zs)[...,0]
+            elif embedding_option == 'dist':
+                cov_zs = cov_zs*0 + np.eye(ndim)
+                heterogeneity_distances = latent_density.compute_latent_log_likelihood(latent_points, zs, cov_zs)[...,0]
+            else:
+                raise ValueError("Unknown embed option")
+
+
+            # latent_points = path_subsampled[k][None]
+            # log_likelihoods = latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], zs, cov_zs)[...,0]
+            heterogeneity_distances = [ heterogeneity_distances[:cryos[0].n_images], heterogeneity_distances[cryos[0].n_images:] ]
+
+
+            # heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder_this, -1, n_bins, B_factor, tau = None, n_min_images = 300, metric_used = "locres_auc")
+            from recovar import noise
+            noise_variance = noise.make_radial_noise(noise_variance, cryos[0].image_shape)
+            locres_maskrad = cryos[0].grid_size * cryos[0].voxel_size / 20
+            logger.info(f"Setting locres_maskrac = locres_sampling = box_size * voxel_size / 20 = {locres_maskrad:.1f} Angstroms")
+
+            heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder_this, ndim, n_bins, B_factor, tau = None, n_min_images = n_min_images, locres_sampling = locres_maskrad, locres_maskrad = locres_maskrad, locres_edgwidth = 0, upsampling_for_ests = 1, use_mask_ests =False, grid_correct_ests = False, save_all_estimates=save_all_estimates, metric_used= 'locshellmost_likely')
+            logger.info(f"Done with volume generation {k} stored in {output_folder_this}")
+
+    # else:
+    #     trajectory_prior, halfmaps = embedding.generate_conformation_from_reweighting(cryos, means, noise_variance, zs, cov_zs, path_subsampled, batch_size = batch_size, disc_type = 'linear_interp', likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, volume_mask = volume_mask, adaptive=adaptive)
+    #     save_volumes(trajectory_prior, output_folder +  'reweight_')
+    #     save_volumes(halfmaps[0], output_folder +  'halfmap0_reweight_')
+    #     save_volumes(halfmaps[1], output_folder +  'halfmap1_reweight_')
 
     
-def compute_and_save_volumes_from_z(dataset_loader, means, u,  path_subsampled, zs, cov_zs, noise_variance, output_folder, likelihood_threshold = None, recompute_prior = True, compute_reproj = True, adaptive = False ):
-        
-    mkdir_safe(output_folder)
-    compute_and_save_reweighted(dataset_loader, means, path_subsampled, zs, cov_zs, noise_variance, output_folder, likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, adaptive = adaptive)
+# def compute_and_save_volumes_from_z(dataset_loader, path_subsampled, zs, cov_zs, noise_variance, output_folder, adaptive = False ):
+#     mkdir_safe(output_folder)
+#     compute_and_save_reweighted(dataset_loader, path_subsampled, zs, cov_zs, noise_variance, output_folder, adaptive = adaptive)
     
-    if compute_reproj:
-        n_eigs = zs.shape[1]
-        trajectory_reproj = embedding.generate_conformation_from_reprojection(path_subsampled, means['combined'], u[:,:n_eigs] )
-        save_volumes(trajectory_reproj, output_folder +  'reproj_')
+    # if compute_reproj:
+    #     n_eigs = zs.shape[1]
+    #     trajectory_reproj = embedding.generate_conformation_from_reprojection(path_subsampled, means['combined'], u[:,:n_eigs] )
+    #     save_volumes(trajectory_reproj, output_folder +  'reproj_')
+
 
     
 def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path, likelihood_threshold = 1e-5 ):
@@ -388,6 +430,18 @@ class PipelineOutput:
         
         elif key == 'mean':
             return ftu.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/' + 'mean' + '.mrc')).reshape(-1)
+        
+        elif key == 'mean_halfmaps':
+            half1 = ftu.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/' + 'mean_half1_unfil' + '.mrc')).reshape(-1)
+            half2 = ftu.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/' + 'mean_half2_unfil' + '.mrc')).reshape(-1)
+            return half1, half2
+        elif key == 'image_snr':
+            vol_shape = self.get('volume_shape')
+            PS = regularization.average_over_shells(np.abs((self.get('mean').reshape( self.get('volume_shape'))))**2, self.get('volume_shape'))
+            noise_level = self.get('noise_var_used')
+            snr = utils.make_radial_image(PS/noise_level, vol_shape[:2])
+            return snr
+        
         elif key == 'volume_mask':
             return utils.load_mrc(self.result_path + 'output/volumes/' + 'mask' + '.mrc')
         elif key == 'dilated_volume_mask':
@@ -419,54 +473,51 @@ def load_results_newest(datadir):
     return results#, results['dataset_loader_dict'], grid_to_z, z_to_grid
 
 
-def make_trajectory_plots_from_results(results, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =10, compute_reproj = False, likelihood_threshold = None, adaptive = False):
+def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, compute_reproj = False, likelihood_threshold = None, adaptive = False):
 
     assert (((z_st is not None) and (z_end is not None)) or (gt_volumes is not None)), 'either z_st and z_end should be passed, or gt_volumes'
 
     # results = load_results_new(results['output_dir'])
     if cryos is None:
-        cryos = dataset.load_dataset_from_args(results['input_args']) if cryos is None else cryos
-        embedding.set_contrasts_in_cryos(cryos, results['contrasts'][basis_size])
+        cryos = pipeline_output.get('dataset') if cryos is None else cryos
+        embedding.set_contrasts_in_cryos(cryos, pipeline_output.get('contrasts')[basis_size])
 
     # cryos = dataset.load_dataset_from_args(results['input_args']) if cryos is None else cryos
-    latent_space_bounds = ld.compute_latent_space_bounds(results['zs'][basis_size])
+    latent_space_bounds = ld.compute_latent_space_bounds(pipeline_output.get('zs')[basis_size])
     
     return make_trajectory_plots(
-        cryos, results['density'], results['u'], results['means'],
-        results['zs'][basis_size], results['cov_zs'][basis_size], results['cov_noise'], 
+        cryos, pipeline_output.get('density'), 
+        pipeline_output.get('zs')[basis_size], pipeline_output.get('cov_zs')[basis_size], pipeline_output.get('noise_var_used'), 
         z_st, z_end, latent_space_bounds, output_folder, 
-        gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = plot_llh, basis_size =basis_size, 
-        compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold, adaptive = adaptive)
+        gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = plot_llh)
 
 
 
-def make_trajectory_plots(dataset_loader, density, u, means, zs, cov_zs, noise_variance, z_st, z_end, latent_space_bounds, output_folder, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, basis_size =10, compute_reproj = False, likelihood_threshold = None, adaptive = False):
-    import time
+def make_trajectory_plots(dataset_loader, density, zs, cov_zs, noise_variance, z_st, z_end, latent_space_bounds, output_folder, gt_volumes= None, n_vols_along_path = 6, plot_llh = False):
     st_time = time.time()
     
-    likelihood_threshold = ld.get_log_likelihood_threshold(k = zs.shape[-1]) if likelihood_threshold is None else likelihood_threshold
+    # likelihood_threshold = ld.get_log_likelihood_threshold(k = zs.shape[-1]) if likelihood_threshold is None else likelihood_threshold
+    gt_volumes = None
+    # if gt_volumes is not None:
+    #     gt_subs_idx = resample_trajectory(gt_volumes, n_vols_along_path = n_vols_along_path)
+        
+    #     # Find ground truth volumes in latent coordinates
+    #     save_volumes(tuple(gt_volumes),   output_folder + '/gt' , volume_shape = None, from_ft = True  )
+    #     save_volumes(tuple(gt_volumes[gt_subs_idx]),   output_folder + '/gt_subs' , volume_shape = None, from_ft = True  )
+    #     json.dump(gt_subs_idx.tolist(), open(output_folder + '/gt_index_resampled.json', 'w'))
+        
+    #     z_vols = vol_to_z(gt_volumes, u, means['combined'], basis_size)
+    #     z_st = z_vols[0]
+    #     z_end = z_vols[-1]
 
-    same_st_end = False
-    if gt_volumes is not None:
-        gt_subs_idx = resample_trajectory(gt_volumes, n_vols_along_path = n_vols_along_path)
+    #     gt_volumes_z = vol_to_z(gt_volumes, u, means['combined'], basis_size)
+    #     z_st = gt_volumes_z[0]
+    #     z_end = gt_volumes_z[-1]
+    #     # gt_coords_grid = z_to_grid(gt_volumes_z)
         
-        # Find ground truth volumes in latent coordinates
-        save_volumes(tuple(gt_volumes),   output_folder + '/gt' , volume_shape = None, from_ft = True  )
-        save_volumes(tuple(gt_volumes[gt_subs_idx]),   output_folder + '/gt_subs' , volume_shape = None, from_ft = True  )
-        json.dump(gt_subs_idx.tolist(), open(output_folder + '/gt_index_resampled.json', 'w'))
-        
-        z_vols = vol_to_z(gt_volumes, u, means['combined'], basis_size)
-        z_st = z_vols[0]
-        z_end = z_vols[-1]
-
-        gt_volumes_z = vol_to_z(gt_volumes, u, means['combined'], basis_size)
-        z_st = gt_volumes_z[0]
-        z_end = gt_volumes_z[-1]
-        # gt_coords_grid = z_to_grid(gt_volumes_z)
-        
-        same_st_end = True
+    #     same_st_end = True
     
-
+    basis_size = zs.shape[1]
     zs = zs[:,:basis_size]
     latent_space_bounds = ld.compute_latent_space_bounds(zs)
     cov_zs = cov_zs[:,:basis_size,:basis_size]
@@ -482,7 +533,7 @@ def make_trajectory_plots(dataset_loader, density, u, means, zs, cov_zs, noise_v
         logger.info(f"after path {time.time() - st_time}")
         path_subsampled = path_z_subsampled
         #trajectory.subsample_path(path_z, n_pts = n_vols_along_path)
-        plot_trajectories_over_density(density, None,latent_space_bounds,  colors = None, plot_folder = output_folder + 'density/', cmap = 'inferno')
+        # plot_trajectories_over_density(density, None,latent_space_bounds,  colors = None, plot_folder = output_folder + 'density_nopath/', cmap = 'inferno')
         if gt_volumes is not None:
             plot_trajectories_over_density(None, [gt_volumes_z, path_z], latent_space_bounds, subsampled = [gt_volumes_z[gt_subs_idx][1:-1], path_z_subsampled[1:-1] ] , colors = ['k', 'cornflowerblue'], plot_folder = output_folder, cmap = 'inferno', zs = zs, cov_zs = cov_zs) 
         else:
@@ -493,22 +544,18 @@ def make_trajectory_plots(dataset_loader, density, u, means, zs, cov_zs, noise_v
         path_subsampled = path_z_subsampled
 
     st_time = time.time()
-    compute_and_save_volumes_from_z(dataset_loader, means, u, path_subsampled, zs, cov_zs, noise_variance, output_folder  , likelihood_threshold = likelihood_threshold, compute_reproj = compute_reproj, adaptive = adaptive)
-    logger.info(f"vol time {time.time() - st_time}")
+    # compute_and_save_reweighted(dataset_loader, path_subsampled, zs, cov_zs, noise_variance, output_folder, B_factor, n_bins = 30)
+    # logger.info(f"vol time {time.time() - st_time}")
     
-    x = ld.compute_weights_of_conformation_2(path_z, zs, cov_zs,likelihood_threshold = likelihood_threshold)
-    summed_weights = np.sum(x, axis =0)
     density_on_path = ld.compute_latent_space_density_at_pts(path_z, zs, cov_zs)
-
-    densities = { 'density' :  density_on_path.tolist(), 'weights': summed_weights.tolist(), 'path' : path_z.tolist(), 'path_subsampled' : path_subsampled.tolist()} 
+    densities = { 'density' :  density_on_path.tolist(), 'path' : path_z.tolist(), 'path_subsampled' : path_subsampled.tolist()} 
     json.dump(densities, open(output_folder + '/path.json', 'w'))
 
-    plot_two_twings_with_diff_scale([density_on_path, summed_weights], [None, None], labels = ['density', '|I(z)|'],plot_folder = output_folder)
-
     if plot_llh:
-        plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path = output_folder, likelihood_threshold = likelihood_threshold  )
+        plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path = output_folder, likelihood_threshold = None  )
+
     logger.info(f"after all plots {time.time() - st_time}")
-    return path_z
+    return path_z, path_z_subsampled
 
 
 def vol_to_z(gt_volumes, u, mean, basis_size):
@@ -567,7 +614,6 @@ def plot_trajectories_over_scatter(trajectories,  subsampled = None, colors = No
 
 def umap_latent_space(zs):
     import umap
-    import time
     st_time = time.time()
     n_components = np.min([zs.shape[1], 2])
     mapper = umap.UMAP(n_components = n_components).fit(zs)

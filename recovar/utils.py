@@ -207,3 +207,72 @@ def jax_has_gpu():
         return True
     except:
         return False
+
+def dtype_to_real(rvs_dtype):
+    return rvs_dtype.type(0).real.dtype
+
+
+import starfile
+import pandas as pd
+def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid_size, particles_file, output_filename, halfset_indices = None):
+
+    # Stored like this in CTF_params
+    # dfu (float or Bx1 tensor): DefocusU (Angstrom)
+    # dfv (float or Bx1 tensor): DefocusV (Angstrom)
+    # dfang (float or Bx1 tensor): DefocusAngle (degrees)
+    # volt (float or Bx1 tensor): accelerating voltage (kV)
+    # cs (float or Bx1 tensor): spherical aberration (mm)
+    # w (float or Bx1 tensor): amplitude contrast ratio
+    # phase_shift (float or Bx1 tensor): degrees 
+    # bfactor (float or Bx1 tensor): envelope fcn B-factor (Angstrom^2)
+    
+    keys = ['rlnOpticsGroup', 'rlnOpticsGroupName', 'rlnAmplitudeContrast',
+       'rlnSphericalAberration', 'rlnVoltage', 'rlnImagePixelSize',
+       'rlnImageSize', 'rlnImageDimensionality']
+    dtype = np.float64
+    values = [ 1, 'opticsGroup1', CTF_params[0, 5].astype(dtype),  CTF_params[0, 4].astype(dtype), CTF_params[0, 3].astype(dtype), voxel_size, grid_size, 2]
+    optic_df = pd.DataFrame.from_dict({ 0: values}, orient='index',
+                       columns=keys)
+    n_images = CTF_params.shape[0]
+    image_names = [ f"{k+1}@{particles_file}" for k in range(n_images) ]
+    micrograph_names = [ f"{k+1}" for k in range(n_images) ]
+    optics_group = np.ones(n_images).astype(int)
+    
+    keys = ['rlnImageName', 'rlnMicrographName', 'rlnDefocusU', 'rlnDefocusV',
+       'rlnDefocusAngle', 'rlnOpticsGroup']
+    
+    values = [ image_names, micrograph_names, CTF_params[:,0].astype(dtype), CTF_params[:,1].astype(dtype), CTF_params[:,2].astype(dtype), optics_group ]
+
+    if rotation_matrices is not None:
+        keys += [ 'rlnAngleRot',
+                'rlnAngleTilt', 
+                'rlnAnglePsi', 
+                'rlnOriginXAngst', 
+                'rlnOriginYAngst',] 
+        import cryodrgn.utils as cryodrgn_utils
+        rots = cryodrgn_utils.R_to_relion_scipy(rotation_matrices)
+        values += [ rots[:,0], rots[:,1], rots[:,2], translations[:,0], translations[:,1] ]
+    
+
+    if halfset_indices is not None:
+        keys += ['rlnRandomSubset']
+        values += [halfset_indices]
+    
+    d = dict(zip(keys, values))
+    particles_df = pd.DataFrame(d)
+    star_df = { 'optics' : optic_df, 'particles' : particles_df }
+    starfile.write(star_df, output_filename)
+    return
+
+
+
+def write_starfile_from_cryodrgn_format(ctf_path, pose_path, particles_file_path, output_filename, halfset_indices = None):
+    ctf = pickle_load(ctf_path)
+    poses = pickle_load(pose_path)
+    rots = poses[0]
+    trans = poses[1]
+    # particles = load_mrc(particles_file_path)
+    # import pdb; pdb.set_trace()
+    write_starfile(ctf[:,2:], rots, trans, ctf[0,1], ctf[0,0], particles_file_path, output_filename, halfset_indices = None)
+
+# make_starfile(cryo_dataset.CTF_params, cryo_dataset.rotation_matrices, cryo_dataset.translations, cryo_dataset.voxel_size, cryo_dataset.volume_shape[0], dataset_dict['particles_file'], output_filename = output_folder + 'sim_newest.star', halfset_indices = array_indices )
