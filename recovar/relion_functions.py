@@ -114,6 +114,26 @@ def relion_style_triangular_kernel_batch_trilinear(images, CTF_params, rotation_
     return Ft_y, Ft_ctf
 
 
+@functools.partial(jax.jit, static_argnums=[4,5,6,7,8])
+def relion_style_triangular_kernel_batch_trilinear_linear_in_het(images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, cov_noise, het_coords):
+    # Assumes het_coords := het_coords - target
+    
+    images = core.translate_images(images, translations, image_shape) / cov_noise
+    Ft_y = core.adjoint_forward_model_from_trilinear(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+    # Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+
+
+    CTF = CTF_fun( CTF_params, image_shape, voxel_size) / cov_noise
+    Ft_ctf = core.adjoint_forward_model_from_trilinear(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+
+    het_CTF = jnp.ones_likes(het_coords)
+
+    # Ft_ctf = core.adjoint_forward_model_from_trilinear(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+
+    # Ft_ctf = core.adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+
+    return Ft_y, Ft_ctf
+
 
 # import functools, jax
 @functools.partial(jax.jit, static_argnums=[5,6,7,8])
@@ -138,6 +158,8 @@ def residual_relion_style_triangular_kernel_batch_trilinear(mean_estimate, image
     Ft_ctf = core.adjoint_slice_volume_by_trilinear(CTF_squared**2, rotation_matrices, image_shape, volume_shape)
 
     return Ft_y, Ft_ctf
+
+
 
 
 # My understanding of what relion does.

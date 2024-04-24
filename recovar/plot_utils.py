@@ -41,7 +41,7 @@ def plot_noise_profile(pipeline_output, yscale = 'linear'):
     
     return
 
-def compare_two_volumes(cryo, vol1, vol2):
+def compare_two_volumes(cryo, vol1, vol2, from_ft_inp = True):
     import matplotlib
     plt.rcParams.update({
         # "text.usetex": True,
@@ -98,11 +98,12 @@ def compare_two_volumes(cryo, vol1, vol2):
         is_first = False
         return
 
-    plot_vol(vol1, 0, from_ft = True, name = 'vol1')
-    plot_vol(vol2, 1, from_ft = True,name = 'vol2')
+
+    plot_vol(vol1, 0, from_ft = from_ft_inp, name = 'vol1')
+    plot_vol(vol2, 1, from_ft = from_ft_inp,name = 'vol2')
     vol_diff = ftu.get_idft3((vol1-vol2).reshape(cryo.volume_shape)).reshape(-1)
-    plot_vol(vol_diff,2, from_ft = False,name = 'diff')
-    plot_vol(np.abs(vol_diff),3, from_ft = False,name = '||diff||')
+    plot_vol(vol_diff,2, from_ft = not from_ft_inp,name = 'diff')
+    plot_vol(np.abs(vol_diff),3, from_ft = not from_ft_inp,name = '||diff||')
     
     plt.subplots_adjust(wspace=0, hspace=0)
 
@@ -356,10 +357,13 @@ def plot_cov_results(u,s, max_eig = 40, savefile = None):
 
     return angles
 
-def plot_mean_fsc(results,cryos):
+def plot_mean_fsc(pipeline_output,cryos):
 
-    ax, score = plot_fsc_new(results['means']['corrected0'], results['means']['corrected1'], cryos[0].volume_shape, cryos[0].voxel_size,  curve = None, ax = None, threshold = 1/7, filename = None, name = "unmasked")
-    ax, score_masked = plot_fsc_new(results['means']['corrected0'], results['means']['corrected1'], cryos[0].volume_shape, cryos[0].voxel_size,  curve = None, ax = ax, threshold = 1/7, filename = None, volume_mask = results['volume_mask'], name = "masked")
+    halfmap1, halfmap2 = pipeline_output.get('mean_halfmaps')
+
+    ax, score = plot_fsc_new(halfmap1, halfmap2, pipeline_output.get('volume_shape'), pipeline_output.get('voxel_size'),  curve = None, ax = None, threshold = 1/7, filename = None, name = "unmasked")
+
+    ax, score_masked = plot_fsc_new(halfmap1, halfmap2, pipeline_output.get('volume_shape'), pipeline_output.get('voxel_size'),  curve = None, ax = ax, threshold = 1/7, filename = None, volume_mask = pipeline_output.get('volume_mask'), name = "masked")
     plt.rcParams.update({
         # "text.usetex": True,
         # "font.family": "serif",

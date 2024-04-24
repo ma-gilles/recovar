@@ -31,15 +31,22 @@ def get_picked_frequencies(volume_shape, radius = 2, use_half = True):
 @functools.partial(jax.jit, static_argnums = [4,5,6,7,8,9,10])    
 def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_threshold, image_shape, volume_shape, grid_size, padding, disc_type, binary = True, soften = -1):
     
-    # if padding is already there, do nothing else double image size.
-    extra_padding = grid_size if ( padding == 0 ) else 0
+    disc_type = 'linear_interp'
+    
+    if disc_type == 'cubic':
+        extra_padding = 0 
+        mask_ft = volume_mask
+    else:
+        # if padding is already there, do nothing else double image size.
+        extra_padding = grid_size if ( padding == 0 ) else 0
+        # Do this in half precision? Shouldn't matter much.
+        volume_mask = pad.pad_volume_spatial_domain(volume_mask, extra_padding).real
+        mask_ft = ftu.get_dft3(volume_mask).reshape(-1)
+
     padded_image_shape = tuple(np.array(image_shape) + extra_padding)
     padded_volume_shape = tuple(np.array(volume_shape) + extra_padding)
     padded_grid_size = grid_size + extra_padding
 
-    # Do this in half precision? Shouldn't matter much.
-    volume_mask = pad.pad_volume_spatial_domain(volume_mask, extra_padding).real
-    mask_ft = ftu.get_dft3(volume_mask).reshape(-1)
     proj_mask = core.slice_volume_by_map(mask_ft, rotation_matrices, padded_image_shape,
                                padded_volume_shape, disc_type)
     

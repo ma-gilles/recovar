@@ -179,7 +179,7 @@ from recovar import metrics, locres
 import recovar
 import os.path
 
-def evaluate_this_choice(target_real, output_folder, voxel_size, mask = None, partial_mask = None ):
+def evaluate_this_choice(target_real, output_folder, voxel_size, mask = None, partial_mask = None, shell_split = False ):
     
     mask = gt_mask_fn(target_real) if mask is None else mask
 
@@ -189,15 +189,22 @@ def evaluate_this_choice(target_real, output_folder, voxel_size, mask = None, pa
     while os.path.isfile(file(k)):
         map2 = recovar.utils.load_mrc(file(k))
         errors_gt[k] = locres.local_error(target_real, map2, voxel_size, locres_sampling = 15)
-        # print(f"Doing {k}'s estimate")
         k = k + 1
-    gt_choice = np.argmin(np.array(list(errors_gt.values())), axis=0)
 
-    choice1 = recovar.utils.load_mrc(output_folder + "ml_optimized_choice.mrc")
-    error_metrics = {"gt_choice": gt_choice}
-    error_metrics["choice_l2_error"], error_metrics["choice_l2_bias"]  = metrics.masked_l2_difference(gt_choice, choice1, voxel_size, mask= mask)
-    if partial_mask is not None:
-        error_metrics["choice_partial_l2_error"], error_metrics["choice_partial_l2_bias"]  = metrics.masked_l2_difference(gt_choice, choice1, voxel_size, mask= partial_mask)
+    gt_choice = np.argmin(np.array(list(errors_gt.values())), axis=0)
+    if shell_split:    
+        error_metrics = {"gt_choice": gt_choice}
+        error_metrics["choice_l2_error"] = None
+        error_metrics["choice_l2_bias"] = None
+        if partial_mask is not None:
+            error_metrics["choice_partial_l2_error"] = None
+            error_metrics["choice_partial_l2_bias"] = None
+    else:
+        choice1 = recovar.utils.load_mrc(output_folder + "ml_optimized_choice.mrc")
+        error_metrics = {"gt_choice": gt_choice}
+        error_metrics["choice_l2_error"], error_metrics["choice_l2_bias"]  = metrics.masked_l2_difference(gt_choice, choice1, voxel_size, mask= mask)
+        if partial_mask is not None:
+            error_metrics["choice_partial_l2_error"], error_metrics["choice_partial_l2_bias"]  = metrics.masked_l2_difference(gt_choice, choice1, voxel_size, mask= partial_mask)
 
     unfiltered_map = recovar.utils.load_mrc(output_folder + "ml_optimized_unfiltered.mrc")
     gt_unfilt_metrics = metrics.compute_volume_error_metrics_from_gt(target_real, unfiltered_map, voxel_size, mask= mask, partial_mask = partial_mask )
@@ -207,8 +214,12 @@ def evaluate_this_choice(target_real, output_folder, voxel_size, mask = None, pa
     gt_filt_metrics = metrics.compute_volume_error_metrics_from_gt(target_real, filtered_map, voxel_size, mask= mask, partial_mask = partial_mask )
     add_dict_with_prefix(error_metrics, gt_filt_metrics, "gt_filt_")
 
-    halfmap1 = recovar.utils.load_mrc(output_folder + "ml_optimized_halfmap1_unfiltered.mrc")
-    halfmap2 = recovar.utils.load_mrc(output_folder + "ml_optimized_halfmap2_unfiltered.mrc")
+    filtered_map = recovar.utils.load_mrc(output_folder + "ml_optimized_locres_filtered_before.mrc")
+    gt_filt_metrics = metrics.compute_volume_error_metrics_from_gt(target_real, filtered_map, voxel_size, mask= mask, partial_mask = partial_mask )
+    add_dict_with_prefix(error_metrics, gt_filt_metrics, "gt_filt_before")
+
+    halfmap1 = recovar.utils.load_mrc(output_folder + "ml_optimized_half1_unfil.mrc")
+    halfmap2 = recovar.utils.load_mrc(output_folder + "ml_optimized_half2_unfil.mrc")
     halfmap_metrics = metrics.compute_volume_error_metrics_from_halfmaps(halfmap1, halfmap2, voxel_size, mask= mask, partial_mask = partial_mask )
     add_dict_with_prefix(error_metrics, halfmap_metrics, "halfmap_")
     
@@ -217,3 +228,37 @@ def evaluate_this_choice(target_real, output_folder, voxel_size, mask = None, pa
 def add_dict_with_prefix(dict1, dict_to_add, prefix):
     for key,value in dict_to_add.items():
         dict1[prefix + key] = value
+
+
+def embed_from_median_label(z, gt_image_assignment):
+    max_im = np.max(gt_image_assignment)+1
+    median_labels = np.zeros((max_im, z.shape[1]))
+    for k in range(max_im):
+        median_labels[k] = np.median(z[gt_image_assignment == k], axis=0)
+    return median_labels
+
+def variance_of_zs(z, gt_image_assignment):
+
+    max_im = np.max(gt_image_assignment)+1
+    variances = np.zeros(max_im)
+    total_variance = 0
+    for k in range(max_im):
+        sub_zs = z[gt_image_assignment == k]
+        if sub_zs.size ==0:
+            continue
+        
+        variances[k] = np.var(z[gt_image_assignment == k])
+        mean_label = np.mean(z[gt_image_assignment == k], axis=0)
+        total_variance += np.sum( (z[gt_image_assignment == k] - mean_label)**2)
+    
+    var_z = np.sum((z - np.mean(z, axis=0))**2) / z.shape[0]
+    return variances, total_variance / z.shape[0], var_z
+
+
+def get_embedding_from_median(zs, image_assignment, n_classes = None):
+    n_classes = np.max(image_assignment) if n_classes is None else n_classes 
+    # labels = np.unique(image_assignments)
+    embeddings = np.zeros((n_classes, zs.shape[-1]))
+    for lab in range(n_classes):
+        embeddings[lab] = np.median(zs[image_assignment == lab], axis=0)
+    return embeddings

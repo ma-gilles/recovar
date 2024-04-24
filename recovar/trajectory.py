@@ -146,7 +146,7 @@ def compute_travel_time(density, g_st, latent_space_bounds):
     travel_time[tuple(g_st)] = 0 
     return travel_time
 
-def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, density_eps = 1e-5, max_dim = None, percentile_bound = 1, num_points = 50, use_log_density = False, debug_plot = False):
+def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, density_eps = 1e-5, max_dim = None, percentile_bound = 1, num_points = 50, use_log_density = False, debug_plot = False, density_option = "kde"):
 
     max_dim = zs.shape[-1] if max_dim is None else max_dim
     latent_space_bounds = latent_density.compute_latent_space_bounds(zs, percentile = percentile_bound)
@@ -168,6 +168,11 @@ def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, dens
 
 
     low_dim = density_low_dim.ndim
+
+    if low_dim > max_dim:
+        density_low_dim, _  = latent_density.compute_latent_space_density(zs, cov_zs, pca_dim_max = max_dim, num_points = 100, density_option = density_option)
+        low_dim = max_dim
+
 
     current_path_grid = find_trajectory_in_grid(density_low_dim,
                                             g_st_in_bound[:low_dim],
@@ -197,7 +202,7 @@ def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, dens
 
         # Compute density
         density = latent_density.compute_latent_space_density_on_curve(zs[:,:dim+1], 
-                                cov_zs[:,:dim+1,:dim+1], current_path_z,  latent_space_bounds, pca_dim = dim, num_points = num_points)
+                                cov_zs[:,:dim+1,:dim+1], current_path_z,  latent_space_bounds, pca_dim = dim, num_points = num_points, density_option = density_option)
         if debug_plot:
             plt.imshow(density, aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
 

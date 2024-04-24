@@ -339,11 +339,24 @@ class CryoEMDataset:
             return to_real(ftu.get_idft2(self.get_image(i)))
 
 
+    def get_denoised_image(self,i, to_real= np.real, hide_padding = True, weiner_param =1):
+        batch_image_ind = np.array([i])
+        CTFs = self.CTF_fun(self.CTF_params[batch_image_ind], self.image_shape, self.voxel_size) # Compute CTF
+        images = self.image_stack.get(i)[None]
+        images = self.image_stack.process_images(images) # Compute DFT, masking
+        images = (CTFs / (CTFs**2 + weiner_param)) * images  # CTF correction
+        images = images.reshape(self.image_shape)
+        # if hide_padding:
+        #     return to_real(ftu.get_idft2(self.get_image(i))[hpad:self.image_shape[0]-hpad,hpad:self.image_shape[1]-hpad])
+        # else:
+        return to_real(ftu.get_idft2(images))
+
+
     def plot_FSC(self, image1 = None, image2 = None, filename = None, threshold = 0.5, curve = None, ax = None):
         score = plot_utils.plot_fsc_new(image1, image2, self.volume_shape, self.voxel_size,  curve = curve, ax = ax, threshold = threshold, filename = filename)
         return score
     
-    def get_image_mask(self, indices, mask, binary = True, soften = -1):
+    def get_image_mask(self, indices, mask, binary = True, soften = 5):
         indices = np.asarray(indices).astype(int)
         from recovar import covariance_core # Not sure I want this depency to exist... Could make some circular imports
         return covariance_core.get_per_image_tight_mask(mask, self.rotation_matrices[indices], self.image_stack.mask, self.volume_mask_threshold, self.image_shape, self.volume_shape, self.grid_size, self.padding, disc_type = 'linear_interp',  binary = binary, soften = soften)

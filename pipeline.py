@@ -29,7 +29,7 @@ def add_args(parser: argparse.ArgumentParser):
     def list_of_ints(arg):
         return list(map(int, arg.split(',')))
 
-    parser.add_argument('--zdim', type=list_of_ints, default=[4,10,20], help="Dimension of latent variable")
+    parser.add_argument('--zdim', type=list_of_ints, default=[1,2,4,10,20], help="Dimensions of latent variable. Default=1,2,4,10,20")
 
     # parser.add_argument(
     #     "--zdim", type=list, help="Dimension of latent variable"
@@ -40,8 +40,17 @@ def add_args(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--ctf", metavar="pkl", type=os.path.abspath, required=True, help="CTF parameters (.pkl)"
     )
+
+    # parser.add_argument(
+    #     "--mask", metavar="mrc", default=None, type=os.path.abspath, help="mask (.mrc)"
+    # )
+
     parser.add_argument(
         "--mask", metavar="mrc", default=None, type=os.path.abspath, help="mask (.mrc)"
+    )
+
+    parser.add_argument(
+        "--focus-mask", metavar="mrc", dest = "focus_mask", default=None, type=os.path.abspath, help="mask (.mrc)"
     )
 
     parser.add_argument(
@@ -81,11 +90,11 @@ def add_args(parser: argparse.ArgumentParser):
         help="Invert data sign: options: true, false, automatic (default). automatic will swap signs if sum(estimated mean) < 0",
     )
 
-    group.add_argument(
-        "--rerescale",
-        dest = "rerescale",
-        action="store_true",
-    )
+    # group.add_argument(
+    #     "--rerescale",
+    #     dest = "rerescale",
+    #     action="store_true",
+    # )
 
 
     # Should probably add these options
@@ -263,6 +272,17 @@ def add_args(parser: argparse.ArgumentParser):
         )
 
 
+    group.add_argument(
+            "--dont-use-image-mask",
+            dest = "dont_use_image_mask",
+            action="store_true",
+        )
+
+    group.add_argument(
+            "--do-over-with-contrast",
+            dest = "do_over_with_contrast",
+            action="store_true",
+        )
     return parser
     
 
@@ -309,247 +329,287 @@ def standard_recovar_pipeline(args):
     # embedding.set_contrasts_in_cryos(cryos, contrasts)
     # cryos_old = pipeline_output2.get('dataset')
     # import pdb; pdb.set_trace()
-
-    # Compute mean
-    if args.mean_fn == 'old':
-        means, mean_prior, _, _ = homogeneous.get_mean_conformation(cryos, 5*batch_size, noise_var_from_hf , valid_idx, disc_type, use_noise_level_prior = False, grad_n_iter = 5)
-        use_adaptive = False
-    elif args.mean_fn == 'triangular':
-        means, mean_prior, _, _  = homogeneous.get_mean_conformation_relion(cryos, 5*batch_size, noise_variance = noise_var_from_hf,  use_regularization = False)
-    elif args.mean_fn == 'triangular_reg':
-        means, mean_prior, _, _  = homogeneous.get_mean_conformation_relion(cryos, 5*batch_size, noise_variance = noise_var_from_hf,  use_regularization = True)
+    
+    n_repeats = 1
+    if args.do_over_with_contrast:
+        n_repeats = 2
     else:
-        raise ValueError(f"mean function {args.mean_fn} not recognized")
-    utils.report_memory_device(logger=logger)
+        n_repeats = 1
 
-    # if use_adaptive:
-    #     for cryo_idx, cryo in enumerate(cryos):
-    #         means['adaptive' + str(cryo_idx)], means['adaptive' + str(cryo_idx)+'_h'] = homogeneous.compute_with_adaptive_discretization(cryo, means['lhs'], means['prior'], means['combined'], cov_noise, 1*batch_size)
-    #     means['combined'] = (means['adaptive' + str(0)] + means['adaptive' + str(1)])/2
+    for repeat in range(n_repeats):
 
-    # means['indices'] = [cryo.dataset_indices for cryo in cryos ]
-    # utils.pickle_dump(means, args.outdir + '/means.pkl')
-    mean_real = ftu.get_idft3(means['combined'].reshape(cryos[0].volume_shape))
-
-    ## DECIDE IF WE SHOULD UNINVERT DATA
-    uninvert_check = np.sum((mean_real.real**3 * cryos[0].get_volume_radial_mask(cryos[0].grid_size//3).reshape(cryos[0].volume_shape))) < 0
-    if args.uninvert_data == 'automatic':
-        # Check if in real space, things towards the middle are mostly positive or negative
-        if uninvert_check:
-        # if np.sum(mean_real.real**3 * cryos[0].get_volume_mask() ) < 0:
-            for key in ['combined', 'init0', 'init1', 'corrected0', 'corrected1']:
-                if key in means:
-                    means[key] =- means[key]
-            for cryo in cryos:
-                cryo.image_stack.mult = -1 * cryo.image_stack.mult
-            args.uninvert_data = "true"
-            logger.warning('sum(mean) < 0! swapping sign of data (uninvert-data = true)')
+        if repeat == 1:
+            if 10 in options['zs_dim_to_test']:
+                ndim = 10
+            else:
+                ndim = np.median(options['zs_dim_to_test'])
+            logger.warning(f"repeating with contrast of zdim={ndim}")
+            contrasts_for_second = est_contrasts[ndim]
+            contrasts_for_second /= np.mean(contrasts_for_second) # normalize to have mean 1
+            embedding.set_contrasts_in_cryos(cryos, contrasts_for_second)
+            options["contrast"] = "none"
         else:
-            logger.info('setting (uninvert-data = false)')
-            args.uninvert_data = "false"
-    elif uninvert_check:
-        logger.warning('sum(mean) < 0! Data probably needs to be inverted! set --uninvert-data=true (or automatic)')
-    ## END OF THIS - maybe move this block of code somewhere else?
+            contrasts_for_second = None
+
+        # Compute mean
+        if args.mean_fn == 'old':
+            means, mean_prior, _, _ = homogeneous.get_mean_conformation(cryos, 5*batch_size, noise_var_from_hf , valid_idx, disc_type, use_noise_level_prior = False, grad_n_iter = 5)
+        elif args.mean_fn == 'triangular':
+            means, mean_prior, _, _  = homogeneous.get_mean_conformation_relion(cryos, 5*batch_size, noise_variance = noise_var_from_hf,  use_regularization = False)
+        elif args.mean_fn == 'triangular_reg':
+            means, mean_prior, _, _  = homogeneous.get_mean_conformation_relion(cryos, 5*batch_size, noise_variance = noise_var_from_hf,  use_regularization = True)
+        else:
+            raise ValueError(f"mean function {args.mean_fn} not recognized")
+        utils.report_memory_device(logger=logger)
+
+        mean_real = ftu.get_idft3(means['combined'].reshape(cryos[0].volume_shape))
+
+        ## DECIDE IF WE SHOULD UNINVERT DATA
+        uninvert_check = np.sum((mean_real.real**3 * cryos[0].get_volume_radial_mask(cryos[0].grid_size//3).reshape(cryos[0].volume_shape))) < 0
+        if args.uninvert_data == 'automatic':
+            # Check if in real space, things towards the middle are mostly positive or negative
+            if uninvert_check:
+            # if np.sum(mean_real.real**3 * cryos[0].get_volume_mask() ) < 0:
+                for key in ['combined', 'init0', 'init1', 'corrected0', 'corrected1']:
+                    if key in means:
+                        means[key] =- means[key]
+                for cryo in cryos:
+                    cryo.image_stack.mult = -1 * cryo.image_stack.mult
+                args.uninvert_data = "true"
+                logger.warning('sum(mean) < 0! swapping sign of data (uninvert-data = true)')
+            else:
+                logger.info('setting (uninvert-data = false)')
+                args.uninvert_data = "false"
+        elif uninvert_check:
+            logger.warning('sum(mean) < 0! Data probably needs to be inverted! set --uninvert-data=true (or automatic)')
+        ## END OF THIS - maybe move this block of code somewhere else?
 
 
-    if means['combined'].dtype != cryo.dtype:
-        logger.warning(f"mean estimate is in type: {means['combined'].dtype}")
-        means['combined'] = means['combined'].astype(cryo.dtype)
+        if means['combined'].dtype != cryo.dtype:
+            logger.warning(f"mean estimate is in type: {means['combined'].dtype}")
+            means['combined'] = means['combined'].astype(cryo.dtype)
 
-    logger.info(f"mean computed in {time.time() - st_time}")
+        logger.info(f"mean computed in {time.time() - st_time}")
 
-    # Compute mask
-    volume_mask, dilated_volume_mask= mask.masking_options(args.mask_option, means, volume_shape, args.mask, cryo.dtype_real, args.mask_dilate_iter)
+        # Compute mask
+        volume_mask, dilated_volume_mask= mask.masking_options(args.mask_option, means, volume_shape, args.mask, cryo.dtype_real, args.mask_dilate_iter)
 
-    # Let's see?
-    
-    noise_time = time.time()
-    # Probably should rename all of this...
-    masked_image_PS, std_masked_image_PS, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
+        if args.focus_mask is not None:
+            focus_mask, _= mask.masking_options(args.mask_option, means, volume_shape, args.focus_mask, cryo.dtype_real, args.mask_dilate_iter)
+        else:
+            focus_mask = volume_mask
 
-    if args.mask_option is not None:
-        radial_noise_var_outside_mask, _,_ =  noise.estimate_noise_variance_from_outside_mask_v2(cryo, dilated_volume_mask, batch_size)
+        # Let's see?
+        
+        noise_time = time.time()
+        # Probably should rename all of this...
+        masked_image_PS, std_masked_image_PS, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
 
-        white_noise_var_outside_mask = noise.estimate_white_noise_variance_from_mask(cryo, dilated_volume_mask, batch_size)
-        # white_noise_var_outside_mask = white_noise_var_outside_mask.copy()
-    else:
-        radial_noise_var_outside_mask = noise_var_from_hf * np.ones(cryos[0].grid_size//2 -1, dtype = np.float32)
-        white_noise_var_outside_mask = noise_var_from_hf
-        # radial_noise_var_outside_mask = noise_var_from_hf * np.ones_like(noise_var_outside_mask)
+        if args.mask_option is not None:
+            radial_noise_var_outside_mask, _,_ =  noise.estimate_noise_variance_from_outside_mask_v2(cryo, dilated_volume_mask, batch_size)
 
-    logger.info(f"time to estimate noise is {time.time() - noise_time}")
+            white_noise_var_outside_mask = noise.estimate_white_noise_variance_from_mask(cryo, dilated_volume_mask, batch_size)
+            # white_noise_var_outside_mask = white_noise_var_outside_mask.copy()
+        else:
+            radial_noise_var_outside_mask = noise_var_from_hf * np.ones(cryos[0].grid_size//2 -1, dtype = np.float32)
+            white_noise_var_outside_mask = noise_var_from_hf
+            # radial_noise_var_outside_mask = noise_var_from_hf * np.ones_like(noise_var_outside_mask)
 
-    # radial_noise_var_outside_mask = np.where(radial_noise_var_outside_mask < 0, image_PS / 10, radial_noise_var_outside_mask)
+        logger.info(f"time to estimate noise is {time.time() - noise_time}")
 
-    logger.info(f"time to estimate noise is {time.time() - noise_time}")
+        # radial_noise_var_outside_mask = np.where(radial_noise_var_outside_mask < 0, image_PS / 10, radial_noise_var_outside_mask)
 
-    # I believe that some versino of this is how relion/cryosparc infer the noise, but it seems like it would only be correct for homogeneous datasets
-    # ub_noise_var, std_ub_noise_var, _, _ =  noise.estimate_radial_noise_upper_bound_from_inside_mask(cryo, means['combined'], dilated_volume_mask, batch_size)
+        logger.info(f"time to estimate noise is {time.time() - noise_time}")
 
-    radial_ub_noise_var, _,_ =  noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(cryo, means['combined'], dilated_volume_mask, batch_size)
+        # I believe that some versino of this is how relion/cryosparc infer the noise, but it seems like it would only be correct for homogeneous datasets
+        # ub_noise_var, std_ub_noise_var, _, _ =  noise.estimate_radial_noise_upper_bound_from_inside_mask(cryo, means['combined'], dilated_volume_mask, batch_size)
 
-    # noise_var_outside_mask, per_pixel_noise =  noise.estimate_noise_variance_from_outside_mask_v2(cryo, dilated_volume_mask, batch_size)
+        radial_ub_noise_var, _,_ =  noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(cryo, means['combined'], dilated_volume_mask, batch_size)
 
-    noise_time = time.time()
-    logger.info(f"time to upper bound noise is {time.time() - noise_time}")
-    radial_noise_var_ubed = np.where(radial_noise_var_outside_mask >  radial_ub_noise_var, radial_ub_noise_var, radial_noise_var_outside_mask)
-    # logger.warning("doing funky noise business")
-    # noise_var = np.where(noise_var_outside_mask >  noise_var_from_hf, noise_var_outside_mask, np.ones_like(noise_var_from_hf))
+        # noise_var_outside_mask, per_pixel_noise =  noise.estimate_noise_variance_from_outside_mask_v2(cryo, dilated_volume_mask, batch_size)
 
-    # noise_var_ = np.where(noise_var_outside_mask >  ub_noise_var, ub_noise_var, noise_var_outside_mask)
+        noise_time = time.time()
+        logger.info(f"time to upper bound noise is {time.time() - noise_time}")
+        radial_noise_var_ubed = np.where(radial_noise_var_outside_mask >  radial_ub_noise_var, radial_ub_noise_var, radial_noise_var_outside_mask)
+        # logger.warning("doing funky noise business")
+        # noise_var = np.where(noise_var_outside_mask >  noise_var_from_hf, noise_var_outside_mask, np.ones_like(noise_var_from_hf))
 
-    # noise_var = noise_var_outside_mask
-    # Noise statistic
-    if noise_model == "white":
-        noise_var_used = np.ones_like(radial_noise_var_ubed) * white_noise_var_outside_mask
-    else:
-        noise_var_used = radial_noise_var_ubed
-    
-    if (noise_var_used <0).any():
-        logger.warning("Negative noise variance detected. Setting to image power spectrum / 10")
+        # noise_var_ = np.where(noise_var_outside_mask >  ub_noise_var, ub_noise_var, noise_var_outside_mask)
 
-    noise_var_used = np.where(noise_var_used < 0, image_PS / 10, noise_var_used)
-    # print('DELETE THIS')
-    # print('DELETE THIS')
-    # print('DELETE THIS')
-    # print('DELETE THIS')
-    # print('DELETE THIS')
-    # print('DELETE THIS')
-    # print('DELETE THIS')
-    # noise_var_used = np.ones_like(radial_noise_var_ubed) * 2e-6
+        # noise_var = noise_var_outside_mask
+        # Noise statistic
+        if noise_model == "white":
+            noise_var_used = np.ones_like(radial_noise_var_ubed) * white_noise_var_outside_mask
+        else:
+            noise_var_used = radial_noise_var_ubed
+        
+        if (noise_var_used <0).any():
+            logger.warning("Negative noise variance detected. Setting to image power spectrum / 10")
 
+        noise_var_used = np.where(noise_var_used < 0, image_PS / 10, noise_var_used)
 
-    image_cov_noise = np.asarray(noise.make_radial_noise(noise_var_used, cryos[0].image_shape))
+        image_cov_noise = np.asarray(noise.make_radial_noise(noise_var_used, cryos[0].image_shape))
 
-    from recovar import covariance_estimation
-    variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, noise_variance = image_cov_noise,  use_regularization = True)
-    print('using regul in variance est?!?')
-    # ### TEST 
-    # for k in range(10):
-    #     print("test", k)
-    #     utils.report_memory_device(logger=logger)
-    #     variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, noise_variance = image_cov_noise,  use_regularization = False)
+        from recovar import covariance_estimation
+        variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, noise_variance = image_cov_noise,  use_regularization = True, disc_type = 'cubic')
+        print('using regul in variance est?!?')
 
 
+        rad_grid = np.array(ftu.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
+        # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
+        n_shell_to_ub = np.min([32, cryos[0].grid_size//2 -1])
+        ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
+        variance_est_low_res_5_pc = np.zeros(n_shell_to_ub, dtype = np.float32)
+        variance_est_low_res_median = np.zeros(n_shell_to_ub, dtype = np.float32)
 
-    rad_grid = np.array(ftu.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
-    # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
-    n_shell_to_ub = np.min([32, cryos[0].grid_size//2 -1])
-    ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
-    for k in range(n_shell_to_ub):
-        if np.sum(rad_grid==k) >0:
-            ub_noise_var_by_var_est[k] = np.percentile(noise_p_variance_est[rad_grid==k], 5)
-            ub_noise_var_by_var_est[k] = np.max([0, ub_noise_var_by_var_est[k]])
-            
-    if np.any(ub_noise_var_by_var_est >  noise_var_used[:n_shell_to_ub]):
-        logger.warning("Estimated noise greater than upper bound. Bounding noise using estimated upper obund")
+        for k in range(n_shell_to_ub):
+            if np.sum(rad_grid==k) >0:
+                ub_noise_var_by_var_est[k] = np.percentile(noise_p_variance_est[rad_grid==k], 5)
+                ub_noise_var_by_var_est[k] = np.max([0, ub_noise_var_by_var_est[k]])
+                variance_est_low_res_5_pc[k] = np.percentile(variance_est['combined'][rad_grid==k], 5)
+                variance_est_low_res_median[k] = np.median(variance_est['combined'][rad_grid==k])
 
-    noise_var_used[:n_shell_to_ub] = np.where( noise_var_used[:n_shell_to_ub] > ub_noise_var_by_var_est, ub_noise_var_by_var_est, noise_var_used[:n_shell_to_ub])
-
-    noise_var_used = noise_var_used.astype(cryos[0].dtype_real)
-    image_cov_noise = np.asarray(noise.make_radial_noise(noise_var_used, cryos[0].image_shape))
-
-
-    from recovar import covariance_estimation
-    # test_covar_options = False
-    if args.test_covar_options:
-        tests = [ 
-            # {},
-            {'column_sampling_scheme': 'high_snr_from_var_est', 'sampling_avoid_in_radius': 3 },
-            # {'sampling_n_cols': 50},
-            # {'column_sampling_scheme': 'high_snr_from_var_est','sampling_n_cols':50},
-            # {'sampling_n_cols': 50, 'sampling_avoid_in_radius': 3},
-            # "n_pcs_to_compute" : 200,
-            # "randomized_sketch_size" : 300,
-            {'column_sampling_scheme': 'high_snr_from_var_est','sampling_n_cols':50,  'sampling_avoid_in_radius': 3, 'randomized_sketch_size' : 100, 'n_pcs_to_compute' : 100},
-            {'column_sampling_scheme': 'high_snr_from_var_est', 'sampling_avoid_in_radius': 1 },
-            {'column_sampling_scheme': 'high_snr_from_var_est', 'sampling_avoid_in_radius': 4 },
-
-            # {'column_sampling_scheme': 'high_snr_p'},
-
-            # {'column_sampling_scheme': 'high_snr_p', 'randomize_column_sampling': True},
-            # {},
-            # {"n_pcs_to_compute" : 200,
-            # "randomized_sketch_size" : 210},
-            # {
-            # "n_pcs_to_compute" : 150,
-            # "randomized_sketch_size" : 300},
-            ]
-        idx = 6
-        for test in tests:
-            output_folder = args.outdir + '/output/' 
-            # Compute principal components
-            covariance_options = covariance_estimation.get_default_covariance_computation_options()
-            for key in test:
-                covariance_options[key] = test[key]
-
-            # u,s, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, covariance_options = covariance_options)
-            # utils.pickle_dump({
-            #     'options':test, 'u' :u[:20,:], 's' :s[:20]
-            # }, output_folder + f'test_{idx}.pkl')
-            # del u, s, covariance_cols, picked_frequencies, column_fscs
-    
-            u,s, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, noise_var_used, volume_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, covariance_options = covariance_options, variance_estimate = variance_est['combined'])
-            from recovar import output
-            output.mkdir_safe(output_folder)
-            utils.pickle_dump({
-                'options':test, 'u' :u['rescaled'][:,:20], 's' :s['rescaled'][:20]
-            }, output_folder + f'test_{idx}.pkl')
-            del u, s, covariance_cols, picked_frequencies, column_fscs
-            idx = idx + 1
-            print('done with', idx, test)
-
-        # # Compute principal components
-        # u,s, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, noise_var_used, volume_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, covariance_options = covariance_options)
+        if np.any(ub_noise_var_by_var_est >  noise_var_used[:n_shell_to_ub]):
+            logger.warning("Estimated noise greater than upper bound. Bounding noise using estimated upper obund")
 
 
-    utils.report_memory_device(logger=logger)
+        if np.any(variance_est_low_res_5_pc < 0):
+            logger.warning("Estimated variance resolutino is < 0. This probably means that the noise was incorrectly estimated. Setting to 0")
+            print("5 percentile:", variance_est_low_res_5_pc)
+            print("5 percentile/median over low shells:", variance_est_low_res_5_pc/variance_est_low_res_median)
 
-    covariance_options = covariance_estimation.get_default_covariance_computation_options()
-    if args.low_memory_option:
-        covariance_options['sampling_n_cols'] = 50
-        covariance_options['randomized_sketch_size'] = 100
-        covariance_options['n_pcs_to_compute'] = 100
-        covariance_options['sampling_avoid_in_radius'] = 3
+        noise_var_used[:n_shell_to_ub] = np.where( noise_var_used[:n_shell_to_ub] > ub_noise_var_by_var_est, ub_noise_var_by_var_est, noise_var_used[:n_shell_to_ub])
+
+        noise_var_used = noise_var_used.astype(cryos[0].dtype_real)
+
+        if noise_model == "mixed":
+            # Noise at very low resolution is difficult to estimate. This is a heuristic to avoid some issues.
+            fixed_resolution_shell = 32
+            # Take min of PS and noise variance at fixed shell
+            noise_var_used[:fixed_resolution_shell] = np.where(image_PS[:fixed_resolution_shell]> noise_var_used[fixed_resolution_shell], noise_var_used[fixed_resolution_shell], image_PS[:fixed_resolution_shell])
+
+        ## DELETE FROM HERE?
+        image_cov_noise = np.asarray(noise.make_radial_noise(noise_var_used, cryos[0].image_shape))
+
+        from recovar import covariance_estimation
+        variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, noise_variance = image_cov_noise,  use_regularization = True, disc_type = 'cubic')
+        print('using regul in variance est?!?')
 
 
-    # Compute principal components
-    u,s, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, noise_var_used, volume_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, covariance_options = covariance_options, variance_estimate = variance_est['combined'])
+        rad_grid = np.array(ftu.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
+        # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
+        n_shell_to_ub = np.min([32, cryos[0].grid_size//2 -1])
+        ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
+        variance_est_low_res_5_pc = np.zeros(n_shell_to_ub, dtype = np.float32)
+        variance_est_low_res_median = np.zeros(n_shell_to_ub, dtype = np.float32)
 
-    if options['ignore_zero_frequency']:
-        # Make the noise in 0th frequency gigantic. Effectively, this ignore this frequency when fitting.
-        logger.info('ignoring zero frequency')
-        noise_var_used[0] *=1e16
+        for k in range(n_shell_to_ub):
+            if np.sum(rad_grid==k) >0:
+                ub_noise_var_by_var_est[k] = np.percentile(noise_p_variance_est[rad_grid==k], 5)
+                ub_noise_var_by_var_est[k] = np.max([0, ub_noise_var_by_var_est[k]])
+                variance_est_low_res_5_pc[k] = np.percentile(variance_est['combined'][rad_grid==k], 5)
+                variance_est_low_res_median[k] = np.median(variance_est['combined'][rad_grid==k])
 
-    image_cov_noise = np.asarray(noise.make_radial_noise(noise_var_used, cryos[0].image_shape))
+        if np.any(ub_noise_var_by_var_est >  noise_var_used[:n_shell_to_ub]):
+            logger.warning("Estimated noise greater than upper bound. Bounding noise using estimated upper obund")
 
-    if not args.keep_intermediate:
-        del u['real']
-        if 'rescaled_no_contrast' in u:
-            del u['rescaled_no_contrast']
-        covariance_cols = None
 
-    # Compute embeddings
-    zs = {}; cov_zs = {}; est_contrasts = {}        
-    for zdim in options['zs_dim_to_test']:
-        z_time = time.time()
-        zs[zdim], cov_zs[zdim], est_contrasts[zdim] = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled'] , zdim,
-                                                                image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
-                                                                contrast_grid = None, contrast_option = options['contrast'],
-                                                                ignore_zero_frequency = options['ignore_zero_frequency'] )
-        logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
+        if np.any(variance_est_low_res_5_pc < 0):
+            logger.warning("Estimated variance resolutino is < 0. This probably means that the noise was incorrectly estimated. Setting to 0")
+            print("5 percentile:", variance_est_low_res_5_pc)
+            print("5 percentile/median over low shells:", variance_est_low_res_5_pc/variance_est_low_res_median)
+        ## DELETE END HERE
 
-    zs_cont = {}; cov_zs_cont = {}; est_contrasts_cont = {}        
-    if args.correct_contrast:
+
+        image_cov_noise = np.asarray(noise.make_radial_noise(noise_var_used, cryos[0].image_shape))
+
+
+        from recovar import covariance_estimation
+        # test_covar_options = False
+        if args.test_covar_options:
+            tests = [ 
+                {},
+                {
+                "mask_images_in_proj": False,
+                "mask_images_in_H_B": False,
+                },
+                # {'column_sampling_scheme': 'high_snr_from_var_est', 'sampling_avoid_in_radius': 3 },
+                # {'column_sampling_scheme': 'high_snr_from_var_est','sampling_n_cols':50,  'sampling_avoid_in_radius': 3, 'randomized_sketch_size' : 100, 'n_pcs_to_compute' : 100},
+                # {'column_sampling_scheme': 'high_snr_from_var_est', 'sampling_avoid_in_radius': 1 },
+                # {'column_sampling_scheme': 'high_snr_from_var_est', 'sampling_avoid_in_radius': 4 },
+                ]
+            idx = 0
+            for test in tests:
+                output_folder = args.outdir + '/output/' 
+                # Compute principal components
+                covariance_options = covariance_estimation.get_default_covariance_computation_options()
+                for key in test:
+                    covariance_options[key] = test[key]
+        
+                u,s, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, noise_var_used, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, covariance_options = covariance_options, variance_estimate = variance_est['combined'])
+                from recovar import output
+                output.mkdir_safe(output_folder)
+                utils.pickle_dump({
+                    'options':test, 'u' :u['rescaled'][:,:20], 's' :s['rescaled'][:20]
+                }, output_folder + f'test_{idx}.pkl')
+                del u, s, covariance_cols, picked_frequencies, column_fscs
+                idx = idx + 1
+                print('done with', idx, test)
+
+
+        utils.report_memory_device(logger=logger)
+
+        covariance_options = covariance_estimation.get_default_covariance_computation_options()
+        if args.low_memory_option:
+            covariance_options['sampling_n_cols'] = 50
+            covariance_options['randomized_sketch_size'] = 100
+            covariance_options['n_pcs_to_compute'] = 100
+            covariance_options['sampling_avoid_in_radius'] = 3
+
+        if args.dont_use_image_mask:
+            # "mask_images_in_proj": True,
+            # "mask_images_in_H_B": True,
+            covariance_options['mask_images_in_proj'] = False
+            covariance_options['mask_images_in_H_B'] = False
+
+
+        # Compute principal components
+        u,s, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, noise_var_used, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, covariance_options = covariance_options, variance_estimate = variance_est['combined'])
+
+        if options['ignore_zero_frequency']:
+            # Make the noise in 0th frequency gigantic. Effectively, this ignore this frequency when fitting.
+            logger.info('ignoring zero frequency')
+            noise_var_used[0] *=1e16
+
+        image_cov_noise = np.asarray(noise.make_radial_noise(noise_var_used, cryos[0].image_shape))
+
+        if not args.keep_intermediate:
+            del u['real']
+            if 'rescaled_no_contrast' in u:
+                del u['rescaled_no_contrast']
+            covariance_cols = None
+
+        # Compute embeddings
+        zs = {}; cov_zs = {}; est_contrasts = {}        
         for zdim in options['zs_dim_to_test']:
-            # contrast = est_contrasts[zdim]
-            contrast_var = np.var(est_contrasts[zdim])
             z_time = time.time()
-            zs_cont[zdim], cov_zs_cont[zdim], est_contrasts_cont[zdim] = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled'] , zdim,
+            zs[zdim], cov_zs[zdim], est_contrasts[zdim] = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled'] , zdim,
                                                                     image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
                                                                     contrast_grid = None, contrast_option = options['contrast'],
-                                                                    ignore_zero_frequency = options['ignore_zero_frequency'], contrast_variance = contrast_var )
-            logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time} with contrast")
+                                                                    ignore_zero_frequency = options['ignore_zero_frequency'] )
+            logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
+
+    zs_cont = {}; cov_zs_cont = {}; est_contrasts_cont = {}        
+    # if args.correct_contrast:
+    #     for zdim in options['zs_dim_to_test']:
+    #         # contrast = est_contrasts[zdim]
+    #         contrast_var = np.var(est_contrasts[zdim])
+    #         z_time = time.time()
+    #         zs_cont[zdim], cov_zs_cont[zdim], est_contrasts_cont[zdim] = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled'] , zdim,
+    #                                                                 image_cov_noise, cryos, volume_mask, gpu_memory, covariance_options['disc_type'],
+    #                                                                 contrast_grid = None, contrast_option = options['contrast'],
+    #                                                                 ignore_zero_frequency = options['ignore_zero_frequency'], contrast_variance = contrast_var )
+    #         logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time} with contrast")
 
 
     n_images_to_test = np.round((cryos[0].n_images + cryos[1].n_images) * 0.01).astype(int)
@@ -557,7 +617,7 @@ def standard_recovar_pipeline(args):
 
 
     zdim = np.max(options['zs_dim_to_test'])
-    noise_var_from_het_residual, _,_ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(cryo, dilated_volume_mask, means['combined'], u['rescaled'][:,:zdim], est_contrasts[zdim], zs[zdim], batch_size//10, disc_type = 'linear_interp')
+    noise_var_from_het_residual, _,_ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(cryos[0], dilated_volume_mask, means['combined'], u['rescaled'][:,:zdim], est_contrasts[zdim], zs[zdim], batch_size//10, disc_type = covariance_options['disc_type'] )
 
 
     # ### END OF DEL
@@ -570,7 +630,7 @@ def standard_recovar_pipeline(args):
     # Precompute the density on the 4D grid. This is the most expensive part of computing trajectories, and can be reused across trajectories. 
     logger.info(f"starting density computation")
     density_z = 10 if 10 in zs else options['zs_dim_to_test'][0]
-    density, latent_space_bounds  = latent_density.compute_latent_space_density(zs[density_z], cov_zs[density_z], pca_dim_max = 4, num_points = 50)
+    density, latent_space_bounds  = latent_density.compute_latent_space_density(zs[density_z], cov_zs[density_z], pca_dim_max = 4, num_points = 50, density_option = 'kde')
     logger.info(f"ending density computation")
 
     # Dump results to file
@@ -601,17 +661,18 @@ def standard_recovar_pipeline(args):
                 'column_fscs': column_fscs, 
                 'covariance_cols': covariance_cols, 
                 'picked_frequencies' : picked_frequencies, 'volume_shape': volume_shape, 'voxel_size': cryos[0].voxel_size, 'pc_metric' : var_metrics['filt_var'],
-                'variance_est': variance_est, 'variance_fsc': variance_fsc, 'noise_p_variance_est': noise_p_variance_est, 'ub_noise_var_by_var_est': ub_noise_var_by_var_est,}
+                'variance_est': variance_est, 'variance_fsc': variance_fsc, 'noise_p_variance_est': noise_p_variance_est, 'ub_noise_var_by_var_est': ub_noise_var_by_var_est, 'covariance_options': covariance_options,
+                'contrasts_for_second': contrasts_for_second}
 
     output_folder = args.outdir + '/output/' 
     o.mkdir_safe(output_folder)
-    o.save_covar_output_volumes(output_folder, means['combined'], u['rescaled'], s, volume_mask, volume_shape)
-    o.save_volume(volume_mask, output_folder + 'volumes/' + 'mask', volume_shape, from_ft = False)
-    o.save_volume(dilated_volume_mask, output_folder + 'volumes/' + 'dilated_mask', volume_shape, from_ft = False)
+    o.save_covar_output_volumes(output_folder, means['combined'], u['rescaled'], s, volume_mask, volume_shape,  voxel_size = cryos[0].voxel_size)
+    o.save_volume(volume_mask, output_folder + 'volumes/' + 'mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
+    o.save_volume(dilated_volume_mask, output_folder + 'volumes/' + 'dilated_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
+    o.save_volume(focus_mask, output_folder + 'volumes/' + 'focus_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
 
-
-    # if rerun:
-    #     result['cov_noise_second'] = cov_noise_second
+    o.save_volume(means['corrected0'], output_folder + 'volumes/' + 'mean_half1_unfil', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
+    o.save_volume(means['corrected1'], output_folder + 'volumes/' + 'mean_half2_unfil', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
 
     utils.pickle_dump(covariance_cols, output_model_folder + 'covariance_cols.pkl')
     utils.pickle_dump(result, output_model_folder + 'params.pkl')

@@ -91,7 +91,7 @@ def get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean = False, frequenc
 def average_over_shells(input_vec, volume_shape, frequency_shift = 0 ):
     radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1) 
     labels = radial_distances.reshape(-1)
-    indices = jnp.arange(0, volume_shape[0]//2 - 1)        
+    indices = jnp.arange(0, volume_shape[0]//2 - 1)        ## I  wish there wasn't a -1 here, hmmmm
     return jax_scipy_nd_image_mean(input_vec.reshape(-1), labels = labels, index = indices)    
 
 
