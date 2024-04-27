@@ -335,13 +335,13 @@ def rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
     return batch_grid_pt_vec_ind_of_images, batch_grid_pt_vec_ind_of_images_og_shape
 
 
-from recovar import jax_map_squared
-@functools.partial(jax.jit, static_argnums = [2,3,4])    
-def map_coordinates_squared_on_slices(volume, rotation_matrices, image_shape, volume_shape, disc_type):
-    order = 1 if disc_type == "linear_interp" else 0
-    batch_grid_pt_vec_ind_of_images, batch_grid_pt_vec_ind_of_images_og_shape = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
-    slices = jax_map_squared.map_coordinates_squared(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
-    return slices
+# from recovar import jax_map_squared
+# @functools.partial(jax.jit, static_argnums = [2,3,4])    
+# def map_coordinates_squared_on_slices(volume, rotation_matrices, image_shape, volume_shape, disc_type):
+#     order = 1 if disc_type == "linear_interp" else 0
+#     batch_grid_pt_vec_ind_of_images, batch_grid_pt_vec_ind_of_images_og_shape = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
+#     slices = jax_map_squared.map_coordinates_squared(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
+#     return slices
 
 # # Not sure this should be used...
 # def slice_by_linear_interp_explicit(volume, rotation_matrices, image_shape, volume_shape, order):

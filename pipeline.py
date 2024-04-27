@@ -54,7 +54,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--mask-option", metavar=str, default="from_halfmaps", help="mask options: from_halfmaps (default), input, sphere, none"
+        "--mask-option", metavar=str, default="input", help="mask options: from_halfmaps , input (default), sphere, none"
     )
 
     parser.add_argument(
@@ -96,7 +96,6 @@ def add_args(parser: argparse.ArgumentParser):
     #     action="store_true",
     # )
 
-
     # Should probably add these options
     # group.add_argument(
     #     "--no-window",
@@ -128,6 +127,7 @@ def add_args(parser: argparse.ArgumentParser):
             type=int,
             help="Number of images to use (should only use for quick run)",
         )
+    
     group.add_argument(
             "--padding",
             type=int,
@@ -153,7 +153,7 @@ def add_args(parser: argparse.ArgumentParser):
     group.add_argument(
             "--noise-model",
             dest = "noise_model",
-            default = "white",
+            default = "radial",
             help="what noise model to use. Options are radial (default) computed from outside the masks, and white computed by power spectrum at high frequencies"
         )
 
@@ -290,6 +290,9 @@ def add_args(parser: argparse.ArgumentParser):
 def standard_recovar_pipeline(args):
     # import pdb; pdb.set_trace()
     st_time = time.time()
+
+    if args.mask_option == 'input' and args.mask is None:
+        raise ValueError("Mask option is input, but no mask provided. Provide a mask using --mask path/to/mask.mrc")
 
     o.mkdir_safe(args.outdir)
     logger.addHandler(logging.FileHandler(f"{args.outdir}/run.log"))
