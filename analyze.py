@@ -171,7 +171,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     else:
         path_folder = output_folder_kmeans + 'path' + str(0) + '/'        
         o.mkdir_safe(path_folder)
-        q = 1
+        q = 0.03
         pairs = np.percentile(po.get('zs')[zdim], [q, 100-q])
         z_st = pairs[0]
         z_end = pairs[1]

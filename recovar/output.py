@@ -147,7 +147,6 @@ def plot_trajectories_over_density(density, trajectories, latent_space_bounds,  
             density_pl = density_pl.T
             
         ax.imshow((density_pl.T), origin='lower', cmap = cmap, interpolation = 'bilinear')#[...,25,25])
-        
         # plt.colorbar()
         
         if path_exists:
@@ -290,13 +289,8 @@ def plot_umap(output_folder, zs, centers):
 def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_variance, output_folder, B_factor, n_bins = 30, n_min_images = 100, embedding_option = 'cov_dist', save_all_estimates = False):
 
     #batch_size = 
-    memory_to_use = utils.get_gpu_memory_total() - path_subsampled.shape[0] * cryos[0].volume_size * 8 / 1e9 * 8
-    assert memory_to_use > 0, "reduce number of volumes computed at once"
-    batch_size = 2 * utils.get_image_batch_size(cryos[0].grid_size, memory_to_use)
-    logger.info(f"batch size in reweighting: {batch_size}")
 
     mkdir_safe(output_folder)
-
     new_volume_generation = True
     if new_volume_generation:
         from recovar import heterogeneity_volume, latent_density
@@ -333,6 +327,12 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_varian
 
             heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder_this, ndim, n_bins, B_factor, tau = None, n_min_images = n_min_images, locres_sampling = locres_maskrad, locres_maskrad = locres_maskrad, locres_edgwidth = 0, upsampling_for_ests = 1, use_mask_ests =False, grid_correct_ests = False, save_all_estimates=save_all_estimates, metric_used= 'locshellmost_likely')
             logger.info(f"Done with volume generation {k} stored in {output_folder_this}")
+
+
+    # memory_to_use = utils.get_gpu_memory_total() - path_subsampled.shape[0] * cryos[0].volume_size * 8 / 1e9 * 8
+    # assert memory_to_use > 0, "reduce number of volumes computed at once"
+    # batch_size = 2 * utils.get_image_batch_size(cryos[0].grid_size, memory_to_use)
+    # logger.info(f"batch size in reweighting: {batch_size}")
 
     # else:
     #     trajectory_prior, halfmaps = embedding.generate_conformation_from_reweighting(cryos, means, noise_variance, zs, cov_zs, path_subsampled, batch_size = batch_size, disc_type = 'linear_interp', likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, volume_mask = volume_mask, adaptive=adaptive)
@@ -486,14 +486,14 @@ def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folde
     latent_space_bounds = ld.compute_latent_space_bounds(pipeline_output.get('zs')[basis_size])
     
     return make_trajectory_plots(
-        cryos, pipeline_output.get('density'), 
-        pipeline_output.get('zs')[basis_size], pipeline_output.get('cov_zs')[basis_size], pipeline_output.get('noise_var_used'), 
+        pipeline_output.get('density'), 
+        pipeline_output.get('zs')[basis_size], pipeline_output.get('cov_zs')[basis_size], 
         z_st, z_end, latent_space_bounds, output_folder, 
         gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = plot_llh)
 
 
 
-def make_trajectory_plots(dataset_loader, density, zs, cov_zs, noise_variance, z_st, z_end, latent_space_bounds, output_folder, gt_volumes= None, n_vols_along_path = 6, plot_llh = False):
+def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds, output_folder, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, use_input_density =False):
     st_time = time.time()
     
     # likelihood_threshold = ld.get_log_likelihood_threshold(k = zs.shape[-1]) if likelihood_threshold is None else likelihood_threshold
@@ -525,29 +525,42 @@ def make_trajectory_plots(dataset_loader, density, zs, cov_zs, noise_variance, z
 
     mkdir_safe(output_folder + 'density/')
     if basis_size >1:
-        path_z = trajectory.compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim=density,
-                                                density_eps = 1e-5, max_dim = basis_size, percentile_bound = 1, num_points = 50, 
-                                                use_log_density = False)
-        path_z_subsampled = trajectory.subsample_path(path_z, n_pts = n_vols_along_path)    
+        if use_input_density:
+            path_z = trajectory.compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim=density,
+                                                    density_eps = 1e-5, max_dim = basis_size, percentile_bound = 1, num_points = 50, 
+                                                    use_log_density = False)
+        else:
+            path_z = trajectory.compute_fixed_dimensional_path(z_st, z_end, density, latent_space_bounds, density_eps = 1e-5, debug_plot = False, density_option = "kde", use_log_density = False)
+
+        path_subsampled = trajectory.subsample_path(path_z, n_pts = n_vols_along_path)    
 
         logger.info(f"after path {time.time() - st_time}")
-        path_subsampled = path_z_subsampled
         #trajectory.subsample_path(path_z, n_pts = n_vols_along_path)
         # plot_trajectories_over_density(density, None,latent_space_bounds,  colors = None, plot_folder = output_folder + 'density_nopath/', cmap = 'inferno')
+        inp_dens = density if use_input_density else None
+
         if gt_volumes is not None:
-            plot_trajectories_over_density(None, [gt_volumes_z, path_z], latent_space_bounds, subsampled = [gt_volumes_z[gt_subs_idx][1:-1], path_z_subsampled[1:-1] ] , colors = ['k', 'cornflowerblue'], plot_folder = output_folder, cmap = 'inferno', zs = zs, cov_zs = cov_zs) 
+            plot_trajectories_over_density(inp_dens, [gt_volumes_z, path_z], latent_space_bounds, subsampled = [gt_volumes_z[gt_subs_idx][1:-1], path_subsampled[1:-1] ] , colors = ['k', 'cornflowerblue'], plot_folder = output_folder, cmap = 'inferno', zs = zs, cov_zs = cov_zs) 
         else:
-            plot_trajectories_over_density(None, [path_z],latent_space_bounds,  subsampled = [path_z_subsampled[1:-1] ] , colors = ['cornflowerblue'], plot_folder = output_folder, cmap = 'inferno', same_st_end = False, zs = zs, cov_zs = cov_zs)
+            plot_trajectories_over_density(inp_dens, [path_z],latent_space_bounds,  subsampled = [path_subsampled[1:-1] ] , colors = ['cornflowerblue'], plot_folder = output_folder, cmap = 'inferno', same_st_end = False, zs = zs, cov_zs = cov_zs)
     else:
         path_z = np.linspace(z_st, z_end, n_vols_along_path)[...,0]
-        path_z_subsampled = path_z
-        path_subsampled = path_z_subsampled
+        path_subsampled = path_z
+        path_subsampled = path_subsampled
 
     st_time = time.time()
     # compute_and_save_reweighted(dataset_loader, path_subsampled, zs, cov_zs, noise_variance, output_folder, B_factor, n_bins = 30)
     # logger.info(f"vol time {time.time() - st_time}")
     
-    density_on_path = ld.compute_latent_space_density_at_pts(path_z, zs, cov_zs)
+    if use_input_density:
+        grid_to_z, z_to_grid = ld.get_grid_z_mappings(latent_space_bounds, num_points = density.shape[0])
+        path_grid = z_to_grid(path_z)
+        import jax.scipy
+        density_on_path = jax.scipy.ndimage.map_coordinates(density, path_grid.T, order=1)
+
+        # density_on_path = ld.compute_latent_space_density_at_pts(path_z, zs, cov_zs)
+    else:
+        density_on_path = ld.compute_latent_space_density_at_pts(path_z, zs, cov_zs)
     densities = { 'density' :  density_on_path.tolist(), 'path' : path_z.tolist(), 'path_subsampled' : path_subsampled.tolist()} 
     json.dump(densities, open(output_folder + '/path.json', 'w'))
 
@@ -555,7 +568,7 @@ def make_trajectory_plots(dataset_loader, density, zs, cov_zs, noise_variance, z
         plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path = output_folder, likelihood_threshold = None  )
 
     logger.info(f"after all plots {time.time() - st_time}")
-    return path_z, path_z_subsampled
+    return path_z, path_subsampled
 
 
 def vol_to_z(gt_volumes, u, mean, basis_size):
