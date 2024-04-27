@@ -41,6 +41,18 @@ def get_z_to_grid(bounds, num_points ):
 def get_grid_z_mappings(bounds, num_points):
     return get_grid_to_z(bounds, num_points ), get_z_to_grid(bounds, num_points )
 
+def make_latent_space_grid_from_bounds(latent_space_bounds, num_points):
+    # latent_space_bounds = compute_latent_space_bounds(zs, percentile = 1)
+    # FIND BOUNDS ON SPACE TO DISCRETIZE
+    coord_pca_1D = []
+    latent_space_bounds = np.array(latent_space_bounds)
+    for pca_dim in range(latent_space_bounds.shape[0]):
+        coord_pca = np.linspace(latent_space_bounds[pca_dim][0], latent_space_bounds[pca_dim][1], num_points)
+        coord_pca_1D.append(coord_pca)
+    grids = jnp.meshgrid(*coord_pca_1D, indexing="ij")
+    grids_flat = jnp.transpose(jnp.vstack([jnp.reshape(g, -1) for g in grids])).astype(np.float32) 
+    return grids_flat
+
 # Computes density in pca_dim_max dimensions on grid
 def compute_latent_space_density(zs, cov_zs, pca_dim_max = 4, num_points = 50, density_option = "kde"):
     
@@ -53,24 +65,26 @@ def compute_latent_space_density(zs, cov_zs, pca_dim_max = 4, num_points = 50, d
         zs = zs[:,:pca_dim_max]
         cov_zs = cov_zs[:,:pca_dim_max,:pca_dim_max]        
         
-    # DISCRETIZE LATENT SPACE
     latent_space_bounds = compute_latent_space_bounds(zs, percentile = 1)
-    coord_pca_1D = []
-    # FIND BOUNDS ON SPACE TO DISCRETIZE
-    for pca_dim in range(pca_dim_max):
-        coord_pca = np.linspace(latent_space_bounds[pca_dim][0], latent_space_bounds[pca_dim][1], num_points)
-        coord_pca_1D.append(coord_pca)
+    grids_flat = make_latent_space_grid_from_bounds(latent_space_bounds, num_points)
+    # # DISCRETIZE LATENT SPACE
+    # latent_space_bounds = compute_latent_space_bounds(zs, percentile = 1)
+    # coord_pca_1D = []
+    # # FIND BOUNDS ON SPACE TO DISCRETIZE
+    # for pca_dim in range(pca_dim_max):
+    #     coord_pca = np.linspace(latent_space_bounds[pca_dim][0], latent_space_bounds[pca_dim][1], num_points)
+    #     coord_pca_1D.append(coord_pca)
 
-    # Numpy's meshgrid seems to be randomly incredibly slow. Not sure why. See https://stackoverflow.com/questions/76058225/numpys-meshgrid-is-discontinuously-slow
-    # grids = np.meshgrid(*coord_pca_1D, indexing="ij")
-    # grids_flat = np.transpose(np.vstack([np.reshape(g, -1) for g in grids])).astype(np.float32) 
+    # # Numpy's meshgrid seems to be randomly incredibly slow. Not sure why. See https://stackoverflow.com/questions/76058225/numpys-meshgrid-is-discontinuously-slow
+    # # grids = np.meshgrid(*coord_pca_1D, indexing="ij")
+    # # grids_flat = np.transpose(np.vstack([np.reshape(g, -1) for g in grids])).astype(np.float32) 
 
-    grids = jnp.meshgrid(*coord_pca_1D, indexing="ij")
-    grids_flat = jnp.transpose(jnp.vstack([jnp.reshape(g, -1) for g in grids])).astype(np.float32) 
-    grids_inv_pca = grids_flat
+    # grids = jnp.meshgrid(*coord_pca_1D, indexing="ij")
+    # grids_flat = jnp.transpose(jnp.vstack([jnp.reshape(g, -1) for g in grids])).astype(np.float32) 
+    # grids_inv_pca = grids_flat
     
     st_time = time.time()    
-    summed_probs = compute_probs_in_batch(grids_inv_pca, zs, cov_zs)
+    summed_probs = compute_probs_in_batch(grids_flat, zs, cov_zs)
     summed_probs_sq = summed_probs.reshape(grids[0].shape)
     end_time = time.time()
     logger.info(f"latent space computation:, {end_time - st_time}")
@@ -296,4 +310,4 @@ def compute_latent_space_density_kde(zs, cov_zs, pca_dim_max = 4, num_points = 5
     summed_probs_sq = probs.reshape(grids[0].shape)
     end_time = time.time()
     logger.info(f"latent space computation:, {end_time - st_time}")
-    return summed_probs_sq, latent_space_bounds, grids_flat.reshape(*grids[0].shape, pca_dim_max )
+    return summed_probs_sq, latent_space_bounds#, grids_flat.reshape(*grids[0].shape, pca_dim_max )

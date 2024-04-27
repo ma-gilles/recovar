@@ -71,6 +71,7 @@ def make_mask_from_half_maps(halfmap1, halfmap2, smax = 3 ):
     x.smax = smax
     x.arr1 = halfmap1
     x.arr2 = halfmap2
+    x.iter = int(6 * halfmap1.shape[0] // 128)
     x.generate_mask()
     return x.mask
 

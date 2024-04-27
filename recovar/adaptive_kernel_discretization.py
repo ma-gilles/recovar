@@ -1192,20 +1192,47 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
     #
     use_Epanechnikov = True
     if use_Epanechnikov:
-        distances = np.zeros(bins.size)
+        # distances = np.zeros(bins.size)
         # distances[1:] = bins[:-1]
         distances = bins
         h_grid = 2 * bins 
+        # h_grid = bins
         logger.info("SHOULD THIS BE SQUARE ROOTED?")
-        Epanechnikov = lambda dist : jnp.where( np.abs(dist) < 1, 3/4 * (1- dist**2), 0)
-        h_grid = bins # Skip the first bin
-        rhs_all_presum = rhs_all.copy()
-        lhs_all_presum = lhs_all.copy()
+
+        np_to_use = np
+        Epanechnikov = lambda dist : np_to_use.where( np_to_use.abs(dist) < 1, 3/4 * (1- dist**2), 0)
+        # h_grid = bins # Skip the first bin
+        weight_matrix = np_to_use.zeros((n_bins, n_bins)).astype(np.float32)
+        weight_matrix[0,0] = 1
         for idx in range(1, n_bins):
-            weights = Epanechnikov(jnp.sqrt(distances/h_grid[idx]))#/ (heterogeneity_bins[idx] - heterogeneity_bins[idx-1]))
-            rhs_all[idx] = jnp.sum(weights[:,None] * rhs_all_presum, axis = 0)
-            lhs_all[idx] = jnp.sum(weights[:,None] * lhs_all_presum, axis = 0)
+            weights = Epanechnikov(np_to_use.sqrt(distances/h_grid[idx]))
+            weight_matrix[:,idx] = weights
+        rhs_all = linalg.blockwise_A_X(rhs_all.T, weight_matrix).T
+        lhs_all = linalg.blockwise_A_X(lhs_all.T, weight_matrix).T
+
+        # rhs_all_presum = np_to_use.asarray(rhs_all.copy())
+        # for idx in range(1, n_bins):
+        #     weights = Epanechnikov(np_to_use.sqrt(distances/h_grid[idx]))#/ (heterogeneity_bins[idx] - heterogeneity_bins[idx-1]))
+        #     rhs_all[idx] = np_to_use.sum(weights[:,None] * rhs_all_presum, axis = 0)
+        # del rhs_all_presum
+
+        # lhs_all_presum = np_to_use.asarray(lhs_all.copy())
+        # for idx in range(1, n_bins):
+        #     weights = Epanechnikov(np_to_use.sqrt(distances/h_grid[idx]))#/ (heterogeneity_bins[idx] - heterogeneity_bins[idx-1]))
+        #     lhs_all[idx] = np_to_use.sum(weights[:,None] * lhs_all_presum, axis = 0)
+        # del lhs_all_presum 
+        # logger.info("done with Epanechnikov weights")
+        # print(np.linalg.norm(lhs_all - lhs_all_presum2) / np.linalg.norm(lhs_all) )
+        # print(np.linalg.norm(rhs_all - rhs_all_presum2) / np.linalg.norm(rhs_all) )
+
         # import pdb; pdb.set_trace()
+        # weight_matrix = np_to_use.zeros((n_bins, n_bins))
+        # for idx in range(0, n_bins):
+        #     weights = Epanechnikov(np_to_use.sqrt(distances/h_grid[idx]))
+        #     weight_matrix[idx] = weights
+        # rhs_all_presum2 = linalg.blockwise_A_X(rhs_all, weight_matrix)
+        # lhs_all_presum2 = linalg.blockwise_A_X(lhs_all, weight_matrix)
+
     else:
         rhs_all = np.cumsum(rhs_all, axis=0)
         lhs_all = np.cumsum(lhs_all, axis=0)

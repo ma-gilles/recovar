@@ -255,8 +255,6 @@ def summed_outer_products(AU_t_images):
 batched_summed_outer_products  = jax.vmap(summed_outer_products)
 
 
-
-
 @functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19])    
 def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid, contrast_mean = 1, contrast_variance = np.inf):
 
@@ -290,6 +288,10 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
         cov_batch = None
     
     return xs_single, contrast_single, cov_batch
+
+
+
+
 
 def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid):
     

@@ -35,15 +35,16 @@ def get_cum_curvelength(gt_vols):
 
 
 ## TRAJECTORY FUNCTIONS
-def find_trajectory_in_grid(density, g_st, g_end, latent_space_bounds, eps = 1e-6, use_log_density = False):
-    
+def find_trajectory_in_grid(density, g_st, g_end, latent_space_bounds, eps = 1e-6, use_log_density = False, debug = False):
+    # use_log_density = True
     density_p_eps = density + np.max(density) * eps
     if use_log_density:
         normalized_dens = density / np.max(density*(1+eps))
         # dens = e^(-kB * T * energy)
-        # log(dens) = kB * T* energy
-        # energy  = log(dens)/kB*T
-        density_p_eps = 1/ (-np.log(normalized_dens))
+        # log(dens) = - kB * T* energy
+        # energy  = - log(dens)/kB*T
+        density_p_eps = 1/(-np.log(normalized_dens ) + eps) + eps
+        # Cost should be 1/ energy in this case.
     
     travel_time = compute_travel_time(density_p_eps, g_st, latent_space_bounds)
     
@@ -51,6 +52,10 @@ def find_trajectory_in_grid(density, g_st, g_end, latent_space_bounds, eps = 1e-
     dx = get_grid_spacing(latent_space_bounds, density)
     # logger.info(f"dx {dx}")
     path = gradient_descent_nd(travel_time, g_st, g_end, dx,  step_size = 0.25, n_theta = 10, max_steps = max_steps )
+    debug = True
+    if debug:
+        plt.imshow(density, aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
+        plt.imshow(np.log(travel_time), aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
 
     # if density.ndim == 2:
     #     plt.imshow(density, aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
@@ -146,11 +151,14 @@ def compute_travel_time(density, g_st, latent_space_bounds):
     travel_time[tuple(g_st)] = 0 
     return travel_time
 
-def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, density_eps = 1e-5, max_dim = None, percentile_bound = 1, num_points = 50, use_log_density = False, debug_plot = False, density_option = "kde"):
+
+def compute_fixed_dimensional_path(z_st, z_end, density_low_dim, latent_space_bounds, density_eps = 1e-5, debug_plot = False, density_option = "kde", use_log_density = False):
+
+    assert z_st.shape[-1] == density_low_dim.ndim, "Start point should be in the same dimension as density"
+    assert np.isclose(np.array(density_low_dim.shape) -  density_low_dim.shape[0], 0).all(), "Density should be on square grid"
 
     max_dim = zs.shape[-1] if max_dim is None else max_dim
-    latent_space_bounds = latent_density.compute_latent_space_bounds(zs, percentile = percentile_bound)
-
+    num_points = density_low_dim.shape[0]
     grid_to_z, z_to_grid = latent_density.get_grid_z_mappings(latent_space_bounds, num_points)
 
     # Start needs to be on a grid point
@@ -167,25 +175,59 @@ def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, dens
     g_end_in_bound = check_in_bound(g_end, num_points)
 
 
-    low_dim = density_low_dim.ndim
+    current_path_grid = find_trajectory_in_grid(density_low_dim,
+                                            g_st_in_bound,
+                                            g_end_in_bound,
+                                            latent_space_bounds,
+                                            eps = density_eps, 
+                                            use_log_density = use_log_density)
+    
+    return current_path_grid
 
-    if low_dim > max_dim:
+
+def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, density_eps = 1e-5, max_dim = None, percentile_bound = 1, num_points = 50, use_log_density = False, debug_plot = False, density_option = "kde"):
+
+    assert np.isclose(np.array(density_low_dim.shape) -  density_low_dim.shape[0], 0).all(), "Density should be on square grid"
+    max_dim = zs.shape[-1] if max_dim is None else max_dim
+    latent_space_bounds = latent_density.compute_latent_space_bounds(zs, percentile = percentile_bound)
+
+
+    low_dim = density_low_dim.ndim
+    if low_dim > max_dim: # Hmmm, this is a bit of a hack.
         density_low_dim, _  = latent_density.compute_latent_space_density(zs, cov_zs, pca_dim_max = max_dim, num_points = 100, density_option = density_option)
+        logger.info(f"Recomputed density on {max_dim} dimensions")
         low_dim = max_dim
 
+    num_points = density_low_dim.shape[0]
+    grid_to_z, z_to_grid = latent_density.get_grid_z_mappings(latent_space_bounds, num_points)
+
+    # Start needs to be on a grid point
+    g_st = z_to_grid(z_st, to_int = True) 
+    g_end = z_to_grid(z_end)
+
+    def check_in_bound(g, num_points):
+        for k in range(g.size):
+            g[k] = np.max([0, g[k]])
+            g[k] = np.min([g[k], num_points-1])
+        return g
+    ## This is not used.
+    g_st_in_bound = check_in_bound(g_st, num_points)
+    g_end_in_bound = check_in_bound(g_end, num_points)
 
     current_path_grid = find_trajectory_in_grid(density_low_dim,
                                             g_st_in_bound[:low_dim],
                                             g_end_in_bound[:low_dim],
                                             latent_space_bounds[:low_dim], 
                                             eps = density_eps, 
-                                            use_log_density = use_log_density)
+                                            use_log_density = use_log_density,debug = debug_plot)
+
     grid_to_z_curr_dim, z_to_grid_curr_dim = latent_density.get_grid_z_mappings(latent_space_bounds[:low_dim], num_points)
     current_path_z = grid_to_z_curr_dim(current_path_grid)
     # resample.
     current_path_z = resample_at_uniform_pts(current_path_z, n_vols_along_path = current_path_z.shape[0])#int(current_path_z.shape[0] * 1.2))
     
     for dim in range(low_dim, max_dim):
+        print("here?")
         num_points = 200
         grid_to_z, z_to_grid = latent_density.get_grid_z_mappings(latent_space_bounds, num_points)
         g_st = z_to_grid(z_st, to_int = True) 
