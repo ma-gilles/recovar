@@ -18,8 +18,18 @@ names_to_show = { "diagonal": "diagonal", "wilson": "Wilson", "diagonal masked":
 colors_name = { "diagonal": "cornflowerblue", "wilson": "lightsalmon", "diagonal masked": "blue", "wilson masked": "orangered"  }
 plt.rcParams['text.usetex'] = True
 
-def plot_noise_profile(results, yscale = 'linear'):
+def plot_power_spectrum(volume, ax = None):
+    input_ax_is_none = ax is None
+    if input_ax_is_none:
+        plt.figure(figsize=(6, 5))
+        ax = plt.gca() 
+    avg = utils.average_over_shells(volume, volume.shape)
+    ax.semilogy(avg)
+    return avg
+
+def plot_noise_profile(pipeline_output, yscale = 'linear'):
     plt.figure(figsize = (8,8))
+    results = pipeline_output.params
     yy = results['noise_var']
     if results['input_args'].ignore_zero_frequency:
         yy[0] =0 
@@ -31,7 +41,75 @@ def plot_noise_profile(results, yscale = 'linear'):
     
     return
 
-def plot_summary_t(results,cryos, n_eigs = 3, u_key = "rescaled"):
+def compare_two_volumes(cryo, vol1, vol2, from_ft_inp = True):
+    import matplotlib
+    plt.rcParams.update({
+        # "text.usetex": True,
+        # "font.family": "serif",
+        # "font.sans-serif": "Helvetica",
+    })
+    font = {'weight' : 'bold',
+            'size'   : 22}
+    matplotlib.rc('font', **font)
+
+    n_plots = 4
+    fig, axs = plt.subplots(n_plots, 6, figsize = ( 6*3, n_plots * 3))#, 6*3))
+    global is_first
+    is_first = True
+    
+    def plot_vol(vol, n_plot, from_ft = True, cmap = 'viridis', name ="", symmetric = False):
+        if not from_ft:
+            vol = ftu.get_dft3(vol.reshape(cryo.volume_shape)).reshape(-1)
+        global is_first
+        
+        axs[n_plot,0].set_ylabel(name)
+
+        for k in range(3):
+
+            img = cryo.get_proj(vol, axis =k )
+            
+            if symmetric:
+                vmax = np.max(np.abs(img))
+                axs[n_plot,k].imshow(img , cmap=matplotlib.colormaps[cmap], vmin = -vmax, vmax = vmax)
+            else:
+                axs[n_plot,k].imshow(img , cmap=matplotlib.colormaps[cmap])
+            axs[n_plot,k].set_xticklabels([])
+            axs[n_plot,k].set_yticklabels([])
+            if is_first:            
+                axs[n_plot,k].set_title(f"projection {k}")
+
+                # axs[n_plot,k].set_ylabel(name)#f"projection {k}")#, fontsize = 20)
+
+        for k in range(3,6):
+
+            img = cryo.get_slice_real(vol, axis =k-3 )
+            
+            if symmetric:
+                vmax = np.max(np.abs(img))
+                axs[n_plot,k].imshow(img , cmap=matplotlib.colormaps[cmap], vmin = -vmax, vmax = vmax)
+            else:
+                axs[n_plot,k].imshow(img , cmap=matplotlib.colormaps[cmap])
+            axs[n_plot,k].set_xticklabels([])
+            axs[n_plot,k].set_yticklabels([])
+            
+            if is_first:            
+                axs[n_plot,k].set_title(f"slice {k-3}")#, fontsize = 20)
+
+        is_first = False
+        return
+
+
+    plot_vol(vol1, 0, from_ft = from_ft_inp, name = 'vol1')
+    plot_vol(vol2, 1, from_ft = from_ft_inp,name = 'vol2')
+    vol_diff = ftu.get_idft3((vol1-vol2).reshape(cryo.volume_shape)).reshape(-1)
+    plot_vol(vol_diff,2, from_ft = not from_ft_inp,name = 'diff')
+    plot_vol(np.abs(vol_diff),3, from_ft = not from_ft_inp,name = '||diff||')
+    
+    plt.subplots_adjust(wspace=0, hspace=0)
+
+    return
+
+def plot_summary_t(pipeline_output,cryos, n_eigs = 3, u_key = "rescaled"):
     plt.rcParams.update({
         # "text.usetex": True,
         # "font.family": "serif",
@@ -87,14 +165,15 @@ def plot_summary_t(results,cryos, n_eigs = 3, u_key = "rescaled"):
         is_first = False
         return
 
-    plot_vol(results['means']['combined'], 0, from_ft = True, name = 'mean')
-    plot_vol(results['volume_mask'], 1, from_ft = False,name = 'mask')
+
+    plot_vol(pipeline_output.get('mean'), 0, from_ft = True, name = 'mean')
+    plot_vol(pipeline_output.get('volume_mask'), 1, from_ft = False,name = 'mask')
+    u = pipeline_output.get('u_real')
     for k in range(n_eigs):
-        plot_vol(results['u'][u_key][:,k], k+2, from_ft = True, cmap = 'seismic' ,name = f"PC {k}", symmetric = True)
+        plot_vol(u[k], k+2, from_ft = False, cmap = 'seismic' ,name = f"PC {k}", symmetric = True)
 
     plt.subplots_adjust(wspace=0, hspace=0)
 
-    
     return
 
 def plot_summary(results,cryos, n_eigs = 3):
@@ -278,10 +357,13 @@ def plot_cov_results(u,s, max_eig = 40, savefile = None):
 
     return angles
 
-def plot_mean_fsc(results,cryos):
+def plot_mean_fsc(pipeline_output,cryos):
 
-    ax, score = plot_fsc_new(results['means']['corrected0'], results['means']['corrected1'], cryos[0].volume_shape, cryos[0].voxel_size,  curve = None, ax = None, threshold = 1/7, filename = None, name = "unmasked")
-    ax, score_masked = plot_fsc_new(results['means']['corrected0'], results['means']['corrected1'], cryos[0].volume_shape, cryos[0].voxel_size,  curve = None, ax = ax, threshold = 1/7, filename = None, volume_mask = results['volume_mask'], name = "masked")
+    halfmap1, halfmap2 = pipeline_output.get('mean_halfmaps')
+
+    ax, score = plot_fsc_new(halfmap1, halfmap2, pipeline_output.get('volume_shape'), pipeline_output.get('voxel_size'),  curve = None, ax = None, threshold = 1/7, filename = None, name = "unmasked")
+
+    ax, score_masked = plot_fsc_new(halfmap1, halfmap2, pipeline_output.get('volume_shape'), pipeline_output.get('voxel_size'),  curve = None, ax = ax, threshold = 1/7, filename = None, volume_mask = pipeline_output.get('volume_mask'), name = "masked")
     plt.rcParams.update({
         # "text.usetex": True,
         # "font.family": "serif",
@@ -292,6 +374,14 @@ def plot_mean_fsc(results,cryos):
 
     ax.set_title("mean estimation", fontsize=20)
     return ax
+    
+def plot_fsc(cryo, vol1, vol2, mask = None, threshold = 1/7, ax = None, voxel_size= None, volume_shape= None, name = "unmasked", fmat = ""):
+    voxel_size = cryo.voxel_size if voxel_size is None else voxel_size
+    volume_shape = cryo.volume_shape if volume_shape is None else volume_shape
+
+    ax, score = plot_fsc_new(vol1, vol2, volume_shape, voxel_size,  curve = None, ax = ax, threshold = threshold, filename = None, name = name, volume_mask = mask, fmat = fmat)
+    return ax
+    
     
 
 def plot_mean_result(cryo, means, cov_noise):
@@ -336,7 +426,7 @@ def plot_mean_result(cryo, means, cov_noise):
 
         
         
-def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = None, threshold = 1/7, filename = None, volume_mask = None, name = ""):
+def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = None, threshold = 1/7, filename = None, volume_mask = None, name = "", fmat = ""):
     grid_size = volume_shape[0]
     input_ax_is_none = ax is None
     if input_ax_is_none:
@@ -359,7 +449,7 @@ def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = N
     freq = freq[freq >= 0 ]
     freq = freq[:grid_size//2 ]
     max_idx = min(curve.size, freq.size)
-    line, = ax.plot(freq[:max_idx], curve[:max_idx],  linewidth = 2 )
+    line, = ax.plot(freq[:max_idx], curve[:max_idx],  fmat, linewidth = 2 )
     color = line.get_color()
     
     if threshold is not None:
@@ -460,7 +550,9 @@ def fsc_score(fsc_curve, grid_size, voxel_size, threshold = 0.5 ):
         
     # Linearly interpolate
     from scipy import interpolate
+    fsc_curve = np.where(np.isnan(fsc_curve), 0, fsc_curve)
     f = interpolate.interp1d( np.array([fsc_curve[idx], fsc_curve[idx+1]]), np.array([freq[idx], freq[idx+1]]) )
+    
     return np.min([f(threshold), 2 * voxel_size])
 
 

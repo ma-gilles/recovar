@@ -14,7 +14,7 @@ from cryodrgn import mrc
 
 #
 
-def load_heterogeneous_reconstruction(simulation_info_file, volumes_path_root = None):
+def load_heterogeneous_reconstruction(simulation_info_file, volumes_path_root = None, load_volumes = True):
     if isinstance(simulation_info_file, dict):
         simulation_info = simulation_info_file 
     else:
@@ -22,9 +22,13 @@ def load_heterogeneous_reconstruction(simulation_info_file, volumes_path_root = 
 
     volumes_path_root = simulation_info['volumes_path_root'] if volumes_path_root is None else volumes_path_root
 
-    volumes = simulator.load_volumes_from_folder(volumes_path_root, simulation_info['grid_size'] , simulation_info['trailing_zero_format_in_vol_name'] )
+    if load_volumes:
+        volumes = simulator.load_volumes_from_folder(volumes_path_root, simulation_info['grid_size'] , simulation_info['trailing_zero_format_in_vol_name'] )
+    else:
+        volumes
 
     return HeterogeneousVolumeDistribution(volumes, simulation_info['image_assignment'], simulation_info['per_image_contrast'] )
+
 
 
 
@@ -36,8 +40,9 @@ class HeterogeneousVolumeDistribution():
         self.volumes = volumes
         # self.volumes = linalg.batch_dft3(volumes, self.volume_shape, self.vol_batch_size)
         valid_indices = mask.get_radial_mask(self.volume_shape, radius = None) if valid_indices is None else valid_indices
-        self.valid_indices = valid_indices.reshape(-1)
-        self.volumes *= self.valid_indices[None,:]
+        self.valid_indices = np.array(valid_indices.reshape(-1))
+        if self.volumes is not None:
+            self.volumes *= self.valid_indices[None,:]
         self.image_assignments = image_assignments
         self.contrasts = contrasts
         
@@ -45,10 +50,26 @@ class HeterogeneousVolumeDistribution():
         self.probs_of_state = None
         self.percent_outliers = None
         self.compute_probs_of_state()
+        self.u = None
+        self.s = None
 
+        # self.get_u 
 
         self.mean = None
         self.covariance_cols = None
+
+    def get_u(self):
+        if self.u is None:
+            self.compute_u_s()
+        return self.u
+    
+    def get_s(self):    
+        if self.s is None:
+            self.compute_u_s()
+        return self.s
+
+    def compute_u_s(self, contrasted = False):
+        self.u, self.s = self.get_covariance_eigendecomposition(contrasted = contrasted)
 
     def get_probs_of_state(self):
         # if self.probs_of_state is None:
@@ -88,10 +109,17 @@ class HeterogeneousVolumeDistribution():
             vols = np.concatenate( [ np.sqrt(contrast_variance) * self.get_mean()[None] , vols ])
         return vols.T
 
-    def get_vol_svd(self, contrasted = False):
+    def get_vol_svd(self, contrasted = False, real_space = False, random_svd_pcs = None):
 
         vols = self.get_covariance_square_root( contrasted)
-        u,s,v = np.linalg.svd(vols, full_matrices = False)
+
+        if real_space:
+            vols = linalg.batch_idft3(vols, self.volume_shape, self.vol_batch_size).real
+        
+        if random_svd_pcs is None:
+            u,s,v = np.linalg.svd(vols, full_matrices = False)
+        else:
+            u,s,v = linalg.randomized_svd(vols, random_svd_pcs)
 
         return u,s,v
 
@@ -104,6 +132,7 @@ class HeterogeneousVolumeDistribution():
         u /= ip
         return u, s**2
     
+
     def get_fourier_variances(self, contrasted = False):
         vols = self.get_covariance_square_root(contrasted)
         return np.linalg.norm(vols, axis=-1)**2
@@ -125,10 +154,7 @@ class HeterogeneousVolumeDistribution():
 #     elif "from_pdb" in image_option:
 #         import simulate_scattering_potential as gsm
 #         gt_volumes = gsm.generate_volumes_from_atom_groups(volume_params, voxel_size, grid_size)
-
 #     return gt_volumes, voxel_size
-
-
 
 # def get_gt_reconstruction(grid_size, voxel_size, padding, exp_name, valid_indices ):
 #     datadir, vol_datadir, fake_vol_exp_name, fake_vol_datadir, indf, label_file, cov_noise_inp, uninvert_data, ctf_pose_datadir = preprocessed_datasets.get_dataset_params(exp_name, on_della=True)
@@ -155,4 +181,6 @@ def get_col_covariance(Xs, X_mean, vec_indices, prob_of_X):
         cov[:,v_idx] = jnp.sum(prob_of_X[...,None] * get_col_covariance_for_many_X_one_index(Xs_j, X_mean, v ), axis =0)
 
     return cov
+
+
 
