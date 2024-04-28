@@ -35,7 +35,7 @@ Then create an environment, download JAX-cuda (for some reason the latest versio
     conda activate recovar
     pip install -U "jax[cuda12_pip]"==0.4.23 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
     git clone https://github.com/ma-gilles/recovar.git
-    pip install -r --no-deps recovar/recovar_install_requirements.txt
+    pip install --no-deps -r  recovar/recovar_install_requirements.txt
     python -m ipykernel install --user --name=recovar 
 
 
