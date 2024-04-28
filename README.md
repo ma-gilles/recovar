@@ -23,16 +23,22 @@ Also:
 
 ## Installation 
 To run this code, CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html#) are required. See information about JAX installation [here](https://jax.readthedocs.io/en/latest/installation.html).
-Assuming you already have CUDA, installation should take < 5 minutes.
-Here is a set of commands which runs on our university cluster (Della), but may need to be tweaked to run on other clusters.
+Assuming you already have CUDA, installation should take less than 5 minutes.
+Below are a set of commands which runs on our university cluster (Della), but may need to be tweaked to run on other clusters.
+You may need to load CUDA before installing JAX, E.g., on our university cluster with
 
-    # module load cudatoolkit/12.2 # You need to load or install CUDA before installing JAX
-    conda create --name recovar python=3.9
+    module load cudatoolkit/12.3
+
+Then create an environment, download JAX-cuda (for some reason the latest version is causing issues, so make sure to use 0.4.23), clone the directory and install the requirements (note the --no-deps flag. This is because of some conflict with dependencies of cryodrgn. Will fix it soon.).
+
+    conda create --name recovar python=3.11
     conda activate recovar
-    pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html # You may need to pass ax[cuda11_pip] if you use cuda v11
-    pip install cryodrgn mrcfile scikit-fmm prody finufft scikit-image tensorflow-cpu matplotlib-scalebar dataframe-image umap-learn[plot] scikit-learn psutil
+    pip install -U "jax[cuda12_pip]"==0.4.23 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
     git clone https://github.com/ma-gilles/recovar.git
-    python -m ipykernel install --user --name=recovar # if you want to use jupyter notebooks
+    pip install -r --no-deps recovar/recovar_install_requirements.txt
+    python -m ipykernel install --user --name=recovar 
+
+
 
 
 The code was tested on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
@@ -189,7 +195,7 @@ Additional parameters that are typically set include:
 
 After the pipeline is run, you can find the mean, eigenvectors, variance maps, and embeddings in the `outdir/results` directory, where outdir is the option given above by `-o`. You can run some standard analysis by running:
 
-    python analyze.py [outdir] --zdim=10
+    python analyze.py [pipeline_output_dir] --zdim=10
 
 It will run k-means, generate volumes corresponding to the centers, generate trajectories between pairs of cluster centers, and run UMAP. See more input details below.
 
@@ -220,6 +226,16 @@ It will run k-means, generate volumes corresponding to the centers, generate tra
                             parameter, only one of them)
 
 </details>
+
+To generate volumes at specific place in latent space you can use:
+
+    python compute_state.py [pipeline_output_dir] -o [volume_output_dir] --latent-points [zfiles.txt] --Bfactor=[Bfac]
+
+where pipeline_output_dir is the path provided to the pipeline, latent-points is np.loadtxt-readable file containing the coordinates in latent space, and Bfactor is a b-factor to sharpen (can provide the same as the consensus reconstruction). It should be positive.
+
+The the sharpened volume will be at volume_output_dir/vol000/
+
+
 
 ## V. Visualizing results
 ### Output structure
@@ -264,7 +280,7 @@ Assuming you have run the pipeline.py and analyze.py, the output will be saved i
     │       ├── dilated_mask.mrc
     │       ├── eigen_neg000.mrc # Eigenvectors
     │       ├── ...
-    │       ├── eigen_pos000.mrc # Negative of eigenvectors. Useful to Chimera visualization to have the two separated, although they clearly contain the same observation
+    │       ├── eigen_pos000.mrc # Negative of eigenvectors. Useful for Chimera visualization to have the two separated, even though they contain the same information
     │       ├── ...
     │       ├── mask.mrc # mask used 
     │       ├── mean.mrc # computed mean
@@ -277,11 +293,11 @@ Assuming you have run the pipeline.py and analyze.py, the output will be saved i
 ### Visualization in jupyter notebook
 
 You can visualize the results using [this notebook](output_visualization.ipynb), which will show a bunch of results including:
-* the FSC of the mean estimation to give you an on an upper bound of the resolution you can expect
+* the FSC of the mean estimation, which you can interpret as an upper bound of the resolution you can expect. 
 * decay of eigenvalues to help you pick the right `zdim`
-*  and standard clustering visualization (borrowed from the cryoDRGN output).
+* and standard clustering visualization (borrowed from the cryoDRGN output).
 
-
+<!-- 
 ## VI. Generating additional trajectories
 
 Usage example:
@@ -309,12 +325,11 @@ Usage example:
     --q <class 'float'>   quantile used for reweighting (default = 0.95)
     --n-vols <class 'int'>
                             number of volumes produced at regular interval along the path
-</details>
-
+</details> -->
 
 
 ## TLDR
- (WIP - Untested)
+ <!-- (WIP - Untested) -->
 A short example illustrating the steps to run the code on EMPIAR-10076. Assuming you have downloaded the code and have a GPU, the code should take less than an hour to run, and less than 10 minutes if you downsample to 128 instead (exact running time depends on your hardware). and  Read above for more details:
 
     # Downloaded poses from here: https://github.com/zhonge/cryodrgn_empiar.git
@@ -356,7 +371,7 @@ The output should be the same as [this notebook](output_visualization_empiar1007
 I hope some developers find parts of the code useful for their projects. See [this notebook](recovar_coding_tutorial.ipynb) for a short tutorial.
 
 Some of the features which may be of interest:
-- The basic building block operations of cryo-EM efficiently, in batch and on GPU: shift images, slice volumes, do the adjoint slicing, apply CTF. See [recovar.core](recovar/core.py).
+- The basic building block operations of cryo-EM efficiently, in batch and on GPU: shift images, slice volumes, do the adjoint slicing, apply CTF. See [recovar.core](recovar/core.py). Though I have not tried it, all of these operations should be differentiable thus you could use JAX's autodiff.
 
 - A heterogeneity dataset simulator that includes variations in contrast, realistic CTF and pose distribution (loaded from real dataset), junk proteins, outliers, etc. See [recovar.simulator](recovar/simulator.py).
 
