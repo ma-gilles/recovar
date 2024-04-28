@@ -525,7 +525,7 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
 
     mkdir_safe(output_folder + 'density/')
     if basis_size >1:
-        if use_input_density:
+        if not use_input_density:
             path_z = trajectory.compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim=density,
                                                     density_eps = 1e-5, max_dim = basis_size, percentile_bound = 1, num_points = 50, 
                                                     use_log_density = False)
