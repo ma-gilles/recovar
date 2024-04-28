@@ -316,7 +316,7 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
                                          volume_shape, 
                                         voxel_size, 
                                         CTF_fun, 
-                                        'cubic'                                           
+                                        'cubic'              
                                           )
     
     # volume = ftu.get_idft3(mean_estimate.reshape(volume_shape)).real#.reshape(-1)
@@ -340,9 +340,8 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
     # disc_type = 'nearest'
     ## DO MASK BUSINESS HERE.
     batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
-
-
     projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, image_shape)
+    
     AUs = covariance_core.batch_over_vol_forward_model_from_map(basis,
                                          CTF_params, 
                                          rotation_matrices,
@@ -350,7 +349,8 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
                                          volume_shape, 
                                         voxel_size, 
                                         CTF_fun, 
-                                        disc_type )    
+                                        disc_type )   
+     
     # Apply mask on operator
     AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, image_shape )
     AUs = AUs.transpose(1,2,0)
