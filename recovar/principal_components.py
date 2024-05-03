@@ -388,7 +388,7 @@ def right_matvec_with_spatial_Sigma_v2(test_mat, columns, picked_frequency_indic
 
     flipped_frequencies = core.vec_indices_to_frequencies(minus_frequency_indices[good_idx], volume_shape)
     flipped_frequencies_indices_in_smaller = np.array(core.frequencies_to_vec_indices(flipped_frequencies, smaller_vol_shape))
-
+    logger.info(f"C_F_t shape: {C_F_t.shape}")
     C_F_t += linalg.blockwise_A_X(columns_flipped , F_t[flipped_frequencies_indices_in_smaller,:], memory_to_use = memory_to_use) 
     # C_F_t += C_F_t_2 
     logger.info(f"AX 2: {time.time() - st_time}")
@@ -451,7 +451,7 @@ def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_
 
     return Q_F_C_F
 
-use_v2_fn = True
+use_v2_fn = False
 report_memory = True
 
 def left_matvec_with_spatial_Sigma_v2(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40):

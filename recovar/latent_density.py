@@ -54,10 +54,10 @@ def make_latent_space_grid_from_bounds(latent_space_bounds, num_points):
     return grids_flat
 
 # Computes density in pca_dim_max dimensions on grid
-def compute_latent_space_density(zs, cov_zs, pca_dim_max = 4, num_points = 50, density_option = "kde"):
+def compute_latent_space_density(zs, cov_zs, pca_dim_max = 4, num_points = 50, density_option = "kde", percentile=1):
     
     if density_option == "kde":
-        return compute_latent_space_density_kde(zs, cov_zs, pca_dim_max = pca_dim_max, num_points = num_points)
+        return compute_latent_space_density_kde(zs, cov_zs, pca_dim_max = pca_dim_max, num_points = num_points, percentile=percentile)
     elif density_option != "old":
         raise ValueError("Density option not recognized")
 
@@ -65,7 +65,7 @@ def compute_latent_space_density(zs, cov_zs, pca_dim_max = 4, num_points = 50, d
         zs = zs[:,:pca_dim_max]
         cov_zs = cov_zs[:,:pca_dim_max,:pca_dim_max]        
         
-    latent_space_bounds = compute_latent_space_bounds(zs, percentile = 1)
+    latent_space_bounds = compute_latent_space_bounds(zs, percentile = percentile)
     grids_flat = make_latent_space_grid_from_bounds(latent_space_bounds, num_points)
     # # DISCRETIZE LATENT SPACE
     # latent_space_bounds = compute_latent_space_bounds(zs, percentile = 1)
@@ -270,7 +270,7 @@ def compute_det_cov_xs(cov_xs):
 
 
 
-def compute_latent_space_density_kde(zs, cov_zs, pca_dim_max = 4, num_points = 50, gauss_kde = None):
+def compute_latent_space_density_kde(zs, cov_zs, pca_dim_max = 4, num_points = 50, gauss_kde = None, percentile=1):
     
     if zs.shape[1] != pca_dim_max:
         zs = zs[:,:pca_dim_max]
@@ -279,7 +279,7 @@ def compute_latent_space_density_kde(zs, cov_zs, pca_dim_max = 4, num_points = 5
     gauss_kde = jax.scipy.stats.gaussian_kde(zs.T, 'silverman') if gauss_kde is None else gauss_kde
 
     # DISCRETIZE LATENT SPACE
-    latent_space_bounds = compute_latent_space_bounds(zs, percentile = 1)
+    latent_space_bounds = compute_latent_space_bounds(zs, percentile = percentile)
     coord_pca_1D = []
     # FIND BOUNDS ON SPACE TO DISCRETIZE
     for pca_dim in range(pca_dim_max):

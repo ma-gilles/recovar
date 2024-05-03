@@ -25,8 +25,33 @@ def resample_at_uniform_pts(gt_vols, n_vols_along_path = 6):
     gt_vols_x = np.zeros([n_vols_along_path, gt_vols.shape[-1]])
     for k in range(gt_vols.shape[-1]):
         gt_vols_x[:,k] = np.interp(x, distances_between_volumes, gt_vols[:,k], left=None, right=None, period=None)
+    return gt_vols_x
+
+def resample_at_uniform_pts2(gt_vols, n_vols_along_path = 6):
+    distances_between_volumes = get_cum_curvelength(gt_vols.T)
+    # n_volumes at approximately equispaced points 
+    x = np.linspace(0, distances_between_volumes[-1], n_vols_along_path, endpoint=True)
+    gt_vols_x = np.zeros([ gt_vols.shape[0], n_vols_along_path], dtype = gt_vols.dtype)
+
+    lower_idx = np.searchsorted(distances_between_volumes, x, side = 'right') - 1
+    upper_idx = np.searchsorted(distances_between_volumes, x, side = 'right')
+    lower_idx = np.clip(lower_idx, 0, distances_between_volumes.size-1)
+    upper_idx = np.clip(upper_idx, 0, distances_between_volumes.size-1)
+
+    for k in range(gt_vols.shape[-1]):
+        lower_x = distances_between_volumes[lower_idx[k]]
+        upper_x = distances_between_volumes[upper_idx[k]]
+        lower_val = gt_vols[:,lower_idx[k]]
+        upper_val = gt_vols[:,upper_idx[k]]
+        if lower_idx[k] == upper_idx[k]:
+            gt_vols_x[:,k] = lower_val
+        else:
+            gt_vols_x[:,k] = lower_val + (x[k] - lower_x) * (upper_val - lower_val) / (upper_x - lower_x)
+        # import pdb; pdb.set_trace()
+        # gt_vols_x[:,k] = np.interp(x, distances_between_volumes, gt_vols[:,k], left=None, right=None, period=None)
      
     return gt_vols_x
+
 
 def get_cum_curvelength(gt_vols):
     distances_between_volumes = np.linalg.norm(gt_vols[1:,...] - gt_vols[:-1,...], axis =1)
@@ -52,7 +77,7 @@ def find_trajectory_in_grid(density, g_st, g_end, latent_space_bounds, eps = 1e-
     dx = get_grid_spacing(latent_space_bounds, density)
     # logger.info(f"dx {dx}")
     path = gradient_descent_nd(travel_time, g_st, g_end, dx,  step_size = 0.25, n_theta = 10, max_steps = max_steps )
-    debug = True
+    debug = False
     if debug:
         plt.imshow(density, aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
         plt.imshow(np.log(travel_time), aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
@@ -127,7 +152,7 @@ def gradient_descent_nd(travel_time, x_st, x_end, dx, step_size = 0.25, n_theta 
             plt.scatter(cur_path[:,0], cur_path[:,1])
             plt.show()
             logger.info(f"Failed to find path. Increasing minimum density")
-            import pdb; pdb.set_trace()
+            # import pdb; pdb.set_trace()
             return None
             
     path.append(x_st)
@@ -157,7 +182,7 @@ def compute_fixed_dimensional_path(z_st, z_end, density_low_dim, latent_space_bo
     assert z_st.shape[-1] == density_low_dim.ndim, "Start point should be in the same dimension as density"
     assert np.isclose(np.array(density_low_dim.shape) -  density_low_dim.shape[0], 0).all(), "Density should be on square grid"
 
-    max_dim = zs.shape[-1] if max_dim is None else max_dim
+    # max_dim = zs.shape[-1] if max_dim is None else max_dim
     num_points = density_low_dim.shape[0]
     grid_to_z, z_to_grid = latent_density.get_grid_z_mappings(latent_space_bounds, num_points)
 
@@ -173,7 +198,7 @@ def compute_fixed_dimensional_path(z_st, z_end, density_low_dim, latent_space_bo
     ## This is not used.
     g_st_in_bound = check_in_bound(g_st, num_points)
     g_end_in_bound = check_in_bound(g_end, num_points)
-
+    # import pdb; pdb.set_trace()
 
     current_path_grid = find_trajectory_in_grid(density_low_dim,
                                             g_st_in_bound,
@@ -182,7 +207,8 @@ def compute_fixed_dimensional_path(z_st, z_end, density_low_dim, latent_space_bo
                                             eps = density_eps, 
                                             use_log_density = use_log_density)
     
-    return current_path_grid
+    return grid_to_z(current_path_grid)
+
 
 
 def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, density_eps = 1e-5, max_dim = None, percentile_bound = 1, num_points = 50, use_log_density = False, debug_plot = False, density_option = "kde"):
@@ -190,7 +216,6 @@ def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, dens
     assert np.isclose(np.array(density_low_dim.shape) -  density_low_dim.shape[0], 0).all(), "Density should be on square grid"
     max_dim = zs.shape[-1] if max_dim is None else max_dim
     latent_space_bounds = latent_density.compute_latent_space_bounds(zs, percentile = percentile_bound)
-
 
     low_dim = density_low_dim.ndim
     if low_dim > max_dim: # Hmmm, this is a bit of a hack.

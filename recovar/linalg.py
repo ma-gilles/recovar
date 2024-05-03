@@ -185,18 +185,18 @@ def randomized_svd(A, n_pcs = 200):
 @functools.partial(jax.jit, static_argnums = [1])    
 def idft3(x, vec_shape ):
     x = x.reshape([*vec_shape, x.shape[-1]]) 
-    x = x.T
-    x = ftu.get_idft3(x)
-    x = x.T
+    # x = x.T
+    x = ftu.get_idft3(x, axes =(0,1,2))
+    # x = x.T
     x = x.reshape([-1, x.shape[-1]])
     return x
 
 @functools.partial(jax.jit, static_argnums = [1])    
 def dft3(x, vec_shape):
     x = x.reshape([*vec_shape, x.shape[-1]])
-    x = x.T
-    x = ftu.get_dft3(x)
-    x = x.T
+    # x = x.T
+    x = ftu.get_dft3(x, axes =(0,1,2))
+    # x = x.T
     x = x.reshape([-1, x.shape[-1]])
     return x
 

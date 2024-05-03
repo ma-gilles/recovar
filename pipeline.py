@@ -75,6 +75,13 @@ def add_args(parser: argparse.ArgumentParser):
         help="use if you want zero frequency to be ignored. If images have been normalized to 0 mean, this is probably a good idea"
     )
 
+    parser.add_argument(
+        "--no-z-regularization",
+        dest = "no_z_regularization",
+        action="store_true",
+    )
+
+
     group = parser.add_argument_group("Dataset loading")
     group.add_argument(
         "--ind",
@@ -163,51 +170,58 @@ def add_args(parser: argparse.ArgumentParser):
             default = "triangular",
             help="which mean function to use. Options are triangular (default), old, triangular_reg"
         )
-
-    group = parser.add_argument_group("Covariance estimation options")
-
-
+    
     group.add_argument(
-            "--covariance-fn",
-            dest = "covariance_fn",
-            default = "noisemask",
-            help="noisemask (default), kernel"
-        )
+        "--accept-cpu",
+        dest="accept_cpu",
+        action="store_true",
+        help="Accept running on CPU if no GPU is found",
+    )
 
-    group.add_argument(
-            "--covariance-reg-fn",
-            dest = "covariance_reg_fn",
-            default = "old",
-            help="old (default), new"
-        )
+    # group = parser.add_argument_group("Covariance estimation options")
 
-    group.add_argument(
-            "--covariance-left-kernel",
-            dest = "covariance_left_kernel",
-            default = "triangular",
-            help="triangular (default), square"
-        )
 
-    group.add_argument(
-            "--covariance-right-kernel",
-            dest = "covariance_right_kernel",
-            default = "triangular",
-            help="triangular (default), square"
-        )
+    # group.add_argument(
+    #         "--covariance-fn",
+    #         dest = "covariance_fn",
+    #         default = "noisemask",
+    #         help="noisemask (default), kernel"
+    #     )
 
-    group.add_argument(
-            "--covariance-left-kernel-width",
-            dest = "covariance_left_kernel_width",
-            default = 1,
-            type=int,
-        )
+    # group.add_argument(
+    #         "--covariance-reg-fn",
+    #         dest = "covariance_reg_fn",
+    #         default = "old",
+    #         help="old (default), new"
+    #     )
 
-    group.add_argument(
-            "--covariance-right-kernel-width",
-            dest = "covariance_right_kernel_width",
-            default = 2,
-            type=int,
-        )
+    # group.add_argument(
+    #         "--covariance-left-kernel",
+    #         dest = "covariance_left_kernel",
+    #         default = "triangular",
+    #         help="triangular (default), square"
+    #     )
+
+    # group.add_argument(
+    #         "--covariance-right-kernel",
+    #         dest = "covariance_right_kernel",
+    #         default = "triangular",
+    #         help="triangular (default), square"
+    #     )
+
+    # group.add_argument(
+    #         "--covariance-left-kernel-width",
+    #         dest = "covariance_left_kernel_width",
+    #         default = 1,
+    #         type=int,
+    #     )
+
+    # group.add_argument(
+    #         "--covariance-right-kernel-width",
+    #         dest = "covariance_right_kernel_width",
+    #         default = 2,
+    #         type=int,
+    #     )
     
     # options = {
     #     "covariance_fn": "noisemask",
@@ -293,6 +307,9 @@ def standard_recovar_pipeline(args):
 
     if args.mask_option == 'input' and args.mask is None:
         raise ValueError("Mask option is input, but no mask provided. Provide a mask using --mask path/to/mask.mrc")
+
+    if (not args.accept_cpu) and (not utils.jax_has_gpu()):
+        raise ValueError("No GPU found. Set --accept-cpu if you really want to run on CPU (probably not). More likely, you want to check that JAX has been properly installed with GPU support.")
 
     o.mkdir_safe(args.outdir)
     logger.addHandler(logging.FileHandler(f"{args.outdir}/run.log"))
@@ -602,6 +619,18 @@ def standard_recovar_pipeline(args):
                                                                     ignore_zero_frequency = options['ignore_zero_frequency'] )
             logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
 
+    # if args.no_z_regularization:
+
+    for zdim in options['zs_dim_to_test']:
+        z_time = time.time()
+        key = f"{zdim}_noreg"
+        zs[key], cov_zs[key], est_contrasts[key] = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled']* 0 + np.inf , zdim,
+                                                                image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
+                                                                contrast_grid = None, contrast_option = options['contrast'],
+                                                                ignore_zero_frequency = options['ignore_zero_frequency'] )
+        logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
+
+
     zs_cont = {}; cov_zs_cont = {}; est_contrasts_cont = {}        
     # if args.correct_contrast:
     #     for zdim in options['zs_dim_to_test']:
@@ -615,9 +644,9 @@ def standard_recovar_pipeline(args):
     #         logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time} with contrast")
 
 
-    n_images_to_test = np.round((cryos[0].n_images + cryos[1].n_images) * 0.01).astype(int)
-    var_metrics, all_estimators, all_lhs = principal_components.test_different_embeddings_from_variance(cryos, zs, cov_zs, image_cov_noise, zdims= np.array(options['zs_dim_to_test']), n_images = n_images_to_test, tau = means['prior'])
-
+    # n_images_to_test = np.round((cryos[0].n_images + cryos[1].n_images) * 0.01).astype(int)
+    # var_metrics, all_estimators, all_lhs = principal_components.test_different_embeddings_from_variance(cryos, zs, cov_zs, image_cov_noise, zdims= np.array(options['zs_dim_to_test']), n_images = n_images_to_test, tau = means['prior'])
+    var_metrics = {'filt_var': None}
 
     zdim = np.max(options['zs_dim_to_test'])
     noise_var_from_het_residual, _,_ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(cryos[0], dilated_volume_mask, means['combined'], u['rescaled'][:,:zdim], est_contrasts[zdim], zs[zdim], batch_size//10, disc_type = covariance_options['disc_type'] )

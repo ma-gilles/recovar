@@ -473,55 +473,41 @@ def load_results_newest(datadir):
     return results#, results['dataset_loader_dict'], grid_to_z, z_to_grid
 
 
-def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, compute_reproj = False, likelihood_threshold = None, adaptive = False):
+def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False,  input_density = None, latent_space_bounds = None):
 
     assert (((z_st is not None) and (z_end is not None)) or (gt_volumes is not None)), 'either z_st and z_end should be passed, or gt_volumes'
 
-    # results = load_results_new(results['output_dir'])
+    if input_density is not None:
+        assert latent_space_bounds is not None, 'need latent_space_bounds if providing density'
+
+    latent_space_bounds = ld.compute_latent_space_bounds(pipeline_output.get('zs')[basis_size]) if latent_space_bounds is None else latent_space_bounds
+
     if cryos is None:
         cryos = pipeline_output.get('dataset') if cryos is None else cryos
         embedding.set_contrasts_in_cryos(cryos, pipeline_output.get('contrasts')[basis_size])
 
-    # cryos = dataset.load_dataset_from_args(results['input_args']) if cryos is None else cryos
-    latent_space_bounds = ld.compute_latent_space_bounds(pipeline_output.get('zs')[basis_size])
-    
+    density = input_density if input_density is not None else pipeline_output.get('density')
+
     return make_trajectory_plots(
-        pipeline_output.get('density'), 
+        density, 
         pipeline_output.get('zs')[basis_size], pipeline_output.get('cov_zs')[basis_size], 
         z_st, z_end, latent_space_bounds, output_folder, 
-        gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = plot_llh)
-
+        gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = plot_llh, use_input_density = input_density is not None)
 
 
 def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds, output_folder, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, use_input_density =False):
-    st_time = time.time()
-    
-    # likelihood_threshold = ld.get_log_likelihood_threshold(k = zs.shape[-1]) if likelihood_threshold is None else likelihood_threshold
-    gt_volumes = None
-    # if gt_volumes is not None:
-    #     gt_subs_idx = resample_trajectory(gt_volumes, n_vols_along_path = n_vols_along_path)
-        
-    #     # Find ground truth volumes in latent coordinates
-    #     save_volumes(tuple(gt_volumes),   output_folder + '/gt' , volume_shape = None, from_ft = True  )
-    #     save_volumes(tuple(gt_volumes[gt_subs_idx]),   output_folder + '/gt_subs' , volume_shape = None, from_ft = True  )
-    #     json.dump(gt_subs_idx.tolist(), open(output_folder + '/gt_index_resampled.json', 'w'))
-        
-    #     z_vols = vol_to_z(gt_volumes, u, means['combined'], basis_size)
-    #     z_st = z_vols[0]
-    #     z_end = z_vols[-1]
 
-    #     gt_volumes_z = vol_to_z(gt_volumes, u, means['combined'], basis_size)
-    #     z_st = gt_volumes_z[0]
-    #     z_end = gt_volumes_z[-1]
-    #     # gt_coords_grid = z_to_grid(gt_volumes_z)
-        
-    #     same_st_end = True
-    
-    basis_size = zs.shape[1]
-    zs = zs[:,:basis_size]
-    latent_space_bounds = ld.compute_latent_space_bounds(zs)
-    cov_zs = cov_zs[:,:basis_size,:basis_size]
+    latent_space_bounds = ld.compute_latent_space_bounds(zs) if latent_space_bounds is None else latent_space_bounds
+
     st_time = time.time()
+    gt_volumes = None    
+    basis_size = zs.shape[1]
+    if use_input_density and (density.ndim < zs.shape[-1]):
+        logger.warning("density dimension is less than zs dimension, truncate zs dimension")
+        basis_size = density.ndim
+
+    zs = zs[:,:basis_size]
+    cov_zs = cov_zs[:,:basis_size,:basis_size]
 
     mkdir_safe(output_folder + 'density/')
     if basis_size >1:
@@ -561,6 +547,7 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
         # density_on_path = ld.compute_latent_space_density_at_pts(path_z, zs, cov_zs)
     else:
         density_on_path = ld.compute_latent_space_density_at_pts(path_z, zs, cov_zs)
+
     densities = { 'density' :  density_on_path.tolist(), 'path' : path_z.tolist(), 'path_subsampled' : path_subsampled.tolist()} 
     json.dump(densities, open(output_folder + '/path.json', 'w'))
 

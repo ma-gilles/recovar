@@ -65,6 +65,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
 
     if use_contrast:
         contrast_grid = np.linspace(0, 2, 50) if contrast_grid is None else contrast_grid
+        contrast_grid[0] = 0.01
     else:
         contrast_grid = np.ones([1])
     
@@ -81,10 +82,8 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
 
     # It is not so clear whether this step should ever use the mask. But when using the options['ignore_zero_frequency'] option, there is a good reason not to do it
     if ignore_zero_frequency:
-        volume_mask = np.ones_like(volume_mask) 
-    
-
-    volume_mask = np.ones_like(volume_mask) 
+        volume_mask = np.ones_like(volume_mask)
+    # volume_mask = np.ones_like(volume_mask) 
 
     logger.info(f"ignore_zero_frequency? {ignore_zero_frequency}")
     # logger.info(f"z batch size old {batch_size_old}")
@@ -135,7 +134,8 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
     eigenvalues = jnp.array(eigenvalues).astype(experiment_dataset.dtype)
     contrast_grid = contrast_grid.astype(experiment_dataset.dtype_real)
 
-    no_mask = covariance_core.check_mask(volume_mask)    
+
+    # no_mask = covariance_core.check_mask(volume_mask)    
     
     basis_size = basis.shape[0]
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
@@ -148,7 +148,6 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
     batch_idx =0 
     for batch, batch_image_ind in data_generator:
         
-
         xs_single, contrast_single, cov_batch = compute_single_batch_coords_split(batch, mean_estimate, volume_mask, 
                                                                         basis, eigenvalues,
                                                                         experiment_dataset.CTF_params[batch_image_ind],
@@ -284,9 +283,16 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
     # covariance
     if compute_covariances:
         cov_batch = (contrast_single**2 )[:,None,None] * AU_t_AU  + jnp.diag(1/eigenvalues)
+        logger.warning("FIX THIS COV BATCH STUFF")
+        gram = (contrast_single**2 )[:,None,None] * AU_t_AU
+        cov_batch = cov_batch @ jnp.linalg.pinv(gram, rcond=1e-4, hermitian=True) @ cov_batch
+        # cov_batch = cov_batch @ jnp.linalg.pinv(gram, hermitian=True) @ cov_batch
+        # min_eig = jnp.min(jnp.linalg.eigvalsh(cov_batch))
+        # cov_batch = jnp.where(min_eig == np.inf, cov_batch2, cov_batch)
+
     else:
         cov_batch = None
-    
+    # import pdb; pdb.set_trace()
     return xs_single, contrast_single, cov_batch
 
 
@@ -294,17 +300,18 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
 
 
 def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid):
-    
+    apply_mask = False
     # Memory to do this is ~ size(volume_mask) * batch_size
-    image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
-                                          rotation_matrices,
-                                          image_mask, 
-                                          volume_mask_threshold,
-                                          image_shape, 
-                                          volume_shape, grid_size, 
-                                          padding, 
-                                          'linear_interp' ) * 0 + 1
-    logger.warning("Not using mask in embedding! Is this what you want?")
+    if apply_mask:
+        image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
+                                            rotation_matrices,
+                                            image_mask, 
+                                            volume_mask_threshold,
+                                            image_shape, 
+                                            volume_shape, grid_size, 
+                                            padding, 
+                                            'linear_interp' ) * 0 + 1
+        logger.warning("Not using mask in embedding! Is this what you want?")
     
     batch = process_fn(batch)
     batch = core.translate_images(batch, translations , image_shape)
@@ -316,7 +323,7 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
                                          volume_shape, 
                                         voxel_size, 
                                         CTF_fun, 
-                                        'cubic'              
+                                        disc_type              
                                           )
     
     # volume = ftu.get_idft3(mean_estimate.reshape(volume_shape)).real#.reshape(-1)
@@ -339,8 +346,9 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
 
     # disc_type = 'nearest'
     ## DO MASK BUSINESS HERE.
-    batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
-    projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, image_shape)
+    if apply_mask:
+        batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
+        projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, image_shape)
     
     AUs = covariance_core.batch_over_vol_forward_model_from_map(basis,
                                          CTF_params, 
@@ -352,7 +360,8 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
                                         disc_type )   
      
     # Apply mask on operator
-    AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, image_shape )
+    if apply_mask:
+        AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, image_shape )
     AUs = AUs.transpose(1,2,0)
 
 

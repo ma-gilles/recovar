@@ -60,32 +60,36 @@ class fourier_transform_utils:
         return self.np.fft.ifftshift(self.np.fft.ifft2(self.np.fft.ifftshift(img, axes = (-2, -1)), norm =norm), axes = (-2,-1 ))
 
 
-    def get_dft3(self, img, norm = DEFAULT_FFT_NORM):
+    def get_dft3(self, img, norm = DEFAULT_FFT_NORM, axes = (-3, -2, -1)):
         # The First FFTSHIFT accounts for the phase shift difference between DFT and continuous FT.
         # return self.np.fft.fftshift(self.np.fft.fftn(self.np.fft.fftshift(img, axes = (-3, -2,-1)), axes = (-3, -2,-1 )), axes = (-3, -2, -1))
-        return self.get_dft3_weird(img, norm = norm)
+        return self.get_dft3_weird(img, norm = norm, axes = axes)
 
     # Jax ifftn is broken...
-    def get_dft3_weird(self, u_res, norm = DEFAULT_FFT_NORM):
-        u_res = self.np.fft.fftshift(u_res, axes = (-3, -2, -1))
-        u_res = self.np.fft.fft(u_res, axis = -3, norm = norm)
-        u_res = self.np.fft.fft(u_res, axis = -2, norm = norm)
-        u_res = self.np.fft.fft(u_res, axis = -1, norm = norm)
-        u_res = self.np.fft.fftshift(u_res, axes = (-3, -2, -1))
+    def get_dft3_weird(self, u_res, norm = DEFAULT_FFT_NORM, axes = (-3, -2, -1)):
+
+        u_res = self.np.fft.fftshift(u_res, axes = axes)
+        # Maybe it is fixed now?
+        u_res = self.np.fft.fftn(u_res, axes = axes, norm = norm)
+        # u_res = self.np.fft.fft(u_res, axis = axes[0], norm = norm)
+        # u_res = self.np.fft.fft(u_res, axis = axes[1], norm = norm)
+        # u_res = self.np.fft.fft(u_res, axis = axes[2], norm = norm)
+        u_res = self.np.fft.fftshift(u_res, axes = axes)
         return u_res
 
         
-    def get_idft3(self, img, norm = DEFAULT_FFT_NORM):
+    def get_idft3(self, img, norm = DEFAULT_FFT_NORM, axes = (-3, -2, -1)):
         # return self.np.fft.ifft2(self.np.fft.ifftshift(img, axes = (-2, -1)))
-        return self.get_idft3_weird(img, norm = norm)#self.np.fft.ifftshift(self.np.fft.ifftn(self.np.fft.ifftshift(img, axes = (-3, -2, -1)), axes = (-3, -2,-1 )), axes = (-3, -2,-1 ))
+        return self.get_idft3_weird(img, norm = norm, axes =axes)#self.np.fft.ifftshift(self.np.fft.ifftn(self.np.fft.ifftshift(img, axes = (-3, -2, -1)), axes = (-3, -2,-1 )), axes = (-3, -2,-1 ))
 
     # Jax ifftn is broken...
-    def get_idft3_weird(self, u_res, norm = DEFAULT_FFT_NORM):
-        u_res = self.np.fft.ifftshift(u_res, axes = (-3, -2, -1))
-        u_res = self.np.fft.ifft(u_res, axis = -3, norm = norm)
-        u_res = self.np.fft.ifft(u_res, axis = -2, norm = norm)
-        u_res = self.np.fft.ifft(u_res, axis = -1, norm = norm)
-        u_res = self.np.fft.ifftshift(u_res, axes = (-3, -2, -1))
+    def get_idft3_weird(self, u_res, norm = DEFAULT_FFT_NORM, axes = (-3, -2, -1)):
+        u_res = self.np.fft.ifftshift(u_res, axes = axes)
+        u_res = self.np.fft.ifftn(u_res, axes = axes, norm = norm)
+        # u_res = self.np.fft.ifft(u_res, axis = -3, norm = norm)
+        # u_res = self.np.fft.ifft(u_res, axis = -2, norm = norm)
+        # u_res = self.np.fft.ifft(u_res, axis = -1, norm = norm)
+        u_res = self.np.fft.ifftshift(u_res, axes =axes)
         return u_res
 
     # # These are possibly broken in JAX, but not used in the code.

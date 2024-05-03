@@ -276,3 +276,18 @@ def write_starfile_from_cryodrgn_format(ctf_path, pose_path, particles_file_path
     write_starfile(ctf[:,2:], rots, trans, ctf[0,1], ctf[0,0], particles_file_path, output_filename, halfset_indices = None)
 
 # make_starfile(cryo_dataset.CTF_params, cryo_dataset.rotation_matrices, cryo_dataset.translations, cryo_dataset.voxel_size, cryo_dataset.volume_shape[0], dataset_dict['particles_file'], output_filename = output_folder + 'sim_newest.star', halfset_indices = array_indices )
+
+
+def downsample_vol_by_fourier_truncation(vol_input, target_grid_size):
+    X = ftu.get_dft3(vol_input)
+    input_grid_size = vol_input.shape[0]
+    diff_size = input_grid_size - target_grid_size 
+    half_diff_size = diff_size//2
+    X = X[half_diff_size:-half_diff_size,half_diff_size:-half_diff_size,half_diff_size:-half_diff_size ]
+    X = np.array(X)
+    X[0,:,:] = X[0,:,:].real
+    X[:,0,:] = X[:,0,:].real
+    X[:,:,0] = X[:,:,0].real
+    # X = np.asarray(X)
+    return ftu.get_idft3(X)
+    # return vol_ft.reshape(-1)

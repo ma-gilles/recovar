@@ -122,7 +122,6 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
     #         # print(k)
     if True:
         # a =1
-        # Doesn't seem to be faster.
         vol_batch_size = recovar.utils.get_vol_batch_size(map1.shape[0], recovar.utils.get_gpu_memory_total())/2
         if use_v2:
             vol_batch_size *=4
