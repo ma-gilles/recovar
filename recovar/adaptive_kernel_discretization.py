@@ -1118,7 +1118,7 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
 
     return estimates
 
-def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False):
+def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola"):
 
     # residuals to pick best one
     # I guess one way to do this without changed the function is to make CTF 0 for all bad images?
@@ -1190,8 +1190,9 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
     #_|     |_ 
     # or almost epachenikov 
     #
-    use_Epanechnikov = True
-    if use_Epanechnikov:
+    # heterogeneity_kernel
+    # use_Epanechnikov = True
+    if heterogeneity_kernel == "parabola" or heterogeneity_kernel == "triangle":
         # distances = np.zeros(bins.size)
         # distances[1:] = bins[:-1]
         distances = bins
@@ -1200,12 +1201,15 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
         logger.info("SHOULD THIS BE SQUARE ROOTED?")
 
         np_to_use = np
-        Epanechnikov = lambda dist : np_to_use.where( np_to_use.abs(dist) < 1, 3/4 * (1- dist**2), 0)
+        if heterogeneity_kernel == "triangle":
+            kernel_fn = lambda dist : np_to_use.where( np_to_use.abs(dist) < 1, 1 - np_to_use.abs(dist), 0)
+        else:
+            kernel_fn = lambda dist : np_to_use.where( np_to_use.abs(dist) < 1, 3/4 * (1- dist**2), 0)
         # h_grid = bins # Skip the first bin
         weight_matrix = np_to_use.zeros((n_bins, n_bins)).astype(np.float32)
         weight_matrix[0,0] = 1
         for idx in range(1, n_bins):
-            weights = Epanechnikov(np_to_use.sqrt(distances/h_grid[idx]))
+            weights = kernel_fn(np_to_use.sqrt(distances/h_grid[idx]))
             weight_matrix[:,idx] = weights
         rhs_all = linalg.blockwise_A_X(rhs_all.T, weight_matrix).T
         lhs_all = linalg.blockwise_A_X(lhs_all.T, weight_matrix).T
@@ -1233,9 +1237,11 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
         # rhs_all_presum2 = linalg.blockwise_A_X(rhs_all, weight_matrix)
         # lhs_all_presum2 = linalg.blockwise_A_X(lhs_all, weight_matrix)
 
-    else:
+    elif heterogeneity_kernel == "square":
         rhs_all = np.cumsum(rhs_all, axis=0)
         lhs_all = np.cumsum(lhs_all, axis=0)
+    else:
+        raise NotImplementedError
     # logger.info(f"done with precomp")
 
     for idx in range(heterogeneity_bins.size):
