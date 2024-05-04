@@ -441,7 +441,12 @@ class PipelineOutput:
             noise_level = self.get('noise_var_used')
             snr = utils.make_radial_image(PS/noise_level, vol_shape[:2])
             return snr
-        
+        elif key == 'variance':
+            return utils.load_mrc(self.result_path + 'output/volumes/' + 'variance10' + '.mrc')
+        elif key == 'variance20':
+            return utils.load_mrc(self.result_path + 'output/volumes/' + 'variance20' + '.mrc')
+        elif key == 'focus_mask':
+            return utils.load_mrc(self.result_path + 'output/volumes/' + 'focus_mask' + '.mrc')
         elif key == 'volume_mask':
             return utils.load_mrc(self.result_path + 'output/volumes/' + 'mask' + '.mrc')
         elif key == 'dilated_volume_mask':
@@ -456,9 +461,8 @@ class PipelineOutput:
             assert False, "key not found"
     def keys(self):
         keys = list(self.params.keys())
-        keys += ['zs', 'cov_zs', 'contrasts', 'u', 'u_real', 'mean', 'volume_mask', 'dilated_volume_mask', 'covariance_cols', 'dataset', 'lazy_dataset']
+        keys += ['zs', 'cov_zs', 'contrasts', 'u', 'u_real', 'mean', 'volume_mask', 'dilated_volume_mask', 'covariance_cols', 'dataset', 'lazy_dataset', 'variance', 'variance20', 'focus_mask', 'image_snr', 'mean_halfmaps']
         return keys
-
 
 
 
