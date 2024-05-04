@@ -56,7 +56,7 @@ def blockwise_X_T_X(X, batch_size = None, memory_to_use = 10):
     return np.array(XX)        
             
 
-
+# Sometimes this takes hours for no apparent reason...
 def blockwise_A_X(A, X, batch_size = None, memory_to_use = 10):
     # Blockwise multiply where # A is very tall, and X is square-ish
 
@@ -181,7 +181,6 @@ def randomized_svd(A, n_pcs = 200):
 
 # Assumes input are of size (vol_size, n_vol)
 # This seems like a crazy amount of reshaping/transposing
-# ### REWRITE THIS TRASH
 @functools.partial(jax.jit, static_argnums = [1])    
 def idft3(x, vec_shape ):
     x = x.reshape([*vec_shape, x.shape[-1]]) 
@@ -191,7 +190,7 @@ def idft3(x, vec_shape ):
     x = x.reshape([-1, x.shape[-1]])
     return x
 
-@functools.partial(jax.jit, static_argnums = [1])    
+@functools.partial(jax.jit, static_argnums = [1])
 def dft3(x, vec_shape):
     x = x.reshape([*vec_shape, x.shape[-1]])
     # x = x.T
@@ -200,6 +199,7 @@ def dft3(x, vec_shape):
     x = x.reshape([-1, x.shape[-1]])
     return x
 
+# Could cut down by a factor of 2 here?
 def batch_idft3(x, vec_shape, batch_size):
     x_out = np.zeros_like(x) 
     n_tot = x.shape[-1]
@@ -211,13 +211,24 @@ def batch_idft3(x, vec_shape, batch_size):
     
     
 def batch_dft3(x, vec_shape, batch_size):
-    x_out = np.zeros_like(x, dtype = 'complex64') 
+    x_out = np.zeros_like(x, dtype = 'complex64')
     n_tot = x.shape[-1]
-    logging.info(f"batch_idft3 in {int(np.ceil(n_tot/batch_size))} blocks") 
+    logging.info(f"batch_dft3 in {int(np.ceil(n_tot/batch_size))} blocks")
     for k in range(0, int(np.ceil(n_tot/batch_size))):
         batch_st, batch_end = batch_st_end(k, batch_size, n_tot)
         x_out[:,batch_st:batch_end] = np.array(dft3(x[:,batch_st:batch_end], vec_shape = vec_shape))
     return x_out
+
+
+def batch_dft3_2(x, vec_shape, batch_size):
+    x_out = jnp.empty(x.shape, dtype = np.complex64, device =jax.devices("cpu")[0])
+    n_tot = x.shape[-1]
+    logging.info(f"batch_dft3 in {int(np.ceil(n_tot/batch_size))} blocks")
+    for k in range(0, int(np.ceil(n_tot/batch_size))):
+        batch_st, batch_end = batch_st_end(k, batch_size, n_tot)
+        x_out[:,batch_st:batch_end] = (dft3(x[:,batch_st:batch_end], vec_shape = vec_shape))
+    return x_out
+
 
 def broadcast_dot(x,y):
     return jax.lax.batch_matmul(jnp.conj(x[...,None,:]),y[...,:,None])[...,0,0]

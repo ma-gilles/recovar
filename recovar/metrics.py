@@ -256,7 +256,7 @@ def variance_of_zs(z, gt_image_assignment):
 
 
 def get_embedding_from_median(zs, image_assignment, n_classes = None):
-    n_classes = np.max(image_assignment) if n_classes is None else n_classes 
+    n_classes = np.max(image_assignment)+1 if n_classes is None else n_classes 
     # labels = np.unique(image_assignments)
     embeddings = np.zeros((n_classes, zs.shape[-1]))
     for lab in range(n_classes):

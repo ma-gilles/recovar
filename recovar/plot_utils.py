@@ -119,7 +119,7 @@ def plot_summary_t(pipeline_output,cryos, n_eigs = 3, u_key = "rescaled"):
             'size'   : 22}
     matplotlib.rc('font', **font)
 
-    n_plots = 2 + n_eigs
+    n_plots = 3 + n_eigs
     fig, axs = plt.subplots(n_plots, 6, figsize = ( 6*3, n_plots * 3))#, 6*3))
     global is_first
     is_first = True
@@ -168,9 +168,11 @@ def plot_summary_t(pipeline_output,cryos, n_eigs = 3, u_key = "rescaled"):
 
     plot_vol(pipeline_output.get('mean'), 0, from_ft = True, name = 'mean')
     plot_vol(pipeline_output.get('volume_mask'), 1, from_ft = False,name = 'mask')
+    plot_vol(pipeline_output.get('variance'), 2, from_ft = False,name = 'variance')
+
     u = pipeline_output.get('u_real')
     for k in range(n_eigs):
-        plot_vol(u[k], k+2, from_ft = False, cmap = 'seismic' ,name = f"PC {k}", symmetric = True)
+        plot_vol(u[k], k+3, from_ft = False, cmap = 'seismic' ,name = f"PC {k}", symmetric = True)
 
     plt.subplots_adjust(wspace=0, hspace=0)
 
