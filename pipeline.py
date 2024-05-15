@@ -375,7 +375,7 @@ def standard_recovar_pipeline(args):
         if args.mean_fn == 'old':
             means, mean_prior, _, _ = homogeneous.get_mean_conformation(cryos, 5*batch_size, noise_var_from_hf , valid_idx, disc_type, use_noise_level_prior = False, grad_n_iter = 5)
         elif args.mean_fn == 'triangular':
-            means, mean_prior, _, _  = homogeneous.get_mean_conformation_relion(cryos, 5*batch_size, noise_variance = noise_var_from_hf,  use_regularization = False)
+            means, mean_prior, _, _  = homogeneous.get_mean_conformation_relion(cryos, 2*batch_size, noise_variance = noise_var_from_hf,  use_regularization = False)
         elif args.mean_fn == 'triangular_reg':
             means, mean_prior, _, _  = homogeneous.get_mean_conformation_relion(cryos, 5*batch_size, noise_variance = noise_var_from_hf,  use_regularization = True)
         else:
