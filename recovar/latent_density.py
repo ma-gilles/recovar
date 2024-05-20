@@ -57,7 +57,7 @@ def make_latent_space_grid_from_bounds(latent_space_bounds, num_points):
 def compute_latent_space_density(zs, cov_zs, pca_dim_max = 4, num_points = 50, density_option = "kde", percentile=1):
     
     if density_option == "kde":
-        return compute_latent_space_density_kde(zs, cov_zs, pca_dim_max = pca_dim_max, num_points = num_points, percentile=percentile)
+        return compute_latent_space_density_kde(zs, pca_dim_max = pca_dim_max, num_points = num_points, percentile=percentile)
     elif density_option != "old":
         raise ValueError("Density option not recognized")
 
@@ -270,11 +270,10 @@ def compute_det_cov_xs(cov_xs):
 
 
 
-def compute_latent_space_density_kde(zs, cov_zs, pca_dim_max = 4, num_points = 50, gauss_kde = None, percentile=1):
+def compute_latent_space_density_kde(zs, pca_dim_max = 4, num_points = 50, gauss_kde = None, percentile=1):
     
     if zs.shape[1] != pca_dim_max:
         zs = zs[:,:pca_dim_max]
-        cov_zs = cov_zs[:,:pca_dim_max,:pca_dim_max]        
         
     gauss_kde = jax.scipy.stats.gaussian_kde(zs.T, 'silverman') if gauss_kde is None else gauss_kde
 

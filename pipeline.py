@@ -694,7 +694,8 @@ def standard_recovar_pipeline(args):
                 'covariance_cols': covariance_cols, 
                 'picked_frequencies' : picked_frequencies, 'volume_shape': volume_shape, 'voxel_size': cryos[0].voxel_size, 'pc_metric' : var_metrics['filt_var'],
                 'variance_est': variance_est, 'variance_fsc': variance_fsc, 'noise_p_variance_est': noise_p_variance_est, 'ub_noise_var_by_var_est': ub_noise_var_by_var_est, 'covariance_options': covariance_options,
-                'contrasts_for_second': contrasts_for_second}
+                'contrasts_for_second': contrasts_for_second, 
+                'version': '0.1'}
 
     output_folder = args.outdir + '/output/' 
     o.mkdir_safe(output_folder)
@@ -708,8 +709,13 @@ def standard_recovar_pipeline(args):
 
     utils.pickle_dump(covariance_cols, output_model_folder + 'covariance_cols.pkl')
     utils.pickle_dump(result, output_model_folder + 'params.pkl')
-    utils.pickle_dump({ 'zs': zs, 'cov_zs' : cov_zs , 'contrasts': est_contrasts, 'zs_cont' : zs_cont, 'cov_zs_cont' : cov_zs_cont, 'contrasts_cont' : est_contrasts_cont}, output_model_folder + 'embeddings.pkl')
 
+    embedding_dict = { 'zs': zs, 'cov_zs' : cov_zs , 'contrasts': est_contrasts, 'zs_cont' : zs_cont, 'cov_zs_cont' : cov_zs_cont, 'contrasts_cont' : est_contrasts_cont}
+    for entry in embedding_dict:
+        for key in embedding_dict[entry]:
+            embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(embedding_dict[entry][key], ind_split)
+
+    utils.pickle_dump(embedding_dict, output_model_folder + 'embeddings.pkl')
 
     logger.info(f"Dumped results to file:, {output_model_folder}results.pkl")
     

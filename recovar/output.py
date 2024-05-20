@@ -407,16 +407,27 @@ class PipelineOutput:
         self.embedding = None
         self.embedding_loaded = False
         self.result_path = result_path
+        self.version = self.params['version'] if 'version' in self.params else '0'
+
+    def load_embedding(self):
+        self.embedding = utils.pickle_load(self.result_path + 'model/' + 'embeddings' + '.pkl')
+        if self.version != '0':
+            halfsets = np.concatenate(self.get('halfsets'))
+            for entry in self.embedding:
+                for key in self.embedding[entry]:
+                    self.embedding[entry][key] = self.embedding[entry][key][halfsets]
+            self.embedding_loaded = True
+        return 
+
     def get(self,key):
         if key in self.params:
             return self.params[key]
+
         elif key in ['zs', 'cov_zs', 'contrasts', 'zs_cont', 'cov_zs_cont', 'est_contrasts_cont']:
-            if self.embedding_loaded:
-                return self.embedding[key]
-            else:
-                self.embedding = utils.pickle_load(self.result_path + 'model/' + 'embeddings' + '.pkl')
-                self.embedding_loaded = True
-                return self.embedding[key]
+            if not self.embedding_loaded:
+                self.load_embedding()
+            return self.embedding[key]
+        
         elif key == 'u' or key == 'u_real':
             n_pcs = 50
             u = np.zeros([n_pcs, *(self.params['volume_shape'])])
@@ -427,7 +438,6 @@ class PipelineOutput:
             else:
                 #return self.params['volume_shape'], 10).reshape(n_pcs, -1)
                 return ftu.get_dft3(u).reshape(n_pcs, -1)
-        
         elif key == 'mean':
             return ftu.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/' + 'mean' + '.mrc')).reshape(-1)
         
@@ -457,11 +467,14 @@ class PipelineOutput:
             return dataset.load_dataset_from_args(self.params['input_args'], lazy = False) 
         elif key == 'lazy_dataset':
             return dataset.load_dataset_from_args(self.params['input_args'], lazy = True) 
+        elif key == 'halfsets':
+            return utils.pickle_load(self.result_path + 'model/' + 'halfsets' + '.pkl')
         else:
             assert False, "key not found"
+
     def keys(self):
         keys = list(self.params.keys())
-        keys += ['zs', 'cov_zs', 'contrasts', 'u', 'u_real', 'mean', 'volume_mask', 'dilated_volume_mask', 'covariance_cols', 'dataset', 'lazy_dataset', 'variance', 'variance20', 'focus_mask', 'image_snr', 'mean_halfmaps']
+        keys += ['zs', 'cov_zs', 'contrasts', 'u', 'u_real', 'mean', 'volume_mask', 'dilated_volume_mask', 'covariance_cols', 'dataset', 'lazy_dataset', 'variance', 'variance20', 'focus_mask', 'image_snr', 'mean_halfmaps', 'halfsets']
         return keys
 
 
