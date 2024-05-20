@@ -73,10 +73,6 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
 
     batch_size = utils.get_embedding_batch_size(basis, cryos[0].image_size, contrast_grid, basis_size, gpu_memory) * 1
     logger.info(f"embedding batch size? {batch_size}")
-
-    print('CHANGE THIS BACK!!!!!!!!')
-    print('CHANGE THIS BACK!!!!!!!!')
-    print('CHANGE THIS BACK!!!!!!!!')
     batch_size = batch_size//10
     # mean = cryojax_map_coordinates.compute_spline_coefficients(mean.reshape(cryos[0].volume_shape))
 

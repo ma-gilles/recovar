@@ -520,3 +520,14 @@ def reorder_to_original_indexing(arr, cryos ):
     dataset_indices = np.concatenate([ cryo.dataset_indices for cryo in cryos])
     inv_argsort = np.argsort(dataset_indices)
     return arr[inv_argsort]
+
+def reorder_to_original_indexing_from_halfsets(arr, halfsets, num_images = None ):
+    if type(arr) is list:
+        arr = np.concatenate(arr)
+    dataset_indices = np.concatenate(halfsets)
+    num_images = (np.max(dataset_indices)+1) if num_images is None else num_images 
+    arr_reorder_shape = (num_images, *arr.shape[1:])
+    arr_reorder = np.ones(arr_reorder_shape) * np.nan # nan things which are not in halfsets. They have been filtered out.
+    arr_reorder[dataset_indices] = arr
+    return arr_reorder
+

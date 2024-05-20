@@ -1198,7 +1198,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
         distances = bins
         h_grid = 2 * bins 
         # h_grid = bins
-        logger.info("SHOULD THIS BE SQUARE ROOTED?")
+        # logger.info("SHOULD THIS BE SQUARE ROOTED?")
 
         np_to_use = np
         if heterogeneity_kernel == "triangle":

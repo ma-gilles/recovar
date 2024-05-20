@@ -86,7 +86,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     po = o.PipelineOutput(recovar_result_dir + '/')
 
     if zdim is None and len(po.get('zs')) > 1:
-        logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --z-dim=4")
+        logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --zdim=4")
         raise Exception("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --z-dim=4")
     
     elif zdim is None:
