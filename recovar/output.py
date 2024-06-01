@@ -183,6 +183,56 @@ def plot_trajectories_over_density(density, trajectories, latent_space_bounds,  
         for k2 in range(k1+1, traj_dim):
             plot_traj_along_axes([k1, k2])
 
+
+def plot_kmeans_over_density(density, centers, plot_folder = None, cmap = 'inferno' ):
+    # colors = ['k', 'cornflowerblue'] if colors is None else colors
+    
+    compute_density = False
+        
+    
+    if compute_density:
+        num_points = 200
+    else:
+        num_points= density.shape[0]
+    
+    # path_grid = z_to_grid(path_z[:,:low_dim])
+    # g_st = z_to_grid(z_st[:low_dim])
+    # g_end = z_to_grid(z_end[:low_dim])
+
+    def plot_traj_along_axes(axes, save_to_file= False ):
+        axes = tuple(axes)
+        fig, ax = plt.subplots(figsize = (8,8))
+        ax.set_frame_on(True)
+
+        axis_x = axes[0]
+        axis_y = axes[1]
+        if compute_density:
+            density_pl, _= ld.compute_latent_space_density_on_2_axes(zs, cov_zs, axes = axes, num_points = num_points)
+        else:
+            density_pl = sum_over_other(density, axes)
+            
+        if axis_x > axis_y:
+            density_pl = density_pl.T
+            
+        ax.imshow((density_pl.T), origin='lower', cmap = cmap, interpolation = 'bilinear')#[...,25,25])
+        # plt.colorbar()
+        
+        ax.scatter(centers[:,axis_x], centers[:,axis_y] )
+        for i in range(centers.shape[0]):
+            ax.annotate(str(i), centers[i, axes] + np.array([0.1, 0.1]), c = 'w')
+        
+
+        ax.axis("off")
+            
+        if plot_folder is not None:
+            save_filepath = plot_folder  + 'density_' + str(axes[0]) + str(axes[1]) + '.png'    
+            plt.savefig(save_filepath, bbox_inches='tight')
+            
+    traj_dim = centers.shape[-1]
+    for k1 in range(np.min([traj_dim,3])):
+        for k2 in range(k1+1, traj_dim):
+            plot_traj_along_axes([k1, k2])
+
 def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us_to_save = 50, us_to_var = [4,10,20], voxel_size = None):
      
     mkdir_safe(output_folder + 'volumes/')
@@ -245,6 +295,17 @@ def kmeans_analysis(output_folder, zs, n_clusters = 20):
         plot_axes(axes = [1,2])
     
     return centers, labels
+
+
+def move_to_one_folder(path_folder, n_vols ):
+    mkdir_safe(path_folder + '/all_volumes/')
+    output_folder = path_folder + '/all_volumes/'
+    import shutil
+    for k in range(n_vols):
+        input_file = path_folder + "/vol" + format(k, '03d') + "/ml_optimized_locres_filtered.mrc"
+        output_file = output_folder + "vol" + format(k, '03d') + ".mrc"
+        shutil.copyfile(input_file, output_file)
+    return
 
 
 def plot_umap(output_folder, zs, centers):
@@ -416,18 +477,21 @@ class PipelineOutput:
             for entry in self.embedding:
                 for key in self.embedding[entry]:
                     self.embedding[entry][key] = self.embedding[entry][key][halfsets]
-            self.embedding_loaded = True
+        self.embedding_loaded = True
         return 
 
     def get(self,key):
-        if key in self.params:
+        if (key in self.params) and (key != 'covariance_cols'):
             return self.params[key]
 
         elif key in ['zs', 'cov_zs', 'contrasts', 'zs_cont', 'cov_zs_cont', 'est_contrasts_cont']:
             if not self.embedding_loaded:
                 self.load_embedding()
             return self.embedding[key]
-        
+    
+        elif key in ['unsorted_embedding']:
+            return utils.pickle_load(self.result_path + 'model/' + 'embeddings' + '.pkl')
+
         elif key == 'u' or key == 'u_real':
             n_pcs = 50
             u = np.zeros([n_pcs, *(self.params['volume_shape'])])
@@ -462,7 +526,7 @@ class PipelineOutput:
         elif key == 'dilated_volume_mask':
             return utils.load_mrc(self.result_path + 'output/volumes/' + 'dilated_mask' + '.mrc')
         elif key == 'covariance_cols':
-            return utils.load_pickle(self.result_path + 'model/' + 'covariance_cols' + '.pkl')
+            return utils.pickle_load(self.result_path + 'model/' + 'covariance_cols' + '.pkl')
         elif key == 'dataset':
             return dataset.load_dataset_from_args(self.params['input_args'], lazy = False) 
         elif key == 'lazy_dataset':
@@ -516,6 +580,9 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
 
     latent_space_bounds = ld.compute_latent_space_bounds(zs) if latent_space_bounds is None else latent_space_bounds
 
+    # latent_space_bounds = ld.compute_latent_space_bounds(zs) if latent_space_bounds is None else latent_space_bounds
+
+
     st_time = time.time()
     gt_volumes = None    
     basis_size = zs.shape[1]
@@ -557,15 +624,21 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
     
     if use_input_density:
         grid_to_z, z_to_grid = ld.get_grid_z_mappings(latent_space_bounds, num_points = density.shape[0])
+
         path_grid = z_to_grid(path_z)
+        path_grid_subs = z_to_grid(path_subsampled)
+
         import jax.scipy
         density_on_path = jax.scipy.ndimage.map_coordinates(density, path_grid.T, order=1)
+        density_on_path_subs = jax.scipy.ndimage.map_coordinates(density, path_grid_subs.T, order=1)
 
         # density_on_path = ld.compute_latent_space_density_at_pts(path_z, zs, cov_zs)
     else:
-        density_on_path = ld.compute_latent_space_density_at_pts(path_z, zs, cov_zs)
+        logger.warning("density on path not computed")
+        density_on_path = ld.compute_latent_space_density_at_pts(path_z, zs, cov_zs) + np.nan
+        density_on_path_subs = ld.compute_latent_space_density_at_pts(path_subsampled, zs, cov_zs) + np.nan
 
-    densities = { 'density' :  density_on_path.tolist(), 'path' : path_z.tolist(), 'path_subsampled' : path_subsampled.tolist()} 
+    densities = { 'density' :  density_on_path.tolist(), 'path' : path_z.tolist(), 'density_subsampled': density_on_path_subs.tolist(), 'path_subsampled' : path_subsampled.tolist(), } 
     json.dump(densities, open(output_folder + '/path.json', 'w'))
 
     if plot_llh:

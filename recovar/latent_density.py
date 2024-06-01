@@ -127,7 +127,7 @@ def compute_latent_space_bounds(zs, percentile = 1):
     return np.array(pca_bounds)
 
 
-def compute_latent_space_density_on_curve(zs, cov_zs, path,  latent_space_bounds, pca_dim = None, num_points = 50, density_option = "old", gauss_kde = None, normalize = True):
+def compute_latent_space_density_on_curve(zs, cov_zs, path,  latent_space_bounds, pca_dim = None, num_points = 50, density_option = "kde", gauss_kde = None, normalize = True):
 
     if density_option == "kde" and gauss_kde is None:
         utils.logger.info("Computing Gaussian KDE with SIlverman bandwidth")

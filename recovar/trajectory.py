@@ -252,7 +252,7 @@ def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, dens
     current_path_z = resample_at_uniform_pts(current_path_z, n_vols_along_path = current_path_z.shape[0])#int(current_path_z.shape[0] * 1.2))
     
     for dim in range(low_dim, max_dim):
-        print("here?")
+        # print("here?")
         num_points = 200
         grid_to_z, z_to_grid = latent_density.get_grid_z_mappings(latent_space_bounds, num_points)
         g_st = z_to_grid(z_st, to_int = True) 

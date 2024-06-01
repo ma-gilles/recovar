@@ -262,3 +262,7 @@ def get_embedding_from_median(zs, image_assignment, n_classes = None):
     for lab in range(n_classes):
         embeddings[lab] = np.median(zs[image_assignment == lab], axis=0)
     return embeddings
+
+
+def get_gt_embedding_from_projection(gt_volumes, u, mean):
+    return (np.conj(u) @ (gt_volumes - mean).T).T.real

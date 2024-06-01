@@ -315,12 +315,13 @@ def post_process_from_filter_v2(Ft_ctf, F_ty, og_volume_shape, volume_upsampling
 
     myreliontest = padding.unpad_volume_spatial_domain(myreliontest, (upsampled_volume_shape[0] - og_volume_shape[0]) )
     
+
     # Soft Spherical mask
     if use_spherical_mask:
         myreliontest, mask2 = mask.soft_mask_outside_map(myreliontest, cosine_width = 3)
     
     if volume_mask is not None:
-        logger.warning("should probably check whether this is correct") 
+        logger.warning("Applying mask in post_proces_from_filter_v2") 
         myreliontest = myreliontest * volume_mask
 
     # Correct gridding effect
@@ -344,6 +345,7 @@ def post_process_from_filter_v2(Ft_ctf, F_ty, og_volume_shape, volume_upsampling
         # plt.colorbar()
         # plt.show()
     myreliontest = ftu.get_dft3(myreliontest.reshape(og_volume_shape))
+
 
     return myreliontest.astype(F_ty.dtype)
 

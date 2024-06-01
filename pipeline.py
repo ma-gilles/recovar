@@ -81,7 +81,6 @@ def add_args(parser: argparse.ArgumentParser):
         action="store_true",
     )
 
-
     group = parser.add_argument_group("Dataset loading")
     group.add_argument(
         "--ind",
@@ -349,8 +348,8 @@ def standard_recovar_pipeline(args):
     # embedding.set_contrasts_in_cryos(cryos, contrasts)
     # cryos_old = pipeline_output2.get('dataset')
     # import pdb; pdb.set_trace()
+
     
-    n_repeats = 1
     if args.do_over_with_contrast:
         n_repeats = 2
     else:
@@ -548,15 +547,10 @@ def standard_recovar_pipeline(args):
         # test_covar_options = False
         if args.test_covar_options:
             tests = [ 
-                {},
                 {
-                "mask_images_in_proj": False,
-                "mask_images_in_H_B": False,
+                "downsample_from_fsc": True,
                 },
-                # {'column_sampling_scheme': 'high_snr_from_var_est', 'sampling_avoid_in_radius': 3 },
-                # {'column_sampling_scheme': 'high_snr_from_var_est','sampling_n_cols':50,  'sampling_avoid_in_radius': 3, 'randomized_sketch_size' : 100, 'n_pcs_to_compute' : 100},
-                # {'column_sampling_scheme': 'high_snr_from_var_est', 'sampling_avoid_in_radius': 1 },
-                # {'column_sampling_scheme': 'high_snr_from_var_est', 'sampling_avoid_in_radius': 4 },
+                {"downsample_from_fsc": False,}
                 ]
             idx = 0
             for test in tests:
@@ -613,7 +607,7 @@ def standard_recovar_pipeline(args):
         zs = {}; cov_zs = {}; est_contrasts = {}        
         for zdim in options['zs_dim_to_test']:
             z_time = time.time()
-            zs[zdim], cov_zs[zdim], est_contrasts[zdim] = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled'] , zdim,
+            zs[zdim], cov_zs[zdim], est_contrasts[zdim], _ = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled'] , zdim,
                                                                     image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
                                                                     contrast_grid = None, contrast_option = options['contrast'],
                                                                     ignore_zero_frequency = options['ignore_zero_frequency'] )
@@ -624,7 +618,7 @@ def standard_recovar_pipeline(args):
     for zdim in options['zs_dim_to_test']:
         z_time = time.time()
         key = f"{zdim}_noreg"
-        zs[key], cov_zs[key], est_contrasts[key] = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled']* 0 + np.inf , zdim,
+        zs[key], cov_zs[key], est_contrasts[key], _ = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled']* 0 + np.inf , zdim,
                                                                 image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
                                                                 contrast_grid = None, contrast_option = options['contrast'],
                                                                 ignore_zero_frequency = options['ignore_zero_frequency'] )
@@ -691,7 +685,7 @@ def standard_recovar_pipeline(args):
                 'noise_var_from_het_residual' : np.array(noise_var_from_het_residual),
                 'noise_var_used' : np.array(noise_var_used),
                 'column_fscs': column_fscs, 
-                'covariance_cols': covariance_cols, 
+                'covariance_cols': None, 
                 'picked_frequencies' : picked_frequencies, 'volume_shape': volume_shape, 'voxel_size': cryos[0].voxel_size, 'pc_metric' : var_metrics['filt_var'],
                 'variance_est': variance_est, 'variance_fsc': variance_fsc, 'noise_p_variance_est': noise_p_variance_est, 'ub_noise_var_by_var_est': ub_noise_var_by_var_est, 'covariance_options': covariance_options,
                 'contrasts_for_second': contrasts_for_second, 

@@ -240,34 +240,55 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
                                noise_model = "radial1", put_extra_particles = True, percent_outliers = 0.1, 
                                volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, disc_type = 'linear_interp' ):
     
-    volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name )
+    volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize = False )
+    scale_vol = 1 / np.mean(np.linalg.norm(volumes, axis =(-1)))
+    volumes *= scale_vol
+
     vol_shape = utils.guess_vol_shape_from_vol_size(volumes.shape[-1])
     # import matplotlib.pyplot as plt
     # plt.imshow(ftu.get_idft3(volumes[0].reshape(vol_shape)).real.sum(axis=0))
     # Maybe normalize volumes?
     # volumes /= np.linalg.norm(volumes, axis =(-1))
     volume_distribution = np.ones(volumes.shape[0]) / volumes.shape[0] if volume_distribution is None else volume_distribution
+
     outlier_volume = ftu.get_dft3(utils.load_mrc(outlier_file_input)).reshape(-1) if outlier_file_input is not None else None
 
     dataset_param_generator = get_pose_ctf_generator(dataset_params_option)
     noise_variance = get_noise_model(noise_model, grid_size) / 50000 * noise_level
 
     ## TODO
-    ## Scale noise and volumes so that images have approximately std =1?
-    # noise_image = noise.make_radial_noise(noise_variance_mod, experiment_dataset.image_shape).reshape(experiment_dataset.image_shape)
+    # Scale noise and volumes so that images have approximately std =1?
+    # noise_image = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape).reshape(experiment_dataset.image_shape)
     # key, subkey = jax.random.split(key)
     # noise_batch = make_noise_batch(subkey, noise_image, images_batch.shape)
-
 
     # mrcf = mrcfile.new(output_folder + '/particles.'+str(grid_size)+'.mrcs',overwrite=True)
     mrc_file = None# mrcfile.new_mmap( output_folder + '/particles.'+str(grid_size)+'.mrcs', shape=(n_images, grid_size, grid_size), mrc_mode=2, overwrite = True)
 
-    # import pdb; pdb.set_trace()
+    rescale_noise = True
+    if rescale_noise:
+        main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size = generate_simulated_dataset(volumes, voxel_size, volume_distribution, 10, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file )
+        norm_image_square = np.mean(main_image_stack**2)
+        norm_image = (norm_image_square)
+
+        # print(norm_image)
+        noise_variance = noise_variance / (norm_image)
+        volumes = volumes / np.sqrt(norm_image)
+        scale_vol =  scale_vol / np.sqrt(norm_image)
+
+        # main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size = generate_simulated_dataset(volumes, voxel_size, volume_distribution, 10, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file )
+        # norm_image = np.mean(np.linalg.norm(main_image_stack, axis = (-1,-2)))
+        # Scale noise and volumes so that images have approximately std =1?
+
+    # First make some dataset to figure out a good scaling?
     main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file )
+
+
     simulation_info['volumes_path_root'] = volumes_path_root
     simulation_info['grid_size'] = grid_size
     simulation_info['trailing_zero_format_in_vol_name'] = trailing_zero_format_in_vol_name
     simulation_info['disc_type'] = disc_type
+    simulation_info['scale_vol'] = scale_vol
 
     particles_file = output_folder + '/particles.'+str(grid_size)+'.mrcs'
 
@@ -283,7 +304,7 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
 
     return main_image_stack, simulation_info
 
-def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name = False):
+def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name = False, normalize = True):
 
     if trailing_zero_format_in_vol_name:
         def make_file(k):
@@ -303,7 +324,8 @@ def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_
         # import pdb; pdb.set_trace()
         idx+=1
     volumes, voxel_size = generate_volumes_from_mrcs(files, grid_size, padding= 0 )
-    volumes /= np.mean(np.linalg.norm(volumes, axis =(-1)))
+    if normalize:
+        volumes /= np.mean(np.linalg.norm(volumes, axis =(-1)))
     return volumes
 
 

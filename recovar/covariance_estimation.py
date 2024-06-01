@@ -36,6 +36,7 @@ def get_default_covariance_computation_options():
         "disc_type_u": 'linear_interp',
         "mask_images_in_proj": True,
         "mask_images_in_H_B": True,
+        "downsample_from_fsc" : False,
     }
     # print('CHANGE THIS BACK !! IN COVAR OPTIONS')
     # print('CHANGE THIS BACK !! IN COVAR OPTIONS')
@@ -458,7 +459,7 @@ def compute_covariance_regularization_relion_style(Hs, Bs, mean_prior, picked_fr
         init_regularization_of_column_k(np.array(indices)), 
         options['substract_shell_mean'], 
         volume_shape, options['left_kernel'], 
-        options['use_spherical_mask'],  options['grid_correct'],  volume_mask, options["prior_n_iterations"])
+        options['use_spherical_mask'],  options['grid_correct'],  volume_mask, options["prior_n_iterations"], options["downsample_from_fsc"])
 
         cpus = jax.devices("cpu")
         priors = jax.device_put(priors, cpus[0])

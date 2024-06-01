@@ -82,7 +82,9 @@ def get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean = False, frequenc
     bot1 = average_over_shells(jnp.abs(vol1)**2, volume_shape, frequency_shift = frequency_shift)
     bot2 = average_over_shells(jnp.abs(vol2)**2, volume_shape, frequency_shift = frequency_shift)    
     bot = jnp.sqrt(bot1 * bot2)
-    fsc = jnp.where(bot  > constants.EPSILON , top_avg / bot, constants.EPSILON)
+    fsc = top_avg / bot
+    # fsc = jnp.where(bot  > constants.EPSILON , top_avg / bot, constants.EPSILON)
+    fsc = jnp.where(jnp.isnan(fsc) + jnp.isinf(fsc), 0, fsc)
     fsc = fsc.at[0].set(fsc[1]) # Always set this 1st shell?
     return fsc
 
@@ -216,11 +218,13 @@ def downsample_lhs(lhs, volume_shape, upsampling_factor = 1):
 def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequency_shift , substract_shell_mean = False, upsampling_factor = 1 ):
     epsilon = constants.FSC_ZERO_THRESHOLD
     # FSC top:
-    fsc = get_fsc_gpu(image0, image1, volume_shape, substract_shell_mean, frequency_shift)
-    fsc = jnp.where(fsc > epsilon , fsc, epsilon )
+    fsc_raw = get_fsc_gpu(image0, image1, volume_shape, substract_shell_mean, frequency_shift)
+
+    fsc = jnp.where(fsc_raw > epsilon , fsc_raw, epsilon )
     fsc = jnp.where(fsc < 1 - epsilon, fsc, 1 - epsilon )
         
     # SNR = jnp.where(fsc < 1 - epsilon, fsc / ( 1 - fsc), jnp.inf)
+
     SNR = fsc / (1 - fsc)
     
     # Gotta somehow downsample lhs by a factor of 2
@@ -234,16 +238,16 @@ def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequenc
         top = lhs**2 / (lhs + 1/prior)**2
         bot = lhs / (lhs + 1/prior)**2
 
-    sum_top = average_over_shells(top,  volume_shape, frequency_shift)    
+    sum_top = average_over_shells(top,  volume_shape, frequency_shift)
     sum_bot = average_over_shells(bot,  volume_shape, frequency_shift)
     
-    prior_avg = jnp.where( sum_top > 0 , SNR * sum_bot / sum_top , constants.ROOT_EPSILON ).real
+    prior_avg = jnp.where( sum_top > 0 , SNR * sum_bot / sum_top , constants.EPSILON ).real
     
     # Put back in array
     radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1)
     prior = prior_avg[radial_distances]
 
-    return prior, fsc, prior_avg
+    return prior, fsc_raw, prior_avg
 
 
 
@@ -280,8 +284,8 @@ def prior_iteration(H0, H1, B0, B1, frequency_shift, init_regularization, substr
     return prior, fsc
 
 from recovar import relion_functions
-@functools.partial(jax.jit, static_argnums = [6,7,8,9,10, 12])    
-def prior_iteration_relion_style(H0, H1, B0, B1, frequency_shift, init_regularization, substract_shell_mean, volume_shape, kernel = 'triangular', use_spherical_mask = True, grid_correct = True, volume_mask = None, prior_iterations = 3):
+@functools.partial(jax.jit, static_argnums = [6,7,8,9,10, 12,13])    
+def prior_iteration_relion_style(H0, H1, B0, B1, frequency_shift, init_regularization, substract_shell_mean, volume_shape, kernel = 'triangular', use_spherical_mask = True, grid_correct = True, volume_mask = None, prior_iterations = 3, downsample_from_fsc_flag = False):
     # assert substract_shell_mean == False
     # assert jnp.linalg.norm(frequency_shift) < 1e-8
 
@@ -311,13 +315,32 @@ def prior_iteration_relion_style(H0, H1, B0, B1, frequency_shift, init_regulariz
         raise ValueError("Prior iterations must be a non-negative integer or -1 (no reg)")
     
     ## NOTE THIS ONE IS NEVER MASKED. IT GETS MASKED LATER. PERHAPS SHOULD BE MASKED HERE
-    cov_col0 = relion_functions.post_process_from_filter_v2(H0 + H1, B0 + B1, volume_shape, volume_upsampling_factor = 1, tau = prior, kernel = kernel, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1, volume_mask = volume_mask )
+    # downsample_from_fsc(array, fsc, volume_shape)
+
+    if downsample_from_fsc_flag:
+        B = downsample_from_fsc(B0 + B1, fsc, volume_shape)
+    else:
+        B = B0 + B1
+
+    cov_col0 = relion_functions.post_process_from_filter_v2(H0 + H1, B, volume_shape, volume_upsampling_factor = 1, tau = prior, kernel = kernel, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1, volume_mask = volume_mask )
 
     return cov_col0.reshape(-1), prior, fsc
 
+def downsample_from_fsc(array, fsc, volume_shape):
+    from recovar import locres
+    fsc_above_threshold = fsc >= 0.0001 #* #0.001
+    # Sometimes the FSC dips at low resolution. We want to avoid that case.
+    fsc_above_threshold = fsc_above_threshold.at[:16].set(1)
+    ires_max = locres.find_first_zero_in_bool(fsc_above_threshold)
+
+    downsample_ar = jnp.where( jnp.arange(fsc.size) < ires_max, fsc, 0)
+    distances = ftu.get_grid_of_radial_distances(volume_shape)
+    fsc_mask = downsample_ar[distances]
+    return array * fsc_mask.reshape(-1)
+
 
 prior_iteration_batch = jax.vmap(prior_iteration, in_axes = (0,0,0,0, 0, 0, None, None, None) )
-prior_iteration_relion_style_batch = jax.vmap(prior_iteration_relion_style, in_axes = (0,0,0,0, 0, 0, None, None, None, None, None, None, None))
+prior_iteration_relion_style_batch = jax.vmap(prior_iteration_relion_style, in_axes = (0,0,0,0, 0, 0, None, None, None, None, None, None, None, None))
 
 
 # def compute_masked_fscs(H0, B0, H1, B1, prior, volume_shape, volume_mask):
