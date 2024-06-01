@@ -43,6 +43,12 @@ def add_args(parser: argparse.ArgumentParser):
         "--zdim1",  action="store_true", help="Whether dimension 1 is used. This is an annoying corner case for np.loadtxt..."
     )
 
+    parser.add_argument(
+        "--no-z-regularization",  action="store_true", dest="no_z_regularization", help="Whether to use z regularization"
+    )
+
+
+
     return parser
 
 
@@ -50,7 +56,7 @@ def compute_state(args):
 
     po = o.PipelineOutput(args.result_dir + '/')
     target_zs = np.loadtxt(args.latent_points)
-    output_folder = args.outdir
+    output_folder = args.outdir + '/'
 
     if args.zdim1:
         zdim =1
@@ -64,17 +70,19 @@ def compute_state(args):
     if zdim not in po.get('zs'):
         logger.error("z-dim not found in results. Options are:" + ','.join(str(e) for e in po.get('zs').keys()))
 
+    zdim_key = f"{zdim}_noreg" if args.no_z_regularization else zdim
+
     cryos = po.get('dataset')
-    embedding.set_contrasts_in_cryos(cryos, po.get('contrasts')[zdim])
-    zs = po.get('zs')[zdim]
-    cov_zs = po.get('cov_zs')[zdim]
+    embedding.set_contrasts_in_cryos(cryos, po.get('contrasts')[zdim_key])
+    zs = po.get('zs')[zdim_key]
+    cov_zs = po.get('cov_zs')[zdim_key]
     noise_variance = po.get('noise_var_used')
     n_bins = args.n_bins
     o.mkdir_safe(output_folder)    
     logger.addHandler(logging.FileHandler(f"{output_folder}/run.log"))
     logger.info(args)
     o.compute_and_save_reweighted(cryos, target_zs, zs, cov_zs, noise_variance, output_folder, args.Bfactor, n_bins)
-
+    o.move_to_one_folder(output_folder, target_zs.shape[0])
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)

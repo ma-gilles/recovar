@@ -54,7 +54,7 @@ def compute_per_image_embedding_from_result(result, zdim, gpu_memory = None):
 
 
 
-def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf):
+def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False):
 
     assert u.shape[0] == cryos[0].volume_size, "input u should be volume_size x basis_size"
     st_time = time.time()    
@@ -94,12 +94,12 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, cryos[0].volume_shape, gpu_memory= None)
 
 
-    zs = [None]*2; cov_zs = [None]*2; est_contrasts = [None]*2
+    zs = [None]*2; cov_zs = [None]*2; est_contrasts = [None]*2; bias = [None]*2
     for cryo_idx,cryo in enumerate(cryos):
-        zs[cryo_idx], cov_zs[cryo_idx], est_contrasts[cryo_idx] = get_coords_in_basis_and_contrast_3(
+        zs[cryo_idx], cov_zs[cryo_idx], est_contrasts[cryo_idx], bias[cryo_idx] = get_coords_in_basis_and_contrast_3(
             cryo, mean, basis, eigenvalues[:basis.shape[0]], volume_mask,
             jnp.array(cov_noise) , contrast_grid, batch_size, disc_type, 
-            parallel_analysis = parallel_analysis, compute_covariances = compute_covariances, contrast_mean = contrast_mean, contrast_variance = contrast_variance )
+            parallel_analysis = parallel_analysis, compute_covariances = compute_covariances, contrast_mean = contrast_mean, contrast_variance = contrast_variance , compute_bias = compute_bias)
 
     
     zs = np.concatenate(zs, axis = 0)
@@ -112,14 +112,19 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
         if to_real:
             cov_zs = cov_zs.real
 
+    if compute_bias:
+        bias = np.concatenate(bias, axis = 0)
+        if to_real:
+            bias = bias.real
+
     if to_real:
         zs = zs.real
     
-    return zs, cov_zs, est_contrasts
+    return zs, cov_zs, est_contrasts, bias
     
 
 # @functools.partial(jax.jit, static_argnums = [5])    
-def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf):
+def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False):
     
     basis = basis.astype(experiment_dataset.dtype)
         
@@ -139,12 +144,13 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
     xs = np.zeros((experiment_dataset.n_images, basis_size), dtype = basis.dtype)
     estimated_contrasts = np.zeros(experiment_dataset.n_images, dtype = basis.dtype).real
     image_latent_covariances = np.zeros((experiment_dataset.n_images, basis_size, basis_size), dtype = basis.dtype) if compute_covariances else None
-    
+    image_latent_bias = np.zeros((experiment_dataset.n_images, basis_size, basis_size), dtype = basis.dtype) if compute_bias else None
+
 
     batch_idx =0 
     for batch, batch_image_ind in data_generator:
         
-        xs_single, contrast_single, cov_batch = compute_single_batch_coords_split(batch, mean_estimate, volume_mask, 
+        xs_single, contrast_single, cov_batch, bias = compute_single_batch_coords_split(batch, mean_estimate, volume_mask, 
                                                                         basis, eigenvalues,
                                                                         experiment_dataset.CTF_params[batch_image_ind],
                                                                         experiment_dataset.rotation_matrices[batch_image_ind],
@@ -160,18 +166,22 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
                                                                         compute_covariances, np.array(noise_variance),
                                                                         experiment_dataset.image_stack.process_images,
                                                                        experiment_dataset.CTF_fun, contrast_grid,
-                                                                       contrast_mean, contrast_variance)
+                                                                       contrast_mean, contrast_variance, compute_bias)
         
         xs[batch_image_ind] = xs_single
         estimated_contrasts[batch_image_ind] = contrast_single
         if compute_covariances:
             image_latent_covariances[np.array(batch_image_ind)] = cov_batch
-            
+
+        if compute_bias:
+            image_latent_bias[np.array(batch_image_ind)] = bias
+
         if (batch_idx % 50 == 49) and (batch_idx > 0):
             compute_single_batch_coords_split._clear_cache() 
         
+
         batch_idx +=1
-    return xs, image_latent_covariances, estimated_contrasts
+    return xs, image_latent_covariances, estimated_contrasts, image_latent_bias
 
 
 
@@ -250,8 +260,8 @@ def summed_outer_products(AU_t_images):
 batched_summed_outer_products  = jax.vmap(summed_outer_products)
 
 
-@functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19])    
-def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid, contrast_mean = 1, contrast_variance = np.inf):
+@functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19, 23])    
+def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False):
 
     # This should scale as O( batch_size * (n^2 * basis_size + n^3 + basis_size**2))
     AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq = compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid)
@@ -278,18 +288,28 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
 
     # covariance
     if compute_covariances:
-        cov_batch = (contrast_single**2 )[:,None,None] * AU_t_AU  + jnp.diag(1/eigenvalues)
+        # cov_batch = (contrast_single**2 )[:,None,None] * AU_t_AU  + jnp.diag(1/eigenvalues)
         logger.warning("FIX THIS COV BATCH STUFF")
         gram = (contrast_single**2 )[:,None,None] * AU_t_AU
-        cov_batch = cov_batch @ jnp.linalg.pinv(gram, rcond=1e-4, hermitian=True) @ cov_batch
+        cov_batch = gram + jnp.diag(1/eigenvalues)
+        cov_batch = cov_batch @ jnp.linalg.pinv(gram, rcond=1e-6, hermitian=True) @ cov_batch
         # cov_batch = cov_batch @ jnp.linalg.pinv(gram, hermitian=True) @ cov_batch
         # min_eig = jnp.min(jnp.linalg.eigvalsh(cov_batch))
         # cov_batch = jnp.where(min_eig == np.inf, cov_batch2, cov_batch)
 
     else:
         cov_batch = None
+
+    if compute_bias:
+        gram = (contrast_single**2 )[:,None,None] * AU_t_AU
+        cov_batch = gram + jnp.diag(1/eigenvalues)
+        bias = jnp.linalg.pinv(cov_batch, rcond=1e-6, hermitian=True) @ gram
+    else:
+        bias = None
+        
+
     # import pdb; pdb.set_trace()
-    return xs_single, contrast_single, cov_batch
+    return xs_single, contrast_single, cov_batch, bias
 
 
 

@@ -435,7 +435,7 @@ def get_split_indices(particles_file, ind_file = None):
         else:
             # Get indf
             with open( ind_file,'rb') as f:
-                indices = pickle.load(f)  
+                indices = np.asarray(pickle.load(f))
   
     split_indices = split_index_list(indices)
     return split_indices

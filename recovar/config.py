@@ -24,11 +24,10 @@ logging.config.dictConfig(
 
 logger = logging.getLogger(__name__)
 import os
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"  # add this
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".90"
 
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]="false"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]=".75"
+# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]=".75"
 # os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"]="platform"
 
 import tensorflow as tf

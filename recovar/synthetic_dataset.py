@@ -23,7 +23,13 @@ def load_heterogeneous_reconstruction(simulation_info_file, volumes_path_root = 
     volumes_path_root = simulation_info['volumes_path_root'] if volumes_path_root is None else volumes_path_root
 
     if load_volumes:
-        volumes = simulator.load_volumes_from_folder(volumes_path_root, simulation_info['grid_size'] , simulation_info['trailing_zero_format_in_vol_name'] )
+        # Probably should delete this at some point
+        if 'scale_vol' in simulation_info:
+            volumes = simulator.load_volumes_from_folder(volumes_path_root, simulation_info['grid_size'] , simulation_info['trailing_zero_format_in_vol_name'], normalize=False )
+            volumes = volumes * simulation_info['scale_vol']
+        else:
+            volumes = simulator.load_volumes_from_folder(volumes_path_root, simulation_info['grid_size'] , simulation_info['trailing_zero_format_in_vol_name'], normalize=True)
+
     else:
         volumes
 
