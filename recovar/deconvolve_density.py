@@ -94,7 +94,9 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
 
     density = jnp.array(density)
     kernel_on_grid = jnp.array(kernel_on_grid)
-
+    # from recovar import utils
+    # utils.pickle_dump(kernel_on_grid, '/home/mg6942/kernel_on_grid.pkl')
+    # import pdb; pdb.set_trace()
     def forward_model_grid(fun_on_grid):
         convolve_fun = convolve_with_pad_nd(fun_on_grid, kernel_on_grid)
         return convolve_fun
@@ -117,7 +119,7 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
 
         dx/= jnp.mean(dx)
 
-        return jnp.mean((residuals * 1e4) ** 2)  + alpha * jnp.sum(jnp.array(jnp.gradient(fun_on_grid, *dx))**2 )
+        return 1e8 * (jnp.mean((residuals * 1e0) ** 2)  +  alpha * jnp.mean(jnp.array(jnp.gradient(fun_on_grid, *dx))**2 ))
 
     cost = np.zeros_like(alphas)
     reg_cost = np.zeros_like(alphas)
@@ -152,9 +154,20 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
 
     return lbfgsb_sols, cost, reg_cost, alphas
 
-def plot_density(lbfgsb_sols, density, alphas):
+def plot_density(lbfgsb_sols, density, alphas, function = None):
     # plt.axis('square');
     from recovar.output import sum_over_other
+
+    def half_slice_other(density, axes):
+        axes = [i for i in range(density.ndim) if i not in axes]
+        axes = np.sort(axes)
+        for i in range(len(axes)-1, -1, -1):
+            density = np.take(density, density.shape[0]//2, axis = axes[i])
+        return density
+    
+    function = half_slice_other if function == 'slice' else function
+    function = sum_over_other if function is None else function
+
 
     plt.rcParams.update({
         # "text.usetex": True,
@@ -168,6 +181,67 @@ def plot_density(lbfgsb_sols, density, alphas):
 
     n_plots = len(lbfgsb_sols)+1
     fig, axs = plt.subplots( n_plots, density.ndim, figsize = ( density.ndim *5, n_plots*3 ))#, 6*3))
+    global is_first
+    is_first = True
+
+    def plot_dens(density, title, n_plot):
+        density = np.asarray(density)
+        # if is_first:            
+        #     axs[n_plot,k].set_title(f"projection {k}")
+
+        if density.ndim ==2:
+            # plt.figure()
+            # plt.title(title)
+            axs[n_plot,k].imshow(density)#.sum(axis=-1))
+            # plt.show()
+        else:
+
+            for k in range(1, density.ndim):
+                if k ==1:
+                    axs[n_plot,k-1].set_ylabel(title)
+                axs[n_plot,k-1].set_xticklabels([])
+                axs[n_plot,k-1].set_yticklabels([])
+
+                to_plot = function(density, [0,k])
+                # plt.figure()
+                # plt.title(title)
+                axs[n_plot,k-1].imshow(to_plot)#.sum(axis=-1))
+                # plt.show()
+            to_plot = function(density, [0,2])
+            # plt.figure()
+            # plt.title(title)
+            axs[n_plot,k].imshow(to_plot)#.sum(axis=-1))
+            axs[n_plot,k].set_xticklabels([])
+            axs[n_plot,k].set_yticklabels([])
+
+            # plt.show()
+
+    # axs[n_plot,0].set_ylabel(name)
+
+    plot_dens(density, 'raw density', 0)
+
+    for alpha_idx, alpha in enumerate(alphas):
+        lbfgsb_sol = lbfgsb_sols[alpha_idx]
+        plot_dens(lbfgsb_sol, r'$\alpha$'+f'[{alpha_idx}]={alpha:.1e}', alpha_idx+1)
+    plt.subplots_adjust(wspace=0, hspace=0)
+
+
+def plot_density_centers(density, centers):
+    # plt.axis('square');
+    from recovar.output import sum_over_other
+
+    plt.rcParams.update({
+        # "text.usetex": True,
+        # "font.family": "serif",
+        # "font.sans-serif": "Helvetica",
+    })
+    font = {'weight' : 'bold',
+            'size'   : 22}
+    import matplotlib
+    matplotlib.rc('font', **font)
+
+    n_plots = 1
+    fig, axs = plt.subplots( n_plots, density.ndim, figsize = ( density.ndim *10, n_plots*6 ))#, 6*3))
     global is_first
     is_first = True
 
@@ -193,149 +267,26 @@ def plot_density(lbfgsb_sols, density, alphas):
                 # plt.figure()
                 # plt.title(title)
                 axs[n_plot,k-1].imshow(to_plot)#.sum(axis=-1))
+                axs[n_plot,k-1].scatter(centers[:,0], centers[:,k] )
+                for i in range(centers.shape[0]):
+                    axs[n_plot,k-1].annotate(str(i), centers[i, [0,k]] + np.array([0.1, 0.1]))
+
                 # plt.show()
             to_plot = sum_over_other(density, [0,2])
             # plt.figure()
             # plt.title(title)
             axs[n_plot,k].imshow(to_plot)#.sum(axis=-1))
+            axs[n_plot,k].scatter(centers[:,0], centers[:,2] )
+            for i in range(centers.shape[0]):
+                axs[n_plot,k].annotate(str(i), centers[i, [0,2]] + np.array([0.1, 0.1]))
+
             axs[n_plot,k].set_xticklabels([])
             axs[n_plot,k].set_yticklabels([])
-
             # plt.show()
-
     # axs[n_plot,0].set_ylabel(name)
 
     plot_dens(density, 'raw density', 0)
-
-    for alpha_idx, alpha in enumerate(alphas):
-        lbfgsb_sol = lbfgsb_sols[alpha_idx]
-        plot_dens(lbfgsb_sol, f'{alpha:.2e}', alpha_idx+1)
     plt.subplots_adjust(wspace=0, hspace=0)
-
-
-def plot_density_centers(density, centers):
-    # plt.axis('square');
-    from recovar.output import sum_over_other
-
-    plt.rcParams.update({
-        # "text.usetex": True,
-        # "font.family": "serif",
-        # "font.sans-serif": "Helvetica",
-    })
-    font = {'weight' : 'bold',
-            'size'   : 22}
-    import matplotlib
-    matplotlib.rc('font', **font)
-
-    n_plots = 1
-    fig, axs = plt.subplots( density.ndim, figsize = ( density.ndim *10, n_plots*30 ))#, 6*3))
-    global is_first
-    is_first = True
-
-    def plot_dens(density, title, n_plot):
-
-        # if is_first:            
-        #     axs[k].set_title(f"projection {k}")
-
-        if density.ndim ==2:
-            # plt.figure()
-            # plt.title(title)
-            axs[k].imshow(density)#.sum(axis=-1))
-            # plt.show()
-        else:
-            # for k1 in range(np.min([traj_dim,3])):
-            #     for k2 in range(k1+1, traj_dim):
-            #         plot_traj_along_axes([k1, k2])
-
-            for k in range(1, density.ndim):
-                if k ==1:
-                    axs[k-1].set_ylabel(title)
-                axs[k-1].set_xticklabels([])
-                axs[k-1].set_yticklabels([])
-
-                to_plot = sum_over_other(density, [0,k])
-                # plt.figure()
-                # plt.title(title)
-                axs[k-1].imshow(to_plot)#.sum(axis=-1))
-                axs[k-1].scatter(centers[:,k], centers[:,0] )
-                for i in range(centers.shape[0]):
-                    axs[k-1].annotate(str(i), centers[i, [k,0]] + np.array([0.1, 0.1]))
-
-                # plt.show()
-            to_plot = sum_over_other(density, [0,2])
-            axs[k].imshow(to_plot)#.sum(axis=-1))
-            axs[k].scatter(centers[:,2], centers[:,0] )
-            for i in range(centers.shape[0]):
-                axs[k].annotate(str(i), centers[i, [2,0]] + np.array([0.1, 0.1]))
-
-            axs[k].set_xticklabels([])
-            axs[k].set_yticklabels([])
-
-    plot_dens(density, 'raw density', 0)
-    plt.subplots_adjust(wspace=0, hspace=0)
-
-
-# def plot_density_centers(density, centers):
-#     # plt.axis('square');
-#     from recovar.output import sum_over_other
-
-#     plt.rcParams.update({
-#         # "text.usetex": True,
-#         # "font.family": "serif",
-#         # "font.sans-serif": "Helvetica",
-#     })
-#     font = {'weight' : 'bold',
-#             'size'   : 22}
-#     import matplotlib
-#     matplotlib.rc('font', **font)
-
-#     n_plots = 1
-#     fig, axs = plt.subplots( n_plots, density.ndim, figsize = ( density.ndim *10, n_plots*6 ))#, 6*3))
-#     global is_first
-#     is_first = True
-
-#     def plot_dens(density, title, n_plot):
-
-#         # if is_first:            
-#         #     axs[n_plot,k].set_title(f"projection {k}")
-
-#         if density.ndim ==2:
-#             # plt.figure()
-#             # plt.title(title)
-#             axs[n_plot,k].imshow(density)#.sum(axis=-1))
-#             # plt.show()
-#         else:
-
-#             for k in range(1, density.ndim):
-#                 if k ==1:
-#                     axs[n_plot,k-1].set_ylabel(title)
-#                 axs[n_plot,k-1].set_xticklabels([])
-#                 axs[n_plot,k-1].set_yticklabels([])
-
-#                 to_plot = sum_over_other(density, [0,k])
-#                 # plt.figure()
-#                 # plt.title(title)
-#                 axs[n_plot,k-1].imshow(to_plot)#.sum(axis=-1))
-#                 axs[n_plot,k-1].scatter(centers[:,0], centers[:,k] )
-#                 for i in range(centers.shape[0]):
-#                     axs[n_plot,k-1].annotate(str(i), centers[i, [0,k]] + np.array([0.1, 0.1]))
-
-#                 # plt.show()
-#             to_plot = sum_over_other(density, [0,2])
-#             # plt.figure()
-#             # plt.title(title)
-#             axs[n_plot,k].imshow(to_plot)#.sum(axis=-1))
-#             axs[n_plot,k].scatter(centers[:,0], centers[:,2] )
-#             for i in range(centers.shape[0]):
-#                 axs[n_plot,k].annotate(str(i), centers[i, [0,2]] + np.array([0.1, 0.1]))
-
-#             axs[n_plot,k].set_xticklabels([])
-#             axs[n_plot,k].set_yticklabels([])
-#             # plt.show()
-#     # axs[n_plot,0].set_ylabel(name)
-
-#     plot_dens(density, 'raw density', 0)
-#     plt.subplots_adjust(wspace=0, hspace=0)
 
 def convolve_with_pad_nd(ar1, ar2):
     full_shape = tuple(2*np.array(ar1.shape)-1)

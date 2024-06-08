@@ -95,7 +95,7 @@ def plot_two_twings_with_diff_scale(cs, xs, labels,plot_folder= None):
 
     
         
-def sum_over_other(x, use_axis = [0,1]):
+def sum_over_other(x, use_axis = [0,1], *args, **kwargs):
     other_axes = []
     for k in range(x.ndim):
         if k not in use_axis:
@@ -104,16 +104,42 @@ def sum_over_other(x, use_axis = [0,1]):
     xk = np.sum(x, axis = tuple(other_axes))
     return xk
 
+def half_slice_other(density, axes, *args, **kwargs):
+    axes = [i for i in range(density.ndim) if i not in axes]
+    axes = np.sort(axes)
+    for i in range(len(axes)-1, -1, -1):
+        density = np.take(density, density.shape[0]//2, axis = axes[i])
+    return density
+
+def slice_at_point(density, axes, point, *args, **kwargs):
+    axes = [i for i in range(density.ndim) if i not in axes]
+    axes = np.sort(axes)
+    for i in range(len(axes)-1, -1, -1):
+        density = np.take(density, point[axes[i]], axis = axes[i])
+    return density
+
+
 def plot_trajectories_over_density_from_result(results, trajectories, subsampled, zdim ):
     latent_space_bounds = ld.compute_latent_space_bounds(results['zs'][zdim])
     plot_trajectories_over_density(results['density'], trajectories, latent_space_bounds,  subsampled = subsampled, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = results['zs'][zdim], cov_zs = results['cov_zs'][zdim] )
     return
 
 
-def plot_trajectories_over_density(density, trajectories, latent_space_bounds,  subsampled = None, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = None, cov_zs = None ):
+def plot_trajectories_over_density(density, trajectories, latent_space_bounds,  subsampled = None, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = None, cov_zs = None, points = None, projection_function = None, annotate = False):
     colors = ['k', 'cornflowerblue'] if colors is None else colors
     path_exists = trajectories is not None
     
+    # def half_slice_other(density, axes):
+    #     axes = [i for i in range(density.ndim) if i not in axes]
+    #     axes = np.sort(axes)
+    #     for i in range(len(axes)-1, -1, -1):
+    #         density = np.take(density, density.shape[0]//2, axis = axes[i])
+    #     return density
+    
+    projection_function = half_slice_other if projection_function == 'slice' else projection_function
+    projection_function = slice_at_point if projection_function == 'slice_point' else projection_function
+    projection_function = sum_over_other if projection_function is None else projection_function
+
     compute_density = False
     if density is None:
         assert zs is not None
@@ -141,14 +167,20 @@ def plot_trajectories_over_density(density, trajectories, latent_space_bounds,  
         if compute_density:
             density_pl, _= ld.compute_latent_space_density_on_2_axes(zs, cov_zs, axes = axes, num_points = num_points)
         else:
-            density_pl = sum_over_other(density, axes)
+            pt = points[0] if points is not None else None
+            density_pl = projection_function(density, axes, pt)
             
         if axis_x > axis_y:
             density_pl = density_pl.T
             
         ax.imshow((density_pl.T), origin='lower', cmap = cmap, interpolation = 'bilinear')#[...,25,25])
         # plt.colorbar()
-        
+        if points is not None:
+            plt.scatter(points[:,axis_x], points[:,axis_y], color = 'w', s = 100, edgecolors= 'k')
+            if annotate:
+                for i in range(points.shape[0]):
+                    plt.annotate(str(i), points[i, axes] + np.array([0.1, 0.1]))
+
         if path_exists:
             # path_grid = z_to_grid(path)
             for traj_idx, traj in enumerate(trajectories):
@@ -171,17 +203,19 @@ def plot_trajectories_over_density(density, trajectories, latent_space_bounds,  
                     plt.scatter(g_end[axis_x], g_end[axis_y], marker = 's', c='w', edgecolors = colors[traj_idx], s = 600, zorder =2)
 
                             
-
         ax.axis("off")
             
         if plot_folder is not None:
             save_filepath = plot_folder  + 'density_' + str(axes[0]) + str(axes[1]) + '.png'    
             plt.savefig(save_filepath, bbox_inches='tight')
             
+
     traj_dim = trajectories[0].shape[1] if trajectories is not None else 4
     for k1 in range(np.min([traj_dim,3])):
         for k2 in range(k1+1, traj_dim):
             plot_traj_along_axes([k1, k2])
+
+
 
 
 def plot_kmeans_over_density(density, centers, plot_folder = None, cmap = 'inferno' ):
@@ -232,6 +266,9 @@ def plot_kmeans_over_density(density, centers, plot_folder = None, cmap = 'infer
     for k1 in range(np.min([traj_dim,3])):
         for k2 in range(k1+1, traj_dim):
             plot_traj_along_axes([k1, k2])
+
+
+
 
 def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us_to_save = 50, us_to_var = [4,10,20], voxel_size = None):
      
@@ -297,13 +334,13 @@ def kmeans_analysis(output_folder, zs, n_clusters = 20):
     return centers, labels
 
 
-def move_to_one_folder(path_folder, n_vols ):
+def move_to_one_folder(path_folder, n_vols, string_name = 'ml_optimized_locres_filtered.mrc', new_stringname = 'vol' ):
     mkdir_safe(path_folder + '/all_volumes/')
     output_folder = path_folder + '/all_volumes/'
     import shutil
     for k in range(n_vols):
-        input_file = path_folder + "/vol" + format(k, '03d') + "/ml_optimized_locres_filtered.mrc"
-        output_file = output_folder + "vol" + format(k, '03d') + ".mrc"
+        input_file = path_folder + "/vol" + format(k, '03d') + '/' + string_name
+        output_file = output_folder + "/" + new_stringname + format(k, '03d') + ".mrc"
         shutil.copyfile(input_file, output_file)
     return
 
@@ -356,7 +393,7 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_varian
     if new_volume_generation:
         from recovar import heterogeneity_volume, latent_density
         for k in range(path_subsampled.shape[0]):
-            output_folder_this = output_folder + "vol" + format(k, '03d') + "/"
+            output_folder_this = output_folder + "/vol" + format(k, '03d') + "/"
             mkdir_safe(output_folder_this)
             ndim = zs.shape[-1]
             # n_bins = 30
@@ -388,7 +425,8 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_varian
 
             heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder_this, ndim, n_bins, B_factor, tau = None, n_min_images = n_min_images, locres_sampling = locres_maskrad, locres_maskrad = locres_maskrad, locres_edgwidth = 0, upsampling_for_ests = 1, use_mask_ests =False, grid_correct_ests = False, save_all_estimates=save_all_estimates, metric_used= 'locshellmost_likely')
             logger.info(f"Done with volume generation {k} stored in {output_folder_this}")
-
+        move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'ml_optimized_locres_filtered.mrc', new_stringname = 'vol' )
+        move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'ml_optimized_locres.mrc', new_stringname = 'locres' )
 
     # memory_to_use = utils.get_gpu_memory_total() - path_subsampled.shape[0] * cryos[0].volume_size * 8 / 1e9 * 8
     # assert memory_to_use > 0, "reduce number of volumes computed at once"
@@ -464,10 +502,10 @@ def load_results_new(datadir):
 
 class PipelineOutput:
     def __init__(self, result_path):
-        self.params = utils.pickle_load(result_path + 'model/params.pkl')
+        self.params = utils.pickle_load(result_path + '/model/params.pkl')
         self.embedding = None
         self.embedding_loaded = False
-        self.result_path = result_path
+        self.result_path = result_path + '/'
         self.version = self.params['version'] if 'version' in self.params else '0'
 
     def load_embedding(self):
