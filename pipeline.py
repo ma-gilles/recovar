@@ -3,7 +3,7 @@ import recovar.config
 import jax.numpy as jnp
 import numpy as np
 
-import os, argparse, time, pickle, logging
+import os, argparse, time, pickle, logging, sys
 from recovar import output as o
 from recovar import dataset, homogeneous, embedding, principal_components, latent_density, mask, utils, constants, noise, output
 from recovar.fourier_transform_utils import fourier_transform_utils
@@ -301,7 +301,6 @@ def add_args(parser: argparse.ArgumentParser):
 
 
 def standard_recovar_pipeline(args):
-    # import pdb; pdb.set_trace()
     st_time = time.time()
 
     if args.mask_option == 'input' and args.mask is None:
@@ -311,6 +310,8 @@ def standard_recovar_pipeline(args):
         raise ValueError("No GPU found. Set --accept-cpu if you really want to run on CPU (probably not). More likely, you want to check that JAX has been properly installed with GPU support.")
 
     o.mkdir_safe(args.outdir)
+    with open(f"{args.outdir}/command.txt", "w") as text_file:
+        text_file.write(str(sys.argv))
     logger.addHandler(logging.FileHandler(f"{args.outdir}/run.log"))
     logger.info(args)
     ind_split = dataset.figure_out_halfsets(args)
@@ -332,22 +333,8 @@ def standard_recovar_pipeline(args):
     utils.report_memory_device(logger=logger)
 
     noise_var_from_hf, _ = noise.estimate_noise_variance(cryos[0], batch_size)
-
-    # I need to rewrite the reweighted so it can use the more general noise distribution, but for now I'll go with that. 
-    # cov_noise_init = cov_noise
     valid_idx = cryo.get_valid_frequency_indices()
     noise_model = args.noise_model
-
-    # ## SETTING CONTRAST HE
-    # print("SETTING CONTRAST HERE!!!")
-    # path = '/projects/CRYOEM/singerlab/mg6942/simulated_empiar10180/volumes_256/vol/dataset_5_extra/contrast_qr_radial_new/'
-    # from recovar import output
-    # pipeline_output2 = output.PipelineOutput(path)
-    # contrasts = pipeline_output2.get('contrasts')[10]
-    # contrasts /= np.mean(contrasts)
-    # embedding.set_contrasts_in_cryos(cryos, contrasts)
-    # cryos_old = pipeline_output2.get('dataset')
-    # import pdb; pdb.set_trace()
 
     
     if args.do_over_with_contrast:
@@ -417,8 +404,6 @@ def standard_recovar_pipeline(args):
             focus_mask, _= mask.masking_options(args.mask_option, means, volume_shape, args.focus_mask, cryo.dtype_real, args.mask_dilate_iter)
         else:
             focus_mask = volume_mask
-
-        # Let's see?
         
         noise_time = time.time()
         # Probably should rename all of this...
@@ -723,7 +708,7 @@ def standard_recovar_pipeline(args):
 
 if __name__ == "__main__":
     # import jax
-    # with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
+    # import pdb; pdb.set_trace()
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
     standard_recovar_pipeline(args)

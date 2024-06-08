@@ -22,7 +22,7 @@ def integral_fsc(fsc, fourier_pixel_size = 1):
 integral_fscs = jax.vmap(integral_fsc, in_axes = [0, None])
 
 
-def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = True, filter_edgewidth=2):
+def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = True, filter_edgewidth=2, filter_map1 = False):
 
     # if use_filter:
     #     use_v2 = False
@@ -67,8 +67,10 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
     nr_samplings = sampling_points.shape[0]
 
     logger.info(f"Calculating local resolution in {nr_samplings} sampling points ...")
-
-    ft_sum = 0.5*(ftu.get_dft3(map1) + ftu.get_dft3(map2))
+    if filter_map1:
+        ft_sum = ftu.get_dft3(map1)
+    else:
+        ft_sum = 0.5*(ftu.get_dft3(map1) + ftu.get_dft3(map2))
     # Need to apply B-factor here I guess
     ft_sum *= simulator.get_B_factor_scaling(map1.shape, voxel_size, -B_factor).reshape(map1.shape).astype(map1.dtype)
 

@@ -48,7 +48,6 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
 
-
     return parser
 
 

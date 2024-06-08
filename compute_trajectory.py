@@ -39,7 +39,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--n-bins",  type =float, default=30, dest="n_bins",help="number of bins for reweighting"
+        "--n-bins",  type =float, default=50, dest="n_bins",help="number of bins for reweighting"
     )
 
     parser.add_argument(
