@@ -31,17 +31,24 @@ def get_picked_frequencies(volume_shape, radius = 2, use_half = True):
 @functools.partial(jax.jit, static_argnums = [4,5,6,7,8,9,10])    
 def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_threshold, image_shape, volume_shape, grid_size, padding, disc_type, binary = True, soften = -1):
     
-    # if padding is already there, do nothing else double image size.
-    extra_padding = grid_size if ( padding == 0 ) else 0
+    disc_type = 'linear_interp'
+    
+    if disc_type == 'cubic':
+        extra_padding = 0 
+        mask_ft = volume_mask
+    else:
+        # if padding is already there, do nothing else double image size.
+        extra_padding = grid_size if ( padding == 0 ) else 0
+        # Do this in half precision? Shouldn't matter much.
+        volume_mask = pad.pad_volume_spatial_domain(volume_mask, extra_padding).real
+        mask_ft = ftu.get_dft3(volume_mask).reshape(-1)
+
     padded_image_shape = tuple(np.array(image_shape) + extra_padding)
     padded_volume_shape = tuple(np.array(volume_shape) + extra_padding)
     padded_grid_size = grid_size + extra_padding
 
-    # Do this in half precision? Shouldn't matter much.
-    volume_mask = pad.pad_volume_spatial_domain(volume_mask, extra_padding).real
-    mask_ft = ftu.get_dft3(volume_mask).reshape(-1)
     proj_mask = core.slice_volume_by_map(mask_ft, rotation_matrices, padded_image_shape,
-                               padded_volume_shape, padded_grid_size, disc_type)
+                               padded_volume_shape, disc_type)
     
     proj_mask = ftu.get_idft2(proj_mask.reshape([-1] + list(padded_image_shape)))
                              
@@ -88,7 +95,7 @@ def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape):
 @functools.partial(jax.jit, static_argnums = [5,6,7,8,9,10])    
 def get_centered_images(images, mean, CTF_params, rotation_matrices, translations, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type  ):    
     translated_images = core.translate_images(images, translations, image_shape)
-    centered_images = translated_images - core.forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type)
+    centered_images = translated_images - core.forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type)
     return centered_images
 
 def check_mask(mask):
@@ -100,13 +107,75 @@ def check_mask(mask):
 batch_forward_model = jax.vmap(core.forward_model, in_axes = (0, None, None))
 
 @functools.partial(jax.jit, static_argnums = [3,4,5,6,7,8])    
-def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):
-    batch_grid_pt_vec_ind_of_images = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
+def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):
+    batch_grid_pt_vec_ind_of_images = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape )
     batch_CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    projected_mean =  batch_forward_model(mean, batch_CTF, batch_grid_pt_vec_ind_of_images)         
+    projected_mean =  batch_forward_model(mean, batch_CTF, batch_grid_pt_vec_ind_of_images)
     return projected_mean
 
 
-batch_over_vol_forward_model_from_map = jax.vmap(core.forward_model_from_map, in_axes = (0, None, None, None, None, None, None, None, None))
+batch_over_vol_forward_model_from_map = jax.vmap(core.forward_model_from_map, in_axes = (0, None, None, None, None, None, None, None))
+
+import jax
+
+# # Are there at most 4 or 5 within one dist? or 9?
+# def find_points_near_grid(gridpoints, gridpoint_target, max_n_points = 5):
+#     max_distances = jnp.max(jnp.abs(gridpoints -  gridpoint_target), axis=-1) #< max_distance
+#     _, indices = jax.lax.top_k(max_distances, max_n_points )
+    
+#     # I think I can just sum them up?
+#     # kernel_weight = gridpoints -  gridpoint_target
+#     return indices
+
+
+# This may use less memory than previous version
+## TODO: compare the two
+def triangular_kernel(gridpoints, gridpoint_target, kernel_width = 1):
+    weights = jnp.ones(gridpoints.shape[:-1])
+    # Note that this is a very small loop (3) so it should be fine to jit this
+    for i in range(gridpoint_target.shape[-1]):
+        weights *= jnp.where(jnp.abs(gridpoints[...,i] - gridpoint_target[i]) < kernel_width, 1 - jnp.abs(gridpoints[...,i] - gridpoint_target[i]) / kernel_width, 0) #/ kernel_width
+    # import pdb; pdb.set_trace()
+    return weights
+
+
+# This may use less memory than previous version
+## TODO: compare the two
+def square_kernel(gridpoints, gridpoint_target, kernel_width = 1):
+    weights = jnp.ones(gridpoints.shape[:-1])
+    # Note that this is a very small loop (3) so it should be fine to jit this 
+    for i in range(gridpoint_target.shape[-1]):
+        weights *= jnp.where(jnp.abs(gridpoints[...,i] - gridpoint_target[i]) < kernel_width/2, 1/ kernel_width, 0) 
+    return weights
+
+
+def sinc_kernel(gridpoints, gridpoint_target, kernel_width = 1):
+    weights = jnp.ones(gridpoints.shape[:-1])
+    # Note that this is a very small loop (3) so it should be fine to jit this 
+    for i in range(gridpoint_target.shape[-1]):
+        weights *= jnp.where(jnp.abs(gridpoints[...,i] - gridpoint_target[i]) < kernel_width/2, 1/ kernel_width, 0) 
+    return weights
+
+
+# Are there at most 4 or 5 within one dist? or 9?
+#@jax.vmap(in_axes=[0,0,None])
+def sum_up_over_near_grid_points(image, gridpoints, gridpoint_target, kernel = "triangular", kernel_width = 1):
+    if kernel == "triangular":
+        kernel_vals = triangular_kernel(gridpoints, gridpoint_target, kernel_width = kernel_width)
+    elif kernel == "square":
+        kernel_vals = square_kernel(gridpoints, gridpoint_target, kernel_width = kernel_width)
+    else:
+        raise ValueError("Kernel function not recognized")
+    # kernel_vals = triangular_kernel(gridpoints, gridpoint_target, kernel_width = 1)
+    kernel_estimated = jnp.sum(kernel_vals * image, axis =-1)
+    return kernel_estimated #, jnp.sum(kernel_vals)
+
+
+# Are there at most 4 or 5 within one dist? or 9?
+#@jax.vmap(in_axes=[0,0,None])
+# def sum_up_over_near_grid_points(image, gridpoints, gridpoint_target):
+#     kernel_vals = triangular_kernel(gridpoints, gridpoint_target)
+#     kernel_estimated = jnp.sum(kernel_vals * image)
+#     return kernel_estimated, jnp.sum(kernel_vals)
 
 
