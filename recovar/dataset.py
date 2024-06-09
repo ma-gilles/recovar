@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Maybe should take out these dependencies?
 import torch
-from cryodrgn import mrc, ctf, dataset
+from cryodrgn import ctf, dataset
 from cryodrgn.pose import PoseTracker
 
 class MRCDataMod(torch.utils.data.Dataset):

@@ -1,7 +1,6 @@
 # import recovar.config
 from importlib import reload
 import numpy as np
-from cryodrgn import analysis
 from cryodrgn import utils
 from cryodrgn import ctf
 from recovar import plot_utils

@@ -222,7 +222,7 @@ def plot_density(lbfgsb_sols, density, alphas, function = None):
 
     for alpha_idx, alpha in enumerate(alphas):
         lbfgsb_sol = lbfgsb_sols[alpha_idx]
-        plot_dens(lbfgsb_sol, r'$\alpha$'+f'[{alpha_idx}]={alpha:.1e}', alpha_idx+1)
+        plot_dens(lbfgsb_sol, r'a'+f'[{alpha_idx}]={alpha:.1e}', alpha_idx+1)
     plt.subplots_adjust(wspace=0, hspace=0)
 
 
