@@ -16,7 +16,9 @@ colors = dict(mcolors.BASE_COLORS, **mcolors.CSS4_COLORS)
 
 names_to_show = { "diagonal": "diagonal", "wilson": "Wilson", "diagonal masked": "diagonal masked", "wilson masked": "Wilson masked" }
 colors_name = { "diagonal": "cornflowerblue", "wilson": "lightsalmon", "diagonal masked": "blue", "wilson masked": "orangered"  }
-plt.rcParams['text.usetex'] = True
+use_tex = False
+if use_tex:
+    plt.rcParams['text.usetex'] = True
 
 def plot_power_spectrum(volume, ax = None):
     input_ax_is_none = ax is None
@@ -616,7 +618,7 @@ def plot_fsc_function_paper(fsc_curves, global_name, names, grid_size, voxel_siz
     if plot_fsc_flag:
         plt.figure(figsize=(9, 8))
         ax = plt.gca()
-        plt.rcParams['text.usetex'] = False
+        # plt.rcParams['text.usetex'] = False
         freq = ftu.get_1d_frequency_grid(2*grid_size, voxel_size = 0.5*voxel_size, scaled = True)
         freq = freq[freq >= 0 ]
         freq = freq[:grid_size//2 ]
