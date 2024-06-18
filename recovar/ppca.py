@@ -9,6 +9,7 @@ ftu = fourier_transform_utils(jnp)
 
 logger = logging.getLogger(__name__)
 
+## HAVEN'T FINISHED THIS YET
 
 def M_step_batch(images, lhs_summed, rhs_summed, mean_batch, covariance_batch, CTF_params, rotation_matrices, translations, image_shape, volume_shape, grid_size, voxel_size, noise_variance,  CTF_fun):
 

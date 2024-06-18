@@ -121,21 +121,15 @@ def slice_at_point(density, axes, point, *args, **kwargs):
 
 def plot_trajectories_over_density_from_result(results, trajectories, subsampled, zdim ):
     latent_space_bounds = ld.compute_latent_space_bounds(results['zs'][zdim])
-    plot_trajectories_over_density(results['density'], trajectories, latent_space_bounds,  subsampled = subsampled, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = results['zs'][zdim], cov_zs = results['cov_zs'][zdim] )
+    plot_over_density(results['density'], trajectories, latent_space_bounds,  subsampled = subsampled, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = results['zs'][zdim], cov_zs = results['cov_zs'][zdim] )
     return
 
 
-def plot_trajectories_over_density(density, trajectories, latent_space_bounds,  subsampled = None, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = None, cov_zs = None, points = None, projection_function = None, annotate = False):
-    colors = ['k', 'cornflowerblue'] if colors is None else colors
+def plot_over_density(density, trajectories = None, latent_space_bounds = None,  subsampled = None, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = None, cov_zs = None, points = None, projection_function = None, annotate = False):
+
+    colors = ['k', 'cornflowerblue', 'g' , 'r', 'b', 'w', 'c'] if colors is None else colors
     path_exists = trajectories is not None
-    
-    # def half_slice_other(density, axes):
-    #     axes = [i for i in range(density.ndim) if i not in axes]
-    #     axes = np.sort(axes)
-    #     for i in range(len(axes)-1, -1, -1):
-    #         density = np.take(density, density.shape[0]//2, axis = axes[i])
-    #     return density
-    
+        
     projection_function = half_slice_other if projection_function == 'slice' else projection_function
     projection_function = slice_at_point if projection_function == 'slice_point' else projection_function
     projection_function = sum_over_other if projection_function is None else projection_function
@@ -146,17 +140,15 @@ def plot_trajectories_over_density(density, trajectories, latent_space_bounds,  
         assert cov_zs is not None 
         compute_density = True
         
-    
     if compute_density:
         num_points = 200
     else:
         num_points= density.shape[0]
-    grid_to_z, z_to_grid = ld.get_grid_z_mappings(latent_space_bounds, num_points)
-    
-    # path_grid = z_to_grid(path_z[:,:low_dim])
-    # g_st = z_to_grid(z_st[:low_dim])
-    # g_end = z_to_grid(z_end[:low_dim])
 
+    if path_exists:
+        assert latent_space_bounds is not None, "Need latent space bounds to plot trajectories"
+        grid_to_z, z_to_grid = ld.get_grid_z_mappings(latent_space_bounds, num_points)
+    
     def plot_traj_along_axes(axes, save_to_file= False ):
         axes = tuple(axes)
         fig, ax = plt.subplots(figsize = (8,8))
@@ -184,9 +176,6 @@ def plot_trajectories_over_density(density, trajectories, latent_space_bounds,  
         if path_exists:
             # path_grid = z_to_grid(path)
             for traj_idx, traj in enumerate(trajectories):
-                
-                # if compute_density:
-                # traj = trajectory.copy()
                 traj = z_to_grid(traj)
                 
                 plt.plot(traj[:,axis_x], traj[:,axis_y], '-', c='w', linewidth=6)
@@ -201,10 +190,8 @@ def plot_trajectories_over_density(density, trajectories, latent_space_bounds,  
                     g_end = traj[-1]
                     plt.scatter(g_st[axis_x], g_st[axis_y], marker = '*', c='w', edgecolors = colors[traj_idx], s = 1800, zorder =2)
                     plt.scatter(g_end[axis_x], g_end[axis_y], marker = 's', c='w', edgecolors = colors[traj_idx], s = 600, zorder =2)
-
                             
         ax.axis("off")
-            
         if plot_folder is not None:
             save_filepath = plot_folder  + 'density_' + str(axes[0]) + str(axes[1]) + '.png'    
             plt.savefig(save_filepath, bbox_inches='tight')
@@ -644,13 +631,13 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
 
         logger.info(f"after path {time.time() - st_time}")
         #trajectory.subsample_path(path_z, n_pts = n_vols_along_path)
-        # plot_trajectories_over_density(density, None,latent_space_bounds,  colors = None, plot_folder = output_folder + 'density_nopath/', cmap = 'inferno')
+        # plot_over_density(density, None,latent_space_bounds,  colors = None, plot_folder = output_folder + 'density_nopath/', cmap = 'inferno')
         inp_dens = density if use_input_density else None
 
         if gt_volumes is not None:
-            plot_trajectories_over_density(inp_dens, [gt_volumes_z, path_z], latent_space_bounds, subsampled = [gt_volumes_z[gt_subs_idx][1:-1], path_subsampled[1:-1] ] , colors = ['k', 'cornflowerblue'], plot_folder = output_folder, cmap = 'inferno', zs = zs, cov_zs = cov_zs) 
+            plot_over_density(inp_dens, [gt_volumes_z, path_z], latent_space_bounds, subsampled = [gt_volumes_z[gt_subs_idx][1:-1], path_subsampled[1:-1] ] , colors = ['k', 'cornflowerblue'], plot_folder = output_folder, cmap = 'inferno', zs = zs, cov_zs = cov_zs) 
         else:
-            plot_trajectories_over_density(inp_dens, [path_z],latent_space_bounds,  subsampled = [path_subsampled[1:-1] ] , colors = ['cornflowerblue'], plot_folder = output_folder, cmap = 'inferno', same_st_end = False, zs = zs, cov_zs = cov_zs)
+            plot_over_density(inp_dens, [path_z],latent_space_bounds,  subsampled = [path_subsampled[1:-1] ] , colors = ['cornflowerblue'], plot_folder = output_folder, cmap = 'inferno', same_st_end = False, zs = zs, cov_zs = cov_zs)
     else:
         path_z = np.linspace(z_st, z_end, n_vols_along_path)[...,0]
         path_subsampled = path_z

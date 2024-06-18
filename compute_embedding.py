@@ -109,6 +109,7 @@ def compute_embedding_and_save(recovar_result_dir):
 
 
 if __name__ == "__main__":
+    raise NotImplementedError("This script is not ready yet")
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
     compute_embedding(args.result_dir,

@@ -28,8 +28,8 @@ def get_raw_density(pipeline_output, zdim = 10, pca_dim_max = 5, percentile_reje
 
     return density, kernel, total_covar, grids, bds
 
-def get_deconvolved_density(pipeline_output, zdim = 10, pca_dim_max = 4, percentile_reject = 10, num_points = 50, kernel_option = 'sampling', alphas = None, percentile_bound = 0.1):
-    alphas = np.flip(np.logspace(-3, 2, 5)) if alphas is None else alphas
+def get_deconvolved_density(pipeline_output, zdim = '4_noreg', pca_dim_max = 4, percentile_reject = 10, num_points = 50, kernel_option = 'sampling', alphas = None, percentile_bound = 1):
+    alphas = np.flip(np.logspace(-4, 1, 10)) if alphas is None else alphas
 
     density, kernel, total_covar, grids, bounds = get_raw_density(pipeline_output, zdim = zdim, pca_dim_max = pca_dim_max, percentile_reject = percentile_reject, num_points = num_points, percentile_bound=percentile_bound)
     lbfgsb_sols, cost, reg_cost, alphas = compute_deconvolved_density(density, kernel, total_covar, grids, kernel_option = kernel_option, alphas = alphas)
@@ -105,8 +105,10 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
     def ridge_reg_objective_grid(fun_on_grid, alpha = 0.0):
         # fun_on_grid = circ_mask * fun_on_grid
         residuals = forward_model_grid(fun_on_grid) - density #/ jnp.sum(y)
-        
-        if fun_on_grid.ndim ==2:
+        ## YIKES
+        if fun_on_grid.ndim ==1:
+            dx = grids[1,:] - grids[0,:] 
+        elif fun_on_grid.ndim ==2:
             dx = grids[1,1,:] - grids[0,0,:] 
         elif fun_on_grid.ndim ==3:
             dx = grids[1,1,1,:] - grids[0,0,0,:] 
@@ -144,7 +146,7 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
 
         lbfgsb_sol_p = lbfgsb.run(init_params=w_init,bounds=bounds, alpha = alpha )#, bounds=bounds)
         # lbfgsb_sol_p = lbfgsb.run(w_init, alpha = alpha, bounds=bounds )
-        print(alpha_idx, alpha, lbfgsb_sol_p.state)
+        # print(alpha_idx, alpha, lbfgsb_sol_p.state)
         # import pdb; pdb.set_trace()
 
         lbfgsb_sol = lbfgsb_sol_p.params
@@ -192,7 +194,7 @@ def plot_density(lbfgsb_sols, density, alphas, function = None):
         if density.ndim ==2:
             # plt.figure()
             # plt.title(title)
-            axs[n_plot,k].imshow(density)#.sum(axis=-1))
+            axs[n_plot,0].imshow(density)#.sum(axis=-1))
             # plt.show()
         else:
 

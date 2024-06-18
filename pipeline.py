@@ -46,11 +46,11 @@ def add_args(parser: argparse.ArgumentParser):
     # )
 
     parser.add_argument(
-        "--mask", metavar="mrc", default=None, type=os.path.abspath, help="mask (.mrc)"
+        "--mask", metavar="mrc", default=None, type=os.path.abspath, help="solvent mask (.mrc). See --mask-option"
     )
 
     parser.add_argument(
-        "--focus-mask", metavar="mrc", dest = "focus_mask", default=None, type=os.path.abspath, help="mask (.mrc)"
+        "--focus-mask", metavar="mrc", dest = "focus_mask", default=None, type=os.path.abspath, help="focus mask (.mrc)"
     )
 
     parser.add_argument(
@@ -75,11 +75,11 @@ def add_args(parser: argparse.ArgumentParser):
         help="use if you want zero frequency to be ignored. If images have been normalized to 0 mean, this is probably a good idea"
     )
 
-    parser.add_argument(
-        "--no-z-regularization",
-        dest = "no_z_regularization",
-        action="store_true",
-    )
+    # parser.add_argument(
+    #     "--no-z-regularization",
+    #     dest = "no_z_regularization",
+    #     action="store_true",
+    # )
 
     group = parser.add_argument_group("Dataset loading")
     group.add_argument(
@@ -250,27 +250,27 @@ def add_args(parser: argparse.ArgumentParser):
     #         action="store_true",
     #     )
 
-    group.add_argument(
-            "--covariance-grid-correct",
-            dest = "covariance_substract_shell_mean",
-            action="store_true",
-        )
+    # group.add_argument(
+    #         "--covariance-grid-correct",
+    #         dest = "covariance_substract_shell_mean",
+    #         action="store_true",
+    #     )
 
 
 
-    group.add_argument(
-            "--covariance-mask-in-fsc",
-            dest = "covariance_mask_in_fsc",
-            action="store_true",
-        )
+    # group.add_argument(
+    #         "--covariance-mask-in-fsc",
+    #         dest = "covariance_mask_in_fsc",
+    #         action="store_true",
+    #     )
 
 
-    group.add_argument(
-            "--n-covariance-columns",
-            dest = "covariance_reg_fn",
-            default = "old",
-            help="old (default), new"
-        )
+    # group.add_argument(
+    #         "--n-covariance-columns",
+    #         dest = "covariance_reg_fn",
+    #         default = "old",
+    #         help="old (default), new"
+    #     )
 
     group.add_argument(
             "--test-covar-options",
@@ -295,7 +295,9 @@ def add_args(parser: argparse.ArgumentParser):
             "--do-over-with-contrast",
             dest = "do_over_with_contrast",
             action="store_true",
+            help="Whether to run again once constrast is estimated",
         )
+    
     return parser
     
 
