@@ -11,9 +11,11 @@ Running RECOVAR:
 * [4. Analyzing results](#iv-analyzing-results)
 * [5. Visualizing results](#v-visualizing-results)
 * [6. Generating trajectories](#vi-generating-additional-trajectories)
+* [Using kernel regression with other embeddings](#using-kernel-regression-with-other-embeddings)
 
 [TLDR](#tldr)
 
+(OUT OF DATE)
 Peak at what output looks like on a [synthetic dataset](output_visualization_simple_synthetic.ipynb) and [real dataset](output_visualization_empiar10076.ipynb).
 
 Also:
@@ -41,9 +43,9 @@ Then create an environment, download JAX-cuda (for some reason the latest versio
 
 
 
-The code was tested on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
+<!-- The code was tested on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
 
-The code for the paper was run on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
+The code for the paper was run on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455). -->
 
 
 
@@ -131,22 +133,24 @@ Example usage for a .cs file:
 
 A real space mask is important to boost SNR. Most consensus reconstruction software output a mask, which you can use as input (`--mask-option=input`). Make sure the mask is not too tight; you can use the input `--dilate-mask-iter` to expand the mask if needed. You may also want to use a focusing mask to focus on heterogeneity in one part of the volume [click here](https://guide.cryosparc.com/processing-data/tutorials-and-case-studies/mask-selection-and-generation-in-ucsf-chimera) to find instructions to generate one with Chimera.
 
-If you don't input a mask, the software will estimate one using the two halfmap means ( `--mask-option=from-halfmaps`). You may also want to run with a loose spherical mask (option `--mask-option=sphere`) and use the computed variance map to observe which parts have large variance.
+If you don't input a mask, you can ask the software to estimate one using the two halfmaps of the mean ( `--mask-option=from-halfmaps`). You may also want to run with a loose spherical mask (option `--mask-option=sphere`) and use the computed variance map to observe which parts have large variance.
 
 
 ## III. Running RECOVAR pipeline
 
 When the input images (.mrcs), poses (.pkl), and CTF parameters (.pkl) have been prepared, RECOVAR can be run with the following command:
 
-    $ python [recovar_directory]/pipeline.py particles.128.mrcs -o output_test --ctf ctf.pkl --poses poses.pkl
+    $ python [recovar_directory]/pipeline.py particles.128.mrcs -o output_test --ctf ctf.pkl --poses poses.pkl --mask=[path_to_your_mask.mrc]
 
 
 <details><summary><code>$ python pipeline.py -h</code></summary>
 
-    usage: pipeline.py [-h] -o OUTDIR [--zdim ZDIM] --poses POSES --ctf pkl [--mask mrc] [--mask-option <class 'str'>] [--mask-dilate-iter MASK_DILATE_ITER]
-                    [--correct-contrast] [--ind PKL] [--uninvert-data UNINVERT_DATA] [--datadir DATADIR] [--n-images N_IMAGES] [--padding PADDING]
-                        [--halfsets HALFSETS]
-                        particles
+    usage: pipeline.py [-h] -o OUTDIR [--zdim ZDIM] --poses POSES --ctf pkl [--mask mrc] [--focus-mask mrc] [--mask-option <class 'str'>]
+                    [--mask-dilate-iter MASK_DILATE_ITER] [--correct-contrast] [--ignore-zero-frequency] [--ind PKL]
+                    [--uninvert-data UNINVERT_DATA] [--datadir DATADIR] [--n-images N_IMAGES] [--padding PADDING] [--halfsets HALFSETS]
+                    [--keep-intermediate] [--noise-model NOISE_MODEL] [--mean-fn MEAN_FN] [--accept-cpu] [--test-covar-options]
+                    [--low-memory-option] [--dont-use-image-mask] [--do-over-with-contrast]
+                    particles
 
     positional arguments:
     particles             Input particles (.mrcs, .star, .cs, or .txt)
@@ -155,24 +159,41 @@ When the input images (.mrcs), poses (.pkl), and CTF parameters (.pkl) have been
     -h, --help            show this help message and exit
     -o OUTDIR, --outdir OUTDIR
                             Output directory to save model
-    --zdim ZDIM           Dimension of latent variable
+    --zdim ZDIM           Dimensions of latent variable. Default=1,2,4,10,20
     --poses POSES         Image poses (.pkl)
     --ctf pkl             CTF parameters (.pkl)
-    --mask mrc            mask (.mrc)
+    --mask mrc            solvent mask (.mrc). See --mask-option
+    --focus-mask mrc      focus mask (.mrc)
     --mask-option <class 'str'>
-                            mask options: from_halfmaps (default), input, sphere, none
+                            mask options: from_halfmaps , input (default), sphere, none
     --mask-dilate-iter MASK_DILATE_ITER
                             mask options how many iters to dilate input mask (only used for input mask)
     --correct-contrast    estimate and correct for amplitude scaling (contrast) variation across images
+    --ignore-zero-frequency
+                            use if you want zero frequency to be ignored. If images have been normalized to 0 mean, this is probably a good
+                            idea
 
     Dataset loading:
     --ind PKL             Filter particles by these indices
     --uninvert-data UNINVERT_DATA
-                            Invert data sign: options: true, false, automatic (default). automatic will swap signs if sum(estimated mean) < 0
+                            Invert data sign: options: true, false, automatic (default). automatic will swap signs if sum(estimated mean) <
+                            0
     --datadir DATADIR     Path prefix to particle stack if loading relative paths from a .star or .cs file
     --n-images N_IMAGES   Number of images to use (should only use for quick run)
     --padding PADDING     Real-space padding
     --halfsets HALFSETS   Path to a file with indices of split dataset (.pkl).
+    --keep-intermediate   saves some intermediate result. Probably only useful for debugging
+    --noise-model NOISE_MODEL
+                            what noise model to use. Options are radial (default) computed from outside the masks, and white computed by
+                            power spectrum at high frequencies
+    --mean-fn MEAN_FN     which mean function to use. Options are triangular (default), old, triangular_reg
+    --accept-cpu          Accept running on CPU if no GPU is found
+    --test-covar-options
+    --low-memory-option
+    --dont-use-image-mask
+    --do-over-with-contrast
+                            Whether to run again once constrast is estimated
+
 </details>
 
 
@@ -182,12 +203,15 @@ The required arguments are:
 * `--poses`, image poses (`.pkl`) that correspond to the input images
 * `--ctf`, ctf parameters (`.pkl`), unless phase-flipped images are used
 * `-o`, a clean output directory for saving results
+* `--mask`, a solvent mask (`.mrc`)
+
 
 Additional parameters that are typically set include:
-* `--zdim`, dimensions of PCA to use for embedding, can submit one integer (`--zdim=20`) or a or a command separated list (`--zdim=10,50,100`). Default (`--zdim=4,10,20`).
+* `--focus-mask` to specify the path to a focus mask path (`.mrc`). Note that if you only have a solvent mask you should pass it with --mask not focus-mask. If you have a focus-mask but not a solvent mask for some reason, you can use --mask-option for the solvent mask.
 * `--mask-option` to specify which mask to use
-* `--mask` to specify the mask path (`.mrc`)
 * `--dilate-mask-iter` to specify the number of dilation iterationof mask (default=0)
+* `--zdim`, dimensions of PCA to use for embedding, can submit one integer (`--zdim=20`) or a or a command separated list (`--zdim=10,50,100`). Default (`--zdim=1,2,4,10,20` and using no regulariation).
+
 <!-- * `--uninvert-data`, Use if particles are dark on light (negative stain format) -->
 
 
@@ -201,10 +225,43 @@ It will run k-means, generate volumes corresponding to the centers, generate tra
 
 
 <details><summary><code>$ python analyze.py -h</code></summary>
+    usage: analyze.py [-h] [-o OUTDIR] [--zdim ZDIM] [--n-clusters N_CLUSTERS] [--n-trajectories N_TRAJECTORIES] [--skip-umap]
+                    [--skip-centers] [--n-vols-along-path N_VOLS_ALONG_PATH] [--Bfactor BFACTOR] [--n-bins N_BINS] [--density DENSITY]
+                    [--normalize-kmeans] [--no-z-regularization]
+                    result_dir
 
-    usage: python analyze.py [-h] [-o OUTDIR] [--zdim ZDIM] [--n-clusters <class 'int'>]
-                            [--n-trajectories N_TRAJECTORIES] [--skip-umap] [--q <class 'float'>]
-                            [--n-std <class 'float'>]
+    positional arguments:
+    result_dir            result dir (output dir of pipeline)
+
+    optional arguments:
+    -h, --help            show this help message and exit
+    -o OUTDIR, --outdir OUTDIR
+                            Output directory to save model. If not provided, will save in result_dir/output/analysis_zdim/
+    --zdim ZDIM           Dimension of latent variable (a single int, not a list)
+    --n-clusters N_CLUSTERS
+                            number of k-means clusters (default 40)
+    --n-trajectories N_TRAJECTORIES
+                            number of trajectories to compute between k-means clusters (default 6)
+    --skip-umap           whether to skip u-map embedding (can be slow for large dataset)
+    --skip-centers        whether to generate the volume of the k-means centers
+    --n-vols-along-path N_VOLS_ALONG_PATH
+                            number of volumes to compute along each trajectory (default 6)
+    --Bfactor BFACTOR     0
+    --n-bins N_BINS       number of bins for kernel regression
+    --density DENSITY     density saved in .pkl file, with keys 'density' and 'latent_space_bounds'
+    --normalize-kmeans    whether to normalize the zs before computing k-means
+    --no-z-regularization
+                            whether to use z without regularization, e.g. use 2_noreg instead of 2
+</details>
+
+To generate volumes at specific place in latent space you can use:
+
+    python compute_state.py [pipeline_output_dir] -o [volume_output_dir] --latent-points [zfiles.txt] --Bfactor=[Bfac]
+
+<details><summary><code>$ python compute_state.py -h</code></summary>
+
+    usage: compute_state.py [-h] [-o OUTDIR] --latent-points LATENT_POINTS [--Bfactor BFACTOR] [--n-bins N_BINS] [--zdim1]
+                            [--no-z-regularization]
                             result_dir
 
     positional arguments:
@@ -214,27 +271,54 @@ It will run k-means, generate volumes corresponding to the centers, generate tra
     -h, --help            show this help message and exit
     -o OUTDIR, --outdir OUTDIR
                             Output directory to save model
-    --zdim ZDIM           Dimension of latent variable (a single int, not a list)
-    --n-clusters <class 'int'>
-                            mask options: from_halfmaps (default), input, sphere, none
-    --n-trajectories N_TRAJECTORIES
-                            how many trajectories to compute between k-means clusters
-    --skip-umap           whether to skip u-map embedding (can be slow for large dataset)
-    --q <class 'float'>   quantile used for reweighting (default = 0.95)
-    --n-std <class 'float'>
-                            number of standard deviations to use for reweighting (don't set q and this
-                            parameter, only one of them)
+    --latent-points LATENT_POINTS
+                            path to latent points (.txt file)
+    --Bfactor BFACTOR     0
+    --n-bins N_BINS       number of bins for kernel regression
+    --zdim1               Whether dimension 1 is used. This is an annoying corner case for np.loadtxt...
+    --no-z-regularization
+                            Whether to use z regularization
 
 </details>
 
-To generate volumes at specific place in latent space you can use:
-
-    python compute_state.py [pipeline_output_dir] -o [volume_output_dir] --latent-points [zfiles.txt] --Bfactor=[Bfac]
 
 where pipeline_output_dir is the path provided to the pipeline, latent-points is np.loadtxt-readable file containing the coordinates in latent space, and Bfactor is a b-factor to sharpen (can provide the same as the consensus reconstruction). It should be positive.
 
 The the sharpened volume will be at volume_output_dir/vol000/
 
+To generate a low free-energy trajectory in latent space (and volumes):
+
+    python compute_trajectory.py [pipeline_output_dir] -o [volume_output_dir] --endpts [zfiles.txt] --Bfactor=[Bfac] --density [deconvolved_density.pkl]
+
+
+<details><summary><code>$ python compute_trajectory.py -h</code></summary>
+
+usage: compute_trajectory.py [-h] [-o OUTDIR] [--zdim ZDIM] [--n-vols-along-path N_VOLS_ALONG_PATH] [--Bfactor BFACTOR]
+                             [--n-bins N_BINS] [--density DENSITY] [--no-z-regularization] [--kmeans-ind KMEANS_IND]
+                             [--endpts ENDPTS_FILE]
+                             result_dir
+
+positional arguments:
+  result_dir            result dir (output dir of pipeline)
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -o OUTDIR, --outdir OUTDIR
+                        Output directory to save model
+  --zdim ZDIM           Dimension of latent variable (a single int, not a list)
+  --n-vols-along-path N_VOLS_ALONG_PATH
+                        number of volumes to compute along each trajectory (default 6)
+  --Bfactor BFACTOR     0
+  --n-bins N_BINS       number of bins for reweighting
+  --density DENSITY     density saved in pkl file, key is 'density' and 'latent_space_bounds
+  --no-z-regularization
+  --kmeans-ind KMEANS_IND
+                        indices of k means centers to use as endpoints
+  --endpts ENDPTS_FILE  end points file. It storing z values, it should be a .txt file with 2 rows, and if it is from kmeans, it should
+                        be a .pkl file (generated by analyze)
+
+
+</details>
 
 
 ## V. Visualizing results
@@ -245,47 +329,58 @@ Assuming you have run the pipeline.py and analyze.py, the output will be saved i
 
 <details><summary>Output file structure</summary>
 
-
-    [output_dir]
+    ├── command.txt
     ├── model
-    │   ├── halfsets.pkl # indices of half sets
-    │   └── results.pkl # all results, should only be used by analye.py
+    │   ├── covariance_cols.pkl
+    │   ├── embeddings.pkl
+    │   ├── halfsets.pkl
+    │   └── params.pkl
     ├── output
-    │   ├── analysis_4
-    │   │   ├── kmeans_40
-    │   │   │   ├── centers_01no_annotate.png
-    │   │   │   ├── centers_01.png
-    │   │   │   ├── ...
-    │   │   │   ├── centers.pkl # centers in zformat
-    │   │   │   ├── path0
-    │   │   │   │   ├── density
-    │   │   │   │   │   ├── density_01.png
-    │   │   │   │   │   └── ...
-    │   │   │   │   ├── density_01.png
-    │   │   │   │   ├── ...
-    │   │   │   │   ├── path_density_t.png
-    │   │   │   │   ├── path.json
-    │   │   │   │   ├── reweight_000.mrc # reweighted reconstructions
-    │   │   │   │   ├── ...
-    │   │   │   │   ├── reweight_halfmap0_000.mrc # halfmaps for each reconstruction
-    │   │   │   │   └── ...
-    │   │   │   ├── path1
-    │   │   │   │   ├── ...
-    │   │   │   ├── reweight_000.mrc # volume reconstruction of kmeans 
-    │   │   │   ├── ...
-    │   │   │   ├── reweight_halfmap1_039.mrc # also halfmaps
-    │   │   │   └── trajectory_endpoints.pkl # end points of trajectory used 
-    │   │   └── umap_embedding.pkl 
-    │   └── volumes
-    │       ├── dilated_mask.mrc
-    │       ├── eigen_neg000.mrc # Eigenvectors
-    │       ├── ...
-    │       ├── eigen_pos000.mrc # Negative of eigenvectors. Useful for Chimera visualization to have the two separated, even though they contain the same information
-    │       ├── ...
-    │       ├── mask.mrc # mask used 
-    │       ├── mean.mrc # computed mean
-    │       ├── variance10.mrc # compute variance from rank 10 approximation
-    │       └── ...
+    │   ├── analysis_10
+    │   │   ├── centers
+    │   │   │   ├── all_volumes
+    │   │   │   │   ├── locres000.mrc
+    │   │   │   │   ├── locres001.mrc
+    │   │   │   │   ├── ...
+    │   │   │   │   ├── locres039.mrc
+    │   │   │   │   ├── vol000.mrc
+    │   │   │   │   ├── vol001.mrc
+    │   │   │   │   └── ...
+    │   │   │   ├── vol000
+    │   │   │   │   ├── ml_optimized_auc.mrc
+    │   │   │   │   ├── ml_optimized_half1_unfil.mrc
+    │   │   │   │   ├── ml_optimized_half2_unfil.mrc
+    │   │   │   │   ├── ml_optimized_locres_filtered.mrc
+    │   │   │   │   ├── ml_optimized_locres_filtered_nob.mrc
+    │   │   │   │   ├── ml_optimized_locres.mrc
+    │   │   │   │   ├── ml_optimized_unfiltered.mrc
+    │   │   │   │   ├── ml_params.pkl
+    │   │   │   │   └── split_choice.pkl
+    │   │   │   ├── ...
+    │   │   ├── centers_01no_annotate.png
+    │   │   ├── centers.pkl
+    │   │   ├── path0
+    │   │   │   └── density
+    │   │   ├── run.log
+    │   │   └── umap
+    │   │       ├── centers_no_annotate.png
+    │   │       ├── centers_.png
+    │   │       ├── embedding.pkl
+    │   │       ├── sns_hex.png
+    │   │       └── sns.png
+    │   └── volumes
+    │       ├── dilated_mask.mrc
+    │       ├── eigen_neg000.mrc
+    │       ├── eigen_neg001.mrc
+    │       ├── ...
+    │       ├── focus_mask.mrc
+    │       ├── mask.mrc
+    │       ├── mean_half1_unfil.mrc
+    │       ├── mean_half2_unfil.mrc
+    │       ├── mean.mrc
+    │       ├── variance10.mrc
+    │       ├── variance20.mrc
+    │       └── variance4.mrc
     └── run.log
 </details>
 
@@ -366,9 +461,54 @@ Note that this is different from the one in the paper. Run the following pipelin
 
 The output should be the same as [this notebook](output_visualization_empiar10076.ipynb).
 
+## Using kernel regression with other embeddings
+
+You can generate volumes from embedding not generated by RECOVAR using `generate_from_embedding`. E.g., for a cryoDRGN embedding:
+
+    python [recovar_dir/]generate_from_embedding.py particles.256.mrcs --poses poses.pkl --ctf ctf.pkl --embedding 02_cryodrgn256/z.24.pkl --o [output_dir] --target zfile.txt
+
+
+<details><summary><code>$ python generate_from_embedding.py -h</code></summary>
+
+    usage: generate_from_embedding.py [-h] -o OUTDIR [--zdim ZDIM] --poses POSES --ctf pkl [--ind PKL] [--uninvert-data UNINVERT_DATA]
+                                    [--datadir DATADIR] [--n-images N_IMAGES] [--padding PADDING] [--halfsets HALFSETS]
+                                    [--noise-model NOISE_MODEL] [--Bfactor BFACTOR] [--n-bins N_BINS] --embedding EMBEDDING --target
+                                    TARGET [--zdim1]
+                                    particles
+
+    positional arguments:
+    particles             Input particles (.mrcs, .star, .cs, or .txt)
+
+    optional arguments:
+    -h, --help            show this help message and exit
+    -o OUTDIR, --outdir OUTDIR
+                            Output directory to save model
+    --zdim ZDIM           Dimensions of latent variable. Default=1,2,4,10,20
+    --poses POSES         Image poses (.pkl)
+    --ctf pkl             CTF parameters (.pkl)
+    --Bfactor BFACTOR     0
+    --n-bins N_BINS       number of bins for kernel regression
+    --embedding EMBEDDING
+                            Image embeddings zs (.pkl), e.g. 00_cryodrgn256/z.24.pkl if you want to use a cryoDRGN embedding.
+    --target TARGET       Target zs to evaluate the kernel regression (.txt)
+    --zdim1               Whether dimension 1 embedding is used. This is an annoying corner case for np.loadtxt...
+
+    Dataset loading:
+    --ind PKL             Filter particles by these indices
+    --uninvert-data UNINVERT_DATA
+                            Invert data sign: options: true, false (default)
+    --datadir DATADIR     Path prefix to particle stack if loading relative paths from a .star or .cs file
+    --n-images N_IMAGES   Number of images to use (should only use for quick run)
+    --padding PADDING     Real-space padding
+    --halfsets HALFSETS   Path to a file with indices of split dataset (.pkl).
+    --noise-model NOISE_MODEL
+                            what noise model to use. Options are radial (default) computed from outside the masks, and white computed by
+                            power spectrum at high frequencies
+<details>
+
 ## Using the source code
 
-I hope some developers find parts of the code useful for their projects. See [this notebook](recovar_coding_tutorial.ipynb) for a short tutorial.
+I hope some developers find parts of the code useful for their projects. See [this notebook](recovar_coding_tutorial.ipynb) for a short tutorial. (OUT OF DATE)
 
 Some of the features which may be of interest:
 - The basic building block operations of cryo-EM efficiently, in batch and on GPU: shift images, slice volumes, do the adjoint slicing, apply CTF. See [recovar.core](recovar/core.py). Though I have not tried it, all of these operations should be differentiable thus you could use JAX's autodiff.
@@ -388,7 +528,7 @@ Some of the features which may be of interest:
 ## Limitations
 
 - *Symmetry*: there is currently no support for symmetry. If you got your poses through symmetric refinement, it will probably not work. It should probably work if you make a symmetry expansion of the particle stack, but I have not tested it.
-- *Memory*: you need a lot of memory to run this. For a stack of images of size 256, you probably need 400 GB+.
+- *Memory*: you need a lot of memory to run this. For a stack of images of size 256, you probably need 200 GB + size of dataset. If you run out of memory, you can use the --low-memory-option, in which case you need 60GB + size of dataset.
 - *ignore-zero-frequency*: I haven't thought much about the best way to do this. I would advise against using it for now.
 - *Other ones, probably?*: if you run into issues, please let me know. 
 

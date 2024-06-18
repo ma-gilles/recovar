@@ -35,7 +35,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--n-bins",  type =float, default=50, dest="n_bins",help="number of bins for reweighting"
+        "--n-bins",  type =float, default=50, dest="n_bins",help="number of bins for kernel regression"
     )
 
 
@@ -46,7 +46,6 @@ def add_args(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--no-z-regularization",  action="store_true", dest="no_z_regularization", help="Whether to use z regularization"
     )
-
 
     return parser
 

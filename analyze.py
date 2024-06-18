@@ -22,7 +22,7 @@ def add_args(parser: argparse.ArgumentParser):
         "--outdir",
         type=os.path.abspath,
         required=False,
-        help="Output directory to save model",
+        help="Output directory to save model. If not provided, will save in result_dir/output/analysis_zdim/",
     )
 
     parser.add_argument(
@@ -60,26 +60,28 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--n-bins",  type =float, default=50, dest="n_bins",help="number of bins for reweighting"
+        "--n-bins",  type =float, default=50, dest="n_bins",help="number of bins for kernel regression"
     )
 
     parser.add_argument(
         "--density",
         type=os.path.abspath,
         required=False,
-        help="density saved in pkl file",
+        help="density saved in .pkl file, with keys 'density' and 'latent_space_bounds'",
     )
 
     parser.add_argument(
         "--normalize-kmeans",
         dest="normalize_kmeans",
         action="store_true",
+        help="whether to normalize the zs before computing k-means"
     )
 
     parser.add_argument(
         "--no-z-regularization",
         dest="no_z_reg",
         action="store_true",
+        help="whether to use z without regularization, e.g. use 2_noreg instead of 2"
     )
 
     return parser
@@ -229,7 +231,6 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     pickle.dump(kmeans_res, open(output_folder_kmeans + 'trajectory_endpoints.pkl', 'wb'))
 
 from recovar.output import move_to_one_folder
-
 
 
 def pick_pairs(centers, n_pairs):
