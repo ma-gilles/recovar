@@ -10,7 +10,7 @@ Running RECOVAR:
 * [3. Running the pipeline](#iii-running-recovar-pipeline)
 * [4. Analyzing results](#iv-analyzing-results)
 * [5. Visualizing results](#v-visualizing-results)
-* [6. Generating trajectories](#vi-generating-additional-trajectories)
+<!-- * [6. Generating trajectories](#vi-generating-additional-trajectories) -->
 * [Using kernel regression with other embeddings](#using-kernel-regression-with-other-embeddings)
 
 [TLDR](#tldr)
