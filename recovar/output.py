@@ -125,14 +125,19 @@ def plot_trajectories_over_density_from_result(results, trajectories, subsampled
     return
 
 
-def plot_over_density(density, trajectories = None, latent_space_bounds = None,  subsampled = None, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = None, cov_zs = None, points = None, projection_function = None, annotate = False):
+def plot_over_density(density, trajectories = None, latent_space_bounds = None,  subsampled = None, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = None, cov_zs = None, points = None, projection_function = None, annotate = False, slice_point = None):
 
     colors = ['k', 'cornflowerblue', 'g' , 'r', 'b', 'w', 'c'] if colors is None else colors
     path_exists = trajectories is not None
         
     projection_function = half_slice_other if projection_function == 'slice' else projection_function
     projection_function = slice_at_point if projection_function == 'slice_point' else projection_function
+
+
     projection_function = sum_over_other if projection_function is None else projection_function
+
+    if slice_point is None:
+        slice_point = points[0] if points is not None else None
 
     compute_density = False
     if density is None:
@@ -159,8 +164,7 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
         if compute_density:
             density_pl, _= ld.compute_latent_space_density_on_2_axes(zs, cov_zs, axes = axes, num_points = num_points)
         else:
-            pt = points[0] if points is not None else None
-            density_pl = projection_function(density, axes, pt)
+            density_pl = projection_function(density, axes, slice_point)
             
         if axis_x > axis_y:
             density_pl = density_pl.T

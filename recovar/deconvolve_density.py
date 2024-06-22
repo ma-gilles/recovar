@@ -156,7 +156,7 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
 
     return lbfgsb_sols, cost, reg_cost, alphas
 
-def plot_density(lbfgsb_sols, density, alphas, function = None):
+def plot_density(lbfgsb_sols, density, alphas, function = None, cmap = 'inferno'):
     # plt.axis('square');
     from recovar.output import sum_over_other
 
@@ -207,7 +207,7 @@ def plot_density(lbfgsb_sols, density, alphas, function = None):
                 to_plot = function(density, [0,k])
                 # plt.figure()
                 # plt.title(title)
-                axs[n_plot,k-1].imshow(to_plot)#.sum(axis=-1))
+                axs[n_plot,k-1].imshow(to_plot, cmap =cmap)#.sum(axis=-1))
                 # plt.show()
             to_plot = function(density, [0,2])
             # plt.figure()

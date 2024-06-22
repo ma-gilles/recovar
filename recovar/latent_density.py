@@ -172,13 +172,25 @@ def compute_latent_space_density_on_curve(zs, cov_zs, path,  latent_space_bounds
 
 def compute_kde_density(points, gauss_kde, normalize = True):
     if normalize:
-        logpdfs = gauss_kde.logpdf(points.T)
+        # logpdfs = gauss_kde.logpdf(points.T)
+        logpdfs = gauss_kde_log_pdf_in_batch(gauss_kde, points)        
         logpdfs = logpdfs - jnp.max(logpdfs)
         pdfs = jnp.exp(logpdfs)
     else:
-        pdfs = gauss_kde.pdf(points.T)
+        logpdfs = gauss_kde_log_pdf_in_batch(gauss_kde, points)        
+        pdfs = jnp.exp(logpdfs)
+        # pdfs = gauss_kde.pdf(points.T)
     return pdfs
 
+def gauss_kde_log_pdf_in_batch(gauss_kde, points):
+    n_images = gauss_kde.dataset.shape[-1]
+    dim = gauss_kde.dataset.shape[0]
+    log_pdfs = np.zeros(points.shape[0])
+    batch_size_x = np.max([int(15 / (utils.get_size_in_gb(gauss_kde.dataset) * dim**1)), 1])
+    for k in range(0, int(np.ceil(n_images/batch_size_x))):
+        batch_st, batch_end = utils.get_batch_of_indices(n_images, batch_size_x, k)
+        log_pdfs[batch_st:batch_end] = gauss_kde.logpdf(points[batch_st:batch_end].T)
+    return log_pdfs
 
 # def compute_latent_space_density_at_zs(zs, cov_zs):   
 #     return compute_probs_in_batch(zs, zs, cov_zs)
