@@ -609,7 +609,7 @@ def standard_recovar_pipeline(args):
                                                                 image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
                                                                 contrast_grid = None, contrast_option = options['contrast'],
                                                                 ignore_zero_frequency = options['ignore_zero_frequency'] )
-        logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
+        logger.info(f"embedding time for zdim={zdim}_noreg: {time.time() - z_time}")
 
 
     zs_cont = {}; cov_zs_cont = {}; est_contrasts_cont = {}        

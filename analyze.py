@@ -182,7 +182,6 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     #     for key in embedding_dict[entry]:
     #         embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(embedding_dict[entry][key], ind_split)
 
-
     if zdim > 1:
         # Recompute density
         # logger.info("recomputing density. Take out?")
@@ -194,7 +193,6 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
             path_folder = output_folder_kmeans + 'path' + str(pair_idx) + '/'        
             o.mkdir_safe(path_folder)
-            print("HERE")
             full_path, subsampled_path = o.make_trajectory_plots_from_results(po, zdim_key, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = False, input_density = input_density, latent_space_bounds = latent_space_bounds)
 
             logger.info(f"path {pair_idx} done")
@@ -242,7 +240,6 @@ def pick_pairs(centers, n_pairs):
     X = distance_matrix(centers[:,:], centers[:,:])
 
     for _ in range(n_pairs//2):
-
         i_idx,j_idx = np.unravel_index(np.argmax(X), X.shape)
         X[i_idx, :] = 0 
         X[:, i_idx] = 0 
@@ -252,12 +249,11 @@ def pick_pairs(centers, n_pairs):
 
     # Pick some pairs that are far in the first few principal components.
     zdim = centers.shape[-1]
-    max_k = np.min([n_pairs//2, zdim])
+    max_k = np.min([(n_pairs - n_pairs//2), zdim])
     for k in range(max_k):
         i_idx = np.argmax(centers[:,k])
         j_idx = np.argmin(centers[:,k])
         pairs.append([i_idx, j_idx])
-
 
     return pairs
 
