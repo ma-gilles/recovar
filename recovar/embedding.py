@@ -124,7 +124,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
     
 
 # @functools.partial(jax.jit, static_argnums = [5])    
-def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False):
+def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, tilt_series_assignment = None):
     
     basis = basis.astype(experiment_dataset.dtype)
         
@@ -261,11 +261,19 @@ batched_summed_outer_products  = jax.vmap(summed_outer_products)
 
 
 @functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19, 23])    
-def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False):
+def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, shared_labels = False):
 
     # This should scale as O( batch_size * (n^2 * basis_size + n^3 + basis_size**2))
     AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq = compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid)
     
+    if shared_labels:
+        # Assumes all have the same labels. Maybe this isn't the best
+        AU_t_images = jnp.sum(AU_t_images, axis=0, keepdims=True)
+        AU_t_Amean = jnp.sum(AU_t_Amean, axis=0, keepdims=True) 
+        AU_t_AU = jnp.sum(AU_t_AU, axis=0, keepdims=True) 
+        image_T_A_mean = jnp.sum(image_T_A_mean, axis=0, keepdims=True) 
+        A_mean_norm_sq = jnp.sum(A_mean_norm_sq, axis=0, keepdims=True) 
+
     # Can't think of a great way to broadcast here, so:
     if noise_variance.ndim < 2:
         masked_noises = jnp.repeat(noise_variance[None], axis =0, repeats = batch.shape[0])#  * jnp.ones(batch.shape[0], dtype = noise_variance.dtype) 
