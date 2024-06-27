@@ -34,7 +34,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--n-trajectories", type=int, default=6, dest="n_trajectories", help="number of trajectories to compute between k-means clusters (default 6)"
+        "--n-trajectories", type=int, default=2, dest="n_trajectories", help="number of trajectories to compute between k-means clusters (default 6)"
     )
 
     parser.add_argument(

@@ -10,6 +10,9 @@ Running RECOVAR:
 * [3. Running the pipeline](#iii-running-recovar-pipeline)
 * [4. Analyzing results](#iv-analyzing-results)
 * [5. Visualizing results](#v-visualizing-results)
+* [Running on a small test dataset](#small-test-dataset)
+
+
 <!-- * [6. Generating trajectories](#vi-generating-additional-trajectories) -->
 * [Using kernel regression with other embeddings](#using-kernel-regression-with-other-embeddings)
 
@@ -239,6 +242,7 @@ Additional parameters that are typically set include:
 <!-- * `--uninvert-data`, Use if particles are dark on light (negative stain format) -->
 
 
+
 ## IV. Analyzing results
 
 After the pipeline is run, you can find the mean, eigenvectors, variance maps, and embeddings in the `outdir/results` directory, where outdir is the option given above by `-o`. You can run some standard analysis by running:
@@ -445,6 +449,33 @@ Usage example:
     --n-vols <class 'int'>
                             number of volumes produced at regular interval along the path
 </details> -->
+
+## Small test dataset
+
+If you want to make sure everything is installed properly, you can run the code in `run_test_dataset.sh`, which will generate a small dataset, run the pipeline and generate volumes.
+
+You can do this by: `conda activate recovar` and then  `sh run_test_dataset.sh`. See below for what the script does
+
+<details><summary>sh run_test_dataset.sh</summary>
+
+    RECOVAR_PATH=./
+    # Generate a small test dataset - should take about 30 sec
+    python $RECOVAR_PATH/make_test_dataset.py
+
+    # Run pipeline, should take about 2 min
+    python $RECOVAR_PATH/pipeline.py test_dataset/particles.64.mrcs --poses test_dataset/poses.pkl --ctf test_dataset/ctf.pkl --correct-contrast --o test_dataset/pipeline_output --mask-option=from_halfmaps
+
+    # Run on the 2D embedding with no regularization on latent space (better for density estimation)
+    # Should take about 5 min
+    python $RECOVAR_PATH/analyze.py test_dataset/pipeline_output --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=0
+
+
+    # You may want to delete this directory after running the test. 
+    # rm -rf $RECOVAR_PATH/test_dataset
+
+    ## One way to make sure everything went well is that the states in test_dataset/pipeline_output/output/analysis_2_noreg/centers/all_volumes should be similar to the simulated ones in recovar/data/vol*.mrc (the order doesn't matter, though)
+</details>
+
 
 
 ## TLDR

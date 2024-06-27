@@ -267,6 +267,10 @@ class CryoEMDataset:
 
         return
 
+    def get_tilt_dataset_generator(self, batch_size, num_workers = 0):
+        self.current_index=0# A very stupid way to do this for now?
+
+        return self.image_stack.get_dataset_generator(batch_size,num_workers = num_workers)
 
     def get_dataset_generator(self, batch_size, num_workers = 0):
         return self.image_stack.get_dataset_generator(batch_size,num_workers = num_workers)
