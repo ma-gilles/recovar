@@ -221,6 +221,10 @@ class CryoEMDataset:
             self.n_images = image_stack.n_images
             self.padding = image_stack.padding
 
+        self.n_units = self.n_images # This is the number of predictions.
+        self.tilt_series_flag = False # Hopefully can just switch this on and off
+
+        # For SPA, it is # of images, for ET, it is # of tilt series 
         self.CTF_FUNCTION_OPTION = "cryodrgn"
         self.CTF_fun_inp = CTF_fun
         self.hpad = self.padding//2
