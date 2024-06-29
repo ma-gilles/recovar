@@ -124,7 +124,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
     
 
 # @functools.partial(jax.jit, static_argnums = [5])    
-def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, tilt_series_assignment = None):
+def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False):
     
     basis = basis.astype(experiment_dataset.dtype)
         
@@ -141,10 +141,10 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
     basis_size = basis.shape[0]
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
     
-    xs = np.zeros((experiment_dataset.n_images, basis_size), dtype = basis.dtype)
-    estimated_contrasts = np.zeros(experiment_dataset.n_images, dtype = basis.dtype).real
-    image_latent_covariances = np.zeros((experiment_dataset.n_images, basis_size, basis_size), dtype = basis.dtype) if compute_covariances else None
-    image_latent_bias = np.zeros((experiment_dataset.n_images, basis_size, basis_size), dtype = basis.dtype) if compute_bias else None
+    xs = np.zeros((experiment_dataset.n_units, basis_size), dtype = basis.dtype)
+    estimated_contrasts = np.zeros(experiment_dataset.n_units, dtype = basis.dtype).real
+    image_latent_covariances = np.zeros((experiment_dataset.n_units, basis_size, basis_size), dtype = basis.dtype) if compute_covariances else None
+    image_latent_bias = np.zeros((experiment_dataset.n_units, basis_size, basis_size), dtype = basis.dtype) if compute_bias else None
 
 
     batch_idx =0 
@@ -166,7 +166,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
                                                                         compute_covariances, np.array(noise_variance),
                                                                         experiment_dataset.image_stack.process_images,
                                                                        experiment_dataset.CTF_fun, contrast_grid,
-                                                                       contrast_mean, contrast_variance, compute_bias)
+                                                                       contrast_mean, contrast_variance, compute_bias, shared_label = experiment_dataset.tilt_series_flag)
         
         xs[batch_image_ind] = xs_single
         estimated_contrasts[batch_image_ind] = contrast_single
@@ -184,89 +184,88 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
     return xs, image_latent_covariances, estimated_contrasts, image_latent_bias
 
 
-
-def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid):
+# # I don't know why this function is in this file
+## DELETE?
+# def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid):
     
-    # Memory to do this is ~ size(volume_mask) * batch_size
-    image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
-                                          rotation_matrices,
-                                          image_mask, 
-                                          volume_mask_threshold,
-                                          image_shape, 
-                                          volume_shape, grid_size, 
-                                          padding, 
-                                          disc_type )
+#     # Memory to do this is ~ size(volume_mask) * batch_size
+#     image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
+#                                           rotation_matrices,
+#                                           image_mask, 
+#                                           volume_mask_threshold,
+#                                           image_shape, 
+#                                           volume_shape, grid_size, 
+#                                           padding, 
+#                                           disc_type )
 
     
-    batch = process_fn(batch)
-    batch = core.translate_images(batch, translations , image_shape)
+#     batch = process_fn(batch)
+#     batch = core.translate_images(batch, translations , image_shape)
 
-    projected_mean = core.forward_model_from_map(mean_estimate,
-                                         CTF_params,
-                                         rotation_matrices, 
-                                         image_shape, 
-                                         volume_shape, 
-                                        voxel_size, 
-                                        CTF_fun, 
-                                        disc_type                                           
-                                          )
-
-
-    ## DO MASK BUSINESS HERE.
-    batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
-    projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, image_shape)
-    AUs = covariance_core.batch_over_vol_forward_model_from_map(basis,
-                                         CTF_params, 
-                                         rotation_matrices,
-                                         image_shape, 
-                                         volume_shape, 
-                                        voxel_size, 
-                                        CTF_fun, 
-                                        disc_type )    
-    # Apply mask on operator
-    AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, image_shape )
-    AUs = AUs.transpose(1,2,0)
-
-    # Do noise busisness here?
-    # batch /= jnp.sqrt(noise_variance)
-    # projected_mean /= jnp.sqrt(noise_variance)
-    # AUs /= jnp.sqrt(noise_variance)[...,None]
-
-    batch_outer = jax.vmap(lambda x : jnp.outer(x, jnp.conj(x)), in_axes = (0,0))
-    AU_t_images = batch_x_T_y(AUs, batch - projected_mean)#.block_until_ready()
-    # AU_t_Amean = batch_x_T_y(AUs, projected_mean)#.block_until_ready()
-    outer_products = batch_outer(AU_t_images)
-
-    # UAAUs = batched_summed_outer_products(AUs)
-
-    AU_t_AU = batch_x_T_y(AUs,AUs)#.block_until_ready()
+#     projected_mean = core.forward_model_from_map(mean_estimate,
+#                                          CTF_params,
+#                                          rotation_matrices, 
+#                                          image_shape, 
+#                                          volume_shape, 
+#                                         voxel_size, 
+#                                         CTF_fun, 
+#                                         disc_type                                           
+#                                           )
 
 
-    AUs /= jnp.sqrt(noise_variance)[...,None]
-    UALambdaAUs = jnp.sum(batched_summed_outer_products(AUs), axis=0)
+#     ## DO MASK BUSINESS HERE.
+#     batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
+#     projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, image_shape)
+#     AUs = covariance_core.batch_over_vol_forward_model_from_map(basis,
+#                                          CTF_params, 
+#                                          rotation_matrices,
+#                                          image_shape, 
+#                                          volume_shape, 
+#                                         voxel_size, 
+#                                         CTF_fun, 
+#                                         disc_type )    
+#     # Apply mask on operator
+#     AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, image_shape )
+#     AUs = AUs.transpose(1,2,0)
 
-    rhs = outer_products - UALambdaAUs
-    AU_t_AU = batch_x_T_y(AUs,AUs)#.block_until_ready()
-    lhs = jnp.sum(jnp.kron(AU_t_AU, AU_t_AU), axis=0)
+#     # Do noise busisness here?
+#     # batch /= jnp.sqrt(noise_variance)
+#     # projected_mean /= jnp.sqrt(noise_variance)
+#     # AUs /= jnp.sqrt(noise_variance)[...,None]
+
+#     batch_outer = jax.vmap(lambda x : jnp.outer(x, jnp.conj(x)), in_axes = (0,0))
+#     AU_t_images = batch_x_T_y(AUs, batch - projected_mean)#.block_until_ready()
+#     # AU_t_Amean = batch_x_T_y(AUs, projected_mean)#.block_until_ready()
+#     outer_products = batch_outer(AU_t_images)
+
+#     # UAAUs = batched_summed_outer_products(AUs)
+
+#     AU_t_AU = batch_x_T_y(AUs,AUs)#.block_until_ready()
+
+
+#     AUs /= jnp.sqrt(noise_variance)[...,None]
+#     UALambdaAUs = jnp.sum(batched_summed_outer_products(AUs), axis=0)
+
+#     rhs = outer_products - UALambdaAUs
+#     AU_t_AU = batch_x_T_y(AUs,AUs)#.block_until_ready()
+#     lhs = jnp.sum(jnp.kron(AU_t_AU, AU_t_AU), axis=0)
     
-    return rhs, lhs
+#     return rhs, lhs
     
+# def summed_outer_products(AU_t_images):
+#     # Not .H because things are already transposed technically
+#     return AU_t_images.T @ jnp.conj(AU_t_images)
+
+# batched_summed_outer_products  = jax.vmap(summed_outer_products)
 
 
-def summed_outer_products(AU_t_images):
-    # Not .H because things are already transposed technically
-    return AU_t_images.T @ jnp.conj(AU_t_images)
-
-batched_summed_outer_products  = jax.vmap(summed_outer_products)
-
-
-@functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19, 23])    
-def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, shared_labels = False):
+@functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19, 23, 24])    
+def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, shared_label = False):
 
     # This should scale as O( batch_size * (n^2 * basis_size + n^3 + basis_size**2))
     AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq = compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid)
     
-    if shared_labels:
+    if shared_label:
         # Assumes all have the same labels. Maybe this isn't the best
         AU_t_images = jnp.sum(AU_t_images, axis=0, keepdims=True)
         AU_t_Amean = jnp.sum(AU_t_Amean, axis=0, keepdims=True) 
@@ -297,7 +296,8 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
     # covariance
     if compute_covariances:
         # cov_batch = (contrast_single**2 )[:,None,None] * AU_t_AU  + jnp.diag(1/eigenvalues)
-        logger.warning("FIX THIS COV BATCH STUFF")
+        # logger.warning("FIX THIS COV BATCH STUFF")
+
         gram = (contrast_single**2 )[:,None,None] * AU_t_AU
         cov_batch = gram + jnp.diag(1/eigenvalues)
         cov_batch = cov_batch @ jnp.linalg.pinv(gram, rcond=1e-6, hermitian=True) @ cov_batch
@@ -316,7 +316,6 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
         bias = None
         
 
-    # import pdb; pdb.set_trace()
     return xs_single, contrast_single, cov_batch, bias
 
 

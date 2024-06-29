@@ -26,8 +26,8 @@ def get_default_covariance_computation_options():
         "column_sampling_scheme": 'high_snr_from_var_est',
         "column_radius": 5,
         "use_combined_mean": True, # doesn't seem to change anything? worth a try
-        "sampling_avoid_in_radius": 2, # doesn't seem to change anything? worth a try
-        "sampling_n_cols": 298, # doesn't seem to change anything? worth a try
+        "sampling_avoid_in_radius": 2, # Tuned
+        "sampling_n_cols": 298, # A weird number for purely historical reasons. Change?
         "n_pcs_to_compute" : 200,
         "randomized_sketch_size" : 300,
         "prior_n_iterations" : 20,
@@ -830,6 +830,9 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
     #     f_jit = jax.jit(compute_H_B_inner, static_argnums = [6])
     #     logger.warning("USING NO NOSIE MASK AND UNFIXED")
 
+    if experiment_dataset.tilt_series_flag:
+        assert "kernel" in H_B_fn, "Only kernel implemented for tilt series"
+
     if options['disc_type'] == 'cubic':
         these_disc = 'cubic'
         from recovar import cryojax_map_coordinates
@@ -895,7 +898,7 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
             elif (H_B_fn =="fixed") or (H_B_fn =="noisemask"):
                 H_k, B_k =  f_jit(images, ones_mapped, batch_CTF, batch_grid_pt_vec_ind_of_images, cov_noise, picked_freq_idx, image_mask, experiment_dataset.image_shape, volume_size)
             elif "kernel" in H_B_fn:
-                H_k, B_k = f_jit(images, batch_CTF, batch_grid_pt_vec_ind_of_images, experiment_dataset.rotation_matrices[batch_image_ind],  cov_noise, picked_freq_idx, image_mask, experiment_dataset.image_shape, volume_size, right_kernel = options["right_kernel"], left_kernel = options["left_kernel"], kernel_width = options["right_kernel_width"])#, kernel_width = 2)
+                H_k, B_k = f_jit(images, batch_CTF, batch_grid_pt_vec_ind_of_images, experiment_dataset.rotation_matrices[batch_image_ind],  cov_noise, picked_freq_idx, image_mask, experiment_dataset.image_shape, volume_size, right_kernel = options["right_kernel"], left_kernel = options["left_kernel"], kernel_width = options["right_kernel_width"], shared_label = experiment_dataset.tilt_series_flag)#, kernel_width = 2)
             else:
                 H_k, B_k =  f_jit(images, ones_mapped, batch_CTF, batch_grid_pt_vec_ind_of_images, cov_noise, picked_freq_idx, volume_size)
 
@@ -1155,7 +1158,8 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
                                                                             disc_type, disc_type_u, np.array(noise_variance),
                                                                             experiment_dataset.image_stack.process_images,
                                                                         experiment_dataset.CTF_fun, parallel_analysis = parallel_analysis,
-                                                                        jax_random_key =subkey, do_mask_images = do_mask_images)
+                                                                        jax_random_key =subkey, do_mask_images = do_mask_images,
+                                                                        shared_label = experiment_dataset.tilt_series_flag)
             
             # reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, disc_type_u, noise_variance, process_fn, CTF_fun, parallel_analysis = False, jax_random_key = None)
             # lhs_this = jax.device_put(lhs_this, jax.devices("cpu")[0])
@@ -1186,8 +1190,8 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     return covar
 
 
-@functools.partial(jax.jit, static_argnums = [8,9,10,11,12,13,14,15,17,18, 19,21])    
-def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, disc_type_u, noise_variance, process_fn, CTF_fun, parallel_analysis = False, jax_random_key = None, do_mask_images = True):
+@functools.partial(jax.jit, static_argnums = [8,9,10,11,12,13,14,15,17,18, 19,21,22])    
+def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, disc_type_u, noise_variance, process_fn, CTF_fun, parallel_analysis = False, jax_random_key = None, do_mask_images = True, shared_label = False):
     
     if disc_type != 'linear_interp':
         logger.warning("USING NEAREST NEIGHBOR DISCRETIZATION IN reduce_covariance_est_inner")
@@ -1232,7 +1236,7 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
                                          volume_shape, 
                                         voxel_size, 
                                         CTF_fun, 
-                                        disc_type_u )    
+                                        disc_type_u )   
     # Apply mask on operator
     AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, image_shape )
     AUs = AUs.transpose(1,2,0)
@@ -1247,6 +1251,9 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
     #     batch *= random_vals
         # print("here")
     AU_t_images = batch_x_T_y(AUs, batch)
+
+    if shared_label:
+        AU_t_images = jnp.sum(AU_t_images, axis=0,keepdims=True)
 
     # if parallel_analysis:
     #     random_vals = jax.random.randint(jax_random_key, AU_t_images.shape, 0, 2)*2 - 1
@@ -1357,7 +1364,7 @@ batched_summed_outer_products  = jax.vmap(summed_outer_products)
 #     return C_mat, grid_point_vec_indices
 
 
-def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coords_on_grid_stacked, rotation_matrices,  cov_noise, picked_freq_index, image_mask, image_shape, volume_size, right_kernel = "triangular", left_kernel = "triangular", kernel_width = 2):
+def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coords_on_grid_stacked, rotation_matrices,  cov_noise, picked_freq_index, image_mask, image_shape, volume_size, right_kernel = "triangular", left_kernel = "triangular", kernel_width = 2, shared_label = False):
     # print("Using kernel", right_kernel, left_kernel, kernel_width)
 
     volume_shape = utils.guess_vol_shape_from_vol_size(volume_size)
@@ -1365,12 +1372,27 @@ def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coord
 
     # The image term
     ctfed_images = centered_images * jnp.conj(CTF_val_on_grid_stacked)
+    
+    # Between SPA and tomography, the only difference here is that we want to treat all images
+    # (which are assumed to be from same tilt series) as a single measurement. 
+    # 
+    # if shared_label:
+    #     ss
+
+    # Why the hell did I call this images_prod??? 
     images_prod = covariance_core.sum_up_over_near_grid_points(ctfed_images, plane_coords_on_grid_stacked, picked_freq_coord, kernel = right_kernel, kernel_width = kernel_width)
+    
+    if shared_label:
+        # I think this is literally the only change? ( a corresponding one below for lhs)
+        ## TODO: Make sure this is correct.
+        images_prod = jnp.repeat(jnp.sum(images_prod, axis=0, keepdims=True), images_prod.shape[0], axis=0)
+
     ctfed_images  *= jnp.conj(images_prod)[...,None]
 
     # - noise term
     ctfed_images -= compute_noise_term(plane_coords_on_grid_stacked, picked_freq_coord, CTF_val_on_grid_stacked, image_shape, image_mask, cov_noise, kernel = right_kernel, kernel_width = kernel_width)
 
+    # TODO: put this in a function
     if left_kernel == "triangular":
         rhs_summed_up = core.adjoint_slice_volume_by_trilinear(ctfed_images, rotation_matrices,image_shape, volume_shape )
     elif left_kernel == "square":
@@ -1382,6 +1404,10 @@ def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coord
     ctf_squared = CTF_val_on_grid_stacked * jnp.conj(CTF_val_on_grid_stacked)
 
     ctfs_prods = covariance_core.sum_up_over_near_grid_points(ctf_squared, plane_coords_on_grid_stacked, picked_freq_coord , kernel = right_kernel, kernel_width = kernel_width)
+
+    if shared_label:
+        ctfs_prods = jnp.repeat(jnp.sum(ctfs_prods, axis=0, keepdims=True), ctfs_prods.shape[0], axis=0) 
+
     ctf_squared *= ctfs_prods[...,None]
 
 
@@ -1394,6 +1420,7 @@ def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coord
 
     
     return lhs_summed_up, rhs_summed_up
+
 
 
 def compute_noise_term(plane_coords, target_coord, CTF_on_grid, image_shape, image_mask, cov_noise, kernel = "triangular", kernel_width = 1):
