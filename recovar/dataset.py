@@ -387,15 +387,18 @@ def subsample_cryoem_dataset(dataset, indices):
 
 
 # Loads dataset that are stored in the cryoDRGN format
-def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False):
+def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False, tilt_series = False):
     
     # if ind is None:
     #     ind = None if n_images is None else jnp.arange(n_images) 
-    
-    if lazy:
-        dataset = LazyMRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
+    if tilt_series:
+            from recovar import tilt_dataset
+            dataset = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
     else:
-        dataset = MRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
+        if lazy:
+            dataset = LazyMRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
+        else:
+            dataset = MRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
         
     ctf_params = np.array(ctf.load_ctf_for_training(dataset.unpadded_D, ctf_file))
         
@@ -448,6 +451,27 @@ def get_split_indices(particles_file, ind_file = None):
     split_indices = split_index_list(indices)
     return split_indices
 
+
+def get_split_tilt_indices(particles_file, ind_file = None):
+    from cryodrgn import starfile
+    # pt, tp = dataset.TiltSeriesData.parse_particle_tilt(particles_file)
+    s = starfile.Starfile.load(particles_file)
+    n_images = s.df["_rlnGroupName"].size
+    # n_images = get_num_images_in_dataset(particles_file)
+    if ind_file is None:
+        particle_ind = np.arange(n_images)
+    elif isinstance(ind_file, np.ndarray):
+        particle_ind = ind_file
+    else:
+        particle_ind = pickle.load(open(ind_file, "rb"))
+    particles_to_tilts, tilts_to_particles = dataset.TiltSeriesData.parse_particle_tilt(args.particles)
+    ind = dataset.TiltSeriesData.particles_to_tilts(particles_to_tilts, particle_ind)
+    split_tilt_indices = split_index_list(ind)
+    split_image_indices = [ tilts_to_particles(ind) for ind in split_tilt_indices]
+    return split_image_indices
+
+
+
 def split_index_list( all_valid_image_indices, split_random_seed = 0 ):
     np.random.seed(split_random_seed)
 
@@ -486,13 +510,18 @@ def figure_out_halfsets(args):
         logging.info("Randomly splitting dataset into halfsets")
         # ind_split = dataset.get_split_indices(args.particles_file, ind_file = args.ind)
         # # pickle.dump(ind_split, open(args.out))
-        halfsets = get_split_indices(args.particles, ind_file = args.ind)
+        if args.tilt_series:
+            halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind)
+        else:
+            halfsets = get_split_indices(args.particles, ind_file = args.ind)
     else:
         logging.info("Loading halfset from file")
         halfsets = pickle.load(open(args.halfsets, 'rb'))
     if args.n_images > 0:
         halfsets = [ halfset[:args.n_images//2] for halfset in halfsets]
         logging.info(f"using only {args.n_images} images")
+        if args.tilt_series:
+            raise NotImplementedError
     return halfsets
 
 

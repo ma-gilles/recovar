@@ -247,6 +247,9 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
     
     values = [ image_names, micrograph_names, CTF_params[:,0].astype(dtype), CTF_params[:,1].astype(dtype), CTF_params[:,2].astype(dtype), optics_group ]
 
+    rotation_matrices = rotation_matrices.astype(np.float32)
+    translations = translations.astype(np.float32)
+
     if rotation_matrices is not None:
         keys += [ 'rlnAngleRot',
                 'rlnAngleTilt', 
