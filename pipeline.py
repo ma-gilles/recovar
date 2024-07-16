@@ -298,6 +298,31 @@ def add_args(parser: argparse.ArgumentParser):
             help="Whether to run again once constrast is estimated",
         )
     
+    parser.add_argument(
+        "--tilt-series", action="store_true",  dest="tilt_series", help="Whether to use tilt_series."
+    )
+
+    parser.add_argument(
+        "--tilt-series-ctf", default = None,  dest="tilt_series_ctf", help="Whether to use tilt_series ctf. Default = same as tilt_series."
+    )
+
+    parser.add_argument(
+        "--dose-per-tilt", default =None, type = float, dest="dose_per_tilt",
+    )
+
+    parser.add_argument(
+        "--angle-per-tilt", default =None,  type = float, dest="angle_per_tilt", 
+    )
+
+    # parser.add_argument(
+    #     "--per-image-bfac-scale", action="store_true",
+    # )
+
+    parser.add_argument(
+        "--only-mean", action="store_true", dest = "only_mean", help="Only compute mean"
+    )
+
+
     return parser
     
 
@@ -370,6 +395,7 @@ def standard_recovar_pipeline(args):
             raise ValueError(f"mean function {args.mean_fn} not recognized")
         utils.report_memory_device(logger=logger)
 
+
         mean_real = ftu.get_idft3(means['combined'].reshape(cryos[0].volume_shape))
 
         ## DECIDE IF WE SHOULD UNINVERT DATA
@@ -401,6 +427,29 @@ def standard_recovar_pipeline(args):
 
         # Compute mask
         volume_mask, dilated_volume_mask= mask.masking_options(args.mask_option, means, volume_shape, args.mask, cryo.dtype_real, args.mask_dilate_iter)
+
+        if args.only_mean:
+            output_folder = args.outdir + '/output/' 
+            o.mkdir_safe(output_folder)
+            o.mkdir_safe(output_folder + 'volumes/')
+
+            o.save_volume(means['combined'], output_folder + 'volumes/' + 'mean', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
+            o.save_volume(means['corrected0'], output_folder + 'volumes/' + 'mean_half1_unfil', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
+            o.save_volume(means['corrected1'], output_folder + 'volumes/' + 'mean_half2_unfil', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
+            o.save_volume(volume_mask, output_folder + 'volumes/' + 'mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
+
+            from recovar import locres
+            half1 = ftu.get_idft3(means['corrected0'].reshape(cryos[0].volume_shape))
+            half2 = ftu.get_idft3(means['corrected1'].reshape(cryos[0].volume_shape))
+
+            best_filtered_nob, _, _, _, _ = locres.local_resolution(half1, half2, 0, cryos[0].voxel_size, use_filter = True, fsc_threshold = 1/7, use_v2 = True)
+
+            o.save_volume(best_filtered_nob, output_folder + 'volumes/' + 'mean_filt', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
+
+            return
+
+
+
 
         if args.focus_mask is not None:
             focus_mask, _= mask.masking_options(args.mask_option, means, volume_shape, args.focus_mask, cryo.dtype_real, args.mask_dilate_iter)
@@ -456,6 +505,7 @@ def standard_recovar_pipeline(args):
 
         image_cov_noise = np.asarray(noise.make_radial_noise(noise_var_used, cryos[0].image_shape))
 
+        ## TODO Does Tilt series for anything for variance??
         from recovar import covariance_estimation
         variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, noise_variance = image_cov_noise,  use_regularization = True, disc_type = 'cubic')
         print('using regul in variance est?!?')
@@ -630,9 +680,11 @@ def standard_recovar_pipeline(args):
     var_metrics = {'filt_var': None}
 
     zdim = np.max(options['zs_dim_to_test'])
-    noise_var_from_het_residual, _,_ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(cryos[0], dilated_volume_mask, means['combined'], u['rescaled'][:,:zdim], est_contrasts[zdim], zs[zdim], batch_size//10, disc_type = covariance_options['disc_type'] )
 
-
+    if not args.tilt_series:
+        noise_var_from_het_residual, _,_ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(cryos[0], dilated_volume_mask, means['combined'], u['rescaled'][:,:zdim], est_contrasts[zdim], zs[zdim], batch_size//10, disc_type = covariance_options['disc_type'] )
+    else:
+        noise_var_from_het_residual = None
     # ### END OF DEL
 
     logger.info(f"embedding time: {time.time() - st_time}")
@@ -676,7 +728,7 @@ def standard_recovar_pipeline(args):
                 'picked_frequencies' : picked_frequencies, 'volume_shape': volume_shape, 'voxel_size': cryos[0].voxel_size, 'pc_metric' : var_metrics['filt_var'],
                 'variance_est': variance_est, 'variance_fsc': variance_fsc, 'noise_p_variance_est': noise_p_variance_est, 'ub_noise_var_by_var_est': ub_noise_var_by_var_est, 'covariance_options': covariance_options,
                 'contrasts_for_second': contrasts_for_second, 
-                'version': '0.1'}
+                'version': '0.2'}
 
     output_folder = args.outdir + '/output/' 
     o.mkdir_safe(output_folder)
@@ -685,6 +737,8 @@ def standard_recovar_pipeline(args):
     o.save_volume(dilated_volume_mask, output_folder + 'volumes/' + 'dilated_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
     o.save_volume(focus_mask, output_folder + 'volumes/' + 'focus_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
 
+
+
     o.save_volume(means['corrected0'], output_folder + 'volumes/' + 'mean_half1_unfil', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
     o.save_volume(means['corrected1'], output_folder + 'volumes/' + 'mean_half2_unfil', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
 
@@ -692,9 +746,17 @@ def standard_recovar_pipeline(args):
     utils.pickle_dump(result, output_model_folder + 'params.pkl')
 
     embedding_dict = { 'zs': zs, 'cov_zs' : cov_zs , 'contrasts': est_contrasts, 'zs_cont' : zs_cont, 'cov_zs_cont' : cov_zs_cont, 'contrasts_cont' : est_contrasts_cont}
+
+    if args.tilt_series:
+        particles_ind_split = [ cryo.image_stack.dataset_tilt_indices for cryo in cryos]
+    else:
+        particles_ind_split = ind_split
+
+    utils.pickle_dump(particles_ind_split, output_model_folder + 'particles_halfsets.pkl')
+
     for entry in embedding_dict:
         for key in embedding_dict[entry]:
-            embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(embedding_dict[entry][key], ind_split)
+            embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(embedding_dict[entry][key], particles_ind_split)
 
     utils.pickle_dump(embedding_dict, output_model_folder + 'embeddings.pkl')
 

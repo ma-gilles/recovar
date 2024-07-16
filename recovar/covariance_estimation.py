@@ -290,7 +290,7 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, c
         data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = index_subset)
 
     Ft_y, Ft_ctf, Ft_im, Ft_one = 0, 0, 0, 0
-    for batch, indices in data_generator:
+    for batch, particles_ind, indices in data_generator:
         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
         Ft_y_b, Ft_ctf_b, Ft_im_b, Ft_one_b = variance_relion_style_triangular_kernel_batch_trilinear(mean_estimate, 
                                                                 batch,
@@ -809,7 +809,10 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
     if H_B_fn =="noisemask":
         f_jit = jax.jit(compute_H_B_inner_mask, static_argnums = [7,8])
     elif "kernel" in H_B_fn:
-        f_jit = jax.jit(compute_H_B_triangular, static_argnums = [7,8,9,10,11])
+        f_jit = jax.jit(compute_H_B_triangular, static_argnums = [7,8,9,10,11,12])
+        # f_jit = compute_H_B_triangular#jax.jit(compute_H_B_triangular, static_argnums = [7,8,9,10,11,12])
+        # print('FIXXXXXXXXXXXXX')
+
     else:
         assert False, "Not recognized covariance_fn"
 
@@ -841,7 +844,7 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
         these_disc = 'linear_interp'
 
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
-    for images, batch_image_ind in data_generator:
+    for images, particles_ind, batch_image_ind in data_generator:
         
         # these_disc = 'linear_interp'
         # Probably should swap this to linear interp
@@ -1140,7 +1143,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
         data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
         
 
-        for batch, batch_image_ind in data_generator:
+        for batch, particles_ind, batch_image_ind in data_generator:
             jax_random_key, subkey = jax.random.split(jax_random_key)
 
             lhs_this, rhs_this = reduce_covariance_est_inner(batch, mean_estimate, volume_mask, 
@@ -1193,8 +1196,8 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
 @functools.partial(jax.jit, static_argnums = [8,9,10,11,12,13,14,15,17,18, 19,21,22])    
 def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, disc_type_u, noise_variance, process_fn, CTF_fun, parallel_analysis = False, jax_random_key = None, do_mask_images = True, shared_label = False):
     
-    if disc_type != 'linear_interp':
-        logger.warning("USING NEAREST NEIGHBOR DISCRETIZATION IN reduce_covariance_est_inner")
+    if (disc_type != 'linear_interp') and (disc_type != 'cubic'):
+        logger.warning(f"USING NEAREST NEIGHBOR DISCRETIZATION IN reduce_covariance_est_inner. disc_type={disc_type}, disc_type_u={disc_type_u}")
 
     # Memory to do this is ~ size(volume_mask) * batch_size
     image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
@@ -1417,7 +1420,6 @@ def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coord
         lhs_summed_up = core.adjoint_slice_volume_by_map(ctf_squared, rotation_matrices,image_shape, volume_shape, 'nearest' )
     else:
         raise ValueError("Kernel not implemented")
-
     
     return lhs_summed_up, rhs_summed_up
 

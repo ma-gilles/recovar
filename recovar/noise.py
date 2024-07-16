@@ -28,7 +28,7 @@ def estimate_noise_variance(experiment_dataset, batch_size):
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
     # all_shell_avgs = []
 
-    for batch, _ in data_generator:
+    for batch, _, _ in data_generator:
         batch = experiment_dataset.image_stack.process_images(batch)
         sum_sq += jnp.sum(np.abs(batch)**2, axis =0)
 
@@ -54,7 +54,7 @@ def estimate_noise_variance_from_outside_mask(experiment_dataset, volume_mask, b
     masked_image_PSs = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
 
     image_mask = jnp.ones_like(experiment_dataset.image_stack.mask)
-    for batch, batch_ind in data_generator:
+    for batch, particles_ind, batch_ind in data_generator:
         masked_image_PS, image_PS = estimate_noise_variance_from_outside_mask_inner(batch, 
                     volume_mask, experiment_dataset.rotation_matrices[batch_ind], 
                     experiment_dataset.translations[batch_ind], 
@@ -82,7 +82,7 @@ def estimate_noise_variance_from_outside_mask_v2(experiment_dataset, volume_mask
     image_mask = jnp.ones_like(experiment_dataset.image_stack.mask)
     top_fraction = 0
     kernel_sq_sum =0 
-    for batch, batch_ind in data_generator:
+    for batch, particles_ind, batch_ind in data_generator:
         top_fraction_this, kernel_sq_sum_this, per_image_est = estimate_noise_variance_from_outside_mask_inner_v2(batch, 
                     volume_mask, experiment_dataset.rotation_matrices[batch_ind], 
                     experiment_dataset.translations[batch_ind], 
@@ -288,7 +288,7 @@ def get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, 
     # all_averaged_residual_squared = 
     # soften_mask = -1
     basis = jnp.asarray(basis.T)
-    for batch, batch_image_ind in data_generator:
+    for batch, particles_ind, batch_image_ind in data_generator:
         # batch = experiment_dataset.image_stack.process_images(batch)
         averaged_residual_squared = get_average_residual_square_inner(batch, mean_estimate, volume_mask, 
                                                                         basis,
@@ -477,7 +477,7 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
     top_fraction = 0
     kernel_sq_sum =0 
 
-    for batch, batch_image_ind in data_generator:
+    for batch, particles_ind, batch_image_ind in data_generator:
         top_fraction_this, kernel_sq_sum_this, per_image_est = get_average_residual_square_inner_v2(batch, mean_estimate, volume_mask, 
                                 basis,
                                 experiment_dataset.CTF_params[batch_image_ind],
@@ -553,13 +553,6 @@ def get_average_residual_square_inner_v2(batch, mean_estimate, volume_mask, basi
                                               disc_type, soften = 5 )
     else:
         image_mask = jnp.ones_like(batch).real
-    # zz1 = batch_basis_times_coords(basis,basis_coordinates)
-    # zz2 = batch_basis_times_coords2(basis,basis_coordinates)
-    # zz3 = batch_basis_times_coords3(basis,basis_coordinates)
-    # print(jnp.linalg.norm(zz1 -zz2)/ jnp.linalg.norm(zz1))
-    # print(jnp.linalg.norm(zz1 -zz2)/ jnp.linalg.norm(zz2))
-    # print(jnp.linalg.norm(zz2 -zz3)/ jnp.linalg.norm(zz2))
-    # import pdb; pdb.set_trace()
     
     if basis.shape[-1] == 0:
         predicted_vols = contrasts.reshape((contrasts.shape[0], *np.ones(mean_estimate.ndim, dtype = int) ) ) * mean_estimate[None]

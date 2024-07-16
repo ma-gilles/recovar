@@ -13,6 +13,18 @@ ftu = fourier_transform_utils(jax.numpy)
 # vec_indices are 0, 1, 2, 3, 4, 5, 6, 7
 # frequencies are [-1, -1, -1], [-1, -1, 0], etc ...
 
+# CTF inds
+dfu_ind = 0# (float or Bx1 tensor): DefocusU (Angstrom)
+dfv_ind = 1 #(float or Bx1 tensor): DefocusV (Angstrom)
+dfang_ind = 2 #(float or Bx1 tensor): DefocusAngle (degrees)
+volt_ind =3 #(float or Bx1 tensor): accelerating voltage (kV)
+cs_int=4 #(float or Bx1 tensor): spherical aberration (mm)
+w_ind =5 #(float or Bx1 tensor): amplitude contrast ratio
+phase_shift_ind = 6 #(float or Bx1 tensor): degrees 
+bfactor_ind = 7 #(float or Bx1 tensor): envelope fcn B-factor (Angstrom^2)
+contrast_ind = 8
+tilt_number_ind = 9
+
 @functools.partial(jax.jit, static_argnums=[1])
 def vol_indices_to_vec_indices(vol_indices, vol_shape):
     # good_idx = check_vol_indices_in_bound(vol_indices,vol_shape[0])
@@ -456,8 +468,6 @@ def compute_residuals_many_poses(volumes, images, rotation_matrices, translation
 
 
 
-
-
 ## CTF functions.
 @jax.jit
 def evaluate_ctf(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfactor):
@@ -511,9 +521,63 @@ def evaluate_ctf_packed(freqs, CTF):
 
 batch_evaluate_ctf = jax.vmap(evaluate_ctf_packed, in_axes = (None, 0))
 
-CTF_FUNCTION_OPTION = "cryodrgn"
+# def evaluate_ctf_tilt(CTF_params, )
+def evaluate_ctf_wrapper_tilt_series(CTF_params, image_shape, voxel_size, dose_per_tilt =None, angle_per_tilt=None ):
 
-def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, CTF_FUNCTION_OPTION ):
+    dose_filter = get_dose_filters(voxel_size, image_shape, dose_per_tilt, angle_per_tilt, CTF_params[:,9], CTF_params[0,4])
+
+    return dose_filter * cryodrgn_CTF(CTF_params[:,:9], image_shape, voxel_size)
+
+# A wrapper to have some input as SPA CTF
+def get_cryo_ET_CTF_fun( dose_per_tilt = 2.9, angle_per_tilt = 3):
+    def CTF_ET_fun(*args):
+        return evaluate_ctf_wrapper_tilt_series(*args, dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt )
+    return CTF_ET_fun
+
+
+def critical_exposure(freq, voltage):
+    # Define a scale factor based on the voltage value
+    scale_factor = jnp.where(jnp.isclose(voltage, 200), 0.75, 1)
+
+    # Calculate the critical exposure
+    critical_exp = freq ** (-1.665)
+    critical_exp = critical_exp * scale_factor * 0.245
+
+    return critical_exp + 2.81
+
+def get_dose_filters(Apix, image_shape, dose_per_tilt, angle_per_tilt, tilt_numbers, voltage):
+    D = image_shape[0]
+
+    N = len(tilt_numbers)
+    
+    freqs = ftu.get_k_coordinate_of_each_pixel(image_shape, Apix, scaled=True)
+
+    x = freqs[..., 0]
+    y = freqs[..., 1]
+    s2 = x**2 + y**2
+    s = jnp.sqrt(s2)
+
+    cumulative_dose = tilt_numbers * dose_per_tilt
+    # cd_tile = torch.repeat_interleave(cumulative_dose, D * D).view(N, -1)
+    cd_tile = cumulative_dose[:, None] * jnp.ones([N, D * D])
+
+    # This probably should be rewritten. For now I am trying to keep it as close to the original as possible.
+    ce = critical_exposure(s, voltage)
+    ce_tile = jnp.repeat(ce[None], N, axis=0)
+
+    oe_tile = ce_tile * 2.51284  # Optimal exposure
+    oe_mask = (cd_tile < oe_tile)
+
+    freq_correction = jnp.exp(-0.5 * cd_tile / ce_tile)
+    freq_correction = jnp.multiply(freq_correction, oe_mask)
+    
+    tilt_angles = angle_per_tilt * jnp.ceil(tilt_numbers / 2) 
+    angle_correction = jnp.cos(tilt_angles * np.pi / 180)
+    ac_tile = angle_correction[:, None] * jnp.ones([N, D * D])
+
+    return freq_correction * ac_tile
+
+def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, CTF_FUNCTION_OPTION=None ):
     return cryodrgn_CTF(CTF_params, image_shape, voxel_size)
 
     # if CTF_FUNCTION_OPTION == "dynamight":

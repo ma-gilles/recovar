@@ -341,7 +341,7 @@
 #     weights, good_weights, RR, bias_multiple = compute_discretization_weights(experiment_dataset, prior, batch_size, order=order, grid_dist = grid_dist, max_dist = max_dist, image_weights=image_weights )
 #     logger.info(f"time done with weights")
 #     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
-#     for batch, indices in data_generator:
+#     for batch, p_indices, indices in data_generator:
         
 #         # Only place where image mask is used ?
 #         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)

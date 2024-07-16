@@ -129,7 +129,7 @@ def gradient_descent_nd(travel_time, x_st, x_end, dx, step_size = 0.25, n_theta 
     directions = np.stack( [ g.reshape(-1) for g in grids] , axis =-1) 
     directions /= np.linalg.norm(directions, axis =-1)[:,None]
     
-    directions /= dx / np.mean(dx)
+    directions /= (dx / np.mean(dx))
     #  
     
     path = [x_end]

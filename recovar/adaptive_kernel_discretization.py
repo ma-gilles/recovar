@@ -204,7 +204,7 @@ def precompute_triangular_kernel(experiment_dataset, noise_variance, pol_degree=
     noise_variance_image = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape).reshape(-1)
 
     idx = 0 
-    for batch, indices in data_generator:
+    for batch, p_indices, indices in data_generator:
         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
         # heterogeneity_distances = None if heterogeneity_distances is None else heterogeneity_distances[indices]
         XWX, F = precompute_triangular_kernel_one_batch(batch,
@@ -553,7 +553,7 @@ def precompute_kernel(experiment_dataset, noise_variance, pol_degree=0, heteroge
     noise_variance_image = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape).reshape(-1)
 
     idx = 0 
-    for batch, indices in data_generator:
+    for batch, p_indices, indices in data_generator:
         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
         # heterogeneity_distances = None if heterogeneity_distances is None else heterogeneity_distances[indices]
         XWX, F = precompute_kernel_one_batch(batch,
@@ -1147,7 +1147,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
         data_generator = experiment_dataset.get_dataset_subset_generator( batch_size=batch_size, subset_indices = image_inds)
         lhs = jnp.zeros(half_volume_size, dtype = experiment_dataset.dtype_real )
         rhs = jnp.zeros(half_volume_size, dtype = experiment_dataset.dtype )
-        for batch, indices in data_generator:
+        for batch, particles_ind, indices in data_generator:
 
             # import pdb; pdb.set_trace()
             # Only place where image mask is used ?
@@ -1839,7 +1839,7 @@ def compute_residuals_many_weights(experiment_dataset, weights , pol_degree, use
     logger.info(f"batch size in residual computation: {batch_size}")
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
     weights = jnp.asarray(weights)
-    for batch, indices in data_generator:
+    for batch, p_indices, indices in data_generator:
         # Only place where image mask is used ?
         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
 

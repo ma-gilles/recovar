@@ -93,6 +93,8 @@ def local_fsc_metric(map1, map2, voxel_size, mask, fsc_threshold=1/7, locres_sam
     i_loc_res[~mask] = None
     plt.imshow(i_loc_res[128]); plt.show()
 
+    
+
     median_locres = np.median(good_resols)
     ninety_pc_locres = np.percentile(good_resols, 90)
 

@@ -626,7 +626,7 @@ def local_error_with_cov(map1, map2, voxel_size, locres_sampling = 25, locres_ma
 
 
 
-
+### This is the metric which is actually used
 def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, use_v2 = False, debug = False, split_shell = False):
 
     locres_maskrad= 0.5 *locres_sampling if locres_maskrad is None else locres_maskrad
@@ -703,6 +703,7 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
     diff_map = jnp.array(map1- map2)
     noise_variance = jnp.array(noise_variance)
 
+    use_v3 = False
 
     single_batch = not use_v2
     if single_batch:
@@ -731,6 +732,9 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
         else:
             vol_batch_size = recovar.utils.get_vol_batch_size(noise_variance.shape[0], recovar.utils.get_gpu_memory_total()) / 4
 
+        if use_v3:
+            vol_batch_size = int(recovar.utils.get_vol_batch_size(noise_variance_small.shape[0], recovar.utils.get_gpu_memory_total()) / (noise_variance_small.shape[0]//2))
+
         n_batch = utils.get_number_of_index_batch(sampling_points.shape[0], vol_batch_size)
 
         for k in range(n_batch):
@@ -738,7 +742,15 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
             batch = sampling_points[batch_st:batch_end]
 
             if split_shell:
-                diff = batch_masked_noisy_error_split_over_shells(diff_map, noise_variance_small, batch, maskrad_pix, edgewidth_pix )
+                ### NOTE!!!
+                ### THIS IS THE OPTION WHICH IS ACTUALLY USED. PROBABLY SHOULD CLEAN UP THE REST
+                if use_v3:
+                    # By noting that diagonal blocks of MCM are toeplitz, we can compute this fast
+                    diff = batch_masked_noisy_error_split_over_shells_v2(diff_map, noise_variance_small, batch, maskrad_pix, edgewidth_pix )
+                    # diff2 = batch_masked_noisy_error_split_over_shells(diff_map, noise_variance_small, batch, maskrad_pix, edgewidth_pix )
+                    # import pdb; pdb.set_trace()
+                else:
+                    diff = batch_masked_noisy_error_split_over_shells(diff_map, noise_variance_small, batch, maskrad_pix, edgewidth_pix )
             else:
                 if use_v2:
                     # By noting that diagonal blocks of MCM are toeplitz, we can compute this fast
@@ -766,9 +778,6 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
         return i_local_error, diffs
     
     return i_local_error
-
-
-
 
 
 @functools.partial(jax.jit, static_argnums = [3,4])    
@@ -803,7 +812,32 @@ def masked_noisy_error_3(diff, noise_variance_small, offset, maskrad_pix, edgewi
     # mask = mask_fn.raised_cosine_mask(diff.shape, maskrad_pix, maskrad_pix + edgewidth_pix, offset)
     # diff = ftu.get_dft3((diff) * mask) * jnp.sqrt(noise_variance)
     return jnp.linalg.norm(diff_masked)**2
+
+
+
+def split_by_shells(input_vec, volume_shape ):
+    radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = 0).astype(int).reshape(-1) 
+    
+    split_by_shell = jnp.zeros((input_vec.size, volume_shape[0]//2 ), dtype = input_vec.dtype)
+    split_by_shell = split_by_shell.at[(jnp.arange(input_vec.size), radial_distances)].set(input_vec)
+    full_shape = split_by_shell.shape
+    indices = jnp.stack([jnp.arange(input_vec.size), radial_distances], axis=0)
+    
+    good_indices = radial_distances < volume_shape[0]//2 
+    sampling_idx = jax.numpy.ravel_multi_index(indices, split_by_shell.shape,mode='clip') #, fill_value=-1)
+    
+    # Some serious JAX hacking going on here to ignore bad indices. Probably should change this.
+    sampling_idx = jnp.where(good_indices, sampling_idx, split_by_shell.size+1) 
+    
+    # This seems silly but not sure how else to do it.
+    split_by_shell = split_by_shell.reshape(-1)
+    split_by_shell = split_by_shell.at[sampling_idx].set(input_vec,mode='drop')
+    split_by_shell = split_by_shell.reshape(full_shape)
+    return split_by_shell
+
+
 from recovar import regularization
+
 
 
 @functools.partial(jax.jit, static_argnums = [3,4,5])    
@@ -819,6 +853,52 @@ def masked_noisy_error_split_over_shells(diff, noise_variance_small, offset, mas
     diff_masked_norm = regularization.sum_over_shells(jnp.abs(diff_masked)**2, diff_masked.shape)
 
     return diff_masked_norm
+
+
+@functools.partial(jax.jit, static_argnums = [3,4,5])    
+def masked_noisy_error_split_over_shells_v2(diff, noise_variance_small, offset, maskrad_pix, edgewidth_pix,multiplier =3 ):
+    # NOT IMPLEMENTED
+    offset += diff.shape[0]//2
+
+    # y = S M diff
+    diff = subsample_array(diff, offset, multiplier*maskrad_pix)
+    mask = mask_fn.raised_cosine_mask(diff.shape, maskrad_pix, edgewidth_pix, 0)
+    diff_masked = diff * mask
+    diff_ft = ftu.get_dft3(diff_masked)
+
+    # Now to compute (S M D M^* S^*)^dagger
+    # = 
+    split_diff = split_by_shells(diff_ft, diff.shape ) #* jnp.sqrt(noise_variance_small)
+    split_diff = ftu.get_idft3(split_diff) * mask
+    split_diff = ftu.get_dft3(split_diff) * jnp.sqrt(noise_variance_small)
+
+    diff_masked_norm = jnp.sum(jnp.abs(split_diff)**2, axis=(-1,-2,-3))
+
+    return diff_masked_norm
+
+def split_by_shells(input_vec, volume_shape ):
+    radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = 0).astype(int).reshape(-1) 
+    
+    split_by_shell = jnp.zeros((volume_shape[0]//2 , input_vec.size), dtype = input_vec.dtype)
+    # split_by_shell = split_by_shell.at[(jnp.arange(input_vec.size), radial_distances)].set(input_vec)
+    full_shape = split_by_shell.shape
+    indices = jnp.stack([radial_distances, jnp.arange(input_vec.size)], axis=0)
+    
+    good_indices = radial_distances < volume_shape[0]//2 
+    sampling_idx = jax.numpy.ravel_multi_index(indices, split_by_shell.shape,mode='clip') #, fill_value=-1)
+    
+    # Some serious JAX hacking going on here to ignore bad indices. Probably should change this.
+    sampling_idx = jnp.where(good_indices, sampling_idx, split_by_shell.size+1) 
+    
+    # This seems silly but not sure how else to do it.
+    split_by_shell = split_by_shell.reshape(-1)
+    split_by_shell = split_by_shell.at[sampling_idx].set(input_vec.reshape(-1),mode='drop')
+    split_by_shell = split_by_shell.reshape(full_shape[0], *input_vec.shape )
+    return split_by_shell
+
+
+
+
 
 batch_subsample_array_at_same_offset = jax.vmap(subsample_array, in_axes = (0, None, None) )
 
@@ -839,7 +919,6 @@ def recombine_with_choice(estimators, choice, offset, maskrad_pix, edgewidth_pix
     combined_est = ftu.get_idft3(combined_est).real
 
     return combined_est
-
 
 # @functools.partial(jax.jit, static_argnums = [3,4])    
 # def masked_noisy_error2(diff, sqrt_noise_variance_real, offset, maskrad_pix, edgewidth_pix ):
@@ -872,8 +951,10 @@ def recombine_with_choice(estimators, choice, offset, maskrad_pix, edgewidth_pix
 
 batch_masked_noisy_error = jax.vmap(masked_noisy_error, in_axes = (None,None,0, None, None) )
 batch_masked_noisy_error_3 = jax.vmap(masked_noisy_error_3, in_axes = (None,None,0, None, None) )
+
 batch_masked_noisy_error_split_over_shells = jax.vmap(masked_noisy_error_split_over_shells, in_axes = (None,None,0, None, None) )
 
+batch_masked_noisy_error_split_over_shells_v2 = jax.vmap(masked_noisy_error_split_over_shells_v2, in_axes = (None,None,0, None, None) )
 
 def recombine_estimates(estimators, choice, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None):
     assert locres_edgwidth ==0

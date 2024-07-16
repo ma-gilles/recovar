@@ -218,7 +218,7 @@ def dtype_to_real(rvs_dtype):
 
 import starfile
 import pandas as pd
-def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid_size, particles_file, output_filename, halfset_indices = None):
+def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid_size, particles_file, output_filename, halfset_indices = None, tilt_groups = None):
 
     # Stored like this in CTF_params
     # dfu (float or Bx1 tensor): DefocusU (Angstrom)
@@ -229,8 +229,9 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
     # w (float or Bx1 tensor): amplitude contrast ratio
     # phase_shift (float or Bx1 tensor): degrees 
     # bfactor (float or Bx1 tensor): envelope fcn B-factor (Angstrom^2)
-    
-    keys = ['rlnOpticsGroup', 'rlnOpticsGroupName', 'rlnAmplitudeContrast',
+    grid_size = int(grid_size)
+
+    keys = ['rlnOpticsGroup', 'rlnOpticsGroupName', 'rlnAmplitudeContrast', 
        'rlnSphericalAberration', 'rlnVoltage', 'rlnImagePixelSize',
        'rlnImageSize', 'rlnImageDimensionality']
     dtype = np.float64
@@ -242,10 +243,12 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
     micrograph_names = [ f"{k+1}" for k in range(n_images) ]
     optics_group = np.ones(n_images).astype(int)
     
+    #_rlnGroupName #20
+
     keys = ['rlnImageName', 'rlnMicrographName', 'rlnDefocusU', 'rlnDefocusV',
-       'rlnDefocusAngle', 'rlnOpticsGroup']
+       'rlnDefocusAngle', 'rlnPhaseShift', 'rlnOpticsGroup']
     
-    values = [ image_names, micrograph_names, CTF_params[:,0].astype(dtype), CTF_params[:,1].astype(dtype), CTF_params[:,2].astype(dtype), optics_group ]
+    values = [ image_names, micrograph_names, CTF_params[:,0].astype(dtype), CTF_params[:,1].astype(dtype), CTF_params[:,2].astype(dtype), CTF_params[:, 6].astype(dtype), optics_group ]
 
     rotation_matrices = rotation_matrices.astype(np.float32)
     translations = translations.astype(np.float32)
@@ -260,7 +263,16 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
         rots = cryodrgn_utils.R_to_relion_scipy(rotation_matrices)
         values += [ rots[:,0], rots[:,1], rots[:,2], translations[:,0], translations[:,1] ]
     
-
+    if tilt_groups is not None:
+        keys += ['rlnGroupName']
+        group_names = [f'tilt_{group_n+1}' for group_n in tilt_groups]
+        values += [group_names]
+        # Also write contrast variation if using tilt groups?
+        keys += ['rlnCtfScalefactor']
+        values += [CTF_params[:,8]]
+        keys += ['rlnCtfBfactor']
+        values += [CTF_params[:,7]]
+        
     if halfset_indices is not None:
         keys += ['rlnRandomSubset']
         values += [halfset_indices]
@@ -269,6 +281,7 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
     particles_df = pd.DataFrame(d)
     star_df = { 'optics' : optic_df, 'particles' : particles_df }
     starfile.write(star_df, output_filename)
+    
     return
 
 

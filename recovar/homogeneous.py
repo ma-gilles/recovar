@@ -207,7 +207,7 @@ def solve_least_squares_mean_iteration(experiment_dataset , cov_diag_prior, nois
     logger.warning('TOOK OUT IMAGE MASK IN MEAN!!! PUT IT BACK??')
 
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
-    for batch, indices in data_generator:
+    for batch, particles_ind, indices in data_generator:
         
         # Only place where image mask is used ?
         # print('TOOK OUT IMAGE MASK IN MEAN!!! PUT IT BACK??')

@@ -307,7 +307,7 @@ def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, n
     vol_real, vol_imag = 0, 0
 
     # Compute \sum_i A_i^T y_i / sigma_i^2
-    for batch, indices in data_generator:
+    for batch, particles_ind, indices in data_generator:
         # Only place where image mask is used ?
         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
         batch = core.translate_images(batch, experiment_dataset.translations[indices], experiment_dataset.image_shape)

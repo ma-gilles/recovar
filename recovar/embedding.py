@@ -148,7 +148,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
 
 
     batch_idx =0 
-    for batch, batch_image_ind in data_generator:
+    for batch, particles_ind, batch_image_ind in data_generator:
         
         xs_single, contrast_single, cov_batch, bias = compute_single_batch_coords_split(batch, mean_estimate, volume_mask, 
                                                                         basis, eigenvalues,
@@ -168,13 +168,13 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
                                                                        experiment_dataset.CTF_fun, contrast_grid,
                                                                        contrast_mean, contrast_variance, compute_bias, shared_label = experiment_dataset.tilt_series_flag)
         
-        xs[batch_image_ind] = xs_single
-        estimated_contrasts[batch_image_ind] = contrast_single
+        xs[particles_ind] = xs_single
+        estimated_contrasts[particles_ind] = contrast_single
         if compute_covariances:
-            image_latent_covariances[np.array(batch_image_ind)] = cov_batch
+            image_latent_covariances[np.array(particles_ind)] = cov_batch
 
         if compute_bias:
-            image_latent_bias[np.array(batch_image_ind)] = bias
+            image_latent_bias[np.array(particles_ind)] = bias
 
         if (batch_idx % 50 == 49) and (batch_idx > 0):
             compute_single_batch_coords_split._clear_cache() 
@@ -265,6 +265,12 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
     # This should scale as O( batch_size * (n^2 * basis_size + n^3 + basis_size**2))
     AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq = compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid)
     
+    # Can't think of a great way to broadcast here, so:
+    if noise_variance.ndim < 2:
+        masked_noises = jnp.repeat(noise_variance[None], axis =0, repeats = batch.shape[0])#  * jnp.ones(batch.shape[0], dtype = noise_variance.dtype) 
+
+
+    # import pdb; pdb.set_trace()
     if shared_label:
         # Assumes all have the same labels. Maybe this isn't the best
         AU_t_images = jnp.sum(AU_t_images, axis=0, keepdims=True)
@@ -272,10 +278,10 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
         AU_t_AU = jnp.sum(AU_t_AU, axis=0, keepdims=True) 
         image_T_A_mean = jnp.sum(image_T_A_mean, axis=0, keepdims=True) 
         A_mean_norm_sq = jnp.sum(A_mean_norm_sq, axis=0, keepdims=True) 
+        masked_noises = jnp.sum(masked_noises, axis=0, keepdims=True)
 
-    # Can't think of a great way to broadcast here, so:
-    if noise_variance.ndim < 2:
-        masked_noises = jnp.repeat(noise_variance[None], axis =0, repeats = batch.shape[0])#  * jnp.ones(batch.shape[0], dtype = noise_variance.dtype) 
+        logger.warning("IS THIS RIGHT?")
+        image_norms_sq = jnp.sum(image_norms_sq, axis=0, keepdims=True)
 
     # This should scale as O( contrast_grid_size * (n^2 * batch_size * basis_size +  )
     xs_batch_contrast = batch_over_images_and_contrast_solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, masked_noises, contrast_grid)
