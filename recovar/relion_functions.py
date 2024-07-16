@@ -64,7 +64,7 @@ def relion_style_triangular_kernel(experiment_dataset , cov_noise,  batch_size, 
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
     Ft_y, Ft_ctf = 0, 0 
 
-    for batch, indices in data_generator:
+    for batch, particles_ind, indices in data_generator:
 
         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
         Ft_y_b, Ft_ctf_b = relion_style_triangular_kernel_batch(batch,
@@ -170,7 +170,7 @@ def residual_relion_style_triangular_kernel(experiment_dataset, mean_estimate, c
         data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = index_subset)
 
     Ft_y, Ft_ctf = 0, 0 
-    for batch, indices in data_generator:
+    for batch, particles_ind, indices in data_generator:
         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
         Ft_y_b, Ft_ctf_b = residual_relion_style_triangular_kernel_batch_trilinear(mean_estimate, 
                                                                 batch,

@@ -59,7 +59,7 @@ class MRCDataMod(torch.utils.data.Dataset):
         return self.n_images
 
     def __getitem__(self, index):
-        return self.get(index), index
+        return self.get(index), index, index
 
     def process_images(self, images, apply_image_mask = False):
         if apply_image_mask:
@@ -69,10 +69,10 @@ class MRCDataMod(torch.utils.data.Dataset):
         return images
 
     def get_dataset_generator(self, batch_size, num_workers = 0):
-        return tf.data.Dataset.from_tensor_slices((self.particles,np.arange(self.n_images))).batch(batch_size, num_parallel_calls = tf.data.AUTOTUNE).as_numpy_iterator()
+        return tf.data.Dataset.from_tensor_slices((self.particles,np.arange(self.n_images),np.arange(self.n_images))).batch(batch_size, num_parallel_calls = tf.data.AUTOTUNE).as_numpy_iterator()
 
     def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
-        return tf.data.Dataset.from_tensor_slices((self.particles[subset_indices], subset_indices)).batch(batch_size, num_parallel_calls = tf.data.AUTOTUNE).as_numpy_iterator()
+        return tf.data.Dataset.from_tensor_slices((self.particles[subset_indices], subset_indices, subset_indices)).batch(batch_size, num_parallel_calls = tf.data.AUTOTUNE).as_numpy_iterator()
 
 
 
@@ -110,7 +110,7 @@ class LazyMRCDataMod(torch.utils.data.Dataset):
         self.unpadded_image_shape = (nx, ny)
 
         # Maybe should do do this on CPU?
-        self.particles = particles #np.array(padded_dft(particles, self.mask, self.image_size))
+        self.particles = particles 
         self.padding = padding
         
     def get(self, i):
@@ -120,7 +120,7 @@ class LazyMRCDataMod(torch.utils.data.Dataset):
         return self.n_images
 
     def __getitem__(self, index):
-        return self.get(index), index
+        return self.get(index), index, index
 
     def process_images(self, images, apply_image_mask = False):
         
@@ -184,7 +184,7 @@ class NumpyLoader(torch.utils.data.DataLoader):
 # A dataset class, that includes images and all other information
 class CryoEMDataset:
 
-    def __init__(self, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.evaluate_ctf_wrapper, dtype = np.complex64, rotation_dtype = np.float64, dataset_indices = None, grid_size = None, volume_upsampling_factor = 1  ):
+    def __init__(self, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.evaluate_ctf_wrapper, dtype = np.complex64, rotation_dtype = np.float64, dataset_indices = None, grid_size = None, volume_upsampling_factor = 1, tilt_series_flag = False  ):
         
         if image_stack is not None:
             grid_size = image_stack.D
@@ -221,11 +221,16 @@ class CryoEMDataset:
             self.n_images = image_stack.n_images
             self.padding = image_stack.padding
 
-        self.n_units = self.n_images # This is the number of predictions.
-        self.tilt_series_flag = False # Hopefully can just switch this on and off
+        
+        # self.n_units = self.n_images # This is the number of predictions.
+        self.tilt_series_flag = tilt_series_flag # Hopefully can just switch this on and off
+
+        # For SPA, it is # of images, for ET, it is # of tilt series
+        # For tilt series: A "tilt" is an image. A particle is a full tilt series 
+        self.n_units = self.image_stack.Np if self.tilt_series_flag else self.n_images
 
         # For SPA, it is # of images, for ET, it is # of tilt series 
-        self.CTF_FUNCTION_OPTION = "cryodrgn"
+        # self.CTF_FUNCTION_OPTION = "cryodrgn"
         self.CTF_fun_inp = CTF_fun
         self.hpad = self.padding//2
         self.volume_mask_threshold = 4 * self.grid_size / 128 # At around 128 resolution, 4 seems good, so scale up accordingly. This probably should have a less heuristic value here. This is assuming the mask is scaled between [0,1]
@@ -249,6 +254,9 @@ class CryoEMDataset:
             6 - phase_shift (float or Bx1 tensor): degrees 
             7 - bfactor (float or Bx1 tensor): envelope fcn B-factor (Angstrom^2)
             8 - per-particle scale
+
+            For tilt series only:
+            9 - tilt number
         '''
         self.CTF_params = np.array(CTF_params.astype(self.CTF_dtype))
 
@@ -285,7 +293,7 @@ class CryoEMDataset:
 
     def CTF_fun(self,*args):
         # Force dtype
-        return self.CTF_fun_inp(*args, CTF_FUNCTION_OPTION = self.CTF_FUNCTION_OPTION).astype(self.CTF_dtype)
+        return self.CTF_fun_inp(*args).astype(self.CTF_dtype)
 
     def get_valid_frequency_indices(self,rad = None):
         rad = self.grid_size//2 -1 if rad is None else rad
@@ -387,20 +395,22 @@ def subsample_cryoem_dataset(dataset, indices):
 
 
 # Loads dataset that are stored in the cryoDRGN format
-def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False, tilt_series = False):
+def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False, tilt_series = False, tilt_series_ctf = None, dose_per_tilt = 2.9, angle_per_tilt = 3 ):
     
-    # if ind is None:
-    #     ind = None if n_images is None else jnp.arange(n_images) 
+    tilt_series_ctf = tilt_series if tilt_series_ctf is None else tilt_series_ctf
+
     if tilt_series:
             from recovar import tilt_dataset
-            dataset = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
+            # particles_to_tilts, tilts_to_particles = tilt_dataset.TiltSeriesData.parse_particle_tilt(particles_file)
+
+            dataset = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data)
     else:
         if lazy:
             dataset = LazyMRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
         else:
             dataset = MRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
         
-    ctf_params = np.array(ctf.load_ctf_for_training(dataset.unpadded_D, ctf_file))
+    ctf_params = np.array(ctf.load_ctf_for_training(dataset.D, ctf_file))
         
     ctf_params = ctf_params if ind is None else ctf_params[ind]
     
@@ -410,27 +420,55 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
     # Initialize constrast == 1
     ctf_params = np.concatenate( [ctf_params, np.ones_like(ctf_params[:,0][...,None])], axis =-1)
     
+    CTF_fun = core.evaluate_ctf_wrapper
+
+    if tilt_series_ctf == "v2":
+        ctf_params[:,core.contrast_ind+1] = dataset.ctfscalefactor
+        ctf_params[:,core.bfactor_ind+1] = dataset.ctfBfactor
+        print('USING V2 CTF!!')
+    elif tilt_series_ctf is True:
+        # Sort of a hacky way to do this.
+        if tilt_series is False:
+            from recovar import tilt_dataset
+            tilt_dataset_this = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data)
+        else:
+            tilt_dataset_this = dataset
+
+        # + 1 because voxel_size in included.... gross
+        ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
+        tilt_numbers = tilt_dataset_this.tilt_numbers
+        # tilt_angles = dataset.tilt_angles[dataset.tilt_indices]
+        # tilt_angles = angle_per_tilt * torch.ceil(tilt_numbers / 2)
+        ctf_params = np.concatenate( [ctf_params, tilt_numbers[...,None]], axis =-1)#, tilt_angles[...,None]], axis =-1)
+
+        assert (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)) , "Critical exposure calculation requires 200kV or 300kV imaging" 
+        # angle_per_tilt = 3 
+        # dose_per_tilt = 2.9
+        CTF_fun = core.get_cryo_ET_CTF_fun(dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt)
+
     posetracker = PoseTracker.load( poses_file, dataset.n_images, dataset.unpadded_D, ind = ind) #,   None, ind, device=device)
-    
-    # Translation might NOT BE PROPERLY SCALED!!!
-    
+        
     voxel_sizes = ctf_params[:,0]
     assert np.all(np.isclose(voxel_sizes - voxel_sizes[0], 0))
     voxel_size = float(voxel_sizes[0])
-    CTF_fun = core.evaluate_ctf_wrapper
+
     return CryoEMDataset( dataset, voxel_size,
-                              np.array(posetracker.rots), np.array(posetracker.trans), ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind)
+                              np.array(posetracker.rots), np.array(posetracker.trans), ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind, tilt_series_flag = tilt_series)
+
 
 def get_split_datasets_from_dict(dataset_loader_dict, ind_split, lazy = False):
     return get_split_datasets(**dataset_loader_dict, ind_split=ind_split, lazy =lazy)
 
 def get_split_datasets(particles_file, poses_file, ctf_file, datadir,
                                   uninvert_data = False, ind_file = None,
-                                  padding = 0, n_images = None, ind_split = None, lazy = False):
+                                  padding = 0, n_images = None, tilt_series = False,
+                                 tilt_series_ctf = None,
+                                    angle_per_tilt = 3, dose_per_tilt = 2.9,
+                                   ind_split = None, lazy = False):
     
     cryos = []
     for ind in ind_split:
-        cryos.append(load_cryodrgn_dataset(particles_file, poses_file, ctf_file , datadir = datadir, n_images = n_images, ind = ind, lazy = lazy, padding = padding, uninvert_data = uninvert_data))
+        cryos.append(load_cryodrgn_dataset(particles_file, poses_file, ctf_file , datadir = datadir, n_images = n_images, ind = ind, lazy = lazy, padding = padding, uninvert_data = uninvert_data, tilt_series = tilt_series, tilt_series_ctf = tilt_series_ctf, angle_per_tilt = angle_per_tilt, dose_per_tilt = dose_per_tilt))
     
     return cryos
 
@@ -462,12 +500,22 @@ def get_split_tilt_indices(particles_file, ind_file = None):
         particle_ind = np.arange(n_images)
     elif isinstance(ind_file, np.ndarray):
         particle_ind = ind_file
+        raise NotImplementedError
     else:
         particle_ind = pickle.load(open(ind_file, "rb"))
-    particles_to_tilts, tilts_to_particles = dataset.TiltSeriesData.parse_particle_tilt(args.particles)
-    ind = dataset.TiltSeriesData.particles_to_tilts(particles_to_tilts, particle_ind)
-    split_tilt_indices = split_index_list(ind)
-    split_image_indices = [ tilts_to_particles(ind) for ind in split_tilt_indices]
+        raise NotImplementedError
+
+    from recovar import tilt_dataset
+    # dataset = tilt_dataset.parse_particle_tilt(args.particles)
+    particles_to_tilts, tilts_to_particles = tilt_dataset.TiltSeriesData.parse_particle_tilt(particles_file)
+    n_tilts = len(particles_to_tilts)
+    split_tilt_indices = split_index_list(np.arange(n_tilts))
+    # ind = tilt_dataset.TiltSeriesData.particles_to_tilts(particles_to_tilts, particle_ind)
+    # split_tilt_indices = split_index_list(ind)
+    split_image_indices = [None,None]
+    for i in range(2):
+        split_image_indices[i] = np.concatenate([ particles_to_tilts[ind] for ind in split_tilt_indices[i]])
+    # split_image_indices = [ tilts_to_particles[ind] for ind in split_tilt_indices]
     return split_image_indices
 
 
@@ -493,9 +541,21 @@ def make_dataset_loader_dict(args):
                             'datadir': args.datadir,
                             'n_images' : args.n_images,
                             'ind_file': args.ind,
-                            'padding' : args.padding }
+                            'padding' : args.padding,
+                            'tilt_series' : False,
+                            'tilt_series_ctf' : False,
+                            'angle_per_tilt' : 3,
+                            'dose_per_tilt' : 2.9,
+                            }
     
-    
+    # For backward compatibility... Delete at some point?
+    if hasattr(args,'tilt_series'):
+        dataset_loader_dict['tilt_series'] = args.tilt_series
+        dataset_loader_dict['tilt_series_ctf'] = args.tilt_series_ctf
+        dataset_loader_dict['angle_per_tilt'] = args.tilt_series
+        dataset_loader_dict['dose_per_tilt'] = args.dose_per_tilt
+
+
     if args.uninvert_data == "automatic" or  args.uninvert_data == "false":
         dataset_loader_dict['uninvert_data'] = False
     elif args.uninvert_data == "true":
@@ -510,7 +570,7 @@ def figure_out_halfsets(args):
         logging.info("Randomly splitting dataset into halfsets")
         # ind_split = dataset.get_split_indices(args.particles_file, ind_file = args.ind)
         # # pickle.dump(ind_split, open(args.out))
-        if args.tilt_series:
+        if args.tilt_series or args.tilt_series_ctf:
             halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind)
         else:
             halfsets = get_split_indices(args.particles, ind_file = args.ind)
@@ -561,7 +621,9 @@ def reorder_to_original_indexing(arr, cryos ):
 def reorder_to_original_indexing_from_halfsets(arr, halfsets, num_images = None ):
     if type(arr) is list:
         arr = np.concatenate(arr)
+    
     dataset_indices = np.concatenate(halfsets)
+    
     num_images = (np.max(dataset_indices)+1) if num_images is None else num_images 
     arr_reorder_shape = (num_images, *arr.shape[1:])
     arr_reorder = np.ones(arr_reorder_shape) * np.nan # nan things which are not in halfsets. They have been filtered out.

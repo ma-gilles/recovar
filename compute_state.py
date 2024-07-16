@@ -20,7 +20,7 @@ def add_args(parser: argparse.ArgumentParser):
         "-o",
         "--outdir",
         type=os.path.abspath,
-        required=False,
+        required=True,
         help="Output directory to save model",
     )
 

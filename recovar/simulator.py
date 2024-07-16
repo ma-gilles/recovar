@@ -238,7 +238,7 @@ def get_noise_model(option, grid_size):
 def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_images, outlier_file_input = None, grid_size = 128,
                                volume_distribution = None,  dataset_params_option = "dataset1", noise_level = 1, 
                                noise_model = "radial1", put_extra_particles = True, percent_outliers = 0.1, 
-                               volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, disc_type = 'linear_interp' ):
+                               volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, disc_type = 'linear_interp', n_tilts = -1, dose_per_tilt = 2.9, angle_per_tilt = 3  ):
     
     volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize = False )
     scale_vol = 1 / np.mean(np.linalg.norm(volumes, axis =(-1)))
@@ -267,7 +267,7 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
 
     rescale_noise = True
     if rescale_noise:
-        main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size = generate_simulated_dataset(volumes, voxel_size, volume_distribution, 10, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file )
+        main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, _ = generate_simulated_dataset(volumes, voxel_size, volume_distribution, 10, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file )
         norm_image_square = np.mean(main_image_stack**2)
         norm_image = (norm_image_square)
 
@@ -281,7 +281,8 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
         # Scale noise and volumes so that images have approximately std =1?
 
     # First make some dataset to figure out a good scaling?
-    main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file )
+    main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file, n_tilts = n_tilts, 
+    dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt )
 
 
     simulation_info['volumes_path_root'] = volumes_path_root
@@ -300,7 +301,7 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
     save_ctf_params(output_folder, grid_size, ctf_params, voxel_size)
     utils.pickle_dump(simulation_info, output_folder + '/simulation_info.pkl' )
 
-    utils.write_starfile(ctf_params, rots.astype(np.float32), trans.astype(np.float32), voxel_size, grid_size, particles_file, output_folder + '/particles.star', halfset_indices = None)
+    utils.write_starfile(ctf_params, rots.astype(np.float32), trans.astype(np.float32), voxel_size, grid_size, particles_file, output_folder + '/particles.star', halfset_indices = None, tilt_groups = tilt_groups )
 
     return main_image_stack, simulation_info
 
@@ -329,7 +330,7 @@ def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_
     return volumes
 
 
-def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None ):
+def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None, n_tilts = -1, dose_per_tilt = None, angle_per_tilt = None ):
     
     # voxel_size = 
     volume_shape = utils.guess_vol_shape_from_vol_size(volumes[0].size)
@@ -339,10 +340,8 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
 
     if "ewald" in disc_type:
         phase_shift = np.arcsin(ctf_params[:,5]) / np.pi * 180
-        ctf_params[:,5] = 0
-        ctf_params[:,6] = phase_shift
-
-
+        ctf_params[:,core.w_ind] = 0
+        ctf_params[:,core.phase_shift_ind] = phase_shift
 
     # ctf_params[:,:2] *=0
     # ctf_params[:,4] *=0 
@@ -352,7 +351,55 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
 
     image_assignments = np.random.choice(np.arange(volumes.shape[0]), size = n_images,  p = volume_distribution)
 
-    CTF_fun = core.evaluate_ctf_wrapper
+    if n_tilts >0:
+        # Define tilt groups
+        tilt_groups = np.arange(n_images) // n_tilts
+
+        n_tilt_groups = np.max(tilt_groups)+1
+
+        # Assign each tilt group to a particle
+        image_assignments_tilt = np.random.choice(np.arange(volumes.shape[0]), size = n_tilt_groups,  p = volume_distribution)
+
+        # Assign each image a tilt number
+        tilt_numbers = np.arange(n_images) % n_tilts
+        # Put contrast in the tilt groups?
+        # This is how it is done in cryoDRGN. tilt number == the ranking in the tilt series by contrast? Seems a bit sus
+        # TODO check this
+        logger.warning("A very arbitrary contrast per tilt number! FIX?")
+        ctf_params[:,core.contrast_ind] =   np.exp(-tilt_numbers / n_tilts)
+
+
+        x_angles = np.arange(n_tilts) * angle_per_tilt
+        x_angles_zz = np.concatenate([x_angles[:,None], np.zeros([n_tilts,2])], axis = -1)
+        from scipy.spatial.transform import Rotation    
+        x_rotations = Rotation.from_euler('xyz', x_angles_zz, degrees=True).as_matrix()
+
+        for i in range(n_tilt_groups):
+            image_assignments[tilt_groups == i] = image_assignments_tilt[i]
+
+            ind = np.where(tilt_groups == i)[0]
+            sort_idxs = ctf_params[ind,core.contrast_ind].argsort()
+            ranks = np.empty_like(sort_idxs)
+            ranks[sort_idxs[::-1]] = np.arange(len(ind))
+            tilt_numbers[ind] = ranks
+
+            this_rot = rots[ind[0]]
+            these_rot = this_rot @ x_rotations
+            rots[tilt_groups == i] = these_rot
+            # import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
+        # Tag it to the end
+        ctf_params = np.concatenate([ctf_params, tilt_numbers[:,None]], axis = -1)
+
+    else:
+        tilt_groups = None
+        image_assignments_tilt = None
+
+    if n_tilts >0:
+        CTF_fun = core.get_cryo_ET_CTF_fun(dose_per_tilt, angle_per_tilt)
+    else:
+        CTF_fun = core.evaluate_ctf_wrapper
+
     main_dataset = dataset.CryoEMDataset( None, voxel_size,
                               rots, trans, ctf_params, CTF_fun = CTF_fun, dataset_indices = None, grid_size = grid_size)
     batch_size = 5 * utils.get_image_batch_size(grid_size, utils.get_gpu_memory_total())
@@ -415,9 +462,11 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         "image_assignment" : image_assignments,
         "noise_variance": noise_variance.astype(np.float32),
         "voxel_size": voxel_size,
+        "tilt_series_assignment": image_assignments_tilt,
+        "tilt_groups": tilt_groups,
     }
 
-    return main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size
+    return main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups
 
 
 def make_small_dataset(output_path = ".", grid_size=128, n_images = 1000):

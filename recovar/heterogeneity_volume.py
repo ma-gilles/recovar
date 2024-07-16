@@ -101,7 +101,7 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
 #     return estimates, opt_halfmaps, index_array_vol, fdisc, residuals_avged
 
 
-def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder, ndim, bins, B_factor, tau = None, n_min_images = 50, metric_used = "locmost_likely", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None, kernel_rad = 4, save_all_estimates = False, heterogeneity_kernel = "parabola" ):
+def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder, ndim, bins, B_factor, tau = None, n_min_images = 50, metric_used = "locshellmost_likely", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None, kernel_rad = 4, save_all_estimates = False, heterogeneity_kernel = "parabola" ):
 
     if type(bins) == int:
         # heterogeneity_bins = pick_heterogeneity_bins2(ndim, heterogeneity_distances[1], 0.5, n_min_images, n_bins = bins)

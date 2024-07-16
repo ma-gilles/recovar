@@ -45,7 +45,7 @@ def M_step(experiment_dataset, latent_means, latent_covariances, noise_variance,
     rhs_summed = jnp.zeros((experiment_dataset.volume_size, basis_size), dtype = experiment_dataset.dtype)
     lhs_summed = jnp.zeros((experiment_dataset.volume_size, basis_size *  basis_size), dtype = experiment_dataset.dtype)
         
-    for batch, batch_image_ind in data_generator:
+    for batch, particles_ind, batch_image_ind in data_generator:
         
         lhs_summed, rhs_summed = M_step_batch(batch, lhs_summed, rhs_summed,
                                             latent_means[batch_image_ind], latent_covariances[batch_image_ind], 

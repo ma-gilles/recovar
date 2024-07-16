@@ -501,8 +501,13 @@ class PipelineOutput:
 
     def load_embedding(self):
         self.embedding = utils.pickle_load(self.result_path + 'model/' + 'embeddings' + '.pkl')
+
         if self.version != '0':
-            halfsets = np.concatenate(self.get('halfsets'))
+            if self.version == '0.1':
+                halfsets = np.concatenate(self.get('halfsets'))
+            else:
+                halfsets = np.concatenate(self.get('particles_halfsets'))
+
             for entry in self.embedding:
                 for key in self.embedding[entry]:
                     self.embedding[entry][key] = self.embedding[entry][key][halfsets]
@@ -562,6 +567,8 @@ class PipelineOutput:
             return dataset.load_dataset_from_args(self.params['input_args'], lazy = True) 
         elif key == 'halfsets':
             return utils.pickle_load(self.result_path + 'model/' + 'halfsets' + '.pkl')
+        elif key == 'particles_halfsets':
+            return utils.pickle_load(self.result_path + 'model/' + 'particles_halfsets' + '.pkl')
         else:
             assert False, "key not found"
 
@@ -652,14 +659,17 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
     # logger.info(f"vol time {time.time() - st_time}")
     
     if use_input_density:
-        grid_to_z, z_to_grid = ld.get_grid_z_mappings(latent_space_bounds, num_points = density.shape[0])
+        # grid_to_z, z_to_grid = ld.get_grid_z_mappings(latent_space_bounds, num_points = density.shape[0])
 
-        path_grid = z_to_grid(path_z)
-        path_grid_subs = z_to_grid(path_subsampled)
+        # path_grid = z_to_grid(path_z)
+        # path_grid_subs = z_to_grid(path_subsampled)
 
-        import jax.scipy
-        density_on_path = jax.scipy.ndimage.map_coordinates(density, path_grid.T, order=1)
-        density_on_path_subs = jax.scipy.ndimage.map_coordinates(density, path_grid_subs.T, order=1)
+        # import jax.scipy
+        density_on_path = density_on_grid(path_z, density, latent_space_bounds) 
+        density_on_path_subs = density_on_grid(path_subsampled, density, latent_space_bounds) 
+
+        #jax.scipy.ndimage.map_coordinates(density, path_grid.T, order=1)
+        # density_on_path_subs = jax.scipy.ndimage.map_coordinates(density, path_grid_subs.T, order=1)
 
         # density_on_path = ld.compute_latent_space_density_at_pts(path_z, zs, cov_zs)
     else:
@@ -677,9 +687,17 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
     return path_z, path_subsampled
 
 
+def density_on_grid(points, density, bounds):
+    import jax.scipy
+    _, z_to_grid = ld.get_grid_z_mappings(bounds, num_points = density.shape[0])
+    path_grid = z_to_grid(points)
+    return jax.scipy.ndimage.map_coordinates(density, path_grid.T, order=1)
+
+
 def vol_to_z(gt_volumes, u, mean, basis_size):
     coords = ((np.conj(u[:,:basis_size].T) @ (gt_volumes - mean).T).T).real
     return coords
+
 
 
 def plot_trajectories_over_scatter(trajectories,  subsampled = None, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = None, cov_zs = None ):

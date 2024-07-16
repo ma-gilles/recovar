@@ -222,7 +222,7 @@
 #     cov_noise_image = noise.make_radial_noise(cov_noise, experiment_dataset.image_shape)
 
 
-#     for batch, indices in data_generator:
+#     for batch, p_indices, indices in data_generator:
         
 #         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
     
@@ -443,7 +443,7 @@
 #     logger.info(f"batch size in second order: {batch_size}")
 #     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
 
-#     for batch, indices in data_generator:
+#     for batch, p_indices, indices in data_generator:
 #         # Only place where image mask is used ?
 #         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
 
@@ -489,7 +489,7 @@
 #     logger.info(f"batch size in residual computation: {batch_size}")
 #     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
 #     weights = jnp.asarray(weights)
-#     for batch, indices in data_generator:
+#     for batch, p_indices, indices in data_generator:
 #         # Only place where image mask is used ?
 #         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
 
