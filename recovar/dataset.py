@@ -602,6 +602,9 @@ def get_default_dataset_option():
                             'ind': None,
                             'padding' : 0,
                             # 'lazy': False,
+                            'tilt_series_ctf' : False,
+                            'angle_per_tilt' : 3,
+                            'dose_per_tilt' : 2.9,
                             'uninvert_data' : False}
     return dataset_loader_dict
 

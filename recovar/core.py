@@ -67,17 +67,13 @@ def check_vec_indices_in_bound(vec_indices,grid_size):
     return ((vec_indices < grid_size**3 ) * vec_indices >= 0).astype(bool)
 
 
-# This function is meant to handle the heterogeneity case.
-def multi_vol_indices_to_multi_vec_indices(vol_indices, het_indices, vol_shape, het_shape):
-    og_shape = vol_indices.shape
-    vol_indices = jnp.concatenate( [het_indices, vol_indices.reshape(-1, vol_indices.shape[-1]) ], axis=-1)
-    multi_vol_shape = (het_shape, *vol_shape)
-    vec_indices = jnp.ravel_multi_index(vol_indices.T, multi_vol_shape, mode = 'clip').reshape(og_shape[:-1])
-
-    return
-
-
-
+# # This function is meant to handle the heterogeneity case.
+# def multi_vol_indices_to_multi_vec_indices(vol_indices, het_indices, vol_shape, het_shape):
+#     og_shape = vol_indices.shape
+#     vol_indices = jnp.concatenate( [het_indices, vol_indices.reshape(-1, vol_indices.shape[-1]) ], axis=-1)
+#     multi_vol_shape = (het_shape, *vol_shape)
+#     vec_indices = jnp.ravel_multi_index(vol_indices.T, multi_vol_shape, mode = 'clip').reshape(og_shape[:-1])
+#     return
 
 
 ## Some similar function used for adaptive discretization: find nearby gridpoints
@@ -210,10 +206,15 @@ def forward_model(volume_vec, CTF_val_on_grid_stacked, plane_indices_on_grid_sta
     return batch_slice_volume_by_nearest(volume_vec, plane_indices_on_grid_stacked) * CTF_val_on_grid_stacked
 
 
+# @jax.jit
+# def translate_single_image(image, translation, lattice):
+#     phase_shift = jnp.exp( 1j * -2 * jnp.pi * (lattice @ translation[:,None] ) )[...,0]
+#     return image.reshape(-1) * phase_shift
+
 @jax.jit
 def translate_single_image(image, translation, lattice):
     phase_shift = jnp.exp( 1j * -2 * jnp.pi * (lattice @ translation[:,None] ) )[...,0]
-    return image.reshape(-1) * phase_shift
+    return image * phase_shift
 
 
 batch_translate = jax.vmap(translate_single_image, in_axes = (0,0, None))
@@ -422,6 +423,20 @@ def adjoint_slice_volume_by_trilinear(images, rotation_matrices, image_shape, vo
 
 
 
+def adjoint_slice_volume_by_trilinear_from_weights(images, grid_vec_indices, weights, volume_shape, volume = None):    
+    # grid_coords, _ = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
+    # grid_points, weights = get_trilinear_weights_and_vol_indices(grid_coords.T, volume_shape)
+    # grid_vec_indices = vol_indices_to_vec_indices(grid_points, volume_shape)
+
+    if volume is None:
+        volume = jnp.zeros(np.prod(volume_shape), dtype = images.dtype)
+
+    weights *= images.reshape(-1,1)
+    volume = volume.at[grid_vec_indices.reshape(-1)].add(weights.reshape(-1))
+
+    return volume
+
+
 
 @functools.partial(jax.jit, static_argnums = [2,3,4])    
 def map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_shape, order):
@@ -438,33 +453,11 @@ def map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_sha
 
     return slices
 
-# batch volumes
-batch_vol_rot_slice_volume_by_map = jax.vmap(slice_volume_by_map, in_axes = (0, 0, None, None, None) )
+# # batch volumes
+# batch_vol_rot_slice_volume_by_map = jax.vmap(slice_volume_by_map, in_axes = (0, 0, None, None, None) )
 
 batch_translate_images = jax.vmap(translate_images, in_axes = (0, 0, None) )
 
-# TODO: Should it be residual of masked?
-# Residual will be 4 dimensional
-# volumes_batch x images_batch x rotations_batch x translations_batch x  
-# @functools.partial(jax.jit, static_argnums = [7,8,9,10,11,12])    
-def compute_residuals_many_poses(volumes, images, rotation_matrices, translations, CTF_params, noise_variance, voxel_size, volume_shape, image_shape, disc_type, CTF_fun ):
-    
-
-    assert(rotation_matrices.shape[0] == volumes.shape[0])
-    assert(rotation_matrices.shape[1] == images.shape[0])
-
-    assert(translations.shape[0] == volumes.shape[0])
-    assert(translations.shape[1] == images.shape[0])
-
-
-    # n_vols x rotations x image_size
-    projected_volumes = batch_vol_rot_slice_volume_by_map(volumes, rotation_matrices, image_shape, volume_shape, disc_type)
-    projected_volumes = projected_volumes * CTF_fun( CTF_params, image_shape, voxel_size)
-
-    translated_images = translate_images(images, translations, image_shape)
-
-    norm_res_squared = jnp.linalg.norm((projected_volumes - translated_images) / jnp.sqrt(noise_variance), axis = (-1))
-    return norm_res_squared
 
 
 

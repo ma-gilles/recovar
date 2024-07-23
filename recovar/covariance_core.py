@@ -106,7 +106,7 @@ def check_mask(mask):
 
 batch_forward_model = jax.vmap(core.forward_model, in_axes = (0, None, None))
 
-@functools.partial(jax.jit, static_argnums = [3,4,5,6,7,8])    
+@functools.partial(jax.jit, static_argnums = [3,4,5,6,7])    
 def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):
     batch_grid_pt_vec_ind_of_images = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape )
     batch_CTF = CTF_fun( CTF_params, image_shape, voxel_size)
