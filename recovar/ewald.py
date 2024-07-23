@@ -27,7 +27,7 @@ PART 1: Coordinate/Ewald Sphere Functions
 ## Get unrotated coordinates for the ewald sphere 
 def get_unrotated_ewald_sphere_coords(image_shape, voxel_size, lam, scaled=True):
     ## Pass scaled = true
-    freqs = ftu.get_k_coordinate_of_each_pixel(image_shape, voxel_size=voxel_size, scaled=True)#.astype(np.float64)
+    freqs = ftu.get_k_coordinate_of_each_pixel(image_shape, voxel_size=voxel_size, scaled=True)
     r = 1/lam
     z = r - jnp.sqrt(r**2 - jnp.linalg.norm(freqs, axis =-1)**2)
     z = z.reshape(-1,1)
@@ -38,10 +38,9 @@ def get_unrotated_ewald_sphere_coords(image_shape, voxel_size, lam, scaled=True)
 ## Get coordinates for the ewald sphere that have the volume represented
 # @functools.partial(jax.jit, static_argnums=[1,2,3])
 def get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam):
-    unrotated_plane_indices = get_unrotated_ewald_sphere_coords(image_shape, voxel_size, lam, scaled = False).astype(np.float64)
+    unrotated_plane_indices = get_unrotated_ewald_sphere_coords(image_shape, voxel_size, lam, scaled = False)
 
     rotated_plane = jnp.matmul(unrotated_plane_indices, rotation_matrix, precision = jax.lax.Precision.HIGHEST)
-    ## CHANGE THIS BACK
     rotated_coords = rotated_plane + jnp.floor(1.0 * grid_size/2)
     return rotated_coords
 
@@ -50,12 +49,8 @@ batch_get_sphere_gridpoint_coords = jax.vmap(get_ewald_sphere_gridpoint_coords, 
 ## Get the slices for ewald sphere
 def get_ewald_sphere_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam, disc_type):
     order = 1 if disc_type == "linear_interp" else 0
-    if order ==1:
-        print("PROBLEM EHRE")
-
     return map_coordinates_on_ewald_sphere(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam, order)
     
-
 # No reason not to do this for forward model, but haven't figured out how to do it for the adjoint 
 # Maps coordinates onto the Ewald sphere
 def map_coordinates_on_ewald_sphere(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam,  order):
@@ -67,11 +62,6 @@ def map_coordinates_on_ewald_sphere(volume, rotation_matrices, image_shape, volu
     slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
     return slices
 
-
-# def map_coordinates_on_ewald_sphere2(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam,  order):
-#     indices = batch_get_nearest_gridpoint_indices_ewald_sphere(rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam)
-#     return core.batch_slice_volume_by_nearest(volume, indices)
-
 # Nearest neighbor
 def batch_get_nearest_gridpoint_indices_ewald_sphere(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam):
     # get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
@@ -81,15 +71,24 @@ def batch_get_nearest_gridpoint_indices_ewald_sphere(rotation_matrix, image_shap
     return rotated_indices
 
 
-# # Nearest neighbor
-# def get_nearest_gridpoint_indices_ewald_sphere(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam):
-#     # get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
-#     rotated_plane = get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
-#     rotated_indices = core.round_to_int(rotated_plane)
-#     rotated_indices = core.vol_indices_to_vec_indices(rotated_indices, volume_shape)
-#     return rotated_indices
+# Nearest neighbor
+def get_nearest_gridpoint_indices_ewald_sphere(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam):
+    # get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
+    rotated_plane = get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
+    rotated_indices = core.round_to_int(rotated_plane)
+    rotated_indices = core.vol_indices_to_vec_indices(rotated_indices, volume_shape)
+    return rotated_indices
 
 # Flips indices
+# def get_flipped_indices(image_shape):
+#     freqs = core.vec_indices_to_frequencies(jnp.arange(np.prod(image_shape)), image_shape)
+#     minus_freqs = -freqs
+#     flipped_indices = core.frequencies_to_vec_indices(minus_freqs, image_shape)
+#     grid_size = image_shape[0]
+#     bad_idx = jnp.nonzero(jnp.any(freqs== -grid_size//2 , axis =1),size=image_shape[0]**2)
+#     flipped_indices = flipped_indices.at[bad_idx].set(0)
+#     return flipped_indices
+
 def get_flipped_indices(image_shape):
     freqs = core.vec_indices_to_frequencies(jnp.arange(np.prod(image_shape)), image_shape)
     minus_freqs = -freqs
@@ -97,6 +96,9 @@ def get_flipped_indices(image_shape):
     grid_size = image_shape[0]
     bad_idx = jnp.any(freqs== -grid_size//2 , axis =-1)
     flipped_indices = jnp.where(bad_idx, -1, flipped_indices)
+    # import pdb; pdb.set_trace()
+    # bad_idx = jnp.nonzero(jnp.any(freqs== -grid_size//2 , axis =1),size=image_shape[0]**2)
+    # flipped_indices = flipped_indices.at[bad_idx].set(-1)
     return flipped_indices
 
 '''
@@ -110,6 +112,7 @@ def get_chi(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfactor):
 
     # Lambda:
     lam = 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
+#     lam = 1e10
 
     # x = xi_1, y = xi_2, theta^2 = x^2 + y^2:
     x = freqs[...,0]
@@ -139,15 +142,11 @@ PART 3: FORWARD/BACKWARD MODELS
 # Forward model
 def ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, disc_type ):
     chi = compute_chi_wrapper(ctf_params, image_shape, voxel_size)
-
-    
-    lam = volt_to_wavelength(ctf_params[0,3].astype(np.float64))  
-
+    lam = 1e-10
     # Slice volume on sphere
     vol_real_on_sphere = get_ewald_sphere_slices(volume_real, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  disc_type)
     vol_imag_on_sphere = get_ewald_sphere_slices(volume_imag, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  disc_type)
-    # import pdb; pdb.set_trace()
-
+    
     # Get flipped versions
     flipped_idx = get_flipped_indices(image_shape)
     flipped_vol_real_on_sphere = vol_real_on_sphere[...,flipped_idx]
@@ -160,9 +159,6 @@ def ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_
 
     images_imag = -(vol_real_on_sphere - flipped_vol_real_on_sphere) * jnp.cos(chi) \
                 + (vol_imag_on_sphere - flipped_vol_imag_on_sphere) * jnp.sin(chi) 
-    
-    # images_real = vol_real_on_sphere
-    # images_imag = vol_imag_on_sphere
     # import pdb; pdb.set_trace()
     return 0.5 * images_real, 0.5 * images_imag
 
@@ -184,6 +180,7 @@ def compute_A_t_Av_ewald_sphere_forward_model(volume_real, volume_imag, rotation
     # Divide by noise for LS
     y_0 = y[0]/noise_variance
     y_1 = y[1]/noise_variance
+
     # y[0] = y[0]/noise_variance
     # y[1] = y[1]/noise_variance
 
@@ -267,7 +264,7 @@ BATCH COMPUTATION
 
 def compute_ewald_LS_matvec_in_batches(experiment_dataset, input_volume_real, input_volume_imag, batch_size, disc_type, signal_variance, noise_variance  ):
 
-    logger.info(f"batch size in second order: {batch_size}")
+#     logger.info(f"batch size in second order: {batch_size}")
 
     vol_real, vol_imag = 0, 0
 
@@ -288,18 +285,45 @@ def compute_ewald_LS_matvec_in_batches(experiment_dataset, input_volume_real, in
     
     # + I / kappa^2 * v
     vol_real += input_volume_real / signal_variance
-    vol_imag += input_volume_imag / signal_variance
+    vol_imag += input_volume_imag / signal_variance 
         
     return vol_real, vol_imag
+
+
+
+def compute_diag_mean(experiment_dataset, batch_size, disc_type, signal_variance, noise_variance  ):
+
+#     logger.info(f"batch size in second order: {batch_size}")
+
+    diagonal = 0 
+
+    # \sum_i A_i^T (1/sigma_i^2) A_i v
+    # in batches
+    n_batches = utils.get_number_of_index_batch(experiment_dataset.n_images, batch_size)
+    
+    for k in range(n_batches):
+        volume = jnp.ones(experiment_dataset.volume_size, dtype = jnp.float32)
+        indices = utils.get_batch_of_indices_arange(experiment_dataset.n_images, batch_size, k)
+        ATA_one = core.compute_A_t_Av_forward_model_from_map(volume, experiment_dataset.CTF_params[indices],
+                                                   experiment_dataset.rotation_matrices[indices],
+                                                   experiment_dataset.image_shape, experiment_dataset.volume_shape, experiment_dataset.voxel_size,
+                                                   experiment_dataset.CTF_fun, disc_type)
+        diagonal += ATA_one[0]
+                                                    
+    return diagonal
+
+
+
 
 def volt_to_wavelength(volt):
     return 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
 
 
-def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance  ):
+def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance):
     
     # volt = experiment_dataset.CTF_params[0,3]
-    # lam = volt_to_wavelength(experiment_dataset.CTF_params[0,3])# 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
+    # lam = volt_to_wavelength(experiment_dataset.CTF_params[0,3])# 
+#     lam = 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
 
     logger.info(f"batch size in second order: {batch_size}")
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
@@ -307,7 +331,7 @@ def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, n
     vol_real, vol_imag = 0, 0
 
     # Compute \sum_i A_i^T y_i / sigma_i^2
-    for batch, particles_ind, indices in data_generator:
+    for batch, _, indices in data_generator:
         # Only place where image mask is used ?
         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
         batch = core.translate_images(batch, experiment_dataset.translations[indices], experiment_dataset.image_shape)
@@ -321,17 +345,22 @@ def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, n
 
         vol_real += A_t_vol_real
         vol_imag += A_t_vol_imag
-            
+                    
     return vol_real, vol_imag
 
 
 
 def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_variance, noise_variance):
     from recovar import noise
+    from importlib import reload
+    from recovar import homogeneous
+    reload(homogeneous)
 
+    noise_variance = noise_variance*0 + 1
     noise_variance = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape)
+    signal_variance = np.inf
 
-    rhs_real, rhs_imag = compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance  )
+    rhs_real, rhs_imag = compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance)
     rhs = vec_masked(rhs_real, rhs_imag, experiment_dataset.volume_shape)
 
     mask_real = mask.get_radial_mask(experiment_dataset.volume_shape).reshape(-1)
@@ -343,6 +372,173 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
         return vec_masked(z_real, z_imag, experiment_dataset.volume_shape)
     
 
+    def mat_vec_wrapped_up_2(x):
+        # volume_real, volume_imag = unvec_masked(x, experiment_dataset.volume_shape, mask_size)
+        z_real, z_imag = compute_ewald_LS_matvec_in_batches(experiment_dataset, x.real, x.imag, batch_size, disc_type, signal_variance, noise_variance  )
+        return z_real + 1j *  z_imag
+
+    # experimenting with preconditioner
+
+    diag_mean2 = compute_diag_mean(experiment_dataset, batch_size, disc_type, signal_variance, noise_variance  )
+
+    diag_mean3, _ = homogeneous.solve_least_squares_mean_iteration(experiment_dataset , None, noise_variance,  batch_size, None, disc_type = disc_type, return_lhs_rhs = True )
+    diag_mean = diag_mean2.reshape(-1)
+    diag_mean = vec_masked(diag_mean, diag_mean, experiment_dataset.volume_shape)
+
+    def planar_model(x):
+        # get diag_mean
+        return x * diag_mean
+
+    def planar_model_2(x):
+        # get diag_mean
+        return x * diag_mean2
+    
+
+
+    import matplotlib.pyplot as plt
+    
+    # temp1_r, _ = unvec_masked(mat_vec_wrapped_up(rhs), experiment_dataset.volume_shape, mask_size)
+    # temp2_r, _ = unvec_masked(planar_model(rhs), experiment_dataset.volume_shape, mask_size)
+
+    x = np.random.randn(experiment_dataset.volume_size) + 1j * np.random.randn(experiment_dataset.volume_size)
+
+
+    # temp1 = temp1_r.reshape(experiment_dataset.volume_shape)
+    # temp2 = temp2_r.reshape(experiment_dataset.volume_shape)
+    cryo = experiment_dataset
+    Ax1 = mat_vec_wrapped_up_2(x).reshape(cryo.volume_shape).real
+    Ax2 = planar_model_2(x).reshape(cryo.volume_shape).imag
+
+    plt.imshow(Ax1[32])
+    plt.colorbar()
+    plt.show()
+    plt.figure()
+    plt.imshow(Ax2[32])
+    plt.colorbar()
+    plt.show()
+    plt.figure()
+
+
+    plt.imshow(Ax1.sum(axis=0))
+    plt.colorbar()
+    plt.show()
+    plt.figure()
+    plt.imshow(Ax2.sum(axis=0))
+    plt.colorbar()
+    plt.show()
+    plt.figure()
+
+    import pdb; pdb.set_trace()
+    return
+
+    print(np.linalg.norm(mat_vec_wrapped_up(rhs) - planar_model(rhs)) / np.linalg.norm(mat_vec_wrapped_up(rhs)))
+    
+    import scipy.sparse
+    import inspect
+
+    N = (mask_size) * 2 -1
+    print(N)
+    ATA_shape = (N, N)
+    ATA_op = scipy.sparse.linalg.LinearOperator(ATA_shape, mat_vec_wrapped_up)
+    ress = []
+    
+#     N2 = experiment_dataset.image_shape[0] ** 3
+#     print(N2)
+#     planar_shape = (N2,N2)
+    planar_op = scipy.sparse.linalg.LinearOperator(ATA_shape, planar_model)
+    
+    def report(xk):
+        frame = inspect.currentframe().f_back
+        ress.append(frame.f_locals['resid'] / np.linalg.norm(rhs))
+
+#     x_result,_  = jax.scipy.sparse.linalg.cg(ATA_op, rhs, maxiter = 20, tol=1e-12,)
+#     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, maxiter = 50, tol=1e-12, callback=report)
+    x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, maxiter=1500, tol=1e-12, M = planar_op, callback=report)
+#     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, maxiter=1500, tol=1e-12, callback=report)
+
+
+    return x_result, ress
+
+# def solve_ewald_least_squares_og(experiment_dataset, batch_size, disc_type, signal_variance, noise_variance):
+#     from recovar import noise
+
+#     noise_variance = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape)
+
+#     rhs_real, rhs_imag = compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance)
+#     rhs = vec_masked(rhs_real, rhs_imag, experiment_dataset.volume_shape)
+
+#     mask_real = mask.get_radial_mask(experiment_dataset.volume_shape).reshape(-1)
+#     mask_size = int(jnp.sum(mask_real))
+
+#     def mat_vec_wrapped_up(x):
+#         volume_real, volume_imag = unvec_masked(x, experiment_dataset.volume_shape, mask_size)
+#         z_real, z_imag = compute_ewald_LS_matvec_in_batches(experiment_dataset, volume_real, volume_imag, batch_size, disc_type, signal_variance, noise_variance  )
+#         return vec_masked(z_real, z_imag, experiment_dataset.volume_shape)
+    
+#     import scipy.sparse
+#     import inspect
+
+#     N = (mask_size) * 2 -1
+#     print(N)
+#     ATA_shape = (N, N)
+#     ATA_op = scipy.sparse.linalg.LinearOperator(ATA_shape, mat_vec_wrapped_up)
+#     ress = []
+    
+#     def report(xk):
+#         frame = inspect.currentframe().f_back
+#         ress.append(frame.f_locals['resid'])
+
+# #     x_result,_  = jax.scipy.sparse.linalg.cg(ATA_op, rhs, maxiter = 20, tol=1e-12,)
+# #     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, maxiter = 50, tol=1e-12, callback=report)
+#     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, maxiter=1500, tol=1e-12, callback=report)
+
+
+#     return x_result, ress
+
+
+
+def matvec_experiments(y, experiment_dataset, batch_size, disc_type, signal_variance, noise_variance):
+    from recovar import noise
+
+    noise_variance = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape)
+    mask_real = mask.get_radial_mask(experiment_dataset.volume_shape).reshape(-1)
+    mask_size = int(jnp.sum(mask_real))
+
+    volume_real, volume_imag = unvec_masked(y, experiment_dataset.volume_shape, mask_size)
+    z_real, z_imag = compute_ewald_LS_matvec_in_batches(experiment_dataset, volume_real, volume_imag, batch_size, disc_type, signal_variance, noise_variance  )
+    z = vec_masked(z_real, z_imag, experiment_dataset.volume_shape)
+    
+#     def jp(y):
+#         e = jnp.ones_like(y)
+#         d = mat_vec_wrapped_up(e)
+#         return d
+    
+#     d = jp(y)
+
+    
+    return z
+
+
+'''
+PRECONDITIONED VERSION
+'''
+
+def solve_ewald_least_squares_2(experiment_dataset, batch_size, disc_type, signal_variance, noise_variance, A):
+    from recovar import noise
+
+    noise_variance = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape)
+
+    rhs_real, rhs_imag = compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance)
+    rhs = vec_masked(rhs_real, rhs_imag, experiment_dataset.volume_shape)
+
+    mask_real = mask.get_radial_mask(experiment_dataset.volume_shape).reshape(-1)
+    mask_size = int(jnp.sum(mask_real))
+
+    def mat_vec_wrapped_up(x):
+        volume_real, volume_imag = unvec_masked(x, experiment_dataset.volume_shape, mask_size)
+        z_real, z_imag = compute_ewald_LS_matvec_in_batches(experiment_dataset, volume_real, volume_imag, batch_size, disc_type, signal_variance, noise_variance  )
+        return vec_masked(z_real, z_imag, experiment_dataset.volume_shape)
+    
     import scipy.sparse
     import inspect
 
@@ -350,12 +546,127 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
     ATA_shape = (N, N)
     ATA_op = scipy.sparse.linalg.LinearOperator(ATA_shape, mat_vec_wrapped_up)
     ress = []
-
+    
+#     def jp(x):
+#         e = jnp.ones_like(x)
+#         d = mat_vec_wrapped_up(e)
+#         return d
+    
+#     d = jp(x)
+#     jacobi = lambda x: x/d
+#     jacobi_op = scipy.sparse.linalg.LinearOperator(ATA_shape, jacobi)
+#     print(jnp.where(d<0))
+    
     def report(xk):
         frame = inspect.currentframe().f_back
         ress.append(frame.f_locals['resid'])
 
-    # x_result,_  = jax.scipy.sparse.linalg.cg(ATA_op, rhs, maxiter = 20, tol=1e-12,)
-    x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, maxiter = 20, tol=1e-12, callback=report)
+#     x_result,_  = jax.scipy.sparse.linalg.cg(ATA_op, rhs, maxiter = 20, tol=1e-12,)
+#     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, maxiter = 50, tol=1e-12, callback=report)
+#     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, maxiter=25, tol=1e-12, callback=report)
+    if np.all(A == 0):
+        x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, tol=1e-12, callback=report)
+    else:
+        x_result,_ = scipy.sparse.linalg.cg(A, rhs, tol=1e-12, callback=report)
 
     return x_result, ress
+
+
+# '''
+# Preconditioning
+# '''
+
+# # Forward model
+# def diagonal_ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, disc_type ):
+#     chi = compute_chi_wrapper(ctf_params, image_shape, voxel_size)
+
+#     lam = volt_to_wavelength(ctf_params[0,3]).astype(np.float64)
+
+#     # Slice volume on sphere
+#     vol_real_on_sphere = ee_slices(volume_real, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  disc_type)
+#     vol_imag_on_sphere = get_ewald_sphere_slices(volume_imag, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  disc_type)
+    
+#     # Get flipped versions
+#     flipped_idx = get_flipped_indices(image_shape)
+#     flipped_vol_real_on_sphere = vol_real_on_sphere[...,flipped_idx]
+#     flipped_vol_imag_on_sphere = vol_imag_on_sphere[...,flipped_idx]
+
+#     # The two equations in ewald.pdf section 4
+#     images_real = (vol_real_on_sphere + flipped_vol_real_on_sphere) * jnp.sin(chi) \
+#                 + (vol_imag_on_sphere + flipped_vol_imag_on_sphere) * jnp.cos(chi)
+
+
+#     images_imag = -(vol_real_on_sphere - flipped_vol_real_on_sphere) * jnp.cos(chi) \
+#                 + (vol_imag_on_sphere - flipped_vol_imag_on_sphere) * jnp.sin(chi) 
+    
+#     print(images_real.shape)
+#     print(images_imag.shape)
+    
+#     # import pdb; pdb.set_trace()
+#     return 0.5 * images_real, 0.5 * images_imag
+
+# # Compute A^TAx (the forward, then its adjoint). For JAX reasons, this should be about 2x faster than doing each call separately.
+# @functools.partial(jax.jit, static_argnums=[5,6,7,8])
+# def diagonal_compute_A_t_Av_ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_params, noise_variance, image_shape, volume_shape, voxel_size, disc_type):    
+#     f = lambda volume_real, volume_imag : diagonal_ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, disc_type )
+#     #Av
+#     y, u = vjp(f,volume_real, volume_imag)
+#     # Divide by noise for LS
+#     y_0 = y[0]/noise_variance
+#     y_1 = y[1]/noise_variance
+
+#     # y[0] = y[0]/noise_variance
+#     # y[1] = y[1]/noise_variance
+
+#     # A^T y 
+#     return u((y_0, y_1))
+
+# def diagonal_compute_ewald_LS_matvec_in_batches(experiment_dataset, input_volume_real, input_volume_imag, batch_size, disc_type, signal_variance, noise_variance  ):
+
+# #     logger.info(f"batch size in second order: {batch_size}")
+
+#     vol_real, vol_imag = 0, 0
+
+#     # \sum_i A_i^T (1/sigma_i^2) A_i v
+#     # in batches
+#     n_batches = utils.get_number_of_index_batch(experiment_dataset.n_images, batch_size)
+#     for k in range(n_batches):
+#         indices = utils.get_batch_of_indices_arange(experiment_dataset.n_images, batch_size, k)
+#         vol_real_this, vol_imag_this = diagonal_compute_A_t_Av_ewald_sphere_forward_model(input_volume_real,
+#                                         input_volume_imag,
+#                                         experiment_dataset.rotation_matrices[indices],
+#                                         experiment_dataset.CTF_params[indices], 
+#                                         noise_variance,
+#                                         experiment_dataset.image_shape, 
+#                                         experiment_dataset.volume_shape, experiment_dataset.voxel_size, disc_type)
+#         vol_real += vol_real_this
+#         vol_imag += vol_imag_this
+    
+#     # + I / kappa^2 * v
+#     vol_real += input_volume_real / signal_variance
+#     vol_imag += input_volume_imag / signal_variance
+        
+#     return vol_real, vol_imag
+
+
+
+# def diagonal_matvec_experiments(y, experiment_dataset, batch_size, disc_type, signal_variance, noise_variance):
+#     from recovar import noise
+
+#     noise_variance = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape)
+#     mask_real = mask.get_radial_mask(experiment_dataset.volume_shape).reshape(-1)
+#     mask_size = int(jnp.sum(mask_real))
+
+#     volume_real, volume_imag = unvec_masked(y, experiment_dataset.volume_shape, mask_size)
+#     z_real, z_imag = diagonal_compute_ewald_LS_matvec_in_batches(experiment_dataset, volume_real, volume_imag, batch_size, disc_type, signal_variance, noise_variance  )
+#     z = vec_masked(z_real, z_imag, experiment_dataset.volume_shape)
+    
+# #     def jp(y):
+# #         e = jnp.ones_like(y)
+# #         d = mat_vec_wrapped_up(e)
+# #         return d
+    
+# #     d = jp(y)
+
+    
+#     return z
