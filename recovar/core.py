@@ -314,10 +314,10 @@ def adjoint_forward_model_from_trilinear(slices, CTF_params, rotation_matrices, 
 
 # Compute A^TAx (the forward, then its adjoint). For JAX reasons, this should be about 2x faster than doing each call separately.
 @functools.partial(jax.jit, static_argnums=[3,4,5,6,7])
-def compute_A_t_Av_forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):    
+def compute_A_t_Av_forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, noise_variance):    
     f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type)
     y, u = vjp(f,volume)
-    return u(y)
+    return u(y/noise_variance)
 
 
 
