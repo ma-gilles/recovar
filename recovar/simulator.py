@@ -90,8 +90,8 @@ def get_params_generator(dataset_params_fn ):
     return params_generator
 
 ## A uniform pose generator
-def random_sampling_scheme(n_images, grid_size, seed =None, uniform = True ):
-    # np.random.seed(seed)
+def random_sampling_scheme(n_images, grid_size, seed =0, uniform = True ):
+    np.random.seed(seed)
     dataset_params_fn = load_first_dataset_params
     ctf_params, _, _ = generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  )
     if uniform:
@@ -330,7 +330,7 @@ def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_
     return volumes
 
 
-def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None, n_tilts = -1, dose_per_tilt = None, angle_per_tilt = None ):
+def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None, n_tilts = -1, dose_per_tilt = None, angle_per_tilt = None, voltage = 100 ):
     
     # voxel_size = 
     volume_shape = utils.guess_vol_shape_from_vol_size(volumes[0].size)
@@ -342,6 +342,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         phase_shift = np.arcsin(ctf_params[:,5]) / np.pi * 180
         ctf_params[:,core.w_ind] = 0
         ctf_params[:,core.phase_shift_ind] = phase_shift
+    ctf_params[:,core.volt_ind] = voltage
 
     # ctf_params[:,:2] *=0
     # ctf_params[:,4] *=0 
@@ -593,6 +594,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 images_batch = core.translate_images(images_batch,
                         -translations,
                         experiment_dataset.image_shape)
+                
             elif disc_type == "linear_interp" or disc_type == "nearest":
                 images_batch = simulate_data_batch(volumes[vol_idx],
                                                  experiment_dataset.rotation_matrices[indices], 
