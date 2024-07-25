@@ -190,47 +190,47 @@ def ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_
     return 0.5 * images_real, 0.5 * images_imag
 
 
-# Adjoint of Forward model - explicit version. Not used currently
-def adjoint_ewald_sphere_forward_model(images_real, images_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, disc_type ):
+# # Adjoint of Forward model - explicit version. Not used currently
+# def adjoint_ewald_sphere_forward_model(images_real, images_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, disc_type ):
 
 
-    chi = compute_chi_wrapper(ctf_params, image_shape, voxel_size)
-    lam = 1e-10
-    # Slice volume on sphere
-    # vol_real_on_sphere = get_ewald_sphere_slices(volume_real, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  disc_type)
-    # vol_imag_on_sphere = get_ewald_sphere_slices(volume_imag, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  disc_type)
+#     chi = compute_chi_wrapper(ctf_params, image_shape, voxel_size)
+#     # lam = 1e-10
+#     # Slice volume on sphere
+#     # vol_real_on_sphere = get_ewald_sphere_slices(volume_real, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  disc_type)
+#     # vol_imag_on_sphere = get_ewald_sphere_slices(volume_imag, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  disc_type)
     
-    # Get flipped versions
-    sin_chi = jnp.sin(chi) * 0.5 
-    cos_chi = jnp.cos(chi) * 0.5
+#     # Get flipped versions
+#     sin_chi = jnp.sin(chi) * 0.5 
+#     cos_chi = jnp.cos(chi) * 0.5
 
-    # import matplotlib.pyplot as plt
-    # plt.imshow(sin_chi[0].reshape(image_shape))
-    # plt.show()
-    # # import pdb; pdb.set_trace()
+#     # import matplotlib.pyplot as plt
+#     # plt.imshow(sin_chi[0].reshape(image_shape))
+#     # plt.show()
+#     # # import pdb; pdb.set_trace()
 
-    sin_images_real = images_real * sin_chi
-    cos_images_real = images_real * cos_chi
-    cos_imag_imag = images_imag * cos_chi
-    sin_imag_imag = images_imag * sin_chi
+#     sin_images_real = images_real * sin_chi
+#     cos_images_real = images_real * cos_chi
+#     cos_imag_imag = images_imag * cos_chi
+#     sin_imag_imag = images_imag * sin_chi
 
-    flipped_idx = get_flipped_indices(image_shape)
+#     flipped_idx = get_flipped_indices(image_shape)
 
-    def flip(x):
-        return x[...,flipped_idx]
-    # (I+ F) D1 y_r + (-I + F) D2 y_i
-    V1 = (sin_images_real + flip(sin_images_real)) + (-cos_imag_imag + flip(cos_imag_imag))
-    # ( I + F) D2 y_r + (I - F) D1 y_i
-    V2 = (cos_images_real + flip(cos_images_real)) + (sin_imag_imag - flip(sin_imag_imag))
+#     def flip(x):
+#         return x[...,flipped_idx]
+#     # (I+ F) D1 y_r + (-I + F) D2 y_i
+#     V1 = (sin_images_real + flip(sin_images_real)) + (-cos_imag_imag + flip(cos_imag_imag))
+#     # ( I + F) D2 y_r + (I - F) D1 y_i
+#     V2 = (cos_images_real + flip(cos_images_real)) + (sin_imag_imag - flip(sin_imag_imag))
 
-    V1_b = adjoint_slice_sphere_nearest(V1, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  0, volume= None)
-    V2_b = adjoint_slice_sphere_nearest(V2, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  0, volume= None)
+#     V1_b = adjoint_slice_sphere_nearest(V1, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  0, volume= None)
+#     V2_b = adjoint_slice_sphere_nearest(V2, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  0, volume= None)
     
-    vol_flipped = get_flipped_indices(volume_shape)
-    def flip_vol(x):
-        return x[...,vol_flipped]
+#     vol_flipped = get_flipped_indices(volume_shape)
+#     def flip_vol(x):
+#         return x[...,vol_flipped]
     
-    return 0.5 * ( V1_b + flip_vol(V1_b)), 0.5*(V2_b - flip_vol(V2_b) )
+#     return 0.5 * ( V1_b + flip_vol(V1_b)), 0.5*(V2_b - flip_vol(V2_b) )
 
 
 
@@ -238,11 +238,11 @@ def adjoint_ewald_sphere_forward_model(images_real, images_imag, rotation_matric
 
 # A JAXed version of the adjoint. This is actually slightly slower but will run with disc_type = 'linear_interp'
 # @functools.partial(jax.jit, static_argnums=[4,5,6,7])
-# def adjoint_ewald_sphere_forward_model(images_real, images_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, disc_type):  
-#     volume_size = np.prod(volume_shape)
-#     f = lambda volume_real, volume_imag : ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, disc_type )
-#     y, u = vjp(f,jnp.zeros(volume_size, dtype = images_real.dtype ), jnp.zeros(volume_size, dtype = images_real.dtype ))
-#     return u((images_real, images_imag))
+def adjoint_ewald_sphere_forward_model(images_real, images_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, disc_type):  
+    volume_size = np.prod(volume_shape)
+    f = lambda volume_real, volume_imag : ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, disc_type )
+    y, u = vjp(f,jnp.zeros(volume_size, dtype = images_real.dtype ), jnp.zeros(volume_size, dtype = images_real.dtype ))
+    return u((images_real, images_imag))
 
 
 # Compute A^TAx (the forward, then its adjoint). For JAX reasons, this should be about 2x faster than doing each call separately.
