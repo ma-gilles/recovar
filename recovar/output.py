@@ -201,7 +201,10 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
             plt.savefig(save_filepath, bbox_inches='tight')
             
 
-    traj_dim = trajectories[0].shape[1] if trajectories is not None else 4
+    if density is not None:
+        traj_dim = density.ndim
+    else:
+        traj_dim = trajectories[0].shape[1] if trajectories is not None else 4
     for k1 in range(np.min([traj_dim,3])):
         for k2 in range(k1+1, traj_dim):
             plot_traj_along_axes([k1, k2])
