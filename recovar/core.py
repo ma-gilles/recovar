@@ -24,6 +24,8 @@ phase_shift_ind = 6 #(float or Bx1 tensor): degrees
 bfactor_ind = 7 #(float or Bx1 tensor): envelope fcn B-factor (Angstrom^2)
 contrast_ind = 8
 tilt_number_ind = 9
+dose_ind = 9
+tilt_angle_ind = 10
 
 @functools.partial(jax.jit, static_argnums=[1])
 def vol_indices_to_vec_indices(vol_indices, vol_shape):
@@ -514,10 +516,18 @@ def evaluate_ctf_packed(freqs, CTF):
 
 batch_evaluate_ctf = jax.vmap(evaluate_ctf_packed, in_axes = (None, 0))
 
+
+
+def evaluate_ctf_wrapper_tilt_series_v2(CTF_params, image_shape, voxel_size ):
+
+    dose_filter = get_dose_filters(voxel_size, image_shape, CTF_params[:,dose_ind], CTF_params[:,tilt_angle_ind], CTF_params[0,4])
+
+    return dose_filter * cryodrgn_CTF(CTF_params[:,:9], image_shape, voxel_size)
+
 # def evaluate_ctf_tilt(CTF_params, )
 def evaluate_ctf_wrapper_tilt_series(CTF_params, image_shape, voxel_size, dose_per_tilt =None, angle_per_tilt=None ):
 
-    dose_filter = get_dose_filters(voxel_size, image_shape, dose_per_tilt, angle_per_tilt, CTF_params[:,9], CTF_params[0,4])
+    dose_filter = get_dose_filters_from_tilt_number(voxel_size, image_shape, dose_per_tilt, angle_per_tilt, CTF_params[:,9], CTF_params[0,4])
 
     return dose_filter * cryodrgn_CTF(CTF_params[:,:9], image_shape, voxel_size)
 
@@ -526,6 +536,8 @@ def get_cryo_ET_CTF_fun( dose_per_tilt = 2.9, angle_per_tilt = 3):
     def CTF_ET_fun(*args):
         return evaluate_ctf_wrapper_tilt_series(*args, dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt )
     return CTF_ET_fun
+
+
 
 
 def critical_exposure(freq, voltage):
@@ -538,11 +550,19 @@ def critical_exposure(freq, voltage):
 
     return critical_exp + 2.81
 
-def get_dose_filters(Apix, image_shape, dose_per_tilt, angle_per_tilt, tilt_numbers, voltage):
+
+def get_dose_filters_from_tilt_number(Apix, image_shape, dose_per_tilt, angle_per_tilt, tilt_numbers, voltage):
+    cumulative_dose = tilt_numbers * dose_per_tilt
+    tilt_angles = angle_per_tilt * jnp.ceil(tilt_numbers / 2) 
+    return get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage)
+
+
+def get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage):
     D = image_shape[0]
 
-    N = len(tilt_numbers)
-    
+    N = len(cumulative_dose)
+    print("whats N?", N)
+
     freqs = ftu.get_k_coordinate_of_each_pixel(image_shape, Apix, scaled=True)
 
     x = freqs[..., 0]
@@ -550,7 +570,7 @@ def get_dose_filters(Apix, image_shape, dose_per_tilt, angle_per_tilt, tilt_numb
     s2 = x**2 + y**2
     s = jnp.sqrt(s2)
 
-    cumulative_dose = tilt_numbers * dose_per_tilt
+    # cumulative_dose = tilt_numbers * dose_per_tilt
     # cd_tile = torch.repeat_interleave(cumulative_dose, D * D).view(N, -1)
     cd_tile = cumulative_dose[:, None] * jnp.ones([N, D * D])
 
@@ -564,11 +584,13 @@ def get_dose_filters(Apix, image_shape, dose_per_tilt, angle_per_tilt, tilt_numb
     freq_correction = jnp.exp(-0.5 * cd_tile / ce_tile)
     freq_correction = jnp.multiply(freq_correction, oe_mask)
     
-    tilt_angles = angle_per_tilt * jnp.ceil(tilt_numbers / 2) 
+    # tilt_angles = angle_per_tilt * jnp.ceil(tilt_numbers / 2) 
     angle_correction = jnp.cos(tilt_angles * np.pi / 180)
     ac_tile = angle_correction[:, None] * jnp.ones([N, D * D])
 
+    # import pdb; pdb.set_trace()
     return freq_correction * ac_tile
+
 
 def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, CTF_FUNCTION_OPTION=None ):
     return cryodrgn_CTF(CTF_params, image_shape, voxel_size)

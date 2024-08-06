@@ -302,7 +302,10 @@ def compute_latent_space_density_kde(zs, pca_dim_max = 4, num_points = 50, gauss
     
     st_time = time.time()    
     
-    batch_size = 10000
+
+    batch_size = utils.get_latent_density_batch_size(grids_flat, zs.shape[-1], utils.get_gpu_memory_total() ) 
+    logger.info(f"batch size in latent computation: {batch_size}")
+    logger.warning("SHOULD THIS BE SCALED?")
     n_pts = grids_flat.shape[0]
     probs = np.zeros(grids_flat.shape[0])
     option = 'new'

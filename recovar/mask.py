@@ -10,11 +10,13 @@ from scipy.ndimage import binary_dilation
 
 logger = logging.getLogger(__name__)
 
-def masking_options(volume_mask_option, means, volume_shape, input_mask, dtype_real = np.float32, mask_dilation_iter = 0):
+def masking_options(volume_mask_option, means, volume_shape, dtype_real = np.float32, mask_dilation_iter = 0):
     dilation_iterations = np.ceil(6 * volume_shape[0] / 128).astype(int)
+    input_mask = volume_mask_option
+
     if isinstance(volume_mask_option, str):
-        if volume_mask_option == 'input' or input_mask is not None :
-            assert input_mask is not None, 'set volume_mask_option = input, but no mask passed'
+        if volume_mask_option.endswith(".mrc"):
+            # assert input_mask is not None, 'set volume_mask_option = input, but no mask passed'
             input_mask = utils.load_mrc(input_mask) 
             logger.info('Using input mask')
 
@@ -49,8 +51,11 @@ def masking_options(volume_mask_option, means, volume_shape, input_mask, dtype_r
             volume_mask = np.ones(volume_shape)
             dilated_volume_mask = volume_mask
             logger.info('using no mask')
+        else:
+            assert False, 'mask option not recognized. Options are: a path ending in .mrc, from_halfmaps, sphere, none'
     else:
         assert False, 'mask option not recognized'
+
     return np.array(volume_mask.astype(dtype_real)), np.array(dilated_volume_mask.astype(dtype_real))
 
 def make_mask_from_half_maps_from_means_dict(means, smax = 3 ):

@@ -162,7 +162,9 @@ def generate_contrast_params(n_images,noise_scale_std, contrast_std ):
     return contrast, noise_scale
 
 
+
 def generate_volumes_from_mrcs(mrc_names, grid_size_i = None, padding= 0 ):
+    ## TODO rewrite this function.
     Xs_vec = []
     first_vol = True
     idx = 0 
@@ -239,7 +241,8 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
                                volume_distribution = None,  dataset_params_option = "dataset1", noise_level = 1, 
                                noise_model = "radial1", put_extra_particles = True, percent_outliers = 0.1, 
                                volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, disc_type = 'linear_interp', n_tilts = -1, dose_per_tilt = 2.9, angle_per_tilt = 3  ):
-    
+    from recovar import output
+    output.mkdir_safe(output_folder)
     volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize = False )
     scale_vol = 1 / np.mean(np.linalg.norm(volumes, axis =(-1)))
     volumes *= scale_vol
@@ -290,6 +293,8 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
     simulation_info['trailing_zero_format_in_vol_name'] = trailing_zero_format_in_vol_name
     simulation_info['disc_type'] = disc_type
     simulation_info['scale_vol'] = scale_vol
+    simulation_info['dose_per_tilt'] = dose_per_tilt
+    simulation_info['angle_per_tilt'] = angle_per_tilt
 
     particles_file = output_folder + '/particles.'+str(grid_size)+'.mrcs'
 
@@ -342,11 +347,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         phase_shift = np.arcsin(ctf_params[:,5]) / np.pi * 180
         ctf_params[:,core.w_ind] = 0
         ctf_params[:,core.phase_shift_ind] = phase_shift
-    ctf_params[:,core.volt_ind] = voltage
 
-    # ctf_params[:,:2] *=0
-    # ctf_params[:,4] *=0 
-    # voxel_size = ctf_params[0,0]
     trans *=0 
     per_image_contrast, per_image_noise_scale = generate_contrast_params(n_images, noise_scale_std, contrast_std )
 
@@ -367,8 +368,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         # This is how it is done in cryoDRGN. tilt number == the ranking in the tilt series by contrast? Seems a bit sus
         # TODO check this
         logger.warning("A very arbitrary contrast per tilt number! FIX?")
-        ctf_params[:,core.contrast_ind] =   np.exp(-tilt_numbers / n_tilts)
-
+        ctf_params[:,core.contrast_ind] =   np.exp(-0.01 * tilt_numbers / n_tilts)
 
         x_angles = np.arange(n_tilts) * angle_per_tilt
         x_angles_zz = np.concatenate([x_angles[:,None], np.zeros([n_tilts,2])], axis = -1)
@@ -390,9 +390,12 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
             # import pdb; pdb.set_trace()
         # import pdb; pdb.set_trace()
         # Tag it to the end
+        per_tilt_contrast, _ = generate_contrast_params(n_tilt_groups, noise_scale_std, contrast_std )
+        per_image_contrast = per_tilt_contrast[tilt_groups]
         ctf_params = np.concatenate([ctf_params, tilt_numbers[:,None]], axis = -1)
 
     else:
+        per_tilt_contrast = None
         tilt_groups = None
         image_assignments_tilt = None
 
@@ -465,6 +468,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         "voxel_size": voxel_size,
         "tilt_series_assignment": image_assignments_tilt,
         "tilt_groups": tilt_groups,
+        "per_tilt_contrast": per_tilt_contrast,
     }
 
     return main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups

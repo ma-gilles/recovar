@@ -31,7 +31,7 @@ def load_heterogeneous_reconstruction(simulation_info_file, volumes_path_root = 
             volumes = simulator.load_volumes_from_folder(volumes_path_root, simulation_info['grid_size'] , simulation_info['trailing_zero_format_in_vol_name'], normalize=True)
 
     else:
-        volumes
+        volumes = None
 
     return HeterogeneousVolumeDistribution(volumes, simulation_info['image_assignment'], simulation_info['per_image_contrast'] )
 
@@ -46,6 +46,8 @@ class HeterogeneousVolumeDistribution():
         self.volumes = volumes
         # self.volumes = linalg.batch_dft3(volumes, self.volume_shape, self.vol_batch_size)
         valid_indices = mask.get_radial_mask(self.volume_shape, radius = None) if valid_indices is None else valid_indices
+        # print('CHANGE THIS BACK')
+        # valid_indices = mask.get_radial_mask(self.volume_shape, radius = self.volume_shape[0]//8) if valid_indices is None else valid_indices
         self.valid_indices = np.array(valid_indices.reshape(-1))
         if self.volumes is not None:
             self.volumes *= self.valid_indices[None,:]

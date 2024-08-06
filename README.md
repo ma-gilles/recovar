@@ -172,41 +172,45 @@ When the input images (.mrcs), poses (.pkl), and CTF parameters (.pkl) have been
 
 <details><summary><code>$ python pipeline.py -h</code></summary>
 
-    usage: pipeline.py [-h] -o OUTDIR [--zdim ZDIM] --poses POSES --ctf pkl [--mask mrc] [--focus-mask mrc] [--mask-option <class 'str'>]
-                    [--mask-dilate-iter MASK_DILATE_ITER] [--correct-contrast] [--ignore-zero-frequency] [--ind PKL]
-                    [--uninvert-data UNINVERT_DATA] [--datadir DATADIR] [--n-images N_IMAGES] [--padding PADDING] [--halfsets HALFSETS]
-                    [--keep-intermediate] [--noise-model NOISE_MODEL] [--mean-fn MEAN_FN] [--accept-cpu] [--test-covar-options]
-                    [--low-memory-option] [--dont-use-image-mask] [--do-over-with-contrast]
-                    particles
+        usage: pipeline.py [-h] -o OUTDIR [--zdim ZDIM] --poses POSES --ctf pkl --mask mrc [--focus-mask mrc]                                      
+                        [--mask-dilate-iter MASK_DILATE_ITER] [--correct-contrast] [--ignore-zero-frequency] [--ind PKL]                        
+                        [--uninvert-data UNINVERT_DATA] [--datadir DATADIR] [--n-images N_IMAGES] [--padding PADDING] [--halfsets HALFSETS]     
+                        [--keep-intermediate] [--noise-model NOISE_MODEL] [--mean-fn MEAN_FN] [--accept-cpu] [--test-covar-options]             
+                        [--low-memory-option] [--dont-use-image-mask] [--do-over-with-contrast] [--tilt-series]                                 
+                        [--tilt-series-ctf TILT_SERIES_CTF] [--dose-per-tilt DOSE_PER_TILT] [--angle-per-tilt ANGLE_PER_TILT] [--only-mean]     
+                        particles                                                                                                               
+                                                                                                                                                
+        positional arguments:                                                                                                                      
+        particles             Input particles (.mrcs, .star, .cs, or .txt)                                                                       
+                                                                                                                                                
+        optional arguments:                                                                                                                        
+        -h, --help            show this help message and exit                                                                                    
+        -o OUTDIR, --outdir OUTDIR                                                                                                               
+                                Output directory to save model                                                                                     
+        --zdim ZDIM           Dimensions of latent variable. Default=1,2,4,10,20                                                                 
+        --poses POSES         Image poses (.pkl)
+        --ctf pkl             CTF parameters (.pkl)
+        --mask mrc            solvent mask (.mrc).Can solve provide: from_halfmaps, sphere, none                                                
+        --focus-mask mrc      focus mask (.mrc)
+        --mask-dilate-iter MASK_DILATE_ITER
+                                mask options how many iters to dilate solvent and focus mask                                                      
+        --correct-contrast    estimate and correct for amplitude scaling (contrast) variation across images                                     
+        --ignore-zero-frequency
+                                use if you want zero frequency to be ignored. If images have been normalized to 0 mean, this is probably a good   
+                                idea
+        --tilt-series         Whether to use tilt_series.
+        --tilt-series-ctf TILT_SERIES_CTF
+                                Whether to use tilt_series ctf. Default = same as tilt_series.                                                    
+        --dose-per-tilt DOSE_PER_TILT
+        --angle-per-tilt ANGLE_PER_TILT
+        --only-mean           Only compute mean
 
-    positional arguments:
-    particles             Input particles (.mrcs, .star, .cs, or .txt)
-
-    optional arguments:
-    -h, --help            show this help message and exit
-    -o OUTDIR, --outdir OUTDIR
-                            Output directory to save model
-    --zdim ZDIM           Dimensions of latent variable. Default=1,2,4,10,20
-    --poses POSES         Image poses (.pkl)
-    --ctf pkl             CTF parameters (.pkl)
-    --mask mrc            solvent mask (.mrc). See --mask-option
-    --focus-mask mrc      focus mask (.mrc)
-    --mask-option <class 'str'>
-                            mask options: from_halfmaps , input (default), sphere, none
-    --mask-dilate-iter MASK_DILATE_ITER
-                            mask options how many iters to dilate input mask (only used for input mask)
-    --correct-contrast    estimate and correct for amplitude scaling (contrast) variation across images
-    --ignore-zero-frequency
-                            use if you want zero frequency to be ignored. If images have been normalized to 0 mean, this is probably a good
-                            idea
-
-    Dataset loading:
-    --ind PKL             Filter particles by these indices
-    --uninvert-data UNINVERT_DATA
-                            Invert data sign: options: true, false, automatic (default). automatic will swap signs if sum(estimated mean) <
-                            0
-    --datadir DATADIR     Path prefix to particle stack if loading relative paths from a .star or .cs file
-    --n-images N_IMAGES   Number of images to use (should only use for quick run)
+        Dataset loading:
+        --ind PKL             Filter particles by these indices
+        --uninvert-data UNINVERT_DATA
+                                Invert data sign: options: true, false, automatic (default). automatic will swap signs if sum(estimated mean) < 0 
+        --datadir DATADIR     Path prefix to particle stack if loading relative paths from a .star or .cs file                                  
+    --n-images N_IMAGES   Number of images to use (should only use for quick run)                                                           
     --padding PADDING     Real-space padding
     --halfsets HALFSETS   Path to a file with indices of split dataset (.pkl).
     --keep-intermediate   saves some intermediate result. Probably only useful for debugging
@@ -218,9 +222,7 @@ When the input images (.mrcs), poses (.pkl), and CTF parameters (.pkl) have been
     --test-covar-options
     --low-memory-option
     --dont-use-image-mask
-    --do-over-with-contrast
-                            Whether to run again once constrast is estimated
-
+    --do-over-with-contrast Whether to run again once constrast is estimated
 </details>
 
 
@@ -230,12 +232,12 @@ The required arguments are:
 * `--poses`, image poses (`.pkl`) that correspond to the input images
 * `--ctf`, ctf parameters (`.pkl`), unless phase-flipped images are used
 * `-o`, a clean output directory for saving results
-* `--mask`, a solvent mask (`.mrc`)
+* `--mask`, a solvent mask (`.mrc`). Can Also provide: from_halfmaps, sphere, none
 
 
 Additional parameters that are typically set include:
-* `--focus-mask` to specify the path to a focus mask path (`.mrc`). Note that if you only have a solvent mask you should pass it with --mask not focus-mask. If you have a focus-mask but not a solvent mask for some reason, you can use --mask-option for the solvent mask.
-* `--mask-option` to specify which mask to use
+* `--focus-mask` to specify the path to a focus mask path (`.mrc`). Note that if you only have a solvent mask you should pass it with --mask not focus-mask. If you have a focus-mask but not a solvent mask for some reason, you can pass `--mask=sphere`
+<!-- * `--mask` to specify which mask to use -->
 * `--dilate-mask-iter` to specify the number of dilation iterationof mask (default=0)
 * `--zdim`, dimensions of PCA to use for embedding, can submit one integer (`--zdim=20`) or a or a command separated list (`--zdim=10,50,100`). Default (`--zdim=1,2,4,10,20` and using no regulariation).
 

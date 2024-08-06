@@ -342,14 +342,20 @@ def center_atoms(atoms):
     atoms.setCoords(coords)
     return atoms
 
-def generate_molecule_spectrum_from_pdb_id(molecule, voxel_size, grid_size, force_symmetry = True, verbosity = 'none', from_atom_group = False):
+def generate_molecule_spectrum_from_pdb_id(molecule, voxel_size, grid_size, force_symmetry = True, verbosity = 'none', from_atom_group = False, do_center_atoms = None):
+    
+    do_center_atoms = not from_atom_group if do_center_atoms is None else do_center_atoms
 
     # prody.confProDy(verbosity=verbosity)
     if not from_atom_group:
-        atoms = center_atoms(prody.parsePDB(molecule))
+        atoms = prody.parsePDB(molecule)
     else:
         atoms = molecule
-        
+
+    if do_center_atoms:
+        atoms = center_atoms(atoms)
+
+
     image_shape = 3 * [grid_size]
     ft_mol = generate_volume_from_atoms(atoms, grid_size = grid_size, voxel_size = voxel_size)
 

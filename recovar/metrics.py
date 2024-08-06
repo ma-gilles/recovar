@@ -185,7 +185,7 @@ def evaluate_this_choice(target_real, output_folder, voxel_size, mask = None, pa
     
     mask = gt_mask_fn(target_real) if mask is None else mask
 
-    file = lambda k : output_folder + "estimates_half2_unfil"+format(k, '03d')  +".mrc"
+    file = lambda k : output_folder + "estimates_half2_unfil"+format(k, '04d')  +".mrc"
     k = 0 
     errors_gt= {}
     while os.path.isfile(file(k)):

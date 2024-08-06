@@ -160,7 +160,7 @@ def get_embedding_batch_size(basis, image_size, contrast_grid, zdim, gpu_memory)
 
 
 def make_algorithm_options(args):
-    options = {'volume_mask_option': args.mask_option,
+    options = {'volume_mask_option': args.mask,
     'zs_dim_to_test': args.zdim,
     'contrast' : "contrast_qr" if args.correct_contrast else "none",
     'ignore_zero_frequency' : args.ignore_zero_frequency ,

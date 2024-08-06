@@ -25,7 +25,7 @@ def plot_power_spectrum(volume, ax = None):
     if input_ax_is_none:
         plt.figure(figsize=(6, 5))
         ax = plt.gca() 
-    avg = utils.average_over_shells(volume, volume.shape)
+    avg = regularization.average_over_shells(jnp.abs(volume)**2, volume.shape)
     ax.semilogy(avg)
     return avg
 
