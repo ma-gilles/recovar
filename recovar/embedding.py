@@ -283,6 +283,9 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
         logger.warning("IS THIS RIGHT?")
         image_norms_sq = jnp.sum(image_norms_sq, axis=0, keepdims=True)
 
+    # Masked noise is NOT used ANYWHERE. TODO DELETE IT?
+    masked_noises += np.nan
+
     # This should scale as O( contrast_grid_size * (n^2 * batch_size * basis_size +  )
     xs_batch_contrast = batch_over_images_and_contrast_solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, masked_noises, contrast_grid)
 
@@ -467,7 +470,38 @@ batch_over_contrast_solve_contrast_linear_system = jax.vmap(solve_contrast_linea
 batch_over_images_and_contrast_solve_contrast_linear_system = jax.vmap(batch_over_contrast_solve_contrast_linear_system, in_axes = ( 0, 0,0,None,0, None) )
 
 def set_contrasts_in_cryos(cryos, contrasts):
-    running_idx = 0 
-    for i in range(2): # Untested
-        cryos[i].CTF_params[:,8] *= contrasts[running_idx:running_idx+cryos[i].n_images]
-        running_idx += cryos[i].n_images
+
+    if cryos[0].tilt_series_flag:
+        running_idx = 0 
+        for i in range(2):
+            for p in cryos[0].image_stack.particles:
+                cryos[i].CTF_params[p,core.contrast_ind] = contrasts[running_idx]
+                running_idx+=1
+            # running_idx += cryos[i].n_images
+    else:
+        running_idx = 0 
+        for i in range(2): # Untested
+            cryos[i].CTF_params[:,core.contrast_ind] *= contrasts[running_idx:running_idx+cryos[i].n_images]
+            running_idx += cryos[i].n_images
+
+
+
+# @functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19, 23, 24])    
+def compute_residual(batch, mean_estimate,  CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, disc_type,  noise_variance, process_fn, CTF_fun):
+
+    batch = process_fn(batch)
+    batch = core.translate_images(batch, translations , image_shape)
+
+    projected_mean = core.forward_model_from_map(mean_estimate,
+                                         CTF_params,
+                                         rotation_matrices, 
+                                         image_shape, 
+                                         volume_shape, 
+                                        voxel_size, 
+                                        CTF_fun, 
+                                        disc_type              
+                                          )
+    difference = batch - projected_mean
+    difference /= jnp.sqrt(noise_variance)[...,None]
+
+    return jnp.linalg.norm(difference, axis = -1)**2     

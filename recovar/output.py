@@ -41,7 +41,7 @@ def save_volumes(volumes,  save_path , volume_shape = None, from_ft = True, inde
     grid_size = np.round((volumes[0].shape[0])**(1/3)).astype(int)
     volume_shape = 3*[grid_size] if volume_shape is None else volume_shape
     for v_idx, vol in enumerate(volumes):
-        save_volume(vol, save_path + format(index_offset + v_idx, '03d') , volume_shape, from_ft = from_ft, voxel_size = voxel_size)
+        save_volume(vol, save_path + format(index_offset + v_idx, '04d') , volume_shape, from_ft = from_ft, voxel_size = voxel_size)
 
 
 def plot_on_same_scale(cs, xs, labels,plot_folder, ):
@@ -330,8 +330,8 @@ def move_to_one_folder(path_folder, n_vols, string_name = 'ml_optimized_locres_f
     output_folder = path_folder + '/all_volumes/'
     import shutil
     for k in range(n_vols):
-        input_file = path_folder + "/vol" + format(k, '03d') + '/' + string_name
-        output_file = output_folder + "/" + new_stringname + format(k, '03d') + ".mrc"
+        input_file = path_folder + "/vol" + format(k, '04d') + '/' + string_name
+        output_file = output_folder + "/" + new_stringname + format(k, '04d') + ".mrc"
         shutil.copyfile(input_file, output_file)
     return
 
@@ -384,7 +384,7 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_varian
     if new_volume_generation:
         from recovar import heterogeneity_volume, latent_density
         for k in range(path_subsampled.shape[0]):
-            output_folder_this = output_folder + "/vol" + format(k, '03d') + "/"
+            output_folder_this = output_folder + "/vol" + format(k, '04d') + "/"
             mkdir_safe(output_folder_this)
             ndim = zs.shape[-1]
             # n_bins = 30
@@ -405,8 +405,7 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_varian
 
             # latent_points = path_subsampled[k][None]
             # log_likelihoods = latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], zs, cov_zs)[...,0]
-            heterogeneity_distances = [ heterogeneity_distances[:cryos[0].n_images], heterogeneity_distances[cryos[0].n_images:] ]
-
+            heterogeneity_distances = [ heterogeneity_distances[:cryos[0].n_units], heterogeneity_distances[cryos[0].n_units:] ]
 
             # heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder_this, -1, n_bins, B_factor, tau = None, n_min_images = 300, metric_used = "locres_auc")
             from recovar import noise
@@ -460,7 +459,7 @@ def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path, like
 
         plt.xticks([], [])
         plt.yticks([], [])
-        save_filepath = save_path +  format(k, '03d') + '.png' # output_folder + 'plots/' + 'vol_weights' +str(k) + '.png'
+        save_filepath = save_path +  format(k, '04d') + '.png' # output_folder + 'plots/' + 'vol_weights' +str(k) + '.png'
         plt.savefig(save_filepath, bbox_inches='tight')
         if k > 0:
             plt.close(fig)
@@ -530,7 +529,7 @@ class PipelineOutput:
             n_pcs = 50
             u = np.zeros([n_pcs, *(self.params['volume_shape'])])
             for i in range(n_pcs):
-                u[i] = utils.load_mrc(self.result_path + 'output/volumes/' + 'eigen_pos' + format(i, '03d') + '.mrc')
+                u[i] = utils.load_mrc(self.result_path + 'output/volumes/' + 'eigen_pos' + format(i, '04d') + '.mrc')
             if key == 'u_real':
                 return u
             else:
@@ -569,12 +568,14 @@ class PipelineOutput:
             return utils.pickle_load(self.result_path + 'model/' + 'halfsets' + '.pkl')
         elif key == 'particles_halfsets':
             return utils.pickle_load(self.result_path + 'model/' + 'particles_halfsets' + '.pkl')
+        elif key == 'input_args':
+            return self.params['input_args']
         else:
             assert False, "key not found"
 
     def keys(self):
         keys = list(self.params.keys())
-        keys += ['zs', 'cov_zs', 'contrasts', 'u', 'u_real', 'mean', 'volume_mask', 'dilated_volume_mask', 'covariance_cols', 'dataset', 'lazy_dataset', 'variance', 'variance20', 'focus_mask', 'image_snr', 'mean_halfmaps', 'halfsets']
+        keys += ['zs', 'cov_zs', 'contrasts', 'u', 'u_real', 'mean', 'volume_mask', 'dilated_volume_mask', 'covariance_cols', 'dataset', 'lazy_dataset', 'variance', 'variance20', 'focus_mask', 'image_snr', 'mean_halfmaps', 'halfsets', 'input_args', 'unsorted_embedding']
         return keys
 
 

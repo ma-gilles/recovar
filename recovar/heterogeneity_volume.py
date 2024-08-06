@@ -15,8 +15,10 @@ def pick_minimum_discretization_size(ndim, log_likelihoods, q = 0.5, min_images 
         disc_latent_dist = recovar.latent_density.get_log_likelihood_threshold(k = ndim, q=0.5)
     else:
         disc_latent_dist = -1
+    
     value = np.max( [ np.sort(log_likelihoods)[min_images], disc_latent_dist] ) # Bump a lil bit
-    return value * ( 1 + 1e-6)
+    # import pdb; pdb.set_trace()
+    return value * ( 1 + 1e-8)
 
 # def pick_heterogeneity_bins(ndim, log_likelihoods, q = 0.5, min_images = 50, n_bins = 11):
 #     disc_latent_dist = pick_minimum_discretization_size(ndim, log_likelihoods, q , min_images )
@@ -25,7 +27,6 @@ def pick_minimum_discretization_size(ndim, log_likelihoods, q = 0.5, min_images 
 
 def pick_heterogeneity_bins2(ndim, log_likelihoods, q = 0.5, min_images = 50, n_bins = 11):
     disc_latent_dist = pick_minimum_discretization_size(ndim, log_likelihoods, q , min_images )
-
     max_latent_dist = np.percentile(log_likelihoods, 95)
     # dist = np.linspace(np.sqrt(disc_latent_dist), np.sqrt(max_latent_dist), 11 ) **2
     return np.linspace(np.sqrt(disc_latent_dist), np.sqrt(max_latent_dist), n_bins ) **2
@@ -103,19 +104,24 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
 
 def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder, ndim, bins, B_factor, tau = None, n_min_images = 50, metric_used = "locshellmost_likely", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None, kernel_rad = 4, save_all_estimates = False, heterogeneity_kernel = "parabola" ):
 
+    if cryos[0].tilt_series_flag:
+        images_per_particles = np.max(list(cryos[0].image_stack.counts.values()))
+        logger.warning(f"Picking bins based on number of images only. n_min_images = {n_min_images}.")
+    else:
+        images_per_particles =1
+
     if type(bins) == int:
         # heterogeneity_bins = pick_heterogeneity_bins2(ndim, heterogeneity_distances[1], 0.5, n_min_images, n_bins = bins)
-
-        logger.warning(f"Picking bins based on number of images only. n_min_images = {n_min_images}")
-        heterogeneity_bins = pick_heterogeneity_bins2(-1, heterogeneity_distances[1], 0.5, n_min_images, n_bins = bins)
-
+        min_particles = np.ceil(n_min_images/images_per_particles).astype(int)
+        logger.warning(f"Picking bins based on number of images only. n_min_images = {n_min_images}, or n_min_particles = {min_particles}.") 
+        heterogeneity_bins = pick_heterogeneity_bins2(-1, heterogeneity_distances[1], 0.5, min_particles, n_bins = bins)
     else:
         heterogeneity_bins = bins
 
     logger.info(f"bins {heterogeneity_bins}")
     n_images_per_bin = [ (np.sum(heterogeneity_distances[0] < b) + np.sum(heterogeneity_distances[1] < b)) for b in heterogeneity_bins ]
     # logger.info(f"images per bin {*n_images_per_bin}")
-    print("images per bin", n_images_per_bin)
+    print("Particles per bin", n_images_per_bin)
     # print(n_images_per_bin)
     # import pdb; pdb.set_trace()
     estimates = [None, None]

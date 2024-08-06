@@ -10,8 +10,14 @@ from recovar.cryodrgn_source import ImageSource
 # from cryodrgn.utils import window_mask
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import BatchSampler, RandomSampler, SequentialSampler
+from recovar import mask
 
 logger = logging.getLogger(__name__)
+
+## Very awkward... Probably should just move things to one file...
+def set_standard_mask(D, dtype):
+    return mask.window_mask(D, 0.85, 0.99)
+
 
 class ImageDataset(data.Dataset):
     def __init__(
@@ -26,8 +32,10 @@ class ImageDataset(data.Dataset):
         datadir=None,
         window_r=0.85,
         max_threads=16,
+        padding=0,
         device: Union[str, torch.device] = "cpu",
     ):
+        assert padding == 0, "Padding not implemented yet"
         assert not keepreal, "Not implemented yet"
         datadir = datadir or ""
         self.ind = ind
@@ -58,10 +66,14 @@ class ImageDataset(data.Dataset):
         self.unpadded_D = ny
         self.unpadded_image_shape = (ny, ny)
         self.image_shape = (ny, ny)
-        # self.mask = set_standard_mask(self.unpadded_D, self.dtype)
+        self.mask = jnp.array(set_standard_mask(self.unpadded_D, self.dtype))
         self.mult = -1 if invert_data else 1
         self.padding=0
-        self.mask = np.ones(self.image_shape, dtype = np.float32)
+        # self.mask = np.ones(self.image_shape, dtype = np.float32)
+
+
+
+
 
     # def estimate_normalization(self, n=1000):
     #     n = min(n, self.N) if n is not None else self.N
@@ -114,7 +126,7 @@ class ImageDataset(data.Dataset):
 
         #particles = self._process(self.src.images(index).to(self.device))
         particles = self.src.images(index)
-        import pdb; pdb.set_trace() 
+        # import pdb; pdb.set_trace() 
         # this is why it is tricky for index to be allowed to be a list!
         if len(particles.shape) == 2:
             particles = particles[np.newaxis, ...]
@@ -126,7 +138,7 @@ class ImageDataset(data.Dataset):
                 f"ImageDataset returning images for {len(index)} indices ({index[0]}..{index[-1]})"
             )
 
-        return particles, None, index
+        return particles, index, index
 
     def get_slice(
         self, start: int, stop: int
@@ -135,6 +147,16 @@ class ImageDataset(data.Dataset):
             self.src.images(slice(start, stop), require_contiguous=True).numpy(),
             None,
         )
+
+    def get_dataset_generator(self, batch_size, num_workers = 0):
+        return NumpyLoader(self, batch_size=batch_size, shuffle=False, num_workers = num_workers)
+    
+    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
+        # raise NotImplementedError
+        # Maybe this would work?
+        return NumpyLoader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, shuffle=False, num_workers = num_workers)
+        # torch.utils.data.Subset(self, subset_indices)
+
 
 class TiltSeriesData(ImageDataset):
     """
@@ -151,6 +173,7 @@ class TiltSeriesData(ImageDataset):
         expected_res=None,
         dose_per_tilt=None,
         angle_per_tilt=None,
+        sort_with_Bfac=False,
         **kwargs,
     ):
         # Note: ind is the indices of the *tilts*, not the particles
@@ -184,9 +207,19 @@ class TiltSeriesData(ImageDataset):
             self.ctfBfactor = np.asarray(s.df["_rlnCtfBfactor"], dtype=np.float32)
 
         self.tilt_numbers = np.zeros(self.N)
+        if sort_with_Bfac:
+            logger.info("Sorting tilt series with Bfactor")
+        else:
+            logger.info("Sorting tilt series with scale factor")
         for ind in self.particles:
             # idk what this is doing
-            sort_idxs = self.ctfscalefactor[ind].argsort()
+            if sort_with_Bfac:
+                sort_idxs = self.ctfBfactor[ind].argsort()
+                # logger.info("Sorting with Bfactor")
+            else:
+                sort_idxs = self.ctfscalefactor[ind].argsort()
+                # logger.info("Sorting with ctf scale factor")
+
             ranks = np.empty_like(sort_idxs)
             ranks[sort_idxs[::-1]] = np.arange(len(ind))
             self.tilt_numbers[ind] = ranks
@@ -207,8 +240,8 @@ class TiltSeriesData(ImageDataset):
         # Assumes dose-symmetric tilt scheme
         # As implemented in Hagen, Wan, Briggs J. Struct. Biol. 2017
         self.tilt_angles = None
-        if angle_per_tilt is not None:
-            self.tilt_angles = angle_per_tilt * torch.ceil(self.tilt_numbers / 2)
+        # if angle_per_tilt is not None:
+            # self.tilt_angles = angle_per_tilt * torch.ceil(self.tilt_numbers / 2)
             # self.tilt_angles = torch.tensor(self.tilt_angles).to(self.device)
 
 
@@ -306,8 +339,34 @@ class TiltSeriesData(ImageDataset):
     def get_dataset_generator(self, batch_size, num_workers = 0):
         return make_dataloader(self, batch_size=batch_size, num_workers=num_workers)
 
+    def get_dataset_subset_generator(self, batch_size, subset_indices , num_workers = 0):
+        return make_dataloader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, num_workers=num_workers) #torch.utils.data(make_dataloader(self, batch_size=batch_size, num_workers=num_workers), subset_indices)
+
+
     # def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
     #     return tf.data.Dataset.from_tensor_slices((self.particles[subset_indices], subset_indices)).batch(batch_size, num_parallel_calls = tf.data.AUTOTUNE).as_numpy_iterator()
+
+# def make_data_subset_loader(
+#     data: ImageDataset,
+#     indices,
+#     *,
+#     batch_size: int,
+#     num_workers: int = 0,
+#     shuffler_size: int = 0,
+#     shuffle=False,
+# ):
+#     if shuffler_size > 0 and shuffle:
+#         assert data.lazy, "Only enable a data shuffler for lazy loading"
+#         return DataShuffler(data, batch_size=batch_size, buffer_size=shuffler_size)
+#     else:
+#         # see https://github.com/zhonge/cryodrgn/pull/221#discussion_r1120711123
+#         # for discussion of why we use BatchSampler, etc.
+#         sampler_cls = RandomSampler if shuffle else SequentialSampler
+#         batch_size=1
+
+#         dataloader = NumpyLoader(data, batch_size=batch_size, shuffle=False, num_workers = num_workers)
+#         return torch.utils.data.Subset(dataloader, indices = indices)
+
 
 
 def make_dataloader(
@@ -345,8 +404,10 @@ def numpy_collate(batch):
   elif isinstance(batch[0], (tuple,list)):
     transposed = zip(*batch)
     return [numpy_collate(samples) for samples in transposed]
+  elif batch is None:
+      return None
   else:
-    return jnp.array(batch)
+    return jnp.array(batch) 
 
 class NumpyLoader(torch.utils.data.DataLoader):
   def __init__(self, dataset, batch_size=1,
@@ -365,6 +426,29 @@ class NumpyLoader(torch.utils.data.DataLoader):
         drop_last=drop_last,
         timeout=timeout,
         worker_init_fn=worker_init_fn)
+
+
+# class NumpySubsetLoader(torch.utils.data.Subset):
+  
+#   def __init__(self, dataset, indices, batch_size=1,
+#                 shuffle=False, sampler=None,
+#                 batch_sampler=None, num_workers=0,
+#                 pin_memory=False, drop_last=False,
+#                 timeout=0, worker_init_fn=None):
+    
+#     torch.utils.data.Subset(super(self.__class__, self).__init__(dataset,
+#         batch_size=batch_size,
+#         shuffle=shuffle,
+#         sampler=sampler,
+#         batch_sampler=batch_sampler,
+#         num_workers=num_workers,
+#         collate_fn=numpy_collate,
+#         pin_memory=pin_memory,
+#         drop_last=drop_last,
+#         timeout=timeout,
+#         worker_init_fn=worker_init_fn), indices)
+
+
 
 # import numpy as np
 # from collections import Counter, OrderedDict

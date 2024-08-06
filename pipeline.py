@@ -46,19 +46,19 @@ def add_args(parser: argparse.ArgumentParser):
     # )
 
     parser.add_argument(
-        "--mask", metavar="mrc", default=None, type=os.path.abspath, help="solvent mask (.mrc). See --mask-option"
+        "--mask", metavar="mrc", required=True, help="solvent mask (.mrc).Can solve provide: from_halfmaps, sphere, none" 
     )
 
     parser.add_argument(
         "--focus-mask", metavar="mrc", dest = "focus_mask", default=None, type=os.path.abspath, help="focus mask (.mrc)"
     )
 
-    parser.add_argument(
-        "--mask-option", metavar=str, default="input", help="mask options: from_halfmaps , input (default), sphere, none"
-    )
+    # parser.add_argument(
+    #     "--mask-option", metavar=str, default="input", help="mask options: from_halfmaps , input (default), sphere, none"
+    # )
 
     parser.add_argument(
-        "--mask-dilate-iter", type=int, default=0, dest="mask_dilate_iter", help="mask options how many iters to dilate input mask (only used for input mask)"
+        "--mask-dilate-iter", type=int, default=0, dest="mask_dilate_iter", help="mask options how many iters to dilate solvent and focus mask"
     )
 
     parser.add_argument(
@@ -115,11 +115,11 @@ def add_args(parser: argparse.ArgumentParser):
     #     default=0.85,
     #     help="Windowing radius (default: %(default)s)",
     # )
-    # group.add_argument(
-    #     "--lazy",
-    #     action="store_true",
-    #     help="Lazy loading if full dataset is too large to fit in memory",
-    # )
+    group.add_argument(
+        "--lazy",
+        action="store_true",
+        help="Lazy loading if full dataset is too large to fit in memory",
+    )
 
     group.add_argument(
         "--datadir",
@@ -303,7 +303,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--tilt-series-ctf", default = None,  dest="tilt_series_ctf", help="Whether to use tilt_series ctf. Default = same as tilt_series."
+        "--tilt-series-ctf", default = None,  dest="tilt_series_ctf", help="What CTF to use for tilt series. Default = same as tilt_series, also "
     )
 
     parser.add_argument(
@@ -330,8 +330,11 @@ def add_args(parser: argparse.ArgumentParser):
 def standard_recovar_pipeline(args):
     st_time = time.time()
 
-    if args.mask_option == 'input' and args.mask is None:
-        raise ValueError("Mask option is input, but no mask provided. Provide a mask using --mask path/to/mask.mrc")
+    # if args.mask_option == 'input' and args.mask is None:
+    #     raise ValueError("Mask option is input, but no mask provided. Provide a mask using --mask path/to/mask.mrc")
+
+    if args.mask.endswith(".mrc"):
+        args.mask = os.path.abspath(args.mask)
 
     if (not args.accept_cpu) and (not utils.jax_has_gpu()):
         raise ValueError("No GPU found. Set --accept-cpu if you really want to run on CPU (probably not). More likely, you want to check that JAX has been properly installed with GPU support.")
@@ -345,8 +348,21 @@ def standard_recovar_pipeline(args):
 
     dataset_loader_dict = dataset.make_dataset_loader_dict(args)
     options = utils.make_algorithm_options(args)
+    # options["contrast"] = "contrast"
+    # print("CHANGE BACK THIS OPTION!!!!!!")
+    # print("CHANGE BACK THIS OPTION!!!!!!")
+    # print("CHANGE BACK THIS OPTION!!!!!!")
+    # print("CHANGE BACK THIS OPTION!!!!!!")
+    # print("CHANGE BACK THIS OPTION!!!!!!")
+    # print("CHANGE BACK THIS OPTION!!!!!!")
+    # print("CHANGE BACK THIS OPTION!!!!!!")
+    # print("CHANGE BACK THIS OPTION!!!!!!")
+    # print("CHANGE BACK THIS OPTION!!!!!!")
+    # print("CHANGE BACK THIS OPTION!!!!!!")
+    # print("CHANGE BACK THIS OPTION!!!!!!")
 
-    cryos = dataset.get_split_datasets_from_dict(dataset_loader_dict, ind_split)
+
+    cryos = dataset.get_split_datasets_from_dict(dataset_loader_dict, ind_split, args.lazy)
     cryo = cryos[0]
     gpu_memory = utils.get_gpu_memory_total()
     volume_shape = cryo.volume_shape
@@ -360,16 +376,23 @@ def standard_recovar_pipeline(args):
     utils.report_memory_device(logger=logger)
 
     noise_var_from_hf, _ = noise.estimate_noise_variance(cryos[0], batch_size)
+
     valid_idx = cryo.get_valid_frequency_indices()
     noise_model = args.noise_model
 
     
     if args.do_over_with_contrast:
         n_repeats = 2
+        if not args.correct_contrast:
+            logger.warning("Do over with contrast, but contrast correction is off. Setting contrast correction to on") 
+            args.correct_contrast = True
+            options["contrast"] = "contrast_qr"
     else:
         n_repeats = 1
 
     for repeat in range(n_repeats):
+        
+        # embedding.set_contrasts_in_cryos(cryos, np.ones(10000))
 
         if repeat == 1:
             if 10 in options['zs_dim_to_test']:
@@ -424,11 +447,14 @@ def standard_recovar_pipeline(args):
             means['combined'] = means['combined'].astype(cryo.dtype)
 
         logger.info(f"mean computed in {time.time() - st_time}")
+        utils.report_memory_device(logger=logger)
 
         # Compute mask
-        volume_mask, dilated_volume_mask= mask.masking_options(args.mask_option, means, volume_shape, args.mask, cryo.dtype_real, args.mask_dilate_iter)
+        volume_mask, dilated_volume_mask= mask.masking_options(args.mask, means, volume_shape, cryo.dtype_real, args.mask_dilate_iter)
 
-        if args.only_mean:
+        ## Always dump mean?
+        # if args.only_mean:
+        if True:
             output_folder = args.outdir + '/output/' 
             o.mkdir_safe(output_folder)
             o.mkdir_safe(output_folder + 'volumes/')
@@ -446,13 +472,12 @@ def standard_recovar_pipeline(args):
 
             o.save_volume(best_filtered_nob, output_folder + 'volumes/' + 'mean_filt', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
 
+        if args.only_mean:
             return
 
 
-
-
         if args.focus_mask is not None:
-            focus_mask, _= mask.masking_options(args.mask_option, means, volume_shape, args.focus_mask, cryo.dtype_real, args.mask_dilate_iter)
+            focus_mask, _= mask.masking_options(args.focus_mask, means, volume_shape, cryo.dtype_real, args.mask_dilate_iter)
         else:
             focus_mask = volume_mask
         
@@ -460,7 +485,7 @@ def standard_recovar_pipeline(args):
         # Probably should rename all of this...
         masked_image_PS, std_masked_image_PS, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
 
-        if args.mask_option is not None:
+        if args.mask.endswith(".mrc"):
             radial_noise_var_outside_mask, _,_ =  noise.estimate_noise_variance_from_outside_mask_v2(cryo, dilated_volume_mask, batch_size)
 
             white_noise_var_outside_mask = noise.estimate_white_noise_variance_from_mask(cryo, dilated_volume_mask, batch_size)
@@ -585,9 +610,33 @@ def standard_recovar_pipeline(args):
         if args.test_covar_options:
             tests = [ 
                 {
-                "downsample_from_fsc": True,
+                "sampling_n_cols": 10,
                 },
-                {"downsample_from_fsc": False,}
+                {
+                "sampling_n_cols": 100,
+                },
+                {
+                "sampling_n_cols": 300,
+                },
+                {
+                "sampling_n_cols": 1000,
+                },
+                {
+                "column_sampling_scheme" : "low_freqs",
+                "sampling_n_cols": 10,
+                },
+                {
+                "column_sampling_scheme" : "low_freqs",
+                "sampling_n_cols": 100,
+                },
+                {
+                "column_sampling_scheme" : "low_freqs",
+                "sampling_n_cols": 300,
+                },
+                {
+                "column_sampling_scheme" : "low_freqs",
+                "sampling_n_cols": 1000,
+                },
                 ]
             idx = 0
             for test in tests:
@@ -601,7 +650,7 @@ def standard_recovar_pipeline(args):
                 from recovar import output
                 output.mkdir_safe(output_folder)
                 utils.pickle_dump({
-                    'options':test, 'u' :u['rescaled'][:,:20], 's' :s['rescaled'][:20]
+                    'options':test, 'u' :u['rescaled'][:,:20], 's' :s['rescaled'][:20], 'picked_frequencies':picked_frequencies
                 }, output_folder + f'test_{idx}.pkl')
                 del u, s, covariance_cols, picked_frequencies, column_fscs
                 idx = idx + 1
@@ -650,17 +699,20 @@ def standard_recovar_pipeline(args):
                                                                     ignore_zero_frequency = options['ignore_zero_frequency'] )
             logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
 
-    # if args.no_z_regularization:
 
-    for zdim in options['zs_dim_to_test']:
-        z_time = time.time()
-        key = f"{zdim}_noreg"
-        zs[key], cov_zs[key], est_contrasts[key], _ = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled']* 0 + np.inf , zdim,
-                                                                image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
-                                                                contrast_grid = None, contrast_option = options['contrast'],
-                                                                ignore_zero_frequency = options['ignore_zero_frequency'] )
-        logger.info(f"embedding time for zdim={zdim}_noreg: {time.time() - z_time}")
+        for zdim in options['zs_dim_to_test']:
+            z_time = time.time()
+            key = f"{zdim}_noreg"
+            zs[key], cov_zs[key], est_contrasts[key], _ = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled']* 0 + np.inf , zdim,
+                                                                    image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
+                                                                    contrast_grid = None, contrast_option = options['contrast'],
+                                                                    ignore_zero_frequency = options['ignore_zero_frequency'] )
+            logger.info(f"embedding time for zdim={zdim}_noreg: {time.time() - z_time}")
 
+
+        if repeat == 1:
+            for key in est_contrasts:
+                est_contrasts[key] = est_contrasts[key] * contrasts_for_second
 
     zs_cont = {}; cov_zs_cont = {}; est_contrasts_cont = {}        
     # if args.correct_contrast:
@@ -738,9 +790,8 @@ def standard_recovar_pipeline(args):
     o.save_volume(focus_mask, output_folder + 'volumes/' + 'focus_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
 
 
-
-    o.save_volume(means['corrected0'], output_folder + 'volumes/' + 'mean_half1_unfil', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
-    o.save_volume(means['corrected1'], output_folder + 'volumes/' + 'mean_half2_unfil', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
+    # o.save_volume(means['corrected0'], output_folder + 'volumes/' + 'mean_half1_unfil', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
+    # o.save_volume(means['corrected1'], output_folder + 'volumes/' + 'mean_half2_unfil', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
 
     utils.pickle_dump(covariance_cols, output_model_folder + 'covariance_cols.pkl')
     utils.pickle_dump(result, output_model_folder + 'params.pkl')

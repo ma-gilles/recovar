@@ -10,6 +10,7 @@ import recovar.padding as pad
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 ftu_np = fourier_transform_utils(np)
+from recovar import tilt_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -74,73 +75,100 @@ class MRCDataMod(torch.utils.data.Dataset):
     def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
         return tf.data.Dataset.from_tensor_slices((self.particles[subset_indices], subset_indices, subset_indices)).batch(batch_size, num_parallel_calls = tf.data.AUTOTUNE).as_numpy_iterator()
 
-
-
-class LazyMRCDataMod(torch.utils.data.Dataset):
-    # Adapted from cryoDRGN
-    '''
-    Class representing an .mrcs stack file -- images loaded on the fly
-    '''
-    def __init__(self, mrcfile, datadir=None, ind = None, padding = 0, uninvert_data = False ):
-        
-        particles = dataset.load_particles(mrcfile, True, datadir=datadir)
-        if ind is not None:
-            particles = [particles[x] for x in ind]
+USE_NEW_LAZY = True
+if USE_NEW_LAZY:
+    def LazyMRCDataMod(particles_file, ind =None , datadir = None, padding = 0, uninvert_data = False):
+        return tilt_dataset.ImageDataset(particles_file, ind = ind, datadir = datadir, padding = padding, invert_data = uninvert_data, lazy =True)
+else:
+    # LazyMRCDataMod = tilt_dataset.ImageDataset
+    class LazyMRCDataMod(torch.utils.data.Dataset):
+        # Adapted from cryoDRGN
+        '''
+        Class representing an .mrcs stack file -- images loaded on the fly
+        '''
+        def __init__(self, mrcfile, datadir=None, ind = None, padding = 0, uninvert_data = False ):
             
-        N = len(particles)
-        ny, nx = particles[0].get().shape
+            particles = dataset.load_particles(mrcfile, True, datadir=datadir)
+            if ind is not None:
+                particles = [particles[x] for x in ind]
+                
+            N = len(particles)
+            ny, nx = particles[0].get().shape
+            
+            assert ny == nx, "Images must be square"
+            assert ny % 2 == 0, "Image size must be even. Is this a preprocessed dataset? Use the --preprocessed flag if so."
+            
+
+            # self.mrcfile = mrcfile
+            # self.datadir = datadir
+            # self.n_images = N
+            # self.D = (nx + padding) 
+            # self.image_size = self.D * self.D
+            # self.image_shape = (nx + padding, ny + padding)
+            # self.dtype = np.complex64 
+
+            # self.mean_mask = set_standard_mask(self.D, self.dtype)
+            # self.mask = set_standard_mask(self.D, self.dtype)
+            # self.mult = -1 if uninvert_data else 1
+            
+            # self.unpadded_D = nx
+            # self.unpadded_image_shape = (nx, ny)
+
+            # # Maybe should do do this on CPU?
+            # self.particles = particles 
+            # self.padding = padding
+
+
+
+            self.n_images = N
+            self.D = (nx + padding) 
+            self.image_size = self.D * self.D
+            self.image_shape = (nx + padding, ny + padding)
+
+            self.dtype = np.complex64 # ???
+            self.unpadded_D = nx
+            self.unpadded_image_shape = (nx, ny)
+            self.mask = set_standard_mask(self.unpadded_D, self.dtype)
+            self.mult = -1 if uninvert_data else 1
+            
+            # Maybe should do do this on CPU?
+            self.particles = particles #np.array(padded_dft(particles, self.mask, self.image_size))
+            self.padding = padding
+
+            
+        def get(self, i):
+            return self.particles[i].get()
+
+        def __len__(self):
+            return self.n_images
+
+        def __getitem__(self, index):
+            return self.get(index), index, index
+
+        def process_images(self, images, apply_image_mask = False):
+            
+            if apply_image_mask:
+                images = images * self.mask
+
+            images = pad.padded_dft(images * self.mult, self.image_size, self.padding)
+            return images
+
+        def get_dataset_generator(self, batch_size, num_workers = 0):
+            return NumpyLoader(self, batch_size=batch_size, shuffle=False, num_workers = num_workers)
         
-        assert ny == nx, "Images must be square"
-        assert ny % 2 == 0, "Image size must be even. Is this a preprocessed dataset? Use the --preprocessed flag if so."
-        
-
-        self.mrcfile = mrcfile
-        self.datadir = datadir
-        self.n_images = N
-        self.D = (nx + padding) 
-        self.image_size = self.D * self.D
-        self.image_shape = (nx + padding, ny + padding)
-        self.dtype = np.complex64 
-
-        self.mean_mask = set_standard_mask(self.D, self.dtype)
-        self.mask = set_standard_mask(self.D, self.dtype)
-        self.mult = -1 if uninvert_data else 1
-        
-        self.unpadded_D = nx
-        self.unpadded_image_shape = (nx, ny)
-
-        # Maybe should do do this on CPU?
-        self.particles = particles 
-        self.padding = padding
-        
-    def get(self, i):
-        return self.particles[i].get()
-
-    def __len__(self):
-        return self.n_images
-
-    def __getitem__(self, index):
-        return self.get(index), index, index
-
-    def process_images(self, images, apply_image_mask = False):
-        
-        if apply_image_mask:
-            images = images * self.mask
-
-        images = pad.padded_dft(images * self.mult, self.image_size, self.padding)
-        return images
-
-    def get_dataset_generator(self, batch_size, num_workers = 0):
-        return NumpyLoader(self, batch_size=batch_size, shuffle=False, num_workers = num_workers)
-    
-    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
-        # raise NotImplementedError
-        # Maybe this would work?
-        NumpyLoader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, shuffle=False, num_workers = num_workers)
-        # torch.utils.data.Subset(self, subset_indices)
+        def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
+            # raise NotImplementedError
+            # Maybe this would work?
+            return NumpyLoader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, shuffle=False, num_workers = num_workers)
+            # torch.utils.data.Subset(self, subset_indices)
     
     
 def get_num_images_in_dataset(mrc_path):
+    # from recovar import cryodrgn_source
+    # n_particles = cryodrgn_source.ImageSource.from_file(
+    #         mrc_path,
+    #         lazy=True).n
+    # return n_particles
     particles = dataset.load_particles(mrc_path, True)
     return len(particles)
 
@@ -378,6 +406,8 @@ class CryoEMDataset:
         return covariance_core.get_per_image_tight_mask(mask, self.rotation_matrices[indices], self.image_stack.mask, self.volume_mask_threshold, self.image_shape, self.volume_shape, self.grid_size, self.padding, disc_type = 'linear_interp',  binary = binary, soften = soften)
 
 
+
+
 def subsample_cryoem_dataset(dataset, indices):
 
     import copy
@@ -397,13 +427,20 @@ def subsample_cryoem_dataset(dataset, indices):
 # Loads dataset that are stored in the cryoDRGN format
 def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False, tilt_series = False, tilt_series_ctf = None, dose_per_tilt = 2.9, angle_per_tilt = 3 ):
     
+    assert tilt_series_ctf in (None, True, False, "from_star", "scale_from_star"), "tilt_series_ctf must be None, from_star, or scale_from_star"
     tilt_series_ctf = tilt_series if tilt_series_ctf is None else tilt_series_ctf
 
+    if tilt_series_ctf == "scale_from_star":
+        angle_per_tilt = 0
+        sort_with_Bfac = True
+    else:
+        sort_with_Bfac = False
+        
     if tilt_series:
             from recovar import tilt_dataset
             # particles_to_tilts, tilts_to_particles = tilt_dataset.TiltSeriesData.parse_particle_tilt(particles_file)
 
-            dataset = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data)
+            dataset = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, sort_with_Bfac = sort_with_Bfac)
     else:
         if lazy:
             dataset = LazyMRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
@@ -422,15 +459,17 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
     
     CTF_fun = core.evaluate_ctf_wrapper
 
-    if tilt_series_ctf == "v2":
+    if tilt_series_ctf == "scale_from_star":
+        angle_per_tilt = 0
+
+    if tilt_series_ctf == "from_star":
         ctf_params[:,core.contrast_ind+1] = dataset.ctfscalefactor
         ctf_params[:,core.bfactor_ind+1] = dataset.ctfBfactor
-        print('USING V2 CTF!!')
-    elif tilt_series_ctf is True:
+        logger.info('CTF from star')
+    elif (tilt_series_ctf == "scale_from_star") or tilt_series_ctf is True:
         # Sort of a hacky way to do this.
         if tilt_series is False:
-            from recovar import tilt_dataset
-            tilt_dataset_this = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data)
+            tilt_dataset_this = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, sort_with_Bfac = sort_with_Bfac)
         else:
             tilt_dataset_this = dataset
 
@@ -445,6 +484,29 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
         # angle_per_tilt = 3 
         # dose_per_tilt = 2.9
         CTF_fun = core.get_cryo_ET_CTF_fun(dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt)
+        logger.info('CTF from dose weighting')
+    elif tilt_series_ctf == "tilt_ctf_v2": 
+        # Sort of a hacky way to do this.
+        if tilt_series is False:
+            tilt_dataset_this = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, sort_with_Bfac = sort_with_Bfac)
+        else:
+            tilt_dataset_this = dataset
+
+        # + 1 because voxel_size in included.... gross
+        # ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
+        tilt_numbers = tilt_dataset_this.tilt_numbers
+        dose = - (tilt_dataset_this.ctfBfactor / 4) # WARP uses a ctfBfactor == -4 * dose
+        angles = angle_per_tilt * tilt_numbers
+
+        ctf_params = np.concatenate( [ctf_params, tilt_numbers[...,None]], axis =-1)
+
+        assert (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)) , "Critical exposure calculation requires 200kV or 300kV imaging" 
+        # angle_per_tilt = 3 
+        # dose_per_tilt = 2.9
+        # CTF_fun = core.get_cryo_ET_CTF_fun(dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt)
+        logger.info('CTF from dose weighting')
+        
+
 
     posetracker = PoseTracker.load( poses_file, dataset.n_images, dataset.unpadded_D, ind = ind) #,   None, ind, device=device)
         
@@ -528,8 +590,8 @@ def split_index_list( all_valid_image_indices, split_random_seed = 0 ):
 
     np.random.shuffle(shuffled_ind)
     ind_split = [
-                all_valid_image_indices[shuffled_ind[:half_ind_size]], 
-                all_valid_image_indices[shuffled_ind[half_ind_size:]],
+                np.sort(all_valid_image_indices[shuffled_ind[:half_ind_size]]), 
+                np.sort(all_valid_image_indices[shuffled_ind[half_ind_size:]]),
                 ]
     return ind_split
         

@@ -1120,8 +1120,6 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
 
 def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola"):
 
-    # residuals to pick best one
-    # I guess one way to do this without changed the function is to make CTF 0 for all bad images?
     estimates = []#heterogeneity_bins.size * [None]
 
     bins = heterogeneity_bins.copy()
@@ -1133,15 +1131,10 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
     rhs_all = np.zeros((n_bins, half_volume_size), dtype =experiment_dataset.dtype )
 
     # logger.info(f"batch size in het comp: {batch_size}")
-    # data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size)
-    # weights = jnp.asarray(weights)
-
-    # print("APPLYING IMAGE MASK!?!")
-    # print("APPLYING IMAGE MASK!?!")
 
 
     for bin_idx in range(n_bins):
-        image_inds = np.where(inds == bin_idx)[0]
+        image_inds = np.sort(np.where(inds == bin_idx)[0])
         # print(image_inds.size)
 
         data_generator = experiment_dataset.get_dataset_subset_generator( batch_size=batch_size, subset_indices = image_inds)
@@ -1149,7 +1142,6 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
         rhs = jnp.zeros(half_volume_size, dtype = experiment_dataset.dtype )
         for batch, particles_ind, indices in data_generator:
 
-            # import pdb; pdb.set_trace()
             # Only place where image mask is used ?
             batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
             # print("APPLYING IMAGE MASK!?!")
@@ -1184,7 +1176,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
         rhs_all[bin_idx] = rhs
         lhs_all[bin_idx] = lhs
 
-    # A slight improvement would be an almost triangular kernel/ pyramid kernel
+    # A slight improvement is an almost triangular kernel/ pyramid kernel
     #    _
     #  _| |_
     #_|     |_ 

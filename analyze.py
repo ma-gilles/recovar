@@ -84,10 +84,17 @@ def add_args(parser: argparse.ArgumentParser):
         help="whether to use z without regularization, e.g. use 2_noreg instead of 2"
     )
 
+    parser.add_argument(
+        "--lazy",
+        action="store_true",
+        help="Lazy loading if full dataset is too large to fit in memory",
+    )
+
+
     return parser
 
 
-def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40, n_paths = 6, skip_umap = False, q = None, n_std = None, B_factor=0, n_bins=30, n_vols_along_path = 6, skip_centers = False, normalize_kmeans = False, density_path = None, no_z_reg = False):
+def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40, n_paths = 6, skip_umap = False, q = None, n_std = None, B_factor=0, n_bins=30, n_vols_along_path = 6, skip_centers = False, normalize_kmeans = False, density_path = None, no_z_reg = False, lazy = False):
 
 
     po = o.PipelineOutput(recovar_result_dir + '/')
@@ -109,7 +116,13 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
     zs = po.get('zs')[zdim_key]
     cov_zs = po.get('cov_zs')[zdim_key]
-    cryos = po.get('dataset')
+
+    # if pipeline_output.get('unsorted_embedding') is not None:
+    #     zs_unsort 
+    if lazy:
+        cryos = po.get('lazy_dataset')
+    else:
+        cryos = po.get('dataset')
     embedding.set_contrasts_in_cryos(cryos, po.get('contrasts')[zdim_key])
 
     if density_path is not None:
@@ -139,7 +152,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     n_bins = args.n_bins
 
     def reorder(array):
-        return dataset.reorder_to_original_indexing_from_halfsets(array, po.get('halfsets'))
+        return dataset.reorder_to_original_indexing_from_halfsets(array, po.get('particles_halfsets'))
 
     output_folder_kmeans = output_folder + '/' #+ '/kmeans'+'_'+ str(n_clusters) + '/'    
     o.mkdir_safe(output_folder_kmeans)    
@@ -261,4 +274,4 @@ def pick_pairs(centers, n_pairs):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
-    analyze(args.result_dir, output_folder = args.outdir, zdim=  args.zdim, n_clusters = args.n_clusters, n_paths= args.n_trajectories, skip_umap = args.skip_umap, B_factor = args.Bfactor, n_bins = args.n_bins, n_vols_along_path = args.n_vols_along_path, skip_centers = args.skip_centers, normalize_kmeans = args.normalize_kmeans, density_path = args.density, no_z_reg = args.no_z_reg)
+    analyze(args.result_dir, output_folder = args.outdir, zdim=  args.zdim, n_clusters = args.n_clusters, n_paths= args.n_trajectories, skip_umap = args.skip_umap, B_factor = args.Bfactor, n_bins = args.n_bins, n_vols_along_path = args.n_vols_along_path, skip_centers = args.skip_centers, normalize_kmeans = args.normalize_kmeans, density_path = args.density, no_z_reg = args.no_z_reg, lazy = args.lazy)

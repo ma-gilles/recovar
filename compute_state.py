@@ -47,13 +47,25 @@ def add_args(parser: argparse.ArgumentParser):
         "--no-z-regularization",  action="store_true", dest="no_z_regularization", help="Whether to use z regularization"
     )
 
+    parser.add_argument(
+        "--lazy",  action="store_true", help="Whether to use lazy loading")
+
+    parser.add_argument(
+        "--particles",  default=None, help="particle stack dataset. In case you want to use a higher resolution stack")
+
+
     return parser
 
 
 def compute_state(args):
 
     po = o.PipelineOutput(args.result_dir + '/')
+
+    if args.particles is not None:
+        po.params['input_args'].particles = args.particles
+
     target_zs = np.loadtxt(args.latent_points)
+
     output_folder = args.outdir + '/'
 
     if args.zdim1:
@@ -70,7 +82,7 @@ def compute_state(args):
 
     zdim_key = f"{zdim}_noreg" if args.no_z_regularization else zdim
 
-    cryos = po.get('dataset')
+    cryos = po.get('lazy_dataset') if args.lazy else po.get('dataset')
     embedding.set_contrasts_in_cryos(cryos, po.get('contrasts')[zdim_key])
     zs = po.get('zs')[zdim_key]
     cov_zs = po.get('cov_zs')[zdim_key]

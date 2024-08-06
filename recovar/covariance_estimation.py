@@ -11,6 +11,11 @@ logger = logging.getLogger(__name__)
 
 def get_default_covariance_computation_options():
 
+    if utils.get_gpu_memory_total() < 70:
+        n_pcs = np.ceil((utils.get_gpu_memory_total() / (75 / 200**4))**(1/4)).astype(int)
+    else:
+        n_pcs = 200
+
     options = {
         "covariance_fn": "kernel",
         "reg_fn": "new",
@@ -27,8 +32,8 @@ def get_default_covariance_computation_options():
         "column_radius": 5,
         "use_combined_mean": True, # doesn't seem to change anything? worth a try
         "sampling_avoid_in_radius": 2, # Tuned
-        "sampling_n_cols": 298, # A weird number for purely historical reasons. Change?
-        "n_pcs_to_compute" : 200,
+        "sampling_n_cols": 300, # A weird number for purely historical reasons. Change?
+        "n_pcs_to_compute" : n_pcs,
         "randomized_sketch_size" : 300,
         "prior_n_iterations" : 20,
         "randomize_column_sampling": False,
@@ -360,7 +365,7 @@ def compute_variance(cryos, mean_estimate, batch_size, volume_mask, noise_varian
     noise_p_variance_est = ( noise_p_variance_rhs[0] + noise_p_variance_rhs[1]) / (noise_p_variance_lhs[0] + noise_p_variance_lhs[1])
 
     end_time = time.time()
-    logger.info(f"time to compute means: {end_time- st_time}")
+    logger.info(f"time to compute variance: {end_time- st_time}")
 
     return variance, variance_prior.real, fsc.real, lhs.real, noise_p_variance_est.real
 
@@ -881,14 +886,16 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
             experiment_dataset.image_shape, experiment_dataset.volume_shape )
         
 
-        all_one_volume = jnp.ones(experiment_dataset.volume_size, dtype = experiment_dataset.dtype)
-        ones_mapped = core.forward_model(all_one_volume, batch_CTF, batch_grid_pt_vec_ind_of_images)
+        # all_one_volume = jnp.ones(experiment_dataset.volume_size, dtype = experiment_dataset.dtype)
+        # ones_mapped = core.forward_model(all_one_volume, batch_CTF, batch_grid_pt_vec_ind_of_images)
         
         if "kernel" in H_B_fn:
             batch_grid_pt_vec_ind_of_images = core.batch_get_gridpoint_coords(
                 experiment_dataset.rotation_matrices[batch_image_ind],
                 experiment_dataset.image_shape, experiment_dataset.volume_shape )
-
+        else:
+            all_one_volume = jnp.ones(experiment_dataset.volume_size, dtype = experiment_dataset.dtype)
+            ones_mapped = core.forward_model(all_one_volume, batch_CTF, batch_grid_pt_vec_ind_of_images)
 
         for (k, picked_freq_idx) in enumerate(picked_frequency_indices):
             
@@ -921,7 +928,7 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
                 H[k] += H_k.real.astype(experiment_dataset.dtype_real)
                 B[k] += B_k
         del image_mask
-        del images, ones_mapped, batch_CTF, batch_grid_pt_vec_ind_of_images
+        del images, batch_CTF, batch_grid_pt_vec_ind_of_images
         
     H = np.stack(H, axis =1)#, dtype=H[0].dtype)
     B = np.stack(B, axis =1)#, dtype=B[0].dtype)
@@ -1138,12 +1145,12 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     if disc_type_u == 'cubic':
         basis = compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)
 
+    change_device= False
 
     for experiment_dataset in experiment_datasets:
         data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
         
-
-        for batch, particles_ind, batch_image_ind in data_generator:
+        for batch, _, batch_image_ind in data_generator:
             jax_random_key, subkey = jax.random.split(jax_random_key)
 
             lhs_this, rhs_this = reduce_covariance_est_inner(batch, mean_estimate, volume_mask, 
@@ -1164,11 +1171,17 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
                                                                         jax_random_key =subkey, do_mask_images = do_mask_images,
                                                                         shared_label = experiment_dataset.tilt_series_flag)
             
-            # reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, disc_type_u, noise_variance, process_fn, CTF_fun, parallel_analysis = False, jax_random_key = None)
+            # Some JAX bugs make this extremely slow (like, HOURS along). Reduced the number of PCS instead.
+            # if (utils.get_gpu_memory_total() - utils.get_gpu_memory_used()) < utils.get_size_in_gb(lhs_this) + utils.get_size_in_gb(rhs_this):
+            #     lhs_this = jax.device_put(lhs_this, jax.devices("cpu")[0])
+            #     rhs_this = jax.device_put(rhs_this, jax.devices("cpu")[0])
+            #     change_device = True
+
             # lhs_this = jax.device_put(lhs_this, jax.devices("cpu")[0])
             # lhs += summed_batch_kron_cpu(lhs_this)
             lhs += lhs_this
             rhs += rhs_this
+            del lhs_this, rhs_this
         # del lhs_this, rhs_this
     del basis
     # Deallocate some memory?
@@ -1185,6 +1198,11 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     logger.info("end of covariance computation - before solve")
     rhs = vec(rhs)
 
+    if change_device:
+        rhs = jax.device_put(rhs, jax.devices("gpu")[0])
+        lhs = jax.device_put(lhs, jax.devices("gpu")[0])
+    # lhs_this = jax.device_put(lhs_this, jax.devices("gpu")[0])
+
     covar = jax.scipy.linalg.solve( lhs ,rhs, assume_a='pos')
     # covar = linalg.batch_linear_solver(lhs, rhs)
     covar = unvec(covar)
@@ -1200,16 +1218,17 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
         logger.warning(f"USING NEAREST NEIGHBOR DISCRETIZATION IN reduce_covariance_est_inner. disc_type={disc_type}, disc_type_u={disc_type_u}")
 
     # Memory to do this is ~ size(volume_mask) * batch_size
-    image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
-                                          rotation_matrices,
-                                          image_mask, 
-                                          volume_mask_threshold,
-                                          image_shape, 
-                                          volume_shape, grid_size, 
-                                          padding, 
-                                          'linear_interp' ) #* 0 + 1
-    if not do_mask_images:
-        image_mask = jnp.ones_like(image_mask)
+    if do_mask_images:
+        image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
+                                            rotation_matrices,
+                                            image_mask, 
+                                            volume_mask_threshold,
+                                            image_shape, 
+                                            volume_shape, grid_size, 
+                                            padding, 
+                                            'linear_interp' ) #* 0 + 1
+    else:
+        image_mask = jnp.ones_like(batch).real
     logger.warning("USING mask in reduce_covariance_est_inner")
     logger.warning("MAKE IMAGE DISC CUBIC?")
 
@@ -1229,8 +1248,9 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
 
 
     ## DO MASK BUSINESS HERE.
-    batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
-    projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, image_shape)
+    if do_mask_images:
+        batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
+        projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, image_shape)
 
     AUs = covariance_core.batch_over_vol_forward_model_from_map(basis,
                                          CTF_params, 
@@ -1239,13 +1259,13 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
                                          volume_shape, 
                                         voxel_size, 
                                         CTF_fun, 
-                                        disc_type_u )   
+                                        disc_type_u ) 
     # Apply mask on operator
-    AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, image_shape )
+    if do_mask_images:
+        AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, image_shape )
     AUs = AUs.transpose(1,2,0)
 
     batch = batch - projected_mean
-
 
     # if parallel_analysis:
     #     # batch *= (np.random.randint(0, 2, batch.shape)*2 - 1)
@@ -1255,21 +1275,19 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
         # print("here")
     AU_t_images = batch_x_T_y(AUs, batch)
 
-    if shared_label:
-        AU_t_images = jnp.sum(AU_t_images, axis=0,keepdims=True)
-
-    # if parallel_analysis:
-    #     random_vals = jax.random.randint(jax_random_key, AU_t_images.shape, 0, 2)*2 - 1
-    #     AU_t_images *= random_vals
-
-    outer_products = summed_outer_products(AU_t_images)
-
     AU_t_AU = batch_x_T_y(AUs,AUs).real.astype(CTF_params.dtype)
     AUs *= jnp.sqrt(noise_variance)[...,None]
     UALambdaAUs = jnp.sum(batch_x_T_y(AUs,AUs), axis=0)
 
+    if shared_label:
+        AU_t_images = jnp.sum(AU_t_images, axis=0,keepdims=True)
+        AU_t_AU = jnp.sum(AU_t_AU, axis=0,keepdims=True)
+
+    outer_products = summed_outer_products(AU_t_images)
+
     rhs = outer_products - UALambdaAUs
     rhs = rhs.real.astype(CTF_params.dtype)
+    # import pdb; pdb.set_trace()
     # return AU_t_AU, rhs
     # Perhaps this should use: jax.lax.fori_loop. This is a lot of memory.
     # Or maybe jax.lax.reduce ?

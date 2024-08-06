@@ -156,8 +156,8 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
         # import pdb; pdb.set_trace()
 
         lbfgsb_sol = lbfgsb_sol_p.params
-        cost[alpha_idx] = ridge_reg_objective_grid(lbfgsb_sol, alpha = 0)
-        reg_cost[alpha_idx] = ridge_reg_objective_grid(lbfgsb_sol, alpha = alpha)
+        cost[alpha_idx] = ridge_reg_objective_grid(lbfgsb_sol, alpha = 0) / ridge_reg_objective_grid(lbfgsb_sol * 0, alpha = 0) 
+        reg_cost[alpha_idx] = ridge_reg_objective_grid(lbfgsb_sol, alpha = alpha) / ridge_reg_objective_grid(lbfgsb_sol * 0, alpha = 0)
         lbfgsb_sols.append(np.array(lbfgsb_sol))
 
     return lbfgsb_sols, cost, reg_cost, alphas
