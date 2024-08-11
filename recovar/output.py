@@ -119,10 +119,10 @@ def slice_at_point(density, axes, point, *args, **kwargs):
     return density
 
 
-def plot_trajectories_over_density_from_result(results, trajectories, subsampled, zdim ):
-    latent_space_bounds = ld.compute_latent_space_bounds(results['zs'][zdim])
-    plot_over_density(results['density'], trajectories, latent_space_bounds,  subsampled = subsampled, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = results['zs'][zdim], cov_zs = results['cov_zs'][zdim] )
-    return
+# def plot_trajectories_over_density_from_result(results, trajectories, subsampled, zdim ):
+#     latent_space_bounds = ld.compute_latent_space_bounds(results['zs'][zdim])
+#     plot_over_density(results['density'], trajectories, latent_space_bounds,  subsampled = subsampled, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = results['zs'][zdim], cov_zs = results['cov_zs'][zdim] )
+#     return
 
 
 def plot_over_density(density, trajectories = None, latent_space_bounds = None,  subsampled = None, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = None, cov_zs = None, points = None, projection_function = None, annotate = False, slice_point = None):
@@ -570,7 +570,10 @@ class PipelineOutput:
         elif key == 'halfsets':
             return utils.pickle_load(self.result_path + 'model/' + 'halfsets' + '.pkl')
         elif key == 'particles_halfsets':
-            return utils.pickle_load(self.result_path + 'model/' + 'particles_halfsets' + '.pkl')
+            if self.version == '0.1':
+                return utils.pickle_load(self.result_path + 'model/' + 'halfsets' + '.pkl')
+            else:
+                return utils.pickle_load(self.result_path + 'model/' + 'particles_halfsets' + '.pkl')
         elif key == 'input_args':
             return self.params['input_args']
         else:

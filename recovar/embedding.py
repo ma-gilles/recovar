@@ -64,8 +64,8 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
     logger.info(f"using contrast? {use_contrast}")
 
     if use_contrast:
-        contrast_grid = np.linspace(0, 2, 50) if contrast_grid is None else contrast_grid
-        contrast_grid[0] = 0.01
+        contrast_grid = np.linspace(0, 2, 51)[1:] if contrast_grid is None else contrast_grid
+        # contrast_grid[0] = 0.01
     else:
         contrast_grid = np.ones([1])
     

@@ -367,26 +367,43 @@ class CryoEMDataset:
         im2 = jnp.take(im, self.grid_size//2, axis = axis)
         return to_real_fn(im2)
 
-    def get_image(self, i ):
-        image = self.image_stack.get(i)[None]
+    def get_image(self, i , tilt_idx = None):
+        if self.tilt_series_flag:
+            assert ( tilt_idx is not None), "Tilt index must be specified for tilt series"
+
+        if tilt_idx is None:
+            image = self.image_stack.__getitem__(i)[0][None]
+        else:
+            image = self.image_stack.__getitem__(i)[0][tilt_idx][None]
+
         processed_image = self.image_stack.process_images(image)
         return processed_image.reshape(self.image_shape)
 
     def get_CTF_image(self, i ):
         return self.get_CTF(np.array([i])).reshape(self.image_shape)
 
-    def get_image_real(self,i, to_real= np.real, hide_padding = True):
+    def get_image_real(self,i, tilt_idx = None, to_real= np.real, hide_padding = True):
         hpad= self.image_stack.padding//2
         if hide_padding:
-            return to_real(ftu.get_idft2(self.get_image(i))[hpad:self.image_shape[0]-hpad,hpad:self.image_shape[1]-hpad])
+            return to_real(ftu.get_idft2(self.get_image(i,tilt_idx))[hpad:self.image_shape[0]-hpad,hpad:self.image_shape[1]-hpad])
         else:
-            return to_real(ftu.get_idft2(self.get_image(i)))
+            return to_real(ftu.get_idft2(self.get_image(i,tilt_idx)))
 
 
-    def get_denoised_image(self,i, to_real= np.real, hide_padding = True, weiner_param =1):
+    def get_denoised_image(self,i, tilt_idx=None, to_real= np.real, hide_padding = True, weiner_param =1):
         batch_image_ind = np.array([i])
-        CTFs = self.CTF_fun(self.CTF_params[batch_image_ind], self.image_shape, self.voxel_size) # Compute CTF
-        images = self.image_stack.get(i)[None]
+        if self.tilt_series_flag:
+            assert ( tilt_idx is not None), "Tilt index must be specified for tilt series"
+        # tilt_idx = None if tilt_idx is None else np.array([tilt_idx])
+
+        if tilt_idx is not None:
+            images, _, image_ind = self.image_stack.__getitem__(i)
+            images = images[tilt_idx][None]
+            CTFs = self.CTF_fun(self.CTF_params[image_ind[tilt_idx]][None], self.image_shape, self.voxel_size) # Compute CTF
+        else:
+            images, _, _ = self.image_stack.__getitem__(i)
+            images = images[None]
+            CTFs = self.CTF_fun(self.CTF_params[i][None], self.image_shape, self.voxel_size) # Compute CTF
         images = self.image_stack.process_images(images) # Compute DFT, masking
         images = (CTFs / (CTFs**2 + weiner_param)) * images  # CTF correction
         images = images.reshape(self.image_shape)
@@ -427,14 +444,18 @@ def subsample_cryoem_dataset(dataset, indices):
 # Loads dataset that are stored in the cryoDRGN format
 def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False, tilt_series = False, tilt_series_ctf = None, dose_per_tilt = 2.9, angle_per_tilt = 3 ):
     
-    assert tilt_series_ctf in (None, True, False, "from_star", "scale_from_star"), "tilt_series_ctf must be None, from_star, or scale_from_star"
-    tilt_series_ctf = tilt_series if tilt_series_ctf is None else tilt_series_ctf
+    # For backward compatibility... Delete at some point?
+    tilt_series_ctf = None if tilt_series_ctf is False else tilt_series_ctf
 
-    if tilt_series_ctf == "scale_from_star":
-        angle_per_tilt = 0
-        sort_with_Bfac = True
-    else:
-        sort_with_Bfac = False
+    # assert tilt_series_ctf in (None, "from_star", "scale_from_star"), "tilt_series_ctf must be None, from_star, or scale_from_star"
+    # tilt_series_ctf = tilt_series if tilt_series_ctf is None else tilt_series_ctf
+
+    sort_with_Bfac = True
+    # if tilt_series_ctf == "scale_from_star":
+    #     angle_per_tilt = 0
+    #     sort_with_Bfac = True
+    # else:
+    #     sort_with_Bfac = False
         
     if tilt_series:
             from recovar import tilt_dataset
@@ -459,54 +480,60 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
     
     CTF_fun = core.evaluate_ctf_wrapper
 
-    if tilt_series_ctf == "scale_from_star":
-        angle_per_tilt = 0
+    # Sort of a hacky way to do this.
+    if (tilt_series is False) and (tilt_series_ctf is not None):
+        from recovar import tilt_dataset
+        tilt_dataset_this = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, sort_with_Bfac = sort_with_Bfac)
+    else:
+        tilt_dataset_this = dataset
 
-    if tilt_series_ctf == "from_star":
-        ctf_params[:,core.contrast_ind+1] = dataset.ctfscalefactor
-        ctf_params[:,core.bfactor_ind+1] = dataset.ctfBfactor
-        logger.info('CTF from star')
-    elif (tilt_series_ctf == "scale_from_star") or tilt_series_ctf is True:
-        # Sort of a hacky way to do this.
-        if tilt_series is False:
-            tilt_dataset_this = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, sort_with_Bfac = sort_with_Bfac)
-        else:
-            tilt_dataset_this = dataset
+    if tilt_series_ctf is not None:
+        if "scale_from_star" in tilt_series_ctf:
+            angle_per_tilt = 0
 
-        # + 1 because voxel_size in included.... gross
-        ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
-        tilt_numbers = tilt_dataset_this.tilt_numbers
-        # tilt_angles = dataset.tilt_angles[dataset.tilt_indices]
-        # tilt_angles = angle_per_tilt * torch.ceil(tilt_numbers / 2)
-        ctf_params = np.concatenate( [ctf_params, tilt_numbers[...,None]], axis =-1)#, tilt_angles[...,None]], axis =-1)
+        if tilt_series_ctf == "from_star":
+            ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
+            ctf_params[:,core.bfactor_ind+1] = -tilt_dataset_this.ctfBfactor # should be POSITIVE (negative in star file)
+            logger.info('CTF from star')
+        elif (tilt_series_ctf == "scale_from_star") or (tilt_series_ctf == "from_dose"):
+            # Sort of a hacky way to do this.
 
-        assert (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)) , "Critical exposure calculation requires 200kV or 300kV imaging" 
-        # angle_per_tilt = 3 
-        # dose_per_tilt = 2.9
-        CTF_fun = core.get_cryo_ET_CTF_fun(dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt)
-        logger.info('CTF from dose weighting')
-    elif tilt_series_ctf == "tilt_ctf_v2": 
-        # Sort of a hacky way to do this.
-        if tilt_series is False:
-            tilt_dataset_this = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, sort_with_Bfac = sort_with_Bfac)
-        else:
-            tilt_dataset_this = dataset
+            # + 1 because voxel_size in included.... gross
+            if "scale_from_star" in tilt_series_ctf:
+                ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
 
-        # + 1 because voxel_size in included.... gross
-        # ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
-        tilt_numbers = tilt_dataset_this.tilt_numbers
-        dose = - (tilt_dataset_this.ctfBfactor / 4) # WARP uses a ctfBfactor == -4 * dose
-        angles = angle_per_tilt * tilt_numbers
+            tilt_numbers = tilt_dataset_this.tilt_numbers
+            # tilt_angles = dataset.tilt_angles[dataset.tilt_indices]
+            # tilt_angles = angle_per_tilt * torch.ceil(tilt_numbers / 2)
+            ctf_params = np.concatenate( [ctf_params, tilt_numbers[...,None]], axis =-1)#, tilt_angles[...,None]], axis =-1)
 
-        ctf_params = np.concatenate( [ctf_params, tilt_numbers[...,None]], axis =-1)
+            assert (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)) , "Critical exposure calculation requires 200kV or 300kV imaging" 
+            # angle_per_tilt = 3 
+            # dose_per_tilt = 2.9
+            CTF_fun = core.get_cryo_ET_CTF_fun(dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt)
+            logger.info('CTF from dose weighting')
+        elif "v2" in tilt_series_ctf:# == "tilt_ctf_v2": 
+            # Sort of a hacky way to do this.
+            tilt_numbers = tilt_dataset_this.tilt_numbers
+            dose = - (tilt_dataset_this.ctfBfactor / 4) # WARP uses a ctfBfactor == -4 * dose
+            angles = jnp.ceil(tilt_numbers/2) * angle_per_tilt 
+            if 'scale_from_star' in tilt_series_ctf:
+                # + 1 because voxel_size in included.... gross
+                ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
+                # angles *=0 
+                logger.warning("Using scale from star")
 
-        assert (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)) , "Critical exposure calculation requires 200kV or 300kV imaging" 
-        # angle_per_tilt = 3 
-        # dose_per_tilt = 2.9
-        # CTF_fun = core.get_cryo_ET_CTF_fun(dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt)
-        logger.info('CTF from dose weighting')
-        
+            if dose_per_tilt is None:
+                dose = - (tilt_dataset_this.ctfBfactor / 4) # WARP uses a ctfBfactor == -4 * dose
+                logger.warning("Using dose from star file (- Bfactor/4)")
 
+
+            CTF_fun = core.evaluate_ctf_wrapper_tilt_series_v2
+            ctf_params = np.concatenate( [ctf_params, dose[...,None], angles[...,None]], axis =-1)
+
+            assert (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)) , "Critical exposure calculation requires 200kV or 300kV imaging" 
+            logger.info('CTF from dose weighting - V2')
+            
 
     posetracker = PoseTracker.load( poses_file, dataset.n_images, dataset.unpadded_D, ind = ind) #,   None, ind, device=device)
         
@@ -516,6 +543,8 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
 
     return CryoEMDataset( dataset, voxel_size,
                               np.array(posetracker.rots), np.array(posetracker.trans), ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind, tilt_series_flag = tilt_series)
+
+
 
 
 def get_split_datasets_from_dict(dataset_loader_dict, ind_split, lazy = False):
@@ -552,7 +581,7 @@ def get_split_indices(particles_file, ind_file = None):
     return split_indices
 
 
-def get_split_tilt_indices(particles_file, ind_file = None):
+def get_split_tilt_indices(particles_file, ind_file = None, ntilts = None, datadir = None):
     from cryodrgn import starfile
     # pt, tp = dataset.TiltSeriesData.parse_particle_tilt(particles_file)
     s = starfile.Starfile.load(particles_file)
@@ -570,13 +599,26 @@ def get_split_tilt_indices(particles_file, ind_file = None):
     from recovar import tilt_dataset
     # dataset = tilt_dataset.parse_particle_tilt(args.particles)
     particles_to_tilts, tilts_to_particles = tilt_dataset.TiltSeriesData.parse_particle_tilt(particles_file)
-    n_tilts = len(particles_to_tilts)
-    split_tilt_indices = split_index_list(np.arange(n_tilts))
-    # ind = tilt_dataset.TiltSeriesData.particles_to_tilts(particles_to_tilts, particle_ind)
-    # split_tilt_indices = split_index_list(ind)
+
+    if ntilts is not None:
+        # A lot of extra compute.
+        # TODO rewrite
+        dataset_tmp = tilt_dataset.TiltSeriesData(particles_file, datadir = datadir)
+        tilt_numbers = dataset_tmp.tilt_numbers
+
+
+    n_tilt_series = len(particles_to_tilts)
+    split_tilt_series_indices = split_index_list(np.arange(n_tilt_series))
     split_image_indices = [None,None]
     for i in range(2):
-        split_image_indices[i] = np.concatenate([ particles_to_tilts[ind] for ind in split_tilt_indices[i]])
+        
+        split_image_indices[i] = np.concatenate([ particles_to_tilts[ind] for ind in split_tilt_series_indices[i]])
+        if ntilts is not None:
+            good_indices = np.where(tilt_numbers[split_image_indices[i]] < ntilts)[0]
+            split_image_indices[i] = split_image_indices[i][good_indices]
+
+        # import pdb; pdb.set_trace()
+
     # split_image_indices = [ tilts_to_particles[ind] for ind in split_tilt_indices]
     return split_image_indices
 
@@ -606,15 +648,15 @@ def make_dataset_loader_dict(args):
                             'padding' : args.padding,
                             'tilt_series' : False,
                             'tilt_series_ctf' : False,
-                            'angle_per_tilt' : 3,
-                            'dose_per_tilt' : 2.9,
+                            'angle_per_tilt' : None,
+                            'dose_per_tilt' : None,
                             }
     
     # For backward compatibility... Delete at some point?
     if hasattr(args,'tilt_series'):
         dataset_loader_dict['tilt_series'] = args.tilt_series
         dataset_loader_dict['tilt_series_ctf'] = args.tilt_series_ctf
-        dataset_loader_dict['angle_per_tilt'] = args.tilt_series
+        dataset_loader_dict['angle_per_tilt'] = args.angle_per_tilt
         dataset_loader_dict['dose_per_tilt'] = args.dose_per_tilt
 
 
@@ -633,7 +675,7 @@ def figure_out_halfsets(args):
         # ind_split = dataset.get_split_indices(args.particles_file, ind_file = args.ind)
         # # pickle.dump(ind_split, open(args.out))
         if args.tilt_series or args.tilt_series_ctf:
-            halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind)
+            halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, ntilts = args.ntilts, datadir = args.datadir)
         else:
             halfsets = get_split_indices(args.particles, ind_file = args.ind)
     else:

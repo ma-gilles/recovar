@@ -66,6 +66,7 @@ class ImageDataset(data.Dataset):
         self.unpadded_D = ny
         self.unpadded_image_shape = (ny, ny)
         self.image_shape = (ny, ny)
+        self.image_size = ny * ny
         self.mask = jnp.array(set_standard_mask(self.unpadded_D, self.dtype))
         self.mult = -1 if invert_data else 1
         self.padding=0
@@ -173,7 +174,7 @@ class TiltSeriesData(ImageDataset):
         expected_res=None,
         dose_per_tilt=None,
         angle_per_tilt=None,
-        sort_with_Bfac=False,
+        sort_with_Bfac=True,
         **kwargs,
     ):
         # Note: ind is the indices of the *tilts*, not the particles
@@ -189,6 +190,7 @@ class TiltSeriesData(ImageDataset):
 
         if ind is not None:
             s.df = s.df.loc[ind]
+            
         group_name = list(s.df["_rlnGroupName"])
         
         particles = OrderedDict()
@@ -210,9 +212,10 @@ class TiltSeriesData(ImageDataset):
         if sort_with_Bfac:
             logger.info("Sorting tilt series with Bfactor")
         else:
-            logger.info("Sorting tilt series with scale factor")
+            logger.info("Sorting tilt series with scale factor!")
+            logger.warning("Sorting tilt series with scale factor!! May be wrong.")
+
         for ind in self.particles:
-            # idk what this is doing
             if sort_with_Bfac:
                 sort_idxs = self.ctfBfactor[ind].argsort()
                 # logger.info("Sorting with Bfactor")
@@ -223,6 +226,7 @@ class TiltSeriesData(ImageDataset):
             ranks = np.empty_like(sort_idxs)
             ranks[sort_idxs[::-1]] = np.arange(len(ind))
             self.tilt_numbers[ind] = ranks
+
         # self.tilt_numbers = torch.tensor(self.tilt_numbers).to(self.device)
         logger.info(f"Loaded {self.N} tilts for {self.Np} particles")
         counts = Counter(group_name)
@@ -266,6 +270,7 @@ class TiltSeriesData(ImageDataset):
         tilt_indices = np.concatenate(tilt_indices)
         images = self.src.images(tilt_indices)#.to(self.device))
         return images, index, tilt_indices#, index
+
 
 
     @classmethod
