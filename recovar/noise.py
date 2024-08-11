@@ -273,22 +273,29 @@ def make_radial_noise(average_image_PS, image_shape):
 
 
 # Assume noise constant across images and within frequency bands. Estimate the noise by the outside of the mask, and report some statistics
-def estimate_noise_from_heterogeneity_residuals_inside_mask(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp'):
-    masked_image_PS =  get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type )
+def estimate_noise_from_heterogeneity_residuals_inside_mask(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp', subset_indices= None):
+    masked_image_PS =  get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type, subset_indices=subset_indices  )
     return mean_fn(masked_image_PS, axis =0), np.std(masked_image_PS, axis =0)
 
 # @functools.partial(jax.jit, static_argnums = [5])    
-def get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp'):
+def get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp', subset_indices = None):
     
     # basis_size = basis.shape[-1]
-    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+    if subset_indices is None:
+        n_images = experiment_dataset.n_images
+        data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+    else:
+        n_images = subset_indices.size
+        data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = subset_indices) 
+
+    # data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
     residual_squared = jnp.zeros(experiment_dataset.image_stack.image_size, dtype = basis.dtype)
     # residuals_squared_per_image = jnp.zeros_like(residual_squared, shape = experiment_dataset.n_images, dtype = basis.dtype)
-    all_averaged_residual_squared = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
+    all_averaged_residual_squared = np.empty((n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
     # all_averaged_residual_squared = 
     # soften_mask = -1
     basis = jnp.asarray(basis.T)
-    for batch, particles_ind, batch_image_ind in data_generator:
+    for batch, _, batch_image_ind in data_generator:
         # batch = experiment_dataset.image_stack.process_images(batch)
         averaged_residual_squared = get_average_residual_square_inner(batch, mean_estimate, volume_mask, 
                                                                         basis,
@@ -440,12 +447,12 @@ def get_average_residual_square_inner(batch, mean_estimate, volume_mask, basis, 
 #     return jnp.sum(residual_squared)
     
 
-def get_average_residual_square_just_mean(experiment_dataset, volume_mask, mean_estimate, batch_size, disc_type = 'linear_interp'):
+def get_average_residual_square_just_mean(experiment_dataset, volume_mask, mean_estimate, batch_size, disc_type = 'linear_interp', subset_indices = None, subset_fn = None):
     contrasts = np.ones(experiment_dataset.n_images, dtype = experiment_dataset.dtype_real)
     basis = np.zeros((experiment_dataset.volume_size, 0))
     zs = np.zeros((experiment_dataset.n_images, 0))
 
-    return get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,zs, batch_size, disc_type = disc_type)
+    return get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,zs, batch_size, disc_type = disc_type, subset_indices=subset_indices, subset_fn = subset_fn)
 
 
 
@@ -455,7 +462,8 @@ def estimate_noise_from_heterogeneity_residuals_inside_mask_v2(experiment_datase
 
 
 # @functools.partial(jax.jit, static_argnums = [5])    
-def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp'):
+def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp', subset_indices = None, subset_fn = None):
+
 
     assert basis.shape[0] == experiment_dataset.volume_size, "input u should be volume_size x basis_size"
     st_time = time.time()    
@@ -470,14 +478,31 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
         # basis = basis.T
 
 
-    images_estimates = np.empty([experiment_dataset.n_images, *experiment_dataset.image_shape], dtype = experiment_dataset.dtype)
     # basis_size = basis.shape[-1]
-    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+    if subset_indices is None:
+        n_images = experiment_dataset.n_images
+        data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+
+    else:
+        n_images = subset_indices.size
+        data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = subset_indices) 
+
+
+    # images_estimates = np.empty([experiment_dataset.n_images, *experiment_dataset.image_shape], dtype = experiment_dataset.dtype)
+    # basis_size = basis.shape[-1]
+    # data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
     basis = jnp.asarray(basis.T)
     top_fraction = 0
     kernel_sq_sum =0 
 
-    for batch, particles_ind, batch_image_ind in data_generator:
+    for batch, _, batch_image_ind in data_generator:
+        # import pdb; pdb.set_trace()
+        if subset_fn is not None:
+            idx = subset_fn(batch_image_ind) 
+            batch = batch[idx]
+            batch_image_ind = batch_image_ind[idx]
+
+
         top_fraction_this, kernel_sq_sum_this, per_image_est = get_average_residual_square_inner_v2(batch, mean_estimate, volume_mask, 
                                 basis,
                                 experiment_dataset.CTF_params[batch_image_ind],
@@ -497,7 +522,7 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
 
         top_fraction += top_fraction_this
         kernel_sq_sum+= kernel_sq_sum_this
-        images_estimates[batch_image_ind] = np.array(per_image_est)
+        # images_estimates[batch_image_ind] = np.array(per_image_est)
         # image_PSs[batch_ind] = np.array(image_PS)
         # masked_image_PSs[batch_ind] = np.array(masked_image_PS)
 
@@ -505,7 +530,7 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
     predicted_pixel_variances = jnp.fft.ifft2( predicted_pixel_variances).real * experiment_dataset.image_size
 
     pred_noise = regularization.average_over_shells(predicted_pixel_variances, experiment_dataset.image_shape, 0) 
-    return pred_noise, predicted_pixel_variances, images_estimates
+    return pred_noise, predicted_pixel_variances, None
 
 
 
@@ -569,6 +594,8 @@ def get_average_residual_square_inner_v2(batch, mean_estimate, volume_mask, basi
                                         CTF_fun, 
                                         disc_type                                      
                                           )[:,0]
+    
+
     
     batch = process_fn(batch)
     batch = core.translate_images(batch, translations , image_shape)

@@ -49,9 +49,21 @@ def get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape
 
 batch_get_sphere_gridpoint_coords = jax.vmap(get_ewald_sphere_gridpoint_coords, in_axes =(0, None, None, None, None, None) ) 
 
+def parse_disc_type(disc_type):
+    if disc_type == 'nearest':
+        order = 0
+    elif disc_type == 'linear_interp':
+        order = 1
+    elif 'cubic' in disc_type:
+        order = 3
+    else:
+        raise ValueError(f"disc_type {disc_type} not recognized")
+    return order
+
 ## Get the slices for ewald sphere
 def get_ewald_sphere_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam, disc_type):
-    order = 1 if disc_type == "linear_interp" else 0
+
+    order = parse_disc_type(disc_type)
     return map_coordinates_on_ewald_sphere(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam, order)
     
 # No reason not to do this for forward model, but haven't figured out how to do it for the adjoint 
@@ -62,7 +74,15 @@ def map_coordinates_on_ewald_sphere(volume, rotation_matrices, image_shape, volu
     # batch_grid_pt_vec_ind_of_images = core.batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size )
     batch_grid_pt_vec_ind_of_images_og_shape = batch_grid_pt_vec_ind_of_images.shape
     batch_grid_pt_vec_ind_of_images = batch_grid_pt_vec_ind_of_images.reshape(-1,3).T
-    slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
+    # slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
+
+    if order ==3:
+        from recovar import cryojax_map_coordinates
+        slices = cryojax_map_coordinates.map_coordinates_with_cubic_spline(volume, batch_grid_pt_vec_ind_of_images, mode = 'fill', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
+    else:
+        slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
+
+
     return slices
 
 
@@ -158,13 +178,14 @@ PART 3: FORWARD/BACKWARD MODELS
 # Forward model
 def ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, disc_type ):
 
+    # This is a hack for CG... I'll take it out if cubic because it doesn't work there.
+    if parse_disc_type(disc_type) < 3:
+        vol_flipped = get_flipped_indices(volume_shape)
 
-    vol_flipped = get_flipped_indices(volume_shape)
-
-    def flip_vol(x):
-        return x[...,vol_flipped]
-    volume_real = 0.5 * (volume_real + flip_vol(volume_real))
-    volume_imag = 0.5 * (volume_imag - flip_vol(volume_imag))
+        def flip_vol(x):
+            return x[...,vol_flipped]
+        volume_real = 0.5 * (volume_real + flip_vol(volume_real))
+        volume_imag = 0.5 * (volume_imag - flip_vol(volume_imag))
 
     
     chi = compute_chi_wrapper(ctf_params, image_shape, voxel_size)

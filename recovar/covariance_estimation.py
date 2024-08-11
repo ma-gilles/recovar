@@ -171,9 +171,10 @@ def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, co
     for k in range(0, int(np.ceil(picked_frequencies.size/frequency_batch))):
         batch_st = int(k * frequency_batch)
         batch_end = int(np.min( [(k+1) * frequency_batch ,picked_frequencies.size  ]))
-        logger.info(f'first batch of col done : {batch_st}, {batch_end}')
 
         covariance_cols_b, _, fscs_b = compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, noise_model, options, picked_frequencies[batch_st:batch_end])
+        logger.info(f'batch of col done: {batch_st}, {batch_end}')
+
         covariance_cols.append(covariance_cols_b['est_mask'])
         fscs.append(fscs_b)
 
@@ -408,8 +409,8 @@ def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequenc
     for k in range(0, int(np.ceil(picked_frequencies.size/frequency_batch))):
         batch_st = int(k * frequency_batch)
         batch_end = int(np.min( [(k+1) * frequency_batch ,picked_frequencies.size  ]))
-        logger.info(f'outside H_B : {batch_st}, {batch_end}')
-        utils.report_memory_device(logger = logger)
+        # logger.info(f'outside H_B : {batch_st}, {batch_end}')
+        # utils.report_memory_device(logger = logger)
         H_batch, B_batch = compute_H_B(cryo, mean, dilated_volume_mask,
                                                                  picked_frequencies[batch_st:batch_end],
                                                                  int(image_batch_size / 1), (cov_noise),
@@ -783,7 +784,7 @@ def compute_H_B_inner_mask_fixed(centered_images, ones_mapped, CTF_val_on_grid_s
 def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency_indices, batch_size, cov_noise, diag_prior, disc_type, parallel_analysis = False, jax_random_key = 0, batch_over_H_B = False, soften_mask = 3, options = None ):
     # Memory in here scales as O (batch_size )
 
-    utils.report_memory_device()
+    # utils.report_memory_device()
 
     volume_size = mean_estimate.size
     n_picked_indices = picked_frequency_indices.size
@@ -792,23 +793,20 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
     jax_random_key = jax.random.PRNGKey(jax_random_key)
     mean_estimate = jnp.array(mean_estimate)
 
-    print('noise in HB:', cov_noise)
-
+    # print('noise in HB:', cov_noise)
     # if (disc_type == 'nearest') or (disc_type== 'linear_interp'):
     #     disc_type_H = disc_type
     #     disc_type_B = disc_type
     # elif disc_type == 'mixed':
     #     disc_type_H = 'nearest'
     #     disc_type_B = 'linear_interp'
-
-
-    use_new_funcs = False
-    apply_noise_mask = True
-    # fixed = True
-    if apply_noise_mask:
-        logger.info('USING NOISE MASK IS ON')
-    else:
-        logger.info('USING NOISE MASK IS OFF')
+    # use_new_funcs = False
+    # apply_noise_mask = True
+    # # fixed = True
+    # if apply_noise_mask:
+    #     logger.info('USING NOISE MASK IS ON')
+    # else:
+    #     logger.info('USING NOISE MASK IS OFF')
 
     H_B_fn = options["covariance_fn"]
     if H_B_fn =="noisemask":
@@ -816,8 +814,6 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
     elif "kernel" in H_B_fn:
         f_jit = jax.jit(compute_H_B_triangular, static_argnums = [7,8,9,10,11,12])
         # f_jit = compute_H_B_triangular#jax.jit(compute_H_B_triangular, static_argnums = [7,8,9,10,11,12])
-        # print('FIXXXXXXXXXXXXX')
-
     else:
         assert False, "Not recognized covariance_fn"
 
@@ -1407,6 +1403,9 @@ def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coord
         # I think this is literally the only change? ( a corresponding one below for lhs)
         ## TODO: Make sure this is correct.
         images_prod = jnp.repeat(jnp.sum(images_prod, axis=0, keepdims=True), images_prod.shape[0], axis=0)
+        logger.warning("SHARED LABEL! CHECK NOISE TERM IS CORRECT")
+        logger.warning("SHARED LABEL! CHECK NOISE TERM IS CORRECT")
+        logger.warning("SHARED LABEL! CHECK NOISE TERM IS CORRECT")
 
     ctfed_images  *= jnp.conj(images_prod)[...,None]
 

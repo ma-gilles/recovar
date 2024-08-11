@@ -240,7 +240,7 @@ def get_noise_model(option, grid_size):
 def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_images, outlier_file_input = None, grid_size = 128,
                                volume_distribution = None,  dataset_params_option = "dataset1", noise_level = 1, 
                                noise_model = "radial1", put_extra_particles = True, percent_outliers = 0.1, 
-                               volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, disc_type = 'linear_interp', n_tilts = -1, dose_per_tilt = 2.9, angle_per_tilt = 3  ):
+                               volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, disc_type = 'linear_interp', n_tilts = -1, dose_per_tilt = 3, angle_per_tilt = 3  ):
     from recovar import output
     output.mkdir_safe(output_folder)
     volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize = False )
@@ -367,26 +367,36 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         # Put contrast in the tilt groups?
         # This is how it is done in cryoDRGN. tilt number == the ranking in the tilt series by contrast? Seems a bit sus
         # TODO check this
-        logger.warning("A very arbitrary contrast per tilt number! FIX?")
-        ctf_params[:,core.contrast_ind] =   np.exp(-0.01 * tilt_numbers / n_tilts)
+        # logger.warning("A very arbitrary contrast per tilt number! FIX?")
+        # ctf_params[:,core.contrast_ind] =  np.cos(  np.ceil(tilt_numbers/2) * angle_per_tilt )
 
-        x_angles = np.arange(n_tilts) * angle_per_tilt
+        # Make a tilt series with symmetric angles
+        x_angles_half = np.arange(n_tilts//2+1) * angle_per_tilt
+        x_angles = np.zeros(n_tilts)
+        x_angles[::2] = -x_angles_half[:-1]   
+        x_angles[1::2] = x_angles_half[1:]   
+
+        # ctf_params[:,core.contrast_ind] =  np.cos(  x_angles / 180 * np.pi )
+
+
         x_angles_zz = np.concatenate([x_angles[:,None], np.zeros([n_tilts,2])], axis = -1)
         from scipy.spatial.transform import Rotation    
         x_rotations = Rotation.from_euler('xyz', x_angles_zz, degrees=True).as_matrix()
+        B_facs = -4 * (tilt_numbers + 0.5) * dose_per_tilt 
 
         for i in range(n_tilt_groups):
             image_assignments[tilt_groups == i] = image_assignments_tilt[i]
+            ctf_params[tilt_groups == i,core.contrast_ind] =  np.cos(  x_angles / 180 * np.pi )
 
             ind = np.where(tilt_groups == i)[0]
-            sort_idxs = ctf_params[ind,core.contrast_ind].argsort()
-            ranks = np.empty_like(sort_idxs)
-            ranks[sort_idxs[::-1]] = np.arange(len(ind))
-            tilt_numbers[ind] = ranks
+            # sort_idxs = ctf_params[ind,core.contrast_ind].argsort()
+            # ranks = np.empty_like(sort_idxs)
+            # ranks[sort_idxs[::-1]] = np.arange(len(ind))
+            # tilt_numbers[ind] = ranks
+            zero_tilt_rot = rots[ind[0]]
+            these_rot = zero_tilt_rot @ x_rotations
+            rots[ind] = these_rot
 
-            this_rot = rots[ind[0]]
-            these_rot = this_rot @ x_rotations
-            rots[tilt_groups == i] = these_rot
             # import pdb; pdb.set_trace()
         # import pdb; pdb.set_trace()
         # Tag it to the end
@@ -406,7 +416,9 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
 
     main_dataset = dataset.CryoEMDataset( None, voxel_size,
                               rots, trans, ctf_params, CTF_fun = CTF_fun, dataset_indices = None, grid_size = grid_size)
-    batch_size = 5 * utils.get_image_batch_size(grid_size, utils.get_gpu_memory_total())
+    
+    mult = 1 if 'cubic' in disc_type else 5
+    batch_size = mult * utils.get_image_batch_size(grid_size, utils.get_gpu_memory_total())
 
     # plt.imshow(main_dataset.get_CTF_image(0)); plt.colorbar()
     # plt.show();
@@ -456,6 +468,10 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         ind_outliers = np.random.choice(n_images, n_outlier_images, replace =False)
         main_image_stack[ind_outliers] = outlier_particle_image_stack
         image_assignments[ind_outliers] = -1
+
+
+    if n_tilts > 0:
+        ctf_params[:,core.bfactor_ind] = B_facs
 
     simulation_info = { 
         "ctf_params" : ctf_params,
@@ -552,6 +568,11 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
         
         if disc_type == "nufft":
             vol_real = ftu.get_idft3(volumes[vol_idx].reshape(experiment_dataset.volume_shape))
+        elif 'cubic' in disc_type:
+            from recovar import cryojax_map_coordinates
+            volume = cryojax_map_coordinates.compute_spline_coefficients(volumes[vol_idx].reshape(experiment_dataset.volume_shape))
+        else:
+            volume = volumes[vol_idx]
 
         for k in range(0, int(np.ceil(n_images/batch_size))):
             batch_st = int(k * batch_size)
@@ -587,8 +608,8 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 from recovar import ewald
                 # lam = ewald.volt_to_wavelength(experiment_dataset.CTF_params[0,3])
                 images_batch_real, images_batch_real_imag = ewald.ewald_sphere_forward_model(
-                        volumes[vol_idx].real, 
-                        volumes[vol_idx].imag, 
+                        volume.real, 
+                        volume.imag, 
                         experiment_dataset.rotation_matrices[indices], 
                         experiment_dataset.CTF_params[indices],
                         experiment_dataset.image_shape,
@@ -599,8 +620,8 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                         -translations,
                         experiment_dataset.image_shape)
                 
-            elif disc_type == "linear_interp" or disc_type == "nearest":
-                images_batch = simulate_data_batch(volumes[vol_idx],
+            elif disc_type == "linear_interp" or disc_type == "nearest" or disc_type == "cubic":
+                images_batch = simulate_data_batch(volume,
                                                  experiment_dataset.rotation_matrices[indices], 
                                                  translations,
                                                  experiment_dataset.CTF_params[indices], 

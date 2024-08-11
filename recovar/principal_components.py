@@ -8,7 +8,8 @@ from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 
 logger = logging.getLogger(__name__)
-
+# from guppy import hpy
+# h = hpy()
 
 
 def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise, volume_mask,
@@ -68,7 +69,8 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
     covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, noise_model, covariance_options, picked_frequencies)
     logger.info("memory after covariance estimation")
     utils.report_memory_device(logger=logger)
-    
+    # import pdb; pdb.set_trace()
+
 
 
     if options['ignore_zero_frequency']:
@@ -109,7 +111,6 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
 
     if options['ignore_zero_frequency']:
         logger.warning("FIX THIS OPTION!! NOT SURE IT WILL STILL WORK")
-    # u['rescaled_old'],s['rescaled_old'], zss['init'] = rescale_eigs(cryos, u['real'],s['real'], means['combined'], volume_mask, image_cov_noise, basis_size = constants.N_PCS_TO_COMPUTE, gpu_memory_to_use = gpu_memory_to_use, use_mask = True, ignore_zero_frequency = options['ignore_zero_frequency'])
 
     # logger.info(f"u after rescale dtype: {u['rescaled'].dtype}")
     logger.info("memory after rescaling")

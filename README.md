@@ -580,14 +580,18 @@ Some of the features which may be of interest:
 
 - Some features that are not there (but soon, hopefully): pose search, symmetry handling.
 
+## Tomography
+
+I am developping the tomography extension. You can try it out by passing the the ``--tilt-series``, ``--tilt-series-ctf=v2``, ``--angle-per-tilt=[insert angle here]`` to ``pipeline.py``. The input should be identical to cryoDRGN-ET ([see here](https://ez-lab.gitbook.io/cryodrgn/cryodrgn-et-subtomogram-analysis)).
+
+
 
 ## Limitations
 
 - *Symmetry*: there is currently no support for symmetry. If you got your poses through symmetric refinement, it will probably not work. It should probably work if you make a symmetry expansion of the particle stack, but I have not tested it.
-- *Memory*: you need a lot of memory to run this. For a stack of images of size 256, you probably need 200 GB + size of dataset. If you run out of memory, you can use the --low-memory-option, in which case you need 60GB + size of dataset.
+- *Memory*: RECOVAR uses a lot of memory by default. For a stack of images of size 256, you need approximately 200 GB + size of dataset. You can also use the --lazy option, which will do lazy loading, in which case you need a little more than 200. If you run out of memory, you can use the --low-memory-option, in which case you need 60GB.
 - *ignore-zero-frequency*: I haven't thought much about the best way to do this. I would advise against using it for now.
 - *Other ones, probably?*: if you run into issues, please let me know. 
-
 
 
 ## Citation
