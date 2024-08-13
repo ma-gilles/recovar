@@ -1,6 +1,6 @@
 # RECOVAR: Regularized covariance estimation for cryo-EM heterogeneity analysis
 
-[See preprint here](https://www.biorxiv.org/content/10.1101/2023.10.28.564422v1) and recorded talk [here](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s)
+[See preprint here](https://www.biorxiv.org/content/10.1101/2023.10.28.564422v2) and recorded talk [here](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s)
 
 [Installation](#installation)
 
@@ -582,7 +582,7 @@ Some of the features which may be of interest:
 ## Limitations
 
 - *Symmetry*: there is currently no support for symmetry. If you got your poses through symmetric refinement, it will probably not work. It should probably work if you make a symmetry expansion of the particle stack, but I have not tested it.
-- *Memory*: you need a lot of memory to run this. For a stack of images of size 256, you probably need 200 GB + size of dataset. If you run out of memory, you can use the --low-memory-option, in which case you need 60GB + size of dataset.
+- *Memory*: you need a lot of memory to run this. For a stack of images of size 256, you probably need 200 GB + size of dataset. If you run out of memory, you can use the --lazy flag dor lazy data loading, and the --low-memory-option, in which case you need 60GB.
 - *ignore-zero-frequency*: I haven't thought much about the best way to do this. I would advise against using it for now.
 - *Other ones, probably?*: if you run into issues, please let me know. 
 
