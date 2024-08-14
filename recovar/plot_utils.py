@@ -546,6 +546,7 @@ def fsc_score(fsc_curve, grid_size, voxel_size, threshold = 0.5 ):
 
 
     idx = int(np.max([np.argmin(above_threshold), 0])) 
+    # import pdb; pdb.set_trace()
     if idx >= grid_size//2 -1:
         return freq[-1]
     if idx == 0:
@@ -557,7 +558,7 @@ def fsc_score(fsc_curve, grid_size, voxel_size, threshold = 0.5 ):
     fsc_curve = np.where(np.isnan(fsc_curve), 0, fsc_curve)
     f = interpolate.interp1d( np.array([fsc_curve[idx], fsc_curve[idx+1]]), np.array([freq[idx], freq[idx+1]]) )
     
-    return np.min([f(threshold), 2 * voxel_size])
+    return np.min([f(threshold),  voxel_size*2])
 
 
 def plot_all_images_for_paper(images_to_plot, n_dirs, global_name, scale_image_name, voxel_size, save_to_file):

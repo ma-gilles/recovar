@@ -52,6 +52,29 @@ def get_all_variance_scores(test_v, U, s):
     normalized_variance = normalized_variance_from_captured_variance(variance, s)
     return variance, rel_variance, normalized_variance
 
+def find_angle_between_subspaces(v1,v2, max_rank):
+    ss = np.conj(v1[:,:max_rank]).T @ v2[:,:max_rank]
+    s,v,d = np.linalg.svd(ss)
+    if np.any(v > 1.2):
+        print('v too big!')
+    v = np.where(v < 1, v, 1)
+    return np.sqrt( 1 - v[-1]**2)
+
+
+def subspace_angles(u ,v, max_rank = None, check_orthogonalize = False):
+    max_rank = u.shape[-1] if max_rank is None else max_rank
+    sine_angles = np.zeros(max_rank)
+    if check_orthogonalize:
+        u,_ = np.linalg.qr(u)
+        v,_ = np.linalg.qr(v)
+
+    for k in range(1,max_rank+1):
+        if k > u.shape[-1]:
+            sine_angles[k-1] = 1
+        else:
+            sine_angles[k-1] = find_angle_between_subspaces(u[:,:k], v[:,:k], max_rank = k )
+    return sine_angles  
+
 def get_variance_error():
 
     return

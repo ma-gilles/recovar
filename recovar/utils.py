@@ -21,29 +21,6 @@ def make_radial_image(average_image_PS, image_shape, extend_last_frequency = Tru
 batch_make_radial_image = jax.vmap(make_radial_image, in_axes = (0,None,None))
 
 
-def find_angle_between_subspaces(v1,v2, max_rank):
-    ss = np.conj(v1[:,:max_rank]).T @ v2[:,:max_rank]
-    s,v,d = np.linalg.svd(ss)
-    if np.any(v > 1.2):
-        print('v too big!')
-    v = np.where(v < 1, v, 1)
-    return np.sqrt( 1 - v[-1]**2)
-
-
-def subspace_angles(u ,v, max_rank = None, check_orthogonalize = False):
-    max_rank = u.shape[-1] if max_rank is None else max_rank
-    corr = np.zeros(max_rank)
-    if check_orthogonalize:
-        u,_ = np.linalg.qr(u)
-        v,_ = np.linalg.qr(v)
-
-    for k in range(1,max_rank+1):
-        if k > u.shape[-1]:
-            corr[k-1] = 1
-        else:
-            corr[k-1] = find_angle_between_subspaces(u[:,:k], v[:,:k], max_rank = k )
-    return corr  
-
 
 def estimate_variance(u, s):
     var = np.sum(np.abs(u)**2 * s[...,None], axis = 0)
