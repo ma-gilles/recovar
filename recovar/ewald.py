@@ -26,14 +26,16 @@ PART 1: Coordinate/Ewald Sphere Functions
 
 PLANE_MODE = False # For debugging only.
 
+if PLANE_MODE:
+    logger.warning("PLANE MODE IS ON! FOR DEBUGGING ONLY")
 
 ## Get unrotated coordinates for the ewald sphere 
-def get_unrotated_ewald_sphere_coords(image_shape, voxel_size, lam, scaled=True):
+def get_unrotated_ewald_sphere_coords(image_shape, voxel_size, lam, scaled=True, sphere_sign = 1):
     ## Pass scaled = true
     freqs = ftu.get_k_coordinate_of_each_pixel(image_shape, voxel_size=voxel_size, scaled=True)
     r = 1/lam
     z = r - jnp.sqrt(r**2 - jnp.linalg.norm(freqs, axis =-1)**2)
-    z = z.reshape(-1,1)
+    z = z.reshape(-1,1) * sphere_sign
     sphere_freqs = jnp.concatenate([freqs, z], axis=-1)
     scalar = 1 if scaled else image_shape[0] * voxel_size
     return sphere_freqs * scalar
@@ -169,13 +171,14 @@ batch_get_chi_packed = jax.vmap(get_chi_packed, in_axes = (None, 0))
 
 def compute_chi_wrapper(CTF_params, image_shape, voxel_size):
     psi = core.get_unrotated_plane_coords(image_shape, voxel_size, scaled = True)[...,:2].astype(CTF_params.dtype)
-    return batch_get_chi_packed(psi, CTF_params)#* 0 + 1
+    return batch_get_chi_packed(psi, CTF_params)
 
 '''
 PART 3: FORWARD/BACKWARD MODELS
 '''
 
 # Forward model
+@functools.partial(jax.jit, static_argnums=[4,5,6,7])
 def ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, disc_type ):
 
     # This is a hack for CG... I'll take it out if cubic because it doesn't work there.
@@ -258,7 +261,7 @@ def ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_
 
 
 # A JAXed version of the adjoint. This is actually slightly slower but will run with disc_type = 'linear_interp'
-# @functools.partial(jax.jit, static_argnums=[4,5,6,7])
+@functools.partial(jax.jit, static_argnums=[4,5,6,7])
 def adjoint_ewald_sphere_forward_model(images_real, images_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, disc_type):  
     volume_size = np.prod(volume_shape)
     f = lambda volume_real, volume_imag : ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, disc_type )
@@ -327,14 +330,14 @@ def vec_masked(vol_real, vol_imag, volume_shape):
     mask_real_indices, mask_imag_indices = get_good_idx_mask(volume_shape)
     vol_real_masked = vol_real[mask_real_indices]
     vol_imag_masked = vol_imag[mask_imag_indices]
-    return jnp.concatenate((vol_real_masked, vol_imag_masked ))
+    return jnp.concatenate((vol_real_masked, vol_imag_masked ), dtype = vol_real.dtype)
 
 
 
 def unvec_masked(x, volume_shape, mask_size):
     # Build the volumes
     volume_size = volume_shape[0] ** 3
-    vol_real, vol_imag = jnp.zeros(volume_size), jnp.zeros(volume_size)
+    vol_real, vol_imag = jnp.zeros(volume_size, dtype = x.dtype), jnp.zeros(volume_size, dtype = x.dtype)
     # # Build the masks
     # zero_freq_idx = core.frequencies_to_vec_indices(jnp.array([0, 0, 0]), volume_shape)
     # mask_real = mask.get_radial_mask(volume_shape).reshape(-1)
@@ -377,7 +380,7 @@ def compute_ewald_LS_matvec_in_batches(experiment_dataset, input_volume_real, in
                                         experiment_dataset.volume_shape, experiment_dataset.voxel_size, disc_type)
         vol_real += vol_real_this
         vol_imag += vol_imag_this
-    
+
     # + I / kappa^2 * v
     vol_real += input_volume_real / signal_variance
     vol_imag += input_volume_imag / signal_variance 
@@ -410,8 +413,47 @@ def compute_diag_mean(experiment_dataset, batch_size, disc_type, noise_variance 
 
 
 
+def sphere_sign_hard_assignment(experiment_dataset, volume, batch_size, disc_type, noise_variance):
+    
+    # volt = experiment_dataset.CTF_params[0,3]
+    # lam = volt_to_wavelength(experiment_dataset.CTF_params[0,3])# 
+    #lam = 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
+
+    logger.info(f"batch size in Ewald LHS: {batch_size}")
+    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
+
+    # vol_real, vol_imag = 0, 0
+
+    # Compute \sum_i A_i^T y_i / sigma_i^2
+    for batch, _, indices in data_generator:
+        # Only place where image mask is used ?
+        batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
+        batch = core.translate_images(batch, experiment_dataset.translations[indices], experiment_dataset.image_shape)
+
+        # batch /= noise_variance
+        residuals = ewald_sphere_forward_model(batch.real, batch.imag,
+                                        experiment_dataset.rotation_matrices[indices],
+                                        experiment_dataset.CTF_params[indices], 
+                                        experiment_dataset.image_shape, experiment_dataset.volume_shape, 
+                                        experiment_dataset.voxel_size, disc_type)
+
+        # vol_real += A_t_vol_real
+        # vol_imag += A_t_vol_imag
+
+    logger.info(f"LHS done.")
+    return vol_real, vol_imag
+
+
+
+
+
 def volt_to_wavelength(volt):
-    return 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
+    logger.warning("IS THIS RIGHT?!")
+    volt = volt * 1000
+    lam = 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
+    return lam #12.2639 / (volt + 0.97845e-6 * volt**2)**.5
+
+
 
 
 def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance):
@@ -420,7 +462,7 @@ def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, n
     # lam = volt_to_wavelength(experiment_dataset.CTF_params[0,3])# 
 #     lam = 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
 
-    logger.info(f"batch size in second order: {batch_size}")
+    logger.info(f"batch size in Ewald LHS: {batch_size}")
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
 
     vol_real, vol_imag = 0, 0
@@ -440,25 +482,38 @@ def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, n
 
         vol_real += A_t_vol_real
         vol_imag += A_t_vol_imag
-                    
+    logger.info(f"LHS done.")
     return vol_real, vol_imag
 
 
 
-def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_variance, noise_variance):
+def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_variance, noise_variance, x0 = None, max_iter = 100, tol = 1e-10):
     from recovar import noise
     from importlib import reload
     from recovar import homogeneous
     reload(homogeneous)
 
-    assert np.isclose(experiment_dataset.CTF_params[:,core.w_ind],0).all(), "w should be 0 for Ewald Sphere"
+    if not np.isclose(experiment_dataset.CTF_params[:,core.w_ind],0).all():
+        ctf_params = experiment_dataset.CTF_params
+        assert np.isclose(experiment_dataset.CTF_params[:,core.phase_shift_ind],0).all(), "Either w or phase shift should be zero"
+
+        phase_shift = np.arcsin(ctf_params[:,core.w_ind]) / np.pi * 180
+        ctf_params[:,core.w_ind] = 0
+        ctf_params[:,core.phase_shift_ind] = phase_shift
+        # ctf_params[:,core.volt_ind] = 100
+        experiment_dataset.CTF_params = ctf_params
+
 
     noise_variance = noise_variance
     noise_variance = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape)
     # signal_variance = np.inf
-
+    print(utils.report_memory_device())
     rhs_real, rhs_imag = compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance)
     rhs = vec_masked(rhs_real, rhs_imag, experiment_dataset.volume_shape)
+    del rhs_imag, rhs_real
+
+    rhs = np.array(rhs)
+    # del rhs
 
     mask_real = mask.get_radial_mask(experiment_dataset.volume_shape).reshape(-1)
     mask_size = int(jnp.sum(mask_real))
@@ -478,9 +533,19 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
 
     diag_mean2 = compute_diag_mean(experiment_dataset, batch_size, disc_type, noise_variance  )
 
-    diag_mean3, _ = homogeneous.solve_least_squares_mean_iteration(experiment_dataset , None, noise_variance,  batch_size, None, disc_type = disc_type, return_lhs_rhs = True )
+    # diag_mean3, _ = homogeneous.solve_least_squares_mean_iteration(experiment_dataset , None, noise_variance,  batch_size, None, disc_type = disc_type, return_lhs_rhs = True )
     diag_mean = (1/ signal_variance + diag_mean2).reshape(-1)
     diag_mean = vec_masked(diag_mean, diag_mean, experiment_dataset.volume_shape)
+    diag_mean2 = np.array(diag_mean2)
+    diag_mean = np.array(diag_mean)
+
+    if x0 is not None:
+        x0_masked = vec_masked(x0.reshape(-1).real, x0.reshape(-1).imag, experiment_dataset.volume_shape)
+        x0_masked = np.array(x0_masked)
+    else:
+        x0_masked = None
+
+
 
     def planar_model(x):
         # get diag_mean
@@ -492,18 +557,17 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
         return x * diag_mean2
     
 
-
     import matplotlib.pyplot as plt
     
     # temp1_r, _ = unvec_masked(mat_vec_wrapped_up(rhs), experiment_dataset.volume_shape, mask_size)
     # temp2_r, _ = unvec_masked(planar_model(rhs), experiment_dataset.volume_shape, mask_size)
 
-    x = ftu.get_dft3(np.random.randn(*experiment_dataset.volume_shape)).reshape(-1) * experiment_dataset.get_valid_frequency_indices(29) # + 1j * np.random.randn(experiment_dataset.volume_size)
+    # x = ftu.get_dft3(np.random.randn(*experiment_dataset.volume_shape)).reshape(-1) * experiment_dataset.get_valid_frequency_indices(29) # + 1j * np.random.randn(experiment_dataset.volume_size)
 
-    A_rhs = mat_vec_wrapped_up(rhs)
-    A_rhs2 = mat_vec_wrapped_up(A_rhs)
-    A_rhs3 = planar_model(A_rhs2)
-    print(np.linalg.norm(A_rhs - A_rhs3)/np.linalg.norm(A_rhs))
+    # A_rhs = mat_vec_wrapped_up(rhs)
+    # A_rhs2 = mat_vec_wrapped_up(A_rhs)
+    # A_rhs3 = planar_model(A_rhs2)
+    # print(np.linalg.norm(A_rhs - A_rhs3)/np.linalg.norm(A_rhs))
     # import pdb; pdb.set_trace()
     # # temp1 = temp1_r.reshape(experiment_dataset.volume_shape)
     # # temp2 = temp2_r.reshape(experiment_dataset.volume_shape)
@@ -546,31 +610,33 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
     # import pdb; pdb.set_trace()
     # return
 
-    print(np.linalg.norm(mat_vec_wrapped_up(rhs) - planar_model(rhs)) / np.linalg.norm(mat_vec_wrapped_up(rhs)))
+    # print(np.linalg.norm(mat_vec_wrapped_up(rhs) - planar_model(rhs)) / np.linalg.norm(mat_vec_wrapped_up(rhs)))
     
     import scipy.sparse
     import inspect
 
     N = (mask_size) * 2 -1
-    print(N)
+    # print(N)
     ATA_shape = (N, N)
     ATA_op = scipy.sparse.linalg.LinearOperator(ATA_shape, mat_vec_wrapped_up)
-    ress = []
-    
-#     N2 = experiment_dataset.image_shape[0] ** 3
-#     print(N2)
-#     planar_shape = (N2,N2)
     planar_op = scipy.sparse.linalg.LinearOperator(ATA_shape, planar_model)
-    
+
+    ress = []
+    global iter_count
+    iter_count = 0
     def report(xk):
         frame = inspect.currentframe().f_back
         ress.append(frame.f_locals['resid'] / np.linalg.norm(rhs))
+        logger.info(f"CG iter {len(ress)}, residual: {ress[-1]}")
+        # print()
+        # iter_count += 1
+    print(utils.report_memory_device())
+    # import pdb; pdb.set_trace()
+    x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, x0 = x0_masked, maxiter=max_iter, tol=tol, M = planar_op, callback=report)
 
-#     x_result,_  = jax.scipy.sparse.linalg.cg(ATA_op, rhs, maxiter = 20, tol=1e-12,)
-#     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, maxiter = 50, tol=1e-12, callback=report)
-    x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, maxiter=100, tol=1e-12, M = planar_op, callback=report)
-#     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, maxiter=1500, tol=1e-12, callback=report)
-
+    # from recovar import utils
+    # outdir = '/home/mg6942/mytigress/'
+    # utils.pickle_dump((volume_real, volume_imag), outdir + 'volume_real_imag.pkl')
 
     volume_real, volume_imag = unvec_masked(x_result, experiment_dataset.volume_shape, mask_size)
     vol = ftu.get_idft3((volume_real + 1j * volume_imag).reshape(experiment_dataset.volume_shape))#.real
@@ -641,53 +707,55 @@ def matvec_experiments(y, experiment_dataset, batch_size, disc_type, signal_vari
 PRECONDITIONED VERSION
 '''
 
-def solve_ewald_least_squares_2(experiment_dataset, batch_size, disc_type, signal_variance, noise_variance, A):
-    from recovar import noise
+# def solve_ewald_least_squares_2(experiment_dataset, batch_size, disc_type, signal_variance, noise_variance, A):
+#     from recovar import noise
 
-    noise_variance = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape)
+#     noise_variance = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape)
 
-    rhs_real, rhs_imag = compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance)
-    rhs = vec_masked(rhs_real, rhs_imag, experiment_dataset.volume_shape)
+#     rhs_real, rhs_imag = compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance)
+#     rhs = vec_masked(rhs_real, rhs_imag, experiment_dataset.volume_shape)
 
-    mask_real = mask.get_radial_mask(experiment_dataset.volume_shape).reshape(-1)
-    mask_size = int(jnp.sum(mask_real))
+#     mask_real = mask.get_radial_mask(experiment_dataset.volume_shape).reshape(-1)
+#     mask_size = int(jnp.sum(mask_real))
 
-    def mat_vec_wrapped_up(x):
-        volume_real, volume_imag = unvec_masked(x, experiment_dataset.volume_shape, mask_size)
-        z_real, z_imag = compute_ewald_LS_matvec_in_batches(experiment_dataset, volume_real, volume_imag, batch_size, disc_type, signal_variance, noise_variance  )
-        return vec_masked(z_real, z_imag, experiment_dataset.volume_shape)
+#     def mat_vec_wrapped_up(x):
+#         volume_real, volume_imag = unvec_masked(x, experiment_dataset.volume_shape, mask_size)
+#         z_real, z_imag = compute_ewald_LS_matvec_in_batches(experiment_dataset, volume_real, volume_imag, batch_size, disc_type, signal_variance, noise_variance  )
+#         return vec_masked(z_real, z_imag, experiment_dataset.volume_shape)
     
-    import scipy.sparse
-    import inspect
+#     import scipy.sparse
+#     import inspect
 
-    N = (mask_size) * 2 -1
-    ATA_shape = (N, N)
-    ATA_op = scipy.sparse.linalg.LinearOperator(ATA_shape, mat_vec_wrapped_up)
-    ress = []
+#     N = (mask_size) * 2 -1
+#     ATA_shape = (N, N)
+#     ATA_op = scipy.sparse.linalg.LinearOperator(ATA_shape, mat_vec_wrapped_up)
+#     ress = []
     
-#     def jp(x):
-#         e = jnp.ones_like(x)
-#         d = mat_vec_wrapped_up(e)
-#         return d
+# #     def jp(x):
+# #         e = jnp.ones_like(x)
+# #         d = mat_vec_wrapped_up(e)
+# #         return d
     
-#     d = jp(x)
-#     jacobi = lambda x: x/d
-#     jacobi_op = scipy.sparse.linalg.LinearOperator(ATA_shape, jacobi)
-#     print(jnp.where(d<0))
-    
-    def report(xk):
-        frame = inspect.currentframe().f_back
-        ress.append(frame.f_locals['resid'])
+# #     d = jp(x)
+# #     jacobi = lambda x: x/d
+# #     jacobi_op = scipy.sparse.linalg.LinearOperator(ATA_shape, jacobi)
+# #     print(jnp.where(d<0))
+#     iter_count = 0 
+#     def report(xk):
+#         frame = inspect.currentframe().f_back
+#         ress.append(frame.f_locals['resid'])
+#         logger.info(f"CG iter {iter_count}, residual: {frame.f_locals['resid']}")
+#         iter_count += 1
 
-#     x_result,_  = jax.scipy.sparse.linalg.cg(ATA_op, rhs, maxiter = 20, tol=1e-12,)
-#     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, maxiter = 50, tol=1e-12, callback=report)
-#     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, maxiter=25, tol=1e-12, callback=report)
-    if np.all(A == 0):
-        x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, tol=1e-12, callback=report)
-    else:
-        x_result,_ = scipy.sparse.linalg.cg(A, rhs, tol=1e-12, callback=report)
+# #     x_result,_  = jax.scipy.sparse.linalg.cg(ATA_op, rhs, maxiter = 20, tol=1e-12,)
+# #     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, maxiter = 50, tol=1e-12, callback=report)
+# #     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, maxiter=25, tol=1e-12, callback=report)
+#     if np.all(A == 0):
+#         x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, tol=1e-12, callback=report)
+#     else:
+#         x_result,_ = scipy.sparse.linalg.cg(A, rhs, tol=1e-12, callback=report)
 
-    return x_result, ress
+#     return x_result, ress
 
 
 # '''

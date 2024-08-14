@@ -299,7 +299,7 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
     particles_file = output_folder + '/particles.'+str(grid_size)+'.mrcs'
 
     with mrcfile.new(particles_file ,overwrite=True) as mrc:
-        mrc.set_data(main_image_stack.astype(np.float32))
+        mrc.set_data(main_image_stack.astype(np.float16))
         mrc.voxel_size = voxel_size
     poses = (rots.astype(np.float32), trans.astype(np.float32))
     utils.pickle_dump(poses, output_folder + '/poses.pkl')
@@ -344,9 +344,11 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     ctf_params, rots, trans = dataset_param_generator(n_images, grid_size)
 
     if "ewald" in disc_type:
-        phase_shift = np.arcsin(ctf_params[:,5]) / np.pi * 180
+        phase_shift = np.arcsin(ctf_params[:,core.w_ind]) / np.pi * 180
         ctf_params[:,core.w_ind] = 0
         ctf_params[:,core.phase_shift_ind] = phase_shift
+        ctf_params[:,core.volt_ind] = 100
+        # import pdb; pdb.set_trace()
 
     trans *=0 
     per_image_contrast, per_image_noise_scale = generate_contrast_params(n_images, noise_scale_std, contrast_std )
@@ -604,7 +606,9 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                                                  disc_type,
                                                  experiment_dataset.CTF_fun) / gt_vols_norm
             elif "ewald" in disc_type:
-                disc_type_e = disc_type.split("_")[1]
+                # disc_type_e = disc_type.split("_")[1]
+                disc_type_e = disc_type[6:]
+
                 from recovar import ewald
                 # lam = ewald.volt_to_wavelength(experiment_dataset.CTF_params[0,3])
                 images_batch_real, images_batch_real_imag = ewald.ewald_sphere_forward_model(
@@ -616,9 +620,11 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                         experiment_dataset.volume_shape, 
                         experiment_dataset.voxel_size, disc_type_e )
                 images_batch = images_batch_real + 1j * images_batch_real_imag
+
                 images_batch = core.translate_images(images_batch,
                         -translations,
                         experiment_dataset.image_shape)
+                
                 
             elif disc_type == "linear_interp" or disc_type == "nearest" or disc_type == "cubic":
                 images_batch = simulate_data_batch(volume,
@@ -634,8 +640,13 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
             else:
                 raise ValueError("Invalid disc_type")
 
-            images_batch = ftu.get_idft2(images_batch.reshape([-1, *experiment_dataset.image_shape])).real
-            
+            images_batch = ftu.get_idft2(images_batch.reshape([-1, *experiment_dataset.image_shape]))
+            # import pdb; pdb.set_trace()
+            images_batch = images_batch.real
+            # images_batch = ftu.get_idft2(images_batch.reshape([-1, *experiment_dataset.image_shape])).real
+
+
+
             if pad_before_translate:
                 plotting = True
                 # for k in range(images_batch.shape[0]):

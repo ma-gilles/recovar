@@ -17,7 +17,7 @@ def image_weight_parse(image_weights, dtype = np.float32):
         return [w.astype(dtype) for w in image_weights]
 
 
-def get_mean_conformation_relion(cryos, batch_size, noise_variance = None,  use_regularization = False):
+def get_mean_conformation_relion(cryos, batch_size, noise_variance = None,  use_regularization = False, upsampling_factor =2):
     st_time = time.time()
 
     cryo = cryos[0]
@@ -26,10 +26,10 @@ def get_mean_conformation_relion(cryos, batch_size, noise_variance = None,  use_
     means = dict()
     lhs_l = 2 * [None]
     for idx, cryo in enumerate(cryos):
-        means["corrected" + str(idx)], lhs_l[idx] = relion_functions.relion_reconstruct(cryo, noise_variance,batch_size )
+        means["corrected" + str(idx)], lhs_l[idx] = relion_functions.relion_reconstruct(cryo, noise_variance,batch_size, upsampling_factor = upsampling_factor )
     lhs = (lhs_l[0] + lhs_l[1])/2
 
-    mean_prior, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(cryo.volume_shape, means["corrected0"], means["corrected1"], lhs, jnp.ones(cryos[0].volume_size, dtype = cryos[0].dtype_real) * np.inf, frequency_shift = jnp.array([0,0,0]), upsampling_factor = 2)
+    mean_prior, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(cryo.volume_shape, means["corrected0"], means["corrected1"], lhs, jnp.ones(cryos[0].volume_size, dtype = cryos[0].dtype_real) * np.inf, frequency_shift = jnp.array([0,0,0]), upsampling_factor = upsampling_factor)
 
     if use_regularization:
         for idx, cryo in enumerate(cryos):
