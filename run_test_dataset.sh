@@ -3,7 +3,7 @@ RECOVAR_PATH=./
 python $RECOVAR_PATH/make_test_dataset.py
 
 # Run pipeline, should take about 2 min
-python $RECOVAR_PATH/pipeline.py test_dataset/particles.64.mrcs --poses test_dataset/poses.pkl --ctf test_dataset/ctf.pkl --correct-contrast -o test_dataset/pipeline_output --mask-option=from_halfmaps
+python $RECOVAR_PATH/pipeline.py test_dataset/particles.64.mrcs --poses test_dataset/poses.pkl --ctf test_dataset/ctf.pkl --correct-contrast -o test_dataset/pipeline_output --mask=from_halfmaps
 
 # Run on the 2D embedding with no regularization on latent space (better for density estimation)
 # Should take about 5 min
