@@ -654,8 +654,6 @@ def standard_recovar_pipeline(args):
 
 if __name__ == "__main__":
     # import jax
-    import pdb; pdb.set_trace()
-
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
     standard_recovar_pipeline(args)
