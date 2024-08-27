@@ -10,11 +10,14 @@ Running RECOVAR:
 * [3. Running the pipeline](#iii-running-recovar-pipeline)
 * [4. Analyzing results](#iv-analyzing-results)
 * [5. Visualizing results](#v-visualizing-results)
-* [Running on a small test dataset](#small-test-dataset)
 
 
+Other:
+* [RECOVAR for Cryo-ET](#cryo-et)
+* [Testing your installation](#small-test-dataset)
 <!-- * [6. Generating trajectories](#vi-generating-additional-trajectories) -->
 * [Using kernel regression with other embeddings](#using-kernel-regression-with-other-embeddings)
+
 
 [TLDR](#tldr)
 
@@ -580,11 +583,15 @@ Some of the features which may be of interest:
 
 - Some features that are not there (but soon, hopefully): pose search, symmetry handling.
 
-## Tomography
+## Cryo-ET
 
 I am developping the tomography extension. You can try it out by passing the the ``--tilt-series``, ``--tilt-series-ctf=v2``, ``--angle-per-tilt=[insert angle here]`` to ``pipeline.py``. The input should be identical to cryoDRGN-ET ([see here](https://ez-lab.gitbook.io/cryodrgn/cryodrgn-et-subtomogram-analysis)).
 
+E.g, on the M-file:
 
+    $ python [recovar_dir]/pipeline.py M_particles.star --ctf ctf.pkl --poses pose.pkl -o v2_nocont_$ntilts --datadir=128 --mask=path_to_mask.mrc --tilt-series-ctf=v2  --ntilts=10 --tilt-series  --angle-per-tilt=3.0 --dose-per-tilt=2.93
+
+You can use all tilts by not passing the argument --ntilts.
 
 ## Limitations
 
