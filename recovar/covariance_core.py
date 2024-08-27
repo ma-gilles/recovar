@@ -157,18 +157,37 @@ def sinc_kernel(gridpoints, gridpoint_target, kernel_width = 1):
     return weights
 
 
+
+
 # Are there at most 4 or 5 within one dist? or 9?
 #@jax.vmap(in_axes=[0,0,None])
 def sum_up_over_near_grid_points(image, gridpoints, gridpoint_target, kernel = "triangular", kernel_width = 1):
+    # if kernel == "triangular":
+    #     kernel_vals = triangular_kernel(gridpoints, gridpoint_target, kernel_width = kernel_width)
+    # elif kernel == "square":
+    #     kernel_vals = square_kernel(gridpoints, gridpoint_target, kernel_width = kernel_width)
+    # else:
+    #     raise ValueError("Kernel function not recognized")
+    # kernel_vals = triangular_kernel(gridpoints, gridpoint_target, kernel_width = 1)
+    kernel_vals = evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel = kernel, kernel_width = kernel_width)
+    kernel_estimated = jnp.sum(kernel_vals * image, axis =-1)
+    return kernel_estimated #, jnp.sum(kernel_vals)
+
+def evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel = "triangular", kernel_width = 1):
     if kernel == "triangular":
         kernel_vals = triangular_kernel(gridpoints, gridpoint_target, kernel_width = kernel_width)
     elif kernel == "square":
         kernel_vals = square_kernel(gridpoints, gridpoint_target, kernel_width = kernel_width)
     else:
         raise ValueError("Kernel function not recognized")
-    # kernel_vals = triangular_kernel(gridpoints, gridpoint_target, kernel_width = 1)
-    kernel_estimated = jnp.sum(kernel_vals * image, axis =-1)
-    return kernel_estimated #, jnp.sum(kernel_vals)
+    return kernel_vals
+
+    # if kernel == "triangular":
+    #     k_xi_x1 = covariance_core.triangular_kernel(plane_coords, target_coord, kernel_width = kernel_width) 
+    # elif kernel == "square":
+    #     k_xi_x1 = covariance_core.square_kernel(plane_coords, target_coord, kernel_width = kernel_width) 
+    # else:
+    #     raise ValueError("Kernel not implemented")
 
 
 # Are there at most 4 or 5 within one dist? or 9?

@@ -378,9 +378,15 @@ def plot_umap(output_folder, zs, centers):
 
 
 
-def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_variance, output_folder, B_factor, n_bins = 30, n_min_images = 100, embedding_option = 'cov_dist', save_all_estimates = False):
+def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_variance, output_folder, B_factor, n_bins = 30, n_min_images = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20 ):
 
     #batch_size = 
+
+    if n_min_images is None:
+        if cryos[0].tilt_series_flag:
+            n_min_images = np.max(100, 10 * np.max(cryos[0].image_stack.counts))
+        else:
+            n_min_images = 100
 
     mkdir_safe(output_folder)
     new_volume_generation = True
@@ -413,10 +419,12 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_varian
             # heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder_this, -1, n_bins, B_factor, tau = None, n_min_images = 300, metric_used = "locres_auc")
             from recovar import noise
             noise_variance = noise.make_radial_noise(noise_variance, cryos[0].image_shape)
-            locres_maskrad = cryos[0].grid_size * cryos[0].voxel_size / 20
-            logger.info(f"Setting locres_maskrac = locres_sampling = box_size * voxel_size / 20 = {locres_maskrad:.1f} Angstroms")
+
+            locres_maskrad = cryos[0].grid_size * cryos[0].voxel_size / maskrad_fraction
+            logger.info(f"Mask radius fraction = {maskrad_fraction}. Setting locres_maskrac = locres_sampling = box_size * voxel_size / {maskrad_fraction} = {locres_maskrad:.1f} Angstroms. Using {n_min_images} images for template.")
 
             heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder_this, ndim, n_bins, B_factor, tau = None, n_min_images = n_min_images, locres_sampling = locres_maskrad, locres_maskrad = locres_maskrad, locres_edgwidth = 0, upsampling_for_ests = 1, use_mask_ests =False, grid_correct_ests = False, save_all_estimates=save_all_estimates, metric_used= 'locshellmost_likely')
+
             logger.info(f"Done with volume generation {k} stored in {output_folder_this}")
         move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'ml_optimized_locres_filtered.mrc', new_stringname = 'vol' )
         move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'ml_optimized_locres.mrc', new_stringname = 'locres' )
