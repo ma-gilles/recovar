@@ -307,15 +307,16 @@ class CryoEMDataset:
 
         return
 
-    def get_tilt_dataset_generator(self, batch_size, num_workers = 0):
-        self.current_index=0# A very stupid way to do this for now?
-
-        return self.image_stack.get_dataset_generator(batch_size,num_workers = num_workers)
+    # def get_tilt_dataset_generator(self, batch_size, num_workers = 0):
+    #     self.current_index=0# A very stupid way to do this for now?
+    #     return self.image_stack.get_dataset_generator(batch_size,num_workers = num_workers)
 
     def get_dataset_generator(self, batch_size, num_workers = 0):
         return self.image_stack.get_dataset_generator(batch_size,num_workers = num_workers)
     
     def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
+        if subset_indices is None:
+            return self.get_dataset_generator(batch_size, num_workers = num_workers)
         return self.image_stack.get_dataset_subset_generator(batch_size, subset_indices, num_workers = num_workers)
 
 
@@ -582,21 +583,9 @@ def get_split_indices(particles_file, ind_file = None):
 
 
 def get_split_tilt_indices(particles_file, ind_file = None, ntilts = None, datadir = None):
-    from cryodrgn import starfile
-    # pt, tp = dataset.TiltSeriesData.parse_particle_tilt(particles_file)
-    s = starfile.Starfile.load(particles_file)
-    n_images = s.df["_rlnGroupName"].size
-    # n_images = get_num_images_in_dataset(particles_file)
-    if ind_file is None:
-        particle_ind = np.arange(n_images)
-    elif isinstance(ind_file, np.ndarray):
-        particle_ind = ind_file
-        raise NotImplementedError
-    else:
-        particle_ind = pickle.load(open(ind_file, "rb"))
-        raise NotImplementedError
-
+    # from cryodrgn import starfile
     from recovar import tilt_dataset
+
     # dataset = tilt_dataset.parse_particle_tilt(args.particles)
     particles_to_tilts, tilts_to_particles = tilt_dataset.TiltSeriesData.parse_particle_tilt(particles_file)
 
@@ -606,20 +595,22 @@ def get_split_tilt_indices(particles_file, ind_file = None, ntilts = None, datad
         dataset_tmp = tilt_dataset.TiltSeriesData(particles_file, datadir = datadir)
         tilt_numbers = dataset_tmp.tilt_numbers
 
-
     n_tilt_series = len(particles_to_tilts)
-    split_tilt_series_indices = split_index_list(np.arange(n_tilt_series))
+    if ind_file is None:
+        particle_ind = np.arange(n_tilt_series)
+    else:
+        particle_ind = pickle.load(open(ind_file, "rb"))
+        logger.warning("Using ind file to pick PARTICLES (i.e. tilt series), not images (individual tilts)!")
+        # raise NotImplementedError
+
+    split_tilt_series_indices = split_index_list(particle_ind)
     split_image_indices = [None,None]
     for i in range(2):
-        
         split_image_indices[i] = np.concatenate([ particles_to_tilts[ind] for ind in split_tilt_series_indices[i]])
         if ntilts is not None:
             good_indices = np.where(tilt_numbers[split_image_indices[i]] < ntilts)[0]
             split_image_indices[i] = split_image_indices[i][good_indices]
 
-        # import pdb; pdb.set_trace()
-
-    # split_image_indices = [ tilts_to_particles[ind] for ind in split_tilt_indices]
     return split_image_indices
 
 

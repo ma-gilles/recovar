@@ -293,7 +293,7 @@ def standard_recovar_pipeline(args):
             contrasts_for_second = est_contrasts[ndim]
             contrasts_for_second /= np.mean(contrasts_for_second) # normalize to have mean 1
             embedding.set_contrasts_in_cryos(cryos, contrasts_for_second)
-            options["contrast"] = "none"
+            options["contrast"] = "contrast"
         else:
             contrasts_for_second = None
 
@@ -486,36 +486,7 @@ def standard_recovar_pipeline(args):
 
         # test_covar_options = False
         if args.test_covar_options:
-            tests = [ 
-                {
-                "sampling_n_cols": 10,
-                },
-                {
-                "sampling_n_cols": 100,
-                },
-                {
-                "sampling_n_cols": 300,
-                },
-                {
-                "sampling_n_cols": 1000,
-                },
-                {
-                "column_sampling_scheme" : "low_freqs",
-                "sampling_n_cols": 10,
-                },
-                {
-                "column_sampling_scheme" : "low_freqs",
-                "sampling_n_cols": 100,
-                },
-                {
-                "column_sampling_scheme" : "low_freqs",
-                "sampling_n_cols": 300,
-                },
-                {
-                "column_sampling_scheme" : "low_freqs",
-                "sampling_n_cols": 1000,
-                },
-                ]
+            tests = [ ]
             idx = 0
             for test in tests:
                 output_folder = args.outdir + '/output/' 
@@ -683,7 +654,8 @@ def standard_recovar_pipeline(args):
 
 if __name__ == "__main__":
     # import jax
-    # import pdb; pdb.set_trace()
+    import pdb; pdb.set_trace()
+
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
     standard_recovar_pipeline(args)

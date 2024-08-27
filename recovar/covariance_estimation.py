@@ -1288,8 +1288,12 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
     # Perhaps this should use: jax.lax.fori_loop. This is a lot of memory.
     # Or maybe jax.lax.reduce ?
     lhs = jnp.sum(batch_kron(AU_t_AU, AU_t_AU), axis=0)
+
     return lhs, rhs
-    
+
+
+
+
 batch_kron = jax.vmap(jnp.kron, in_axes=(0,0))
 
 def summed_batch_kron(X):
@@ -1392,9 +1396,6 @@ def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coord
     
     # Between SPA and tomography, the only difference here is that we want to treat all images
     # (which are assumed to be from same tilt series) as a single measurement. 
-    # 
-    # if shared_label:
-    #     ss
 
     # Why the hell did I call this images_prod??? 
     images_prod = covariance_core.sum_up_over_near_grid_points(ctfed_images, plane_coords_on_grid_stacked, picked_freq_coord, kernel = right_kernel, kernel_width = kernel_width)
@@ -1412,13 +1413,15 @@ def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coord
     # - noise term
     ctfed_images -= compute_noise_term(plane_coords_on_grid_stacked, picked_freq_coord, CTF_val_on_grid_stacked, image_shape, image_mask, cov_noise, kernel = right_kernel, kernel_width = kernel_width)
 
-    # TODO: put this in a function
-    if left_kernel == "triangular":
-        rhs_summed_up = core.adjoint_slice_volume_by_trilinear(ctfed_images, rotation_matrices,image_shape, volume_shape )
-    elif left_kernel == "square":
-        rhs_summed_up = core.adjoint_slice_volume_by_map(ctfed_images, rotation_matrices,image_shape, volume_shape , 'nearest')
-    else:
-        raise ValueError("Kernel not implemented")
+    # # TODO: put this in a function
+    # if left_kernel == "triangular":
+    #     rhs_summed_up = core.adjoint_slice_volume_by_trilinear(ctfed_images, rotation_matrices,image_shape, volume_shape )
+    # elif left_kernel == "square":
+    #     rhs_summed_up = core.adjoint_slice_volume_by_map(ctfed_images, rotation_matrices,image_shape, volume_shape , 'nearest')
+    # else:
+    #     raise ValueError("Kernel not implemented")
+    
+    rhs_summed_up = adjoint_kernel_slice(ctfed_images, rotation_matrices, image_shape, volume_shape, left_kernel)
 
     # lhs term 
     ctf_squared = CTF_val_on_grid_stacked * jnp.conj(CTF_val_on_grid_stacked)
@@ -1431,25 +1434,37 @@ def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coord
     ctf_squared *= ctfs_prods[...,None]
 
 
-    if left_kernel == "triangular":
-        lhs_summed_up = core.adjoint_slice_volume_by_trilinear(ctf_squared, rotation_matrices,image_shape, volume_shape )
-    elif left_kernel == "square":
-        lhs_summed_up = core.adjoint_slice_volume_by_map(ctf_squared, rotation_matrices,image_shape, volume_shape, 'nearest' )
-    else:
-        raise ValueError("Kernel not implemented")
-    
+    # if left_kernel == "triangular":
+    #     lhs_summed_up = core.adjoint_slice_volume_by_trilinear(ctf_squared, rotation_matrices,image_shape, volume_shape )
+    # elif left_kernel == "square":
+    #     lhs_summed_up = core.adjoint_slice_volume_by_map(ctf_squared, rotation_matrices,image_shape, volume_shape, 'nearest' )
+    # else:
+    #     raise ValueError("Kernel not implemented")
+    lhs_summed_up = adjoint_kernel_slice(ctf_squared, rotation_matrices, image_shape, volume_shape, left_kernel)
+
     return lhs_summed_up, rhs_summed_up
 
+
+def adjoint_kernel_slice(images, rotation_matrices, image_shape, volume_shape, kernel = "triangular"):
+    if kernel == "triangular":
+        lhs_summed_up = core.adjoint_slice_volume_by_trilinear(images, rotation_matrices,image_shape, volume_shape )
+    elif kernel == "square":
+        lhs_summed_up = core.adjoint_slice_volume_by_map(images, rotation_matrices,image_shape, volume_shape, 'nearest' )
+    else:
+        raise ValueError("Kernel not implemented")
+    return lhs_summed_up
 
 
 def compute_noise_term(plane_coords, target_coord, CTF_on_grid, image_shape, image_mask, cov_noise, kernel = "triangular", kernel_width = 1):
     # Evaluate kernel
-    if kernel == "triangular":
-        k_xi_x1 = covariance_core.triangular_kernel(plane_coords, target_coord, kernel_width = kernel_width) * CTF_on_grid
-    elif kernel == "square":
-        k_xi_x1 = covariance_core.square_kernel(plane_coords, target_coord, kernel_width = kernel_width) * CTF_on_grid
-    else:
-        raise ValueError("Kernel not implemented")
+
+    # if kernel == "triangular":
+    #     k_xi_x1 = covariance_core.triangular_kernel(plane_coords, target_coord, kernel_width = kernel_width) * CTF_on_grid
+    # elif kernel == "square":
+    #     k_xi_x1 = covariance_core.square_kernel(plane_coords, target_coord, kernel_width = kernel_width) * CTF_on_grid
+    # else:
+    #     raise ValueError("Kernel not implemented")
+    k_xi_x1 = covariance_core.evaluate_kernel_on_grid(plane_coords, target_coord, kernel = kernel, kernel_width = kernel_width) * CTF_on_grid
 
     # Apply mask
     k_xi_x1 = covariance_core.apply_image_masks(k_xi_x1, image_mask, image_shape)
@@ -1462,3 +1477,4 @@ def compute_noise_term(plane_coords, target_coord, CTF_on_grid, image_shape, ima
     # import pdb; pdb.set_trace()
     # mutiply by CTF again
     return k_xi_x1 * CTF_on_grid
+

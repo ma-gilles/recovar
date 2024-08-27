@@ -6,7 +6,8 @@ import mrcfile, os , psutil, pickle
 from recovar.fourier_transform_utils import fourier_transform_utils
 from recovar import core
 ftu = fourier_transform_utils(jax.numpy)
-    
+import more_itertools
+more_itertools.chunked
 logger = logging.getLogger(__name__)
 
 @functools.partial(jax.jit, static_argnums = [1,2])    
@@ -21,6 +22,19 @@ def make_radial_image(average_image_PS, image_shape, extend_last_frequency = Tru
 batch_make_radial_image = jax.vmap(make_radial_image, in_axes = (0,None,None))
 
 
+def index_batch_iter(n_units, batch_size):
+    return more_itertools.chunked(np.arange(n_units),batch_size)
+
+def subset_batch_iter(subset_indices, batch_size):
+    return more_itertools.chunked(subset_indices,batch_size)
+    # for k in range(get_number_of_index_batch(n_images, batch_size)):
+    #     yield get_batch_of_indices(n_images, batch_size, k)
+
+def subset_batch_iter(subset_indices, batch_size):
+    return more_itertools.chunked(subset_indices,batch_size)
+
+def subset_and_indices_batch_iter(subset_indices, batch_size):
+    return zip(subset_batch_iter(np.arange(len(subset_indices)), batch_size), subset_batch_iter(subset_indices, batch_size))
 
 def estimate_variance(u, s):
     var = np.sum(np.abs(u)**2 * s[...,None], axis = 0)

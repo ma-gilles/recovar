@@ -64,6 +64,15 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
+        "--maskrad-fraction",  type =float, default=20, dest="maskrad_fraction",help="Radius of mask used in kernel regression. Default = 20, which means radius = grid_size/20 pixels, or grid_size * voxel_size / 20 angstrom"
+    )
+
+    parser.add_argument(
+        "--n-min-images",  type =int, default=None, dest="n_min_images",help="minimum number of images to compute kernel regression. Default = 100 for SPA, and 10 particles for tilt series"
+    )
+
+
+    parser.add_argument(
         "--density",
         type=os.path.abspath,
         required=False,
@@ -174,7 +183,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     pickle.dump(kmeans_result, open(output_folder_kmeans + 'centers.pkl', 'wb'))
 
     if not skip_centers:
-        o.compute_and_save_reweighted(cryos, centers, zs, cov_zs, noise_variance, output_folder_kmeans_centers, B_factor, n_bins)
+        o.compute_and_save_reweighted(cryos, centers, zs, cov_zs, noise_variance, output_folder_kmeans_centers, B_factor, n_bins, n_min_images = args.n_min_images,  maskrad_fraction = args.maskrad_fraction)
         move_to_one_folder(output_folder_kmeans_centers, n_clusters )
 
     if (not skip_umap) and (zdim > 1):
@@ -209,7 +218,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
             full_path, subsampled_path = o.make_trajectory_plots_from_results(po, zdim_key, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = False, input_density = input_density, latent_space_bounds = latent_space_bounds)
 
             logger.info(f"path {pair_idx} done")
-            o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins)
+            o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins, n_min_images = args.n_min_images,  maskrad_fraction = args.maskrad_fraction)
             move_to_one_folder(path_folder, n_vols_along_path )
 
     else:
@@ -223,7 +232,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         # z_points = np.linspace(z_st, z_end, n_vols_along_path)
         # pairs = [ [z_points[0], z_points[40-1]], [z_points[40], z_points[80-1]] ]
         subsampled_path = np.linspace(z_st, z_end, n_vols_along_path)[:,None]
-        o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins, save_all_estimates = False)
+        o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins, save_all_estimates = False, n_min_images = args.n_min_images,  maskrad_fraction = args.maskrad_fraction)
         move_to_one_folder(path_folder, n_vols_along_path )
 
     # for pair_idx in range(len(pairs)):
