@@ -1,6 +1,6 @@
 # RECOVAR: Regularized covariance estimation for cryo-EM heterogeneity analysis
 
-[See preprint here](https://www.biorxiv.org/content/10.1101/2023.10.28.564422v1) and recorded talk [here](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s)
+[See preprint here](https://www.biorxiv.org/content/10.1101/2023.10.28.564422v3) and recorded talk [here](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s)
 
 [Installation](#installation)
 
@@ -158,9 +158,9 @@ Example usage for a .cs file:
 
 ## II. Specifying a real-space mask
 
-A real space mask is important to boost SNR. Most consensus reconstruction software output a mask, which you can use as input (`--mask-option=input`). Make sure the mask is not too tight; you can use the input `--dilate-mask-iter` to expand the mask if needed. You may also want to use a focusing mask to focus on heterogeneity in one part of the volume [click here](https://guide.cryosparc.com/processing-data/tutorials-and-case-studies/mask-selection-and-generation-in-ucsf-chimera) to find instructions to generate one with Chimera.
+A real space mask is important to boost SNR. Most consensus reconstruction software output a mask, which you can use as input (`--mask=path_to_mask.mrc`). Make sure the mask is not too tight; you can use the input `--dilate-mask-iter` to expand the mask if needed. You may also want to use a focusing mask to focus on heterogeneity in one part of the volume [click here](https://guide.cryosparc.com/processing-data/tutorials-and-case-studies/mask-selection-and-generation-in-ucsf-chimera) to find instructions to generate one with Chimera.
 
-If you don't input a mask, you can ask the software to estimate one using the two halfmaps of the mean ( `--mask-option=from-halfmaps`). You may also want to run with a loose spherical mask (option `--mask-option=sphere`) and use the computed variance map to observe which parts have large variance.
+If you don't input a mask, you can ask the software to estimate one using the two halfmaps of the mean ( `--mask=from-halfmaps`). You may also want to run with a loose spherical mask (option `--mask=sphere`) and use the computed variance map to observe which parts have large variance.
 
 
 ## III. Running RECOVAR pipeline
@@ -465,7 +465,7 @@ You can do this by: `conda activate recovar` and then  `sh run_test_dataset.sh`.
     python $RECOVAR_PATH/make_test_dataset.py
 
     # Run pipeline, should take about 2 min
-    python $RECOVAR_PATH/pipeline.py test_dataset/particles.64.mrcs --poses test_dataset/poses.pkl --ctf test_dataset/ctf.pkl --correct-contrast --o test_dataset/pipeline_output --mask-option=from_halfmaps
+    python $RECOVAR_PATH/pipeline.py test_dataset/particles.64.mrcs --poses test_dataset/poses.pkl --ctf test_dataset/ctf.pkl --correct-contrast --o test_dataset/pipeline_output --mask=from_halfmaps
 
     # Run on the 2D embedding with no regularization on latent space (better for density estimation)
     # Should take about 5 min
