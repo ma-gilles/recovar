@@ -192,6 +192,13 @@ def add_args(parser: argparse.ArgumentParser):
 
 
     group.add_argument(
+            "--very-low-memory-option",
+            dest = "very_low_memory_option",
+            action="store_true",
+        )
+
+
+    group.add_argument(
             "--dont-use-image-mask",
             dest = "dont_use_image_mask",
             action="store_true",
@@ -513,6 +520,12 @@ def standard_recovar_pipeline(args):
             covariance_options['sampling_n_cols'] = 50
             covariance_options['randomized_sketch_size'] = 100
             covariance_options['n_pcs_to_compute'] = 100
+            covariance_options['sampling_avoid_in_radius'] = 3
+
+        if args.very_low_memory_option:
+            covariance_options['sampling_n_cols'] = 25
+            covariance_options['randomized_sketch_size'] = 30
+            covariance_options['n_pcs_to_compute'] = 20
             covariance_options['sampling_avoid_in_radius'] = 3
 
         if args.dont_use_image_mask:
