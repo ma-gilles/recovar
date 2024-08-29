@@ -165,7 +165,12 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
     output_folder_kmeans = output_folder + '/' #+ '/kmeans'+'_'+ str(n_clusters) + '/'    
     o.mkdir_safe(output_folder_kmeans)    
-    logger.addHandler(logging.FileHandler(f"{output_folder_kmeans}/run.log"))
+    # logger.addHandler(logging.FileHandler(f"{output_folder_kmeans}/run.log"))
+    logging.basicConfig(filename=f"{output_folder}/run.log",
+                        format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
+                        level=logging.INFO,
+                        force = True)
+
     logger.info(args)
     # zs_unsort = po.get('unsorted_embedding')['zs'][zdim_key]
     zs_unsort = zs
@@ -181,7 +186,8 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     o.mkdir_safe(output_folder_kmeans_centers)    
     kmeans_result = { 'centers' : centers, 'labels': reorder(labels)  }
     pickle.dump(kmeans_result, open(output_folder_kmeans + 'centers.pkl', 'wb'))
-
+    np.savetxt(output_folder_kmeans + 'centers.txt', centers)
+    
     if not skip_centers:
         o.compute_and_save_reweighted(cryos, centers, zs, cov_zs, noise_variance, output_folder_kmeans_centers, B_factor, n_bins, n_min_images = args.n_min_images,  maskrad_fraction = args.maskrad_fraction)
         move_to_one_folder(output_folder_kmeans_centers, n_clusters )

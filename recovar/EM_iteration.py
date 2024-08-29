@@ -5,7 +5,8 @@ from recovar import core
 import numpy as np
 import logging
 import itertools
-
+from recovar import mask as mask_fn
+from recovar import relion_functions    
 logger = logging.getLogger(__name__)
 
 
@@ -380,7 +381,6 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
                 # Hmmm this is a bit of a hack. Indexing is not what I wish it was
                 rot_indices = np.array(rot_indices)
                 residuals[start_idx:end_idx, rot_indices] -= compute_bHb_terms(projections[rot_indices], u_projections[rot_indices], s, batch, translations, experiment_dataset.CTF_params[indices], experiment_dataset.CTF_fun, noise_variance, experiment_dataset.voxel_size, image_shape, experiment_dataset.image_stack.process_images)
-
                 # Ft_y, Ft_ctf = sum_up_images_fixed_rots(batch, probabilities[start_idx:end_idx, rot_indices[0]:rot_indices[-1]+1], translations, rotations[rot_indices], experiment_dataset.CTF_params[indices], experiment_dataset.CTF_fun, noise_variance, experiment_dataset.voxel_size, image_shape, experiment_dataset.volume_shape, experiment_dataset.image_stack.process_images,  Ft_y = Ft_y, Ft_ctf = Ft_ctf)
 
             start_idx = end_idx
@@ -430,7 +430,6 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
 
     return residuals
 
-sgd_options = { }
 def get_default_sgd_options():
     options = {}
     options['minibatch_size'] = 30
@@ -441,115 +440,9 @@ def get_default_sgd_options():
 
 DEBUG = True
 from recovar import utils
-def E_M_batches(experiment_dataset, mean, rotations, translations, noise_variance, disc_type, memory_to_use = 128, u = None, s = None, subspace = None, heterogenous = False, volume_mask = None, picked_frequency_indices= None, covariance_options = None, sgd = False, sgd_stepsize = 1e-3, sgd_batchsize = 100, mean_signal_variance = None, sgd_update = 0, sgd_projection = None):
-
-    total_hidden = rotations.shape[0] * translations.shape[0]
-    logger.info(f"starting precomp proj. Num rotations {rotations.shape[0]}, num translations {translations.shape[0]}. Total = {total_hidden}")
-    n_images_batch = int(memory_to_use * 1e9 / ( total_hidden * 8  ))
-    # If we count the allocated memor
-
-    if n_images_batch < 1:
-        n_images_batch = 1
-        logger.warning(f"Memory to use is too small. Setting n_images_batch to {n_images_batch}. May run out of memory")
-    logger.info(f"n_images_batch {n_images_batch}. Number of batches {int(np.ceil(experiment_dataset.n_units / n_images_batch))}")   
-    
-    if sgd:
-        n_images_batch = sgd_batchsize
-
-    Ft_y, Ft_CTF = 0, 0
-    H,B = 0,0
-    projected_cov_lhs, projected_cov_rhs = 0, 0
-    sgd_iter = 0
-    first= True
-    idx =0 
-    hard_assignment = np.empty(experiment_dataset.n_units)
-
-    for big_image_batch in utils.index_batch_iter(experiment_dataset.n_units, n_images_batch): 
-
-        probabilities = E_with_precompute(experiment_dataset, mean, rotations, translations, noise_variance, disc_type, big_image_batch, u = u, s = s)
-        # hard_assignment[big_image_batch] = np.argmax(probabilities, axis = (-1, -2))
-        hard_assignment[big_image_batch] = np.argmax(probabilities.reshape(probabilities.shape[0], -1), axis=-1)
-        if np.isnan(probabilities).any():
-            print(np.linalg.norm(mean))
-            import pdb; pdb.set_trace()
-        Ft_y_this, Ft_CTF_this = M_with_precompute(experiment_dataset, probabilities, rotations, translations, noise_variance, disc_type, big_image_batch)
 
 
-        if sgd:
-            mu = 0.9
-            grad = 2 * ((Ft_CTF_this) * mean - Ft_y_this) *  experiment_dataset.n_images / n_images_batch + 2/ mean_signal_variance * mean
-
-            step = 1 / np.max(np.abs(Ft_CTF_this))
-            sgd_update = mu * sgd_update + (1 - mu) * step * grad 
-            if np.isnan(sgd_update).any() or np.isinf(sgd_update).any():
-                print(np.linalg.norm(sgd_update))
-
-            # import pdb; pdb.set_trace()
-            if idx%10==0 and DEBUG:
-                print(idx)
-                print('|dx| / |x|:', np.linalg.norm(sgd_update) / np.linalg.norm(mean))
-                print('|prior|/ grad:', np.linalg.norm( 2/ mean_signal_variance * mean) / np.linalg.norm(grad))
-                print('|x|:', np.linalg.norm( mean))
-                print('|dx|:', np.linalg.norm( sgd_update))
-                # plot_utils.plot
-
-                first = False
-            mean -= sgd_update * 0.1#0.01 
-
-            if sgd_projection is not None:
-                mean = sgd_projection(mean)
-
-            std_multiplier = 10
-            mean = np.clip(mean.real, -std_multiplier * np.sqrt(mean_signal_variance), std_multiplier * np.sqrt(mean_signal_variance)) + 1j * np.clip(mean.imag, -std_multiplier * np.sqrt(mean_signal_variance), std_multiplier * np.sqrt(mean_signal_variance))
-
-            if np.isnan(mean).any() or np.isinf(mean).any() or np.isnan(np.linalg.norm(mean)) or np.isinf(np.linalg.norm(mean)):
-                print('|dx| / |x|:', np.linalg.norm(sgd_update) / np.linalg.norm(mean))
-                print('|prior|/ grad:', np.linalg.norm( 2/ mean_signal_variance * mean) / np.linalg.norm(grad))
-                print('|x|:', np.linalg.norm( mean))
-                print('|dx|:', np.linalg.norm( sgd_update))
-
-                print(np.linalg.norm(sgd_update))
-                import pdb; pdb.set_trace()
-
-            logger.warning("There is a necessary 0.1 that shouldn't be there")
-
-            idx +=1
-            # mean *= experiment_dataset.get_valid_frequency_indices(5)
-        else:
-            Ft_y += Ft_y_this
-            Ft_CTF += Ft_CTF_this
-
-        if heterogenous:
-            
-            ## Accumulate H, B, and covs
-            H_this,B_this = compute_H_B(experiment_dataset, mean, probabilities, rotations, translations, noise_variance, volume_mask, picked_frequency_indices, big_image_batch, covariance_options['disc_type'])
-            H_this = np.array(H_this)
-            B_this = np.array(B_this)
-            H += H_this
-            B += B_this
-
-            if subspace is not None:
-                projected_cov_lhs_this, projected_cov_rhs_this = compute_projected_covariance_rhs_lhs(experiment_dataset, mean, subspace, rotations, translations, probabilities, volume_mask, noise_variance, disc_type_mean = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], image_indices = big_image_batch)
-                projected_cov_lhs += projected_cov_lhs_this
-                projected_cov_rhs += projected_cov_rhs_this
-
-        ## Aculumate projected covariance_matrix
-
-        del probabilities
-
-    if sgd:
-        return mean, sgd_update, hard_assignment
-
-    if heterogenous:
-        # sgd_update U, s ? No need to store projected_cov_lhs/projected_cov_rhs
-
-        return Ft_y, Ft_CTF, H, B, projected_cov_lhs, projected_cov_rhs, hard_assignment
-    
-    return Ft_y, Ft_CTF, hard_assignment
-
-
-
-def E_M_batches_2(experiment_dataset, state_obj, rotations, translations, noise_variance, disc_type, memory_to_use = 128, volume_mask = None):
+def E_M_batches_2(experiment_dataset, state_obj, rotations, translations, disc_type, memory_to_use = 128, volume_mask = None):
 
     total_hidden = rotations.shape[0] * translations.shape[0]
     logger.info(f"starting precomp proj. Num rotations {rotations.shape[0]}, num translations {translations.shape[0]}. Total = {total_hidden}")
@@ -564,7 +457,7 @@ def E_M_batches_2(experiment_dataset, state_obj, rotations, translations, noise_
     if state_obj.name =='SGD':
         n_images_batch = state_obj.sgd_batchsize
 
-    hard_assignment = np.empty(experiment_dataset.n_units)
+    hard_assignment = np.empty(experiment_dataset.n_units, dtype = int)
 
     for big_image_batch in utils.index_batch_iter(experiment_dataset.n_units, n_images_batch): 
 
@@ -574,177 +467,10 @@ def E_M_batches_2(experiment_dataset, state_obj, rotations, translations, noise_
         if np.isnan(probabilities).any():
             print(np.linalg.norm(state_obj.mean))
             import pdb; pdb.set_trace()
-        state_obj.M_step(experiment_dataset, probabilities, rotations, translations, noise_variance, disc_type, big_image_batch)
+        state_obj.M_step(experiment_dataset, probabilities, rotations, translations, disc_type, big_image_batch)
     
     return state_obj, hard_assignment
 
-
-
-
-from recovar import relion_functions
-
-def split_E_M(experiment_datasets, means, mean_signal_variance, rotations, translations, noise_variance, disc_type, heterogeneous = False, us = None, ss = None, covariance_signal_variance = None, bases = None, sgd=False, sgd_updates = None, average_up_to_angstrom = None, sgd_batchsize = 100, sgd_projection = None, covariance_options = None, picked_frequency_indices = None):
-
-    # Ft_y, Ft_CTF, H, B, projected_cov_lhs, projected_cov_rhs = tuple(6*[2 *[None]])
-    # Ft_y = [None] * len(experiment_datasets)
-    Ft_y, Ft_CTF, Hs, Bs, projected_cov_lhs, projected_cov_rhs = 2 * [None], 2 * [None], 2 * [None], 2 * [None], 2 * [None], 2 * [None]
-    cov_cols = 2 * [None]
-    hard_assignments = 2 * [None]
-    for i, experiment_dataset in enumerate(experiment_datasets):
-        if sgd:
-            means[i], sgd_updates[i], hard_assignments[i] = E_M_batches(experiment_dataset, means[i], rotations, translations, noise_variance, disc_type, memory_to_use = 128, u = None, s = None, subspace = None, heterogenous = False, volume_mask = None, picked_frequency_indices= None, covariance_options = None, sgd = True, sgd_batchsize = sgd_batchsize, mean_signal_variance = mean_signal_variance, sgd_update = sgd_updates[i], sgd_projection = sgd_projection)
-        elif heterogeneous:
-            Ft_y[i], Ft_CTF[i], Hs[i], Bs[i], projected_cov_lhs[i], projected_cov_rhs[i], hard_assignments[i] = E_M_batches(experiment_dataset, means[i], rotations, translations, noise_variance, disc_type, memory_to_use = 128,  u = us[i], s = ss[i], subspace = bases[i], heterogenous = heterogeneous, volume_mask = None, picked_frequency_indices= picked_frequency_indices, covariance_options = covariance_options, mean_signal_variance = mean_signal_variance)
-
-            means[i] = relion_functions.post_process_from_filter(experiment_dataset, Ft_CTF[i], Ft_y[i], tau = mean_signal_variance, disc_type = disc_type).reshape(-1)
-        else:
-            Ft_y[i], Ft_CTF[i], hard_assignments[i] = E_M_batches(experiment_dataset, means[i], rotations, translations, noise_variance, disc_type, memory_to_use = 128, u = None, s = None, subspace = None, heterogenous = False, volume_mask = None, picked_frequency_indices= None, options = None, sgd = sgd, sgd_batchsize = sgd_batchsize, mean_signal_variance = mean_signal_variance, sgd_update = None, sgd_projection = sgd_projection, covariance_options = covariance_options)
-
-            means[i] = relion_functions.post_process_from_filter(experiment_dataset, Ft_CTF[i], Ft_y[i], tau = mean_signal_variance, disc_type = disc_type).reshape(-1)
-
-            # cov_cols[i] = relion_functions.post_process_from_filter_v2(Hs[i], Bs[i], experiment_dataset.volume_shape, volume_upsampling_factor = 1, tau = covariance_signal_variance, kernel = covariance_options['left_kernel'], use_spherical_mask = True, grid_correct = covariance_options['grid_correct'], gridding_correct = "square", kernel_width = 1, volume_mask = None )
-
-            # plt.figure()
-            # plt.imshow(experiment_dataset.get_proj(Ft_y[i]))
-            # plt.show()
-
-            # plt.figure()
-            # plt.imshow(experiment_dataset.get_proj(Ft_CTF[i]))
-            # plt.show()
-
-            # # import pdb; pdb.set_trace()
-            # zz = Ft_y[i] / ( Ft_CTF[i] + 1 / mean_signal_variance)
-            # means[i] = relion_functions.post_process_from_filter(experiment_dataset, Ft_CTF[i], Ft_y[i], tau = mean_signal_variance, disc_type = disc_type).reshape(-1)
-            # plt.figure()
-            # plt.imshow(experiment_dataset.get_proj(means[i]))
-            # plt.show()
-
-            # plt.figure()
-            # plt.imshow(experiment_dataset.get_proj(zz)); plt.show()
-            # plt.show()
-            # import pdb; pdb.set_trace()
-
-
-        ## sgd_update...
-        if heterogeneous:
-
-            if bases[i] is not None:
-                projected_covar = solve_covariance(projected_cov_lhs[i], projected_cov_rhs[i])
-                s, u = np.linalg.eigh(projected_covar)
-                u =  np.fliplr(u)
-                s = np.flip(s)
-                us[i] = (bases[i] @ u).T
-                ss[i] = np.where(s >0 , s, np.ones_like(s)*constants.EPSILON)
-                # us[i] = us[i].T
-
-            post_process_vmap = jax.vmap(relion_functions.post_process_from_filter_v2, in_axes = (0, 0, None, None, 0, None,None, None, None, None, None))
-            
-            # cov_cols[i] = post_process_vmap(Hs[i], Bs[i], experiment_dataset.volume_shape, volume_upsampling_factor = 1, tau = covariance_signal_variance, kernel = covariance_options['left_kernel'], use_spherical_mask = True, grid_correct = covariance_options['grid_correct'], gridding_correct = "square", kernel_width = 1, volume_mask = None )
-
-            cov_cols[i] = post_process_vmap(Hs[i], Bs[i], experiment_dataset.volume_shape, 1, covariance_signal_variance, covariance_options['left_kernel'], True, covariance_options['grid_correct'],  "square",  1, None ).reshape(Hs[i].shape[0], -1).T
-
-            # basis,_ = principal_components.get_cov_svds(cov_col0, picked_frequency_indices)
-            # spherical_mask = 
-            memory_to_use = utils.get_gpu_memory_total()
-            bases[i], _ , _ = principal_components.randomized_real_svd_of_columns(cov_cols[i], picked_frequency_indices, None, experiment_dataset.volume_shape, 50, test_size=covariance_options['randomized_sketch_size'], gpu_memory_to_use=memory_to_use)
-            # Keep only the first n_pcs_to_compute
-            bases[i] = bases[i][:,:covariance_options['n_pcs_to_compute']]
-
-
-
-    ## Update prior and estimate resolution
-    from recovar import regularization, locres
-    # sgd_updates priors
-    cryo = experiment_datasets[0]
-    use_fsc_prior= not sgd
-
-    if use_fsc_prior:
-        mean_signal_variance, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(cryo.volume_shape, means[0], means[1], (Ft_CTF[0] + Ft_CTF[1])/2, mean_signal_variance, frequency_shift = jnp.array([0,0,0]), upsampling_factor = 1)
-    else:
-        fsc = regularization.get_fsc_gpu(means[0], means[1], cryo.volume_shape, substract_shell_mean = False, frequency_shift = 0 )
-        mean_avg = (means[0] + means[1])/2
-        PS = regularization.average_over_shells(jnp.abs(mean_avg)**2, cryo.volume_shape)
-
-        T = 4
-        mean_signal_variance = T * 1/2 * utils.make_radial_image(PS, cryo.volume_shape, extend_last_frequency = True)
-        
-        mean_signal_variance += np.max(mean_signal_variance) * 1e-6
-        # mean_signal_variance  = 1 /signal_variance
-
-    from recovar import plot_utils
-    plot_utils.plot_fsc(cryo, means[0], means[1])
-    
-    ##  Estimate noise level
-    from recovar import noise
-    # if heterogeneous:
-    # This doesn't really make sense...
-    noise_from_res, _, _ = noise.get_average_residual_square_just_mean(cryo, None, means[0], 100, disc_type = 'linear_interp', subset_indices = np.arange(1000), subset_fn = None)
-    noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)#, cryo.voxel_size)
-    # In pixel units?
-    current_pixel_res = locres.find_fsc_resol(fsc, threshold = 1/7)
-    current_res = current_pixel_res / cryo.voxel_size
-    # logger.info("Current resolution is", current_res, "pixel resolution: ", current_pixel_res)
-    print("Current resolution is ", current_res, "pixel resolution: ", current_pixel_res)
-
-    if heterogeneous:
-        # Downsample to mean resolution
-        valid_freqs = np.array(cryo.get_valid_frequency_indices(current_pixel_res))
-        if us[0] is not None:
-            us = [u * valid_freqs[None] for u in us]
-        if bases[0] is not None:
-            bases = [basis * valid_freqs[...,None] for basis in bases]
-        # Update covariance prior
-
-
-        # H0, H1, B0, B1, frequency_shift, init_regularization, substract_shell_mean, volume_shape, kernel = 'triangular', use_spherical_mask = True, grid_correct = True, volume_mask = None, prior_iterations = 3, downsample_from_fsc_flag = False
-        _, covariance_signal_variance, _ = regularization.prior_iteration_relion_style_batch(Hs[0], Hs[1], Bs[0], Bs[1], np.zeros(Hs[0].shape[0]),
-        covariance_signal_variance, 
-        covariance_options['substract_shell_mean'], 
-        cryo.volume_shape, covariance_options['left_kernel'], 
-        covariance_options['use_spherical_mask'],  covariance_options['grid_correct'],  None, covariance_options["prior_n_iterations"], covariance_options["downsample_from_fsc"])
-
-    # 
-    if average_up_to_angstrom is not None:
-        low_res_mask = cryo.get_valid_frequency_indices(average_up_to_angstrom)
-        logger.info(f"Averaging halfmaps up to {3/cryo.voxel_size} resolution")
-        means = [np.array(mean) for mean in means ]
-        old_means = means[0].copy()
-
-        means[0][low_res_mask] = (means[0][low_res_mask] + means[1][low_res_mask])/2
-        means[1][low_res_mask] = means[0][low_res_mask]
-        
-
-    if heterogeneous:
-        return means, mean_signal_variance, current_pixel_res, noise_variance, sgd_updates, us, ss, bases, covariance_signal_variance, hard_assignments
-
-    return means, mean_signal_variance, current_pixel_res, noise_variance, sgd_updates, hard_assignments
-
-        # probabilities = E_with_precompute(experiment_dataset, mean, rotations, translations, noise_variance, disc_type, big_image_batch, u = u, s = s)
-
-## Probably should implement these so we don't have to pass around so many arguments
-class EMState():
-    mean = None
-    mean_variance = None
-    noise_variance = None
-    name = "EM"
-    Ft_CTF = 0
-    Ft_y = 0
-    def __init__(self, mean, mean_variance, noise_variance):
-        self.mean = mean
-        self.mean_variance = mean_variance
-        self.noise_variance = noise_variance
-        return
-    
-    def E_step(self, experiment_dataset, rotations, translations, disc_type, big_image_batch):
-        probabilities = E_with_precompute(experiment_dataset, self.mean, rotations, translations, self.noise_variance, disc_type, big_image_batch)
-        return probabilities
-    
-    def M_step(self, experiment_dataset, probabilities, rotations, translations, disc_type, big_image_batch):
-        Ft_y_this, Ft_CTF_this = M_with_precompute(experiment_dataset, probabilities, rotations, translations, self.noise_variance, disc_type, big_image_batch)
-        self.Ft_y += Ft_y_this
-        self.Ft_CTF += Ft_CTF_this
-        return
-    
 
 def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_type, average_up_to_angstrom = None,  ):
 
@@ -767,7 +493,6 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
     if use_fsc_prior:
         mean_signal_variance, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(cryo.volume_shape, means[0], means[1], (state_objs[0].Ft_CTF + state_objs[i].Ft_CTF[1])/2, mean_signal_variance, frequency_shift = jnp.array([0,0,0]), upsampling_factor = 1)
     else:
-
         fsc = regularization.get_fsc_gpu(means[0], means[1], cryo.volume_shape, substract_shell_mean = False, frequency_shift = 0 )
         mean_avg = (means[0] + means[1])/2
         PS = regularization.average_over_shells(jnp.abs(mean_avg)**2, cryo.volume_shape)
@@ -785,6 +510,12 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
     from recovar import noise
     # if heterogeneous:
     # This doesn't really make sense...
+
+    for k in range(2):
+        best_rotations, best_translations = hard_assignment_idx_to_pose(hard_assignments[k], rotations, translations)
+        experiment_datasets[k].rotation_matrices = best_rotations
+        experiment_datasets[k].translations = best_translations
+
     noise_from_res, _, _ = noise.get_average_residual_square_just_mean(cryo, None, means[0], 100, disc_type = 'linear_interp', subset_indices = np.arange(1000), subset_fn = None)
     noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)#, cryo.voxel_size)
     # In pixel units?
@@ -792,44 +523,49 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
     current_res = current_pixel_res / cryo.voxel_size
     # logger.info("Current resolution is", current_res, "pixel resolution: ", current_pixel_res)
     print("Current resolution is ", current_res, "pixel resolution: ", current_pixel_res)
-    state_objs[0].noise_variance = noise_variance
-    state_objs[1].noise_variance = noise_variance
 
     # [ state_obj.noise_variance for state_obj in state_objs]
-    if heterogeneous:
+    if state_objs[0].name == 'HeterogeneousEM':
         # Downsample to mean resolution
         valid_freqs = np.array(cryo.get_valid_frequency_indices(current_pixel_res))
-        if us[0] is not None:
-            us = [u * valid_freqs[None] for u in us]
-        if bases[0] is not None:
-            bases = [basis * valid_freqs[...,None] for basis in bases]
-        # Update covariance prior
 
+        if state_objs[0].u is not None:
+            for state_obj in state_objs:
+                state_obj.u = state_obj.u * valid_freqs[None]
+                state_obj.subspace = state_obj.subspace * valid_freqs[...,None]
 
-        # H0, H1, B0, B1, frequency_shift, init_regularization, substract_shell_mean, volume_shape, kernel = 'triangular', use_spherical_mask = True, grid_correct = True, volume_mask = None, prior_iterations = 3, downsample_from_fsc_flag = False
-        _, covariance_signal_variance, _ = regularization.prior_iteration_relion_style_batch(Hs[0], Hs[1], Bs[0], Bs[1], np.zeros(Hs[0].shape[0]),
-        covariance_signal_variance, 
+        covariance_options = state_objs[0].covariance_options
+        _, covariance_prior, _ = regularization.prior_iteration_relion_style_batch(state_objs[0].H, state_objs[1].H, state_objs[0].B, state_objs[1].B, np.zeros(state_objs[0].H.shape[0]),
+        state_objs[0].covariance_prior, 
         covariance_options['substract_shell_mean'], 
         cryo.volume_shape, covariance_options['left_kernel'], 
         covariance_options['use_spherical_mask'],  covariance_options['grid_correct'],  None, covariance_options["prior_n_iterations"], covariance_options["downsample_from_fsc"])
 
-    # 
+        for k in range(2):
+            state_objs[k].covariance_prior = covariance_prior
+
     if average_up_to_angstrom is not None:
         low_res_mask = cryo.get_valid_frequency_indices(average_up_to_angstrom)
-        logger.info(f"Averaging halfmaps up to {3/cryo.voxel_size} resolution")
+        logger.info(f"Averaging halfmaps up to {average_up_to_angstrom} pixels")
         means = [np.array(mean) for mean in means ]
-        old_means = means[0].copy()
-
+        # old_means = means[0].copy()
         means[0][low_res_mask] = (means[0][low_res_mask] + means[1][low_res_mask])/2
         means[1][low_res_mask] = means[0][low_res_mask]
         
+    # Update objects
+    for k in range(2):
+        state_objs[k].noise_variance = noise_variance
+        state_objs[k].mean_variance = mean_signal_variance
+        state_objs[k].mean = means[k]
 
-    if heterogeneous:
-        return means, mean_signal_variance, current_pixel_res, noise_variance, sgd_updates, us, ss, bases, covariance_signal_variance, hard_assignments
+    return state_objs, current_pixel_res, hard_assignments
 
-    return means, mean_signal_variance, current_pixel_res, noise_variance, sgd_updates, hard_assignments
-
-        # probabilities = E_with_precompute(experiment_dataset, mean, rotations, translations, noise_variance, disc_type, big_image_batch, u = u, s = s)
+def hard_assignment_idx_to_pose(indices, rotation_grid, translation_grid):
+    square_shape = (rotation_grid.shape[0], translation_grid.shape[0])
+    maxpos_vect = np.column_stack(np.unravel_index(indices,square_shape))
+    predicted_trans = translation_grid[maxpos_vect[:,1]]
+    predicted_pose = rotation_grid[maxpos_vect[:,0]]
+    return predicted_pose, predicted_trans
 
 ## Probably should implement these so we don't have to pass around so many arguments
 class EMState():
@@ -880,7 +616,7 @@ class SGDState():
         probabilities = E_with_precompute(experiment_dataset, self.mean, rotations, translations, self.noise_variance, disc_type, big_image_batch)
         return probabilities
 
-    def M_step(self, experiment_dataset, probabilities, rotations, translations, disc_type, big_image_batch, iter):
+    def M_step(self, experiment_dataset, probabilities, rotations, translations, disc_type, big_image_batch, iter, volume_mask = None):
 
         Ft_y_this, Ft_CTF_this = M_with_precompute(experiment_dataset, probabilities, rotations, translations, self.noise_variance, disc_type, big_image_batch)
         n_images_batch = len(big_image_batch)
@@ -930,42 +666,68 @@ class SGDState():
 
 
 class HeterogeneousEMState():
+
+    # Mean stuff
     mean = None
     mean_prior = None
-    u = None
-    s = None
+    Ft_y = 0
+    Ft_CTF = 0 
+
+    # Covariance stuff
+    H = 0
+    B = 0
+    cov_cols = None
     covariance_prior = None
-    noise_variance = None
-    name = "HeterogeneousEM"
     covariance_options = None
     picked_frequency_indices = None
-    H = None
-    B = None
-    projected_cov_lhs = None
-    projected_cov_rhs = None
+
+    # Projected covariance stuff
+    projected_cov_lhs = 0
+    projected_cov_rhs = 0
     subspace = None
     cov_cols = None
 
+    # PCA stuff
+    u = None
+    s = None
+
+    # Other stuff
+    volume_mask = None
+    noise_variance = None
+    name = "HeterogeneousEM"
+
+
     def __init__(self, mean, mean_variance, noise_variance):
+        self.grid_size = utils.guess_grid_size_from_vol_size(mean.size)
         self.mean = mean
         self.mean_variance = mean_variance
         self.noise_variance = noise_variance
+        grid_size = utils.guess_grid_size_from_vol_size(mean.size)
+        self.volume_mask = mask_fn.raised_cosine_mask(3 * [grid_size], grid_size//2 -3, grid_size//2, -1)  
         return
     
+
+
     def E_step(self, experiment_dataset, rotations, translations, disc_type, big_image_batch):
         probabilities = E_with_precompute(experiment_dataset, self.mean, rotations, translations, self.noise_variance, disc_type, big_image_batch, u = self.u, s = self.s)
         return probabilities
 
-    def M_step(self, experiment_dataset, probabilities, rotations, translations, disc_type, big_image_batch, volume_mask):
-                    ## Accumulate H, B, and covs
-        H_this,B_this = compute_H_B(experiment_dataset, self.mean, probabilities, rotations, translations, self.noise_variance, volume_mask, self.picked_frequency_indices, big_image_batch, self.covariance_options['disc_type'])
+    def M_step(self, experiment_dataset, probabilities, rotations, translations, disc_type, big_image_batch):
+
+        ## Accumulate Ft_y and Ft_CTF
+        Ft_y_this, Ft_CTF_this = M_with_precompute(experiment_dataset, probabilities, rotations, translations, self.noise_variance, disc_type, big_image_batch)
+        self.Ft_y += Ft_y_this
+        self.Ft_CTF += Ft_CTF_this
+
+        ## Accumulate H, B, and covs
+        H_this,B_this = compute_H_B(experiment_dataset, self.mean, probabilities, rotations, translations, self.noise_variance, None, self.picked_frequency_indices, big_image_batch, self.covariance_options['disc_type'])
         H_this = np.array(H_this)
         B_this = np.array(B_this)
         self.H += H_this
         self.B += B_this
 
         if self.subspace is not None:
-            projected_cov_lhs_this, projected_cov_rhs_this = compute_projected_covariance_rhs_lhs(experiment_dataset, self.mean, self.subspace, rotations, translations, probabilities, volume_mask, self.noise_variance, disc_type_mean = self.covariance_options['disc_type'], disc_type_u = self.covariance_options['disc_type_u'], image_indices = big_image_batch)
+            projected_cov_lhs_this, projected_cov_rhs_this = compute_projected_covariance_rhs_lhs(experiment_dataset, self.mean, self.subspace, rotations, translations, probabilities, None, self.noise_variance, disc_type_mean = self.covariance_options['disc_type'], disc_type_u = self.covariance_options['disc_type_u'], image_indices = big_image_batch)
             self.projected_cov_lhs += projected_cov_lhs_this
             self.projected_cov_rhs += projected_cov_rhs_this
         return 
@@ -976,14 +738,14 @@ class HeterogeneousEMState():
         if self.subspace is not None:
             projected_covar = solve_covariance(self.projected_cov_lhs, self.projected_cov_rhs)
             s, u_small = np.linalg.eigh(projected_covar)
-            u =  np.fliplr(u)
+            u_small =  np.fliplr(u_small)
             s = np.flip(s)
-            u = (self.subspace @ u_small).T
-            s = np.where(s >0 , s, np.ones_like(s)*constants.EPSILON)
+            self.u = (self.subspace @ u_small).T
+            self.s = np.where(s >0 , s, np.ones_like(s)*constants.EPSILON)
 
         post_process_vmap = jax.vmap(relion_functions.post_process_from_filter_v2, in_axes = (0, 0, None, None, 0, None,None, None, None, None, None))
         
-        self.cov_cols = post_process_vmap(self.H, self.B, experiment_dataset.volume_shape, 1, self.covariance_signal_variance, self.covariance_options['left_kernel'], True, self.covariance_options['grid_correct'],  "square",  1, None ).reshape(Hs[i].shape[0], -1).T
+        self.cov_cols = post_process_vmap(self.H, self.B, experiment_dataset.volume_shape, 1, self.covariance_prior, self.covariance_options['left_kernel'], False, self.covariance_options['grid_correct'],  "square",  1, self.volume_mask ).reshape(self.H.shape[0], -1).T
 
         # basis,_ = principal_components.get_cov_svds(cov_col0, picked_frequency_indices)
         # spherical_mask = 
@@ -1182,17 +944,29 @@ def compute_little_H_b(mean_projections, u_projections, s, batch, translations, 
     # b = b.transpose(0, 3, 2, 1).reshape(n_images * n_rotations, n_principal_components )
     return H, b
 
+# diag_vmap = jax.vmap(jnp.diag, in_axes = 0, out_axes = 1)
+batch_batch_diag = jax.vmap(jax.vmap(jnp.diag, in_axes = 0, out_axes = 0), in_axes = 0, out_axes = 0)
+
 @functools.partial(jax.jit, static_argnums=[6,9,10])
 def compute_bHb_terms(mean_projections, u_projections, s, batch, translations, CTF_params, CTF_fun, noise_variance, voxel_size, image_shape, process_images):
 
     H,b = compute_little_H_b(mean_projections, u_projections, s, batch, translations, CTF_params, CTF_fun, noise_variance, voxel_size, image_shape, process_images)
 
     # Compute bHb
-    Hinvb = jax.scipy.linalg.solve(H, b, assume_a = 'pos')
+    # Hinvb = jax.scipy.linalg.solve(H, b, assume_a = 'pos')
+    # 
+    # import pdb; pdb.set_trace()   
+    H_chol, low = jax.scipy.linalg.cho_factor(H, lower = True)
+    Hinvb = jax.scipy.linalg.cho_solve((H_chol, low), b, overwrite_b=False, check_finite=True)
+
     bHinvb = jnp.sum(jnp.conj(b) * Hinvb, axis =-2)
-    
+    log_det = 2 * jnp.sum(jnp.log(jnp.abs(batch_batch_diag(H_chol))), axis = -1)
+    ## THings are off by a factor of 2 everywhere. YUCK. This is why the last 2
+    half_inv_logdet = - 0.5 * log_det * 2
+    # log_det_H2 =  jnp.log((jnp.linalg.det(H)))
+
     # This could be done more efficiently by solving Chol of H.
-    log_det_H =  jnp.log((1/jnp.linalg.det(H)))
+    log_det_H =  half_inv_logdet #jnp.log((1/jnp.linalg.det(H)))
     logger.warning(f"Make sure this is correct...")
     summed = bHinvb + log_det_H[...,None]
     # import pdb; pdb.set_trace()
@@ -2012,3 +1786,281 @@ def compute_regularized_covariance_columns(cryos, means, mean_signal_variance, c
 
     return covariance_cols, picked_frequencies, np.asarray(fscs)
 
+
+
+
+# def E_M_batches(experiment_dataset, mean, rotations, translations, noise_variance, disc_type, memory_to_use = 128, u = None, s = None, subspace = None, heterogenous = False, volume_mask = None, picked_frequency_indices= None, covariance_options = None, sgd = False, sgd_stepsize = 1e-3, sgd_batchsize = 100, mean_signal_variance = None, sgd_update = 0, sgd_projection = None):
+
+#     total_hidden = rotations.shape[0] * translations.shape[0]
+#     logger.info(f"starting precomp proj. Num rotations {rotations.shape[0]}, num translations {translations.shape[0]}. Total = {total_hidden}")
+#     n_images_batch = int(memory_to_use * 1e9 / ( total_hidden * 8  ))
+#     # If we count the allocated memor
+
+#     if n_images_batch < 1:
+#         n_images_batch = 1
+#         logger.warning(f"Memory to use is too small. Setting n_images_batch to {n_images_batch}. May run out of memory")
+#     logger.info(f"n_images_batch {n_images_batch}. Number of batches {int(np.ceil(experiment_dataset.n_units / n_images_batch))}")   
+    
+#     if sgd:
+#         n_images_batch = sgd_batchsize
+
+#     Ft_y, Ft_CTF = 0, 0
+#     H,B = 0,0
+#     projected_cov_lhs, projected_cov_rhs = 0, 0
+#     sgd_iter = 0
+#     first= True
+#     idx =0 
+#     hard_assignment = np.empty(experiment_dataset.n_units)
+
+#     for big_image_batch in utils.index_batch_iter(experiment_dataset.n_units, n_images_batch): 
+
+#         probabilities = E_with_precompute(experiment_dataset, mean, rotations, translations, noise_variance, disc_type, big_image_batch, u = u, s = s)
+#         # hard_assignment[big_image_batch] = np.argmax(probabilities, axis = (-1, -2))
+#         hard_assignment[big_image_batch] = np.argmax(probabilities.reshape(probabilities.shape[0], -1), axis=-1)
+#         if np.isnan(probabilities).any():
+#             print(np.linalg.norm(mean))
+#             import pdb; pdb.set_trace()
+#         Ft_y_this, Ft_CTF_this = M_with_precompute(experiment_dataset, probabilities, rotations, translations, noise_variance, disc_type, big_image_batch)
+
+
+#         if sgd:
+#             mu = 0.9
+#             grad = 2 * ((Ft_CTF_this) * mean - Ft_y_this) *  experiment_dataset.n_images / n_images_batch + 2/ mean_signal_variance * mean
+
+#             step = 1 / np.max(np.abs(Ft_CTF_this))
+#             sgd_update = mu * sgd_update + (1 - mu) * step * grad 
+#             if np.isnan(sgd_update).any() or np.isinf(sgd_update).any():
+#                 print(np.linalg.norm(sgd_update))
+
+#             # import pdb; pdb.set_trace()
+#             if idx%10==0 and DEBUG:
+#                 print(idx)
+#                 print('|dx| / |x|:', np.linalg.norm(sgd_update) / np.linalg.norm(mean))
+#                 print('|prior|/ grad:', np.linalg.norm( 2/ mean_signal_variance * mean) / np.linalg.norm(grad))
+#                 print('|x|:', np.linalg.norm( mean))
+#                 print('|dx|:', np.linalg.norm( sgd_update))
+#                 # plot_utils.plot
+#                 first = False
+#             mean -= sgd_update * 0.1#0.01 
+
+#             if sgd_projection is not None:
+#                 mean = sgd_projection(mean)
+
+#             std_multiplier = 10
+#             mean = np.clip(mean.real, -std_multiplier * np.sqrt(mean_signal_variance), std_multiplier * np.sqrt(mean_signal_variance)) + 1j * np.clip(mean.imag, -std_multiplier * np.sqrt(mean_signal_variance), std_multiplier * np.sqrt(mean_signal_variance))
+
+#             if np.isnan(mean).any() or np.isinf(mean).any() or np.isnan(np.linalg.norm(mean)) or np.isinf(np.linalg.norm(mean)):
+#                 print('|dx| / |x|:', np.linalg.norm(sgd_update) / np.linalg.norm(mean))
+#                 print('|prior|/ grad:', np.linalg.norm( 2/ mean_signal_variance * mean) / np.linalg.norm(grad))
+#                 print('|x|:', np.linalg.norm( mean))
+#                 print('|dx|:', np.linalg.norm( sgd_update))
+
+#                 print(np.linalg.norm(sgd_update))
+#                 import pdb; pdb.set_trace()
+
+#             logger.warning("There is a necessary 0.1 that shouldn't be there")
+
+#             idx +=1
+#             # mean *= experiment_dataset.get_valid_frequency_indices(5)
+#         else:
+#             Ft_y += Ft_y_this
+#             Ft_CTF += Ft_CTF_this
+
+#         if heterogenous:
+            
+#             ## Accumulate H, B, and covs
+#             H_this,B_this = compute_H_B(experiment_dataset, mean, probabilities, rotations, translations, noise_variance, volume_mask, picked_frequency_indices, big_image_batch, covariance_options['disc_type'])
+#             H_this = np.array(H_this)
+#             B_this = np.array(B_this)
+#             H += H_this
+#             B += B_this
+
+#             if subspace is not None:
+#                 projected_cov_lhs_this, projected_cov_rhs_this = compute_projected_covariance_rhs_lhs(experiment_dataset, mean, subspace, rotations, translations, probabilities, volume_mask, noise_variance, disc_type_mean = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], image_indices = big_image_batch)
+#                 projected_cov_lhs += projected_cov_lhs_this
+#                 projected_cov_rhs += projected_cov_rhs_this
+
+#         ## Aculumate projected covariance_matrix
+
+#         del probabilities
+
+#     if sgd:
+#         return mean, sgd_update, hard_assignment
+
+#     if heterogenous:
+#         # sgd_update U, s ? No need to store projected_cov_lhs/projected_cov_rhs
+
+#         return Ft_y, Ft_CTF, H, B, projected_cov_lhs, projected_cov_rhs, hard_assignment
+    
+#     return Ft_y, Ft_CTF, hard_assignment
+
+
+
+
+
+# from recovar import relion_functions
+
+# def split_E_M(experiment_datasets, means, mean_signal_variance, rotations, translations, noise_variance, disc_type, heterogeneous = False, us = None, ss = None, covariance_signal_variance = None, bases = None, sgd=False, sgd_updates = None, average_up_to_angstrom = None, sgd_batchsize = 100, sgd_projection = None, covariance_options = None, picked_frequency_indices = None):
+
+#     # Ft_y, Ft_CTF, H, B, projected_cov_lhs, projected_cov_rhs = tuple(6*[2 *[None]])
+#     # Ft_y = [None] * len(experiment_datasets)
+#     Ft_y, Ft_CTF, Hs, Bs, projected_cov_lhs, projected_cov_rhs = 2 * [None], 2 * [None], 2 * [None], 2 * [None], 2 * [None], 2 * [None]
+#     cov_cols = 2 * [None]
+#     hard_assignments = 2 * [None]
+#     for i, experiment_dataset in enumerate(experiment_datasets):
+#         if sgd:
+#             means[i], sgd_updates[i], hard_assignments[i] = E_M_batches(experiment_dataset, means[i], rotations, translations, noise_variance, disc_type, memory_to_use = 128, u = None, s = None, subspace = None, heterogenous = False, volume_mask = None, picked_frequency_indices= None, covariance_options = None, sgd = True, sgd_batchsize = sgd_batchsize, mean_signal_variance = mean_signal_variance, sgd_update = sgd_updates[i], sgd_projection = sgd_projection)
+#         elif heterogeneous:
+#             Ft_y[i], Ft_CTF[i], Hs[i], Bs[i], projected_cov_lhs[i], projected_cov_rhs[i], hard_assignments[i] = E_M_batches(experiment_dataset, means[i], rotations, translations, noise_variance, disc_type, memory_to_use = 128,  u = us[i], s = ss[i], subspace = bases[i], heterogenous = heterogeneous, volume_mask = None, picked_frequency_indices= picked_frequency_indices, covariance_options = covariance_options, mean_signal_variance = mean_signal_variance)
+
+#             means[i] = relion_functions.post_process_from_filter(experiment_dataset, Ft_CTF[i], Ft_y[i], tau = mean_signal_variance, disc_type = disc_type).reshape(-1)
+#         else:
+#             Ft_y[i], Ft_CTF[i], hard_assignments[i] = E_M_batches(experiment_dataset, means[i], rotations, translations, noise_variance, disc_type, memory_to_use = 128, u = None, s = None, subspace = None, heterogenous = False, volume_mask = None, picked_frequency_indices= None, options = None, sgd = sgd, sgd_batchsize = sgd_batchsize, mean_signal_variance = mean_signal_variance, sgd_update = None, sgd_projection = sgd_projection, covariance_options = covariance_options)
+
+#             means[i] = relion_functions.post_process_from_filter(experiment_dataset, Ft_CTF[i], Ft_y[i], tau = mean_signal_variance, disc_type = disc_type).reshape(-1)
+
+#             # cov_cols[i] = relion_functions.post_process_from_filter_v2(Hs[i], Bs[i], experiment_dataset.volume_shape, volume_upsampling_factor = 1, tau = covariance_signal_variance, kernel = covariance_options['left_kernel'], use_spherical_mask = True, grid_correct = covariance_options['grid_correct'], gridding_correct = "square", kernel_width = 1, volume_mask = None )
+
+#             # plt.figure()
+#             # plt.imshow(experiment_dataset.get_proj(Ft_y[i]))
+#             # plt.show()
+
+#             # plt.figure()
+#             # plt.imshow(experiment_dataset.get_proj(Ft_CTF[i]))
+#             # plt.show()
+
+#             # # import pdb; pdb.set_trace()
+#             # zz = Ft_y[i] / ( Ft_CTF[i] + 1 / mean_signal_variance)
+#             # means[i] = relion_functions.post_process_from_filter(experiment_dataset, Ft_CTF[i], Ft_y[i], tau = mean_signal_variance, disc_type = disc_type).reshape(-1)
+#             # plt.figure()
+#             # plt.imshow(experiment_dataset.get_proj(means[i]))
+#             # plt.show()
+
+#             # plt.figure()
+#             # plt.imshow(experiment_dataset.get_proj(zz)); plt.show()
+#             # plt.show()
+#             # import pdb; pdb.set_trace()
+
+
+#         ## sgd_update...
+#         if heterogeneous:
+
+#             if bases[i] is not None:
+#                 projected_covar = solve_covariance(projected_cov_lhs[i], projected_cov_rhs[i])
+#                 s, u = np.linalg.eigh(projected_covar)
+#                 u =  np.fliplr(u)
+#                 s = np.flip(s)
+#                 us[i] = (bases[i] @ u).T
+#                 ss[i] = np.where(s >0 , s, np.ones_like(s)*constants.EPSILON)
+#                 # us[i] = us[i].T
+
+#             post_process_vmap = jax.vmap(relion_functions.post_process_from_filter_v2, in_axes = (0, 0, None, None, 0, None,None, None, None, None, None))
+            
+#             # cov_cols[i] = post_process_vmap(Hs[i], Bs[i], experiment_dataset.volume_shape, volume_upsampling_factor = 1, tau = covariance_signal_variance, kernel = covariance_options['left_kernel'], use_spherical_mask = True, grid_correct = covariance_options['grid_correct'], gridding_correct = "square", kernel_width = 1, volume_mask = None )
+
+#             cov_cols[i] = post_process_vmap(Hs[i], Bs[i], experiment_dataset.volume_shape, 1, covariance_signal_variance, covariance_options['left_kernel'], True, covariance_options['grid_correct'],  "square",  1, None ).reshape(Hs[i].shape[0], -1).T
+
+#             # basis,_ = principal_components.get_cov_svds(cov_col0, picked_frequency_indices)
+#             # spherical_mask = 
+#             memory_to_use = utils.get_gpu_memory_total()
+#             bases[i], _ , _ = principal_components.randomized_real_svd_of_columns(cov_cols[i], picked_frequency_indices, None, experiment_dataset.volume_shape, 50, test_size=covariance_options['randomized_sketch_size'], gpu_memory_to_use=memory_to_use)
+#             # Keep only the first n_pcs_to_compute
+#             bases[i] = bases[i][:,:covariance_options['n_pcs_to_compute']]
+
+
+
+#     ## Update prior and estimate resolution
+#     from recovar import regularization, locres
+#     # sgd_updates priors
+#     cryo = experiment_datasets[0]
+#     use_fsc_prior= not sgd
+
+#     if use_fsc_prior:
+#         mean_signal_variance, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(cryo.volume_shape, means[0], means[1], (Ft_CTF[0] + Ft_CTF[1])/2, mean_signal_variance, frequency_shift = jnp.array([0,0,0]), upsampling_factor = 1)
+#     else:
+#         fsc = regularization.get_fsc_gpu(means[0], means[1], cryo.volume_shape, substract_shell_mean = False, frequency_shift = 0 )
+#         mean_avg = (means[0] + means[1])/2
+#         PS = regularization.average_over_shells(jnp.abs(mean_avg)**2, cryo.volume_shape)
+
+#         T = 4
+#         mean_signal_variance = T * 1/2 * utils.make_radial_image(PS, cryo.volume_shape, extend_last_frequency = True)
+        
+#         mean_signal_variance += np.max(mean_signal_variance) * 1e-6
+#         # mean_signal_variance  = 1 /signal_variance
+
+#     from recovar import plot_utils
+#     plot_utils.plot_fsc(cryo, means[0], means[1])
+    
+#     ##  Estimate noise level
+#     from recovar import noise
+#     # if heterogeneous:
+#     # This doesn't really make sense...
+#     noise_from_res, _, _ = noise.get_average_residual_square_just_mean(cryo, None, means[0], 100, disc_type = 'linear_interp', subset_indices = np.arange(1000), subset_fn = None)
+#     noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)#, cryo.voxel_size)
+#     # In pixel units?
+#     current_pixel_res = locres.find_fsc_resol(fsc, threshold = 1/7)
+#     current_res = current_pixel_res / cryo.voxel_size
+#     # logger.info("Current resolution is", current_res, "pixel resolution: ", current_pixel_res)
+#     print("Current resolution is ", current_res, "pixel resolution: ", current_pixel_res)
+
+#     if heterogeneous:
+#         # Downsample to mean resolution
+#         valid_freqs = np.array(cryo.get_valid_frequency_indices(current_pixel_res))
+#         if us[0] is not None:
+#             us = [u * valid_freqs[None] for u in us]
+#         if bases[0] is not None:
+#             bases = [basis * valid_freqs[...,None] for basis in bases]
+#         # Update covariance prior
+
+
+#         # H0, H1, B0, B1, frequency_shift, init_regularization, substract_shell_mean, volume_shape, kernel = 'triangular', use_spherical_mask = True, grid_correct = True, volume_mask = None, prior_iterations = 3, downsample_from_fsc_flag = False
+#         _, covariance_signal_variance, _ = regularization.prior_iteration_relion_style_batch(Hs[0], Hs[1], Bs[0], Bs[1], np.zeros(Hs[0].shape[0]),
+#         covariance_signal_variance, 
+#         covariance_options['substract_shell_mean'], 
+#         cryo.volume_shape, covariance_options['left_kernel'], 
+#         covariance_options['use_spherical_mask'],  covariance_options['grid_correct'],  None, covariance_options["prior_n_iterations"], covariance_options["downsample_from_fsc"])
+
+#     # 
+#     if average_up_to_angstrom is not None:
+#         low_res_mask = cryo.get_valid_frequency_indices(average_up_to_angstrom)
+#         logger.info(f"Averaging halfmaps up to {3/cryo.voxel_size} resolution")
+#         means = [np.array(mean) for mean in means ]
+#         old_means = means[0].copy()
+
+#         means[0][low_res_mask] = (means[0][low_res_mask] + means[1][low_res_mask])/2
+#         means[1][low_res_mask] = means[0][low_res_mask]
+        
+
+#     if heterogeneous:
+#         return means, mean_signal_variance, current_pixel_res, noise_variance, sgd_updates, us, ss, bases, covariance_signal_variance, hard_assignments
+
+#     return means, mean_signal_variance, current_pixel_res, noise_variance, sgd_updates, hard_assignments
+
+
+
+        # probabilities = E_with_precompute(experiment_dataset, mean, rotations, translations, noise_variance, disc_type, big_image_batch, u = u, s = s)
+
+## Probably should implement these so we don't have to pass around so many arguments
+# class EMState():
+#     mean = None
+#     mean_variance = None
+#     noise_variance = None
+#     name = "EM"
+#     Ft_CTF = 0
+#     Ft_y = 0
+#     def __init__(self, mean, mean_variance, noise_variance):
+#         self.mean = mean
+#         self.mean_variance = mean_variance
+#         self.noise_variance = noise_variance
+#         return
+    
+#     def E_step(self, experiment_dataset, rotations, translations, disc_type, big_image_batch):
+#         probabilities = E_with_precompute(experiment_dataset, self.mean, rotations, translations, self.noise_variance, disc_type, big_image_batch)
+#         return probabilities
+    
+#     def M_step(self, experiment_dataset, probabilities, rotations, translations, disc_type, big_image_batch, volume_mask = None):
+#         Ft_y_this, Ft_CTF_this = M_with_precompute(experiment_dataset, probabilities, rotations, translations, self.noise_variance, disc_type, big_image_batch)
+#         self.Ft_y += Ft_y_this
+#         self.Ft_CTF += Ft_CTF_this
+#         return
+    

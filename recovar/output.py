@@ -1,15 +1,20 @@
 import logging
+logger = logging.getLogger(__name__)
 import numpy as np
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import matplotlib, pickle, os, json
-
 import recovar.latent_density as ld
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
-from recovar import embedding, linalg, trajectory, utils, dataset, regularization
+from recovar import embedding
+from recovar import linalg
+from recovar import trajectory
+from recovar import utils
+from recovar import dataset
+from recovar import regularization
+
 import time
-logger = logging.getLogger(__name__)
 
 def get_resampled_distances(gt_vols):
     return trajectory.get_cum_curvelength(gt_vols)

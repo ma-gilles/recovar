@@ -64,7 +64,12 @@ def compute_state(args):
     if args.particles is not None:
         po.params['input_args'].particles = args.particles
 
-    target_zs = np.loadtxt(args.latent_points)
+    if args.latent_points.endswith('.pkl'):
+        target_zs = pickle.load(open(args.latent_points, 'rb'))
+    elif args.latent_points.endswith('.txt'):
+        target_zs = np.loadtxt(args.latent_points)
+    else:
+        raise ValueError("Target zs should be a .txt or .pkl file")
 
     output_folder = args.outdir + '/'
 
@@ -89,7 +94,7 @@ def compute_state(args):
     noise_variance = po.get('noise_var_used')
     n_bins = args.n_bins
     o.mkdir_safe(output_folder)    
-    logger.addHandler(logging.FileHandler(f"{output_folder}/run.log"))
+    # logger.addHandler(logging.FileHandler(f"{output_folder}/run.log"))
     logger.info(args)
     o.compute_and_save_reweighted(cryos, target_zs, zs, cov_zs, noise_variance, output_folder, args.Bfactor, n_bins)
     o.move_to_one_folder(output_folder, target_zs.shape[0])
