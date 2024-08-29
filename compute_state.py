@@ -38,6 +38,14 @@ def add_args(parser: argparse.ArgumentParser):
         "--n-bins",  type =float, default=50, dest="n_bins",help="number of bins for kernel regression"
     )
 
+    parser.add_argument(
+        "--maskrad-fraction",  type =float, default=20, dest="maskrad_fraction",help="Radius of mask used in kernel regression. Default = 20, which means radius = grid_size/20 pixels, or grid_size * voxel_size / 20 angstrom"
+    )
+
+    parser.add_argument(
+        "--n-min-images",  type =int, default=None, dest="n_min_images",help="minimum number of images to compute kernel regression. Default = 100 for SPA, and 10 particles for tilt series"
+    )
+
 
     parser.add_argument(
         "--zdim1",  action="store_true", help="Whether dimension 1 is used. This is an annoying corner case for np.loadtxt..."
@@ -53,6 +61,13 @@ def add_args(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--particles",  default=None, help="particle stack dataset. In case you want to use a higher resolution stack")
 
+    parser.add_argument(
+        "--datadir",
+        type=os.path.abspath,
+        help="Path prefix to particle stack if loading relative paths from a .star or .cs file",
+    )
+
+
 
     return parser
 
@@ -63,6 +78,10 @@ def compute_state(args):
 
     if args.particles is not None:
         po.params['input_args'].particles = args.particles
+
+    if args.datadir is not None:
+        po.params['input_args'].datadir = args.datadir
+
 
     if args.latent_points.endswith('.pkl'):
         target_zs = pickle.load(open(args.latent_points, 'rb'))
@@ -96,7 +115,7 @@ def compute_state(args):
     o.mkdir_safe(output_folder)    
     # logger.addHandler(logging.FileHandler(f"{output_folder}/run.log"))
     logger.info(args)
-    o.compute_and_save_reweighted(cryos, target_zs, zs, cov_zs, noise_variance, output_folder, args.Bfactor, n_bins)
+    o.compute_and_save_reweighted(cryos, target_zs, zs, cov_zs, noise_variance, output_folder, args.Bfactor, n_bins =n_bins, maskrad_fraction = args.maskrad_fraction, n_min_images = args.n_min_images)
     o.move_to_one_folder(output_folder, target_zs.shape[0])
 
 if __name__ == "__main__":

@@ -596,7 +596,7 @@ You can use all tilts by not passing the argument --ntilts.
 ## Limitations
 
 - *Symmetry*: there is currently no support for symmetry. If you got your poses through symmetric refinement, it will probably not work. It should probably work if you make a symmetry expansion of the particle stack, but I have not tested it.
-- *Memory*: RECOVAR uses a lot of memory by default. For a stack of images of size 256, you need approximately 200 GB + size of dataset. You can also use the --lazy option, which will do lazy loading, in which case you need a little more than 200. If you run out of memory, you can use the --low-memory-option, in which case you need 60GB. If even that fails, you can try --very-low-memory-option. Finally, you can downsample the data and run RECOVAR.  
+- *Memory*: RECOVAR uses a lot of memory by default. For a stack of images of size 256, you need approximately 200 GB + size of dataset. You can also use the --lazy option, which will do lazy loading, in which case you need a little more than 200. If you run out of memory, you can use the --low-memory-option, in which case you need 60GB. If even that fails, you can try --very-low-memory-option. Finally, you can downsample the data and run RECOVAR. You can generate states from the full resolution images even if you ran the RECOVAR pipeline on downsampled images by using `compute_state.py` and passing the `--particles` argument. The memory requirement for the compute_state is approximately `n_bins * volume_size * 32` bytes where n_bins is 50 by default (~26 GB for size 256 images).
 - *ignore-zero-frequency*: I haven't thought much about the best way to do this. I would advise against using it for now.
 - *Other ones, probably?*: if you run into issues, please let me know. 
 

@@ -433,6 +433,7 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_varian
             logger.info(f"Done with volume generation {k} stored in {output_folder_this}")
         move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'ml_optimized_locres_filtered.mrc', new_stringname = 'vol' )
         move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'ml_optimized_locres.mrc', new_stringname = 'locres' )
+        np.savetxt(output_folder + 'latent_coords.txt', path_subsampled)
 
     # memory_to_use = utils.get_gpu_memory_total() - path_subsampled.shape[0] * cryos[0].volume_size * 8 / 1e9 * 8
     # assert memory_to_use > 0, "reduce number of volumes computed at once"
