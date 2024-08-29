@@ -163,7 +163,6 @@ def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_rad
 
 def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, noise_model, options, picked_frequencies):
     
-    image_batch_size = utils.get_image_batch_size(cryos[0].grid_size, gpu_memory)
     frequency_batch = utils.get_column_batch_size(cryos[0].grid_size, gpu_memory)    
 
     covariance_cols = []

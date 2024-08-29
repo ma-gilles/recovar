@@ -4,7 +4,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pickle 
 import tensorflow as tf
-
 from recovar import plot_utils, core, mask
 import recovar.padding as pad
 from recovar.fourier_transform_utils import fourier_transform_utils
@@ -15,6 +14,7 @@ from recovar import tilt_dataset
 logger = logging.getLogger(__name__)
 
 # Maybe should take out these dependencies?
+
 import torch
 from cryodrgn import ctf, dataset
 from cryodrgn.pose import PoseTracker
@@ -662,7 +662,7 @@ def make_dataset_loader_dict(args):
 
 def figure_out_halfsets(args):
     if args.halfsets == None:
-        logging.info("Randomly splitting dataset into halfsets")
+        logger.info("Randomly splitting dataset into halfsets")
         # ind_split = dataset.get_split_indices(args.particles_file, ind_file = args.ind)
         # # pickle.dump(ind_split, open(args.out))
         if args.tilt_series or args.tilt_series_ctf:
@@ -670,11 +670,11 @@ def figure_out_halfsets(args):
         else:
             halfsets = get_split_indices(args.particles, ind_file = args.ind)
     else:
-        logging.info("Loading halfset from file")
+        logger.info("Loading halfset from file")
         halfsets = pickle.load(open(args.halfsets, 'rb'))
     if args.n_images > 0:
         halfsets = [ halfset[:args.n_images//2] for halfset in halfsets]
-        logging.info(f"using only {args.n_images} images")
+        logger.info(f"using only {args.n_images} images")
         if args.tilt_series:
             raise NotImplementedError
     return halfsets

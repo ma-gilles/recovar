@@ -1,14 +1,18 @@
 # If you want to extend and use recovar, you should import this first
+import logging
+# It is important to import cryodrgn before the setting basicConfig which is why it is imported here (but not used)
+import cryodrgn
+logger = logging.getLogger(__name__)
 import recovar.config 
+import jax
 import jax.numpy as jnp
 import numpy as np
-
-import os, argparse, time, pickle, logging, sys
+import os, argparse, time, pickle, sys
 from recovar import output as o
 from recovar import dataset, homogeneous, embedding, principal_components, latent_density, mask, utils, constants, noise, output, covariance_estimation
-
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
+# logger.setLevel(logger.info)
 logger = logging.getLogger(__name__)
 
 
@@ -254,7 +258,13 @@ def standard_recovar_pipeline(args):
     o.mkdir_safe(args.outdir)
     with open(f"{args.outdir}/command.txt", "w") as text_file:
         text_file.write(str(sys.argv))
-    logger.addHandler(logging.FileHandler(f"{args.outdir}/run.log"))
+
+    # The force interaction has something to do with cryodrgn interaction which is breaking the logger...
+    logging.basicConfig(filename=f"{args.outdir}/run.log",
+                        format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
+                        level=logging.INFO,
+                        force = True)
+
     logger.info(args)
     ind_split = dataset.figure_out_halfsets(args)
 
@@ -668,5 +678,6 @@ def standard_recovar_pipeline(args):
 if __name__ == "__main__":
     # import jax
     parser = argparse.ArgumentParser(description=__doc__)
+
     args = add_args(parser).parse_args()
     standard_recovar_pipeline(args)

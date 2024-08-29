@@ -27,7 +27,7 @@ def blockwise_Y_T_X(Y,X, batch_size = None, memory_to_use = 10):
     n_rows = X.shape[0]
     YX = jnp.zeros_like(X, shape =[Y.shape[-1], X.shape[-1]])
     square_jit = jax.jit( lambda y, x: jnp.conj(y).T @ x)
-    logging.info(f"Y^T @ X {int(np.ceil(n_rows/batch_size))} blocks") 
+    logger.info(f"Y^T @ X {int(np.ceil(n_rows/batch_size))} blocks") 
     for k in range(0, int(np.ceil(n_rows/batch_size))):
         batch_st, batch_end = batch_st_end(k, batch_size, n_rows)
         YX += square_jit(Y[batch_st:batch_end], X[batch_st:batch_end]) #jnp.conj(Z).T @ Z
@@ -77,7 +77,7 @@ def blockwise_A_X(A, X, batch_size = None, memory_to_use = 10):
     X = jnp.array(X)
     
     mat_mat_jit = jax.jit( lambda x, y: x @ y)
-    logging.info(f"A@X in {int(np.ceil(n_rows/batch_size))} blocks") 
+    logger.info(f"A@X in {int(np.ceil(n_rows/batch_size))} blocks") 
     for k in range(0, int(np.ceil(n_rows/batch_size))):
         batch_st, batch_end = batch_st_end(k, batch_size, n_rows)
         Z[batch_st:batch_end] = np.array(mat_mat_jit( A[batch_st:batch_end],  X))
@@ -102,7 +102,7 @@ def blockwise_A_X(A, X, batch_size = None, memory_to_use = 10):
 #     X = jnp.array(X)
     
 #     mat_mat_jit = jax.jit( lambda x, y: x @ y)
-#     logging.info(f"A@X in {int(np.ceil(n_rows/batch_size))} blocks") 
+#     logger.info(f"A@X in {int(np.ceil(n_rows/batch_size))} blocks") 
 #     for k in range(0, int(np.ceil(n_rows/batch_size))):
 #         batch_st, batch_end = batch_st_end(k, batch_size, n_rows)
 #         Z = np.array(mat_mat_jit(X,  A[batch_st:batch_end] ))
@@ -203,7 +203,7 @@ def dft3(x, vec_shape):
 def batch_idft3(x, vec_shape, batch_size):
     x_out = np.zeros_like(x) 
     n_tot = x.shape[-1]
-    logging.info(f"batch_idft3 in {int(np.ceil(n_tot/batch_size))} blocks") 
+    logger.info(f"batch_idft3 in {int(np.ceil(n_tot/batch_size))} blocks") 
     for k in range(0, int(np.ceil(n_tot/batch_size))):
         batch_st, batch_end = batch_st_end(k, batch_size, n_tot)
         x_out[:,batch_st:batch_end] = np.array(idft3(x[:,batch_st:batch_end], vec_shape = vec_shape))
@@ -213,7 +213,7 @@ def batch_idft3(x, vec_shape, batch_size):
 def batch_dft3(x, vec_shape, batch_size):
     x_out = np.zeros_like(x, dtype = 'complex64')
     n_tot = x.shape[-1]
-    logging.info(f"batch_dft3 in {int(np.ceil(n_tot/batch_size))} blocks")
+    logger.info(f"batch_dft3 in {int(np.ceil(n_tot/batch_size))} blocks")
     for k in range(0, int(np.ceil(n_tot/batch_size))):
         batch_st, batch_end = batch_st_end(k, batch_size, n_tot)
         x_out[:,batch_st:batch_end] = np.array(dft3(x[:,batch_st:batch_end], vec_shape = vec_shape))
@@ -223,7 +223,7 @@ def batch_dft3(x, vec_shape, batch_size):
 def batch_dft3_2(x, vec_shape, batch_size):
     x_out = jnp.empty(x.shape, dtype = np.complex64, device =jax.devices("cpu")[0])
     n_tot = x.shape[-1]
-    logging.info(f"batch_dft3 in {int(np.ceil(n_tot/batch_size))} blocks")
+    logger.info(f"batch_dft3 in {int(np.ceil(n_tot/batch_size))} blocks")
     for k in range(0, int(np.ceil(n_tot/batch_size))):
         batch_st, batch_end = batch_st_end(k, batch_size, n_tot)
         x_out[:,batch_st:batch_end] = (dft3(x[:,batch_st:batch_end], vec_shape = vec_shape))

@@ -129,7 +129,7 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
     n_bins = args.n_bins
     output_folder_kmeans = output_folder + '/' #+ '/kmeans'+'_'+ str(n_clusters) + '/'    
     o.mkdir_safe(output_folder_kmeans)    
-    logger.addHandler(logging.FileHandler(f"{output_folder_kmeans}/run.log"))
+    # logger.addHandler(logging.FileHandler(f"{output_folder_kmeans}/run.log"))
     logger.info(args)
 
     if zdim > 1:
