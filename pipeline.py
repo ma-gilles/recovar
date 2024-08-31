@@ -186,10 +186,12 @@ def add_args(parser: argparse.ArgumentParser):
             "--test-covar-options",
             dest = "test_covar_options",
             action="store_true",
+            help="Only for development. Test different covariance estimation options"
         )
 
     group.add_argument(
             "--low-memory-option",
+            help = "Use lower memory options for covariance estimation",
             dest = "low_memory_option",
             action="store_true",
         )
@@ -197,6 +199,7 @@ def add_args(parser: argparse.ArgumentParser):
 
     group.add_argument(
             "--very-low-memory-option",
+            help = "Use lowest memory options for covariance estimation",
             dest = "very_low_memory_option",
             action="store_true",
         )

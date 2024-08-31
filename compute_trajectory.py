@@ -6,40 +6,20 @@ from recovar import dataset, utils, latent_density, embedding
 from scipy.spatial import distance_matrix
 import pickle
 import os, argparse
+from recovar import parser_args
 logger = logging.getLogger(__name__)
 
 def add_args(parser: argparse.ArgumentParser):
 
-    parser.add_argument(
-        "result_dir",
-        # dest="result_dir",
-        type=os.path.abspath,
-        help="result dir (output dir of pipeline)",
-    )
 
-    parser.add_argument(
-        "-o",
-        "--outdir",
-        type=os.path.abspath,
-        required=False,
-        help="Output directory to save model",
-    )
+    parser = parser_args.standard_downstream_args(parser)
 
     parser.add_argument(
         "--zdim", type=int, help="Dimension of latent variable (a single int, not a list)"
     )
 
-
     parser.add_argument(
         "--n-vols-along-path", type=int, default=6, dest="n_vols_along_path", help="number of volumes to compute along each trajectory (default 6)"
-    )
-
-    parser.add_argument(
-        "--Bfactor",  type =float, default=0, help="0"
-    )
-
-    parser.add_argument(
-        "--n-bins",  type =float, default=50, dest="n_bins",help="number of bins for reweighting"
     )
 
     parser.add_argument(
@@ -47,12 +27,6 @@ def add_args(parser: argparse.ArgumentParser):
         type=os.path.abspath,
         required=False,
         help="density saved in pkl file, key is 'density' and 'latent_space_bounds",
-    )
-
-    parser.add_argument(
-        "--no-z-regularization",
-        dest="no_z_reg",
-        action="store_true",
     )
 
     def list_of_ints(arg):
@@ -77,7 +51,9 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
-def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_factor=0, n_bins=30, n_vols_along_path = 6, density_path = None, no_z_reg = False, z_st = None, z_end = None):
+def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_factor=0, n_bins=30, n_vols_along_path = 6, density_path = None, no_z_reg = False, z_st = None, z_end = None, args = None):
+    # I kind of like the idea of not passing args, but I'm getting lazy.
+    # TODO dont pass args, pass options
 
     po = o.PipelineOutput(recovar_result_dir + '/')
 
@@ -136,10 +112,9 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
         path_folder = output_folder_kmeans       
         o.mkdir_safe(path_folder)
         full_path, subsampled_path = o.make_trajectory_plots_from_results(po, zdim_key, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = False, input_density = input_density, latent_space_bounds = latent_space_bounds)
-
         logger.info(f"path done")
-        o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins)
-        move_to_one_folder(path_folder, n_vols_along_path )
+        # o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins, maskrad_fraction = args.maskrad_fraction, n_min_images = args.n_min_images, save_all_estimates = False)
+        # move_to_one_folder(path_folder, n_vols_along_path )
 
     else:
         path_folder = output_folder_kmeans + 'path' + str(0) + '/'        
@@ -152,8 +127,9 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
         # z_points = np.linspace(z_st, z_end, n_vols_along_path)
         # pairs = [ [z_points[0], z_points[40-1]], [z_points[40], z_points[80-1]] ]
         subsampled_path = np.linspace(z_st, z_end, n_vols_along_path)[:,None]
-        o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins, save_all_estimates = False)
-        move_to_one_folder(path_folder, n_vols_along_path )
+        # o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins, save_all_estimates = False)
+        # move_to_one_folder(path_folder, n_vols_along_path )
+    o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins, maskrad_fraction = args.maskrad_fraction, n_min_images = args.n_min_images, save_all_estimates = False)
 
 
 from recovar.output import move_to_one_folder
@@ -173,7 +149,5 @@ if __name__ == "__main__":
     else:
         raise Exception("end point format wrong")
 
-    compute_trajectory(args.result_dir, output_folder = args.outdir, zdim= args.zdim, B_factor = args.Bfactor, n_bins = args.n_bins, n_vols_along_path = args.n_vols_along_path, density_path = args.density, no_z_reg = args.no_z_reg, z_st = z_st, z_end = z_end)
+    compute_trajectory(args.result_dir, output_folder = args.outdir, zdim= args.zdim, B_factor = args.Bfactor, n_bins = args.n_bins, n_vols_along_path = args.n_vols_along_path, density_path = args.density, no_z_reg = args.no_z_reg, z_st = z_st, z_end = z_end, args = args)
 
-                    #    None, zdim = 4,  B_factor=0, n_bins=30, n_vols_along_path = 6, density_path = None, no_z_reg = False)
-    # analyze(args.result_dir, output_folder = args.outdir, zdim=  args.zdim, n_clusters = args.n_clusters, n_paths= args.n_trajectories, skip_umap = args.skip_umap, B_factor = args.Bfactor, n_bins = args.n_bins, n_vols_along_path = args.n_vols_along_path, skip_centers = args.skip_centers, normalize_kmeans = args.normalize_kmeans, density_path = args.density, no_z_reg = args.no_z_reg)

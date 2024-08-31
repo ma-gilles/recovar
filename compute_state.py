@@ -7,67 +7,17 @@ from scipy.spatial import distance_matrix
 import pickle
 import os, argparse
 logger = logging.getLogger(__name__)
+from recovar import parser_args
+
 
 def add_args(parser: argparse.ArgumentParser):
-
-    parser.add_argument(
-        "result_dir",
-        type=os.path.abspath,
-        help="result dir (output dir of pipeline)",
-    )
-
-    parser.add_argument(
-        "-o",
-        "--outdir",
-        type=os.path.abspath,
-        required=True,
-        help="Output directory to save model",
-    )
+    parser = parser_args.standard_downstream_args(parser)
 
     parser.add_argument(
         "--latent-points", type=os.path.abspath,
         required=True,
-        help="path to latent points (.txt file)",
+        help="path to latent points (.txt file). E.g., you can use the output of k-means and input output/analysis_2/centers.txt from analyze.py. Or you can make your own latent points. It should be a .txt file with shape (n_points, zdim).",
     )
-
-    parser.add_argument(
-        "--Bfactor",  type =float, default=0, help="0"
-    )
-
-    parser.add_argument(
-        "--n-bins",  type =float, default=50, dest="n_bins",help="number of bins for kernel regression"
-    )
-
-    parser.add_argument(
-        "--maskrad-fraction",  type =float, default=20, dest="maskrad_fraction",help="Radius of mask used in kernel regression. Default = 20, which means radius = grid_size/20 pixels, or grid_size * voxel_size / 20 angstrom"
-    )
-
-    parser.add_argument(
-        "--n-min-images",  type =int, default=None, dest="n_min_images",help="minimum number of images to compute kernel regression. Default = 100 for SPA, and 10 particles for tilt series"
-    )
-
-
-    parser.add_argument(
-        "--zdim1",  action="store_true", help="Whether dimension 1 is used. This is an annoying corner case for np.loadtxt..."
-    )
-
-    parser.add_argument(
-        "--no-z-regularization",  action="store_true", dest="no_z_regularization", help="Whether to use z regularization"
-    )
-
-    parser.add_argument(
-        "--lazy",  action="store_true", help="Whether to use lazy loading")
-
-    parser.add_argument(
-        "--particles",  default=None, help="particle stack dataset. In case you want to use a higher resolution stack")
-
-    parser.add_argument(
-        "--datadir",
-        type=os.path.abspath,
-        help="Path prefix to particle stack if loading relative paths from a .star or .cs file",
-    )
-
-
 
     return parser
 
@@ -102,7 +52,7 @@ def compute_state(args):
             target_zs = target_zs[None]
 
     if zdim not in po.get('zs'):
-        logger.error("z-dim not found in results. Options are:" + ','.join(str(e) for e in po.get('zs').keys()))
+        logger.error("zdim of provided latent points are not found in embedding results. Options are:" + ','.join(str(e) for e in po.get('zs').keys()))
 
     zdim_key = f"{zdim}_noreg" if args.no_z_regularization else zdim
 
