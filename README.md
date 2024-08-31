@@ -166,86 +166,97 @@ A real space mask is important to boost SNR. Most consensus reconstruction softw
 If you don't input a mask, you can ask the software to estimate one using the two halfmaps of the mean ( `--mask=from-halfmaps`). You may also want to run with a loose spherical mask (option `--mask=sphere`) and use the computed variance map to observe which parts have large variance.
 
 
-## III. Running RECOVAR pipeline
 
-When the input images (.mrcs), poses (.pkl), and CTF parameters (.pkl) have been prepared, RECOVAR can be run with the following command:
+## III. Running the RECOVAR Pipeline
 
-    $ python [recovar_directory]/pipeline.py particles.128.mrcs -o output_test --ctf ctf.pkl --poses poses.pkl --mask=[path_to_your_mask.mrc]
+To run the RECOVAR pipeline, ensure that the input images (.mrcs), poses (.pkl), and CTF parameters (.pkl) are prepared. Then, execute the following command:
 
+```bash
+$ python [recovar_directory]/pipeline.py particles.128.mrcs -o output_test --ctf ctf.pkl --poses poses.pkl --mask [path_to_your_mask.mrc]
+```
+
+To view a list of all available options and their usage, use the help command:
 
 <details><summary><code>$ python pipeline.py -h</code></summary>
 
-        usage: pipeline.py [-h] -o OUTDIR [--zdim ZDIM] --poses POSES --ctf pkl --mask mrc [--focus-mask mrc]                                      
-                        [--mask-dilate-iter MASK_DILATE_ITER] [--correct-contrast] [--ignore-zero-frequency] [--ind PKL]                        
-                        [--uninvert-data UNINVERT_DATA] [--datadir DATADIR] [--n-images N_IMAGES] [--padding PADDING] [--halfsets HALFSETS]     
-                        [--keep-intermediate] [--noise-model NOISE_MODEL] [--mean-fn MEAN_FN] [--accept-cpu] [--test-covar-options]             
-                        [--low-memory-option] [--dont-use-image-mask] [--do-over-with-contrast] [--tilt-series]                                 
-                        [--tilt-series-ctf TILT_SERIES_CTF] [--dose-per-tilt DOSE_PER_TILT] [--angle-per-tilt ANGLE_PER_TILT] [--only-mean]     
-                        particles                                                                                                               
-                                                                                                                                                
-        positional arguments:                                                                                                                      
-        particles             Input particles (.mrcs, .star, .cs, or .txt)                                                                       
-                                                                                                                                                
-        optional arguments:                                                                                                                        
-        -h, --help            show this help message and exit                                                                                    
-        -o OUTDIR, --outdir OUTDIR                                                                                                               
-                                Output directory to save model                                                                                     
-        --zdim ZDIM           Dimensions of latent variable. Default=1,2,4,10,20                                                                 
-        --poses POSES         Image poses (.pkl)
-        --ctf pkl             CTF parameters (.pkl)
-        --mask mrc            solvent mask (.mrc).Can solve provide: from_halfmaps, sphere, none                                                
-        --focus-mask mrc      focus mask (.mrc)
-        --mask-dilate-iter MASK_DILATE_ITER
-                                mask options how many iters to dilate solvent and focus mask                                                      
-        --correct-contrast    estimate and correct for amplitude scaling (contrast) variation across images                                     
-        --ignore-zero-frequency
-                                use if you want zero frequency to be ignored. If images have been normalized to 0 mean, this is probably a good   
-                                idea
-        --tilt-series         Whether to use tilt_series.
-        --tilt-series-ctf TILT_SERIES_CTF
-                                Whether to use tilt_series ctf. Default = same as tilt_series.                                                    
-        --dose-per-tilt DOSE_PER_TILT
-        --angle-per-tilt ANGLE_PER_TILT
-        --only-mean           Only compute mean
+```
+usage: pipeline.py [-h] -o OUTDIR [--zdim ZDIM] --poses POSES --ctf pkl --mask mrc [--focus-mask mrc] 
+                   [--mask-dilate-iter MASK_DILATE_ITER] [--correct-contrast] [--ignore-zero-frequency] 
+                   [--ind PKL] [--uninvert-data UNINVERT_DATA] [--lazy] [--datadir DATADIR] [--n-images N_IMAGES] 
+                   [--padding PADDING] [--halfsets HALFSETS] [--keep-intermediate] [--noise-model NOISE_MODEL] 
+                   [--mean-fn MEAN_FN] [--accept-cpu] [--test-covar-options] [--low-memory-option] 
+                   [--very-low-memory-option] [--dont-use-image-mask] [--do-over-with-contrast] [--tilt-series] 
+                   [--tilt-series-ctf TILT_SERIES_CTF] [--dose-per-tilt DOSE_PER_TILT] [--angle-per-tilt ANGLE_PER_TILT] 
+                   [--only-mean] [--ntilts NTILTS]
+                   particles
 
-        Dataset loading:
-        --ind PKL             Filter particles by these indices
-        --uninvert-data UNINVERT_DATA
-                                Invert data sign: options: true, false, automatic (default). automatic will swap signs if sum(estimated mean) < 0 
-        --datadir DATADIR     Path prefix to particle stack if loading relative paths from a .star or .cs file                                  
-    --n-images N_IMAGES   Number of images to use (should only use for quick run)                                                           
-    --padding PADDING     Real-space padding
-    --halfsets HALFSETS   Path to a file with indices of split dataset (.pkl).
-    --keep-intermediate   saves some intermediate result. Probably only useful for debugging
-    --noise-model NOISE_MODEL
-                            what noise model to use. Options are radial (default) computed from outside the masks, and white computed by
-                            power spectrum at high frequencies
-    --mean-fn MEAN_FN     which mean function to use. Options are triangular (default), old, triangular_reg
-    --accept-cpu          Accept running on CPU if no GPU is found
-    --test-covar-options
-    --low-memory-option
-    --dont-use-image-mask
-    --do-over-with-contrast Whether to run again once constrast is estimated
+positional arguments:
+  particles             Input particles (.mrcs, .star, .cs, or .txt)
+
+optional arguments:
+  -h, --help            Show this help message and exit
+  -o OUTDIR, --outdir OUTDIR
+                        Output directory to save model
+  --zdim ZDIM           Dimensions of latent variable. Default = 1, 2, 4, 10, 20
+  --poses POSES         Image poses (.pkl)
+  --ctf pkl             CTF parameters (.pkl)
+  --mask mrc            Solvent mask (.mrc). Options: from_halfmaps, sphere, none
+  --focus-mask mrc      Focus mask (.mrc)
+  --mask-dilate-iter MASK_DILATE_ITER
+                        Number of iterations to dilate solvent and focus mask
+  --correct-contrast    Estimate and correct for amplitude scaling (contrast) variation across images
+  --ignore-zero-frequency
+                        Ignore zero frequency. Useful if images are normalized to 0 mean
+  --tilt-series         Use tilt series data
+  --tilt-series-ctf TILT_SERIES_CTF
+                        Specify CTF for tilt series. Default is the same as tilt series
+  --dose-per-tilt DOSE_PER_TILT
+                        Specify dose per tilt
+  --angle-per-tilt ANGLE_PER_TILT
+                        Specify angle per tilt
+  --only-mean           Only compute mean
+  --ntilts NTILTS       Number of tilts to use per tilt series. Default is all
+
+Dataset loading:
+  --ind PKL             Filter particles by these indices (.pkl)
+  --uninvert-data UNINVERT_DATA
+                        Invert data sign: Options are true, false, automatic (default). 
+                        Automatic will swap signs if sum(estimated mean) < 0
+  --lazy                Use lazy loading if the full dataset is too large to fit in memory
+  --datadir DATADIR     Path prefix to particle stack if loading relative paths from a .star or .cs file
+  --n-images N_IMAGES   Number of images to use (useful for quick runs)
+  --padding PADDING     Real-space padding
+  --halfsets HALFSETS   Path to a file with indices of split dataset (.pkl)
+  --keep-intermediate   Save intermediate results (useful for debugging)
+  --noise-model NOISE_MODEL
+                        Noise model to use. Options: radial (default), white
+  --mean-fn MEAN_FN     Mean function to use. Options: triangular (default), old, triangular_reg
+  --accept-cpu          Accept running on CPU if no GPU is found
+  --test-covar-options  Test different covariance estimation options (for development)
+  --low-memory-option   Use low memory options for covariance estimation
+  --very-low-memory-option
+                        Use very low memory options for covariance estimation
+  --dont-use-image-mask Do not use image mask
+  --do-over-with-contrast
+                        Run again once contrast is estimated
+```
+
 </details>
 
+### Required Arguments:
 
-The required arguments are:
+- **particles**: Input particle stack file (.mrcs, .star, .cs, or .txt)
+- **`-o OUTDIR, --outdir OUTDIR`**: Output directory to save the model
+- **`--poses POSES`**: Image poses file (.pkl)
+- **`--ctf pkl`**: CTF parameters file (.pkl)
+- **`--mask mrc`**: Solvent mask file (.mrc). Options: from_halfmaps, sphere, none (no mask used).
 
-* an input image stack (`.mrcs` or other listed file types)
-* `--poses`, image poses (`.pkl`) that correspond to the input images
-* `--ctf`, ctf parameters (`.pkl`), unless phase-flipped images are used
-* `-o`, a clean output directory for saving results
-* `--mask`, a solvent mask (`.mrc`). Can Also provide: from_halfmaps, sphere, none
+### Commonly Used Optional Arguments:
 
-
-Additional parameters that are typically set include:
-* `--focus-mask` to specify the path to a focus mask path (`.mrc`). Note that if you only have a solvent mask you should pass it with --mask not focus-mask. If you have a focus-mask but not a solvent mask for some reason, you can pass `--mask=sphere`
-<!-- * `--mask` to specify which mask to use -->
-* `--dilate-mask-iter` to specify the number of dilation iterationof mask (default=0)
-* `--zdim`, dimensions of PCA to use for embedding, can submit one integer (`--zdim=20`) or a or a command separated list (`--zdim=10,50,100`). Default (`--zdim=1,2,4,10,20` and using no regulariation).
-
-<!-- * `--uninvert-data`, Use if particles are dark on light (negative stain format) -->
-
+- **`--focus-mask mrc`**: Specify a focus mask file (.mrc). If using only a solvent mask, pass it with `--mask`. If only a focus mask is available, you can use `--mask=sphere`.
+- **`--mask-dilate-iter MASK_DILATE_ITER`**: Number of iterations to dilate the mask (default = 0).
+- **`--zdim ZDIM`**: Dimensions of the PCA to use for embedding. You can specify one integer (`--zdim=20`) or a comma-separated list (`--zdim=10,50,100`). Default is `--zdim=1,2,4,10,20` with no regularization.
+- **`--only-mean`**: Only compute the mean. Fast and useful to make dataset is properly preprocessed.
 
 
 ## IV. Analyzing results
@@ -256,100 +267,114 @@ After the pipeline is run, you can find the mean, eigenvectors, variance maps, a
 
 It will run k-means, generate volumes corresponding to the centers, generate trajectories between pairs of cluster centers, and run UMAP. See more input details below.
 
+### Usage of `analyze.py`
 
-<details><summary><code>$ python analyze.py -h</code></summary>
-    usage: analyze.py [-h] [-o OUTDIR] [--zdim ZDIM] [--n-clusters N_CLUSTERS] [--n-trajectories N_TRAJECTORIES] [--skip-umap]
-                    [--skip-centers] [--n-vols-along-path N_VOLS_ALONG_PATH] [--Bfactor BFACTOR] [--n-bins N_BINS] [--density DENSITY]
-                    [--normalize-kmeans] [--no-z-regularization]
-                    result_dir
+**Command**:
 
-    positional arguments:
-    result_dir            result dir (output dir of pipeline)
+```bash
+python analyze.py [result_dir] --zdim=10
+```
 
-    optional arguments:
-    -h, --help            show this help message and exit
-    -o OUTDIR, --outdir OUTDIR
-                            Output directory to save model. If not provided, will save in result_dir/output/analysis_zdim/
-    --zdim ZDIM           Dimension of latent variable (a single int, not a list)
-    --n-clusters N_CLUSTERS
-                            number of k-means clusters (default 40)
-    --n-trajectories N_TRAJECTORIES
-                            number of trajectories to compute between k-means clusters (default 6)
-    --skip-umap           whether to skip u-map embedding (can be slow for large dataset)
-    --skip-centers        whether to generate the volume of the k-means centers
-    --n-vols-along-path N_VOLS_ALONG_PATH
-                            number of volumes to compute along each trajectory (default 6)
-    --Bfactor BFACTOR     0
-    --n-bins N_BINS       number of bins for kernel regression
-    --density DENSITY     density saved in .pkl file, with keys 'density' and 'latent_space_bounds'
-    --normalize-kmeans    whether to normalize the zs before computing k-means
-    --no-z-regularization
-                            whether to use z without regularization, e.g. use 2_noreg instead of 2
-</details>
+**Positional Arguments:**
 
-To generate volumes at specific place in latent space you can use:
+- `result_dir`: Path to the result directory (output directory of the pipeline).
 
-    python compute_state.py [pipeline_output_dir] -o [volume_output_dir] --latent-points [zfiles.txt] --Bfactor=[Bfac]
+**Required Arguments:**
 
-<details><summary><code>$ python compute_state.py -h</code></summary>
+- `--zdim ZDIM`: Dimension of the latent variable (must be a single integer, not a list).
 
-    usage: compute_state.py [-h] [-o OUTDIR] --latent-points LATENT_POINTS [--Bfactor BFACTOR] [--n-bins N_BINS] [--zdim1]
-                            [--no-z-regularization]
-                            result_dir
+<details><summary>Optional Arguments</summary>
 
-    positional arguments:
-    result_dir            result dir (output dir of pipeline)
-
-    optional arguments:
-    -h, --help            show this help message and exit
-    -o OUTDIR, --outdir OUTDIR
-                            Output directory to save model
-    --latent-points LATENT_POINTS
-                            path to latent points (.txt file)
-    --Bfactor BFACTOR     0
-    --n-bins N_BINS       number of bins for kernel regression
-    --zdim1               Whether dimension 1 is used. This is an annoying corner case for np.loadtxt...
-    --no-z-regularization
-                            Whether to use z regularization
+- `-o OUTDIR, --outdir OUTDIR`: Output directory to save model. If not provided, results will be saved in `result_dir/output/analysis_zdim/`.
+- `--n-clusters N_CLUSTERS`: Number of k-means clusters (default: 40).
+- `--n-trajectories N_TRAJECTORIES`: Number of trajectories to compute between k-means clusters (default: 6).
+- `--skip-umap`: Skip UMAP embedding (useful for large datasets where UMAP can be slow).
+- `--skip-centers`: Skip generating volumes of the k-means cluster centers.
+- `--n-vols-along-path N_VOLS_ALONG_PATH`: Number of volumes to compute along each trajectory (default: 6).
+- `--Bfactor BFACTOR`: B-factor for sharpening (default: 0).
+- `--n-bins N_BINS`: Number of bins for kernel regression.
+- `--maskrad-fraction MASKRAD_FRACTION`: Radius of mask used in kernel regression. Default is 20, which means radius = `grid_size/20` pixels, or `grid_size * voxel_size / 20` Å.
+- `--n-min-images N_MIN_IMAGES`: Minimum number of images required for kernel regression. Default is 100 for SPA and 10 particles for tilt series.
+- `--density DENSITY`: Path to a `.pkl` file containing density data with keys `density` and `latent_space_bounds`.
+- `--normalize-kmeans`: Normalize latent variables (`z`) before computing k-means clustering.
+- `--no-z-regularization`: Use latent variables without regularization (e.g., use `2_noreg` instead of `2`).
+- `--lazy`: Enable lazy loading if the full dataset is too large to fit in memory.
 
 </details>
 
+### Generating Volumes at Specific Points in Latent Space
 
-where pipeline_output_dir is the path provided to the pipeline, latent-points is np.loadtxt-readable file containing the coordinates in latent space, and Bfactor is a b-factor to sharpen (can provide the same as the consensus reconstruction). It should be positive.
+To generate volumes at specific coordinates in latent space, use the `compute_state.py` script. Ensure you specify the coordinates using a `.txt` file readable by `np.loadtxt` and provide a B-factor if sharpening is required.
 
-The the sharpened volume will be at volume_output_dir/vol000/
+**Command**:
 
-To generate a low free-energy trajectory in latent space (and volumes):
+```bash
+python compute_state.py [pipeline_output_dir] -o [volume_output_dir] --latent-points [zfiles.txt] --Bfactor=[Bfac]
+```
 
-    python compute_trajectory.py [pipeline_output_dir] -o [volume_output_dir] --endpts [zfiles.txt] --Bfactor=[Bfac] --density [deconvolved_density.pkl]
+**Positional Arguments:**
+
+- `result_dir`: The output directory provided to `pipeline.py` using the `--o` option. For `analyze.py`, this is set by default to `result_dir/output/analysis_[zdim]`.
+
+**Required Arguments:**
+
+- `--latent-points LATENT_POINTS`: Path to latent points (`.txt` file). You can use the output of k-means, such as `output/analysis_2/centers.txt` from `analyze.py`, or create your own latent points. The file should have a shape of `(n_points, zdim)`.
+
+<details><summary>Optional Arguments</summary>
+
+- `-o OUTDIR, --outdir OUTDIR`: Output directory to save all outputs. For `analyze.py`, it defaults to `result_dir/output/analysis_[zdim]`. For other functions, this argument is required.
+- `--Bfactor BFACTOR`: B-factor for sharpening. The B-factor of the consensus reconstruction is likely a good guess. Default is 0, meaning no sharpening.
+- `--n-bins N_BINS`: Number of bins for kernel regression. Default is 50, which works well for most cases. This setting was used to generate all figures in the paper.
+- `--maskrad-fraction MASKRAD_FRACTION`: Radius of mask used in kernel regression. Default is 20, meaning `radius = grid_size/20` pixels or `grid_size * voxel_size / 20` Å. The default setting works well for most cases. This was used for all figures in the paper. If using cryo-ET or very noisy (or very non-noisy) data, you might want to adjust this value accordingly. For low-resolution data (less than 128x128 images), consider increasing this value. For high-resolution data (more than 512x512 images), consider decreasing it.
+- `--n-min-images N_MIN_IMAGES`: Minimum number of images required for kernel regression. The default is 100 for SPA and 10 particles for tilt series. The default works well for most cases, as it was used to generate all figures in the paper. For cryo-ET or very noisy (or very non-noisy) data, consider adjusting this value.
+- `--zdim1`: Enable this if dimension 1 is used. This setting addresses a specific issue with `np.loadtxt`.
+- `--no-z-regularization`: If set, uses latent variables without regularization.
+- `--lazy`: Enables lazy loading when the full dataset is too large to fit in memory.
+- `--particles PARTICLES`: Path to the particle stack dataset. If not specified, the same stack as provided to `pipeline.py` will be used. Use this option to utilize a higher-resolution stack.
+- `--datadir DATADIR`: Path prefix to the particle stack if loading relative paths from a `.star` or `.cs` file. Similar to the `--datadir` option in `pipeline.py`. If not specified, the same stack as provided to `pipeline.py` will be used. Use this option to load a higher-resolution stack.
+
+</details>
 
 
-<details><summary><code>$ python compute_trajectory.py -h</code></summary>
 
-usage: compute_trajectory.py [-h] [-o OUTDIR] [--zdim ZDIM] [--n-vols-along-path N_VOLS_ALONG_PATH] [--Bfactor BFACTOR]
-                             [--n-bins N_BINS] [--density DENSITY] [--no-z-regularization] [--kmeans-ind KMEANS_IND]
-                             [--endpts ENDPTS_FILE]
-                             result_dir
+### Generating and Analyzing Trajectories in Latent Space
 
-positional arguments:
-  result_dir            result dir (output dir of pipeline)
+To compute a high density/low free energy trajectory in latent space and generate corresponding volumes, use the following command:
 
-optional arguments:
-  -h, --help            show this help message and exit
-  -o OUTDIR, --outdir OUTDIR
-                        Output directory to save model
-  --zdim ZDIM           Dimension of latent variable (a single int, not a list)
-  --n-vols-along-path N_VOLS_ALONG_PATH
-                        number of volumes to compute along each trajectory (default 6)
-  --Bfactor BFACTOR     0
-  --n-bins N_BINS       number of bins for reweighting
-  --density DENSITY     density saved in pkl file, key is 'density' and 'latent_space_bounds
-  --no-z-regularization
-  --kmeans-ind KMEANS_IND
-                        indices of k means centers to use as endpoints
-  --endpts ENDPTS_FILE  end points file. It storing z values, it should be a .txt file with 2 rows, and if it is from kmeans, it should
-                        be a .pkl file (generated by analyze)
+```bash
+python compute_trajectory.py [pipeline_output_dir] -o [volume_output_dir] --latent-points [zfiles.txt] --zdim [dimension] --n-vols-along-path [num_vols] --density [density.pkl] --kmeans-ind [indices] --endpts [endpoints.txt] --Bfactor [Bfac]
+```
 
+#### Positional Arguments:
+
+- **`result_dir`**:  
+  The output directory provided to the pipeline using the `--o` option. This is where results will be saved. For analysis, the default directory is `result_dir/output/analysis_[zdim]`.
+
+#### Required Arguments:
+
+- **`--zdim ZDIM`**:  
+  Dimension of the latent variable (a single integer). It specifies the latent space dimension used in the analysis.
+- **`--latent-points LATENT_POINTS`**:  
+  Path to the latent points file in `.txt` format. This file should be readable by `np.loadtxt` and contain coordinates in latent space.
+
+<details><summary>Optional Arguments</summary>
+
+- **`-o, --outdir OUTDIR`**:  
+  Output directory to save all results. If not specified, it defaults to `result_dir/output/analysis_[zdim]`.
+- **`--n-vols-along-path N_VOLS_ALONG_PATH`**:  
+  Number of volumes to compute along each trajectory. Default is 6.
+- **`--density DENSITY`**:  
+  Path to a density file saved in `.pkl` format. The dictionary in this file should include 'density' and 'latent_space_bounds'.
+- **`--kmeans-ind KMEANS_IND`**:  
+  Indices of k-means centers to use as endpoints. Should be a list of integers, specified as a comma-separated string. Example: `1,2,3`.
+- **`--endpts ENDPTS_FILE`**:  
+  File containing endpoints. Should be a `.txt` file with two rows for z values or a `.pkl` file if using k-means results.
+- **`--Bfactor BFACTOR`**:  
+  B-factor for sharpening. Default is 0 (no sharpening).
+- **`--n-bins N_BINS`**:  
+  Number of bins for kernel regression. Default is 50.
+- **`--no-z-regularization`**:  
+  Disable z regularization if needed.
 
 </details>
 
