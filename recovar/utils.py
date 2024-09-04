@@ -134,7 +134,7 @@ def get_column_batch_size(grid_size, gpu_memory):
     return int(50 * ((256/grid_size)**3) * gpu_memory / 38)
 
 def get_latent_density_batch_size(test_pts,zdim, gpu_memory):
-    return np.max([int(gpu_memory /(3 * (get_size_in_gb(test_pts) * zdim**2))), 1])
+    return np.max([int(gpu_memory /(3 * (get_size_in_gb(test_pts) * zdim**1))), 1])
 
 def get_embedding_batch_size(basis, image_size, contrast_grid, zdim, gpu_memory):
 
@@ -302,3 +302,12 @@ def downsample_vol_by_fourier_truncation(vol_input, target_grid_size):
     # X = np.asarray(X)
     return ftu.get_idft3(X)
     # return vol_ft.reshape(-1)
+
+def basic_config_logger(output_folder):
+    logging.basicConfig(
+    format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
+                    level=logging.INFO,
+                    force = True, 
+                    handlers=[
+    logging.FileHandler(f"{output_folder}/run.log"),
+    logging.StreamHandler()])

@@ -122,11 +122,17 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
     output_folder_kmeans = output_folder + '/' #+ '/kmeans'+'_'+ str(n_clusters) + '/'    
     o.mkdir_safe(output_folder_kmeans)    
-    # logger.addHandler(logging.FileHandler(f"{output_folder_kmeans}/run.log"))
-    logging.basicConfig(filename=f"{output_folder}/run.log",
-                        format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
-                        level=logging.INFO,
-                        force = True)
+
+    utils.basic_config_logger(output_folder)
+    # logging.basicConfig(
+    #     format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
+    #                     level=logging.INFO,
+    #                     force = True, 
+    #                     handlers=[
+    #     logging.FileHandler(f"{output_folder}/run.log"),
+    #     logging.StreamHandler()])
+
+
 
     logger.info(args)
     # zs_unsort = po.get('unsorted_embedding')['zs'][zdim_key]

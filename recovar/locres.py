@@ -29,36 +29,37 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
 
     locres_maskrad= 0.5 *locres_sampling if locres_maskrad is None else locres_maskrad
     locres_edgwidth = locres_sampling if locres_edgwidth is None else locres_edgwidth
-    angpix = voxel_size
+    
 
 
 
-    step_size = np.round(locres_sampling / angpix).astype(int)
-    maskrad_pix = np.round(locres_maskrad / angpix).astype(int)
+    step_size = np.round(locres_sampling / voxel_size).astype(int)
+    maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
 
     if maskrad_pix < 5:
         logger.warning(f"radius of local resolution mask is only {maskrad_pix} pixels. Result will probably be nonsense. Should either increase locres_maskrad or do global resolution estimate")
 
-
-
-    edgewidth_pix = np.round(locres_edgwidth / angpix).astype(int)
+    edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
     logger.info(f"Step size: {step_size}, maskrad_pix: {maskrad_pix}, edgewidth_pix: {edgewidth_pix}")
-    myrad = map1.shape[0]//2 - 1*maskrad_pix
+    # myrad = map1.shape[0]//2 - 1*maskrad_pix
     # print('CHANGE THIS BACK!!')
     # myrad = 40
-    myradf = myrad / step_size
-    sampling_points = []
+    # myradf = myrad / step_size
+    # sampling_points = []
 
-    logger.info(f"Starting...")
+    # logger.info(f"Starting...")
 
-    grid = np.array(ftu.get_1d_frequency_grid(map1.shape[0], 1, scaled = False)[::step_size])
-    for kk in grid:
-        for ii in grid:
-            for jj in grid:
-                rad = np.sqrt(kk * kk + ii * ii + jj * jj)
-                if rad < myrad:
-                    sampling_points.append((kk, ii, jj))
-    sampling_points = jnp.array(sampling_points).astype(int)
+    # grid = np.array(ftu.get_1d_frequency_grid(map1.shape[0], 1, scaled = False)[::step_size])
+    # for kk in grid:
+    #     for ii in grid:
+    #         for jj in grid:
+    #             rad = np.sqrt(kk * kk + ii * ii + jj * jj)
+    #             if rad < myrad:
+    #                 sampling_points.append((kk, ii, jj))
+    # sampling_points = jnp.array(sampling_points).astype(int)
+
+    sampling_points = get_sampling_points(map1.shape[0], locres_sampling, locres_maskrad, voxel_size)
+
 
     fourier_pixel_size = 1/(map1.shape[0] * voxel_size)
     # sampling_points = jnp.array(sampling_points).astype(int)[:1]
@@ -86,42 +87,7 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
     # Put stuff on GPU
     map1 = jnp.asarray(map1)
     map2 = jnp.asarray(map2)
-    single_batch = False
-    # if single_batch:
-    #     for k in range(nr_samplings):
-    #         batch_st, batch_end = utils.get_batch_of_indices(nr_samplings, 1, k)
-    #         batch = sampling_points[batch_st:batch_end]
 
-    #         if use_v2:
-    #             if use_filter:
-    #                 ift_sum, loc_mask, fsc, local_resol = compute_local_fsc_v2(batch[0], ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_treshold = fsc_threshold, use_filter = use_filter, filter_edgewidth = filter_edgewidth)
-
-    #                 i_fil += ift_sum * loc_mask
-    #                 i_loc_res += loc_mask / local_resol
-    #                 i_sum_w += loc_mask
-    #             else:
-    #                 fsc, local_resol = compute_local_fsc_v2(batch[0], ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_treshold = fsc_threshold, use_filter = use_filter, filter_edgewidth = filter_edgewidth)
-
-    #         else:
-    #             if use_filter:
-    #                 ift_sum, loc_mask, fsc, local_resol = compute_local_fsc(batch, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_treshold = fsc_threshold, use_filter = use_filter, filter_edgewidth = filter_edgewidth)
-
-    #                 i_fil += ift_sum * loc_mask
-    #                 i_loc_res += loc_mask / local_resol
-    #                 i_sum_w += loc_mask
-    #             else:
-    #                 fsc, local_resol = compute_local_fsc(batch, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_treshold = fsc_threshold, use_filter = use_filter, filter_edgewidth = filter_edgewidth)
-
-
-
-    #         fscs.append(fsc)
-    #         local_resols.append(local_resol[None])
-    #         if k % 100 == 0:
-    #             logger.info(f"Sampling point {k} out of {nr_samplings} done")
-
-    #         if jnp.isnan(i_fil).any() or jnp.isnan(i_loc_res).any():
-    #             import pdb; pdb.set_trace()
-    #         # print(k)
     if True:
         # a =1
         vol_batch_size = recovar.utils.get_vol_batch_size(map1.shape[0], recovar.utils.get_gpu_memory_total())/2
@@ -138,23 +104,7 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
             if use_v2:
                 if use_filter:
                     ift_sum, loc_mask, fsc, local_resol, offset, radius = batch_compute_local_fsc_v2(batch, i_ft_sum_orig, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold, use_filter, filter_edgewidth )
-                    # i_fil2 = np.zeros_like(i_fil)
-
-                    # for k in range(batch.shape[0]):
-                    #     i_fil = add_subarray_to_array(i_fil, ift_sum[k] * loc_mask[k], offset[k], int(radius[k]))
-                    #     i_fil2 = add_subarray_to_array_2(i_fil2, ift_sum[k] * loc_mask[k], offset[k], int(radius[k]))
-                    # print(np.linalg.norm(i_fil- i_fil2)/ np.linalg.norm(i_fil))
-                    # i_fil2 = np.zeros_like(i_fil)
                     i_fil = add_subarrays_to_array(i_fil, ift_sum * loc_mask, offset, int(radius[0]))
-                    # print(np.linalg.norm(i_fil- i_fil2)/ np.linalg.norm(i_fil))
-
-                    # import pdb; pdb.set_trace()        
-                    #     print(np.linalg.norm(i_fil))
-                    # import pdb; pdb.set_trace()
-                        # i_loc_res = add_subarray_to_array(loc_mask / local_resol, ift_sum[0] * loc_mask[0], offset[0], radius[0])
-                    # i_fil += ift_sum * loc_mask
-                    # i_loc_res += loc_mask / local_resol
-                    # i_sum_w += loc_mask
                 else:
                     fsc, local_resol = batch_compute_local_fsc_v2(batch, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold , use_filter, filter_edgewidth)
 
@@ -164,21 +114,9 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
                     ift_sum, loc_mask, fsc, local_resol = batch_compute_local_fsc(batch, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold,  use_filter, filter_edgewidth)
 
                     i_fil += jnp.sum(ift_sum * loc_mask, axis=0)
-
-                    # i_loc_auc += jnp.sum(loc_mask * integral_fscs(fsc, fourier_pixel_size)[:,None,None,None], axis=0)
-                    # i_loc_res += jnp.sum(loc_mask / local_resol[:,None,None,None], axis=0)
-                    # i_sum_w += jnp.sum(loc_mask, axis=0)
                 else:
                     fsc, local_resol = batch_compute_local_fsc(batch, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold,  use_filter, filter_edgewidth)
 
-                # i_loc_res += jnp.sum(loc_mask / local_resol[:,None,None,None], axis=0)
-                # i_sum_w += jnp.sum(loc_mask, axis=0)
-
-            # ift_sum, loc_mask, fsc, local_resol = batch_compute_local_fsc(batch, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, 1/8,  True)
-
-            # i_fil += jnp.sum(ift_sum * loc_mask, axis=0)
-            # i_loc_res += jnp.sum(loc_mask / local_resol[:,None,None,None], axis=0)
-            # i_sum_w += jnp.sum(loc_mask, axis=0)
             fscs.append(fsc)
             local_resols.append(local_resol)
             if k % 100 == 0:
@@ -195,46 +133,12 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
     i_loc_auc = make_auc_map(sampling_points, int_fscs, full_mask)
 
     if not use_filter:
-        # full_mask = mask_fn.raised_cosine_mask(map1.shape, maskrad_pix, maskrad_pix + edgewidth_pix, -1)    
-        # i_loc_res = make_local_resol_map(sampling_points, 1/local_resols, full_mask)
-        # int_fscs = integral_fscs(fscs,fourier_pixel_size)
-        # i_loc_auc = make_auc_map(sampling_points, int_fscs, full_mask)
-        # import pdb; pdb.set_trace()
         return fscs, local_resols, i_loc_res, i_loc_auc
     
 
     # i_fil3 = jnp.where( i_sum_w > 0,  i_fil / i_sum_w, 0)
     i_fil = make_i_fil_map(sampling_points, i_fil, full_mask)
     logger.info(f"Done")
-
-    # mask_conv = convolve_mask_at_sampling_points(sampling_points, jnp.ones(sampling_points.shape[0]), full_mask)
-
-    # print(np.linalg.norm(i_fil2 - i_fil3) / np.linalg.norm(i_fil3))
-    # plt.imshow(mask_conv[64]); plt.colorbar(); plt.show()
-    # plt.imshow(i_sum_w[64] - mask_conv[64]); plt.colorbar(); plt.show()
-    # plt.imshow(np.abs(i_sum_w[64] - mask_conv[64]) / np.abs(mask_conv[64])); plt.colorbar(); plt.show()
-
-    # plt.imshow(np.abs(i_fil2[64] - i_fil3[64]) / np.abs(i_fil3[64])); plt.colorbar(); plt.show()
-    # i_fil = jnp.where( i_sum_w > 0,  i_fil / i_sum_w, 0)
-
-    # print(np.linalg.norm(mask_conv - i_sum_w) / np.linalg.norm(mask_conv))
-    # plt.imshow(i_fil[64]); plt.colorbar(); plt.show()
-    # plt.imshow(i_fil2[64]); plt.colorbar(); plt.show()
-
-    # i_loc_res_og = i_loc_res.copy()
-    # Does this make sense?
-    # i_loc_res = jnp.where( i_sum_w > 0,  1/ (i_loc_res/ i_sum_w) , 0)
-    # i_loc_res = make_local_resol_map(sampling_points, 1/local_resols, full_mask)
-    # # i_loc_auc = jnp.where( i_sum_w > 0,  i_loc_auc / i_sum_w, 0)
-    # i_loc_au = make_auc_map(sampling_points, int_fscs, full_mask)
-
-    # plt.imshow(i_loc_auc[64]); plt.colorbar(); plt.show()
-    # plt.imshow(i_loc_auc2[64]); plt.colorbar(); plt.show()
-    # plt.imshow((i_loc_auc-i_loc_auc2)[64]); plt.colorbar(); plt.show()
-
-    # print(np.linalg.norm(i_loc_res - i_loc_res_2) / np.linalg.norm(i_loc_res))
-    # print(np.linalg.norm(i_loc_auc - i_loc_auc2) / np.linalg.norm(i_loc_auc))
-    # import pdb; pdb.set_trace()
 
     return i_fil, i_loc_res, i_loc_auc, fscs, local_resols#, sampling_points
 
@@ -279,8 +183,9 @@ def make_i_fil_map(sampling_points, i_fil, full_mask):
 
 
 
-
 def get_subsample_indices(array_shape, offset, radius):
+    # This is so complicated because the simple way doesn't JIT...
+
     size = 2*radius
     grid = jnp.mgrid[:size,:size,:size]
     grid = grid.reshape(3, -1).T
@@ -411,26 +316,6 @@ def compute_local_fsc(offset, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, lo
     local_resol = jnp.where(local_resol > 0, map1.shape[0] * voxel_size / local_resol, 999)
     local_resol = jnp.where(local_resol < locres_minres, local_resol, locres_minres)
 
-    # import matplotlib.pyplot as plt
-    # radius = maskrad_pix + edgewidth_pix
-
-    # map1_sub = subsample_array(mask, offset[0] + map1.shape[0]//2, radius)
-
-    # offset = offset[0]
-    # l_bounds = offset - radius + map1.shape[0]//2
-    # u_bounds = offset + radius + map1.shape[0]//2
-    # mask2 = mask[l_bounds[0]:u_bounds[0], l_bounds[1]:u_bounds[1], l_bounds[2]:u_bounds[2]] 
-    # plt.figure()
-    # plt.imshow(map1_sub.sum(axis=0))
-    # plt.show()
-    # plt.figure()
-    # plt.imshow(mask.sum(axis=0))
-    # plt.show()
-    # plt.figure()
-    # plt.plot(fsc)
-    # plt.show()
-    # import pdb; pdb.set_trace()
-
     if use_filter:
         ift_sum = filter_with_local_fsc(ft_sum, fsc, local_resol, voxel_size, filter_edgewidth)
         # if jnp.isnan(ift_sum).any():
@@ -463,23 +348,6 @@ def find_fsc_resol(fsc_curve, threshold = 1/7):
 
     ires_interp = jnp.where(ires_zero > 0, ires_interp, 0)
     ires_interp = jnp.where((ires_zero == fsc_curve.size-1) * fsc_curve[-1] >= threshold, fsc_curve.size-1, ires_interp)
-
-    # # ires_interp = jnp.interp(threshold, fsc_subcurve, jnp.array([1,0]) * 1.0 )
-
-    # plt.plot(fsc_subcurve, [1,0]); plt.plot(1/7, ires_interp, 'o'); plt.show()
-    # plt.show()
-
-    # plt.plot(fsc_curve); plt.plot(ires_interp, 1/7, 'o'); plt.show()
-
-    # # import matplotlib.pyplot as plt
-
-    # ires_interp = 
-    # jnp.where(ires_zero > 0 )
-    # if ires_zero == fsc_curve.size - 1:
-    #     return 999
-    # from scipy import interpolate
-    # fsc_curve = np.where(np.isnan(fsc_curve), 0, fsc_curve)
-    # f = interpolate.interp1d( np.array([fsc_curve[idx], fsc_curve[idx+1]]), np.array([freq[idx], freq[idx+1]]) )
     return ires_interp
 
 
@@ -507,26 +375,9 @@ def filter_with_local_fsc(ft_sum, fsc, local_resol, voxel_size, filter_edgewidth
     # import pdb; pdb.set_trace()
     return  ift_sum
 
-# def low_pass_filter_map(FT, ori_size, low_pass, angpix, filter_edgewidth=2, do_highpass_instead = False):
-#     ires_filter = jnp.round((ori_size * angpix) / low_pass)
-#     filter_edge_halfwidth = filter_edgewidth // 2
 
-#     edge_low = jnp.maximum(0., (ires_filter - filter_edge_halfwidth) / ori_size)
-#     edge_high = jnp.minimum(FT.shape[0], (ires_filter + filter_edge_halfwidth) / ori_size)
-#     edge_width = edge_high - edge_low
-#     res = ftu.get_grid_of_radial_distances(FT.shape) / ori_size
-
-#     if do_highpass_instead:
-#         filter = jnp.where(res <  edge_low , 0, 1)
-#         filter = jnp.where(res >= edge_low * (res < edge_high), 0.5 - 0.5 * jnp.cos(jnp.pi * (res - edge_low) / edge_width), filter)
-#     else:
-#         filter = jnp.where(res <  edge_low , 1, 0)
-#         filter = jnp.where(res >= edge_low * (res < edge_high), 0.5 + 0.5 * jnp.cos(jnp.pi * (res - edge_low) / edge_width), filter)
-#     filter = filter.astype(FT.dtype)
-#     return FT * filter
-
-def low_pass_filter_map(FT, ori_size, low_pass, angpix, filter_edgewidth, do_highpass_instead = False):
-    ires_filter = jnp.round((ori_size * angpix) / low_pass)
+def low_pass_filter_map(FT, ori_size, low_pass, voxel_size, filter_edgewidth, do_highpass_instead = False):
+    ires_filter = jnp.round((ori_size * voxel_size) / low_pass)
     filter_edge_halfwidth = filter_edgewidth // 2
 
     edge_low = jnp.maximum(0., (ires_filter - filter_edge_halfwidth) / ori_size)
@@ -547,9 +398,9 @@ def low_pass_filter_map(FT, ori_size, low_pass, angpix, filter_edgewidth, do_hig
 def local_error(map1, map2, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, low_pass_filter_res = None):
     locres_maskrad= 0.5 *locres_sampling if locres_maskrad is None else locres_maskrad
     locres_edgwidth = locres_sampling if locres_edgwidth is None else locres_edgwidth
-    angpix = voxel_size
+    
 
-    edgewidth_pix = np.round(locres_edgwidth / angpix).astype(int)
+    edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
 
     # mask = mask_fn.raised_cosine_mask(map1.shape, locres_maskrad, locres_maskrad + edgewidth_pix, -1)
 
@@ -558,10 +409,10 @@ def local_error(map1, map2, voxel_size, locres_sampling = 25, locres_maskrad= No
     # Compute error with convolution
     
     if low_pass_filter_res is not None:
-        map1_ft = low_pass_filter_map(map1_ft, map1_ft.shape[0], low_pass_filter_res, angpix, edgewidth_pix, do_highpass_instead = False)
+        map1_ft = low_pass_filter_map(map1_ft, map1_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
         map1 = ftu.get_idft3(map1_ft).real
 
-        map2_ft = low_pass_filter_map(map2_ft, map1_ft.shape[0], low_pass_filter_res, angpix, edgewidth_pix, do_highpass_instead = False)
+        map2_ft = low_pass_filter_map(map2_ft, map1_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
         map2 = ftu.get_idft3(map2_ft).real
 
     mask_ft = ftu.get_dft3(mask)
@@ -586,9 +437,9 @@ def local_error(map1, map2, voxel_size, locres_sampling = 25, locres_maskrad= No
 def local_error_with_cov(map1, map2, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, low_pass_filter_res = None, noise_variance = None):
     locres_maskrad= 0.5 *locres_sampling if locres_maskrad is None else locres_maskrad
     locres_edgwidth = locres_sampling if locres_edgwidth is None else locres_edgwidth
-    angpix = voxel_size
+    
 
-    edgewidth_pix = np.round(locres_edgwidth / angpix).astype(int)
+    edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
 
 
     # TODO FIX this +/- 1 business somewhere once and for all...
@@ -598,10 +449,10 @@ def local_error_with_cov(map1, map2, voxel_size, locres_sampling = 25, locres_ma
 
     # Compute error with convolution
     if low_pass_filter_res is not None:
-        map1_ft = low_pass_filter_map(map1_ft, map1_ft.shape[0], low_pass_filter_res, angpix, edgewidth_pix, do_highpass_instead = False)
+        map1_ft = low_pass_filter_map(map1_ft, map1_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
         map1 = ftu.get_idft3(map1_ft).real
 
-        map2_ft = low_pass_filter_map(map2_ft, map1_ft.shape[0], low_pass_filter_res, angpix, edgewidth_pix, do_highpass_instead = False)
+        map2_ft = low_pass_filter_map(map2_ft, map1_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
         map2 = ftu.get_idft3(map2_ft).real
 
     ## Whiten maps
@@ -625,36 +476,51 @@ def local_error_with_cov(map1, map2, voxel_size, locres_sampling = 25, locres_ma
     return local_errors
 
 
+def get_local_error_subvolume_rad(locres_maskrad, voxel_size, multiplier=3):
+    maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
+    rad = maskrad_pix * multiplier
+    return rad
+
+def get_local_error_subvolume_size(locres_maskrad, voxel_size, multiplier=3):
+    # locres_maskrad= 0.5 *locres_sampling if locres_maskrad is None else locres_maskrad
+    # maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
+    # rad = maskrad_pix * multiplier
+    return 2*get_local_error_subvolume_rad(locres_maskrad, voxel_size, multiplier=3)
+
 
 ### This is the metric which is actually used
 def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, use_v2 = False, debug = False, split_shell = False):
 
-    locres_maskrad= 0.5 *locres_sampling if locres_maskrad is None else locres_maskrad
-    locres_edgwidth = locres_sampling if locres_edgwidth is None else locres_edgwidth
+    # Took out these - likely to cause bugs
+    # locres_maskrad=  0.5 *locres_sampling if locres_maskrad is None else locres_maskrad
+    # locres_edgwidth = locres_sampling if locres_edgwidth is None else locres_edgwidth
 
 
-    angpix = voxel_size
+
+    maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
+    edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
+
+    step_size = np.round(locres_sampling / voxel_size).astype(int)
+    # logger.info(f"Step size: {step_size}, maskrad_pix: {maskrad_pix}, edgewidth_pix: {edgewidth_pix}")
+    logger.info(f"Compute CV metric with sampling = {locres_sampling} and radius = {locres_maskrad} and edgewidth = {locres_edgwidth}")
 
 
-    step_size = np.round(locres_sampling / angpix).astype(int)
-    maskrad_pix = np.round(locres_maskrad / angpix).astype(int)
-    edgewidth_pix = np.round(locres_edgwidth / angpix).astype(int)
-    logger.info(f"Step size: {step_size}, maskrad_pix: {maskrad_pix}, edgewidth_pix: {edgewidth_pix}")
-    myrad = map1.shape[0]//2 - maskrad_pix
     # myrad = 40
-    myradf = myrad / step_size
-    sampling_points = []
+    # myradf = myrad / step_size
+    # sampling_points = []
 
-    # logger.info(f"Starting...")
+    # # logger.info(f"Starting...")
 
-    grid = np.array(ftu.get_1d_frequency_grid(map1.shape[0], 1, scaled = False)[::step_size])
-    for kk in grid:
-        for ii in grid:
-            for jj in grid:
-                rad = np.sqrt(kk * kk + ii * ii + jj * jj)
-                if rad < myrad:
-                    sampling_points.append((kk, ii, jj))
-    sampling_points = jnp.array(sampling_points).astype(int)
+    # grid = np.array(ftu.get_1d_frequency_grid(map1.shape[0], 1, scaled = False)[::step_size])
+    # for kk in grid:
+    #     for ii in grid:
+    #         for jj in grid:
+    #             rad = np.sqrt(kk * kk + ii * ii + jj * jj)
+    #             if rad < myrad:
+    #                 sampling_points.append((kk, ii, jj))
+    # sampling_points = jnp.array(sampling_points).astype(int)
+
+    sampling_points = get_sampling_points(map1.shape[0], locres_sampling, locres_maskrad, voxel_size)
 
     # sampling_points = jnp.array(sampling_points).astype(int)[:1]
 
@@ -683,19 +549,14 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
     # from skimage.transform import downscale_local_mean
     
     if use_v2:
-        multiplier = 3
-        rad = maskrad_pix * multiplier
+        # multiplier = 3
+        # rad = maskrad_pix * multiplier
+        rad = get_local_error_subvolume_rad(locres_maskrad, voxel_size)
         # downsampled_noise_variance_ift = ftu.get_idft3(jnp.sqrt(noise_variance) )
         downsampled_noise_variance_ift = ftu.get_idft3((noise_variance) )#.real
 
         downsampled_noise_variance_ift_subs = subsample_array(downsampled_noise_variance_ift, map1.shape[0]//2+1, rad)
         noise_variance_small = ftu.get_dft3(downsampled_noise_variance_ift_subs ) * noise_variance.size / downsampled_noise_variance_ift_subs.size
-
-
-        # downsampled_noise_variance_ift_subs = subsample_array(downsampled_noise_variance_ift, map1.shape[0]//2+0, rad)
-        # noise_variance_small2 = ftu.get_dft3(downsampled_noise_variance_ift_subs) * noise_variance.size / downsampled_noise_variance_ift_subs.size#, norm = "ortho") 
-        # print(np.linalg.norm(noise_variance_small - noise_variance_small2) / np.linalg.norm(noise_variance_small))
-        # import pdb; pdb.set_trace()
 
 
     # map1_sub = subsample_array(diff, offset, multiplier*radius)
@@ -920,33 +781,6 @@ def recombine_with_choice(estimators, choice, offset, maskrad_pix, edgewidth_pix
 
     return combined_est
 
-# @functools.partial(jax.jit, static_argnums = [3,4])    
-# def masked_noisy_error2(diff, sqrt_noise_variance_real, offset, maskrad_pix, edgewidth_pix ):
-
-#     offset = offset + diff.shape[0]//2
-#     radius = maskrad_pix + edgewidth_pix
-#     multiplier = 2
-#     map1_sub = subsample_array(diff, offset, multiplier*radius)
-
-
-#     noise_variance_real = subsample_array(sqrt_noise_variance_real, offset, multiplier*radius)
-#     mask = mask_fn.raised_cosine_mask(map1_sub.shape, maskrad_pix, radius, 0)
-#     result = jnp.linalg.norm(map1_sub * mask * noise_variance_real )**2
-#     import pdb; pdb.set_trace()
-#     return result
-
-# @functools.partial(jax.jit, static_argnums = [3,4])    
-# def masked_noisy_error2(diff, downsampled_noise_variance, offset, maskrad_pix, edgewidth_pix ):
-
-#     offset = offset + diff.shape[0]//2
-#     radius = maskrad_pix + edgewidth_pix
-#     # multiplier = 2
-#     diff_sub = subsample_array(diff, offset, downsampled_noise_variance.shape[0]//2)
-#     # noise_variance_real = subsample_array(sqrt_noise_variance_real, offset, multiplier*radius)
-#     mask = mask_fn.raised_cosine_mask(diff_sub.shape, maskrad_pix, radius, 0)
-#     result = jnp.linalg.norm( jnp.sqrt(downsampled_noise_variance) * ftu.get_dft3(diff_sub * mask) )**2
-#     # import pdb; pdb.set_trace()
-#     return result
 
 
 batch_masked_noisy_error = jax.vmap(masked_noisy_error, in_axes = (None,None,0, None, None) )
@@ -960,33 +794,33 @@ def recombine_estimates(estimators, choice, voxel_size, locres_sampling = 25, lo
     assert locres_edgwidth ==0
     locres_maskrad= 0.5 *locres_sampling if locres_maskrad is None else locres_maskrad
     locres_edgwidth = locres_sampling if locres_edgwidth is None else locres_edgwidth
-    angpix = voxel_size
+    
+    logger.info(f"Recombining estimate with sampling = {locres_sampling} and radius = {locres_maskrad} and edgewidth = {locres_edgwidth}")
 
-    step_size = np.round(locres_sampling / angpix).astype(int)
-    maskrad_pix = np.round(locres_maskrad / angpix).astype(int)
+    step_size = np.round(locres_sampling / voxel_size).astype(int)
+    maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
 
     if maskrad_pix < 5:
         logger.warning(f"radius of local resolution mask is only {maskrad_pix} pixels. Result will probably be nonsense. Should either increase locres_maskrad or do global resolution estimate")
 
-    edgewidth_pix = np.round(locres_edgwidth / angpix).astype(int)
+    edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
     logger.info(f"Step size: {step_size}, maskrad_pix: {maskrad_pix}, edgewidth_pix: {edgewidth_pix}")
-    myrad = estimators.shape[1]//2 - 1*maskrad_pix
     # print('CHANGE THIS BACK!!')
     # myrad = 40
-    myradf = myrad / step_size
-    sampling_points = []
+    # myradf = myrad / step_size
 
     logger.info(f"Starting...")
-
-    # TODO: REally need to put this in a function
-    grid = np.array(ftu.get_1d_frequency_grid(estimators.shape[1], 1, scaled = False)[::step_size])
-    for kk in grid:
-        for ii in grid:
-            for jj in grid:
-                rad = np.sqrt(kk * kk + ii * ii + jj * jj)
-                if rad < myrad:
-                    sampling_points.append((kk, ii, jj))
-    sampling_points = jnp.array(sampling_points).astype(int)
+    sampling_points = get_sampling_points(estimators.shape[1], locres_sampling, locres_maskrad, voxel_size)
+    # sampling_points = []
+    # # TODO: REally need to put this in a function
+    # grid = np.array(ftu.get_1d_frequency_grid(estimators.shape[1], 1, scaled = False)[::step_size])
+    # for kk in grid:
+    #     for ii in grid:
+    #         for jj in grid:
+    #             rad = np.sqrt(kk * kk + ii * ii + jj * jj)
+    #             if rad < myrad:
+    #                 sampling_points.append((kk, ii, jj))
+    # sampling_points = jnp.array(sampling_points).astype(int)
 
     nr_samplings = sampling_points.shape[0]
     logger.info(f"Recombining estimates at {nr_samplings} sampling points ...")
@@ -1010,3 +844,52 @@ def recombine_estimates(estimators, choice, voxel_size, locres_sampling = 25, lo
     optimized_estimator = make_i_fil_map(sampling_points, optimized_estimator, full_mask)
 
     return optimized_estimator
+
+
+def get_sampling_points(grid_size, locres_sampling, locres_maskrad, voxel_size):
+    maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
+    step_size = np.round(locres_sampling / voxel_size).astype(int)
+    myrad = grid_size//2 - maskrad_pix
+
+    sampling_points = []
+    grid = np.array(ftu.get_1d_frequency_grid(grid_size, 1, scaled = False)[::step_size])
+    for kk in grid:
+        for ii in grid:
+            for jj in grid:
+                rad = np.sqrt(kk * kk + ii * ii + jj * jj)
+                if rad < myrad:
+                    sampling_points.append((kk, ii, jj))
+    sampling_points = jnp.array(sampling_points).astype(int)
+    return sampling_points
+
+
+def make_sampling_volume(grid_size, locres_sampling, voxel_size, locres_maskrad):
+    maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
+    step_size = np.round(locres_sampling / voxel_size).astype(int)
+
+    sampling_points = get_sampling_points(grid_size, locres_sampling, locres_maskrad, voxel_size)
+    # Sampling points are centered at 0. We need to recenter them at half the grid
+    sampling_points += grid_size//2
+    # Dump 
+    volume = np.ones((grid_size, grid_size, grid_size), dtype = np.float16) * -1
+    for k in range(sampling_points.shape[0]):
+        half_step = step_size // 2
+        volume[sampling_points[k,0]-half_step:sampling_points[k,0]+half_step, sampling_points[k,1]-half_step:sampling_points[k,1]+half_step, sampling_points[k,2]-half_step:sampling_points[k,2]+half_step] = k
+    return volume
+
+
+
+def make_sampling_volume(grid_size, locres_sampling, voxel_size, locres_maskrad):
+    maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
+    step_size = np.round(locres_sampling / voxel_size).astype(int)
+
+    sampling_points = get_sampling_points(grid_size, locres_sampling, locres_maskrad, voxel_size)
+    # Sampling points are centered at 0. We need to recenter them at half the grid
+    sampling_points += grid_size//2
+    # Dump 
+    volume = np.ones((grid_size, grid_size, grid_size), dtype = np.float16) * -1
+    for k in range(sampling_points.shape[0]):
+        half_step = step_size // 2
+        volume[sampling_points[k,0]-half_step:sampling_points[k,0]+half_step, sampling_points[k,1]-half_step:sampling_points[k,1]+half_step, sampling_points[k,2]-half_step:sampling_points[k,2]+half_step] = k
+    return volume
+

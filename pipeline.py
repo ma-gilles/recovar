@@ -263,10 +263,12 @@ def standard_recovar_pipeline(args):
         text_file.write(str(sys.argv))
 
     # The force interaction has something to do with cryodrgn interaction which is breaking the logger...
-    logging.basicConfig(filename=f"{args.outdir}/run.log",
-                        format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
+    logging.basicConfig(format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
                         level=logging.INFO,
-                        force = True)
+                        force = True, 
+                        handlers=[
+        logging.FileHandler(f"{args.outdir}/run.log"),
+        logging.StreamHandler()])
 
     logger.info(args)
     ind_split = dataset.figure_out_halfsets(args)
