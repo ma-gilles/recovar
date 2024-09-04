@@ -333,7 +333,7 @@ def kmeans_analysis(output_folder, zs, n_clusters = 20):
     return centers, labels
 
 
-def move_to_one_folder(path_folder, n_vols, string_name = 'ml_optimized_locres_filtered.mrc', new_stringname = 'vol' ):
+def move_to_one_folder(path_folder, n_vols, string_name = 'locres_filtered.mrc', new_stringname = 'vol' ):
     mkdir_safe(path_folder + '/all_volumes/')
     output_folder = path_folder + '/all_volumes/'
     import shutil
@@ -427,12 +427,11 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_varian
 
             locres_maskrad = cryos[0].grid_size * cryos[0].voxel_size / maskrad_fraction
             logger.info(f"Mask radius fraction = {maskrad_fraction}. Setting locres_maskrac = locres_sampling = box_size * voxel_size / {maskrad_fraction} = {locres_maskrad:.1f} Angstroms. Using {n_min_images} images for template.")
-
             heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder_this, ndim, n_bins, B_factor, tau = None, n_min_images = n_min_images, locres_sampling = locres_maskrad, locres_maskrad = locres_maskrad, locres_edgwidth = 0, upsampling_for_ests = 1, use_mask_ests =False, grid_correct_ests = False, save_all_estimates=save_all_estimates, metric_used= 'locshellmost_likely')
 
             logger.info(f"Done with volume generation {k} stored in {output_folder_this}")
-        move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'ml_optimized_locres_filtered.mrc', new_stringname = 'vol' )
-        move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'ml_optimized_locres.mrc', new_stringname = 'locres' )
+        move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'locres_filtered.mrc', new_stringname = 'vol' )
+        move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'locres.mrc', new_stringname = 'locres' )
         np.savetxt(output_folder + 'latent_coords.txt', path_subsampled)
 
     # memory_to_use = utils.get_gpu_memory_total() - path_subsampled.shape[0] * cryos[0].volume_size * 8 / 1e9 * 8
