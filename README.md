@@ -394,8 +394,6 @@ python compute_trajectory.py [pipeline_output_dir] -o [volume_output_dir] --late
 
 </details>
 
-Thanks for sharing the updated code! Here’s the refined documentation that aligns with your latest script updates for the `extract_image_subset` function:
-
 ## Extracting image subset based on volumes 
 
 ### Overview
