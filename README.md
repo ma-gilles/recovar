@@ -69,8 +69,10 @@ The code for the paper was run on [this commit](https://github.com/ma-gilles/rec
 
 
 
-
 ## I. Preprocessing 
+## NOTE: Until I fix versioning issues, you need to install cryoDRGN and RECOVAR in two different conda environments.
+**This means you should install cryoDRGN in the crydrgn environment as below, process the data using the cryoDRGN environment after doing `conda activate cryodrgn`, then activate the recovar environement with `conda activate recovar`, and go on with the analysis.**
+
 
 The input interface of RECOVAR is borrowed directly from the excellent [cryoDRGN toolbox](https://cryodrgn.cs.princeton.edu/). 
 Particles, poses and CTF must be prepared in the same way, and below is copy-pasted part of 
