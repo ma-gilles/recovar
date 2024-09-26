@@ -459,6 +459,58 @@ python extract_image_subset.py --input-dir [input_directory] --output [output_pa
 - Ensure that the correct path is provided for both the `--input-dir` and `--output` parameters.
 - Only one of `--subvol-idx`, `--mask`, or `--coordinate` should be provided to define the criteria for image extraction. Providing more than one of these parameters will result in an error.
 
+
+## Command: `extract_image_subset_from_kmeans`
+
+### Overview
+
+This command extracts a subset of images based on the k-means clustering indices from a specified `.pkl` file. The images can be selected either by directly specifying the k-means indices to keep, or by excluding the specified indices using the inverse option.
+
+### Usage
+
+```bash
+python extract_image_subset_from_kmeans.py [path_to_centers] [output_path] [kmeans_indices] [-i]
+```
+
+### Parameters
+
+- **`path_to_centers`** *(required)*: 
+  - Type: `str`
+  - Description: Path to the `centers.pkl` file. This file is usually found in the folder `[recovar_output_folder]/output/analysis_[zdim]/centers.pkl` and contains the labels of the k-means clustering.
+
+- **`output_path`** *(required)*:
+  - Type: `str`
+  - Description: Path where the output `.pkl` file containing the indices of the extracted image subset will be saved.
+
+- **`kmeans_indices`** *(required)*:
+  - Type: `list of int`
+  - Description: A comma-separated list of k-means indices that you wish to keep. For example, `20,30,50` would keep the images that belong to these k-means clusters.
+
+- **`-i, --inverse`** *(optional)*:
+  - Type: `bool`
+  - Description: If this option is provided, the function will exclude the images that correspond to the specified k-means indices. By default, the function keeps the images that correspond to the specified indices.
+
+### Example Commands
+
+1. **Extracting images corresponding to specific k-means clusters:**
+
+   ```bash
+   python extract_image_subset_from_kmeans.py /path/to/centers.pkl /path/to/output_indices.pkl 20,30,50
+   ```
+
+2. **Excluding specific k-means clusters:**
+
+   ```bash
+   python extract_image_subset_from_kmeans.py /path/to/centers.pkl /path/to/output_indices.pkl 20,30,50 -i
+   ```
+
+### Notes
+
+- The `path_to_centers` must be a valid `.pkl` file containing the k-means clustering labels, typically located at `[recovar_output_folder]/output/analysis_[zdim]/centers.pkl`.
+- The `output_path` must also be a `.pkl` file where the subset of indices will be saved.
+- Only one of the `--inverse` option should be used. If provided, the images not in the specified clusters will be saved.
+
+
 ## V. Visualizing results
 ### Output structure
 
