@@ -258,7 +258,7 @@ def compute_latent_log_likelihood(test_pts, zs, cov_zs):
     logger.warning("SHOULD THIS BE SCALED?")
     for k in range(0, utils.get_number_of_index_batch(n_images, batch_size_x)):
         batch_st, batch_end = utils.get_batch_of_indices(n_images, batch_size_x, k)
-        quads[batch_st:batch_end,:] = 0.5 * (compute_latent_quadratic_forms( test_pts.real, zs[batch_st:batch_end].real, cov_zs[batch_st:batch_end]) + det_cov_zs[batch_st:batch_end][...,None])
+        quads[batch_st:batch_end,:] = 0.5 * (compute_latent_quadratic_forms( test_pts.real, zs[batch_st:batch_end].real, cov_zs[batch_st:batch_end]) - det_cov_zs[batch_st:batch_end][...,None])
     # import pdb; pdb.set_trace()
 
     return quads

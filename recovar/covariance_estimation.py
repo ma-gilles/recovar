@@ -57,12 +57,15 @@ def set_covariance_options(args, options):
 
 
 from recovar import core
-def greedy_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_radius = 1):
+def greedy_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_radius = 1, keep_only_below_freq = 32):
     if avoid_in_radius < 0 or avoid_in_radius > 20:
         raise ValueError("avoid_in_radius should be between 0 and 20")
 
     if n_samples < 1 or n_samples > sampling_vec.size:
         raise ValueError("n_samples should be between 1 and the size of sampling_vec")
+
+    radial_distances = ftu.get_grid_of_radial_distances(volume_shape)
+    sampling_vec *= radial_distances.reshape(-1) < keep_only_below_freq
 
     sorted_idx = jnp.argsort(-sampling_vec)
     sorted_idx = np.array(sorted_idx)

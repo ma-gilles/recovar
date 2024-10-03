@@ -46,7 +46,10 @@ def get_process_memory_used():
     mem_info = process.memory_info()
     return int(mem_info.rss / 1e9)
 
+GPU_MEMORY_LIMIT = None
 def get_gpu_memory_total(device =0):
+    if GPU_MEMORY_LIMIT is not None:
+        return GPU_MEMORY_LIMIT
     if jax_has_gpu():
         return int(jax.local_devices()[device].memory_stats()['bytes_limit']/1e9)
     else:
