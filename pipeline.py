@@ -246,6 +246,10 @@ def add_args(parser: argparse.ArgumentParser):
         "--ntilts", default = None, type=int, help="Number of tilts to use per tilt series. None = all (default)"
     )
 
+    parser.add_argument(
+        "--gpu-gb", default =None,  type = float, dest="gpu_memory", help="How much GPU memory to use. Default = all" 
+    )
+
     return parser
     
 
@@ -278,6 +282,8 @@ def standard_recovar_pipeline(args):
 
     cryos = dataset.get_split_datasets_from_dict(dataset_loader_dict, ind_split, args.lazy)
     cryo = cryos[0]
+    if args.gpu_memory is not None:
+        utils.GPU_MEMORY_LIMIT = args.gpu_memory
     gpu_memory = utils.get_gpu_memory_total()
     volume_shape = cryo.volume_shape
     disc_type = "linear_interp"
