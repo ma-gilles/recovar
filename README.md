@@ -70,6 +70,7 @@ Then create an environment, download JAX-cuda (for some reason the latest versio
 
 
 
+It is recommanded to test your installation before running on a real dataset, see (#small-test-dataset).
 
 <!-- The code was tested on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
 
@@ -840,30 +841,79 @@ Usage example:
 
 ## Small test dataset
 
-If you want to make sure everything is installed properly, you can run the code in `run_test_dataset.sh`, which will generate a small dataset, run the pipeline and generate volumes.
+To verify that RECOVAR is installed properly and functioning correctly, you can run a small test using a synthetic dataset. The script `run_test_dataset.py` is already included in the repository and will:
 
-You can do this by: `conda activate recovar` and then  `sh run_test_dataset.sh`. See below for what the script does
+- Generate a small synthetic dataset.
+- Run the RECOVAR pipeline on this dataset.
+- Perform analysis, including clustering and embedding.
+- Estimate conformational density.
+- Compute trajectories in the latent space.
+- Report which steps passed or failed.
+- Delete the test dataset directory at the end if all steps pass.
 
-<details><summary>sh run_test_dataset.sh</summary>
+### Steps to Run the Test Script
 
-    RECOVAR_PATH=./
-    # Generate a small test dataset - should take about 30 sec
-    python $RECOVAR_PATH/make_test_dataset.py
+1. **Activate your `recovar` environment**:
 
-    # Run pipeline, should take about 2 min
-    python $RECOVAR_PATH/pipeline.py test_dataset/particles.64.mrcs --poses test_dataset/poses.pkl --ctf test_dataset/ctf.pkl --correct-contrast --o test_dataset/pipeline_output --mask=from_halfmaps
+   ```bash
+   conda activate recovar
+   ```
 
-    # Run on the 2D embedding with no regularization on latent space (better for density estimation)
-    # Should take about 5 min
-    python $RECOVAR_PATH/analyze.py test_dataset/pipeline_output --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=0
+2. **Run the test script**
 
+   Navigate to the directory where RECOVAR is installed and execute:
 
-    # You may want to delete this directory after running the test. 
-    # rm -rf $RECOVAR_PATH/test_dataset
+   ```bash
+   python run_test_dataset.py
+   ```
 
-    ## One way to make sure everything went well is that the states in test_dataset/pipeline_output/output/analysis_2_noreg/centers/all_volumes should be similar to the simulated ones in recovar/data/vol*.mrc (the order doesn't matter, though)
-</details>
+   This script is located in the root directory of the RECOVAR repository.
 
+### What the Script Does
+
+The script performs the following steps:
+
+1. **Generates a small synthetic dataset** using `make_test_dataset.py`.
+2. **Runs the RECOVAR pipeline** on the test dataset using `pipeline.py`.
+3. **Analyzes the results** using `analyze.py`, including clustering and embedding.
+4. **Estimates the conformational density** with `estimate_conformational_density.py`.
+5. **Computes trajectories** in the latent space using `compute_trajectory.py`.
+6. **Reports which steps passed or failed**.
+7. **Deletes the `test_dataset` directory** at the end if all steps pass.
+
+### Verifying the Results
+
+- **Success Message**: If all steps complete successfully, you'll see:
+
+  ```
+  Total steps passed: 6
+  Total steps failed: 0
+
+  All functions completed successfully!
+  Test dataset directory 'test_dataset' has been deleted.
+  ```
+
+- **Failure Notification**: If any steps fail, the script will indicate which functions failed, and you can check the output for details.
+
+  ```
+  Total steps passed: 5
+  Total steps failed: 1
+
+  The following functions failed:
+  - estimate_conformational_density.py
+
+  Please check the output above for details.
+  ```
+
+### Notes
+
+- **Verifying Outputs**: You can compare the volumes generated in `test_dataset/pipeline_output/output/analysis_2_noreg/kmeans_center_volumes/all_volumes` with the simulated volumes in `recovar/data/vol*.mrc` to ensure the pipeline is producing expected results (the order may differ).
+
+- **Cleanup**: The script will delete the `test_dataset` directory at the end if all steps pass. This helps keep your workspace clean.
+
+---
+
+[Rest of the README remains unchanged.]
 
 
 ## TLDR
