@@ -18,13 +18,21 @@ If you are interested in the research and methods
 
 [Installation](#installation)
 
+
 Running RECOVAR:
 * [1. Preprocessing](#i-preprocessing)
 * [2. Specifying a mask](#ii-specifying-a-real-space-mask)
-* [3. Running the pipeline](#iii-running-recovar-pipeline)
+* [3. Running the pipeline](#iii-running-the-recovar-pipeline)
+  - Uses [`pipeline.py`](#iii-running-the-recovar-pipeline)
 * [4. Analyzing results](#iv-analyzing-results)
+  - Uses [`analyze.py`](#usage-of-analyzepy)
+  - Generating volumes at specific points: [`compute_state.py`](#generating-volumes-at-specific-points-in-latent-space)
+  - Generating and analyzing trajectories: [`compute_trajectory.py`](#generating-and-analyzing-trajectories-in-latent-space)
+  - Extracting image subsets:
+    - Based on volumes: [`extract_image_subset.py`](#extracting-image-subset-based-on-volumes)
+    - Based on k-means clusters: [`extract_image_subset_from_kmeans.py`](#command-extract_image_subset_from_kmeans)
+  - Estimating conformational density: [`estimate_conformational_density.py`](#command-estimate_conformational_densitypy)
 * [5. Visualizing results](#v-visualizing-results)
-
 
 Other:
 * [RECOVAR for Cryo-ET](#cryo-et)
