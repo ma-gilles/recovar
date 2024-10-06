@@ -70,7 +70,7 @@ Then create an environment, download JAX-cuda (for some reason the latest versio
 
 
 
-It is recommanded to test your installation before running on a real dataset, see (#small-test-dataset).
+It is recommanded to test your installation before running on a real dataset, see [Testing your installation](#small-test-dataset).
 
 <!-- The code was tested on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
 
