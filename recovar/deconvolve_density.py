@@ -178,9 +178,6 @@ def plot_density(lbfgsb_sols, density, alphas, function = None, cmap = 'inferno'
 
 
     plt.rcParams.update({
-        # "text.usetex": True,
-        # "font.family": "serif",
-        # "font.sans-serif": "Helvetica",
     })
     font = {'weight' : 'bold',
             'size'   : 22}
@@ -188,40 +185,40 @@ def plot_density(lbfgsb_sols, density, alphas, function = None, cmap = 'inferno'
     matplotlib.rc('font', **font)
 
     n_plots = len(lbfgsb_sols)+1
-    fig, axs = plt.subplots( n_plots, density.ndim, figsize = ( density.ndim *5, n_plots*3 ))#, 6*3))
+    n_cols = density.ndim if density.ndim < 3 else density.ndim 
+    fig, axs = plt.subplots( n_plots, n_cols, figsize = ( n_cols *5, n_plots*5 ))#, 6*3))
     global is_first
     is_first = True
 
-    def plot_dens(density, title, n_plot):
+    def plot_dens(density, title, n_plot, first = False):
         density = np.asarray(density)
-        # if is_first:            
-        #     axs[n_plot,k].set_title(f"projection {k}")
+        global is_first
+        for k in range(1, density.ndim):
 
-        if density.ndim ==2:
+            if k ==1:
+                axs[n_plot,k-1].set_ylabel(title)
+            axs[n_plot,k-1].set_xticklabels([])
+            axs[n_plot,k-1].set_yticklabels([])
+
+            to_plot = function(density, [0,k])
             # plt.figure()
             # plt.title(title)
-            axs[n_plot,0].imshow(density)#.sum(axis=-1))
+            axs[n_plot,k-1].imshow(to_plot, cmap =cmap)#.sum(axis=-1))
             # plt.show()
-        else:
+            if is_first:            
+                axs[n_plot,k-1].set_title(f"PC {0}, {k}")
 
-            for k in range(1, density.ndim):
-                if k ==1:
-                    axs[n_plot,k-1].set_ylabel(title)
-                axs[n_plot,k-1].set_xticklabels([])
-                axs[n_plot,k-1].set_yticklabels([])
 
-                to_plot = function(density, [0,k])
-                # plt.figure()
-                # plt.title(title)
-                axs[n_plot,k-1].imshow(to_plot, cmap =cmap)#.sum(axis=-1))
-                # plt.show()
-            to_plot = function(density, [0,2])
+        if density.ndim > 2:
+            to_plot = function(density, [1,2])
             # plt.figure()
             # plt.title(title)
-            axs[n_plot,k].imshow(to_plot)#.sum(axis=-1))
+            axs[n_plot,k].imshow(to_plot, cmap =cmap)#.sum(axis=-1))
             axs[n_plot,k].set_xticklabels([])
             axs[n_plot,k].set_yticklabels([])
-
+            if is_first:            
+                axs[n_plot,k].set_title(f"PC {1}, {2}")
+        is_first = False
             # plt.show()
 
     # axs[n_plot,0].set_ylabel(name)
@@ -232,6 +229,7 @@ def plot_density(lbfgsb_sols, density, alphas, function = None, cmap = 'inferno'
         lbfgsb_sol = lbfgsb_sols[alpha_idx]
         plot_dens(lbfgsb_sol, r'a'+f'[{alpha_idx}]={alpha:.1e}', alpha_idx+1)
     plt.subplots_adjust(wspace=0, hspace=0)
+
 
 
 def plot_density_centers(density, centers):

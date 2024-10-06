@@ -2,7 +2,7 @@ import recovar.config
 import logging
 import numpy as np
 from recovar import output as o
-from recovar import dataset, utils, latent_density, embedding
+from recovar import dataset, utils, latent_density, embedding, plot_utils
 from scipy.spatial import distance_matrix
 import pickle
 import os, argparse
@@ -29,7 +29,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--n-trajectories", type=int, default=2, dest="n_trajectories", help="number of trajectories to compute between k-means clusters (default 6)"
+        "--n-trajectories", type=int, default=0, dest="n_trajectories", help="number of trajectories to compute between k-means clusters (default 0)"
     )
 
     parser.add_argument(
@@ -60,7 +60,7 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
-def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40, n_paths = 6, skip_umap = False, q = None, n_std = None, B_factor=0, n_bins=30, n_vols_along_path = 6, skip_centers = False, normalize_kmeans = False, density_path = None, no_z_reg = False, lazy = False):
+def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40, n_paths = 0, skip_umap = False, q = None, n_std = None, B_factor=0, n_bins=30, n_vols_along_path = 6, skip_centers = False, normalize_kmeans = False, density_path = None, no_z_reg = False, lazy = False):
 
 
     po = o.PipelineOutput(recovar_result_dir + '/')
@@ -75,7 +75,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     zdim_key = f"{zdim}_noreg" if no_z_reg else zdim
 
     if output_folder is None:
-        output_folder = recovar_result_dir + f'/output/analysis_{zdim_key}/' 
+        output_folder = recovar_result_dir + f'/analysis_{zdim_key}/' 
 
     if zdim not in po.get('zs'):
         logger.error("z-dim not found in results. Options are:" + ','.join(str(e) for e in po.get('zs').keys()))
@@ -122,8 +122,9 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
     output_folder_kmeans = output_folder + '/' #+ '/kmeans'+'_'+ str(n_clusters) + '/'    
     o.mkdir_safe(output_folder_kmeans)    
-
     utils.basic_config_logger(output_folder)
+    plot_utils.plot_summary_t(po,cryos, n_eigs = 5, filename = output_folder_kmeans + "mean_variance_eigenvolume_plots.png")
+
     # logging.basicConfig(
     #     format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
     #                     level=logging.INFO,
@@ -140,16 +141,16 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     if normalize_kmeans:
         # zs_unsort = po.get('unsorted_embedding')['zs'][zdim_key]
         std = np.std(zs_unsort, axis = 0)
-        centers, labels = o.kmeans_analysis(output_folder_kmeans, zs_unsort/std, n_clusters = n_clusters)
+        centers, labels = o.kmeans_analysis(output_folder_kmeans + '/PCA/', zs_unsort/std, n_clusters = n_clusters)
         centers = centers * std
     else:
-        centers, labels = o.kmeans_analysis(output_folder_kmeans, zs_unsort, n_clusters = n_clusters)
+        centers, labels = o.kmeans_analysis(output_folder_kmeans  + '/PCA/', zs_unsort, n_clusters = n_clusters)
 
-    output_folder_kmeans_centers = output_folder_kmeans + '/centers/'
+    output_folder_kmeans_centers = output_folder_kmeans + '/kmeans_center_volumes/'
     o.mkdir_safe(output_folder_kmeans_centers)    
     kmeans_result = { 'centers' : centers, 'labels': reorder(labels)  }
-    pickle.dump(kmeans_result, open(output_folder_kmeans + 'centers.pkl', 'wb'))
-    np.savetxt(output_folder_kmeans + 'centers.txt', centers)
+    pickle.dump(kmeans_result, open(output_folder_kmeans + 'kmeans_result.pkl', 'wb'))
+    np.savetxt(output_folder_kmeans + 'kmeans_center_coords.txt', centers)
     
     if not skip_centers:
         o.compute_and_save_reweighted(cryos, centers, zs, cov_zs, noise_variance, output_folder_kmeans_centers, B_factor, n_bins, n_min_images = args.n_min_images,  maskrad_fraction = args.maskrad_fraction)
@@ -159,16 +160,14 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         # zs_unsort = po.get('unsorted_embedding')['zs'][zdim_key]
         mapper = o.umap_latent_space(zs_unsort)
         o.mkdir_safe(output_folder + '/umap/')    
-        utils.pickle_dump(reorder(mapper.embedding_), output_folder + '/umap/embedding.pkl')
+        utils.pickle_dump(reorder(mapper.embedding_), output_folder + '/umap/umap_embedding.pkl')
         from cryodrgn import analysis
         _, kmeans_ind = analysis.get_nearest_point(zs_unsort, centers)
 
         o.plot_umap(output_folder + '/umap/', mapper.embedding_, mapper.embedding_[kmeans_ind])
 
     del zs_unsort
-
     # num_images = 
-        
     # for entry in embedding_dict:
     #     for key in embedding_dict[entry]:
     #         embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(embedding_dict[entry][key], ind_split)

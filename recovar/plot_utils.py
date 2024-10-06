@@ -111,7 +111,7 @@ def compare_two_volumes(cryo, vol1, vol2, from_ft_inp = True):
 
     return
 
-def plot_summary_t(pipeline_output,cryos, n_eigs = 3, u_key = "rescaled"):
+def plot_summary_t(pipeline_output,cryos, n_eigs = 3, filename = None):
     plt.rcParams.update({
         # "text.usetex": True,
         # "font.family": "serif",
@@ -177,6 +177,9 @@ def plot_summary_t(pipeline_output,cryos, n_eigs = 3, u_key = "rescaled"):
         plot_vol(u[k], k+3, from_ft = False, cmap = 'seismic' ,name = f"PC {k}", symmetric = True)
 
     plt.subplots_adjust(wspace=0, hspace=0)
+    if filename is not None:
+        plt.savefig(filename)
+    # plt.savefig("summary.png")
 
     return
 

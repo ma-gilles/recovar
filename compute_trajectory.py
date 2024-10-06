@@ -18,6 +18,13 @@ def add_args(parser: argparse.ArgumentParser):
         "--zdim", type=int, help="Dimension of latent variable (a single int, not a list)"
     )
 
+    # parser.add_argument(
+    #     "--no_z_reg", type=int, help="Dimension of latent variable (a single int, not a list)"
+    # )
+    parser.add_argument(
+        "--override_z_regularization", action="store_true", help= "Whether to override z regularization. It probably does not make sense to use this option, because the deconvolved density uses the UNREGULARIZED z's (see paper for why)."
+    )
+
     parser.add_argument(
         "--n-vols-along-path", type=int, default=6, dest="n_vols_along_path", help="number of volumes to compute along each trajectory (default 6)"
     )
@@ -59,13 +66,13 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
 
     if zdim is None and len(po.get('zs')) > 1:
         logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --zdim=4")
-        raise Exception("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --z-dim=4")
+        raise Exception("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --zdim=4")
     
     elif zdim is None:
         zdim = list(po.get('zs').keys())[0]
         logger.info(f"using zdim={zdim}")
     zdim_key = f"{zdim}_noreg" if no_z_reg else zdim
-
+    logger.info(f"using zdim_key={zdim_key}")
     assert output_folder is not None
     # if output_folder is None:
     #     output_folder = recovar_result_dir + f'/output/analysis_{zdim_key}/' 
@@ -139,6 +146,7 @@ if __name__ == "__main__":
     args = add_args(parser).parse_args()
 
     if args.kmeans_ind is not None:
+        
         kmeans_result = pickle.load(open(args.endpts_file, 'rb'))
         z_st = kmeans_result['centers'][args.kmeans_ind[0]]
         z_end = kmeans_result['centers'][args.kmeans_ind[1]]
@@ -149,5 +157,5 @@ if __name__ == "__main__":
     else:
         raise Exception("end point format wrong")
 
-    compute_trajectory(args.result_dir, output_folder = args.outdir, zdim= args.zdim, B_factor = args.Bfactor, n_bins = args.n_bins, n_vols_along_path = args.n_vols_along_path, density_path = args.density, no_z_reg = args.no_z_reg, z_st = z_st, z_end = z_end, args = args)
+    compute_trajectory(args.result_dir, output_folder = args.outdir, zdim= args.zdim, B_factor = args.Bfactor, n_bins = args.n_bins, n_vols_along_path = args.n_vols_along_path, density_path = args.density, no_z_reg = not args.override_z_regularization, z_st = z_st, z_end = z_end, args = args)
 
