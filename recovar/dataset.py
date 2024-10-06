@@ -67,7 +67,7 @@ class MRCDataMod(torch.utils.data.Dataset):
             images = images * self.mask
         # logger.warning("CHANGE BACK USE MASK TO FALSE")
         images = pad.padded_dft(images * self.mult,  self.image_size, self.padding)
-        return images
+        return images.astype(self.dtype)
 
     def get_dataset_generator(self, batch_size, num_workers = 0):
         return tf.data.Dataset.from_tensor_slices((self.particles,np.arange(self.n_images),np.arange(self.n_images))).batch(batch_size, num_parallel_calls = tf.data.AUTOTUNE).as_numpy_iterator()
@@ -540,10 +540,15 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
         
     voxel_sizes = ctf_params[:,0]
     assert np.all(np.isclose(voxel_sizes - voxel_sizes[0], 0))
-    voxel_size = float(voxel_sizes[0])
+    voxel_size = np.float32(voxel_sizes[0])
+
+    # Make sure everything is in correct dtype:
+    ctf_params = ctf_params.astype(np.float32)
+    translations = np.array(posetracker.trans).astype(np.float32)
+    rots = np.array(posetracker.rots).astype(np.float32)
 
     return CryoEMDataset( dataset, voxel_size,
-                              np.array(posetracker.rots), np.array(posetracker.trans), ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind, tilt_series_flag = tilt_series)
+                              rots, translations, ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind.astype(int), tilt_series_flag = tilt_series)
 
 
 

@@ -116,7 +116,7 @@ class ImageDataset(data.Dataset):
         # logger.warning("CHANGE BACK USE MASK TO FALSE")
         import recovar.padding as pad
         images = pad.padded_dft(images * self.mult,  self.D, self.padding)
-        return images
+        return images.astype(self.dtype)
 
 
     def __len__(self):
