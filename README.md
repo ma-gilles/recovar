@@ -598,9 +598,6 @@ The script will create a `density/` directory inside the `recovar_result_dir` (o
 - **`all_densities.png`**: Visualization of all densities across different alphas.
 - **`Lcurve.png`**: L-curve plot used for selecting the optimal alpha.
 
-```
-
-
 
 ## V. Visualizing results
 
