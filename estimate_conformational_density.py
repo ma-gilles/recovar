@@ -29,7 +29,7 @@ def estimate_conformational_density(recovar_result_dir, output_dir = None, decon
 
     pipeline_output = o.PipelineOutput(recovar_result_dir + '/')
     percentile_reject = 10
-    alphas = np.flip(np.logspace(-9, 1, 11)) if alphas is None else alphas
+    alphas = np.flip(np.logspace(-9, 1, 11)) if alphas is None else np.array(alphas)
 
     zdim = f"{z_dim_used}_noreg"
     lbfgsb_sols, alphas, cost, reg_cost, density, total_covar, grids, bounds = deconvolve_density.get_deconvolved_density(
