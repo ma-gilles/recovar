@@ -315,7 +315,7 @@ def kmeans_analysis(output_folder, zs, n_clusters = 20):
         ax.set_xticks([], [])
         ax.set_yticks([], [])
         if output_folder is not None:
-            plt.savefig(output_folder + 'centers_'+str(axes[0]) + str(axes[1])+'.png' )
+            plt.savefig(output_folder + 'PC_'+str(axes[0]) + str(axes[1])+'.png' )
         
         fig,ax = cryodrgn_analysis.scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=False, labels=None, alpha=0.1, s=2)
         fig.set_figheight(6)
@@ -323,7 +323,7 @@ def kmeans_analysis(output_folder, zs, n_clusters = 20):
         ax.set_xticks([], [])
         ax.set_yticks([], [])
         if output_folder is not None:
-            plt.savefig(output_folder + 'centers_'+str(axes[0]) + str(axes[1])+'no_annotate.png' )
+            plt.savefig(output_folder + 'PC_'+str(axes[0]) + str(axes[1])+'no_annotate.png' )
 
     for k in range(1,zs.shape[-1]):
         plot_axes(axes = [0,k])
@@ -354,7 +354,7 @@ def plot_umap(output_folder, zs, centers):
         ax.set_xticks([], [])
         ax.set_yticks([], [])
         if output_folder is not None:
-            plt.savefig(output_folder + 'centers_.png' )
+            plt.savefig(output_folder + 'kmeans_centers.png' )
         
         fig,ax = cryodrgn_analysis.scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=False, labels=None, alpha=0.1, s=2)
         fig.set_figheight(6)
@@ -362,7 +362,7 @@ def plot_umap(output_folder, zs, centers):
         ax.set_xticks([], [])
         ax.set_yticks([], [])
         if output_folder is not None:
-            plt.savefig(output_folder + 'centers_no_annotate.png' )
+            plt.savefig(output_folder + 'kmeans_centers_no_annotate.png' )
 
         import seaborn as sns
 

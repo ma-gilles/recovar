@@ -244,3 +244,4 @@ xarray==2023.9.0
 xyzservices==2023.10.0
 yarl==1.9.2
 zipp==3.17.0
+kneed==0.8.5
