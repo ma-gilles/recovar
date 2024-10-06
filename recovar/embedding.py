@@ -56,6 +56,9 @@ def compute_per_image_embedding_from_result(result, zdim, gpu_memory = None):
 
 def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False):
 
+    
+
+
     assert u.shape[0] == cryos[0].volume_size, "input u should be volume_size x basis_size"
     st_time = time.time()    
     basis = np.asarray(u[:, :basis_size]).T

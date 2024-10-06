@@ -67,11 +67,13 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
         raise NotImplementedError('unrecognized column sampling scheme')
     
     covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, noise_model, covariance_options, picked_frequencies)
-    logger.info("memory after covariance estimation")
-    utils.report_memory_device(logger=logger)
-    # import pdb; pdb.set_trace()
-
-
+    
+    # Check for NaN or Inf values in covariance_cols
+    for col in covariance_cols.values():
+        if np.any(np.isnan(col)) or np.any(np.isinf(col)):
+            raise ValueError("covariance_cols contains NaN or Inf values")
+        if col.dtype != np.complex64:
+            raise TypeError("covariance_cols is not of type np.complex64")
 
     if options['ignore_zero_frequency']:
         zero_freq_index = np.asarray(core.frequencies_to_vec_indices( np.array([0,0,0]), cryos[0].volume_shape)).astype(int)
@@ -84,7 +86,18 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
 
     # First approximation of eigenvalue decomposition
     u,s = get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use, options['ignore_zero_frequency'], covariance_options['randomized_sketch_size'])
-    
+    # Check for NaN or Inf values in u and s
+    if np.any(np.isnan(u['real'])) or np.any(np.isinf(u['real'])):
+        raise ValueError("u['real'] contains NaN or Inf values")
+    if np.any(np.isnan(s['real'])) or np.any(np.isinf(s['real'])):
+        raise ValueError("s['real'] contains NaN or Inf values")
+
+    # Check if the type of u and s is np.float32 or np.float64
+    if u['real'].dtype not in [np.float32, np.complex64]:
+        raise TypeError("u['real'] is not of type np.float32 or np.complex64")
+    if s['real'].dtype not in [np.float32, np.complex64]:
+        raise TypeError("s['real'] is not of type np.float32 or np.complex64")
+
     if not options['keep_intermediate']:
         for key in covariance_cols.keys():
             covariance_cols[key] = None

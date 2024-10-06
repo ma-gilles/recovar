@@ -17,7 +17,7 @@ def masking_options(volume_mask_option, means, volume_shape, dtype_real = np.flo
     if isinstance(volume_mask_option, str):
         if volume_mask_option.endswith(".mrc"):
             # assert input_mask is not None, 'set volume_mask_option = input, but no mask passed'
-            input_mask = utils.load_mrc(input_mask) 
+            input_mask = utils.load_mrc(input_mask).astype(np.float32)
             logger.info('Using input mask')
 
             if mask_dilation_iter > 0:
@@ -165,7 +165,7 @@ def window_mask(D, in_rad, out_rad):
                          np.linspace(-1, 1, D, endpoint=False, dtype=np.float32))
     r = (x0**2 + x1**2)**.5
     mask = np.minimum(1.0, np.maximum(0.0, 1 - (r-in_rad)/(out_rad-in_rad)))
-    return mask
+    return mask.astype(np.float32)
 
 
 ## What is below is copy-pasted from EMDA (https://emda.readthedocs.io/en/latest/)

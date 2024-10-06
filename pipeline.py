@@ -264,7 +264,7 @@ def standard_recovar_pipeline(args):
 
     o.mkdir_safe(args.outdir)
     with open(f"{args.outdir}/command.txt", "w") as text_file:
-        text_file.write(str(sys.argv))
+        text_file.write(' '.join((sys.argv)))
 
     # The force interaction has something to do with cryodrgn interaction which is breaking the logger...
     logging.basicConfig(format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
@@ -464,7 +464,7 @@ def standard_recovar_pipeline(args):
             logger.warning("Estimated noise greater than upper bound. Bounding noise using estimated upper obund")
 
         if np.any(variance_est_low_res_5_pc < 0):
-            logger.warning("Estimated variance resolutino is < 0. This probably means that the noise was incorrectly estimated. Setting to 0")
+            logger.warning("Estimated variance resolutino is < 0. This probably means that the noise was incorrectly estimated. Recomputing noise")
             print("5 percentile:", variance_est_low_res_5_pc)
             print("5 percentile/median over low shells:", variance_est_low_res_5_pc/variance_est_low_res_median)
 
@@ -504,7 +504,7 @@ def standard_recovar_pipeline(args):
 
 
         if np.any(variance_est_low_res_5_pc < 0):
-            logger.warning("Estimated variance resolutino is < 0. This probably means that the noise was incorrectly estimated. Setting to 0")
+            logger.warning("Estimated variance resolution is < 0.")
             print("5 percentile:", variance_est_low_res_5_pc)
             print("5 percentile/median over low shells:", variance_est_low_res_5_pc/variance_est_low_res_median)
 
@@ -556,6 +556,27 @@ def standard_recovar_pipeline(args):
 
         # Compute principal components
         u,s, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, noise_var_used, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, covariance_options = covariance_options, variance_estimate = variance_est['combined'])
+
+    
+        # Check if u and s are finite and not NaN
+        if not np.all(np.isfinite(u['rescaled'])):
+            raise ValueError("u contains non-finite values")
+        if not np.all(np.isfinite(s['rescaled'])):
+            raise ValueError("s contains non-finite values")
+
+        # Check if s is positive
+        if not np.all(s['rescaled'] > 0):
+            raise ValueError("s contains non-positive values")
+
+        # Check if u and s are of dtype float32/complex64
+        if u['rescaled'].dtype not in [np.float32, np.complex64]:
+            raise TypeError(f"u is not of dtype float32 or complex64, but {u['rescaled'].dtype}")
+        if s['rescaled'].dtype not in [np.float32, np.complex64]:
+            raise TypeError(f"s is not of dtype float32 or complex64, but {s['rescaled'].dtype}")
+
+        # Check if mask is of dtype float32
+        if volume_mask.dtype != np.float32:
+            raise TypeError(f"volume_mask is not of dtype float32, but {volume_mask.dtype}")
 
         if options['ignore_zero_frequency']:
             # Make the noise in 0th frequency gigantic. Effectively, this ignore this frequency when fitting.

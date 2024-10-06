@@ -1110,8 +1110,9 @@ vmap_compute_spline_coefficients = jax.vmap(cryojax_map_coordinates.compute_spli
 
 def compute_spline_coeffs_in_batch(basis, volume_shape, gpu_memory= None):
     gpu_memory = utils.get_gpu_memory_total() if gpu_memory is None else gpu_memory
-
     vol_batch_size = utils.get_vol_batch_size(volume_shape[0], gpu_memory=gpu_memory)
+    logger.info(f"memory used = {gpu_memory}, vol_batch_size in compute_spline_coeffs_in_batch {vol_batch_size}")
+    utils.report_memory_device(logger=logger)
     coeffs = []
     for k in range(0, basis.shape[0], vol_batch_size):
         coeffs.append(np.array(vmap_compute_spline_coefficients(basis[k:k+vol_batch_size].reshape(-1, *volume_shape))))
