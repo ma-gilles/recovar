@@ -25,7 +25,7 @@ def extract_image_subset_from_kmeans(path_to_centers, kmeans_indices, inverse, o
     indices = np.where(good_indices)[0]
 
     utils.pickle_dump(indices, output_path)
-
+    logger.info(f"Saved {indices.size} out of {labels.size} indices of subset of images to {output_path}")
 
 
 

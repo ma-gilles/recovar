@@ -13,8 +13,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Estimate conformational density from recovar results")
     parser.add_argument("recovar_result_dir", type=str, help="Directory containing recovar results provided to pipeline.py")
     parser.add_argument("--output_dir", type=str, default=None, help="Directory to save the density estimation results. Default = recovar_result_dir/density/")
-    parser.add_argument("--deconvolved_dim", type=int, default=4, help="Dimension of deconvolved space (default 4). This is the dimension of the PC space where the conformational density is estimated. The runtime increases exponentially with this number, so <=5 is recommended.")
-    parser.add_argument("--z_dim_used", type=int, default=4, help="Dimension of latent variable used (default 4)")
+    parser.add_argument("--pca_dim", type=int, default=4, help="Dimension of PCA space in which the density is estimated (default 4). The runtime increases exponentially with this number, so <=5 is recommended.")
+    parser.add_argument("--z_dim_used", type=int, default=4, help="Dimension of latent variable used (default 4). Should be at least as big as pca_dim, and should be one of the dims used in analyze.py")
     parser.add_argument("--percentile_reject", type=int, default=10, help="Percentile of data to reject b/c they have large covariance (default 10%)")
     parser.add_argument("--num_disc_points", type=int, default=50, help="Number of discretization points in each dimension for the grid density estimation (default 50) = 50^4 points")
     parser.add_argument("--alphas", type=float, nargs='*', default=None, help="List of alphas for regularization (default (1e-9, 1e-8, ..., 1e1)")
@@ -23,7 +23,7 @@ def parse_args():
 
 
 
-def estimate_conformational_density(recovar_result_dir, output_dir = None, deconvolved_dim=4, z_dim_used=4, percentile_reject=10, num_disc_points=50, alphas=None, percentile_bound=1):
+def estimate_conformational_density(recovar_result_dir, output_dir = None, pca_dim=4, z_dim_used=4, percentile_reject=10, num_disc_points=50, alphas=None, percentile_bound=1):
     output_dir = recovar_result_dir + '/density/' if output_dir is None else output_dir
     output.mkdir_safe(output_dir )
 
@@ -33,7 +33,7 @@ def estimate_conformational_density(recovar_result_dir, output_dir = None, decon
 
     zdim = f"{z_dim_used}_noreg"
     lbfgsb_sols, alphas, cost, reg_cost, density, total_covar, grids, bounds = deconvolve_density.get_deconvolved_density(
-        pipeline_output, zdim=zdim, pca_dim_max=deconvolved_dim, percentile_reject=percentile_reject, kernel_option='sampling', num_points=num_disc_points, alphas=alphas, percentile_bound=percentile_bound, save_to_file=None
+        pipeline_output, zdim=zdim, pca_dim_max=pca_dim, percentile_reject=percentile_reject, kernel_option='sampling', num_points=num_disc_points, alphas=alphas, percentile_bound=percentile_bound, save_to_file=None
     )
 
     deconvolve_density.plot_density(lbfgsb_sols, density, alphas)
@@ -71,7 +71,7 @@ def main():
     estimate_conformational_density(
         recovar_result_dir=args.recovar_result_dir,
         output_dir=args.output_dir,
-        deconvolved_dim=args.deconvolved_dim,
+        pca_dim=args.pca_dim,
         z_dim_used=args.z_dim_used,
         percentile_reject=args.percentile_reject,
         num_disc_points=args.num_disc_points,

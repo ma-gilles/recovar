@@ -15,7 +15,12 @@ def check_gpu():
         if gpu_devices:
             print("GPU devices found:", gpu_devices)
         else:
-            print("No GPU devices found. Please ensure that JAX is properly configured with CUDA and a compatible GPU.")
+            print("--------------------------------------------")
+            print("--------------------------------------------")
+            print("No GPU devices found. Please ensure that JAX is properly configured with CUDA and a compatible GPU. Typically, the problem was during the installation of JAX which could not find the CUDA libraries. This can be fixed by setting the correct paths to the CUDA libraries in the environment variables, or module load depending on your system. Note that you may have to reinstall JAX after setting the correct paths.  E.g. run the following:\n pip uninstall jax jaxlib; \n pip install -U \"jax[cuda12_pip]\"==0.4.23 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html")
+            print("--------------------------------------------")
+            print("--------------------------------------------")
+
             exit(1)
     
     except Exception as e:
