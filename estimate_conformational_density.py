@@ -24,8 +24,14 @@ def parse_args():
 
 
 def estimate_conformational_density(recovar_result_dir, output_dir = None, pca_dim=4, z_dim_used=4, percentile_reject=10, num_disc_points=50, alphas=None, percentile_bound=1):
+
+    assert os.path.exists(recovar_result_dir), f"recovar_result_dir {recovar_result_dir} does not exist"
+    assert (pca_dim <= z_dim_used), f"pca_dim {pca_dim} should be less than or equal to z_dim_used {z_dim_used}"
+    assert (pca_dim <= 6), f"pca_dim {pca_dim} should be less than or equal to 6. It will take very long even for 5."
+
     output_dir = recovar_result_dir + '/density/' if output_dir is None else output_dir
     output.mkdir_safe(output_dir )
+
 
     pipeline_output = o.PipelineOutput(recovar_result_dir + '/')
     percentile_reject = 10
