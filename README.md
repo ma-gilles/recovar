@@ -533,7 +533,7 @@ See the RECOVAR paper for the theory and explanation of the outputs.
 ### Usage
 
 ```bash
-python estimate_conformational_density.py [recovar_result_dir] --z_dim_used [Z_DIM_USED]
+python estimate_conformational_density.py [recovar_result_dir] 
 ```
 
 **Positional Arguments:**
@@ -541,18 +541,19 @@ python estimate_conformational_density.py [recovar_result_dir] --z_dim_used [Z_D
 - `recovar_result_dir`  
   Directory containing RECOVAR results provided to `pipeline.py`.
 
-**Required Arguments:**
 
-- `--z_dim_used Z_DIM_USED`  
-  Dimension of the latent variable used for the analysis (must be a single integer).
 
 <details><summary>Optional Arguments</summary>
+
+- `--pca_dim PCA_DIM`  
+Dimension of PCA space in which the density is estimated (default 4). The runtime increases exponentially with this number, so <=5 is recommended.
+
+- `--z_dim_used Z_DIM_USED`  
+  Dimension of latent variable used (default 4). Should be at least as big as pca_dim, and should be one of the dims used in analyze.py
 
 - `--output_dir OUTPUT_DIR`  
   Directory to save the density estimation results. Default is `recovar_result_dir/density/`.
 
-- `--deconvolved_dim DECONVOLVED_DIM`  
-  Dimension of deconvolved space (default: 4). This is the dimension of the principal component space where the conformational density is estimated. The runtime increases exponentially with this number, so a value ≤5 is recommended.
 
 - `--percentile_reject PERCENTILE_REJECT`  
   Percentile of data to reject due to large covariance (default: 10%).
