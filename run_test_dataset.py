@@ -72,7 +72,7 @@ run_command(
 
 # Estimate conformational density
 run_command(
-    f'python {RECOVAR_PATH}/estimate_conformational_density.py test_dataset/pipeline_output --deconvolved_dim 2',
+    f'python {RECOVAR_PATH}/estimate_conformational_density.py test_dataset/pipeline_output --pca_dim 2',
     'Estimate conformational density',
     'estimate_conformational_density.py'
 )

@@ -389,7 +389,7 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_varian
 
     if n_min_images is None:
         if cryos[0].tilt_series_flag:
-            n_min_images = np.max(100, 10 * np.max(cryos[0].image_stack.counts))
+            n_min_images = np.max([100, 10 * np.max(list(cryos[0].image_stack.counts.values()))])
         else:
             n_min_images = 100
 

@@ -58,6 +58,15 @@ def add_args(parser: argparse.ArgumentParser):
         "--focus-mask", metavar="mrc", dest = "focus_mask", default=None, type=os.path.abspath, help="focus mask (.mrc)"
     )
 
+    parser.add_argument(
+        "--keep-input-mask", action="store_true", dest="keep_input_mask", help="By default, the software thresholds and then softens mask. If this option is on, the input mask is used as is." 
+    )
+
+    parser.add_argument(
+        "--use-complement-mask", action="store_true", dest = "use_complement_mask", help="Use complement of focus mask"
+    )
+
+
     # parser.add_argument(
     #     "--mask-option", metavar=str, default="input", help="mask options: from_halfmaps , input (default), sphere, none"
     # )
@@ -250,6 +259,8 @@ def add_args(parser: argparse.ArgumentParser):
         "--gpu-gb", default =None,  type = float, dest="gpu_memory", help="How much GPU memory to use. Default = all" 
     )
 
+
+
     return parser
     
 
@@ -368,7 +379,7 @@ def standard_recovar_pipeline(args):
         utils.report_memory_device(logger=logger)
 
         # Compute mask
-        volume_mask, dilated_volume_mask= mask.masking_options(args.mask, means, volume_shape, cryo.dtype_real, args.mask_dilate_iter)
+        volume_mask, dilated_volume_mask= mask.masking_options(args.mask, means, volume_shape, cryo.dtype_real, args.mask_dilate_iter, args.keep_input_mask)
 
         ## Always dump mean?
         # if args.only_mean:
@@ -394,10 +405,19 @@ def standard_recovar_pipeline(args):
             return
 
         if args.focus_mask is not None:
-            focus_mask, _= mask.masking_options(args.focus_mask, means, volume_shape, cryo.dtype_real, args.mask_dilate_iter)
+            focus_mask, _= mask.masking_options(args.focus_mask, means, volume_shape, cryo.dtype_real, args.mask_dilate_iter, args.keep_input_mask)
         else:
             focus_mask = volume_mask
         
+        if args.use_complement_mask:
+            complement_mask = (volume_mask > 0.90)*1.0 - (focus_mask > 0.9)*1.0
+            complement_mask = (complement_mask > 0)
+            from recovar import mask as mask_fn
+            complement_mask = np.array(mask_fn.soften_volume_mask(complement_mask, 3).astype(np.float32))
+            focus_masks = [complement_mask, focus_mask]
+        else:
+            focus_masks = [focus_mask]
+
         noise_time = time.time()
         # Probably should rename all of this...
         masked_image_PS, std_masked_image_PS, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
@@ -554,9 +574,28 @@ def standard_recovar_pipeline(args):
             covariance_options['mask_images_in_H_B'] = False
 
 
-        # Compute principal components
-        u,s, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, noise_var_used, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, covariance_options = covariance_options, variance_estimate = variance_est['combined'])
 
+        # Compute principal components
+        # Only focus_mask[-1] will do a zdim search, rest will do zdim_for_rest
+
+        # if len(focus_mask) > 1:
+        num_foc_masks = len(focus_masks)
+        u = []
+        s = []
+        # This could be sped up by a factor of len(focus_masks)
+        zdim_for_rest = 20 # Maybe should make this an option
+        n_pcs_to_keep = np.max( np.append(options['zs_dim_to_test'], 50))
+        for idx, focus_mask in enumerate(focus_masks):
+            u_this,s_this, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, noise_var_used, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, covariance_options = covariance_options, variance_estimate = variance_est['combined'])
+            if idx == num_foc_masks -1:
+                s.append(s_this['rescaled'][:n_pcs_to_keep].copy())
+                u.append(u_this['rescaled'][:,:n_pcs_to_keep].copy())
+            else:
+                s.append(s_this['rescaled'][:zdim_for_rest].copy())
+                u.append(u_this['rescaled'][:,:zdim_for_rest].copy())
+            del u_this, s_this
+        u = { 'rescaled' : np.concatenate(u, axis = 1), 'real' : None}
+        s =  { 'rescaled' : np.concatenate(s, axis = 0), 'real': None}
     
         # Check if u and s are finite and not NaN
         if not np.all(np.isfinite(u['rescaled'])):
@@ -592,10 +631,12 @@ def standard_recovar_pipeline(args):
             covariance_cols = None
 
         # Compute embeddings
-        zs = {}; cov_zs = {}; est_contrasts = {}        
+        zs = {}; cov_zs = {}; est_contrasts = {}
         for zdim in options['zs_dim_to_test']:
+            # Now we keep num_foc_masks-1*zdim_rest + zdim
+            n_pcs_to_use = (num_foc_masks-1)*zdim_for_rest + zdim
             z_time = time.time()
-            zs[zdim], cov_zs[zdim], est_contrasts[zdim], _ = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled'] , zdim,
+            zs[zdim], cov_zs[zdim], est_contrasts[zdim], _ = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled'] , n_pcs_to_use,
                                                                     image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
                                                                     contrast_grid = None, contrast_option = options['contrast'],
                                                                     ignore_zero_frequency = options['ignore_zero_frequency'] )
@@ -604,8 +645,9 @@ def standard_recovar_pipeline(args):
 
         for zdim in options['zs_dim_to_test']:
             z_time = time.time()
+            n_pcs_to_use = (num_foc_masks-1)*zdim_for_rest + zdim
             key = f"{zdim}_noreg"
-            zs[key], cov_zs[key], est_contrasts[key], _ = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled']* 0 + np.inf , zdim,
+            zs[key], cov_zs[key], est_contrasts[key], _ = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled']* 0 + np.inf , n_pcs_to_use,
                                                                     image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
                                                                     contrast_grid = None, contrast_option = options['contrast'],
                                                                     ignore_zero_frequency = options['ignore_zero_frequency'] )
@@ -622,7 +664,8 @@ def standard_recovar_pipeline(args):
     zdim = np.max(options['zs_dim_to_test'])
 
     if not args.tilt_series:
-        noise_var_from_het_residual, _,_ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(cryos[0], dilated_volume_mask, means['combined'], u['rescaled'][:,:zdim], est_contrasts[zdim], zs[zdim], batch_size//10, disc_type = covariance_options['disc_type'] )
+        n_pcs_to_use = (num_foc_masks-1)*zdim_for_rest + zdim
+        noise_var_from_het_residual, _,_ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(cryos[0], dilated_volume_mask, means['combined'], u['rescaled'][:,:n_pcs_to_use], est_contrasts[zdim], zs[zdim], batch_size//10, disc_type = covariance_options['disc_type'] )
     else:
         noise_var_from_het_residual = None
     # ### END OF DEL
@@ -650,6 +693,19 @@ def standard_recovar_pipeline(args):
         pickle.dump(ind_split, open(output_model_folder + 'halfsets.pkl', 'wb'))
         args.halfsets = output_model_folder + 'halfsets.pkl'
     
+    # For now, maybe just dump the rest?
+    
+    if args.use_complement_mask:
+        import copy
+        zs_full = copy.deepcopy(zs)
+        for key in zs:
+            zs[key] = zs[key][:,zdim_for_rest:]
+        for key in cov_zs:
+            cov_zs[key] = cov_zs[key][:,zdim_for_rest:,zdim_for_rest:]
+        u['rescaled'] = u['rescaled'][:,zdim_for_rest:]
+        s['rescaled'] = s['rescaled'][zdim_for_rest:]
+
+
     result = { 's' : s['rescaled'],'s_all': s,
                 'input_args' : args,
                 'latent_space_bounds' : None, #np.array(latent_space_bounds), 
@@ -669,7 +725,7 @@ def standard_recovar_pipeline(args):
                 'picked_frequencies' : picked_frequencies, 'volume_shape': volume_shape, 'voxel_size': cryos[0].voxel_size, 'pc_metric' : var_metrics['filt_var'],
                 'variance_est': variance_est, 'variance_fsc': variance_fsc, 'noise_p_variance_est': noise_p_variance_est, 'ub_noise_var_by_var_est': ub_noise_var_by_var_est, 'covariance_options': covariance_options,
                 'contrasts_for_second': contrasts_for_second, 
-                'version': '0.2'}
+                'version': '0.3'}
 
     output_folder = args.outdir + '/output/' 
     o.mkdir_safe(output_folder)
@@ -677,6 +733,8 @@ def standard_recovar_pipeline(args):
     o.save_volume(volume_mask, output_folder + 'volumes/' + 'mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
     o.save_volume(dilated_volume_mask, output_folder + 'volumes/' + 'dilated_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
     o.save_volume(focus_mask, output_folder + 'volumes/' + 'focus_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
+    if args.use_complement_mask:
+        o.save_volume(focus_masks[0], output_folder + 'volumes/' + 'complement_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
 
 
     utils.pickle_dump(covariance_cols, output_model_folder + 'covariance_cols.pkl')
@@ -694,8 +752,11 @@ def standard_recovar_pipeline(args):
     for entry in embedding_dict:
         for key in embedding_dict[entry]:
             embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(embedding_dict[entry][key], particles_ind_split)
-
+            # for k in range(num_foc_masks-1):
+            #     embedding_dict[entry][key][k] = embedding_dict[entry][key][k].astype(np.float32)
     utils.pickle_dump(embedding_dict, output_model_folder + 'embeddings.pkl')
+    if args.use_complement_mask:
+        utils.pickle_dump(zs_full, output_model_folder + 'zs_with_complement.pkl')
 
     logger.info(f"Dumped results to file:, {output_model_folder}results.pkl")
     

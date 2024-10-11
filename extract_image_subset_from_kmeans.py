@@ -16,12 +16,13 @@ def extract_image_subset_from_kmeans(path_to_centers, kmeans_indices, inverse, o
 
     centers = utils.pickle_load(path_to_centers)
     labels = centers['labels'].astype(int)
+    labels[np.isnan(centers['labels'])] = -1
     good_indices = np.zeros(labels.size, dtype = bool)
     for kmean_index in kmeans_indices:
         good_indices += (labels == kmean_index)
     if inverse:
         good_indices = ~good_indices
-
+        good_indices[np.isnan(centers['labels'])]= 0
     indices = np.where(good_indices)[0]
 
     utils.pickle_dump(indices, output_path)
