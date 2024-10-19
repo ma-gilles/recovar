@@ -51,7 +51,7 @@ def add_args(parser: argparse.ArgumentParser):
         "--endpts",
         dest="endpts_file",
         default=None,
-        help="end points file (txt). It it has more than 2 lines, it will use the first two lines as endpoints. If that's not the case, use --ind to specify them instead",
+        help="end points file (txt). It it has more than 2 lines, it will use the first two lines as endpoints. If that's not the case, use --ind to specify them instead. Alternatively, use --z_st and --z_end to specify each one separately.",
     )
 
     parser.add_argument(
