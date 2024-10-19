@@ -88,14 +88,14 @@ run_command(
 
 # Compute trajectory - option 1
 run_command(
-    f'python {RECOVAR_PATH}/compute_trajectory.py test_dataset/pipeline_output -o test_dataset/pipeline_output/trajectory1 --endpts test_dataset/pipeline_output/analysis_2_noreg/kmeans_center_coords.txt --density test_dataset/pipeline_output/density/deconv_density_knee.pkl --zdim=2 --n-vols-along-path=3',
+    f'python {RECOVAR_PATH}/compute_trajectory.py test_dataset/pipeline_output -o test_dataset/pipeline_output/trajectory1 --endpts test_dataset/pipeline_output/analysis_2_noreg/kmeans_center_coords.txt  --ind=0,1  --density test_dataset/pipeline_output/density/deconv_density_knee.pkl --zdim=2 --n-vols-along-path=3',
     'Compute trajectory - option 1',
     'compute_trajectory.py (option 1)'
 )
 
 # Compute trajectory - option 2
 run_command(
-    f'python {RECOVAR_PATH}/compute_trajectory.py test_dataset/pipeline_output -o test_dataset/pipeline_output/trajectory2 --endpts test_dataset/pipeline_output/analysis_2_noreg/kmeans_center_coords.txt --density test_dataset/pipeline_output/density/deconv_density_knee.pkl --ind=0,1 --zdim=2 --n-vols-along-path=0',
+    f'python {RECOVAR_PATH}/compute_trajectory.py test_dataset/pipeline_output -o test_dataset/pipeline_output/trajectory2 --z_st test_dataset/pipeline_output/analysis_2_noreg/kmeans_center_volumes/vol0000/latent_coords.txt --z_end test_dataset/pipeline_output/analysis_2_noreg/kmeans_center_volumes/vol0002/latent_coords.txt  --density test_dataset/pipeline_output/density/deconv_density_knee.pkl --zdim=2 --n-vols-along-path=0',
     'Compute trajectory - option 2',
     'compute_trajectory.py (option 2)'
 )
