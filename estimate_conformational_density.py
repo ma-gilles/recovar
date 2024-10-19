@@ -14,7 +14,7 @@ def parse_args():
     parser.add_argument("recovar_result_dir", type=str, help="Directory containing recovar results provided to pipeline.py")
     parser.add_argument("--output_dir", type=str, default=None, help="Directory to save the density estimation results. Default = recovar_result_dir/density/")
     parser.add_argument("--pca_dim", type=int, default=4, help="Dimension of PCA space in which the density is estimated (default 4). The runtime increases exponentially with this number, so <=5 is recommended.")
-    parser.add_argument("--z_dim_used", type=int, default=4, help="Dimension of latent variable used (default 4). Should be at least as big as pca_dim, and should be one of the dims used in analyze.py")
+    parser.add_argument("--z_dim_used", type=int, default=None, help="Dimension of latent variable used (default smallest zdim stored >= pca_dim). Should be at least as big as pca_dim, and should be one of the dims used in analyze.py")
     parser.add_argument("--percentile_reject", type=int, default=10, help="Percentile of data to reject b/c they have large covariance (default 10%)")
     parser.add_argument("--num_disc_points", type=int, default=None, help="Number of discretization points in each dimension for the grid density estimation. Default = 50 for dim >3, 100 for dim = 3, 200 for dim = 2")
     parser.add_argument("--alphas", type=float, nargs='*', default=None, help="List of alphas for regularization (default (1e-9, 1e-8, ..., 1e1)")
@@ -25,13 +25,29 @@ def parse_args():
 
 def estimate_conformational_density(recovar_result_dir, output_dir = None, pca_dim=4, z_dim_used=4, percentile_reject=10, num_disc_points=None, alphas=None, percentile_bound=1):
 
+    # pca_dim_inp = pca_dim
+    # # Special case for dim = 1, which for some reason works
+    # if pca_dim_inp ==1:
+    #     pca_dim = 2
+
+
     if num_disc_points is None:
+
         if pca_dim > 3:
             num_disc_points = 50
         elif pca_dim == 3:
             num_disc_points = 100
-        else:
+        elif pca_dim == 2:
             num_disc_points = 200
+        else:
+            num_disc_points = 1000
+            
+    pipeline_output = o.PipelineOutput(recovar_result_dir + '/')
+
+    if z_dim_used is None:
+        z_dim_all = np.array(pipeline_output.get('input_args').zdim)
+        z_dim_all = z_dim_all[z_dim_all >= pca_dim] 
+        z_dim_used = np.min(z_dim_all)
 
 
     assert os.path.exists(recovar_result_dir), f"recovar_result_dir {recovar_result_dir} does not exist"
@@ -42,7 +58,7 @@ def estimate_conformational_density(recovar_result_dir, output_dir = None, pca_d
     output.mkdir_safe(output_dir )
 
 
-    pipeline_output = o.PipelineOutput(recovar_result_dir + '/')
+
     percentile_reject = 10
     alphas = np.flip(np.logspace(-9, 1, 11)) if alphas is None else np.array(alphas)
 
@@ -63,9 +79,12 @@ def estimate_conformational_density(recovar_result_dir, output_dir = None, pca_d
     knee_idx = np.argmin(np.abs(np.log10(1/alphas) - kn.knee))
     logger.info(f"Knee point: alpha = {10**(1/kn.knee)} at idx = {knee_idx}")
 
+
+
     output.mkdir_safe(output_dir + '/all_densities/' )
     for idx in range(len(lbfgsb_sols)):
         utils.pickle_dump({ 'density' : lbfgsb_sols[idx], 'latent_space_bounds' : bounds, 'alpha' : alphas[idx] }, output_dir + '/all_densities/' + f'deconv_density_{idx}.pkl')
+
     idx = knee_idx
     utils.pickle_dump({ 'density' : lbfgsb_sols[idx], 'latent_space_bounds' : bounds, 'alpha' : alphas[idx] }, output_dir + f'deconv_density_knee.pkl')
     plt.figure(figsize = (12,10))

@@ -95,13 +95,17 @@ run_command(
 
 # Compute trajectory - option 2
 run_command(
-    f'python {RECOVAR_PATH}/compute_trajectory.py test_dataset/pipeline_output -o test_dataset/pipeline_output/trajectory2 --endpts test_dataset/pipeline_output/analysis_2_noreg/kmeans_result.pkl --density test_dataset/pipeline_output/density/deconv_density_knee.pkl --kmeans-ind=0,1 --zdim=2 --n-vols-along-path=0',
+    f'python {RECOVAR_PATH}/compute_trajectory.py test_dataset/pipeline_output -o test_dataset/pipeline_output/trajectory2 --endpts test_dataset/pipeline_output/analysis_2_noreg/kmeans_center_coords.txt --density test_dataset/pipeline_output/density/deconv_density_knee.pkl --ind=0,1 --zdim=2 --n-vols-along-path=0',
     'Compute trajectory - option 2',
     'compute_trajectory.py (option 2)'
 )
 
-print(f"\nTotal steps passed: {len(passed_functions)}")
-print(f"Total steps failed: {len(failed_functions)}\n")
+
+run_command(
+    f'python {RECOVAR_PATH}/estimate_stable_states.py test_dataset/pipeline_output/density/all_densities/deconv_density_1.pkl --percent_top=10 --n_local_maxs=-1 -o test_dataset/pipeline_output/stable_states',
+    'estimate stable states',
+    'estimate_stable_states.py'
+)
 
 if failed_functions:
     print("The following functions failed:")
