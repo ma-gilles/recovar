@@ -77,6 +77,15 @@ run_command(
     'estimate_conformational_density.py'
 )
 
+# Run analyze.py with 2D embedding and no regularization on latent space (better for density estimation) and trajectory estimation
+# Should take about 5 min
+run_command(
+    f'python {RECOVAR_PATH}/analyze.py test_dataset/pipeline_output --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=1 --density test_dataset/pipeline_output/density/deconv_density_knee.pkl --skip-centers',
+    'Run analyze.py with density',
+    'analyze.py'
+)
+
+
 # Compute trajectory - option 1
 run_command(
     f'python {RECOVAR_PATH}/compute_trajectory.py test_dataset/pipeline_output -o test_dataset/pipeline_output/trajectory1 --endpts test_dataset/pipeline_output/analysis_2_noreg/kmeans_center_coords.txt --density test_dataset/pipeline_output/density/deconv_density_knee.pkl --zdim=2 --n-vols-along-path=3',

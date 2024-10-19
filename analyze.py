@@ -18,7 +18,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--n-clusters", dest= "n_clusters", type=int, default=40, help="number of k-means clusters (default 40)"
+        "--n-clusters", dest= "n_clusters", type=int, default=40, help="number of k-means clusters (default 40). The clustering is only used to sample the latent space, and the actual cluster labels are not used to generate volumes."
     )
 
     parser.add_argument(
@@ -123,7 +123,15 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     output_folder_kmeans = output_folder + '/' #+ '/kmeans'+'_'+ str(n_clusters) + '/'    
     o.mkdir_safe(output_folder_kmeans)    
     utils.basic_config_logger(output_folder)
-    plot_utils.plot_summary_t(po,cryos, n_eigs = 5, filename = output_folder_kmeans + "mean_variance_eigenvolume_plots.png")
+
+    import matplotlib.pyplot as plt
+    plt.figure(figsize = (10,10))
+    plt.hist(po.get('contrasts')[zdim_key],bins =50)
+    plt.xlabel('Contrast')
+    plt.ylabel('Number of particles')
+    plt.savefig(output_folder_kmeans + 'contrast_histogram.png')
+    plt.close()
+
 
     # logging.basicConfig(
     #     format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
@@ -132,7 +140,6 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     #                     handlers=[
     #     logging.FileHandler(f"{output_folder}/run.log"),
     #     logging.StreamHandler()])
-
 
 
     logger.info(args)
@@ -152,6 +159,17 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     pickle.dump(kmeans_result, open(output_folder_kmeans + 'kmeans_result.pkl', 'wb'))
     np.savetxt(output_folder_kmeans + 'kmeans_center_coords.txt', centers)
     
+    if density_path is not None:
+        _, z_to_grid = latent_density.get_grid_z_mappings(latent_space_bounds, input_density.shape[0])
+        centers_grid = z_to_grid(centers)
+
+        o.mkdir_safe(output_folder_kmeans + 'density_plots/')
+        o.plot_over_density(input_density, points =centers_grid, annotate=True, plot_folder = output_folder_kmeans + 'density_plots/')
+
+        o.mkdir_safe(output_folder_kmeans + 'density_plots_sliced/')
+        o.plot_over_density(input_density, points =centers_grid, annotate=True, plot_folder = output_folder_kmeans + 'density_plots_sliced/', projection_function = 'slice')
+
+
     if not skip_centers:
         o.compute_and_save_reweighted(cryos, centers, zs, cov_zs, noise_variance, output_folder_kmeans_centers, B_factor, n_bins, n_min_images = args.n_min_images,  maskrad_fraction = args.maskrad_fraction)
         # move_to_one_folder(output_folder_kmeans_centers, n_clusters )
@@ -181,7 +199,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
             z_st = centers[pair[0],:]
             z_end = centers[pair[1],:]
 
-            path_folder = output_folder_kmeans + 'path' + str(pair_idx) + '/'        
+            path_folder = output_folder_kmeans + 'traj' + str(pair_idx) + '/'        
             o.mkdir_safe(path_folder)
             full_path, subsampled_path = o.make_trajectory_plots_from_results(po, zdim_key, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = False, input_density = input_density, latent_space_bounds = latent_space_bounds)
 
@@ -189,7 +207,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
             o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins, n_min_images = args.n_min_images,  maskrad_fraction = args.maskrad_fraction)
 
     else:
-        path_folder = output_folder_kmeans + 'path' + str(0) + '/'        
+        path_folder = output_folder_kmeans + 'traj' + str(0) + '/'        
         o.mkdir_safe(path_folder)
         q = 0.03
         pairs = np.percentile(po.get('zs')[zdim], [q, 100-q])
