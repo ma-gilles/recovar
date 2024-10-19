@@ -107,6 +107,15 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
     # cryos = po.get('dataset')
     # embedding.set_contrasts_in_cryos(cryos, po.get('contrasts')[zdim])
     
+    if zs.shape[1] > z_st.shape[0]:
+        z_st = np.concatenate([z_st, np.zeros(zs.shape[1] - z_st.shape[0])])
+        z_end = np.concatenate([z_end, np.zeros(zs.shape[1] - z_end.shape[0])])
+        logger.warning(f"endpoints are padded with 0 to match zs dimension = {zs.shape[1]}")
+    elif zs.shape[1] < z_st.shape[0]:
+        z_st = z_st[:zs.shape[1]]
+        z_end = z_end[:zs.shape[1]]
+        logger.warning(f"endpoints are truncated to match zs dimension = {zs.shape[1]}")
+
     noise_variance = po.get('noise_var_used')
     B_factor = args.Bfactor
     n_bins = args.n_bins

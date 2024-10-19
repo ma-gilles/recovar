@@ -203,21 +203,21 @@ def plot_density(lbfgsb_sols, density, alphas, function = None, cmap = 'inferno'
             to_plot = function(density, [0,k])
             # plt.figure()
             # plt.title(title)
-            axs[n_plot,k-1].imshow(to_plot, cmap =cmap)#.sum(axis=-1))
+            axs[n_plot,k-1].imshow(to_plot.T, cmap =cmap)#.sum(axis=-1))
             # plt.show()
             if is_first:            
-                axs[n_plot,k-1].set_title(f"PC {0}, {k}")
+                axs[n_plot,k-1].set_title(f"PC x={0}, y={k}")
 
 
         if density.ndim > 2:
             to_plot = function(density, [1,2])
             # plt.figure()
             # plt.title(title)
-            axs[n_plot,k].imshow(to_plot, cmap =cmap)#.sum(axis=-1))
+            axs[n_plot,k].imshow(to_plot.T, cmap =cmap)#.sum(axis=-1))
             axs[n_plot,k].set_xticklabels([])
             axs[n_plot,k].set_yticklabels([])
             if is_first:            
-                axs[n_plot,k].set_title(f"PC {1}, {2}")
+                axs[n_plot,k].set_title(f"PC x={1}, y={2}")
         is_first = False
             # plt.show()
 

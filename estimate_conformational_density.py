@@ -16,14 +16,23 @@ def parse_args():
     parser.add_argument("--pca_dim", type=int, default=4, help="Dimension of PCA space in which the density is estimated (default 4). The runtime increases exponentially with this number, so <=5 is recommended.")
     parser.add_argument("--z_dim_used", type=int, default=4, help="Dimension of latent variable used (default 4). Should be at least as big as pca_dim, and should be one of the dims used in analyze.py")
     parser.add_argument("--percentile_reject", type=int, default=10, help="Percentile of data to reject b/c they have large covariance (default 10%)")
-    parser.add_argument("--num_disc_points", type=int, default=50, help="Number of discretization points in each dimension for the grid density estimation (default 50) = 50^4 points")
+    parser.add_argument("--num_disc_points", type=int, default=None, help="Number of discretization points in each dimension for the grid density estimation. Default = 50 for dim >3, 100 for dim = 3, 200 for dim = 2")
     parser.add_argument("--alphas", type=float, nargs='*', default=None, help="List of alphas for regularization (default (1e-9, 1e-8, ..., 1e1)")
     parser.add_argument("--percentile_bound", type=int, default=1, help="Rejects zs with coordinates above this bound for deciding the bounds of the grid (default 1 =1%)")
     return parser.parse_args()
 
 
 
-def estimate_conformational_density(recovar_result_dir, output_dir = None, pca_dim=4, z_dim_used=4, percentile_reject=10, num_disc_points=50, alphas=None, percentile_bound=1):
+def estimate_conformational_density(recovar_result_dir, output_dir = None, pca_dim=4, z_dim_used=4, percentile_reject=10, num_disc_points=None, alphas=None, percentile_bound=1):
+
+    if num_disc_points is None:
+        if pca_dim > 3:
+            num_disc_points = 50
+        elif pca_dim == 3:
+            num_disc_points = 100
+        else:
+            num_disc_points = 200
+
 
     assert os.path.exists(recovar_result_dir), f"recovar_result_dir {recovar_result_dir} does not exist"
     assert (pca_dim <= z_dim_used), f"pca_dim {pca_dim} should be less than or equal to z_dim_used {z_dim_used}"
@@ -41,7 +50,7 @@ def estimate_conformational_density(recovar_result_dir, output_dir = None, pca_d
     lbfgsb_sols, alphas, cost, reg_cost, density, total_covar, grids, bounds = deconvolve_density.get_deconvolved_density(
         pipeline_output, zdim=zdim, pca_dim_max=pca_dim, percentile_reject=percentile_reject, kernel_option='sampling', num_points=num_disc_points, alphas=alphas, percentile_bound=percentile_bound, save_to_file=None
     )
-
+    logger.info(f"Deconvolution done, size = {density.shape}")
     deconvolve_density.plot_density(lbfgsb_sols, density, alphas)
     plt.savefig(output_dir + '/all_densities.png')
 

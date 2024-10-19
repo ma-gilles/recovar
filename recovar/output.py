@@ -135,6 +135,9 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
     colors = ['k', 'cornflowerblue', 'g' , 'r', 'b', 'w', 'c'] if colors is None else colors
     path_exists = trajectories is not None
         
+
+    # assert projection_function is None or slice_point is None, "Can't have both projection function and slice point"
+    assert projection_function in ['slice', 'slice_point', 'sum', None], "Unknown projection function"
     projection_function = half_slice_other if projection_function == 'slice' else projection_function
     projection_function = slice_at_point if projection_function == 'slice_point' else projection_function
 
@@ -180,7 +183,7 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
             plt.scatter(points[:,axis_x], points[:,axis_y], color = 'w', s = 100, edgecolors= 'k')
             if annotate:
                 for i in range(points.shape[0]):
-                    plt.annotate(str(i), points[i, axes] + np.array([0.1, 0.1]))
+                    plt.annotate(str(i), points[i, axes] + np.array([0.1, 0.1]), color='white')
 
         if path_exists:
             # path_grid = z_to_grid(path)
@@ -668,7 +671,7 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
         if gt_volumes is not None:
             plot_over_density(inp_dens, [gt_volumes_z, path_z], latent_space_bounds, subsampled = [gt_volumes_z[gt_subs_idx][1:-1], path_subsampled[1:-1] ] , colors = ['k', 'cornflowerblue'], plot_folder = output_folder, cmap = 'inferno', zs = zs, cov_zs = cov_zs) 
         else:
-            plot_over_density(inp_dens, [path_z],latent_space_bounds,  subsampled = [path_subsampled[1:-1] ] , colors = ['cornflowerblue'], plot_folder = output_folder, cmap = 'inferno', same_st_end = False, zs = zs, cov_zs = cov_zs)
+            plot_over_density(inp_dens, [path_z],latent_space_bounds,  subsampled = [path_subsampled[1:-1] ] , colors = ['cornflowerblue'], plot_folder = output_folder + 'density/', cmap = 'inferno', same_st_end = False, zs = zs, cov_zs = cov_zs)
     else:
         path_z = np.linspace(z_st, z_end, n_vols_along_path)[...,0]
         path_subsampled = path_z
@@ -777,3 +780,35 @@ def umap_latent_space(zs):
     # umap.plot.points(mapper) 
     logger.info(f"time to umap: {time.time() - st_time}")
     return mapper
+
+
+
+def standard_pipeline_plots(po, zdim_key, output_folder):
+    cryos = po.get('lazy_dataset')
+    from recovar import plot_utils
+    mkdir_safe(output_folder)
+    plot_utils.plot_summary_t(po,cryos, n_eigs = 10, filename = output_folder + "mean_variance_eigenvolume_plots.png")
+
+    import matplotlib.pyplot as plt
+    plt.figure(figsize = (10,10))
+    plt.hist(po.get('contrasts')[zdim_key],bins =50)
+    plt.xlabel('Contrast')
+    plt.ylabel('Number of particles')
+    plt.savefig(output_folder + 'contrast_histogram.png')
+    plt.title(f'contrast histogram using zdim={zdim_key}')
+    plt.close()
+
+
+    plt.figure(figsize = (8,8))
+    plt.semilogy(po.get('s')[:40], '-o')
+    plt.xlabel('eigenvalue index')
+    plt.ylabel('eigenvalue')
+    plt.savefig(output_folder + 'eigenvalues.png')
+    plt.close()
+
+
+    plt.figure(figsize = (8,8))
+    ax = plot_utils.plot_mean_fsc(po,None)
+    plt.savefig(output_folder + 'mean_fsc.png')
+
+    return

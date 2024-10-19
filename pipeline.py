@@ -774,3 +774,11 @@ if __name__ == "__main__":
 
     args = add_args(parser).parse_args()
     standard_recovar_pipeline(args)
+
+    ## Make plots
+    from recovar import output
+    po = output.PipelineOutput(args.outdir + '/')
+    zdims = np.array(args.zdim)
+    zdim_choose = np.argmin(np.abs(zdims - 10))
+    zdim = zdims[zdim_choose]
+    output.standard_pipeline_plots(po, zdim, args.outdir + '/output/plots/')

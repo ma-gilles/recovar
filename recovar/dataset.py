@@ -715,11 +715,14 @@ def load_dataset_from_dict(dataset_loader_dict, lazy = True):
 
 
 def reorder_to_original_indexing(arr, cryos ):
-    if type(arr) is list:
-        arr = np.concatenate(arr)
-    dataset_indices = np.concatenate([ cryo.dataset_indices for cryo in cryos])
-    inv_argsort = np.argsort(dataset_indices)
-    return arr[inv_argsort]
+    if cryos[0].tilt_series_flag:
+        dataset_indices = [ cryo.image_stack.dataset_tilt_indices for cryo in cryos]
+    else:
+        dataset_indices = [ cryo.dataset_indices for cryo in cryos]
+    return reorder_to_original_indexing_from_halfsets(arr, dataset_indices)
+
+    # inv_argsort = np.argsort(dataset_indices)
+    # return arr[inv_argsort]
 
 def reorder_to_original_indexing_from_halfsets(arr, halfsets, num_images = None ):
     if type(arr) is list:

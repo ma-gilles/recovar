@@ -3,7 +3,7 @@ import recovar.config
 import numpy as np
 from recovar import dataset
 import jax.numpy as jnp
-from recovar import locres
+from recovar import locres, utils
 from recovar import adaptive_kernel_discretization
 import logging
 from recovar.fourier_transform_utils import fourier_transform_utils
@@ -201,13 +201,14 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_var
     # split_choice, _ = choice_most_likely_split(estimates[0], estimates[1], cross_validation_estimators[0], cross_validation_estimators[1], lhs[0], lhs[1], cryos[0].voxel_size, locres_sampling=locres_sampling, locres_maskrad=locres_maskrad, locres_edgwidth=locres_edgwidth)
     do_smooth_error = "smooth" in metric_used
 
+
     if metric_used == "locmost_likely":
         ml_choice, ml_errors = choice_most_likely(estimates[0], estimates[1], cross_validation_estimators[0], cross_validation_estimators[1], lhs[0], lhs[1], cryos[0].voxel_size, locres_sampling=locres_sampling, locres_maskrad=locres_maskrad, locres_edgwidth=locres_edgwidth)
     elif "locshellmost_likely" in metric_used:
         ml_choice, ml_errors = choice_most_likely_split(estimates[0], estimates[1], cross_validation_estimators[0], cross_validation_estimators[1], lhs[0], lhs[1], cryos[0].voxel_size, locres_sampling=locres_sampling, locres_maskrad=locres_maskrad, locres_edgwidth=locres_edgwidth, smooth_error = do_smooth_error)
     else:
         raise ValueError("Metric used not recognized")
-    
+
     # locres_choice, locres_score, auc_choice, auc_score = choice_best_locres(estimates[0], estimates[1][0], cryos[0].voxel_size)
     
     # estimates = np.asarray(estimates)
@@ -325,6 +326,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_var
         recovar.utils.pickle_dump(output_dict ,  output_folder + name + "params.pkl")
 
 
+
     distances_reordered = dataset.reorder_to_original_indexing(heterogeneity_distances, cryos)
     np.savetxt(output_folder + "heterogeneity_distances.txt", distances_reordered)
     use_choice_and_filter(ml_choice, "")
@@ -388,6 +390,11 @@ batch_smooth_shell_error = jax.vmap(smooth_shell_error, in_axes = (0, None, None
 
 def choice_most_likely_split(estimates0, estimates1, target0, target1, noise_variances_target0, noise_variances_target1, voxel_size, locres_sampling, locres_maskrad, locres_edgwidth, smooth_error = False):
 
+    dup_filter = utils.DuplicateFilter()
+    logger.addFilter(dup_filter)
+    logger.removeFilter(dup_filter)
+
+
     n_estimators = estimates0.shape[0]
     errors = n_estimators * [None]
     use_v2 = True
@@ -405,6 +412,7 @@ def choice_most_likely_split(estimates0, estimates1, target0, target1, noise_var
         logger.info(f"Grouping first {sum_up_up_to_res} shells together, and smoothing with kernel size {smooth_mean_filter}")
         errors = batch_smooth_shell_error(errors, voxel_size, subarray_size, sum_up_up_to_res, smooth_mean_filter)
 
+    logger.removeFilter(dup_filter)
 
     choice = np.argmin(errors, axis=0 ) 
     return choice, errors
