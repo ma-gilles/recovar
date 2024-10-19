@@ -240,7 +240,7 @@ def get_noise_model(option, grid_size):
 def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_images, outlier_file_input = None, grid_size = 128,
                                volume_distribution = None,  dataset_params_option = "dataset1", noise_level = 1, 
                                noise_model = "radial1", put_extra_particles = True, percent_outliers = 0.1, 
-                               volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, disc_type = 'linear_interp', n_tilts = -1, dose_per_tilt = 3, angle_per_tilt = 3  ):
+                               volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, disc_type = 'linear_interp', n_tilts = -1, dose_per_tilt = 3, angle_per_tilt = 3, image_dtype = np.float16 ):
     from recovar import output
     output.mkdir_safe(output_folder)
     volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize = False )
@@ -299,7 +299,7 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
     particles_file = output_folder + '/particles.'+str(grid_size)+'.mrcs'
 
     with mrcfile.new(particles_file ,overwrite=True) as mrc:
-        mrc.set_data(main_image_stack.astype(np.float16))
+        mrc.set_data(main_image_stack.astype(image_dtype))
         mrc.voxel_size = voxel_size
     poses = (rots.astype(np.float32), trans.astype(np.float32))
     utils.pickle_dump(poses, output_folder + '/poses.pkl')

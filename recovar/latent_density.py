@@ -325,3 +325,6 @@ def compute_latent_space_density_kde(zs, pca_dim_max = 4, num_points = 50, gauss
     end_time = time.time()
     logger.info(f"latent space computation:, {end_time - st_time}")
     return summed_probs_sq, latent_space_bounds#, grids_flat.reshape(*grids[0].shape, pca_dim_max )
+
+
+

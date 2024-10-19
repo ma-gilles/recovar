@@ -406,6 +406,7 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_varian
             ndim = zs.shape[-1]
             # n_bins = 30
             latent_points = path_subsampled[k][None]
+            np.savetxt(output_folder_this + 'latent_coords.txt', latent_points)
 
             if embedding_option == 'llh':
                 log_likelihoods = latent_density.compute_latent_log_likelihood(latent_points, zs, cov_zs)[...,0]

@@ -185,7 +185,8 @@ def plot_density(lbfgsb_sols, density, alphas, function = None, cmap = 'inferno'
     matplotlib.rc('font', **font)
 
     n_plots = len(lbfgsb_sols)+1
-    n_cols = density.ndim if density.ndim < 3 else density.ndim 
+    n_cols = density.ndim +1 if density.ndim < 2 else density.ndim 
+
     fig, axs = plt.subplots( n_plots, n_cols, figsize = ( n_cols *5, n_plots*5 ))#, 6*3))
     global is_first
     is_first = True
@@ -193,6 +194,16 @@ def plot_density(lbfgsb_sols, density, alphas, function = None, cmap = 'inferno'
     def plot_dens(density, title, n_plot, first = False):
         density = np.asarray(density)
         global is_first
+        if density.ndim ==1:
+            axs[n_plot,0].plot(density)
+            axs[n_plot,0].set_title(title)
+            axs[n_plot,0].set_xticklabels([])
+            axs[n_plot,0].set_yticklabels([])
+            if is_first:            
+                axs[n_plot,0].set_title(f"PC x={0}")
+            axs[n_plot,0].set_ylabel(title)
+            return
+
         for k in range(1, density.ndim):
 
             if k ==1:
@@ -340,3 +351,61 @@ def fftn(arr, s= None, axes = None):
         arr = jnp.fft.fftn(arr, s[3:], axes[3:])
     return arr 
 
+
+
+def find_local_maxs_of_density(density_deconv, latent_space_bounds, percent_top = 1, n_local_maxs = 3, plot_folder = None):
+    ## Attempts to find local maxima of the density by clustering the top percent_top of the density on the grid. 
+    ## Then finds the maximum within each cluster.
+    ## Not a very good method, but has worked fine for a couple of datasets....
+
+    zz = np.argsort(density_deconv.reshape(-1))
+    large_dens_indices_raveled = np.unravel_index(zz, density_deconv.shape)
+    n_top_points = int(percent_top/100 * np.prod(density_deconv.shape))
+    large_dens_indices = (np.array(large_dens_indices_raveled)[:,-n_top_points:]).T
+
+    from sklearn.cluster import KMeans, SpectralClustering, AgglomerativeClustering, HDBSCAN
+    import matplotlib.pyplot as plt
+    # clustering = KMeans(n_clusters=n_local_maxs,  n_init=10).fit(X)
+    if n_local_maxs >= 1:
+        clustering = AgglomerativeClustering(n_clusters = n_local_maxs, linkage = 'complete').fit(large_dens_indices)
+    else:
+        clustering = HDBSCAN().fit(large_dens_indices)
+
+    def find_max_within_clusters(density, labels, indices):
+        n_clusters = np.max(labels)+1
+        best_indices = []
+        for k in range(n_clusters):
+            sub_indices = indices[labels==k]
+            zz = np.argmax(density[tuple(sub_indices.T)])
+            best_indices.append(sub_indices[zz])
+                                
+        return np.array(best_indices)
+    max_within_cluster = find_max_within_clusters(density_deconv, clustering.labels_, large_dens_indices)
+
+    ndim = density_deconv.ndim
+    if ndim > 2:
+        fig = plt.figure(figsize = (10,10))
+        ax = fig.add_subplot(projection='3d')
+        ax.scatter(large_dens_indices[:,0], large_dens_indices[:,1], large_dens_indices[:,2], c = clustering.labels_)
+        ax.scatter(max_within_cluster[:,0], max_within_cluster[:,1], max_within_cluster[:,2], s = 300, c = 'k', alpha = 1, marker='x', linewidths=30)
+        if plot_folder is not None:
+            plt.savefig(plot_folder + 'local_max_viz.png')
+            plt.close()
+
+    if ndim == 2:
+        fig = plt.figure(figsize = (10,10))
+        ax = fig.add_subplot()
+        ax.scatter(large_dens_indices[:,0], large_dens_indices[:,1],  c = clustering.labels_)
+        ax.scatter(max_within_cluster[:,0], max_within_cluster[:,1], s = 300, c = 'k', alpha = 1, marker='x', linewidths=30)
+        if plot_folder is not None:
+            plt.savefig(plot_folder + 'local_max_viz.png')
+            plt.close()
+
+
+    # plt.figure()
+    # plt.scatter(large_dens_indices[:,0], large_dens_indices[:,3], large_dens_indices[:,2], c = kmeans.labels_)
+
+    grid_to_z, _ = latent_density.get_grid_z_mappings(latent_space_bounds, density_deconv.shape[0])
+    max_within_cluster_z = grid_to_z(max_within_cluster)
+
+    return max_within_cluster_z, max_within_cluster
