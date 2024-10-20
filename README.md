@@ -60,7 +60,7 @@ You may need to load CUDA before installing JAX, E.g., on our university cluster
     module load cudatoolkit/12.3 -->
 
 <!-- Then create an environment, download JAX-cuda (for some reason the latest version is causing issues, so make sure to use 0.4.23), clone the directory and install the requirements (note the --no-deps flag. This is because of some conflict with dependencies of cryodrgn. Will fix it soon.). -->
-If you have an internet connection, you can copy paste the following commands below and should be good to go.
+If you have an internet connection, you can copy paste the following commands below and should be good to go. It clones (downloads) this github repo, creates a python virtual environement to run the code in, and installs the required dependencies.
 
     git clone https://github.com/ma-gilles/recovar.git
     cd recovar
