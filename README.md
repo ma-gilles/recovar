@@ -52,25 +52,28 @@ Also:
 [contact](#contact)
 
 ## Installation 
-To run this code, CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html#) are required. See information about JAX installation [here](https://jax.readthedocs.io/en/latest/installation.html).
-Assuming you already have CUDA, installation should take less than 5 minutes.
-Below are a set of commands which runs on our university cluster (Della), but may need to be tweaked to run on other clusters.
+CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html#) are required to run this code. JAX will be installed by the command below, and the cudatoolkit is now included, but you need to have the CUDA drivers installed, see info here about JAX installation [here](https://jax.readthedocs.io/en/latest/installation.html).
+Assuming you already have CUDA drivers (probably already installed on your cluster), installation should take less than 5 minutes.
+<!-- Below are a set of commands which runs on our university cluster (Della), but may need to be tweaked to run on other clusters.
 You may need to load CUDA before installing JAX, E.g., on our university cluster with
 
-    module load cudatoolkit/12.3
+    module load cudatoolkit/12.3 -->
 
-Then create an environment, download JAX-cuda (for some reason the latest version is causing issues, so make sure to use 0.4.23), clone the directory and install the requirements (note the --no-deps flag. This is because of some conflict with dependencies of cryodrgn. Will fix it soon.).
+<!-- Then create an environment, download JAX-cuda (for some reason the latest version is causing issues, so make sure to use 0.4.23), clone the directory and install the requirements (note the --no-deps flag. This is because of some conflict with dependencies of cryodrgn. Will fix it soon.). -->
+If you have an internet connection, you can copy paste the following commands below and should be good to go.
 
-    conda create --name recovar python=3.11
-    conda activate recovar
-    pip install -U "jax[cuda12_pip]"==0.4.23 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
     git clone https://github.com/ma-gilles/recovar.git
-    pip install --no-deps -r  recovar/recovar_install_requirements.txt
-    python -m ipykernel install --user --name=recovar 
+    cd recovar
+    conda init
+    conda create --name recovar python=3.11 -y
+    conda activate recovar
+    pip install --upgrade "jax[cuda12]"==0.4.34 --no-input
+    pip install -r recovar_install_requirements.txt --no-input 
+    pip install --no-deps cryodrgn==2.3.0 --no-input
+    python -m ipykernel install --user --name=recovar
 
-
-
-It is recommanded to test your installation before running on a real dataset, see [Testing your installation](#small-test-dataset).
+After this, you should do `conda activate recovar` and run the commands described below.
+It is recommended to test your installation before running on a real dataset, see [Testing your installation](#small-test-dataset).
 
 <!-- The code was tested on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
 
