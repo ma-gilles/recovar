@@ -62,11 +62,11 @@ You may need to load CUDA before installing JAX, E.g., on our university cluster
 
 Then create an environment, download JAX-cuda (for some reason the latest version is causing issues, so make sure to use 0.4.23), clone the directory and install the requirements (note the --no-deps flag. This is because of some conflict with dependencies of cryodrgn. Will fix it soon.).
 
-    conda create --name recovar python=3.11
-    conda activate recovar
-    pip install -U "jax[cuda12_pip]"==0.4.23 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
     git clone https://github.com/ma-gilles/recovar.git
-    pip install --no-deps -r  recovar/recovar_install_requirements.txt
+    conda create --name recovar python=3.11 -y
+    conda activate recovar
+    pip install -U "jax[cuda12_pip]"==0.4.23 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html --no-input
+    pip install --no-deps -r recovar/recovar_install_requirements.txt --no-input
     python -m ipykernel install --user --name=recovar 
 
 It is recommanded to test your installation before running on a real dataset, see [Testing your installation](#small-test-dataset).
