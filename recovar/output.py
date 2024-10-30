@@ -129,15 +129,11 @@ def slice_at_point(density, axes, point, *args, **kwargs):
 #     plot_over_density(results['density'], trajectories, latent_space_bounds,  subsampled = subsampled, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = results['zs'][zdim], cov_zs = results['cov_zs'][zdim] )
 #     return
 
-
 def plot_over_density(density, trajectories = None, latent_space_bounds = None,  subsampled = None, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = None, cov_zs = None, points = None, projection_function = None, annotate = False, slice_point = None):
 
     colors = ['k', 'cornflowerblue', 'g' , 'r', 'b', 'w', 'c'] if colors is None else colors
     path_exists = trajectories is not None
         
-
-    # assert projection_function is None or slice_point is None, "Can't have both projection function and slice point"
-    assert projection_function in ['slice', 'slice_point', 'sum', None], "Unknown projection function"
     projection_function = half_slice_other if projection_function == 'slice' else projection_function
     projection_function = slice_at_point if projection_function == 'slice_point' else projection_function
 
@@ -183,7 +179,7 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
             plt.scatter(points[:,axis_x], points[:,axis_y], color = 'w', s = 100, edgecolors= 'k')
             if annotate:
                 for i in range(points.shape[0]):
-                    plt.annotate(str(i), points[i, axes] + np.array([0.1, 0.1]), color='white')
+                    plt.annotate(str(i), points[i, axes] + np.array([0.1, 0.1]))
 
         if path_exists:
             # path_grid = z_to_grid(path)
@@ -216,6 +212,7 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
     for k1 in range(np.min([traj_dim,3])):
         for k2 in range(k1+1, traj_dim):
             plot_traj_along_axes([k1, k2])
+
 
 
 
