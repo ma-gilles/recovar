@@ -9,6 +9,11 @@ if len(sys.argv) > 1:
 else:
     do_all_tests = False
 
+if len(sys.argv) > 2:
+    delete_everything = False
+else:
+    delete_everything = True
+
 RECOVAR_PATH = './'
 
 passed_functions = []
@@ -121,7 +126,7 @@ else:
     print("All functions completed successfully!")
 
     # Delete the test_dataset directory since all steps passed
-    if os.path.exists('test_dataset'):
+    if delete_everything and os.path.exists('test_dataset'):
         shutil.rmtree('test_dataset')
         print("Test dataset directory 'test_dataset' has been deleted.")
 
