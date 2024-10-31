@@ -13,6 +13,7 @@ from recovar import trajectory
 from recovar import utils
 from recovar import dataset
 from recovar import regularization
+import matplotlib.patheffects as pe
 
 import time
 
@@ -134,6 +135,9 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
     colors = ['k', 'cornflowerblue', 'g' , 'r', 'b', 'w', 'c'] if colors is None else colors
     path_exists = trajectories is not None
         
+
+    # assert projection_function is None or slice_point is None, "Can't have both projection function and slice point"
+    assert projection_function in ['slice', 'slice_point', 'sum', None], "Unknown projection function"
     projection_function = half_slice_other if projection_function == 'slice' else projection_function
     projection_function = slice_at_point if projection_function == 'slice_point' else projection_function
 
@@ -158,7 +162,7 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
         assert latent_space_bounds is not None, "Need latent space bounds to plot trajectories"
         grid_to_z, z_to_grid = ld.get_grid_z_mappings(latent_space_bounds, num_points)
     
-    def plot_traj_along_axes(axes, save_to_file= False ):
+    def plot_traj_along_axes(axes, points = None ):
         axes = tuple(axes)
         fig, ax = plt.subplots(figsize = (8,8))
         ax.set_frame_on(True)
@@ -176,10 +180,25 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
         ax.imshow((density_pl.T), origin='lower', cmap = cmap, interpolation = 'bilinear')#[...,25,25])
         # plt.colorbar()
         if points is not None:
-            plt.scatter(points[:,axis_x], points[:,axis_y], color = 'w', s = 100, edgecolors= 'k')
+            points = points.copy()
+            # project points in bound:
+            # out_of_bounds_points = ((points < 0) * (points > np.array(density.shape)[None])).any(axis=-1)
+            # points = np.where(points < 0, 0, points)
+            out_of_bounds_points = np.zeros(points.shape[0], dtype = bool)
+            for k in range(points.shape[1]):
+                out_of_bounds_points = out_of_bounds_points | (points[:,k] > density.shape[k])
+                out_of_bounds_points = out_of_bounds_points | (points[:,k] < 0)
+
+                points[:,k] = np.where(points[:,k] > density.shape[k], density.shape[k], points[:,k])
+                points[:,k] = np.where(points[:,k] < 0, 0, points[:,k])
+
+            #     in_bound_points[k] = z_to_grid(in_bound_points[k])
+            # in_bound_points = np.where(points > (points > np.array(density.shape)[None]), 0, points)
+            plt.scatter(points[out_of_bounds_points,axis_x], points[out_of_bounds_points,axis_y], color = 'r', s = 100, edgecolors= 'k')
+            plt.scatter(points[~out_of_bounds_points,axis_x], points[~out_of_bounds_points,axis_y], color = 'w', s = 100, edgecolors= 'k')
             if annotate:
                 for i in range(points.shape[0]):
-                    plt.annotate(str(i), points[i, axes] + np.array([0.1, 0.1]))
+                    plt.annotate(str(i), points[i, axes] + np.array([0.1, 0.1]), color='white', path_effects=[pe.withStroke(linewidth=4, foreground="black")])
 
         if path_exists:
             # path_grid = z_to_grid(path)
@@ -211,8 +230,7 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
         traj_dim = trajectories[0].shape[1] if trajectories is not None else 4
     for k1 in range(np.min([traj_dim,3])):
         for k2 in range(k1+1, traj_dim):
-            plot_traj_along_axes([k1, k2])
-
+            plot_traj_along_axes([k1, k2], points = points)
 
 
 
