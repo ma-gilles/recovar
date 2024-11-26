@@ -366,10 +366,18 @@ def find_local_maxs_of_density(density_deconv, latent_space_bounds, percent_top 
     from sklearn.cluster import KMeans, SpectralClustering, AgglomerativeClustering, HDBSCAN
     import matplotlib.pyplot as plt
     # clustering = KMeans(n_clusters=n_local_maxs,  n_init=10).fit(X)
+
+
     if n_local_maxs >= 1:
+        
         clustering = AgglomerativeClustering(n_clusters = n_local_maxs, linkage = 'complete').fit(large_dens_indices)
+        
+        if clustering == 'kmeans':
+            clustering = KMeans(n_clusters=n_local_maxs,  n_init=10).fit(large_dens_indices)
     else:
         clustering = HDBSCAN().fit(large_dens_indices)
+
+
 
     def find_max_within_clusters(density, labels, indices):
         n_clusters = np.max(labels)+1

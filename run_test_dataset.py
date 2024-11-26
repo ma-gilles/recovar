@@ -56,12 +56,18 @@ def run_command(command, description, function_name):
         print(f"Failed: {description}\n")
         failed_functions.append(function_name)
 
+
+
+
 # Generate a small test dataset - should take about 30 sec
 run_command(
     f'python {RECOVAR_PATH}/make_test_dataset.py',
     'Generate a small test dataset',
     'make_test_dataset.py'
 )
+
+
+
 
 # Run pipeline, should take about 2 min
 run_command(
@@ -85,7 +91,29 @@ run_command(
     'estimate_conformational_density.py'
 )
 
+
+
+
 if do_all_tests:
+
+    # Run pipeline, should take about 2 min
+    run_command(
+        f'python {RECOVAR_PATH}/pipeline.py test_dataset/particles.64.mrcs --poses test_dataset/poses.pkl --ctf test_dataset/ctf.pkl --correct-contrast -o test_dataset/pipeline_output --mask=from_halfmaps --lazy --ignore-zero-frequency',
+        'Run pipeline',
+        'pipeline.py'
+    )
+
+
+    # Set the number of rounds K for the outlier detection pipeline
+    K = 2  # You can adjust K as needed
+
+    # Run pipeline_with_outliers.py with K rounds
+    run_command(
+        f'python {RECOVAR_PATH}/pipeline_with_outliers.py test_dataset/particles.64.mrcs --poses test_dataset/poses.pkl --ctf test_dataset/ctf.pkl --correct-contrast -o test_dataset/pipeline_with_outliers_output --mask=from_halfmaps --lazy --zdim 4 --k-rounds {K}',
+        f'Run pipeline_with_outliers.py for {K} rounds',
+        'pipeline_with_outliers.py'
+    )
+
 
     # Run analyze.py with 2D embedding and no regularization on latent space (better for density estimation) and trajectory estimation
     # Should take about 5 min

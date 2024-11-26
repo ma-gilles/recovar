@@ -128,7 +128,7 @@ def guess_vol_shape_from_vol_size(vol_size):
 # These should probably be set more intelligently
 # Sometimes, memory can grow like O(vol_batch_size * image_batch_size)
 def get_image_batch_size(grid_size, gpu_memory):
-    return int(2*(2**24)/ (grid_size**2)  * gpu_memory / 38)
+    return int(2*(2**24)/ (grid_size**2)  * gpu_memory / 38 / 4) 
 
 def get_vol_batch_size(grid_size, gpu_memory):
     return int(25 * (256 / grid_size)**3 * gpu_memory / 38) 

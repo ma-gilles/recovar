@@ -212,7 +212,7 @@ class NumpyLoader(torch.utils.data.DataLoader):
 # A dataset class, that includes images and all other information
 class CryoEMDataset:
 
-    def __init__(self, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.evaluate_ctf_wrapper, dtype = np.complex64, rotation_dtype = np.float64, dataset_indices = None, grid_size = None, volume_upsampling_factor = 1, tilt_series_flag = False  ):
+    def __init__(self, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.evaluate_ctf_wrapper, dtype = np.complex64, rotation_dtype = np.float32, dataset_indices = None, grid_size = None, volume_upsampling_factor = 1, tilt_series_flag = False  ):
         
         if image_stack is not None:
             grid_size = image_stack.D
@@ -666,6 +666,7 @@ def make_dataset_loader_dict(args):
     return dataset_loader_dict
 
 def figure_out_halfsets(args):
+
     if args.halfsets == None:
         logger.info("Randomly splitting dataset into halfsets")
         # ind_split = dataset.get_split_indices(args.particles_file, ind_file = args.ind)
@@ -674,9 +675,29 @@ def figure_out_halfsets(args):
             halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, ntilts = args.ntilts, datadir = args.datadir)
         else:
             halfsets = get_split_indices(args.particles, ind_file = args.ind)
+    # else:
+    #     logger.info("Loading halfset from file")
+    #     halfsets = pickle.load(open(args.halfsets, 'rb'))
     else:
+        if args.tilt_series or args.tilt_series_ctf:
+            halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, ntilts = args.ntilts, datadir = args.datadir)
+            logger.warning("Ignoring halfsets file for tilt series! Using random split instead.")
+            return halfsets
+        
         logger.info("Loading halfset from file")
         halfsets = pickle.load(open(args.halfsets, 'rb'))
+
+        # Ensure only the indices in args.ind are used
+        if args.ind is not None:
+            # Load indices from args.ind
+            if isinstance(args.ind, np.ndarray):
+                ind = args.ind
+            else:
+                with open(args.ind, 'rb') as f:
+                    ind = np.asarray(pickle.load(f))
+            # Intersect the loaded halfsets with ind
+            halfsets = [np.intersect1d(halfset, ind) for halfset in halfsets]
+
     if args.n_images > 0:
         halfsets = [ halfset[:args.n_images//2] for halfset in halfsets]
         logger.info(f"using only {args.n_images} images")
