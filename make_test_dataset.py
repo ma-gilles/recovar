@@ -26,7 +26,7 @@ def make_test_dataset(noise_level = 0.1, n_images = None):
     image_stack, sim_info = simulator.generate_synthetic_dataset(output_folder, voxel_size, volume_folder_input, n_images,
                                      outlier_file_input = outlier_file_input, grid_size = grid_size,
                                 volume_distribution = volume_distribution,  dataset_params_option = "uniform", noise_level =noise_level,
-                                noise_model = "radial1", put_extra_particles = False, percent_outliers = 0.00, 
+                                noise_model = "radial1", put_extra_particles = False, percent_outliers = 0.0, 
                                 volume_radius = 0.7, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.2 * 0, contrast_std =0.1   , disc_type = 'linear_interp')
     
     print(f"Finished generating dataset {output_folder}")
