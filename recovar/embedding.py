@@ -54,10 +54,7 @@ def compute_per_image_embedding_from_result(result, zdim, gpu_memory = None):
 
 
 
-def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False):
-
-    
-
+def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, skip_image_i_in_series = None):
 
     assert u.shape[0] == cryos[0].volume_size, "input u should be volume_size x basis_size"
     st_time = time.time()    
@@ -102,7 +99,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
         zs[cryo_idx], cov_zs[cryo_idx], est_contrasts[cryo_idx], bias[cryo_idx] = get_coords_in_basis_and_contrast_3(
             cryo, mean, basis, eigenvalues[:basis.shape[0]], volume_mask,
             jnp.array(cov_noise) , contrast_grid, batch_size, disc_type, 
-            parallel_analysis = parallel_analysis, compute_covariances = compute_covariances, contrast_mean = contrast_mean, contrast_variance = contrast_variance , compute_bias = compute_bias)
+            parallel_analysis = parallel_analysis, compute_covariances = compute_covariances, contrast_mean = contrast_mean, contrast_variance = contrast_variance , compute_bias = compute_bias, skip_image_i_in_series = skip_image_i_in_series)
 
     
     zs = np.concatenate(zs, axis = 0)
@@ -126,9 +123,14 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
     return zs, cov_zs, est_contrasts, bias
     
 
+
+
+
 # @functools.partial(jax.jit, static_argnums = [5])    
-def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False):
-    
+def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, skip_image_i_in_series = None):
+    # If skip_image_i_in_series is not None, it will skip that image in the tilt series. This is useful for detecting bad tilt images.
+
+
     basis = basis.astype(experiment_dataset.dtype)
         
     # Make sure variables used in every iteration are on gpu.
@@ -151,8 +153,17 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
 
 
     batch_idx =0 
+
     for batch, particles_ind, batch_image_ind in data_generator:
         
+        # TODO this should probably be changed to a more general way of handling this
+        ## Tilt series are always processed one by one so index == position in tilt series
+        if skip_image_i_in_series is not None:
+            batch = jnp.delete(batch, skip_image_i_in_series, axis = 0)
+            # particles_ind = np.delete(particles_ind, skip_image_i_in_series)
+            batch_image_ind = np.delete(batch_image_ind, skip_image_i_in_series)
+
+
         xs_single, contrast_single, cov_batch, bias = compute_single_batch_coords_split(batch, mean_estimate, volume_mask, 
                                                                         basis, eigenvalues,
                                                                         experiment_dataset.CTF_params[batch_image_ind],

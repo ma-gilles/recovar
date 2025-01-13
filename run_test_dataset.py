@@ -68,6 +68,15 @@ run_command(
 
 
 
+# Run pipeline, should take about 2 min
+run_command(
+    f'python {RECOVAR_PATH}/pipeline.py test_dataset/particles.64.mrcs --poses test_dataset/poses.pkl --ctf test_dataset/ctf.pkl --correct-contrast -o test_dataset/pipeline_output --mask=from_halfmaps --lazy --ignore-zero-frequency',
+    'Run pipeline',
+    'pipeline.py'
+)
+
+
+
 
 # Run pipeline, should take about 2 min
 run_command(
@@ -95,13 +104,6 @@ run_command(
 
 
 if do_all_tests:
-
-    # Run pipeline, should take about 2 min
-    run_command(
-        f'python {RECOVAR_PATH}/pipeline.py test_dataset/particles.64.mrcs --poses test_dataset/poses.pkl --ctf test_dataset/ctf.pkl --correct-contrast -o test_dataset/pipeline_output --mask=from_halfmaps --lazy --ignore-zero-frequency',
-        'Run pipeline',
-        'pipeline.py'
-    )
 
 
     # Set the number of rounds K for the outlier detection pipeline

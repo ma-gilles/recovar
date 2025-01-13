@@ -434,7 +434,9 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     main_image_stack = simulate_data(main_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = disc_type, mrc_file = mrc_file )
 
     image_means = np.mean(main_image_stack, axis = (-1,-2))
+    # image_means_mean = np.mean(main_image_stack, axis = (-1,-2))
     image_mean_std = np.std(image_means)
+    logger.info(f"Image mean mean {np.mean(image_means)}, image mean std: {image_mean_std}")
     per_image_offset = np.random.randn(n_images) * image_mean_std * image_offset_n_std
     main_image_stack += per_image_offset[:,None,None]
 
