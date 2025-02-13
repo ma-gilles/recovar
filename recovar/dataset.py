@@ -451,17 +451,19 @@ def subsample_cryoem_dataset(dataset, indices):
 def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False, tilt_series = False, tilt_series_ctf = None, dose_per_tilt = 2.9, angle_per_tilt = 3 ):
     
     # For backward compatibility... Delete at some point?
-    tilt_series_ctf = None if tilt_series_ctf is False else tilt_series_ctf
+    if tilt_series_ctf is None and tilt_series is False:
+        tilt_series_ctf = 'cryoem'
+    elif tilt_series_ctf is None and tilt_series is True:
+        tilt_series_ctf = 'v2_scale_from_star'
+
+    # else:
+    #     tilt_series_ctf = tilt_series_ctf
+    # tilt_series_ctf = #None if tilt_series_ctf is False else tilt_series_ctf
 
     # assert tilt_series_ctf in (None, "from_star", "scale_from_star"), "tilt_series_ctf must be None, from_star, or scale_from_star"
     # tilt_series_ctf = tilt_series if tilt_series_ctf is None else tilt_series_ctf
 
     sort_with_Bfac = True
-    # if tilt_series_ctf == "scale_from_star":
-    #     angle_per_tilt = 0
-    #     sort_with_Bfac = True
-    # else:
-    #     sort_with_Bfac = False
         
     if tilt_series:
             from recovar import tilt_dataset
@@ -486,14 +488,16 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
     
     CTF_fun = core.evaluate_ctf_wrapper
 
-    # Sort of a hacky way to do this.
-    if (tilt_series is False) and (tilt_series_ctf is not None):
+    # This is an option used to treat a cryo-ET dataset as a cryo-EM dataset, but still use the right CTF.
+    # It means, that it will use the cryo-EM pipeline but the cryoET CTF.
+    if (tilt_series is False) and (tilt_series_ctf != 'cryoem'):
         from recovar import tilt_dataset
         tilt_dataset_this = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, sort_with_Bfac = sort_with_Bfac)
     else:
         tilt_dataset_this = dataset
 
-    if tilt_series_ctf is not None:
+    if tilt_series_ctf != 'cryoem':
+        # The angles are used to compute a scale factor cos(angles). If scale from star, then the scale factor is already in the star file, so set angle to 0
         if "scale_from_star" in tilt_series_ctf:
             angle_per_tilt = 0
 
@@ -501,6 +505,7 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
             ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
             ctf_params[:,core.bfactor_ind+1] = -tilt_dataset_this.ctfBfactor # should be POSITIVE (negative in star file)
             logger.info('CTF from star')
+
         elif (tilt_series_ctf == "scale_from_star") or (tilt_series_ctf == "from_dose"):
             # Sort of a hacky way to do this.
 
@@ -522,6 +527,8 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
             # Sort of a hacky way to do this.
             tilt_numbers = tilt_dataset_this.tilt_numbers
             dose = - (tilt_dataset_this.ctfBfactor / 4) # WARP uses a ctfBfactor == -4 * dose
+
+            # The angles are used to compute a scale factor cos(angles). If scale from star, then the scale factor is already in the star file
             angles = jnp.ceil(tilt_numbers/2) * angle_per_tilt 
             if 'scale_from_star' in tilt_series_ctf:
                 # + 1 because voxel_size in included.... gross
