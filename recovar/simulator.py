@@ -336,7 +336,7 @@ def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_
     return volumes
 
 
-def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None, n_tilts = -1, dose_per_tilt = None, angle_per_tilt = None, voltage = 100, image_offset_n_std = 0.0 ):
+def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None, n_tilts = -1, dose_per_tilt = None, angle_per_tilt = None, voltage = 100, image_offset_n_std = 0.0, per_particle_contrast= True ):
     
     # voxel_size = 
     volume_shape = utils.guess_vol_shape_from_vol_size(volumes[0].size)
@@ -403,8 +403,12 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
             # import pdb; pdb.set_trace()
         # import pdb; pdb.set_trace()
         # Tag it to the end
-        per_tilt_contrast, _ = generate_contrast_params(n_tilt_groups, noise_scale_std, contrast_std )
-        per_image_contrast = per_tilt_contrast[tilt_groups]
+        if per_particle_contrast:
+            per_tilt_contrast, _ = generate_contrast_params(n_tilt_groups, noise_scale_std, contrast_std )
+            per_image_contrast = per_tilt_contrast[tilt_groups]
+        else:
+            per_tilt_contrast = None
+            per_image_contrast, _ = generate_contrast_params(n_images, noise_scale_std, contrast_std )
         ctf_params = np.concatenate([ctf_params, tilt_numbers[:,None]], axis = -1)
 
     else:

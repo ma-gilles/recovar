@@ -232,7 +232,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--tilt-series-ctf", default = None,  dest="tilt_series_ctf", help="What CTF to use for tilt series. Default = same as tilt_series, also "
+        "--tilt-series-ctf", default = None,  dest="tilt_series_ctf", help="What CTF to use for tilt series. Default = cryoem if tilt series is False, dose weighting + ctfFromStar if tilt series is True"
     )
 
     parser.add_argument(

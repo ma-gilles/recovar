@@ -125,10 +125,13 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
 
 
 
-
 # @functools.partial(jax.jit, static_argnums = [5])    
-def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, skip_image_i_in_series = None):
+def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, skip_image_i_in_series = None, force_not_shared_label = False, not_shared_contrast = False):
     # If skip_image_i_in_series is not None, it will skip that image in the tilt series. This is useful for detecting bad tilt images.
+
+    # This is the handle the case where we want to assign a label to each image despite them from the same tilt series. E.g, for tilt cleaning.
+    shared_label = experiment_dataset.tilt_series_flag and not force_not_shared_label
+    n_units = experiment_dataset.n_units if not force_not_shared_label else experiment_dataset.n_images
 
 
     basis = basis.astype(experiment_dataset.dtype)
@@ -140,16 +143,17 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
     eigenvalues = jnp.array(eigenvalues).astype(experiment_dataset.dtype)
     contrast_grid = contrast_grid.astype(experiment_dataset.dtype_real)
 
-
-    # no_mask = covariance_core.check_mask(volume_mask)    
     
     basis_size = basis.shape[0]
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
     
-    xs = np.zeros((experiment_dataset.n_units, basis_size), dtype = basis.dtype)
-    estimated_contrasts = np.zeros(experiment_dataset.n_units, dtype = basis.dtype).real
-    image_latent_covariances = np.zeros((experiment_dataset.n_units, basis_size, basis_size), dtype = basis.dtype) if compute_covariances else None
-    image_latent_bias = np.zeros((experiment_dataset.n_units, basis_size, basis_size), dtype = basis.dtype) if compute_bias else None
+    xs = np.zeros((n_units, basis_size), dtype = basis.dtype)
+    image_latent_covariances = np.zeros((n_units, basis_size, basis_size), dtype = basis.dtype) if compute_covariances else None
+    image_latent_bias = np.zeros((n_units, basis_size, basis_size), dtype = basis.dtype) if compute_bias else None
+
+    # Size depends on whether we are sharing contrast or not
+    contrast_units = experiment_dataset.n_images if not_shared_contrast else n_units
+    estimated_contrasts = np.zeros(contrast_units, dtype = basis.dtype).real
 
 
     batch_idx =0 
@@ -160,7 +164,6 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
         ## Tilt series are always processed one by one so index == position in tilt series
         if skip_image_i_in_series is not None:
             batch = jnp.delete(batch, skip_image_i_in_series, axis = 0)
-            # particles_ind = np.delete(particles_ind, skip_image_i_in_series)
             batch_image_ind = np.delete(batch_image_ind, skip_image_i_in_series)
 
 
@@ -180,10 +183,20 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
                                                                         compute_covariances, np.array(noise_variance),
                                                                         experiment_dataset.image_stack.process_images,
                                                                        experiment_dataset.CTF_fun, contrast_grid,
-                                                                       contrast_mean, contrast_variance, compute_bias, shared_label = experiment_dataset.tilt_series_flag)
+                                                                       contrast_mean, contrast_variance, compute_bias, 
+                                                                       shared_label = shared_label)
         
+        # If we are not sharing labels, we need to make sure we are assigning the correct label to each particle
+        if force_not_shared_label:
+            particles_ind = batch_image_ind
+
         xs[particles_ind] = xs_single
-        estimated_contrasts[particles_ind] = contrast_single
+
+        if not_shared_contrast:
+            estimated_contrasts[batch_image_ind] = contrast_single
+        else:
+            estimated_contrasts[particles_ind] = contrast_single
+
         if compute_covariances:
             image_latent_covariances[np.array(particles_ind)] = cov_batch
 
@@ -193,7 +206,6 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
         if (batch_idx % 50 == 49) and (batch_idx > 0):
             compute_single_batch_coords_split._clear_cache() 
         
-
         batch_idx +=1
     return xs, image_latent_covariances, estimated_contrasts, image_latent_bias
 
@@ -274,7 +286,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
 
 
 @functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19, 23, 24])    
-def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, shared_label = False):
+def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, shared_label = False, not_shared_contrast = False):
 
     # This should scale as O( batch_size * (n^2 * basis_size + n^3 + basis_size**2))
     AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq = compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid)
@@ -283,8 +295,16 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
     if noise_variance.ndim < 2:
         masked_noises = jnp.repeat(noise_variance[None], axis =0, repeats = batch.shape[0])#  * jnp.ones(batch.shape[0], dtype = noise_variance.dtype) 
 
+    if shared_label and not_shared_contrast:
+        ## keep a copy of all of these before summing to get the best contrast for each image later
+        AU_t_images_unsummed = AU_t_images.copy()
+        AU_t_Amean_unsummed = AU_t_Amean.copy()
+        AU_t_AU_unsummed = AU_t_AU.copy()
+        image_T_A_mean_unsummed = image_T_A_mean.copy()
+        A_mean_norm_sq_unsummed = A_mean_norm_sq.copy()
+        masked_noises_unsummed = masked_noises.copy()
+        image_norms_sq_unsummed = image_norms_sq.copy()
 
-    # import pdb; pdb.set_trace()
     if shared_label:
         # Assumes all have the same labels. Maybe this isn't the best
         AU_t_images = jnp.sum(AU_t_images, axis=0, keepdims=True)
@@ -316,23 +336,69 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
     xs_single = batch_slice_ar(best_idx, xs_batch_contrast)
     contrast_single = contrast_grid[best_idx]
 
+
+    if shared_label and not_shared_contrast:
+        # In this case, we need to do a separate contrast search for each image by iterating.
+
+        contrast_est = jnp.ones(batch.shape[0], dtype = contrast_single.dtype) * contrast_single
+
+        # First assume contrast == 1 and solve:
+        def refine_contrast(i, contrast_est):
+            AU_t_images = jnp.sum(AU_t_images_unsummed * contrast_est **1, axis=0, keepdims=True)
+            AU_t_Amean = jnp.sum(AU_t_Amean_unsummed * contrast_est **2, axis=0, keepdims=True) 
+            AU_t_AU = jnp.sum(AU_t_AU_unsummed * contrast_est **2, axis=0, keepdims=True) 
+
+            # here DOES NOT solve for contrast. optimize over zs only
+            dummy_contrast_grid = np.array([1])
+            # Solve for best zs given given contrast
+            xs_batch_contrast = batch_over_images_and_contrast_solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, masked_noises, dummy_contrast_grid)
+
+
+            # For all images in batch, set same xs and check all contrasts.
+            xs_repeat = jnp.repeat(xs_batch_contrast, axis = (0, 1), repeats = (batch.shape[0], contrast_grid.shape[0],1))
+            # Find best contrast given zs. One could just explicitly solve for contrast, but this works too...
+            residuals_fit, residuals_prior = batch_compute_contrast_residual_fast_2(xs_repeat, AU_t_images_unsummed, image_norms_sq_unsummed, AU_t_Amean_unsummed, A_mean_norm_sq_unsummed, image_T_A_mean_unsummed,  AU_t_AU_unsummed, eigenvalues, masked_noises_unsummed, contrast_grid)
+
+            contrast_prior = (contrast_grid - contrast_mean)**2 / contrast_variance
+
+            # Pick best contrast
+            res_sum1 = residuals_fit + residuals_prior + contrast_prior
+            best_idx = jnp.argmin(res_sum1, axis = 1).astype(int)
+            contrast_est = contrast_grid[best_idx]
+            return contrast_est
+        
+        contrast_single = jax.lax.fori_loop(0, 10, refine_contrast, contrast_est)
+
+
+        return 
+
+
     # covariance
     if compute_covariances:
         # cov_batch = (contrast_single**2 )[:,None,None] * AU_t_AU  + jnp.diag(1/eigenvalues)
         # logger.warning("FIX THIS COV BATCH STUFF")
+        if shared_label and not_shared_contrast:
+            # gram = (contrast_single**2 )[:,None,None] * AU_t_AU
+            gram = jnp.sum(AU_t_AU_unsummed * contrast_est **2, axis=0, keepdims=True) 
+        else:
+            gram = (contrast_single**2 )[:,None,None] * AU_t_AU
 
-        gram = (contrast_single**2 )[:,None,None] * AU_t_AU
+
         cov_batch = gram + jnp.diag(1/eigenvalues)
         cov_batch = cov_batch @ jnp.linalg.pinv(gram, rcond=1e-6, hermitian=True) @ cov_batch
-        # cov_batch = cov_batch @ jnp.linalg.pinv(gram, hermitian=True) @ cov_batch
-        # min_eig = jnp.min(jnp.linalg.eigvalsh(cov_batch))
-        # cov_batch = jnp.where(min_eig == np.inf, cov_batch2, cov_batch)
+
+
 
     else:
         cov_batch = None
 
     if compute_bias:
-        gram = (contrast_single**2 )[:,None,None] * AU_t_AU
+        if shared_label and not_shared_contrast:
+            # gram = (contrast_single**2 )[:,None,None] * AU_t_AU
+            gram = jnp.sum(AU_t_AU_unsummed * contrast_est **2, axis=0, keepdims=True) 
+        else:
+            gram = (contrast_single**2 )[:,None,None] * AU_t_AU
+
         cov_batch = gram + jnp.diag(1/eigenvalues)
         bias = jnp.linalg.pinv(cov_batch, rcond=1e-6, hermitian=True) @ gram
     else:
