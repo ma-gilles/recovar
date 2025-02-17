@@ -543,7 +543,7 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
 
             CTF_fun = core.evaluate_ctf_wrapper_tilt_series_v2
             ctf_params = np.concatenate( [ctf_params, dose[...,None], angles[...,None]], axis =-1)
-
+            import pdb; pdb.set_trace()
             assert (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)) , "Critical exposure calculation requires 200kV or 300kV imaging" 
             logger.info('CTF from dose weighting - V2')
             

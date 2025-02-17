@@ -23,7 +23,8 @@ w_ind =5 #(float or Bx1 tensor): amplitude contrast ratio
 phase_shift_ind = 6 #(float or Bx1 tensor): degrees 
 bfactor_ind = 7 #(float or Bx1 tensor): envelope fcn B-factor (Angstrom^2)
 contrast_ind = 8
-tilt_number_ind = 9
+# delete this option?
+tilt_number_ind = 9 # 
 dose_ind = 9
 tilt_angle_ind = 10
 
@@ -281,7 +282,7 @@ batch_get_nearest_gridpoint_indices = jax.vmap(get_nearest_gridpoint_indices, in
 batch_get_gridpoint_coords = jax.vmap(get_gridpoint_coords, in_axes =(0, None, None) ) 
 
 
-@functools.partial(jax.jit, static_argnums=[3,4,5,6,7])
+@functools.partial(jax.jit, static_argnums=[3,4,6,7])
 def forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):
     slices = slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)
     return slices
@@ -290,7 +291,7 @@ batch_forward_model_from_map = jax.vmap(forward_model_from_map, in_axes = (0, 0,
 
 
 
-@functools.partial(jax.jit, static_argnums=[3,4,5,6,7])
+@functools.partial(jax.jit, static_argnums=[3,4,6,7])
 def forward_model_from_map_and_return_adjoint(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):
     f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type)
     slices, f_adj = vjp(f,volume)
@@ -298,7 +299,7 @@ def forward_model_from_map_and_return_adjoint(volume, CTF_params, rotation_matri
 
 
 # A JAXed version of the adjoint. This is actually slightly slower but will run with disc_type = 'linear_interp'. I probably should just write out an explicit adjoint of linear interpolation...
-@functools.partial(jax.jit, static_argnums=[3,4,5,6,7])
+@functools.partial(jax.jit, static_argnums=[3,4,6,7])
 def adjoint_forward_model_from_map(slices, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):  
     volume_size = np.prod(volume_shape)
     f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type)
@@ -306,7 +307,7 @@ def adjoint_forward_model_from_map(slices, CTF_params, rotation_matrices, image_
     return u(slices)[0]
 
 
-@functools.partial(jax.jit, static_argnums=[3,4,5,6,7])
+@functools.partial(jax.jit, static_argnums=[3,4,6,7])
 def adjoint_forward_model_from_trilinear(slices, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):  
 
     return adjoint_slice_volume_by_trilinear(slices * CTF_fun( CTF_params, image_shape, voxel_size), rotation_matrices, image_shape, volume_shape, volume = None)
@@ -315,7 +316,7 @@ def adjoint_forward_model_from_trilinear(slices, CTF_params, rotation_matrices, 
 
 
 # Compute A^TAx (the forward, then its adjoint). For JAX reasons, this should be about 2x faster than doing each call separately.
-@functools.partial(jax.jit, static_argnums=[3,4,5,6,7])
+@functools.partial(jax.jit, static_argnums=[3,4,6,7])
 def compute_A_t_Av_forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, noise_variance):    
     f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type)
     y, u = vjp(f,volume)
