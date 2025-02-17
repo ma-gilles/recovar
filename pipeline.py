@@ -213,7 +213,6 @@ def add_args(parser: argparse.ArgumentParser):
             action="store_true",
         )
 
-
     group.add_argument(
             "--dont-use-image-mask",
             dest = "dont_use_image_mask",
@@ -258,8 +257,6 @@ def add_args(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--gpu-gb", default =None,  type = float, dest="gpu_memory", help="How much GPU memory to use. Default = all" 
     )
-
-
 
     return parser
     

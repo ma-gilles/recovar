@@ -291,7 +291,7 @@ def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us
      
     mkdir_safe(output_folder + 'volumes/')
     save_volumes([ u[...,k] for k in range (us_to_save)], output_folder + 'volumes/' +  'eigen_pos', volume_shape = volume_shape,   voxel_size = voxel_size)
-    save_volumes([ -u[...,k] for k in range (us_to_save)], output_folder + 'volumes/' +  'eigen_neg', volume_shape = volume_shape,   voxel_size = voxel_size)
+    # save_volumes([ -u[...,k] for k in range (us_to_save)], output_folder + 'volumes/' +  'eigen_neg', volume_shape = volume_shape,   voxel_size = voxel_size)
     save_volume(mean, output_folder + 'volumes/' + 'mean', volume_shape = volume_shape,   voxel_size = voxel_size)
     
     grid_size = np.round((mean.shape[0])**(1/3)).astype(int)
@@ -549,10 +549,8 @@ class PipelineOutput:
         return 
 
     def get(self,key):
-        if (key in self.params) and (key != 'covariance_cols'):
-            return self.params[key]
 
-        elif key in ['zs', 'cov_zs', 'contrasts', 'zs_cont', 'cov_zs_cont', 'est_contrasts_cont']:
+        if key in ['zs', 'cov_zs', 'contrasts', 'zs_cont', 'cov_zs_cont', 'est_contrasts_cont']:
             if not self.embedding_loaded:
                 self.load_embedding()
             return self.embedding[key]
@@ -596,9 +594,9 @@ class PipelineOutput:
         elif key == 'covariance_cols':
             return utils.pickle_load(self.result_path + 'model/' + 'covariance_cols' + '.pkl')
         elif key == 'dataset':
-            return dataset.load_dataset_from_args(self.params['input_args'], lazy = False) 
+            return dataset.load_dataset_from_args(self.get('input_args'), lazy = False) 
         elif key == 'lazy_dataset':
-            return dataset.load_dataset_from_args(self.params['input_args'], lazy = True) 
+            return dataset.load_dataset_from_args(self.get('input_args'), lazy = True) 
         elif key == 'halfsets':
             return utils.pickle_load(self.result_path + 'model/' + 'halfsets' + '.pkl')
         elif key == 'particles_halfsets':
@@ -607,7 +605,10 @@ class PipelineOutput:
             else:
                 return utils.pickle_load(self.result_path + 'model/' + 'particles_halfsets' + '.pkl')
         elif key == 'input_args':
-            return self.params['input_args']
+            # Not sure why this is necessary all of the sudden...
+            return self.params['input_args'].item()
+        elif (key in self.params):
+            return self.params[key]
         else:
             assert False, "key not found"
 

@@ -128,10 +128,10 @@ def guess_vol_shape_from_vol_size(vol_size):
 # These should probably be set more intelligently
 # Sometimes, memory can grow like O(vol_batch_size * image_batch_size)
 def get_image_batch_size(grid_size, gpu_memory):
-    return int(2*(2**24)/ (grid_size**2)  * gpu_memory / 38 / 4) 
+    return int(2*(2**24)/ (grid_size**2)  * gpu_memory / 38 / 2) 
 
 def get_vol_batch_size(grid_size, gpu_memory):
-    return int(25 * (256 / grid_size)**3 * gpu_memory / 38) 
+    return int(25 * (256 / grid_size)**3 * gpu_memory / 38)
 
 def get_column_batch_size(grid_size, gpu_memory):
     return int(50 * ((256/grid_size)**3) * gpu_memory / 38)
@@ -263,9 +263,9 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
         values += [group_names]
         # Also write contrast variation if using tilt groups?
         keys += ['rlnCtfScalefactor']
-        values += [CTF_params[:,8]]
+        values += [CTF_params[:,core.contrast_ind]]
         keys += ['rlnCtfBfactor']
-        values += [CTF_params[:,7]]
+        values += [CTF_params[:,core.bfactor_ind]]
         
     if halfset_indices is not None:
         keys += ['rlnRandomSubset']
