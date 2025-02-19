@@ -161,8 +161,8 @@ def randomized_svd(A, n_pcs = 200):
     logger.info("QR done")
     Y = blockwise_Y_T_X(Q,A) #np.conj(Q).T @ A
     logger.info("Q^TA done")
-    svd_cpu = jax.jit(jnp.linalg.svd, backend='cpu')
-    U, S, Vh = svd_cpu(Y, full_matrices=True)#, full_matrices = True)
+    svd_cpu = jax.jit( lambda X :jnp.linalg.svd(X, full_matrices = True), backend='cpu')
+    U, S, Vh = svd_cpu(Y)
     QU = blockwise_A_X(Q, U, memory_to_use = utils.get_gpu_memory_total()//3)
 
     return QU, S, Vh

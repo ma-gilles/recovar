@@ -7,10 +7,14 @@ Created on Thu Sep 30 16:04:24 2021
 """
 import json, os, finufft
 
-try:
-    import prody
-except:
-    print("Did not find prody. If you need it, install it by running: pip install prody")
+
+def check_prody():
+    try:
+        import prody
+    except:
+        raise Exception("Did not find prody. Prody is not in recovar by default anymore If you need it, install it by running: pip install prody. You might need to install some dependencies.")
+
+
 
 import numpy as np
 from collections import defaultdict
@@ -183,12 +187,13 @@ def five_gaussian_atom_shape(psi, coeffs):
 
 
 def generate_volume_from_pdb(molecule, voxel_size, grid_size):
-
+    check_prody()
     atoms = prody.parsePDB(molecule)
     return generate_volume_from_atoms(atoms, voxel_size = voxel_size, grid_size = grid_size)
 
 
 def generate_potential_at_freqs_from_pdb(molecule, voxel_size, freq_coords):
+    check_prody()
     atoms = center_atoms(prody.parsePDB(molecule))
     return generate_volume_from_atoms(atoms, voxel_size = voxel_size, grid_size = None, freq_coords = freq_coords)
 
@@ -287,7 +292,7 @@ def generate_synthetic_atomgroup(radius):
 
     ATOM_TYPE = 'C'
     ATOMGROUP_FLAGS = ['hetatm', 'pdbter', 'ca', 'calpha', 'protein', 'aminoacid', 'nucleic', 'hetero']
-   
+    check_prody()
     atoms = prody.AtomGroup()
     atoms.setCoords(atom_coor)
     atoms.setNames(np.array(N_atoms *[ATOM_TYPE],  dtype='<U6'))
@@ -306,6 +311,7 @@ def generate_synthetic_pdb_dataset(directory, radius, n_samples = 1):
     for k in range(n_samples):
         atoms = generate_synthetic_atomgroup(radius)
         filename = directory + "/mol" + str(k) + ".pdb"
+        check_prody()
         prody.writePDB(filename, atoms)
 
     
@@ -353,7 +359,9 @@ def generate_molecule_spectrum_from_pdb_id(molecule, voxel_size, grid_size, forc
     do_center_atoms = not from_atom_group if do_center_atoms is None else do_center_atoms
 
     # prody.confProDy(verbosity=verbosity)
+    
     if not from_atom_group:
+        check_prody()
         atoms = prody.parsePDB(molecule)
     else:
         atoms = molecule

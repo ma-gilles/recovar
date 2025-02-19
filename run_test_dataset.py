@@ -19,11 +19,11 @@ RECOVAR_PATH = './'
 passed_functions = []
 failed_functions = []
 
+
 def error_message():
     print("--------------------------------------------")
     print("--------------------------------------------")
-    print("No GPU devices found by JAX. Please ensure that JAX is properly configured with CUDA and a compatible GPU. Some info from the JAX website: (https://jax.readthedocs.io/en/latest/installation.html): \n You must first install the NVIDIA driver. You’re recommended to install the newest driver available from NVIDIA, but the driver version must be >= 525.60.13 for CUDA 12 on Linux. \n  The info below is outdated, and this problem should not happen anymore with the newest versions of JAX but I am leaving it in case it could be useful.... \n Typically, the problem was during the installation of JAX which could not find the CUDA libraries. Sometimes, this can be fixed by setting the correct paths to the CUDA libraries in the environment variables, or module load depending on your system. Note that you may have to reinstall JAX after setting the correct paths.  E.g. run the following:")
-    print("pip uninstall jax jaxlib; pip install -U \"jax[cuda12_pip]\"==0.4.23 -f https://storage.googleapis.com/jax-releases/" )
+    print("No GPU devices found by JAX. Please ensure that JAX is properly configured with CUDA and a compatible GPU. Some info from the JAX website: (https://jax.readthedocs.io/en/latest/installation.html): \n You must first install the NVIDIA driver. You’re recommended to install the newest driver available from NVIDIA, but the driver version must be >= 525.60.13 for CUDA 12 on Linux. Then reinstall jax as follows:\n pip uninstall jax jaxlib; \n pip install -U \"jax[cuda12]\"==0.5.0" )
     print("--------------------------------------------")
     print("--------------------------------------------")
     exit(1)
