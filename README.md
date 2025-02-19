@@ -92,8 +92,13 @@ If you have an internet connection, you can copy paste the following commands be
     pip install -r requirements.txt
     python -m ipykernel install --user --name=recovar
 
-After this, you should do `conda activate recovar` and run the commands described below.
-It is recommended to test your installation before running on a real dataset, see [Testing your installation](#small-test-dataset).
+It is recommended to test your installation before running on a real dataset. You can do this by running this on a GPU-capable device:
+
+    conda activate recovar
+    cd recovar
+    python run_test_dataset.py
+
+see details in [testing your installation](#small-test-dataset).
 
 <!-- The code was tested on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
 
