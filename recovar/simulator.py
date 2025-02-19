@@ -8,10 +8,10 @@ from recovar import utils
 import jax.scipy.spatial.transform
 import os
 import mrcfile
-import matplotlib.pyplot as plt
-from cryodrgn import mrc, ctf
-from cryodrgn.pose import PoseTracker
-from pathlib import Path
+# import matplotlib.pyplot as plt
+# from cryodrgn import ctf
+# from cryodrgn.pose import PoseTracker
+from recovar import cryodrgn_load
 # xx = Path(__file__).resolve()
 import recovar.simulate_scattering_potential as gsm
 import logging
@@ -22,15 +22,15 @@ data_path = os.path.join(os.path.dirname(__file__),'data/')
 
 # Two generators that load ctf and poses from real datasets
 def get_dataset_params(n_images, grid_size, ctf_file, poses_file):
-    ctf_params = np.array(ctf.load_ctf_for_training(grid_size, ctf_file))
+    ctf_params = np.array(cryodrgn_load.load_ctf_for_training(grid_size, ctf_file))
     
     # Initialize bfactor == 0
     ctf_params = np.concatenate( [ctf_params, np.zeros_like(ctf_params[:,0][...,None])], axis =-1)
     
     # Initialize constrast == 1
     ctf_params = np.concatenate( [ctf_params, np.ones_like(ctf_params[:,0][...,None])], axis =-1)
-    posetracker = PoseTracker.load(poses_file, n_images, grid_size, ind = None) 
-    return ctf_params, np.array(posetracker.rots), np.array(posetracker.trans)
+    rots, trans, _ = cryodrgn_load.load_poses(poses_file, n_images, grid_size, ind = None) 
+    return ctf_params, np.array(rots), np.array(trans)
 
 def load_first_dataset_params(grid_size):
     n_images = 131899
@@ -91,6 +91,7 @@ def get_params_generator(dataset_params_fn ):
 
 ## A uniform pose generator
 def random_sampling_scheme(n_images, grid_size, seed =0, uniform = True ):
+    
     np.random.seed(seed)
     dataset_params_fn = load_first_dataset_params
     ctf_params, _, _ = generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  )
@@ -240,7 +241,7 @@ def get_noise_model(option, grid_size):
 def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_images, outlier_file_input = None, grid_size = 128,
                                volume_distribution = None,  dataset_params_option = "dataset1", noise_level = 1, 
                                noise_model = "radial1", put_extra_particles = True, percent_outliers = 0.1, 
-                               volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, disc_type = 'linear_interp', n_tilts = -1, dose_per_tilt = 3, angle_per_tilt = 3, image_dtype = np.float16 ):
+                               volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, disc_type = 'linear_interp', n_tilts = -1, dose_per_tilt = 3, angle_per_tilt = 3, image_dtype = np.float16, image_offset_n_std = 0.0, per_particle_contrast=True ):
     from recovar import output
     output.mkdir_safe(output_folder)
     volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize = False )
@@ -270,7 +271,7 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
 
     rescale_noise = True
     if rescale_noise:
-        main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, _ = generate_simulated_dataset(volumes, voxel_size, volume_distribution, 10, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file )
+        main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, _ = generate_simulated_dataset(volumes, voxel_size, volume_distribution, 10, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file, image_offset_n_std= image_offset_n_std, per_particle_contrast=per_particle_contrast )
         norm_image_square = np.mean(main_image_stack**2)
         norm_image = (norm_image_square)
 
@@ -285,7 +286,7 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
 
     # First make some dataset to figure out a good scaling?
     main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file, n_tilts = n_tilts, 
-    dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt )
+    dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt, image_offset_n_std= image_offset_n_std , per_particle_contrast=per_particle_contrast)
 
 
     simulation_info['volumes_path_root'] = volumes_path_root
@@ -335,7 +336,7 @@ def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_
     return volumes
 
 
-def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None, n_tilts = -1, dose_per_tilt = None, angle_per_tilt = None, voltage = 100 ):
+def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None, n_tilts = -1, dose_per_tilt = None, angle_per_tilt = None, voltage = 100, image_offset_n_std = 0.0, per_particle_contrast= True ):
     
     # voxel_size = 
     volume_shape = utils.guess_vol_shape_from_vol_size(volumes[0].size)
@@ -402,9 +403,24 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
             # import pdb; pdb.set_trace()
         # import pdb; pdb.set_trace()
         # Tag it to the end
-        per_tilt_contrast, _ = generate_contrast_params(n_tilt_groups, noise_scale_std, contrast_std )
-        per_image_contrast = per_tilt_contrast[tilt_groups]
-        ctf_params = np.concatenate([ctf_params, tilt_numbers[:,None]], axis = -1)
+        if per_particle_contrast:
+            per_tilt_contrast, _ = generate_contrast_params(n_tilt_groups, noise_scale_std, contrast_std )
+            per_image_contrast = per_tilt_contrast[tilt_groups]
+        else:
+            per_tilt_contrast = None
+            per_image_contrast, _ = generate_contrast_params(n_images, noise_scale_std, contrast_std )
+
+
+        ## Set the ctf_scale_params to angle correction (this is how it is saved from WARP supposedly)
+        angle_scale_correction = jnp.cos(x_angles * np.pi / 180)
+        ctf_params[:,core.contrast_ind] = angle_scale_correction[tilt_numbers]
+
+        # Angle ind is just set to 0 in this version
+        dose =  (tilt_numbers + 0.5) * dose_per_tilt
+
+        # The cryo-EM / angle (unsused?) / dose (used)
+        ctf_params = np.concatenate([ctf_params, np.zeros_like(tilt_numbers[:,None]), dose[:,None] ], axis = -1)
+
 
     else:
         per_tilt_contrast = None
@@ -412,7 +428,8 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         image_assignments_tilt = None
 
     if n_tilts >0:
-        CTF_fun = core.get_cryo_ET_CTF_fun(dose_per_tilt, angle_per_tilt)
+        # CTF_fun = core.get_cryo_ET_CTF_fun(dose_per_tilt, angle_per_tilt)
+        CTF_fun = core.evaluate_ctf_wrapper_tilt_series_v2
     else:
         CTF_fun = core.evaluate_ctf_wrapper
 
@@ -429,7 +446,18 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     # logger.warning("USING NEAREST")
     # disc_type = 'nearest'
     # disc_type = 'linear_interp'
+
     main_image_stack = simulate_data(main_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = disc_type, mrc_file = mrc_file )
+
+    image_means = np.mean(main_image_stack, axis = (-1,-2))
+    # image_means_mean = np.mean(main_image_stack, axis = (-1,-2))
+    image_mean_std = np.std(image_means)
+    logger.info(f"Image mean mean {np.mean(image_means)}, image mean std: {image_mean_std}")
+    per_image_offset = np.random.randn(n_images) * image_mean_std * image_offset_n_std
+    main_image_stack += per_image_offset[:,None,None]
+
+
+
 
     if put_extra_particles:
         # Make other particles with same ctf but different rots
@@ -473,6 +501,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
 
 
     if n_tilts > 0:
+        # Note that b_facs are stored here just so that the get saved in the starfile in WARP style...
         ctf_params[:,core.bfactor_ind] = B_facs
 
     simulation_info = { 
@@ -481,6 +510,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         "trans" : trans,
         "per_image_contrast" : per_image_contrast,
         "per_image_noise_scale" : per_image_noise_scale,
+        "per_image_offset" : per_image_offset,
         "image_assignment" : image_assignments,
         "noise_variance": noise_variance.astype(np.float32),
         "voxel_size": voxel_size,

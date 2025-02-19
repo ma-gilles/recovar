@@ -5,14 +5,14 @@ import logging
 import torch
 from torch.utils import data
 from typing import Optional, Tuple, Union
-from cryodrgn import fft, starfile
+# from cryodrgn import fft, starfile
 
 from recovar.cryodrgn_source import ImageSource
 # from cryodrgn.utils import window_mask
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import BatchSampler, RandomSampler, SequentialSampler
 from recovar import mask
-
+from recovar import cryodrgn_starfile as starfile
 logger = logging.getLogger(__name__)
 
 ## Very awkward... Probably should just move things to one file...

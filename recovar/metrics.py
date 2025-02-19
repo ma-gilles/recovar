@@ -291,3 +291,41 @@ def get_embedding_from_median(zs, image_assignment, n_classes = None):
 
 def get_gt_embedding_from_projection(gt_volumes, u, mean):
     return (np.conj(u) @ (gt_volumes - mean).T).T.real
+
+
+def fro_norm_diff_low_rank(U, s, V, d):
+    """
+    ChatGPTed
+    Compute the Frobenius norm of (A - B) where
+    A = U * diag(s) * U^T and B = V * diag(d) * V^T,
+    using only their low-rank representations.
+
+    Parameters
+    ----------
+    U : jnp.ndarray
+        An n x r matrix (orthonormal columns).
+    s : jnp.ndarray
+        A length-r vector for A's eigenvalues.
+    V : jnp.ndarray
+        An n x r matrix (orthonormal columns).
+    d : jnp.ndarray
+        A length-r vector for B's eigenvalues.
+
+    Returns
+    -------
+    jnp.ndarray
+        The Frobenius norm of A - B.
+    """
+    # Compute X = U^T V (r x r)
+    X = jnp.matmul(U.T, V)
+
+    # ||A||_F^2 = sum of s_i^2; ||B||_F^2 = sum of d_j^2
+    norm_A_sq = jnp.sum(s**2)
+    norm_B_sq = jnp.sum(d**2)
+
+    # trace(A B) = sum_{i,j} s[i]*d[j]*X[i,j]^2
+    trace_AB = jnp.sum((s[:, None] * d[None, :]) * (X**2))
+
+    # ||A - B||_F^2
+    diff_norm_sq = norm_A_sq + norm_B_sq - 2.0 * trace_AB
+    return jnp.sqrt(diff_norm_sq)
