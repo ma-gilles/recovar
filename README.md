@@ -69,7 +69,15 @@ Then create an environment, download JAX-cuda (for some reason the latest versio
     pip install --no-deps -r recovar/recovar_install_requirements.txt --no-input
     python -m ipykernel install --user --name=recovar 
 
-It is recommanded to test your installation before running on a real dataset, see [Testing your installation](#small-test-dataset).
+It is recommended to test your installation before running on a real dataset. You can do this by running this on a GPU-capable device:
+
+  conda activate recovar
+  cd recovar
+  python run_test_dataset.py
+
+see details in [testing your installation](#small-test-dataset).
+
+
 
 <!-- 
 ## Installation 
