@@ -1244,6 +1244,10 @@ If you use this software for analysis, please cite:
 
 You can reach me (Marc) at gilles@princeton.edu with questions or comments, or open an issue on Github.
 
+## Dataset from manuscript
+
+Input files to replicate the results in the manuscript can be found in this [dropbox](https://www.dropbox.com/scl/fo/fjo8lwfj0xemqmki1dc30/AKISv4oMtt6q0gKGz59gFxM?rlkey=pgeyhw02w6ngzsv8vzno0vf3j&st=ifpgweyu&dl=0).
+
 
 ## Other relevant github repos:
 
