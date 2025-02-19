@@ -43,8 +43,8 @@ Other:
 
 [TLDR](#tldr)
 
-(OUT OF DATE)
-Peak at what output looks like on a [synthetic dataset](output_visualization_simple_synthetic.ipynb) and [real dataset](output_visualization_empiar10076.ipynb).
+<!-- (OUT OF DATE)
+Peak at what output looks like on a [synthetic dataset](output_visualization_simple_synthetic.ipynb) and [real dataset](  x). -->
 
 Also:
 [using the source code](#using-the-source-code), 
@@ -54,8 +54,10 @@ Also:
 
 
 ## Installation 
-To run this code, CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html#) are required. See information about JAX installation [here](https://jax.readthedocs.io/en/latest/installation.html).
-Assuming you already have CUDA, installation should take less than 5 minutes.
+<!-- To run this code, CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html#) are required. See information about JAX installation [here](https://jax.readthedocs.io/en/latest/installation.html). -->
+
+
+<!-- Assuming you already have CUDA, installation should take less than 5 minutes.
 Below are a set of commands which runs on our university cluster (Della), but may need to be tweaked to run on other clusters.
 You may need to load CUDA before installing JAX, E.g., on our university cluster with
     module load cudatoolkit/12.3
@@ -69,18 +71,13 @@ Then create an environment, download JAX-cuda (for some reason the latest versio
     pip install --no-deps -r recovar/recovar_install_requirements.txt --no-input
     python -m ipykernel install --user --name=recovar 
 
-It is recommended to test your installation before running on a real dataset. You can do this by running this on a GPU-capable device:
-
-  conda activate recovar
-  cd recovar
-  python run_test_dataset.py
-
-see details in [testing your installation](#small-test-dataset).
+It is recommanded to test your installation before running on a real dataset, see [Testing your installation](#small-test-dataset). -->
 
 
 
-<!-- 
-## Installation 
+
+
+<!-- ## Installation  -->
 CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html#) are required to run this code. JAX will be installed by the command below, and the cudatoolkit is now included, but you need to have the CUDA drivers installed, see info here about JAX installation [here](https://jax.readthedocs.io/en/latest/installation.html).
 Assuming you already have CUDA drivers (probably already installed on your cluster), installation should take less than 5 minutes.
 
@@ -91,13 +88,17 @@ If you have an internet connection, you can copy paste the following commands be
     conda init
     conda create --name recovar python=3.11 -y
     conda activate recovar
-    pip install --upgrade "jax[cuda12]"==0.4.34 --no-input
-    pip install -r recovar_install_requirements.txt --no-input 
-    pip install --no-deps cryodrgn==2.3.0 --no-input
+    pip install -U "jax[cuda12]"==0.5.0
+    pip install -r requirements.txt
     python -m ipykernel install --user --name=recovar
 
-After this, you should do `conda activate recovar` and run the commands described below.
-It is recommended to test your installation before running on a real dataset, see [Testing your installation](#small-test-dataset). -->
+It is recommended to test your installation before running on a real dataset. You can do this by running this on a GPU-capable device:
+
+    conda activate recovar
+    cd recovar
+    python run_test_dataset.py
+
+see details in [testing your installation](#small-test-dataset).
 
 <!-- The code was tested on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455).
 
@@ -106,15 +107,15 @@ The code for the paper was run on [this commit](https://github.com/ma-gilles/rec
 
 
 ## I. Preprocessing 
-## NOTE: Until I fix versioning issues, you need to install cryoDRGN and RECOVAR in two different conda environments.
-**This means you should install cryoDRGN in the crydrgn environment as below, process the data using the cryoDRGN environment after doing `conda activate cryodrgn`, then activate the recovar environement with `conda activate recovar`, and go on with the analysis.**
-
-
 The input interface of RECOVAR is borrowed directly from the excellent [cryoDRGN toolbox](https://cryodrgn.cs.princeton.edu/). 
 Particles, poses and CTF must be prepared in the same way, and below is copy-pasted part of 
 [cryoDRGN's documentation](https://github.com/ml-struct-bio/cryodrgn#2-parse-image-poses-from-a-consensus-homogeneous-reconstructiqqon).
 <!-- CryoDRGN is a dependency, so you should be able to run the commands below after ``conda activate recovar``. -->
 You should first install cryoDRGN, and prepare the dataset as below before going on to step 2.
+
+
+**NOTE: You need to install cryoDRGN and RECOVAR in two different conda environments (they have versioning conflict). This means you should install cryoDRGN in the crydrgn environment as below, process the data using the cryoDRGN environment after doing `conda activate cryodrgn`, then activate the recovar environement with `conda activate recovar`, and go on with the analysis.**
+
 
 
 ### cryoDRGN Installation
@@ -565,7 +566,17 @@ optional arguments:
 
 This command will automatically figure out which images produced a particular feature of a volume generated by RECOVAR. You may want to use these images for a downstream tasks, or to re-import into RELION/cryosparc.
 
-You can use `cryodrgn_utils write_star` and `cryodrgn write_cs` to do that after running `extract_image_subset`.
+To do this, you should use the command `extract_image_subset.py` as described below, which will output a .pkl file that contains the corresponding subset of images.
+You can then use `cryodrgn_utils write_star` and `cryodrgn write_cs` to do that after running `extract_image_subset`.
+
+E.g., you can do 
+```bash
+  conda activate cryodrgn 
+  cryodrgn_utils write_star path_to_original_starfile.starfile --ind path_to_pkl_file.pkl -o path_to_new_starfile.starfile
+  conda activate recovar
+```
+This activates the cryodrgn environment, generates the new starfile from the old one (by picking out only the correct rows) and then reactivate the recovar environment. You can see more details about cryodrgn_utils write_star [here](https://github.com/ml-struct-bio/cryodrgn/blob/main/cryodrgn/commands_utils/write_star.py) and write_cs [here](https://github.com/ml-struct-bio/cryodrgn/blob/main/cryodrgn/commands_utils/write_cs.py).
+
 
 The volume generation method of RECOVAR uses different sets of images to generate different parts of the volume. Thus, you need to tell this function which part of the volume is of interest. This can be done by giving a small mask around a region (note that it is really the center of mass of the mask which is used, so if you give a strange non convex mask, it will give strange result). 
 
@@ -1109,9 +1120,6 @@ The script performs the following steps:
 
 - **Cleanup**: The script will delete the `test_dataset` directory at the end if all steps pass. This helps keep your workspace clean.
 
----
-
-[Rest of the README remains unchanged.]
 
 
 ## TLDR
@@ -1150,7 +1158,7 @@ Note that this is different from the one in the paper. Run the following pipelin
 
     python ~/recovar/pipeline.py particles.256.mrcs --ctf ctf.pkl --poses poses.pkl -o test-mask --mask recovar_masks/mask_10076.mrc --ind filtered.ind.pkl
 
-The output should be the same as [this notebook](output_visualization_empiar10076.ipynb).
+<!-- The output should be the same as [this notebook](output_visualization_empiar10076.ipynb). -->
 
 ## Using kernel regression with other embeddings
 
@@ -1240,20 +1248,21 @@ Much of this documentation is generated using chatGTP4.
 If you use this software for analysis, please cite:
 
     @article{gilles2023bayesian,
-      title={A Bayesian Framework for Cryo-EM Heterogeneity Analysis using Regularized Covariance Estimation},
-      author={Gilles, Marc Aurele T and Singer, Amit},
-      journal={bioRxiv},
-      pages={2023--10},
-      year={2023},
-      publisher={Cold Spring Harbor Laboratory}
+      author = {Gilles, Marc Aur{\`e}le and Singer, Amit},
+      title = {Cryo-EM Heterogeneity Analysis using Regularized Covariance Estimation and Kernel Regression},
+      elocation-id = {2023.10.28.564422},
+      year = {2024},
+      doi = {10.1101/2023.10.28.564422},
+      publisher = {Cold Spring Harbor Laboratory},
     }
+
+
 
 ## Contact
 
 You can reach me (Marc) at gilles@princeton.edu with questions or comments, or open an issue on Github.
 
 ## Dataset from manuscript
-
 Input files to replicate the results in the manuscript can be found in this [dropbox](https://www.dropbox.com/scl/fo/fjo8lwfj0xemqmki1dc30/AKISv4oMtt6q0gKGz59gFxM?rlkey=pgeyhw02w6ngzsv8vzno0vf3j&st=ifpgweyu&dl=0).
 
 
