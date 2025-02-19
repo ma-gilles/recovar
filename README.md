@@ -43,8 +43,8 @@ Other:
 
 [TLDR](#tldr)
 
-(OUT OF DATE)
-Peak at what output looks like on a [synthetic dataset](output_visualization_simple_synthetic.ipynb) and [real dataset](output_visualization_empiar10076.ipynb).
+<!-- (OUT OF DATE)
+Peak at what output looks like on a [synthetic dataset](output_visualization_simple_synthetic.ipynb) and [real dataset](output_visualization_empiar10076.ipynb). -->
 
 Also:
 [using the source code](#using-the-source-code), 
@@ -1115,9 +1115,6 @@ The script performs the following steps:
 
 - **Cleanup**: The script will delete the `test_dataset` directory at the end if all steps pass. This helps keep your workspace clean.
 
----
-
-[Rest of the README remains unchanged.]
 
 
 ## TLDR
@@ -1156,7 +1153,7 @@ Note that this is different from the one in the paper. Run the following pipelin
 
     python ~/recovar/pipeline.py particles.256.mrcs --ctf ctf.pkl --poses poses.pkl -o test-mask --mask recovar_masks/mask_10076.mrc --ind filtered.ind.pkl
 
-The output should be the same as [this notebook](output_visualization_empiar10076.ipynb).
+<!-- The output should be the same as [this notebook](output_visualization_empiar10076.ipynb). -->
 
 ## Using kernel regression with other embeddings
 
@@ -1246,13 +1243,15 @@ Much of this documentation is generated using chatGTP4.
 If you use this software for analysis, please cite:
 
     @article{gilles2023bayesian,
-      title={A Bayesian Framework for Cryo-EM Heterogeneity Analysis using Regularized Covariance Estimation},
-      author={Gilles, Marc Aurele T and Singer, Amit},
-      journal={bioRxiv},
-      pages={2023--10},
-      year={2023},
-      publisher={Cold Spring Harbor Laboratory}
+      author = {Gilles, Marc Aur{\`e}le and Singer, Amit},
+      title = {Cryo-EM Heterogeneity Analysis using Regularized Covariance Estimation and Kernel Regression},
+      elocation-id = {2023.10.28.564422},
+      year = {2024},
+      doi = {10.1101/2023.10.28.564422},
+      publisher = {Cold Spring Harbor Laboratory},
     }
+
+
 
 ## Contact
 
