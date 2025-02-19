@@ -310,15 +310,15 @@ def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us
 #         embedding.set_contrasts_in_cryos(cryos, pipeline_output.get('contrasts')[zdim])
 
 #     return kmeans_analysis(output_folder, cryos, pipeline_output.get('mean'), results['u']['rescaled'], results['zs'][zdim], results['cov_zs'][zdim], results['cov_noise'], likelihood_threshold,  n_clusters = n_clusters, generate_volumes = generate_volumes, compute_reproj = compute_reproj)
-    
+
+
 def kmeans_analysis(output_folder, zs, n_clusters = 20):
 
-    import cryodrgn.analysis as cryodrgn_analysis
     #key = 'zs12'
     #zs = results[key]
     #cov_zs = results['cov_' + key]
     reorder = zs.shape[1] != 1
-    labels, centers = cryodrgn_analysis.cluster_kmeans(zs, n_clusters, reorder = reorder)
+    labels, centers = cluster_kmeans(zs, n_clusters, reorder = reorder)
     
     import os
     try:
@@ -327,7 +327,7 @@ def kmeans_analysis(output_folder, zs, n_clusters = 20):
         pass
 
     def plot_axes(axes = [0,1]):
-        fig,ax = cryodrgn_analysis.scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=True, labels=None, alpha=0.1, s=1)
+        fig,ax = scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=True, labels=None, alpha=0.1, s=1)
         fig.set_figheight(6)
         fig.set_figwidth(6)
         ax.set_xticks([], [])
@@ -335,7 +335,7 @@ def kmeans_analysis(output_folder, zs, n_clusters = 20):
         if output_folder is not None:
             plt.savefig(output_folder + 'PC_'+str(axes[0]) + str(axes[1])+'.png' )
         
-        fig,ax = cryodrgn_analysis.scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=False, labels=None, alpha=0.1, s=2)
+        fig,ax = scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=False, labels=None, alpha=0.1, s=2)
         fig.set_figheight(6)
         fig.set_figwidth(6)
         ax.set_xticks([], [])
@@ -362,11 +362,13 @@ def move_to_one_folder(path_folder, n_vols, string_name = 'locres_filtered.mrc',
     return
 
 
+
+
 def plot_umap(output_folder, zs, centers):
-    import cryodrgn.analysis as cryodrgn_analysis
+    # import cryodrgn.analysis as cryodrgn_analysis
 
     def plot_axes(axes = [0,1]):
-        fig,ax = cryodrgn_analysis.scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=True, labels=None, alpha=0.1, s=1)
+        fig,ax = scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=True, labels=None, alpha=0.1, s=1)
         fig.set_figheight(6)
         fig.set_figwidth(6)
         ax.set_xticks([], [])
@@ -374,7 +376,7 @@ def plot_umap(output_folder, zs, centers):
         if output_folder is not None:
             plt.savefig(output_folder + 'kmeans_centers.png' )
         
-        fig,ax = cryodrgn_analysis.scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=False, labels=None, alpha=0.1, s=2)
+        fig,ax = scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=False, labels=None, alpha=0.1, s=2)
         fig.set_figheight(6)
         fig.set_figwidth(6)
         ax.set_xticks([], [])
@@ -829,3 +831,82 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
     plt.savefig(output_folder + 'mean_fsc.png')
 
     return
+
+
+
+''' Copied from cryoDRGN '''
+
+from typing import Optional, Union, Tuple
+from sklearn.cluster import KMeans
+import seaborn as sns
+from matplotlib.figure import Figure, Axes
+from scipy.spatial.distance import cdist
+import numpy.typing as npt
+
+
+def scatter_annotate(
+    x: np.ndarray,
+    y: np.ndarray,
+    centers: Optional[np.ndarray] = None,
+    centers_ind: Optional[np.ndarray] = None,
+    annotate: bool = True,
+    labels: Optional[np.ndarray] = None,
+    alpha: Union[float, np.ndarray, None] = 0.1,
+    s: Union[float, np.ndarray, None] = 1,
+    colors: Union[list, str, None] = None,
+) -> Tuple[Figure, Axes]:
+    fig, ax = plt.subplots(figsize=(4, 4))
+    plt.scatter(x, y, alpha=alpha, s=s, rasterized=True)
+
+    # plot cluster centers
+    if centers_ind is not None:
+        assert centers is None
+        centers = np.array([[x[i], y[i]] for i in centers_ind])
+    if centers is not None:
+        if colors is None:
+            colors = "k"
+        plt.scatter(centers[:, 0], centers[:, 1], c=colors, edgecolor="black")
+    if annotate:
+        assert centers is not None
+        if labels is None:
+            labels = np.arange(len(centers))
+        assert labels is not None
+        for i in labels:
+            ax.annotate(str(i), centers[i, 0:2] + np.array([0.1, 0.1]))
+    return fig, ax
+
+def get_nearest_point(
+    data: np.ndarray, query: np.ndarray
+) -> Tuple[npt.NDArray[np.float32], np.ndarray]:
+    """
+    Find closest point in @data to @query
+    Return datapoint, index
+    """
+    ind = cdist(query, data).argmin(axis=1)
+    return data[ind], ind
+
+def cluster_kmeans(
+    z: np.ndarray, K: int, on_data: bool = True, reorder: bool = True
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Cluster z by K means clustering
+    Returns cluster labels, cluster centers
+    If reorder=True, reorders clusters according to agglomerative clustering of cluster centers
+    """
+    kmeans = KMeans(n_clusters=K, random_state=0, max_iter=10)
+    labels = kmeans.fit_predict(z)
+    centers = kmeans.cluster_centers_
+
+    centers_ind = None
+    if on_data:
+        centers, centers_ind = get_nearest_point(z, centers)
+
+    if reorder:
+        g = sns.clustermap(centers)
+        reordered = g.dendrogram_row.reordered_ind
+        centers = centers[reordered]
+        if centers_ind is not None:
+            centers_ind = centers_ind[reordered]
+        tmp = {k: i for i, k in enumerate(reordered)}
+        labels = np.array([tmp[k] for k in labels])
+    return labels, centers
