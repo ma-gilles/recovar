@@ -38,5 +38,14 @@ jax.config.update("jax_enable_x64", True)
 # Interestingly, nothing works if I don't do this print statement :)))) 
 # Something weird with JAX not finding devices?
 logger = logging.getLogger(__name__)
-logger.info(f"Devices found: {','.join([l.device_kind for l in jax.devices()])}")
+
+try:
+    devices = jax.devices()
+    logger.info(f"Devices found: {','.join([d.device_kind for d in devices])}")
+except RuntimeError as e:
+    logger.warning("---------------------------------------------------")
+    logger.warning("---------------------------------------------------")
+    logger.warning("No JAX devices found! Falling back to CPU-only mode.")
+    logger.warning("---------------------------------------------------")
+    logger.warning("---------------------------------------------------")
 
