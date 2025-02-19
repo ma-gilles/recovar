@@ -568,7 +568,7 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     else:
         Q = right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use ).real.astype(np.float32)
     del test_mat
-
+    
     ## Do masking here ?
     # Q *= volume_mask.reshape(-1,1)
 
@@ -607,13 +607,13 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     vol_size = np.prod(volume_shape)
     # To save some memory... Q = FQ
     Q = linalg.batch_dft3(Q, volume_shape, vol_batch_size)
-    Q = linalg.blockwise_A_X(Q, U, memory_to_use = gpu_memory_to_use) / np.sqrt(vol_size)
+    Q = linalg.blockwise_A_X(Q, U, memory_to_use = gpu_memory_to_use) / np.float32(np.sqrt(vol_size))
     logger.info(f"FQU matvec {time.time() - st_time}")
     utils.report_memory_device(logger=logger)
 
     volume_size = np.prod(volume_shape)
     # Factors due to IDFT on both sides
-    S_fd = S * np.sqrt(smaller_vol_size) * np.sqrt(volume_size)
+    S_fd = S * np.float32(np.sqrt(smaller_vol_size) * np.sqrt(volume_size))
     return np.array(Q), np.array(S_fd), np.array(V)
 
 

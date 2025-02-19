@@ -128,7 +128,8 @@ def guess_vol_shape_from_vol_size(vol_size):
 # These should probably be set more intelligently
 # Sometimes, memory can grow like O(vol_batch_size * image_batch_size)
 def get_image_batch_size(grid_size, gpu_memory):
-    return int(2*(2**24)/ (grid_size**2)  * gpu_memory / 38 / 2) 
+    # return int(2*(2**24)/ (grid_size**2)  * gpu_memory / 38 / 3) 
+    return int((2**18) / (grid_size**2) * gpu_memory) 
 
 def get_vol_batch_size(grid_size, gpu_memory):
     return int(25 * (256 / grid_size)**3 * gpu_memory / 38)
@@ -253,8 +254,8 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
                 'rlnAnglePsi', 
                 'rlnOriginXAngst', 
                 'rlnOriginYAngst',] 
-        import cryodrgn.utils as cryodrgn_utils
-        rots = cryodrgn_utils.R_to_relion_scipy(rotation_matrices)
+        # import cryodrgn.utils as cryodrgn_utils
+        rots = R_to_relion_scipy(rotation_matrices)
         values += [ rots[:,0], rots[:,1], rots[:,2], translations[:,0], translations[:,1] ]
     
     if tilt_groups is not None:
@@ -278,7 +279,27 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
     
     return
 
+def R_to_relion_scipy(rot: np.ndarray, degrees: bool = True) -> np.ndarray:
+    """Nx3x3 rotation matrices to RELION euler angles"""
+    from scipy.spatial.transform import Rotation as RR
 
+    if rot.shape == (3, 3):
+        rot = rot.reshape(1, 3, 3)
+    assert len(rot.shape) == 3, "Input must have dim Nx3x3"
+    f = np.ones((3, 3))
+    f[0, 1] = -1
+    f[1, 0] = -1
+    f[1, 2] = -1
+    f[2, 1] = -1
+    euler = RR.from_matrix(rot * f).as_euler("zxz", degrees=True)
+    euler[:, 0] -= 90
+    euler[:, 2] += 90
+    euler += 180
+    euler %= 360
+    euler -= 180
+    if not degrees:
+        euler *= np.pi / 180
+    return euler
 
 def write_starfile_from_cryodrgn_format(ctf_path, pose_path, particles_file_path, output_filename, halfset_indices = None):
     ctf = pickle_load(ctf_path)

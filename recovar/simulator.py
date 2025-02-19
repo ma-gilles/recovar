@@ -8,10 +8,10 @@ from recovar import utils
 import jax.scipy.spatial.transform
 import os
 import mrcfile
-import matplotlib.pyplot as plt
-from cryodrgn import mrc, ctf
-from cryodrgn.pose import PoseTracker
-from pathlib import Path
+# import matplotlib.pyplot as plt
+# from cryodrgn import ctf
+# from cryodrgn.pose import PoseTracker
+from recovar import cryodrgn_load
 # xx = Path(__file__).resolve()
 import recovar.simulate_scattering_potential as gsm
 import logging
@@ -22,15 +22,15 @@ data_path = os.path.join(os.path.dirname(__file__),'data/')
 
 # Two generators that load ctf and poses from real datasets
 def get_dataset_params(n_images, grid_size, ctf_file, poses_file):
-    ctf_params = np.array(ctf.load_ctf_for_training(grid_size, ctf_file))
+    ctf_params = np.array(cryodrgn_load.load_ctf_for_training(grid_size, ctf_file))
     
     # Initialize bfactor == 0
     ctf_params = np.concatenate( [ctf_params, np.zeros_like(ctf_params[:,0][...,None])], axis =-1)
     
     # Initialize constrast == 1
     ctf_params = np.concatenate( [ctf_params, np.ones_like(ctf_params[:,0][...,None])], axis =-1)
-    posetracker = PoseTracker.load(poses_file, n_images, grid_size, ind = None) 
-    return ctf_params, np.array(posetracker.rots), np.array(posetracker.trans)
+    rots, trans, _ = cryodrgn_load.load_poses(poses_file, n_images, grid_size, ind = None) 
+    return ctf_params, np.array(rots), np.array(trans)
 
 def load_first_dataset_params(grid_size):
     n_images = 131899

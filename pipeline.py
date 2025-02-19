@@ -1,7 +1,7 @@
 # If you want to extend and use recovar, you should import this first
 import logging
 # It is important to import cryodrgn before the setting basicConfig which is why it is imported here (but not used)
-import cryodrgn
+# import cryodrgn
 logger = logging.getLogger(__name__)
 import recovar.config 
 import jax

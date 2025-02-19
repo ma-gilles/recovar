@@ -179,8 +179,8 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         mapper = o.umap_latent_space(zs_unsort)
         o.mkdir_safe(output_folder + '/umap/')    
         utils.pickle_dump(reorder(mapper.embedding_), output_folder + '/umap/umap_embedding.pkl')
-        from cryodrgn import analysis
-        _, kmeans_ind = analysis.get_nearest_point(zs_unsort, centers)
+        from recovar import output
+        _, kmeans_ind = output.get_nearest_point(zs_unsort, centers)
 
         o.plot_umap(output_folder + '/umap/', mapper.embedding_, mapper.embedding_[kmeans_ind])
 
