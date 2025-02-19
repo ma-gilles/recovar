@@ -7,8 +7,9 @@ from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 ftu_np = fourier_transform_utils(np)
 import matplotlib.pyplot as plt
-# Maybe should take out these dependencies?
-from cryodrgn import mrc
+from recovar import metrics, locres
+import recovar
+import os.path
 
 def qr_on_cpu(Q):
     Q = jax.device_put(Q, device=jax.devices("cpu")[0])
@@ -200,9 +201,6 @@ def compute_volume_error_metrics_from_halfmaps(estimate1, estimate2, voxel_size,
 
     return errors_metrics
 
-from recovar import metrics, locres
-import recovar
-import os.path
 
 def evaluate_this_choice(target_real, output_folder, voxel_size, mask = None, partial_mask = None, shell_split = False ):
     

@@ -10,9 +10,6 @@ ftu = fourier_transform_utils(jnp)
 ftu_np = fourier_transform_utils(np)
 
 # Maybe should take out these dependencies?
-from cryodrgn import mrc
-
-#
 
 def load_heterogeneous_reconstruction(simulation_info_file, volumes_path_root = None, load_volumes = True):
     if isinstance(simulation_info_file, dict):

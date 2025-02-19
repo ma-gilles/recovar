@@ -55,14 +55,21 @@ def get_gpu_memory_total(device =0):
     else:
         logger.warning("GPU not found. Using default value of 80GB for batching computation on CPU.")
         return int(80)
-    
-
 
 def get_gpu_memory_used(device =0):
-    return int(jax.local_devices()[device].memory_stats()['bytes_in_use']/1e9)
-
+    if jax_has_gpu():
+        return int(jax.local_devices()[device].memory_stats()['bytes_in_use']/1e9)
+    else:
+        logger.warning("GPU not found. Using default value of 80GB for batching computation on CPU.")
+        return int(0)
+    
 def get_peak_gpu_memory_used(device =0):
-    return int(jax.local_devices()[device].memory_stats()['peak_bytes_in_use']/1e9)
+    if jax_has_gpu():
+        return int(jax.local_devices()[device].memory_stats()['peak_bytes_in_use']/1e9)
+    else:
+        logger.warning("GPU not found. Peak =0")
+        return int(0)
+    
 
 def report_memory_device(device=0, logger=None):
     output_str = f"GPU mem in use:{get_gpu_memory_used(device)}; peak:{get_peak_gpu_memory_used(device)}; total available:{get_gpu_memory_total(device)}, process mem in use:{get_process_memory_used()}"
