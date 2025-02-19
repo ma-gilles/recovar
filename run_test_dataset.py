@@ -3,16 +3,28 @@ import shutil
 import os
 import jax
 import sys
+import argparse
 
-if len(sys.argv) > 1:
-    do_all_tests = True
-else:
-    do_all_tests = False
+# if len(sys.argv) > 1:
+#     do_all_tests = True
+# else:
+#     do_all_tests = False
 
-if len(sys.argv) > 2:
-    delete_everything = False
-else:
-    delete_everything = True
+# if len(sys.argv) > 2:
+#     delete_everything = False
+# else:
+#     delete_everything = True
+
+parser = argparse.ArgumentParser(description="Run tests for recovar")
+parser.add_argument('--all-tests', action='store_true', help='Run all tests')
+parser.add_argument('--no-delete', action='store_true', help='Do not delete the test dataset directory after successful tests')
+parser.add_argument('--cpu', action='store_true', help='Run on CPU only (skip GPU check)')
+args = parser.parse_args()
+
+do_all_tests = args.all_tests
+delete_everything = not args.no_delete
+run_on_cpu = args.cpu
+
 
 RECOVAR_PATH = './'
 
@@ -24,6 +36,7 @@ def error_message():
     print("--------------------------------------------")
     print("--------------------------------------------")
     print("No GPU devices found by JAX. Please ensure that JAX is properly configured with CUDA and a compatible GPU. Some info from the JAX website: (https://jax.readthedocs.io/en/latest/installation.html): \n You must first install the NVIDIA driver. You’re recommended to install the newest driver available from NVIDIA, but the driver version must be >= 525.60.13 for CUDA 12 on Linux. Then reinstall jax as follows:\n pip uninstall jax jaxlib; \n pip install -U \"jax[cuda12]\"==0.5.0" )
+    print("If you do truly want to on CPU, please run the script with the --cpu flag. Note that while this test will run, a real dataset will be extremely slow on CPU.")
     print("--------------------------------------------")
     print("--------------------------------------------")
     exit(1)
@@ -41,9 +54,10 @@ def check_gpu():
         print("Error occurred while checking for GPU devices:", e)
         error_message()
 
-
 # Check for GPU availability
-check_gpu()
+if not run_on_cpu:
+    check_gpu()
+
 
 def run_command(command, description, function_name):
     print(f"Running: {description}")
@@ -57,6 +71,7 @@ def run_command(command, description, function_name):
         failed_functions.append(function_name)
 
 
+cpu_string = " --accept-cpu" if run_on_cpu else ""
 
 
 # Generate a small test dataset - should take about 30 sec
@@ -70,7 +85,7 @@ run_command(
 
 # Run pipeline, should take about 2 min
 run_command(
-    f'python {RECOVAR_PATH}/pipeline.py test_dataset/particles.64.mrcs --poses test_dataset/poses.pkl --ctf test_dataset/ctf.pkl --correct-contrast -o test_dataset/pipeline_output --mask=from_halfmaps --lazy --ignore-zero-frequency',
+    f'python {RECOVAR_PATH}/pipeline.py test_dataset/particles.64.mrcs --poses test_dataset/poses.pkl --ctf test_dataset/ctf.pkl --correct-contrast -o test_dataset/pipeline_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
     'Run pipeline',
     'pipeline.py'
 )
@@ -80,7 +95,7 @@ run_command(
 
 # Run pipeline, should take about 2 min
 run_command(
-    f'python {RECOVAR_PATH}/pipeline.py test_dataset/particles.64.mrcs --poses test_dataset/poses.pkl --ctf test_dataset/ctf.pkl --correct-contrast -o test_dataset/pipeline_output --mask=from_halfmaps --lazy',
+    f'python {RECOVAR_PATH}/pipeline.py test_dataset/particles.64.mrcs --poses test_dataset/poses.pkl --ctf test_dataset/ctf.pkl --correct-contrast -o test_dataset/pipeline_output --mask=from_halfmaps --lazy {cpu_string}',
     'Run pipeline',
     'pipeline.py'
 )
