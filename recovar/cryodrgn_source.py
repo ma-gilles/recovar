@@ -1,4 +1,9 @@
-"""This module provides an `ImageSource` class that makes it easy to work with Image data.
+"""
+
+Copy pasted from https://github.com/ml-struct-bio/cryodrgn
+
+
+This module provides an `ImageSource` class that makes it easy to work with Image data.
 
 An `ImageSource` can be instantiated with a path to a .star/.mrcs/.txt/.cs file, in either lazy or eager mode.
 An `images` method is used at runtime to retrieve 3D Tensors for image data at specified indices.
@@ -234,7 +239,7 @@ class MRCFileSource(ImageSource):
     def __init__(
         self, filepath: str, lazy: bool = True, indices: Optional[np.ndarray] = None
     ):
-        from cryodrgn.mrc import MRCHeader
+        from recovar.cryodrgn_mrcfile import MRCHeader
 
         header = MRCHeader.parse(filepath)
         self.header = header
@@ -248,7 +253,7 @@ class MRCFileSource(ImageSource):
         )
         assert self.ny == self.nx, "Only square images supported"
         self.size = self.ny * self.nx
-        self.stride = self.dtype.itemsize * self.size
+        self.stride = self.dtype().itemsize * self.size
 
         super().__init__(
             D=self.ny,
@@ -380,7 +385,7 @@ class StarfileSource(_MRCDataFrameSource):
         indices: Optional[np.ndarray] = None,
         max_threads: int = 1,
     ):
-        from cryodrgn.starfile import Starfile
+        from recovar.cryodrgn_starfile import Starfile
 
         df = Starfile.load(filepath).df
         df[["__mrc_index", "__mrc_filename"]] = df["_rlnImageName"].str.split(

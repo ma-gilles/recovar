@@ -16,110 +16,54 @@ logger = logging.getLogger(__name__)
 # Maybe should take out these dependencies?
 
 import torch
-from cryodrgn import ctf, dataset
-from cryodrgn.pose import PoseTracker
+from recovar.cryodrgn_source import ImageSource
 
-class MRCDataMod(torch.utils.data.Dataset):
-    # Adapted from cryoDRGN
-    '''
-    Class representing an .mrcs stack file -- images preloaded
-    '''
-    def __init__(self, mrcfile, datadir=None, ind = None, padding = 0, uninvert_data = False, mask = None ):
-        
-        if ind is not None:
-            # particles = dataset.load_particles(mrcfile, True, datadir=datadir)
-            # particles = np.array([particles[i].get() for i in ind])
-            particles = dataset.load_particles(mrcfile, False, datadir=datadir)[ind]
-        else:
-            particles = dataset.load_particles(mrcfile, False, datadir=datadir)
-        N, ny, nx = particles.shape
-        
-        assert ny == nx, "Images must be square"
-        assert ny % 2 == 0, "Image size must be even. Is this a preprocessed dataset? Use the --preprocessed flag if so."
-        
-        
-        self.n_images = N
-        self.D = (nx + padding) 
-        self.image_size = self.D * self.D
-        self.image_shape = (nx + padding, ny + padding)
 
-        self.dtype = np.complex64 # ???
-        self.unpadded_D = nx
-        self.unpadded_image_shape = (nx, ny)
-        self.mask = set_standard_mask(self.unpadded_D, self.dtype)
-        self.mult = -1 if uninvert_data else 1
-        
-        # Maybe should do do this on CPU?
-        self.particles = particles #np.array(padded_dft(particles, self.mask, self.image_size))
-        self.padding = padding
-        
-    def get(self, i):
-        return self.particles[i]
-
-    def __len__(self):
-        return self.n_images
-
-    def __getitem__(self, index):
-        return self.get(index), index, index
-
-    def process_images(self, images, apply_image_mask = False):
-        if apply_image_mask:
-            images = images * self.mask
-        # logger.warning("CHANGE BACK USE MASK TO FALSE")
-        images = pad.padded_dft(images * self.mult,  self.image_size, self.padding)
-        return images.astype(self.dtype)
-
-    def get_dataset_generator(self, batch_size, num_workers = 0):
-        return tf.data.Dataset.from_tensor_slices((self.particles,np.arange(self.n_images),np.arange(self.n_images))).batch(batch_size, num_parallel_calls = tf.data.AUTOTUNE).as_numpy_iterator()
-
-    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
-        return tf.data.Dataset.from_tensor_slices((self.particles[subset_indices], subset_indices, subset_indices)).batch(batch_size, num_parallel_calls = tf.data.AUTOTUNE).as_numpy_iterator()
-
-USE_NEW_LAZY = True
-if USE_NEW_LAZY:
-    def LazyMRCDataMod(particles_file, ind =None , datadir = None, padding = 0, uninvert_data = False):
-        return tilt_dataset.ImageDataset(particles_file, ind = ind, datadir = datadir, padding = padding, invert_data = uninvert_data, lazy =True)
+USE_LAZY = True
+if USE_LAZY:
+    def MRCDataMod(particles_file, ind =None , datadir = None, padding = 0, uninvert_data = False):
+        return tilt_dataset.ImageDataset(particles_file, ind = ind, datadir = datadir, padding = padding, invert_data = uninvert_data, lazy =False)
 else:
-    # LazyMRCDataMod = tilt_dataset.ImageDataset
-    class LazyMRCDataMod(torch.utils.data.Dataset):
+    class MRCDataMod(torch.utils.data.Dataset):
         # Adapted from cryoDRGN
         '''
-        Class representing an .mrcs stack file -- images loaded on the fly
+        Class representing an .mrcs stack file -- images preloaded
         '''
-        def __init__(self, mrcfile, datadir=None, ind = None, padding = 0, uninvert_data = False ):
+        def __init__(self, mrcfile, datadir=None, ind = None, padding = 0, uninvert_data = False, mask = None, lazy = False, max_threads=16 ):
             
-            particles = dataset.load_particles(mrcfile, True, datadir=datadir)
-            if ind is not None:
-                particles = [particles[x] for x in ind]
-                
-            N = len(particles)
-            ny, nx = particles[0].get().shape
+            self.src = ImageSource.from_file(
+                mrcfile,
+                lazy=lazy,
+                datadir=datadir,
+                indices=ind,
+                max_threads=max_threads,
+            )
+
+            # if ind is not None:
+            #     # particles = dataset.load_particles(mrcfile, True, datadir=datadir)
+            #     # particles = np.array([particles[i].get() for i in ind])
+            #     self.src = ImageSource.from_file(
+            #         mrcfile,
+            #         lazy=lazy,
+            #         datadir=datadir,
+            #         indices=ind,
+            #         max_threads=max_threads,
+            #     )
+
+            #     ImageDataset(data.Dataset)
+            #     ImageDataset(data.Dataset)
+            #     particles = 
+            #     particles = dataset.load_particles(mrcfile, False, datadir=datadir)[ind]
+            # else:
+            #     particles = dataset.load_particles(mrcfile, False, datadir=datadir)
+            # N, ny, nx = particles.shape
+            N = self.src.n
+            ny, nx = self.src.D, self.src.D
             
             assert ny == nx, "Images must be square"
             assert ny % 2 == 0, "Image size must be even. Is this a preprocessed dataset? Use the --preprocessed flag if so."
             
-
-            # self.mrcfile = mrcfile
-            # self.datadir = datadir
-            # self.n_images = N
-            # self.D = (nx + padding) 
-            # self.image_size = self.D * self.D
-            # self.image_shape = (nx + padding, ny + padding)
-            # self.dtype = np.complex64 
-
-            # self.mean_mask = set_standard_mask(self.D, self.dtype)
-            # self.mask = set_standard_mask(self.D, self.dtype)
-            # self.mult = -1 if uninvert_data else 1
             
-            # self.unpadded_D = nx
-            # self.unpadded_image_shape = (nx, ny)
-
-            # # Maybe should do do this on CPU?
-            # self.particles = particles 
-            # self.padding = padding
-
-
-
             self.n_images = N
             self.D = (nx + padding) 
             self.image_size = self.D * self.D
@@ -132,26 +76,57 @@ else:
             self.mult = -1 if uninvert_data else 1
             
             # Maybe should do do this on CPU?
-            self.particles = particles #np.array(padded_dft(particles, self.mask, self.image_size))
+            # self.particles = particles #np.array(padded_dft(particles, self.mask, self.image_size))
             self.padding = padding
-
             
-        def get(self, i):
-            return self.particles[i].get()
+        def get(self, index):
+            if isinstance(index, list):
+                index = np.array(index)#.to(torch.long)
+            particles = self.src.images(index)
+            # TODO - why do I need the [0]
+            return particles[0]
+        
+        # def __getitem__(self, index):
+        #     if isinstance(index, list):
+        #         index = torch.Tensor(index).to(torch.long)
+
+        #     particles = self._process(self.src.images(index).to(self.device))
+
+        #     # this is why it is tricky for index to be allowed to be a list!
+        #     if len(particles.shape) == 2:
+        #         particles = particles[np.newaxis, ...]
+
+        #     if isinstance(index, (int, np.integer)):
+        #         logger.debug(f"ImageDataset returning images at index ({index})")
+        #     else:
+        #         logger.debug(
+        #             f"ImageDataset returning images for {len(index)} indices:"
+        #             f" ({index[0]}..{index[-1]})"
+        #         )
+
+        #     return particles, None, index
+
+
 
         def __len__(self):
             return self.n_images
 
         def __getitem__(self, index):
+            # import pdb; pdb.set_trace()
             return self.get(index), index, index
 
         def process_images(self, images, apply_image_mask = False):
-            
             if apply_image_mask:
                 images = images * self.mask
+            # logger.warning("CHANGE BACK USE MASK TO FALSE")
+            images = pad.padded_dft(images * self.mult,  self.image_size, self.padding)
+            return images.astype(self.dtype)
 
-            images = pad.padded_dft(images * self.mult, self.image_size, self.padding)
-            return images
+        # def get_dataset_generator(self, batch_size, num_workers = 0):
+        #     return tf.data.Dataset.from_tensor_slices((self.src,np.arange(self.n_images),np.arange(self.n_images))).batch(batch_size, num_parallel_calls = tf.data.AUTOTUNE).as_numpy_iterator()
+
+        # def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
+        #     return tf.data.Dataset.from_tensor_slices((self.src[subset_indices], subset_indices, subset_indices)).batch(batch_size, num_parallel_calls = tf.data.AUTOTUNE).as_numpy_iterator()
 
         def get_dataset_generator(self, batch_size, num_workers = 0):
             return NumpyLoader(self, batch_size=batch_size, shuffle=False, num_workers = num_workers)
@@ -161,16 +136,109 @@ else:
             # Maybe this would work?
             return NumpyLoader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, shuffle=False, num_workers = num_workers)
             # torch.utils.data.Subset(self, subset_indices)
+
+
+
+USE_NEW_LAZY = True
+if USE_NEW_LAZY:
+    def LazyMRCDataMod(particles_file, ind =None , datadir = None, padding = 0, uninvert_data = False):
+        return tilt_dataset.ImageDataset(particles_file, ind = ind, datadir = datadir, padding = padding, invert_data = uninvert_data, lazy =True)
+else:
+    False
+    # Nothing
+    # LazyMRCDataMod = tilt_dataset.ImageDataset
+    # class LazyMRCDataMod(torch.utils.data.Dataset):
+    #     # Adapted from cryoDRGN
+    #     '''
+    #     Class representing an .mrcs stack file -- images loaded on the fly
+    #     '''
+    #     def __init__(self, mrcfile, datadir=None, ind = None, padding = 0, uninvert_data = False ):
+            
+    #         particles = dataset.load_particles(mrcfile, True, datadir=datadir)
+    #         if ind is not None:
+    #             particles = [particles[x] for x in ind]
+                
+    #         N = len(particles)
+    #         ny, nx = particles[0].get().shape
+            
+    #         assert ny == nx, "Images must be square"
+    #         assert ny % 2 == 0, "Image size must be even. Is this a preprocessed dataset? Use the --preprocessed flag if so."
+            
+
+    #         # self.mrcfile = mrcfile
+    #         # self.datadir = datadir
+    #         # self.n_images = N
+    #         # self.D = (nx + padding) 
+    #         # self.image_size = self.D * self.D
+    #         # self.image_shape = (nx + padding, ny + padding)
+    #         # self.dtype = np.complex64 
+
+    #         # self.mean_mask = set_standard_mask(self.D, self.dtype)
+    #         # self.mask = set_standard_mask(self.D, self.dtype)
+    #         # self.mult = -1 if uninvert_data else 1
+            
+    #         # self.unpadded_D = nx
+    #         # self.unpadded_image_shape = (nx, ny)
+
+    #         # # Maybe should do do this on CPU?
+    #         # self.particles = particles 
+    #         # self.padding = padding
+
+
+
+    #         self.n_images = N
+    #         self.D = (nx + padding) 
+    #         self.image_size = self.D * self.D
+    #         self.image_shape = (nx + padding, ny + padding)
+
+    #         self.dtype = np.complex64 # ???
+    #         self.unpadded_D = nx
+    #         self.unpadded_image_shape = (nx, ny)
+    #         self.mask = set_standard_mask(self.unpadded_D, self.dtype)
+    #         self.mult = -1 if uninvert_data else 1
+            
+    #         # Maybe should do do this on CPU?
+    #         self.particles = particles #np.array(padded_dft(particles, self.mask, self.image_size))
+    #         self.padding = padding
+
+            
+    #     def get(self, i):
+    #         return self.particles[i].get()
+
+    #     def __len__(self):
+    #         return self.n_images
+
+    #     def __getitem__(self, index):
+    #         return self.get(index), index, index
+
+    #     def process_images(self, images, apply_image_mask = False):
+            
+    #         if apply_image_mask:
+    #             images = images * self.mask
+
+    #         images = pad.padded_dft(images * self.mult, self.image_size, self.padding)
+    #         return images
+
+    #     def get_dataset_generator(self, batch_size, num_workers = 0):
+    #         return NumpyLoader(self, batch_size=batch_size, shuffle=False, num_workers = num_workers)
+        
+    #     def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
+    #         # raise NotImplementedError
+    #         # Maybe this would work?
+    #         return NumpyLoader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, shuffle=False, num_workers = num_workers)
+    #         # torch.utils.data.Subset(self, subset_indices)
     
     
 def get_num_images_in_dataset(mrc_path):
+    return ImageSource.from_file(mrc_path, lazy=True).n
     # from recovar import cryodrgn_source
     # n_particles = cryodrgn_source.ImageSource.from_file(
     #         mrc_path,
     #         lazy=True).n
     # return n_particles
-    particles = dataset.load_particles(mrc_path, True)
-    return len(particles)
+    # ImageSource.from_file(mrc_path, lazy=True).n
+    # particles = dataset.load_particles(mrc_path, True)
+    # return ImageSource.from_file(mrc_path, lazy=True).n
 
 def set_standard_mask(D, dtype):
     return mask.window_mask(D, 0.85, 0.99)
@@ -212,7 +280,7 @@ class NumpyLoader(torch.utils.data.DataLoader):
 # A dataset class, that includes images and all other information
 class CryoEMDataset:
 
-    def __init__(self, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.evaluate_ctf_wrapper, dtype = np.complex64, rotation_dtype = np.float64, dataset_indices = None, grid_size = None, volume_upsampling_factor = 1, tilt_series_flag = False  ):
+    def __init__(self, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.evaluate_ctf_wrapper, dtype = np.complex64, rotation_dtype = np.float32, dataset_indices = None, grid_size = None, volume_upsampling_factor = 1, tilt_series_flag = False  ):
         
         if image_stack is not None:
             grid_size = image_stack.D
@@ -373,7 +441,7 @@ class CryoEMDataset:
             assert ( tilt_idx is not None), "Tilt index must be specified for tilt series"
 
         if tilt_idx is None:
-            image = self.image_stack.__getitem__(i)[0][None]
+            image = self.image_stack.__getitem__(i)[0]#[None]
         else:
             image = self.image_stack.__getitem__(i)[0][tilt_idx][None]
 
@@ -403,7 +471,7 @@ class CryoEMDataset:
             CTFs = self.CTF_fun(self.CTF_params[image_ind[tilt_idx]][None], self.image_shape, self.voxel_size) # Compute CTF
         else:
             images, _, _ = self.image_stack.__getitem__(i)
-            images = images[None]
+            images = images#[None]
             CTFs = self.CTF_fun(self.CTF_params[i][None], self.image_shape, self.voxel_size) # Compute CTF
         images = self.image_stack.process_images(images) # Compute DFT, masking
         images = (CTFs / (CTFs**2 + weiner_param)) * images  # CTF correction
@@ -421,7 +489,12 @@ class CryoEMDataset:
     def get_image_mask(self, indices, mask, binary = True, soften = 5):
         indices = np.asarray(indices).astype(int)
         from recovar import covariance_core # Not sure I want this depency to exist... Could make some circular imports
-        return covariance_core.get_per_image_tight_mask(mask, self.rotation_matrices[indices], self.image_stack.mask, self.volume_mask_threshold, self.image_shape, self.volume_shape, self.grid_size, self.padding, disc_type = 'linear_interp',  binary = binary, soften = soften)
+        mask = covariance_core.get_per_image_tight_mask(mask, self.rotation_matrices[indices], self.image_stack.mask, self.volume_mask_threshold, self.image_shape, self.volume_shape, self.grid_size, self.padding, disc_type = 'linear_interp',  binary = binary, soften = soften)
+        mask_ft = ftu.get_dft2(mask).reshape(mask.shape[0], -1)
+        # Usually images are translated, here we translate back.
+        batch = core.translate_images(mask_ft, -self.translations[indices].astype(int) , self.image_shape)
+        mask2 = ftu.get_idft2(batch.reshape(-1, *self.image_shape))
+        return mask2.real
 
 
 
@@ -446,17 +519,19 @@ def subsample_cryoem_dataset(dataset, indices):
 def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False, tilt_series = False, tilt_series_ctf = None, dose_per_tilt = 2.9, angle_per_tilt = 3 ):
     
     # For backward compatibility... Delete at some point?
-    tilt_series_ctf = None if tilt_series_ctf is False else tilt_series_ctf
+    if tilt_series_ctf is None and tilt_series is False:
+        tilt_series_ctf = 'cryoem'
+    elif tilt_series_ctf is None and tilt_series is True:
+        tilt_series_ctf = 'v2_scale_from_star'
+
+    # else:
+    #     tilt_series_ctf = tilt_series_ctf
+    # tilt_series_ctf = #None if tilt_series_ctf is False else tilt_series_ctf
 
     # assert tilt_series_ctf in (None, "from_star", "scale_from_star"), "tilt_series_ctf must be None, from_star, or scale_from_star"
     # tilt_series_ctf = tilt_series if tilt_series_ctf is None else tilt_series_ctf
 
     sort_with_Bfac = True
-    # if tilt_series_ctf == "scale_from_star":
-    #     angle_per_tilt = 0
-    #     sort_with_Bfac = True
-    # else:
-    #     sort_with_Bfac = False
         
     if tilt_series:
             from recovar import tilt_dataset
@@ -468,8 +543,9 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
             dataset = LazyMRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
         else:
             dataset = MRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
-        
-    ctf_params = np.array(ctf.load_ctf_for_training(dataset.D, ctf_file))
+
+    from recovar import cryodrgn_load
+    ctf_params = np.array(cryodrgn_load.load_ctf_for_training(dataset.D, ctf_file))
         
     ctf_params = ctf_params if ind is None else ctf_params[ind]
     
@@ -481,14 +557,16 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
     
     CTF_fun = core.evaluate_ctf_wrapper
 
-    # Sort of a hacky way to do this.
-    if (tilt_series is False) and (tilt_series_ctf is not None):
+    # This is an option used to treat a cryo-ET dataset as a cryo-EM dataset, but still use the right CTF.
+    # It means, that it will use the cryo-EM pipeline but the cryoET CTF.
+    if (tilt_series is False) and (tilt_series_ctf != 'cryoem'):
         from recovar import tilt_dataset
         tilt_dataset_this = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, sort_with_Bfac = sort_with_Bfac)
     else:
         tilt_dataset_this = dataset
 
-    if tilt_series_ctf is not None:
+    if tilt_series_ctf != 'cryoem':
+        # The angles are used to compute a scale factor cos(angles). If scale from star, then the scale factor is already in the star file, so set angle to 0
         if "scale_from_star" in tilt_series_ctf:
             angle_per_tilt = 0
 
@@ -496,6 +574,7 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
             ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
             ctf_params[:,core.bfactor_ind+1] = -tilt_dataset_this.ctfBfactor # should be POSITIVE (negative in star file)
             logger.info('CTF from star')
+
         elif (tilt_series_ctf == "scale_from_star") or (tilt_series_ctf == "from_dose"):
             # Sort of a hacky way to do this.
 
@@ -517,6 +596,8 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
             # Sort of a hacky way to do this.
             tilt_numbers = tilt_dataset_this.tilt_numbers
             dose = - (tilt_dataset_this.ctfBfactor / 4) # WARP uses a ctfBfactor == -4 * dose
+
+            # The angles are used to compute a scale factor cos(angles). If scale from star, then the scale factor is already in the star file
             angles = jnp.ceil(tilt_numbers/2) * angle_per_tilt 
             if 'scale_from_star' in tilt_series_ctf:
                 # + 1 because voxel_size in included.... gross
@@ -531,21 +612,23 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
 
             CTF_fun = core.evaluate_ctf_wrapper_tilt_series_v2
             ctf_params = np.concatenate( [ctf_params, dose[...,None], angles[...,None]], axis =-1)
-
             assert (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)) , "Critical exposure calculation requires 200kV or 300kV imaging" 
             logger.info('CTF from dose weighting - V2')
             
 
-    posetracker = PoseTracker.load( poses_file, dataset.n_images, dataset.unpadded_D, ind = ind) #,   None, ind, device=device)
-        
+    # posetracker = PoseTracker.load( poses_file, dataset.n_images, dataset.unpadded_D, ind = ind) #,   None, ind, device=device)
+    # from recovar import cryodrgn_load
+    rots, trans, _ = cryodrgn_load.load_poses( poses_file, dataset.n_images, dataset.unpadded_D, ind = ind) #,   None, ind, device=device)
+
+
     voxel_sizes = ctf_params[:,0]
     assert np.all(np.isclose(voxel_sizes - voxel_sizes[0], 0))
     voxel_size = np.float32(voxel_sizes[0])
 
     # Make sure everything is in correct dtype:
     ctf_params = ctf_params.astype(np.float32)
-    translations = np.array(posetracker.trans).astype(np.float32)
-    rots = np.array(posetracker.rots).astype(np.float32)
+    translations = np.array(trans).astype(np.float32)
+    rots = np.array(rots).astype(np.float32)
 
     return CryoEMDataset( dataset, voxel_size,
                               rots, translations, ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind.astype(int), tilt_series_flag = tilt_series)
@@ -666,6 +749,7 @@ def make_dataset_loader_dict(args):
     return dataset_loader_dict
 
 def figure_out_halfsets(args):
+
     if args.halfsets == None:
         logger.info("Randomly splitting dataset into halfsets")
         # ind_split = dataset.get_split_indices(args.particles_file, ind_file = args.ind)
@@ -674,9 +758,29 @@ def figure_out_halfsets(args):
             halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, ntilts = args.ntilts, datadir = args.datadir)
         else:
             halfsets = get_split_indices(args.particles, ind_file = args.ind)
+    # else:
+    #     logger.info("Loading halfset from file")
+    #     halfsets = pickle.load(open(args.halfsets, 'rb'))
     else:
+        if args.tilt_series or args.tilt_series_ctf:
+            halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, ntilts = args.ntilts, datadir = args.datadir)
+            logger.warning("Ignoring halfsets file for tilt series! Using random split instead.")
+            return halfsets
+        
         logger.info("Loading halfset from file")
         halfsets = pickle.load(open(args.halfsets, 'rb'))
+
+        # Ensure only the indices in args.ind are used
+        if args.ind is not None:
+            # Load indices from args.ind
+            if isinstance(args.ind, np.ndarray):
+                ind = args.ind
+            else:
+                with open(args.ind, 'rb') as f:
+                    ind = np.asarray(pickle.load(f))
+            # Intersect the loaded halfsets with ind
+            halfsets = [np.intersect1d(halfset, ind) for halfset in halfsets]
+
     if args.n_images > 0:
         halfsets = [ halfset[:args.n_images//2] for halfset in halfsets]
         logger.info(f"using only {args.n_images} images")

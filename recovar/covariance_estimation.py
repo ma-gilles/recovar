@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import jax, time
 import functools
-from recovar import core, covariance_core, regularization, utils, constants, noise, homogeneous, linalg, cryojax_map_coordinates
+from recovar import core, covariance_core, regularization, utils, constants, noise, cryojax_map_coordinates
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 
@@ -199,8 +199,7 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, cov_noise, 
     image_noise_var = noise.make_radial_noise(cov_noise, cryos[0].image_shape)
 
     utils.report_memory_device(logger = logger)
-    disc_type = 'nearest'
-    Hs, Bs = compute_both_H_B(cryos, means, mask_ls, picked_frequencies, gpu_memory, image_noise_var, disc_type, parallel_analysis = False, options = options)
+    Hs, Bs = compute_both_H_B(cryos, means, mask_ls, picked_frequencies, gpu_memory, image_noise_var,  parallel_analysis = False, options = options)
     st_time = time.time()
     volume_noise_var = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].volume_shape))
     covariance_cols = {}
@@ -374,14 +373,14 @@ def compute_variance(cryos, mean_estimate, batch_size, volume_mask, noise_varian
 
 
 
-def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies, gpu_memory, cov_noise, disc_type, parallel_analysis, options ):
+def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies, gpu_memory, cov_noise, parallel_analysis, options ):
     Hs = []
     Bs = []
     st_time = time.time()
 
     for cryo_idx, cryo in enumerate(cryos):
         mean = means["combined"] if options["use_combined_mean"] else means["corrected" + str(cryo_idx)]
-        H, B = compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gpu_memory, cov_noise, disc_type, parallel_analysis, options = options)
+        H, B = compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gpu_memory, cov_noise, parallel_analysis, options = options)
         logger.info(f"Time to cov {time.time() - st_time}")
         # check_memory()
         Hs.append(H)
@@ -391,7 +390,7 @@ def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies, gpu_
 
 # AT SOME POINT, I CONVINCED MYSELF THAT IT WAS BETTER FOR MEMORY TRANSFER REASONS TO DO THIS IN BATCHES OVER VOLS, THEN OVER IMAGES. I am not sure anymore.
 # Covariance_cols
-def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gpu_memory, cov_noise, disc_type, parallel_analysis = False, options = None):
+def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gpu_memory, cov_noise, parallel_analysis = False, options = None):
 
     image_batch_size = utils.get_image_batch_size(cryo.grid_size, gpu_memory) // (2 if options['disc_type'] =='cubic' else 1)
     column_batch_size = utils.get_column_batch_size(cryo.grid_size, gpu_memory)
@@ -416,7 +415,7 @@ def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequenc
         H_batch, B_batch = compute_H_B(cryo, mean, dilated_volume_mask,
                                                                  picked_frequencies[batch_st:batch_end],
                                                                  int(image_batch_size / 1), (cov_noise),
-                                                                 None , disc_type = disc_type,
+                                                                 None ,
                                                                  parallel_analysis = parallel_analysis,
                                                                  jax_random_key = 0, options = options)
         H[:, batch_st:batch_end]  = np.array(H_batch)
@@ -783,7 +782,7 @@ def compute_H_B_inner_mask_fixed(centered_images, ones_mapped, CTF_val_on_grid_s
 
 
 # @functools.partial(jax.jit, static_argnums = [5])    
-def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency_indices, batch_size, cov_noise, diag_prior, disc_type, parallel_analysis = False, jax_random_key = 0, batch_over_H_B = False, soften_mask = 3, options = None ):
+def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency_indices, batch_size, cov_noise, diag_prior, parallel_analysis = False, jax_random_key = 0, batch_over_H_B = False, soften_mask = 3, options = None ):
     # Memory in here scales as O (batch_size )
 
     # utils.report_memory_device()

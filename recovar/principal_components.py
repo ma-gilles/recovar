@@ -75,9 +75,9 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
         if col.dtype != np.complex64:
             raise TypeError("covariance_cols is not of type np.complex64")
 
-    if options['ignore_zero_frequency']:
-        zero_freq_index = np.asarray(core.frequencies_to_vec_indices( np.array([0,0,0]), cryos[0].volume_shape)).astype(int)
-        zero_freq_in_picked_freq = np.where(picked_frequencies == zero_freq_index)[0].astype(int)
+    # if options['ignore_zero_frequency']:
+    #     zero_freq_index = np.asarray(core.frequencies_to_vec_indices( np.array([0,0,0]), cryos[0].volume_shape)).astype(int)
+    #     zero_freq_in_picked_freq = np.where(picked_frequencies == zero_freq_index)[0].astype(int)
 
         # Set covariances with frequency 0 to 0.
         # I am not this if this is a good idea...
@@ -85,7 +85,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
         # covariance_cols['est_mask'][zero_freq_index,:] *= 0 
 
     # First approximation of eigenvalue decomposition
-    u,s = get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use, options['ignore_zero_frequency'], covariance_options['randomized_sketch_size'])
+    u,s = get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use, False, covariance_options['randomized_sketch_size'])
     # Check for NaN or Inf values in u and s
     if np.any(np.isnan(u['real'])) or np.any(np.isinf(u['real'])):
         raise ValueError("u['real'] contains NaN or Inf values")
@@ -107,10 +107,10 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
     #     cov_noise = cov_noise
     # else:
     #     # This probably should be moved into embedding
-    if options['ignore_zero_frequency']:
-        # Make the noise in 0th frequency gigantic. Effectively, this ignore this frequency when fitting.
-        logger.info('ignoring zero frequency')
-        cov_noise[0] *=1e16
+    # if options['ignore_zero_frequency']:
+    #     # Make the noise in 0th frequency gigantic. Effectively, this ignore this frequency when fitting.
+    #     logger.info('ignoring zero frequency')
+    #     cov_noise[0] *=1e16
         
     image_cov_noise = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].image_shape))
 
@@ -128,7 +128,17 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
     # logger.info(f"u after rescale dtype: {u['rescaled'].dtype}")
     logger.info("memory after rescaling")
     utils.report_memory_device(logger=logger)
-    if (options['contrast'] == "contrast_qr"):
+
+    # if options['ignore_zero_frequency']:
+    #     # knockout volume_mask direction stuff?
+    #     norm_volume_mask = volume_mask.reshape(-1) / np.linalg.norm(volume_mask)
+    #     # substract component in direction of mask?
+    #     # Apply matrix (I - mask mask.T / \|mask^2\| ) 
+    #     u['rescaled'] -= np.outer(norm_volume_mask, (norm_volume_mask.T @ u['rescaled']))
+    #     logger.info('ignoring zero frequency')
+
+
+    if (options['contrast'] == "contrast_qr" or options['ignore_zero_frequency']):
         c_time = time.time()
         # Going to keep a copy around for debugging purposes. Probably should delete at some point to reduce memory 
         u['rescaled_no_contrast'] = u['rescaled'].copy()
@@ -137,7 +147,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
         mean_used = means['combined']
         # if options['ignore_zero_frequency']:
         #     mean_used[...,zero_freq_index] = 0
-        u['rescaled'],s['rescaled'] = knock_out_mean_component_2(u['rescaled'], s['rescaled'],mean_used, volume_mask, volume_shape, vol_batch_size, options['ignore_zero_frequency'])
+        u['rescaled'],s['rescaled'] = knock_out_mean_component_2(u['rescaled'], s['rescaled'],mean_used, volume_mask, volume_shape, vol_batch_size, options['ignore_zero_frequency'], options['contrast'] == "contrast_qr" )
 
         if not options['keep_intermediate']:
             u['rescaled_no_contrast'] = None
@@ -192,7 +202,7 @@ def pca_by_projected_covariance(cryos, basis, mean, noise_variance, volume_mask,
 
 # EVERYTHING BELOW HERE IS NOT USED IN CURRENT VERSION OF THE CODE. DELETE?
 
-def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_size,ignore_zero_frequency):
+def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_size,ignore_zero_frequency, correct_contrast):
     # This assumes s has been kept around
     # cov == u s u^*
     # Want to compute eigendecomposition of the projection onto complement of mean:
@@ -215,9 +225,13 @@ def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_s
         # Apply matrix (I - mask mask.T / \|mask^2\| ) 
         masked_mean -= norm_volume_mask * (norm_volume_mask.T @ masked_mean)
 
-
     # Project out the mean
-    u_m_proj = u_real - masked_mean[:,None] @  (np.conj(masked_mean).T @ u_real )[None]
+    if correct_contrast:
+        u_m_proj = u_real - masked_mean[:,None] @  (np.conj(masked_mean).T @ u_real )[None]
+    
+    if ignore_zero_frequency:
+        u_m_proj = u_real - norm_volume_mask[:,None] @  (np.conj(norm_volume_mask).T @ u_real )[None]
+
     cov_chol = u_m_proj * np.sqrt(s)
 
     # Reorthogonalize
@@ -554,17 +568,17 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     else:
         Q = right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use ).real.astype(np.float32)
     del test_mat
-
+    
     ## Do masking here ?
     # Q *= volume_mask.reshape(-1,1)
 
-    if ignore_zero_frequency:
-        # knockout volume_mask direction stuff?
-        norm_volume_mask = volume_mask.reshape(-1) / np.linalg.norm(volume_mask)
-        # substract component in direction of mask?
-        # Apply matrix (I - mask mask.T / \|mask^2\| ) 
-        Q -= np.outer(norm_volume_mask, (norm_volume_mask.T @ Q))
-        logger.info('ignoring zero frequency')
+    # if ignore_zero_frequency:
+    #     # knockout volume_mask direction stuff?
+    #     norm_volume_mask = volume_mask.reshape(-1) / np.linalg.norm(volume_mask)
+    #     # substract component in direction of mask?
+    #     # Apply matrix (I - mask mask.T / \|mask^2\| ) 
+    #     Q -= np.outer(norm_volume_mask, (norm_volume_mask.T @ Q))
+    #     logger.info('ignoring zero frequency')
 
     logger.info(f"right matvec {time.time() - st_time}")
     utils.report_memory_device(logger=logger)
@@ -593,13 +607,13 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     vol_size = np.prod(volume_shape)
     # To save some memory... Q = FQ
     Q = linalg.batch_dft3(Q, volume_shape, vol_batch_size)
-    Q = linalg.blockwise_A_X(Q, U, memory_to_use = gpu_memory_to_use) / np.sqrt(vol_size)
+    Q = linalg.blockwise_A_X(Q, U, memory_to_use = gpu_memory_to_use) / np.float32(np.sqrt(vol_size))
     logger.info(f"FQU matvec {time.time() - st_time}")
     utils.report_memory_device(logger=logger)
 
     volume_size = np.prod(volume_shape)
     # Factors due to IDFT on both sides
-    S_fd = S * np.sqrt(smaller_vol_size) * np.sqrt(volume_size)
+    S_fd = S * np.float32(np.sqrt(smaller_vol_size) * np.sqrt(volume_size))
     return np.array(Q), np.array(S_fd), np.array(V)
 
 

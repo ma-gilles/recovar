@@ -5,7 +5,13 @@ Created on Thu Sep 30 16:04:24 2021
 
 @author: marcaurele
 """
-import json, os, prody, finufft
+import json, os, finufft
+
+try:
+    import prody
+except:
+    print("Did not find prody. If you need it, install it by running: pip install prody")
+
 import numpy as np
 from collections import defaultdict
 from recovar.fourier_transform_utils import fourier_transform_utils

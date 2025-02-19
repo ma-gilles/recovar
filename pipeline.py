@@ -1,7 +1,7 @@
 # If you want to extend and use recovar, you should import this first
 import logging
 # It is important to import cryodrgn before the setting basicConfig which is why it is imported here (but not used)
-import cryodrgn
+# import cryodrgn
 logger = logging.getLogger(__name__)
 import recovar.config 
 import jax
@@ -213,7 +213,6 @@ def add_args(parser: argparse.ArgumentParser):
             action="store_true",
         )
 
-
     group.add_argument(
             "--dont-use-image-mask",
             dest = "dont_use_image_mask",
@@ -232,7 +231,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--tilt-series-ctf", default = None,  dest="tilt_series_ctf", help="What CTF to use for tilt series. Default = same as tilt_series, also "
+        "--tilt-series-ctf", default = None,  dest="tilt_series_ctf", help="What CTF to use for tilt series. Default = cryoem if tilt series is False, dose weighting + ctfFromStar if tilt series is True"
     )
 
     parser.add_argument(
@@ -258,8 +257,6 @@ def add_args(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--gpu-gb", default =None,  type = float, dest="gpu_memory", help="How much GPU memory to use. Default = all" 
     )
-
-
 
     return parser
     
@@ -585,6 +582,10 @@ def standard_recovar_pipeline(args):
         # This could be sped up by a factor of len(focus_masks)
         zdim_for_rest = 20 # Maybe should make this an option
         n_pcs_to_keep = np.max( np.append(options['zs_dim_to_test'], 50))
+
+        ## FIXME
+        ignore_zero_frequency = options['ignore_zero_frequency']
+        # options['ignore_zero_frequency'] = False
         for idx, focus_mask in enumerate(focus_masks):
             u_this,s_this, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, noise_var_used, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, covariance_options = covariance_options, variance_estimate = variance_est['combined'])
             if idx == num_foc_masks -1:
@@ -596,7 +597,8 @@ def standard_recovar_pipeline(args):
             del u_this, s_this
         u = { 'rescaled' : np.concatenate(u, axis = 1), 'real' : None}
         s =  { 'rescaled' : np.concatenate(s, axis = 0), 'real': None}
-    
+        options['ignore_zero_frequency'] = ignore_zero_frequency
+
         # Check if u and s are finite and not NaN
         if not np.all(np.isfinite(u['rescaled'])):
             raise ValueError("u contains non-finite values")
@@ -726,6 +728,15 @@ def standard_recovar_pipeline(args):
                 'variance_est': variance_est, 'variance_fsc': variance_fsc, 'noise_p_variance_est': noise_p_variance_est, 'ub_noise_var_by_var_est': ub_noise_var_by_var_est, 'covariance_options': covariance_options,
                 'contrasts_for_second': contrasts_for_second, 
                 'version': '0.3'}
+    
+    # Make sure nothing is a JAX array...
+    for entry in result:
+        if result[entry] is not None:
+            try:
+                result[entry] = np.array(result[entry])
+            except:
+                pass
+
 
     output_folder = args.outdir + '/output/' 
     o.mkdir_safe(output_folder)
