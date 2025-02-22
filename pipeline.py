@@ -75,11 +75,13 @@ def add_args(parser: argparse.ArgumentParser):
         "--mask-dilate-iter", type=int, default=0, dest="mask_dilate_iter", help="mask options how many iters to dilate solvent and focus mask"
     )
 
+
     parser.add_argument(
         "--correct-contrast",
         dest = "correct_contrast",
-        action="store_true",
-        help="estimate and correct for amplitude scaling (contrast) variation across images "
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="estimate and correct for amplitude scaling (contrast) variation across images. Default = false "
     )
 
     parser.add_argument(
@@ -219,12 +221,12 @@ def add_args(parser: argparse.ArgumentParser):
             action="store_true",
         )
 
-    group.add_argument(
-            "--do-over-with-contrast",
-            dest = "do_over_with_contrast",
-            action="store_true",
-            help="Whether to run again once constrast is estimated",
-        )
+    # group.add_argument(
+    #         "--do-over-with-contrast",
+    #         dest = "do_over_with_contrast",
+    #         default = "True",
+    #         help="Whether to run again once constrast is estimated",
+    #     )
     
     parser.add_argument(
         "--tilt-series", action="store_true",  dest="tilt_series", help="Whether to use tilt_series."
@@ -258,6 +260,33 @@ def add_args(parser: argparse.ArgumentParser):
         "--gpu-gb", default =None,  type = float, dest="gpu_memory", help="How much GPU memory to use. Default = all" 
     )
 
+
+    parser.add_argument('--shared_contrast_across_tilts', action=argparse.BooleanOptionalAction, default =False,
+                        help="Whether to share contrast (amplitude scale) across tilts in cryoET. Default = False")
+
+    parser.add_argument('--use_reg_mean_in_contrast', action=argparse.BooleanOptionalAction, default =True)
+
+    parser.add_argument(
+            "--do-over-with-contrast",
+            dest = "do_over_with_contrast",
+            action=argparse.BooleanOptionalAction,
+            default = None,
+            help="Whether to run again once constrast is estimated. By default == correct_contrast. Can enter --no-do-over-with-contrast to turn off",
+        )
+    
+
+
+
+    # parser.add_argument(
+    #     "--use_reg_mean_in_contrast", action="store_true",
+    # )
+
+
+    # parser.add_argument(
+    #     "--shared_contrast_across_tilts", action="store_true",
+    # )
+
+
     return parser
     
 
@@ -270,9 +299,27 @@ def standard_recovar_pipeline(args):
     if (not args.accept_cpu) and (not utils.jax_has_gpu()):
         raise ValueError("No GPU found. Set --accept-cpu if you really want to run on CPU (probably not). More likely, you want to check that JAX has been properly installed with GPU support.")
 
+    # Dump input arguments
     o.mkdir_safe(args.outdir)
     with open(f"{args.outdir}/command.txt", "w") as text_file:
-        text_file.write(' '.join((sys.argv)))
+        command = 'python ' + ' '.join((sys.argv))
+        text_file.write(command)
+
+    # Set CTF function here
+    if args.tilt_series_ctf is None and args.tilt_series is False:
+        args.tilt_series_ctf = 'cryoem'
+        logger.info("Setting tilt_series_ctf to cryoem")
+    elif args.tilt_series_ctf is None and args.tilt_series is True:
+        args.tilt_series_ctf = 'v2_scale_from_star'
+        logger.info("Setting tilt_series_ctf to v2_scale_from_star")
+
+    if args.tilt_series and args.dose_per_tilt is not None:
+        logger.warning("dose_per_tilt is provided, but tilt_series_ctf is set to using starfile = -B_fac/4 (by default). Thus, dose_per_tilt will not be used.")
+        # logger.warning("angle_per_tilt is provided, but tilt_series_ctf is set to using scale from inputfile (by default). Thus, angle_per_tilt will not be used.")
+        # raise ValueError("dose_per_tilt must be provided for tilt series")
+
+    if (args.tilt_series_ctf == 'v2_scale_from_star') and (args.angle_per_tilt is not None):
+        logger.warning("angle_per_tilt is provided, but tilt_series_ctf is set to using scale from inputfile (by default). Thus, angle_per_tilt will not be used.")
 
     # The force interaction has something to do with cryodrgn interaction which is breaking the logger...
     logging.basicConfig(format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
@@ -315,8 +362,14 @@ def standard_recovar_pipeline(args):
             logger.warning("Do over with contrast, but contrast correction is off. Setting contrast correction to on") 
             args.correct_contrast = True
             options["contrast"] = "contrast_qr"
+
     else:
         n_repeats = 1
+
+    if args.shared_contrast_across_tilts:
+        options['contrast'] += '_shared'
+        logger.info("Setting contrast to shared")
+
 
     for repeat in range(n_repeats):
         
@@ -338,6 +391,7 @@ def standard_recovar_pipeline(args):
             means, mean_prior, _, _ = homogeneous.get_mean_conformation(cryos, 5*batch_size, noise_var_from_hf , valid_idx, disc_type, use_noise_level_prior = False, grad_n_iter = 5)
         elif args.mean_fn == 'triangular':
             means, mean_prior, _, _  = homogeneous.get_mean_conformation_relion(cryos, 2*batch_size, noise_variance = noise_var_from_hf,  use_regularization = False)
+
         elif args.mean_fn == 'triangular_reg':
             means, mean_prior, _, _  = homogeneous.get_mean_conformation_relion(cryos, 5*batch_size, noise_variance = noise_var_from_hf,  use_regularization = True)
         else:
@@ -585,9 +639,11 @@ def standard_recovar_pipeline(args):
 
         ## FIXME
         ignore_zero_frequency = options['ignore_zero_frequency']
+        # mean_for_contrast_correction = means['combined_regularized'] if args.contrast_use_reg_mean else means['combined']
+
         # options['ignore_zero_frequency'] = False
         for idx, focus_mask in enumerate(focus_masks):
-            u_this,s_this, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, noise_var_used, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, covariance_options = covariance_options, variance_estimate = variance_est['combined'])
+            u_this,s_this, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, noise_var_used, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, covariance_options = covariance_options, variance_estimate = variance_est['combined'], use_reg_mean_in_contrast = args.use_reg_mean_in_contrast)
             if idx == num_foc_masks -1:
                 s.append(s_this['rescaled'][:n_pcs_to_keep].copy())
                 u.append(u_this['rescaled'][:,:n_pcs_to_keep].copy())
@@ -727,7 +783,7 @@ def standard_recovar_pipeline(args):
                 'picked_frequencies' : picked_frequencies, 'volume_shape': volume_shape, 'voxel_size': cryos[0].voxel_size, 'pc_metric' : var_metrics['filt_var'],
                 'variance_est': variance_est, 'variance_fsc': variance_fsc, 'noise_p_variance_est': noise_p_variance_est, 'ub_noise_var_by_var_est': ub_noise_var_by_var_est, 'covariance_options': covariance_options,
                 'contrasts_for_second': contrasts_for_second, 
-                'version': '0.3'}
+                'version': '0.4'}
     
     # Make sure nothing is a JAX array...
     for entry in result:
@@ -762,7 +818,11 @@ def standard_recovar_pipeline(args):
 
     for entry in embedding_dict:
         for key in embedding_dict[entry]:
-            embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(embedding_dict[entry][key], particles_ind_split)
+            if entry == 'contrasts' and args.tilt_series and ('shared' not in options['contrast']):
+                embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(embedding_dict[entry][key], ind_split)
+            else:
+                embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(embedding_dict[entry][key], particles_ind_split)
+
             # for k in range(num_foc_masks-1):
             #     embedding_dict[entry][key][k] = embedding_dict[entry][key][k].astype(np.float32)
     utils.pickle_dump(embedding_dict, output_model_folder + 'embeddings.pkl')

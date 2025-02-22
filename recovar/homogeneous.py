@@ -31,14 +31,26 @@ def get_mean_conformation_relion(cryos, batch_size, noise_variance = None,  use_
 
     mean_prior, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(cryo.volume_shape, means["corrected0"], means["corrected1"], lhs, jnp.ones(cryos[0].volume_size, dtype = cryos[0].dtype_real) * np.inf, frequency_shift = jnp.array([0,0,0]), upsampling_factor = upsampling_factor)
 
-    if use_regularization:
-        for idx, cryo in enumerate(cryos):
-            means["corrected" + str(idx)], lhs_l[idx] = relion_functions.relion_reconstruct(cryo, noise_variance,batch_size, tau = mean_prior )
-    lhs = (lhs_l[0] + lhs_l[1])/2
+    # Store the unreg
+    means["combined"] = (means["corrected0"] + means["corrected1"])/2
 
+
+    for idx, cryo in enumerate(cryos):
+        # Compute the regularized
+        means["corrected" + str(idx) + 'reg'], lhs_l[idx] = relion_functions.relion_reconstruct(cryo, noise_variance,batch_size, tau = mean_prior )
+
+    # Store the reg
+    means["combined_regularized"] = (means["corrected0" + 'reg'] + means["corrected1" + 'reg'])/2
+
+    
+    if use_regularization:
+        means["combined"] = means["combined_regularized"]
+        
+
+    lhs = (lhs_l[0] + lhs_l[1])/2
     logger.info(f"Using new prior")
     mean_prior = np.array(mean_prior)
-    means["combined"] = (means["corrected0"] + means["corrected1"])/2
+    # means["combined"] = (means["corrected0"] + means["corrected1"])/2
     means["prior"] = mean_prior
     means["lhs"] = lhs
 

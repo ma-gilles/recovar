@@ -45,22 +45,23 @@ def generate_conformation_from_reprojection(xs, mean, u ):
     return ((mean[...,None] + u @ xs.T)[0]).T
     
 
-def compute_per_image_embedding_from_result(result, zdim, gpu_memory = None):
-    gpu_memory = utils.get_gpu_memory_total() if gpu_memory is None else gpu_memory
-    options = utils.make_algorithm_options(result['input_args'])
-    cryos = dataset.load_dataset_from_args(result['input_args'])
+# def compute_per_image_embedding_from_result(result, zdim, gpu_memory = None):
+#     gpu_memory = utils.get_gpu_memory_total() if gpu_memory is None else gpu_memory
+#     options = utils.make_algorithm_options(result['input_args'])
+#     cryos = dataset.load_dataset_from_args(result['input_args'])
     
-    return get_per_image_embedding(result['means']['combined'], result['u']['rescaled'], result['s']['rescaled'], zdim, result['cov_noise'], cryos, result['volume_mask'], gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = options["contrast"], to_real = True, parallel_analysis = False, compute_covariances = True )
+#     return get_per_image_embedding(result['means']['combined'], result['u']['rescaled'], result['s']['rescaled'], zdim, result['cov_noise'], cryos, result['volume_mask'], gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = options["contrast"], to_real = True, parallel_analysis = False, compute_covariances = True )
 
 
 
-def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, skip_image_i_in_series = None):
+def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None):
 
     assert u.shape[0] == cryos[0].volume_size, "input u should be volume_size x basis_size"
     st_time = time.time()    
     basis = np.asarray(u[:, :basis_size]).T
     eigenvalues = (s + constants.ROOT_EPSILON)
     use_contrast = "contrast" in contrast_option
+    contrast_shared_across_tilt_series = ("shared" in contrast_option) #and not use_contrast
     logger.info(f"using contrast? {use_contrast}")
 
     if use_contrast:
@@ -99,7 +100,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
         zs[cryo_idx], cov_zs[cryo_idx], est_contrasts[cryo_idx], bias[cryo_idx] = get_coords_in_basis_and_contrast_3(
             cryo, mean, basis, eigenvalues[:basis.shape[0]], volume_mask,
             jnp.array(cov_noise) , contrast_grid, batch_size, disc_type, 
-            parallel_analysis = parallel_analysis, compute_covariances = compute_covariances, contrast_mean = contrast_mean, contrast_variance = contrast_variance , compute_bias = compute_bias, skip_image_i_in_series = skip_image_i_in_series)
+            parallel_analysis = parallel_analysis, compute_covariances = compute_covariances, contrast_mean = contrast_mean, contrast_variance = contrast_variance , compute_bias = compute_bias, image_subset_in_tilt_series = image_subset_in_tilt_series, contrast_shared_across_tilt_series= contrast_shared_across_tilt_series)
 
     
     zs = np.concatenate(zs, axis = 0)
@@ -126,8 +127,9 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
 
 
 # @functools.partial(jax.jit, static_argnums = [5])    
-def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, skip_image_i_in_series = None, force_not_shared_label = False, not_shared_contrast = False):
+def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None, force_not_shared_label = False, contrast_shared_across_tilt_series = False):
     # If skip_image_i_in_series is not None, it will skip that image in the tilt series. This is useful for detecting bad tilt images.
+    # not_shared_contrast = not contrast_shared_across_tilt_series
 
     # This is the handle the case where we want to assign a label to each image despite them from the same tilt series. E.g, for tilt cleaning.
     shared_label = experiment_dataset.tilt_series_flag and not force_not_shared_label
@@ -142,7 +144,6 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
     mean_estimate = jnp.array(mean_estimate).astype(experiment_dataset.dtype)
     eigenvalues = jnp.array(eigenvalues).astype(experiment_dataset.dtype)
     contrast_grid = contrast_grid.astype(experiment_dataset.dtype_real)
-
     
     basis_size = basis.shape[0]
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
@@ -152,19 +153,29 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
     image_latent_bias = np.zeros((n_units, basis_size, basis_size), dtype = basis.dtype) if compute_bias else None
 
     # Size depends on whether we are sharing contrast or not
-    contrast_units = experiment_dataset.n_images if not_shared_contrast else n_units
+    contrast_units = n_units if contrast_shared_across_tilt_series else experiment_dataset.n_images 
     estimated_contrasts = np.zeros(contrast_units, dtype = basis.dtype).real
-
-
     batch_idx =0 
+
+    invalid_particles = []
+
 
     for batch, particles_ind, batch_image_ind in data_generator:
         
         # TODO this should probably be changed to a more general way of handling this
         ## Tilt series are always processed one by one so index == position in tilt series
-        if skip_image_i_in_series is not None:
-            batch = jnp.delete(batch, skip_image_i_in_series, axis = 0)
-            batch_image_ind = np.delete(batch_image_ind, skip_image_i_in_series)
+        if image_subset_in_tilt_series is not None:
+            # 
+            subset_image_subset_in_tilt_series = image_subset_in_tilt_series.copy()
+            if np.max(image_subset_in_tilt_series) >= batch.shape[0]:
+                subset_image_subset_in_tilt_series = image_subset_in_tilt_series[image_subset_in_tilt_series < batch.shape[0]]
+                # logger.warning("image_subset_in_tilt_series is larger than the batch size. Skipping this batch")
+
+            batch = jnp.array(batch[subset_image_subset_in_tilt_series])
+            batch_image_ind = batch_image_ind[subset_image_subset_in_tilt_series]
+
+            # batch = jnp.delete(batch, skip_image_i_in_series, axis = 0)
+            # batch_image_ind = np.delete(batch_image_ind, skip_image_i_in_series)
 
 
         xs_single, contrast_single, cov_batch, bias = compute_single_batch_coords_split(batch, mean_estimate, volume_mask, 
@@ -184,7 +195,8 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
                                                                         experiment_dataset.image_stack.process_images,
                                                                        experiment_dataset.CTF_fun, contrast_grid,
                                                                        contrast_mean, contrast_variance, compute_bias, 
-                                                                       shared_label = shared_label)
+                                                                       shared_label = shared_label,
+                                                                       contrast_shared_across_tilt_series = contrast_shared_across_tilt_series)
         
         # If we are not sharing labels, we need to make sure we are assigning the correct label to each particle
         if force_not_shared_label:
@@ -192,7 +204,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
 
         xs[particles_ind] = xs_single
 
-        if not_shared_contrast:
+        if not contrast_shared_across_tilt_series:
             estimated_contrasts[batch_image_ind] = contrast_single
         else:
             estimated_contrasts[particles_ind] = contrast_single
@@ -203,10 +215,14 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
         if compute_bias:
             image_latent_bias[np.array(particles_ind)] = bias
 
-        if (batch_idx % 50 == 49) and (batch_idx > 0):
-            compute_single_batch_coords_split._clear_cache() 
+
+        # if (batch_idx % 50 == 49) and (batch_idx > 0):
+        #     compute_single_batch_coords_split._clear_cache() 
         
         batch_idx +=1
+
+
+
     return xs, image_latent_covariances, estimated_contrasts, image_latent_bias
 
 
@@ -285,8 +301,10 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
 # batched_summed_outer_products  = jax.vmap(summed_outer_products)
 
 
-@functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19, 23, 24])    
-def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, shared_label = False, not_shared_contrast = False):
+@functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19, 23, 24,25])    
+def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, shared_label = False, contrast_shared_across_tilt_series = True):
+
+    contrast_grid = jnp.array(contrast_grid)    
 
     # This should scale as O( batch_size * (n^2 * basis_size + n^3 + basis_size**2))
     AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq = compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid)
@@ -295,7 +313,7 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
     if noise_variance.ndim < 2:
         masked_noises = jnp.repeat(noise_variance[None], axis =0, repeats = batch.shape[0])#  * jnp.ones(batch.shape[0], dtype = noise_variance.dtype) 
 
-    if shared_label and not_shared_contrast:
+    if shared_label and not contrast_shared_across_tilt_series:
         ## keep a copy of all of these before summing to get the best contrast for each image later
         AU_t_images_unsummed = AU_t_images.copy()
         AU_t_Amean_unsummed = AU_t_Amean.copy()
@@ -305,6 +323,7 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
         masked_noises_unsummed = masked_noises.copy()
         image_norms_sq_unsummed = image_norms_sq.copy()
 
+    
     if shared_label:
         # Assumes all have the same labels. Maybe this isn't the best
         AU_t_images = jnp.sum(AU_t_images, axis=0, keepdims=True)
@@ -330,56 +349,71 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
 
     # Pick best contrast
     res_sum1 = residuals_fit + residuals_prior + contrast_prior
-    # import pdb; pdb.set_trace()
     best_idx = jnp.argmin(res_sum1, axis = 1).astype(int)
     
     xs_single = batch_slice_ar(best_idx, xs_batch_contrast)
     contrast_single = contrast_grid[best_idx]
 
 
-    if shared_label and not_shared_contrast:
+    if shared_label and not contrast_shared_across_tilt_series:
         # In this case, we need to do a separate contrast search for each image by iterating.
-
+        logger.info("Doing separate contrast search for each image")
         contrast_est = jnp.ones(batch.shape[0], dtype = contrast_single.dtype) * contrast_single
 
         # First assume contrast == 1 and solve:
         def refine_contrast(i, contrast_est):
-            AU_t_images = jnp.sum(AU_t_images_unsummed * contrast_est **1, axis=0, keepdims=True)
-            AU_t_Amean = jnp.sum(AU_t_Amean_unsummed * contrast_est **2, axis=0, keepdims=True) 
-            AU_t_AU = jnp.sum(AU_t_AU_unsummed * contrast_est **2, axis=0, keepdims=True) 
+            AU_t_images = jnp.sum(AU_t_images_unsummed * contrast_est[:,None] **1, axis=0, keepdims=True)
+            AU_t_Amean = jnp.sum(AU_t_Amean_unsummed * contrast_est[:,None] **2, axis=0, keepdims=True) 
+            AU_t_AU = jnp.sum(AU_t_AU_unsummed * contrast_est[:,None, None] **2, axis=0, keepdims=True) 
+
+
 
             # here DOES NOT solve for contrast. optimize over zs only
-            dummy_contrast_grid = np.array([1])
+            # dummy_contrast_grid = np.array([1])
             # Solve for best zs given given contrast
-            xs_batch_contrast = batch_over_images_and_contrast_solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, masked_noises, dummy_contrast_grid)
-
-
+            # xs_batch_contrast = batch_over_images_and_contrast_solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, masked_noises, dummy_contrast_grid)
+            xs_batch_contrast = solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, None, 1)[None]
+            
             # For all images in batch, set same xs and check all contrasts.
-            xs_repeat = jnp.repeat(xs_batch_contrast, axis = (0, 1), repeats = (batch.shape[0], contrast_grid.shape[0],1))
+            xs_repeat = jnp.repeat(xs_batch_contrast, axis = (0), repeats = (batch.shape[0]))
+            xs_repeat = jnp.repeat(xs_repeat, axis = (1), repeats = (contrast_grid.shape[0]))
+
             # Find best contrast given zs. One could just explicitly solve for contrast, but this works too...
             residuals_fit, residuals_prior = batch_compute_contrast_residual_fast_2(xs_repeat, AU_t_images_unsummed, image_norms_sq_unsummed, AU_t_Amean_unsummed, A_mean_norm_sq_unsummed, image_T_A_mean_unsummed,  AU_t_AU_unsummed, eigenvalues, masked_noises_unsummed, contrast_grid)
 
             contrast_prior = (contrast_grid - contrast_mean)**2 / contrast_variance
 
             # Pick best contrast
-            res_sum1 = residuals_fit + residuals_prior + contrast_prior
+            res_sum1 = residuals_fit + residuals_prior + contrast_prior[None]
             best_idx = jnp.argmin(res_sum1, axis = 1).astype(int)
+            # print(xs_batch_contrast, best_idx)
             contrast_est = contrast_grid[best_idx]
+            # import pdb; pdb.set_trace()
             return contrast_est
         
-        contrast_single = jax.lax.fori_loop(0, 10, refine_contrast, contrast_est)
+        contrast_single = contrast_est
+        # contrast_single = refine_contrast(0, contrast_single)
+        # contrast_single = refine_contrast(1, contrast_single)
+        # contrast_single = refine_contrast(2, contrast_single)
+        # contrast_single = refine_contrast(3, contrast_single)
+        # contrast_single = refine_contrast(0, contrast_single)
+        # contrast_single = refine_contrast(0, contrast_single)
+        # contrast_single = refine_contrast(0, contrast_single)
+        # contrast_single = refine_contrast(0, contrast_single)
+
+        contrast_single = jax.lax.fori_loop(0, 10, refine_contrast, contrast_single)
 
 
-        return 
+        # return 
 
 
     # covariance
     if compute_covariances:
         # cov_batch = (contrast_single**2 )[:,None,None] * AU_t_AU  + jnp.diag(1/eigenvalues)
         # logger.warning("FIX THIS COV BATCH STUFF")
-        if shared_label and not_shared_contrast:
+        if shared_label and not contrast_shared_across_tilt_series:
             # gram = (contrast_single**2 )[:,None,None] * AU_t_AU
-            gram = jnp.sum(AU_t_AU_unsummed * contrast_est **2, axis=0, keepdims=True) 
+            gram = jnp.sum(AU_t_AU_unsummed * contrast_est[:,None,None] **2, axis=0, keepdims=True) 
         else:
             gram = (contrast_single**2 )[:,None,None] * AU_t_AU
 
@@ -387,15 +421,13 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
         cov_batch = gram + jnp.diag(1/eigenvalues)
         cov_batch = cov_batch @ jnp.linalg.pinv(gram, rcond=1e-6, hermitian=True) @ cov_batch
 
-
-
     else:
         cov_batch = None
 
     if compute_bias:
-        if shared_label and not_shared_contrast:
+        if shared_label and not contrast_shared_across_tilt_series:
             # gram = (contrast_single**2 )[:,None,None] * AU_t_AU
-            gram = jnp.sum(AU_t_AU_unsummed * contrast_est **2, axis=0, keepdims=True) 
+            gram = jnp.sum(AU_t_AU_unsummed * contrast_est[:,None,None] **2, axis=0, keepdims=True) 
         else:
             gram = (contrast_single**2 )[:,None,None] * AU_t_AU
 
@@ -552,15 +584,23 @@ batch_over_images_and_contrast_solve_contrast_linear_system = jax.vmap(batch_ove
 def set_contrasts_in_cryos(cryos, contrasts):
 
     if cryos[0].tilt_series_flag:
-        running_idx = 0 
-        for i in range(2):
-            for p in cryos[0].image_stack.particles:
-                cryos[i].CTF_params[p,core.contrast_ind] = contrasts[running_idx]
-                running_idx+=1
-            # running_idx += cryos[i].n_images
+        
+        # If it's a per image assignment
+        if contrasts.shape[0] == cryos[0].n_images + cryos[1].n_images:
+            running_idx = 0 
+            for i in range(2): # Untested
+                cryos[i].CTF_params[:,core.contrast_ind] *= contrasts[running_idx:running_idx+cryos[i].n_images]
+                running_idx += cryos[i].n_images
+        else:
+            # If it's a per tilt series assignment
+            running_idx = 0 
+            for i in range(2):
+                for p in cryos[i].image_stack.particles:
+                    cryos[i].CTF_params[p,core.contrast_ind] *= contrasts[running_idx]
+                    running_idx+=1
     else:
         running_idx = 0 
-        for i in range(2): # Untested
+        for i in range(2): 
             cryos[i].CTF_params[:,core.contrast_ind] *= contrasts[running_idx:running_idx+cryos[i].n_images]
             running_idx += cryos[i].n_images
 
