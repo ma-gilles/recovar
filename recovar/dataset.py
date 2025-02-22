@@ -630,8 +630,12 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
     translations = np.array(trans).astype(np.float32)
     rots = np.array(rots).astype(np.float32)
 
+    if ind is not None:
+        ind = ind.astype(int)
+
+
     return CryoEMDataset( dataset, voxel_size,
-                              rots, translations, ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind.astype(int), tilt_series_flag = tilt_series)
+                              rots, translations, ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind, tilt_series_flag = tilt_series)
 
 
 
@@ -726,7 +730,7 @@ def make_dataset_loader_dict(args):
                             'ind_file': args.ind,
                             'padding' : args.padding,
                             'tilt_series' : False,
-                            'tilt_series_ctf' : False,
+                            'tilt_series_ctf' : 'cryoem',
                             'angle_per_tilt' : None,
                             'dose_per_tilt' : None,
                             }
@@ -754,7 +758,7 @@ def figure_out_halfsets(args):
         logger.info("Randomly splitting dataset into halfsets")
         # ind_split = dataset.get_split_indices(args.particles_file, ind_file = args.ind)
         # # pickle.dump(ind_split, open(args.out))
-        if args.tilt_series or args.tilt_series_ctf:
+        if args.tilt_series or args.tilt_series_ctf != 'cryoem':
             halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, ntilts = args.ntilts, datadir = args.datadir)
         else:
             halfsets = get_split_indices(args.particles, ind_file = args.ind)
@@ -762,7 +766,7 @@ def figure_out_halfsets(args):
     #     logger.info("Loading halfset from file")
     #     halfsets = pickle.load(open(args.halfsets, 'rb'))
     else:
-        if args.tilt_series or args.tilt_series_ctf:
+        if args.tilt_series or args.tilt_series_ctf!= 'cryoem':
             halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, ntilts = args.ntilts, datadir = args.datadir)
             logger.warning("Ignoring halfsets file for tilt series! Using random split instead.")
             return halfsets
@@ -806,7 +810,8 @@ def get_default_dataset_option():
                             'ind': None,
                             'padding' : 0,
                             # 'lazy': False,
-                            'tilt_series_ctf' : False,
+                            'tilt_series' : False,
+                            'tilt_series_ctf' : 'cryoem',
                             'angle_per_tilt' : 3,
                             'dose_per_tilt' : 2.9,
                             'uninvert_data' : False}

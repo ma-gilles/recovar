@@ -419,8 +419,8 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         dose =  (tilt_numbers + 0.5) * dose_per_tilt
 
         # The cryo-EM / angle (unsused?) / dose (used)
-        ctf_params = np.concatenate([ctf_params, np.zeros_like(tilt_numbers[:,None]), dose[:,None] ], axis = -1)
-
+        # ctf_params_big = np.zeros([n_images, 11])
+        ctf_params = np.concatenate([ctf_params, dose[:,None], np.zeros_like(tilt_numbers[:,None]) ], axis = -1)
 
     else:
         per_tilt_contrast = None

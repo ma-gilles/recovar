@@ -847,7 +847,6 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
 
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
     for images, particles_ind, batch_image_ind in data_generator:
-        
         # these_disc = 'linear_interp'
         # Probably should swap this to linear interp
         image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
@@ -1225,10 +1224,11 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
                                             volume_shape, grid_size, 
                                             padding, 
                                             'linear_interp' ) #* 0 + 1
+        logger.warning("USING mask in reduce_covariance_est_inner")
     else:
         image_mask = jnp.ones_like(batch).real
     logger.warning("USING mask in reduce_covariance_est_inner")
-    logger.warning("MAKE IMAGE DISC CUBIC?")
+    # logger.warning("MAKE IMAGE DISC CUBIC?")
 
     
     batch = process_fn(batch)
@@ -1387,6 +1387,12 @@ batched_summed_outer_products  = jax.vmap(summed_outer_products)
 #     return C_mat, grid_point_vec_indices
 
 
+# This computes the sums
+#  H_{k_1, k_2} & = \sum_{i,j_1, j_2} c_{i,j_1}^2 c_{i,j_2}^2 K\left(\xi^{k_1} , \xi_{i,j_1} \right)  K\left(\xi^{k_2} , \xi_{i,j_2} \right)   \label{eq:H} \\
+#  B_{k_1, k_2} & = \sum_{i,j_1, j_2} c_{i,j_1} c_{i,j_2} \left(l_{i,j_1} \overline{l_{i,j_2}} - \Lambda^{i}_{j_1, j_2}\right)K\left(\xi^{k_1} , \xi_{i,j_1} \right)  K\left(\xi^{k_2} , \xi_{i,j_2} \right)  \label{eq:B}
+# For a fixed k_2
+#  Eq. 12-13 in arxiv version?
+
 def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coords_on_grid_stacked, rotation_matrices,  cov_noise, picked_freq_index, image_mask, image_shape, volume_size, right_kernel = "triangular", left_kernel = "triangular", kernel_width = 2, shared_label = False):
     # print("Using kernel", right_kernel, left_kernel, kernel_width)
 
@@ -1394,34 +1400,27 @@ def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coord
     picked_freq_coord = core.vec_indices_to_vol_indices(picked_freq_index, volume_shape)
 
     # The image term
+    # this is c_i l_i...
     ctfed_images = centered_images * jnp.conj(CTF_val_on_grid_stacked)
     
     # Between SPA and tomography, the only difference here is that we want to treat all images
     # (which are assumed to be from same tilt series) as a single measurement. 
-
     # Why the hell did I call this images_prod??? 
+    # \xi^{k_2} frequency at k_2 == picked_freq_ind == column of covariance
+    # This computes K(x_i, freq) for all x_i grid frequencies, then sums up 
+    # c_{i,j_2} l_{i,j_2} K( \xi_{i,j_2}, k_2) over j_2
     images_prod = covariance_core.sum_up_over_near_grid_points(ctfed_images, plane_coords_on_grid_stacked, picked_freq_coord, kernel = right_kernel, kernel_width = kernel_width)
     
     if shared_label:
         # I think this is literally the only change? ( a corresponding one below for lhs)
         ## TODO: Make sure this is correct.
         images_prod = jnp.repeat(jnp.sum(images_prod, axis=0, keepdims=True), images_prod.shape[0], axis=0)
-        logger.warning("SHARED LABEL! CHECK NOISE TERM IS CORRECT")
-        logger.warning("SHARED LABEL! CHECK NOISE TERM IS CORRECT")
-        logger.warning("SHARED LABEL! CHECK NOISE TERM IS CORRECT")
+        # This seems right...
 
     ctfed_images  *= jnp.conj(images_prod)[...,None]
-
     # - noise term
+    ## TODO: I'm still a little iffy about this in cryo-ET
     ctfed_images -= compute_noise_term(plane_coords_on_grid_stacked, picked_freq_coord, CTF_val_on_grid_stacked, image_shape, image_mask, cov_noise, kernel = right_kernel, kernel_width = kernel_width)
-
-    # # TODO: put this in a function
-    # if left_kernel == "triangular":
-    #     rhs_summed_up = core.adjoint_slice_volume_by_trilinear(ctfed_images, rotation_matrices,image_shape, volume_shape )
-    # elif left_kernel == "square":
-    #     rhs_summed_up = core.adjoint_slice_volume_by_map(ctfed_images, rotation_matrices,image_shape, volume_shape , 'nearest')
-    # else:
-    #     raise ValueError("Kernel not implemented")
     
     rhs_summed_up = adjoint_kernel_slice(ctfed_images, rotation_matrices, image_shape, volume_shape, left_kernel)
 
@@ -1434,14 +1433,6 @@ def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coord
         ctfs_prods = jnp.repeat(jnp.sum(ctfs_prods, axis=0, keepdims=True), ctfs_prods.shape[0], axis=0) 
 
     ctf_squared *= ctfs_prods[...,None]
-
-
-    # if left_kernel == "triangular":
-    #     lhs_summed_up = core.adjoint_slice_volume_by_trilinear(ctf_squared, rotation_matrices,image_shape, volume_shape )
-    # elif left_kernel == "square":
-    #     lhs_summed_up = core.adjoint_slice_volume_by_map(ctf_squared, rotation_matrices,image_shape, volume_shape, 'nearest' )
-    # else:
-    #     raise ValueError("Kernel not implemented")
     lhs_summed_up = adjoint_kernel_slice(ctf_squared, rotation_matrices, image_shape, volume_shape, left_kernel)
 
     return lhs_summed_up, rhs_summed_up
@@ -1456,6 +1447,10 @@ def adjoint_kernel_slice(images, rotation_matrices, image_shape, volume_shape, k
         raise ValueError("Kernel not implemented")
     return lhs_summed_up
 
+
+# This computes the sums
+#  B_{k_1, k_2} & = \sum_{i,j_1, j_2} c_{i,j_1} c_{i,j_2}  \Lambda^{i}_{j_1, j_2} K\left(\xi^{k_1} , \xi_{i,j_1} \right)  K\left(\xi^{k_2} , \xi_{i,j_2} \right)  \label{eq:B}
+# For a fixed k_2
 
 def compute_noise_term(plane_coords, target_coord, CTF_on_grid, image_shape, image_mask, cov_noise, kernel = "triangular", kernel_width = 1):
     # Evaluate kernel
