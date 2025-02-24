@@ -321,6 +321,9 @@ def standard_recovar_pipeline(args):
     if (args.tilt_series_ctf == 'v2_scale_from_star') and (args.angle_per_tilt is not None):
         logger.warning("angle_per_tilt is provided, but tilt_series_ctf is set to using scale from inputfile (by default). Thus, angle_per_tilt will not be used.")
 
+    if args.do_over_with_contrast is None:
+        args.do_over_with_contrast = args.correct_contrast
+
     # The force interaction has something to do with cryodrgn interaction which is breaking the logger...
     logging.basicConfig(format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
                         level=logging.INFO,
@@ -747,7 +750,8 @@ def standard_recovar_pipeline(args):
 
     logger.info(f"peak gpu memory use {utils.get_peak_gpu_memory_used(device =0)}")
 
-    if args.halfsets is None:
+    # Always dump to know where to load... Maybe wasteful?
+    if True:#args.halfsets is None:
         pickle.dump(ind_split, open(output_model_folder + 'halfsets.pkl', 'wb'))
         args.halfsets = output_model_folder + 'halfsets.pkl'
     

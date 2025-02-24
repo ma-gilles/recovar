@@ -550,12 +550,13 @@ class PipelineOutput:
             for entry in self.embedding:
                 for key in self.embedding[entry]:
                     # Handling the case where the contrasts are not shared across tilts...
-                    if entry == 'contrasts' and self.get('input_args').tilt_series and  not self.get('input_args').shared_contrast_across_tilts:
+                    # import pdb; pdb.set_trace()
+                    if entry == 'contrasts' and self.get('input_args').tilt_series and not self.get('input_args').shared_contrast_across_tilts:
                         self.embedding[entry][key] = self.embedding[entry][key][image_halfsets]
                     else:
                         self.embedding[entry][key] = self.embedding[entry][key][halfsets]
-                for key in self.embedding[entry]:
-                    self.embedding[entry][key] = self.embedding[entry][key][halfsets]
+                # for key in self.embedding[entry]:
+                #     self.embedding[entry][key] = self.embedding[entry][key][halfsets]
         self.embedding_loaded = True
         return 
 
@@ -590,7 +591,7 @@ class PipelineOutput:
             vol_shape = self.get('volume_shape')
             PS = regularization.average_over_shells(np.abs((self.get('mean').reshape( self.get('volume_shape'))))**2, self.get('volume_shape'))
             noise_level = self.get('noise_var_used')
-            snr = utils.make_radial_image(PS/noise_level, vol_shape[:2])
+            snr = utils.make_radial_image(PS/noise_level, tuple(vol_shape[:2]))
             return snr
         elif key == 'variance':
             return utils.load_mrc(self.result_path + 'output/volumes/' + 'variance10' + '.mrc')
