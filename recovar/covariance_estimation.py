@@ -1193,6 +1193,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
         return x.reshape(n,n).T
     
     logger.info("end of covariance computation - before solve")
+    utils.report_memory_device(logger=logger)
     rhs = vec(rhs)
 
     if change_device:

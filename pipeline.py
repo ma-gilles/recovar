@@ -102,8 +102,17 @@ def add_args(parser: argparse.ArgumentParser):
         "--ind",
         type=os.path.abspath,
         metavar="PKL",
-        help="Filter particles by these indices",
+        help="Filter images by these indices",
     )
+
+    group.add_argument(
+        "--tilt-ind",
+        dest="tilt_ind",
+        type=os.path.abspath,
+        metavar="PKL",
+        help="Filter tilts (particles) by these indices",
+    )
+
 
     group.add_argument(
         "--uninvert-data",
@@ -274,18 +283,6 @@ def add_args(parser: argparse.ArgumentParser):
             help="Whether to run again once constrast is estimated. By default == correct_contrast. Can enter --no-do-over-with-contrast to turn off",
         )
     
-
-
-
-    # parser.add_argument(
-    #     "--use_reg_mean_in_contrast", action="store_true",
-    # )
-
-
-    # parser.add_argument(
-    #     "--shared_contrast_across_tilts", action="store_true",
-    # )
-
 
     return parser
     
@@ -750,10 +747,6 @@ def standard_recovar_pipeline(args):
 
     logger.info(f"peak gpu memory use {utils.get_peak_gpu_memory_used(device =0)}")
 
-    # Always dump to know where to load... Maybe wasteful?
-    if True:#args.halfsets is None:
-        pickle.dump(ind_split, open(output_model_folder + 'halfsets.pkl', 'wb'))
-        args.halfsets = output_model_folder + 'halfsets.pkl'
     
     # For now, maybe just dump the rest?
     
@@ -819,6 +812,11 @@ def standard_recovar_pipeline(args):
         particles_ind_split = ind_split
 
     utils.pickle_dump(particles_ind_split, output_model_folder + 'particles_halfsets.pkl')
+    # Always dump to know where to load... Maybe wasteful?
+    if True:#args.halfsets is None:
+        pickle.dump(ind_split, open(output_model_folder + 'halfsets.pkl', 'wb'))
+        args.halfsets = output_model_folder + 'halfsets.pkl'
+
 
     for entry in embedding_dict:
         for key in embedding_dict[entry]:

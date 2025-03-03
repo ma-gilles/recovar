@@ -260,7 +260,6 @@ class TiltSeriesData(ImageDataset):
             # self.tilt_angles = torch.tensor(self.tilt_angles).to(self.device)
         elapsed = time.time() - self._load_start_time
         logger.info(f"Tilt series loaded in {elapsed:.2f} seconds")
-        print(f"Tilt series loaded in {elapsed:.2f} seconds")
 
     def __len__(self):
         return self.Np
