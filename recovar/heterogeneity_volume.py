@@ -120,18 +120,15 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_var
         heterogeneity_bins = bins
 
     logger.info(f"bins {heterogeneity_bins}")
-    n_images_per_bin = [ (np.sum(heterogeneity_distances[0] < b) + np.sum(heterogeneity_distances[1] < b)) for b in heterogeneity_bins ]
+    n_images_per_bin = [ int(np.sum(heterogeneity_distances[0] < b) + np.sum(heterogeneity_distances[1] < b)) for b in heterogeneity_bins ]
     # logger.info(f"images per bin {*n_images_per_bin}")
-    print("Particles per bin", n_images_per_bin)
+    logger.info(f"Particles per bin: {n_images_per_bin}")
     # print(n_images_per_bin)
     # import pdb; pdb.set_trace()
     estimates = [None, None]
     lhs, rhs = [None, None], [None, None]
     cross_validation_estimators = [None, None]
     for k in range(2):
-        logger.info(f"Computing estimates start")
-        ## 
-        # print("OHHHHHH HERE")
         cryos[k].update_volume_upsampling_factor(upsampling_for_ests)
 
         estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins, tau= tau, grid_correct=grid_correct_ests, use_spherical_mask=use_mask_ests, heterogeneity_kernel= heterogeneity_kernel)
@@ -327,7 +324,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_var
 
 
 
-    distances_reordered = dataset.reorder_to_original_indexing(heterogeneity_distances, cryos)
+    distances_reordered = dataset.reorder_to_original_indexing(heterogeneity_distances, cryos, cryos[0].tilt_series_flag)
     np.savetxt(output_folder + "heterogeneity_distances.txt", distances_reordered)
     use_choice_and_filter(ml_choice, "")
 

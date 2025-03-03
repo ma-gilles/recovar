@@ -179,8 +179,8 @@ def plot_anomaly_detection_results(zs, folder_name):
         ax = axes[0, i_algo]
         if np.sum(inliers) > 1:
             # Compute axis limits based on inliers
-            x_min, x_max = np.percentile(zs_valid[inliers, 0], [1, 99])
-            y_min, y_max = np.percentile(zs_valid[inliers, 1], [1, 99])
+            x_min, x_max = np.percentile(zs_valid[inliers, 0], [0.1, 99.9])
+            y_min, y_max = np.percentile(zs_valid[inliers, 1], [0.1, 99.9])
 
             hb = ax.hexbin(
                 zs_valid[inliers, 0],
@@ -230,8 +230,8 @@ def plot_anomaly_detection_results(zs, folder_name):
             ax = axes[1, i_algo]
             if np.sum(inliers) > 1:
                 # Compute axis limits based on inliers
-                x_min, x_max = np.percentile(zs_valid[inliers, 2], [1, 99])
-                y_min, y_max = np.percentile(zs_valid[inliers, 3], [1, 99])
+                x_min, x_max = np.percentile(zs_valid[inliers, 2], [0.1, 99.9])
+                y_min, y_max = np.percentile(zs_valid[inliers, 3], [0.1, 99.9])
 
                 hb = ax.hexbin(
                     zs_valid[inliers, 2],

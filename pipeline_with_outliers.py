@@ -90,15 +90,18 @@ def run_pipeline_with_outlier_removal():
             with open(indices_filename, "wb") as f:
                 pickle.dump(current_indices, f)
             # Update args to use the indices file
-            args.ind = indices_filename
+            if args.tilt_series:
+                args.tilt_ind = indices_filename
+            else:
+                args.ind = indices_filename
             logger.info(f"Using inliers from round {k} as input indices for round {round_number}")
-        else:
-            args.ind = None  # Use all particles in the first round
+        # else:
+        #     if args.ind 
+        #     args.ind = None  # Use all particles in the first round
 
         # Run the pipeline
         standard_recovar_pipeline(args)
 
-        
         # Add plot
         po = output.PipelineOutput(args.outdir + '/')
         output.standard_pipeline_plots(po, zdim, args.outdir + '/output/plots/')

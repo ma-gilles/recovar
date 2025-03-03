@@ -674,7 +674,7 @@ def get_split_indices(particles_file, ind_file = None):
     return split_indices
 
 
-def get_split_tilt_indices(particles_file, ind_file = None, ntilts = None, datadir = None):
+def get_split_tilt_indices(particles_file, ind_file = None, tilt_ind_file =None, ntilts = None, datadir = None):
     # from cryodrgn import starfile
     from recovar import tilt_dataset
 
@@ -688,12 +688,15 @@ def get_split_tilt_indices(particles_file, ind_file = None, ntilts = None, datad
         tilt_numbers = dataset_tmp.tilt_numbers
 
     n_tilt_series = len(particles_to_tilts)
-    if ind_file is None:
+    if tilt_ind_file is None:
         particle_ind = np.arange(n_tilt_series)
     else:
-        particle_ind = pickle.load(open(ind_file, "rb"))
-        logger.warning("Using ind file to pick PARTICLES (i.e. tilt series), not images (individual tilts)!")
+        particle_ind = pickle.load(open(tilt_ind_file, "rb"))
+        logger.warning("Using tilt-ind file to pick PARTICLES (i.e. tilt series), not images (individual tilts). Use --ind to pick images.")
         # raise NotImplementedError
+
+    if ind_file is not None:
+        ind_images = pickle.load(open(ind_file, "rb"))
 
     split_tilt_series_indices = split_index_list(particle_ind)
     split_image_indices = [None,None]
@@ -702,6 +705,9 @@ def get_split_tilt_indices(particles_file, ind_file = None, ntilts = None, datad
         if ntilts is not None:
             good_indices = np.where(tilt_numbers[split_image_indices[i]] < ntilts)[0]
             split_image_indices[i] = split_image_indices[i][good_indices]
+        # intersection = set(split_image_indices[i]) & set(ind_images)
+        # tmp=np.intersect1d(split_image_indices[i], ind_images)
+        split_image_indices[i] = np.intersect1d(split_image_indices[i], ind_images)
 
     return split_image_indices
 
@@ -733,6 +739,7 @@ def make_dataset_loader_dict(args):
                             'tilt_series_ctf' : 'cryoem',
                             'angle_per_tilt' : None,
                             'dose_per_tilt' : None,
+                            # 'tilt_ind' : None,
                             }
     
     # For backward compatibility... Delete at some point?
@@ -741,6 +748,9 @@ def make_dataset_loader_dict(args):
         dataset_loader_dict['tilt_series_ctf'] = args.tilt_series_ctf
         dataset_loader_dict['angle_per_tilt'] = args.angle_per_tilt
         dataset_loader_dict['dose_per_tilt'] = args.dose_per_tilt
+
+    # if hasattr(args,'tilt_ind'):
+    #     dataset_loader_dict['tilt_ind'] = args.tilt_ind
 
 
     if args.uninvert_data == "automatic" or  args.uninvert_data == "false":
@@ -759,7 +769,7 @@ def figure_out_halfsets(args):
         # ind_split = dataset.get_split_indices(args.particles_file, ind_file = args.ind)
         # # pickle.dump(ind_split, open(args.out))
         if args.tilt_series or args.tilt_series_ctf != 'cryoem':
-            halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, ntilts = args.ntilts, datadir = args.datadir)
+            halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, tilt_ind_file = args.tilt_ind, ntilts = args.ntilts, datadir = args.datadir)
         else:
             halfsets = get_split_indices(args.particles, ind_file = args.ind)
     # else:
@@ -767,8 +777,8 @@ def figure_out_halfsets(args):
     #     halfsets = pickle.load(open(args.halfsets, 'rb'))
     else:
         if args.tilt_series or args.tilt_series_ctf!= 'cryoem':
-            halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, ntilts = args.ntilts, datadir = args.datadir)
-            logger.warning("Ignoring halfsets file for tilt series! Using random split instead.")
+            halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, tilt_ind_file = args.tilt_ind, ntilts = args.ntilts, datadir = args.datadir)
+            logger.warning("Ignoring halfsets file for tilt series! Using randomly partition instead.")
             return halfsets
         
         logger.info("Loading halfset from file")
@@ -808,6 +818,7 @@ def get_default_dataset_option():
                             'datadir': None,
                             'n_images' : -1,
                             'ind': None,
+                            'tilt_ind': None,
                             'padding' : 0,
                             # 'lazy': False,
                             'tilt_series' : False,
@@ -823,8 +834,9 @@ def load_dataset_from_dict(dataset_loader_dict, lazy = True):
     return load_cryodrgn_dataset(**dataset_loader_dict, lazy = lazy)
 
 
-def reorder_to_original_indexing(arr, cryos ):
-    if cryos[0].tilt_series_flag:
+def reorder_to_original_indexing(arr, cryos, use_tilt_indices = False):
+    # if cryos[0].tilt_series_flag:
+    if use_tilt_indices:
         dataset_indices = [ cryo.image_stack.dataset_tilt_indices for cryo in cryos]
     else:
         dataset_indices = [ cryo.dataset_indices for cryo in cryos]
