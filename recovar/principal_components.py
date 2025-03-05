@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise, volume_mask,
                                 dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use,
                                 noise_model,  
-                                covariance_options = None, variance_estimate = None):
+                                covariance_options = None, variance_estimate = None, use_reg_mean_in_contrast = False):
     
     covariance_options = covariance_estimation.get_default_covariance_computation_options() if covariance_options is None else covariance_options
 
@@ -144,7 +144,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
         u['rescaled_no_contrast'] = u['rescaled'].copy()
         s['rescaled_no_contrast'] = s['rescaled'].copy()
 
-        mean_used = means['combined']
+        mean_used = means['combined_regularized'] if use_reg_mean_in_contrast else means['combined'] 
         # if options['ignore_zero_frequency']:
         #     mean_used[...,zero_freq_index] = 0
         u['rescaled'],s['rescaled'] = knock_out_mean_component_2(u['rescaled'], s['rescaled'],mean_used, volume_mask, volume_shape, vol_batch_size, options['ignore_zero_frequency'], options['contrast'] == "contrast_qr" )

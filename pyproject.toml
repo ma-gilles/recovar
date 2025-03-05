@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=61.0", "setuptools_scm>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recovar"
+dynamic = ["version"]
+authors = [
+  { name = "Marc Aurele Gilles", email = "gilles@princeton.edu" }
+]
+description = "RECOVAR cryo-EM heterogeneity analysis"
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: POSIX :: Linux"
+]
+
+# Merged dependencies from the original pyproject.toml and your requirements.txt.
+# Note: To install torch, use the pip flag:
+#       -f https://download.pytorch.org/whl/torch_stable.html
+dependencies = [
+    "dataframe_image==0.2.7",
+    "finufft==2.3.1",
+    "healpy==1.18.0",
+    "ipython==8.12.3",
+    "ipywidgets==8.1.5",
+    "jax_finufft==0.1.0",
+    "jaxopt==0.8.3",
+    "jaxtyping==0.2.38",
+    "kneed==0.8.5",
+    "lineax==0.0.7",
+    "matplotlib==3.10.0",
+    "matplotlib_scalebar==0.9.0",
+    "more_itertools==10.6.0",
+    "mrcfile==1.5.4",
+    "numpy",
+    "pandas==2.2.3",
+    "plotly==6.0.0",
+    "scikit-learn==1.6.1",
+    "cufflinks",
+    "jupyterlab",
+    "notebook<7",
+    "scipy==1.15.2",
+    "seaborn==0.13.2",
+    "scikit-image",
+    "starfile==0.5.11",
+    "tensorflow_cpu==2.18.0",
+    "typing_extensions==4.12.2",
+    "twine",
+    "ipykernel",
+    "scikit-fmm",
+    "umap-learn"
+]
+
+[project.optional-dependencies]
+dev = []
+
+[project.urls]
+Homepage = "https://github.com/ma-gilles/recovar"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["recovar*"]
+
+[tool.setuptools_scm]
+write_to = "recovar/_version.py"
+local_scheme = "no-local-version"
+
+[project.scripts]
+recovar = "recovar.command_line:main_commands"
+

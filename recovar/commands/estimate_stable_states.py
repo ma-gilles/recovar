@@ -23,7 +23,7 @@ def parse_args():
     parser.add_argument('--n_local_maxs', type=int, default=3, help='Number of local maxima to find. If <1, will use whatever HDBSCAN finds.')
     return parser.parse_args()
 
-if __name__ == "__main__":
+def main():
     args = parse_args()
     dens_pkl = utils.pickle_load(args.density)
     density = dens_pkl['density']
@@ -31,3 +31,5 @@ if __name__ == "__main__":
     estimate_stable_states(density, latent_space_bounds, args.percent_top, args.n_local_maxs, args.file_path)
 
 
+if __name__ == "__main__":
+    main()

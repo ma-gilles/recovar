@@ -419,8 +419,8 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         dose =  (tilt_numbers + 0.5) * dose_per_tilt
 
         # The cryo-EM / angle (unsused?) / dose (used)
-        ctf_params = np.concatenate([ctf_params, np.zeros_like(tilt_numbers[:,None]), dose[:,None] ], axis = -1)
-
+        # ctf_params_big = np.zeros([n_images, 11])
+        ctf_params = np.concatenate([ctf_params, dose[:,None], np.zeros_like(tilt_numbers[:,None]) ], axis = -1)
 
     else:
         per_tilt_contrast = None
@@ -772,7 +772,7 @@ def get_rotated_plane_coords(rotation_matrix, image_shape, voxel_size, scaled = 
 batch_get_rotated_plane_coords = jax.vmap(get_rotated_plane_coords, in_axes = (0, None, None, None))
 
 
-def simulate_nufft_data_batch_from_pdb(atom_group, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun, Bfactor=100 ):
+def simulate_nufft_data_batch_from_pdb(atom_group, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun, Bfactor=0 ):
     
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)    
     plane_coords_mol = batch_get_rotated_plane_coords(rotation_matrices, image_shape, voxel_size, True) 

@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.sampler import BatchSampler, RandomSampler, SequentialSampler
 from recovar import mask
 from recovar import cryodrgn_starfile as starfile
+import time
 logger = logging.getLogger(__name__)
 
 ## Very awkward... Probably should just move things to one file...
@@ -168,6 +169,7 @@ class TiltSeriesData(ImageDataset):
     def __init__(
         self,
         tiltstar,
+        lazy = True,
         ntilts=None,
         random_tilts=False,
         ind=None,
@@ -178,24 +180,33 @@ class TiltSeriesData(ImageDataset):
         sort_with_Bfac=True,
         **kwargs,
     ):
+        self._load_start_time = time.time()
         # Note: ind is the indices of the *tilts*, not the particles
         super().__init__(tiltstar, ind=ind, **kwargs)
-
         # Parse unique particles from _rlnGroupName
+        elapsed = time.time() - self._load_start_time
+        print(f"Tilt series loaded in {elapsed:.2f} seconds")
+
         s = starfile.Starfile.load(tiltstar)
+        elapsed = time.time() - self._load_start_time
+        print(f"Tilt series loaded in {elapsed:.2f} seconds")
 
         unique_sorted_group_names = []
-        for name in s.df["_rlnGroupName"]:
-            if name not in unique_sorted_group_names:
-                unique_sorted_group_names.append(name)
+        unique_sorted_group_names = list(s.df["_rlnGroupName"].unique())
+        # for name in s.df["_rlnGroupName"]:
+        #     if name not in unique_sorted_group_names:
+        #         unique_sorted_group_names.append(name)
 
         if ind is not None:
             s.df = s.df.loc[ind]
             
         group_name = list(s.df["_rlnGroupName"])
-        
+
         particles = OrderedDict()
         self.dataset_tilt_indices = []
+        # groups = s.df.groupby("_rlnGroupName").indices
+        # particles = [np.array(idx, dtype=int) for idx in groups.values()]
+        # self.dataset_tilt_indices = [unique_sorted_group_names.index(gn) for gn in groups.keys()]
         for ii, gn in enumerate(group_name):
             if gn not in particles:
                 particles[gn] = []
@@ -215,7 +226,6 @@ class TiltSeriesData(ImageDataset):
         else:
             logger.info("Sorting tilt series with scale factor!")
             logger.warning("Sorting tilt series with scale factor!! May be wrong.")
-
         for ind in self.particles:
             if sort_with_Bfac:
                 sort_idxs = self.ctfBfactor[ind].argsort()
@@ -248,8 +258,8 @@ class TiltSeriesData(ImageDataset):
         # if angle_per_tilt is not None:
             # self.tilt_angles = angle_per_tilt * torch.ceil(self.tilt_numbers / 2)
             # self.tilt_angles = torch.tensor(self.tilt_angles).to(self.device)
-
-
+        elapsed = time.time() - self._load_start_time
+        logger.info(f"Tilt series loaded in {elapsed:.2f} seconds")
 
     def __len__(self):
         return self.Np
@@ -348,30 +358,6 @@ class TiltSeriesData(ImageDataset):
     def get_dataset_subset_generator(self, batch_size, subset_indices , num_workers = 0):
         return make_dataloader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, num_workers=num_workers) #torch.utils.data(make_dataloader(self, batch_size=batch_size, num_workers=num_workers), subset_indices)
 
-
-    # def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
-    #     return tf.data.Dataset.from_tensor_slices((self.particles[subset_indices], subset_indices)).batch(batch_size, num_parallel_calls = tf.data.AUTOTUNE).as_numpy_iterator()
-
-# def make_data_subset_loader(
-#     data: ImageDataset,
-#     indices,
-#     *,
-#     batch_size: int,
-#     num_workers: int = 0,
-#     shuffler_size: int = 0,
-#     shuffle=False,
-# ):
-#     if shuffler_size > 0 and shuffle:
-#         assert data.lazy, "Only enable a data shuffler for lazy loading"
-#         return DataShuffler(data, batch_size=batch_size, buffer_size=shuffler_size)
-#     else:
-#         # see https://github.com/zhonge/cryodrgn/pull/221#discussion_r1120711123
-#         # for discussion of why we use BatchSampler, etc.
-#         sampler_cls = RandomSampler if shuffle else SequentialSampler
-#         batch_size=1
-
-#         dataloader = NumpyLoader(data, batch_size=batch_size, shuffle=False, num_workers = num_workers)
-#         return torch.utils.data.Subset(dataloader, indices = indices)
 
 
 

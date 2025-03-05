@@ -163,7 +163,7 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
 
 from recovar.output import move_to_one_folder
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
 
@@ -186,3 +186,6 @@ if __name__ == "__main__":
 
     compute_trajectory(args.result_dir, output_folder = args.outdir, zdim= args.zdim, B_factor = args.Bfactor, n_bins = args.n_bins, n_vols_along_path = args.n_vols_along_path, density_path = args.density, no_z_reg = not args.override_z_regularization, z_st = z_st, z_end = z_end, args = args)
 
+
+if __name__ == "__main__":
+    main()
