@@ -841,7 +841,9 @@ def standard_recovar_pipeline(args):
     return means, u, s, volume_mask, dilated_volume_mask, noise_var_used 
 
 
-if __name__ == "__main__":
+
+
+def main():
     # import jax
     parser = argparse.ArgumentParser(description=__doc__)
 
@@ -855,3 +857,7 @@ if __name__ == "__main__":
     zdim_choose = np.argmin(np.abs(zdims - 10))
     zdim = zdims[zdim_choose]
     output.standard_pipeline_plots(po, zdim, args.outdir + '/output/plots/')
+
+
+if __name__ == "__main__":
+    main()
