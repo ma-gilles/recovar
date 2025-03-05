@@ -80,13 +80,13 @@ It is recommanded to test your installation before running on a real dataset, se
 CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html#) are required to run this code. JAX will be installed by the command below, and the cudatoolkit is now included, but you need to have the CUDA drivers installed, see info here about JAX installation [here](https://jax.readthedocs.io/en/latest/installation.html).
 Assuming you already have CUDA drivers (probably already installed on your cluster), installation should take less than 5 minutes.
 
-If you have an internet connection, you can copy paste the commands below. It `pip install`s the GPU version of JAX, the cpu version of torch, and the rest of the dependenies.
+If you have an internet connection, you can copy paste the commands below. It creates a conda environment to install recovar in, then `pip install`s the GPU version of JAX, the cpu version of pytorch, and recovar.
 
     conda create --name recovar python=3.11 -y
     conda activate recovar
-    pip install -f https://download.pytorch.org/whl/torch_stable.html torch==2.3.1+cpu "jax[cuda12]"==0.5.0  recovar==0.4.1.dev0
+    pip install -f https://download.pytorch.org/whl/torch_stable.html torch==2.3.1+cpu "jax[cuda12]"==0.5.0  recovar
 
-It is recommended to test your installation before running on a real dataset. You can do this by running this on a GPU-capable device:
+You can then use the recovar command after activating the environment. It is recommended to test your installation before running on a real dataset. You can do this by running this on a GPU-capable device:
 
     conda activate recovar
     recovar run_test_dataset
