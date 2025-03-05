@@ -66,6 +66,8 @@ include = ["recovar*"]
 
 [tool.setuptools_scm]
 write_to = "recovar/_version.py"
+local_scheme = "no-local-version"
 
 [project.scripts]
 recovar = "recovar.command_line:main_commands"
+
