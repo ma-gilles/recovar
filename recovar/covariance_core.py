@@ -149,12 +149,12 @@ def square_kernel(gridpoints, gridpoint_target, kernel_width = 1):
     return weights
 
 
-def sinc_kernel(gridpoints, gridpoint_target, kernel_width = 1):
-    weights = jnp.ones(gridpoints.shape[:-1])
-    # Note that this is a very small loop (3) so it should be fine to jit this 
-    for i in range(gridpoint_target.shape[-1]):
-        weights *= jnp.where(jnp.abs(gridpoints[...,i] - gridpoint_target[i]) < kernel_width/2, 1/ kernel_width, 0) 
-    return weights
+# def sinc_kernel(gridpoints, gridpoint_target, kernel_width = 1):
+#     weights = jnp.ones(gridpoints.shape[:-1])
+#     # Note that this is a very small loop (3) so it should be fine to jit this 
+#     for i in range(gridpoint_target.shape[-1]):
+#         weights *= jnp.where(jnp.abs(gridpoints[...,i] - gridpoint_target[i]) < kernel_width/2, 1/ kernel_width, 0) 
+#     return weights
 
 
 

@@ -14,7 +14,7 @@ from recovar import utils
 from recovar import dataset
 from recovar import regularization
 import matplotlib.patheffects as pe
-
+from packaging.version import parse as parse_version
 import time
 
 def get_resampled_distances(gt_vols):
@@ -533,7 +533,7 @@ class PipelineOutput:
         self.embedding = None
         self.embedding_loaded = False
         self.result_path = result_path + '/'
-        self.version = self.params['version'] if 'version' in self.params else '0'
+        self.version = str(self.params['version']) if 'version' in self.params else '0'
 
     def load_embedding(self):
         self.embedding = utils.pickle_load(self.result_path + 'model/' + 'embeddings' + '.pkl')
@@ -544,9 +544,19 @@ class PipelineOutput:
             else:
                 halfsets = np.concatenate(self.get('particles_halfsets'))
 
+            image_halfsets = np.concatenate(self.get('halfsets'))
+
+            # embedding_dict = self.embedding
             for entry in self.embedding:
                 for key in self.embedding[entry]:
-                    self.embedding[entry][key] = self.embedding[entry][key][halfsets]
+                    # Handling the case where the contrasts are not shared across tilts...
+                    # import pdb; pdb.set_trace()
+                    if entry == 'contrasts' and self.get('input_args').tilt_series and not self.get('input_args').shared_contrast_across_tilts:
+                        self.embedding[entry][key] = self.embedding[entry][key][image_halfsets]
+                    else:
+                        self.embedding[entry][key] = self.embedding[entry][key][halfsets]
+                # for key in self.embedding[entry]:
+                #     self.embedding[entry][key] = self.embedding[entry][key][halfsets]
         self.embedding_loaded = True
         return 
 
@@ -581,7 +591,7 @@ class PipelineOutput:
             vol_shape = self.get('volume_shape')
             PS = regularization.average_over_shells(np.abs((self.get('mean').reshape( self.get('volume_shape'))))**2, self.get('volume_shape'))
             noise_level = self.get('noise_var_used')
-            snr = utils.make_radial_image(PS/noise_level, vol_shape[:2])
+            snr = utils.make_radial_image(PS/noise_level, tuple(vol_shape[:2]))
             return snr
         elif key == 'variance':
             return utils.load_mrc(self.result_path + 'output/volumes/' + 'variance10' + '.mrc')
@@ -607,8 +617,12 @@ class PipelineOutput:
             else:
                 return utils.pickle_load(self.result_path + 'model/' + 'particles_halfsets' + '.pkl')
         elif key == 'input_args':
-            # Not sure why this is necessary all of the sudden...
-            return self.params['input_args'].item()
+            # Not sure why this is necessary all of the sudden... For backward compatibility
+            if parse_version(self.version) > parse_version('0.3') or isinstance(self.params['input_args'], np.ndarray):# type(self.params['input_args']) is n:
+                return self.params['input_args'].item()
+            else:
+                return self.params['input_args']
+            
         elif (key in self.params):
             return self.params[key]
         else:

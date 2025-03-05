@@ -4,19 +4,19 @@ from recovar import simulator, output, utils
 reload(simulator)
 import numpy as np
 import os
+import sys
 # atom_coeff_path = 'data/atom_coeffs_extended.json'
 # with open(os.path.join(os.path.dirname(__file__), atom_coeff_path), 'r') as f:
 #     atom_coeffs = json.load(f)
 
 
-def make_test_dataset(noise_level = 0.1, n_images = None):
+def make_test_dataset(output_dir, noise_level = 0.1, n_images = None):
     grid_size =64
     this_dir = os.path.dirname(__file__)
-    volume_folder_input =  this_dir+ '/recovar/data/vol'
+    volume_folder_input =  this_dir+ '/../data/vol'
     print(volume_folder_input)
-    output_folder = this_dir + '/test_dataset/'
+    output_folder = output_dir + '/test_dataset/'
     output.mkdir_safe(output_folder)
-
     outlier_file_input = None
     log_n = 3
     n_images = int(10**(log_n)) if n_images is None else n_images
@@ -30,8 +30,11 @@ def make_test_dataset(noise_level = 0.1, n_images = None):
                                 volume_radius = 0.7, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.2 * 0, contrast_std =0.1   , disc_type = 'linear_interp')
     
     print(f"Finished generating dataset {output_folder}")
-        
+
+def main():
+    this_dir = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
+    make_test_dataset(this_dir)
+    print("Done")        
 
 if __name__ == '__main__':
-    make_test_dataset()
-    print("Done")
+    main()

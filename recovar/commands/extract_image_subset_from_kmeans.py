@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 
+
 def extract_image_subset_from_kmeans(path_to_centers, kmeans_indices, inverse, output_path):
     assert os.path.exists(path_to_centers), f"Path to centers {path_to_centers} does not exist"
     assert path_to_centers.endswith('.pkl'), "path_to_centers must be a .pkl file"
@@ -30,7 +31,8 @@ def extract_image_subset_from_kmeans(path_to_centers, kmeans_indices, inverse, o
 
 
 
-if __name__ == '__main__':
+def main():
+
 
     def list_of_ints(arg):
         return list(map(int, arg.split(',')))
@@ -42,8 +44,22 @@ if __name__ == '__main__':
     parser.add_argument('-i', '--inverse', action='store_true', help='If provided, keep the images that correspond to kmeans centesr that are not in list of kmeans indices')
 
     args = parser.parse_args()
+
+    log_dir = os.path.dirname(args.output_path)
+    log_file = os.path.join(log_dir, "extract_subset_run.log")
+
+    logging.basicConfig(format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
+                        level=logging.INFO,
+                        force = True, 
+                        handlers=[
+        logging.FileHandler(f"{log_file}"),
+        logging.StreamHandler()])
+
     # Check that either subvol_idx, or mask or coordinate are provided
     extract_image_subset_from_kmeans(args.path_to_centers, args.kmeans_indices, args.inverse, args.output_path)
 
 
 
+
+if __name__ == '__main__':
+    main()
