@@ -108,7 +108,7 @@ def compute_embedding_and_save(recovar_result_dir):
     #     logger.error("z-dim not found in results. Options are:" + ','.join(str(e) for e in results['zs'].keys()))
 
 
-if __name__ == "__main__":
+def main():
     raise NotImplementedError("This script is not ready yet")
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
@@ -116,3 +116,6 @@ if __name__ == "__main__":
                     output_folder = args.outdir, zdim=args.zdim,
                     n_clusters = args.n_clusters, n_paths= args.n_trajectories, 
                     skip_umap = args.skip_umap, q=args.q, n_std=args.n_std )
+
+if __name__ == "__main__":
+    main()

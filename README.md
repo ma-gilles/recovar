@@ -1,6 +1,5 @@
 # RECOVAR: Regularized covariance estimation for cryo-EM heterogeneity analysis
 
-RECOVAR is a software tool for analyzing different conformations in heterogeneous cryo-EM and cryo-ET datasets. RECOVAR can reconstruct high-resolution volumes, estimate conformational density and low free-energy motions, and automatically identify subsets of images with a particular volume feature. 
 
 <details><summary>Click here to see more details about the features RECOVAR</summary>
 
@@ -23,15 +22,15 @@ Running RECOVAR:
 * [1. Preprocessing](#i-preprocessing)
 * [2. Specifying a mask](#ii-specifying-a-real-space-mask)
 * [3. Running the pipeline](#iii-running-the-recovar-pipeline)
-  - Uses [`pipeline.py`](#iii-running-the-recovar-pipeline)
+  - Uses [`recovar pipeline`](#iii-running-the-recovar-pipeline)
 * [4. Analyzing results](#iv-analyzing-results)
-  - Uses [`analyze.py`](#usage-of-analyzepy)
-  - Generating volumes at specific points: [`compute_state.py`](#generating-volumes-at-specific-points-in-latent-space)
-  - Generating and analyzing trajectories: [`compute_trajectory.py`](#generating-and-analyzing-trajectories-in-latent-space)
+  - Uses [`analyze`](#usage-of-analyzepy)
+  - Generating volumes at specific points: [`compute_state`](#generating-volumes-at-specific-points-in-latent-space)
+  - Generating and analyzing trajectories: [`compute_trajectory`](#generating-and-analyzing-trajectories-in-latent-space)
   - Extracting image subsets:
-    - Based on volumes: [`extract_image_subset.py`](#extracting-image-subset-based-on-volumes)
-    - Based on k-means clusters: [`extract_image_subset_from_kmeans.py`](#command-extract_image_subset_from_kmeans)
-  - Estimating conformational density: [`estimate_conformational_density.py`](#command-estimate_conformational_densitypy)
+    - Based on volumes: [`extract_image_subset`](#extracting-image-subset-based-on-volumes)
+    - Based on k-means clusters: [`extract_image_subset_from_kmeans`](#command-extract_image_subset_from_kmeans)
+  - Estimating conformational density: [`estimate_conformational_density`](#command-estimate_conformational_densitypy)
 * [5. Visualizing results](#v-visualizing-results)
 
 Other:
@@ -95,8 +94,7 @@ If you have an internet connection, you can copy paste the following commands be
 It is recommended to test your installation before running on a real dataset. You can do this by running this on a GPU-capable device:
 
     conda activate recovar
-    cd recovar
-    python run_test_dataset.py
+    recovar run_test_dataset
 
 see details in [testing your installation](#small-test-dataset).
 
@@ -224,15 +222,15 @@ If you don't input a mask, you can ask the software to estimate one using the tw
 To run the RECOVAR pipeline, ensure that the input images (.mrcs), poses (.pkl), and CTF parameters (.pkl) are prepared. Then, execute the following command:
 
 ```bash
-$ python [recovar_directory]/pipeline.py particles.128.mrcs -o output_test --ctf ctf.pkl --poses poses.pkl --mask [path_to_your_mask.mrc]
+$ recovar pipeline particles.128.mrcs -o output_test --ctf ctf.pkl --poses poses.pkl --mask [path_to_your_mask.mrc]
 ```
 
 To view a list of all available options and their usage, use the help command:
 
-<details><summary><code>$ python pipeline.py -h</code></summary>
+<details><summary><code>$ recovar pipeline -h</code></summary>
 
 ```
-usage: pipeline.py [-h] -o OUTDIR [--zdim ZDIM] --poses POSES --ctf pkl --mask mrc [--focus-mask mrc] 
+usage: pipeline [-h] -o OUTDIR [--zdim ZDIM] --poses POSES --ctf pkl --mask mrc [--focus-mask mrc] 
                    [--mask-dilate-iter MASK_DILATE_ITER] [--correct-contrast] [--ignore-zero-frequency] 
                    [--ind PKL] [--uninvert-data UNINVERT_DATA] [--lazy] [--datadir DATADIR] [--n-images N_IMAGES] 
                    [--padding PADDING] [--halfsets HALFSETS] [--keep-intermediate] [--noise-model NOISE_MODEL] 
@@ -315,18 +313,18 @@ Dataset loading:
 
 After the pipeline is run, you can find the mean, eigenvectors, variance maps, and embeddings in the `outdir/results` directory, where outdir is the option given above by `-o`. You can run some standard analysis by running:
 
-    python analyze.py [pipeline_output_dir] --zdim=10
+    recovar analyze [pipeline_output_dir] --zdim=10
 
 It will run k-means, generate volumes corresponding to the centers, generate trajectories between pairs of cluster centers, and run UMAP. See more input details below.
 
-If you want to sample many points of the distribution (e.g 100-200), and want to do it fast, you can use `--n-clusters=200` and reduce run time (at the cost of resolution) with `--n-bins=10`. Afterwards, you can recompute the same cluster to higher resolution using `compute_state.py`.
+If you want to sample many points of the distribution (e.g 100-200), and want to do it fast, you can use `--n-clusters=200` and reduce run time (at the cost of resolution) with `--n-bins=10`. Afterwards, you can recompute the same cluster to higher resolution using `compute_state`.
 
-### Usage of `analyze.py`
+### Usage of `analyze`
 
 **Command**:
 
 ```bash
-python analyze.py [result_dir] --zdim=10
+recovar analyze [result_dir] --zdim=10
 ```
 
 **Positional Arguments:**
@@ -358,25 +356,25 @@ python analyze.py [result_dir] --zdim=10
 
 ### Generating Volumes at Specific Points in Latent Space
 
-To generate volumes at specific coordinates in latent space, use the `compute_state.py` script. Ensure you specify the coordinates using a `.txt` file readable by `np.loadtxt` and provide a B-factor if sharpening is required.
+To generate volumes at specific coordinates in latent space, use the `compute_state` script. Ensure you specify the coordinates using a `.txt` file readable by `np.loadtxt` and provide a B-factor if sharpening is required.
 
 **Command**:
 
 ```bash
-python compute_state.py [pipeline_output_dir] -o [volume_output_dir] --latent-points [zfiles.txt] --Bfactor=[Bfac]
+recovar compute_state [pipeline_output_dir] -o [volume_output_dir] --latent-points [zfiles.txt] --Bfactor=[Bfac]
 ```
 
 **Positional Arguments:**
 
-- `result_dir`: The output directory provided to `pipeline.py` using the `--o` option. For `analyze.py`, this is set by default to `result_dir/output/analysis_[zdim]`.
+- `result_dir`: The output directory provided to `pipeline` using the `--o` option. For `analyze`, this is set by default to `result_dir/output/analysis_[zdim]`.
 
 **Required Arguments:**
 
-- `--latent-points LATENT_POINTS`: Path to latent points (`.txt` file). You can use the output of k-means, such as `output/analysis_2/centers.txt` from `analyze.py`, or create your own latent points. The file should have a shape of `(n_points, zdim)`.
+- `--latent-points LATENT_POINTS`: Path to latent points (`.txt` file). You can use the output of k-means, such as `output/analysis_2/centers.txt` from `analyze`, or create your own latent points. The file should have a shape of `(n_points, zdim)`.
 
 <details><summary>Optional Arguments</summary>
 
-- `-o OUTDIR, --outdir OUTDIR`: Output directory to save all outputs. For `analyze.py`, it defaults to `result_dir/output/analysis_[zdim]`. For other functions, this argument is required.
+- `-o OUTDIR, --outdir OUTDIR`: Output directory to save all outputs. For `analyze`, it defaults to `result_dir/output/analysis_[zdim]`. For other functions, this argument is required.
 - `--Bfactor BFACTOR`: B-factor for sharpening. The B-factor of the consensus reconstruction is likely a good guess. Default is 0, meaning no sharpening.
 - `--n-bins N_BINS`: Number of bins for kernel regression. Default is 50, which works well for most cases. This setting was used to generate all figures in the paper.
 - `--maskrad-fraction MASKRAD_FRACTION`: Radius of mask used in kernel regression. Default is 20, meaning `radius = grid_size/20` pixels or `grid_size * voxel_size / 20` Å. The default setting works well for most cases. This was used for all figures in the paper. If using cryo-ET or very noisy (or very non-noisy) data, you might want to adjust this value accordingly. For low-resolution data (less than 128x128 images), consider increasing this value. For high-resolution data (more than 512x512 images), consider decreasing it.
@@ -384,8 +382,8 @@ python compute_state.py [pipeline_output_dir] -o [volume_output_dir] --latent-po
 - `--zdim1`: Enable this if dimension 1 is used. This setting addresses a specific issue with `np.loadtxt`.
 - `--no-z-regularization`: If set, uses latent variables without regularization.
 - `--lazy`: Enables lazy loading when the full dataset is too large to fit in memory.
-- `--particles PARTICLES`: Path to the particle stack dataset. If not specified, the same stack as provided to `pipeline.py` will be used. Use this option to utilize a higher-resolution stack.
-- `--datadir DATADIR`: Path prefix to the particle stack if loading relative paths from a `.star` or `.cs` file. Similar to the `--datadir` option in `pipeline.py`. If not specified, the same stack as provided to `pipeline.py` will be used. Use this option to load a higher-resolution stack.
+- `--particles PARTICLES`: Path to the particle stack dataset. If not specified, the same stack as provided to `pipeline` will be used. Use this option to utilize a higher-resolution stack.
+- `--datadir DATADIR`: Path prefix to the particle stack if loading relative paths from a `.star` or `.cs` file. Similar to the `--datadir` option in `pipeline`. If not specified, the same stack as provided to `pipeline` will be used. Use this option to load a higher-resolution stack.
 
 </details>
 
@@ -393,18 +391,18 @@ python compute_state.py [pipeline_output_dir] -o [volume_output_dir] --latent-po
 
 ### Generating and Analyzing Trajectories in Latent Space
 
-To compute a high-density (low free energy) trajectory in latent space and generate corresponding volumes, use the `compute_trajectory.py` script.
+To compute a high-density (low free energy) trajectory in latent space and generate corresponding volumes, use the `compute_trajectory` script.
 
 **Command**:
 
 ```bash
-python compute_trajectory.py [pipeline_output_dir] -o [volume_output_dir] --zdim [dimension] [options]
+recovar compute_trajectory [pipeline_output_dir] -o [volume_output_dir] --zdim [dimension] [options]
 ```
 
 #### Positional Arguments:
 
 - **`result_dir`**:
-  The output directory provided to `pipeline.py` using the `-o` option. This is where the results from `pipeline.py` are stored.
+  The output directory provided to `pipeline` using the `-o` option. This is where the results from `pipeline` are stored.
 
 #### Required Arguments:
 
@@ -432,7 +430,7 @@ To define the start and end points of the trajectory in latent space, you need t
 #### Optional Arguments:
 
 - **`--density DENSITY`**:
-  Path to the density file saved in `.pkl` format, containing keys `'density'` and `'latent_space_bounds'`. This is typically generated by `estimate_conformational_density.py`, e.g., `density/deconv_density_knee.pkl`.
+  Path to the density file saved in `.pkl` format, containing keys `'density'` and `'latent_space_bounds'`. This is typically generated by `estimate_conformational_density`, e.g., `density/deconv_density_knee.pkl`.
 
 - **`--n-vols-along-path N_VOLS_ALONG_PATH`**:
   Number of volumes to compute along the trajectory. Default is 6.
@@ -453,7 +451,7 @@ To define the start and end points of the trajectory in latent space, you need t
   Use lazy loading if the dataset is too large to fit in memory.
 
 - **`--particles PARTICLES`**:
-  Path to the particle stack dataset. If not specified, the same stack used in `pipeline.py` will be used. Use this option if you want to use a higher-resolution stack.
+  Path to the particle stack dataset. If not specified, the same stack used in `pipeline` will be used. Use this option if you want to use a higher-resolution stack.
 
 - **`--datadir DATADIR`**:
   Path prefix to particle stack if loading relative paths from a `.star` or `.cs` file.
@@ -468,10 +466,10 @@ To define the start and end points of the trajectory in latent space, you need t
 
 1. **Compute trajectory using indices in a coordinate file**:
 
-   If you have a coordinate file (e.g., `kmeans_center_coords.txt` generated by `analyze.py`), you can specify which lines (points) to use as endpoints using `--ind`.
+   If you have a coordinate file (e.g., `kmeans_center_coords.txt` generated by `analyze`), you can specify which lines (points) to use as endpoints using `--ind`.
 
    ```bash
-   python compute_trajectory.py [pipeline_output_dir] -o [volume_output_dir] --zdim [dimension] \
+   recovar compute_trajectory [pipeline_output_dir] -o [volume_output_dir] --zdim [dimension] \
        --density [density.pkl] --endpts kmeans_center_coords.txt --ind 0,1
    ```
 
@@ -482,7 +480,7 @@ To define the start and end points of the trajectory in latent space, you need t
    If your endpoint file has exactly two lines, you can simply specify:
 
    ```bash
-   python compute_trajectory.py [pipeline_output_dir] -o [volume_output_dir] --zdim [dimension] \
+   recovar compute_trajectory [pipeline_output_dir] -o [volume_output_dir] --zdim [dimension] \
        --density [density.pkl] --endpts endpoints.txt
    ```
 
@@ -493,13 +491,13 @@ To define the start and end points of the trajectory in latent space, you need t
    If you have separate `.txt` files for the starting point (`z_st.txt`) and ending point (`z_end.txt`):
 
    ```bash
-   python compute_trajectory.py [pipeline_output_dir] -o [volume_output_dir] --zdim [dimension] \
+   recovar compute_trajectory [pipeline_output_dir] -o [volume_output_dir] --zdim [dimension] \
        --density [density.pkl] --z_st z_st.txt --z_end z_end.txt
    ```
 
 #### Additional Notes:
 
-- The `--density` option is important if you want to compute trajectories that follow regions of high conformational density (low free energy). The density file can be generated using `estimate_conformational_density.py`.
+- The `--density` option is important if you want to compute trajectories that follow regions of high conformational density (low free energy). The density file can be generated using `estimate_conformational_density`.
 
 - Ensure that the `zdim` matches the dimension used in the pipeline and in density estimation.
 
@@ -510,13 +508,13 @@ To define the start and end points of the trajectory in latent space, you need t
 For more details and options, you can view the help message by running:
 
 ```bash
-python compute_trajectory.py -h
+recovar compute_trajectory -h
 ```
 
 **Help Output:**
 
 ```
-usage: compute_trajectory.py [-h] -o OUTDIR [--zdim ZDIM] [--Bfactor BFACTOR] [--n-bins N_BINS]
+usage: compute_trajectory [-h] -o OUTDIR [--zdim ZDIM] [--Bfactor BFACTOR] [--n-bins N_BINS]
                              [--maskrad-fraction MASKRAD_FRACTION] [--n-min-images N_MIN_IMAGES] [--zdim1]
                              [--no-z-regularization] [--override_z_regularization] [--lazy]
                              [--particles PARTICLES] [--datadir DATADIR] [--n-vols-along-path N_VOLS_ALONG_PATH]
@@ -525,7 +523,7 @@ usage: compute_trajectory.py [-h] -o OUTDIR [--zdim ZDIM] [--Bfactor BFACTOR] [-
                              result_dir
 
 positional arguments:
-  result_dir            Output directory provided to pipeline.py using the --o option.
+  result_dir            Output directory provided to pipeline using the --o option.
 
 optional arguments:
   -h, --help            Show this help message and exit.
@@ -545,7 +543,7 @@ optional arguments:
                         Override the z regularization setting from the pipeline. Use with caution.
   --lazy                Use lazy loading if the dataset is too large to fit in memory.
   --particles PARTICLES
-                        Particle stack dataset. If not specified, the same stack as provided to pipeline.py will be used. Use this option if you want to use a higher resolution stack.
+                        Particle stack dataset. If not specified, the same stack as provided to pipeline will be used. Use this option if you want to use a higher resolution stack.
   --datadir DATADIR     Path prefix to particle stack if loading relative paths from a .star or .cs file.
   --n-vols-along-path N_VOLS_ALONG_PATH
                         Number of volumes to compute along each trajectory (default 6)
@@ -565,7 +563,7 @@ optional arguments:
 
 This command will automatically figure out which images produced a particular feature of a volume generated by RECOVAR. You may want to use these images for a downstream tasks, or to re-import into RELION/cryosparc.
 
-To do this, you should use the command `extract_image_subset.py` as described below, which will output a .pkl file that contains the corresponding subset of images.
+To do this, you should use the command `extract_image_subset` as described below, which will output a .pkl file that contains the corresponding subset of images.
 You can then use `cryodrgn_utils write_star` and `cryodrgn write_cs` to do that after running `extract_image_subset`.
 
 E.g., you can do 
@@ -582,14 +580,14 @@ The volume generation method of RECOVAR uses different sets of images to generat
 ### Usage
 
 ```bash
-python extract_image_subset.py --input-dir [input_directory] --output [output_path] --subvol-idx [subvolume_idx] --mask [mask_file] --coordinate [x,y,z]
+recovar extract_image_subset --input-dir [input_directory] --output [output_path] --subvol-idx [subvolume_idx] --mask [mask_file] --coordinate [x,y,z]
 ```
 
 ### Parameters
 
 - **`--input-dir`** *(required)*: 
   - Type: `str`
-  - Description: Path to the directory containing the volume data, typically generated by volume-processing scripts like analyze, compute_state, or compute_trajectory. input-dir should point to a folder that looks like `\vol00**\`. For example, if you ran pipeline.py then analyze.py --zdim 20, this folder should exist: `[pipeline_output_dir]/output/analysis_20/centers/vol0000/`, which contains all the parameters of the volume stored in `[pipeline_output_dir]/output/analysis_20/centers/all_volumes/vol0000.mrc`.
+  - Description: Path to the directory containing the volume data, typically generated by volume-processing scripts like analyze, compute_state, or compute_trajectory. input-dir should point to a folder that looks like `\vol00**\`. For example, if you ran pipeline then analyze --zdim 20, this folder should exist: `[pipeline_output_dir]/output/analysis_20/centers/vol0000/`, which contains all the parameters of the volume stored in `[pipeline_output_dir]/output/analysis_20/centers/all_volumes/vol0000.mrc`.
 
 - **`--output`** *(required)*:
   - Type: `str`
@@ -612,19 +610,19 @@ python extract_image_subset.py --input-dir [input_directory] --output [output_pa
 1. **Extracting by Subvolume Index:**
 
    ```bash
-   python extract_image_subset.py --input-dir "/path/to/volume_data" --output "/path/to/output_indices.pkl" --subvol-idx 3
+   recovar extract_image_subset --input-dir "/path/to/volume_data" --output "/path/to/output_indices.pkl" --subvol-idx 3
    ```
 
 2. **Extracting by Mask:**
 
    ```bash
-   python extract_image_subset.py --input-dir "/path/to/volume_data" --output "/path/to/output_indices.pkl" --mask "/path/to/mask.mrc"
+   recovar extract_image_subset --input-dir "/path/to/volume_data" --output "/path/to/output_indices.pkl" --mask "/path/to/mask.mrc"
    ```
 
 3. **Extracting by Coordinates:**
 
    ```bash
-   python extract_image_subset.py --input-dir "/path/to/volume_data" --output "/path/to/output_indices.pkl" --coordinate 50,50,50
+   recovar extract_image_subset --input-dir "/path/to/volume_data" --output "/path/to/output_indices.pkl" --coordinate 50,50,50
    ```
 
 ### Notes
@@ -642,7 +640,7 @@ This command extracts a subset of images based on the k-means clustering indices
 ### Usage
 
 ```bash
-python extract_image_subset_from_kmeans.py [path_to_centers] [output_path] [kmeans_indices] [-i]
+recovar extract_image_subset_from_kmeans [path_to_centers] [output_path] [kmeans_indices] [-i]
 ```
 
 ### Parameters
@@ -668,13 +666,13 @@ python extract_image_subset_from_kmeans.py [path_to_centers] [output_path] [kmea
 1. **Extracting images corresponding to specific k-means clusters:**
 
    ```bash
-   python extract_image_subset_from_kmeans.py /path/to/centers.pkl /path/to/output_indices.pkl 20,30,50
+   recovar extract_image_subset_from_kmeans /path/to/centers.pkl /path/to/output_indices.pkl 20,30,50
    ```
 
 2. **Excluding specific k-means clusters:**
 
    ```bash
-   python extract_image_subset_from_kmeans.py /path/to/centers.pkl /path/to/output_indices.pkl 20,30,50 -i
+   recovar extract_image_subset_from_kmeans /path/to/centers.pkl /path/to/output_indices.pkl 20,30,50 -i
    ```
 
 ### Notes
@@ -684,7 +682,7 @@ python extract_image_subset_from_kmeans.py [path_to_centers] [output_path] [kmea
 - Only one of the `--inverse` option should be used. If provided, the images not in the specified clusters will be saved.
 
 
-## Command: `estimate_conformational_density.py`
+## Command: `estimate_conformational_density`
 
 ### Overview
 
@@ -692,20 +690,20 @@ This script estimates the conformational density from RECOVAR results using a de
 
 Note that this conformational density works better if you have a relatively simple distribution, which can be well represented in a small number of PCS (<=4). Often this is achievable by using focused mask to focus the analysis on a part of the biomoecule.
 
-Note that the density estimation requires a regularization parameter $\alpha$ in the paper. By default, the code will try a range of different $\alpha$'s and estimate the correct one by finding the knee in the L-curve. This does not always work great, so you should look at the `all_densities.png` plot and the `L-curve.png` plots to make sure the densities don't look overfit at the selected knee. The estimated densities with all values of $\alpha$ are stored in `all_densities/`, and you can select the corresponding one if you do not think the knee selection is accurate, e.g. if you think the `a[3]` is the most accurate density on the `all_densities.png` plot, select the density `all_densities/deconv_density_3.pkl` for further analysis (e.g. by passing it to `compute_trajectory.py`).
+Note that the density estimation requires a regularization parameter $\alpha$ in the paper. By default, the code will try a range of different $\alpha$'s and estimate the correct one by finding the knee in the L-curve. This does not always work great, so you should look at the `all_densities.png` plot and the `L-curve.png` plots to make sure the densities don't look overfit at the selected knee. The estimated densities with all values of $\alpha$ are stored in `all_densities/`, and you can select the corresponding one if you do not think the knee selection is accurate, e.g. if you think the `a[3]` is the most accurate density on the `all_densities.png` plot, select the density `all_densities/deconv_density_3.pkl` for further analysis (e.g. by passing it to `compute_trajectory`).
 
 <!-- See the RECOVAR paper for the theory and explanation of the outputs. -->
 
 ### Usage
 
 ```bash
-python estimate_conformational_density.py [recovar_result_dir] 
+recovar estimate_conformational_density [recovar_result_dir] 
 ```
 
 **Positional Arguments:**
 
 - `recovar_result_dir`  
-  Directory containing RECOVAR results provided to `pipeline.py`.
+  Directory containing RECOVAR results provided to `pipeline`.
 
 
 
@@ -715,7 +713,7 @@ python estimate_conformational_density.py [recovar_result_dir]
 Dimension of PCA space in which the density is estimated (default 4). The runtime increases exponentially with this number, so <=5 is recommended.
 
 - `--z_dim_used Z_DIM_USED`  
-  Dimension of latent variable used (default 4). Should be at least as big as pca_dim, and should be one of the dims used in analyze.py
+  Dimension of latent variable used (default 4). Should be at least as big as pca_dim, and should be one of the dims used in analyze
 
 - `--output_dir OUTPUT_DIR`  
   Directory to save the density estimation results. Default is `recovar_result_dir/density/`.
@@ -728,7 +726,7 @@ Dimension of PCA space in which the density is estimated (default 4). The runtim
   Number of discretization points in each dimension for the grid density estimation (default: 50). For example, `50^4` points for a 4-dimensional grid.
 
 - `--alphas ALPHAS`  
-  List of alphas for regularization. Provide as space-separated values, e.g., `--alphas 1e-9 1e-8 1e-7`. If not provided, defaults to values from `1e-9` to `1e1` in logarithmic spacing.
+  List of alphas for regularization. Provide as space-separated values, e.g., `--alphas 1e-9 1e-8 1e-7 1e-1`. If not provided, defaults to values from `1e-9` to `1e1` in logarithmic spacing.
 
 - `--percentile_bound PERCENTILE_BOUND`  
   Reject zs with coordinates above this percentile when deciding the bounds of the grid (default: 1%).
@@ -740,13 +738,13 @@ Dimension of PCA space in which the density is estimated (default 4). The runtim
 1. **Basic Density Estimation:**
 
    ```bash
-   python estimate_conformational_density.py /path/to/recovar_results --pca_dim 3
+   recovar estimate_conformational_density /path/to/recovar_results --pca_dim 3
    ```
 
 2. **Advanced Example with Custom Parameters:**
 
    ```bash
-   python estimate_conformational_density.py /path/to/recovar_results --z_dim_used 4 \
+   recovar estimate_conformational_density /path/to/recovar_results --z_dim_used 4 \
     --pca_dim 2 \
      --output_dir /path/to/output \
      --percentile_reject 15 \
@@ -761,7 +759,7 @@ Dimension of PCA space in which the density is estimated (default 4). The runtim
 
 - The dimensionality of the deconvolved space (`--pca_dim`) determines the runtime complexity, which grows exponentially with higher dimensions.
 
-- Ensure that the correct `recovar_result_dir` is provided, as it should contain the necessary results generated by `pipeline.py`.
+- Ensure that the correct `recovar_result_dir` is provided, as it should contain the necessary results generated by `pipeline`.
 
 - The `--alphas` parameter allows for fine-tuning regularization, and the script will automatically select an optimal alpha based on the L-curve.
 
@@ -779,7 +777,7 @@ The script will create a `density/` directory inside the `recovar_result_dir` (o
 
 ### Output Structure
 
-After running the RECOVAR pipeline and the subsequent analysis scripts (e.g., `analyze.py`, `compute_state.py`, `compute_trajectory.py`, `estimate_conformational_density.py`), the outputs will be organized in a structured directory tree. Understanding this structure will help you navigate the results and locate the files of interest.
+After running the RECOVAR pipeline and the subsequent analysis scripts (e.g., `analyze`, `compute_state`, `compute_trajectory`, `estimate_conformational_density`), the outputs will be organized in a structured directory tree. Understanding this structure will help you navigate the results and locate the files of interest.
 
 If you are running on a remote server and wish to visualize the results locally, it is recommended to copy only the `[output_dir]/output` directory to your local machine, as the model files can be quite large. You can then use visualization tools like ChimeraX to inspect the generated volumes.
 
@@ -789,9 +787,9 @@ Below is the updated directory tree structure (click to expand):
 
 ```
 .
-├── analysis_2_noreg                   # Generated by `analyze.py` with zdim=2
+├── analysis_2_noreg                   # Generated by `analyze` with zdim=2
 │   ├── contrast_histogram.png         # Histogram of contrast values
-│   ├── density_plots                  # Density plots from `estimate_conformational_density.py`
+│   ├── density_plots                  # Density plots from `estimate_conformational_density`
 │   │   └── density_01.png
 │   ├── density_plots_sliced           # Sliced density plots
 │   │   └── density_01.png
@@ -824,8 +822,8 @@ Below is the updated directory tree structure (click to expand):
 │   ├── PCA                            # Principal Component Analysis results
 │   │   ├── PC_01.png
 │   │   └── PC_01no_annotate.png
-│   ├── run.log                        # Log file from `analyze.py`
-│   ├── traj0                          # Trajectory directory generated by `compute_trajectory.py`
+│   ├── run.log                        # Log file from `analyze`
+│   ├── traj0                          # Trajectory directory generated by `compute_trajectory`
 │   │   ├── all_volumes
 │   │   │   ├── locres0000.mrc
 │   │   │   ├── locres0001.mrc
@@ -863,7 +861,7 @@ Below is the updated directory tree structure (click to expand):
 │       ├── sns_hex.png
 │       └── umap_embedding.pkl
 ├── command.txt                        # Command used to run the pipeline
-├── density                            # Generated by `estimate_conformational_density.py`
+├── density                            # Generated by `estimate_conformational_density`
 │   ├── all_densities
 │   │   ├── deconv_density_0.pkl
 │   │   ├── deconv_density_1.pkl
@@ -876,10 +874,10 @@ Below is the updated directory tree structure (click to expand):
 │   │   ├── deconv_density_8.pkl
 │   │   ├── deconv_density_9.pkl
 │   │   └── deconv_density_10.pkl
-│   ├── all_densities.png              # Visualization of densities across alphas
+│   ├── all_densities.png              # Visualization of all densities across alphas
 │   ├── deconv_density_knee.pkl        # Optimal density selected via L-curve
 │   └── Lcurve.png                     # L-curve plot for regularization selection
-├── model                              # Generated by `pipeline.py`
+├── model                              # Generated by `pipeline`
 │   ├── covariance_cols.pkl            # Covariance matrices
 │   ├── embeddings.pkl                 # Embeddings of the data
 │   ├── halfsets.pkl                   # Information about half-sets
@@ -891,7 +889,7 @@ Below is the updated directory tree structure (click to expand):
 │   │   ├── eigenvalues.png            # Eigenvalues plot
 │   │   ├── mean_fsc.png               # Fourier Shell Correlation of the mean volume
 │   │   └── mean_variance_eigenvolume_plots.png
-│   └── volumes                        # Volumes generated by `pipeline.py`
+│   └── volumes                        # Volumes generated by `pipeline`
 │       ├── dilated_mask.mrc           # Dilated version of the mask
 │       ├── eigen_neg*.mrc             # Negative eigenvolumes (principal components)
 │       ├── eigen_pos*.mrc             # Positive eigenvolumes (principal components)
@@ -905,7 +903,7 @@ Below is the updated directory tree structure (click to expand):
 │       ├── variance10.mrc             # Variance map for zdim=10
 │       └── variance20.mrc             # Variance map for zdim=20
 ├── run.log                            # Log file from the pipeline execution
-└── trajectory1                        # Generated by `compute_trajectory.py`
+└── trajectory1                        # Generated by `compute_trajectory`
     ├── density
     │   └── density_01.png
     ├── path.json                      # Trajectory path in latent space
@@ -917,7 +915,7 @@ Below is the updated directory tree structure (click to expand):
 
 #### Directory and File Descriptions
 
-- **`analysis_2_noreg/`**: Results from `analyze.py` with `zdim=2` and no regularization.
+- **`analysis_2_noreg/`**: Results from `analyze` with `zdim=2` and no regularization.
   - **`contrast_histogram.png`**: Histogram of estimated contrast values across images.
   - **`density_plots/`**: Density plots generated from conformational density estimation.
   - **`kmeans_center_coords.txt`**: Coordinates of k-means cluster centers in latent space.
@@ -931,7 +929,7 @@ Below is the updated directory tree structure (click to expand):
   - **`PCA/`**: Principal Component Analysis plots.
     - `PC_01.png`: Plot of the first principal component.
     - `PC_01no_annotate.png`: Same plot without annotations.
-  - **`traj0/`**: Trajectory results from `compute_trajectory.py`.
+  - **`traj0/`**: Trajectory results from `compute_trajectory`.
     - **`all_volumes/`**: Volumes along the trajectory.
     - **`density/`**: Density plots along the trajectory.
     - **`path.json`**: JSON file containing the trajectory path.
@@ -944,14 +942,14 @@ Below is the updated directory tree structure (click to expand):
 
 - **`command.txt`**: Contains the command used to run the pipeline, useful for record-keeping and reproducing results.
 
-- **`density/`**: Generated by `estimate_conformational_density.py`.
+- **`density/`**: Generated by `estimate_conformational_density`.
   - **`all_densities/`**: Deconvolved densities for different regularization parameters (`alphas`).
     - `deconv_density_*.pkl`: Density files for each alpha value.
   - **`all_densities.png`**: Visualization of all densities across different alphas.
   - **`deconv_density_knee.pkl`**: Deconvolved density corresponding to the optimal regularization parameter (knee point).
   - **`Lcurve.png`**: L-curve plot used for selecting the optimal alpha.
 
-- **`model/`**: Generated by `pipeline.py`.
+- **`model/`**: Generated by `pipeline`.
   - `covariance_cols.pkl`: Covariance matrices of the columns.
   - `embeddings.pkl`: Embeddings of the data.
   - `halfsets.pkl`: Information about half-sets used in the analysis.
@@ -964,7 +962,7 @@ Below is the updated directory tree structure (click to expand):
     - `eigenvalues.png`: Plot showing the decay of eigenvalues.
     - `mean_fsc.png`: Fourier Shell Correlation of the mean volume.
     - `mean_variance_eigenvolume_plots.png`: Combined plots of mean, variance, and eigenvolumes.
-  - **`volumes/`**: Volumes generated by `pipeline.py`.
+  - **`volumes/`**: Volumes generated by `pipeline`.
     - `mean.mrc`: The mean volume reconstructed from the data.
     - `mean_filt.mrc`: Filtered mean volume.
     - `mean_half1_unfil.mrc` & `mean_half2_unfil.mrc`: Unfiltered mean volumes from half-sets.
@@ -976,7 +974,7 @@ Below is the updated directory tree structure (click to expand):
 
 - **`run.log`**: Log file containing messages and errors during the pipeline execution.
 
-- **`trajectory1/`**: Generated by `compute_trajectory.py`.
+- **`trajectory1/`**: Generated by `compute_trajectory`.
   - **`density/`**: Density plots along the trajectory.
     - `density_01.png`: Density plot for the first pair of dimensions.
   - **`path.json`**: JSON file containing the trajectory path in latent space.
@@ -985,21 +983,21 @@ Below is the updated directory tree structure (click to expand):
 
 #### Functions and Their Outputs
 
-- **`pipeline.py`**: Generates the `model/` directory and the `output/` directory.
+- **`pipeline`**: Generates the `model/` directory and the `output/` directory.
   - Computes the mean volume, variance maps, eigenvolumes, and saves necessary parameters and embeddings.
   - Generates plots such as eigenvalues and FSC curves.
 
-- **`analyze.py`**: Creates the `analysis_[zdim]_noreg/` directories.
+- **`analyze`**: Creates the `analysis_[zdim]_noreg/` directories.
   - Performs k-means clustering, generating cluster center volumes, and computing UMAP and PCA embeddings.
   - Generates contrast histograms and density plots.
 
-- **`compute_state.py`**: Generates volumes at specific points in latent space provided by the user.
+- **`compute_state`**: Generates volumes at specific points in latent space provided by the user.
   - Outputs are stored in directories like `vol****/` under `kmeans_center_volumes/` or specified output directory.
 
-- **`compute_trajectory.py`**: Produces the `traj0/` directory within `analysis_[zdim]_noreg/` or a separate trajectory directory.
+- **`compute_trajectory`**: Produces the `traj0/` directory within `analysis_[zdim]_noreg/` or a separate trajectory directory.
   - Contains volumes along a trajectory in latent space, density plots, and the trajectory path (`path.json`).
 
-- **`estimate_conformational_density.py`**: Creates the `density/` directory with deconvolved density estimations, plots, and related data.
+- **`estimate_conformational_density`**: Creates the `density/` directory with deconvolved density estimations, plots, and related data.
   - Computes the conformational density in the principal component space and selects the optimal regularization parameter using the L-curve method.
 
 #### Copying and Visualizing Results
@@ -1017,39 +1015,10 @@ You can visualize the results using [this notebook](output_visualization.ipynb),
 * decay of eigenvalues to help you pick the right `zdim`
 * and standard clustering visualization (borrowed from the cryoDRGN output).
 
-<!-- 
-## VI. Generating additional trajectories
-
-Usage example:
-
-    python [recovar_dir]/compute_trajectory.py output-dir --zdim=4 --endpts test-new-mask/output/analysis_4/kmeans_40/centers.pkl --kmeans-ind=0,10 -o path_test
-
-<details><summary><code>$ python compute_trajectory.py -h</code></summary>
-
-    usage: compute_trajectory.py [-h] [-o OUTDIR] [--kmeans-ind KMEANS_IND] [--endpts ENDPTS_FILE] [--zdim ZDIM] [--q <class 'float'>]
-                                [--n-vols <class 'int'>]
-                                result_dir
-
-    positional arguments:
-    result_dir            result dir (output dir of pipeline)
-
-    optional arguments:
-    -h, --help            show this help message and exit
-    -o OUTDIR, --outdir OUTDIR
-                            Output directory to save model
-    --kmeans-ind KMEANS_IND
-                            indices of k means centers to use as endpoints
-    --endpts ENDPTS_FILE  end points file. It storing z values, it should be a .txt file with 2 rows, and if it is from kmeans, it should be a .pkl file
-                            (generated by analyze)
-    --zdim ZDIM           Dimension of latent variable (a single int, not a list)
-    --q <class 'float'>   quantile used for reweighting (default = 0.95)
-    --n-vols <class 'int'>
-                            number of volumes produced at regular interval along the path
-</details> -->
 
 ## Small test dataset
 
-To verify that RECOVAR is installed properly and functioning correctly, you can run a small test using a synthetic dataset. The script `run_test_dataset.py` is already included in the repository and will:
+To verify that RECOVAR is installed properly and functioning correctly, you can run a small test using a synthetic dataset. The script `run_test_dataset` is already included in the repository and will:
 
 - Generate a small synthetic dataset.
 - Run the RECOVAR pipeline on this dataset.
@@ -1072,7 +1041,7 @@ To verify that RECOVAR is installed properly and functioning correctly, you can 
    Navigate to the directory where RECOVAR is installed and execute:
 
    ```bash
-   python run_test_dataset.py
+   recovar run_test_dataset
    ```
 
    This script is located in the root directory of the RECOVAR repository.
@@ -1081,11 +1050,11 @@ To verify that RECOVAR is installed properly and functioning correctly, you can 
 
 The script performs the following steps:
 
-1. **Generates a small synthetic dataset** using `make_test_dataset.py`.
-2. **Runs the RECOVAR pipeline** on the test dataset using `pipeline.py`.
-3. **Analyzes the results** using `analyze.py`, including clustering and embedding.
-4. **Estimates the conformational density** with `estimate_conformational_density.py`.
-5. **Computes trajectories** in the latent space using `compute_trajectory.py`.
+1. **Generates a small synthetic dataset** using `make_test_dataset`.
+2. **Runs the RECOVAR pipeline** on the test dataset using `pipeline`.
+3. **Analyzes the results** using `analyze`, including clustering and embedding.
+4. **Estimates the conformational density** with `estimate_conformational_density`.
+5. **Computes trajectories** in the latent space using `compute_trajectory`.
 6. **Reports which steps passed or failed**.
 7. **Deletes the `test_dataset` directory** at the end if all steps pass.
 
@@ -1108,7 +1077,7 @@ The script performs the following steps:
   Total steps failed: 1
 
   The following functions failed:
-  - estimate_conformational_density.py
+  - estimate_conformational_density
 
   Please check the output above for details.
   ```
@@ -1142,10 +1111,10 @@ A short example illustrating the steps to run the code on EMPIAR-10076. Assuming
     cryodrgn parse_pose_csparc cryosparc_P4_J33_004_particles.cs -D 320 -o poses.pkl
     
     # run recovar
-    python [recovar_dir]/pipeline.py particles.256.mrcs --ctf --ctf.pkl -poses poses.pkl --o recovar_test 
+    recovar pipeline particles.256.mrcs --ctf --ctf.pkl -poses poses.pkl --o recovar_test 
 
     # run analysis
-    python [recovar_dir]/analysis.py recovar_test --zdim=20 
+    recovar analyze recovar_test --zdim=20 
 
     # Open notebook output_visualization.ipynb
     # Change the recovar_result_dir = '[path_to_this_dir]/recovar_test' and 
@@ -1155,7 +1124,7 @@ Note that this is different from the one in the paper. Run the following pipelin
     # Download mask
     git clone https://github.com/ma-gilles/recovar_masks.git
 
-    python ~/recovar/pipeline.py particles.256.mrcs --ctf ctf.pkl --poses poses.pkl -o test-mask --mask recovar_masks/mask_10076.mrc --ind filtered.ind.pkl
+    recovar pipeline particles.256.mrcs --ctf ctf.pkl --poses poses.pkl -o test-mask --mask recovar_masks/mask_10076.mrc --ind filtered.ind.pkl
 
 <!-- The output should be the same as [this notebook](output_visualization_empiar10076.ipynb). -->
 
@@ -1163,12 +1132,12 @@ Note that this is different from the one in the paper. Run the following pipelin
 
 You can generate volumes from embedding not generated by RECOVAR using `generate_from_embedding`. E.g., for a cryoDRGN embedding:
 
-    python [recovar_dir/]generate_from_embedding.py particles.256.mrcs --poses poses.pkl --ctf ctf.pkl --embedding 02_cryodrgn256/z.24.pkl --o [output_dir] --target zfile.txt
+    recovar generate_from_embedding particles.256.mrcs --poses poses.pkl --ctf ctf.pkl --embedding 02_cryodrgn256/z.24.pkl --o [output_dir] --target zfile.txt
 
 
-<details><summary><code>$ python generate_from_embedding.py -h</code></summary>
+<details><summary><code>$ recovar generate_from_embedding -h</code></summary>
 
-    usage: generate_from_embedding.py [-h] -o OUTDIR [--zdim ZDIM] --poses POSES --ctf pkl [--ind PKL] [--uninvert-data UNINVERT_DATA]
+    usage: generate_from_embedding [-h] -o OUTDIR [--zdim ZDIM] --poses POSES --ctf pkl [--ind PKL] [--uninvert-data UNINVERT_DATA]
                                     [--datadir DATADIR] [--n-images N_IMAGES] [--padding PADDING] [--halfsets HALFSETS]
                                     [--noise-model NOISE_MODEL] [--Bfactor BFACTOR] [--n-bins N_BINS] --embedding EMBEDDING --target
                                     TARGET [--zdim1]
@@ -1223,18 +1192,18 @@ Some of the features which may be of interest:
 
 ## Tomography
 
-I am developping the tomography extension. You can try it out by passing the the ``--tilt-series``, ``--tilt-series-ctf=v2``, ``--angle-per-tilt=[insert angle here]`` to ``pipeline.py``. The input should be identical to cryoDRGN-ET ([see here](https://ez-lab.gitbook.io/cryodrgn/cryodrgn-et-subtomogram-analysis)).
+I am developping the tomography extension. You can try it out by passing the the ``--tilt-series``, ``--tilt-series-ctf=v2``, ``--angle-per-tilt=[insert angle here]`` to ``pipeline``. The input should be identical to cryoDRGN-ET ([see here](https://ez-lab.gitbook.io/cryodrgn/cryodrgn-et-subtomogram-analysis)).
 
 E.g, on the M-file:
 
-    $ python [recovar_dir]/pipeline.py M_particles.star --ctf ctf.pkl --poses pose.pkl -o v2_nocont_$ntilts --datadir=128 --mask=path_to_mask.mrc --tilt-series-ctf=v2  --ntilts=10 --tilt-series  --angle-per-tilt=3.0 --dose-per-tilt=2.93
+    recovar pipeline M_particles.star --ctf ctf.pkl --poses pose.pkl -o v2_nocont_$ntilts --datadir=128 --mask=path_to_mask.mrc --tilt-series-ctf=v2  --ntilts=10 --tilt-series  --angle-per-tilt=3.0 --dose-per-tilt=2.93
 
 You can use all tilts by not passing the argument --ntilts.
 
 ## Limitations
 
 - *Symmetry*: there is currently no support for symmetry. If you got your poses through symmetric refinement, it will probably not work. It should probably work if you make a symmetry expansion of the particle stack, but I have not tested it.
-- *Memory*: RECOVAR uses a lot of memory by default. For a stack of images of size 256, you need approximately 200 GB + size of dataset. You can also use the --lazy option, which will do lazy loading, in which case you need a little more than 200. If you run out of memory, you can use the --low-memory-option, in which case you need 60GB. If even that fails, you can try --very-low-memory-option. Finally, you can downsample the data and run RECOVAR. You can generate states from the full resolution images even if you ran the RECOVAR pipeline on downsampled images by using `compute_state.py` and passing the `--particles` argument. The memory requirement for the compute_state is approximately `n_bins * volume_size * 32` bytes where n_bins is 50 by default (~26 GB for size 256 images).
+- *Memory*: RECOVAR uses a lot of memory by default. For a stack of images of size 256, you need approximately 200 GB + size of dataset. You can also use the --lazy option, which will do lazy loading, in which case you need a little more than 200. If you run out of memory, you can use the --low-memory-option, in which case you need 60GB. If even that fails, you can try --very-low-memory-option. Finally, you can downsample the data and run RECOVAR. You can generate states from the full resolution images even if you ran the RECOVAR pipeline on downsampled images by using `compute_state` and passing the `--particles` argument. The memory requirement for the compute_state is approximately `n_bins * volume_size * 32` bytes where n_bins is 50 by default (~26 GB for size 256 images).
 - *ignore-zero-frequency*: I haven't thought much about the best way to do this. I would advise against using it for now.
 - *Other ones, probably?*: if you run into issues, please let me know. 
 

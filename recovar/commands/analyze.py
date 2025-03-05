@@ -60,7 +60,7 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
-def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40, n_paths = 0, skip_umap = False, q = None, n_std = None, B_factor=0, n_bins=30, n_vols_along_path = 6, skip_centers = False, normalize_kmeans = False, density_path = None, no_z_reg = False, lazy = False):
+def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40, n_paths = 0, skip_umap = False, q = None, n_std = None, B_factor=0, n_bins=30, n_vols_along_path = 6, skip_centers = False, normalize_kmeans = False, density_path = None, no_z_reg = False, lazy = False, n_min_images = 0, maskrad_fraction = 0.5):
 
 
     po = o.PipelineOutput(recovar_result_dir + '/')
@@ -114,8 +114,8 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     # embedding.set_contrasts_in_cryos(cryos, po.get('contrasts')[zdim])
     
     noise_variance = po.get('noise_var_used')
-    B_factor = args.Bfactor
-    n_bins = args.n_bins
+    # B_factor = args.Bfactor
+    # n_bins = args.n_bins
 
     def reorder(array):
         return dataset.reorder_to_original_indexing_from_halfsets(array, po.get('particles_halfsets'))
@@ -142,7 +142,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     #     logging.StreamHandler()])
 
 
-    logger.info(args)
+    
     # zs_unsort = po.get('unsorted_embedding')['zs'][zdim_key]
     zs_unsort = zs
     if normalize_kmeans:
@@ -171,7 +171,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
 
     if not skip_centers:
-        o.compute_and_save_reweighted(cryos, centers, zs, cov_zs, noise_variance, output_folder_kmeans_centers, B_factor, n_bins, n_min_images = args.n_min_images,  maskrad_fraction = args.maskrad_fraction)
+        o.compute_and_save_reweighted(cryos, centers, zs, cov_zs, noise_variance, output_folder_kmeans_centers, B_factor, n_bins, n_min_images = n_min_images,  maskrad_fraction =  maskrad_fraction)
         # move_to_one_folder(output_folder_kmeans_centers, n_clusters )
 
     if (not skip_umap) and (zdim > 1):
@@ -204,7 +204,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
             full_path, subsampled_path = o.make_trajectory_plots_from_results(po, zdim_key, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = False, input_density = input_density, latent_space_bounds = latent_space_bounds)
 
             logger.info(f"path {pair_idx} done")
-            o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins, n_min_images = args.n_min_images,  maskrad_fraction = args.maskrad_fraction)
+            o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins, n_min_images =  n_min_images,  maskrad_fraction =  maskrad_fraction)
 
     else:
         path_folder = output_folder_kmeans + 'traj' + str(0) + '/'        
@@ -217,7 +217,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         # z_points = np.linspace(z_st, z_end, n_vols_along_path)
         # pairs = [ [z_points[0], z_points[40-1]], [z_points[40], z_points[80-1]] ]
         subsampled_path = np.linspace(z_st, z_end, n_vols_along_path)[:,None]
-        o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins, save_all_estimates = False, n_min_images = args.n_min_images,  maskrad_fraction = args.maskrad_fraction)
+        o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins, save_all_estimates = False, n_min_images =  n_min_images,  maskrad_fraction =  maskrad_fraction)
 
     # for pair_idx in range(len(pairs)):
     #     pair = pairs[pair_idx]
@@ -264,7 +264,11 @@ def pick_pairs(centers, n_pairs):
     return pairs
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
-    analyze(args.result_dir, output_folder = args.outdir, zdim=  args.zdim, n_clusters = args.n_clusters, n_paths= args.n_trajectories, skip_umap = args.skip_umap, B_factor = args.Bfactor, n_bins = args.n_bins, n_vols_along_path = args.n_vols_along_path, skip_centers = args.skip_centers, normalize_kmeans = args.normalize_kmeans, density_path = args.density, no_z_reg = args.no_z_regularization, lazy = args.lazy)
+    logger.info(args)
+    analyze(args.result_dir, output_folder = args.outdir, zdim=  args.zdim, n_clusters = args.n_clusters, n_paths= args.n_trajectories, skip_umap = args.skip_umap, B_factor = args.Bfactor, n_bins = args.n_bins, n_vols_along_path = args.n_vols_along_path, skip_centers = args.skip_centers, normalize_kmeans = args.normalize_kmeans, density_path = args.density, no_z_reg = args.no_z_regularization, lazy = args.lazy, n_min_images = args.n_min_images, maskrad_fraction = args.maskrad_fraction)
+
+if __name__ == "__main__":
+    main()

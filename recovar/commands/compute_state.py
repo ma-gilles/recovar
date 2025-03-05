@@ -68,7 +68,10 @@ def compute_state(args):
     o.compute_and_save_reweighted(cryos, target_zs, zs, cov_zs, noise_variance, output_folder, args.Bfactor, n_bins =n_bins, maskrad_fraction = args.maskrad_fraction, n_min_images = args.n_min_images)
     o.move_to_one_folder(output_folder, target_zs.shape[0])
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
     compute_state(args)
+
+if __name__ == "__main__":
+    main()

@@ -15,9 +15,9 @@ from sklearn.neighbors import LocalOutlierFactor
 from recovar import output
 
 # Import necessary functions from pipeline.py and output module
-from pipeline import add_args, standard_recovar_pipeline
+from recovar.commands.pipeline import add_args, standard_recovar_pipeline
 from recovar import output
-from outlier_detection import plot_anomaly_detection_results
+from recovar.commands.outlier_detection import plot_anomaly_detection_results
 matplotlib.rcParams["contour.negative_linestyle"] = "solid"
 
 def run_pipeline_with_outlier_removal():
@@ -187,6 +187,10 @@ def run_pipeline_with_outlier_removal():
 
     logger.info("Pipeline with outlier removal completed.")
 
-if __name__ == "__main__":
+
+def main():
     run_pipeline_with_outlier_removal()
+
+if __name__ == "__main__":
+    main()
 
