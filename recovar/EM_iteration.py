@@ -315,7 +315,7 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     from recovar import utils
 
     gpu_memory = utils.get_gpu_memory_total()
-    batch_size = utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) * 10
+    batch_size = utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) * 5
     n_batches = utils.get_number_of_index_batch(n_rotations, batch_size)
 
     projections = np.zeros((rotations.shape[0], image_size), dtype = np.complex64)
@@ -421,9 +421,9 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     logger.info(f"done with norms. Batch size {norm_batch_size}")
 
 
-    n_batches = utils.get_number_of_index_batch(n_images, batch_size)
+    n_batches = utils.get_number_of_index_batch(n_images, batch_size//10)
     start_idx = 0
-    for array_indices, _ in utils.subset_and_indices_batch_iter(image_indices, batch_size):
+    for array_indices, _ in utils.subset_and_indices_batch_iter(image_indices, batch_size//10):
         residuals[array_indices] = compute_probability_from_residual_normal_squared_one_image(residuals[array_indices])
 
     logger.info(f"done probs. Batch size {batch_size}")

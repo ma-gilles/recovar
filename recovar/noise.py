@@ -49,7 +49,7 @@ def predict_noise_variance( noise_variance, CTF_params, CTF_fun, image_masks, im
 
 def fit_noise_model_to_images():
 
-
+    return
     # Use the above function to jaxopt your way to a noise model. Should impose >=0, and perhaps some smoothness.
     
 
