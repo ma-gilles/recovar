@@ -327,7 +327,7 @@ def _centered(arr, newshape):
     startind = [(s1 - s2) // 2 for s1, s2 in zip(arr.shape, newshape)]
     return jax.lax.dynamic_slice(arr, startind, newshape)
 
-
+# TODO: I think this was fixed in newer versions of JAX? 
 def ifftn(arr, s= None, axes = None):
     axes = np.arange(arr.ndim)
     s = arr.shape if s is None else s
@@ -338,7 +338,6 @@ def ifftn(arr, s= None, axes = None):
         arr = jnp.fft.ifftn(arr, s[:3], axes[:3])
         arr = jnp.fft.ifftn(arr, s[3:], axes[3:])
     return arr
-
 
 def fftn(arr, s= None, axes = None):
     axes = np.arange(arr.ndim)

@@ -1,5 +1,5 @@
 """
-(from recovar)
+(from cryodrgn)
 
 
 Here we add modules under the `recovar.commands` 

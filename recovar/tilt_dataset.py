@@ -16,6 +16,12 @@ from recovar import cryodrgn_starfile as starfile
 import time
 logger = logging.getLogger(__name__)
 
+
+# A tilt is a single image (more commonly called a subtilt) 
+# A particle is a collection of tilts, supposedly of the same object, that form a tilt series (typically 10-100)
+# A tomogram tilt is single big image. Tomogram tilts are never loaded or used directly in this code, but it is occasionally important to know which collection of tilt come from the same tomogram tilt
+# A tomogram is a collection of tomogram tilt (typically 10-100)
+
 ## Very awkward... Probably should just move things to one file...
 def set_standard_mask(D, dtype):
     return mask.window_mask(D, 0.85, 0.99)
@@ -294,9 +300,10 @@ class TiltSeriesData(ImageDataset):
         particles = OrderedDict()
 
         for ii, gn in enumerate(group_name):
-            if gn not in particles:
-                particles[gn] = []
-            particles[gn].append(ii)
+            particles.setdefault(gn, []).append(ii)
+            # if gn not in particles:
+            #     particles[gn] = []
+            # particles[gn].append(ii)
 
         particles = [np.asarray(pp, dtype=int) for pp in particles.values()]
         particles_to_tilts = particles
@@ -307,6 +314,54 @@ class TiltSeriesData(ImageDataset):
                 tilts_to_particles[jj] = i
 
         return particles_to_tilts, tilts_to_particles
+
+
+    @classmethod
+    def parse_tomogram_tilt(
+        cls, tiltstar: str
+    ) -> Tuple[list[np.ndarray], dict[int, int]]:
+        # Parse unique particles from _rlnGroupName
+        s = starfile.Starfile.load(tiltstar)
+        group_name = list(s.df["_rlnGroupName"])
+        tomogram = OrderedDict()
+        for ii, gn in enumerate(group_name):
+            tomogram.setdefault(gn, []).append(ii)
+
+        tomogram = [np.asarray(pp, dtype=int) for pp in tomogram.values()]
+        tomogram_to_tilts = tomogram
+        tilts_to_tomogram = {}
+
+        for i, j in enumerate(tomogram):
+            for jj in j:
+                tilts_to_tomogram[jj] = i
+
+        return tomogram_to_tilts, tilts_to_tomogram
+
+
+    @classmethod
+    def parse_tomogramtilt_tilt(
+        cls, tiltstar: str
+    ) -> Tuple[list[np.ndarray], dict[int, int]]:
+        # Parse unique particles from _rlnGroupName
+        s = starfile.Starfile.load(tiltstar)
+        group_name = list(s.df["_rlnGroupName"])
+        dose = list(s.df['_rlnCtfBfactor'])
+        groups = OrderedDict()
+        for i, (gn, d) in enumerate(zip(group_name, dose)):
+            key = (gn, d)
+            groups.setdefault(key, []).append(i)
+
+        groups = [np.asarray(pp, dtype=int) for pp in groups.values()]
+        tomogramtilts_to_tilts = groups
+        tilts_to_tomogramtilts = {}
+
+        for i, j in enumerate(groups):
+            for jj in j:
+                tilts_to_tomogramtilts[jj] = i
+
+        return tomogramtilts_to_tilts, tilts_to_tomogramtilts
+
+
 
     @classmethod
     def particles_to_tilts(

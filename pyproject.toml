@@ -46,7 +46,7 @@ dependencies = [
     "seaborn==0.13.2",
     "scikit-image",
     "starfile==0.5.11",
-    "tensorflow_cpu==2.18.0",
+    "tensorflow_cpu",
     "typing_extensions==4.12.2",
     "twine",
     "ipykernel",

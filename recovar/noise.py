@@ -14,6 +14,47 @@ logger = logging.getLogger(__name__)
 # Neither solution implemented here are very satisfying. Guessing noise in presence of heterogeneity is not trivial, since the residual doesn't seem like the correct way to do it.
 # It makes me think we should have "noise pickers".
 
+# 
+class AbstractNoiseModel():
+    def __init__(self):
+        pass
+
+class TiltSeriesNoiseModel():
+    def __init__(self):
+        pass
+
+# From a given noise variance model, predict the observed noise variance in a possibly CTFed + masked image
+def predict_noise_variance( noise_variance, CTF_params, CTF_fun, image_masks, image_shape, radial = True ):
+    if radial:
+        noise_variance = make_radial_noise(noise_variance, image_shape )
+
+    if CTF is not None:
+        CTF = CTF_fun(CTF_params, image_shape)
+        noise_variance = noise_variance * CTF**2
+
+
+    # This is supposed to compute the expected variance of a masked image
+    # images = covariance_core.apply_image_masks(images, image_masks, image_shape)
+
+    masked_variance = jnp.abs(images.reshape([-1, *image_shape]))**2
+    masked_variance_ft = jnp.fft.fft2(masked_variance)
+
+    # mask = image_mask
+    f_mask = jnp.fft.fft2(image_masks)
+    kernels = jnp.fft.ifft2(jnp.abs(f_mask)**2)
+    kernel_sq_sum = jnp.sum(jnp.abs(kernels)**2, axis=0)
+    top_fraction= jnp.sum(masked_variance_ft * jnp.conj(kernels), axis=0) 
+
+    return images - XXX
+
+def fit_noise_model_to_images():
+
+
+    # Use the above function to jaxopt your way to a noise model. Should impose >=0, and perhaps some smoothness.
+    
+
+
+
 
 
 ## should probably clean up all this?
