@@ -359,16 +359,6 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
         logger.info(f"done with u_proj {batch_size}")
         data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=dot_product_batch_size, subset_indices = image_indices)
         
-        # start_idx = 0
-        # for batch, _, indices in data_generator:
-        #     # running_idx 
-        #     # Only place where image mask is used ?
-        #     end_idx = start_idx + len(indices)
-        #     # zz1, z_opt = compute_bHb_term(projections, u_projections, s, batch, translations, experiment_dataset.CTF_params[indices], experiment_dataset.CTF_fun, noise_variance, experiment_dataset.voxel_size, image_shape, experiment_dataset.image_stack.process_images)
-        #     # print(np.mean(z_opt[0, ..., 0], axis=-0))
-            
-        #     residuals[start_idx:end_idx] -= compute_bHb_terms(projections, u_projections, s, batch, translations, experiment_dataset.CTF_params[indices], experiment_dataset.CTF_fun, noise_variance, experiment_dataset.voxel_size, image_shape, experiment_dataset.image_stack.process_images)
-        #     start_idx = end_idx
         rotation_batch = rotations.shape[0]//10
         start_idx = 0
         for batch, _, indices in data_generator:
@@ -376,16 +366,11 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
             end_idx = start_idx + len(indices)
 
             for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):# k in range(mult):
-                # could just not backproject until the end
-                # rot_indices = utils.get_batch_of_indices_arange(n_rotations, rotation_batch, k)
                 # Hmmm this is a bit of a hack. Indexing is not what I wish it was
                 rot_indices = np.array(rot_indices)
                 residuals[start_idx:end_idx, rot_indices] -= compute_bHb_terms(projections[rot_indices], u_projections[rot_indices], s, batch, translations, experiment_dataset.CTF_params[indices], experiment_dataset.CTF_fun, noise_variance, experiment_dataset.voxel_size, image_shape, experiment_dataset.image_stack.process_images)
-                # Ft_y, Ft_ctf = sum_up_images_fixed_rots(batch, probabilities[start_idx:end_idx, rot_indices[0]:rot_indices[-1]+1], translations, rotations[rot_indices], experiment_dataset.CTF_params[indices], experiment_dataset.CTF_fun, noise_variance, experiment_dataset.voxel_size, image_shape, experiment_dataset.volume_shape, experiment_dataset.image_stack.process_images,  Ft_y = Ft_y, Ft_ctf = Ft_ctf)
 
             start_idx = end_idx
-
-
 
     projections = (jnp.abs(projections)**2).block_until_ready()
 
@@ -393,21 +378,8 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     utils.report_memory_device(logger=logger)
     # For the \|C_i Proj_j\|^2 term
 
-    # norm_batch_size = batch_size // 3
     norm_batch_size = utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory - utils.get_size_in_gb(projections)) * 3
     
-    # n_batches = utils.get_number_of_index_batch(n_images, norm_batch_size)
-    start_idx = 0
-    # for k in range(n_batches):
-    # for indices in utils.subset_batch_iter(image_indices, norm_batch_size):
-    #     end_idx = start_idx + len(indices)
-    #     # indices = utils.get_batch_of_indices_arange(n_images, norm_batch_size, k)
-    #     res = compute_CTFed_proj_norms(projections, experiment_dataset.CTF_params[indices], experiment_dataset.CTF_fun, noise_variance, experiment_dataset.voxel_size, image_shape)
-    #     if k == n_batches - 1:
-    #         res = res.block_until_ready()
-    #     residuals[start_idx:end_idx] += np.array(res[...,None])
-    #     start_idx = end_idx
-
     for array_indices, dataset_indices in utils.subset_and_indices_batch_iter(image_indices, norm_batch_size):
         # indices = utils.get_batch_of_indices_arange(n_images, norm_batch_size, k)
         res = compute_CTFed_proj_norms(projections, experiment_dataset.CTF_params[dataset_indices], experiment_dataset.CTF_fun, noise_variance, experiment_dataset.voxel_size, image_shape)
@@ -415,14 +387,10 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
             res = res.block_until_ready()
         residuals[array_indices] += np.array(res[...,None])
 
-
-
     del projections
     logger.info(f"done with norms. Batch size {norm_batch_size}")
 
-
     n_batches = utils.get_number_of_index_batch(n_images, batch_size//10)
-    start_idx = 0
     for array_indices, _ in utils.subset_and_indices_batch_iter(image_indices, batch_size//10):
         residuals[array_indices] = compute_probability_from_residual_normal_squared_one_image(residuals[array_indices])
 
