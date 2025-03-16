@@ -77,7 +77,7 @@ def estimate_noise_variance_from_outside_mask_v2(experiment_dataset, volume_mask
 
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
     # all_shell_avgs = []
-    images_estimates = np.empty([experiment_dataset.n_images, *experiment_dataset.image_shape])
+    # images_estimates = np.empty([experiment_dataset.n_images, *experiment_dataset.image_shape])
 
     image_mask = jnp.ones_like(experiment_dataset.image_stack.mask)
     top_fraction = 0
@@ -96,7 +96,7 @@ def estimate_noise_variance_from_outside_mask_v2(experiment_dataset, volume_mask
                     experiment_dataset.image_stack.process_images)
         top_fraction += top_fraction_this
         kernel_sq_sum+= kernel_sq_sum_this
-        images_estimates[batch_ind] = np.array(per_image_est)
+        # images_estimates[batch_ind] = np.array(per_image_est)
         # image_PSs[batch_ind] = np.array(image_PS)
         # masked_image_PSs[batch_ind] = np.array(masked_image_PS)
 
