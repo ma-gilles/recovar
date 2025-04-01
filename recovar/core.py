@@ -157,19 +157,6 @@ def adjoint_slice_volume_by_map(slices, rotation_matrices, image_shape, volume_s
     _, u = vjp(f,jnp.zeros(volume_size, dtype = slices.dtype ))
     return u(slices)[0]
 
-# ## This is about twice faster. It doesn't do any checking, I guess? 
-# def slice_volume_by_map_nomap(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type):
-#     grid_point_indices = batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape, grid_size )
-#     return volume[grid_point_indices] 
-
-
-# Computes \sum_i S_i v_i where S_i: N^2 -> N^3 is sparse, v_i \in N^2
-# @functools.partial(jax.jit, static_argnums=0)
-# def summed_adjoint_slice_by_nearest(volume_size, image_vecs, plane_indices_on_grids):
-#     volume_vec = jnp.zeros(volume_size, dtype = image_vecs.dtype)
-#     volume_vec = volume_vec.at[plane_indices_on_grids.reshape(-1)].add((image_vecs).reshape(-1))
-#     return volume_vec
-
 # This is what people called the backprojection
 # Computes \sum_i S_i v_i where S_i: N^2 -> N^3 is sparse, v_i \in N^2
 @functools.partial(jax.jit, static_argnums=0)
@@ -282,66 +269,49 @@ batch_get_nearest_gridpoint_indices = jax.vmap(get_nearest_gridpoint_indices, in
 batch_get_gridpoint_coords = jax.vmap(get_gridpoint_coords, in_axes =(0, None, None) ) 
 
 
-@functools.partial(jax.jit, static_argnums=[3,4,6,7])
-def forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):
-    slices = slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)
+@functools.partial(jax.jit, static_argnums=[3,4,6,7,8], static_argnames=['premultiplied_ctf'])
+def forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, premultiplied_ctf=False ):
+    slices = slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type) 
+    if not premultiplied_ctf:
+        slices = slices * CTF_fun( CTF_params, image_shape, voxel_size)
     return slices
 
-batch_forward_model_from_map = jax.vmap(forward_model_from_map, in_axes = (0, 0, 0, None, None, None, None, None) )
+batch_forward_model_from_map = jax.vmap(forward_model_from_map, in_axes = (0, 0, 0, None, None, None, None, None, None) )
 
 
 
-@functools.partial(jax.jit, static_argnums=[3,4,6,7])
-def forward_model_from_map_and_return_adjoint(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):
-    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type)
+@functools.partial(jax.jit, static_argnums=[3,4,6,7,8], static_argnames=['premultiplied_ctf'])
+def forward_model_from_map_and_return_adjoint(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, premultiplied_ctf = False):
+    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, premultiplied_ctf)
     slices, f_adj = vjp(f,volume)
     return slices, f_adj
 
 
 # A JAXed version of the adjoint. This is actually slightly slower but will run with disc_type = 'linear_interp'. I probably should just write out an explicit adjoint of linear interpolation...
-@functools.partial(jax.jit, static_argnums=[3,4,6,7])
-def adjoint_forward_model_from_map(slices, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):  
+@functools.partial(jax.jit, static_argnums=[3,4,6,7,8], static_argnames=['premultiplied_ctf'])
+def adjoint_forward_model_from_map(slices, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, premultiplied_ctf=False ):  
     volume_size = np.prod(volume_shape)
-    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type)
+    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, premultiplied_ctf)
     _, u = vjp(f,jnp.zeros(volume_size, dtype = slices.dtype ))
     return u(slices)[0]
 
 
-@functools.partial(jax.jit, static_argnums=[3,4,6,7])
-def adjoint_forward_model_from_trilinear(slices, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):  
-
-    return adjoint_slice_volume_by_trilinear(slices * CTF_fun( CTF_params, image_shape, voxel_size), rotation_matrices, image_shape, volume_shape, volume = None)
-
+@functools.partial(jax.jit, static_argnums=[3,4,6,7,8], static_argnames=['premultiplied_ctf'])
+def adjoint_forward_model_from_trilinear(slices, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, premultiplied_ctf = False):
+    if not premultiplied_ctf:
+        slices = slices * CTF_fun( CTF_params, image_shape, voxel_size)
+    return adjoint_slice_volume_by_trilinear(slices, rotation_matrices, image_shape, volume_shape, volume = None)
 
 
 
 # Compute A^TAx (the forward, then its adjoint). For JAX reasons, this should be about 2x faster than doing each call separately.
-@functools.partial(jax.jit, static_argnums=[3,4,6,7])
-def compute_A_t_Av_forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, noise_variance):    
-    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type)
+@functools.partial(jax.jit, static_argnums=[3,4,6,7,9], static_argnames=['premultiplied_ctf'])
+def compute_A_t_Av_forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, noise_variance, premultiplied_ctf = False):    
+    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, premultiplied_ctf)
     y, u = vjp(f,volume)
     return u(y/noise_variance)
 
 
-
-    
-# @functools.partial(jax.jit, static_argnums = [2,3,4])    
-# def map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_shape, order):
-#     # import pdb; pdb.set_trace()
-#     # batch_grid_pt_vec_ind_of_images = batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size )
-#     # batch_grid_pt_vec_ind_of_images_og_shape = batch_grid_pt_vec_ind_of_images.shape
-#     # batch_grid_pt_vec_ind_of_images = batch_grid_pt_vec_ind_of_images.reshape(-1,3).T
-#     batch_grid_pt_vec_ind_of_images, batch_grid_pt_vec_ind_of_images_og_shape = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
-    
-#     # slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
-
-#     if order ==3:
-#         from recovar import cryojax_map_coordinates
-#         slices = cryojax_map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
-#     else:
-#         slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
-
-#     return slices
 
 
 def rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape):
@@ -350,26 +320,6 @@ def rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
     batch_grid_pt_vec_ind_of_images = batch_grid_pt_vec_ind_of_images.reshape(-1,3).T
     return batch_grid_pt_vec_ind_of_images, batch_grid_pt_vec_ind_of_images_og_shape
 
-
-# from recovar import jax_map_squared
-# @functools.partial(jax.jit, static_argnums = [2,3,4])    
-# def map_coordinates_squared_on_slices(volume, rotation_matrices, image_shape, volume_shape, disc_type):
-#     order = 1 if disc_type == "linear_interp" else 0
-#     batch_grid_pt_vec_ind_of_images, batch_grid_pt_vec_ind_of_images_og_shape = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
-#     slices = jax_map_squared.map_coordinates_squared(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
-#     return slices
-
-# # Not sure this should be used...
-# def slice_by_linear_interp_explicit(volume, rotation_matrices, image_shape, volume_shape, order):
-#     batch_grid_pt_vec_ind_of_images = batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape )
-#     # Get all 8 grid-points    
-#     return
-
-# # def get_nearby_grid
-# def mesh_grid_one(x_grid):
-#     z = jnp.meshgrid(low_high, low_high)
-#     return jnp.concatenate()
-# mesh_grid_coords = jax.vmap(mesh_grid_coords, in_axes=(-1))
 
 def get_stencil(dim):
     if dim==2:
@@ -600,277 +550,6 @@ def get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage):
 def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, CTF_FUNCTION_OPTION=None ):
     return cryodrgn_CTF(CTF_params, image_shape, voxel_size)
 
-    # if CTF_FUNCTION_OPTION == "dynamight":
-    #     return dynamight_CTF_wrapper(CTF_params, image_shape, voxel_size, 0)
-    # if CTF_FUNCTION_OPTION == "cryodrgn_antialiasing":
-
-    #     grid_size = image_shape[0]
-    #     large_image_shape = (image_shape[0]*2, image_shape[1]*2)
-    #     psi = get_unrotated_plane_coords(large_image_shape, voxel_size*1, scaled = True)[...,:2]
-    #     CTF_large_grid = batch_evaluate_ctf(psi, CTF_params).reshape([CTF_params.shape[0], *large_image_shape])
-
-    #     CTF_large_grid_ft = ftu.get_dft2(CTF_large_grid)
-
-    #     # CTF_ft_windowed = padding.unpad_images_spatial_domain(CTF_ft_windowed, image_shape)
-    #     # CTF_ft_windowed = CTF_large_grid_ft[:,grid_size//2:-grid_size//2,grid_size//2:-grid_size//2]
-    #     o = 2
-    #     CTF_ft_windowed = equinox.nn.AvgPool2d(o+o//2,o)(CTF_large_grid_ft)
-
-    #     CTF = ftu.get_idft2(CTF_ft_windowed) / 4
-
-    #     CTF2 = CTF_large_grid[:,grid_size//2:-grid_size//2,grid_size//2:-grid_size//2]
-
-    #     psi = get_unrotated_plane_coords(image_shape, voxel_size, scaled = True)[...,:2]
-    #     CTF3 = batch_evaluate_ctf(psi, CTF_params).reshape([CTF_params.shape[0], *image_shape])
-
-    #     # Downsample
-    #     from recovar import padding
-
-    #     # CTF_large_grid_ft = padding.unpad_images_spatial_domain(CTF_large_grid_ft, image_shape)
-    #     # CTF_large_grid_ft = ftu.get_dft2(CTF_large_grid, large_image_shape)
-    #     # CTF = padding.unpad_images_fourier_domain(CTF_large_grid, large_image_shape, image_shape[0])
-    #     # import pdb; pdb.set_trace()
-    #     return CTF
-    
-    # if CTF_FUNCTION_OPTION == "cryodrgn_zeroed":
-    #     CTF = cryodrgn_CTF(CTF_params, image_shape, voxel_size)
-    #     CTF = CTF.reshape([CTF_params.shape[0], *image_shape])
-    #     CTF = CTF.at[:,1::2,:].set(0)
-    #     CTF = CTF.at[:,:,1::2].set(0)
-    #     return CTF.reshape([CTF_params.shape[0], -1])
-    # return cryodrgn_CTF(CTF_params, image_shape, voxel_size)
-
 def cryodrgn_CTF(CTF_params, image_shape, voxel_size):
     psi = get_unrotated_plane_coords(image_shape, voxel_size, scaled = True)[...,:2]
     return batch_evaluate_ctf(psi, CTF_params)
-
-# def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size):
-#     if CTF_FUNCTION_OPTION == "dynamight":
-#         return dynamight_CTF_wrapper(CTF_params, image_shape, voxel_size, 1)
-    
-#     psi = get_unrotated_plane_coords(image_shape, voxel_size, scaled = True)[...,:2]
-#     return batch_evaluate_ctf(psi, CTF_params)
-
-
-
-
-### CTF functions taken from dynamight and JAXed up, which does anti-aliasing business.
-# See https://github.com/3dem/DynaMight/blob/616360b790febf56edf08aef5d4c414058194376/dynamight/data/handlers/ctf.py#L16
-
-# class ContrastTransferFunction:
-#     def __init__(
-#             self,
-#             voltage: float,
-#             spherical_aberration: float = 0.,
-#             amplitude_contrast: float = 0.,
-#             phase_shift: float = 0.,
-#             b_factor: float = 0.,
-#     ) -> None:
-#         np = jnp
-#         """
-#         Initialization of the CTF parameter for an optics group.
-#         :param voltage: Voltage
-#         :param spherical_aberration: Spherical aberration
-#         :param amplitude_contrast: Amplitude contrast
-#         :param phase_shift: Phase shift
-#         :param b_factor: B-factor
-#         """
-
-#         self.voltage = voltage
-#         self.spherical_aberration = spherical_aberration
-#         self.amplitude_contrast = amplitude_contrast
-#         self.phase_shift = phase_shift
-#         self.b_factor = b_factor
-
-#         # Adjust units
-#         spherical_aberration = spherical_aberration * 1e7
-#         voltage = voltage * 1e3
-
-#         # Relativistic wave length
-#         # See http://en.wikipedia.org/wiki/Electron_diffraction
-#         # lambda = h/sqrt(2*m*e) * 1/sqrt(V*(1+V*e/(2*m*c^2)))
-#         # h/sqrt(2*m*e) = 12.2642598 * 10^-10 meters -> 12.2642598 Angstrom
-#         # e/(2*m*c^2)   = 9.78475598 * 10^-7 coulombs/joules
-#         lam = 12.2642598 / np.sqrt(voltage * (1. + voltage * 9.78475598e-7))
-
-#         # Some constants
-#         self.c1 = -np.pi * lam
-#         self.c2 = np.pi / 2. * spherical_aberration * lam ** 3
-#         self.c3 = phase_shift * np.pi / 180.
-#         self.c4 = -b_factor/4.
-#         self.c5 = \
-#             np.arctan(
-#                 amplitude_contrast / np.sqrt(1-amplitude_contrast**2)
-#             )
-
-#         self.xx = {}
-#         self.yy = {}
-#         self.xy = {}
-#         self.n4 = {}
-
-
-#     def __call__(
-#             self,
-#             grid_size: int,
-#             pixel_size: float,
-#             u,
-#             v,
-#             angle,
-#             h_sym: bool = False,
-#             antialiasing: int = 0
-#     ) :
-#         """
-#         Get the CTF in an numpy array, the size of freq_x or freq_y.
-#         Generates a Numpy array or a Torch tensor depending on the object type
-#         on freq_x and freq_y passed to the constructor.
-#         :param u: the U defocus
-#         :param v: the V defocus
-#         :param angle: the azimuthal angle defocus (degrees)
-#         :param antialiasing: Antialiasing oversampling factor (0 = no antialiasing)
-#         :param grid_size: the side of the box
-#         :param pixel_size: pixel size
-#         :param h_sym: Only consider the hermitian half
-#         :return: Numpy array or Torch tensor containing the CTF
-#         """
-#         torch = jnp
-        
-#         freq_x, freq_y = self._get_freq(grid_size, pixel_size, h_sym, antialiasing)
-#         xx = freq_x**2
-#         yy = freq_y**2
-#         xy = freq_x * freq_y
-#         n4 = (xx + yy)**2  
-
-#         angle = angle * np.pi / 180
-#         acos = torch.cos(angle)
-#         asin = torch.sin(angle)
-#         acos2 = torch.square(acos)
-#         asin2 = torch.square(asin)
-
-#         """
-#         Out line of math for following three lines of code
-#         Q = [[sin cos] [-sin cos]] sin/cos of the angle
-#         D = [[u 0] [0 v]]
-#         A = Q^T.D.Q = [[Axx Axy] [Ayx Ayy]]
-#         Axx = cos^2 * u + sin^2 * v
-#         Ayy = sin^2 * u + cos^2 * v
-#         Axy = Ayx = cos * sin * (u - v)
-#         defocus = A.k.k^2 = Axx*x^2 + 2*Axy*x*y + Ayy*y^2
-#         """
-
-#         xx_ = (acos2 * u + asin2 * v)[:, None, None] * xx[None, :, :]
-#         yy_ = (asin2 * u + acos2 * v)[:, None, None] * yy[None, :, :]
-#         xy_ = (acos * asin * (u - v))[:, None, None] * xy[None, :, :]
-
-#         gamma = self.c1 * (xx_ + 2. * xy_ + yy_) + self.c2 * n4[None, :, :] - self.c3 - self.c5
-#         ctf = -torch.sin(gamma)
-#         if self.c4 > 0:
-#             ctf *= torch.exp(self.c4 * n4)
-
-#         if antialiasing > 0:
-#             o = 2**antialiasing
-#             # ctf = ctf.unsqueeze(1)  # Add singleton channel
-#             # ctf = torch.nn.functional.avg_pool2d(ctf, kernel_size=o+o//2, stride=o)
-#             # ctf = ctf.squeeze(1)  # Remove singleton channel
-#             import equinox
-#             ctf = equinox.nn.AvgPool2d(o+o//2,o)(ctf)
-
-
-
-#         return ctf
-
-
-#     @staticmethod
-#     def _get_freq(
-#             grid_size: int,
-#             pixel_size: float,
-#             h_sym: bool = False,
-#             antialiasing: int = 0,
-#     ):
-#         """
-#         Get the inverted frequencies of the Fourier transform of a square or cuboid grid.
-#         Can generate both Torch tensors and Numpy arrays.
-#         TODO Add 3D
-#         :param antialiasing: Antialiasing oversampling factor (0 = no antialiasing)
-#         :param grid_size: the side of the box
-#         :param pixel_size: pixel size
-#         :param h_sym: Only consider the hermitian half
-#         :return: two or three numpy arrays or tensors,
-#                  containing frequencies along the different axes
-#         """
-#         np = jnp
-#         if antialiasing > 0:
-#             o = 2**antialiasing
-#             grid_size *= o
-#             y_ls = np.linspace(
-#                 -(grid_size + o) // 2,
-#                 (grid_size - o) // 2,
-#                 grid_size + o//2
-#             )
-#             x_ls = y_ls if not h_sym else np.linspace(0, grid_size // 2, grid_size // 2 + o + 1)
-#         else:
-#             y_ls = np.linspace(-grid_size // 2, grid_size // 2 - 1, grid_size)
-#             x_ls = y_ls if not h_sym else np.linspace(0, grid_size // 2, grid_size // 2 + 1)
-
-#         y, x = np.meshgrid((y_ls), (x_ls), indexing = 'ij')
-#         freq_x = x / (grid_size * pixel_size)
-#         freq_y = y / (grid_size * pixel_size)
-
-#         return freq_x, freq_y
-
-# @functools.partial(jax.jit, static_argnums=[1,2,3])
-# def dynamight_CTF_wrapper(CTF_params, image_shape, voxel_size, antialiasing ):
-    
-#     # assert (jnp.linalg.norm(CTF_params[:, 3:6] - CTF_params[0, 3:6]) < 1e-6)
-#         # assert False
-    
-#     ctf_obj = ContrastTransferFunction(
-#         CTF_params[0,3], 
-#         CTF_params[0,4], 
-#         CTF_params[0,5], 
-#     )
-    
-#     zz = ctf_obj(image_shape[0], voxel_size, CTF_params[:,0], CTF_params[:,1], CTF_params[:,2], False, antialiasing)
-
-#     return -zz.reshape(zz.shape[0], -1)
-
-
-
-# These functions below are not really used anymore. Could probably delete them. They could useful for preconditioning of Ewald
-
-# # This squared the entries of the forward model. Useful to compute the diagonal of P_i^T_i
-# @functools.partial(jax.jit, static_argnums=[3,4,5,6,7,8])
-# def forward_model_squared_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):    
-#     # slices = map_coordinates_squared_on_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)**2
-#     slices = slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)**2
-#     return slices
-
-
-# # This squared the entries of the forward model. Useful to compute the diagonal of P_i^T_i
-# @functools.partial(jax.jit, static_argnums=[3,4,5,6,7,8])
-# def forward_model_squared_from_map_and_return_adjoint(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):    
-#     f = lambda volume : forward_model_squared_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type)
-#     slices, f_adj = vjp(f,volume)
-#     return slices, f_adj
-
-#     # slices = map_coordinates_squared_on_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)**2
-#     # return slices
-
-
-# @functools.partial(jax.jit, static_argnums=[3,4,5,6,7,8])
-# def adjoint_forward_model_squared_from_map(slices, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):  
-#     # Not clear to me whether this has to be done everytime I want to adjoint
-#     volume_size = np.prod(volume_shape)
-#     f = lambda volume : forward_model_squared_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type)
-#     _, u = vjp(f,jnp.zeros(volume_size, dtype = slices.dtype ))
-#     return u(slices)[0]
-
-
-# @functools.partial(jax.jit, static_argnums=[3,4,5,6,7,8])
-# def forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):
-#     slices = slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)
-#     return slices
-
-
-# def forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type):
-#     slices = slice_volume_by_map(mean, rotation_matrices, image_shape, volume_shape, grid_size, disc_type) * CTF_fun( CTF_params, image_shape, voxel_size)
-#     return slices

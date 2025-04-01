@@ -129,7 +129,6 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
         z_end = z_end[:zs.shape[1]]
         logger.warning(f"endpoints are truncated to match zs dimension = {zs.shape[1]}")
 
-    noise_variance = po.get('noise_var_used')
     B_factor = args.Bfactor
     n_bins = args.n_bins
     output_folder_kmeans = output_folder + '/' #+ '/kmeans'+'_'+ str(n_clusters) + '/'    
@@ -142,7 +141,6 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
         o.mkdir_safe(path_folder)
         full_path, subsampled_path = o.make_trajectory_plots_from_results(po, zdim_key, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = False, input_density = input_density, latent_space_bounds = latent_space_bounds)
         logger.info(f"path done")
-        # o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins, maskrad_fraction = args.maskrad_fraction, n_min_images = args.n_min_images, save_all_estimates = False)
         # move_to_one_folder(path_folder, n_vols_along_path )
 
     else:
@@ -156,9 +154,8 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
         # z_points = np.linspace(z_st, z_end, n_vols_along_path)
         # pairs = [ [z_points[0], z_points[40-1]], [z_points[40], z_points[80-1]] ]
         subsampled_path = np.linspace(z_st, z_end, n_vols_along_path)[:,None]
-        # o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins, save_all_estimates = False)
         # move_to_one_folder(path_folder, n_vols_along_path )
-    o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins, maskrad_fraction = args.maskrad_fraction, n_min_images = args.n_min_images, save_all_estimates = False)
+    o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, path_folder, B_factor, n_bins, maskrad_fraction = args.maskrad_fraction, n_min_images = args.n_min_images, save_all_estimates = False)
 
 
 from recovar.output import move_to_one_folder

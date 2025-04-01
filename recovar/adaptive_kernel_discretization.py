@@ -1118,7 +1118,7 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
 
     return estimates
 
-def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola"):
+def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola"):
 
     estimates = []#heterogeneity_bins.size * [None]
 
@@ -1145,6 +1145,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
             # Only place where image mask is used ?
             batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
             # print("APPLYING IMAGE MASK!?!")
+            noise_variances = experiment_dataset.noise.get(indices)
             Ft_y_b, Ft_ctf_b = relion_functions.relion_style_triangular_kernel_batch(batch,
                                                                     experiment_dataset.CTF_params[indices], 
                                                                     experiment_dataset.rotation_matrices[indices], 
@@ -1154,21 +1155,8 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_
                                                                     experiment_dataset.voxel_size, 
                                                                     experiment_dataset.CTF_fun, 
                                                                     disc_type, 
-                                                                    noise_variance)
+                                                                    noise_variances)
         
-
-            # Ft_y_b2, Ft_ctf_b2 = relion_functions.relion_style_triangular_kernel_batch_trilinear(batch,
-            #                                                         experiment_dataset.CTF_params[indices], 
-            #                                                         experiment_dataset.rotation_matrices[indices], 
-            #                                                         experiment_dataset.translations[indices], 
-            #                                                         experiment_dataset.image_shape, 
-            #                                                         experiment_dataset.upsampled_volume_shape, 
-            #                                                         experiment_dataset.voxel_size, 
-            #                                                         experiment_dataset.CTF_fun, 
-            #                                                         disc_type, 
-            #                                                         noise_variance)
-            # print(jnp.linalg.norm(Ft_y_b - Ft_y_b2) / jnp.linalg.norm(Ft_y_b))
-
 
             rhs += full_volume_to_half_volume(Ft_y_b, experiment_dataset.upsampled_volume_shape)
             lhs += full_volume_to_half_volume(Ft_ctf_b, experiment_dataset.upsampled_volume_shape)

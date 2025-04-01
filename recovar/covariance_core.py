@@ -92,10 +92,12 @@ def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape):
 
 
 # Compute y_i - P_i mu terms
-@functools.partial(jax.jit, static_argnums = [5,6,7,8,9,10])    
-def get_centered_images(images, mean, CTF_params, rotation_matrices, translations, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type  ):    
+@functools.partial(jax.jit, static_argnums = [5,6,7,8,9,10, 11], static_argnames = ('premultiplied_ctf'))    
+def get_centered_images(images, mean, CTF_params, rotation_matrices, translations, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type, premultiplied_ctf = False  ):    
+    if premultiplied_ctf:
+        logger.warning('If premultiplied_ctf is True, the CTF function should be the premultiplied one, this return CTF**2')
     translated_images = core.translate_images(images, translations, image_shape)
-    centered_images = translated_images - core.forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type)
+    centered_images = translated_images - core.forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) * CTF_fun(CTF_params, image_shape, voxel_size)
     return centered_images
 
 def check_mask(mask):
@@ -114,9 +116,8 @@ def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shap
     return projected_mean
 
 
-batch_over_vol_forward_model_from_map = jax.vmap(core.forward_model_from_map, in_axes = (0, None, None, None, None, None, None, None))
+batch_over_vol_forward_model_from_map = jax.vmap(core.forward_model_from_map, in_axes = (0, None, None, None, None, None, None, None, None))
 
-import jax
 
 # # Are there at most 4 or 5 within one dist? or 9?
 # def find_points_near_grid(gridpoints, gridpoint_target, max_n_points = 5):
@@ -182,19 +183,5 @@ def evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel = "triangular",
         raise ValueError("Kernel function not recognized")
     return kernel_vals
 
-    # if kernel == "triangular":
-    #     k_xi_x1 = covariance_core.triangular_kernel(plane_coords, target_coord, kernel_width = kernel_width) 
-    # elif kernel == "square":
-    #     k_xi_x1 = covariance_core.square_kernel(plane_coords, target_coord, kernel_width = kernel_width) 
-    # else:
-    #     raise ValueError("Kernel not implemented")
-
-
-# Are there at most 4 or 5 within one dist? or 9?
-#@jax.vmap(in_axes=[0,0,None])
-# def sum_up_over_near_grid_points(image, gridpoints, gridpoint_target):
-#     kernel_vals = triangular_kernel(gridpoints, gridpoint_target)
-#     kernel_estimated = jnp.sum(kernel_vals * image)
-#     return kernel_estimated, jnp.sum(kernel_vals)
 
 

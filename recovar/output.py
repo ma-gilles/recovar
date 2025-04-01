@@ -13,6 +13,7 @@ from recovar import trajectory
 from recovar import utils
 from recovar import dataset
 from recovar import regularization
+from recovar import noise
 import matplotlib.patheffects as pe
 from packaging.version import parse as parse_version
 import time
@@ -403,7 +404,7 @@ def plot_umap(output_folder, zs, centers):
 
 
 
-def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_variance, output_folder, B_factor, n_bins = 30, n_min_images = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20 ):
+def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_images = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20 ):
 
     #batch_size = 
 
@@ -444,11 +445,11 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_varian
 
             # heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder_this, -1, n_bins, B_factor, tau = None, n_min_images = 300, metric_used = "locres_auc")
             from recovar import noise
-            noise_variance = noise.make_radial_noise(noise_variance, cryos[0].image_shape)
+            # noise_variance = noise.make_radial_noise(noise_variance, cryos[0].image_shape)
 
             locres_maskrad = cryos[0].grid_size * cryos[0].voxel_size / maskrad_fraction
             logger.info(f"Mask radius fraction = {maskrad_fraction}. Setting locres_maskrac = locres_sampling = box_size * voxel_size / {maskrad_fraction} = {locres_maskrad:.1f} Angstroms. Using {n_min_images} images for template.")
-            heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder_this, ndim, n_bins, B_factor, tau = None, n_min_images = n_min_images, locres_sampling = locres_maskrad, locres_maskrad = locres_maskrad, locres_edgwidth = 0, upsampling_for_ests = 1, use_mask_ests =False, grid_correct_ests = False, save_all_estimates=save_all_estimates, metric_used= 'locshellmost_likely')
+            heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_folder_this, ndim, n_bins, B_factor, tau = None, n_min_images = n_min_images, locres_sampling = locres_maskrad, locres_maskrad = locres_maskrad, locres_edgwidth = 0, upsampling_for_ests = 1, use_mask_ests =False, grid_correct_ests = False, save_all_estimates=save_all_estimates, metric_used= 'locshellmost_likely')
 
             logger.info(f"Done with volume generation {k} stored in {output_folder_this}")
         move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'locres_filtered.mrc', new_stringname = 'vol' )
@@ -605,10 +606,11 @@ class PipelineOutput:
             return utils.load_mrc(self.result_path + 'output/volumes/' + 'dilated_mask' + '.mrc')
         elif key == 'covariance_cols':
             return utils.pickle_load(self.result_path + 'model/' + 'covariance_cols' + '.pkl')
-        elif key == 'dataset':
-            return dataset.load_dataset_from_args(self.get('input_args'), lazy = False) 
-        elif key == 'lazy_dataset':
-            return dataset.load_dataset_from_args(self.get('input_args'), lazy = True) 
+        elif key == 'dataset' or key == 'lazy_dataset':
+            cryos = dataset.load_dataset_from_args(self.get('input_args'), lazy = 'lazy' in key)
+            add_noise_to_loaded_dataset(cryos , self.get('noise_var_used'))
+            return cryos
+        
         elif key == 'halfsets':
             return utils.pickle_load(self.result_path + 'model/' + 'halfsets' + '.pkl')
         elif key == 'particles_halfsets':
@@ -634,16 +636,10 @@ class PipelineOutput:
         return keys
 
 
-
-def load_results_newest(datadir):
-    model_folder = datadir +'model'  + '/'
-    output_folder = datadir +'output'  + '/'
-    with open(model_folder + 'results.pkl', 'rb') as f:
-        results = pickle.load( f)
-    # results['dataset_loader_dict']['compute_ground_truth'] = False
-    # dataset_loader = dataset.get_dataset_loader_from_dict(results['dataset_loader_dict'])
-    # grid_to_z, z_to_grid = ld.get_grid_z_mappings(results['latent_space_bounds'], results['density'].shape[0])
-    return results#, results['dataset_loader_dict'], grid_to_z, z_to_grid
+def add_noise_to_loaded_dataset(cryos, noise_variance):
+    noise_model = noise.RadialNoiseModel(noise_variance)
+    for cryo in cryos:
+        cryo.noise = noise_model
 
 
 def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False,  input_density = None, latent_space_bounds = None):
