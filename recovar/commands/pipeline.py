@@ -370,6 +370,15 @@ def standard_recovar_pipeline(args):
         options['contrast'] += '_shared'
         logger.info("Setting contrast to shared")
 
+    def _update_noise_variance(noise_variance):
+        if noise_model == "radial":
+            new_noise_model = noise.RadialNoiseModel(noise_variance)
+        elif noise_model == 'tilt':
+            new_noise_model = noise.TiltSeriesNoiseModel(noise_variance)
+
+        for cryo in cryos:
+            cryo.noise = new_noise_model
+
 
     for repeat in range(n_repeats):
         
@@ -484,6 +493,8 @@ def standard_recovar_pipeline(args):
 
             # radial_noise_var_outside_mask = noise_var_from_hf * np.ones_like(noise_var_outside_mask)
 
+    
+
         logger.info(f"time to estimate noise is {time.time() - noise_time}")
         utils.report_memory_device(logger=logger)
 
@@ -506,12 +517,11 @@ def standard_recovar_pipeline(args):
             logger.warning("Negative noise variance detected. Setting to image power spectrum / 10")
 
         noise_var_used = np.where(noise_var_used < 0, image_PS / 10, noise_var_used)
-
-        image_cov_noise = np.asarray(noise.make_radial_noise(noise_var_used, cryos[0].image_shape))
+        _update_noise_variance(noise_var_used)
 
         ## TODO Does Tilt series for anything for variance??
         variance_time = time.time()
-        variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, noise_variance = image_cov_noise,  use_regularization = True, disc_type = 'cubic')
+        variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, use_regularization = True, disc_type = 'cubic')
         # print('using regul in variance est?!?')
         logger.info(f"variance estimation time: {time.time() - variance_time}")
         utils.report_memory_device(logger=logger)
@@ -549,12 +559,10 @@ def standard_recovar_pipeline(args):
             # Take min of PS and noise variance at fixed shell
             noise_var_used[:fixed_resolution_shell] = np.where(image_PS[:fixed_resolution_shell]> noise_var_used[fixed_resolution_shell], noise_var_used[fixed_resolution_shell], image_PS[:fixed_resolution_shell])
 
-        ## DELETE FROM HERE?
-        image_cov_noise = np.asarray(noise.make_radial_noise(noise_var_used, cryos[0].image_shape))
+        _update_noise_variance(noise_var_used)
 
-        variance_est, _, variance_fsc, _, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, noise_variance = image_cov_noise,  use_regularization = True, disc_type = 'cubic')
+        variance_est, _, variance_fsc, _, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, use_regularization = True, disc_type = 'cubic')
         utils.report_memory_device(logger=logger)
-
 
         rad_grid = np.array(ftu.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
         # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
@@ -580,8 +588,7 @@ def standard_recovar_pipeline(args):
             print("5 percentile/median over low shells:", variance_est_low_res_5_pc/variance_est_low_res_median)
 
 
-        image_cov_noise = np.asarray(noise.make_radial_noise(noise_var_used, cryos[0].image_shape))
-
+        _update_noise_variance(noise_var_used)
 
         # test_covar_options = False
         if args.test_covar_options:
@@ -594,7 +601,7 @@ def standard_recovar_pipeline(args):
                 for key in test:
                     covariance_options[key] = test[key]
         
-                u,s, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, noise_var_used, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, covariance_options = covariance_options, variance_estimate = variance_est['combined'])
+                u,s, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory, covariance_options = covariance_options, variance_estimate = variance_est['combined'])
                 from recovar import output
                 output.mkdir_safe(output_folder)
                 utils.pickle_dump({
@@ -643,7 +650,7 @@ def standard_recovar_pipeline(args):
 
         # options['ignore_zero_frequency'] = False
         for idx, focus_mask in enumerate(focus_masks):
-            u_this,s_this, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, noise_var_used, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory,noise_model=noise_model, covariance_options = covariance_options, variance_estimate = variance_est['combined'], use_reg_mean_in_contrast = args.use_reg_mean_in_contrast)
+            u_this,s_this, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory, covariance_options = covariance_options, variance_estimate = variance_est['combined'], use_reg_mean_in_contrast = args.use_reg_mean_in_contrast)
             if idx == num_foc_masks -1:
                 s.append(s_this['rescaled'][:n_pcs_to_keep].copy())
                 u.append(u_this['rescaled'][:,:n_pcs_to_keep].copy())
@@ -680,7 +687,7 @@ def standard_recovar_pipeline(args):
             logger.info('ignoring zero frequency')
             noise_var_used[0] *=1e16
 
-        image_cov_noise = np.asarray(noise.make_radial_noise(noise_var_used, cryos[0].image_shape))
+        # image_cov_noise = np.asarray(noise.make_radial_noise(noise_var_used, cryos[0].image_shape))
 
         if not args.keep_intermediate:
             del u['real']
@@ -695,7 +702,7 @@ def standard_recovar_pipeline(args):
             n_pcs_to_use = (num_foc_masks-1)*zdim_for_rest + zdim
             z_time = time.time()
             zs[zdim], cov_zs[zdim], est_contrasts[zdim], _ = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled'] , n_pcs_to_use,
-                                                                    image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
+                                                                     cryos, volume_mask, gpu_memory, 'linear_interp',
                                                                     contrast_grid = None, contrast_option = options['contrast'],
                                                                     ignore_zero_frequency = options['ignore_zero_frequency'] )
             logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
@@ -706,7 +713,7 @@ def standard_recovar_pipeline(args):
             n_pcs_to_use = (num_foc_masks-1)*zdim_for_rest + zdim
             key = f"{zdim}_noreg"
             zs[key], cov_zs[key], est_contrasts[key], _ = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled']* 0 + np.inf , n_pcs_to_use,
-                                                                    image_cov_noise, cryos, volume_mask, gpu_memory, 'linear_interp',
+                                                                     cryos, volume_mask, gpu_memory, 'linear_interp',
                                                                     contrast_grid = None, contrast_option = options['contrast'],
                                                                     ignore_zero_frequency = options['ignore_zero_frequency'] )
             logger.info(f"embedding time for zdim={zdim}_noreg: {time.time() - z_time}")

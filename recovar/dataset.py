@@ -110,6 +110,7 @@ class CryoEMDataset:
         
         # self.n_units = self.n_images # This is the number of predictions.
         self.tilt_series_flag = tilt_series_flag # Hopefully can just switch this on and off
+        self.premultiplied_ctf = False
 
         # For SPA, it is # of images, for ET, it is # of tilt series
         # For tilt series: A "tilt" is an image. A particle is a full tilt series 
@@ -147,6 +148,12 @@ class CryoEMDataset:
         self.CTF_params = np.array(CTF_params.astype(self.CTF_dtype))
 
         self.dataset_indices = dataset_indices
+        self.noise = None
+
+    def get_noise_variance(self, indices):
+        if self.noise_model is None:            
+            return None
+        return self.noise_model.get(indices)
 
     def delete(self):
         del self.image_stack.particles
@@ -154,6 +161,7 @@ class CryoEMDataset:
         del self.rotation_matrices
         del self.CTF_params
         del self.translations
+        del self.noise_model
 
     def update_volume_upsampling_factor(self, volume_upsampling_factor):
 

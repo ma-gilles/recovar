@@ -3,6 +3,7 @@ import recovar.config
 import numpy as np
 from recovar import dataset
 import jax.numpy as jnp
+import jax.scipy
 from recovar import locres, utils
 from recovar import adaptive_kernel_discretization
 import logging
@@ -51,59 +52,9 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
         print("CHOOSING THREHSOLD ONLY BASED ON NUMBER OF IMAGES! FIX?")
         make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder, -1, n_bins, B_factor, tau = None, n_min_images = n_min_images, metric_used = metric_used)
     
-# from recovar import relion_functions
 
 
-# def make_volumes_kernel_estimate(heterogeneity_distances, cryos, noise_variance, output_folder, ndim, bins, tau = None, n_min_images = 80):
-
-#     if type(bins) == int:
-#         heterogeneity_bins = pick_heterogeneity_bins2(ndim, heterogeneity_distances[1], 0.5, n_min_images, n_bins = bins)
-#     else:
-#         heterogeneity_bins = bins
-
-#     residual_threshold = heterogeneity_bins[0]
-
-#     n_images_per_bin = [ np.sum(heterogeneity_distances[1] <= b) for b in heterogeneity_bins ]
-#     print(n_images_per_bin)
-#     # import pdb; pdb.set_trace()
-#     estimates = [None, None]
-#     lhs = [None, None]
-#     rhs = [None, None]
-#     for k in range(2):
-#         estimates[k] = adaptive_kernel_discretization.naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins, tau= tau, compute_lhs_rhs=False)
-
-#     cross_validation_estimators = [None, None]
-#     for k in range(2):
-#         cross_validation_estimators[k], lhs[k], rhs[k] = adaptive_kernel_discretization.naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins[0:1], tau= tau, compute_lhs_rhs=True)
-
-    
-#     import recovar
-#     recovar.utils.pickle_dump( { "lhs" : lhs, "rhs" : rhs } ,  output_folder  + "lhs_rhs.pkl")
-
-#     logger.info(f"Computing estimates done")
-
-#     import jax.numpy as jnp
-#     index_array_vol, fdisc, residuals_avged,  summed_residuals  = adaptive_kernel_discretization.pick_best_heterogeneity_from_residual((estimates[0].T)[...,None], 
-#                                         cryos[1], heterogeneity_distances[1], heterogeneity_bins, 
-#                                         residual_threshold = residual_threshold , min_number_of_images_in_bin = 50)
-#     logger.info(f"Computing estimates done")
-
-
-#     opt_halfmaps = [None, None]
-#     for k in range(2):
-#         opt_halfmaps[k] = jnp.take_along_axis(estimates[k].T , np.expand_dims(index_array_vol, axis=-1), axis=-1)
-
-#     recovar.output.save_volume(opt_halfmaps[0], output_folder + "optimized_half1_unfil", cryos[0].volume_shape, voxel_size = cryos[0].voxel_size)
-#     recovar.output.save_volume(opt_halfmaps[1], output_folder + "optimized_half2_unfil", cryos[0].volume_shape, voxel_size = cryos[0].voxel_size)
-
-#     recovar.output.save_volumes(estimates[0], output_folder + "estimates_half1_unfil", cryos[0].volume_shape, voxel_size = cryos[0].voxel_size)
-#     recovar.output.save_volumes(estimates[1], output_folder + "estimates_half2_unfil", cryos[0].volume_shape, voxel_size = cryos[0].voxel_size)
-    
-#     recovar.utils.pickle_dump( { "index_array_vol" : index_array_vol, "fdisc" : fdisc, "residuals_avged" : residuals_avged, "n_images_per_bin" :n_images_per_bin, "summed_residuals" : summed_residuals } ,  output_folder  + "stuff.pkl")
-#     return estimates, opt_halfmaps, index_array_vol, fdisc, residuals_avged
-
-
-def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder, ndim, bins, B_factor, tau = None, n_min_images = 50, metric_used = "locshellmost_likely", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None, kernel_rad = 4, save_all_estimates = False, heterogeneity_kernel = "parabola" ):
+def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_folder, ndim, bins, B_factor, tau = None, n_min_images = 50, metric_used = "locshellmost_likely", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None, kernel_rad = 4, save_all_estimates = False, heterogeneity_kernel = "parabola" ):
 
     if cryos[0].tilt_series_flag:
         images_per_particles = np.max(list(cryos[0].image_stack.counts.values()))
@@ -131,31 +82,8 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_var
     for k in range(2):
         cryos[k].update_volume_upsampling_factor(upsampling_for_ests)
 
-        estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins, tau= tau, grid_correct=grid_correct_ests, use_spherical_mask=use_mask_ests, heterogeneity_kernel= heterogeneity_kernel)
+        estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], None, heterogeneity_distances[k], heterogeneity_bins, tau= tau, grid_correct=grid_correct_ests, use_spherical_mask=use_mask_ests, heterogeneity_kernel= heterogeneity_kernel)
         estimates[k] = ftu.get_idft3(estimates[k].reshape(-1, *cryos[0].volume_shape)).real.astype(np.float32)
-
-        # print(heterogeneity_distances[k][:10])
-        # estimates2 = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins, tau= tau, grid_correct=False, use_spherical_mask=False)
-
-        # print(heterogeneity_distances[k][:10])
-
-        # estimates3 = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins, tau= tau, grid_correct=False, use_spherical_mask=False)
-
-        # print(np.linalg.norm(estimates3 - estimates[k]) / np.linalg.norm(estimates2))
-
-        # import pdb; pdb.set_trace()
-        # print(np.linalg.norm(estimates3 - estimates[k]) / np.linalg.norm(estimates2))
-
-        # print(np.linalg.norm(estimates3 - estimates2) / np.linalg.norm(estimates2))
-        # print(np.linalg.norm(lhs - lhs2) / np.linalg.norm(lhs2))
-        # print(np.linalg.norm(lhs[0] - lhs2[0]) / np.linalg.norm(lhs2[0]))
-        # # print(np.linalg.norm(lhs[0] - lhs2[0]) / np.linalg.norm(lhs2[0]))
-        # print(np.linalg.norm(rhs[0] - rhs2[0]) / np.linalg.norm(rhs[0]))
-
-        # print(np.linalg.norm(rhs - rhs2) / np.linalg.norm(rhs))
-        # import pdb; pdb.set_trace()
-        # np.linalg.norm(estimates[k][-1] - estimates2[-1]) / np.linalg.norm(estimates2[-1])
-
         logger.info(f"Computing estimates done")
 
     
@@ -163,29 +91,15 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_var
         # 
         cryos[k].update_volume_upsampling_factor(1)
 
-        cross_validation_estimators[k], lhs[k], rhs[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins[0:1], tau= tau, grid_correct=False, use_spherical_mask=False, return_lhs_rhs=True, heterogeneity_kernel= heterogeneity_kernel)
+        cross_validation_estimators[k], lhs[k], rhs[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k],  None, heterogeneity_distances[k], heterogeneity_bins[0:1], tau= tau, grid_correct=False, use_spherical_mask=False, return_lhs_rhs=True, heterogeneity_kernel= heterogeneity_kernel)
         # return_lhs_rhs=True)
         # import pdb; pdb.set_trace()
 
         lhs[k] = adaptive_kernel_discretization.half_volume_to_full_volume(lhs[k][0], cryos[k].volume_shape)
         # Zero out things after Nyquist - these won't be used in CV
         lhs[k] = (lhs[k] * cryos[0].get_valid_frequency_indices()).reshape(cryos[0].volume_shape)
-
         cross_validation_estimators[k] = ftu.get_idft3(cross_validation_estimators[k].reshape(cryos[0].volume_shape)).real.astype(np.float32)
-
         cryos[k].update_volume_upsampling_factor(upsampling_for_ests)
-
-
-    # for k in range(2):
-    #     cryos[k].update_volume_upsampling_factor(1)
-
-    #     cross_validation_estimators[k], lhs[k], rhs[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins[0:1], tau= tau, grid_correct=False, use_spherical_mask=False, return_lhs_rhs=True)
-
-    #     lhs[k] = adaptive_kernel_discretization.half_volume_to_full_volume(lhs[k][0], cryos[k].volume_shape)
-    #     # Zero out things after Nyquist - these won't be used in CV
-    #     lhs[k] = (lhs[k] * cryos[0].get_valid_frequency_indices()).reshape(cryos[0].volume_shape)
-
-    #     cross_validation_estimators[k] = ftu.get_idft3(cross_validation_estimators[k].reshape(cryos[0].volume_shape)).real.astype(np.float32)
 
 
     logger.info(f"Computing estimates done")
@@ -214,23 +128,8 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_var
     for k in range(2):
         logger.info(f"Computing estimates start")
         cryos[k].update_volume_upsampling_factor(2)
-        estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], noise_variance.astype(np.float32), None, heterogeneity_distances[k], heterogeneity_bins, tau= None, grid_correct=True, use_spherical_mask=True,heterogeneity_kernel= heterogeneity_kernel)
+        estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k],  None, heterogeneity_distances[k], heterogeneity_bins, tau= None, grid_correct=True, use_spherical_mask=True,heterogeneity_kernel= heterogeneity_kernel)
         estimates[k] = ftu.get_idft3(estimates[k].reshape(-1, *cryos[0].volume_shape)).real.astype(np.float32)
-
-    # for k in range(2):
-    #     for i in range(estimates[k].shape[0]):
-    #         from recovar import mask as mask_fn
-    #         if use_mask_ests is False:
-    #             estimates[k][i], _ = mask_fn.soft_mask_outside_map(estimates[k][i].reshape(cryos[0].volume_shape), cosine_width = 3)
-    #         else:
-    #             estimates[k][i] = estimates[k][i].reshape(cryos[0].volume_shape)
-
-    #         if grid_correct_ests is False:                  
-    #             gridding_correct = "square"
-    #             grid_fn = relion_functions.griddingCorrect_square if gridding_correct == "square" else relion_functions.griddingCorrect
-    #             kernel_width = 1
-    #             order =1
-    #             estimates[k][i], _ = grid_fn(estimates[k][i].reshape(cryos[0].volume_shape), cryos[0].grid_size, cryos[0].volume_upsampling_factor/kernel_width, order = order)
 
 
 
@@ -357,9 +256,6 @@ def choice_most_likely(estimates0, estimates1, target0, target1, noise_variances
 
     choice = np.argmin(errors, axis=0)
     return choice, errors
-
-
-import jax.scipy
 
 
 def smooth_shell_error(shell_error, voxel_size, subarray_size, sum_up_up_to_res = 50, smooth_mean_filter = 3):

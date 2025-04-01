@@ -76,42 +76,43 @@ def relion_style_triangular_kernel(experiment_dataset , cov_noise,  batch_size, 
                                                                 experiment_dataset.voxel_size, 
                                                                 experiment_dataset.CTF_fun, 
                                                                 disc_type, 
-                                                                cov_noise)
+                                                                cov_noise,
+                                                                experiment_dataset.premultiplied_ctf)
         Ft_y += Ft_y_b
         Ft_ctf += Ft_ctf_b
     # To agree with order of other fcns.
     return Ft_ctf, Ft_y
 
-@functools.partial(jax.jit, static_argnums=[4,5,6,7,8])
-def relion_style_triangular_kernel_batch(images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, cov_noise):
+@functools.partial(jax.jit, static_argnums=[4,5,6,7,8,10])#, static_argnames=('premultiplied_ctf'))
+def relion_style_triangular_kernel_batch(images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, noise_variances, premultiplied_ctf ):
     # images = process_images(images, apply_image_mask = True)
     
-    images = core.translate_images(images, translations, image_shape) / cov_noise
+    images = core.translate_images(images, translations, image_shape) / noise_variances
     # Ft_y = core.adjoint_forward_model_from_trilinear(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
-    Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+    Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, premultiplied_ctf) 
 
 
-    CTF = CTF_fun( CTF_params, image_shape, voxel_size) / cov_noise
+    CTF = CTF_fun( CTF_params, image_shape, voxel_size) / noise_variances
     # Ft_ctf = core.adjoint_forward_model_from_trilinear(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
     Ft_ctf = core.adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
 
     return Ft_y, Ft_ctf
 
 
-@functools.partial(jax.jit, static_argnums=[4,5,6,7,8])
-def relion_style_triangular_kernel_batch_trilinear(images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, cov_noise):
-    # images = process_images(images, apply_image_mask = True)
+# @functools.partial(jax.jit, static_argnums=[4,5,6,7,8])
+# def relion_style_triangular_kernel_batch_trilinear(images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, cov_noise):
+#     # images = process_images(images, apply_image_mask = True)
     
-    images = core.translate_images(images, translations, image_shape) / cov_noise
-    Ft_y = core.adjoint_forward_model_from_trilinear(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
-    # Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+#     images = core.translate_images(images, translations, image_shape) / cov_noise
+#     Ft_y = core.adjoint_forward_model_from_trilinear(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+#     # Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
 
 
-    CTF = CTF_fun( CTF_params, image_shape, voxel_size) / cov_noise
-    Ft_ctf = core.adjoint_forward_model_from_trilinear(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
-    # Ft_ctf = core.adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+#     CTF = CTF_fun( CTF_params, image_shape, voxel_size) / cov_noise
+#     Ft_ctf = core.adjoint_forward_model_from_trilinear(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+#     # Ft_ctf = core.adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
 
-    return Ft_y, Ft_ctf
+#     return Ft_y, Ft_ctf
 
 
 @functools.partial(jax.jit, static_argnums=[4,5,6,7,8])

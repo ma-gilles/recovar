@@ -65,7 +65,7 @@ def compute_state(args):
     o.mkdir_safe(output_folder)    
     # logger.addHandler(logging.FileHandler(f"{output_folder}/run.log"))
     logger.info(args)
-    o.compute_and_save_reweighted(cryos, target_zs, zs, cov_zs, noise_variance, output_folder, args.Bfactor, n_bins =n_bins, maskrad_fraction = args.maskrad_fraction, n_min_images = args.n_min_images)
+    o.compute_and_save_reweighted(cryos, target_zs, zs, cov_zs, output_folder, args.Bfactor, n_bins =n_bins, maskrad_fraction = args.maskrad_fraction, n_min_images = args.n_min_images)
     o.move_to_one_folder(output_folder, target_zs.shape[0])
 
 def main():

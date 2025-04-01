@@ -54,7 +54,7 @@ def generate_conformation_from_reprojection(xs, mean, u ):
 
 
 
-def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None):
+def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None):
 
     assert u.shape[0] == cryos[0].volume_size, "input u should be volume_size x basis_size"
     st_time = time.time()    
@@ -99,7 +99,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
     for cryo_idx,cryo in enumerate(cryos):
         zs[cryo_idx], cov_zs[cryo_idx], est_contrasts[cryo_idx], bias[cryo_idx] = get_coords_in_basis_and_contrast_3(
             cryo, mean, basis, eigenvalues[:basis.shape[0]], volume_mask,
-            jnp.array(cov_noise) , contrast_grid, batch_size, disc_type, 
+             contrast_grid, batch_size, disc_type, 
             parallel_analysis = parallel_analysis, compute_covariances = compute_covariances, contrast_mean = contrast_mean, contrast_variance = contrast_variance , compute_bias = compute_bias, image_subset_in_tilt_series = image_subset_in_tilt_series, contrast_shared_across_tilt_series= contrast_shared_across_tilt_series)
 
     
@@ -127,7 +127,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cov_noise, cryos, volume_mas
 
 
 # @functools.partial(jax.jit, static_argnums = [5])    
-def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None, force_not_shared_label = False, contrast_shared_across_tilt_series = False):
+def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None, force_not_shared_label = False, contrast_shared_across_tilt_series = False):
     # If skip_image_i_in_series is not None, it will skip that image in the tilt series. This is useful for detecting bad tilt images.
     # not_shared_contrast = not contrast_shared_across_tilt_series
 
@@ -177,7 +177,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
             # batch = jnp.delete(batch, skip_image_i_in_series, axis = 0)
             # batch_image_ind = np.delete(batch_image_ind, skip_image_i_in_series)
 
-
+        noise_variances = experiment_dataset.noise.get(batch_image_ind)
         xs_single, contrast_single, cov_batch, bias = compute_single_batch_coords_split(batch, mean_estimate, volume_mask, 
                                                                         basis, eigenvalues,
                                                                         experiment_dataset.CTF_params[batch_image_ind],
@@ -191,7 +191,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
                                                                         experiment_dataset.voxel_size, 
                                                                         experiment_dataset.padding, 
                                                                         disc_type, 
-                                                                        compute_covariances, np.array(noise_variance),
+                                                                        compute_covariances, np.array(noise_variances),
                                                                         experiment_dataset.image_stack.process_images,
                                                                        experiment_dataset.CTF_fun, contrast_grid,
                                                                        contrast_mean, contrast_variance, compute_bias, 
@@ -226,80 +226,6 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
     return xs, image_latent_covariances, estimated_contrasts, image_latent_bias
 
 
-# # I don't know why this function is in this file
-## DELETE?
-# def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid):
-    
-#     # Memory to do this is ~ size(volume_mask) * batch_size
-#     image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
-#                                           rotation_matrices,
-#                                           image_mask, 
-#                                           volume_mask_threshold,
-#                                           image_shape, 
-#                                           volume_shape, grid_size, 
-#                                           padding, 
-#                                           disc_type )
-
-    
-#     batch = process_fn(batch)
-#     batch = core.translate_images(batch, translations , image_shape)
-
-#     projected_mean = core.forward_model_from_map(mean_estimate,
-#                                          CTF_params,
-#                                          rotation_matrices, 
-#                                          image_shape, 
-#                                          volume_shape, 
-#                                         voxel_size, 
-#                                         CTF_fun, 
-#                                         disc_type                                           
-#                                           )
-
-
-#     ## DO MASK BUSINESS HERE.
-#     batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
-#     projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, image_shape)
-#     AUs = covariance_core.batch_over_vol_forward_model_from_map(basis,
-#                                          CTF_params, 
-#                                          rotation_matrices,
-#                                          image_shape, 
-#                                          volume_shape, 
-#                                         voxel_size, 
-#                                         CTF_fun, 
-#                                         disc_type )    
-#     # Apply mask on operator
-#     AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, image_shape )
-#     AUs = AUs.transpose(1,2,0)
-
-#     # Do noise busisness here?
-#     # batch /= jnp.sqrt(noise_variance)
-#     # projected_mean /= jnp.sqrt(noise_variance)
-#     # AUs /= jnp.sqrt(noise_variance)[...,None]
-
-#     batch_outer = jax.vmap(lambda x : jnp.outer(x, jnp.conj(x)), in_axes = (0,0))
-#     AU_t_images = batch_x_T_y(AUs, batch - projected_mean)#.block_until_ready()
-#     # AU_t_Amean = batch_x_T_y(AUs, projected_mean)#.block_until_ready()
-#     outer_products = batch_outer(AU_t_images)
-
-#     # UAAUs = batched_summed_outer_products(AUs)
-
-#     AU_t_AU = batch_x_T_y(AUs,AUs)#.block_until_ready()
-
-
-#     AUs /= jnp.sqrt(noise_variance)[...,None]
-#     UALambdaAUs = jnp.sum(batched_summed_outer_products(AUs), axis=0)
-
-#     rhs = outer_products - UALambdaAUs
-#     AU_t_AU = batch_x_T_y(AUs,AUs)#.block_until_ready()
-#     lhs = jnp.sum(jnp.kron(AU_t_AU, AU_t_AU), axis=0)
-    
-#     return rhs, lhs
-    
-# def summed_outer_products(AU_t_images):
-#     # Not .H because things are already transposed technically
-#     return AU_t_images.T @ jnp.conj(AU_t_images)
-
-# batched_summed_outer_products  = jax.vmap(summed_outer_products)
-
 
 @functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19, 23, 24,25])    
 def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, shared_label = False, contrast_shared_across_tilt_series = True):
@@ -307,11 +233,11 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
     contrast_grid = jnp.array(contrast_grid)    
 
     # This should scale as O( batch_size * (n^2 * basis_size + n^3 + basis_size**2))
-    AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq = compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid)
+    AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq = compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, noise_variance, process_fn, CTF_fun)
     
     # Can't think of a great way to broadcast here, so:
-    if noise_variance.ndim < 2:
-        masked_noises = jnp.repeat(noise_variance[None], axis =0, repeats = batch.shape[0])#  * jnp.ones(batch.shape[0], dtype = noise_variance.dtype) 
+    # if noise_variance.ndim < 2:
+    #     masked_noises = jnp.repeat(noise_variance[None], axis =0, repeats = batch.shape[0])#  * jnp.ones(batch.shape[0], dtype = noise_variance.dtype) 
 
     if shared_label and not contrast_shared_across_tilt_series:
         ## keep a copy of all of these before summing to get the best contrast for each image later
@@ -320,7 +246,6 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
         AU_t_AU_unsummed = AU_t_AU.copy()
         image_T_A_mean_unsummed = image_T_A_mean.copy()
         A_mean_norm_sq_unsummed = A_mean_norm_sq.copy()
-        masked_noises_unsummed = masked_noises.copy()
         image_norms_sq_unsummed = image_norms_sq.copy()
 
     
@@ -331,19 +256,16 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
         AU_t_AU = jnp.sum(AU_t_AU, axis=0, keepdims=True) 
         image_T_A_mean = jnp.sum(image_T_A_mean, axis=0, keepdims=True) 
         A_mean_norm_sq = jnp.sum(A_mean_norm_sq, axis=0, keepdims=True) 
-        masked_noises = jnp.sum(masked_noises, axis=0, keepdims=True)
 
         logger.warning("IS THIS RIGHT?")
         image_norms_sq = jnp.sum(image_norms_sq, axis=0, keepdims=True)
 
-    # Masked noise is NOT used ANYWHERE. TODO DELETE IT?
-    masked_noises += np.nan
 
     # This should scale as O( contrast_grid_size * (n^2 * batch_size * basis_size +  )
-    xs_batch_contrast = batch_over_images_and_contrast_solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, masked_noises, contrast_grid)
+    xs_batch_contrast = batch_over_images_and_contrast_solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, contrast_grid)
 
     # Compute residual
-    residuals_fit, residuals_prior = batch_compute_contrast_residual_fast_2(xs_batch_contrast, AU_t_images, image_norms_sq, AU_t_Amean, A_mean_norm_sq, image_T_A_mean,  AU_t_AU, eigenvalues, masked_noises, contrast_grid)
+    residuals_fit, residuals_prior = batch_compute_contrast_residual_fast_2(xs_batch_contrast, AU_t_images, image_norms_sq, AU_t_Amean, A_mean_norm_sq, image_T_A_mean,  AU_t_AU, eigenvalues, contrast_grid)
 
     contrast_prior = (contrast_grid - contrast_mean)**2 / contrast_variance
 
@@ -379,7 +301,7 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
             xs_repeat = jnp.repeat(xs_repeat, axis = (1), repeats = (contrast_grid.shape[0]))
 
             # Find best contrast given zs. One could just explicitly solve for contrast, but this works too...
-            residuals_fit, residuals_prior = batch_compute_contrast_residual_fast_2(xs_repeat, AU_t_images_unsummed, image_norms_sq_unsummed, AU_t_Amean_unsummed, A_mean_norm_sq_unsummed, image_T_A_mean_unsummed,  AU_t_AU_unsummed, eigenvalues, masked_noises_unsummed, contrast_grid)
+            residuals_fit, residuals_prior = batch_compute_contrast_residual_fast_2(xs_repeat, AU_t_images_unsummed, image_norms_sq_unsummed, AU_t_Amean_unsummed, A_mean_norm_sq_unsummed, image_T_A_mean_unsummed,  AU_t_AU_unsummed, eigenvalues, contrast_grid)
 
             contrast_prior = (contrast_grid - contrast_mean)**2 / contrast_variance
 
@@ -392,19 +314,8 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
             return contrast_est
         
         contrast_single = contrast_est
-        # contrast_single = refine_contrast(0, contrast_single)
-        # contrast_single = refine_contrast(1, contrast_single)
-        # contrast_single = refine_contrast(2, contrast_single)
-        # contrast_single = refine_contrast(3, contrast_single)
-        # contrast_single = refine_contrast(0, contrast_single)
-        # contrast_single = refine_contrast(0, contrast_single)
-        # contrast_single = refine_contrast(0, contrast_single)
-        # contrast_single = refine_contrast(0, contrast_single)
-
         contrast_single = jax.lax.fori_loop(0, 10, refine_contrast, contrast_single)
 
-
-        # return 
 
 
     # covariance
@@ -442,8 +353,8 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
 
 
 
+def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, noise_variance, process_fn, CTF_fun, premultiplied_ctf = False):
 
-def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid):
     apply_mask = False
     # Memory to do this is ~ size(volume_mask) * batch_size
     if apply_mask:
@@ -470,25 +381,6 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
                                         disc_type              
                                           )
     
-    # volume = ftu.get_idft3(mean_estimate.reshape(volume_shape)).real#.reshape(-1)
-    # from recovar import simulator
-    # # projected_mean = simulator.simulate_nufft_data_batch(volume, rotation_matrices, translations*0, CTF_params, voxel_size, volume_shape, image_shape, image_shape[0], '', CTF_fun )
-    # from recovar import padding as pad
-    # volume_padded = pad.pad_volume_spatial_domain(volume, grid_size).real
-    # mean_padded = ftu.get_dft3(volume_padded).reshape(-1)
-    # projected_mean = core.forward_model_from_map(mean_padded,
-    #                                      CTF_params,
-    #                                      rotation_matrices, 
-    #                                      image_shape, 
-    #                                      (2*volume_shape[0],2*volume_shape[1],2*volume_shape[2]), 
-    #                                     voxel_size, 
-    #                                     CTF_fun, 
-    #                                     disc_type                                           
-    #                                       )
-
-
-
-    # disc_type = 'nearest'
     ## DO MASK BUSINESS HERE.
     if apply_mask:
         batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
@@ -501,27 +393,37 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
                                          volume_shape, 
                                         voxel_size, 
                                         CTF_fun, 
-                                        disc_type )   
+                                        disc_type,
+                                        premultiplied_ctf )   
      
     # Apply mask on operator
     if apply_mask:
         AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, image_shape )
     AUs = AUs.transpose(1,2,0)
 
-
     # Do noise busisness here?
     batch /= jnp.sqrt(noise_variance)
+    AU_t_images = batch_x_T_y(AUs, batch)#.block_until_ready()
+    # Dont multiply AUs by CTF above if premultiplied_ctf is one, as batch is already CTF premultiplied
+    # But now, do it:
+    if premultiplied_ctf:
+        AUs *= CTF_fun(CTF_params, grid_size, voxel_size, disc_type)[...,None]
+
     projected_mean /= jnp.sqrt(noise_variance)
     AUs /= jnp.sqrt(noise_variance)[...,None]
 
-
-    AU_t_images = batch_x_T_y(AUs, batch)#.block_until_ready()
     AU_t_Amean = batch_x_T_y(AUs, projected_mean)#.block_until_ready()
     AU_t_AU = batch_x_T_y(AUs,AUs)#.block_until_ready()
 
 
     # Compute everything that is needed, before a low dimension contrast search
+    
+    ## WARNING!!!
+    ## Image norm squared is not actually needed, because it is basically doing min_x a(x) + norm(images)^2, so the it is a constant wrt the optimization.
+    ## I am leaving it here anyway
+    ## But it should be noted that this does not compute the correct norm is the images are ctf-premultiplied. However, it doesn't change anything.
     image_norms_sq = jnp.linalg.norm(batch, axis =-1)**2
+
     image_T_A_mean =  batch_x_T_y(batch, projected_mean) #jnp.conj(images).T @ projected_mean
     A_mean_norm_sq = jnp.linalg.norm(projected_mean, axis =-1)**2
     
@@ -543,9 +445,8 @@ batch_compute_contrast_residual_naive = jax.vmap(compute_contrast_residual_naive
 
 
 
-
 @jax.jit
-def compute_contrast_residual_fast_2(xs, AU_t_images, image_norms_sq, AU_t_Amean, Amean_norms_sq, image_T_A_mean ,  AU_t_AU, eigenvalues, noise_variance, contrast):
+def compute_contrast_residual_fast_2(xs, AU_t_images, image_norms_sq, AU_t_Amean, Amean_norms_sq, image_T_A_mean ,  AU_t_AU, eigenvalues, contrast):
     
     # x^T (AU)^T AU x
     # Square terms
@@ -565,12 +466,12 @@ def compute_contrast_residual_fast_2(xs, AU_t_images, image_norms_sq, AU_t_Amean
 
     return ((p1 + p2 + p3 + p4 + p5 + p6) ).real, batch_x_T_y( xs, xs / eigenvalues).real
 
-batch_compute_contrast_residual_fast_2 = jax.vmap(compute_contrast_residual_fast_2, in_axes = (0,0,0,0,0,0,0,None, 0, None))
+batch_compute_contrast_residual_fast_2 = jax.vmap(compute_contrast_residual_fast_2, in_axes = (0,0,0,0,0,0,0,None, None))
 
 
 ### TODO MAKE SURE THERE IS NO BUG HERE
 @jax.jit
-def solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, noise_variance, contrast):
+def solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, contrast):
     A = (contrast **2) * AU_t_AU  +  jnp.diag(1 / eigenvalues )
     b = contrast * ( AU_t_images - contrast * AU_t_Amean ) 
     # sol = jnp.linalg.solve(A, b)
@@ -578,8 +479,8 @@ def solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, 
     # I am scared of what this does, jax seems to do weird things with solving complex systems
     return sol
 
-batch_over_contrast_solve_contrast_linear_system = jax.vmap(solve_contrast_linear_system, in_axes = ( None, None, None, None, None, 0) )
-batch_over_images_and_contrast_solve_contrast_linear_system = jax.vmap(batch_over_contrast_solve_contrast_linear_system, in_axes = ( 0, 0,0,None,0, None) )
+batch_over_contrast_solve_contrast_linear_system = jax.vmap(solve_contrast_linear_system, in_axes = ( None, None, None, None, 0) )
+batch_over_images_and_contrast_solve_contrast_linear_system = jax.vmap(batch_over_contrast_solve_contrast_linear_system, in_axes = ( 0, 0,0,None, None) )
 
 def set_contrasts_in_cryos(cryos, contrasts):
 
@@ -606,22 +507,22 @@ def set_contrasts_in_cryos(cryos, contrasts):
 
 
 
-# @functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19, 23, 24])    
-def compute_residual(batch, mean_estimate,  CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, disc_type,  noise_variance, process_fn, CTF_fun):
+# # @functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19, 23, 24])    
+# def compute_residual(batch, mean_estimate,  CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, disc_type,  noise_variance, process_fn, CTF_fun):
 
-    batch = process_fn(batch)
-    batch = core.translate_images(batch, translations , image_shape)
+#     batch = process_fn(batch)
+#     batch = core.translate_images(batch, translations , image_shape)
 
-    projected_mean = core.forward_model_from_map(mean_estimate,
-                                         CTF_params,
-                                         rotation_matrices, 
-                                         image_shape, 
-                                         volume_shape, 
-                                        voxel_size, 
-                                        CTF_fun, 
-                                        disc_type              
-                                          )
-    difference = batch - projected_mean
-    difference /= jnp.sqrt(noise_variance)[...,None]
+#     projected_mean = core.forward_model_from_map(mean_estimate,
+#                                          CTF_params,
+#                                          rotation_matrices, 
+#                                          image_shape, 
+#                                          volume_shape, 
+#                                         voxel_size, 
+#                                         CTF_fun, 
+#                                         disc_type              
+#                                           )
+#     difference = batch - projected_mean
+#     difference /= jnp.sqrt(noise_variance)#[...,None]
 
-    return jnp.linalg.norm(difference, axis = -1)**2     
+#     return jnp.linalg.norm(difference, axis = -1)**2     

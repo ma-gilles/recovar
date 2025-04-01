@@ -12,9 +12,8 @@ logger = logging.getLogger(__name__)
 # h = hpy()
 
 
-def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise, volume_mask,
+def estimate_principal_components(cryos, options,  means, mean_prior, volume_mask,
                                 dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use,
-                                noise_model,  
                                 covariance_options = None, variance_estimate = None, use_reg_mean_in_contrast = False):
     
     covariance_options = covariance_estimation.get_default_covariance_computation_options() if covariance_options is None else covariance_options
@@ -66,7 +65,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
     else:
         raise NotImplementedError('unrecognized column sampling scheme')
     
-    covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, noise_model, covariance_options, picked_frequencies)
+    covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, covariance_options, picked_frequencies)
     
     # Check for NaN or Inf values in covariance_cols
     for col in covariance_cols.values():
@@ -112,14 +111,11 @@ def estimate_principal_components(cryos, options,  means, mean_prior, cov_noise,
     #     logger.info('ignoring zero frequency')
     #     cov_noise[0] *=1e16
         
-    image_cov_noise = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].image_shape))
 
-    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], image_cov_noise, dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'])
+    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'])
 
     if not options['keep_intermediate']:
         u['real'] = None
-
-    # u['pa'], s['pa'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], image_cov_noise, dilated_volume_mask, disc_type ='linear_interp', gpu_memory_to_use= gpu_memory_to_use, use_mask = True, parallel_analysis = True ,ignore_zero_frequency = False)
 
 
     if options['ignore_zero_frequency']:
@@ -176,7 +172,7 @@ def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,
     return u, s
 
 
-def pca_by_projected_covariance(cryos, basis, mean, noise_variance, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = -1):
+def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = -1):
 
     # basis_size = basis.shape[-1]
     basis_size = n_pcs_to_compute
@@ -188,7 +184,7 @@ def pca_by_projected_covariance(cryos, basis, mean, noise_variance, volume_mask,
 
     logger.info('batch size for covariance computation: ' + str(batch_size))
 
-    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, noise_variance, batch_size,  disc_type, disc_type_u, parallel_analysis = parallel_analysis, do_mask_images = use_mask )
+    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, batch_size,  disc_type, disc_type_u, parallel_analysis = parallel_analysis, do_mask_images = use_mask )
 
     ss, u = np.linalg.eigh(covariance)
     u =  np.fliplr(u)
@@ -617,6 +613,8 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     return np.array(Q), np.array(S_fd), np.array(V)
 
 
+### THESE ARE FUNCTIONS THAT ARE NOT USED IN THE CURRENT VERSION OF THE CODE. DELETE?
+
 
 def test_different_embeddings(cryos, volume_mask, mean_estimate, basis, eigenvalues, noise_variance, batch_size, disc_type = 'linear_interp', use_contrast = False, zdims= None):
     ## TODO
@@ -653,8 +651,6 @@ def test_different_embeddings(cryos, volume_mask, mean_estimate, basis, eigenval
 
         logger.info(f"zdim {zdim}")#, end="")
     return residuals, residuals_flipped
-
-
 
 
 def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zdims= None, n_images = 1000, volume_mask= None):

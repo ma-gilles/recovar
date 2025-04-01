@@ -154,9 +154,13 @@ def generate(args):
     # import pdb; pdb.set_trace()
     # noise_variance = np.ones(zs.shape[0])
     noise_variance, _ = noise.estimate_noise_variance(cryos[0], 100)
-    noise_variance =np.ones(cryos[0].image_size) * noise_variance
+    noise_variance = np.ones(cryos[0].image_shape[0]//2-1) * noise_variance
+
+    for cryo in cryos:
+        cryo.noise = noise.RadialNoiseModel(noise_variance)
+        
     output_folder = args.outdir
-    o.compute_and_save_reweighted(cryos, target, zs, cov_zs, noise_variance, output_folder, args.Bfactor, args.n_bins)
+    o.compute_and_save_reweighted(cryos, target, zs, cov_zs, output_folder, args.Bfactor, args.n_bins)
 
     return 
 
