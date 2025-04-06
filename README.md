@@ -1,5 +1,7 @@
 # RECOVAR: Regularized covariance estimation for cryo-EM heterogeneity analysis
 
+RECOVAR is a software tool for analyzing different conformations in heterogeneous cryo-EM and cryo-ET datasets. RECOVAR can reconstruct high-resolution volumes, estimate conformational density and low free-energy motions, and automatically identify subsets of images with a particular volume feature.
+
 
 <details><summary>Click here to see more details about the features RECOVAR</summary>
 
@@ -1210,13 +1212,15 @@ Much of this documentation is generated using chatGTP4.
 
 If you use this software for analysis, please cite:
 
-    @article{gilles2023bayesian,
-      author = {Gilles, Marc Aur{\`e}le and Singer, Amit},
-      title = {Cryo-EM Heterogeneity Analysis using Regularized Covariance Estimation and Kernel Regression},
-      elocation-id = {2023.10.28.564422},
-      year = {2024},
-      doi = {10.1101/2023.10.28.564422},
-      publisher = {Cold Spring Harbor Laboratory},
+    @article{gilles2025cryo,
+      title={Cryo-{EM} heterogeneity analysis using regularized covariance estimation and kernel regression},
+      author={Gilles, Marc Aur{\`e}le and Singer, Amit},
+      journal={Proceedings of the National Academy of Sciences},
+      volume={122},
+      number={9},
+      pages={e2419140122},
+      year={2025},
+      publisher={National Academy of Sciences}
     }
 
 
