@@ -15,7 +15,7 @@ RECOVAR is a software tool for analyzing different conformations in heterogeneou
 </details>
 
 If you are interested in the research and methods
-[see preprint here](https://www.biorxiv.org/content/10.1101/2023.10.28.564422v4) and recorded talk [here](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s).
+[see paper here](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122) and recorded talk [here](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s) (the talk is a little outdated).
 
 [Installation](#installation)
 
