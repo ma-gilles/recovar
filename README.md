@@ -1,4 +1,4 @@
-# RECOVAR: Regularized covariance estimation for cryo-EM heterogeneity analysis
+# RECOVAR: Tools for cryo-EM heterogeneity analysis
 
 RECOVAR is a software tool for analyzing different conformations in heterogeneous cryo-EM and cryo-ET datasets. RECOVAR can reconstruct high-resolution volumes, estimate conformational density and low free-energy motions, and automatically identify subsets of images with a particular volume feature.
 
