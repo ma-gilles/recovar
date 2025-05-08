@@ -70,7 +70,7 @@ class NumpyLoader(torch.utils.data.DataLoader):
 # A dataset class, that includes images and all other information
 class CryoEMDataset:
 
-    def __init__(self, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.evaluate_ctf_wrapper, dtype = np.complex64, rotation_dtype = np.float32, dataset_indices = None, grid_size = None, volume_upsampling_factor = 1, tilt_series_flag = False  ):
+    def __init__(self, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.evaluate_ctf_wrapper, dtype = np.complex64, rotation_dtype = np.float32, dataset_indices = None, grid_size = None, volume_upsampling_factor = 1, tilt_series_flag = False, premultiplied_ctf = False  ):
         
         if image_stack is not None:
             grid_size = image_stack.D
@@ -110,7 +110,7 @@ class CryoEMDataset:
         
         # self.n_units = self.n_images # This is the number of predictions.
         self.tilt_series_flag = tilt_series_flag # Hopefully can just switch this on and off
-        self.premultiplied_ctf = False
+        self.premultiplied_ctf = premultiplied_ctf
 
         # For SPA, it is # of images, for ET, it is # of tilt series
         # For tilt series: A "tilt" is an image. A particle is a full tilt series 
@@ -314,7 +314,7 @@ def subsample_cryoem_dataset(dataset, indices):
 
 
 # Loads dataset that are stored in the cryoDRGN format
-def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False, tilt_series = False, tilt_series_ctf = None, dose_per_tilt = 2.9, angle_per_tilt = 3 ):
+def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False, tilt_series = False, tilt_series_ctf = None, dose_per_tilt = 2.9, angle_per_tilt = 3, premultiplied_ctf = False):
     
     # For backward compatibility... Delete at some point?
     if tilt_series_ctf is None and tilt_series is False:
@@ -341,6 +341,7 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
             dataset = LazyMRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
         else:
             dataset = MRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
+
 
     from recovar import cryodrgn_load
     ctf_params = np.array(cryodrgn_load.load_ctf_for_training(dataset.D, ctf_file))
@@ -431,9 +432,8 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
     if ind is not None:
         ind = ind.astype(int)
 
-
     return CryoEMDataset( dataset, voxel_size,
-                              rots, translations, ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind, tilt_series_flag = tilt_series)
+                              rots, translations, ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind, tilt_series_flag = tilt_series, premultiplied_ctf = premultiplied_ctf)
 
 
 
@@ -446,11 +446,11 @@ def get_split_datasets(particles_file, poses_file, ctf_file, datadir,
                                   padding = 0, n_images = None, tilt_series = False,
                                  tilt_series_ctf = None,
                                     angle_per_tilt = 3, dose_per_tilt = 2.9,
-                                   ind_split = None, lazy = False):
+                                   ind_split = None, lazy = False, premultiplied_ctf = False):
     
     cryos = []
     for ind in ind_split:
-        cryos.append(load_cryodrgn_dataset(particles_file, poses_file, ctf_file , datadir = datadir, n_images = n_images, ind = ind, lazy = lazy, padding = padding, uninvert_data = uninvert_data, tilt_series = tilt_series, tilt_series_ctf = tilt_series_ctf, angle_per_tilt = angle_per_tilt, dose_per_tilt = dose_per_tilt))
+        cryos.append(load_cryodrgn_dataset(particles_file, poses_file, ctf_file , datadir = datadir, n_images = n_images, ind = ind, lazy = lazy, padding = padding, uninvert_data = uninvert_data, tilt_series = tilt_series, tilt_series_ctf = tilt_series_ctf, angle_per_tilt = angle_per_tilt, dose_per_tilt = dose_per_tilt, premultiplied_ctf = premultiplied_ctf))
     
     return cryos
 
@@ -537,7 +537,7 @@ def make_dataset_loader_dict(args):
                             'tilt_series_ctf' : 'cryoem',
                             'angle_per_tilt' : None,
                             'dose_per_tilt' : None,
-                            # 'tilt_ind' : None,
+                            'premultiplied_ctf' : False,
                             }
     
     # For backward compatibility... Delete at some point?
@@ -546,6 +546,9 @@ def make_dataset_loader_dict(args):
         dataset_loader_dict['tilt_series_ctf'] = args.tilt_series_ctf
         dataset_loader_dict['angle_per_tilt'] = args.angle_per_tilt
         dataset_loader_dict['dose_per_tilt'] = args.dose_per_tilt
+
+    if hasattr(args, 'premultiplied_ctf'):
+        dataset_loader_dict['premultiplied_ctf'] = args.premultiplied_ctf
 
     # if hasattr(args,'tilt_ind'):
     #     dataset_loader_dict['tilt_ind'] = args.tilt_ind
@@ -623,7 +626,8 @@ def get_default_dataset_option():
                             'tilt_series_ctf' : 'cryoem',
                             'angle_per_tilt' : 3,
                             'dose_per_tilt' : 2.9,
-                            'uninvert_data' : False}
+                            'uninvert_data' : False,
+                            'premultiplied_ctf' : False,}
     return dataset_loader_dict
 
 def load_dataset_from_dict(dataset_loader_dict, lazy = True):

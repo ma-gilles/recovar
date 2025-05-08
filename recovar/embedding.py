@@ -19,27 +19,27 @@ def split_weights(weight, cryos):
         start_idx = end_idx
     return weights
 
-def generate_conformation_from_reweighting(cryos, means, cov_noise, zs, cov_zs, latent_points, batch_size, disc_type, likelihood_threshold = None, recompute_prior = True, volume_mask = None, adaptive = False ):    
+# def generate_conformation_from_reweighting(cryos, means, cov_noise, zs, cov_zs, latent_points, batch_size, disc_type, likelihood_threshold = None, recompute_prior = True, volume_mask = None, adaptive = False ):    
     
-    likelihood_threshold = latent_density.get_log_likelihood_threshold(k = zs.shape[-1]) if likelihood_threshold is None else likelihood_threshold
+#     likelihood_threshold = latent_density.get_log_likelihood_threshold(k = zs.shape[-1]) if likelihood_threshold is None else likelihood_threshold
 
-    weights = latent_density.compute_weights_of_conformation_2(latent_points, zs, cov_zs,likelihood_threshold = likelihood_threshold )
-    logger.info(f"likelihood_threshold: {likelihood_threshold}")
-    logger.info(f"weights per state: {np.array2string(np.sum(weights,axis=0))}")
-    logger.info(f"summed weights {np.sum(weights)}")
+#     weights = latent_density.compute_weights_of_conformation_2(latent_points, zs, cov_zs,likelihood_threshold = likelihood_threshold )
+#     logger.info(f"likelihood_threshold: {likelihood_threshold}")
+#     logger.info(f"weights per state: {np.array2string(np.sum(weights,axis=0))}")
+#     logger.info(f"summed weights {np.sum(weights)}")
 
-    all_weights_0 = []
-    all_weights_1 = []
+#     all_weights_0 = []
+#     all_weights_1 = []
 
-    for w in weights.T:
-        weight_this = split_weights(w,cryos)
-        all_weights_0.append(weight_this[0])
-        all_weights_1.append(weight_this[1])
+#     for w in weights.T:
+#         weight_this = split_weights(w,cryos)
+#         all_weights_0.append(weight_this[0])
+#         all_weights_1.append(weight_this[1])
 
-    image_weights = [np.array(all_weights_0),np.array(all_weights_1)] 
+#     image_weights = [np.array(all_weights_0),np.array(all_weights_1)] 
 
-    reconstructions, fscs = homogeneous.get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, means['prior'], means['combined']*0 , image_weights, recompute_prior = recompute_prior, volume_mask = volume_mask, adaptive = adaptive)
-    return reconstructions, fscs
+#     reconstructions, fscs = homogeneous.get_multiple_conformations(cryos, cov_noise, disc_type, batch_size, means['prior'], means['combined']*0 , image_weights, recompute_prior = recompute_prior, volume_mask = volume_mask, adaptive = adaptive)
+#     return reconstructions, fscs
     
 def generate_conformation_from_reprojection(xs, mean, u ):
     return ((mean[...,None] + u @ xs.T)[0]).T
@@ -196,7 +196,8 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
                                                                        experiment_dataset.CTF_fun, contrast_grid,
                                                                        contrast_mean, contrast_variance, compute_bias, 
                                                                        shared_label = shared_label,
-                                                                       contrast_shared_across_tilt_series = contrast_shared_across_tilt_series)
+                                                                       contrast_shared_across_tilt_series = contrast_shared_across_tilt_series,
+                                                                       premultiplied_ctf = experiment_dataset.premultiplied_ctf)
         
         # If we are not sharing labels, we need to make sure we are assigning the correct label to each particle
         if force_not_shared_label:
@@ -227,13 +228,19 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
 
 
 
-@functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19, 23, 24,25])    
-def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, compute_covariances, noise_variance, process_fn, CTF_fun, contrast_grid, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, shared_label = False, contrast_shared_across_tilt_series = True):
+@functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19, 23, 24,25,26])    
+def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, eigenvalues,
+                                       CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold,
+                                         image_shape, volume_shape, grid_size, voxel_size, padding,
+                                           disc_type, compute_covariances, noise_variance, process_fn, CTF_fun,
+                                             contrast_grid, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, shared_label = False,
+                                               contrast_shared_across_tilt_series = True, premultiplied_ctf = False):
 
     contrast_grid = jnp.array(contrast_grid)    
 
     # This should scale as O( batch_size * (n^2 * basis_size + n^3 + basis_size**2))
-    AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq = compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, noise_variance, process_fn, CTF_fun)
+    #                                                                                   compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, noise_variance, process_fn, CTF_fun, premultiplied_ctf = False)
+    AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq = compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, noise_variance, process_fn, CTF_fun, premultiplied_ctf)
     
     # Can't think of a great way to broadcast here, so:
     # if noise_variance.ndim < 2:
@@ -371,6 +378,7 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
     batch = process_fn(batch)
     batch = core.translate_images(batch, translations , image_shape)
 
+    # Here, also, we do not apply the CTF if the images are already CTF premultiplied
     projected_mean = core.forward_model_from_map(mean_estimate,
                                          CTF_params,
                                          rotation_matrices, 
@@ -378,7 +386,8 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
                                          volume_shape, 
                                         voxel_size, 
                                         CTF_fun, 
-                                        disc_type              
+                                        disc_type,
+                                        skip_ctf= premultiplied_ctf,              
                                           )
     
     ## DO MASK BUSINESS HERE.
@@ -394,7 +403,7 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
                                         voxel_size, 
                                         CTF_fun, 
                                         disc_type,
-                                        premultiplied_ctf )   
+                                        premultiplied_ctf )  # skip_ctf = premultiplied_ctf
      
     # Apply mask on operator
     if apply_mask:
@@ -403,29 +412,33 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
 
     # Do noise busisness here?
     batch /= jnp.sqrt(noise_variance)
-    AU_t_images = batch_x_T_y(AUs, batch)#.block_until_ready()
-    # Dont multiply AUs by CTF above if premultiplied_ctf is one, as batch is already CTF premultiplied
-    # But now, do it:
-    if premultiplied_ctf:
-        AUs *= CTF_fun(CTF_params, grid_size, voxel_size, disc_type)[...,None]
-
     projected_mean /= jnp.sqrt(noise_variance)
     AUs /= jnp.sqrt(noise_variance)[...,None]
 
+    if premultiplied_ctf:
+        AU_t_images = batch_x_T_y(AUs, batch) # Here, the batch is already CTF premultiplied, so the AUs are not CTF multiplied if premultiplied_ctf is true
+        image_T_A_mean =  batch_x_T_y(batch, projected_mean) # Same here, the batch is already CTF premultiplied, so the projected mean is not CTF multiplied if premultiplied_ctf is true
+
+        # Dont multiply AUs by CTF above if premultiplied_ctf is one, as batch is already CTF premultiplied
+        # But now, do it and on mean:
+        CTF = CTF_fun( CTF_params, image_shape, voxel_size)
+        AUs *= CTF[...,None]
+        projected_mean *= CTF
+    else:
+        AU_t_images = batch_x_T_y(AUs, batch)
+        image_T_A_mean =  batch_x_T_y(batch, projected_mean) #jnp.conj(images).T @ projected_mean
+
+
     AU_t_Amean = batch_x_T_y(AUs, projected_mean)#.block_until_ready()
     AU_t_AU = batch_x_T_y(AUs,AUs)#.block_until_ready()
+    A_mean_norm_sq = jnp.linalg.norm(projected_mean, axis =-1)**2
 
-
-    # Compute everything that is needed, before a low dimension contrast search
-    
     ## WARNING!!!
     ## Image norm squared is not actually needed, because it is basically doing min_x a(x) + norm(images)^2, so the it is a constant wrt the optimization.
     ## I am leaving it here anyway
     ## But it should be noted that this does not compute the correct norm is the images are ctf-premultiplied. However, it doesn't change anything.
     image_norms_sq = jnp.linalg.norm(batch, axis =-1)**2
 
-    image_T_A_mean =  batch_x_T_y(batch, projected_mean) #jnp.conj(images).T @ projected_mean
-    A_mean_norm_sq = jnp.linalg.norm(projected_mean, axis =-1)**2
     
     return AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq
     

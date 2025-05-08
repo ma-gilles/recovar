@@ -92,7 +92,7 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
         # a =1
         vol_batch_size = recovar.utils.get_vol_batch_size(map1.shape[0], recovar.utils.get_gpu_memory_total())/2
         if use_v2:
-            vol_batch_size *=4
+            vol_batch_size *=1
         # print(vol_batch_size)
         n_batch = utils.get_number_of_index_batch(sampling_points.shape[0], vol_batch_size)
         # print(n_batch)

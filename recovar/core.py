@@ -269,10 +269,10 @@ batch_get_nearest_gridpoint_indices = jax.vmap(get_nearest_gridpoint_indices, in
 batch_get_gridpoint_coords = jax.vmap(get_gridpoint_coords, in_axes =(0, None, None) ) 
 
 
-@functools.partial(jax.jit, static_argnums=[3,4,6,7,8], static_argnames=['premultiplied_ctf'])
-def forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, premultiplied_ctf=False ):
+@functools.partial(jax.jit, static_argnums=[3,4,6,7,8], static_argnames=['skip_ctf'])
+def forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf=False ):
     slices = slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type) 
-    if not premultiplied_ctf:
+    if not skip_ctf:
         slices = slices * CTF_fun( CTF_params, image_shape, voxel_size)
     return slices
 
@@ -280,34 +280,34 @@ batch_forward_model_from_map = jax.vmap(forward_model_from_map, in_axes = (0, 0,
 
 
 
-@functools.partial(jax.jit, static_argnums=[3,4,6,7,8], static_argnames=['premultiplied_ctf'])
-def forward_model_from_map_and_return_adjoint(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, premultiplied_ctf = False):
-    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, premultiplied_ctf)
+@functools.partial(jax.jit, static_argnums=[3,4,6,7,8], static_argnames=['skip_ctf'])
+def forward_model_from_map_and_return_adjoint(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf = False):
+    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf)
     slices, f_adj = vjp(f,volume)
     return slices, f_adj
 
 
 # A JAXed version of the adjoint. This is actually slightly slower but will run with disc_type = 'linear_interp'. I probably should just write out an explicit adjoint of linear interpolation...
-@functools.partial(jax.jit, static_argnums=[3,4,6,7,8], static_argnames=['premultiplied_ctf'])
-def adjoint_forward_model_from_map(slices, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, premultiplied_ctf=False ):  
+@functools.partial(jax.jit, static_argnums=[3,4,6,7,8], static_argnames=['skip_ctf'])
+def adjoint_forward_model_from_map(slices, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf=False ):  
     volume_size = np.prod(volume_shape)
-    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, premultiplied_ctf)
+    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf)
     _, u = vjp(f,jnp.zeros(volume_size, dtype = slices.dtype ))
     return u(slices)[0]
 
 
-@functools.partial(jax.jit, static_argnums=[3,4,6,7,8], static_argnames=['premultiplied_ctf'])
-def adjoint_forward_model_from_trilinear(slices, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, premultiplied_ctf = False):
-    if not premultiplied_ctf:
+@functools.partial(jax.jit, static_argnums=[3,4,6,7,8], static_argnames=['skip_ctf'])
+def adjoint_forward_model_from_trilinear(slices, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf = False):
+    if not skip_ctf:
         slices = slices * CTF_fun( CTF_params, image_shape, voxel_size)
     return adjoint_slice_volume_by_trilinear(slices, rotation_matrices, image_shape, volume_shape, volume = None)
 
 
 
 # Compute A^TAx (the forward, then its adjoint). For JAX reasons, this should be about 2x faster than doing each call separately.
-@functools.partial(jax.jit, static_argnums=[3,4,6,7,9], static_argnames=['premultiplied_ctf'])
-def compute_A_t_Av_forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, noise_variance, premultiplied_ctf = False):    
-    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, premultiplied_ctf)
+@functools.partial(jax.jit, static_argnums=[3,4,6,7,9], static_argnames=['skip_ctf'])
+def compute_A_t_Av_forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, noise_variance, skip_ctf = False):    
+    f = lambda volume : forward_model_from_map(volume, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf)
     y, u = vjp(f,volume)
     return u(y/noise_variance)
 
@@ -459,6 +459,8 @@ def evaluate_ctf(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfactor):
     ctf = (1-w**2)**.5*jnp.sin(gamma) - w*jnp.cos(gamma) 
     if bfactor is not None:
         ctf *= jnp.exp(-bfactor/4*s2)
+
+    
     return ctf
 
 @jax.jit

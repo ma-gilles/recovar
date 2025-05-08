@@ -89,7 +89,7 @@ def relion_style_triangular_kernel_batch(images, CTF_params, rotation_matrices, 
     
     images = core.translate_images(images, translations, image_shape) / noise_variances
     # Ft_y = core.adjoint_forward_model_from_trilinear(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
-    Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, premultiplied_ctf) 
+    Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf=premultiplied_ctf) 
 
 
     CTF = CTF_fun( CTF_params, image_shape, voxel_size) / noise_variances
