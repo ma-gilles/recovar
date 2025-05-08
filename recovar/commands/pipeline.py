@@ -269,6 +269,14 @@ def add_args(parser: argparse.ArgumentParser):
         "--gpu-gb", default =None,  type = float, dest="gpu_memory", help="How much GPU memory to use. Default = all" 
     )
 
+    parser.add_argument(
+        "--premultiplied-ctf", dest = 'premultiplied_ctf', action="store_true", help="Whether to use premultiplied CTF. Default = False"
+    )
+
+    parser.add_argument(
+        "--new-noise-est", dest = 'new_noise_est', action="store_true", help="Whether to use new noise estimation. Default = False"
+    )
+
 
     parser.add_argument('--shared_contrast_across_tilts', action=argparse.BooleanOptionalAction, default =False,
                         help="Whether to share contrast (amplitude scale) across tilts in cryoET. Default = False")
@@ -331,7 +339,6 @@ def standard_recovar_pipeline(args):
 
     logger.info(args)
     ind_split = dataset.figure_out_halfsets(args)
-
     dataset_loader_dict = dataset.make_dataset_loader_dict(args)
     options = utils.make_algorithm_options(args)
 
@@ -464,6 +471,7 @@ def standard_recovar_pipeline(args):
         if args.only_mean:
             return
 
+        ### FIGURE OUT MASKS
         if args.focus_mask is not None:
             focus_mask, _= mask.masking_options(args.focus_mask, means, volume_shape, cryo.dtype_real, args.mask_dilate_iter, args.keep_input_mask)
         else:
@@ -478,28 +486,61 @@ def standard_recovar_pipeline(args):
         else:
             focus_masks = [focus_mask]
 
+        ## NOW ESTIMATE NOISE A FEW WAYS
+
         noise_time = time.time()
-        # Probably should rename all of this...
-        masked_image_PS, std_masked_image_PS, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
+        use_new_noise_fn = args.new_noise_est or args.premultiplied_ctf
+        logger.info(f"Using new noise estimation function?: {use_new_noise_fn}")
+        # if use_new_noise_fn:
+        #     # radial_noise_var_outside_mask = 
+        #     masked_image_PS, _ = noise.fit_noise_model_to_images2(cryo, dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = True, disc_type = 'linear_interp')
+        #     print("change discretization to cubic!")
+        # else:
+        #     masked_image_PS, std_masked_image_PS, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
         
         if args.mask.endswith(".mrc"):
-            radial_noise_var_outside_mask, _,_ =  noise.estimate_noise_variance_from_outside_mask_v2(cryo, dilated_volume_mask, batch_size)
-
-            white_noise_var_outside_mask = noise.estimate_white_noise_variance_from_mask(cryo, dilated_volume_mask, batch_size)
+            if use_new_noise_fn:
+                masked_image_PS, _ = noise.fit_noise_model_to_images2(cryo, dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = True, disc_type = 'linear_interp')
+            else:
+                radial_noise_var_outside_mask, _,_ =  noise.estimate_noise_variance_from_outside_mask_v2(cryo, dilated_volume_mask, batch_size)
+                white_noise_var_outside_mask = noise.estimate_white_noise_variance_from_mask(cryo, dilated_volume_mask, batch_size)
             # white_noise_var_outside_mask = white_noise_var_outside_mask.copy()
         else:
-            radial_noise_var_outside_mask = masked_image_PS#noise_var_from_hf * np.ones(cryos[0].grid_size//2 -1, dtype = np.float32)
+            if use_new_noise_fn:
+                # radial_noise_var_outside_mask = 
+                masked_image_PS, _ = noise.fit_noise_model_to_images2(cryo, dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = True, disc_type = 'linear_interp')
+                print("change discretization to cubic!")
+                # Estimates the 
+                image_PS = noise.estimate_noise_level_no_masks(
+                        cryo,
+                        None, # Pass image_subset = None
+                        None, # Pass mean = None 
+                        batch_size,
+                        disc_type="linear_interp",
+                    ) 
+                std_masked_image_PS = None
+                std_image_PS = None
+
+            else:
+                masked_image_PS, std_masked_image_PS, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
+
+            radial_noise_var_outside_mask = masked_image_PS
             white_noise_var_outside_mask = np.median(masked_image_PS)
 
-            # radial_noise_var_outside_mask = noise_var_from_hf * np.ones_like(noise_var_outside_mask)
+        if use_new_noise_fn:
+            assert noise_model == "radial", f"new noise fn only works with radial noise model. You set {noise_model}"
 
-    
 
         logger.info(f"time to estimate noise is {time.time() - noise_time}")
         utils.report_memory_device(logger=logger)
 
         noise_time = time.time()
-        radial_ub_noise_var, _,_ =  noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(cryo, means['combined'], dilated_volume_mask, batch_size)
+        if use_new_noise_fn:
+            # radial_noise_var_outside_mask = 
+            radial_ub_noise_var, _ =  noise.fit_noise_model_to_images2(cryo, dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = False, disc_type = 'linear_interp')
+        else:
+            radial_ub_noise_var, _,_ =  noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(cryo, means['combined'], dilated_volume_mask, batch_size)
+
         logger.info(f"time to upper bound noise is {time.time() - noise_time}")
 
 
@@ -514,83 +555,58 @@ def standard_recovar_pipeline(args):
             noise_var_used = radial_noise_var_ubed
         
         if (noise_var_used <0).any():
-            logger.warning("Negative noise variance detected. Setting to image power spectrum / 10")
+            logger.info("Negative noise variance detected. Setting to image power spectrum / 10")
 
         noise_var_used = np.where(noise_var_used < 0, image_PS / 10, noise_var_used)
         _update_noise_variance(noise_var_used)
 
-        ## TODO Does Tilt series for anything for variance??
-        variance_time = time.time()
-        variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, use_regularization = True, disc_type = 'cubic')
-        # print('using regul in variance est?!?')
-        logger.info(f"variance estimation time: {time.time() - variance_time}")
-        utils.report_memory_device(logger=logger)
+        for noise_repeat in range(2):
+            ## TODO Does Tilt series for anything for variance??
+            variance_time = time.time()
+            variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, use_regularization = True, disc_type = 'cubic')
+            # print('using regul in variance est?!?')
+            logger.info(f"variance estimation time: {time.time() - variance_time}")
+            utils.report_memory_device(logger=logger)
 
 
-        rad_grid = np.array(ftu.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
-        # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
-        n_shell_to_ub = np.min([32, cryos[0].grid_size//2 -1])
-        ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
-        variance_est_low_res_5_pc = np.zeros(n_shell_to_ub, dtype = np.float32)
-        variance_est_low_res_median = np.zeros(n_shell_to_ub, dtype = np.float32)
+            rad_grid = np.array(ftu.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
+            # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
+            n_shell_to_ub = np.min([32, cryos[0].grid_size//2 -1])
+            ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
+            variance_est_low_res_5_pc = np.zeros(n_shell_to_ub, dtype = np.float32)
+            variance_est_low_res_median = np.zeros(n_shell_to_ub, dtype = np.float32)
 
-        for k in range(n_shell_to_ub):
-            if np.sum(rad_grid==k) >0:
-                ub_noise_var_by_var_est[k] = np.percentile(noise_p_variance_est[rad_grid==k], 5)
-                ub_noise_var_by_var_est[k] = np.max([0, ub_noise_var_by_var_est[k]])
-                variance_est_low_res_5_pc[k] = np.percentile(variance_est['combined'][rad_grid==k], 5)
-                variance_est_low_res_median[k] = np.median(variance_est['combined'][rad_grid==k])
+            for k in range(n_shell_to_ub):
+                if np.sum(rad_grid==k) >0:
+                    ub_noise_var_by_var_est[k] = np.percentile(noise_p_variance_est[rad_grid==k], 5)
+                    ub_noise_var_by_var_est[k] = np.max([0, ub_noise_var_by_var_est[k]])
+                    variance_est_low_res_5_pc[k] = np.percentile(variance_est['combined'][rad_grid==k], 5)
+                    variance_est_low_res_median[k] = np.median(variance_est['combined'][rad_grid==k])
 
-        if np.any(ub_noise_var_by_var_est >  noise_var_used[:n_shell_to_ub]):
-            logger.warning("Estimated noise greater than upper bound. Bounding noise using estimated upper obund")
+            if np.any(ub_noise_var_by_var_est >  noise_var_used[:n_shell_to_ub]):
+                logger.info("Estimated noise greater than upper bound. Bounding noise using estimated upper bound")
 
-        if np.any(variance_est_low_res_5_pc < 0):
-            logger.warning("Estimated variance resolutino is < 0. This probably means that the noise was incorrectly estimated. Recomputing noise")
-            print("5 percentile:", variance_est_low_res_5_pc)
-            print("5 percentile/median over low shells:", variance_est_low_res_5_pc/variance_est_low_res_median)
+            if np.any(variance_est_low_res_5_pc < 0):
+                logger.info("Estimated variance resolutino is < 0. This probably means that the noise was incorrectly estimated. Recomputing noise")
+                print("5 percentile:", variance_est_low_res_5_pc)
+                print("5 percentile/median over low shells:", variance_est_low_res_5_pc/variance_est_low_res_median)
 
-        noise_var_used[:n_shell_to_ub] = np.where( noise_var_used[:n_shell_to_ub] > ub_noise_var_by_var_est, ub_noise_var_by_var_est, noise_var_used[:n_shell_to_ub])
+            # if not cryos[0].premultiplied_ctf:
+                # This is a bit of a hack. We are using the variance estimate to bound the noise variance
+                # This is not correct, but it is better than nothing
+            noise_var_used[:n_shell_to_ub] = np.where( noise_var_used[:n_shell_to_ub] > ub_noise_var_by_var_est, ub_noise_var_by_var_est, noise_var_used[:n_shell_to_ub])
+            # else:
+            #     print('FIX THIS')
+            #     print('FIX THIS')
+            #     print('FIX THIS')
+            #     print('FIX THIS')
+            #     print('FIX THIS')
 
-        noise_var_used = noise_var_used.astype(cryos[0].dtype_real)
-
-        if noise_model == "mixed":
-            # Noise at very low resolution is difficult to estimate. This is a heuristic to avoid some issues.
-            fixed_resolution_shell = 32
-            # Take min of PS and noise variance at fixed shell
-            noise_var_used[:fixed_resolution_shell] = np.where(image_PS[:fixed_resolution_shell]> noise_var_used[fixed_resolution_shell], noise_var_used[fixed_resolution_shell], image_PS[:fixed_resolution_shell])
-
-        _update_noise_variance(noise_var_used)
-
-        variance_est, _, variance_fsc, _, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, use_regularization = True, disc_type = 'cubic')
-        utils.report_memory_device(logger=logger)
-
-        rad_grid = np.array(ftu.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
-        # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
-        n_shell_to_ub = np.min([32, cryos[0].grid_size//2 -1])
-        ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
-        variance_est_low_res_5_pc = np.zeros(n_shell_to_ub, dtype = np.float32)
-        variance_est_low_res_median = np.zeros(n_shell_to_ub, dtype = np.float32)
-
-        for k in range(n_shell_to_ub):
-            if np.sum(rad_grid==k) >0:
-                ub_noise_var_by_var_est[k] = np.percentile(noise_p_variance_est[rad_grid==k], 5)
-                ub_noise_var_by_var_est[k] = np.max([0, ub_noise_var_by_var_est[k]])
-                variance_est_low_res_5_pc[k] = np.percentile(variance_est['combined'][rad_grid==k], 5)
-                variance_est_low_res_median[k] = np.median(variance_est['combined'][rad_grid==k])
-
-        if np.any(ub_noise_var_by_var_est >  noise_var_used[:n_shell_to_ub]):
-            logger.warning("Estimated noise greater than upper bound. Bounding noise using estimated upper obund")
+            noise_var_used = noise_var_used.astype(cryos[0].dtype_real)
+            _update_noise_variance(noise_var_used)
 
 
-        if np.any(variance_est_low_res_5_pc < 0):
-            logger.warning("Estimated variance resolution is < 0.")
-            print("5 percentile:", variance_est_low_res_5_pc)
-            print("5 percentile/median over low shells:", variance_est_low_res_5_pc/variance_est_low_res_median)
 
-
-        _update_noise_variance(noise_var_used)
-
-        # test_covar_options = False
         if args.test_covar_options:
             tests = [ ]
             idx = 0
@@ -630,7 +646,6 @@ def standard_recovar_pipeline(args):
         if args.dont_use_image_mask:
             covariance_options['mask_images_in_proj'] = False
             covariance_options['mask_images_in_H_B'] = False
-
 
 
         # Compute principal components

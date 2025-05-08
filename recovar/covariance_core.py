@@ -59,7 +59,7 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
         image_mask = pad.pad_images_spatial_domain(image_mask, padding)[0]
 
     if binary:
-        proj_mask = (proj_mask > mask_threshold)  * image_mask[None]    
+        proj_mask = (proj_mask > mask_threshold)  * ( image_mask[None]  if image_mask is not None else 1)
         
     if soften > 0:
         # Soft mask
@@ -91,13 +91,16 @@ def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape):
     return proj_eigen
 
 
-# Compute y_i - P_i mu terms
+# Compute y_i - P_i mu terms. If premultiplied_ctf is true, this computes z_i - CTF_i P_i mu where z_i = y_i CTF_i is the premultiplied image.
 @functools.partial(jax.jit, static_argnums = [5,6,7,8,9,10, 11], static_argnames = ('premultiplied_ctf'))    
 def get_centered_images(images, mean, CTF_params, rotation_matrices, translations, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type, premultiplied_ctf = False  ):    
-    if premultiplied_ctf:
-        logger.warning('If premultiplied_ctf is True, the CTF function should be the premultiplied one, this return CTF**2')
+
     translated_images = core.translate_images(images, translations, image_shape)
-    centered_images = translated_images - core.forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) * CTF_fun(CTF_params, image_shape, voxel_size)
+    if premultiplied_ctf:
+        centered_images = translated_images - core.forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf = True) * CTF_fun(CTF_params, image_shape, voxel_size)**2
+    else:
+        centered_images = translated_images - core.forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf = False)
+    
     return centered_images
 
 def check_mask(mask):

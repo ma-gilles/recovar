@@ -1155,7 +1155,8 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
                                                                     experiment_dataset.voxel_size, 
                                                                     experiment_dataset.CTF_fun, 
                                                                     disc_type, 
-                                                                    noise_variances)
+                                                                    noise_variances,
+                                                                    premultiplied_ctf=experiment_dataset.premultiplied_ctf,)
         
 
             rhs += full_volume_to_half_volume(Ft_y_b, experiment_dataset.upsampled_volume_shape)

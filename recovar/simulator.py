@@ -103,6 +103,25 @@ def random_sampling_scheme(n_images, grid_size, seed =0, uniform = True ):
     return ctf_params, rotations, translations
 
 
+## A uniform pose generator
+def noctf_random_sampling_scheme(n_images, grid_size, seed =0, uniform = True ):
+    
+    np.random.seed(seed)
+    dataset_params_fn = load_first_dataset_params
+    ctf_params, _, _ = generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  )
+
+    ctf_params = ctf_params * 0
+    ctf_params[:,core.contrast_ind]=1
+    ctf_params[:,core.volt_ind]=300
+    ctf_params[:,core.w_ind]=-1
+    if uniform:
+        rotations = uniform_rotation_sampling(n_images, grid_size, seed = seed )
+    else:
+        rotations = nonuniform_rotation_sampling(n_images, grid_size, seed = seed )
+    translations = np.zeros([n_images,2])
+    return ctf_params, rotations, translations
+
+
 
 
 
@@ -148,6 +167,8 @@ def nonuniform_rotation_sampling(n_images, grid_size, seed = 0 ):
 def get_pose_ctf_generator(option):
     if option == "uniform":
         return random_sampling_scheme
+    elif option == "noctf":
+        return noctf_random_sampling_scheme
     elif option == "dataset1":
         return get_params_generator(load_first_dataset_params)
     elif option == "nonuniform":
@@ -241,7 +262,7 @@ def get_noise_model(option, grid_size):
 def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_images, outlier_file_input = None, grid_size = 128,
                                volume_distribution = None,  dataset_params_option = "dataset1", noise_level = 1, 
                                noise_model = "radial1", put_extra_particles = True, percent_outliers = 0.1, 
-                               volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, disc_type = 'linear_interp', n_tilts = -1, dose_per_tilt = 3, angle_per_tilt = 3, image_dtype = np.float16, image_offset_n_std = 0.0, per_particle_contrast=True ):
+                               volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, disc_type = 'linear_interp', n_tilts = -1, dose_per_tilt = 3, angle_per_tilt = 3, image_dtype = np.float16, image_offset_n_std = 0.0, per_particle_contrast=True, premultiplied_ctf = False ):
     from recovar import output
     output.mkdir_safe(output_folder)
     volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize = False )
@@ -269,9 +290,14 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
     # mrcf = mrcfile.new(output_folder + '/particles.'+str(grid_size)+'.mrcs',overwrite=True)
     mrc_file = None# mrcfile.new_mmap( output_folder + '/particles.'+str(grid_size)+'.mrcs', shape=(n_images, grid_size, grid_size), mrc_mode=2, overwrite = True)
 
+    # print( 'CHANGE THIS BACK')
+    # print( 'CHANGE THIS BACK')
+    # print( 'CHANGE THIS BACK')
+    # print( 'CHANGE THIS BACK')
     rescale_noise = True
     if rescale_noise:
-        main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, _ = generate_simulated_dataset(volumes, voxel_size, volume_distribution, 10, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file, image_offset_n_std= image_offset_n_std, per_particle_contrast=per_particle_contrast )
+        # Dont use premultiplied_ctf for
+        main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, _ = generate_simulated_dataset(volumes, voxel_size, volume_distribution, 10, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file, image_offset_n_std= image_offset_n_std, per_particle_contrast=per_particle_contrast, premultiplied_ctf = False )
         norm_image_square = np.mean(main_image_stack**2)
         norm_image = (norm_image_square)
 
@@ -286,7 +312,7 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
 
     # First make some dataset to figure out a good scaling?
     main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file, n_tilts = n_tilts, 
-    dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt, image_offset_n_std= image_offset_n_std , per_particle_contrast=per_particle_contrast)
+    dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt, image_offset_n_std= image_offset_n_std , per_particle_contrast=per_particle_contrast, premultiplied_ctf = premultiplied_ctf)
 
 
     simulation_info['volumes_path_root'] = volumes_path_root
@@ -336,7 +362,7 @@ def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_
     return volumes
 
 
-def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None, n_tilts = -1, dose_per_tilt = None, angle_per_tilt = None, voltage = 100, image_offset_n_std = 0.0, per_particle_contrast= True ):
+def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None, n_tilts = -1, dose_per_tilt = None, angle_per_tilt = None, voltage = 100, image_offset_n_std = 0.0, per_particle_contrast= True, premultiplied_ctf = False ):
     
     # voxel_size = 
     volume_shape = utils.guess_vol_shape_from_vol_size(volumes[0].size)
@@ -438,7 +464,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     
     mult = 1 if 'cubic' in disc_type else 5
     batch_size = mult * utils.get_image_batch_size(grid_size, utils.get_gpu_memory_total())
-
+    # import pdb; pdb.set_trace()
     # plt.imshow(main_dataset.get_CTF_image(0)); plt.colorbar()
     # plt.show();
     # import pdb; pdb.set_trace()
@@ -447,7 +473,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     # disc_type = 'nearest'
     # disc_type = 'linear_interp'
 
-    main_image_stack = simulate_data(main_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = disc_type, mrc_file = mrc_file )
+    main_image_stack = simulate_data(main_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = disc_type, mrc_file = mrc_file, premultiplied_ctf=premultiplied_ctf )
 
     image_means = np.mean(main_image_stack, axis = (-1,-2))
     # image_means_mean = np.mean(main_image_stack, axis = (-1,-2))
@@ -475,7 +501,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         other_particles_dataset = dataset.CryoEMDataset( None, voxel_size,
                                 rots_2, trans_2, ctf_params, CTF_fun = CTF_fun, dataset_indices = None, grid_size = grid_size)
         # No noise in this stack.
-        extra_particles_image_stack = simulate_data(other_particles_dataset, volumes,  noise_variance * 0 ,  batch_size, image_assignments, per_image_noise_scale_2, per_image_noise_scale, seed =0, disc_type = disc_type, mrc_file = None, pad_before_translate= True )
+        extra_particles_image_stack = simulate_data(other_particles_dataset, volumes,  noise_variance * 0 ,  batch_size, image_assignments, per_image_noise_scale_2, per_image_noise_scale, seed =0, disc_type = disc_type, mrc_file = None, pad_before_translate= True, premultiplied_ctf=premultiplied_ctf )
 
         main_image_stack += extra_particles_image_stack
 
@@ -493,7 +519,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         outlier_particle_dataset = dataset.CryoEMDataset( None, voxel_size,
                                 rots_3, trans_3, ctf_params_3, CTF_fun = CTF_fun, dataset_indices = None, grid_size = grid_size)
         
-        outlier_particle_image_stack = simulate_data(outlier_particle_dataset, outlier_volume[None],  noise_variance ,  batch_size, np.zeros(n_outlier_images, dtype = int), outlier_noise_scale, outlier_contrast, seed =1, disc_type = disc_type, mrc_file = None )
+        outlier_particle_image_stack = simulate_data(outlier_particle_dataset, outlier_volume[None],  noise_variance ,  batch_size, np.zeros(n_outlier_images, dtype = int), outlier_noise_scale, outlier_contrast, seed =1, disc_type = disc_type, mrc_file = None , premultiplied_ctf=premultiplied_ctf)
 
         ind_outliers = np.random.choice(n_images, n_outlier_images, replace =False)
         main_image_stack[ind_outliers] = outlier_particle_image_stack
@@ -574,7 +600,7 @@ roll_batch = jax.vmap(lambda x,y,z: jax.numpy.roll(x,y,axis = z), in_axes = (0, 
 
 
 # Solves the linear system Dx = b.
-def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = 'linear_interp', mrc_file = None, pad_before_translate = False, Bfactor=100 ):
+def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = 'linear_interp', mrc_file = None, pad_before_translate = False, Bfactor=100, premultiplied_ctf = False ):
 
     if disc_type == "pdb":
         gt_vols = [gsm.generate_volume_from_atoms(vol, voxel_size = experiment_dataset.voxel_size,  grid_size = experiment_dataset.grid_size,  freq_coords = None, jax_backend = False).reshape(-1) for vol in volumes ]
@@ -585,7 +611,6 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
     key = jax.random.PRNGKey(seed)
     # A little bit of a hack to account for the fact that noise is complex but goes to real
     noise_variance_mod = noise_variance.copy()
-    # noise_variance_mod[1:] = 2 * noise_variance_mod[1:] 
     noise_image = noise.make_radial_noise(noise_variance_mod, experiment_dataset.image_shape).reshape(experiment_dataset.image_shape)
 
     if mrc_file is None:
@@ -606,6 +631,8 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
         else:
             volume = volumes[vol_idx]
 
+        pad_before_ctf = True
+
         for k in range(0, int(np.ceil(n_images/batch_size))):
             batch_st = int(k * batch_size)
             batch_end = int(np.min( [(k+1) * batch_size, n_images]))
@@ -623,7 +650,8 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                                                  experiment_dataset.image_shape, 
                                                  experiment_dataset.grid_size, 
                                                  disc_type,
-                                                 experiment_dataset.CTF_fun)
+                                                 experiment_dataset.CTF_fun,
+                                                 skip_ctf = pad_before_ctf)
             elif disc_type == "pdb":
                 images_batch = simulate_nufft_data_batch_from_pdb(volumes[vol_idx],
                                                  experiment_dataset.rotation_matrices[indices], 
@@ -634,7 +662,12 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                                                  experiment_dataset.image_shape, 
                                                  experiment_dataset.grid_size, 
                                                  disc_type,
-                                                 experiment_dataset.CTF_fun) / gt_vols_norm
+                                                 experiment_dataset.CTF_fun,
+                                                  skip_ctf = pad_before_ctf) / gt_vols_norm
+                
+
+
+
             elif "ewald" in disc_type:
                 # disc_type_e = disc_type.split("_")[1]
                 disc_type_e = disc_type[6:]
@@ -648,13 +681,16 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                         experiment_dataset.CTF_params[indices],
                         experiment_dataset.image_shape,
                         experiment_dataset.volume_shape, 
-                        experiment_dataset.voxel_size, disc_type_e )
+                        experiment_dataset.voxel_size, disc_type_e ,
+                        skip_ctf = pad_before_ctf)
                 images_batch = images_batch_real + 1j * images_batch_real_imag
 
                 images_batch = core.translate_images(images_batch,
                         -translations,
                         experiment_dataset.image_shape)
                 
+                if premultiplied_ctf:
+                    raise NotImplementedError("Premultiplied CTF not implemented for Ewald")
                 
             elif disc_type == "linear_interp" or disc_type == "nearest" or disc_type == "cubic":
                 images_batch = simulate_data_batch(volume,
@@ -666,47 +702,107 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                                                  experiment_dataset.image_shape, 
                                                  experiment_dataset.grid_size, 
                                                  disc_type,
-                                                 experiment_dataset.CTF_fun)
+                                                 experiment_dataset.CTF_fun,
+                                                 skip_ctf = pad_before_ctf)
+                
+                
             else:
                 raise ValueError("Invalid disc_type")
 
-            images_batch = ftu.get_idft2(images_batch.reshape([-1, *experiment_dataset.image_shape]))
-            # import pdb; pdb.set_trace()
-            images_batch = images_batch.real
-            # images_batch = ftu.get_idft2(images_batch.reshape([-1, *experiment_dataset.image_shape])).real
 
-
-
-            if pad_before_translate:
-                plotting = True
-                # for k in range(images_batch.shape[0]):
-                #     if k > 3:
-                #         break
+            
+            if pad_before_ctf:
                 from recovar import padding
-                padded_images = padding.pad_images_spatial_domain(images_batch,experiment_dataset.grid_size)
-                if plotting:
-                    import matplotlib.pyplot as plt
-                    plt.imshow(padded_images[0])
-                    plt.show()
-                padded_images = roll_batch(padded_images, -np.round(experiment_dataset.translations[indices]).astype(int)[:,0], -1 )
-                padded_images = roll_batch(padded_images, -np.round(experiment_dataset.translations[indices]).astype(int)[:,1], -2 )
-                if plotting:
-                    plt.imshow(padded_images[0])
-                    plt.show()
-                images_batch2 = padding.unpad_images_spatial_domain(padded_images, experiment_dataset.grid_size)
+                # IF this is on, we did not apply CTF above.
+                upsample_factor=2
+                upsampled_shape = tuple(np.array(experiment_dataset.image_shape) * upsample_factor)
+                upsampled_CTF = experiment_dataset.CTF_fun(experiment_dataset.CTF_params[indices],  upsampled_shape, experiment_dataset.voxel_size)
+                # upsampled_CTF2 = experiment_dataset.CTF_fun(experiment_dataset.CTF_params[indices],  experiment_dataset.image_shape, experiment_dataset.voxel_size)
+                # import matplotlib.pyplot as plt
+                # plt.imshow(upsampled_CTF.reshape(upsampled_shape))
+                # plt.show()
 
-                if plotting:
-                    plt.imshow(images_batch2[0]); plt.show()
-                    plt.show()
+                # import matplotlib.pyplot as plt
+                # plt.imshow(upsampled_CTF2.reshape(experiment_dataset.image_shape))
+                # plt.show()
+
+
                 # import pdb; pdb.set_trace()
-                images_batch = images_batch2
 
+                images_batch = padding.pad_images_fourier_domain(images_batch,  experiment_dataset.image_shape, experiment_dataset.grid_size * (upsample_factor-1))
+                images_batch = images_batch * upsampled_CTF
+                images_batch = ftu.get_idft2(images_batch.reshape([-1, *upsampled_shape]))
 
-            key, subkey = jax.random.split(key)
-            noise_batch = make_noise_batch(subkey, noise_image, images_batch.shape)
-            noise_batch *= per_image_noise_scale[indices][...,None,None]
-            images_batch *= per_image_contrast[indices][...,None,None]
-            output_array[indices] = np.array(images_batch + noise_batch)
+                ## adjust the radial noise to handle the upsampling
+                # Interpolate noise_variance onto a grid that is twice as fine
+                from scipy.interpolate import interp1d
+                original_grid = np.linspace(0, 1, len(noise_variance))
+                fine_grid = np.linspace(0, 1, len(noise_variance) * upsample_factor)
+                interpolator = interp1d(original_grid, noise_variance, kind='linear', fill_value="extrapolate")
+                noise_variance_mod = interpolator(fine_grid)
+                noise_image = noise.make_radial_noise(noise_variance_mod, upsampled_shape).reshape(upsampled_shape)
+
+                ## AND THE MAGIC NUMBER IS... (to make things consistent with the non-premultiplied CTF case)
+                noise_image = noise_image * upsample_factor **2
+                
+                # Make big noise
+                key, subkey = jax.random.split(key)
+                noise_batch = make_noise_batch(subkey, noise_image, images_batch.shape)
+                noise_batch *= per_image_noise_scale[indices][...,None,None]
+                images_batch *= per_image_contrast[indices][...,None,None]
+                
+                # Now apply CTF AGAIN after noise is added, and unpad
+
+                images_batch = (images_batch + noise_batch).real
+
+                if premultiplied_ctf:
+                    images_batch = ftu.get_dft2(images_batch)
+                    images_batch = images_batch * upsampled_CTF.reshape(-1, *upsampled_shape)
+                    images_batch = ftu.get_idft2(images_batch)
+
+                if pad_before_translate:
+                    images_batch = roll_batch(images_batch, -np.round(experiment_dataset.translations[indices]).astype(int)[:,0], -1 )
+                    images_batch = roll_batch(images_batch, -np.round(experiment_dataset.translations[indices]).astype(int)[:,1], -2 )
+
+                images_batch = padding.unpad_images_spatial_domain(images_batch, experiment_dataset.grid_size * (upsample_factor-1)).real
+                output_array[indices] = np.array(images_batch)
+
+            else:
+
+                if pad_before_translate:
+                    plotting = True
+                    # for k in range(images_batch.shape[0]):
+                    #     if k > 3:
+                    #         break
+                    from recovar import padding
+                    padded_images = padding.pad_images_spatial_domain(images_batch,experiment_dataset.grid_size)
+                    if plotting:
+                        import matplotlib.pyplot as plt
+                        plt.imshow(padded_images[0])
+                        plt.show()
+                    padded_images = roll_batch(padded_images, -np.round(experiment_dataset.translations[indices]).astype(int)[:,0], -1 )
+                    padded_images = roll_batch(padded_images, -np.round(experiment_dataset.translations[indices]).astype(int)[:,1], -2 )
+                    if plotting:
+                        plt.imshow(padded_images[0])
+                        plt.show()
+                    images_batch2 = padding.unpad_images_spatial_domain(padded_images, experiment_dataset.grid_size)
+
+                    if plotting:
+                        plt.imshow(images_batch2[0]); plt.show()
+                        plt.show()
+                    # import pdb; pdb.set_trace()
+                    images_batch = images_batch2
+                
+                images_batch = ftu.get_idft2(images_batch.reshape([-1, *experiment_dataset.image_shape]))
+                # import pdb; pdb.set_trace()
+                images_batch = images_batch.real
+                key, subkey = jax.random.split(key)
+                noise_batch = make_noise_batch(subkey, noise_image, images_batch.shape)
+                noise_batch *= per_image_noise_scale[indices][...,None,None]
+                images_batch *= per_image_contrast[indices][...,None,None]
+
+                output_array[indices] = np.array(images_batch + noise_batch)
+
 
 
             n_images_done += indices.size
@@ -740,22 +836,28 @@ def make_noise_batch(subkey, noise_image, images_batch_shape):
 
 
 
-@functools.partial(jax.jit, static_argnums = [4,5,6,7,8,9])    
-def simulate_data_batch(volume, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun ):
+@functools.partial(jax.jit, static_argnums = [4,5,6,7,8,9,10])    
+def simulate_data_batch(volume, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun, skip_ctf = False ):
     
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    corrected_images = core.slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type) * CTF
-    # import pdb; pdb.set_trace()
+    corrected_images = core.slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type) 
+    if not skip_ctf:
+        # Apply CTF
+        corrected_images = corrected_images * CTF
     # Translate back.
     translated_images = core.translate_images(corrected_images, -translations, image_shape)
     
     return translated_images
 
 
-def simulate_nufft_data_batch(volume, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun ):
+def simulate_nufft_data_batch(volume, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun, skip_ctf = False ):
     
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    corrected_images = get_nufft_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size) * CTF
+    corrected_images = get_nufft_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size) 
+
+    if not skip_ctf:
+        # Apply CTF
+        corrected_images = corrected_images * CTF
     
     # Translate back.
     translated_images = core.translate_images(corrected_images, -translations, image_shape)
@@ -772,13 +874,16 @@ def get_rotated_plane_coords(rotation_matrix, image_shape, voxel_size, scaled = 
 batch_get_rotated_plane_coords = jax.vmap(get_rotated_plane_coords, in_axes = (0, None, None, None))
 
 
-def simulate_nufft_data_batch_from_pdb(atom_group, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun, Bfactor=0 ):
+def simulate_nufft_data_batch_from_pdb(atom_group, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun, Bfactor=0, skip_ctf = False ):
     
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)    
     plane_coords_mol = batch_get_rotated_plane_coords(rotation_matrices, image_shape, voxel_size, True) 
     slices = compute_projections_with_nufft(atom_group, plane_coords_mol, voxel_size)
 
-    corrected_images = slices * CTF
+    if not skip_ctf:
+        # Apply CTF
+        corrected_images = slices * CTF
+
     # Translate back.
     translated_images = core.translate_images(corrected_images, -translations, image_shape)
     translated_images = Bfactorize_images(translated_images, Bfactor, plane_coords_mol)

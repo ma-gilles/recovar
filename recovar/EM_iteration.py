@@ -390,9 +390,9 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     del projections
     logger.info(f"done with norms. Batch size {norm_batch_size}")
 
-    n_batches = utils.get_number_of_index_batch(n_images, batch_size//10)
-    for array_indices, _ in utils.subset_and_indices_batch_iter(image_indices, batch_size//10):
-        residuals[array_indices] = compute_probability_from_residual_normal_squared_one_image(residuals[array_indices])
+    # n_batches = utils.get_number_of_index_batch(n_images, batch_size//10)
+    # for array_indices, _ in utils.subset_and_indices_batch_iter(image_indices, batch_size//10):
+    #     residuals[array_indices] = compute_probability_from_residual_normal_squared_one_image(residuals[array_indices])
 
     logger.info(f"done probs. Batch size {batch_size}")
 
