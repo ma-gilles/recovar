@@ -6,6 +6,7 @@ import functools
 from recovar import core, covariance_core, regularization, utils, constants
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
+import os
 
 logger = logging.getLogger(__name__)
 ## There is currently two ways to estimate noise:
@@ -21,27 +22,35 @@ class AbstractNoiseModel():
         pass    
 
 class RadialNoiseModel():
-    def __init__(self, noise_variance_radial):
+    def __init__(self, noise_variance_radial, image_shape = None):
         self.noise_variance_radial = noise_variance_radial
-        self.image_shape = (2 * (len(noise_variance_radial)+1) , 2 * (len(noise_variance_radial)+1) )
+        self.image_shape = image_shape if image_shape is not None else (2 * (len(noise_variance_radial)+1) , 2 * (len(noise_variance_radial)+1) )
     def get(self, *args, **kwargs):
         return make_radial_noise(self.noise_variance_radial, self.image_shape)[None]
     
+    def set_variance(self, noise_variance_radial):
+        self.noise_variance_radial = noise_variance_radial
+
     def get_average_radial_noise(self, *args, **kwargs):
         return self.noise_variance_radial
 
 
-class TiltSeriesNoiseModel():
-    def __init__(self, noise_variance_radials):
+class VariableRadialNoiseModel():
+    def __init__(self, noise_variance_radials, dose_indices, image_shape = None):
         self.noise_variance_radials = noise_variance_radials
-    
+        self.dose_indices = dose_indices
+        self.image_shape = image_shape if image_shape is not None else (2 * (len(noise_variance_radials[0])+1) , 2 * (len(noise_variance_radials[0])+1) )
+
     def get(self, indices, *args, **kwargs):
-        return batch_make_radial_noise(self.noise_variance_radials[indices])
+        dose_indices_batch = self.dose_indices[indices]
+        return batch_make_radial_noise(self.noise_variance_radials[dose_indices_batch], self.image_shape)
     
     def get_average_radial_noise(self, *args, **kwargs):
-        return
+        counts = jnp.bincount(self.dose_indices) / self.dose_indices.size      
+        return jnp.sum(self.noise_variance_radials * counts[:,None], axis=0)
     
-
+    def set_variance(self, noise_variance_radials):
+        self.noise_variance_radials = noise_variance_radials
 
 @functools.partial(jax.jit, static_argnums=(3,4,6))
 def get_image_masks(volume_mask, rotation_matrices, volume_mask_threshold, volume_shape, image_shape, image_mask, invert_mask):
@@ -127,9 +136,6 @@ def noise_variance_loss(images, noise_variance, translations, CTF_params, voxel_
     # plt.colorbar()
     # plt.show()
 
-    # import pdb; pdb.set_trace()
-
-
     # Compute the loss as the difference between the predicted and observed noise variance
     loss = jnp.sum( jnp.abs( jnp.abs(masked_images)**2 - predicted_noise_variance )**2  ) / np.prod(image_shape)
 
@@ -208,7 +214,6 @@ DEBUG = False
 #             # f = lambda x : jnp.sum(x)
 
 #             # jax.test_util.check_grads(f, (noise_variance, ), order=1, eps = np.float64(noise_variance[0] * 1e-3))
-#             # import pdb; pdb.set_trace()
 
 #         import matplotlib.pyplot as plt
 #         plt.plot(initial_noise_variance)
@@ -267,13 +272,11 @@ DEBUG = False
 #     initial_noise_variance= initial_noise_variance * average_PS
 #     print(f"initial_noise_variance={average_PS:.2e}")
 #     loss = loss_function(initial_noise_variance)
-#     # import pdb; pdb.set_trace()
 
 #     iterator = data_iterator()
 #     solver.run_iterator(initial_noise_variance, iterator)
 #     initial_noise_variance
 
-#     # import pdb; pdb.set_trace()
 
 #     from jaxopt import LBFGSB, ScipyBoundedMinimize
 
@@ -295,7 +298,6 @@ DEBUG = False
 #     optimized_noise_variance = lbfgsb_sol_p.params
 
 #     loss, loss_grad = loss_function(lbfgsb_sol_p.params)
-#     import pdb; pdb.set_trace()
 
 #     return optimized_noise_variance
 
@@ -303,15 +305,77 @@ DEBUG = False
     # Use the above function to jaxopt your way to a noise model. Should impose >=0, and perhaps some smoothness.
     
 
-def fit_noise_model_to_images2(experiment_dataset, volume_mask, mean_estimate, image_subset, batch_size, invert_mask, disc_type='linear_interp', use_batch_solver = True):
-    from jaxopt import LBFGSB, ScipyBoundedMinimize
-    import optax
-    from jaxopt import OptaxSolver, ArmijoSGD
-
-    import matplotlib.pyplot as plt
-
+def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, image_subset, batch_size, invert_mask, disc_type='linear_interp', use_batch_solver=True, tilt_dose_inner=False, image_n_iter=1e4):
+    """Fit noise model to images, handling tilt series data specially.
+    
+    Args:
+        experiment_dataset: Dataset containing images and metadata
+        volume_mask: Mask for the volume
+        mean_estimate: Estimate of mean volume
+        image_subset: Subset of images to use, or None for all
+        batch_size: Batch size for processing
+        invert_mask: Whether to invert the mask
+        disc_type: Type of discretization to use
+        use_batch_solver: Whether to use batch solver vs full dataset
+        tilt_dose_inner: Whether this is an inner call for tilt series
         
-    # ---------- initial guess (keep the real estimate, don’t overwrite) ----------
+    Returns:
+        For tilt series: Array of noise variances per tilt
+        Otherwise: Single noise variance and initial estimate
+    """
+    # Import optimization libraries
+    from jaxopt import LBFGSB, ScipyBoundedMinimize, OptaxSolver, ArmijoSGD
+    import optax
+
+    # Map unique CTF parameter values to sequential indices using unique
+    # _, dose_indices = jnp.unique(experiment_dataset.CTF_params[:,9], return_inverse=True)
+    # experiment_dataset.dose_indices = dose_indices
+
+    # Special handling for tilt series data
+    if isinstance(experiment_dataset.noise, VariableRadialNoiseModel) and not tilt_dose_inner:
+    # if True:
+        print("Fitting noise model for each tilt")
+        # Initialize array to store noise variances for each tilt
+        noise_variance_radials = []
+        initial_noise_variance_radials = []
+
+        # Get max tilt index
+        max_noise_index = jnp.max(experiment_dataset.noise.dose_indices) + 1
+        
+        # Fit noise model separately for each tilt
+        for tilt_idx in range(max_noise_index):
+            # Get images for this tilt
+            tilt_mask = experiment_dataset.noise.dose_indices == tilt_idx
+            tilt_images = np.where(tilt_mask)[0]
+            
+            # Intersect with provided image subset if any
+            images_to_use = (tilt_images if image_subset is None 
+                           else np.intersect1d(image_subset, tilt_images))
+            images_to_use = np.array(images_to_use)
+
+            # Fit noise model for this tilt
+            noise_variance, initial_noise_variance_radial = fit_noise_model_to_images(
+                experiment_dataset,
+                volume_mask, 
+                mean_estimate,
+                images_to_use,
+                batch_size,
+                invert_mask,
+                disc_type,
+                use_batch_solver,
+                tilt_dose_inner=True
+            )
+            noise_variance_radials.append(noise_variance)
+            initial_noise_variance_radials.append(initial_noise_variance_radial)
+            print("Done fitting noise model for tilt", tilt_idx)
+        noise_variance_radials = jnp.stack(noise_variance_radials)
+        initial_noise_variance_radials = jnp.stack(initial_noise_variance_radials)
+        return noise_variance_radials, initial_noise_variance_radials
+    
+    if image_subset is not None:
+        batch_size = int(np.min([batch_size, image_subset.size]))
+
+    # ---------- initial guess (keep the real estimate, don't overwrite) ----------
     initial_noise_variance = estimate_noise_level_no_masks(
         experiment_dataset,
         image_subset,
@@ -322,17 +386,19 @@ def fit_noise_model_to_images2(experiment_dataset, volume_mask, mean_estimate, i
 
 
     def infinite_data_iterator():
-        while True:                              # repeat forever (or add a break after N epochs)
-            for batch, _, batch_ind in \
-                experiment_dataset.get_dataset_subset_generator(
-                    batch_size=batch_size,
-                    subset_indices=image_subset):
-                yield (
-                    batch,
-                    experiment_dataset.rotation_matrices[batch_ind],
-                    experiment_dataset.translations[batch_ind],
-                    experiment_dataset.CTF_params[batch_ind],
-                )
+        # if tilt_dose_inner:
+            while True:                              # repeat forever (or add a break after N epochs)
+
+                for batch, _, batch_ind in \
+                    experiment_dataset.get_image_subset_generator(
+                        batch_size=batch_size,
+                        subset_indices=image_subset):
+                    yield (
+                        batch,
+                        experiment_dataset.rotation_matrices[batch_ind],
+                        experiment_dataset.translations[batch_ind],
+                        experiment_dataset.CTF_params[batch_ind],
+                    )
 
 
     # ---------- choose optimiser ----------
@@ -341,6 +407,7 @@ def fit_noise_model_to_images2(experiment_dataset, volume_mask, mean_estimate, i
     if use_batch_solver:
         # ---------- mini-batch loss (Optax expects signature: (params, data)) ----------
         #@jax.jit  # compiles once, regardless of batch size
+        logger.info("Fitting noise model to images using batch solver")
         def loss_fn_batch(noise_variance, data):
             batch, rot, trans, ctf_p = data
 
@@ -371,10 +438,14 @@ def fit_noise_model_to_images2(experiment_dataset, volume_mask, mean_estimate, i
                 experiment_dataset.premultiplied_ctf,
             )
             return loss / batch.shape[0]          # divide by mini-batch size
+        
         opt = optax.adam(1e-3)
+
+        maxiter = int(image_n_iter / batch_size)
+
         solver = OptaxSolver(opt=opt,
                             fun=loss_fn_batch,
-                            maxiter=100)
+                            maxiter=maxiter)
 
         # run the streaming optimiser; run_iterator returns (params, state)
         optimized_noise_variance, state = solver.run_iterator(
@@ -393,7 +464,7 @@ def fit_noise_model_to_images2(experiment_dataset, volume_mask, mean_estimate, i
 
             solver = OptaxSolver(opt=opt,
                                 fun=loss_function_partial,
-                                maxiter=100, tol = 1e-5)
+                                maxiter=maxiter, tol = 1e-5)
 
             # run the streaming optimiser; run_iterator returns (params, state)
             optimized_noise_variance_k, state = solver.run_iterator(
@@ -499,13 +570,96 @@ def fit_noise_model_to_images2(experiment_dataset, volume_mask, mean_estimate, i
     return optimized_noise_variance, initial_noise_variance
     
 
+
+def update_noise_variance(noise_variance, cryos):
+    for cryo in cryos:
+        if isinstance(cryo.noise, RadialNoiseModel):
+            cryo.set_radial_noise_model(noise_variance)
+        elif isinstance(cryo.noise, VariableRadialNoiseModel):
+            cryo.set_variable_radial_noise_model(noise_variance)
+
+
+def upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, cryos, means, batch_size, dilated_volume_mask):
+
+    if isinstance(cryos[0].noise, VariableRadialNoiseModel):
+        # Get max tilt index
+        experiment_dataset = cryos[0]
+        max_noise_index = jnp.max(experiment_dataset.noise.dose_indices) + 1
+        
+        # Fit noise model separately for each tilt
+        for tilt_idx in range(max_noise_index):
+            variance = upper_bound_noise_by_signal_p_noise(noise_var_used[tilt_idx], cryos, means, batch_size, dilated_volume_mask, noise_ind_subset = tilt_idx)
+        return variance
+
+    else:
+        return upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size, dilated_volume_mask, noise_ind_subset = None)
+
+
+def upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size, dilated_volume_mask, noise_ind_subset = None):
+        # Now, estimate the variance of the signal. If the variance estimate ends up negative, we have overestimated the noise variance.
+        for noise_repeat in range(2):
+            ## TODO Does Tilt series for anything for variance??
+            variance_time = time.time()
+            from recovar import covariance_estimation
+            variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, noise_ind_subset = noise_ind_subset, use_regularization = True, disc_type = 'cubic')
+            # print('using regul in variance est?!?')
+            logger.info(f"variance estimation time: {time.time() - variance_time}")
+            utils.report_memory_device(logger=logger)
+
+            # def upper_bound_noise_var(noise_var_used, variance_est, noise_p_variance_est):
+            rad_grid = np.array(ftu.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
+            # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
+            n_shell_to_ub = np.min([32, cryos[0].grid_size//2 -1])
+            ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
+            variance_est_low_res_5_pc = np.zeros(n_shell_to_ub, dtype = np.float32)
+            variance_est_low_res_median = np.zeros(n_shell_to_ub, dtype = np.float32)
+
+            for k in range(n_shell_to_ub):
+                if np.sum(rad_grid==k) >0:
+                    ub_noise_var_by_var_est[k] = np.percentile(noise_p_variance_est[rad_grid==k], 5)
+                    ub_noise_var_by_var_est[k] = np.max([0, ub_noise_var_by_var_est[k]])
+                    variance_est_low_res_5_pc[k] = np.percentile(variance_est['combined'][rad_grid==k], 5)
+                    variance_est_low_res_median[k] = np.median(variance_est['combined'][rad_grid==k])
+
+            if np.any(ub_noise_var_by_var_est >  noise_var_used[:n_shell_to_ub]):
+                logger.info("Estimated noise greater than upper bound. Bounding noise using estimated upper bound")
+
+            if np.any(variance_est_low_res_5_pc < 0):
+                logger.info("Estimated variance resolutino is < 0. This probably means that the noise was incorrectly estimated. Recomputing noise")
+                print("5 percentile:", variance_est_low_res_5_pc)
+                print("5 percentile/median over low shells:", variance_est_low_res_5_pc/variance_est_low_res_median)
+
+            # if not cryos[0].premultiplied_ctf:
+                # This is a bit of a hack. We are using the variance estimate to bound the noise variance
+                # This is not correct, but it is better than nothing
+            noise_var_used[:n_shell_to_ub] = np.where( noise_var_used[:n_shell_to_ub] > ub_noise_var_by_var_est, ub_noise_var_by_var_est, noise_var_used[:n_shell_to_ub])
+
+            noise_var_used = noise_var_used.astype(cryos[0].dtype_real)
+            if noise_ind_subset is None:
+                update_noise_variance(noise_var_used, cryos)
+            else:
+                new_noise_variance = cryos[0].noise.noise_variance_radials.copy()
+                new_noise_variance[noise_ind_subset] = noise_var_used
+                update_noise_variance(new_noise_variance, cryos)
+            
+        return variance_est
+
+
+
 def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimate, batch_size, disc_type='linear_interp'):
     lhs = 0
     rhs = 0 
-    data_generator = experiment_dataset.get_dataset_subset_generator(
+    
+    # Print debug info about input parameters
+    print(f"Image subset type: {type(image_subset)}")
+    if image_subset is not None:
+        print(f"Image subset shape: {image_subset.shape if hasattr(image_subset, 'shape') else 'no shape'}")
+    
+    data_generator = experiment_dataset.get_image_subset_generator(
         batch_size=batch_size,
         subset_indices=image_subset
     )
+
     total_loss = 0.0
     n_images = (image_subset.size if image_subset is not None else experiment_dataset.n_images)
     for batch, _, batch_ind in data_generator:
@@ -513,7 +667,6 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
         batch = core.translate_images(batch, experiment_dataset.translations[batch_ind], experiment_dataset.image_shape)
         CTF = experiment_dataset.CTF_fun(experiment_dataset.CTF_params[batch_ind], experiment_dataset.image_shape, experiment_dataset.voxel_size)
         
-
         if mean_estimate is not None:
             projected_mean = core.forward_model_from_map(mean_estimate,
                                                 experiment_dataset.CTF_params[batch_ind],
@@ -538,6 +691,7 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
         else:
             rhs += batch.shape[0] 
 
+    print("Finished processing all batches")
     estimated_noise = lhs / rhs
     return estimated_noise
 
@@ -768,7 +922,6 @@ def estimate_noise_variance_from_outside_mask_inner(batch, volume_mask, rotation
     masked_image_PS = regularization.batch_average_over_shells(jnp.abs(batch)**2, image_shape, 0) / image_mask_sums[:,None]
 
     # masked_image_PS = masked_image_PS.at[:,0].set(masked_image_PS[:,0] *  image_mask_sums[:] )
-    # import pdb; pdb.set_trace()
 
     return masked_image_PS, image_PS
     
@@ -1131,3 +1284,17 @@ def get_average_residual_square_inner_v2(batch, mean_estimate, volume_mask, basi
     substracted_images = batch - projected_vols
 
     return get_masked_image_noise_fractions(substracted_images, image_mask, image_shape)
+
+# # Count dose indices
+# unique_doses, dose_counts = np.unique(dose_indices, return_counts=True)
+# print("\nDose index distribution:")
+# for dose, count in zip(unique_doses, dose_counts):
+#     print(f"Dose index {dose}: {count} images ({count/len(dose_indices)*100:.1f}%)")
+
+# # Save dose distribution to a file
+# dose_dist_path = os.path.join(os.path.dirname(output_dir), 'dose_distribution.txt')
+# with open(dose_dist_path, 'w') as f:
+#     f.write("Dose index distribution:\n")
+#     for dose, count in zip(unique_doses, dose_counts):
+#         f.write(f"Dose index {dose}: {count} images ({count/len(dose_indices)*100:.1f}%)\n")
+# print(f"\nDose distribution saved to {dose_dist_path}")

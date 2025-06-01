@@ -144,7 +144,7 @@ class HeterogeneousVolumeDistribution():
 
     def get_spatial_variances(self, contrasted = False):
         vols = self.get_covariance_square_root(contrasted)
-        vols = linalg.get_batch_idft3(vols, self.volume_shape, self.vol_batch_size)
+        vols = linalg.batch_idft3(vols, self.volume_shape, self.vol_batch_size)
         return np.linalg.norm(vols, axis=-1)**2
 
 

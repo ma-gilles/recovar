@@ -262,7 +262,10 @@ def get_noise_model(option, grid_size):
 def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_images, outlier_file_input = None, grid_size = 128,
                                volume_distribution = None,  dataset_params_option = "dataset1", noise_level = 1, 
                                noise_model = "radial1", put_extra_particles = True, percent_outliers = 0.1, 
-                               volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, disc_type = 'linear_interp', n_tilts = -1, dose_per_tilt = 3, angle_per_tilt = 3, image_dtype = np.float16, image_offset_n_std = 0.0, per_particle_contrast=True, premultiplied_ctf = False ):
+                               volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, 
+                               disc_type = 'linear_interp', n_tilts = -1, dose_per_tilt = 3, angle_per_tilt = 3, 
+                               image_dtype = np.float16, image_offset_n_std = 0.0, per_particle_contrast=True, 
+                               premultiplied_ctf = False, noise_increase_per_tilt = None):
     from recovar import output
     output.mkdir_safe(output_folder)
     volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize = False )
@@ -312,7 +315,7 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
 
     # First make some dataset to figure out a good scaling?
     main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file, n_tilts = n_tilts, 
-    dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt, image_offset_n_std= image_offset_n_std , per_particle_contrast=per_particle_contrast, premultiplied_ctf = premultiplied_ctf)
+    dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt, image_offset_n_std= image_offset_n_std , per_particle_contrast=per_particle_contrast, premultiplied_ctf = premultiplied_ctf, noise_increase_per_tilt = noise_increase_per_tilt)
 
 
     simulation_info['volumes_path_root'] = volumes_path_root
@@ -362,7 +365,7 @@ def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_
     return volumes
 
 
-def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None, n_tilts = -1, dose_per_tilt = None, angle_per_tilt = None, voltage = 100, image_offset_n_std = 0.0, per_particle_contrast= True, premultiplied_ctf = False ):
+def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None, n_tilts = -1, dose_per_tilt = None, angle_per_tilt = None, voltage = 100, image_offset_n_std = 0.0, per_particle_contrast= True, premultiplied_ctf = False, noise_increase_per_tilt = None):
     
     # voxel_size = 
     volume_shape = utils.guess_vol_shape_from_vol_size(volumes[0].size)
@@ -379,6 +382,8 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
 
     trans *=0 
     per_image_contrast, per_image_noise_scale = generate_contrast_params(n_images, noise_scale_std, contrast_std )
+
+
 
     image_assignments = np.random.choice(np.arange(volumes.shape[0]), size = n_images,  p = volume_distribution)
 
@@ -448,6 +453,9 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         # ctf_params_big = np.zeros([n_images, 11])
         ctf_params = np.concatenate([ctf_params, dose[:,None], np.zeros_like(tilt_numbers[:,None]) ], axis = -1)
 
+        ##
+        if noise_increase_per_tilt is not None:
+            per_image_noise_scale *= (1 + noise_increase_per_tilt * tilt_numbers)
     else:
         per_tilt_contrast = None
         tilt_groups = None
@@ -749,6 +757,8 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 key, subkey = jax.random.split(key)
                 noise_batch = make_noise_batch(subkey, noise_image, images_batch.shape)
                 noise_batch *= per_image_noise_scale[indices][...,None,None]
+
+                
                 images_batch *= per_image_contrast[indices][...,None,None]
                 
                 # Now apply CTF AGAIN after noise is added, and unpad

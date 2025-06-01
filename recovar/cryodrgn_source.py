@@ -134,9 +134,11 @@ class ImageSource:
     def __getitem__(self, item) -> torch.Tensor:
         return self.images(item)
 
-    def _convert_to_ndarray(
-        self, indices: Optional[Union[np.ndarray, int, slice, Iterable]] = None
-    ) -> np.ndarray:
+    def _convert_to_ndarray(self, indices):
+        if np.isscalar(indices):
+            return np.array([indices])
+        if isinstance(indices, (list, tuple)):
+            return np.array(indices)
         if isinstance(indices, np.ndarray):
             pass
         elif indices is None:
