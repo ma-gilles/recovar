@@ -31,6 +31,7 @@ def make_test_dataset(output_dir, noise_level = 0.1, n_images = None):
     
     print(f"Finished generating dataset {output_folder}")
 
+
 def main():
     this_dir = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
     make_test_dataset(this_dir)

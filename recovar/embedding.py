@@ -301,7 +301,7 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
             # dummy_contrast_grid = np.array([1])
             # Solve for best zs given given contrast
             # xs_batch_contrast = batch_over_images_and_contrast_solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, masked_noises, dummy_contrast_grid)
-            xs_batch_contrast = solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, None, 1)[None]
+            xs_batch_contrast = solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, 1)[None]
             
             # For all images in batch, set same xs and check all contrasts.
             xs_repeat = jnp.repeat(xs_batch_contrast, axis = (0), repeats = (batch.shape[0]))

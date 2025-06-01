@@ -329,7 +329,6 @@ def standard_recovar_pipeline(args):
     if args.do_over_with_contrast is None:
         args.do_over_with_contrast = args.correct_contrast
 
-    # The force interaction has something to do with cryodrgn interaction which is breaking the logger...
     logging.basicConfig(format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
                         level=logging.INFO,
                         force = True, 
@@ -377,15 +376,16 @@ def standard_recovar_pipeline(args):
         options['contrast'] += '_shared'
         logger.info("Setting contrast to shared")
 
-    def _update_noise_variance(noise_variance):
+    ## Initialize noise model
+    for cryo in cryos:
         if noise_model == "radial":
-            new_noise_model = noise.RadialNoiseModel(noise_variance)
-        elif noise_model == 'tilt':
-            new_noise_model = noise.TiltSeriesNoiseModel(noise_variance)
-
-        for cryo in cryos:
-            cryo.noise = new_noise_model
-
+            cryo.set_radial_noise_model(None)
+            logger.info("Setting noise model to radial")
+        elif noise_model == 'radial_per_tilt':
+            cryo.set_variable_radial_noise_model(None)
+            logger.info("Setting noise model to radial_per_tilt")
+        else:
+            raise ValueError(f"noise model {noise_model} not recognized")
 
     for repeat in range(n_repeats):
         
@@ -447,26 +447,22 @@ def standard_recovar_pipeline(args):
 
         # Compute mask
         volume_mask, dilated_volume_mask= mask.masking_options(args.mask, means, volume_shape, cryo.dtype_real, args.mask_dilate_iter, args.keep_input_mask)
-
         ## Always dump mean?
-        # if args.only_mean:
-        if True:
-            output_folder = args.outdir + '/output/' 
-            o.mkdir_safe(output_folder)
-            o.mkdir_safe(output_folder + 'volumes/')
+        ### Dump mean and mask to file
+        output_folder = args.outdir + '/output/' 
+        o.mkdir_safe(output_folder)
+        o.mkdir_safe(output_folder + 'volumes/')
+        o.save_volume(means['combined'], output_folder + 'volumes/' + 'mean', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
+        o.save_volume(means['corrected0'], output_folder + 'volumes/' + 'mean_half1_unfil', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
+        o.save_volume(means['corrected1'], output_folder + 'volumes/' + 'mean_half2_unfil', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
+        o.save_volume(volume_mask, output_folder + 'volumes/' + 'mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
 
-            o.save_volume(means['combined'], output_folder + 'volumes/' + 'mean', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
-            o.save_volume(means['corrected0'], output_folder + 'volumes/' + 'mean_half1_unfil', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
-            o.save_volume(means['corrected1'], output_folder + 'volumes/' + 'mean_half2_unfil', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
-            o.save_volume(volume_mask, output_folder + 'volumes/' + 'mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
-
-            from recovar import locres
-            half1 = ftu.get_idft3(means['corrected0'].reshape(cryos[0].volume_shape))
-            half2 = ftu.get_idft3(means['corrected1'].reshape(cryos[0].volume_shape))
-
-            best_filtered_nob, _, _, _, _ = locres.local_resolution(half1, half2, 0, cryos[0].voxel_size, use_filter = True, fsc_threshold = 1/7, use_v2 = True)
-
-            o.save_volume(best_filtered_nob, output_folder + 'volumes/' + 'mean_filt', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
+        # Filter and save mean
+        from recovar import locres
+        half1 = ftu.get_idft3(means['corrected0'].reshape(cryos[0].volume_shape))
+        half2 = ftu.get_idft3(means['corrected1'].reshape(cryos[0].volume_shape))
+        best_filtered_nob, _, _, _, _ = locres.local_resolution(half1, half2, 0, cryos[0].voxel_size, use_filter = True, fsc_threshold = 1/7, use_v2 = True)
+        o.save_volume(best_filtered_nob, output_folder + 'volumes/' + 'mean_filt', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
 
         if args.only_mean:
             return
@@ -491,16 +487,11 @@ def standard_recovar_pipeline(args):
         noise_time = time.time()
         use_new_noise_fn = args.new_noise_est or args.premultiplied_ctf
         logger.info(f"Using new noise estimation function?: {use_new_noise_fn}")
-        # if use_new_noise_fn:
-        #     # radial_noise_var_outside_mask = 
-        #     masked_image_PS, _ = noise.fit_noise_model_to_images2(cryo, dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = True, disc_type = 'linear_interp')
-        #     print("change discretization to cubic!")
-        # else:
-        #     masked_image_PS, std_masked_image_PS, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
-        
+
+        ## First, estimate noise outside the mask
         if args.mask.endswith(".mrc"):
             if use_new_noise_fn:
-                masked_image_PS, _ = noise.fit_noise_model_to_images2(cryo, dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = True, disc_type = 'linear_interp')
+                masked_image_PS, _ = noise.fit_noise_model_to_images(cryo, dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = True, disc_type = 'linear_interp')
             else:
                 radial_noise_var_outside_mask, _,_ =  noise.estimate_noise_variance_from_outside_mask_v2(cryo, dilated_volume_mask, batch_size)
                 white_noise_var_outside_mask = noise.estimate_white_noise_variance_from_mask(cryo, dilated_volume_mask, batch_size)
@@ -508,16 +499,8 @@ def standard_recovar_pipeline(args):
         else:
             if use_new_noise_fn:
                 # radial_noise_var_outside_mask = 
-                masked_image_PS, _ = noise.fit_noise_model_to_images2(cryo, dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = True, disc_type = 'linear_interp')
+                masked_image_PS, image_PS = noise.fit_noise_model_to_images(cryo, dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = True, disc_type = 'linear_interp')
                 print("change discretization to cubic!")
-                # Estimates the 
-                image_PS = noise.estimate_noise_level_no_masks(
-                        cryo,
-                        None, # Pass image_subset = None
-                        None, # Pass mean = None 
-                        batch_size,
-                        disc_type="linear_interp",
-                    ) 
                 std_masked_image_PS = None
                 std_image_PS = None
 
@@ -528,27 +511,26 @@ def standard_recovar_pipeline(args):
             white_noise_var_outside_mask = np.median(masked_image_PS)
 
         if use_new_noise_fn:
-            assert noise_model == "radial", f"new noise fn only works with radial noise model. You set {noise_model}"
+            assert (noise_model == "radial" or noise_model == "radial_per_tilt"), f"new noise fn only works with radial noise model. You set {noise_model}"
 
 
         logger.info(f"time to estimate noise is {time.time() - noise_time}")
         utils.report_memory_device(logger=logger)
 
+        ## Then, estimate the EX [ (y_i - P_i \mu)^2] = noise_variance + signal_variance *CTF^2, where CTF is the CTF of the image, so this is the upper bound on the noise variance.
         noise_time = time.time()
         if use_new_noise_fn:
             # radial_noise_var_outside_mask = 
-            radial_ub_noise_var, _ =  noise.fit_noise_model_to_images2(cryo, dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = False, disc_type = 'linear_interp')
+            radial_ub_noise_var, _ =  noise.fit_noise_model_to_images(cryo, dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = False, disc_type = 'linear_interp')
         else:
             radial_ub_noise_var, _,_ =  noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(cryo, means['combined'], dilated_volume_mask, batch_size)
 
         logger.info(f"time to upper bound noise is {time.time() - noise_time}")
 
-
+        ## Use this to bound the noise variance.
         utils.report_memory_device(logger=logger)
         radial_noise_var_ubed = np.where(radial_noise_var_outside_mask >  radial_ub_noise_var, radial_ub_noise_var, radial_noise_var_outside_mask)
-        # logger.warning("doing funky noise business")
-        # noise_var = np.where(noise_var_outside_mask >  noise_var_from_hf, noise_var_outside_mask, np.ones_like(noise_var_from_hf))
-        # Noise statistic
+
         if noise_model == "white":
             noise_var_used = np.ones_like(radial_noise_var_ubed) * white_noise_var_outside_mask
         else:
@@ -558,52 +540,57 @@ def standard_recovar_pipeline(args):
             logger.info("Negative noise variance detected. Setting to image power spectrum / 10")
 
         noise_var_used = np.where(noise_var_used < 0, image_PS / 10, noise_var_used)
-        _update_noise_variance(noise_var_used)
+        noise.update_noise_variance(noise_var_used, cryos)
 
-        for noise_repeat in range(2):
-            ## TODO Does Tilt series for anything for variance??
-            variance_time = time.time()
-            variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, use_regularization = True, disc_type = 'cubic')
-            # print('using regul in variance est?!?')
-            logger.info(f"variance estimation time: {time.time() - variance_time}")
-            utils.report_memory_device(logger=logger)
+        # This works in place?
+        variance_est = noise.upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, cryos, means, batch_size, dilated_volume_mask)
+        variance_fsc = None
+        if noise_model == "radial_per_tilt":
+            # Recompute variance with the new noise variance. If tilt_series noise model this is needed
+            variance_est, _, variance_fsc, _, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, use_regularization = True, disc_type = 'cubic')
 
 
-            rad_grid = np.array(ftu.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
-            # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
-            n_shell_to_ub = np.min([32, cryos[0].grid_size//2 -1])
-            ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
-            variance_est_low_res_5_pc = np.zeros(n_shell_to_ub, dtype = np.float32)
-            variance_est_low_res_median = np.zeros(n_shell_to_ub, dtype = np.float32)
 
-            for k in range(n_shell_to_ub):
-                if np.sum(rad_grid==k) >0:
-                    ub_noise_var_by_var_est[k] = np.percentile(noise_p_variance_est[rad_grid==k], 5)
-                    ub_noise_var_by_var_est[k] = np.max([0, ub_noise_var_by_var_est[k]])
-                    variance_est_low_res_5_pc[k] = np.percentile(variance_est['combined'][rad_grid==k], 5)
-                    variance_est_low_res_median[k] = np.median(variance_est['combined'][rad_grid==k])
+        # # Now, estimate the variance of the signal. If the variance estimate ends up negative, we have overestimated the noise variance.
+        # for noise_repeat in range(2):
+        #     ## TODO Does Tilt series for anything for variance??
+        #     variance_time = time.time()
+        #     variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, use_regularization = True, disc_type = 'cubic')
+        #     # print('using regul in variance est?!?')
+        #     logger.info(f"variance estimation time: {time.time() - variance_time}")
+        #     utils.report_memory_device(logger=logger)
 
-            if np.any(ub_noise_var_by_var_est >  noise_var_used[:n_shell_to_ub]):
-                logger.info("Estimated noise greater than upper bound. Bounding noise using estimated upper bound")
+        #     # def upper_bound_noise_var(noise_var_used, variance_est, noise_p_variance_est):
+        #     rad_grid = np.array(ftu.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
+        #     # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
+        #     n_shell_to_ub = np.min([32, cryos[0].grid_size//2 -1])
+        #     ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
+        #     variance_est_low_res_5_pc = np.zeros(n_shell_to_ub, dtype = np.float32)
+        #     variance_est_low_res_median = np.zeros(n_shell_to_ub, dtype = np.float32)
 
-            if np.any(variance_est_low_res_5_pc < 0):
-                logger.info("Estimated variance resolutino is < 0. This probably means that the noise was incorrectly estimated. Recomputing noise")
-                print("5 percentile:", variance_est_low_res_5_pc)
-                print("5 percentile/median over low shells:", variance_est_low_res_5_pc/variance_est_low_res_median)
+        #     for k in range(n_shell_to_ub):
+        #         if np.sum(rad_grid==k) >0:
+        #             ub_noise_var_by_var_est[k] = np.percentile(noise_p_variance_est[rad_grid==k], 5)
+        #             ub_noise_var_by_var_est[k] = np.max([0, ub_noise_var_by_var_est[k]])
+        #             variance_est_low_res_5_pc[k] = np.percentile(variance_est['combined'][rad_grid==k], 5)
+        #             variance_est_low_res_median[k] = np.median(variance_est['combined'][rad_grid==k])
 
-            # if not cryos[0].premultiplied_ctf:
-                # This is a bit of a hack. We are using the variance estimate to bound the noise variance
-                # This is not correct, but it is better than nothing
-            noise_var_used[:n_shell_to_ub] = np.where( noise_var_used[:n_shell_to_ub] > ub_noise_var_by_var_est, ub_noise_var_by_var_est, noise_var_used[:n_shell_to_ub])
-            # else:
-            #     print('FIX THIS')
-            #     print('FIX THIS')
-            #     print('FIX THIS')
-            #     print('FIX THIS')
-            #     print('FIX THIS')
+        #     if np.any(ub_noise_var_by_var_est >  noise_var_used[:n_shell_to_ub]):
+        #         logger.info("Estimated noise greater than upper bound. Bounding noise using estimated upper bound")
 
-            noise_var_used = noise_var_used.astype(cryos[0].dtype_real)
-            _update_noise_variance(noise_var_used)
+        #     if np.any(variance_est_low_res_5_pc < 0):
+        #         logger.info("Estimated variance resolutino is < 0. This probably means that the noise was incorrectly estimated. Recomputing noise")
+        #         print("5 percentile:", variance_est_low_res_5_pc)
+        #         print("5 percentile/median over low shells:", variance_est_low_res_5_pc/variance_est_low_res_median)
+
+        #     # if not cryos[0].premultiplied_ctf:
+        #         # This is a bit of a hack. We are using the variance estimate to bound the noise variance
+        #         # This is not correct, but it is better than nothing
+        #     noise_var_used[:n_shell_to_ub] = np.where( noise_var_used[:n_shell_to_ub] > ub_noise_var_by_var_est, ub_noise_var_by_var_est, noise_var_used[:n_shell_to_ub])
+
+
+        #     noise_var_used = noise_var_used.astype(cryos[0].dtype_real)
+        # _update_noise_variance(noise_var_used)
 
 
 
@@ -754,14 +741,6 @@ def standard_recovar_pipeline(args):
 
     utils.report_memory_device()
 
-    # Compute latent space density. Now just done in analyze or elsewhere
-    # Precompute the density on the 4D grid. This is the most expensive part of computing trajectories, and can be reused across trajectories. 
-    # logger.info(f"starting density computation")
-    # density_z = 10 if 10 in zs else options['zs_dim_to_test'][0]
-    # density, latent_space_bounds = None, None
-    # density, latent_space_bounds  = latent_density.compute_latent_space_density(zs[density_z], cov_zs[density_z], pca_dim_max = 4, num_points = 50, density_option = 'kde')
-    # logger.info(f"ending density computation")
-
     # Dump results to file
     output_model_folder = args.outdir + '/model/'
     o.mkdir_safe(args.outdir)
@@ -783,34 +762,61 @@ def standard_recovar_pipeline(args):
         s['rescaled'] = s['rescaled'][zdim_for_rest:]
 
 
-    result = { 's' : s['rescaled'],'s_all': s,
-                'input_args' : args,
-                'latent_space_bounds' : None, #np.array(latent_space_bounds), 
-                'density': None,
-                'noise_var_from_hf': noise_var_from_hf,
-                'radial_noise_var_outside_mask' : np.array(radial_noise_var_outside_mask),
-                'radial_ub_noise_var' : np.array(radial_ub_noise_var),
-                'white_noise_var_outside_mask' : np.array(white_noise_var_outside_mask),
-                'image_PS' : np.array(image_PS),
-                'std_image_PS' : np.array(std_image_PS),
-                'masked_image_PS' : np.array(masked_image_PS),
-                'std_masked_image_PS' : np.array(std_masked_image_PS),
-                'noise_var_from_het_residual' : np.array(noise_var_from_het_residual),
-                'noise_var_used' : np.array(noise_var_used),
-                'column_fscs': column_fscs, 
-                'covariance_cols': None, 
-                'picked_frequencies' : picked_frequencies, 'volume_shape': volume_shape, 'voxel_size': cryos[0].voxel_size, 'pc_metric' : var_metrics['filt_var'],
-                'variance_est': variance_est, 'variance_fsc': variance_fsc, 'noise_p_variance_est': noise_p_variance_est, 'ub_noise_var_by_var_est': ub_noise_var_by_var_est, 'covariance_options': covariance_options,
-                'contrasts_for_second': contrasts_for_second, 
-                'version': '0.4'}
+    # Organize results into logical sections
+    result = {
+        # Core reconstruction results
+        's': s['rescaled'],
+        's_all': s,
+        'density': None,
+        'version': '0.4',
+        
+        # Volume metadata
+        'volume_shape': volume_shape,
+        'voxel_size': cryos[0].voxel_size,
+        
+        # Noise estimation results
+        'noise_var_from_hf': noise_var_from_hf,
+        'noise_var_from_het_residual': np.array(noise_var_from_het_residual),
+        'noise_var_used': np.array(noise_var_used),
+        'radial_noise_var_outside_mask': np.array(radial_noise_var_outside_mask),
+        'radial_ub_noise_var': np.array(radial_ub_noise_var),
+        'white_noise_var_outside_mask': np.array(white_noise_var_outside_mask),
+        'ub_noise_var_by_var_est': None,
+        
+        # Power spectrum measurements
+        'image_PS': np.array(image_PS),
+        'std_image_PS': np.array(std_image_PS),
+        'masked_image_PS': np.array(masked_image_PS),
+        'std_masked_image_PS': np.array(std_masked_image_PS),
+        
+        # Variance and covariance results
+        'variance_est': variance_est,
+        'variance_fsc': variance_fsc,
+        'noise_p_variance_est': noise_p_variance_est,
+        'covariance_cols': None,
+        'covariance_options': covariance_options,
+        
+        # FSC and frequency analysis
+        'column_fscs': column_fscs,
+        'picked_frequencies': picked_frequencies,
+        
+        # PCA and metrics
+        'pc_metric': var_metrics['filt_var'],
+        'contrasts_for_second': contrasts_for_second,
+        'latent_space_bounds': None,  # np.array(latent_space_bounds)
+        
+        # Input parameters
+        'input_args': args
+    }
     
-    # Make sure nothing is a JAX array...
-    for entry in result:
-        if result[entry] is not None:
+    # Convert all non-None values to numpy arrays where possible
+    for key, value in result.items():
+        if value is not None and not isinstance(value, (dict, str, float, int, bool)):
             try:
-                result[entry] = np.array(result[entry])
-            except:
-                pass
+                result[key] = np.array(value)
+            except (TypeError, ValueError) as e:
+                # Log if conversion fails but continue
+                print(f"Warning: Could not convert {key} to numpy array: {e}")
 
 
     output_folder = args.outdir + '/output/' 
@@ -854,11 +860,8 @@ def standard_recovar_pipeline(args):
         utils.pickle_dump(zs_full, output_model_folder + 'zs_with_complement.pkl')
 
     logger.info(f"Dumped results to file:, {output_model_folder}results.pkl")
-    
     logger.info(f"total time: {time.time() - st_time}")
     
-    # from analyze import analyze
-    # analyze(args.outdir, output_folder = None, zdim=  np.max(options['zs_dim_to_test']), n_clusters = 40, n_paths= 2, skip_umap = False, q=None, n_std=None )
 
     return means, u, s, volume_mask, dilated_volume_mask, noise_var_used 
 

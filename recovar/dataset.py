@@ -3,7 +3,6 @@ import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
 import pickle 
-import tensorflow as tf
 from recovar import plot_utils, core, mask
 import recovar.padding as pad
 from recovar.fourier_transform_utils import fourier_transform_utils
@@ -185,6 +184,20 @@ class CryoEMDataset:
             return self.get_dataset_generator(batch_size, num_workers = num_workers)
         return self.image_stack.get_dataset_subset_generator(batch_size, subset_indices, num_workers = num_workers)
 
+    # This is a generator that iterates over individual images rather than tilt groups. For SPA, this is the same as get_dataset_subset_generator.
+    def get_image_subset_generator(self, batch_size, subset_indices, num_workers = 0):
+        if self.tilt_series_flag:
+            return self.image_stack.get_image_subset_generator(batch_size, subset_indices, num_workers = num_workers)
+        else:
+            return self.get_dataset_subset_generator(batch_size, subset_indices, num_workers = num_workers)
+
+    # This is a generator that iterates over individual images rather than tilt groups. For SPA, this is the same as get_dataset_generator.
+    def get_image_generator(self, batch_size, num_workers = 0):
+        if self.tilt_series_flag:
+            return self.image_stack.get_image_generator(batch_size, num_workers = num_workers)
+        else:
+            return self.get_dataset_generator(batch_size, num_workers = num_workers)
+
 
     def CTF_fun(self,*args):
         # Force dtype
@@ -294,22 +307,29 @@ class CryoEMDataset:
         mask2 = ftu.get_idft2(batch.reshape(-1, *self.image_shape))
         return mask2.real
 
+    def set_radial_noise_model(self, noise_variance):
+        from recovar import noise
+        self.noise = noise.RadialNoiseModel(noise_variance, image_shape = self.image_shape)
 
+    def set_variable_radial_noise_model(self, noise_variance_radials):
+        from recovar import noise
+        _, dose_indices = jnp.unique(self.CTF_params[:,core.dose_ind], return_inverse=True)
+        self.noise = noise.VariableRadialNoiseModel(noise_variance_radials, dose_indices, image_shape = self.image_shape)
 
+# TODO: This is not used anywhere. Delete?
+# def subsample_cryoem_dataset(dataset, indices):
 
-def subsample_cryoem_dataset(dataset, indices):
+#     import copy
+#     image_stack = copy.copy(dataset.image_stack)
 
-    import copy
-    image_stack = copy.copy(dataset.image_stack)
+#     if type(image_stack.particles) is list:
+#         image_stack.particles = [dataset.image_stack.particles[i] for i in indices]
+#         image_stack.n_images = len(image_stack.particles)#.shape[0]
+#     else:
+#         image_stack.particles = dataset.image_stack.particles[indices]
+#         image_stack.n_images = image_stack.particles.shape[0]
 
-    if type(image_stack.particles) is list:
-        image_stack.particles = [dataset.image_stack.particles[i] for i in indices]
-        image_stack.n_images = len(image_stack.particles)#.shape[0]
-    else:
-        image_stack.particles = dataset.image_stack.particles[indices]
-        image_stack.n_images = image_stack.particles.shape[0]
-
-    return CryoEMDataset( image_stack, dataset.voxel_size, dataset.rotation_matrices[indices], dataset.translations[indices], dataset.CTF_params[indices], CTF_fun = dataset.CTF_fun_inp, dtype = dataset.dtype, rotation_dtype = dataset.rotation_dtype, dataset_indices = dataset.dataset_indices[indices] , volume_upsampling_factor= dataset.volume_upsampling_factor)
+#     return CryoEMDataset( image_stack, dataset.voxel_size, dataset.rotation_matrices[indices], dataset.translations[indices], dataset.CTF_params[indices], CTF_fun = dataset.CTF_fun_inp, dtype = dataset.dtype, rotation_dtype = dataset.rotation_dtype, dataset_indices = dataset.dataset_indices[indices] , volume_upsampling_factor= dataset.volume_upsampling_factor)
 
 
 
@@ -505,7 +525,8 @@ def get_split_tilt_indices(particles_file, ind_file = None, tilt_ind_file =None,
             split_image_indices[i] = split_image_indices[i][good_indices]
         # intersection = set(split_image_indices[i]) & set(ind_images)
         # tmp=np.intersect1d(split_image_indices[i], ind_images)
-        split_image_indices[i] = np.intersect1d(split_image_indices[i], ind_images)
+        if ind_file is not None:
+            split_image_indices[i] = np.intersect1d(split_image_indices[i], ind_images)
 
     return split_image_indices
 

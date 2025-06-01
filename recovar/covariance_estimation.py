@@ -307,11 +307,12 @@ def variance_relion_style_triangular_kernel_batch_trilinear(mean_estimate, image
 
 
 # This computes the lhs and rhs of two things: the estimator for the variance of the signal, and the variance of the var(signal)*CTF**2 + var(noise)**2
-def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate,  batch_size, index_subset = None, volume_mask = None, disc_type= ''):
-    if index_subset is None:
-        data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
-    else:
-        data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = index_subset)
+def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate,  batch_size, image_subset = None, volume_mask = None, disc_type= ''):
+
+    # if image_subset is None:
+    #     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+    # else:
+    data_generator = experiment_dataset.get_image_subset_generator(batch_size=batch_size, subset_indices = image_subset)
 
     Ft_y, Ft_ctf, Ft_im, Ft_one = 0, 0, 0, 0
     for batch, particles_ind, indices in data_generator:
@@ -344,7 +345,7 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate,  
     return Ft_ctf, Ft_y, Ft_one, Ft_im
 
 
-def compute_variance(cryos, mean_estimate, batch_size, volume_mask,  use_regularization = False, disc_type = ''):
+def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset = None, use_regularization = False, disc_type = '', noise_ind_subset = None):
     st_time = time.time()
 
     cryo = cryos[0]
@@ -361,7 +362,12 @@ def compute_variance(cryos, mean_estimate, batch_size, volume_mask,  use_regular
 
 
     for idx, cryo in enumerate(cryos):
-        lhs_l[idx], rhs_l[idx], noise_p_variance_lhs[idx] , noise_p_variance_rhs[idx] = variance_relion_style_triangular_kernel(cryo, mean_estimate, batch_size, index_subset = None, volume_mask = volume_mask, disc_type = disc_type)
+        if noise_ind_subset is not None:
+            image_subset = np.where(cryo.noise.dose_indices == noise_ind_subset)[0]
+        else:
+            image_subset = None
+
+        lhs_l[idx], rhs_l[idx], noise_p_variance_lhs[idx] , noise_p_variance_rhs[idx] = variance_relion_style_triangular_kernel(cryo, mean_estimate, batch_size, image_subset = image_subset, volume_mask = volume_mask, disc_type = disc_type)
 
         lhs_l[idx] = relion_functions.adjust_regularization_relion_style(lhs_l[idx], cryos[0].volume_shape, tau = None, padding_factor = 1, max_res_shell = None)
         variance["corrected" + str(idx)] = rhs_l[idx] / lhs_l[idx]

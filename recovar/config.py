@@ -1,8 +1,8 @@
 import logging
 import os
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".90"
-import tensorflow as tf
-tf.config.experimental.set_visible_devices([], "GPU")
+# import tensorflow as tf
+# tf.config.experimental.set_visible_devices([], "GPU")
 import jax
 jax.config.update("jax_enable_x64", True)
 logger = logging.getLogger(__name__)

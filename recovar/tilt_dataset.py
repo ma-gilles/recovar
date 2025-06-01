@@ -1,4 +1,3 @@
-
 import numpy as np
 from collections import Counter, OrderedDict
 import logging
@@ -399,6 +398,9 @@ class TiltSeriesData(ImageDataset):
                 return self.src.n
 
             def __getitem__(self, index):
+                # Ensure index is a scalar
+                if isinstance(index, (list, tuple, np.ndarray)):
+                    index = index[0]
                 image = self.src.images(index)
                 if image.ndim == 2:
                     image = image[np.newaxis, ...]
@@ -407,7 +409,23 @@ class TiltSeriesData(ImageDataset):
         if subset_indices is None:
             return self.get_image_generator(batch_size, num_workers)
         
-        subset_dataset = torch.utils.data.Subset(SingleImageDataset(self.src), subset_indices)
+        # Convert subset_indices to numpy array and ensure it's 1D
+        if not isinstance(subset_indices, np.ndarray):
+            subset_indices = np.array(subset_indices)
+        if subset_indices.ndim == 0:
+            subset_indices = np.array([subset_indices])
+        elif subset_indices.ndim > 1:
+            subset_indices = subset_indices.flatten()
+        
+        # Create dataset and dataloader
+        dataset = SingleImageDataset(self.src)
+        subset_dataset = torch.utils.data.Subset(dataset, subset_indices)
+        
+        # Print debug info
+        # print(f"Dataset length: {len(dataset)}")
+        # print(f"Subset indices shape: {subset_indices.shape}")
+        # print(f"Subset dataset length: {len(subset_dataset)}")
+        
         return NumpyLoader(subset_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
 
