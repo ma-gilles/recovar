@@ -139,7 +139,7 @@ class TiltSeriesData(ImageDataset):
         expected_res=None,
         dose_per_tilt=None,
         angle_per_tilt=None,
-        sort_with_Bfac=True,
+        tilt_file_option='relion5',
         **kwargs,
     ):
         self._load_start_time = time.time()
@@ -151,7 +151,7 @@ class TiltSeriesData(ImageDataset):
 
         s = starfile.Starfile.load(tiltstar)
         elapsed = time.time() - self._load_start_time
-        print(f"Tilt series loaded in {elapsed:.2f} seconds")
+        print(f"starfile loaded in {elapsed:.2f} seconds")
 
         unique_sorted_group_names = []
         unique_sorted_group_names = list(s.df["_rlnGroupName"].unique())
@@ -182,20 +182,31 @@ class TiltSeriesData(ImageDataset):
         if '_rlnCtfBfactor' in s.df.columns:
             self.ctfBfactor = np.asarray(s.df["_rlnCtfBfactor"], dtype=np.float32)
 
-        self.tilt_numbers = np.zeros(self.N)
-        if sort_with_Bfac:
-            logger.info("Sorting tilt series with Bfactor")
-        else:
-            logger.info("Sorting tilt series with scale factor!")
-            logger.warning("Sorting tilt series with scale factor!! May be wrong.")
-        for ind in self.particles:
-            if sort_with_Bfac:
-                sort_idxs = self.ctfBfactor[ind].argsort()
-                # logger.info("Sorting with Bfactor")
-            else:
-                sort_idxs = self.ctfscalefactor[ind].argsort()
-                # logger.info("Sorting with ctf scale factor")
+        if tilt_file_option == 'relion5':
+            self.dose = np.asarray(s.df["_rlnMicrographPreExposure"], dtype=np.float32)
 
+
+        if tilt_file_option == 'relion5':
+            # The rest are swapped so swap it too...
+            logger.info("Sorting tilt series with dose  (_rlnMicrographPreExposure) - relion5")
+        elif tilt_file_option == 'warp':
+            logger.info("Sorting tilt series with Bfactor - warp (windows)")
+        else:
+            raise ValueError(f"Invalid tilt file option: {tilt_file_option}. Only relion5 and warp are supported.")
+        # else:
+        #     logger.info("Sorting tilt series with scale factor!")
+        #     logger.warning("Sorting tilt series with scale factor!! May be wrong.")
+
+
+        self.tilt_numbers = np.zeros(self.N)
+        for ind in self.particles:
+            if tilt_file_option == 'relion5':
+                # The rest are swapped so swap it too...
+                sort_idxs = (-self.dose[ind]).argsort()
+            elif tilt_file_option == 'warp':
+                sort_idxs = self.ctfBfactor[ind].argsort()
+
+            
             ranks = np.empty_like(sort_idxs)
             ranks[sort_idxs[::-1]] = np.arange(len(ind))
             self.tilt_numbers[ind] = ranks
@@ -221,7 +232,7 @@ class TiltSeriesData(ImageDataset):
             # self.tilt_angles = angle_per_tilt * torch.ceil(self.tilt_numbers / 2)
             # self.tilt_angles = torch.tensor(self.tilt_angles).to(self.device)
         elapsed = time.time() - self._load_start_time
-        logger.info(f"Tilt series loaded in {elapsed:.2f} seconds")
+        logger.info(f"Tilt series loaded and sorted in {elapsed:.2f} seconds")
 
     def __len__(self):
         return self.Np
@@ -236,10 +247,12 @@ class TiltSeriesData(ImageDataset):
                     self.particles[ii], self.ntilts, replace=False
                 )
             else:
-                # take the first ntilts
-                tilt_index = self.particles[ii][0: self.ntilts]
+                # Get the tilt numbers for this particle's tilts
+                particle_tilt_numbers = self.tilt_numbers[self.particles[ii]]
+                # Sort indices by tilt numbers and take first ntilts
+                sorted_indices = np.argsort(particle_tilt_numbers)
+                tilt_index = self.particles[ii][sorted_indices[:self.ntilts]]
             tilt_indices.append(tilt_index)
-
         tilt_indices = np.concatenate(tilt_indices)
         images = self.src.images(tilt_indices)
         return images, index, tilt_indices
@@ -335,32 +348,33 @@ class TiltSeriesData(ImageDataset):
     def get_tilt(self, index):
         return super().__getitem__(index)
 
-    def get_slice(self, start: int, stop: int) -> Tuple[np.ndarray, np.ndarray]:
-        # we have to fetch all the tilts to stay contiguous, and then subset
-        tilt_indices = [self.particles[index] for index in range(start, stop)]
-        cat_tilt_indices = np.concatenate(tilt_indices)
-        images = self.src.images(cat_tilt_indices, require_contiguous=True)
+    # I don't understand what this does so I'm not using it
+    # def get_slice(self, start: int, stop: int) -> Tuple[np.ndarray, np.ndarray]:
+    #     # we have to fetch all the tilts to stay contiguous, and then subset
+    #     tilt_indices = [self.particles[index] for index in range(start, stop)]
+    #     cat_tilt_indices = np.concatenate(tilt_indices)
+    #     images = self.src.images(cat_tilt_indices, require_contiguous=True)
 
-        tilt_masks = []
-        for tilt_idx in tilt_indices:
-            tilt_mask = np.zeros(len(tilt_idx), dtype=bool)
-            if self.random_tilts:
-                tilt_mask_idx = np.random.choice(
-                    len(tilt_idx), self.ntilts, replace=False
-                )
-                tilt_mask[tilt_mask_idx] = True
-            else:
-                # if self.ntilts == -1:
-                #     self.ntilts = len(tilt_idx)
-                i = 0#(len(tilt_idx) - self.ntilts) // 2
-                # if self.n_tilts == -1:
-                #     title_mask = np.ones(len(tilt_idx), dtype=bool)
-                # else:
-                tilt_mask[i: i + self.ntilts] = True
-            tilt_masks.append(tilt_mask)
+    #     tilt_masks = []
+    #     for tilt_idx in tilt_indices:
+    #         tilt_mask = np.zeros(len(tilt_idx), dtype=bool)
+    #         if self.random_tilts:
+    #             tilt_mask_idx = np.random.choice(
+    #                 len(tilt_idx), self.ntilts, replace=False
+    #             )
+    #             tilt_mask[tilt_mask_idx] = True
+    #         else:
+    #             # if self.ntilts == -1:
+    #             #     self.ntilts = len(tilt_idx)
+    #             i = 0#(len(tilt_idx) - self.ntilts) // 2
+    #             # if self.n_tilts == -1:
+    #             #     title_mask = np.ones(len(tilt_idx), dtype=bool)
+    #             # else:
+    #             tilt_mask[i: i + self.ntilts] = True
+    #         tilt_masks.append(tilt_mask)
 
-        tilt_mask = np.concatenate(tilt_masks)
-        return images.numpy(), tilt_mask
+    #     tilt_mask = np.concatenate(tilt_masks)
+    #     return images.numpy(), tilt_mask
 
     def get_dataset_generator(self, batch_size, num_workers = 0):
         return make_dataloader(self, batch_size=batch_size, num_workers=num_workers)
@@ -371,6 +385,8 @@ class TiltSeriesData(ImageDataset):
         return make_dataloader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, num_workers=num_workers)
 
     def get_image_generator(self, batch_size, num_workers=0):
+
+
         # This generator iterates over individual images rather than tilt groups.
         class SingleImageDataset(torch.utils.data.Dataset):
             def __init__(self, src):
@@ -389,6 +405,8 @@ class TiltSeriesData(ImageDataset):
         return NumpyLoader(SingleImageDataset(self.src), batch_size=batch_size, shuffle=False, num_workers=num_workers)
         
     def get_image_subset_generator(self, batch_size, subset_indices, num_workers=0):
+
+
         # This generator iterates over individual images rather than tilt groups.
         class SingleImageDataset(torch.utils.data.Dataset):
             def __init__(self, src):
@@ -420,12 +438,7 @@ class TiltSeriesData(ImageDataset):
         # Create dataset and dataloader
         dataset = SingleImageDataset(self.src)
         subset_dataset = torch.utils.data.Subset(dataset, subset_indices)
-        
-        # Print debug info
-        # print(f"Dataset length: {len(dataset)}")
-        # print(f"Subset indices shape: {subset_indices.shape}")
-        # print(f"Subset dataset length: {len(subset_dataset)}")
-        
+                
         return NumpyLoader(subset_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
 

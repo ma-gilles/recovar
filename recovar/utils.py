@@ -135,14 +135,78 @@ def guess_vol_shape_from_vol_size(vol_size):
 # These should probably be set more intelligently
 # Sometimes, memory can grow like O(vol_batch_size * image_batch_size)
 def get_image_batch_size(grid_size, gpu_memory):
-    # return int(2*(2**24)/ (grid_size**2)  * gpu_memory / 38 / 3) 
-    return int((2**18) / (grid_size**2) * gpu_memory) 
+    """Calculate batch size for image processing.
+    
+    Args:
+        grid_size: Size of the grid
+        gpu_memory: Available GPU memory in GB
+        
+    Returns:
+        Integer batch size with reasonable bounds
+    """
+    if grid_size < 1:
+        raise ValueError("grid_size must be positive")
+    if gpu_memory <= 0:
+        raise ValueError("gpu_memory must be positive")
+        
+    # Use floating point arithmetic to avoid integer overflow
+    # Convert to float before any calculations
+    grid_size_f = float(grid_size)
+    gpu_memory_f = float(gpu_memory)
+    
+    # Calculate batch size using floating point
+    batch_size = (2.0**18.0) / (grid_size_f * grid_size_f) * gpu_memory_f
+    
+    # Add reasonable bounds
+    max_batch_size = 2**20  # Reduced from 2**30 to be more conservative
+    min_batch_size = 1
+    
+    # Clip to reasonable bounds
+    batch_size = max(min_batch_size, min(max_batch_size, batch_size))
+    
+    return int(batch_size)
 
 def get_vol_batch_size(grid_size, gpu_memory):
-    return int(25 * (256 / grid_size)**3 * gpu_memory / 38)
+    """Calculate batch size for volume processing."""
+    if grid_size < 1:
+        raise ValueError("grid_size must be positive")
+    if gpu_memory <= 0:
+        raise ValueError("gpu_memory must be positive")
+        
+    # Use floating point arithmetic
+    grid_size_f = float(grid_size)
+    gpu_memory_f = float(gpu_memory)
+    
+    # Calculate using floating point
+    batch_size = 25.0 * (256.0 / grid_size_f)**3.0 * gpu_memory_f / 38.0
+    
+    # Add reasonable bounds
+    max_batch_size = 2**20  # Reduced from 2**30
+    min_batch_size = 1
+    
+    batch_size = max(min_batch_size, min(max_batch_size, batch_size))
+    return int(batch_size)
 
 def get_column_batch_size(grid_size, gpu_memory):
-    return int(50 * ((256/grid_size)**3) * gpu_memory / 38)
+    """Calculate batch size for column processing."""
+    if grid_size < 1:
+        raise ValueError("grid_size must be positive")
+    if gpu_memory <= 0:
+        raise ValueError("gpu_memory must be positive")
+        
+    # Use floating point arithmetic
+    grid_size_f = float(grid_size)
+    gpu_memory_f = float(gpu_memory)
+    
+    # Calculate using floating point
+    batch_size = 50.0 * (256.0/grid_size_f)**3.0 * gpu_memory_f / 38.0
+    
+    # Add reasonable bounds
+    max_batch_size = 2**20  # Reduced from 2**30
+    min_batch_size = 1
+    
+    batch_size = max(min_batch_size, min(max_batch_size, batch_size))
+    return int(batch_size)
 
 def get_latent_density_batch_size(test_pts,zdim, gpu_memory):
     return np.max([int(gpu_memory /(3 * (get_size_in_gb(test_pts) * zdim**1))), 1])
@@ -274,7 +338,10 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
         values += [CTF_params[:,core.contrast_ind]]
         keys += ['rlnCtfBfactor']
         values += [CTF_params[:,core.bfactor_ind]]
-        
+        keys += ['rlnMicrographPreExposure']
+        values += [CTF_params[:,core.dose_ind]]
+
+
     if halfset_indices is not None:
         keys += ['rlnRandomSubset']
         values += [halfset_indices]

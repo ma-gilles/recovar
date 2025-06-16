@@ -18,7 +18,7 @@ dfu_ind = 0# (float or Bx1 tensor): DefocusU (Angstrom)
 dfv_ind = 1 #(float or Bx1 tensor): DefocusV (Angstrom)
 dfang_ind = 2 #(float or Bx1 tensor): DefocusAngle (degrees)
 volt_ind =3 #(float or Bx1 tensor): accelerating voltage (kV)
-cs_int=4 #(float or Bx1 tensor): spherical aberration (mm)
+cs_ind=4 #(float or Bx1 tensor): spherical aberration (mm)
 w_ind =5 #(float or Bx1 tensor): amplitude contrast ratio
 phase_shift_ind = 6 #(float or Bx1 tensor): degrees 
 bfactor_ind = 7 #(float or Bx1 tensor): envelope fcn B-factor (Angstrom^2)
@@ -549,9 +549,52 @@ def get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage):
     return freq_correction * ac_tile
 
 
-def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, CTF_FUNCTION_OPTION=None ):
-    return cryodrgn_CTF(CTF_params, image_shape, voxel_size)
+def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, antialiasing=False):
+    """Evaluate CTF with optional antialiasing.
+    
+    When antialiasing is True:
+    1. Upsamples CTF by factor of 2
+    2. Squares the upsampled CTF
+    3. Applies average pooling with a kernel of size (upsample_factor + upsample_factor//2)
+    4. Downsamples back to original size
+    """
+    if not antialiasing:
+        return cryodrgn_CTF(CTF_params, image_shape, voxel_size)
+
+    # Step 1: Upsample and square CTF
+    upsample_factor = 2
+    upsampled_shape = tuple(np.array(image_shape) * upsample_factor)
+    upsampled_CTF_squared = cryodrgn_CTF(CTF_params, upsampled_shape, voxel_size)
+    
+    # Step 2: Prepare for average pooling
+    batch_size = upsampled_CTF_squared.shape[0]
+    ctf = upsampled_CTF_squared.reshape(batch_size, *upsampled_shape)
+    
+    # Create average pooling kernel
+    kernel_size = upsample_factor + upsample_factor//2
+    kernel = jnp.ones((kernel_size, kernel_size), dtype=upsampled_CTF_squared.dtype) / (kernel_size * kernel_size)
+    
+    # Add channel dimension for convolution
+    ctf = jnp.expand_dims(ctf, 1)  # Shape: (batch, 1, H, W)
+    kernel = kernel.reshape(1, 1, kernel_size, kernel_size)  # Shape: (1, 1, kernel_size, kernel_size)
+    
+    # Step 3: Apply average pooling
+    ctf = jax.lax.conv_general_dilated(
+        ctf,
+        kernel,
+        window_strides=(1, 1),
+        padding='SAME',
+        dimension_numbers=('NCHW', 'IOHW', 'NCHW')
+    )
+    ctf = jnp.squeeze(ctf, axis=1)  # Remove channel dimension
+    
+    # Step 4: Downsample to original size
+    ctf = ctf[:, ::upsample_factor, ::upsample_factor]
+    
+    return ctf
 
 def cryodrgn_CTF(CTF_params, image_shape, voxel_size):
     psi = get_unrotated_plane_coords(image_shape, voxel_size, scaled = True)[...,:2]
     return batch_evaluate_ctf(psi, CTF_params)
+
+

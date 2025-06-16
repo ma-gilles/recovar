@@ -594,6 +594,12 @@ class PipelineOutput:
             noise_level = self.get('noise_var_used')
             snr = utils.make_radial_image(PS/noise_level, tuple(vol_shape[:2]))
             return snr
+        elif key == 'image_snr_radial':
+            vol_shape = self.get('volume_shape')
+            PS = regularization.average_over_shells(np.abs((self.get('mean').reshape( self.get('volume_shape'))))**2, self.get('volume_shape'))
+            noise_level = self.get('noise_var_used')
+            return PS/noise_level
+
         elif key == 'variance':
             return utils.load_mrc(self.result_path + 'output/volumes/' + 'variance10' + '.mrc')
         elif key == 'variance20':
@@ -637,9 +643,11 @@ class PipelineOutput:
 
 
 def add_noise_to_loaded_dataset(cryos, noise_variance):
-    noise_model = noise.RadialNoiseModel(noise_variance)
     for cryo in cryos:
-        cryo.noise = noise_model
+        if noise_variance.ndim == 1:
+            cryo.set_radial_noise_model(noise_variance)
+        else:
+            cryo.set_variable_radial_noise_model(noise_variance)
 
 
 def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False,  input_density = None, latent_space_bounds = None):

@@ -18,6 +18,10 @@ def add_args(parser: argparse.ArgumentParser):
         required=True,
         help="path to latent points (.txt file). E.g., you can use the output of k-means and input output/analysis_2/centers.txt from analyze.py. Or you can make your own latent points. It should be a .txt file with shape (n_points, zdim).",
     )
+    parser.add_argument(
+        "--save-all-estimates", action="store_true",
+        help="Save all estimates. This is useful for debugging.",
+    )
 
     return parser
 
@@ -31,6 +35,7 @@ def compute_state(args):
 
     if args.datadir is not None:
         po.params['input_args'].datadir = args.datadir
+
 
 
     if args.latent_points.endswith('.pkl'):
@@ -57,15 +62,24 @@ def compute_state(args):
     zdim_key = f"{zdim}_noreg" if args.no_z_regularization else zdim
 
     cryos = po.get('lazy_dataset') if args.lazy else po.get('dataset')
+
+    # print("CHANGE THIS STUFF")
+    # print("CHANGE THIS STUFF")
+    # print("CHANGE THIS STUFF")
+    # print("CHANGE THIS STUFF")
+
+    # for cryo in cryos:
+    #     cryo.premultiplied_ctf = True
+    # [ cryo.premultiplied_ctf = False for cryo in cryos ] 
+
     embedding.set_contrasts_in_cryos(cryos, po.get('contrasts')[zdim_key])
     zs = po.get('zs')[zdim_key]
     cov_zs = po.get('cov_zs')[zdim_key]
     noise_variance = po.get('noise_var_used')
     n_bins = args.n_bins
     o.mkdir_safe(output_folder)    
-    # logger.addHandler(logging.FileHandler(f"{output_folder}/run.log"))
     logger.info(args)
-    o.compute_and_save_reweighted(cryos, target_zs, zs, cov_zs, output_folder, args.Bfactor, n_bins =n_bins, maskrad_fraction = args.maskrad_fraction, n_min_images = args.n_min_images)
+    o.compute_and_save_reweighted(cryos, target_zs, zs, cov_zs, output_folder, args.Bfactor, n_bins =n_bins, maskrad_fraction = args.maskrad_fraction, n_min_images = args.n_min_images, save_all_estimates = args.save_all_estimates)
     o.move_to_one_folder(output_folder, target_zs.shape[0])
 
 def main():
