@@ -395,12 +395,18 @@ class StarfileSource(_MRCDataFrameSource):
         )
         df["__mrc_index"] = pd.to_numeric(df["__mrc_index"]) - 1
 
-        if not datadir:
+        if datadir == 'original':
+            datadir = None
+        elif not datadir:
             datadir = os.path.dirname(filepath)
+            datadir=os.path.abspath(datadir)
+        else:
+            datadir=os.path.abspath(datadir)
+
 
         super().__init__(
             df=df,
-            datadir=os.path.abspath(datadir),
+            datadir=datadir,
             lazy=lazy,
             indices=indices,
             max_threads=max_threads,

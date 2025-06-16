@@ -40,7 +40,7 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
         logger.warning(f"radius of local resolution mask is only {maskrad_pix} pixels. Result will probably be nonsense. Should either increase locres_maskrad or do global resolution estimate")
 
     edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
-    logger.info(f"Step size: {step_size}, maskrad_pix: {maskrad_pix}, edgewidth_pix: {edgewidth_pix}")
+    # logger.info(f"Step size: {step_size}, maskrad_pix: {maskrad_pix}, edgewidth_pix: {edgewidth_pix}")
     # myrad = map1.shape[0]//2 - 1*maskrad_pix
     # print('CHANGE THIS BACK!!')
     # myrad = 40
@@ -67,7 +67,7 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
 
     nr_samplings = sampling_points.shape[0]
 
-    logger.info(f"Calculating local resolution in {nr_samplings} sampling points ...")
+    # logger.info(f"Calculating local resolution in {nr_samplings} sampling points ...")
     if filter_map1:
         ft_sum = ftu.get_dft3(map1)
     else:
@@ -119,8 +119,8 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
 
             fscs.append(fsc)
             local_resols.append(local_resol)
-            if k % 100 == 0:
-                logger.info(f"Sampling point batch {k} out of {n_batch} done")
+            # if k % 100 == 0:
+            #     logger.info(f"Sampling point batch {k} out of {n_batch} done")
 
             if jnp.isnan(i_fil).any() or jnp.isnan(i_loc_res).any():
                 import pdb; pdb.set_trace()
@@ -138,7 +138,7 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
 
     # i_fil3 = jnp.where( i_sum_w > 0,  i_fil / i_sum_w, 0)
     i_fil = make_i_fil_map(sampling_points, i_fil, full_mask)
-    logger.info(f"Done")
+    # logger.info(f"Done")
 
     return i_fil, i_loc_res, i_loc_auc, fscs, local_resols#, sampling_points
 
@@ -502,7 +502,7 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
 
     step_size = np.round(locres_sampling / voxel_size).astype(int)
     # logger.info(f"Step size: {step_size}, maskrad_pix: {maskrad_pix}, edgewidth_pix: {edgewidth_pix}")
-    logger.info(f"Compute CV metric with sampling = {locres_sampling} and radius = {locres_maskrad} and edgewidth = {locres_edgwidth}")
+    # logger.info(f"Compute CV metric with sampling = {locres_sampling} and radius = {locres_maskrad} and edgewidth = {locres_edgwidth}")
 
 
     # myrad = 40
@@ -527,7 +527,7 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
 
     nr_samplings = sampling_points.shape[0]
 
-    logger.info(f"Calculating local error in {nr_samplings} sampling points ...")
+    # logger.info(f"Calculating local error in {nr_samplings} sampling points ...")
     
 
     # for now will do batch of 1.

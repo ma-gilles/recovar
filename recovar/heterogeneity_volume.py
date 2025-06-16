@@ -86,14 +86,9 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         estimates[k] = ftu.get_idft3(estimates[k].reshape(-1, *cryos[0].volume_shape)).real.astype(np.float32)
         logger.info(f"Computing estimates done")
 
-    
-        # cross_validation_estimators[k], lhs[k], rhs[k] =  
-        # 
         cryos[k].update_volume_upsampling_factor(1)
 
         cross_validation_estimators[k], lhs[k], rhs[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k],  None, heterogeneity_distances[k], heterogeneity_bins[0:1], tau= tau, grid_correct=False, use_spherical_mask=False, return_lhs_rhs=True, heterogeneity_kernel= heterogeneity_kernel)
-        # return_lhs_rhs=True)
-        # import pdb; pdb.set_trace()
 
         lhs[k] = adaptive_kernel_discretization.half_volume_to_full_volume(lhs[k][0], cryos[k].volume_shape)
         # Zero out things after Nyquist - these won't be used in CV
@@ -106,13 +101,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
 
     from_ft = False
 
-    # metric_used = "locshellmost_likely"
-    # # Choice from these estimators, but then recompute nicer ones?
-    # ml_choice, ml_errors = choice_most_likely(estimates[0], estimates[1], cross_validation_estimators[0], cross_validation_estimators[1], lhs[0], lhs[1], cryos[0].voxel_size, locres_sampling=locres_sampling, locres_maskrad=locres_maskrad, locres_edgwidth=locres_edgwidth)
-    # split_choice, _ = choice_most_likely_split(estimates[0], estimates[1], cross_validation_estimators[0], cross_validation_estimators[1], lhs[0], lhs[1], cryos[0].voxel_size, locres_sampling=locres_sampling, locres_maskrad=locres_maskrad, locres_edgwidth=locres_edgwidth)
     do_smooth_error = "smooth" in metric_used
-
-
     if metric_used == "locmost_likely":
         ml_choice, ml_errors = choice_most_likely(estimates[0], estimates[1], cross_validation_estimators[0], cross_validation_estimators[1], lhs[0], lhs[1], cryos[0].voxel_size, locres_sampling=locres_sampling, locres_maskrad=locres_maskrad, locres_edgwidth=locres_edgwidth)
     elif "locshellmost_likely" in metric_used:

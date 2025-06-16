@@ -169,9 +169,6 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         o.mkdir_safe(output_folder_kmeans + 'density_plots_sliced/')
         o.plot_over_density(input_density, points =centers_grid, annotate=True, plot_folder = output_folder_kmeans + 'density_plots_sliced/', projection_function = 'slice')
 
-
-    if not skip_centers:
-        o.compute_and_save_reweighted(cryos, centers, zs, cov_zs, output_folder_kmeans_centers, B_factor, n_bins, n_min_images = n_min_images,  maskrad_fraction =  maskrad_fraction)
         # move_to_one_folder(output_folder_kmeans_centers, n_clusters )
 
     if (not skip_umap) and (zdim > 1):
@@ -183,6 +180,10 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         _, kmeans_ind = output.get_nearest_point(zs_unsort, centers)
 
         o.plot_umap(output_folder + '/umap/', mapper.embedding_, mapper.embedding_[kmeans_ind])
+
+    if not skip_centers:
+        o.compute_and_save_reweighted(cryos, centers, zs, cov_zs, output_folder_kmeans_centers, B_factor, n_bins, n_min_images = n_min_images,  maskrad_fraction =  maskrad_fraction)
+
 
     del zs_unsort
     # num_images = 

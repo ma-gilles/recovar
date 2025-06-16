@@ -360,7 +360,7 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
 
 
 
-def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, noise_variance, process_fn, CTF_fun, premultiplied_ctf = False):
+def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eigenvalues, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, noise_variance, process_fn, CTF_fun, premultiplied_ctf):
 
     apply_mask = False
     # Memory to do this is ~ size(volume_mask) * batch_size
@@ -387,7 +387,7 @@ def compute_single_batch_coords_p1(batch, mean_estimate, volume_mask, basis, eig
                                         voxel_size, 
                                         CTF_fun, 
                                         disc_type,
-                                        skip_ctf= premultiplied_ctf,              
+                                        premultiplied_ctf,              
                                           )
     
     ## DO MASK BUSINESS HERE.

@@ -2,10 +2,8 @@ import os
 import sys
 import json
 import argparse
-import subprocess
-import shutil
 from pathlib import Path
-
+import logging
 import numpy as np
 import matplotlib.pyplot as plt
 import jax
@@ -16,6 +14,18 @@ from recovar.commands import pipeline, compute_state
 
 ftu = fourier_transform_utils.fourier_transform_utils(jnp)
 
+# Set up logging configuration
+def setup_logging(output_dir):
+    log_file = os.path.join(output_dir, 'run_test.log')
+    logging.basicConfig(
+        format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
+        level=logging.INFO,
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ]
+    )
+    return logging.getLogger(__name__)
 
 def make_big_test_dataset(input_dir, output_dir, noise_level=0.1, grid_size=128, n_images=50000,
                           contrast_std=0.1, n_tilts=-1, premultiplied_ctf=False, noise_increase_per_tilt=None):
@@ -32,7 +42,7 @@ def make_big_test_dataset(input_dir, output_dir, noise_level=0.1, grid_size=128,
         noise_scale_std=0.0, contrast_std=contrast_std, disc_type='cubic',
         n_tilts=n_tilts, premultiplied_ctf=premultiplied_ctf, noise_increase_per_tilt=noise_increase_per_tilt)
 
-    print(f"Finished generating dataset {output_folder}")
+    logging.info(f"Finished generating dataset {output_folder}")
     return sim_info
 
 
@@ -62,8 +72,9 @@ def main():
                         help='Use new noise estimation method')
 
     args = parser.parse_args()
-
     output.mkdir_safe(args.output_dir)
+    logger = setup_logging(args.output_dir)
+
     # Dump parser arguments to a JSON file.
     dump_json_path = os.path.join(args.output_dir, "parser_args.json")
     with open(dump_json_path, "w") as f:
@@ -76,14 +87,14 @@ def main():
 
     
     def error_message(msg="An error occurred"):
-        print(f"Error: {msg}")
+        logger.error(msg)
         sys.exit(1)
 
     def check_gpu():
         try:
             gpu_devices = jax.devices('gpu')
             if gpu_devices:
-                print("GPU devices found:", gpu_devices)
+                logger.info(f"GPU devices found: {gpu_devices}")
             else:
                 error_message("No GPU devices found. Please ensure JAX is properly configured with CUDA.")
         except Exception as e:
@@ -93,23 +104,20 @@ def main():
         check_gpu()
 
     # Generate synthetic test dataset
-    try:
-        sim_info = make_big_test_dataset(
-            args.volume_input, args.output_dir, noise_level=args.noise_level,
-            grid_size=grid_size, n_images=n_images,
-            contrast_std=args.contrast_std, n_tilts=args.tomo_tilts,
-            premultiplied_ctf=args.premultiplied_ctf,
-            noise_increase_per_tilt=args.noise_increase_per_tilt
-        )
-    except Exception as e:
-        error_message(f"Failed to generate test dataset: {e}")
+    sim_info = make_big_test_dataset(
+        args.volume_input, args.output_dir, noise_level=args.noise_level,
+        grid_size=grid_size, n_images=n_images,
+        contrast_std=args.contrast_std, n_tilts=args.tomo_tilts,
+        premultiplied_ctf=args.premultiplied_ctf,
+        noise_increase_per_tilt=args.noise_increase_per_tilt
+    )
 
     # Compute average noise radial by counting dose indices
-    if 'dose_indices' in sim_info:
+    if 'dose_indices' in sim_info and sim_info['dose_indices'] is not None:
         unique_doses, dose_counts = np.unique(sim_info['dose_indices'], return_counts=True)
-        print("\nDose index distribution:")
+        logger.info("\nDose index distribution:")
         for dose, count in zip(unique_doses, dose_counts):
-            print(f"Dose index {dose}: {count} images ({count/len(sim_info['dose_indices'])*100:.1f}%)")
+            logger.info(f"Dose index {dose}: {count} images ({count/len(sim_info['dose_indices'])*100:.1f}%)")
         
         # Save dose distribution to a file
         dose_dist_path = os.path.join(dataset_dir, 'dose_distribution.txt')
@@ -117,7 +125,9 @@ def main():
             f.write("Dose index distribution:\n")
             for dose, count in zip(unique_doses, dose_counts):
                 f.write(f"Dose index {dose}: {count} images ({count/len(sim_info['dose_indices'])*100:.1f}%)\n")
-        print(f"\nDose distribution saved to {dose_dist_path}")
+        logger.info(f"\nDose distribution saved to {dose_dist_path}")
+    else:
+        logger.info("No dose indices found in simulation info - skipping dose distribution analysis")
 
     # Run pipeline plugin
     cmd = [
@@ -146,9 +156,12 @@ def main():
     
     pipeline_parser = pipeline.add_args(argparse.ArgumentParser())
     pipeline_args = pipeline_parser.parse_args(cmd)
-    print("\nRunning pipeline, as if:")
-    print("recovar " + " ".join(cmd))
+    logger.info("\nRunning pipeline, as if:")
+    logger.info("recovar " + " ".join(cmd))
     pipeline.standard_recovar_pipeline(pipeline_args)
+
+
+    
 
     pipeline_output_dir = os.path.join(dataset_dir, 'pipeline_output')
     sim_info_path = os.path.join(dataset_dir, 'simulation_info.pkl')
@@ -173,11 +186,17 @@ def main():
     np.savetxt(latent_points_path, zs_assignment)
 
     cs_parser = compute_state.add_args(argparse.ArgumentParser())
-    cs_args = cs_parser.parse_args([
+    cmd = [
         f"{dataset_dir}/pipeline_output",
         "-o", output_state_dir,
-        "--latent-points", latent_points_path
-    ])
+        "--latent-points", latent_points_path,
+        "--save-all-estimates"
+    ]
+    cs_args = cs_parser.parse_args(cmd)
+
+    logger.info("\nRunning compute_state, as if:")
+    logger.info("recovar compute_state " + " ".join(cmd))
+
     compute_state.compute_state(cs_args)
 
     # Metrics and plots
@@ -259,6 +278,7 @@ def main():
         else:
             plt.show()
 
+    # Still save individual plots for reference
     plot_dict(angles, 'Angle Error', filename=os.path.join(plots_dir, 'angle_error.png'))
     plot_dict(rel_var, 'Relative Variance Explained',
               filename=os.path.join(plots_dir, 'relative_variance_explained.png'))
@@ -277,9 +297,31 @@ def main():
     all_scores['embedding_squared_error_10'] = averaged_variance
 
     gt_contrasts = synt.contrasts
-    for idx in [4, 10]:
+    for idx in [4, 10, '4_noreg', '10_noreg']:
         unsorted_contrast = pipeline_output.get('unsorted_embedding')['contrasts'][idx]
         all_scores[f'constrasts_{idx}'] = np.mean(np.abs(gt_contrasts - unsorted_contrast))
+        
+        # Create contrast comparison plot
+        plt.figure(figsize=(10, 6))
+        plt.scatter(gt_contrasts, unsorted_contrast, alpha=0.5, label='Particle contrasts')
+        plt.plot([0, 1], [0, 1], 'r--', label='Perfect correlation')
+        plt.xlabel('Ground Truth Contrast')
+        plt.ylabel('Estimated Contrast')
+        plt.title(f'Contrast Comparison (zdim={idx})')
+        plt.legend()
+        plt.savefig(os.path.join(plots_dir, f'contrast_comparison_{idx}.png'))
+        plt.close()
+        
+        # Create contrast distribution plot
+        plt.figure(figsize=(10, 6))
+        plt.hist(gt_contrasts, bins=50, alpha=0.5, label='Ground Truth')
+        plt.hist(unsorted_contrast, bins=50, alpha=0.5, label='Estimated')
+        plt.xlabel('Contrast')
+        plt.ylabel('Number of particles')
+        plt.title(f'Contrast Distribution (zdim={idx})')
+        plt.legend()
+        plt.savefig(os.path.join(plots_dir, f'contrast_distribution_{idx}.png'))
+        plt.close()
 
     for l_idx, l in enumerate(labels_to_plot):
         gt_map = ftu.get_idft3(synt.volumes[l].reshape(cryos[0].volume_shape)).real
@@ -290,7 +332,238 @@ def main():
             gt_map, estimate_map, cryos[0].voxel_size, None, partial_mask=None,
             normalize_by_map1=True
         )
-        all_scores[f'state_{l_idx}_median_locres'] = errors_metrics.get('ninety_pc_locres')
+        all_scores[f'state_{l_idx}_ninety_pc_locres'] = errors_metrics.get('ninety_pc_locres')
+        all_scores[f'state_{l_idx}_median_locres'] = errors_metrics.get('median_locres')
+
+        # write mask to file
+        mask = errors_metrics.get('mask')
+        if mask is not None:
+            mask_path = os.path.join(output_state_dir, 'all_volumes', f'mask_{l_idx:04d}.mrc')
+            utils.write_mrc(mask_path, mask.astype(np.float32), voxel_size=cryos[0].voxel_size)
+            logger.info(f"Mask written to: {mask_path}")
+
+        # Add noise variance estimation metrics
+        logger.info("Computing noise variance estimation metrics...")
+        
+        # Get ground truth noise from simulation
+        gt_noise_base = sim_info.get('noise_variance')
+        if gt_noise_base is None:
+            logger.warning("No ground truth noise variance found in simulation info")
+        else:
+            # Get estimated noise from pipeline output
+            est_noise = pipeline_output.get('noise_var_used')
+            
+            # Log shapes for debugging
+            logger.info(f"Ground truth noise shape: {gt_noise_base.shape}")
+            logger.info(f"Estimated noise shape: {est_noise.shape if isinstance(est_noise, np.ndarray) else 'not array'}")
+            
+            # Handle both single noise model and variable noise per tilt cases
+            if isinstance(est_noise, np.ndarray) and est_noise.ndim > 1:
+                # Variable noise per tilt case
+                logger.info("Processing variable noise per tilt...")
+                
+                # Get dose indices from simulation info
+                dose_indices = sim_info.get('dose_indices')
+                if dose_indices is None:
+                    logger.warning("No dose indices found for variable noise comparison")
+                else:
+                    # Get unique tilts and their counts
+                    unique_tilts, tilt_counts = np.unique(dose_indices, return_counts=True)
+                    n_tilts = len(unique_tilts)
+                    
+                    # Initialize arrays for per-tilt metrics
+                    tilt_correlations = np.zeros(n_tilts)
+                    tilt_mean_errors = np.zeros(n_tilts)
+                    tilt_median_errors = np.zeros(n_tilts)
+                    
+                    # Create a figure with subplots for each tilt
+                    fig, axes = plt.subplots(n_tilts, 1, figsize=(10, 4*n_tilts))
+                    if n_tilts == 1:
+                        axes = [axes]
+                    
+                    # Get noise increase per tilt if it exists
+                    noise_increase_per_tilt = sim_info.get('noise_increase_per_tilt')
+                    
+                    # Compute metrics for each tilt
+                    for i, tilt_idx in enumerate(unique_tilts):
+                        # Reconstruct ground truth noise for this tilt
+                        if noise_increase_per_tilt is not None:
+                            # Scale noise by tilt number if noise_increase_per_tilt is set
+                            tilt_scale = 1 + noise_increase_per_tilt * tilt_idx
+                            tilt_gt_noise = gt_noise_base * tilt_scale
+                        else:
+                            tilt_gt_noise = gt_noise_base
+                            
+                        tilt_est_noise = est_noise[tilt_idx]
+                        
+                        # Ensure shapes match by truncating to shorter length
+                        min_len = min(len(tilt_gt_noise), len(tilt_est_noise))
+                        tilt_gt_noise = tilt_gt_noise[:min_len]
+                        tilt_est_noise = tilt_est_noise[:min_len]
+                        
+                        # Compute metrics
+                        noise_relative_error = np.abs(tilt_est_noise - tilt_gt_noise) / (np.abs(tilt_gt_noise) + 1e-10)
+                        tilt_correlations[i] = np.corrcoef(tilt_est_noise, tilt_gt_noise)[0,1]
+                        tilt_mean_errors[i] = np.mean(noise_relative_error)
+                        tilt_median_errors[i] = np.median(noise_relative_error)
+                        
+                        # Plot for this tilt
+                        ax = axes[i]
+                        ax.plot(tilt_gt_noise, label='Ground Truth', alpha=0.7)
+                        ax.plot(tilt_est_noise, label='Estimated', alpha=0.7)
+                        ax.set_xlabel('Radial Frequency Index')
+                        ax.set_ylabel('Noise Variance')
+                        ax.set_title(f'Noise Variance Estimation (Tilt {tilt_idx}, {tilt_counts[i]} images)')
+                        if noise_increase_per_tilt is not None:
+                            ax.set_title(f'Noise Variance Estimation (Tilt {tilt_idx}, {tilt_counts[i]} images, scale={tilt_scale:.2f})')
+                        ax.legend()
+                        ax.grid(True, alpha=0.3)
+                        
+                        # Add metrics to subplot
+                        ax.text(0.02, 0.98, 
+                               f'Correlation: {tilt_correlations[i]:.3f}\nMean Rel. Error: {tilt_mean_errors[i]:.3f}\nMedian Rel. Error: {tilt_median_errors[i]:.3f}',
+                               transform=ax.transAxes,
+                               verticalalignment='top',
+                               bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                    
+                    plt.tight_layout()
+                    noise_plot_path = os.path.join(plots_dir, "noise_variance_comparison_per_tilt.png")
+                    plt.savefig(noise_plot_path)
+                    plt.close()
+                    logger.info(f"Noise variance comparison plot (per tilt) saved to: {noise_plot_path}")
+                    
+                    # Store aggregate metrics
+                    all_scores['noise_mean_relative_error'] = np.mean(tilt_mean_errors)
+                    all_scores['noise_median_relative_error'] = np.mean(tilt_median_errors)
+                    all_scores['noise_max_relative_error'] = np.max(tilt_mean_errors)
+                    all_scores['noise_correlation'] = np.mean(tilt_correlations)
+                    all_scores['noise_correlation_per_tilt'] = tilt_correlations.tolist()
+                    all_scores['noise_mean_error_per_tilt'] = tilt_mean_errors.tolist()
+                    all_scores['noise_median_error_per_tilt'] = tilt_median_errors.tolist()
+                    
+            else:
+                # Single noise model case
+                # Ensure shapes match by truncating to shorter length
+                min_len = min(len(gt_noise_base), len(est_noise))
+                gt_noise_base = gt_noise_base[:min_len]
+                est_noise = est_noise[:min_len]
+                
+                # Compute metrics
+                noise_relative_error = np.abs(est_noise - gt_noise_base) / (np.abs(gt_noise_base) + 1e-10)
+                noise_correlation = np.corrcoef(est_noise, gt_noise_base)[0,1]
+                
+                # Store metrics
+                all_scores['noise_mean_relative_error'] = np.mean(noise_relative_error)
+                all_scores['noise_median_relative_error'] = np.median(noise_relative_error)
+                all_scores['noise_max_relative_error'] = np.max(noise_relative_error)
+                all_scores['noise_correlation'] = noise_correlation
+                
+                # Plot noise comparison
+                plt.figure(figsize=(10, 6))
+                plt.plot(gt_noise_base, label='Ground Truth', alpha=0.7)
+                plt.plot(est_noise, label='Estimated', alpha=0.7)
+                plt.xlabel('Radial Frequency Index')
+                plt.ylabel('Noise Variance')
+                plt.title('Noise Variance Estimation')
+                plt.legend()
+                plt.grid(True, alpha=0.3)
+                
+                # Add correlation and error metrics to plot
+                plt.text(0.02, 0.98, 
+                        f'Correlation: {noise_correlation:.3f}\nMean Rel. Error: {np.mean(noise_relative_error):.3f}\nMedian Rel. Error: {np.median(noise_relative_error):.3f}',
+                        transform=plt.gca().transAxes,
+                        verticalalignment='top',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+                
+                noise_plot_path = os.path.join(plots_dir, "noise_variance_comparison.png")
+                plt.savefig(noise_plot_path)
+                plt.close()
+                logger.info(f"Noise variance comparison plot saved to: {noise_plot_path}")
+
+
+    # Create a single figure with all plots
+    plt.figure(figsize=(30, 20))
+    
+    # Plot 1: Angle Error
+    plt.subplot(3, 3, 1)
+    for key, data in angles.items():
+        max_size_this = min(b, data.size)
+        plt.plot(np.arange(1, max_size_this + 1), data[:max_size_this], label=str(key))
+    plt.legend()
+    plt.title('Angle Error')
+    
+    # Plot 2: Relative Variance Explained
+    plt.subplot(3, 3, 2)
+    for key, data in rel_var.items():
+        max_size_this = min(b, data.size)
+        plt.plot(np.arange(1, max_size_this + 1), data[:max_size_this], label=str(key))
+    plt.legend()
+    plt.title('Relative Variance Explained')
+    
+    # Plot 3: Normalized Variance Explained
+    plt.subplot(3, 3, 3)
+    for key, data in norm_var.items():
+        max_size_this = min(b, data.size)
+        plt.plot(np.arange(1, max_size_this + 1), data[:max_size_this], label=str(key))
+    plt.legend()
+    plt.title('Normalized Variance Explained')
+    
+    # Plot 4: Eigenvalues
+    plt.subplot(3, 3, 4)
+    for key, data in s.items():
+        max_size_this = min(b, data.size)
+        plt.semilogy(np.arange(1, max_size_this + 1), data[:max_size_this], label=str(key))
+    plt.legend()
+    plt.title('Eigenvalues (log scale)')
+    
+    # Plot 5: Contrast comparison for zdim=4
+    plt.subplot(3, 3, 5)
+    unsorted_contrast_4 = pipeline_output.get('unsorted_embedding')['contrasts'][4]
+    plt.scatter(gt_contrasts, unsorted_contrast_4, alpha=0.5, label='Particle contrasts')
+    plt.plot([0, 1], [0, 1], 'r--', label='Perfect correlation')
+    plt.xlabel('Ground Truth Contrast')
+    plt.ylabel('Estimated Contrast')
+    plt.title('Contrast Comparison (zdim=4)')
+    plt.legend()
+    
+    # Plot 6: Contrast distribution for zdim=4
+    plt.subplot(3, 3, 6)
+    plt.hist(gt_contrasts, bins=50, alpha=0.5, label='Ground Truth')
+    plt.hist(unsorted_contrast_4, bins=50, alpha=0.5, label='Estimated')
+    plt.xlabel('Contrast')
+    plt.ylabel('Number of particles')
+    plt.title('Contrast Distribution (zdim=4)')
+    plt.legend()
+    
+    # Plot 7: Contrast comparison for zdim=10
+    plt.subplot(3, 3, 7)
+    unsorted_contrast_10 = pipeline_output.get('unsorted_embedding')['contrasts'][10]
+    plt.scatter(gt_contrasts, unsorted_contrast_10, alpha=0.5, label='Particle contrasts')
+    plt.plot([0, 1], [0, 1], 'r--', label='Perfect correlation')
+    plt.xlabel('Ground Truth Contrast')
+    plt.ylabel('Estimated Contrast')
+    plt.title('Contrast Comparison (zdim=10)')
+    plt.legend()
+    
+    # Plot 8: Contrast distribution for zdim=10
+    plt.subplot(3, 3, 8)
+    plt.hist(gt_contrasts, bins=50, alpha=0.5, label='Ground Truth')
+    plt.hist(unsorted_contrast_10, bins=50, alpha=0.5, label='Estimated')
+    plt.xlabel('Contrast')
+    plt.ylabel('Number of particles')
+    plt.title('Contrast Distribution (zdim=10)')
+    plt.legend()
+    
+    # Plot 9: FSC scores
+    plt.subplot(3, 3, 9)
+    plt.bar(['Mean FSC', 'Variance FSC'], [all_scores['mean_fsc'], all_scores['variance_fsc']])
+    plt.ylim(0, 1)
+    plt.title('FSC Scores')
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, 'all_metrics_visualizations.png'))
+    plt.close()
+
 
     scores_file = os.path.join(plots_dir, "all_scores.json")
     if os.path.exists(scores_file):
@@ -325,9 +598,9 @@ def main():
         comparison_plot_path = os.path.join(plots_dir, "scores_comparison.png")
         plt.savefig(comparison_plot_path)
         plt.close()
-        print(f"Score comparison plot saved at: {comparison_plot_path}")
+        logger.info(f"Score comparison plot saved at: {comparison_plot_path}")
     else:
-        print("No previous scores file found; skipping comparison.")
+        logger.info("No previous scores file found; skipping comparison.")
 
     # Ensure scores are of type float64 before saving.
     for key in all_scores:
@@ -335,7 +608,7 @@ def main():
 
     with open(scores_file, "w") as f:
         json.dump(all_scores, f, indent=2)
-    print(f"All scores saved to: {scores_file}")
+    logger.info(f"All scores saved to: {scores_file}")
 
 
 if __name__ == "__main__":

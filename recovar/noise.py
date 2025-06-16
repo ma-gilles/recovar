@@ -43,7 +43,7 @@ class VariableRadialNoiseModel():
 
     def get(self, indices, *args, **kwargs):
         dose_indices_batch = self.dose_indices[indices]
-        return batch_make_radial_noise(self.noise_variance_radials[dose_indices_batch], self.image_shape)
+        return batch_make_radial_noise(self.noise_variance_radials[dose_indices_batch,:], self.image_shape)
     
     def get_average_radial_noise(self, *args, **kwargs):
         counts = jnp.bincount(self.dose_indices) / self.dose_indices.size      
@@ -77,15 +77,49 @@ def get_image_masks(volume_mask, rotation_matrices, volume_mask_threshold, volum
 
 
 # From a given noise variance model, predict the observed noise variance in a possibly CTFed + masked image
-def predict_noise_variance( noise_variance, CTF_params, voxel_size, CTF_fun, image_masks, image_shape, radial = True, premultiplied_ctf = False):
+def predict_noise_variance(noise_variance, CTF_params, voxel_size, CTF_fun, image_masks, image_shape, radial=True, premultiplied_ctf=False, upsample_factor=1):
+    """Predict noise variance in images, optionally handling upsampling.
+    
+    Args:
+        noise_variance: Base noise variance (radial or scalar)
+        CTF_params: CTF parameters
+        voxel_size: Voxel size
+        CTF_fun: Function to compute CTF
+        image_masks: Image masks
+        image_shape: Image shape
+        radial: Whether noise is radial
+        premultiplied_ctf: Whether CTF is premultiplied
+        upsample_factor: Factor to upsample by (default 1 for no upsampling)
+    """
+    if upsample_factor > 1:
+        # Interpolate noise_variance onto a finer grid using JAX operations
+        n_orig = len(noise_variance)
+        n_new = n_orig * upsample_factor
+        orig_indices = jnp.arange(n_orig)
+        new_indices = jnp.linspace(0, n_orig-1, n_new)
+        
+        # Get indices for interpolation
+        idx_lo = jnp.floor(new_indices).astype(int)
+        idx_hi = jnp.minimum(idx_lo + 1, n_orig-1)
+        alpha = new_indices - idx_lo
+        
+        # Linear interpolation
+        noise_variance = (1 - alpha) * noise_variance[idx_lo] + alpha * noise_variance[idx_hi]
+        
+        # Scale noise by upsample factor squared to maintain variance
+        noise_variance = noise_variance * upsample_factor**2
+        upsampled_shape = tuple(np.array(image_shape) * upsample_factor)
+        noise_variance = make_radial_noise(noise_variance, upsampled_shape)
 
-    if radial:
+        # Apply CTF on upsampled grid if needed
+        if premultiplied_ctf:
+            upsampled_CTF = CTF_fun(CTF_params, upsampled_shape, voxel_size)
+            noise_variance = noise_variance * upsampled_CTF**2
+    else:
         noise_variance = make_radial_noise(noise_variance, image_shape)
-
-    if premultiplied_ctf:
-    # if CTF is not None:
-        CTF = CTF_fun(CTF_params, image_shape, voxel_size).astype(np.float64)
-        noise_variance = noise_variance * CTF**2
+        if premultiplied_ctf:
+            CTF = CTF_fun(CTF_params, image_shape, voxel_size)
+            noise_variance = noise_variance * CTF**2
 
     predicted_noise_variance = get_masked_noise_variance_from_noise_variance(image_masks, noise_variance, image_shape)
 
@@ -408,6 +442,7 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
         # ---------- mini-batch loss (Optax expects signature: (params, data)) ----------
         #@jax.jit  # compiles once, regardless of batch size
         logger.info("Fitting noise model to images using batch solver")
+        @jax.jit  # compiles once, regardless of batch size
         def loss_fn_batch(noise_variance, data):
             batch, rot, trans, ctf_p = data
 
@@ -585,12 +620,12 @@ def upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, cryos, means,
         # Get max tilt index
         experiment_dataset = cryos[0]
         max_noise_index = jnp.max(experiment_dataset.noise.dose_indices) + 1
-        
+        ub_noise_var_by_var_ests = []
         # Fit noise model separately for each tilt
         for tilt_idx in range(max_noise_index):
-            variance = upper_bound_noise_by_signal_p_noise(noise_var_used[tilt_idx], cryos, means, batch_size, dilated_volume_mask, noise_ind_subset = tilt_idx)
-        return variance
-
+            variance, ub_noise_var_by_var_est = upper_bound_noise_by_signal_p_noise(noise_var_used[tilt_idx], cryos, means, batch_size, dilated_volume_mask, noise_ind_subset = tilt_idx)
+            ub_noise_var_by_var_ests.append(ub_noise_var_by_var_est)
+        return variance, np.stack(ub_noise_var_by_var_ests)
     else:
         return upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size, dilated_volume_mask, noise_ind_subset = None)
 
@@ -642,7 +677,7 @@ def upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size
                 new_noise_variance[noise_ind_subset] = noise_var_used
                 update_noise_variance(new_noise_variance, cryos)
             
-        return variance_est
+        return variance_est, ub_noise_var_by_var_est
 
 
 
@@ -691,8 +726,18 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
         else:
             rhs += batch.shape[0] 
 
+
+
     print("Finished processing all batches")
     estimated_noise = lhs / rhs
+    # Replace any inf entries with the last non-inf value. Inf value can happen when the CTF is 0, because of weight dosing.
+    non_inf_mask = ~jnp.isinf(estimated_noise)
+    if not jnp.all(non_inf_mask):
+        # Find the last non-inf value
+        last_valid_idx = jnp.where(non_inf_mask)[0][-1]
+        last_valid_value = estimated_noise[last_valid_idx]
+        # Replace inf values with the last valid value
+        estimated_noise = jnp.where(non_inf_mask, estimated_noise, last_valid_value)
     return estimated_noise
 
 
@@ -805,7 +850,7 @@ def estimate_noise_variance_from_outside_mask_inner_v2(batch, volume_mask, rotat
                                           image_shape, 
                                           volume_shape, grid_size, 
                                           padding, 
-                                          disc_type, soften =5)
+                                          disc_type, soften =5 )
     # image_mask = image_mask > 0
     
     # Invert mask

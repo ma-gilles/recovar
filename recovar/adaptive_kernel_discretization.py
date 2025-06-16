@@ -2,6 +2,8 @@ import logging
 import jax.numpy as jnp
 import numpy as np
 import jax, functools, time
+import pickle
+import os
 
 from recovar import core, regularization, constants, noise, linalg, relion_functions, dataset
 from recovar.fourier_transform_utils import fourier_transform_utils
@@ -1118,7 +1120,7 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
 
     return estimates
 
-def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola"):
+def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola", use_upsampled_ctf = True):
 
     estimates = []#heterogeneity_bins.size * [None]
 
@@ -1129,8 +1131,6 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
 
     lhs_all = np.zeros((n_bins, half_volume_size), dtype =experiment_dataset.dtype_real )
     rhs_all = np.zeros((n_bins, half_volume_size), dtype =experiment_dataset.dtype )
-
-    # logger.info(f"batch size in het comp: {batch_size}")
 
 
     for bin_idx in range(n_bins):
@@ -1144,8 +1144,8 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
 
             # Only place where image mask is used ?
             batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
-            # print("APPLYING IMAGE MASK!?!")
-            noise_variances = experiment_dataset.noise.get(indices)
+            noise_variances = experiment_dataset.noise.get(indices) 
+            # import pdb; pdb.set_trace()
             Ft_y_b, Ft_ctf_b = relion_functions.relion_style_triangular_kernel_batch(batch,
                                                                     experiment_dataset.CTF_params[indices], 
                                                                     experiment_dataset.rotation_matrices[indices], 
@@ -1156,15 +1156,34 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
                                                                     experiment_dataset.CTF_fun, 
                                                                     disc_type, 
                                                                     noise_variances,
-                                                                    premultiplied_ctf=experiment_dataset.premultiplied_ctf,)
-        
+                                                                    experiment_dataset.premultiplied_ctf,
+                                                                    use_upsampled_ctf=use_upsampled_ctf)
+
+                # Ft_y_b, Ft_ctf_b = relion_style_triangular_kernel_batch(batch,
+                #                                                 experiment_dataset.CTF_params[indices], 
+                #                                                 experiment_dataset.rotation_matrices[indices], 
+                #                                                 experiment_dataset.translations[indices], 
+                #                                                 experiment_dataset.image_shape, 
+                #                                                 experiment_dataset.upsampled_volume_shape, 
+                #                                                 experiment_dataset.voxel_size, 
+                #                                                 experiment_dataset.CTF_fun, 
+                #                                                 disc_type, 
+                #                                                 cov_noise,
+                #                                                 experiment_dataset.premultiplied_ctf)
+
 
             rhs += full_volume_to_half_volume(Ft_y_b, experiment_dataset.upsampled_volume_shape)
             lhs += full_volume_to_half_volume(Ft_ctf_b, experiment_dataset.upsampled_volume_shape)
 
         rhs_all[bin_idx] = rhs
         lhs_all[bin_idx] = lhs
-
+    
+    # Create directory if it doesn't exist
+    os.makedirs('/tmp/temp_dump/', exist_ok=True)
+    
+    with open('/tmp/temp_dump/data.pkl', 'wb') as f:
+        pickle.dump((rhs_all, lhs_all), f)
+    
     # A slight improvement is an almost triangular kernel/ pyramid kernel
     #    _
     #  _| |_
@@ -1261,18 +1280,6 @@ def compute_lhs_rhs(cryo,noise_variance, heterogeneity_distances, residual_thres
     # cryo.update_volume_upsampling_factor(og_upsampling)
 
     return Ft_ctf, F_ty
-
-
-    # residuals, _ = compute_residuals_many_weights_in_weight_batch(test_dataset, first_estimates[0], max_pol_degree )
-    # # Meshgrid but idk to do it cleanly
-    # all_params = []
-    # for param in discretization_params:
-    #     for bin in heterogeneity_bins:
-    #         all_params.append((*param, bin))
-
-
-    # all_params = np.meshgrid([discretization_params, heterogeneity_bins])
-
 
 
 
@@ -1908,4 +1915,5 @@ def compute_hessian(x):
 def compute_hessian_norm_squared(x):
     hessians = compute_hessian(x)
     return jnp.linalg.norm(hessians, axis = (0,1), ord =2)**2
+
 

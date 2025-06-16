@@ -146,11 +146,17 @@ def add_args(parser: argparse.ArgumentParser):
         help="Lazy loading if full dataset is too large to fit in memory",
     )
 
-    group.add_argument(
+    def datadir_type(value):
+        if value == "original":
+            return value
+        return os.path.abspath(value)
+
+    parser.add_argument(
         "--datadir",
-        type=os.path.abspath,
-        help="Path prefix to particle stack if loading relative paths from a .star or .cs file",
+        type=datadir_type,
+        help="Path prefix to particle stack if loading relative paths from a .star or .cs file. Same as the --datadir option in pipeline.py. If you don't pass an argument, the same stack as provided to pipeline.py will be used. You should use this option in case you want to use a higher resolution stack. Use 'original' to use the original paths from the starfile.",
     )
+    
     group.add_argument(
             "--n-images",
             default = -1,
@@ -291,6 +297,14 @@ def add_args(parser: argparse.ArgumentParser):
             help="Whether to run again once constrast is estimated. By default == correct_contrast. Can enter --no-do-over-with-contrast to turn off",
         )
     
+
+    parser.add_argument('--dilated-mask-dilation-iters', 
+                        type = int,
+                        default = None,
+                        help = "How many times to dilate the mask. Default = 6 * volume_shape[0] / 128"
+                        )
+                        
+
 
     return parser
     
@@ -446,7 +460,7 @@ def standard_recovar_pipeline(args):
         utils.report_memory_device(logger=logger)
 
         # Compute mask
-        volume_mask, dilated_volume_mask= mask.masking_options(args.mask, means, volume_shape, cryo.dtype_real, args.mask_dilate_iter, args.keep_input_mask)
+        volume_mask, dilated_volume_mask= mask.masking_options(args.mask, means, volume_shape, cryo.dtype_real, args.mask_dilate_iter, args.keep_input_mask, args.dilated_mask_dilation_iters  )
         ## Always dump mean?
         ### Dump mean and mask to file
         output_folder = args.outdir + '/output/' 
@@ -491,11 +505,14 @@ def standard_recovar_pipeline(args):
         ## First, estimate noise outside the mask
         if args.mask.endswith(".mrc"):
             if use_new_noise_fn:
-                masked_image_PS, _ = noise.fit_noise_model_to_images(cryo, dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = True, disc_type = 'linear_interp')
+                masked_image_PS, image_PS = noise.fit_noise_model_to_images(cryo, dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = True, disc_type = 'linear_interp')
             else:
-                radial_noise_var_outside_mask, _,_ =  noise.estimate_noise_variance_from_outside_mask_v2(cryo, dilated_volume_mask, batch_size)
+                masked_image_PS, _,_ =  noise.estimate_noise_variance_from_outside_mask_v2(cryo, dilated_volume_mask, batch_size)
                 white_noise_var_outside_mask = noise.estimate_white_noise_variance_from_mask(cryo, dilated_volume_mask, batch_size)
+                _, _, image_PS, _ =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
             # white_noise_var_outside_mask = white_noise_var_outside_mask.copy()
+            std_image_PS = None
+            std_masked_image_PS = None
         else:
             if use_new_noise_fn:
                 # radial_noise_var_outside_mask = 
@@ -507,8 +524,8 @@ def standard_recovar_pipeline(args):
             else:
                 masked_image_PS, std_masked_image_PS, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
 
-            radial_noise_var_outside_mask = masked_image_PS
-            white_noise_var_outside_mask = np.median(masked_image_PS)
+        radial_noise_var_outside_mask = masked_image_PS
+        white_noise_var_outside_mask = np.median(masked_image_PS)
 
         if use_new_noise_fn:
             assert (noise_model == "radial" or noise_model == "radial_per_tilt"), f"new noise fn only works with radial noise model. You set {noise_model}"
@@ -543,11 +560,12 @@ def standard_recovar_pipeline(args):
         noise.update_noise_variance(noise_var_used, cryos)
 
         # This works in place?
-        variance_est = noise.upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, cryos, means, batch_size, dilated_volume_mask)
-        variance_fsc = None
-        if noise_model == "radial_per_tilt":
-            # Recompute variance with the new noise variance. If tilt_series noise model this is needed
-            variance_est, _, variance_fsc, _, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, use_regularization = True, disc_type = 'cubic')
+        variance_est, ub_noise_var_by_var_est = noise.upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, cryos, means, batch_size, dilated_volume_mask)
+        # variance_fsc = None
+        # if noise_model == "radial_per_tilt":
+        #     # Recompute variance with the new noise variance. If tilt_series noise model this is needed
+        # This computes the variance once more which is unnecessary. TODO: rewrite this
+        variance_est, _, variance_fsc, _, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, use_regularization = True, disc_type = 'cubic')
 
 
 
@@ -781,7 +799,7 @@ def standard_recovar_pipeline(args):
         'radial_noise_var_outside_mask': np.array(radial_noise_var_outside_mask),
         'radial_ub_noise_var': np.array(radial_ub_noise_var),
         'white_noise_var_outside_mask': np.array(white_noise_var_outside_mask),
-        'ub_noise_var_by_var_est': None,
+        'ub_noise_var_by_var_est': np.array(ub_noise_var_by_var_est),
         
         # Power spectrum measurements
         'image_PS': np.array(image_PS),

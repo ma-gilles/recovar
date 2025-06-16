@@ -10,8 +10,9 @@ from scipy.ndimage import binary_dilation, distance_transform_edt
 # from scipy.ndimage import distance_transform_edt
 logger = logging.getLogger(__name__)
 
-def masking_options(volume_mask_option, means, volume_shape, dtype_real = np.float32, mask_dilation_iter = 0, keep_input_mask = False):
-    dilation_iterations = np.ceil(6 * volume_shape[0] / 128).astype(int)
+def masking_options(volume_mask_option, means, volume_shape, dtype_real = np.float32, mask_dilation_iter = 0, keep_input_mask = False, dilated_mask_dilations_iter = None):
+    # dilation_iterations = np.ceil(6 * volume_shape[0] / 128).astype(int)
+    dilated_mask_dilations_iter = np.ceil(6 * volume_shape[0] / 128).astype(int) if dilated_mask_dilations_iter is None else dilated_mask_dilations_iter
     input_mask = volume_mask_option
 
     if isinstance(volume_mask_option, str):
@@ -36,14 +37,14 @@ def masking_options(volume_mask_option, means, volume_shape, dtype_real = np.flo
                 input_mask = input_mask > 0.5
                 volume_mask = soften_volume_mask(input_mask, kernel_size)
 
-            dilated_volume_mask = binary_dilation(input_mask,iterations=dilation_iterations)
+            dilated_volume_mask = binary_dilation(input_mask,iterations=dilated_mask_dilations_iter)
             dilated_volume_mask = soften_volume_mask(dilated_volume_mask, kernel_size)
         elif volume_mask_option == 'from_halfmaps':
             volume_mask = make_mask_from_half_maps_from_means_dict(means, smax = 3 )
             kernel_size = 3
             logger.info('Softening mask')
 
-            dilated_volume_mask = binary_dilation(volume_mask,iterations=dilation_iterations)
+            dilated_volume_mask = binary_dilation(volume_mask,iterations=dilated_mask_dilations_iter)
             volume_mask = soften_volume_mask(volume_mask, kernel_size)
             dilated_volume_mask = soften_volume_mask(dilated_volume_mask, kernel_size)
             logger.info('using mask computed from mean')
@@ -68,8 +69,8 @@ def make_mask_from_half_maps_from_means_dict(means, smax = 3 ):
     # x = MaskedMaps()
     # x.smax = smax
     vol_shape = utils.guess_vol_shape_from_vol_size(means['corrected0'].size)
-    halfmap1 = ftu.get_idft3(means['corrected0'].reshape(vol_shape)).real
-    halfmap2 = ftu.get_idft3(means['corrected1'].reshape(vol_shape)).real
+    halfmap1 = ftu.get_idft3(means['corrected0reg'].reshape(vol_shape)).real
+    halfmap2 = ftu.get_idft3(means['corrected1reg'].reshape(vol_shape)).real
     return make_mask_from_half_maps(halfmap1, halfmap2, smax = smax )
 
 

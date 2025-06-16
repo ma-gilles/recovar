@@ -435,7 +435,9 @@ def plot_mean_result(cryo, means, cov_noise):
 
         
         
-def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = None, threshold = 1/7, filename = None, volume_mask = None, name = "", fmat = ""):
+def plot_fsc_new(image1, image2, volume_shape = None, voxel_size=1,  curve = None, ax = None, threshold = 1/7, filename = None, volume_mask = None, name = "", fmat = ""):
+    volume_shape = utils.guess_vol_shape_from_vol_size(image1.size) if volume_shape is None else volume_shape
+    
     grid_size = volume_shape[0]
     input_ax_is_none = ax is None
     if input_ax_is_none:

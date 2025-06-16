@@ -63,9 +63,8 @@ def relion_style_triangular_kernel(experiment_dataset , cov_noise,  batch_size, 
     
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
     Ft_y, Ft_ctf = 0, 0 
-
+    use_upsampled_ctf = False
     for batch, particles_ind, indices in data_generator:
-
         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
         Ft_y_b, Ft_ctf_b = relion_style_triangular_kernel_batch(batch,
                                                                 experiment_dataset.CTF_params[indices], 
@@ -77,23 +76,57 @@ def relion_style_triangular_kernel(experiment_dataset , cov_noise,  batch_size, 
                                                                 experiment_dataset.CTF_fun, 
                                                                 disc_type, 
                                                                 cov_noise,
-                                                                experiment_dataset.premultiplied_ctf)
+                                                                experiment_dataset.premultiplied_ctf, 
+                                                                use_upsampled_ctf)
         Ft_y += Ft_y_b
         Ft_ctf += Ft_ctf_b
     # To agree with order of other fcns.
     return Ft_ctf, Ft_y
 
-@functools.partial(jax.jit, static_argnums=[4,5,6,7,8,10])#, static_argnames=('premultiplied_ctf'))
-def relion_style_triangular_kernel_batch(images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, noise_variances, premultiplied_ctf ):
-    # images = process_images(images, apply_image_mask = True)
+@functools.partial(jax.jit, static_argnums=[4,5,6,7,8,10,11])#, static_argnames=('premultiplied_ctf'))
+def relion_style_triangular_kernel_batch(images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, noise_variances, premultiplied_ctf, use_upsampled_ctf  ):
     
     images = core.translate_images(images, translations, image_shape) / noise_variances
-    # Ft_y = core.adjoint_forward_model_from_trilinear(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
     Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf=premultiplied_ctf) 
 
-
     CTF = CTF_fun( CTF_params, image_shape, voxel_size) / noise_variances
-    # Ft_ctf = core.adjoint_forward_model_from_trilinear(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+    
+    if use_upsampled_ctf:
+        upsample_factor = 2
+        upsampled_shape = tuple(np.array(image_shape) * upsample_factor)
+        # Get CTF at upsampled resolution and square it
+        upsampled_CTF_squared = CTF_fun(CTF_params, upsampled_shape, voxel_size) ** 2
+        
+        # Add singleton channel and perform average pooling in JAX to get to image_shape
+        batch_size = upsampled_CTF_squared.shape[0]
+        ctf = upsampled_CTF_squared.reshape(batch_size, *upsampled_shape)
+        kernel_size = upsample_factor + upsample_factor//2  # Restore original kernel size
+        # Create a uniform kernel for average pooling
+        kernel = jnp.ones((kernel_size, kernel_size), dtype=upsampled_CTF_squared.dtype) / (kernel_size * kernel_size)
+        # Reshape for convolution - need to add channel dimension
+        ctf = jnp.expand_dims(ctf, 1)  # Add channel dimension: (batch, 1, H, W)
+        kernel = kernel.reshape(1, 1, kernel_size, kernel_size)  # Reshape kernel: (1, 1, H, W)
+        # Apply convolution (average pooling) using jax.lax.conv with stride=1 to maintain size
+        ctf = jax.lax.conv_general_dilated(
+            ctf,  # (batch, 1, H, W)
+            kernel,  # (1, 1, kernel_size, kernel_size)
+            window_strides=(1, 1),  # stride=1 to maintain size
+            padding='SAME',  # Use SAME padding to maintain size
+            dimension_numbers=('NCHW', 'IOHW', 'NCHW')
+        )
+        ctf = jnp.squeeze(ctf, axis=1)  # Remove channel dimension
+        
+        # Now downsample by taking every other pixel
+        ctf = ctf[:, ::upsample_factor, ::upsample_factor]
+        
+        # Verify we have the right shape
+        # assert ctf.shape[1:] == image_shape, f"Expected shape {image_shape}, got {ctf.shape[1:]}"
+        
+        # Take DFT back to Fourier space, maintaining batch dimension
+        CTF_squared = ctf.reshape(batch_size, -1) / noise_variances
+        Ft_ctf = core.adjoint_forward_model_from_map(CTF_squared, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf = True) 
+        return Ft_y, Ft_ctf
+    
     Ft_ctf = core.adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
 
     return Ft_y, Ft_ctf
@@ -115,25 +148,25 @@ def relion_style_triangular_kernel_batch(images, CTF_params, rotation_matrices, 
 #     return Ft_y, Ft_ctf
 
 
-@functools.partial(jax.jit, static_argnums=[4,5,6,7,8])
-def relion_style_triangular_kernel_batch_trilinear_linear_in_het(images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, cov_noise, het_coords):
-    # Assumes het_coords := het_coords - target
+# @functools.partial(jax.jit, static_argnums=[4,5,6,7,8])
+# def relion_style_triangular_kernel_batch_trilinear_linear_in_het(images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, cov_noise, het_coords):
+#     # Assumes het_coords := het_coords - target
     
-    images = core.translate_images(images, translations, image_shape) / cov_noise
-    Ft_y = core.adjoint_forward_model_from_trilinear(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
-    # Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+#     images = core.translate_images(images, translations, image_shape) / cov_noise
+#     Ft_y = core.adjoint_forward_model_from_trilinear(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+#     # Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
 
 
-    CTF = CTF_fun( CTF_params, image_shape, voxel_size) / cov_noise
-    Ft_ctf = core.adjoint_forward_model_from_trilinear(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+#     CTF = CTF_fun( CTF_params, image_shape, voxel_size) / cov_noise
+#     Ft_ctf = core.adjoint_forward_model_from_trilinear(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
 
-    het_CTF = jnp.ones_likes(het_coords)
+#     het_CTF = jnp.ones_likes(het_coords)
 
-    # Ft_ctf = core.adjoint_forward_model_from_trilinear(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+#     # Ft_ctf = core.adjoint_forward_model_from_trilinear(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
 
-    # Ft_ctf = core.adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
+#     # Ft_ctf = core.adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type) 
 
-    return Ft_y, Ft_ctf
+#     return Ft_y, Ft_ctf
 
 
 # import functools, jax
@@ -279,19 +312,11 @@ def post_process_from_filter(cryo, Ft_ctf, F_ty, tau = None, disc_type = 'neares
     if use_spherical_mask:
         myreliontest, mask2 = mask.soft_mask_outside_map(myreliontest, cosine_width = 3)
     
-    # Correct gridding effect
+    # Correct gridding effect - Deconvolving the kernel regression kernel
     if grid_correct:
         order = 1 if disc_type == 'linear_interp' else 0
-
         grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
         myreliontest, sinc = grid_fn(myreliontest.reshape(cryo.volume_shape), cryo.grid_size, cryo.volume_upsampling_factor/kernel_width, order = order)
-        # print(cryo.volume_upsampling_factor/kernel_width)
-
-        # import matplotlib.pyplot as plt
-        # plt.figure()
-        # plt.imshow(sinc[sinc.shape[0]//2])
-        # plt.colorbar()
-        # plt.show()
     myreliontest = ftu.get_dft3(myreliontest.reshape(cryo.volume_shape))
 
     return myreliontest

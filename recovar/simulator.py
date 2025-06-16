@@ -317,16 +317,26 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
     main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file, n_tilts = n_tilts, 
     dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt, image_offset_n_std= image_offset_n_std , per_particle_contrast=per_particle_contrast, premultiplied_ctf = premultiplied_ctf, noise_increase_per_tilt = noise_increase_per_tilt)
 
+    # Add additional simulation parameters that weren't set in generate_simulated_dataset
+    additional_params = {
+        # Volume parameters
+        'volumes_path_root': volumes_path_root,
+        'trailing_zero_format_in_vol_name': trailing_zero_format_in_vol_name,
+        'scale_vol': scale_vol,
+        
+        # Dataset parameters
+        'grid_size': grid_size,
+        'dataset_params_option': dataset_params_option,
+        'outlier_file_input': outlier_file_input,
+        
+        # Noise parameters
+        'noise_model': noise_model,
+        'noise_level': noise_level,
+    }
+    simulation_info.update(additional_params)
 
-    simulation_info['volumes_path_root'] = volumes_path_root
-    simulation_info['grid_size'] = grid_size
-    simulation_info['trailing_zero_format_in_vol_name'] = trailing_zero_format_in_vol_name
-    simulation_info['disc_type'] = disc_type
-    simulation_info['scale_vol'] = scale_vol
-    simulation_info['dose_per_tilt'] = dose_per_tilt
-    simulation_info['angle_per_tilt'] = angle_per_tilt
-
-    particles_file = output_folder + '/particles.'+str(grid_size)+'.mrcs'
+    # Save outputs
+    particles_file = output_folder + f'/particles.{grid_size}.mrcs'
 
     with mrcfile.new(particles_file ,overwrite=True) as mrc:
         mrc.set_data(main_image_stack.astype(image_dtype))
@@ -344,21 +354,18 @@ def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_
 
     if trailing_zero_format_in_vol_name:
         def make_file(k):
-            # return os.path.join(volumes_path_root,   format(k, '04d')+".mrc")
             return volumes_path_root + format(k, '04d')+".mrc"
-
     else:
         def make_file(k):
             return volumes_path_root + f"{k}.mrc"
-            # return os.path.join(volumes_path_root,  f"{k}.mrc")
-
     
     idx =0 
     files = []
     while(os.path.isfile(make_file(idx))):
         files.append(make_file(idx))
-        # import pdb; pdb.set_trace()
         idx+=1
+    if len(files) == 0:
+        raise ValueError(f"No volume files found in {volumes_path_root}. Volumes should be in the format {volumes_path_root}0000.mrc, {volumes_path_root}0001.mrc, etc.")
     volumes, voxel_size = generate_volumes_from_mrcs(files, grid_size, padding= 0 )
     if normalize:
         volumes /= np.mean(np.linalg.norm(volumes, axis =(-1)))
@@ -383,8 +390,6 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     trans *=0 
     per_image_contrast, per_image_noise_scale = generate_contrast_params(n_images, noise_scale_std, contrast_std )
 
-
-
     image_assignments = np.random.choice(np.arange(volumes.shape[0]), size = n_images,  p = volume_distribution)
 
     if n_tilts >0:
@@ -398,16 +403,10 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
 
         # Assign each image a tilt number
         tilt_numbers = np.arange(n_images) % n_tilts
-        # Put contrast in the tilt groups?
-        # This is how it is done in cryoDRGN. tilt number == the ranking in the tilt series by contrast? Seems a bit sus
-        # TODO check this
-        # logger.warning("A very arbitrary contrast per tilt number! FIX?")
-        # ctf_params[:,core.contrast_ind] =  np.cos(  np.ceil(tilt_numbers/2) * angle_per_tilt )
-
         # Make a tilt series with symmetric angles
         x_angles_half = np.arange(n_tilts//2+1) * angle_per_tilt
         x_angles = np.zeros(n_tilts)
-        x_angles[::2] = -x_angles_half[:-1]   
+        x_angles[::2] = -x_angles_half[:-1]  if n_tilts % 2 == 0 else -x_angles_half
         x_angles[1::2] = x_angles_half[1:]   
 
         # ctf_params[:,core.contrast_ind] =  np.cos(  x_angles / 180 * np.pi )
@@ -420,19 +419,13 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
 
         for i in range(n_tilt_groups):
             image_assignments[tilt_groups == i] = image_assignments_tilt[i]
-            ctf_params[tilt_groups == i,core.contrast_ind] =  np.cos(  x_angles / 180 * np.pi )
+            ctf_params[tilt_groups == i,core.contrast_ind] =  np.cos(  x_angles[tilt_numbers[tilt_groups == i]] / 180 * np.pi )
 
             ind = np.where(tilt_groups == i)[0]
-            # sort_idxs = ctf_params[ind,core.contrast_ind].argsort()
-            # ranks = np.empty_like(sort_idxs)
-            # ranks[sort_idxs[::-1]] = np.arange(len(ind))
-            # tilt_numbers[ind] = ranks
             zero_tilt_rot = rots[ind[0]]
-            these_rot = zero_tilt_rot @ x_rotations
+            these_rot = zero_tilt_rot @ x_rotations[tilt_numbers[tilt_groups == i]]
             rots[ind] = these_rot
 
-            # import pdb; pdb.set_trace()
-        # import pdb; pdb.set_trace()
         # Tag it to the end
         if per_particle_contrast:
             per_tilt_contrast, _ = generate_contrast_params(n_tilt_groups, noise_scale_std, contrast_std )
@@ -472,14 +465,6 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     
     mult = 1 if 'cubic' in disc_type else 5
     batch_size = mult * utils.get_image_batch_size(grid_size, utils.get_gpu_memory_total())
-    # import pdb; pdb.set_trace()
-    # plt.imshow(main_dataset.get_CTF_image(0)); plt.colorbar()
-    # plt.show();
-    # import pdb; pdb.set_trace()
-    # simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = 'linear_interp', mrc_file = None )
-    # logger.warning("USING NEAREST")
-    # disc_type = 'nearest'
-    # disc_type = 'linear_interp'
 
     main_image_stack = simulate_data(main_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = disc_type, mrc_file = mrc_file, premultiplied_ctf=premultiplied_ctf )
 
@@ -551,45 +536,17 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         "tilt_series_assignment": image_assignments_tilt,
         "tilt_groups": tilt_groups,
         "per_tilt_contrast": per_tilt_contrast,
+        # Add noise-related parameters
+        "noise_increase_per_tilt": noise_increase_per_tilt,
+        "dose_indices": tilt_numbers if n_tilts > 0 else None,
+        "dose_per_tilt": dose_per_tilt if n_tilts > 0 else None,
+        "angle_per_tilt": angle_per_tilt if n_tilts > 0 else None,
+        "n_tilts": n_tilts if n_tilts > 0 else None,
     }
 
     return main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups
 
 
-def make_small_dataset(output_path = ".", grid_size=128, n_images = 1000):
-    from recovar import simulate_scattering_potential
-    import os
-    this_file_path = os.path.dirname(__file__)
-    atom_coeff_path = 'data/5nrl.cif'
-    splice_path = os.path.join(this_file_path, atom_coeff_path)
-    voxel_size = 2/256 * grid_size
-    volume = simulate_scattering_potential.generate_molecule_spectrum_from_pdb_id(splice_path, voxel_size, grid_size)
-    from recovar import output
-    volume_path_root = output_path + "/gt_volumes/"
-    output.save_volumes(volume[None], volume_path_root)
-
-    generate_synthetic_dataset(output_path + "/dataset/", voxel_size,  volume_path_root, n_images = 1000, grid_size = grid_size)
-
-    # output_dir = os.path.join(this_file_path, atom_coeff_path)
-
-
-    return 
-
-# def generate_data_and_save_to_file(outdir):
-
-#     main_image_stack, ctf_params, rots, trans, simulation_info = generate_simulated_dataset(volumes, volume_distribution, voxel_size, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_data, volume_radius = 0.9, outlier_volume = None )
-#     grid_size = main_image_stack.shape[-1]
-
-#     #
-#     with mrcfile.new(outdir + 'particles.'+str(grid_size)+'.mrcs') as mrc:
-#         mrc.set_data(main_image_stack)
-#         mrc.voxel_size = voxel_size
-
-#     poses = (rots, trans)
-#     pickle.dump(poses, open(outdir + '/poses.pkl', "wb"))
-#     save_ctf_params(outdir, grid_size, ctf_params, voxel_size)
-#     pickle.dump(simulation_info, open(outdir + '/simulation_info.pkl', "wb"))
-#     return 
 
 def save_ctf_params(outdir, D: int, ctf_params, voxel_size):
 
@@ -723,6 +680,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 from recovar import padding
                 # IF this is on, we did not apply CTF above.
                 upsample_factor=2
+                # print("DEBUGGING HERE !!!")
                 upsampled_shape = tuple(np.array(experiment_dataset.image_shape) * upsample_factor)
                 upsampled_CTF = experiment_dataset.CTF_fun(experiment_dataset.CTF_params[indices],  upsampled_shape, experiment_dataset.voxel_size)
                 # upsampled_CTF2 = experiment_dataset.CTF_fun(experiment_dataset.CTF_params[indices],  experiment_dataset.image_shape, experiment_dataset.voxel_size)
@@ -757,12 +715,9 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 key, subkey = jax.random.split(key)
                 noise_batch = make_noise_batch(subkey, noise_image, images_batch.shape)
                 noise_batch *= per_image_noise_scale[indices][...,None,None]
-
-                
                 images_batch *= per_image_contrast[indices][...,None,None]
                 
                 # Now apply CTF AGAIN after noise is added, and unpad
-
                 images_batch = (images_batch + noise_batch).real
 
                 if premultiplied_ctf:
@@ -814,7 +769,6 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 output_array[indices] = np.array(images_batch + noise_batch)
 
 
-
             n_images_done += indices.size
             # if n_images_done % 1000 == 0:
             logger.info(f"Batch {k}: Generated {n_images_done} images so far")
@@ -831,8 +785,6 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 
 def make_noise_batch(subkey, noise_image, images_batch_shape):
     image_size = images_batch_shape[-1] * images_batch_shape[-2]
-    # 
-
     noise_batch = jax.random.normal(subkey, images_batch_shape ) / jnp.sqrt(image_size)
     
     # import recovar.fourier_transform_utils

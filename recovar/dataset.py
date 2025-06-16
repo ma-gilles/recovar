@@ -13,8 +13,6 @@ from recovar import tilt_dataset
 logger = logging.getLogger(__name__)
 
 # Maybe should take out these dependencies?
-
-import torch
 from recovar.cryodrgn_source import ImageSource
 
 
@@ -37,33 +35,33 @@ def set_standard_mask(D, dtype):
 
 # I don't remember why I use two different loaders here.
 
-# This might work. 
-def numpy_collate(batch):
-  if isinstance(batch[0], np.ndarray):
-    return jnp.stack(batch)
-  elif isinstance(batch[0], (tuple,list)):
-    transposed = zip(*batch)
-    return [numpy_collate(samples) for samples in transposed]
-  else:
-    return jnp.array(batch)
+# # This might work. 
+# def numpy_collate(batch):
+#   if isinstance(batch[0], np.ndarray):
+#     return jnp.stack(batch)
+#   elif isinstance(batch[0], (tuple,list)):
+#     transposed = zip(*batch)
+#     return [numpy_collate(samples) for samples in transposed]
+#   else:
+#     return jnp.array(batch)
 
-class NumpyLoader(torch.utils.data.DataLoader):
-  def __init__(self, dataset, batch_size=1,
-                shuffle=False, sampler=None,
-                batch_sampler=None, num_workers=0,
-                pin_memory=False, drop_last=False,
-                timeout=0, worker_init_fn=None):
-    super(self.__class__, self).__init__(dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        sampler=sampler,
-        batch_sampler=batch_sampler,
-        num_workers=num_workers,
-        collate_fn=numpy_collate,
-        pin_memory=pin_memory,
-        drop_last=drop_last,
-        timeout=timeout,
-        worker_init_fn=worker_init_fn)
+# class NumpyLoader(torch.utils.data.DataLoader):
+#   def __init__(self, dataset, batch_size=1,
+#                 shuffle=False, sampler=None,
+#                 batch_sampler=None, num_workers=0,
+#                 pin_memory=False, drop_last=False,
+#                 timeout=0, worker_init_fn=None):
+#     super(self.__class__, self).__init__(dataset,
+#         batch_size=batch_size,
+#         shuffle=shuffle,
+#         sampler=sampler,
+#         batch_sampler=batch_sampler,
+#         num_workers=num_workers,
+#         collate_fn=numpy_collate,
+#         pin_memory=pin_memory,
+#         drop_last=drop_last,
+#         timeout=timeout,
+#         worker_init_fn=worker_init_fn)
     
 
 # A dataset class, that includes images and all other information
@@ -236,6 +234,7 @@ class CryoEMDataset:
             im = im[self.hpad:self.image_stack.unpadded_D + self.hpad,self.hpad:self.image_stack.unpadded_D + self.hpad]
         return im
 
+
     def get_slice(self, X, to_real_fn = np.abs, axis = 0):
         # zero_th freq
         z_freq = self.grid_size//2 +1
@@ -307,6 +306,35 @@ class CryoEMDataset:
         mask2 = ftu.get_idft2(batch.reshape(-1, *self.image_shape))
         return mask2.real
 
+
+    def get_predicted_image(self, indices, volume, skip_ctf = False, spatial = True):
+        """Get predicted images for given indices using forward model.
+        
+        Args:
+            indices: Array of indices to predict images for
+            volume: Volume to use for prediction
+            skip_ctf: Whether to skip CTF application
+            spatial: Whether to return images in real space (True) or Fourier space (False)
+            
+        Returns:
+            Predicted images in real space if spatial=True, otherwise in Fourier space
+        """
+        predicted_images = core.forward_model_from_map(
+            volume,
+            self.CTF_params[indices],
+            self.rotation_matrices[indices],
+            self.image_shape,
+            self.volume_shape,
+            self.voxel_size,
+            self.CTF_fun,
+            'linear_interp',  # Using linear interpolation for better quality
+            skip_ctf = skip_ctf
+        )
+        if spatial:
+            predicted_images = ftu.get_idft2(predicted_images.reshape(-1, *self.image_shape)).real#.reshape(predicted_images.shape[0], -1)
+        return predicted_images
+
+
     def set_radial_noise_model(self, noise_variance):
         from recovar import noise
         self.noise = noise.RadialNoiseModel(noise_variance, image_shape = self.image_shape)
@@ -315,6 +343,7 @@ class CryoEMDataset:
         from recovar import noise
         _, dose_indices = jnp.unique(self.CTF_params[:,core.dose_ind], return_inverse=True)
         self.noise = noise.VariableRadialNoiseModel(noise_variance_radials, dose_indices, image_shape = self.image_shape)
+
 
 # TODO: This is not used anywhere. Delete?
 # def subsample_cryoem_dataset(dataset, indices):
@@ -340,22 +369,16 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
     if tilt_series_ctf is None and tilt_series is False:
         tilt_series_ctf = 'cryoem'
     elif tilt_series_ctf is None and tilt_series is True:
+        tilt_series_ctf = 'relion5'
+    elif tilt_series_ctf == 'warp':
         tilt_series_ctf = 'v2_scale_from_star'
 
-    # else:
-    #     tilt_series_ctf = tilt_series_ctf
-    # tilt_series_ctf = #None if tilt_series_ctf is False else tilt_series_ctf
-
-    # assert tilt_series_ctf in (None, "from_star", "scale_from_star"), "tilt_series_ctf must be None, from_star, or scale_from_star"
-    # tilt_series_ctf = tilt_series if tilt_series_ctf is None else tilt_series_ctf
-
-    sort_with_Bfac = True
         
     if tilt_series:
             from recovar import tilt_dataset
             # particles_to_tilts, tilts_to_particles = tilt_dataset.TiltSeriesData.parse_particle_tilt(particles_file)
-
-            dataset = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, sort_with_Bfac = sort_with_Bfac)
+            tilt_file_option = 'relion5' if tilt_series_ctf == 'relion5' else 'warp'
+            dataset = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, tilt_file_option=tilt_file_option)
     else:
         if lazy:
             dataset = LazyMRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
@@ -385,6 +408,15 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
         tilt_dataset_this = dataset
 
     if tilt_series_ctf != 'cryoem':
+
+        if tilt_series_ctf == 'relion5':
+            ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
+            dose = tilt_dataset_this.dose
+            angles = np.zeros_like(dose) # Set angles to 0 - the np.cos factor is included already?
+            ctf_params = np.concatenate( [ctf_params, dose[...,None], angles[...,None]], axis =-1)
+            CTF_fun = core.evaluate_ctf_wrapper_tilt_series_v2
+
+
         # The angles are used to compute a scale factor cos(angles). If scale from star, then the scale factor is already in the star file, so set angle to 0
         if "scale_from_star" in tilt_series_ctf:
             angle_per_tilt = 0
