@@ -86,7 +86,7 @@ If you have an internet connection, you can copy paste the commands below. It cr
 
     conda create --name recovar python=3.11 -y
     conda activate recovar
-    pip install -f https://download.pytorch.org/whl/torch_stable.html torch==2.3.1+cpu "jax[cuda12]"==0.5.0  recovar
+    pip install git+https://github.com/scikit-fmm/scikit-fmm.git -f https://download.pytorch.org/whl/torch_stable.html torch==2.3.1+cpu "jax[cuda12]"==0.5.0  recovar
 
 You can then use the recovar command after activating the environment. It is recommended to test your installation before running on a real dataset. You can do this by running this on a GPU-capable device:
 
