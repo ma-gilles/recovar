@@ -106,49 +106,49 @@ def main():
 
         # Generate a test dataset with nested structure for strip_prefix testing
         run_command(
-            f'{BASE_CMD} make_test_dataset {dataset_dir} --create-nested-structure --nested-prefix Extract/job193',
+            f'{BASE_CMD} make_test_dataset {dataset_dir}/nested_test --create-nested-structure --nested-prefix Extract/job193',
             'Generate a test dataset with nested structure',
             'make_test_dataset_nested'
         )
 
         # Test pipeline with strip_prefix functionality
         run_command(
-            f'{BASE_CMD} pipeline {dataset_dir}/test_dataset/particles.star --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --strip-prefix Extract/job193 --correct-contrast -o {dataset_dir}/test_dataset/pipeline_strip_prefix_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
+            f'{BASE_CMD} pipeline {dataset_dir}/nested_test/test_dataset/particles.star --poses {dataset_dir}/nested_test/test_dataset/poses.pkl --ctf {dataset_dir}/nested_test/test_dataset/ctf.pkl --strip-prefix Extract/job193 --correct-contrast -o {dataset_dir}/nested_test/test_dataset/pipeline_strip_prefix_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
             'Run pipeline with strip_prefix functionality',
             'pipeline_strip_prefix'
         )
 
         # Run analyze with strip_prefix functionality
         run_command(
-            f'{BASE_CMD} analyze {dataset_dir}/test_dataset/pipeline_strip_prefix_output --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=0',
+            f'{BASE_CMD} analyze {dataset_dir}/nested_test/test_dataset/pipeline_strip_prefix_output --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=0',
             'Run analyze with strip_prefix',
             'analyze_strip_prefix'
         )
 
         # Generate a test dataset with nested structure for tilt series testing
         run_command(
-            f'{BASE_CMD} make_test_dataset {dataset_dir} --create-nested-structure --nested-prefix Extract/job193 --n-images 100',
+            f'{BASE_CMD} make_test_dataset {dataset_dir}/nested_tilt_test --create-nested-structure --nested-prefix Extract/job193 --n-images 100',
             'Generate a test dataset with nested structure for tilt series',
             'make_test_dataset_nested_tilt'
         )
 
         # Test pipeline with strip_prefix and tilt series functionality
         run_command(
-            f'{BASE_CMD} pipeline {dataset_dir}/test_dataset/particles.star --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --strip-prefix Extract/job193 --tilt-series --tilt-series-ctf=relion5 --correct-contrast -o {dataset_dir}/test_dataset/pipeline_strip_prefix_tilt_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
+            f'{BASE_CMD} pipeline {dataset_dir}/nested_tilt_test/test_dataset/particles.star --poses {dataset_dir}/nested_tilt_test/test_dataset/poses.pkl --ctf {dataset_dir}/nested_tilt_test/test_dataset/ctf.pkl --strip-prefix Extract/job193 --tilt-series --tilt-series-ctf=relion5 --correct-contrast -o {dataset_dir}/nested_tilt_test/test_dataset/pipeline_strip_prefix_tilt_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
             'Run pipeline with strip_prefix and tilt series functionality',
             'pipeline_strip_prefix_tilt'
         )
 
         # Run analyze with strip_prefix and tilt series functionality
         run_command(
-            f'{BASE_CMD} analyze {dataset_dir}/test_dataset/pipeline_strip_prefix_tilt_output --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=0',
+            f'{BASE_CMD} analyze {dataset_dir}/nested_tilt_test/test_dataset/pipeline_strip_prefix_tilt_output --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=0',
             'Run analyze with strip_prefix and tilt series',
             'analyze_strip_prefix_tilt'
         )
 
         # Run pipeline_with_outliers with K rounds
         run_command(
-            f'{BASE_CMD} pipeline_with_outliers {dataset_dir}/test_dataset/particles.star --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --strip-prefix Extract/job193 --correct-contrast -o {dataset_dir}/test_dataset/pipeline_with_outliers_output --mask=from_halfmaps --lazy --zdim 4 --k-rounds {K}',
+            f'{BASE_CMD} pipeline_with_outliers {dataset_dir}/nested_test/test_dataset/particles.star --poses {dataset_dir}/nested_test/test_dataset/poses.pkl --ctf {dataset_dir}/nested_test/test_dataset/ctf.pkl --strip-prefix Extract/job193 --correct-contrast -o {dataset_dir}/nested_test/test_dataset/pipeline_with_outliers_output --mask=from_halfmaps --lazy --zdim 4 --k-rounds {K}',
             f'Run pipeline_with_outliers for {K} rounds',
             'pipeline_with_outliers'
         )
@@ -181,16 +181,30 @@ def main():
             'estimate_stable_states'
         )
 
+        # Create a simple target file for reconstruction testing
+        run_command(
+            f'echo "0.0 0.0" > {dataset_dir}/nested_test/test_dataset/target.txt',
+            'Create target file for reconstruction',
+            'create_target'
+        )
+
         # Test reconstruct_from_external_embedding with strip_prefix
         run_command(
-            f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/test_dataset/particles.star --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --strip-prefix Extract/job193 --embedding {dataset_dir}/test_dataset/pipeline_strip_prefix_output/embeddings.pkl --output {dataset_dir}/test_dataset/reconstruct_strip_prefix_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
+            f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/nested_test/test_dataset/particles.star --poses {dataset_dir}/nested_test/test_dataset/poses.pkl --ctf {dataset_dir}/nested_test/test_dataset/ctf.pkl --strip-prefix Extract/job193 --embedding {dataset_dir}/nested_test/test_dataset/pipeline_strip_prefix_output/embeddings.pkl --target {dataset_dir}/nested_test/test_dataset/target.txt -o {dataset_dir}/nested_test/test_dataset/reconstruct_strip_prefix_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
             'Test reconstruct_from_external_embedding with strip_prefix',
             'reconstruct_strip_prefix'
         )
 
+        # Create a simple target file for tilt series reconstruction testing
+        run_command(
+            f'echo "0.0 0.0" > {dataset_dir}/nested_tilt_test/test_dataset/target.txt',
+            'Create target file for tilt series reconstruction',
+            'create_target_tilt'
+        )
+
         # Test reconstruct_from_external_embedding with strip_prefix and tilt series
         run_command(
-            f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/test_dataset/particles.star --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --strip-prefix Extract/job193 --tilt-series --tilt-series-ctf=relion5 --correct-contrast --embedding {dataset_dir}/test_dataset/pipeline_strip_prefix_tilt_output/embeddings.pkl --output {dataset_dir}/test_dataset/reconstruct_strip_prefix_tilt_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
+            f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/nested_tilt_test/test_dataset/particles.star --poses {dataset_dir}/nested_tilt_test/test_dataset/poses.pkl --ctf {dataset_dir}/nested_tilt_test/test_dataset/ctf.pkl --strip-prefix Extract/job193 --tilt-series --tilt-series-ctf=relion5 --correct-contrast --embedding {dataset_dir}/nested_tilt_test/test_dataset/pipeline_strip_prefix_tilt_output/embeddings.pkl --target {dataset_dir}/nested_tilt_test/test_dataset/target.txt -o {dataset_dir}/nested_tilt_test/test_dataset/reconstruct_strip_prefix_tilt_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
             'Test reconstruct_from_external_embedding with strip_prefix and tilt series',
             'reconstruct_strip_prefix_tilt'
         )
