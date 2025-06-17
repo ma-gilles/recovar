@@ -57,6 +57,7 @@ class ImageSource:
         indices: Optional[np.ndarray] = None,
         datadir: str = "",
         max_threads: int = 1,
+        strip_prefix: str = None,
     ):
         ext = os.path.splitext(filepath)[-1][1:]
         if ext == "star":
@@ -66,6 +67,7 @@ class ImageSource:
                 datadir=datadir,
                 indices=indices,
                 max_threads=max_threads,
+                strip_prefix=strip_prefix,
             )
         elif ext in ("mrc", "mrcs"):
             return MRCFileSource(filepath, lazy=lazy, indices=indices)
@@ -330,10 +332,12 @@ class _MRCDataFrameSource(ImageSource):
         self.df = df
 
         if datadir:
+            # When datadir is specified, join it with the filename (which may already have been processed by strip_prefix)
             self.df["__mrc_filepath"] = self.df["__mrc_filename"].apply(
-                lambda filename: os.path.join(datadir, os.path.basename(filename))
+                lambda filename: os.path.join(datadir, filename)
             )
         else:
+            # When datadir is empty string, use the original filenames
             self.df["__mrc_filepath"] = self.df["__mrc_filename"]
 
         # Peek into the first mrc file to get image size
@@ -386,6 +390,7 @@ class StarfileSource(_MRCDataFrameSource):
         lazy: bool = True,
         indices: Optional[np.ndarray] = None,
         max_threads: int = 1,
+        strip_prefix: str = None,
     ):
         from recovar.cryodrgn_starfile import Starfile
 
@@ -395,14 +400,17 @@ class StarfileSource(_MRCDataFrameSource):
         )
         df["__mrc_index"] = pd.to_numeric(df["__mrc_index"]) - 1
 
-        if datadir == 'original':
-            datadir = None
-        elif not datadir:
-            datadir = os.path.dirname(filepath)
-            datadir=os.path.abspath(datadir)
-        else:
-            datadir=os.path.abspath(datadir)
+        # Handle path stripping if strip_prefix is provided
+        if strip_prefix:
+            df["__mrc_filename"] = df["__mrc_filename"].apply(
+                lambda filename: filename.replace(strip_prefix, "", 1) if filename.startswith(strip_prefix) else filename
+            )
 
+        if not datadir:
+            datadir = os.path.dirname(filepath)
+            datadir = os.path.abspath(datadir)
+        else:
+            datadir = os.path.abspath(datadir)
 
         super().__init__(
             df=df,

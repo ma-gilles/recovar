@@ -57,15 +57,15 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze= False):
     parser.add_argument(
         "--particles",  default=None, help="Particle stack dataset. If you don't pass an argument, the same stack as provided to pipeline.py will be used. You should use this option in case you want to use a higher resolution stack.")
 
-    def datadir_type(value):
-        if value == "original":
-            return value
-        return os.path.abspath(value)
-
     parser.add_argument(
         "--datadir",
-        type=datadir_type,
-        help="Path prefix to particle stack if loading relative paths from a .star or .cs file. Same as the --datadir option in pipeline.py. If you don't pass an argument, the same stack as provided to pipeline.py will be used. You should use this option in case you want to use a higher resolution stack. Use 'original' to use the original paths from the starfile.",
+        type=os.path.abspath,
+        help="Path prefix to particle stack if loading relative paths from a .star or .cs file. If not specified, uses the directory of the star file.",
+    )
+    
+    parser.add_argument(
+        "--strip-prefix",
+        help="Path prefix to strip from filenames in star file (using in starfile input ONLY). Useful when star file contains longer paths than available on the system. By default, it strips the full path (except the filename). E.g, if you starfile path is Extract/job193/Subtomograms/XXX/XXX.mrcs, and your directory looks like /your/path/to/Subtomograms, then you can use --strip-prefix Extract/job193 --datadir /your/path/to/.",
     )
 
     return parser

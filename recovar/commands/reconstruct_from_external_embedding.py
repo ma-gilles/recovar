@@ -63,6 +63,10 @@ def add_args(parser: argparse.ArgumentParser):
         help="Path prefix to particle stack if loading relative paths from a .star or .cs file",
     )
     group.add_argument(
+        "--strip-prefix",
+        help="Path prefix to strip from filenames in star file. Useful when star file contains longer paths than available on the system.",
+    )
+    group.add_argument(
             "--n-images",
             default = -1,
             dest="n_images",

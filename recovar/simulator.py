@@ -265,7 +265,8 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
                                volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, 
                                disc_type = 'linear_interp', n_tilts = -1, dose_per_tilt = 3, angle_per_tilt = 3, 
                                image_dtype = np.float16, image_offset_n_std = 0.0, per_particle_contrast=True, 
-                               premultiplied_ctf = False, noise_increase_per_tilt = None):
+                               premultiplied_ctf = False, noise_increase_per_tilt = None, 
+                               create_nested_structure = False, nested_prefix = "Extract/job193"):
     from recovar import output
     output.mkdir_safe(output_folder)
     volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize = False )
@@ -346,7 +347,22 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
     save_ctf_params(output_folder, grid_size, ctf_params, voxel_size)
     utils.pickle_dump(simulation_info, output_folder + '/simulation_info.pkl' )
 
-    utils.write_starfile(ctf_params, rots.astype(np.float32), trans.astype(np.float32), voxel_size, grid_size, particles_file, output_folder + '/particles.star', halfset_indices = None, tilt_groups = tilt_groups )
+    # Create nested structure if requested
+    if create_nested_structure:
+        # Create nested directories
+        nested_dir = os.path.join(output_folder, nested_prefix)
+        output.mkdir_safe(nested_dir)
+        
+        # Move files to nested directory
+        nested_particles_file = os.path.join(nested_dir, f'particles.{grid_size}.mrcs')
+        os.rename(particles_file, nested_particles_file)
+        
+        # Update star file to use nested path
+        star_particles_file = f"{nested_prefix}/particles.{grid_size}.mrcs"
+    else:
+        star_particles_file = particles_file
+
+    utils.write_starfile(ctf_params, rots.astype(np.float32), trans.astype(np.float32), voxel_size, grid_size, star_particles_file, output_folder + '/particles.star', halfset_indices = None, tilt_groups = tilt_groups )
 
     return main_image_stack, simulation_info
 
