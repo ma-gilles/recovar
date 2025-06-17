@@ -263,8 +263,6 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
         AU_t_AU = jnp.sum(AU_t_AU, axis=0, keepdims=True) 
         image_T_A_mean = jnp.sum(image_T_A_mean, axis=0, keepdims=True) 
         A_mean_norm_sq = jnp.sum(A_mean_norm_sq, axis=0, keepdims=True) 
-
-        logger.warning("IS THIS RIGHT?")
         image_norms_sq = jnp.sum(image_norms_sq, axis=0, keepdims=True)
 
 
@@ -315,9 +313,7 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
             # Pick best contrast
             res_sum1 = residuals_fit + residuals_prior + contrast_prior[None]
             best_idx = jnp.argmin(res_sum1, axis = 1).astype(int)
-            # print(xs_batch_contrast, best_idx)
             contrast_est = contrast_grid[best_idx]
-            # import pdb; pdb.set_trace()
             return contrast_est
         
         contrast_single = contrast_est
@@ -327,10 +323,7 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
 
     # covariance
     if compute_covariances:
-        # cov_batch = (contrast_single**2 )[:,None,None] * AU_t_AU  + jnp.diag(1/eigenvalues)
-        # logger.warning("FIX THIS COV BATCH STUFF")
         if shared_label and not contrast_shared_across_tilt_series:
-            # gram = (contrast_single**2 )[:,None,None] * AU_t_AU
             gram = jnp.sum(AU_t_AU_unsummed * contrast_est[:,None,None] **2, axis=0, keepdims=True) 
         else:
             gram = (contrast_single**2 )[:,None,None] * AU_t_AU
@@ -344,7 +337,6 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
 
     if compute_bias:
         if shared_label and not contrast_shared_across_tilt_series:
-            # gram = (contrast_single**2 )[:,None,None] * AU_t_AU
             gram = jnp.sum(AU_t_AU_unsummed * contrast_est[:,None,None] **2, axis=0, keepdims=True) 
         else:
             gram = (contrast_single**2 )[:,None,None] * AU_t_AU

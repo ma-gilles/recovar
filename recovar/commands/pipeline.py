@@ -146,15 +146,17 @@ def add_args(parser: argparse.ArgumentParser):
         help="Lazy loading if full dataset is too large to fit in memory",
     )
 
-    def datadir_type(value):
-        if value == "original":
-            return value
-        return os.path.abspath(value)
-
-    parser.add_argument(
+    group.add_argument(
         "--datadir",
-        type=datadir_type,
-        help="Path prefix to particle stack if loading relative paths from a .star or .cs file. Same as the --datadir option in pipeline.py. If you don't pass an argument, the same stack as provided to pipeline.py will be used. You should use this option in case you want to use a higher resolution stack. Use 'original' to use the original paths from the starfile.",
+        type=os.path.abspath,
+        help="Path prefix to particle stack if loading relative paths from a .star or .cs file. If not specified, uses the directory of the star file.",
+    )
+    
+    parser.add_argument(
+        "--strip-prefix",
+        help="Path prefix to strip from filenames in star file (used in starfile input ONLY). \
+        Useful when star file contains longer paths than available on the system. By default, it strips the full path (except the filename). E.g, if you starfile path is Extract/job193/Subtomograms/XXX/XXX.mrcs, \
+        and your directory looks like /your/path/to/Subtomograms, then you can use --strip-prefix Extract/job193 --datadir /your/path/to/.",
     )
     
     group.add_argument(
@@ -248,15 +250,15 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--tilt-series-ctf", default = None,  dest="tilt_series_ctf", help="What CTF to use for tilt series. Default = cryoem if tilt series is False, dose weighting + ctfFromStar if tilt series is True"
+        "--tilt-series-ctf", default = None,  dest="tilt_series_ctf", help="What CTF to use for tilt series. Options : cryoem, relion5, warp (windows). Warptools is not yet supported. Default = cryoem if tilt series is False, relion5 if tilt series is True"
     )
 
     parser.add_argument(
-        "--dose-per-tilt", default =None, type = float, dest="dose_per_tilt",
+        "--dose-per-tilt", default =None, type = float, dest="dose_per_tilt", help="Default = None, read from starfile"
     )
 
     parser.add_argument(
-        "--angle-per-tilt", default =None,  type = float, dest="angle_per_tilt", 
+        "--angle-per-tilt", default =None,  type = float, dest="angle_per_tilt", help="Default = None, estimated from starfile"
     )
 
     # parser.add_argument(
@@ -303,8 +305,7 @@ def add_args(parser: argparse.ArgumentParser):
                         default = None,
                         help = "How many times to dilate the mask. Default = 6 * volume_shape[0] / 128"
                         )
-                        
-
+                    
 
     return parser
     

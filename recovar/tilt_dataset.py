@@ -41,6 +41,7 @@ class ImageDataset(data.Dataset):
         max_threads=16,
         padding=0,
         device: Union[str, torch.device] = "cpu",
+        strip_prefix: str = None,
     ):
         assert padding == 0, "Padding not implemented yet"
         assert not keepreal, "Not implemented yet"
@@ -52,6 +53,7 @@ class ImageDataset(data.Dataset):
             datadir=datadir,
             indices=ind,
             max_threads=max_threads,
+            strip_prefix=strip_prefix,
         )
 
         ny = self.src.D

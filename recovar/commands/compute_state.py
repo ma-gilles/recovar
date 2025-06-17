@@ -36,7 +36,8 @@ def compute_state(args):
     if args.datadir is not None:
         po.params['input_args'].datadir = args.datadir
 
-
+    if args.strip_prefix is not None:
+        po.params['input_args'].strip_prefix = args.strip_prefix
 
     if args.latent_points.endswith('.pkl'):
         target_zs = pickle.load(open(args.latent_points, 'rb'))

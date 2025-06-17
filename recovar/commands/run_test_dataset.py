@@ -104,9 +104,51 @@ def main():
         # Set the number of rounds K for the outlier detection pipeline
         K = 2  # Adjust K as needed
 
+        # Generate a test dataset with nested structure for strip_prefix testing
+        run_command(
+            f'{BASE_CMD} make_test_dataset {dataset_dir} --create-nested-structure --nested-prefix Extract/job193',
+            'Generate a test dataset with nested structure',
+            'make_test_dataset_nested'
+        )
+
+        # Test pipeline with strip_prefix functionality
+        run_command(
+            f'{BASE_CMD} pipeline {dataset_dir}/test_dataset/particles.star --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --strip-prefix Extract/job193 --correct-contrast -o {dataset_dir}/test_dataset/pipeline_strip_prefix_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
+            'Run pipeline with strip_prefix functionality',
+            'pipeline_strip_prefix'
+        )
+
+        # Run analyze with strip_prefix functionality
+        run_command(
+            f'{BASE_CMD} analyze {dataset_dir}/test_dataset/pipeline_strip_prefix_output --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=0',
+            'Run analyze with strip_prefix',
+            'analyze_strip_prefix'
+        )
+
+        # Generate a test dataset with nested structure for tilt series testing
+        run_command(
+            f'{BASE_CMD} make_test_dataset {dataset_dir} --create-nested-structure --nested-prefix Extract/job193 --n-images 100',
+            'Generate a test dataset with nested structure for tilt series',
+            'make_test_dataset_nested_tilt'
+        )
+
+        # Test pipeline with strip_prefix and tilt series functionality
+        run_command(
+            f'{BASE_CMD} pipeline {dataset_dir}/test_dataset/particles.star --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --strip-prefix Extract/job193 --tilt-series --tilt-series-ctf=relion5 --correct-contrast -o {dataset_dir}/test_dataset/pipeline_strip_prefix_tilt_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
+            'Run pipeline with strip_prefix and tilt series functionality',
+            'pipeline_strip_prefix_tilt'
+        )
+
+        # Run analyze with strip_prefix and tilt series functionality
+        run_command(
+            f'{BASE_CMD} analyze {dataset_dir}/test_dataset/pipeline_strip_prefix_tilt_output --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=0',
+            'Run analyze with strip_prefix and tilt series',
+            'analyze_strip_prefix_tilt'
+        )
+
         # Run pipeline_with_outliers with K rounds
         run_command(
-            f'{BASE_CMD} pipeline_with_outliers {dataset_dir}/test_dataset/particles.64.mrcs --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {dataset_dir}/test_dataset/pipeline_with_outliers_output --mask=from_halfmaps --lazy --zdim 4 --k-rounds {K}',
+            f'{BASE_CMD} pipeline_with_outliers {dataset_dir}/test_dataset/particles.star --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --strip-prefix Extract/job193 --correct-contrast -o {dataset_dir}/test_dataset/pipeline_with_outliers_output --mask=from_halfmaps --lazy --zdim 4 --k-rounds {K}',
             f'Run pipeline_with_outliers for {K} rounds',
             'pipeline_with_outliers'
         )
@@ -137,6 +179,20 @@ def main():
             f'{BASE_CMD} estimate_stable_states {dataset_dir}/test_dataset/pipeline_output/density/all_densities/deconv_density_1.pkl --percent_top=10 --n_local_maxs=-1 -o {dataset_dir}/test_dataset/pipeline_output/stable_states',
             'Estimate stable states',
             'estimate_stable_states'
+        )
+
+        # Test reconstruct_from_external_embedding with strip_prefix
+        run_command(
+            f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/test_dataset/particles.star --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --strip-prefix Extract/job193 --embedding {dataset_dir}/test_dataset/pipeline_strip_prefix_output/embeddings.pkl --output {dataset_dir}/test_dataset/reconstruct_strip_prefix_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
+            'Test reconstruct_from_external_embedding with strip_prefix',
+            'reconstruct_strip_prefix'
+        )
+
+        # Test reconstruct_from_external_embedding with strip_prefix and tilt series
+        run_command(
+            f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/test_dataset/particles.star --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --strip-prefix Extract/job193 --tilt-series --tilt-series-ctf=relion5 --correct-contrast --embedding {dataset_dir}/test_dataset/pipeline_strip_prefix_tilt_output/embeddings.pkl --output {dataset_dir}/test_dataset/reconstruct_strip_prefix_tilt_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
+            'Test reconstruct_from_external_embedding with strip_prefix and tilt series',
+            'reconstruct_strip_prefix_tilt'
         )
 
     if failed_functions:

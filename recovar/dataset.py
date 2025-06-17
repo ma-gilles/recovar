@@ -16,12 +16,12 @@ logger = logging.getLogger(__name__)
 from recovar.cryodrgn_source import ImageSource
 
 
-def MRCDataMod(particles_file, ind =None , datadir = None, padding = 0, uninvert_data = False):
-    return tilt_dataset.ImageDataset(particles_file, ind = ind, datadir = datadir, padding = padding, invert_data = uninvert_data, lazy =False)
+def MRCDataMod(particles_file, ind =None , datadir = None, padding = 0, uninvert_data = False, strip_prefix = None):
+    return tilt_dataset.ImageDataset(particles_file, ind = ind, datadir = datadir, padding = padding, invert_data = uninvert_data, lazy =False, strip_prefix=strip_prefix)
 
 
-def LazyMRCDataMod(particles_file, ind =None , datadir = None, padding = 0, uninvert_data = False):
-    return tilt_dataset.ImageDataset(particles_file, ind = ind, datadir = datadir, padding = padding, invert_data = uninvert_data, lazy =True)
+def LazyMRCDataMod(particles_file, ind =None , datadir = None, padding = 0, uninvert_data = False, strip_prefix = None):
+    return tilt_dataset.ImageDataset(particles_file, ind = ind, datadir = datadir, padding = padding, invert_data = uninvert_data, lazy =True, strip_prefix=strip_prefix)
     
     
 def get_num_images_in_dataset(mrc_path):
@@ -363,7 +363,7 @@ class CryoEMDataset:
 
 
 # Loads dataset that are stored in the cryoDRGN format
-def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False, tilt_series = False, tilt_series_ctf = None, dose_per_tilt = 2.9, angle_per_tilt = 3, premultiplied_ctf = False):
+def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False, tilt_series = False, tilt_series_ctf = None, dose_per_tilt = 2.9, angle_per_tilt = 3, premultiplied_ctf = False, strip_prefix = None):
     
     # For backward compatibility... Delete at some point?
     if tilt_series_ctf is None and tilt_series is False:
@@ -378,12 +378,25 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
             from recovar import tilt_dataset
             # particles_to_tilts, tilts_to_particles = tilt_dataset.TiltSeriesData.parse_particle_tilt(particles_file)
             tilt_file_option = 'relion5' if tilt_series_ctf == 'relion5' else 'warp'
-            dataset = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, tilt_file_option=tilt_file_option)
+            dataset = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, tilt_file_option=tilt_file_option, strip_prefix=strip_prefix)
+            # # Use TF-based implementation for tilt series
+            # from recovar import tf_tilt_dataset
+            # tilt_file_option = 'relion5' if tilt_series_ctf == 'relion5' else 'warp'
+            # dataset = tf_tilt_dataset.TFTiltSeriesData(
+            #     particles_file, 
+            #     ind=ind, 
+            #     datadir=datadir, 
+            #     invert_data=uninvert_data, 
+            #     tilt_file_option=tilt_file_option,
+            #     cache_size=1000,  # Adjust based on available memory
+            #     prefetch_size=100  # Adjust based on batch size
+            # )
+
     else:
         if lazy:
-            dataset = LazyMRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
+            dataset = LazyMRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data, strip_prefix=strip_prefix)
         else:
-            dataset = MRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
+            dataset = MRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data, strip_prefix=strip_prefix)
 
 
     from recovar import cryodrgn_load
@@ -498,11 +511,11 @@ def get_split_datasets(particles_file, poses_file, ctf_file, datadir,
                                   padding = 0, n_images = None, tilt_series = False,
                                  tilt_series_ctf = None,
                                     angle_per_tilt = 3, dose_per_tilt = 2.9,
-                                   ind_split = None, lazy = False, premultiplied_ctf = False):
+                                   ind_split = None, lazy = False, premultiplied_ctf = False, strip_prefix = None):
     
     cryos = []
     for ind in ind_split:
-        cryos.append(load_cryodrgn_dataset(particles_file, poses_file, ctf_file , datadir = datadir, n_images = n_images, ind = ind, lazy = lazy, padding = padding, uninvert_data = uninvert_data, tilt_series = tilt_series, tilt_series_ctf = tilt_series_ctf, angle_per_tilt = angle_per_tilt, dose_per_tilt = dose_per_tilt, premultiplied_ctf = premultiplied_ctf))
+        cryos.append(load_cryodrgn_dataset(particles_file, poses_file, ctf_file , datadir = datadir, n_images = n_images, ind = ind, lazy = lazy, padding = padding, uninvert_data = uninvert_data, tilt_series = tilt_series, tilt_series_ctf = tilt_series_ctf, angle_per_tilt = angle_per_tilt, dose_per_tilt = dose_per_tilt, premultiplied_ctf = premultiplied_ctf, strip_prefix = strip_prefix))
     
     return cryos
 
@@ -591,6 +604,7 @@ def make_dataset_loader_dict(args):
                             'angle_per_tilt' : None,
                             'dose_per_tilt' : None,
                             'premultiplied_ctf' : False,
+                            'strip_prefix': getattr(args, 'strip_prefix', None),
                             }
     
     # For backward compatibility... Delete at some point?
