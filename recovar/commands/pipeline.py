@@ -330,8 +330,8 @@ def standard_recovar_pipeline(args):
         args.tilt_series_ctf = 'cryoem'
         logger.info("Setting tilt_series_ctf to cryoem")
     elif args.tilt_series_ctf is None and args.tilt_series is True:
-        args.tilt_series_ctf = 'v2_scale_from_star'
-        logger.info("Setting tilt_series_ctf to v2_scale_from_star")
+        args.tilt_series_ctf = 'relion5'
+        logger.info("Setting tilt_series_ctf to relion5")
 
     if args.tilt_series and args.dose_per_tilt is not None:
         logger.warning("dose_per_tilt is provided, but tilt_series_ctf is set to using starfile = -B_fac/4 (by default). Thus, dose_per_tilt will not be used.")

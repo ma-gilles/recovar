@@ -29,7 +29,8 @@ def get_mean_conformation_relion(cryos, batch_size, noise_variance = None,  use_
         means["corrected" + str(idx)], lhs_l[idx] = relion_functions.relion_reconstruct(cryo, noise_variance,batch_size, upsampling_factor = upsampling_factor )
     lhs = (lhs_l[0] + lhs_l[1])/2
 
-    mean_prior, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(cryo.volume_shape, means["corrected0"], means["corrected1"], lhs, jnp.ones(cryos[0].volume_size, dtype = cryos[0].dtype_real) * np.inf, frequency_shift = jnp.array([0,0,0]), upsampling_factor = upsampling_factor)
+    # mean_prior, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(cryo.volume_shape, means["corrected0"], means["corrected1"], lhs, jnp.ones(cryos[0].volume_size, dtype = cryos[0].dtype_real) * np.inf, frequency_shift = jnp.array([0,0,0]), upsampling_factor = upsampling_factor)
+    mean_prior, fsc, _ = regularization.compute_relion_prior(cryos, noise_variance, means["corrected0"], means["corrected1"], batch_size)        
 
     # Store the unreg
     means["combined"] = (means["corrected0"] + means["corrected1"])/2
@@ -42,7 +43,6 @@ def get_mean_conformation_relion(cryos, batch_size, noise_variance = None,  use_
     # Store the reg
     means["combined_regularized"] = (means["corrected0" + 'reg'] + means["corrected1" + 'reg'])/2
 
-    
     if use_regularization:
         means["combined"] = means["combined_regularized"]
         
