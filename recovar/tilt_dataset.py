@@ -146,7 +146,7 @@ class TiltSeriesData(ImageDataset):
     ):
         self._load_start_time = time.time()
         # Note: ind is the indices of the *tilts*, not the particles
-        super().__init__(tiltstar, ind=ind, **kwargs)
+        super().__init__(tiltstar, lazy=lazy, ind=ind, **kwargs)
         # Parse unique particles from _rlnGroupName
         elapsed = time.time() - self._load_start_time
         print(f"Tilt series loaded in {elapsed:.2f} seconds")
