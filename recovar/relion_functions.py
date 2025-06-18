@@ -61,7 +61,7 @@ def griddingCorrect_square(vol_in, ori_size, padding_factor, order = 0,):
 # My understanding of what relion does.
 def relion_style_triangular_kernel(experiment_dataset , cov_noise,  batch_size,  disc_type = 'linear_interp', return_lhs_rhs = False ):
     
-    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+    data_generator = experiment_dataset.get_image_generator(batch_size=batch_size) 
     Ft_y, Ft_ctf = 0, 0 
     use_upsampled_ctf = False
     for batch, particles_ind, indices in data_generator:
