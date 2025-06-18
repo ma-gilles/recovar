@@ -181,7 +181,7 @@ DEBUG = False
 
 # def fit_noise_model_to_images(experiment_dataset, volume_mask, image_subset, batch_size, invert_mask, disc_type = 'linear_interp'):
 
-#     # data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+#     # data_generator = experiment_dataset.get_image_generator(batch_size=batch_size) 
 #     # all_shell_avgs = []
 #     # image_PSs = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
 #     # masked_image_PSs = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
@@ -524,7 +524,7 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
                 noise_variance = noise_variance.at[:only_up_to_k].set(noise_variance_to_opt)
             else:
                 noise_variance = noise_variance_to_opt
-            data_generator = experiment_dataset.get_dataset_subset_generator(
+            data_generator = experiment_dataset.get_image_subset_generator(
                 batch_size=batch_size,
                 subset_indices=image_subset
             )
@@ -749,18 +749,35 @@ def batch_make_radial_noise(average_image_PS, image_shape):
     # Perhaps it should be mean at low freq and median at high freq?
 mean_fn = np.mean
 
-def estimate_noise_variance(experiment_dataset, batch_size):
+def estimate_noise_variance(experiment_dataset, batch_size, max_images = 10000):
     sum_sq = 0
 
+    # Subsample at most 10000 images
+    if experiment_dataset.n_images > max_images:
+        # Calculate subsampling ratio
+        subsample_ratio = max_images / experiment_dataset.n_images
+        # Create subset indices for subsampling
+        subset_indices = np.random.choice(
+            experiment_dataset.n_images, 
+            size=max_images, 
+            replace=False
+        )
+        data_generator = experiment_dataset.get_image_subset_generator(
+            batch_size=batch_size, 
+            subset_indices=subset_indices
+        )
+        n_images_used = max_images
+    else:
+        data_generator = experiment_dataset.get_image_generator(batch_size=batch_size)
+        n_images_used = experiment_dataset.n_images
     
-    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
     # all_shell_avgs = []
 
     for batch, _, _ in data_generator:
         batch = experiment_dataset.image_stack.process_images(batch)
         sum_sq += jnp.sum(np.abs(batch)**2, axis =0)
 
-    mean_PS =  sum_sq / experiment_dataset.n_images
+    mean_PS =  sum_sq / n_images_used
     cov_noise_mask = jnp.median(mean_PS)
 
     average_image_PS = regularization.average_over_shells(mean_PS, experiment_dataset.image_shape)
@@ -775,7 +792,7 @@ def estimate_white_noise_variance_from_mask(experiment_dataset, volume_mask, bat
 
 def estimate_noise_variance_from_outside_mask(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp'):
 
-    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+    data_generator = experiment_dataset.get_image_generator(batch_size=batch_size) 
     # all_shell_avgs = []
     image_PSs = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
 
@@ -803,7 +820,7 @@ def estimate_noise_variance_from_outside_mask(experiment_dataset, volume_mask, b
 
 def estimate_noise_variance_from_outside_mask_v2(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp'):
 
-    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+    data_generator = experiment_dataset.get_image_generator(batch_size=batch_size) 
     # all_shell_avgs = []
     # images_estimates = np.empty([experiment_dataset.n_images, *experiment_dataset.image_shape])
 
@@ -895,7 +912,7 @@ def get_masked_noise_variance_from_noise_variance(image_masks, unmasked_noise_va
 
 # def upper_bound_noise_by_reprojected_mean(experiment_dataset, mean_estimate, volume_mask, batch_size, disc_type = 'linear_interp'):
 
-#     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+#     data_generator = experiment_dataset.get_image_generator(batch_size=batch_size) 
 #     # all_shell_avgs = []
 #     image_PSs = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
 
@@ -1010,12 +1027,12 @@ def get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, 
     # basis_size = basis.shape[-1]
     if subset_indices is None:
         n_images = experiment_dataset.n_images
-        data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+        data_generator = experiment_dataset.get_image_generator(batch_size=batch_size) 
     else:
         n_images = subset_indices.size
-        data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = subset_indices) 
+        data_generator = experiment_dataset.get_image_subset_generator(batch_size=batch_size, subset_indices = subset_indices) 
 
-    # data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+    # data_generator = experiment_dataset.get_image_generator(batch_size=batch_size) 
     residual_squared = jnp.zeros(experiment_dataset.image_stack.image_size, dtype = basis.dtype)
     # residuals_squared_per_image = jnp.zeros_like(residual_squared, shape = experiment_dataset.n_images, dtype = basis.dtype)
     all_averaged_residual_squared = np.empty((n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
@@ -1101,7 +1118,7 @@ def get_average_residual_square_inner(batch, mean_estimate, volume_mask, basis, 
 # def get_average_residual_square_v3(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp', noise_var = None, index_subset = None):
     
 #     # basis_size = basis.shape[-1]
-#     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+#     data_generator = experiment_dataset.get_image_generator(batch_size=batch_size) 
 #     residual = 0 
 #     basis = jnp.asarray(basis.T)
 #     for batch, batch_image_ind in data_generator:
@@ -1208,16 +1225,16 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
     # basis_size = basis.shape[-1]
     if subset_indices is None:
         n_images = experiment_dataset.n_images
-        data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+        data_generator = experiment_dataset.get_image_generator(batch_size=batch_size) 
 
     else:
         n_images = subset_indices.size
-        data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = subset_indices) 
+        data_generator = experiment_dataset.get_image_subset_generator(batch_size=batch_size, subset_indices = subset_indices) 
 
 
     # images_estimates = np.empty([experiment_dataset.n_images, *experiment_dataset.image_shape], dtype = experiment_dataset.dtype)
     # basis_size = basis.shape[-1]
-    # data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+    # data_generator = experiment_dataset.get_image_generator(batch_size=batch_size) 
     basis = jnp.asarray(basis.T)
     top_fraction = 0
     kernel_sq_sum =0 
