@@ -648,7 +648,7 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
                 # print( k, " cols comp.")
                 f_jit._clear_cache() # Maybe this?
 
-            H_k, B_k = f_jit(images, batch_CTF, batch_grid_pt_vec_ind_of_images, experiment_dataset.rotation_matrices[batch_image_ind],  noise_variances, picked_freq_idx, image_mask, experiment_dataset.image_shape, volume_size, right_kernel = options["right_kernel"], left_kernel = options["left_kernel"], kernel_width = options["right_kernel_width"], shared_label = experiment_dataset.tilt_series_flag, premultiplied_ctf = experiment_dataset.premultiplied_ctf)
+            H_k, B_k = f_jit(images, batch_CTF, batch_grid_pt_vec_ind_of_images, experiment_dataset.rotation_matrices[batch_image_ind],  noise_variances, picked_freq_idx, image_mask, experiment_dataset.image_shape, volume_size, right_kernel = options["right_kernel"], left_kernel = options["left_kernel"], kernel_width = options["right_kernel_width"], shared_label = experiment_dataset.tilt_series_flag, premultiplied_ctf = experiment_dataset.premultiplied_ctf, tilt_labels = particles_ind)
 
             _cpu = jax.devices("cpu")[0]
 
@@ -989,13 +989,35 @@ batched_summed_outer_products  = jax.vmap(summed_outer_products)
 #     return C_mat, grid_point_vec_indices
 
 
+
+@functools.partial(jax.jit, static_argnums=[2])
+def group_sum_by_labels(array, tilt_labels, max_groups):
+    """
+    General function to group and sum arrays by tilt_labels.
+    This is JIT-compatible and assumes tilt_labels are consecutive indices (0, 1, 2, ...).
+    
+    Args:
+        array: Array to sum, shape (n_images, n_features)
+        tilt_labels: Group labels, shape (n_images,)
+        max_groups: Maximum number of groups (should be >= max(tilt_labels) + 1)
+        
+    Returns:
+        Array with same shape as input, where each element is replaced by the sum of its group
+    """
+    # Sum within each tilt label group using scatter-add
+    summed_by_label = jnp.zeros((max_groups, *array.shape[1:]), dtype=array.dtype)
+    summed_by_label = summed_by_label.at[tilt_labels].add(array)
+    
+    # Repeat the summed values back to the original image positions
+    return summed_by_label[tilt_labels]
+
+
 # This computes the sums
 #  H_{k_1, k_2} & = \sum_{i,j_1, j_2} c_{i,j_1}^2 c_{i,j_2}^2 K\left(\xi^{k_1} , \xi_{i,j_1} \right)  K\left(\xi^{k_2} , \xi_{i,j_2} \right)   \label{eq:H} \\
 #  B_{k_1, k_2} & = \sum_{i,j_1, j_2} c_{i,j_1} c_{i,j_2} \left(l_{i,j_1} \overline{l_{i,j_2}} - \Lambda^{i}_{j_1, j_2}\right)K\left(\xi^{k_1} , \xi_{i,j_1} \right)  K\left(\xi^{k_2} , \xi_{i,j_2} \right)  \label{eq:B}
 # For a fixed k_2
 #  Eq. 12-13 in arxiv version?
-
-def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coords_on_grid_stacked, rotation_matrices,  noise_variances, picked_freq_index, image_mask, image_shape, volume_size, right_kernel = "triangular", left_kernel = "triangular", kernel_width = 2, shared_label = False, premultiplied_ctf = False):
+def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coords_on_grid_stacked, rotation_matrices,  noise_variances, picked_freq_index, image_mask, image_shape, volume_size, right_kernel = "triangular", left_kernel = "triangular", kernel_width = 2, shared_label = False, premultiplied_ctf = False, tilt_labels = None):
     # print("Using kernel", right_kernel, left_kernel, kernel_width)
 
     volume_shape = utils.guess_vol_shape_from_vol_size(volume_size)
@@ -1023,11 +1045,18 @@ def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coord
     # c_{i,j_2} l_{i,j_2} K( \xi_{i,j_2}, k_2) over j_2
     images_prod = covariance_core.sum_up_over_near_grid_points(ctfed_images, plane_coords_on_grid_stacked, picked_freq_coord, kernel = right_kernel, kernel_width = kernel_width)
     
+
     if shared_label:
-        # I think this is literally the only change? ( a corresponding one below for lhs)
-        ## TODO: Make sure this is correct.
-        images_prod = jnp.repeat(jnp.sum(images_prod, axis=0, keepdims=True), images_prod.shape[0], axis=0)
-        # This seems right...
+        
+        # Group images by tilt_labels and sum within each group
+        if tilt_labels is not None:
+            # Use the jittable grouping function
+            max_tilt_n_groups = centered_images.shape[0]  # Worst case: each image is its own group
+            tilt_labels = preprocess_tilt_labels_for_batch(tilt_labels)
+            images_prod = group_sum_by_labels(images_prod, tilt_labels, max_tilt_n_groups)
+        else:
+            # Fallback to original behavior if no tilt_labels provided
+            images_prod = jnp.repeat(jnp.sum(images_prod, axis=0, keepdims=True), images_prod.shape[0], axis=0)
 
     ctfed_images  *= jnp.conj(images_prod)[...,None]
     # - noise term
@@ -1042,7 +1071,14 @@ def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coord
     ctfs_prods = covariance_core.sum_up_over_near_grid_points(ctf_squared, plane_coords_on_grid_stacked, picked_freq_coord , kernel = right_kernel, kernel_width = kernel_width)
 
     if shared_label:
-        ctfs_prods = jnp.repeat(jnp.sum(ctfs_prods, axis=0, keepdims=True), ctfs_prods.shape[0], axis=0) 
+        # Group images by tilt_labels and sum within each group
+        if tilt_labels is not None:
+            # Use the jittable grouping function
+            max_tilt_n_groups = centered_images.shape[0]  # Worst case: each image is its own group
+            ctfs_prods = group_sum_by_labels(ctfs_prods, tilt_labels, max_tilt_n_groups)
+        else:
+            # Fallback to original behavior if no tilt_labels provided
+            ctfs_prods = jnp.repeat(jnp.sum(ctfs_prods, axis=0, keepdims=True), ctfs_prods.shape[0], axis=0)
 
     ctf_squared *= ctfs_prods[...,None]
     lhs_summed_up = adjoint_kernel_slice(ctf_squared, rotation_matrices, image_shape, volume_shape, left_kernel)
@@ -1096,4 +1132,26 @@ def compute_noise_term(plane_coords, target_coord, CTF_on_grid, image_shape, ima
 
     # mutiply by CTF again
     return k_xi_x1 
+
+
+def preprocess_tilt_labels_for_batch(tilt_labels):
+    """
+    Pre-process tilt_labels to be consecutive indices starting from 0.
+    This should be called outside JIT to handle arbitrary tilt label values.
+    
+    Args:
+        tilt_labels: Array of arbitrary tilt label values
+        
+    Returns:
+        mapped_labels: Array of consecutive indices (0, 1, 2, ...)
+        max_tilt_n_groups: Number of unique tilt groups
+    """
+    if tilt_labels is None:
+        return None, None
+    
+    # Get unique labels and their inverse indices
+    unique_labels, inverse_indices = jnp.unique(tilt_labels, return_inverse=True, size = tilt_labels.shape[0])
+    
+    # inverse_indices already gives us the mapping to consecutive indices
+    return inverse_indices
 
