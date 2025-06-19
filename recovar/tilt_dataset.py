@@ -115,8 +115,23 @@ class ImageDataset(data.Dataset):
             None,
         )
 
-    def get_dataset_generator(self, batch_size, num_workers = 0):
-        return NumpyLoader(self, batch_size=batch_size, shuffle=False, num_workers = num_workers)
+    def get_dataset_generator(self, batch_size, num_workers=0, pad_to_batch_size=False):
+        """
+        Create a data generator that returns batches based on image count rather than tilt series count.
+        
+        Args:
+            batch_size: Target number of images per batch
+            num_workers: Number of workers for data loading
+            pad_to_batch_size: If True, pad the last batch to exact batch_size with zeros
+            
+        Returns:
+            Generator yielding (images, particle_indices, tilt_indices) where:
+            - images: concatenated images from multiple tilt series
+            - particle_indices: array indicating which particle each image belongs to
+            - tilt_indices: array of tilt indices for each image
+        """
+        return ImageBatchDataLoader(self, batch_size=batch_size, num_workers=num_workers, 
+                                   pad_to_batch_size=pad_to_batch_size)
     
     def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
         if subset_indices is None:
