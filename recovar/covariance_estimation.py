@@ -9,12 +9,57 @@ ftu = fourier_transform_utils(jnp)
 
 logger = logging.getLogger(__name__)
 
-def get_default_covariance_computation_options():
+def get_default_covariance_computation_options(grid_size=None):
 
-    if utils.get_gpu_memory_total() < 70:
-        n_pcs = np.ceil((utils.get_gpu_memory_total() / (75 / 200**4))**(1/4)).astype(int)
+    gpu_memory = utils.get_gpu_memory_total()
+    
+    if grid_size is not None:
+        # Account for basis memory: basis has shape (volume_size, n_pcs) 
+        # where volume_size = grid_size^3
+        # Memory usage scales as volume_size * n_pcs * dtype_size
+        volume_size = grid_size ** 3
+        dtype_size = 8  # bytes for complex64
+        
+        # Reserve some memory for other operations (keep ~30% free)
+        available_memory_gb = gpu_memory * 0.7
+        
+        # The original formula: n_pcs = ceil((gpu_memory / (75 / 200^4))^(1/4))
+        # This implies memory scales as: base_memory = (75 / 200^4) * n_pcs^4
+        # Total memory = base_memory + basis_memory
+        # Total memory = (75 / 200^4) * n_pcs^4 + volume_size * n_pcs * dtype_size / 1e9
+        
+        base_memory_coefficient = 75 / (200**4)  # From original formula
+        basis_memory_coefficient = volume_size * dtype_size / 1e9  # GB per PC
+        
+        # Solve: base_memory_coefficient * n_pcs^4 + basis_memory_coefficient * n_pcs <= available_memory_gb
+        # This is a quartic equation, but we can approximate by trying values
+        
+        if gpu_memory < 70:
+            # Start with original estimate and adjust down if needed
+            n_pcs_original = np.ceil((gpu_memory / (75 / 200**4))**(1/4)).astype(int)
+        else:
+            n_pcs_original = 200
+            
+        # Check if original estimate fits with basis memory
+        for n_pcs in range(n_pcs_original, 0, -1):
+            base_memory = base_memory_coefficient * (n_pcs ** 4)
+            basis_memory = basis_memory_coefficient * n_pcs
+            total_memory = base_memory + basis_memory
+            
+            if total_memory <= available_memory_gb:
+                break
+        else:
+            n_pcs = 50  # Fallback to minimum
+            
+        logger.info(f"Using {n_pcs} PCs for covariance computation (GPU memory: {gpu_memory} GB, grid_size: {grid_size}, original estimate: {n_pcs_original}, base+basis memory: {base_memory + basis_memory:.2f} GB)")
     else:
-        n_pcs = 200
+        # Fallback to original calculation if grid_size not provided
+        if gpu_memory < 70:
+            n_pcs = np.ceil((gpu_memory / (75 / 200**4))**(1/4)).astype(int)
+            logger.info(f"Using {n_pcs} PCs for covariance computation (GPU memory: {gpu_memory} GB)")
+        else:
+            n_pcs = 200
+            logger.info(f"Using {n_pcs} PCs for covariance computation (GPU memory: {gpu_memory} GB)")
 
     options = {
         "covariance_fn": "kernel",
@@ -43,20 +88,13 @@ def get_default_covariance_computation_options():
         "mask_images_in_H_B": True,
         "downsample_from_fsc" : False,
     }
-
+    
+    print( "--------------------------------" )
+    print( "--------------------------------" )
     print( "mask_images_in_proj changed" )
     print( "mask_images_in_proj changed" )
-    print( "mask_images_in_proj changed" )
-    print( "mask_images_in_proj changed" )
-    print( "mask_images_in_proj changed" )
-    print( "mask_images_in_proj changed" )
-    print( "mask_images_in_proj changed" )
-    print( "mask_images_in_proj changed" )
-    print( "mask_images_in_proj changed" )
-    print( "mask_images_in_proj changed" )
-    print( "mask_images_in_proj changed" )
-    print( "mask_images_in_proj changed" )
-    print( "mask_images_in_proj changed" )
+    print( "--------------------------------" )
+    print( "--------------------------------" )
 
     return options
 
@@ -593,7 +631,7 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
     else:
         these_disc = 'linear_interp'
 
-    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
+    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size, mode='images') 
     for images, particles_ind, batch_image_ind in data_generator:
         # these_disc = 'linear_interp'
         # Probably should swap this to linear interp
@@ -644,9 +682,9 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
 
         for (k, picked_freq_idx) in enumerate(picked_frequency_indices):
             
-            if (k % 50 == 49) and (k > 0):
-                # print( k, " cols comp.")
-                f_jit._clear_cache() # Maybe this?
+            # if (k % 50 == 49) and (k > 0):
+            #     # print( k, " cols comp.")
+            #     f_jit._clear_cache() # Maybe this?
 
             H_k, B_k = f_jit(images, batch_CTF, batch_grid_pt_vec_ind_of_images, experiment_dataset.rotation_matrices[batch_image_ind],  noise_variances, picked_freq_idx, image_mask, experiment_dataset.image_shape, volume_size, right_kernel = options["right_kernel"], left_kernel = options["left_kernel"], kernel_width = options["right_kernel_width"], shared_label = experiment_dataset.tilt_series_flag, premultiplied_ctf = experiment_dataset.premultiplied_ctf, tilt_labels = particles_ind)
 

@@ -174,13 +174,13 @@ class CryoEMDataset:
     #     self.current_index=0# A very stupid way to do this for now?
     #     return self.image_stack.get_dataset_generator(batch_size,num_workers = num_workers)
 
-    def get_dataset_generator(self, batch_size, num_workers = 0):
-        return self.image_stack.get_dataset_generator(batch_size,num_workers = num_workers)
+    def get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
+        return self.image_stack.get_dataset_generator(batch_size, num_workers=num_workers, **kwargs)
     
-    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
+    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
         if subset_indices is None:
-            return self.get_dataset_generator(batch_size, num_workers = num_workers)
-        return self.image_stack.get_dataset_subset_generator(batch_size, subset_indices, num_workers = num_workers)
+            return self.get_dataset_generator(batch_size, num_workers=num_workers, **kwargs)
+        return self.image_stack.get_dataset_subset_generator(batch_size, subset_indices, num_workers=num_workers, **kwargs)
 
     # This is a generator that iterates over individual images rather than tilt groups. For SPA, this is the same as get_dataset_subset_generator.
     def get_image_subset_generator(self, batch_size, subset_indices, num_workers = 0):
