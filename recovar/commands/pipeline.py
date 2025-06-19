@@ -619,7 +619,7 @@ def standard_recovar_pipeline(args):
             for test in tests:
                 output_folder = args.outdir + '/output/' 
                 # Compute principal components
-                covariance_options = covariance_estimation.get_default_covariance_computation_options()
+                covariance_options = covariance_estimation.get_default_covariance_computation_options(cryos[0].grid_size)
                 for key in test:
                     covariance_options[key] = test[key]
         
@@ -636,7 +636,7 @@ def standard_recovar_pipeline(args):
 
         utils.report_memory_device(logger=logger)
 
-        covariance_options = covariance_estimation.get_default_covariance_computation_options()
+        covariance_options = covariance_estimation.get_default_covariance_computation_options(cryos[0].grid_size)
         if args.low_memory_option:
             covariance_options['sampling_n_cols'] = 50
             covariance_options['randomized_sketch_size'] = 100

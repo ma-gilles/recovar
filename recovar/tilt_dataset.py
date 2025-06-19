@@ -115,29 +115,13 @@ class ImageDataset(data.Dataset):
             None,
         )
 
-    def get_dataset_generator(self, batch_size, num_workers=0, pad_to_batch_size=False):
-        """
-        Create a data generator that returns batches based on image count rather than tilt series count.
-        
-        Args:
-            batch_size: Target number of images per batch
-            num_workers: Number of workers for data loading
-            pad_to_batch_size: If True, pad the last batch to exact batch_size with zeros
-            
-        Returns:
-            Generator yielding (images, particle_indices, tilt_indices) where:
-            - images: concatenated images from multiple tilt series
-            - particle_indices: array indicating which particle each image belongs to
-            - tilt_indices: array of tilt indices for each image
-        """
-        return ImageBatchDataLoader(self, batch_size=batch_size, num_workers=num_workers, 
-                                   pad_to_batch_size=pad_to_batch_size)
+    def get_dataset_generator(self, batch_size, num_workers=0, pad_to_batch_size=False, mode='tilt_series', **kwargs):
+        # For ImageDataset, ignore pad_to_batch_size, mode, and any additional kwargs for compatibility
+        return NumpyLoader(self, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     
-    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
-        if subset_indices is None:
-            subset_indices = list(range(len(self)))
-        return NumpyLoader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, shuffle=False, num_workers = num_workers)
-        # torch.utils.data.Subset(self, subset_indices)
+    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, pad_to_batch_size=False, mode='tilt_series', **kwargs):
+        # For ImageDataset, ignore pad_to_batch_size, mode, and any additional kwargs for compatibility
+        return NumpyLoader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
 
 class TiltSeriesData(ImageDataset):
@@ -365,46 +349,11 @@ class TiltSeriesData(ImageDataset):
     def get_tilt(self, index):
         return super().__getitem__(index)
 
-    # I don't understand what this does so I'm not using it
-    # def get_slice(self, start: int, stop: int) -> Tuple[np.ndarray, np.ndarray]:
-    #     # we have to fetch all the tilts to stay contiguous, and then subset
-    #     tilt_indices = [self.particles[index] for index in range(start, stop)]
-    #     cat_tilt_indices = np.concatenate(tilt_indices)
-    #     images = self.src.images(cat_tilt_indices, require_contiguous=True)
-
-    #     tilt_masks = []
-    #     for tilt_idx in tilt_indices:
-    #         tilt_mask = np.zeros(len(tilt_idx), dtype=bool)
-    #         if self.random_tilts:
-    #             tilt_mask_idx = np.random.choice(
-    #                 len(tilt_idx), self.ntilts, replace=False
-    #             )
-    #             tilt_mask[tilt_mask_idx] = True
-    #         else:
-    #             # if self.ntilts == -1:
-    #             #     self.ntilts = len(tilt_idx)
-    #             i = 0#(len(tilt_idx) - self.ntilts) // 2
-    #             # if self.n_tilts == -1:
-    #             #     title_mask = np.ones(len(tilt_idx), dtype=bool)
-    #             # else:
-    #             tilt_mask[i: i + self.ntilts] = True
-    #         tilt_masks.append(tilt_mask)
-
-    #     tilt_mask = np.concatenate(tilt_masks)
-    #     return images.numpy(), tilt_mask
-
-    def get_dataset_generator(self, batch_size, num_workers = 0):
-        return make_dataloader(self, batch_size=batch_size, num_workers=num_workers)
-
-    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
-        if subset_indices is None:
-            return self.get_dataset_generator(batch_size, num_workers = 0)
-        return make_dataloader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, num_workers=num_workers)
-
     def get_image_generator(self, batch_size, num_workers=0):
-
-
-        # This generator iterates over individual images rather than tilt groups.
+        """
+        This generator iterates over individual images rather than tilt groups.
+        Different from get_dataset_generator which batches by tilt series.
+        """
         class SingleImageDataset(torch.utils.data.Dataset):
             def __init__(self, src):
                 self.src = src
@@ -422,9 +371,10 @@ class TiltSeriesData(ImageDataset):
         return NumpyLoader(SingleImageDataset(self.src), batch_size=batch_size, shuffle=False, num_workers=num_workers)
         
     def get_image_subset_generator(self, batch_size, subset_indices, num_workers=0):
-
-
-        # This generator iterates over individual images rather than tilt groups.
+        """
+        This generator iterates over individual images rather than tilt groups.
+        Different from get_dataset_subset_generator which batches by tilt series.
+        """
         class SingleImageDataset(torch.utils.data.Dataset):
             def __init__(self, src):
                 self.src = src
@@ -457,6 +407,88 @@ class TiltSeriesData(ImageDataset):
         subset_dataset = torch.utils.data.Subset(dataset, subset_indices)
                 
         return NumpyLoader(subset_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+
+    def get_dataset_generator(self, batch_size, num_workers=0, pad_to_batch_size=False, mode='tilt_series', **kwargs):
+        """
+        Create a data generator with different batching modes.
+        
+        Args:
+            batch_size: Target batch size
+            num_workers: Number of workers for data loading
+            pad_to_batch_size: If True, pad the last batch to exact batch_size with zeros
+            mode: Batching mode:
+                - 'images': Batch by total image count (combines tilt series)
+                - 'tilt_series': Batch by tilt series count (original behavior - DEFAULT)
+            **kwargs: Additional arguments (ignored but accepted for compatibility)
+            
+        Returns:
+            Generator yielding batches based on the selected mode
+        """
+        if mode == 'images':
+            # Validate batch size against maximum tilt series size
+            max_tilts_per_series = self._get_max_tilts_per_series()
+            if batch_size < max_tilts_per_series:
+                raise ValueError(
+                    f"Batch size ({batch_size}) is smaller than the maximum number of tilts "
+                    f"in a single tilt series ({max_tilts_per_series}). "
+                    f"Either increase batch_size or use mode='tilt_series'."
+                )
+            
+            return ImageBatchDataLoader(self, batch_size=batch_size, num_workers=num_workers, 
+                                       pad_to_batch_size=pad_to_batch_size)
+        elif mode == 'tilt_series':
+            # Original behavior: batch by tilt series count
+            return make_dataloader(self, batch_size=batch_size, num_workers=num_workers) #super().get_dataset_generator(batch_size, num_workers=num_workers)
+        else:
+            raise ValueError(f"Invalid mode '{mode}'. Must be 'images' or 'tilt_series'.")
+
+    def _get_max_tilts_per_series(self):
+        """Get the maximum number of tilts in any single tilt series."""
+        max_tilts = 0
+        for i in range(len(self)):
+            if self.ntilts is not None:
+                # If ntilts is specified, use min of ntilts and available tilts
+                available_tilts = len(self.particles[i])
+                actual_tilts = min(self.ntilts, available_tilts)
+            else:
+                # Use all available tilts for this particle
+                actual_tilts = len(self.particles[i])
+            max_tilts = max(max_tilts, actual_tilts)
+        return max_tilts
+
+    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, pad_to_batch_size=False, mode='tilt_series', **kwargs):
+        """
+        Create a data generator for a subset of particles with different batching modes.
+        
+        Args:
+            batch_size: Target batch size
+            subset_indices: Indices of particles to include
+            num_workers: Number of workers for data loading
+            pad_to_batch_size: If True, pad the last batch to exact batch_size with zeros
+            mode: Batching mode ('images' or 'tilt_series' - DEFAULT)
+            **kwargs: Additional arguments (ignored but accepted for compatibility)
+        """
+        if subset_indices is None:
+            return self.get_dataset_generator(batch_size, num_workers, pad_to_batch_size, mode, **kwargs)
+        
+        if mode == 'images':
+            # Create a subset dataset and validate batch size
+            subset_dataset = TiltSeriesSubset(self, subset_indices)
+            max_tilts_per_series = subset_dataset._get_max_tilts_per_series()
+            if batch_size < max_tilts_per_series:
+                raise ValueError(
+                    f"Batch size ({batch_size}) is smaller than the maximum number of tilts "
+                    f"in a single tilt series ({max_tilts_per_series}) in the subset. "
+                    f"Either increase batch_size or use mode='tilt_series'."
+                )
+            
+            return ImageBatchDataLoader(subset_dataset, batch_size=batch_size, num_workers=num_workers, 
+                                       pad_to_batch_size=pad_to_batch_size)
+        elif mode == 'tilt_series':
+            # Original behavior with subset
+            return make_dataloader(self, batch_size=batch_size, num_workers=num_workers) #super().get_dataset_generator(batch_size, num_workers=num_workers)
+        else:
+            raise ValueError(f"Invalid mode '{mode}'. Must be 'images' or 'tilt_series'.")
 
 
 def make_dataloader(
@@ -507,4 +539,146 @@ class NumpyLoader(torch.utils.data.DataLoader):
         drop_last=drop_last,
         timeout=timeout,
         worker_init_fn=worker_init_fn)
+
+
+class ImageBatchDataLoader:
+    """
+    Custom data loader that batches tilt series by total image count rather than series count.
+    """
+    
+    def __init__(self, dataset, batch_size, num_workers=0, pad_to_batch_size=False):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.pad_to_batch_size = pad_to_batch_size
+        
+        # Pre-compute the number of tilts per particle for efficient batching
+        self.tilts_per_particle = []
+        for i in range(len(dataset)):
+            if dataset.ntilts is not None:
+                # If ntilts is specified, use min of ntilts and available tilts
+                available_tilts = len(dataset.particles[i])
+                self.tilts_per_particle.append(min(dataset.ntilts, available_tilts))
+            else:
+                # Use all available tilts for this particle
+                self.tilts_per_particle.append(len(dataset.particles[i]))
+        
+        self.tilts_per_particle = np.array(self.tilts_per_particle)
+        self.total_images = np.sum(self.tilts_per_particle)
+        
+    def __iter__(self):
+        """
+        Iterate over batches, collecting tilt series until reaching target image count.
+        """
+        particle_idx = 0
+        
+        while particle_idx < len(self.dataset):
+            batch_images = []
+            batch_particle_indices = []
+            batch_tilt_indices = []
+            current_batch_size = 0
+            
+            # Collect tilt series until we reach the target batch size
+            while (particle_idx < len(self.dataset) and 
+                   current_batch_size < self.batch_size):
+                
+                # Get the next tilt series
+                images, p_idx, t_indices = self.dataset[particle_idx]
+                
+                # How many images are in this tilt series?
+                n_images = images.shape[0]
+                
+                # Check if adding this series would exceed batch size
+                if current_batch_size + n_images > self.batch_size and current_batch_size > 0:
+                    # Don't add this series to current batch, save for next batch
+                    break
+                
+                # Add this tilt series to the batch
+                batch_images.append(images)
+                
+                # Create particle indices for this tilt series
+                particle_indices_for_series = np.full(n_images, particle_idx, dtype=np.int32)
+                batch_particle_indices.append(particle_indices_for_series)
+                
+                # Add tilt indices
+                batch_tilt_indices.append(t_indices)
+                
+                current_batch_size += n_images
+                particle_idx += 1
+            
+            # If no images were added (e.g., single tilt series larger than batch_size)
+            if len(batch_images) == 0:
+                if particle_idx < len(self.dataset):
+                    # Get the oversized tilt series anyway
+                    images, p_idx, t_indices = self.dataset[particle_idx]
+                    batch_images.append(images)
+                    batch_particle_indices.append(np.full(images.shape[0], particle_idx, dtype=np.int32))
+                    batch_tilt_indices.append(t_indices)
+                    current_batch_size = images.shape[0]
+                    particle_idx += 1
+                else:
+                    break
+            
+            # Concatenate all images and indices
+            if len(batch_images) > 0:
+                batch_images = np.concatenate(batch_images, axis=0)
+                batch_particle_indices = np.concatenate(batch_particle_indices, axis=0)
+                batch_tilt_indices = np.concatenate(batch_tilt_indices, axis=0)
+                
+                # Pad to exact batch size if requested
+                if self.pad_to_batch_size and current_batch_size < self.batch_size:
+                    padding_needed = self.batch_size - current_batch_size
+                    
+                    # Pad images with zeros
+                    image_shape = batch_images.shape[1:]
+                    padding_images = np.zeros((padding_needed,) + image_shape, dtype=batch_images.dtype)
+                    batch_images = np.concatenate([batch_images, padding_images], axis=0)
+                    
+                    # Pad indices with invalid values (-1)
+                    padding_particle_indices = np.full(padding_needed, -1, dtype=np.int32)
+                    padding_tilt_indices = np.full(padding_needed, -1, dtype=batch_tilt_indices.dtype)
+                    
+                    batch_particle_indices = np.concatenate([batch_particle_indices, padding_particle_indices], axis=0)
+                    batch_tilt_indices = np.concatenate([batch_tilt_indices, padding_tilt_indices], axis=0)
+                
+                yield batch_images, batch_particle_indices, batch_tilt_indices
+    
+    def __len__(self):
+        """
+        Estimate the number of batches.
+        This is approximate since tilt series have variable sizes.
+        """
+        if self.pad_to_batch_size:
+            return int(np.ceil(self.total_images / self.batch_size))
+        else:
+            # Conservative estimate - could be slightly different due to variable tilt series sizes
+            return int(np.ceil(self.total_images / self.batch_size))
+
+
+class TiltSeriesSubset:
+    """A subset of TiltSeriesData for efficient batching."""
+    
+    def __init__(self, dataset, indices):
+        self.dataset = dataset
+        self.indices = indices
+    
+    def __len__(self):
+        return len(self.indices)
+    
+    def __getitem__(self, idx):
+        return self.dataset[self.indices[idx]]
+    
+    def _get_max_tilts_per_series(self):
+        """Get the maximum number of tilts in any single tilt series in this subset."""
+        max_tilts = 0
+        for idx in self.indices:
+            if self.dataset.ntilts is not None:
+                # If ntilts is specified, use min of ntilts and available tilts
+                available_tilts = len(self.dataset.particles[idx])
+                actual_tilts = min(self.dataset.ntilts, available_tilts)
+            else:
+                # Use all available tilts for this particle
+                actual_tilts = len(self.dataset.particles[idx])
+            max_tilts = max(max_tilts, actual_tilts)
+        return max_tilts
 
