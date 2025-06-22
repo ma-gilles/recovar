@@ -335,11 +335,11 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
         values += [group_names]
         # Also write contrast variation if using tilt groups?
         keys += ['rlnCtfScalefactor']
-        values += [CTF_params[:,core.contrast_ind]]
+        values += [CTF_params[:,core.CTFParamIndex.CONTRAST]]
         keys += ['rlnCtfBfactor']
-        values += [CTF_params[:,core.bfactor_ind]]
+        values += [CTF_params[:,core.CTFParamIndex.BFACTOR]]
         keys += ['rlnMicrographPreExposure']
-        values += [CTF_params[:,core.dose_ind]]
+        values += [CTF_params[:,core.CTFParamIndex.DOSE]]
 
 
     if halfset_indices is not None:

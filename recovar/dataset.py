@@ -24,8 +24,8 @@ def LazyMRCDataMod(particles_file, ind =None , datadir = None, padding = 0, unin
     return tilt_dataset.ImageDataset(particles_file, ind = ind, datadir = datadir, padding = padding, invert_data = uninvert_data, lazy =True, strip_prefix=strip_prefix)
     
     
-def get_num_images_in_dataset(mrc_path):
-    return ImageSource.from_file(mrc_path, lazy=True).n
+def get_num_images_in_dataset(mrc_path, datadir = None, strip_prefix = None):
+    return ImageSource.from_file(mrc_path, lazy=True, datadir = datadir, strip_prefix = strip_prefix).n
 
 def set_standard_mask(D, dtype):
     return mask.window_mask(D, 0.85, 0.99)
@@ -341,7 +341,7 @@ class CryoEMDataset:
 
     def set_variable_radial_noise_model(self, noise_variance_radials):
         from recovar import noise
-        _, dose_indices = jnp.unique(self.CTF_params[:,core.dose_ind], return_inverse=True)
+        _, dose_indices = jnp.unique(self.CTF_params[:,core.CTFParamIndex.DOSE], return_inverse=True)
         self.noise = noise.VariableRadialNoiseModel(noise_variance_radials, dose_indices, image_shape = self.image_shape)
 
 
@@ -423,7 +423,7 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
     if tilt_series_ctf != 'cryoem':
 
         if tilt_series_ctf == 'relion5':
-            ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
+            ctf_params[:,core.CTFParamIndex.CONTRAST+1] = tilt_dataset_this.ctfscalefactor
             dose = tilt_dataset_this.dose
             angles = np.zeros_like(dose) # Set angles to 0 - the np.cos factor is included already?
             ctf_params = np.concatenate( [ctf_params, dose[...,None], angles[...,None]], axis =-1)
@@ -435,8 +435,8 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
             angle_per_tilt = 0
 
         if tilt_series_ctf == "from_star":
-            ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
-            ctf_params[:,core.bfactor_ind+1] = -tilt_dataset_this.ctfBfactor # should be POSITIVE (negative in star file)
+            ctf_params[:,core.CTFParamIndex.CONTRAST+1] = tilt_dataset_this.ctfscalefactor
+            ctf_params[:,core.CTFParamIndex.BFACTOR+1] = -tilt_dataset_this.ctfBfactor # should be POSITIVE (negative in star file)
             logger.info('CTF from star')
 
         elif (tilt_series_ctf == "scale_from_star") or (tilt_series_ctf == "from_dose"):
@@ -444,7 +444,7 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
 
             # + 1 because voxel_size in included.... gross
             if "scale_from_star" in tilt_series_ctf:
-                ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
+                ctf_params[:,core.CTFParamIndex.CONTRAST+1] = tilt_dataset_this.ctfscalefactor
 
             tilt_numbers = tilt_dataset_this.tilt_numbers
             # tilt_angles = dataset.tilt_angles[dataset.tilt_indices]
@@ -465,7 +465,7 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
             angles = jnp.ceil(tilt_numbers/2) * angle_per_tilt 
             if 'scale_from_star' in tilt_series_ctf:
                 # + 1 because voxel_size in included.... gross
-                ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
+                ctf_params[:,core.CTFParamIndex.CONTRAST+1] = tilt_dataset_this.ctfscalefactor
                 # angles *=0 
                 logger.warning("Using scale from star")
 
@@ -520,20 +520,50 @@ def get_split_datasets(particles_file, poses_file, ctf_file, datadir,
     return cryos
 
 
-def get_split_indices(particles_file, ind_file = None):
-
+def get_split_indices(particles_file, datadir=None, strip_prefix=None, ind_file=None, split_random_seed=0, validate_split=True):
+    """
+    Get indices for splitting dataset into halfsets.
+    
+    Args:
+        particles_file: Path to particles STAR file
+        datadir: Data directory (optional)
+        strip_prefix: Prefix to strip from file paths (optional)
+        ind_file: File containing specific indices to use (optional)
+        split_random_seed: Random seed for reproducible splits
+        validate_split: Whether to validate the split is balanced
+        
+    Returns:
+        List of two numpy arrays containing indices for each halfset
+    """
     if ind_file is None:
-        n_images = get_num_images_in_dataset(particles_file)
+        n_images = get_num_images_in_dataset(particles_file, datadir=datadir, strip_prefix=strip_prefix)
         indices = np.arange(n_images)
     else:
         if isinstance(ind_file, np.ndarray):
             indices = ind_file
         else:
-            # Get indf
-            with open( ind_file,'rb') as f:
+            # Get indices from file
+            with open(ind_file, 'rb') as f:
                 indices = np.asarray(pickle.load(f))
-  
-    split_indices = split_index_list(indices)
+    
+    if len(indices) == 0:
+        raise ValueError("No valid indices found for dataset splitting")
+    
+    split_indices = split_index_list(indices, split_random_seed=split_random_seed)
+    
+    if validate_split:
+        # Validate split is reasonably balanced
+        n1, n2 = len(split_indices[0]), len(split_indices[1])
+        total = n1 + n2
+        if abs(n1 - n2) > max(1, total * 0.01):  # Allow 1% imbalance
+            logger.warning(f"Split is imbalanced: {n1} vs {n2} images ({abs(n1-n2)/total*100:.1f}% difference)")
+        
+        # Check for overlap
+        overlap = np.intersect1d(split_indices[0], split_indices[1])
+        if len(overlap) > 0:
+            raise ValueError(f"Split contains {len(overlap)} overlapping indices")
+    
+    logger.info(f"Split dataset into halfsets: {len(split_indices[0])} and {len(split_indices[1])} images")
     return split_indices
 
 
@@ -577,17 +607,36 @@ def get_split_tilt_indices(particles_file, ind_file = None, tilt_ind_file =None,
 
 
 
-def split_index_list( all_valid_image_indices, split_random_seed = 0 ):
+def split_index_list(all_valid_image_indices, split_random_seed=0):
+    """
+    Split a list of indices into two balanced halves with reproducible randomization.
+    
+    Args:
+        all_valid_image_indices: Array of indices to split
+        split_random_seed: Random seed for reproducible splits
+        
+    Returns:
+        List of two numpy arrays containing the split indices
+    """
+    if len(all_valid_image_indices) == 0:
+        raise ValueError("Cannot split empty index list")
+    
+    # Set random seed for reproducibility
     np.random.seed(split_random_seed)
-
-    half_ind_size = all_valid_image_indices.size //2
-    shuffled_ind = np.arange(all_valid_image_indices.size)
-
+    
+    n_indices = len(all_valid_image_indices)
+    half_ind_size = n_indices // 2
+    
+    # Create shuffled indices
+    shuffled_ind = np.arange(n_indices)
     np.random.shuffle(shuffled_ind)
+    
+    # Split into two halves
     ind_split = [
-                np.sort(all_valid_image_indices[shuffled_ind[:half_ind_size]]), 
-                np.sort(all_valid_image_indices[shuffled_ind[half_ind_size:]]),
-                ]
+        np.sort(all_valid_image_indices[shuffled_ind[:half_ind_size]]), 
+        np.sort(all_valid_image_indices[shuffled_ind[half_ind_size:]]),
+    ]
+    
     return ind_split
         
 
@@ -639,7 +688,7 @@ def figure_out_halfsets(args):
         if args.tilt_series or args.tilt_series_ctf != 'cryoem':
             halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, tilt_ind_file = args.tilt_ind, ntilts = args.ntilts, datadir = args.datadir)
         else:
-            halfsets = get_split_indices(args.particles, ind_file = args.ind)
+            halfsets = get_split_indices(args.particles, datadir = args.datadir, strip_prefix = args.strip_prefix, ind_file = args.ind)
     # else:
     #     logger.info("Loading halfset from file")
     #     halfsets = pickle.load(open(args.halfsets, 'rb'))

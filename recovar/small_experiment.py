@@ -18,18 +18,18 @@ def indices_to_coo(grid_indices, n, data= None):
 
 def subsample_coo_columns(sparse_mat, right_indices):
     good_indices = jnp.where(jnp.isin(sparse_mat.indices[:,1], right_indices))[0]
-    new_indices = sparse_mat.indices[good_indices,1]
+    neCTFParamIndex.Wices = sparse_mat.indices[good_indices,1]
 
-    # Find positions of new_indices inside right_indices
+    # Find positions of neCTFParamIndex.Wices inside right_indices
     for new_col, old_col in enumerate(right_indices):
-        new_indices = new_indices.at[new_indices == old_col].set(new_col)
+        neCTFParamIndex.Wices = neCTFParamIndex.Wices.at[neCTFParamIndex.Wices == old_col].set(new_col)
         # import pdb; pdb.set_trace()
     # Update column indices
-    # new_indices = sparse_mat.indices[good_indices].at[:,1].set(mapped_indices)
-    new_indices_all = sparse_mat.indices[good_indices]
-    new_indices_all = new_indices_all.at[:,1].set(new_indices)
+    # neCTFParamIndex.Wices = sparse_mat.indices[good_indices].at[:,1].set(mapped_indices)
+    neCTFParamIndex.Wices_all = sparse_mat.indices[good_indices]
+    neCTFParamIndex.Wices_all = neCTFParamIndex.Wices_all.at[:,1].set(neCTFParamIndex.Wices)
 
-    return sparse.BCOO((sparse_mat.data[good_indices], new_indices_all), shape=(sparse_mat.shape[0], right_indices.size))
+    return sparse.BCOO((sparse_mat.data[good_indices], neCTFParamIndex.Wices_all), shape=(sparse_mat.shape[0], right_indices.size))
 
 def covar_estimate_sparse(y, P, noise_variance, right_indices, covar_regularization = None):
 

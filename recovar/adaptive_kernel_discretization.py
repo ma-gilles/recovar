@@ -1137,7 +1137,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
         image_inds = np.sort(np.where(inds == bin_idx)[0])
         # print(image_inds.size)
 
-        data_generator = experiment_dataset.get_dataset_subset_generator( batch_size=batch_size, subset_indices = image_inds)
+        data_generator = experiment_dataset.get_dataset_subset_generator( batch_size=batch_size, subset_indices = image_inds, mode ='images')
         lhs = jnp.zeros(half_volume_size, dtype = experiment_dataset.dtype_real )
         rhs = jnp.zeros(half_volume_size, dtype = experiment_dataset.dtype )
         for batch, particles_ind, indices in data_generator:

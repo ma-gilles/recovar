@@ -59,7 +59,7 @@ def griddingCorrect_square(vol_in, ori_size, padding_factor, order = 0,):
 
 
 # My understanding of what relion does.
-def relion_style_triangular_kernel(experiment_dataset , cov_noise,  batch_size = None,  disc_type = 'linear_interp', return_lhs_rhs = False, data_generator = None ):
+def relion_style_triangular_kernel(experiment_dataset , cov_noise,  batch_size = None,  disc_type = 'linear_interp', data_generator = None ):
     if batch_size is None and data_generator is None:
         raise ValueError("Either batch_size or data_generator must be provided")
     if batch_size is not None and data_generator is not None:
@@ -391,10 +391,10 @@ def relion_reconstruct(cryo, noise_variance, batch_size = 100, disc_type = 'line
 
     og_upsampling = cryo.volume_upsampling_factor
     cryo.update_volume_upsampling_factor(upsampling_factor)
-
-    Ft_ctf, F_ty = relion_style_triangular_kernel(cryo , noise_variance.astype(np.float32),  batch_size,  disc_type = disc_type, return_lhs_rhs = False )
-
+    Ft_ctf, F_ty = relion_style_triangular_kernel(cryo , noise_variance.astype(np.float32),  batch_size,  disc_type = disc_type )
     estimate = post_process_from_filter(cryo, Ft_ctf, F_ty, tau = tau, disc_type = disc_type, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
     cryo.update_volume_upsampling_factor(og_upsampling)
 
     return estimate, Ft_ctf
+
+

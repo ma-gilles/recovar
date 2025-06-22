@@ -263,72 +263,112 @@ class TiltSeriesData(ImageDataset):
     def parse_particle_tilt(
         cls, tiltstar: str
     ) -> Tuple[list[np.ndarray], dict[int, int]]:
-        # Parse unique particles from _rlnGroupName
+        """
+        Parse unique particles from _rlnGroupName efficiently for large datasets.
+        
+        Optimized for datasets with millions of particles by:
+        - Using pandas groupby operations instead of Python loops
+        - Pre-allocating arrays instead of growing lists
+        - Using vectorized operations where possible
+        """
+        import pandas as pd
+        
+        # Load starfile
         s = starfile.Starfile.load(tiltstar)
-        group_name = list(s.df["_rlnGroupName"])
-        particles = OrderedDict()
-
-        for ii, gn in enumerate(group_name):
-            particles.setdefault(gn, []).append(ii)
-            # if gn not in particles:
-            #     particles[gn] = []
-            # particles[gn].append(ii)
-
-        particles = [np.asarray(pp, dtype=int) for pp in particles.values()]
-        particles_to_tilts = particles
-        tilts_to_particles = {}
-
-        for i, j in enumerate(particles):
-            for jj in j:
-                tilts_to_particles[jj] = i
-
-        return particles_to_tilts, tilts_to_particles
-
-
-    @classmethod
-    def parse_tomogram_tilt(
-        cls, tiltstar: str
-    ) -> Tuple[list[np.ndarray], dict[int, int]]:
-        # Parse unique particles from _rlnGroupName
-        s = starfile.Starfile.load(tiltstar)
-        group_name = list(s.df["_rlnGroupName"])
-        tomogram = OrderedDict()
-        for ii, gn in enumerate(group_name):
-            tomogram.setdefault(gn, []).append(ii)
-
-        tomogram = [np.asarray(pp, dtype=int) for pp in tomogram.values()]
-        tomogram_to_tilts = tomogram
-        tilts_to_tomogram = {}
-
-        for i, j in enumerate(tomogram):
-            for jj in j:
-                tilts_to_tomogram[jj] = i
-
-        return tomogram_to_tilts, tilts_to_tomogram
-
+        df = s.df
+        
+        # Use pandas groupby for efficient grouping
+        grouped = df.groupby('_rlnGroupName').groups
+        
+        # Convert to numpy arrays directly
+        particles_to_tilts = [np.asarray(indices, dtype=int) for indices in grouped.values()]
+        
+        # Create reverse mapping efficiently using numpy operations
+        n_particles = len(particles_to_tilts)
+        max_indices = max(len(particle_indices) for particle_indices in particles_to_tilts)
+        
+        # Pre-allocate the reverse mapping array
+        tilts_to_particles = np.full(len(df), -1, dtype=int)
+        
+        # Use vectorized assignment
+        for particle_idx, particle_indices in enumerate(particles_to_tilts):
+            tilts_to_particles[particle_indices] = particle_idx
+        
+        # Convert to dict for compatibility
+        tilts_to_particles_dict = {i: val for i, val in enumerate(tilts_to_particles)}
+        
+        return particles_to_tilts, tilts_to_particles_dict
 
     @classmethod
     def parse_tomogramtilt_tilt(
         cls, tiltstar: str
     ) -> Tuple[list[np.ndarray], dict[int, int]]:
-        # Parse unique particles from _rlnGroupName
+        """
+        Parse unique tomogram tilts from rlnTiltName efficiently for large datasets.
+        
+        Optimized for datasets with millions of particles by:
+        - Using pandas groupby operations instead of Python loops
+        - Pre-allocating arrays instead of growing lists
+        - Using vectorized operations where possible
+        """
+        import pandas as pd
+        
+        # Load starfile
         s = starfile.Starfile.load(tiltstar)
-        group_name = list(s.df["_rlnGroupName"])
-        dose = list(s.df['_rlnCtfBfactor'])
-        groups = OrderedDict()
-        for i, (gn, d) in enumerate(zip(group_name, dose)):
-            key = (gn, d)
-            groups.setdefault(key, []).append(i)
+        df = s.df
+        
+        # Find tilt name column
+        tilt_col = None
+        for col in ['_rlnTiltName', 'rlnTiltName']:
+            if col in df.columns:
+                tilt_col = col
+                break
+        if tilt_col is None:
+            raise ValueError(f"No tilt name column found in starfile. Columns: {list(df.columns)}")
+        
+        # Use pandas groupby for efficient grouping by tilt name
+        grouped = df.groupby(tilt_col).groups
+        
+        # Convert to numpy arrays directly
+        tomogramtilts_to_tilts = [np.asarray(indices, dtype=int) for indices in grouped.values()]
+        
+        # Create reverse mapping efficiently using numpy operations
+        n_groups = len(tomogramtilts_to_tilts)
+        
+        # Pre-allocate the reverse mapping array
+        tilts_to_tomogramtilts = np.full(len(df), -1, dtype=int)
+        
+        # Use vectorized assignment
+        for group_idx, group_indices in enumerate(tomogramtilts_to_tilts):
+            tilts_to_tomogramtilts[group_indices] = group_idx
+        
+        # Convert to dict for compatibility
+        tilts_to_tomogramtilts_dict = {i: val for i, val in enumerate(tilts_to_tomogramtilts)}
+        
+        return tomogramtilts_to_tilts, tilts_to_tomogramtilts_dict
 
-        groups = [np.asarray(pp, dtype=int) for pp in groups.values()]
-        tomogramtilts_to_tilts = groups
-        tilts_to_tomogramtilts = {}
+    # @classmethod
+    # def parse_tomogramtilt_tilt(
+    #     cls, tiltstar: str
+    # ) -> Tuple[list[np.ndarray], dict[int, int]]:
+    #     # Parse unique particles from _rlnGroupName
+    #     s = starfile.Starfile.load(tiltstar)
+    #     group_name = list(s.df["_rlnGroupName"])
+    #     dose = list(s.df['_rlnCtfBfactor'])
+    #     groups = OrderedDict()
+    #     for i, (gn, d) in enumerate(zip(group_name, dose)):
+    #         key = (gn, d)
+    #         groups.setdefault(key, []).append(i)
 
-        for i, j in enumerate(groups):
-            for jj in j:
-                tilts_to_tomogramtilts[jj] = i
+    #     groups = [np.asarray(pp, dtype=int) for pp in groups.values()]
+    #     tomogramtilts_to_tilts = groups
+    #     tilts_to_tomogramtilts = {}
 
-        return tomogramtilts_to_tilts, tilts_to_tomogramtilts
+    #     for i, j in enumerate(groups):
+    #         for jj in j:
+    #             tilts_to_tomogramtilts[jj] = i
+
+    #     return tomogramtilts_to_tilts, tilts_to_tomogramtilts
 
 
 
@@ -661,6 +701,9 @@ class TiltSeriesSubset:
     def __init__(self, dataset, indices):
         self.dataset = dataset
         self.indices = indices
+        # Delegate important attributes from the underlying dataset
+        self.ntilts = getattr(dataset, 'ntilts', None)
+        self.particles = getattr(dataset, 'particles', None)
     
     def __len__(self):
         return len(self.indices)

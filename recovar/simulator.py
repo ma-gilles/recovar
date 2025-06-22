@@ -111,9 +111,9 @@ def noctf_random_sampling_scheme(n_images, grid_size, seed =0, uniform = True ):
     ctf_params, _, _ = generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  )
 
     ctf_params = ctf_params * 0
-    ctf_params[:,core.contrast_ind]=1
+    ctf_params[:,core.CTFParamIndex.CONTRAST]=1
     ctf_params[:,core.volt_ind]=300
-    ctf_params[:,core.w_ind]=-1
+    ctf_params[:,core.CTFParamIndex.W]=-1
     if uniform:
         rotations = uniform_rotation_sampling(n_images, grid_size, seed = seed )
     else:
@@ -397,9 +397,9 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     ctf_params, rots, trans = dataset_param_generator(n_images, grid_size)
 
     if "ewald" in disc_type:
-        phase_shift = np.arcsin(ctf_params[:,core.w_ind]) / np.pi * 180
-        ctf_params[:,core.w_ind] = 0
-        ctf_params[:,core.phase_shift_ind] = phase_shift
+        phase_shift = np.arcsin(ctf_params[:,core.CTFParamIndex.W]) / np.pi * 180
+        ctf_params[:,core.CTFParamIndex.W] = 0
+        ctf_params[:,core.CTFParamIndex.PHASE_SHIFT] = phase_shift
         ctf_params[:,core.volt_ind] = 100
         # import pdb; pdb.set_trace()
 
@@ -425,7 +425,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         x_angles[::2] = -x_angles_half[:-1]  if n_tilts % 2 == 0 else -x_angles_half
         x_angles[1::2] = x_angles_half[1:]   
 
-        # ctf_params[:,core.contrast_ind] =  np.cos(  x_angles / 180 * np.pi )
+        # ctf_params[:,core.CTFParamIndex.CONTRAST] =  np.cos(  x_angles / 180 * np.pi )
 
 
         x_angles_zz = np.concatenate([x_angles[:,None], np.zeros([n_tilts,2])], axis = -1)
@@ -435,7 +435,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
 
         for i in range(n_tilt_groups):
             image_assignments[tilt_groups == i] = image_assignments_tilt[i]
-            ctf_params[tilt_groups == i,core.contrast_ind] =  np.cos(  x_angles[tilt_numbers[tilt_groups == i]] / 180 * np.pi )
+            ctf_params[tilt_groups == i,core.CTFParamIndex.CONTRAST] =  np.cos(  x_angles[tilt_numbers[tilt_groups == i]] / 180 * np.pi )
 
             ind = np.where(tilt_groups == i)[0]
             zero_tilt_rot = rots[ind[0]]
@@ -453,7 +453,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
 
         ## Set the ctf_scale_params to angle correction (this is how it is saved from WARP supposedly)
         angle_scale_correction = jnp.cos(x_angles * np.pi / 180)
-        ctf_params[:,core.contrast_ind] = angle_scale_correction[tilt_numbers]
+        ctf_params[:,core.CTFParamIndex.CONTRAST] = angle_scale_correction[tilt_numbers]
 
         # Angle ind is just set to 0 in this version
         dose =  (tilt_numbers + 0.5) * dose_per_tilt
@@ -537,7 +537,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
 
     if n_tilts > 0:
         # Note that b_facs are stored here just so that the get saved in the starfile in WARP style...
-        ctf_params[:,core.bfactor_ind] = B_facs
+        ctf_params[:,core.CTFParamIndex.BFACTOR] = B_facs
 
     simulation_info = { 
         "ctf_params" : ctf_params,

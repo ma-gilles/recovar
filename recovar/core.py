@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import functools
 from jax import vjp
+from enum import IntEnum
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jax.numpy)
 
@@ -13,20 +14,32 @@ ftu = fourier_transform_utils(jax.numpy)
 # vec_indices are 0, 1, 2, 3, 4, 5, 6, 7
 # frequencies are [-1, -1, -1], [-1, -1, 0], etc ...
 
-# CTF inds
-dfu_ind = 0# (float or Bx1 tensor): DefocusU (Angstrom)
-dfv_ind = 1 #(float or Bx1 tensor): DefocusV (Angstrom)
-dfang_ind = 2 #(float or Bx1 tensor): DefocusAngle (degrees)
-volt_ind =3 #(float or Bx1 tensor): accelerating voltage (kV)
-cs_ind=4 #(float or Bx1 tensor): spherical aberration (mm)
-w_ind =5 #(float or Bx1 tensor): amplitude contrast ratio
-phase_shift_ind = 6 #(float or Bx1 tensor): degrees 
-bfactor_ind = 7 #(float or Bx1 tensor): envelope fcn B-factor (Angstrom^2)
-contrast_ind = 8
-# delete this option?
-tilt_number_ind = 9 # 
-dose_ind = 9
-tilt_angle_ind = 10
+class CTFParamIndex(IntEnum):
+    """Enum for CTF parameter indices to avoid magic numbers"""
+    DFU = 0              # DefocusU (Angstrom)
+    DFV = 1              # DefocusV (Angstrom) 
+    DFANG = 2            # DefocusAngle (degrees)
+    VOLT = 3             # Accelerating voltage (kV)
+    CS = 4               # Spherical aberration (mm)
+    W = 5                # Amplitude contrast ratio
+    PHASE_SHIFT = 6      # Phase shift (degrees)
+    BFACTOR = 7          # Envelope function B-factor (Angstrom^2)
+    CONTRAST = 8         # Per-particle contrast scale
+    DOSE = 9             # Dose (for tilt series)
+    TILT_ANGLE = 10      # Tilt angle (for tilt series)
+
+# # Backward compatibility aliases
+# dfu_ind = CTFParamIndex.DFU
+# dfv_ind = CTFParamIndex.DFV
+# dfang_ind = CTFParamIndex.DFANG
+# volt_ind = CTFParamIndex.VOLT
+# cs_ind = CTFParamIndex.CS
+# CTFParamIndex.W = CTFParamIndex.W
+# CTFParamIndex.PHASE_SHIFT = CTFParamIndex.PHASE_SHIFT
+# CTFParamIndex.BFACTOR = CTFParamIndex.BFACTOR
+# CTFParamIndex.CONTRAST = CTFParamIndex.CONTRAST
+# dose_ind = CTFParamIndex.DOSE
+# tilt_angle_ind = CTFParamIndex.TILT_ANGLE
 
 @functools.partial(jax.jit, static_argnums=[1])
 def vol_indices_to_vec_indices(vol_indices, vol_shape):
@@ -596,5 +609,89 @@ def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, antialiasing=False
 def cryodrgn_CTF(CTF_params, image_shape, voxel_size):
     psi = get_unrotated_plane_coords(image_shape, voxel_size, scaled = True)[...,:2]
     return batch_evaluate_ctf(psi, CTF_params)
+
+class CTFParams:
+    """Class to handle CTF parameters in a more structured way"""
+    
+    def __init__(self, params_array):
+        """
+        Initialize CTF parameters from array.
+        
+        Args:
+            params_array: Array of shape (n_images, n_params) containing CTF parameters
+        """
+        self.params = np.asarray(params_array)
+        self.n_images = self.params.shape[0]
+        self.n_params = self.params.shape[1]
+        
+    @classmethod
+    def create_standard_params(cls, n_images, dfu=0, dfv=0, dfang=0, volt=300, 
+                              cs=2.7, w=0.1, phase_shift=0, bfactor=0, contrast=1.0):
+        """Create standard CTF parameters for n_images"""
+        params = np.zeros((n_images, len(CTFParamIndex)))
+        params[:, CTFParamIndex.DFU] = dfu
+        params[:, CTFParamIndex.DFV] = dfv
+        params[:, CTFParamIndex.DFANG] = dfang
+        params[:, CTFParamIndex.VOLT] = volt
+        params[:, CTFParamIndex.CS] = cs
+        params[:, CTFParamIndex.W] = w
+        params[:, CTFParamIndex.PHASE_SHIFT] = phase_shift
+        params[:, CTFParamIndex.BFACTOR] = bfactor
+        params[:, CTFParamIndex.CONTRAST] = contrast
+        return cls(params)
+    
+    def get_param(self, param_index):
+        """Get specific parameter for all images"""
+        return self.params[:, param_index]
+    
+    def set_param(self, param_index, values):
+        """Set specific parameter for all images"""
+        self.params[:, param_index] = values
+    
+    def get_image_params(self, image_idx):
+        """Get all parameters for a specific image"""
+        return self.params[image_idx, :]
+    
+    def add_tilt_series_params(self, dose_values, tilt_angles):
+        """Add tilt series parameters (dose and tilt angles)"""
+        if self.n_params < len(CTFParamIndex):
+            # Extend array to accommodate tilt parameters
+            extended_params = np.zeros((self.n_images, len(CTFParamIndex)))
+            extended_params[:, :self.n_params] = self.params
+            self.params = extended_params
+            self.n_params = len(CTFParamIndex)
+        
+        self.params[:, CTFParamIndex.DOSE] = dose_values
+        self.params[:, CTFParamIndex.TILT_ANGLE] = tilt_angles
+    
+    def validate(self):
+        """Validate CTF parameters"""
+        if self.n_images == 0:
+            raise ValueError("No images in CTF parameters")
+        
+        # Check for reasonable parameter ranges
+        if np.any(self.params[:, CTFParamIndex.VOLT] <= 0):
+            raise ValueError("Voltage must be positive")
+        
+        if np.any(self.params[:, CTFParamIndex.CONTRAST] <= 0):
+            raise ValueError("Contrast must be positive")
+        
+        return True
+    
+    def __getitem__(self, key):
+        """Allow array-like access"""
+        return self.params[key]
+    
+    def __setitem__(self, key, value):
+        """Allow array-like assignment"""
+        self.params[key] = value
+    
+    @property
+    def shape(self):
+        return self.params.shape
+    
+    def astype(self, dtype):
+        """Convert to different dtype"""
+        return CTFParams(self.params.astype(dtype))
 
 
