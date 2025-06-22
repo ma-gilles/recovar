@@ -195,8 +195,10 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
 
             #     in_bound_points[k] = z_to_grid(in_bound_points[k])
             # in_bound_points = np.where(points > (points > np.array(density.shape)[None]), 0, points)
-            plt.scatter(points[out_of_bounds_points,axis_x], points[out_of_bounds_points,axis_y], color = 'r', s = 100, edgecolors= 'k')
-            plt.scatter(points[~out_of_bounds_points,axis_x], points[~out_of_bounds_points,axis_y], color = 'w', s = 100, edgecolors= 'k')
+            ax.scatter(points[out_of_bounds_points,axis_x], points[out_of_bounds_points,axis_y], 
+                      color = 'red', s = 100, edgecolors= 'black', linewidth=1, alpha=0.8)
+            ax.scatter(points[~out_of_bounds_points,axis_x], points[~out_of_bounds_points,axis_y], 
+                      color = 'cornflowerblue', s = 100, edgecolors= 'black', linewidth=1, alpha=0.8)
             if annotate:
                 for i in range(points.shape[0]):
                     plt.annotate(str(i), points[i, axes] + np.array([0.1, 0.1]), color='white', path_effects=[pe.withStroke(linewidth=4, foreground="black")])
@@ -211,13 +213,16 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
                 if subsampled is not None:
                     # subs = subsampled[traj_idx]
                     subs = z_to_grid(subsampled[traj_idx].copy())
-                    plt.scatter(subs[:,axis_x], subs[:,axis_y], marker = 'o', c=colors[traj_idx], edgecolors = 'w', s = 500, zorder =2)
+                    ax.scatter(subs[:,axis_x], subs[:,axis_y], marker = 'o', c=colors[traj_idx], 
+                             edgecolors = 'w', s = 500, zorder=2, linewidth=1)
                 
                 if not same_st_end or traj_idx ==0:
                     g_st = traj[0]
                     g_end = traj[-1]
-                    plt.scatter(g_st[axis_x], g_st[axis_y], marker = '*', c='w', edgecolors = colors[traj_idx], s = 1800, zorder =2)
-                    plt.scatter(g_end[axis_x], g_end[axis_y], marker = 's', c='w', edgecolors = colors[traj_idx], s = 600, zorder =2)
+                    ax.scatter(g_st[axis_x], g_st[axis_y], marker = '*', c='w', 
+                             edgecolors = colors[traj_idx], s = 1800, zorder=2, linewidth=2)
+                    ax.scatter(g_end[axis_x], g_end[axis_y], marker = 's', c='w', 
+                             edgecolors = colors[traj_idx], s = 600, zorder=2, linewidth=2)
                             
         ax.axis("off")
         if plot_folder is not None:
@@ -269,9 +274,11 @@ def plot_kmeans_over_density(density, centers, plot_folder = None, cmap = 'infer
         ax.imshow((density_pl.T), origin='lower', cmap = cmap, interpolation = 'bilinear')#[...,25,25])
         # plt.colorbar()
         
-        ax.scatter(centers[:,axis_x], centers[:,axis_y] )
+        ax.scatter(centers[:,axis_x], centers[:,axis_y], c='red', edgecolor='black', s=100, zorder=3, linewidth=1)
         for i in range(centers.shape[0]):
-            ax.annotate(str(i), centers[i, axes] + np.array([0.1, 0.1]), c = 'w')
+            ax.annotate(str(i), centers[i, axes] + np.array([0.1, 0.1]), c = 'white', 
+                       fontsize=12, fontweight='bold',
+                       path_effects=[pe.withStroke(linewidth=3, foreground="black")])
         
 
         ax.axis("off")
@@ -490,15 +497,34 @@ def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path, like
     plt.ioff()
     for k in range(likelihoods.shape[1]):
         fig, ax = plt.subplots(figsize = (8,8))
+        
+        # Create hexbin density plot for background
+        try:
+            ax.hexbin(zs[:,0], zs[:,1], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
+        except:
+            pass
+        
         greater_x = likelihoods[:,k] > vmin
-        plt.scatter(zs[~greater_x,0], zs[~greater_x,1], c='black', alpha = 0.1, s = 2, edgecolors='none')  
+        ax.scatter(zs[~greater_x,0], zs[~greater_x,1], c='black', alpha = 0.3, s = 2, edgecolors='none')  
 
-        plt.scatter(zs[greater_x,0], zs[greater_x,1], c= likelihoods[greater_x,k]  , cmap='rainbow', s = 5, alpha = 1, norm=matplotlib.colors.LogNorm(vmin=vmin, vmax=vmax, clip = True), edgecolors='none')
+        scatter = ax.scatter(zs[greater_x,0], zs[greater_x,1], c= likelihoods[greater_x,k], cmap='rainbow', 
+                           s = 5, alpha = 0.8, norm=matplotlib.colors.LogNorm(vmin=vmin, vmax=vmax, clip = True), 
+                           edgecolors='none')
 
-        plt.xticks([], [])
-        plt.yticks([], [])
+        # Add grid and improve styling
+        ax.grid(True, alpha=0.3)
+        ax.set_facecolor('white')
+        ax.set_xlabel('PC1', fontweight='bold')
+        ax.set_ylabel('PC2', fontweight='bold')
+        ax.set_title(f'Likelihood Analysis - Component {k}', fontweight='bold')
+        
+        # Add colorbar
+        plt.colorbar(scatter, ax=ax, label='Likelihood')
+
+        ax.set_xticks([])
+        ax.set_yticks([])
         save_filepath = save_path +  format(k, '04d') + '.png' # output_folder + 'plots/' + 'vol_weights' +str(k) + '.png'
-        plt.savefig(save_filepath, bbox_inches='tight')
+        plt.savefig(save_filepath, bbox_inches='tight', dpi=300)
         if k > 0:
             plt.close(fig)
         else:
@@ -771,43 +797,55 @@ def plot_trajectories_over_scatter(trajectories,  subsampled = None, colors = No
 
         axis_x = axes[0]
         axis_y = axes[1]
-            
-        if axis_x > axis_y:
-            density_pl = density_pl.T
         
-        ax.scatter(zs[:,axis_x], zs[:,axis_y], s = 1, alpha = 0.05)
+        # Create hexbin density plot for background
+        try:
+            ax.hexbin(zs[:,axis_x], zs[:,axis_y], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
+        except:
+            pass
+        
+        # Main scatter plot with improved styling
+        ax.scatter(zs[:,axis_x], zs[:,axis_y], s=1, alpha=0.6, c='cornflowerblue', edgecolors='none')
         
         if path_exists:
             # path_grid = z_to_grid(path)
             for traj_idx, traj in enumerate(trajectories):
                                 
-                plt.plot(traj[:,axis_x], traj[:,axis_y], '-o', c=colors[traj_idx], linewidth=3, zorder =3)
+                ax.plot(traj[:,axis_x], traj[:,axis_y], '-o', c=colors[traj_idx], linewidth=3, zorder=3, markersize=4)
                 # plt.plot(traj[:,axis_x], traj[:,axis_y], '--', c=colors[traj_idx], dashes=[3], linewidth=6)
 
                 if subsampled is not None:
                     subs = subsampled[traj_idx]
                     if subs is not None:
-                        plt.scatter(subs[:,axis_x], subs[:,axis_y], marker = '>', c=colors[traj_idx], edgecolors = 'w', s = 200, zorder =3)
+                        ax.scatter(subs[:,axis_x], subs[:,axis_y], marker = '>', c=colors[traj_idx], 
+                                 edgecolors = 'w', s = 200, zorder=3, linewidth=1)
 
             # for traj_idx, traj in enumerate(trajectories):
                 if not same_st_end or traj_idx ==0:
                     g_st = traj[0]
                     g_end = traj[-1]
-                    plt.scatter(g_st[axis_x], g_st[axis_y], marker = '*', c='w', edgecolors = colors[traj_idx], s = 1800, zorder =2)
-                    plt.scatter(g_end[axis_x], g_end[axis_y], marker = 's', c='w', edgecolors = colors[traj_idx], s = 600, zorder =2)
+                    ax.scatter(g_st[axis_x], g_st[axis_y], marker = '*', c='w', 
+                             edgecolors = colors[traj_idx], s = 1800, zorder=2, linewidth=2)
+                    ax.scatter(g_end[axis_x], g_end[axis_y], marker = 's', c='w', 
+                             edgecolors = colors[traj_idx], s = 600, zorder=2, linewidth=2)
 
-        # ax.axis("off")
+        # Add grid and improve styling
+        ax.grid(True, alpha=0.3)
+        ax.set_facecolor('white')
+        ax.set_xlabel(f'PC{axis_x+1}', fontweight='bold')
+        ax.set_ylabel(f'PC{axis_y+1}', fontweight='bold')
+        ax.set_title(f'PC{axis_x+1} vs PC{axis_y+1}', fontweight='bold')
             
         if plot_folder is not None:
             save_filepath = plot_folder  + 'density_' + str(axes[0]) + str(axes[1]) + '.png'    
-            plt.savefig(save_filepath, bbox_inches='tight')
+            plt.savefig(save_filepath, bbox_inches='tight', dpi=300)
             
     traj_dim = trajectories[0].shape[1] if trajectories is not None else 4
     # print(traj_dim)
     for k1 in range(np.min([traj_dim,3])):
         for k2 in range(k1+1, traj_dim):
-            plot_traj_along_axes([k1, k2])            
-        
+            plot_traj_along_axes([k1, k2])
+
 
 def umap_latent_space(zs):
     import umap
@@ -821,10 +859,9 @@ def umap_latent_space(zs):
 
 
 def standard_pipeline_plots(po, zdim_key, output_folder):
-    cryos = po.get('lazy_dataset')
     from recovar import plot_utils
     mkdir_safe(output_folder)
-    plot_utils.plot_summary_t(po,cryos, n_eigs = 10, filename = output_folder + "mean_variance_eigenvolume_plots.png")
+    plot_utils.plot_summary_t(po, n_eigs = 10, filename = output_folder + "mean_variance_eigenvolume_plots.png")
 
     import matplotlib.pyplot as plt
     plt.figure(figsize = (10,10))
@@ -869,12 +906,20 @@ def scatter_annotate(
     centers_ind: Optional[np.ndarray] = None,
     annotate: bool = True,
     labels: Optional[np.ndarray] = None,
-    alpha: Union[float, np.ndarray, None] = 0.1,
+    alpha: Union[float, np.ndarray, None] = 0.6,
     s: Union[float, np.ndarray, None] = 1,
     colors: Union[list, str, None] = None,
 ) -> Tuple[Figure, Axes]:
-    fig, ax = plt.subplots(figsize=(4, 4))
-    plt.scatter(x, y, alpha=alpha, s=s, rasterized=True)
+    fig, ax = plt.subplots(figsize=(8, 8))
+    
+    # Create hexbin density plot for background
+    try:
+        ax.hexbin(x, y, gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
+    except:
+        pass
+    
+    # Main scatter plot with improved styling
+    scatter = ax.scatter(x, y, alpha=alpha, s=s, c='cornflowerblue', edgecolors='none', rasterized=True)
 
     # plot cluster centers
     if centers_ind is not None:
@@ -882,15 +927,22 @@ def scatter_annotate(
         centers = np.array([[x[i], y[i]] for i in centers_ind])
     if centers is not None:
         if colors is None:
-            colors = "k"
-        plt.scatter(centers[:, 0], centers[:, 1], c=colors, edgecolor="black")
+            colors = "red"
+        ax.scatter(centers[:, 0], centers[:, 1], c=colors, edgecolor="black", s=100, zorder=3)
     if annotate:
         assert centers is not None
         if labels is None:
             labels = np.arange(len(centers))
         assert labels is not None
         for i in labels:
-            ax.annotate(str(i), centers[i, 0:2] + np.array([0.1, 0.1]))
+            ax.annotate(str(i), centers[i, 0:2] + np.array([0.1, 0.1]), 
+                       fontsize=12, fontweight='bold', color='white',
+                       path_effects=[pe.withStroke(linewidth=3, foreground="black")])
+    
+    # Add grid and improve styling
+    ax.grid(True, alpha=0.3)
+    ax.set_facecolor('white')
+    
     return fig, ax
 
 def get_nearest_point(

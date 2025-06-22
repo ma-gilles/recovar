@@ -96,12 +96,12 @@ def predict_noise_variance(noise_variance, CTF_params, voxel_size, CTF_fun, imag
         n_orig = len(noise_variance)
         n_new = n_orig * upsample_factor
         orig_indices = jnp.arange(n_orig)
-        new_indices = jnp.linspace(0, n_orig-1, n_new)
+        neCTFParamIndex.Wices = jnp.linspace(0, n_orig-1, n_new)
         
         # Get indices for interpolation
-        idx_lo = jnp.floor(new_indices).astype(int)
+        idx_lo = jnp.floor(neCTFParamIndex.Wices).astype(int)
         idx_hi = jnp.minimum(idx_lo + 1, n_orig-1)
-        alpha = new_indices - idx_lo
+        alpha = neCTFParamIndex.Wices - idx_lo
         
         # Linear interpolation
         noise_variance = (1 - alpha) * noise_variance[idx_lo] + alpha * noise_variance[idx_hi]

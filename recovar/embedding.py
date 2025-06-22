@@ -495,19 +495,19 @@ def set_contrasts_in_cryos(cryos, contrasts):
         if contrasts.shape[0] == cryos[0].n_images + cryos[1].n_images:
             running_idx = 0 
             for i in range(2): # Untested
-                cryos[i].CTF_params[:,core.contrast_ind] *= contrasts[running_idx:running_idx+cryos[i].n_images]
+                cryos[i].CTF_params[:,core.CTFParamIndex.CONTRAST] *= contrasts[running_idx:running_idx+cryos[i].n_images]
                 running_idx += cryos[i].n_images
         else:
             # If it's a per tilt series assignment
             running_idx = 0 
             for i in range(2):
                 for p in cryos[i].image_stack.particles:
-                    cryos[i].CTF_params[p,core.contrast_ind] *= contrasts[running_idx]
+                    cryos[i].CTF_params[p,core.CTFParamIndex.CONTRAST] *= contrasts[running_idx]
                     running_idx+=1
     else:
         running_idx = 0 
         for i in range(2): 
-            cryos[i].CTF_params[:,core.contrast_ind] *= contrasts[running_idx:running_idx+cryos[i].n_images]
+            cryos[i].CTF_params[:,core.CTFParamIndex.CONTRAST] *= contrasts[running_idx:running_idx+cryos[i].n_images]
             running_idx += cryos[i].n_images
 
 

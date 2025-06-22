@@ -493,13 +493,13 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
     from recovar import homogeneous
     reload(homogeneous)
 
-    if not np.isclose(experiment_dataset.CTF_params[:,core.w_ind],0).all():
+    if not np.isclose(experiment_dataset.CTF_params[:,core.CTFParamIndex.W],0).all():
         ctf_params = experiment_dataset.CTF_params
-        assert np.isclose(experiment_dataset.CTF_params[:,core.phase_shift_ind],0).all(), "Either w or phase shift should be zero"
+        assert np.isclose(experiment_dataset.CTF_params[:,core.CTFParamIndex.PHASE_SHIFT],0).all(), "Either w or phase shift should be zero"
 
-        phase_shift = np.arcsin(ctf_params[:,core.w_ind]) / np.pi * 180
-        ctf_params[:,core.w_ind] = 0
-        ctf_params[:,core.phase_shift_ind] = phase_shift
+        phase_shift = np.arcsin(ctf_params[:,core.CTFParamIndex.W]) / np.pi * 180
+        ctf_params[:,core.CTFParamIndex.W] = 0
+        ctf_params[:,core.CTFParamIndex.PHASE_SHIFT] = phase_shift
         # ctf_params[:,core.volt_ind] = 100
         experiment_dataset.CTF_params = ctf_params
 
