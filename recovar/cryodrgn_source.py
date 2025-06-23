@@ -405,6 +405,10 @@ class StarfileSource(_MRCDataFrameSource):
             df["__mrc_filename"] = df["__mrc_filename"].apply(
                 lambda filename: filename.replace(strip_prefix, "", 1) if filename.startswith(strip_prefix) else filename
             )
+            # Ensure we don't end up with paths starting with '/' if strip_prefix doesn't end with '/'
+            df["__mrc_filename"] = df["__mrc_filename"].apply(
+                lambda filename: filename.lstrip('/') if filename.startswith('/') else filename
+            )
 
         if not datadir:
             datadir = os.path.dirname(filepath)

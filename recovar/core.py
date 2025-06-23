@@ -487,7 +487,7 @@ batch_evaluate_ctf = jax.vmap(evaluate_ctf_packed, in_axes = (None, 0))
 @functools.partial(jax.jit, static_argnums=[1])
 def evaluate_ctf_wrapper_tilt_series_v2(CTF_params, image_shape, voxel_size ):
 
-    dose_filter = get_dose_filters(voxel_size, image_shape, CTF_params[:,dose_ind], CTF_params[:,tilt_angle_ind], CTF_params[0,volt_ind])
+    dose_filter = get_dose_filters(voxel_size, image_shape, CTF_params[:, CTFParamIndex.DOSE], CTF_params[:,CTFParamIndex.TILT_ANGLE], CTF_params[0,CTFParamIndex.VOLT])
 
     return dose_filter * cryodrgn_CTF(CTF_params[:,:9], image_shape, voxel_size)
 

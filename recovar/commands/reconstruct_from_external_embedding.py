@@ -50,6 +50,14 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     group.add_argument(
+        "--tilt-ind",
+        dest="tilt_ind",
+        type=os.path.abspath,
+        metavar="PKL",
+        help="Filter tilts (particles) by these indices",
+    )
+
+    group.add_argument(
         "--uninvert-data",
         dest="uninvert_data",
         default = "false",
@@ -119,6 +127,19 @@ def add_args(parser: argparse.ArgumentParser):
 
     parser.add_argument(
         "--tilt-series", action="store_true",  dest="tilt_series", help="Whether to use tilt_series."
+    )
+
+    group.add_argument(
+        "--ntilts",
+        default=None,
+        type=int,
+        help="Number of tilts to use per tilt series. None = all (default)",
+    )
+
+    group.add_argument(
+        "--tilt-series-ctf",
+        default=None,
+        help="What CTF to use for tilt series. Options : cryoem, relion5, warp (windows). Warptools is not yet supported. Default = cryoem if tilt series is False, relion5 if tilt series is True"
     )
 
     return parser

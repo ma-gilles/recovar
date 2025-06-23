@@ -418,11 +418,8 @@ def standard_recovar_pipeline(args):
             contrasts_for_second = None
 
         # Compute mean
-        if args.mean_fn == 'old':
-            means, mean_prior, _, _ = homogeneous.get_mean_conformation(cryos, 5*batch_size, noise_var_from_hf , valid_idx, disc_type, use_noise_level_prior = False, grad_n_iter = 5)
-        elif args.mean_fn == 'triangular':
+        if args.mean_fn == 'triangular':
             means, mean_prior, _  = homogeneous.get_mean_conformation_relion(cryos, 2*batch_size, noise_variance = noise_var_from_hf,  use_regularization = False)
-
         elif args.mean_fn == 'triangular_reg':
             means, mean_prior, _  = homogeneous.get_mean_conformation_relion(cryos, 5*batch_size, noise_variance = noise_var_from_hf,  use_regularization = True)
         else:
@@ -781,13 +778,36 @@ def standard_recovar_pipeline(args):
         s['rescaled'] = s['rescaled'][zdim_for_rest:]
 
 
+    
+
+    output_folder = args.outdir + '/output/' 
+    o.mkdir_safe(output_folder)
+    o.save_covar_output_volumes(output_folder, means['combined'], u['rescaled'], s, volume_mask, volume_shape,  voxel_size = cryos[0].voxel_size)
+    o.save_volume(volume_mask, output_folder + 'volumes/' + 'mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
+    o.save_volume(dilated_volume_mask, output_folder + 'volumes/' + 'dilated_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
+    o.save_volume(focus_mask, output_folder + 'volumes/' + 'focus_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
+    if args.use_complement_mask:
+        o.save_volume(focus_masks[0], output_folder + 'volumes/' + 'complement_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
+
+
+    embedding_dict = { 'zs': zs, 'cov_zs' : cov_zs , 'contrasts': est_contrasts, 'zs_cont' : zs_cont, 'cov_zs_cont' : cov_zs_cont, 'contrasts_cont' : est_contrasts_cont}
+
+    if args.tilt_series:
+        particles_ind_split = [ cryo.image_stack.dataset_tilt_indices for cryo in cryos]
+    else:
+        particles_ind_split = ind_split
+
+    utils.pickle_dump(particles_ind_split, output_model_folder + 'particles_halfsets.pkl')
+    pickle.dump(ind_split, open(output_model_folder + 'halfsets.pkl', 'wb'))
+    args.halfsets = output_model_folder + 'particles_halfsets.pkl'
+
     # Organize results into logical sections
     result = {
         # Core reconstruction results
         's': s['rescaled'],
         's_all': s,
         'density': None,
-        'version': '0.4',
+        'version': '0.5',
         
         # Volume metadata
         'volume_shape': volume_shape,
@@ -827,7 +847,6 @@ def standard_recovar_pipeline(args):
         # Input parameters
         'input_args': args
     }
-    
     # Convert all non-None values to numpy arrays where possible
     for key, value in result.items():
         if value is not None and not isinstance(value, (dict, str, float, int, bool)):
@@ -837,32 +856,8 @@ def standard_recovar_pipeline(args):
                 # Log if conversion fails but continue
                 print(f"Warning: Could not convert {key} to numpy array: {e}")
 
-
-    output_folder = args.outdir + '/output/' 
-    o.mkdir_safe(output_folder)
-    o.save_covar_output_volumes(output_folder, means['combined'], u['rescaled'], s, volume_mask, volume_shape,  voxel_size = cryos[0].voxel_size)
-    o.save_volume(volume_mask, output_folder + 'volumes/' + 'mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
-    o.save_volume(dilated_volume_mask, output_folder + 'volumes/' + 'dilated_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
-    o.save_volume(focus_mask, output_folder + 'volumes/' + 'focus_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
-    if args.use_complement_mask:
-        o.save_volume(focus_masks[0], output_folder + 'volumes/' + 'complement_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
-
-
-    utils.pickle_dump(covariance_cols, output_model_folder + 'covariance_cols.pkl')
     utils.pickle_dump(result, output_model_folder + 'params.pkl')
-
-    embedding_dict = { 'zs': zs, 'cov_zs' : cov_zs , 'contrasts': est_contrasts, 'zs_cont' : zs_cont, 'cov_zs_cont' : cov_zs_cont, 'contrasts_cont' : est_contrasts_cont}
-
-    if args.tilt_series:
-        particles_ind_split = [ cryo.image_stack.dataset_tilt_indices for cryo in cryos]
-    else:
-        particles_ind_split = ind_split
-
-    utils.pickle_dump(particles_ind_split, output_model_folder + 'particles_halfsets.pkl')
-    # Always dump to know where to load... Maybe wasteful?
-    if True:#args.halfsets is None:
-        pickle.dump(ind_split, open(output_model_folder + 'halfsets.pkl', 'wb'))
-        args.halfsets = output_model_folder + 'halfsets.pkl'
+    utils.pickle_dump(covariance_cols, output_model_folder + 'covariance_cols.pkl')
 
 
     for entry in embedding_dict:
