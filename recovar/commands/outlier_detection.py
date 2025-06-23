@@ -569,78 +569,56 @@ Final outliers: {results['statistics']['n_final_outliers']} ({results['statistic
 import logging
 def main():
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description="Run outlier detection and plot results.")
-    parser.add_argument("input_dir", type=str, help="Directory where the recovar results are stored.")
-    parser.add_argument("-o", "--output_dir", type=str, required=True, help="Folder where the plots and indices will be saved.")
-    parser.add_argument("--zdim", type=int, required=True, help="Dimension of the zs array to use.")
-    parser.add_argument("--no-z-regularization", action="store_true", help="Disable z regularization.")
-    parser.add_argument("--starfile", type=str, help="Path to starfile for contrast-based outlier detection.")
-    parser.add_argument("--contrast-outliers", action="store_true", help="Run contrast-based outlier detection.")
-    parser.add_argument("--low-contrast-threshold", type=float, default=0.1, help="Low contrast threshold for outlier detection.")
-    parser.add_argument("--high-contrast-threshold", type=float, default=3.5, help="High contrast threshold for outlier detection.")
-    parser.add_argument("--tomogram-threshold", type=float, default=0.7, help="Fraction threshold for rejecting entire tomograms.")
-    parser.add_argument("--tilt-series-threshold", type=float, default=0.7, help="Fraction threshold for rejecting entire tilt series.")
+    parser = argparse.ArgumentParser(description="Run outlier detection on latent space.")
+    parser.add_argument("recovar_result_dir", help="Path to the directory with recovar results")
+    parser.add_argument("--output_dir", default="outlier_detection_results", help="Directory to save results")
+    parser.add_argument("--zdim_key", type=int, default=4, help="Latent space dimension key to use (e.g., 4 for a 4D latent space)")
+    
+    # Arguments for contrast-based outlier detection
+    parser.add_argument("--low_contrast_threshold", type=float, default=0.1, help="Lower bound for contrast")
+    parser.add_argument("--high_contrast_threshold", type=float, default=3.5, help="Upper bound for contrast")
+    parser.add_argument("--max_contrast", type=float, default=4.0, help="Maximum possible contrast value (for plotting)")
+    parser.add_argument("--tomogram_bad_fraction_threshold", type=float, default=0.7, help="Fraction of bad particles to mark a tomogram as bad")
+    parser.add_argument("--tilt_series_bad_fraction_threshold", type=float, default=0.7, help="Fraction of bad particles to mark a tilt-series as bad")
 
     args = parser.parse_args()
 
-    # Use the parsed arguments
-    recovar_result_dir = args.input_dir
-    zdim = args.zdim
-    no_z_regularization = args.no_z_regularization
-    if no_z_regularization:
-        zdim_key = f"{zdim}_noreg"
-    else:
-        zdim_key = zdim
+    # Create output directory
+    os.makedirs(args.output_dir, exist_ok=True)
 
-    # Set up logging
-    logging.basicConfig(
-        format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
-        level=logging.INFO,
-        handlers=[
-            logging.StreamHandler()
-        ]
-    )
-    logger = logging.getLogger(__name__)
+    # Load latent space embeddings
+    pipeline_output = output.PipelineOutput(args.recovar_result_dir)
+    zs = pipeline_output.get('zs')[args.zdim_key]
 
-    pipeline_output = output.PipelineOutput(recovar_result_dir)
+    # --- Anomaly Detection on Latent Space ---
+    plot_anomaly_detection_results(zs, folder_name=args.output_dir)
 
-    # Run contrast-based outlier detection if requested
-    if args.contrast_outliers:
-        if args.starfile is None:
-            logger.error("--starfile is required for contrast-based outlier detection")
-            return
+    # --- Contrast-based Outlier Detection ---
+    if pipeline_output.get('contrasts') is not None:
+        contrasts = pipeline_output.get('contrasts')
         
-        logger.info("Running contrast-based outlier detection...")
+        # Load starfile path and options from pipeline input_args
+        input_args = pipeline_output.get('input_args')
+        starfile = getattr(input_args, 'particles', None)
+        datadir = getattr(input_args, 'datadir', None)
+        strip_prefix = getattr(input_args, 'strip_prefix', None)
+        print(f"Using starfile: {starfile} (datadir={datadir}, strip_prefix={strip_prefix})")
+        if starfile is None or not os.path.exists(starfile):
+            raise RuntimeError(f"Could not find particles.star file from pipeline input_args: {starfile}. Tilt series information cannot be loaded. Please check your pipeline output and rerun.")
         
-        # Get contrasts from pipeline output
-        unsorted_embedding = pipeline_output.get('unsorted_embedding')
-        contrasts = unsorted_embedding['contrasts']
-        
-        # Run contrast-based outlier detection
-        contrast_results = outlier_detection_from_contrast(
+        outlier_detection_from_contrast(
             contrasts=contrasts,
-            starfile=args.starfile,
-            zdim_key=zdim_key,
+            starfile=starfile,
+            zdim_key=args.zdim_key,
             low_contrast_threshold=args.low_contrast_threshold,
             high_contrast_threshold=args.high_contrast_threshold,
-            tomogram_bad_fraction_threshold=args.tomogram_threshold,
-            tilt_series_bad_fraction_threshold=args.tilt_series_threshold,
+            max_contrast=args.max_contrast,
+            tomogram_bad_fraction_threshold=args.tomogram_bad_fraction_threshold,
+            tilt_series_bad_fraction_threshold=args.tilt_series_bad_fraction_threshold,
             output_dir=args.output_dir
         )
-        
-        logger.info("Contrast-based outlier detection completed.")
-        return
-
-    # Run traditional anomaly detection
-    logger.info("Running traditional anomaly detection...")
-    
-    # Get zs from pipeline output
-    unsorted_embedding = pipeline_output.get('unsorted_embedding')
-    zs = unsorted_embedding['zs'][zdim_key]
-
-    # Call the function with the parsed arguments
-    plot_anomaly_detection_results(zs, args.output_dir)
-    logger.info("Traditional anomaly detection completed.")
+    else:
+        print("Contrasts not found in pipeline output. Skipping contrast-based outlier detection.")
 
 if __name__ == "__main__":
     main()

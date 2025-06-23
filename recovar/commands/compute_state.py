@@ -80,7 +80,25 @@ def compute_state(args):
     n_bins = args.n_bins
     o.mkdir_safe(output_folder)    
     logger.info(args)
-    o.compute_and_save_reweighted(cryos, target_zs, zs, cov_zs, output_folder, args.Bfactor, n_bins =n_bins, maskrad_fraction = args.maskrad_fraction, n_min_images = args.n_min_images, save_all_estimates = args.save_all_estimates)
+    
+    # Get the mask from pipeline output for FSC filtering
+    fsc_mask = None
+    if args.apply_global_filtering:
+        try:
+            fsc_mask = po.get('volume_mask')
+            logger.info("Using pipeline output volume_mask for FSC filtering")
+        except:
+            logger.warning("Could not load volume_mask from pipeline output, proceeding without FSC mask")
+    
+    o.compute_and_save_reweighted(
+        cryos, target_zs, zs, cov_zs, output_folder, args.Bfactor, 
+        n_bins=n_bins, maskrad_fraction=args.maskrad_fraction, 
+        n_min_images=args.n_min_images, save_all_estimates=args.save_all_estimates,
+        apply_global_filtering=args.apply_global_filtering,
+        fsc_mask=fsc_mask,
+        fsc_mask_radius=args.fsc_mask_radius,
+        fsc_mask_edgewidth=args.fsc_mask_edgewidth
+    )
     o.move_to_one_folder(output_folder, target_zs.shape[0])
 
 def main():

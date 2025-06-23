@@ -411,7 +411,7 @@ def plot_umap(output_folder, zs, centers):
 
 
 
-def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_images = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20 ):
+def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_images = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None):
 
     #batch_size = 
 
@@ -458,6 +458,42 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
             logger.info(f"Mask radius fraction = {maskrad_fraction}. Setting locres_maskrac = locres_sampling = box_size * voxel_size / {maskrad_fraction} = {locres_maskrad:.1f} Angstroms. Using {n_min_images} images for template.")
             heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_folder_this, ndim, n_bins, B_factor, tau = None, n_min_images = n_min_images, locres_sampling = locres_maskrad, locres_maskrad = locres_maskrad, locres_edgwidth = 0, upsampling_for_ests = 1, use_mask_ests =False, grid_correct_ests = False, save_all_estimates=save_all_estimates, metric_used= 'locshellmost_likely')
 
+            # Apply global filtering to the generated halfmaps if requested
+            if apply_global_filtering:
+                from recovar import locres
+                import glob
+                
+                # Find the halfmap files that were just generated
+                halfmap_files = glob.glob(output_folder_this + "half*_unfil.mrc")
+                if len(halfmap_files) >= 2:
+                    # Load the halfmaps
+                    halfmap1_path = output_folder_this + "halfmap1.mrc"
+                    halfmap2_path = output_folder_this + "halfmap2.mrc"
+                    
+                    if os.path.exists(halfmap1_path) and os.path.exists(halfmap2_path):
+                        halfmap1 = utils.load_mrc(halfmap1_path)
+                        halfmap2 = utils.load_mrc(halfmap2_path)
+                        
+                        # Apply global filtering
+                        filtered_combined, fsc, global_resol = locres.filter_maps_with_global_fsc(
+                            halfmap1, halfmap2, cryos[0].voxel_size, fsc_mask = fsc_mask
+                        )
+                        
+                        # Save filtered halfmaps with _filtered suffix
+                        filtered_half1_path = output_folder_this + "halfmap1_filtered.mrc"
+                        filtered_half2_path = output_folder_this + "halfmap2_filtered.mrc"
+                        
+                        utils.write_mrc(filtered_half1_path, filtered_combined, voxel_size=cryos[0].voxel_size)
+                        utils.write_mrc(filtered_half2_path, filtered_combined, voxel_size=cryos[0].voxel_size)
+                        
+                        logger.info(f"Applied global filtering to volume {k}. Resolution: {global_resol:.2f} Angstroms")
+                        logger.info(f"Saved filtered halfmaps: {filtered_half1_path}, {filtered_half2_path}")
+                    else:
+                        logger.warning(f"Halfmap files not found for volume {k}, skipping global filtering")
+                else:
+                    logger.warning(f"Not enough halfmap files found for volume {k}, skipping global filtering")
+
+            # filter the volumes with the global FSC
             logger.info(f"Done with volume generation {k} stored in {output_folder_this}")
         move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'locres_filtered.mrc', new_stringname = 'vol' )
         move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'locres.mrc', new_stringname = 'locres' )

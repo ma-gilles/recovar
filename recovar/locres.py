@@ -22,6 +22,9 @@ def integral_fsc(fsc, fourier_pixel_size = 1):
 integral_fscs = jax.vmap(integral_fsc, in_axes = [0, None])
 
 
+
+
+
 def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = True, filter_edgewidth=2, filter_map1 = False):
 
     # if use_filter:
@@ -724,7 +727,6 @@ def masked_noisy_error_split_over_shells_v2(diff, noise_variance_small, offset, 
     # y = S M diff
     diff = subsample_array(diff, offset, multiplier*maskrad_pix)
     mask = mask_fn.raised_cosine_mask(diff.shape, maskrad_pix, edgewidth_pix, 0)
-    diff_masked = diff * mask
     diff_ft = ftu.get_dft3(diff_masked)
 
     # Now to compute (S M D M^* S^*)^dagger
@@ -892,4 +894,212 @@ def make_sampling_volume(grid_size, locres_sampling, voxel_size, locres_maskrad)
         half_step = step_size // 2
         volume[sampling_points[k,0]-half_step:sampling_points[k,0]+half_step, sampling_points[k,1]-half_step:sampling_points[k,1]+half_step, sampling_points[k,2]-half_step:sampling_points[k,2]+half_step] = k
     return volume
+
+
+def filter_with_global_fsc(ft_sum, fsc, voxel_size, filter_edgewidth, mask=None, fsc_mask=None, B_factor=None):
+    """
+    Apply global FSC-based filtering to a Fourier transform.
+    
+    Parameters:
+    - ft_sum: Fourier transform of the map to filter
+    - fsc: Fourier Shell Correlation curve
+    - voxel_size: Voxel size in Angstroms
+    - filter_edgewidth: Width of the filter edge in pixels
+    - mask: Optional mask to apply to final result (if None, no mask applied)
+    - fsc_mask: Optional mask used only for FSC estimation (if None, no FSC mask)
+    - B_factor: Optional B-factor for sharpening (if None, no B-factor applied)
+    
+    Returns:
+    - Filtered map in real space
+    """
+    # Apply B-factor sharpening if specified
+    if B_factor is not None:
+        B_factor_scaling = simulator.get_B_factor_scaling(ft_sum.shape, voxel_size, B_factor).reshape(ft_sum.shape)
+        ft_sum = ft_sum * B_factor_scaling.astype(ft_sum.dtype)
+    
+    # Apply FSC weighting
+    ft_sum = apply_fsc_weighting(ft_sum, fsc)
+    
+    # Find global resolution from FSC curve
+    global_resol = find_fsc_resol(fsc, 1/7)  # Using 1/7 threshold like in local filtering
+    global_resol = ft_sum.shape[0] * voxel_size / global_resol if global_resol > 0 else 999
+    
+    # Apply low-pass filter
+    ft_sum = low_pass_filter_map(ft_sum, ft_sum.shape[0], global_resol, voxel_size, filter_edgewidth)
+    
+    # Convert to real space
+    ift_sum = ftu.get_idft3(ft_sum).real
+    
+    # Apply mask if provided
+    if mask is not None:
+        ift_sum = ift_sum * mask
+    
+    return ift_sum
+
+
+def filter_with_global_fsc_and_mask(ft_sum, fsc, voxel_size, filter_edgewidth, mask_radius=None, mask_edgewidth=None, fsc_mask_radius=None, fsc_mask_edgewidth=None, B_factor=None, mask=None, fsc_mask=None):
+    """
+    Apply global FSC-based filtering with automatic spherical mask.
+    
+    Parameters:
+    - ft_sum: Fourier transform of the map to filter
+    - fsc: Fourier Shell Correlation curve
+    - voxel_size: Voxel size in Angstroms
+    - filter_edgewidth: Width of the filter edge in pixels
+    - mask_radius: Radius of the spherical mask for final result (if None, no mask applied)
+    - mask_edgewidth: Width of the mask edge (if None, uses 10% of mask_radius)
+    - fsc_mask_radius: Radius of the spherical mask for FSC estimation (if None, no FSC mask)
+    - fsc_mask_edgewidth: Width of the FSC mask edge (if None, uses 10% of fsc_mask_radius)
+    - B_factor: Optional B-factor for sharpening (if None, no B-factor applied)
+    - mask: Custom mask for final result (overrides mask_radius/mask_edgewidth if provided)
+    - fsc_mask: Custom mask for FSC estimation (overrides fsc_mask_radius/fsc_mask_edgewidth if provided)
+    
+    Returns:
+    - Filtered map in real space with spherical mask applied
+    """
+    # Create spherical mask for final result if parameters provided and no custom mask
+    if mask is None and mask_radius is not None:
+        if mask_edgewidth is None:
+            mask_edgewidth = mask_radius * 0.1  # 10% of radius as default edge width
+        
+        # Convert to pixels
+        maskrad_pix = np.round(mask_radius / voxel_size).astype(int)
+        edgewidth_pix = np.round(mask_edgewidth / voxel_size).astype(int)
+        
+        # Create raised cosine mask
+        mask = mask_fn.raised_cosine_mask(ft_sum.shape, maskrad_pix, maskrad_pix + edgewidth_pix, -1)
+    
+    return filter_with_global_fsc(ft_sum, fsc, voxel_size, filter_edgewidth, mask, fsc_mask, B_factor)
+
+
+def filter_maps_with_global_fsc(map1, map2, voxel_size, filter_edgewidth=2, mask_radius=None, mask_edgewidth=None, fsc_mask_radius=None, fsc_mask_edgewidth=None, B_factor=None, fsc_threshold=1/7, mask=None, fsc_mask=None):
+    """
+    Convenience function to filter two maps using global FSC-based filtering.
+    
+    Parameters:
+    - map1: First map
+    - map2: Second map  
+    - voxel_size: Voxel size in Angstroms
+    - filter_edgewidth: Width of the filter edge in pixels (default: 2)
+    - mask_radius: Radius of the spherical mask for final result (if None, no mask applied)
+    - mask_edgewidth: Width of the mask edge (if None, uses 10% of mask_radius)
+    - fsc_mask_radius: Radius of the spherical mask for FSC estimation (if None, no FSC mask)
+    - fsc_mask_edgewidth: Width of the FSC mask edge (if None, uses 10% of fsc_mask_radius)
+    - B_factor: Optional B-factor for sharpening (if None, no B-factor applied)
+    - fsc_threshold: FSC threshold for resolution determination (default: 1/7)
+    - mask: Custom mask for final result (overrides mask_radius/mask_edgewidth if provided)
+    - fsc_mask: Custom mask for FSC estimation (overrides fsc_mask_radius/fsc_mask_edgewidth if provided)
+    
+    Returns:
+    - filtered_combined: Filtered version of the combined map (average of map1 and map2)
+    - fsc: The FSC curve used for filtering
+    - global_resol: The global resolution determined from FSC
+    """
+    # Create FSC mask if specified and no custom FSC mask provided
+    if fsc_mask is None and fsc_mask_radius is not None:
+        if fsc_mask_edgewidth is None:
+            fsc_mask_edgewidth = fsc_mask_radius * 0.1  # 10% of radius as default edge width
+        
+        # Convert to pixels
+        fsc_maskrad_pix = np.round(fsc_mask_radius / voxel_size).astype(int)
+        fsc_edgewidth_pix = np.round(fsc_mask_edgewidth / voxel_size).astype(int)
+        
+        # Create raised cosine mask for FSC estimation
+        fsc_mask = mask_fn.raised_cosine_mask(map1.shape, fsc_maskrad_pix, fsc_maskrad_pix + fsc_edgewidth_pix, -1)
+    
+    # Apply FSC mask to maps for FSC computation if specified
+    map1_for_fsc = map1 * fsc_mask if fsc_mask is not None else map1
+    map2_for_fsc = map2 * fsc_mask if fsc_mask is not None else map2
+    
+    # Compute FSC between the masked maps
+    fsc = regularization.get_fsc(ftu.get_dft3(map1_for_fsc), ftu.get_dft3(map2_for_fsc), volume_shape=map1.shape)
+    
+    # Find global resolution
+    global_resol_idx = find_fsc_resol(fsc, fsc_threshold)
+    global_resol = map1.shape[0] * voxel_size / global_resol_idx if global_resol_idx > 0 else 999
+    
+    # Create combined Fourier transform (average of both maps)
+    ft_sum = 0.5 * (ftu.get_dft3(map1) + ftu.get_dft3(map2))
+    
+    # Create final mask if specified and no custom mask provided
+    if mask is None and mask_radius is not None:
+        if mask_edgewidth is None:
+            mask_edgewidth = mask_radius * 0.1  # 10% of radius as default edge width
+        
+        # Convert to pixels
+        maskrad_pix = np.round(mask_radius / voxel_size).astype(int)
+        edgewidth_pix = np.round(mask_edgewidth / voxel_size).astype(int)
+        
+        # Create raised cosine mask
+        mask = mask_fn.raised_cosine_mask(ft_sum.shape, maskrad_pix, maskrad_pix + edgewidth_pix, -1)
+    
+    # Apply global filtering to the combined map
+    filtered_combined = filter_with_global_fsc(ft_sum, fsc, voxel_size, filter_edgewidth, mask, None, B_factor)
+    
+    return filtered_combined, fsc, global_resol
+
+
+def filter_single_map_with_global_fsc(map1, map2, voxel_size, filter_edgewidth=2, mask_radius=None, mask_edgewidth=None, fsc_mask_radius=None, fsc_mask_edgewidth=None, B_factor=None, fsc_threshold=1/7, mask=None, fsc_mask=None):
+    """
+    Filter a single map using FSC computed from two maps.
+    
+    Parameters:
+    - map1: Map to filter
+    - map2: Reference map for FSC computation
+    - voxel_size: Voxel size in Angstroms
+    - filter_edgewidth: Width of the filter edge in pixels (default: 2)
+    - mask_radius: Radius of the spherical mask for final result (if None, no mask applied)
+    - mask_edgewidth: Width of the mask edge (if None, uses 10% of mask_radius)
+    - fsc_mask_radius: Radius of the spherical mask for FSC estimation (if None, no FSC mask)
+    - fsc_mask_edgewidth: Width of the FSC mask edge (if None, uses 10% of fsc_mask_radius)
+    - B_factor: Optional B-factor for sharpening (if None, no B-factor applied)
+    - fsc_threshold: FSC threshold for resolution determination (default: 1/7)
+    - mask: Custom mask for final result (overrides mask_radius/mask_edgewidth if provided)
+    - fsc_mask: Custom mask for FSC estimation (overrides fsc_mask_radius/fsc_mask_edgewidth if provided)
+    
+    Returns:
+    - filtered_map: Filtered version of map1
+    - fsc: The FSC curve used for filtering
+    - global_resol: The global resolution determined from FSC
+    """
+    # Create FSC mask if specified and no custom FSC mask provided
+    if fsc_mask is None and fsc_mask_radius is not None:
+        if fsc_mask_edgewidth is None:
+            fsc_mask_edgewidth = fsc_mask_radius * 0.1  # 10% of radius as default edge width
+        
+        # Convert to pixels
+        fsc_maskrad_pix = np.round(fsc_mask_radius / voxel_size).astype(int)
+        fsc_edgewidth_pix = np.round(fsc_mask_edgewidth / voxel_size).astype(int)
+        
+        # Create raised cosine mask for FSC estimation
+        fsc_mask = mask_fn.raised_cosine_mask(map1.shape, fsc_maskrad_pix, fsc_maskrad_pix + fsc_edgewidth_pix, -1)
+    
+    # Apply FSC mask to maps for FSC computation if specified
+    map1_for_fsc = map1 * fsc_mask if fsc_mask is not None else map1
+    map2_for_fsc = map2 * fsc_mask if fsc_mask is not None else map2
+    
+    # Compute FSC between the masked maps
+    fsc = regularization.get_fsc(ftu.get_dft3(map1_for_fsc), ftu.get_dft3(map2_for_fsc), volume_shape=map1.shape)
+    
+    # Find global resolution
+    global_resol_idx = find_fsc_resol(fsc, fsc_threshold)
+    global_resol = map1.shape[0] * voxel_size / global_resol_idx if global_resol_idx > 0 else 999
+    
+    # Create final mask if specified and no custom mask provided
+    if mask is None and mask_radius is not None:
+        if mask_edgewidth is None:
+            mask_edgewidth = mask_radius * 0.1  # 10% of radius as default edge width
+        
+        # Convert to pixels
+        maskrad_pix = np.round(mask_radius / voxel_size).astype(int)
+        edgewidth_pix = np.round(mask_edgewidth / voxel_size).astype(int)
+        
+        # Create raised cosine mask
+        mask = mask_fn.raised_cosine_mask(map1.shape, maskrad_pix, maskrad_pix + edgewidth_pix, -1)
+    
+    # Apply global filtering to map1
+    ft1 = ftu.get_dft3(map1)
+    filtered_map = filter_with_global_fsc(ft1, fsc, voxel_size, filter_edgewidth, mask, None, B_factor)
+    
+    return filtered_map, fsc, global_resol
 

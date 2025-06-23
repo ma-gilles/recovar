@@ -567,7 +567,7 @@ def get_split_indices(particles_file, datadir=None, strip_prefix=None, ind_file=
     return split_indices
 
 
-def get_split_tilt_indices(particles_file, ind_file = None, tilt_ind_file =None, ntilts = None, datadir = None):
+def get_split_tilt_indices(particles_file, ind_file = None, tilt_ind_file =None, ntilts = None, datadir = None, particle_halfset_indices_file = None):
     # from cryodrgn import starfile
     from recovar import tilt_dataset
 
@@ -580,18 +580,31 @@ def get_split_tilt_indices(particles_file, ind_file = None, tilt_ind_file =None,
         dataset_tmp = tilt_dataset.TiltSeriesData(particles_file, datadir = datadir)
         tilt_numbers = dataset_tmp.tilt_numbers
 
-    n_tilt_series = len(particles_to_tilts)
+
+    # Determine particle indices
     if tilt_ind_file is None:
-        particle_ind = np.arange(n_tilt_series)
+        particle_ind = np.arange(len(particles_to_tilts))
     else:
         particle_ind = pickle.load(open(tilt_ind_file, "rb"))
         logger.warning("Using tilt-ind file to pick PARTICLES (i.e. tilt series), not images (individual tilts). Use --ind to pick images.")
-        # raise NotImplementedError
 
+    # Load image indices if provided
+    ind_images = None
     if ind_file is not None:
         ind_images = pickle.load(open(ind_file, "rb"))
 
-    split_tilt_series_indices = split_index_list(particle_ind)
+    # Determine halfset split indices
+    if particle_halfset_indices_file is not None:
+        split_tilt_series_indices = pickle.load(open(particle_halfset_indices_file, "rb"))
+        # Ensure split indices are within valid particle indices
+        if tilt_ind_file is not None:
+            split_tilt_series_indices = [
+                np.intersect1d(split_tilt_series_indices[0], particle_ind),
+                np.intersect1d(split_tilt_series_indices[1], particle_ind)
+            ]
+    else:
+        split_tilt_series_indices = split_index_list(particle_ind)
+
     split_image_indices = [None,None]
     for i in range(2):
         split_image_indices[i] = np.concatenate([ particles_to_tilts[ind] for ind in split_tilt_series_indices[i]])
@@ -683,40 +696,33 @@ def figure_out_halfsets(args):
 
     if args.halfsets == None:
         logger.info("Randomly splitting dataset into halfsets")
-        # ind_split = dataset.get_split_indices(args.particles_file, ind_file = args.ind)
-        # # pickle.dump(ind_split, open(args.out))
         if args.tilt_series or args.tilt_series_ctf != 'cryoem':
             halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, tilt_ind_file = args.tilt_ind, ntilts = args.ntilts, datadir = args.datadir)
         else:
             halfsets = get_split_indices(args.particles, datadir = args.datadir, strip_prefix = args.strip_prefix, ind_file = args.ind)
-    # else:
-    #     logger.info("Loading halfset from file")
-    #     halfsets = pickle.load(open(args.halfsets, 'rb'))
     else:
-        if args.tilt_series or args.tilt_series_ctf!= 'cryoem':
-            halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, tilt_ind_file = args.tilt_ind, ntilts = args.ntilts, datadir = args.datadir)
-            logger.warning("Ignoring halfsets file for tilt series! Using randomly partition instead.")
-            return halfsets
-        
-        logger.info("Loading halfset from file")
-        halfsets = pickle.load(open(args.halfsets, 'rb'))
+        logger.info("Loading halfsets from file")
 
-        # Ensure only the indices in args.ind are used
-        if args.ind is not None:
-            # Load indices from args.ind
-            if isinstance(args.ind, np.ndarray):
-                ind = args.ind
-            else:
-                with open(args.ind, 'rb') as f:
-                    ind = np.asarray(pickle.load(f))
-            # Intersect the loaded halfsets with ind
-            halfsets = [np.intersect1d(halfset, ind) for halfset in halfsets]
+        if args.tilt_series or args.tilt_series_ctf!= 'cryoem':
+            halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, tilt_ind_file = args.tilt_ind, ntilts = args.ntilts, datadir = args.datadir, particle_halfset_indices_file = args.halfsets)
+        else:
+            halfsets = pickle.load(open(args.halfsets, 'rb'))
+            logger.info("Loaded halfsets from file")
+
+            # Ensure only the indices in args.ind are used
+            if args.ind is not None:
+                # Load indices from args.ind
+                if isinstance(args.ind, np.ndarray):
+                    ind = args.ind
+                else:
+                    with open(args.ind, 'rb') as f:
+                        ind = np.asarray(pickle.load(f))
+                # Intersect the loaded halfsets with ind
+                halfsets = [np.intersect1d(halfset, ind) for halfset in halfsets]
 
     if args.n_images > 0:
         halfsets = [ halfset[:args.n_images//2] for halfset in halfsets]
-        logger.info(f"using only {args.n_images} images")
-        if args.tilt_series:
-            raise NotImplementedError
+        logger.info(f"using only {args.n_images} particles")
     return halfsets
 
 

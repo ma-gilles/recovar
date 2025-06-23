@@ -68,5 +68,20 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze= False):
         help="Path prefix to strip from filenames in star file (using in starfile input ONLY). Useful when star file contains longer paths than available on the system. By default, it strips the full path (except the filename). E.g, if you starfile path is Extract/job193/Subtomograms/XXX/XXX.mrcs, and your directory looks like /your/path/to/Subtomograms, then you can use --strip-prefix Extract/job193 --datadir /your/path/to/.",
     )
 
+    parser.add_argument(
+        "--apply-global-filtering", action="store_true",
+        help="Apply global FSC filtering to generated halfmaps and save them with _filtered.mrc suffix. Uses the pipeline's volume_mask for FSC estimation.",
+    )
+
+    parser.add_argument(
+        "--fsc-mask-radius", type=float, default=None,
+        help="Radius of spherical mask for FSC estimation (in Angstroms). If None, uses pipeline output volume_mask. Overrides the pipeline mask if specified.",
+    )
+
+    parser.add_argument(
+        "--fsc-mask-edgewidth", type=float, default=None,
+        help="Edge width of FSC mask (in Angstroms). If None, uses 10%% of fsc-mask-radius. Only used if fsc-mask-radius is specified.",
+    )
+
     return parser
 

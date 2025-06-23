@@ -99,7 +99,7 @@ def main():
 
         # Test reconstruct_from_external_embedding with strip_prefix and tilt series
         run_command(
-            f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/nested_tilt_test/test_dataset/particles.star --poses {dataset_dir}/nested_tilt_test/test_dataset/poses.pkl --ctf {dataset_dir}/nested_tilt_test/test_dataset/ctf.pkl --strip-prefix Extract/job193 --tilt-series --tilt-series-ctf=relion5 --correct-contrast --embedding {dataset_dir}/nested_tilt_test/test_dataset/pipeline_strip_prefix_tilt_output/embeddings.pkl --target {dataset_dir}/nested_tilt_test/test_dataset/target.txt -o {dataset_dir}/nested_tilt_test/test_dataset/reconstruct_strip_prefix_tilt_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
+            f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/nested_tilt_test/test_dataset/particles.star --poses {dataset_dir}/nested_tilt_test/test_dataset/poses.pkl --ctf {dataset_dir}/nested_tilt_test/test_dataset/ctf.pkl --strip-prefix Extract/job193 --tilt-series --embedding {dataset_dir}/nested_tilt_test/test_dataset/pipeline_strip_prefix_tilt_output/embeddings.pkl --target {dataset_dir}/nested_tilt_test/test_dataset/target.txt -o {dataset_dir}/nested_tilt_test/test_dataset/reconstruct_strip_prefix_tilt_output',
             'Test reconstruct_from_external_embedding with strip_prefix and tilt series',
             'reconstruct_strip_prefix_tilt'
         )
@@ -230,7 +230,7 @@ def main():
 
             # Test reconstruct_from_external_embedding with strip_prefix
             run_command(
-                f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/nested_test/test_dataset/particles.star --poses {dataset_dir}/nested_test/test_dataset/poses.pkl --ctf {dataset_dir}/nested_test/test_dataset/ctf.pkl --strip-prefix Extract/job193 --embedding {dataset_dir}/nested_test/test_dataset/pipeline_strip_prefix_output/embeddings.pkl --target {dataset_dir}/nested_test/test_dataset/target.txt -o {dataset_dir}/nested_test/test_dataset/reconstruct_strip_prefix_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
+                f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/nested_test/test_dataset/particles.star --poses {dataset_dir}/nested_test/test_dataset/poses.pkl --ctf {dataset_dir}/nested_test/test_dataset/ctf.pkl --strip-prefix Extract/job193 --embedding {dataset_dir}/nested_test/test_dataset/pipeline_strip_prefix_output/embeddings.pkl --target {dataset_dir}/nested_test/test_dataset/target.txt -o {dataset_dir}/nested_test/test_dataset/reconstruct_strip_prefix_output',
                 'Test reconstruct_from_external_embedding with strip_prefix',
                 'reconstruct_strip_prefix'
             )
@@ -244,7 +244,7 @@ def main():
 
             # Test reconstruct_from_external_embedding with strip_prefix and tilt series
             run_command(
-                f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/nested_tilt_test/test_dataset/particles.star --poses {dataset_dir}/nested_tilt_test/test_dataset/poses.pkl --ctf {dataset_dir}/nested_tilt_test/test_dataset/ctf.pkl --strip-prefix Extract/job193 --tilt-series --tilt-series-ctf=relion5 --correct-contrast --embedding {dataset_dir}/nested_tilt_test/test_dataset/pipeline_strip_prefix_tilt_output/embeddings.pkl --target {dataset_dir}/nested_tilt_test/test_dataset/target.txt -o {dataset_dir}/nested_tilt_test/test_dataset/reconstruct_strip_prefix_tilt_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
+                f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/nested_tilt_test/test_dataset/particles.star --poses {dataset_dir}/nested_tilt_test/test_dataset/poses.pkl --ctf {dataset_dir}/nested_tilt_test/test_dataset/ctf.pkl --strip-prefix Extract/job193 --tilt-series --embedding {dataset_dir}/nested_tilt_test/test_dataset/pipeline_strip_prefix_tilt_output/embeddings.pkl --target {dataset_dir}/nested_tilt_test/test_dataset/target.txt -o {dataset_dir}/nested_tilt_test/test_dataset/reconstruct_strip_prefix_tilt_output',
                 'Test reconstruct_from_external_embedding with strip_prefix and tilt series',
                 'reconstruct_strip_prefix_tilt'
             )
