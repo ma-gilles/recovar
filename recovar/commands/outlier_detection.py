@@ -1397,7 +1397,7 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
                 # Create boolean mask for image-level contrast values
                 outlier_contrast_mask = np.isin(original_image_indices, outlier_image_indices)
                 outlier_contrast = contrast_values[outlier_contrast_mask]
-                ax.hist(outlier_contrast, bins=bins, alpha=0.8, 
+                ax.hist(outlier_contrast, bins=bins, alpha=0.5, 
                        color=colors['outliers'], label=f'Outliers (n={len(outlier_contrast):,})', 
                        density=True, edgecolor='black', linewidth=0.8, hatch='///')
             
@@ -1405,7 +1405,7 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
                 # Create boolean mask for image-level contrast values
                 inlier_contrast_mask = np.isin(original_image_indices, inlier_image_indices)
                 inlier_contrast = contrast_values[inlier_contrast_mask]
-                ax.hist(inlier_contrast, bins=bins, alpha=0.8, 
+                ax.hist(inlier_contrast, bins=bins, alpha=0.5, 
                        color=colors['inliers'], label=f'Inliers (n={len(inlier_contrast):,})', 
                        density=True, edgecolor='black', linewidth=0.8, hatch='\\\\\\')
             
