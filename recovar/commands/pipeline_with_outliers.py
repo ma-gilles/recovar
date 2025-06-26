@@ -36,6 +36,21 @@ def run_pipeline_with_outlier_removal():
     parser.add_argument("--no-z-regularization", action="store_true", help="Disable z regularization.")
     # Add option to delete round results
     parser.add_argument("--cleanup", action="store_true", help="Delete results of all rounds except the inliers/outliers")
+    
+    # Add junk particle detection options
+    parser.add_argument("--use-junk-detection", action="store_true", 
+                       help="Use junk particle detection in addition to outlier detection")
+    parser.add_argument("--junk-detection-method", type=str, default="adaptive_threshold", 
+                       choices=["adaptive_threshold", "percentile", "std_based", "consensus"],
+                       help="Junk detection method (default: adaptive_threshold)")
+    parser.add_argument("--n-clusters", type=int, default=100, help="Number of k-means clusters for junk detection (default: 100)")
+    parser.add_argument("--combine-methods", action="store_true", 
+                       help="Combine junk detection and outlier detection results (intersection of good particles)")
+    parser.add_argument("--save-pipeline-indices", action="store_true", 
+                       help="Save particle indices in pipeline-compatible format (for --ind or --tilt-ind)")
+    parser.add_argument("--output-format", type=str, default="both", 
+                       choices=["both", "junk_only", "good_only"], 
+                       help="Which indices to save for junk detection (default: both)")
 
     args = parser.parse_args()
 
@@ -137,8 +152,62 @@ def run_pipeline_with_outlier_removal():
             logger.error(f"Consensus inliers file not found: {consensus_inliers_file}")
             sys.exit(1)
         with open(consensus_inliers_file, 'rb') as f:
-            current_indices = pickle.load(f)
-
+            outlier_inliers = pickle.load(f)
+        
+        # Run junk particle detection if requested
+        junk_inliers = None
+        if args.use_junk_detection:
+            logger.info("Running junk particle detection...")
+            try:
+                from recovar.commands.junk_particle_detection import junk_particle_detection_with_args
+                
+                # Set up junk detection output directory
+                junk_output_dir = os.path.join(args.outdir, 'junk_detection')
+                os.makedirs(junk_output_dir, exist_ok=True)
+                
+                # Run junk particle detection
+                junk_particle_detection_with_args(
+                    recovar_result_dir=args.outdir,
+                    output_folder=junk_output_dir,
+                    zdim=zdim,
+                    n_clusters=args.n_clusters,
+                    batch_size=100,
+                    n_particles_per_cluster=100,
+                    no_z_regularization=args.no_z_regularization,
+                    save_reconstructions=False,
+                    filter_resolution=None,
+                    filter_fourier_shells=10,
+                    junk_detection_method=args.junk_detection_method,
+                    percentile_threshold=25.0,
+                    std_threshold=2.0,
+                    min_junk_fraction=0.1,
+                    max_junk_fraction=0.8,
+                    save_pipeline_indices=args.save_pipeline_indices,
+                    output_format=args.output_format
+                )
+                
+                # Load junk detection results
+                junk_good_file = os.path.join(junk_output_dir, f'good_pipeline_indices_{zdim_key}.pkl')
+                if os.path.exists(junk_good_file):
+                    with open(junk_good_file, 'rb') as f:
+                        junk_inliers = pickle.load(f)
+                    logger.info(f"Junk detection completed. Found {len(junk_inliers)} good particles.")
+                else:
+                    logger.warning("Junk detection good particles file not found.")
+                    
+            except Exception as e:
+                logger.warning(f"Junk particle detection failed: {e}")
+        
+        # Combine results if requested
+        if args.combine_methods and junk_inliers is not None:
+            logger.info("Combining outlier detection and junk detection results...")
+            # Take intersection of good particles from both methods
+            combined_inliers = np.intersect1d(outlier_inliers, junk_inliers)
+            logger.info(f"Combined results: {len(combined_inliers)} particles (intersection of {len(outlier_inliers)} outlier inliers and {len(junk_inliers)} junk inliers)")
+            current_indices = combined_inliers
+        else:
+            current_indices = outlier_inliers
+        
         # Save the inliers and outliers for this round in the original output directory
         inliers_save_path = os.path.join(original_outdir, f"inliers_round_{round_number}.pkl")
         outliers_save_path = os.path.join(original_outdir, f"outliers_round_{round_number}.pkl")
@@ -146,6 +215,21 @@ def run_pipeline_with_outlier_removal():
         shutil.copy(os.path.join(outlier_output_dir, 'outliers_consensus.pkl'), outliers_save_path)
         logger.info(f"Saved inliers of round {round_number} to {inliers_save_path}")
         logger.info(f"Saved outliers of round {round_number} to {outliers_save_path}")
+        
+        # Save combined results if applicable
+        if args.combine_methods and junk_inliers is not None:
+            combined_inliers_save_path = os.path.join(original_outdir, f"combined_inliers_round_{round_number}.pkl")
+            with open(combined_inliers_save_path, 'wb') as f:
+                pickle.dump(combined_inliers, f)
+            logger.info(f"Saved combined inliers of round {round_number} to {combined_inliers_save_path}")
+            
+            # Save junk detection results
+            if args.save_pipeline_indices:
+                junk_junk_file = os.path.join(junk_output_dir, f'junk_pipeline_indices_{zdim_key}.pkl')
+                if os.path.exists(junk_junk_file):
+                    junk_junk_save_path = os.path.join(original_outdir, f"junk_particles_round_{round_number}.pkl")
+                    shutil.copy(junk_junk_file, junk_junk_save_path)
+                    logger.info(f"Saved junk particles of round {round_number} to {junk_junk_save_path}")
 
         # Keep track of inliers for all rounds
         all_rounds_inliers[round_number] = current_indices

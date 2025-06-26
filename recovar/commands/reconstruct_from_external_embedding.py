@@ -142,6 +142,26 @@ def add_args(parser: argparse.ArgumentParser):
         help="What CTF to use for tilt series. Options : cryoem, relion5, warp (windows). Warptools is not yet supported. Default = cryoem if tilt series is False, relion5 if tilt series is True"
     )
 
+    group.add_argument(
+        "--angle-per-tilt",
+        type=float,
+        default=3.0,
+        help="Angle per tilt in degrees (default: 3.0)"
+    )
+
+    group.add_argument(
+        "--dose-per-tilt",
+        type=float,
+        default=2.9,
+        help="Dose per tilt in e-/Å² (default: 2.9)"
+    )
+
+    group.add_argument(
+        "--premultiplied-ctf",
+        action="store_true",
+        help="Whether CTF is premultiplied in the data"
+    )
+
     return parser
     
 

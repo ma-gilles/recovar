@@ -103,7 +103,7 @@ class ImageSource:
         if indices is None:
             self.indices = np.arange(self.n)
         else:
-            self.indices = indices
+            self.indices = np.asarray(indices)
             # If indices is provided, it overrides self.n
             self.n = len(indices)
 

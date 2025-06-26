@@ -675,7 +675,7 @@ class PipelineOutput:
         elif key == 'covariance_cols':
             return utils.pickle_load(self.result_path + 'model/' + 'covariance_cols' + '.pkl')
         elif key == 'dataset' or key == 'lazy_dataset':
-            cryos = dataset.load_dataset_from_args(self.get('input_args'), lazy = 'lazy' in key)
+            cryos = dataset.load_dataset_from_args(self.get('input_args'), lazy = 'lazy' in key, ind_split = self.get('halfsets'))
             add_noise_to_loaded_dataset(cryos , self.get('noise_var_used'))
             return cryos
         
