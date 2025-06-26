@@ -9,15 +9,11 @@ import logging
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
-from sklearn.covariance import EllipticEnvelope
-from sklearn.ensemble import IsolationForest
-from sklearn.neighbors import LocalOutlierFactor
 from recovar import output
 
 # Import necessary functions from pipeline.py and output module
 from recovar.commands.pipeline import add_args, standard_recovar_pipeline
 from recovar import output
-from recovar.commands.outlier_detection import plot_anomaly_detection_results
 matplotlib.rcParams["contour.negative_linestyle"] = "solid"
 
 def run_pipeline_with_outlier_removal():
@@ -37,20 +33,38 @@ def run_pipeline_with_outlier_removal():
     # Add option to delete round results
     parser.add_argument("--cleanup", action="store_true", help="Delete results of all rounds except the inliers/outliers")
     
-    # Add junk particle detection options
+    # Add comprehensive outlier detection arguments
+    parser.add_argument("--use-contrast-detection", action="store_true", 
+                       help="Use contrast-based outlier detection")
     parser.add_argument("--use-junk-detection", action="store_true", 
                        help="Use junk particle detection in addition to outlier detection")
-    parser.add_argument("--junk-detection-method", type=str, default="adaptive_threshold", 
-                       choices=["adaptive_threshold", "percentile", "std_based", "consensus"],
-                       help="Junk detection method (default: adaptive_threshold)")
-    parser.add_argument("--n-clusters", type=int, default=100, help="Number of k-means clusters for junk detection (default: 100)")
-    parser.add_argument("--combine-methods", action="store_true", 
-                       help="Combine junk detection and outlier detection results (intersection of good particles)")
+    parser.add_argument("--no-plots", action="store_true", 
+                       help="Skip plotting and visualization in outlier detection")
+    
+    # Contrast-based outlier detection arguments
+    parser.add_argument("--low-contrast-threshold", type=float, default=0.1, 
+                       help="Low contrast threshold for outlier detection (default: 0.1)")
+    parser.add_argument("--high-contrast-threshold", type=float, default=3.5, 
+                       help="High contrast threshold for outlier detection (default: 3.5)")
+    parser.add_argument("--max-contrast", type=float, default=4.0, 
+                       help="Maximum contrast value to consider (default: 4.0)")
+    parser.add_argument("--particle-bad-fraction-threshold", type=float, default=0.7, 
+                       help="Threshold for bad fraction in particle (default: 0.7)")
+    parser.add_argument("--micrograph-bad-fraction-threshold", type=float, default=0.7,
+                       help="If this fraction of a micrograph's images are bad, reject entire micrograph (default: 0.7)")
+    
+    # Junk detection arguments
+    parser.add_argument("--junk-threshold", type=float, default=0.5, 
+                       help="Threshold for junk particle detection (default: 0.5)")
+    parser.add_argument("--particles-per-cluster", type=int, default=100, 
+                       help="Number of particles per cluster for junk detection (default: 100)")
+    
+    # Output format arguments
     parser.add_argument("--save-pipeline-indices", action="store_true", 
-                       help="Save particle indices in pipeline-compatible format (for --ind or --tilt-ind)")
+                       help="Save indices in pipeline-compatible format (--ind for images, --tilt-ind for particles in tilt series)")
     parser.add_argument("--output-format", type=str, default="both", 
-                       choices=["both", "junk_only", "good_only"], 
-                       help="Which indices to save for junk detection (default: both)")
+                       choices=["both", "outliers_only", "inliers_only"], 
+                       help="Which indices to save (default: both)")
 
     args = parser.parse_args()
 
@@ -139,98 +153,85 @@ def run_pipeline_with_outlier_removal():
         if zdim_key not in embeddings['zs']:
             logger.error(f"zdim {zdim_key} not found in embeddings")
             sys.exit(1)
-        zs = embeddings['zs'][zdim_key]
 
-        # Run outlier detection
-        outlier_output_dir = os.path.join(args.outdir, 'outlier_detection')
-        os.makedirs(outlier_output_dir, exist_ok=True)
-        plot_anomaly_detection_results(zs, outlier_output_dir)
-
-        # Load the consensus inliers indices for the next round
-        consensus_inliers_file = os.path.join(outlier_output_dir, 'inliers_consensus.pkl')
-        if not os.path.exists(consensus_inliers_file):
-            logger.error(f"Consensus inliers file not found: {consensus_inliers_file}")
-            sys.exit(1)
-        with open(consensus_inliers_file, 'rb') as f:
-            outlier_inliers = pickle.load(f)
+        # Run comprehensive outlier detection
+        logger.info("Running comprehensive outlier detection...")
         
-        # Run junk particle detection if requested
-        junk_inliers = None
+        # Create command line arguments for outlier detection
+        original_argv = sys.argv
+        
+        # Build argument list for outlier detection
+        outlier_argv = [
+            'outlier_detection',  # script name
+            args.outdir,  # pipeline_output_dir
+            '--zdim-key', str(zdim_key),
+            '--output-dir', os.path.join(args.outdir, 'outlier_detection')
+        ]
+        
+        if args.no_z_regularization:
+            outlier_argv.append('--no-z-regularization')
+        
+        if args.save_pipeline_indices:
+            outlier_argv.append('--save-pipeline-indices')
+        
+        outlier_argv.extend(['--output-format', args.output_format])
+        
+        if args.no_plots:
+            outlier_argv.append('--no-plots')
+        
+        # Contrast-based detection
+        if args.use_contrast_detection:
+            outlier_argv.extend([
+                '--low-contrast-threshold', str(args.low_contrast_threshold),
+                '--high-contrast-threshold', str(args.high_contrast_threshold),
+                '--max-contrast', str(args.max_contrast),
+                '--particle-bad-fraction-threshold', str(args.particle_bad_fraction_threshold),
+                '--micrograph-bad-fraction-threshold', str(args.micrograph_bad_fraction_threshold)
+            ])
+        
+        # Junk detection
         if args.use_junk_detection:
-            logger.info("Running junk particle detection...")
-            try:
-                from recovar.commands.junk_particle_detection import junk_particle_detection_with_args
-                
-                # Set up junk detection output directory
-                junk_output_dir = os.path.join(args.outdir, 'junk_detection')
-                os.makedirs(junk_output_dir, exist_ok=True)
-                
-                # Run junk particle detection
-                junk_particle_detection_with_args(
-                    recovar_result_dir=args.outdir,
-                    output_folder=junk_output_dir,
-                    zdim=zdim,
-                    n_clusters=args.n_clusters,
-                    batch_size=100,
-                    n_particles_per_cluster=100,
-                    no_z_regularization=args.no_z_regularization,
-                    save_reconstructions=False,
-                    filter_resolution=None,
-                    filter_fourier_shells=10,
-                    junk_detection_method=args.junk_detection_method,
-                    percentile_threshold=25.0,
-                    std_threshold=2.0,
-                    min_junk_fraction=0.1,
-                    max_junk_fraction=0.8,
-                    save_pipeline_indices=args.save_pipeline_indices,
-                    output_format=args.output_format
-                )
-                
-                # Load junk detection results
-                junk_good_file = os.path.join(junk_output_dir, f'good_pipeline_indices_{zdim_key}.pkl')
-                if os.path.exists(junk_good_file):
-                    with open(junk_good_file, 'rb') as f:
-                        junk_inliers = pickle.load(f)
-                    logger.info(f"Junk detection completed. Found {len(junk_inliers)} good particles.")
-                else:
-                    logger.warning("Junk detection good particles file not found.")
-                    
-            except Exception as e:
-                logger.warning(f"Junk particle detection failed: {e}")
+            outlier_argv.extend([
+                '--use-junk-detection',
+                '--junk-threshold', str(args.junk_threshold),
+                '--particles-per-cluster', str(args.particles_per_cluster)
+            ])
         
-        # Combine results if requested
-        if args.combine_methods and junk_inliers is not None:
-            logger.info("Combining outlier detection and junk detection results...")
-            # Take intersection of good particles from both methods
-            combined_inliers = np.intersect1d(outlier_inliers, junk_inliers)
-            logger.info(f"Combined results: {len(combined_inliers)} particles (intersection of {len(outlier_inliers)} outlier inliers and {len(junk_inliers)} junk inliers)")
-            current_indices = combined_inliers
-        else:
-            current_indices = outlier_inliers
+        # Temporarily replace sys.argv and run outlier detection
+        try:
+            sys.argv = outlier_argv
+            from recovar.commands.outlier_detection import main as outlier_main
+            outlier_main()
+            logger.info("Comprehensive outlier detection completed successfully.")
+        except Exception as e:
+            logger.error(f"Comprehensive outlier detection failed: {e}")
+            sys.exit(1)
+        finally:
+            # Restore original argv
+            sys.argv = original_argv
+        
+        # Load the combined inliers indices for the next round
+        outlier_output_dir = os.path.join(args.outdir, 'outlier_detection')
+        combined_inliers_file = os.path.join(outlier_output_dir, 'combined_results', f'combined_image_inliers_{zdim_key}.pkl')
+        if not os.path.exists(combined_inliers_file):
+            logger.error(f"Combined inliers file not found: {combined_inliers_file}")
+            sys.exit(1)
+        with open(combined_inliers_file, 'rb') as f:
+            current_indices = pickle.load(f)
         
         # Save the inliers and outliers for this round in the original output directory
         inliers_save_path = os.path.join(original_outdir, f"inliers_round_{round_number}.pkl")
         outliers_save_path = os.path.join(original_outdir, f"outliers_round_{round_number}.pkl")
-        shutil.copy(consensus_inliers_file, inliers_save_path)
-        shutil.copy(os.path.join(outlier_output_dir, 'outliers_consensus.pkl'), outliers_save_path)
+        
+        # Copy combined results
+        shutil.copy(combined_inliers_file, inliers_save_path)
+        combined_outliers_file = os.path.join(outlier_output_dir, 'combined_results', f'combined_image_outliers_{zdim_key}.pkl')
+        if os.path.exists(combined_outliers_file):
+            shutil.copy(combined_outliers_file, outliers_save_path)
+        
         logger.info(f"Saved inliers of round {round_number} to {inliers_save_path}")
         logger.info(f"Saved outliers of round {round_number} to {outliers_save_path}")
         
-        # Save combined results if applicable
-        if args.combine_methods and junk_inliers is not None:
-            combined_inliers_save_path = os.path.join(original_outdir, f"combined_inliers_round_{round_number}.pkl")
-            with open(combined_inliers_save_path, 'wb') as f:
-                pickle.dump(combined_inliers, f)
-            logger.info(f"Saved combined inliers of round {round_number} to {combined_inliers_save_path}")
-            
-            # Save junk detection results
-            if args.save_pipeline_indices:
-                junk_junk_file = os.path.join(junk_output_dir, f'junk_pipeline_indices_{zdim_key}.pkl')
-                if os.path.exists(junk_junk_file):
-                    junk_junk_save_path = os.path.join(original_outdir, f"junk_particles_round_{round_number}.pkl")
-                    shutil.copy(junk_junk_file, junk_junk_save_path)
-                    logger.info(f"Saved junk particles of round {round_number} to {junk_junk_save_path}")
-
         # Keep track of inliers for all rounds
         all_rounds_inliers[round_number] = current_indices
 

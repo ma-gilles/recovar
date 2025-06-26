@@ -11,6 +11,7 @@ from sklearn.covariance import EllipticEnvelope
 from sklearn.ensemble import IsolationForest
 from sklearn.neighbors import LocalOutlierFactor
 from recovar import tilt_dataset
+import seaborn as sns
 
 matplotlib.rcParams["contour.negative_linestyle"] = "solid"
 
@@ -23,24 +24,20 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
 
     Parameters:
     - zs: numpy array
-        The original dataset (may contain NaN values).
+        In the local ordering, loaded from pipeline_output.get(zs)
+    - original_indices: numpy array
+        The original indices of the particles, loaded from np.concatenate(pipeline_output.get(particles_halfsets))
     - folder_name: str
-        The folder name where all files (plots and indices) will be saved.
+        The folder name where all files (plots and indices) will be saved in the original ordering
     """
     # Ensure the folder exists
     os.makedirs(folder_name, exist_ok=True)
 
     # Identify valid entries (rows without NaNs)
-    valid_mask = np.all(np.isfinite(zs), axis=1)
-    valid_indices = np.where(valid_mask)[0]
-    zs_valid = zs[valid_mask]
-
-    if zs_valid.shape[0] == 0:
-        print("No valid entries in zs after removing NaN values.")
-        return
+    zs = zs
 
     # Compute UMAP on valid zs
-    umapper = output.umap_latent_space(zs_valid)
+    umapper = output.umap_latent_space(zs)
     umap_valid = umapper.embedding_
 
     # Define anomaly detection algorithms
@@ -56,12 +53,12 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
     outlier_percentages = []
 
     # Fit each algorithm (excluding Robust Covariance for now) and store predictions
-    total_samples = zs_valid.shape[0]
+    total_samples = zs.shape[0]
     for name, algorithm in anomaly_algorithms:
         if name == "Local Outlier Factor":
-            y_pred = algorithm.fit_predict(zs_valid)
+            y_pred = algorithm.fit_predict(zs)
         else:
-            y_pred = algorithm.fit(zs_valid).predict(zs_valid)
+            y_pred = algorithm.fit(zs).predict(zs)
         predictions.append(y_pred)
         algorithm_names.append(name)
 
@@ -71,10 +68,10 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
         outlier_percentages.append(percentage_outliers)
 
         # Save indices of inliers and outliers in original indexing
-        inliers_indices_valid = np.where(y_pred == 1)[0]
-        outliers_indices_valid = np.where(y_pred == -1)[0]
-        inliers_indices = valid_indices[inliers_indices_valid]
-        outliers_indices = valid_indices[outliers_indices_valid]
+        inliers_indices = np.where(y_pred == 1)[0]
+        outliers_indices = np.where(y_pred == -1)[0]
+        # inliers_indices = valid_indices[inliers_indices_valid]
+        # outliers_indices = valid_indices[outliers_indices_valid]
 
         # Sanitize algorithm name for filename
         safe_name = name.replace(" ", "_").lower()
@@ -96,15 +93,13 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
 
     # Fit Robust Covariance
     name, algorithm = robust_covariance
-    y_pred = algorithm.fit(zs_valid).predict(zs_valid)
+    y_pred = algorithm.fit(zs).predict(zs)
     predictions.insert(0, y_pred)
     algorithm_names.insert(0, name)
 
     # Save indices of inliers and outliers in original indexing
-    inliers_indices_valid = np.where(y_pred == 1)[0]
-    outliers_indices_valid = np.where(y_pred == -1)[0]
-    inliers_indices = valid_indices[inliers_indices_valid]
-    outliers_indices = valid_indices[outliers_indices_valid]
+    inliers_indices = np.where(y_pred == 1)[0]
+    outliers_indices = np.where(y_pred == -1)[0]
 
     # Sanitize algorithm name for filename
     safe_name = name.replace(" ", "_").lower()
@@ -134,10 +129,6 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
     consensus_inliers = ~consensus_outliers
 
     # Save consensus indices in original indexing
-    # consensus_inliers_indices_valid = np.where(consensus_inliers)[0]
-    # consensus_outliers_indices_valid = np.where(consensus_outliers)[0]
-    # consensus_inliers_indices = valid_indices[consensus_inliers_indices_valid]
-    # consensus_outliers_indices = valid_indices[consensus_outliers_indices_valid]
 
     inliers_mapped_back_to_original_indices = original_indices[consensus_inliers]
     outliers_mapped_back_to_original_indices = original_indices[consensus_outliers]
@@ -155,7 +146,7 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
 
     # Prepare for plotting
     n_algorithms = len(algorithm_names)
-    n_rows = 3  # zs[0] vs zs[1], zs[2] vs zs[3], umap[0] vs umap[1]
+    n_rows = 3  # zs[:, 0] vs zs[:, 1], zs[:, 2] vs zs[:, 3], umap[:, 0] vs umap[:, 1]
     n_cols = n_algorithms
     fig, axes = plt.subplots(
         nrows=n_rows, ncols=n_cols, figsize=(n_cols * 6, n_rows * 5), squeeze=False
@@ -177,12 +168,12 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
         ax = axes[0, i_algo]
         if np.sum(inliers) > 1:
             # Compute axis limits based on inliers
-            x_min, x_max = np.percentile(zs_valid[inliers, 0], [0.1, 99.9])
-            y_min, y_max = np.percentile(zs_valid[inliers, 1], [0.1, 99.9])
+            x_min, x_max = np.percentile(zs[inliers, 0], [0.1, 99.9])
+            y_min, y_max = np.percentile(zs[inliers, 1], [0.1, 99.9])
 
             hb = ax.hexbin(
-                zs_valid[inliers, 0],
-                zs_valid[inliers, 1],
+                zs[inliers, 0],
+                zs[inliers, 1],
                 gridsize=50,
                 cmap='Blues',
                 bins='log',
@@ -194,14 +185,14 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
         else:
             ax.text(0.5, 0.5, "Insufficient inliers for hexbin", transform=ax.transAxes,
                     ha='center', va='center', fontsize=12)
-            x_min, x_max = zs_valid[:, 0].min(), zs_valid[:, 0].max()
-            y_min, y_max = zs_valid[:, 1].min(), zs_valid[:, 1].max()
+            x_min, x_max = zs[:, 0].min(), zs[:, 0].max()
+            y_min, y_max = zs[:, 1].min(), zs[:, 1].max()
 
         # Overlay outliers
         if np.sum(outliers) > 0:
             ax.scatter(
-                zs_valid[outliers, 0],
-                zs_valid[outliers, 1],
+                zs[outliers, 0],
+                zs[outliers, 1],
                 s=10,
                 c="red",
                 alpha=0.8,
@@ -224,16 +215,16 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
         ax.legend(loc="upper right")
 
         # --- Plot zs[:, 2] vs zs[:, 3] if available ---
-        if zs_valid.shape[1] >= 4:
+        if zs.shape[1] >= 4:
             ax = axes[1, i_algo]
             if np.sum(inliers) > 1:
                 # Compute axis limits based on inliers
-                x_min, x_max = np.percentile(zs_valid[inliers, 2], [0.1, 99.9])
-                y_min, y_max = np.percentile(zs_valid[inliers, 3], [0.1, 99.9])
+                x_min, x_max = np.percentile(zs[inliers, 2], [0.1, 99.9])
+                y_min, y_max = np.percentile(zs[inliers, 3], [0.1, 99.9])
 
                 hb = ax.hexbin(
-                    zs_valid[inliers, 2],
-                    zs_valid[inliers, 3],
+                    zs[inliers, 2],
+                    zs[inliers, 3],
                     gridsize=50,
                     cmap='Blues',
                     bins='log',
@@ -245,13 +236,13 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
             else:
                 ax.text(0.5, 0.5, "Insufficient inliers for hexbin", transform=ax.transAxes,
                         ha='center', va='center', fontsize=12)
-                x_min, x_max = zs_valid[:, 2].min(), zs_valid[:, 2].max()
-                y_min, y_max = zs_valid[:, 3].min(), zs_valid[:, 3].max()
+                x_min, x_max = zs[:, 2].min(), zs[:, 2].max()
+                y_min, y_max = zs[:, 3].min(), zs[:, 3].max()
             # Overlay outliers
             if np.sum(outliers) > 0:
                 ax.scatter(
-                    zs_valid[outliers, 2],
-                    zs_valid[outliers, 3],
+                    zs[outliers, 2],
+                    zs[outliers, 3],
                     s=10,
                     c="red",
                     alpha=0.8,
@@ -350,9 +341,14 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
     - particle_bad_fraction_threshold: Threshold for particle-based outlier detection
     - micrograph_bad_fraction_threshold: Threshold for micrograph-based outlier detection
     - output_dir: Output directory for saving results
+    
+    Returns:
+    - image_outliers: Array of image-level outlier indices
+    - image_inliers: Array of image-level inlier indices  
+    - particle_outliers: Array of particle-level outlier indices (None if not tilt series)
+    - particle_inliers: Array of particle-level inlier indices (None if not tilt series)
     """
-    print(f"Contrast-based outlier detection for zdim={zdim_key}")
-    # print(f"Input contrasts type: {type(contrasts)}, shape: {contrasts.shape if hasattr(contrasts, 'shape') else len(contrasts)}")
+    logger.info(f"Contrast-based outlier detection for zdim={zdim_key}")
     
     input_args = pipeline_output.get('input_args')
     starfile = getattr(input_args, 'particles', None)
@@ -365,18 +361,7 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
     if not isinstance(contrasts, np.ndarray):
         contrasts = np.array(contrasts, dtype=float)
     
-    n_images = len(contrasts)
     contrast_array = contrasts
-    
-    print(f"Final contrast array shape: {contrast_array.shape}")
-    print(f"Number of images: {n_images}")
-    
-    
-    print(f"Contrast-based outlier detection for {n_images} images")
-    print(f"Low contrast threshold: {low_contrast_threshold}")
-    print(f"High contrast threshold: {high_contrast_threshold}")
-    print(f"Particle bad fraction threshold: {particle_bad_fraction_threshold}")
-    print(f"Micrograph bad fraction threshold: {micrograph_bad_fraction_threshold}")
     
     # Parse starfile for grouping information
     # Check if this is a tilt-series dataset by looking at pipeline input arguments
@@ -393,29 +378,44 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
     n_high_contrast = np.sum(high_contrast_outliers)
     n_individual_outliers = np.sum(individual_outliers)
     
-    print(f"\nIndividual image outlier detection:")
-    print(f"  Low contrast outliers (< {low_contrast_threshold}): {n_low_contrast} ({n_low_contrast/n_images*100:.1f}%)")
-    print(f"  High contrast outliers (> {high_contrast_threshold}): {n_high_contrast} ({n_high_contrast/n_images*100:.1f}%)")
-    print(f"  Total individual outliers: {n_individual_outliers} ({n_individual_outliers/n_images*100:.1f}%)")
+    original_image_indices = np.concatenate(pipeline_output.get('halfsets'))
+    original_particle_indices = np.concatenate(pipeline_output.get('particles_halfsets'))
+    n_images = len(original_image_indices)
+
+
+    logger.info(f"Final contrast array shape: {contrast_array.shape}")
+    logger.info(f"Number of images: {n_images}")
     
-    halfsets = np.concatenate(pipeline_output.get('halfsets'))
-    particles_halfsets = np.concatenate(pipeline_output.get('particles_halfsets'))
+    logger.info(f"Contrast-based outlier detection for {n_images} images")
+    logger.info(f"Low contrast threshold: {low_contrast_threshold}")
+    logger.info(f"High contrast threshold: {high_contrast_threshold}")
+    logger.info(f"Particle bad fraction threshold: {particle_bad_fraction_threshold}")
+    logger.info(f"Micrograph bad fraction threshold: {micrograph_bad_fraction_threshold}")
+
+
+    logger.info(f"\nIndividual image outlier detection:")
+    logger.info(f"  Low contrast outliers (< {low_contrast_threshold}): {n_low_contrast} ({n_low_contrast/n_images*100:.1f}%)")
+    logger.info(f"  High contrast outliers (> {high_contrast_threshold}): {n_high_contrast} ({n_high_contrast/n_images*100:.1f}%)")
+    logger.info(f"  Total individual outliers: {n_individual_outliers} ({n_individual_outliers/n_images*100:.1f}%)")
+    
 
 
     outliers_ind = np.where(individual_outliers)[0]
     inliers_ind = np.where(~individual_outliers)[0]
 
+    # Initialize return values
+    image_outliers = original_image_indices[outliers_ind]
+    image_inliers = original_image_indices[inliers_ind]
+    particle_outliers = None
+    particle_inliers = None
 
     if not is_tilt_series:
-        outliers_ind_mapped_back_to_original_indices = halfsets[outliers_ind]
-        inliers_ind_mapped_back_to_original_indices = halfsets[inliers_ind]
-
-        return outliers_ind_mapped_back_to_original_indices, inliers_ind_mapped_back_to_original_indices, None, None
+        return image_outliers, image_inliers, particle_outliers, particle_inliers
 
     # If the dataset is a tilt-series or the contrast is shared across tilts, skip the grouping based on particle or micrograph
     if is_tilt_series and shared_contrast_across_tilts:
-        outliers_ind_mapped_back_to_original_indices = particles_halfsets[outliers_ind]
-        inliers_ind_mapped_back_to_original_indices = particles_halfsets[inliers_ind]
+        outliers_ind_mapped_back_to_original_indices = original_particle_indices[outliers_ind]
+        inliers_ind_mapped_back_to_original_indices = original_particle_indices[inliers_ind]
 
         return outliers_ind_mapped_back_to_original_indices, inliers_ind_mapped_back_to_original_indices, None, None
 
@@ -425,13 +425,12 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
     outliers_image_identified_by_particle = np.zeros(n_images, dtype=bool)
     # Particle-based outlier detection
     if particle_to_tilts is not None:
-        print(f"\nParticle-based outlier detection:")
-        print(f"Contrast array size: {len(contrast_array)}")
-        print(f"Total of particles: {len(particle_to_tilts)}, of which {particles_halfsets.size} were used in pipeline")
+        logger.info(f"\nParticle-based outlier detection:")
+        logger.info(f"Total of particles: {len(particle_to_tilts)}, of which {original_particle_indices.size} were used in pipeline")
         
         particle_outliers = []
         particle_inliers = []
-        tilts_mapped_to_particles = [tilts_to_particle[tilt] for tilt in halfsets]
+        tilts_mapped_to_particles = [tilts_to_particle[tilt] for tilt in original_image_indices]
 
         # Get unique particles and their inverse mapping
         unique_particles, inverse_particles = np.unique(tilts_mapped_to_particles, return_inverse=True)
@@ -448,29 +447,38 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
             particle_tilt_indices = np.where(particle_indices)[0]
             
             if bad_fraction >= particle_bad_fraction_threshold:
-                print(f"  Particle {particle}: {len(particle_tilt_indices)} images, {bad_fraction*100:.1f}% bad -> REJECTING ENTIRE PARTICLE")
                 particle_outliers.append(particle)
                 outliers_image_identified_by_particle[particle_indices] = True
             else:
-                print(f"  Particle {particle}: {len(particle_tilt_indices)} images, {bad_fraction*100:.1f}% bad -> KEEPING")
                 particle_inliers.append(particle)
 
-        print(f"  Total particle-based outliers: {len(particle_outliers)} ({len(particle_outliers)/n_images*100:.1f}%)")
+        logger.info(f"  Total particle-based outliers: {len(particle_outliers)} ({len(particle_outliers)/(len(particle_outliers) + len(particle_inliers))*100:.1f}% of particles)")
+        logger.info(f"  Corresponding to: {np.sum(outliers_image_identified_by_particle)} ({np.sum(outliers_image_identified_by_particle)/n_images*100:.1f}% of images)")
 
 
     outliers_image_identified_by_micrograph = np.zeros(n_images, dtype=bool)
 
     # Micrograph-based outlier detection
     if micrographtilt_to_tilts is not None:
-        print(f"\nMicrograph-based outlier detection:")
-        print(f"Contrast array size: {len(contrast_array)}")
-        print(f"Number of micrographs: {len(micrographtilt_to_tilts)}")
+        logger.info(f"\nMicrograph-based outlier detection:")
+        logger.info(f"Number of micrographs: {len(micrographtilt_to_tilts)}")
+        if len(micrographtilt_to_tilts) > 0:
+            micrograph_sizes = [micrograph.size for micrograph in micrographtilt_to_tilts]
+            logger.info(f"Average number of images per micrograph: {np.mean(micrograph_sizes):.1f}")
+            logger.info(f"Max number of images per micrograph: {np.max(micrograph_sizes)}")
+            logger.info(f"Min number of images per micrograph: {np.min(micrograph_sizes)}")
+            logger.info(f"Median number of images per micrograph: {np.median(micrograph_sizes):.1f}")
+            logger.info(f"Number of micrographs with less than 10 images: {np.sum([size < 10 for size in micrograph_sizes])}")
+            logger.info(f"Number of micrographs with 1 images: {np.sum([size ==1 for size in micrograph_sizes])}")
+
+        else:
+            logger.info("No micrographs found in the dataset")
         
         micrograph_outliers = []
         micrograph_inliers = []
         
         # Map tilts to micrographs
-        tilts_mapped_to_micrographs = [tilts_to_micrographtilt[tilt] for tilt in halfsets]
+        tilts_mapped_to_micrographs = [tilts_to_micrographtilt[tilt] for tilt in original_image_indices]
         
         # Get unique micrographs and their inverse mapping
         unique_micrographs, inverse_micrographs = np.unique(tilts_mapped_to_micrographs, return_inverse=True)
@@ -487,37 +495,36 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
             micrograph_tilt_indices = np.where(micrograph_indices)[0]
             
             if bad_fraction >= micrograph_bad_fraction_threshold:
-                print(f"  Micrograph {micrograph}: {len(micrograph_tilt_indices)} images, {bad_fraction*100:.1f}% bad -> REJECTING ENTIRE MICROGRAPH")
-                micrograph_outliers.extend(micrograph_tilt_indices)
+                # print(f"  Micrograph {micrograph}: {len(micrograph_tilt_indices)} images, {bad_fraction*100:.1f}% bad -> REJECTING ENTIRE MICROGRAPH")
+                micrograph_outliers.append(micrograph)
                 outliers_image_identified_by_micrograph[micrograph_indices] = True
             else:
-                print(f"  Micrograph {micrograph}: {len(micrograph_tilt_indices)} images, {bad_fraction*100:.1f}% bad -> KEEPING")
+                # print(f"  Micrograph {micrograph}: {len(micrograph_tilt_indices)} images, {bad_fraction*100:.1f}% bad -> KEEPING")
                 micrograph_inliers.append(micrograph)
-        
-        print(f"  Total micrograph-based outliers: {len(micrograph_outliers)} ({len(micrograph_outliers)/n_images*100:.1f}%)")
 
-
+        logger.info(f"  Total micrograph-based outliers: {len(micrograph_outliers)} ({len(micrograph_outliers)/(len(micrograph_outliers) + len(micrograph_inliers))*100:.1f}%) of micrographs")
+        logger.info(f"  Corresponding to: {np.sum(outliers_image_identified_by_micrograph)} ({np.sum(outliers_image_identified_by_micrograph)/n_images*100:.1f}% of images)")
     # Print overlap statistics between methods
     if (particle_to_tilts is not None) or (micrographtilt_to_tilts is not None):
-        print(f"\nOutlier detection method overlap:")
+        logger.info(f"\nOutlier detection method overlap:")
         individual_count = np.sum(individual_outliers)
         particle_count = np.sum(outliers_image_identified_by_particle)
         micrograph_count = np.sum(outliers_image_identified_by_micrograph)
         
-        print(f"  Individual outliers: {individual_count} ({individual_count/n_images*100:.1f}%)")
-        print(f"  Particle outliers: {particle_count} ({particle_count/n_images*100:.1f}%)")
-        print(f"  Micrograph outliers: {micrograph_count} ({micrograph_count/n_images*100:.1f}%)")
+        logger.info(f"  Individual outliers: {individual_count} ({individual_count/n_images*100:.1f}%)")
+        logger.info(f"  Particle outliers: {particle_count} ({particle_count/n_images*100:.1f}%)")
+        logger.info(f"  Micrograph outliers: {micrograph_count} ({micrograph_count/n_images*100:.1f}%)")
         
         # Calculate overlaps
         if individual_count > 0 and particle_count > 0:
             overlap = np.sum(individual_outliers & outliers_image_identified_by_particle)
-            print(f"  Individual-Particle overlap: {overlap} ({overlap/individual_count*100:.1f}% of individual)")
+            logger.info(f"  Individual-Particle overlap: {overlap} ({overlap/individual_count*100:.1f}% of individual)")
         if individual_count > 0 and micrograph_count > 0:
             overlap = np.sum(individual_outliers & outliers_image_identified_by_micrograph)
-            print(f"  Individual-Micrograph overlap: {overlap} ({overlap/individual_count*100:.1f}% of individual)")
+            logger.info(f"  Individual-Micrograph overlap: {overlap} ({overlap/individual_count*100:.1f}% of individual)")
         if particle_count > 0 and micrograph_count > 0:
             overlap = np.sum(outliers_image_identified_by_particle & outliers_image_identified_by_micrograph)
-            print(f"  Particle-Micrograph overlap: {overlap} ({overlap/particle_count*100:.1f}% of particle)")
+            logger.info(f"  Particle-Micrograph overlap: {overlap} ({overlap/np.sum(outliers_image_identified_by_micrograph)*100:.1f}% of micrographs)")
     
     # Create plots if output directory is provided
     if output_dir is not None:
@@ -579,59 +586,162 @@ Individual outliers: {n_individual_outliers} ({n_individual_outliers/n_images*10
             plt.savefig(os.path.join(output_dir, 'median_contrast_distributions.png'), dpi=300, bbox_inches='tight')
             plt.close()
         
-        # Save outlier indices
-        outlier_indices = np.where(individual_outliers)[0]
-        inlier_indices = np.where(~individual_outliers)[0]
-        
-        # Get halfsets from pipeline output for proper index mapping
-        particles_halfsets = pipeline_output.get('particles_halfsets')
-        image_halfsets = pipeline_output.get('halfsets')
-        is_tilt_series = pipeline_output.get('input_args').tilt_series
-        
-        # Save indices using the unified function
-        print(f"  Image-level outliers: {len(outlier_indices)} images")
-        print(f"  Image-level inliers: {len(inlier_indices)} images")
+        logger.info(f"  Image-level outliers: {len(image_outliers)} images")
+        logger.info(f"  Image-level inliers: {len(image_inliers)} images")
+        if particle_outliers is not None:
+            logger.info(f"  Particle-level outliers: {len(particle_outliers)} particles")
+        if particle_inliers is not None:
+            logger.info(f"  Particle-level inliers: {len(particle_inliers)} particles")
     
-    print(f"\nResults saved to: {output_dir}")
+    logger.info(f"\nResults saved to: {output_dir}")
     
-    combined_outliers = individual_outliers | outliers_image_identified_by_particle | outliers_image_identified_by_micrograph
-    save_outlier_image_indices(combined_outliers, halfsets, False, output_dir, 'contrast_based')
 
-    # Create results dictionary for return
-    results = {
-        'individual_outliers': individual_outliers,
-        'outliers_image_identified_by_particle': outliers_image_identified_by_particle,
-        'outliers_image_identified_by_micrograph': outliers_image_identified_by_micrograph,
-        'final_outliers': individual_outliers,  # Use individual outliers as final result
-        'statistics': {
-            'n_images': n_images,
-            'n_individual_outliers': n_individual_outliers,
-            'n_final_outliers': n_individual_outliers,
-            'n_particle_outliers': len(particle_outliers),
-            'n_micrograph_outliers': len(micrograph_outliers)
-        }
+    combined_image_outliers = (individual_outliers | outliers_image_identified_by_particle | outliers_image_identified_by_micrograph)
+    outliers_ind = np.where(combined_image_outliers)[0]
+    inliers_ind = np.where(~combined_image_outliers)[0]
 
-    }
-
-    return results
+    # Initialize return values
+    image_outliers = original_image_indices[outliers_ind]
+    image_inliers = original_image_indices[inliers_ind]
+    # import pdb; pdb.set_trace()
 
 
-def save_outlier_image_indices(classification, original_indices, is_tilt_series, output_dir, name):
-    outlier_indices = np.where(classification)[0]
-    inlier_indices = np.where(~classification)[0]
+    return image_outliers, image_inliers, particle_outliers, particle_inliers
 
-    outlier_indices_mapped_back_to_original_indices = original_indices[outlier_indices]
-    inlier_indices_mapped_back_to_original_indices = original_indices[inlier_indices]
 
-    if is_tilt_series:
-        logger.info(f"Saving {name} tilt indices outliers and inliers for tilt series to {output_dir}")
-        pickle.dump(outlier_indices_mapped_back_to_original_indices, open(os.path.join(output_dir, f"{name}_tilt_series_outliers.pkl"), "wb"))
-        pickle.dump(inlier_indices_mapped_back_to_original_indices, open(os.path.join(output_dir, f"{name}_tilt_series_inliers.pkl"), "wb"))
-    else:
-        logger.info(f"Saving {name} image indices outliers and inliers for regular dataset to {output_dir}")
-        pickle.dump(outlier_indices_mapped_back_to_original_indices, open(os.path.join(output_dir, f"{name}_outliers.pkl"), "wb"))
-        pickle.dump(inlier_indices_mapped_back_to_original_indices, open(os.path.join(output_dir, f"{name}_inliers.pkl"), "wb"))
-    return
+# def save_outlier_image_indices(classification, original_indices, is_tilt_series, output_dir, name):
+#     outlier_indices = np.where(classification)[0]
+#     inlier_indices = np.where(~classification)[0]
+
+#     outlier_indices_mapped_back_to_original_indices = original_indices[outlier_indices]
+#     inlier_indices_mapped_back_to_original_indices = original_indices[inlier_indices]
+
+#     if is_tilt_series:
+#         logger.info(f"Saving {name} tilt indices outliers and inliers for tilt series to {output_dir}")
+#         pickle.dump(outlier_indices_mapped_back_to_original_indices, open(os.path.join(output_dir, f"{name}_tilt_series_outliers.pkl"), "wb"))
+#         pickle.dump(inlier_indices_mapped_back_to_original_indices, open(os.path.join(output_dir, f"{name}_tilt_series_inliers.pkl"), "wb"))
+#     else:
+#         logger.info(f"Saving {name} image indices outliers and inliers for regular dataset to {output_dir}")
+#         pickle.dump(outlier_indices_mapped_back_to_original_indices, open(os.path.join(output_dir, f"{name}_outliers.pkl"), "wb"))
+#         pickle.dump(inlier_indices_mapped_back_to_original_indices, open(os.path.join(output_dir, f"{name}_inliers.pkl"), "wb"))
+#     return
+
+def create_particle_outlier_visualization(all_particle_outliers, method_names, output_dir, zdim_key, total_particles):
+    """
+    Create visualization of particle-level outliers from different methods.
+    
+    Parameters:
+    - all_particle_outliers: List of particle outlier arrays from different methods
+    - method_names: List of method names
+    - output_dir: Output directory for saving plots
+    - zdim_key: Dimension key for embeddings
+    - total_particles: Total number of particles
+    """
+    if len(all_particle_outliers) == 0:
+        return
+    
+    logger.info("Creating particle outlier visualization...")
+    
+    # Create overlap matrix visualization for particle-level outliers
+    n_methods = len(method_names)
+    overlap_matrix = np.zeros((n_methods, n_methods), dtype=int)
+    
+    for i in range(n_methods):
+        for j in range(n_methods):
+            if i == j:
+                # Diagonal: total number of outliers for each method
+                overlap_matrix[i, j] = len(all_particle_outliers[i])
+            else:
+                # Off-diagonal: overlap between methods
+                overlap_matrix[i, j] = len(np.intersect1d(all_particle_outliers[i], all_particle_outliers[j]))
+    
+    # Create the visualization
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    
+    # Plot 1: Overlap matrix as heatmap
+    im = ax1.imshow(overlap_matrix, cmap='Blues', aspect='auto')
+    ax1.set_xticks(range(n_methods))
+    ax1.set_yticks(range(n_methods))
+    ax1.set_xticklabels(method_names)
+    ax1.set_yticklabels(method_names)
+    ax1.set_title('Particle-Level Outlier Detection Method Overlap Matrix\n(Number of particles)')
+    
+    # Add text annotations to the heatmap
+    for i in range(n_methods):
+        for j in range(n_methods):
+            text = ax1.text(j, i, str(overlap_matrix[i, j]), 
+                          ha="center", va="center", color="black", fontweight='bold')
+    
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax1)
+    cbar.set_label('Number of Particles')
+    
+    # Plot 2: Percentage overlap matrix
+    percentage_matrix = np.zeros((n_methods, n_methods))
+    for i in range(n_methods):
+        for j in range(n_methods):
+            if i == j:
+                # Diagonal: percentage of total particles
+                percentage_matrix[i, j] = (overlap_matrix[i, j] / total_particles) * 100
+            else:
+                # Off-diagonal: percentage overlap relative to method i
+                if overlap_matrix[i, i] > 0:
+                    percentage_matrix[i, j] = (overlap_matrix[i, j] / overlap_matrix[i, i]) * 100
+                else:
+                    percentage_matrix[i, j] = 0
+            
+    im2 = ax2.imshow(percentage_matrix, cmap='Reds', aspect='auto')
+    ax2.set_xticks(range(n_methods))
+    ax2.set_yticks(range(n_methods))
+    ax2.set_xticklabels(method_names)
+    ax2.set_yticklabels(method_names)
+    ax2.set_title('Particle-Level Outlier Detection Method Overlap Matrix\n(Percentage)')
+    
+    # Add text annotations to the percentage heatmap
+    for i in range(n_methods):
+        for j in range(n_methods):
+            if i == j:
+                # Diagonal: percentage of total particles
+                text = ax2.text(j, i, f'{percentage_matrix[i, j]:.1f}%\n({overlap_matrix[i, j]})', 
+                              ha="center", va="center", color="black", fontweight='bold')
+            else:
+                # Off-diagonal: percentage overlap
+                if percentage_matrix[i, j] > 0:
+                    text = ax2.text(j, i, f'{percentage_matrix[i, j]:.1f}%\n({overlap_matrix[i, j]})', 
+                                  ha="center", va="center", color="black", fontweight='bold')
+                else:
+                    text = ax2.text(j, i, '0%\n(0)', 
+                                  ha="center", va="center", color="black", fontweight='bold')
+            
+    # Add colorbar
+    cbar2 = plt.colorbar(im2, ax=ax2)
+    cbar2.set_label('Percentage')
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'particle_outlier_method_overlap_matrix.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # Create detailed overlap analysis for particles
+    overlap_analysis_file = os.path.join(output_dir, 'particle_outlier_method_overlap_analysis.txt')
+    with open(overlap_analysis_file, 'w') as f:
+        f.write("Particle-Level Outlier Detection Method Overlap Analysis\n")
+        f.write("======================================================\n\n")
+        f.write(f"Total particles analyzed: {total_particles}\n\n")
+        
+        for i, method in enumerate(method_names):
+            f.write(f"{method} Particle Outliers:\n")
+            f.write(f"  Total: {overlap_matrix[i, i]} ({percentage_matrix[i, i]:.1f}% of total)\n")
+            
+            for j, other_method in enumerate(method_names):
+                if i != j:
+                    if overlap_matrix[i, i] > 0:
+                        overlap_pct = (overlap_matrix[i, j] / overlap_matrix[i, i]) * 100
+                        f.write(f"  Overlap with {other_method}: {overlap_matrix[i, j]} ({overlap_pct:.1f}% of {method} outliers)\n")
+                    else:
+                        f.write(f"  Overlap with {other_method}: 0 (0% of {method} outliers)\n")
+            f.write("\n")
+    
+    logger.info(f"Particle outlier visualization saved to: {output_dir}")
 
 def create_overlap_matrix_visualization(all_outliers, method_names, output_dir, zdim_key, total_particles):
     """
@@ -772,6 +882,7 @@ def main():
     input_args = pipeline_output.get('input_args')
     is_tilt_series = getattr(input_args, 'tilt_series', False)
     is_shared_contrast = getattr(input_args, 'shared_contrast', False)
+    starfile = getattr(input_args, 'particles', None)
 
     # Get both types of halfsets
     particles_halfsets = pipeline_output.get('particles_halfsets')
@@ -790,15 +901,6 @@ def main():
     logger.info(f"Particles halfsets: {len(particles_halfsets[0])} + {len(particles_halfsets[1])} = {len(particles_halfsets[0]) + len(particles_halfsets[1])} particles")
     logger.info(f"Image halfsets: {len(image_halfsets[0])} + {len(image_halfsets[1])} = {len(image_halfsets[0]) + len(image_halfsets[1])} images")
     
-    # Validate that outlier indices are within bounds
-    def validate_outlier_indices(outliers, method_name):
-        if outliers is not None and len(outliers) > 0:
-            max_index = np.max(outliers)
-            if max_index >= total_particles:
-                error_msg = f"{method_name}: Maximum outlier index ({max_index}) exceeds total particles ({total_particles}). This indicates a bug in the outlier detection logic."
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-        return outliers
     
     # --- Method 1: Anomaly Detection (UMAP-based) ---
     logger.info("Running anomaly detection...")
@@ -821,101 +923,51 @@ def main():
         anomaly_outliers = pickle.load(f)
     
     # Validate anomaly detection results
-    anomaly_inliers = validate_outlier_indices(anomaly_inliers, "Anomaly Detection (inliers)")
-    anomaly_outliers = validate_outlier_indices(anomaly_outliers, "Anomaly Detection (outliers)")
     
     logger.info(f"Anomaly detection completed. Found {len(anomaly_inliers)} inliers and {len(anomaly_outliers)} particle outliers.")
     
-    # # Save pipeline-compatible indices if requested
-    # if args.save_pipeline_indices:
-    #     logger.info("Saving anomaly detection pipeline-compatible indices...")
-    #     save_outlier_indices(anomaly_inliers, anomaly_outliers, anomaly_output_dir, zdim_key, "anomaly_detection",
-    #                        particles_halfsets, image_halfsets, is_tilt_series)
-    
     # --- Method 2: Contrast-based Outlier Detection ---
     contrasts = pipeline_output.get('contrasts')
-    contrast_inliers = None
-    contrast_outliers = None
+    contrast_image_inliers = None
+    contrast_image_outliers = None
+    contrast_particle_inliers = None
+    contrast_particle_outliers = None
     
+    if contrasts is not None and zdim_key in contrasts:
         # Extract contrast values for the specific zdim_key
+        contrast_values = contrasts[zdim_key]
+        logger.info(f"Found contrast values for zdim={zdim_key}, shape: {contrast_values.shape}")
+        
+        # Load starfile path and options from pipeline input_args
+        contrast_output_dir = os.path.join(args.output_dir, 'contrast_based')
+        os.makedirs(contrast_output_dir, exist_ok=True)
+        
+        image_outliers, image_inliers, particle_outliers, particle_inliers = outlier_detection_from_contrast(
+            pipeline_output=pipeline_output,
+            zdim_key=zdim_key,
+            low_contrast_threshold=args.low_contrast_threshold,
+            high_contrast_threshold=args.high_contrast_threshold,
+            max_contrast=args.max_contrast,
+            particle_bad_fraction_threshold=args.particle_bad_fraction_threshold,
+            micrograph_bad_fraction_threshold=args.micrograph_bad_fraction_threshold,
+            output_dir=contrast_output_dir,
+        )
+        
+        # Store results
+        contrast_image_inliers = image_inliers
+        contrast_image_outliers = image_outliers
+        contrast_particle_inliers = particle_inliers
+        contrast_particle_outliers = particle_outliers
 
-    contrast_values = contrasts[zdim_key]
-    logger.info(f"Found contrast values for zdim={zdim_key}, shape: {contrast_values.shape}")
-    
-    # Load starfile path and options from pipeline input_args
-    # logger.info(f"Using starfile: {starfile} (datadir={datadir}, strip_prefix={strip_prefix})")
-    contrast_output_dir = os.path.join(args.output_dir, 'contrast_based')
-    os.makedirs(contrast_output_dir, exist_ok=True)
-    
-    outlier_detection_from_contrast(
-        pipeline_output=pipeline_output,
-        zdim_key=zdim_key,
-        low_contrast_threshold=args.low_contrast_threshold,
-        high_contrast_threshold=args.high_contrast_threshold,
-        max_contrast=args.max_contrast,
-        particle_bad_fraction_threshold=args.particle_bad_fraction_threshold,
-        micrograph_bad_fraction_threshold=args.micrograph_bad_fraction_threshold,
-        output_dir=contrast_output_dir,
-    )
-    
-    # Load contrast-based results
-    contrast_inliers_file = os.path.join(contrast_output_dir, 'inlier_indices.pkl')
-    contrast_outliers_file = os.path.join(contrast_output_dir, 'outlier_indices.pkl')
-    
-    if os.path.exists(contrast_inliers_file) and os.path.exists(contrast_outliers_file):
-        with open(contrast_inliers_file, 'rb') as f:
-            contrast_image_inliers = pickle.load(f)
-        with open(contrast_outliers_file, 'rb') as f:
-            contrast_image_outliers = pickle.load(f)
-        
-        # Validate contrast detection results (image-level)
-        contrast_image_inliers = validate_outlier_indices(contrast_image_inliers, "Contrast-based (image inliers)")
-        contrast_image_outliers = validate_outlier_indices(contrast_image_outliers, "Contrast-based (image outliers)")
-        
         logger.info(f"Contrast-based outlier detection completed. Found {len(contrast_image_inliers)} image inliers and {len(contrast_image_outliers)} image outliers.")
         
-        # For tilt series, also load particle-level indices if they exist
-        if is_tilt_series:
-            particle_inliers_file = os.path.join(contrast_output_dir, 'particle_inlier_indices.pkl')
-            particle_outliers_file = os.path.join(contrast_output_dir, 'particle_outlier_indices.pkl')
-            
-            if os.path.exists(particle_inliers_file) and os.path.exists(particle_outliers_file):
-                with open(particle_inliers_file, 'rb') as f:
-                    contrast_particle_inliers = pickle.load(f)
-                with open(particle_outliers_file, 'rb') as f:
-                    contrast_particle_outliers = pickle.load(f)
-                
-                # Validate particle-level results
-                contrast_particle_inliers = validate_outlier_indices(contrast_particle_inliers, "Contrast-based (particle inliers)")
-                contrast_particle_outliers = validate_outlier_indices(contrast_particle_outliers, "Contrast-based (particle outliers)")
-                
-                logger.info(f"Loaded particle-level contrast results: {len(contrast_particle_inliers)} particle inliers and {len(contrast_particle_outliers)} particle outliers")
-                
-                # Use particle-level indices for combined results
-                contrast_inliers = contrast_particle_inliers
-                contrast_outliers = contrast_particle_outliers
-            else:
-                logger.error(f"Particle-level contrast indices not found for tilt-series dataset. Expected files:")
-                logger.error(f"  {particle_inliers_file}")
-                logger.error(f"  {particle_outliers_file}")
-                logger.error("Contrast detection may have failed or the dataset may not be properly configured for tilt-series.")
-                sys.exit(1)
-        else:
-            # For regular datasets, image indices = particle indices
-            contrast_inliers = contrast_image_inliers
-            contrast_outliers = contrast_image_outliers
-        
-        # Save both image and particle indices if requested
-        if args.save_pipeline_indices:
-            logger.info("Saving contrast-based pipeline indices...")
-            save_outlier_indices(contrast_image_inliers, contrast_image_outliers, contrast_output_dir, zdim_key, "contrast_based",
-                               particles_halfsets, image_halfsets, is_tilt_series)
     else:
-        logger.error(f"Contrast-based results not found. Expected files:")
-        logger.error(f"  {contrast_inliers_file}")
-        logger.error(f"  {contrast_outliers_file}")
-        logger.error("Contrast detection may have failed.")
-        sys.exit(1)
+        contrast_image_inliers = None
+        contrast_image_outliers = None
+        contrast_particle_inliers = None
+        contrast_particle_outliers = None
+
+        logger.warning("No contrast data available for contrast-based outlier detection.")
     
     # --- Method 3: Junk Particle Detection ---
     junk_inliers = None
@@ -937,7 +989,7 @@ def main():
             os.makedirs(junk_output_dir, exist_ok=True)
             
             # Run junk detection
-            junk_particle_detection.junk_particle_detection_with_args(
+            junk_particle_detection.junk_particle_detection(
                 recovar_result_dir=args.pipeline_output_dir,
                 output_folder=junk_output_dir,
                 zdim=args.zdim_key,
@@ -958,167 +1010,164 @@ def main():
             )
             
             # Load junk detection results
-            junk_inliers_file = os.path.join(junk_output_dir, 'inliers_pipeline_indices.pkl')
-            junk_outliers_file = os.path.join(junk_output_dir, 'outliers_pipeline_indices.pkl')
+            junk_outliers_file = os.path.join(junk_output_dir, f'junk_indices_{zdim_key}.pkl')
+            junk_inliers_file = os.path.join(junk_output_dir, f'good_indices_{zdim_key}.pkl')
             
-            if os.path.exists(junk_inliers_file) and os.path.exists(junk_outliers_file):
-                with open(junk_inliers_file, 'rb') as f:
-                    junk_inliers = pickle.load(f)
+            if os.path.exists(junk_outliers_file):
                 with open(junk_outliers_file, 'rb') as f:
                     junk_outliers = pickle.load(f)
-                
-                # Validate junk detection results
-                junk_inliers = validate_outlier_indices(junk_inliers, "Junk Detection (inliers)")
-                junk_outliers = validate_outlier_indices(junk_outliers, "Junk Detection (outliers)")
-                
-                logger.info(f"Junk particle detection completed. Found {len(junk_inliers)} inliers and {len(junk_outliers)} outliers.")
             else:
-                logger.error(f"Junk detection results not found. Expected files:")
-                logger.error(f"  {junk_inliers_file}")
-                logger.error(f"  {junk_outliers_file}")
-                logger.error("Junk detection may have failed.")
-                sys.exit(1)
+                logger.warning(f"Junk outliers file not found: {junk_outliers_file}")
+                raise FileNotFoundError(f"Junk outliers file not found: {junk_outliers_file}")
+                
+            if os.path.exists(junk_inliers_file):
+                with open(junk_inliers_file, 'rb') as f:
+                    junk_inliers = pickle.load(f)
+            else:
+                logger.warning(f"Junk inliers file not found: {junk_inliers_file}")
+                raise FileNotFoundError(f"Junk inliers file not found: {junk_inliers_file}")
+
     
     # --- Combine Results from All Methods ---
     logger.info("Combining results from all methods...")
     combined_output_dir = os.path.join(args.output_dir, 'combined_results')
     os.makedirs(combined_output_dir, exist_ok=True)
     
-    # Collect all outlier indices
-    all_outliers = []
+    # Collect all particle-level outlier indices (for visualization)
+    all_particle_outliers = []
     method_names = []
     
     if anomaly_outliers is not None:
-        all_outliers.append(anomaly_outliers)
+        all_particle_outliers.append(anomaly_outliers)
         method_names.append("Anomaly Detection")
     
-    if contrast_outliers is not None:
-        all_outliers.append(contrast_outliers)
+    if contrast_particle_outliers is not None:
+        all_particle_outliers.append(contrast_particle_outliers)
         method_names.append("Contrast-based")
     
     if junk_outliers is not None:
-        all_outliers.append(junk_outliers)
+        all_particle_outliers.append(junk_outliers)
         method_names.append("Junk Detection")
     
-    if len(all_outliers) > 0:
-        # Combine results: particles are considered outliers if they are outliers in ANY method
-        combined_outliers = all_outliers[0]
-        for outliers in all_outliers[1:]:
-            combined_outliers = np.union1d(combined_outliers, outliers)
-        combined_inliers = np.setdiff1d(np.arange(total_particles), combined_outliers)
+    original_particle_indices = np.concatenate(pipeline_output.get('particles_halfsets'))
+    original_image_indices = np.concatenate(pipeline_output.get('halfsets'))
+    
+    combined_particle_outliers = all_particle_outliers[0]
+    for outliers in all_particle_outliers[1:]:
+        combined_particle_outliers = np.union1d(combined_particle_outliers, outliers)
+    combined_particle_inliers = np.setdiff1d(original_particle_indices , combined_particle_outliers)
+
+
+    # Create particle-level visualization if we have particle outliers
+    if len(all_particle_outliers) > 0:
+        create_particle_outlier_visualization(all_particle_outliers, method_names, combined_output_dir, zdim_key, total_particles)
+    
+    # Collect all image-level outlier indices (for final combination)
+    all_image_outliers = []
+    
+    if anomaly_outliers is not None:
+        # Convert particle outliers to image outliers for anomaly detection
+        if is_tilt_series:
+            # For tilt series, map particle outliers to image outliers
+            anomaly_image_outliers = map_particle_original_indexing_to_images_original_indexing(anomaly_outliers, original_image_indices, starfile)
+        else:
+            # For regular datasets, particle outliers = image outliers
+            anomaly_image_outliers = anomaly_outliers
+        all_image_outliers.append(anomaly_image_outliers)
+    
+    if contrast_image_outliers is not None:
+        all_image_outliers.append(contrast_image_outliers)
+    
+
+
+    if junk_outliers is not None:
+        # Convert particle outliers to image outliers for junk detection
+        if is_tilt_series:
+            # For tilt series, map particle outliers to image outliers
+            junk_image_outliers = map_particle_original_indexing_to_images_original_indexing(junk_outliers, original_image_indices, starfile)
+        else:
+            # For regular datasets, particle outliers = image outliers
+            junk_image_outliers = junk_outliers
+        all_image_outliers.append(junk_image_outliers)
+
+
+    original_image_indices = (np.concatenate(pipeline_output.get('halfsets')))
+
+    if len(all_image_outliers) > 0:
+        # Combine results: images are considered outliers if they are outliers in ANY method
+        combined_image_outliers = all_image_outliers[0]
+        for outliers in all_image_outliers[1:]:
+            combined_image_outliers = np.union1d(combined_image_outliers, outliers)
+        combined_image_inliers = np.setdiff1d(original_image_indices , combined_image_outliers)
+
+        # Save image-level indices (for --ind)
+        image_outliers_file = os.path.join(combined_output_dir, f'combined_image_outliers_{zdim_key}.pkl')
+        image_inliers_file = os.path.join(combined_output_dir, f'combined_image_inliers_{zdim_key}.pkl')
         
-        # Save combined results
-        if args.save_pipeline_indices:
-            save_outlier_indices(combined_inliers, combined_outliers, combined_output_dir, zdim_key, "combined",
-                               particles_halfsets, image_halfsets, is_tilt_series)
+        with open(image_outliers_file, 'wb') as f:
+            pickle.dump(combined_image_outliers, f)
+        with open(image_inliers_file, 'wb') as f:
+            pickle.dump(combined_image_inliers, f)
         
-        # Save detailed breakdown
+        # Save particle-level indices (for --tilt-ind) if this is a tilt series
+        if is_tilt_series:
+            particle_outliers_file = os.path.join(combined_output_dir, f'combined_particle_outliers_{zdim_key}.pkl')
+            particle_inliers_file = os.path.join(combined_output_dir, f'combined_particle_inliers_{zdim_key}.pkl')
+            
+            with open(particle_outliers_file, 'wb') as f:
+                pickle.dump(combined_particle_outliers, f)
+            with open(particle_inliers_file, 'wb') as f:
+                pickle.dump(combined_particle_inliers, f)
+        
+        # Save simple breakdown
         breakdown_file = os.path.join(combined_output_dir, 'detection_breakdown.txt')
         with open(breakdown_file, 'w') as f:
-            f.write("Combined Outlier Detection Results\n")
-            f.write("==================================\n\n")
+            f.write(f"Combined Outlier Detection Results\n")
             f.write(f"Total particles: {total_particles}\n")
-            f.write(f"Combined outliers: {len(combined_outliers)} ({len(combined_outliers)/total_particles*100:.1f}%)\n")
-            f.write(f"Combined inliers: {len(combined_inliers)} ({len(combined_inliers)/total_particles*100:.1f}%)\n\n")
-            
-            f.write("Individual Method Results:\n")
-            f.write("-------------------------\n")
-            
-            for i, (outliers, method) in enumerate(zip(all_outliers, method_names)):
-                f.write(f"{method}:\n")
-                f.write(f"  Outliers: {len(outliers)} ({len(outliers)/total_particles*100:.1f}%)\n")
-                f.write(f"  Inliers: {total_particles - len(outliers)} ({(total_particles - len(outliers))/total_particles*100:.1f}%)\n\n")
-            
-            # Find particles detected by multiple methods
-            f.write("Method Overlap Analysis:\n")
-            f.write("-----------------------\n")
-            
-            for i in range(len(all_outliers)):
-                for j in range(i + 1, len(all_outliers)):
-                    overlap = np.intersect1d(all_outliers[i], all_outliers[j])
-                    f.write(f"{method_names[i]} + {method_names[j]} overlap: {len(overlap)} ({len(overlap)/total_particles*100:.1f}%)\n")
-            
-            if len(all_outliers) == 3:
-                # All three methods overlap
-                all_three_overlap = np.intersect1d.reduce(all_outliers)
-                f.write(f"All three methods overlap: {len(all_three_overlap)} ({len(all_three_overlap)/total_particles*100:.1f}%)\n")
-            
-            # Find unique outliers for each method
-            f.write("\nUnique Outliers Analysis:\n")
-            f.write("------------------------\n")
-            
-            for i, (outliers, method) in enumerate(zip(all_outliers, method_names)):
-                # Find outliers unique to this method
-                other_outliers = []
-                for j, other_outliers_list in enumerate(all_outliers):
-                    if i != j:
-                        other_outliers.extend(other_outliers_list)
-                
-                if other_outliers:
-                    other_outliers = np.unique(other_outliers)
-                    unique_outliers = np.setdiff1d(outliers, other_outliers)
-                    f.write(f"{method} unique outliers: {len(unique_outliers)} ({len(unique_outliers)/total_particles*100:.1f}%)\n")
-                else:
-                    f.write(f"{method} unique outliers: {len(outliers)} ({len(outliers)/total_particles*100:.1f}%)\n")
+            f.write(f"Combined image outliers: {len(combined_image_outliers)} ({len(combined_image_outliers)/original_image_indices.size*100:.1f}%)\n")
+            f.write(f"Combined image inliers: {len(combined_image_inliers)} ({len(combined_image_inliers)/original_image_indices.size*100:.1f}%)\n\n")
+            for i, (outliers, method) in enumerate(zip(all_image_outliers, method_names)):
+                f.write(f"{method}: {len(outliers)} outliers ({len(outliers)/original_image_indices.size*100:.1f}%)\n")
         
         # Create overlap matrix visualization
-        if len(all_outliers) > 1:
-            create_overlap_matrix_visualization(all_outliers, method_names, combined_output_dir, zdim_key, total_particles)
+        if len(all_image_outliers) > 1:
+            create_overlap_matrix_visualization(all_image_outliers, method_names, combined_output_dir, zdim_key, original_image_indices.size)
         
-        # Create contrast distribution plots if contrast data is available
-        if contrasts is not None:
-            # Collect all inlier arrays
-            all_inliers = []
-            for outliers in all_outliers:
-                inliers = np.setdiff1d(np.arange(total_particles), outliers)
-                all_inliers.append(inliers)
-            
-            # Get starfile path from pipeline input_args
-            input_args = pipeline_output.get('input_args')
-            starfile = getattr(input_args, 'particles', None)
-            
-            create_contrast_distribution_plots(all_outliers, all_inliers, method_names, contrasts,
-                                             particles_halfsets, image_halfsets, is_tilt_series,
-                                             combined_output_dir, zdim_key, total_particles, starfile)
+        # Create outlier visualizations (UMAP, latent space, contrast histograms)
+        create_outlier_visualizations(pipeline_output, all_particle_outliers, method_names, 
+                                    combined_particle_outliers, combined_particle_inliers, 
+                                    args.output_dir, zdim_key, total_particles, is_tilt_series, starfile)
         
         logger.info(f"Combined results saved to: {combined_output_dir}")
-        logger.info(f"Combined outliers: {len(combined_outliers)} ({len(combined_outliers)/total_particles*100:.1f}%)")
+        logger.info(f"Combined image outliers: {len(combined_image_outliers)} ({len(combined_image_outliers)/original_image_indices.size*100:.1f}%)")
+        logger.info(f"Combined particle outliers: {len(combined_particle_outliers)} ({len(combined_particle_outliers)/original_particle_indices.size*100:.1f}%)")
+
     else:
         logger.warning("No outlier detection methods produced results. Combined analysis skipped.")
     
+
+
     # Create summary file
     summary_file = os.path.join(args.output_dir, 'summary.txt')
     with open(summary_file, 'w') as f:
         f.write("Outlier Detection Summary\n")
-        f.write("========================\n\n")
-        f.write(f"Pipeline output directory: {args.pipeline_output_dir}\n")
+        f.write(f"Pipeline output: {args.pipeline_output_dir}\n")
         f.write(f"Output directory: {args.output_dir}\n")
         f.write(f"zdim key: {zdim_key}\n")
-        f.write(f"Total particles: {total_particles}\n\n")
-        
-        f.write("Methods Run:\n")
-        f.write("------------\n")
-        f.write("✓ Anomaly Detection (UMAP-based)\n")
-        if contrasts is not None:
-            f.write("✓ Contrast-based Outlier Detection\n")
-        else:
-            f.write("✗ Contrast-based Outlier Detection (no contrast data)\n")
-        if args.use_junk_detection:
-            f.write("✓ Junk Particle Detection\n")
-        else:
-            f.write("✗ Junk Particle Detection (not enabled)\n")
-        
-        f.write("\nOutput Structure:\n")
-        f.write("-----------------\n")
-        f.write("anomaly_detection/     - UMAP-based anomaly detection results\n")
-        f.write("contrast_based/        - Contrast-based outlier detection results\n")
-        f.write("junk_detection/        - Junk particle detection results\n")
-        f.write("combined_results/      - Combined results from all methods\n")
-        f.write("outlier_detection.log  - Log file\n")
-        f.write("summary.txt           - This summary file\n")
+        f.write(f"Total particles: {total_particles}\n")
+        f.write("Methods: Anomaly Detection, Contrast-based, Junk Detection\n")
     
     logger.info(f"Outlier detection completed. Results saved to {args.output_dir}")
-    logger.info(f"Summary file: {summary_file}")
+
+
+
+def map_particle_original_indexing_to_images_original_indexing(particle_indices_in_original_ordering, image_subset, starfile):
+    particle_to_tilts, tilts_to_particle = tilt_dataset.TiltSeriesData.parse_particle_tilt(starfile)
+
+    image_indices = np.concatenate([ particle_to_tilts[particle_index] for particle_index in particle_indices_in_original_ordering ])
+    # Ignore images which are not in the image_subset
+    return np.intersect1d(image_indices, image_subset)
+
 
 def add_args(parser):
     """Add command line arguments for outlier detection."""
@@ -1155,270 +1204,330 @@ def add_args(parser):
     return parser
 
 
-# def save_outlier_indices(inliers_indices, outliers_indices, output_dir, zdim_key, method="consensus", 
-#                         particles_halfsets=None, image_halfsets=None, is_tilt_series=False):
-#     """
-#     Save outlier indices in pipeline-compatible format using proper halfsets mapping.
-    
-#     Parameters:
-#     - inliers_indices: Array of inlier indices (in the order of embeddings/contrasts)
-#     - outliers_indices: Array of outlier indices (in the order of embeddings/contrasts)
-#     - output_dir: Output directory for saving files
-#     - zdim_key: Dimension key for embeddings
-#     - method: Outlier detection method used
-#     - particles_halfsets: Particle-level halfsets (for --tilt-ind)
-#     - image_halfsets: Image-level halfsets (for --ind)
-#     - is_tilt_series: Whether this is a tilt series dataset
-#     """
-#     logger.info("Saving outlier indices in pipeline-compatible format...")
-    
-#     # Save image-level indices (for --ind)
-#     inliers_pipeline_file = os.path.join(output_dir, f'inliers_pipeline_indices_{zdim_key}.pkl')
-#     with open(inliers_pipeline_file, 'wb') as f:
-#         pickle.dump(inliers_indices, f)
-    
-#     outliers_pipeline_file = os.path.join(output_dir, f'outliers_pipeline_indices_{zdim_key}.pkl')
-#     with open(outliers_pipeline_file, 'wb') as f:
-#         pickle.dump(outliers_indices, f)
-    
-#     # For tilt-series, also save particle-level indices (for --tilt-ind)
-#     if is_tilt_series and particles_halfsets is not None:
-#         # Convert image indices to particle indices using halfsets mapping
-#         def image_to_particle_indices(image_indices):
-#             """Convert image indices to particle indices using halfsets mapping."""
-#             particle_indices = set()
-#             for image_idx in image_indices:
-#                 # Find which halfset this image belongs to
-#                 if image_idx in image_halfsets[0]:
-#                     image_pos_in_halfset = np.where(image_halfsets[0] == image_idx)[0][0]
-#                     particle_indices.add(particles_halfsets[0][image_pos_in_halfset])
-#                 elif image_idx in image_halfsets[1]:
-#                     image_pos_in_halfset = np.where(image_halfsets[1] == image_idx)[0][0]
-#                     particle_indices.add(particles_halfsets[1][image_pos_in_halfset])
-#             return np.array(sorted(list(particle_indices)))
-        
-#         particle_inliers = image_to_particle_indices(inliers_indices)
-#         particle_outliers = image_to_particle_indices(outliers_indices)
-        
-#         # Save particle-level indices with different naming
-#         particle_inliers_file = os.path.join(output_dir, f'particle_inliers_pipeline_indices_{zdim_key}.pkl')
-#         particle_outliers_file = os.path.join(output_dir, f'particle_outliers_pipeline_indices_{zdim_key}.pkl')
-        
-#         with open(particle_inliers_file, 'wb') as f:
-#             pickle.dump(particle_inliers, f)
-#         with open(particle_outliers_file, 'wb') as f:
-#             pickle.dump(particle_outliers, f)
-        
-#         logger.info(f"Saved particle-level indices: {len(particle_inliers)} inliers, {len(particle_outliers)} outliers")
-    
-#     # Create usage summary
-#     summary_file = os.path.join(output_dir, f'pipeline_usage_summary_{zdim_key}.txt')
-#     with open(summary_file, 'w') as f:
-#         f.write("Pipeline-Compatible Outlier Indices Usage Summary\n")
-#         f.write("==================================================\n\n")
-#         f.write(f"Method: {method}\n")
-#         f.write(f"zdim: {zdim_key}\n")
-#         f.write(f"Dataset type: {'Tilt series' if is_tilt_series else 'Regular'}\n\n")
-        
-#         f.write("Image-level indices (for --ind):\n")
-#         f.write(f"  Inlier images: {os.path.abspath(inliers_pipeline_file)}\n")
-#         f.write(f"  Outlier images: {os.path.abspath(outliers_pipeline_file)}\n\n")
-        
-#         if is_tilt_series and particles_halfsets is not None:
-#             f.write("Particle-level indices (for --tilt-ind):\n")
-#             f.write(f"  Inlier particles: {os.path.abspath(particle_inliers_file)}\n")
-#             f.write(f"  Outlier particles: {os.path.abspath(particle_outliers_file)}\n\n")
-        
-#         f.write("Example usage:\n")
-#         f.write("  # Run pipeline with only inlier images:\n")
-#         f.write(f"  python -m recovar.commands.pipeline particles.star --poses poses.pkl --ctf ctf.pkl --ind {os.path.basename(inliers_pipeline_file)} -o output_dir\n")
-        
-#         if is_tilt_series and particles_halfsets is not None:
-#             f.write("  # Run pipeline with only inlier particles (tilt series):\n")
-#             f.write(f"  python -m recovar.commands.pipeline particles.star --poses poses.pkl --ctf ctf.pkl --tilt-ind {os.path.basename(particle_inliers_file)} -o output_dir\n")
-    
-#     logger.info(f"Pipeline-compatible indices saved:")
-#     logger.info(f"  Image inliers: {inliers_pipeline_file}")
-#     logger.info(f"  Image outliers: {outliers_pipeline_file}")
-#     if is_tilt_series and particles_halfsets is not None:
-#         logger.info(f"  Particle inliers: {particle_inliers_file}")
-#         logger.info(f"  Particle outliers: {particle_outliers_file}")
-#     logger.info(f"  Usage summary: {summary_file}")
-    
-#     return inliers_pipeline_file, outliers_pipeline_file, summary_file
 
-# def create_contrast_distribution_plots(all_outliers, all_inliers, method_names, contrasts, 
-#                                      particles_halfsets, image_halfsets, is_tilt_series, 
-#                                      output_dir, zdim_key, total_particles, starfile=None):
-#     """
-#     Create contrast distribution histograms for outliers vs inliers from different detection methods.
+def create_outlier_visualizations(pipeline_output, all_particle_outliers, method_names, combined_particle_outliers, 
+                                 combined_particle_inliers, output_dir, zdim_key, total_particles, is_tilt_series=False, starfile=None):
+    """
+    Create UMAP and latent space visualizations with contrast histograms for each outlier group.
     
-#     Parameters:
-#     - all_outliers: List of outlier arrays from different methods
-#     - all_inliers: List of inlier arrays from different methods  
-#     - method_names: List of method names
-#     - contrasts: Array of contrast values (one per image)
-#     - particles_halfsets: Particle-level halfsets (for --tilt-ind)
-#     - image_halfsets: Image-level halfsets (for --ind)
-#     - is_tilt_series: Whether this is a tilt series dataset
-#     - output_dir: Output directory for saving plots
-#     - zdim_key: Dimension key for embeddings
-#     - total_particles: Total number of particles
-#     - starfile: Path to starfile (needed for tilt series mapping)
-#     """
-#     if contrasts is None:
-#         logger.warning("No contrast data available. Skipping contrast distribution plots.")
-#         return
+    Parameters:
+    - pipeline_output: Pipeline output containing zs and other data
+    - all_particle_outliers: List of particle outlier arrays for each method
+    - method_names: List of method names
+    - combined_particle_outliers: Combined particle outliers
+    - combined_particle_inliers: Combined particle inliers
+    - output_dir: Output directory for saving visualizations
+    - zdim_key: Dimension key for embeddings
+    - total_particles: Total number of particles
+    - is_tilt_series: Whether this is a tilt series dataset
+    - starfile: Star file path for tilt series mapping
+    """
+    logger.info("Creating outlier visualizations...")
     
-#     logger.info("Creating contrast distribution plots...")
+    # Set up improved plotting style
+    plt.style.use('default')
+    sns.set_palette("husl")
     
-#     # Convert particle indices to image indices for contrast lookup
-#     def particle_to_image_indices(particle_indices):
-#         """Convert particle indices to image indices for tilt series."""
-#         if not is_tilt_series:
-#             # For regular datasets, particle indices = image indices
-#             return particle_indices
+    # Use professional color scheme
+    colors = {
+        'background': '#E0E0E0',  # Light gray
+        'inliers': '#2E8B57',     # Sea green
+        'outliers': '#DC143C',    # Crimson red
+        'mean': '#4169E1',        # Royal blue
+        'grid': '#F0F0F0',        # Very light gray
+        'scatter': 'cornflowerblue'
+    }
+    
+    # Get zs embeddings and original particle indices
+    zs = pipeline_output.get('zs')[zdim_key]
+    original_particle_indices = np.concatenate(pipeline_output.get('particles_halfsets'))
+    original_image_indices = np.concatenate(pipeline_output.get('halfsets'))
+    
+    # Get contrast values if available
+    contrast_values = None
+    contrast_values = pipeline_output.get('contrasts')[zdim_key]
+    umapper = output.umap_latent_space(zs)
+    umap_coords = umapper.embedding_
+    has_umap = True
+
+    # Create visualization directory
+    viz_dir = os.path.join(output_dir, 'outlier_visualizations')
+    os.makedirs(viz_dir, exist_ok=True)
+    
+    # Function to map particle indices to image indices for contrast plotting
+    def get_contrast_indices_for_particles(particle_indices):
+        """Map particle indices to image indices for contrast plotting."""
+        if contrast_values is None:
+            return None
         
-#         if starfile is None:
-#             logger.error("Starfile is required for tilt series but not provided.")
-#             sys.exit(1)
+        if is_tilt_series:
+            # For tilt series, map particle indices to image indices
+            particle_to_tilts, _ = tilt_dataset.TiltSeriesData.parse_particle_tilt(starfile)
+            image_indices = np.concatenate([particle_to_tilts[particle_index] for particle_index in particle_indices])
+            # Only include images that are in the original image subset
+            return np.intersect1d(image_indices, original_image_indices)
+        else:
+            # For regular datasets, particle indices = image indices
+            return particle_indices
+    
+    # Function to create plots for a set of outliers/inliers
+    def create_method_plots(outlier_indices, inlier_indices, method_name, save_prefix):
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        fig.suptitle(f'{method_name} Outlier Analysis', fontsize=16, fontweight='bold', y=0.95)
         
-#         # Use proper tilt dataset functions
-#         try:
-#             particle_to_tilts, tilts_to_particle = tilt_dataset.TiltSeriesData.parse_particle_tilt(starfile)
+        # Create boolean masks for particle-level plotting (UMAP and latent space)
+        outlier_mask = np.isin(original_particle_indices, outlier_indices)
+        inlier_mask = np.isin(original_particle_indices, inlier_indices)
+        
+        # Function to downsample large datasets for better visualization
+        def downsample_points(points, mask, max_points=10000):
+            """Downsample points to max_points for better visualization."""
+            if np.sum(mask) <= max_points:
+                return points[mask]
+            else:
+                # Randomly sample max_points from the masked data
+                indices = np.where(mask)[0]
+                sampled_indices = np.random.choice(indices, size=max_points, replace=False)
+                return points[sampled_indices]
+        
+        # Plot 1: UMAP visualization with improved styling for large datasets
+        if has_umap:
+            ax = axes[0, 0]
             
-#             # Convert particle indices to tilt indices
-#             image_indices = set()
-#             for particle_idx in particle_indices:
-#                 if particle_idx in particle_to_tilts:
-#                     # Get all tilt indices for this particle
-#                     tilt_indices = particle_to_tilts[particle_idx]
-#                     image_indices.update(tilt_indices)
+            # Create hexbin density plot for background with larger gridsize for big datasets
+            try:
+                # Use larger gridsize for better density representation with many points
+                gridsize = min(50, max(20, int(np.sqrt(len(umap_coords) / 100))))
+                hb = ax.hexbin(umap_coords[:, 0], umap_coords[:, 1], gridsize=gridsize, 
+                              cmap='Blues', alpha=0.4, mincnt=1, reduce_C_function=np.mean)
+            except:
+                pass
             
-#             return np.array(list(image_indices))
-#         except Exception as e:
-#             logger.error(f"Failed to use tilt dataset functions: {e}")
-#             sys.exit(1)
-    
-#     # Create subplots for each method
-#     n_methods = len(method_names)
-#     fig, axes = plt.subplots(2, n_methods, figsize=(5*n_methods, 10))
-#     if n_methods == 1:
-#         axes = axes.reshape(2, 1)
-    
-#     for i, (outliers, inliers, method) in enumerate(zip(all_outliers, all_inliers, method_names)):
-#         # Convert particle indices to image indices
-#         outlier_image_indices = particle_to_image_indices(outliers)
-#         inlier_image_indices = particle_to_image_indices(inliers)
+            # Downsample points for scatter plot to avoid overcrowding
+            if np.sum(inlier_mask) > 0:
+                inlier_points = downsample_points(umap_coords, inlier_mask, max_points=5000)
+                ax.scatter(inlier_points[:, 0], inlier_points[:, 1], 
+                          c=colors['inliers'], alpha=0.7, s=6, label=f'Inliers (n={np.sum(inlier_mask):,})', 
+                          rasterized=True, edgecolors='none')
+            
+            if np.sum(outlier_mask) > 0:
+                outlier_points = downsample_points(umap_coords, outlier_mask, max_points=2000)
+                ax.scatter(outlier_points[:, 0], outlier_points[:, 1], 
+                          c=colors['outliers'], alpha=0.9, s=10, label=f'Outliers (n={np.sum(outlier_mask):,})', 
+                          rasterized=True, edgecolors='none')
+            
+            ax.set_xlabel('UMAP 1', fontweight='bold')
+            ax.set_ylabel('UMAP 2', fontweight='bold')
+            ax.set_title('UMAP Embedding', fontweight='bold')
+            ax.legend(frameon=True, fancybox=True, shadow=True, fontsize=9)
+            ax.grid(True, alpha=0.3, color=colors['grid'])
+            ax.set_facecolor('#FAFAFA')
         
-#         # Get contrast values for outliers and inliers
-#         outlier_contrasts = contrasts[outlier_image_indices]
-#         inlier_contrasts = contrasts[inlier_image_indices]
+        # Plot 2: Latent space (zs[:, 0] vs zs[:, 1]) with improved styling for large datasets
+        ax = axes[0, 1]
         
-#         # Plot 1: Histogram of contrast distributions
-#         ax1 = axes[0, i]
-#         ax1.hist(inlier_contrasts, bins=50, alpha=0.7, label='Inliers', color='blue', density=True)
-#         ax1.hist(outlier_contrasts, bins=50, alpha=0.7, label='Outliers', color='red', density=True)
-#         ax1.set_xlabel('Contrast')
-#         ax1.set_ylabel('Density')
-#         ax1.set_title(f'{method}\nContrast Distribution')
-#         ax1.legend()
-#         ax1.grid(True, alpha=0.3)
+        # Create hexbin density plot for background
+        try:
+            gridsize = min(50, max(20, int(np.sqrt(len(zs) / 100))))
+            hb = ax.hexbin(zs[:, 0], zs[:, 1], gridsize=gridsize, 
+                          cmap='Blues', alpha=0.4, mincnt=1, reduce_C_function=np.mean)
+        except:
+            pass
         
-#         # Add statistics
-#         inlier_mean = np.mean(inlier_contrasts)
-#         outlier_mean = np.mean(outlier_contrasts)
-#         inlier_std = np.std(inlier_contrasts)
-#         outlier_std = np.std(outlier_contrasts)
+        # Downsample points for scatter plot
+        if np.sum(inlier_mask) > 0:
+            inlier_points = downsample_points(zs, inlier_mask, max_points=5000)
+            ax.scatter(inlier_points[:, 0], inlier_points[:, 1], 
+                      c=colors['inliers'], alpha=0.7, s=6, label=f'Inliers (n={np.sum(inlier_mask):,})', 
+                      rasterized=True, edgecolors='none')
+        if np.sum(outlier_mask) > 0:
+            outlier_points = downsample_points(zs, outlier_mask, max_points=2000)
+            ax.scatter(outlier_points[:, 0], outlier_points[:, 1], 
+                      c=colors['outliers'], alpha=0.9, s=10, label=f'Outliers (n={np.sum(outlier_mask):,})', 
+                      rasterized=True, edgecolors='none')
+        ax.set_xlabel('Latent Dimension 1', fontweight='bold')
+        ax.set_ylabel('Latent Dimension 2', fontweight='bold')
+        ax.set_title('Latent Space (Dim 1 vs Dim 2)', fontweight='bold')
+        ax.legend(frameon=True, fancybox=True, shadow=True, fontsize=9)
+        ax.grid(True, alpha=0.3, color=colors['grid'])
+        ax.set_facecolor('#FAFAFA')
         
-#         stats_text = f'Inliers: μ={inlier_mean:.3f}, σ={inlier_std:.3f}\nOutliers: μ={outlier_mean:.3f}, σ={outlier_std:.3f}'
-#         ax1.text(0.02, 0.98, stats_text, transform=ax1.transAxes, verticalalignment='top',
-#                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+        # Plot 3: Latent space (zs[:, 2] vs zs[:, 3]) with improved styling for large datasets
+        ax = axes[0, 2]
         
-#         # Plot 2: Box plot comparison
-#         ax2 = axes[1, i]
-#         data = [inlier_contrasts, outlier_contrasts]
-#         labels = ['Inliers', 'Outliers']
-#         colors = ['lightblue', 'lightcoral']
+        # Create hexbin density plot for background
+        try:
+            gridsize = min(50, max(20, int(np.sqrt(len(zs) / 100))))
+            hb = ax.hexbin(zs[:, 2], zs[:, 3], gridsize=gridsize, 
+                          cmap='Blues', alpha=0.4, mincnt=1, reduce_C_function=np.mean)
+        except:
+            pass
         
-#         bp = ax2.boxplot(data, labels=labels, patch_artist=True)
-#         for patch, color in zip(bp['boxes'], colors):
-#             patch.set_facecolor(color)
+        # Downsample points for scatter plot
+        if np.sum(inlier_mask) > 0:
+            inlier_points = downsample_points(zs, inlier_mask, max_points=5000)
+            ax.scatter(inlier_points[:, 2], inlier_points[:, 3], 
+                      c=colors['inliers'], alpha=0.7, s=6, label=f'Inliers (n={np.sum(inlier_mask):,})', 
+                      rasterized=True, edgecolors='none')
+        if np.sum(outlier_mask) > 0:
+            outlier_points = downsample_points(zs, outlier_mask, max_points=2000)
+            ax.scatter(outlier_points[:, 2], outlier_points[:, 3], 
+                      c=colors['outliers'], alpha=0.9, s=10, label=f'Outliers (n={np.sum(outlier_mask):,})', 
+                      rasterized=True, edgecolors='none')
+        ax.set_xlabel('Latent Dimension 3', fontweight='bold')
+        ax.set_ylabel('Latent Dimension 4', fontweight='bold')
+        ax.set_title('Latent Space (Dim 3 vs Dim 4)', fontweight='bold')
+        ax.legend(frameon=True, fancybox=True, shadow=True, fontsize=9)
+        ax.grid(True, alpha=0.3, color=colors['grid'])
+        ax.set_facecolor('#FAFAFA')
         
-#         ax2.set_ylabel('Contrast')
-#         ax2.set_title(f'{method}\nContrast Box Plot')
-#         ax2.grid(True, alpha=0.3)
+        # Plot 4: Contrast histogram with improved styling for large datasets
+        if contrast_values is not None:
+            ax = axes[1, 0]
+            
+            # Get image indices for contrast plotting
+            outlier_image_indices = get_contrast_indices_for_particles(outlier_indices)
+            inlier_image_indices = get_contrast_indices_for_particles(inlier_indices)
+            
+            # Use adaptive binning for better histogram readability with large datasets
+            n_bins = min(50, max(20, len(contrast_values) // 200))
+            bins = np.linspace(contrast_values.min(), contrast_values.max(), n_bins + 1)
+            
+            if outlier_image_indices is not None and len(outlier_image_indices) > 0:
+                # Create boolean mask for image-level contrast values
+                outlier_contrast_mask = np.isin(original_image_indices, outlier_image_indices)
+                outlier_contrast = contrast_values[outlier_contrast_mask]
+                ax.hist(outlier_contrast, bins=bins, alpha=0.8, 
+                       color=colors['outliers'], label=f'Outliers (n={len(outlier_contrast):,})', 
+                       density=True, edgecolor='black', linewidth=0.8, hatch='///')
+            
+            if inlier_image_indices is not None and len(inlier_image_indices) > 0:
+                # Create boolean mask for image-level contrast values
+                inlier_contrast_mask = np.isin(original_image_indices, inlier_image_indices)
+                inlier_contrast = contrast_values[inlier_contrast_mask]
+                ax.hist(inlier_contrast, bins=bins, alpha=0.8, 
+                       color=colors['inliers'], label=f'Inliers (n={len(inlier_contrast):,})', 
+                       density=True, edgecolor='black', linewidth=0.8, hatch='\\\\\\')
+            
+            # Add mean lines with better styling
+            if outlier_image_indices is not None and len(outlier_image_indices) > 0:
+                outlier_contrast_mask = np.isin(original_image_indices, outlier_image_indices)
+                outlier_contrast = contrast_values[outlier_contrast_mask]
+                ax.axvline(np.mean(outlier_contrast), color=colors['outliers'], 
+                          linestyle='--', linewidth=2.5, alpha=0.9,
+                          label=f'Outlier mean: {np.mean(outlier_contrast):.3f}')
+            
+            if inlier_image_indices is not None and len(inlier_image_indices) > 0:
+                inlier_contrast_mask = np.isin(original_image_indices, inlier_image_indices)
+                inlier_contrast = contrast_values[inlier_contrast_mask]
+                ax.axvline(np.mean(inlier_contrast), color=colors['inliers'], 
+                          linestyle='--', linewidth=2.5, alpha=0.9,
+                          label=f'Inlier mean: {np.mean(inlier_contrast):.3f}')
+            
+            ax.set_xlabel('Contrast Value', fontweight='bold')
+            ax.set_ylabel('Density', fontweight='bold')
+            ax.set_title('Contrast Distribution', fontweight='bold')
+            ax.legend(frameon=True, fancybox=True, shadow=True, fontsize=9)
+            ax.grid(True, alpha=0.3, color=colors['grid'])
+            ax.set_facecolor('#FAFAFA')
         
-#         # Add sample sizes
-#         ax2.text(0.02, 0.98, f'n_inliers={len(inlier_contrasts)}\nn_outliers={len(outlier_contrasts)}', 
-#                 transform=ax2.transAxes, verticalalignment='top',
-#                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+        # Plot 5: Latent space (zs[:, 0] vs zs[:, 2]) with improved styling for large datasets
+        ax = axes[1, 1]
+        
+        # Create hexbin density plot for background
+        try:
+            gridsize = min(50, max(20, int(np.sqrt(len(zs) / 100))))
+            hb = ax.hexbin(zs[:, 0], zs[:, 2], gridsize=gridsize, 
+                          cmap='Blues', alpha=0.4, mincnt=1, reduce_C_function=np.mean)
+        except:
+            pass
+        
+        # Downsample points for scatter plot
+        if np.sum(inlier_mask) > 0:
+            inlier_points = downsample_points(zs, inlier_mask, max_points=5000)
+            ax.scatter(inlier_points[:, 0], inlier_points[:, 2], 
+                      c=colors['inliers'], alpha=0.7, s=6, label=f'Inliers (n={np.sum(inlier_mask):,})', 
+                      rasterized=True, edgecolors='none')
+        if np.sum(outlier_mask) > 0:
+            outlier_points = downsample_points(zs, outlier_mask, max_points=2000)
+            ax.scatter(outlier_points[:, 0], outlier_points[:, 2], 
+                      c=colors['outliers'], alpha=0.9, s=10, label=f'Outliers (n={np.sum(outlier_mask):,})', 
+                      rasterized=True, edgecolors='none')
+        ax.set_xlabel('Latent Dimension 1', fontweight='bold')
+        ax.set_ylabel('Latent Dimension 3', fontweight='bold')
+        ax.set_title('Latent Space (Dim 1 vs Dim 3)', fontweight='bold')
+        ax.legend(frameon=True, fancybox=True, shadow=True, fontsize=9)
+        ax.grid(True, alpha=0.3, color=colors['grid'])
+        ax.set_facecolor('#FAFAFA')
+        
+        # Plot 6: Latent space (zs[:, 1] vs zs[:, 3]) with improved styling for large datasets
+        ax = axes[1, 2]
+        
+        # Create hexbin density plot for background
+        try:
+            gridsize = min(50, max(20, int(np.sqrt(len(zs) / 100))))
+            hb = ax.hexbin(zs[:, 1], zs[:, 3], gridsize=gridsize, 
+                          cmap='Blues', alpha=0.4, mincnt=1, reduce_C_function=np.mean)
+        except:
+            pass
+        
+        # Downsample points for scatter plot
+        if np.sum(inlier_mask) > 0:
+            inlier_points = downsample_points(zs, inlier_mask, max_points=5000)
+            ax.scatter(inlier_points[:, 1], inlier_points[:, 3], 
+                      c=colors['inliers'], alpha=0.7, s=6, label=f'Inliers (n={np.sum(inlier_mask):,})', 
+                      rasterized=True, edgecolors='none')
+        if np.sum(outlier_mask) > 0:
+            outlier_points = downsample_points(zs, outlier_mask, max_points=2000)
+            ax.scatter(outlier_points[:, 1], outlier_points[:, 3], 
+                      c=colors['outliers'], alpha=0.9, s=10, label=f'Outliers (n={np.sum(outlier_mask):,})', 
+                      rasterized=True, edgecolors='none')
+        ax.set_xlabel('Latent Dimension 2', fontweight='bold')
+        ax.set_ylabel('Latent Dimension 4', fontweight='bold')
+        ax.set_title('Latent Space (Dim 2 vs Dim 4)', fontweight='bold')
+        ax.legend(frameon=True, fancybox=True, shadow=True, fontsize=9)
+        ax.grid(True, alpha=0.3, color=colors['grid'])
+        ax.set_facecolor('#FAFAFA')
+        
+        plt.tight_layout(rect=[0, 0.03, 1, 0.93])
+        plt.savefig(os.path.join(viz_dir, f'{save_prefix}.png'), dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+        
+        # Save statistics
+        stats_file = os.path.join(viz_dir, f'{save_prefix}_stats.txt')
+        with open(stats_file, 'w') as f:
+            f.write(f'{method_name} Statistics\n')
+            f.write(f'Total particles: {total_particles}\n')
+            f.write(f'Outliers: {len(outlier_indices)} ({len(outlier_indices)/total_particles*100:.1f}%)\n')
+            f.write(f'Inliers: {len(inlier_indices)} ({len(inlier_indices)/total_particles*100:.1f}%)\n')
+            if contrast_values is not None:
+                outlier_image_indices = get_contrast_indices_for_particles(outlier_indices)
+                inlier_image_indices = get_contrast_indices_for_particles(inlier_indices)
+                
+                if outlier_image_indices is not None and len(outlier_image_indices) > 0:
+                    outlier_contrast_mask = np.isin(original_image_indices, outlier_image_indices)
+                    outlier_contrast = contrast_values[outlier_contrast_mask]
+                    f.write(f'Outlier contrast - Mean: {np.mean(outlier_contrast):.3f}, Std: {np.std(outlier_contrast):.3f}\n')
+                
+                if inlier_image_indices is not None and len(inlier_image_indices) > 0:
+                    inlier_contrast_mask = np.isin(original_image_indices, inlier_image_indices)
+                    inlier_contrast = contrast_values[inlier_contrast_mask]
+                    f.write(f'Inlier contrast - Mean: {np.mean(inlier_contrast):.3f}, Std: {np.std(inlier_contrast):.3f}\n')
     
-#     plt.tight_layout()
-#     plt.savefig(os.path.join(output_dir, 'contrast_distributions.png'), dpi=300, bbox_inches='tight')
-#     plt.close()
+    # Create plots for each method
+    for i, (outliers, method) in enumerate(zip(all_particle_outliers, method_names)):
+        if len(outliers) > 0:
+            # Get inliers for this method
+            method_inliers = np.setdiff1d(original_particle_indices, outliers)
+            create_method_plots(outliers, method_inliers, method, f'{method.lower().replace(" ", "_")}_{zdim_key}')
     
-#     # Create a summary plot showing all methods together
-#     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    # Create plots for combined results
+    if len(combined_particle_outliers) > 0:
+        create_method_plots(combined_particle_outliers, combined_particle_inliers, 
+                          'Combined', f'combined_{zdim_key}')
     
-#     # Combined histogram
-#     for i, (outliers, inliers, method) in enumerate(zip(all_outliers, all_inliers, method_names)):
-#         outlier_image_indices = particle_to_image_indices(outliers)
-#         inlier_image_indices = particle_to_image_indices(inliers)
-        
-#         outlier_contrasts = contrasts[outlier_image_indices]
-#         inlier_contrasts = contrasts[inlier_image_indices]
-        
-#         # Use different colors for each method
-#         colors = ['red', 'orange', 'green', 'purple', 'brown']
-#         color = colors[i % len(colors)]
-        
-#         ax1.hist(outlier_contrasts, bins=30, alpha=0.6, label=f'{method} Outliers', 
-#                 color=color, density=True, histtype='step', linewidth=2)
-    
-#     ax1.set_xlabel('Contrast')
-#     ax1.set_ylabel('Density')
-#     ax1.set_title('Contrast Distribution: All Outlier Methods')
-#     ax1.legend()
-#     ax1.grid(True, alpha=0.3)
-    
-#     # Combined box plot
-#     all_outlier_contrasts = []
-#     all_inlier_contrasts = []
-#     all_labels = []
-    
-#     for i, (outliers, inliers, method) in enumerate(zip(all_outliers, all_inliers, method_names)):
-#         outlier_image_indices = particle_to_image_indices(outliers)
-#         inlier_image_indices = particle_to_image_indices(inliers)
-        
-#         outlier_contrasts = contrasts[outlier_image_indices]
-#         inlier_contrasts = contrasts[inlier_image_indices]
-        
-#         all_outlier_contrasts.append(outlier_contrasts)
-#         all_inlier_contrasts.append(inlier_contrasts)
-#         all_labels.extend([f'{method} Inliers', f'{method} Outliers'])
-    
-#     # Combine all data for box plot
-#     all_data = []
-#     for inlier_contrasts, outlier_contrasts in zip(all_inlier_contrasts, all_outlier_contrasts):
-#         all_data.extend([inlier_contrasts, outlier_contrasts])
-    
-#     bp = ax2.boxplot(all_data, labels=all_labels, patch_artist=True)
-#     colors = ['lightblue', 'lightcoral'] * len(method_names)
-#     for patch, color in zip(bp['boxes'], colors):
-#         patch.set_facecolor(color)
-    
-#     ax2.set_ylabel('Contrast')
-#     ax2.set_title('Contrast Comparison: All Methods')
-#     ax2.tick_params(axis='x', rotation=45)
-#     ax2.grid(True, alpha=0.3)
-    
-#     plt.tight_layout()
-#     plt.savefig(os.path.join(output_dir, 'contrast_distributions_combined.png'), dpi=300, bbox_inches='tight')
-#     plt.close()
-    
-#     logger.info(f"Contrast distribution plots saved to: {os.path.join(output_dir, 'contrast_distributions.png')}")
-#     logger.info(f"Combined contrast distribution plot saved to: {os.path.join(output_dir, 'contrast_distributions_combined.png')}")
+    logger.info(f"Outlier visualizations saved to: {viz_dir}")
+
 
 
 if __name__ == "__main__":
