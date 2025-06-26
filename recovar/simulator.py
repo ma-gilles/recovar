@@ -357,10 +357,12 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
         nested_particles_file = os.path.join(nested_dir, f'particles.{grid_size}.mrcs')
         os.rename(particles_file, nested_particles_file)
         
-        # Update star file to use nested path
+        # For star file, use relative path from star file location to mrcs file
+        # The star file will be in output_folder, and the mrcs file will be in nested_dir
         star_particles_file = f"{nested_prefix}/particles.{grid_size}.mrcs"
     else:
-        star_particles_file = particles_file
+        # For non-nested structure, use just the filename since star file and mrcs are in same directory
+        star_particles_file = f"particles.{grid_size}.mrcs"
 
     utils.write_starfile(ctf_params, rots.astype(np.float32), trans.astype(np.float32), voxel_size, grid_size, star_particles_file, output_folder + '/particles.star', halfset_indices = None, tilt_groups = tilt_groups )
 

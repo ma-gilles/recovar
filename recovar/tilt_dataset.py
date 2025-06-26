@@ -3,7 +3,7 @@ from collections import Counter, OrderedDict
 import logging
 import torch
 from torch.utils import data
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, List, Dict
 # from cryodrgn import fft, starfile
 
 from recovar.cryodrgn_source import ImageSource
@@ -76,7 +76,7 @@ class ImageDataset(data.Dataset):
         self.unpadded_image_shape = (ny, ny)
         self.image_shape = (ny, ny)
         self.image_size = ny * ny
-        self.mask = jnp.array(set_standard_mask(self.unpadded_D, self.dtype))
+        self.mask = np.array(set_standard_mask(self.unpadded_D, self.dtype))
         self.mult = -1 if invert_data else 1
         self.padding=0
 
@@ -261,8 +261,8 @@ class TiltSeriesData(ImageDataset):
 
     @classmethod
     def parse_particle_tilt(
-        cls, tiltstar: str
-    ) -> Tuple[list[np.ndarray], dict[int, int]]:
+        cls, tiltstar: str, ind =None,
+    ) -> Tuple[List[np.ndarray], Dict[int, int]]:
         """
         Parse unique particles from _rlnGroupName efficiently for large datasets.
         
@@ -276,7 +276,10 @@ class TiltSeriesData(ImageDataset):
         # Load starfile
         s = starfile.Starfile.load(tiltstar)
         df = s.df
-        
+
+        if ind is not None:
+            df = df.loc[ind]
+
         # Use pandas groupby for efficient grouping
         grouped = df.groupby('_rlnGroupName').groups
         
@@ -300,9 +303,9 @@ class TiltSeriesData(ImageDataset):
         return particles_to_tilts, tilts_to_particles_dict
 
     @classmethod
-    def parse_tomogramtilt_tilt(
+    def parse_micrograph_tilt(
         cls, tiltstar: str
-    ) -> Tuple[list[np.ndarray], dict[int, int]]:
+    ) -> Tuple[List[np.ndarray], Dict[int, int]]:
         """
         Parse unique tomogram tilts from rlnTiltName efficiently for large datasets.
         
@@ -374,14 +377,14 @@ class TiltSeriesData(ImageDataset):
 
     @classmethod
     def particles_to_tilts(
-        cls, particles_to_tilts: list[np.ndarray], particles: np.ndarray
+        cls, particles_to_tilts: List[np.ndarray], particles: np.ndarray
     ) -> np.ndarray:
         tilts = [particles_to_tilts[int(i)] for i in particles]
         tilts = np.concatenate(tilts)
         return tilts
 
     @classmethod
-    def tilts_to_particles(cls, tilts_to_particles, tilts):
+    def tilts_to_particles(cls, tilts_to_particles: Dict[int,int], tilts):
         particles = [tilts_to_particles[i] for i in tilts]
         particles = np.array(sorted(set(particles)))
         return particles

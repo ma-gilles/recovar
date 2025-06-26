@@ -5,7 +5,14 @@ import matplotlib.patheffects as pe
 import warnings
 import matplotlib.pyplot as plt
 import numpy as np
-import dataframe_image as dfi
+import seaborn as sns
+
+# Optional dependency: dataframe_image
+try:
+    import dataframe_image as dfi
+except ImportError:
+    dfi = None  # Functions relying on dfi will check for None and skip saving images
+
 import pandas as pd
 import jax.numpy as jnp
 from recovar.fourier_transform_utils import fourier_transform_utils

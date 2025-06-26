@@ -495,10 +495,14 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
     rots = np.array(rots).astype(np.float32)
 
     if ind is not None:
-        ind = ind.astype(int)
+        ind = np.asarray(ind).astype(int)
 
     return CryoEMDataset( dataset, voxel_size,
-                              rots, translations, ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind, tilt_series_flag = tilt_series, premultiplied_ctf = premultiplied_ctf)
+                              rots, translations, ctf_params[:,1:], 
+                              CTF_fun = CTF_fun, 
+                              dataset_indices = ind, 
+                              tilt_series_flag = tilt_series, 
+                              premultiplied_ctf = premultiplied_ctf)
 
 
 
@@ -726,8 +730,9 @@ def figure_out_halfsets(args):
     return halfsets
 
 
-def load_dataset_from_args(args, lazy = False):
-    ind_split = figure_out_halfsets(args)
+def load_dataset_from_args(args, lazy = False, ind_split = None):
+    if ind_split is None:
+        ind_split = figure_out_halfsets(args)
     dataset_loader_dict = make_dataset_loader_dict(args)
     return get_split_datasets_from_dict(dataset_loader_dict, ind_split, lazy = lazy)
 
