@@ -556,28 +556,36 @@ Individual outliers: {n_individual_outliers} ({n_individual_outliers/n_images*10
         if particle_to_tilts is not None or micrographtilt_to_tilts is not None:
             fig, axes = plt.subplots(1, 2, figsize=(12, 5))
             
-            # Plot median contrast per particle
-            if particle_to_tilts is not None:
-                particle_median_contrasts = [np.median(contrast_array[particle_tilts]) for particle_tilts in particle_to_tilts if len(particle_tilts) > 0]
-                axes[0].hist(particle_median_contrasts, bins=30, alpha=0.7, color='blue', edgecolor='black')
-                axes[0].axvline(x=np.median(particle_median_contrasts), color='red', linestyle='--', linewidth=2)
-                axes[0].set_xlabel('Median Contrast per Particle')
-                axes[0].set_ylabel('Number of Particles')
-                axes[0].set_title(f'Median Contrast per Particle\n(n={len(particle_median_contrasts)} particles)')
-                axes[0].grid(True, alpha=0.3)
+            # Plot median contrast per particle (reuse computed values)
+            if particle_to_tilts is not None and 'particle_median_contrasts' in locals():
+                particle_contrast_values = list(particle_median_contrasts.values())
+                if len(particle_contrast_values) > 0:
+                    axes[0].hist(particle_contrast_values, bins=30, alpha=0.7, color='blue', edgecolor='black')
+                    axes[0].axvline(x=np.median(particle_contrast_values), color='red', linestyle='--', linewidth=2)
+                    axes[0].set_xlabel('Median Contrast per Particle')
+                    axes[0].set_ylabel('Number of Particles')
+                    axes[0].set_title(f'Median Contrast per Particle\n(n={len(particle_contrast_values)} particles)')
+                    axes[0].grid(True, alpha=0.3)
+                else:
+                    axes[0].text(0.5, 0.5, 'No particle contrast data available', transform=axes[0].transAxes, ha='center', va='center')
+                    axes[0].set_title('Median Contrast per Particle')
             else:
                 axes[0].text(0.5, 0.5, 'No particle grouping available', transform=axes[0].transAxes, ha='center', va='center')
                 axes[0].set_title('Median Contrast per Particle')
             
-            # Plot median contrast per micrograph
-            if micrographtilt_to_tilts is not None:
-                micrograph_median_contrasts = [np.median(contrast_array[micrograph_tilts]) for micrograph_tilts in micrographtilt_to_tilts if len(micrograph_tilts) > 0]
-                axes[1].hist(micrograph_median_contrasts, bins=30, alpha=0.7, color='green', edgecolor='black')
-                axes[1].axvline(x=np.median(micrograph_median_contrasts), color='red', linestyle='--', linewidth=2)
-                axes[1].set_xlabel('Median Contrast per Micrograph')
-                axes[1].set_ylabel('Number of Micrographs')
-                axes[1].set_title(f'Median Contrast per Micrograph\n(n={len(micrograph_median_contrasts)} micrographs)')
-                axes[1].grid(True, alpha=0.3)
+            # Plot median contrast per micrograph (reuse computed values)
+            if micrographtilt_to_tilts is not None and 'micrograph_median_contrasts' in locals():
+                micrograph_contrast_values = list(micrograph_median_contrasts.values())
+                if len(micrograph_contrast_values) > 0:
+                    axes[1].hist(micrograph_contrast_values, bins=30, alpha=0.7, color='green', edgecolor='black')
+                    axes[1].axvline(x=np.median(micrograph_contrast_values), color='red', linestyle='--', linewidth=2)
+                    axes[1].set_xlabel('Median Contrast per Micrograph')
+                    axes[1].set_ylabel('Number of Micrographs')
+                    axes[1].set_title(f'Median Contrast per Micrograph\n(n={len(micrograph_contrast_values)} micrographs)')
+                    axes[1].grid(True, alpha=0.3)
+                else:
+                    axes[1].text(0.5, 0.5, 'No micrograph contrast data available', transform=axes[1].transAxes, ha='center', va='center')
+                    axes[1].set_title('Median Contrast per Micrograph')
             else:
                 axes[1].text(0.5, 0.5, 'No micrograph grouping available', transform=axes[1].transAxes, ha='center', va='center')
                 axes[1].set_title('Median Contrast per Micrograph')
@@ -603,7 +611,6 @@ Individual outliers: {n_individual_outliers} ({n_individual_outliers/n_images*10
     # Initialize return values
     image_outliers = original_image_indices[outliers_ind]
     image_inliers = original_image_indices[inliers_ind]
-    # import pdb; pdb.set_trace()
 
 
     return image_outliers, image_inliers, particle_outliers, particle_inliers
@@ -988,14 +995,36 @@ def main():
             junk_output_dir = os.path.join(args.output_dir, 'junk_detection')
             os.makedirs(junk_output_dir, exist_ok=True)
             
+            # Automatically set batch_size and n_particles_per_cluster
+            # Get GPU memory and grid size for batch size calculation
+            from recovar import utils
+            gpu_memory = utils.get_gpu_memory_total()
+            pipeline_output = output.PipelineOutput(args.pipeline_output_dir)
+            cryos = pipeline_output.get('dataset')
+            grid_size = cryos[0].grid_size
+            
+            # Calculate automatic batch size like in pipeline
+            batch_size = utils.get_image_batch_size(grid_size, gpu_memory)
+            
+            # Calculate n_particles_per_cluster as min(100, max(10, n_particles/n_clusters))
+            n_clusters = 100
+            n_particles = len(pipeline_output.get('zs')[zdim_key])
+            n_particles_per_cluster = min(100, max(10, n_particles // n_clusters))
+            
+            # Override with user-provided value if specified
+            if hasattr(args, 'particles_per_cluster') and args.particles_per_cluster is not None:
+                n_particles_per_cluster = args.particles_per_cluster
+            
+            logger.info(f"Junk detection: auto batch_size={batch_size}, auto n_particles_per_cluster={n_particles_per_cluster}")
+            
             # Run junk detection
             junk_particle_detection.junk_particle_detection(
                 recovar_result_dir=args.pipeline_output_dir,
                 output_folder=junk_output_dir,
                 zdim=args.zdim_key,
-                n_clusters=100,  # Default number of clusters
-                batch_size=100,
-                n_particles_per_cluster=args.particles_per_cluster,
+                n_clusters=n_clusters,
+                batch_size=batch_size,
+                n_particles_per_cluster=n_particles_per_cluster,
                 no_z_regularization=args.no_z_regularization,
                 save_reconstructions=False,
                 filter_resolution=None,
@@ -1035,35 +1064,44 @@ def main():
     
     # Collect all particle-level outlier indices (for visualization)
     all_particle_outliers = []
-    method_names = []
+    particle_method_names = []
     
     if anomaly_outliers is not None:
         all_particle_outliers.append(anomaly_outliers)
-        method_names.append("Anomaly Detection")
+        particle_method_names.append("Anomaly Detection")
     
     if contrast_particle_outliers is not None:
         all_particle_outliers.append(contrast_particle_outliers)
-        method_names.append("Contrast-based")
+        particle_method_names.append("Contrast-based")
     
     if junk_outliers is not None:
         all_particle_outliers.append(junk_outliers)
-        method_names.append("Junk Detection")
+        particle_method_names.append("Junk Detection")
     
     original_particle_indices = np.concatenate(pipeline_output.get('particles_halfsets'))
     original_image_indices = np.concatenate(pipeline_output.get('halfsets'))
     
-    combined_particle_outliers = all_particle_outliers[0]
-    for outliers in all_particle_outliers[1:]:
-        combined_particle_outliers = np.union1d(combined_particle_outliers, outliers)
-    combined_particle_inliers = np.setdiff1d(original_particle_indices , combined_particle_outliers)
+    # Handle particle outlier combination safely
+    if len(all_particle_outliers) > 0:
+        combined_particle_outliers = all_particle_outliers[0]
+        for outliers in all_particle_outliers[1:]:
+            combined_particle_outliers = np.union1d(combined_particle_outliers, outliers)
+        # Convert back to integers since np.union1d can return floats
+        combined_particle_outliers = combined_particle_outliers.astype(np.int64)
+        combined_particle_inliers = np.setdiff1d(original_particle_indices, combined_particle_outliers)
+    else:
+        # If no particle outliers, all particles are inliers
+        combined_particle_outliers = np.array([], dtype=int)
+        combined_particle_inliers = original_particle_indices
 
 
     # Create particle-level visualization if we have particle outliers
     if len(all_particle_outliers) > 0:
-        create_particle_outlier_visualization(all_particle_outliers, method_names, combined_output_dir, zdim_key, total_particles)
+        create_particle_outlier_visualization(all_particle_outliers, particle_method_names, combined_output_dir, zdim_key, total_particles)
     
     # Collect all image-level outlier indices (for final combination)
     all_image_outliers = []
+    image_method_names = []
     
     if anomaly_outliers is not None:
         # Convert particle outliers to image outliers for anomaly detection
@@ -1074,9 +1112,11 @@ def main():
             # For regular datasets, particle outliers = image outliers
             anomaly_image_outliers = anomaly_outliers
         all_image_outliers.append(anomaly_image_outliers)
+        image_method_names.append("Anomaly Detection")
     
     if contrast_image_outliers is not None:
         all_image_outliers.append(contrast_image_outliers)
+        image_method_names.append("Contrast-based")
     
 
 
@@ -1089,61 +1129,90 @@ def main():
             # For regular datasets, particle outliers = image outliers
             junk_image_outliers = junk_outliers
         all_image_outliers.append(junk_image_outliers)
+        image_method_names.append("Junk Detection")
 
 
-    original_image_indices = (np.concatenate(pipeline_output.get('halfsets')))
+    # Don't redefine original_image_indices here - it's already defined above
+    # original_image_indices = (np.concatenate(pipeline_output.get('halfsets')))
 
+    # Always save combined results, even if some methods don't produce outliers
     if len(all_image_outliers) > 0:
         # Combine results: images are considered outliers if they are outliers in ANY method
         combined_image_outliers = all_image_outliers[0]
         for outliers in all_image_outliers[1:]:
             combined_image_outliers = np.union1d(combined_image_outliers, outliers)
-        combined_image_inliers = np.setdiff1d(original_image_indices , combined_image_outliers)
+        # Convert back to integers since np.union1d can return floats
+        combined_image_outliers = combined_image_outliers.astype(np.int64)
+    else:
+        # If no methods produced image outliers, all images are inliers
+        combined_image_outliers = np.array([], dtype=int)
 
-        # Save image-level indices (for --ind)
-        image_outliers_file = os.path.join(combined_output_dir, f'combined_image_outliers_{zdim_key}.pkl')
-        image_inliers_file = os.path.join(combined_output_dir, f'combined_image_inliers_{zdim_key}.pkl')
+    # Combine particle outliers with image outliers
+    particle_outliers_to_image_outliers = map_particle_original_indexing_to_images_original_indexing(combined_particle_outliers, original_image_indices, starfile)
+    combined_image_outliers = np.union1d(combined_image_outliers, particle_outliers_to_image_outliers)
+
+    combined_image_inliers = np.setdiff1d(original_image_indices , combined_image_outliers)
+
+    # Save image-level indices (for --ind) - ALWAYS save these
+    image_outliers_file = os.path.join(combined_output_dir, f'combined_image_outliers_{zdim_key}.pkl')
+    image_inliers_file = os.path.join(combined_output_dir, f'combined_image_inliers_{zdim_key}.pkl')
+    
+    with open(image_outliers_file, 'wb') as f:
+        pickle.dump(combined_image_outliers, f)
+    with open(image_inliers_file, 'wb') as f:
+        pickle.dump(combined_image_inliers, f)
+    
+    # Save particle-level indices (for --particle-ind) if this is a tilt series or if we have particle outliers
+    if is_tilt_series or len(all_particle_outliers) > 0:
+        particle_outliers_file = os.path.join(combined_output_dir, f'combined_particle_outliers_{zdim_key}.pkl')
+        particle_inliers_file = os.path.join(combined_output_dir, f'combined_particle_inliers_{zdim_key}.pkl')
         
-        with open(image_outliers_file, 'wb') as f:
-            pickle.dump(combined_image_outliers, f)
-        with open(image_inliers_file, 'wb') as f:
-            pickle.dump(combined_image_inliers, f)
-        
-        # Save particle-level indices (for --tilt-ind) if this is a tilt series
-        if is_tilt_series:
-            particle_outliers_file = os.path.join(combined_output_dir, f'combined_particle_outliers_{zdim_key}.pkl')
-            particle_inliers_file = os.path.join(combined_output_dir, f'combined_particle_inliers_{zdim_key}.pkl')
-            
-            with open(particle_outliers_file, 'wb') as f:
-                pickle.dump(combined_particle_outliers, f)
-            with open(particle_inliers_file, 'wb') as f:
-                pickle.dump(combined_particle_inliers, f)
-        
-        # Save simple breakdown
-        breakdown_file = os.path.join(combined_output_dir, 'detection_breakdown.txt')
-        with open(breakdown_file, 'w') as f:
-            f.write(f"Combined Outlier Detection Results\n")
-            f.write(f"Total particles: {total_particles}\n")
-            f.write(f"Combined image outliers: {len(combined_image_outliers)} ({len(combined_image_outliers)/original_image_indices.size*100:.1f}%)\n")
-            f.write(f"Combined image inliers: {len(combined_image_inliers)} ({len(combined_image_inliers)/original_image_indices.size*100:.1f}%)\n\n")
-            for i, (outliers, method) in enumerate(zip(all_image_outliers, method_names)):
+        with open(particle_outliers_file, 'wb') as f:
+            pickle.dump(combined_particle_outliers, f)
+        with open(particle_inliers_file, 'wb') as f:
+            pickle.dump(combined_particle_inliers, f)
+    
+    # Save simple breakdown
+    breakdown_file = os.path.join(combined_output_dir, 'detection_breakdown.txt')
+    with open(breakdown_file, 'w') as f:
+        f.write(f"Combined Outlier Detection Results\n")
+        f.write(f"Total particles: {total_particles}\n")
+        f.write(f"Combined image outliers: {len(combined_image_outliers)} ({len(combined_image_outliers)/original_image_indices.size*100:.1f}%)\n")
+        f.write(f"Combined image inliers: {len(combined_image_inliers)} ({len(combined_image_inliers)/original_image_indices.size*100:.1f}%)\n\n")
+        if len(all_image_outliers) > 0:
+            for i, (outliers, method) in enumerate(zip(all_image_outliers, image_method_names)):
                 f.write(f"{method}: {len(outliers)} outliers ({len(outliers)/original_image_indices.size*100:.1f}%)\n")
-        
-        # Create overlap matrix visualization
-        if len(all_image_outliers) > 1:
-            create_overlap_matrix_visualization(all_image_outliers, method_names, combined_output_dir, zdim_key, original_image_indices.size)
-        
-        # Create outlier visualizations (UMAP, latent space, contrast histograms)
-        create_outlier_visualizations(pipeline_output, all_particle_outliers, method_names, 
+        else:
+            f.write("No outlier detection methods produced results.\n")
+    
+
+
+
+    # Create overlap matrix visualization
+    if len(all_image_outliers) > 1:
+        create_overlap_matrix_visualization(all_image_outliers, image_method_names, combined_output_dir, zdim_key, original_image_indices.size)
+    
+    # Create outlier visualizations (UMAP, latent space, contrast histograms)
+    if len(all_particle_outliers) > 0:
+        create_outlier_visualizations(pipeline_output, all_particle_outliers, particle_method_names, 
                                     combined_particle_outliers, combined_particle_inliers, 
                                     args.output_dir, zdim_key, total_particles, is_tilt_series, starfile)
-        
-        logger.info(f"Combined results saved to: {combined_output_dir}")
-        logger.info(f"Combined image outliers: {len(combined_image_outliers)} ({len(combined_image_outliers)/original_image_indices.size*100:.1f}%)")
-        logger.info(f"Combined particle outliers: {len(combined_particle_outliers)} ({len(combined_particle_outliers)/original_particle_indices.size*100:.1f}%)")
-
-    else:
-        logger.warning("No outlier detection methods produced results. Combined analysis skipped.")
+    
+    logger.info(f"Combined results saved to: {combined_output_dir}")
+    logger.info(f"Combined image outliers: {len(combined_image_outliers)} ({len(combined_image_outliers)/original_image_indices.size*100:.1f}%)")
+    logger.info(f"Combined particle outliers: {len(combined_particle_outliers)} ({len(combined_particle_outliers)/original_particle_indices.size*100:.1f}%)")
+    
+    # Debug information about the confusion
+    logger.info(f"Debug: Total images in dataset: {original_image_indices.size}")
+    logger.info(f"Debug: Total particles in dataset: {original_particle_indices.size}")
+    logger.info(f"Debug: Number of particle outlier methods: {len(all_particle_outliers)}")
+    logger.info(f"Debug: Number of image outlier methods: {len(all_image_outliers)}")
+    if len(all_particle_outliers) > 0:
+        for i, (outliers, method) in enumerate(zip(all_particle_outliers, particle_method_names)):
+            logger.info(f"Debug: {method} particle outliers: {len(outliers)}")
+    if len(all_image_outliers) > 0:
+        for i, (outliers, method) in enumerate(zip(all_image_outliers, image_method_names)):
+            logger.info(f"Debug: {method} image outliers: {len(outliers)}")
     
 
 
@@ -1162,11 +1231,12 @@ def main():
 
 
 def map_particle_original_indexing_to_images_original_indexing(particle_indices_in_original_ordering, image_subset, starfile):
-    particle_to_tilts, tilts_to_particle = tilt_dataset.TiltSeriesData.parse_particle_tilt(starfile)
+    return tilt_dataset.tilt_series_indices_to_image_indices(particle_indices_in_original_ordering, starfile, image_subset)
+    # particle_to_tilts, tilts_to_particle = tilt_dataset.TiltSeriesData.parse_particle_tilt(starfile)
 
-    image_indices = np.concatenate([ particle_to_tilts[particle_index] for particle_index in particle_indices_in_original_ordering ])
-    # Ignore images which are not in the image_subset
-    return np.intersect1d(image_indices, image_subset)
+    # image_indices = np.concatenate([ particle_to_tilts[particle_index] for particle_index in particle_indices_in_original_ordering ])
+    # # Ignore images which are not in the image_subset
+    # return np.intersect1d(image_indices, image_subset)
 
 
 def add_args(parser):
@@ -1176,7 +1246,7 @@ def add_args(parser):
     parser.add_argument("--no-z-regularization", action="store_true", help="Use unregularized embeddings")
     parser.add_argument("--output-dir", "-o", type=str, help="Output directory for results (default: pipeline_output_dir/outlier_detection)")
     parser.add_argument("--save-pipeline-indices", action="store_true", 
-                       help="Save indices in pipeline-compatible format (--ind for images, --tilt-ind for particles in tilt series)")
+                       help="Save indices in pipeline-compatible format (--ind for images, --particle-ind for particles in tilt series)")
     parser.add_argument("--output-format", type=str, default="both", 
                        choices=["both", "outliers_only", "inliers_only"], 
                        help="Which indices to save (default: both)")
@@ -1198,8 +1268,8 @@ def add_args(parser):
                        help="Run junk particle detection in addition to outlier detection")
     parser.add_argument("--junk-threshold", type=float, default=0.5, 
                        help="Threshold for junk particle detection (default: 0.5)")
-    parser.add_argument("--particles-per-cluster", type=int, default=100, 
-                       help="Number of particles per cluster for junk detection (default: 100)")
+    parser.add_argument("--particles-per-cluster", type=int, 
+                       help="Number of particles per cluster for junk detection (auto: min(100, max(10, n_particles/n_clusters)))")
     
     return parser
 
@@ -1242,6 +1312,7 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
     zs = pipeline_output.get('zs')[zdim_key]
     original_particle_indices = np.concatenate(pipeline_output.get('particles_halfsets'))
     original_image_indices = np.concatenate(pipeline_output.get('halfsets'))
+    
     
     # Get contrast values if available
     contrast_values = None
@@ -1388,7 +1459,17 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
             # Get image indices for contrast plotting
             outlier_image_indices = get_contrast_indices_for_particles(outlier_indices)
             inlier_image_indices = get_contrast_indices_for_particles(inlier_indices)
-            
+
+            # logger.info(f"Number of images in outlier indices: {len(outlier_image_indices)}")
+            # logger.info(f"Number of images in inlier indices: {len(inlier_image_indices)}")
+            # logger.info()
+            if outlier_image_indices.size + inlier_image_indices.size != original_image_indices.size:
+                logger.info(f"Number of images in outlier indices: {len(outlier_image_indices)}")
+                logger.info(f"Number of images in inlier indices: {len(inlier_image_indices)}")
+                logger.info(f"Number of images in original image indices: {original_image_indices.size}")
+                logger.info(f"Number of images in outlier indices + inlier indices: {outlier_image_indices.size + inlier_image_indices.size}")
+                raise ValueError("Number of images in outlier indices + inlier indices does not match original image indices")
+
             # Use adaptive binning for better histogram readability with large datasets
             n_bins = min(50, max(20, len(contrast_values) // 200))
             bins = np.linspace(contrast_values.min(), contrast_values.max(), n_bins + 1)

@@ -571,54 +571,61 @@ def get_split_indices(particles_file, datadir=None, strip_prefix=None, ind_file=
     return split_indices
 
 
-def get_split_tilt_indices(particles_file, ind_file = None, tilt_ind_file =None, ntilts = None, datadir = None, particle_halfset_indices_file = None):
-    # from cryodrgn import starfile
+def get_split_tilt_indices(
+    particles_file, ind_file=None, tilt_ind_file=None, ntilts=None, datadir=None, particle_halfset_indices_file=None
+):
+    """
+    Split a tilt-series dataset into two halfsets (image indices), supporting optional filtering by image/particle indices and precomputed splits.
+    """
     from recovar import tilt_dataset
+    import pickle
+    import numpy as np
 
-    # dataset = tilt_dataset.parse_particle_tilt(args.particles)
+    # Step 1: Parse STAR file for mapping
     particles_to_tilts, tilts_to_particles = tilt_dataset.TiltSeriesData.parse_particle_tilt(particles_file)
 
+    # Step 2: Optionally get tilt numbers for ntilts filtering
+    tilt_numbers = None
     if ntilts is not None:
-        # A lot of extra compute.
-        # TODO rewrite
-        dataset_tmp = tilt_dataset.TiltSeriesData(particles_file, datadir = datadir)
+        dataset_tmp = tilt_dataset.TiltSeriesData(particles_file, datadir=datadir)
         tilt_numbers = dataset_tmp.tilt_numbers
 
-
-    # Determine particle indices
-    if tilt_ind_file is None:
-        particle_ind = np.arange(len(particles_to_tilts))
-    else:
+    # Step 3: Determine which particles to use
+    if tilt_ind_file is not None:
         particle_ind = pickle.load(open(tilt_ind_file, "rb"))
-        logger.warning("Using tilt-ind file to pick PARTICLES (i.e. tilt series), not images (individual tilts). Use --ind to pick images.")
+    else:
+        particle_ind = np.arange(len(particles_to_tilts))
 
-    # Load image indices if provided
-    ind_images = None
+    # Map selected particles to image indices
+    allowed_image_indices = tilt_dataset.tilt_series_indices_to_image_indices(particle_ind, particles_file)
+
+    # Step 4: Optionally filter by image indices
     if ind_file is not None:
         ind_images = pickle.load(open(ind_file, "rb"))
+        allowed_image_indices = np.intersect1d(allowed_image_indices, ind_images)
 
-    # Determine halfset split indices
+    # Step 5: Keep only particles with at least one allowed image
+    image_to_particle = np.array([tilts_to_particles[i] for i in allowed_image_indices])
+    valid_particles = np.unique(image_to_particle)
+
+    # Step 6: Determine halfset split (by particles)
     if particle_halfset_indices_file is not None:
-        split_tilt_series_indices = pickle.load(open(particle_halfset_indices_file, "rb"))
-        # Ensure split indices are within valid particle indices
+        split_particles = pickle.load(open(particle_halfset_indices_file, "rb"))
+        # If tilt_ind_file is set, intersect with valid_particles
         if tilt_ind_file is not None:
-            split_tilt_series_indices = [
-                np.intersect1d(split_tilt_series_indices[0], particle_ind),
-                np.intersect1d(split_tilt_series_indices[1], particle_ind)
-            ]
+            split_particles = [np.intersect1d(split_particles[0], valid_particles),
+                              np.intersect1d(split_particles[1], valid_particles)]
     else:
-        split_tilt_series_indices = split_index_list(particle_ind)
+        split_particles = split_index_list(valid_particles)
 
-    split_image_indices = [None,None]
-    for i in range(2):
-        split_image_indices[i] = np.concatenate([ particles_to_tilts[ind] for ind in split_tilt_series_indices[i]])
-        if ntilts is not None:
-            good_indices = np.where(tilt_numbers[split_image_indices[i]] < ntilts)[0]
-            split_image_indices[i] = split_image_indices[i][good_indices]
-        # intersection = set(split_image_indices[i]) & set(ind_images)
-        # tmp=np.intersect1d(split_image_indices[i], ind_images)
-        if ind_file is not None:
-            split_image_indices[i] = np.intersect1d(split_image_indices[i], ind_images)
+    # Step 7: For each halfset, get all image indices for those particles, filter by ntilts if needed, and intersect with allowed images
+    split_image_indices = []
+    for half in split_particles:
+        imgs = np.concatenate([particles_to_tilts[ind] for ind in half])
+        if tilt_numbers is not None:
+            imgs = imgs[tilt_numbers[imgs] < ntilts]
+        imgs = np.intersect1d(imgs, allowed_image_indices)
+        split_image_indices.append(imgs)
 
     return split_image_indices
 

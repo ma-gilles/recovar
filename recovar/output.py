@@ -17,6 +17,7 @@ from recovar import noise
 import matplotlib.patheffects as pe
 from packaging.version import parse as parse_version
 import time
+import recovar.utils as utils
 
 def get_resampled_distances(gt_vols):
     return trajectory.get_cum_curvelength(gt_vols)

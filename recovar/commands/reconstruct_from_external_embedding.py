@@ -50,11 +50,11 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     group.add_argument(
-        "--tilt-ind",
+        "--particle-ind",
         dest="tilt_ind",
         type=os.path.abspath,
         metavar="PKL",
-        help="Filter tilts (particles) by these indices",
+        help="Filter particles by these indices (only for tilt-series/cryo-ET)",
     )
 
     group.add_argument(

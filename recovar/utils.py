@@ -312,9 +312,11 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
     #_rlnGroupName #20
 
     keys = ['rlnImageName', 'rlnMicrographName', 'rlnDefocusU', 'rlnDefocusV',
-       'rlnDefocusAngle', 'rlnPhaseShift', 'rlnOpticsGroup']
+       'rlnDefocusAngle', 'rlnPhaseShift', 'rlnOpticsGroup', 'rlnTiltName']
     
-    values = [ image_names, micrograph_names, CTF_params[:,0].astype(dtype), CTF_params[:,1].astype(dtype), CTF_params[:,2].astype(dtype), CTF_params[:, 6].astype(dtype), optics_group ]
+    # Give each image its own tilt name for compatibility with tilt series parsing
+    tilt_names = [f'tilt_{k+1}' for k in range(n_images)]
+    values = [ image_names, micrograph_names, CTF_params[:,0].astype(dtype), CTF_params[:,1].astype(dtype), CTF_params[:,2].astype(dtype), CTF_params[:, 6].astype(dtype), optics_group, tilt_names ]
 
     rotation_matrices = rotation_matrices.astype(np.float32)
     translations = translations.astype(np.float32)
@@ -331,7 +333,7 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
     
     if tilt_groups is not None:
         keys += ['rlnGroupName']
-        group_names = [f'tilt_{group_n+1}' for group_n in tilt_groups]
+        group_names = [f'tilt_{group_n+1:07d}' for i, group_n in enumerate(tilt_groups)]
         values += [group_names]
         # Also write contrast variation if using tilt groups?
         keys += ['rlnCtfScalefactor']

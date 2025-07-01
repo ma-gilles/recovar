@@ -8,7 +8,7 @@ from recovar import locres, utils
 from recovar import adaptive_kernel_discretization
 import logging
 from recovar.fourier_transform_utils import fourier_transform_utils
-import recovar.utils
+import recovar.utils as utils
 ftu = fourier_transform_utils(jnp)
 logger = logging.getLogger(__name__)
 

@@ -154,11 +154,7 @@ class TiltSeriesData(ImageDataset):
         elapsed = time.time() - self._load_start_time
         print(f"starfile loaded in {elapsed:.2f} seconds")
 
-        unique_sorted_group_names = []
-        unique_sorted_group_names = list(s.df["_rlnGroupName"].unique())
-        # for name in s.df["_rlnGroupName"]:
-        #     if name not in unique_sorted_group_names:
-        #         unique_sorted_group_names.append(name)
+        unique_sorted_group_names = get_canonical_group_names(s.df)
 
         if ind is not None:
             s.df = s.df.loc[ind]
@@ -265,41 +261,26 @@ class TiltSeriesData(ImageDataset):
     ) -> Tuple[List[np.ndarray], Dict[int, int]]:
         """
         Parse unique particles from _rlnGroupName efficiently for large datasets.
-        
-        Optimized for datasets with millions of particles by:
-        - Using pandas groupby operations instead of Python loops
-        - Pre-allocating arrays instead of growing lists
-        - Using vectorized operations where possible
+        Group names are always returned in canonical (sorted) order for robustness and reproducibility.
         """
         import pandas as pd
-        
         # Load starfile
         s = starfile.Starfile.load(tiltstar)
         df = s.df
-
+        assert df is not None, "DataFrame loaded from starfile is None!"
         if ind is not None:
             df = df.loc[ind]
-
         # Use pandas groupby for efficient grouping
         grouped = df.groupby('_rlnGroupName').groups
-        
-        # Convert to numpy arrays directly
-        particles_to_tilts = [np.asarray(indices, dtype=int) for indices in grouped.values()]
-        
+        # Get canonical (sorted) group names for robust ordering
+        canonical_group_names = get_canonical_group_names(df)
+        # Build particles_to_tilts in canonical order
+        particles_to_tilts = [np.asarray(grouped[gn], dtype=int) for gn in canonical_group_names]
         # Create reverse mapping efficiently using numpy operations
-        n_particles = len(particles_to_tilts)
-        max_indices = max(len(particle_indices) for particle_indices in particles_to_tilts)
-        
-        # Pre-allocate the reverse mapping array
         tilts_to_particles = np.full(len(df), -1, dtype=int)
-        
-        # Use vectorized assignment
-        for particle_idx, particle_indices in enumerate(particles_to_tilts):
-            tilts_to_particles[particle_indices] = particle_idx
-        
-        # Convert to dict for compatibility
+        for particle_idx, indices in enumerate(particles_to_tilts):
+            tilts_to_particles[indices] = particle_idx
         tilts_to_particles_dict = {i: val for i, val in enumerate(tilts_to_particles)}
-        
         return particles_to_tilts, tilts_to_particles_dict
 
     @classmethod
@@ -727,4 +708,28 @@ class TiltSeriesSubset:
                 actual_tilts = len(self.dataset.particles[idx])
             max_tilts = max(max_tilts, actual_tilts)
         return max_tilts
+
+
+
+def tilt_series_indices_to_image_indices(tilt_series_indices, starfile, image_indices_subset = None):
+    particle_to_tilts, _ = TiltSeriesData.parse_particle_tilt(starfile)
+    images_indices = np.concatenate([particle_to_tilts[i] for i in tilt_series_indices])
+    if image_indices_subset is not None:
+        images_indices = np.intersect1d(images_indices, image_indices_subset)
+    return images_indices
+
+
+# def tilt_series_indices_to_tilt_series_names(tilt_series_indices, starfile):
+#     particle_to_tilts, _ = TiltSeriesData.parse_particle_tilt(starfile)
+#     tilt_series_names = [particle_to_tilts[i] for i in range(len(tilt_series_indices))]
+#     return tilt_series_names
+
+
+def get_canonical_group_names(df, group_col='_rlnGroupName'):
+    """
+    Return a sorted list of unique group names for robust, reproducible, and transparent ordering.
+    This canonical order should be used everywhere group names are mapped to indices or iterated over.
+    Sorting ensures that the order is not dependent on DataFrame construction, shuffling, or pandas internals.
+    """
+    return sorted(df[group_col].unique())
 

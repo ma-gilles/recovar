@@ -4,7 +4,7 @@ import numpy as np
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 ftu_np = fourier_transform_utils(np)
-from recovar import utils 
+import recovar.utils as utils
 import skimage
 from scipy.ndimage import binary_dilation, distance_transform_edt
 # from scipy.ndimage import distance_transform_edt
