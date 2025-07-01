@@ -15,6 +15,7 @@ from recovar import cryodrgn_load
 # xx = Path(__file__).resolve()
 import recovar.simulate_scattering_potential as gsm
 import logging
+import recovar.utils as utils
 CONSTANT_CTF=False
 logger = logging.getLogger(__name__)
 
@@ -260,13 +261,13 @@ def get_noise_model(option, grid_size):
 
 
 def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_images, outlier_file_input = None, grid_size = 128,
-                               volume_distribution = None,  dataset_params_option = "dataset1", noise_level = 1, 
+                               volume_distribution = None,  dataset_params_option = "dataset1", noise_level = 1.0, 
                                noise_model = "radial1", put_extra_particles = True, percent_outliers = 0.1, 
                                volume_radius = 0.9, trailing_zero_format_in_vol_name = True, noise_scale_std = 0.3, contrast_std =0.3, 
                                disc_type = 'linear_interp', n_tilts = -1, dose_per_tilt = 3, angle_per_tilt = 3, 
                                image_dtype = np.float16, image_offset_n_std = 0.0, per_particle_contrast=True, 
                                premultiplied_ctf = False, noise_increase_per_tilt = None, 
-                               create_nested_structure = False, nested_prefix = "Extract/job193"):
+                               create_nested_structure = False, nested_prefix = "Extract/job193", percent_tilt_series_outliers = 0.0):
     from recovar import output
     output.mkdir_safe(output_folder)
     volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize = False )
@@ -316,7 +317,7 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
 
     # First make some dataset to figure out a good scaling?
     main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file, n_tilts = n_tilts, 
-    dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt, image_offset_n_std= image_offset_n_std , per_particle_contrast=per_particle_contrast, premultiplied_ctf = premultiplied_ctf, noise_increase_per_tilt = noise_increase_per_tilt)
+    dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt, image_offset_n_std= image_offset_n_std , per_particle_contrast=per_particle_contrast, premultiplied_ctf = premultiplied_ctf, noise_increase_per_tilt = noise_increase_per_tilt, percent_tilt_series_outliers = percent_tilt_series_outliers)
 
     # Add additional simulation parameters that weren't set in generate_simulated_dataset
     additional_params = {
@@ -390,7 +391,7 @@ def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_
     return volumes
 
 
-def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None, n_tilts = -1, dose_per_tilt = None, angle_per_tilt = None, voltage = 100, image_offset_n_std = 0.0, per_particle_contrast= True, premultiplied_ctf = False, noise_increase_per_tilt = None):
+def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None, n_tilts = -1, dose_per_tilt = None, angle_per_tilt = None, voltage = 100, image_offset_n_std = 0.0, per_particle_contrast= True, premultiplied_ctf = False, noise_increase_per_tilt = None, percent_tilt_series_outliers = 0.0):
     
     # voxel_size = 
     volume_shape = utils.guess_vol_shape_from_vol_size(volumes[0].size)
@@ -417,7 +418,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         n_tilt_groups = np.max(tilt_groups)+1
 
         # Assign each tilt group to a particle
-        image_assignments_tilt = np.random.choice(np.arange(volumes.shape[0]), size = n_tilt_groups,  p = volume_distribution)
+        tilt_series_assignment = np.random.choice(np.arange(volumes.shape[0]), size = n_tilt_groups,  p = volume_distribution)
 
         # Assign each image a tilt number
         tilt_numbers = np.arange(n_images) % n_tilts
@@ -436,7 +437,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         B_facs = -4 * (tilt_numbers + 0.5) * dose_per_tilt 
 
         for i in range(n_tilt_groups):
-            image_assignments[tilt_groups == i] = image_assignments_tilt[i]
+            image_assignments[tilt_groups == i] = tilt_series_assignment[i]
             ctf_params[tilt_groups == i,core.CTFParamIndex.CONTRAST] =  np.cos(  x_angles[tilt_numbers[tilt_groups == i]] / 180 * np.pi )
 
             ind = np.where(tilt_groups == i)[0]
@@ -470,7 +471,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     else:
         per_tilt_contrast = None
         tilt_groups = None
-        image_assignments_tilt = None
+        tilt_series_assignment = None
 
     if n_tilts >0:
         # CTF_fun = core.get_cryo_ET_CTF_fun(dose_per_tilt, angle_per_tilt)
@@ -536,6 +537,46 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         main_image_stack[ind_outliers] = outlier_particle_image_stack
         image_assignments[ind_outliers] = -1
 
+    # Handle tilt outliers for tilt series (individual tilts within normal particles)
+    if n_tilts > 0 and percent_tilt_series_outliers > 0:
+        assert outlier_volume is not None, "if you want tilt outliers, need to provide a structure"
+        
+        # Calculate number of tilt outliers
+        n_tilt_series_outliers = np.round(percent_tilt_series_outliers * n_tilt_groups).astype(int)
+        ind_tilt_series_outliers = np.random.choice(np.arange(n_tilt_groups), n_tilt_series_outliers, replace=False)
+        image_indices_tilt_series_outliers = []
+        for ind_tilt_series_outlier in ind_tilt_series_outliers:
+            ind_tilt_outliers = np.where(tilt_groups == ind_tilt_series_outlier)[0]
+            image_assignments[ind_tilt_outliers] = -2
+            tilt_series_assignment[ind_tilt_series_outlier] = -1
+            image_indices_tilt_series_outliers.extend(ind_tilt_outliers)
+        image_indices_tilt_series_outliers = np.array(image_indices_tilt_series_outliers)
+        n_images_outliers = image_indices_tilt_series_outliers.size
+        # Generate parameters for tilt outliers
+        ctf_params_tilt_outliers, rots_tilt_outliers, trans_tilt_outliers = dataset_param_generator(n_images_outliers, grid_size)
+        tilt_outlier_contrast, tilt_outlier_noise_scale = generate_contrast_params(n_images_outliers, noise_scale_std, contrast_std)
+        
+        # Create dataset for tilt outliers
+        tilt_outlier_dataset = dataset.CryoEMDataset(None, voxel_size,
+                                                    rots_tilt_outliers, trans_tilt_outliers, ctf_params_tilt_outliers, 
+                                                    CTF_fun=CTF_fun, dataset_indices=None, grid_size=grid_size)
+        
+        # Generate tilt outlier images
+        tilt_outlier_image_stack = simulate_data(tilt_outlier_dataset, outlier_volume[None], noise_variance, 
+                                               batch_size, np.zeros(n_images_outliers, dtype=int), 
+                                               tilt_outlier_noise_scale, tilt_outlier_contrast, seed=2, 
+                                               disc_type=disc_type, mrc_file=None, premultiplied_ctf=premultiplied_ctf)
+        main_image_stack[image_indices_tilt_series_outliers] = tilt_outlier_image_stack
+        # Select random tilts to replace (avoiding particle outliers)
+        # non_outlier_indices = np.where(image_assignments != -1)[0]
+        # if n_tilt_groups >= n_tilt_outliers:
+        #     ind_tilt_outliers = np.random.choice(np.arange(n_tilt_groups), n_tilt_outliers, replace=False)
+        #     main_image_stack[ind_tilt_outliers] = tilt_outlier_image_stack
+        #     # Mark these as tilt outliers (different assignment value)
+        #     image_assignments[ind_tilt_outliers] = -2
+        #     tilt_series_assignment[ind_tilt_outliers] = -1
+        # else:
+        #     print(f"Warning: Not enough non-outlier images ({len(non_outlier_indices)}) for {n_tilt_outliers} tilt outliers")
 
     if n_tilts > 0:
         # Note that b_facs are stored here just so that the get saved in the starfile in WARP style...
@@ -551,7 +592,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         "image_assignment" : image_assignments,
         "noise_variance": noise_variance.astype(np.float32),
         "voxel_size": voxel_size,
-        "tilt_series_assignment": image_assignments_tilt,
+        "tilt_series_assignment": tilt_series_assignment,
         "tilt_groups": tilt_groups,
         "per_tilt_contrast": per_tilt_contrast,
         # Add noise-related parameters

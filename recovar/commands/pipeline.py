@@ -7,10 +7,11 @@ import recovar.config
 import jax
 import jax.numpy as jnp
 import numpy as np
-import os, argparse, time, pickle, sys
+import os, argparse, time, pickle, sys, shutil
 from recovar import output as o
 from recovar import dataset, homogeneous, embedding, principal_components, latent_density, mask, utils, constants, noise, output, covariance_estimation
 from recovar.fourier_transform_utils import fourier_transform_utils
+from recovar.utils_core.data_copy import copy_data_to_temp_folder, save_original_paths_info
 ftu = fourier_transform_utils(jnp)
 # logger.setLevel(logger.info)
 logger = logging.getLogger(__name__)
@@ -66,6 +67,9 @@ def add_args(parser: argparse.ArgumentParser):
         "--use-complement-mask", action="store_true", dest = "use_complement_mask", help="Use complement of focus mask"
     )
 
+    parser.add_argument(
+        "--copy-to-folder", dest="copy_to_folder", type=os.path.abspath, help="Copy all input data files to this temporary folder before processing. Original paths will be saved in output."
+    )
 
     # parser.add_argument(
     #     "--mask-option", metavar=str, default="input", help="mask options: from_halfmaps , input (default), sphere, none"
@@ -106,11 +110,11 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     group.add_argument(
-        "--tilt-ind",
+        "--particle-ind",
         dest="tilt_ind",
         type=os.path.abspath,
         metavar="PKL",
-        help="Filter tilts (particles) by these indices",
+        help="Filter particles by these indices (only for tilt-series/cryo-ET)",
     )
 
 
@@ -313,6 +317,9 @@ def add_args(parser: argparse.ArgumentParser):
 def standard_recovar_pipeline(args):
     st_time = time.time()
 
+    # Copy data to temporary folder if requested
+    path_mapping = copy_data_to_temp_folder(args)
+
     if args.mask.endswith(".mrc"):
         args.mask = os.path.abspath(args.mask)
 
@@ -324,6 +331,9 @@ def standard_recovar_pipeline(args):
     with open(f"{args.outdir}/command.txt", "w") as text_file:
         command = 'python ' + ' '.join((sys.argv))
         text_file.write(command)
+
+    # Save original paths if data was copied
+    save_original_paths_info(path_mapping, args.outdir)
 
     # Set CTF function here
     if args.tilt_series_ctf is None and args.tilt_series is False:
@@ -354,6 +364,23 @@ def standard_recovar_pipeline(args):
     logger.info(args)
     ind_split = dataset.figure_out_halfsets(args)
     dataset_loader_dict = dataset.make_dataset_loader_dict(args)
+    
+    # Log the paths being used for data loading
+    if path_mapping is not None:
+        logger.info("Using copied data files for loading:")
+        logger.info(f"  Particles file: {dataset_loader_dict['particles_file']}")
+        logger.info(f"  Poses file: {dataset_loader_dict['poses_file']}")
+        logger.info(f"  CTF file: {dataset_loader_dict['ctf_file']}")
+        if dataset_loader_dict['datadir']:
+            logger.info(f"  Datadir: {dataset_loader_dict['datadir']}")
+    else:
+        logger.info("Using original data files for loading:")
+        logger.info(f"  Particles file: {dataset_loader_dict['particles_file']}")
+        logger.info(f"  Poses file: {dataset_loader_dict['poses_file']}")
+        logger.info(f"  CTF file: {dataset_loader_dict['ctf_file']}")
+        if dataset_loader_dict['datadir']:
+            logger.info(f"  Datadir: {dataset_loader_dict['datadir']}")
+    
     options = utils.make_algorithm_options(args)
 
     cryos = dataset.get_split_datasets_from_dict(dataset_loader_dict, ind_split, args.lazy)
@@ -847,6 +874,11 @@ def standard_recovar_pipeline(args):
         # Input parameters
         'input_args': args
     }
+    
+    # Add original paths information if data was copied
+    if path_mapping is not None:
+        result['original_paths'] = path_mapping
+
     # Convert all non-None values to numpy arrays where possible
     for key, value in result.items():
         if value is not None and not isinstance(value, (dict, str, float, int, bool)):

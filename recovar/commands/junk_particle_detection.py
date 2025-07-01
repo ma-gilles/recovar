@@ -21,22 +21,22 @@ New in this version:
 """
 
 import os
-import sys
-import argparse
 import pickle
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
-import matplotlib.patches
-from sklearn.cluster import KMeans
 import logging
-from recovar import output, relion_functions, plot_utils
+from sklearn.cluster import KMeans
+from recovar import output, relion_functions, plot_utils, utils
 from recovar.fourier_transform_utils import fourier_transform_utils
 import jax.numpy as jnp
 import seaborn as sns
 import mrcfile
-import umap
 import pandas as pd
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
+import umap
+import argparse
 
 matplotlib.rcParams["contour.negative_linestyle"] = "solid"
 ftu = fourier_transform_utils(jnp)
@@ -410,17 +410,17 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     freq_axis = x / (2 * len(all_fsc_curves[0]))
     
     # Use hexbin density plot for background like in output.py
-    try:
-        # Create 2D histogram of FSC curves vs frequency
-        curve_data = np.array(all_fsc_curves)
-        freq_mesh, curve_mesh = np.meshgrid(freq_axis, np.arange(len(curve_data)))
-        hb = ax.hexbin(freq_mesh.flatten(), curve_data.flatten(), 
-                      gridsize=30, cmap='Blues', alpha=0.3, mincnt=1)
-    except:
-        pass
+    # try:
+    #     # Create 2D histogram of FSC curves vs frequency
+    curve_data = np.array(all_fsc_curves)
+    freq_mesh, curve_mesh = np.meshgrid(freq_axis, np.arange(len(curve_data)))
+    hb = ax.hexbin(freq_mesh.flatten(), curve_data.flatten(), 
+                  gridsize=30, cmap='Blues', alpha=0.3, mincnt=1)
+    # except:
+    #     pass
     
     # Color code curves by FSC score with better transparency
-    colors_curves = plt.cm.viridis(np.array(halfmap_fscs))
+    colors_curves = cm.viridis(np.array(halfmap_fscs))
     for i, curve in enumerate(all_fsc_curves):
         ax.plot(freq_axis, curve, color=colors_curves[i], alpha=0.3, linewidth=0.5)
     
@@ -445,7 +445,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     ax.set_facecolor('#FAFAFA')
     
     # Add colorbar
-    sm = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(vmin=min(halfmap_fscs), vmax=max(halfmap_fscs)))
+    sm = plt.cm.ScalarMappable(cmap=cm.viridis, norm=mcolors.Normalize(vmin=min(halfmap_fscs), vmax=max(halfmap_fscs)))
     cbar = plt.colorbar(sm, ax=ax)
     cbar.set_label('Half-map FSC Score', fontweight='bold')
     
@@ -457,16 +457,16 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     fig, ax = plt.subplots(figsize=(12, 8))
     
     # Use hexbin density plot for background
-    try:
-        curve_data = np.array(all_vs_mean_curves)
-        freq_mesh, curve_mesh = np.meshgrid(freq_axis, np.arange(len(curve_data)))
-        hb = ax.hexbin(freq_mesh.flatten(), curve_data.flatten(), 
-                      gridsize=30, cmap='Blues', alpha=0.3, mincnt=1)
-    except:
-        pass
+    # try:
+    curve_data = np.array(all_vs_mean_curves)
+    freq_mesh, curve_mesh = np.meshgrid(freq_axis, np.arange(len(curve_data)))
+    hb = ax.hexbin(freq_mesh.flatten(), curve_data.flatten(), 
+                  gridsize=30, cmap='Blues', alpha=0.3, mincnt=1)
+    # except:
+    #     pass
     
     # Color code curves by vs-mean FSC score
-    colors_curves = plt.cm.viridis(np.array(vs_mean_fscs))
+    colors_curves = cm.viridis(np.array(vs_mean_fscs))
     for i, curve in enumerate(all_vs_mean_curves):
         ax.plot(freq_axis, curve, color=colors_curves[i], alpha=0.3, linewidth=0.5)
     
@@ -563,10 +563,10 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     ax = axes[0, 0]
     
     # Create hexbin density plot for background
-    try:
-        hb = ax.hexbin(zs[:, 0], zs[:, 1], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
-    except:
-        pass
+    # try:
+    hb = ax.hexbin(zs[:, 0], zs[:, 1], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
+    # except:
+    #     pass
     
     # Main scatter plot with improved styling (like output.py)
     ax.scatter(zs[:, 0], zs[:, 1], s=1, alpha=0.6, c=colors['scatter'], edgecolors='none', rasterized=True)
@@ -743,10 +743,10 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
         ax = axes[1, 2]
         
         # Create hexbin density plot for background
-        try:
-            hb = ax.hexbin(halfmap_fscs, vs_mean_fscs, gridsize=20, cmap='Blues', alpha=0.3, mincnt=1)
-        except:
-            pass
+        # try:
+        hb = ax.hexbin(halfmap_fscs, vs_mean_fscs, gridsize=20, cmap='Blues', alpha=0.3, mincnt=1)
+        # except:
+        #     pass
         
         # Main scatter plot with improved styling
         scatter = ax.scatter(halfmap_fscs, vs_mean_fscs, c=halfmap_fscs, cmap='viridis', 
@@ -836,10 +836,10 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     ax = axes[1, 1]
     
     # Create hexbin density plot for background
-    try:
-        hb = ax.hexbin(halfmap_fscs, halfmap_aucs, gridsize=20, cmap='Blues', alpha=0.3, mincnt=1)
-    except:
-        pass
+    # try:
+    hb = ax.hexbin(halfmap_fscs, halfmap_aucs, gridsize=20, cmap='Blues', alpha=0.3, mincnt=1)
+    # except:
+    #     pass
     
     scatter = ax.scatter(halfmap_fscs, halfmap_aucs, c=halfmap_fscs, cmap='viridis', 
                         alpha=0.7, s=50, edgecolors='black', linewidth=0.5)
@@ -854,10 +854,10 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     ax = axes[1, 2]
     
     # Create hexbin density plot for background
-    try:
-        hb = ax.hexbin(halfmap_fscs, vs_mean_fscs, gridsize=20, cmap='Blues', alpha=0.3, mincnt=1)
-    except:
-        pass
+    # try:
+    hb = ax.hexbin(halfmap_fscs, vs_mean_fscs, gridsize=20, cmap='Blues', alpha=0.3, mincnt=1)
+    # except:
+    #     pass
     
     scatter = ax.scatter(halfmap_fscs, vs_mean_fscs, c=halfmap_fscs, cmap='viridis', 
                         alpha=0.7, s=50, edgecolors='black', linewidth=0.5)
@@ -1578,8 +1578,23 @@ def create_junk_detection_visualizations(halfmap_fscs, vs_mean_fscs, halfmap_auc
     ax = axes[0, 2]
     
     # Create hexbin density plot for all clusters
-    hb = ax.hexbin(combined_fsc, combined_auc, gridsize=20, cmap='Blues', alpha=0.6, 
-                   mincnt=1, reduce_C_function=np.mean)
+    try:
+        # Debug: check data bounds
+        if np.any(np.isnan(combined_fsc)) or np.any(np.isnan(combined_auc)):
+            logger.warning(f"NaN values found: FSC NaN count: {np.sum(np.isnan(combined_fsc))}, AUC NaN count: {np.sum(np.isnan(combined_auc))}")
+            hb = None
+        elif np.any(np.isinf(combined_fsc)) or np.any(np.isinf(combined_auc)):
+            logger.warning(f"Infinite values found: FSC inf count: {np.sum(np.isinf(combined_fsc))}, AUC inf count: {np.sum(np.isinf(combined_auc))}")
+            hb = None
+        elif combined_fsc.max() - combined_fsc.min() < 1e-10 or combined_auc.max() - combined_auc.min() < 1e-10:
+            logger.warning(f"No range in data: FSC range: {combined_fsc.max() - combined_fsc.min()}, AUC range: {combined_auc.max() - combined_auc.min()}")
+            hb = None
+        else:
+            hb = ax.hexbin(combined_fsc, combined_auc, gridsize=20, cmap='Blues', alpha=0.6, 
+                           mincnt=1, reduce_C_function=np.mean)
+    except Exception as e:
+        logger.warning(f"Hexbin failed: {e}")
+        hb = None
     
     # Plot good and junk clusters separately with better styling
     if len(good_clusters) > 0:
@@ -1592,8 +1607,9 @@ def create_junk_detection_visualizations(halfmap_fscs, vs_mean_fscs, halfmap_auc
                   edgecolor='black', linewidth=0.8, zorder=5)
     
     # Add colorbar for hexbin
-    cbar = plt.colorbar(hb, ax=ax)
-    cbar.set_label('Density', fontsize=10)
+    if hb is not None:
+        cbar = plt.colorbar(hb, ax=ax)
+        cbar.set_label('Density', fontsize=10)
     
     ax.set_xlabel('Combined FSC Score', fontsize=12, fontweight='bold')
     ax.set_ylabel('Combined AUC Score', fontsize=12, fontweight='bold')
@@ -1935,116 +1951,84 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
     
     # Create UMAP visualization
     logger.info("Creating UMAP visualization...")
-    try:
-        umap_data = plot_umap_visualization(
-            zs, cluster_centers, cluster_indices, fsc_scores, fsc_auc_scores, output_folder, zdim_key
-        )
-        # Add UMAP data to junk_info for potential future use
-        junk_info['umap_data'] = umap_data
-    except Exception as e:
-        logger.warning(f"UMAP visualization failed: {e}")
+    umap_data = plot_umap_visualization(
+        zs, cluster_centers, cluster_indices, fsc_scores, fsc_auc_scores, output_folder, zdim_key
+    )
+    junk_info['umap_data'] = umap_data
     
     # Perform junk detection
     logger.info("Performing junk detection...")
-    junk_clusters = np.array([])  # Initialize empty array
-    try:
-        junk_clusters, junk_detection_info = detect_junk_clusters(
-            fsc_scores, fsc_auc_scores, output_folder, zdim_key,
-            method=junk_detection_method, percentile_threshold=percentile_threshold,
-            std_threshold=std_threshold, min_junk_fraction=min_junk_fraction, max_junk_fraction=max_junk_fraction
-        )
-        # Add junk detection results to junk_info
-        junk_info['junk_detection'] = junk_detection_info
-        junk_info['junk_clusters'] = junk_clusters.tolist()
-        junk_info['good_clusters'] = junk_detection_info['good_clusters']
-        
-        logger.info(f"Junk detection completed. Found {len(junk_clusters)} junk clusters.")
-    except Exception as e:
-        logger.warning(f"Junk detection failed: {e}")
-        # Ensure junk_clusters is still defined even if detection fails
-        junk_clusters = np.array([])
-        junk_info['junk_detection'] = {'error': str(e)}
-        junk_info['junk_clusters'] = []
-        junk_info['good_clusters'] = []
+    junk_clusters, junk_detection_info = detect_junk_clusters(
+        fsc_scores, fsc_auc_scores, output_folder, zdim_key,
+        method=junk_detection_method, percentile_threshold=percentile_threshold,
+        std_threshold=std_threshold, min_junk_fraction=min_junk_fraction, max_junk_fraction=max_junk_fraction
+    )
+    junk_info['junk_detection'] = junk_detection_info
+    junk_info['junk_clusters'] = junk_clusters.tolist()
+    junk_info['good_clusters'] = junk_detection_info['good_clusters']
+    logger.info(f"Junk detection completed. Found {len(junk_clusters)} junk clusters.")
     
     # Map clusters to particles and save particle classifications
     logger.info("Mapping clusters to particles...")
-    try:
-        junk_particles, good_particles, particle_stats = map_clusters_to_particles(
-            junk_clusters, cluster_indices, output_folder, zdim_key, junk_detection_method
-        )
-        
-        # Create particle classification visualizations
-        create_particle_classification_visualizations(
-            zs, cluster_indices, junk_particles, good_particles, 
-            particle_stats, output_folder, zdim_key, junk_detection_method
-        )
-        
-        # Get original particle indices for mapping
-        original_particle_indices = np.concatenate(pipeline_output.get('particles_halfsets'))
-        
-        # Save particle classifications
-        save_particle_classifications(
-            junk_particles, good_particles, particle_stats, 
-            cluster_indices, output_folder, zdim_key, junk_detection_method, original_particle_indices
-        )
-        
-        # Save pipeline-compatible indices if requested
-        if save_pipeline_indices:
-            logger.info("Saving pipeline-compatible indices...")
+    junk_particles, good_particles, particle_stats = map_clusters_to_particles(
+        junk_clusters, cluster_indices, output_folder, zdim_key, junk_detection_method
+    )
+    # Create particle classification visualizations
+    create_particle_classification_visualizations(
+        zs, cluster_indices, junk_particles, good_particles, 
+        particle_stats, output_folder, zdim_key, junk_detection_method
+    )
+    # Get original particle indices for mapping
+    original_particle_indices = np.concatenate(pipeline_output.get('particles_halfsets'))
+    # Save particle classifications
+    save_particle_classifications(
+        junk_particles, good_particles, particle_stats, 
+        cluster_indices, output_folder, zdim_key, junk_detection_method, original_particle_indices
+    )
+    # Save pipeline-compatible indices if requested
+    if save_pipeline_indices:
+        logger.info("Saving pipeline-compatible indices...")
+        if output_format in ["both", "junk_only"]:
+            junk_pipeline_file = os.path.join(output_folder, f'junk_pipeline_indices_{zdim_key}.pkl')
+            with open(junk_pipeline_file, 'wb') as f:
+                pickle.dump(junk_particles, f)
+            logger.info(f"Saved junk indices for pipeline: {junk_pipeline_file}")
+        if output_format in ["both", "good_only"]:
+            good_pipeline_file = os.path.join(output_folder, f'good_pipeline_indices_{zdim_key}.pkl')
+            with open(good_pipeline_file, 'wb') as f:
+                pickle.dump(good_particles, f)
+            logger.info(f"Saved good indices for pipeline: {good_pipeline_file}")
+        # Create a summary file with usage instructions
+        summary_file = os.path.join(output_folder, f'pipeline_usage_summary_{zdim_key}.txt')
+        with open(summary_file, 'w') as f:
+            f.write("Pipeline-Compatible Indices Usage Summary\n")
+            f.write("==========================================\n\n")
+            f.write(f"Generated from: {recovar_result_dir}\n")
+            f.write(f"Method: {junk_detection_method}\n")
+            f.write(f"zdim: {zdim_key}\n\n")
             if output_format in ["both", "junk_only"]:
-                junk_pipeline_file = os.path.join(output_folder, f'junk_pipeline_indices_{zdim_key}.pkl')
-                with open(junk_pipeline_file, 'wb') as f:
-                    pickle.dump(junk_particles, f)
-                logger.info(f"Saved junk indices for pipeline: {junk_pipeline_file}")
-            
+                f.write("Junk particles (exclude these):\n")
+                f.write(f"  --ind {os.path.abspath(junk_pipeline_file)} (for regular datasets)\n")
+                f.write(f"  --particle-ind {os.path.abspath(junk_pipeline_file)} (for tilt series)\n\n")
             if output_format in ["both", "good_only"]:
-                good_pipeline_file = os.path.join(output_folder, f'good_pipeline_indices_{zdim_key}.pkl')
-                with open(good_pipeline_file, 'wb') as f:
-                    pickle.dump(good_particles, f)
-                logger.info(f"Saved good indices for pipeline: {good_pipeline_file}")
-            
-            # Create a summary file with usage instructions
-            summary_file = os.path.join(output_folder, f'pipeline_usage_summary_{zdim_key}.txt')
-            with open(summary_file, 'w') as f:
-                f.write("Pipeline-Compatible Indices Usage Summary\n")
-                f.write("==========================================\n\n")
-                f.write(f"Generated from: {recovar_result_dir}\n")
-                f.write(f"Method: {junk_detection_method}\n")
-                f.write(f"zdim: {zdim_key}\n\n")
-                
-                if output_format in ["both", "junk_only"]:
-                    f.write("Junk particles (exclude these):\n")
-                    f.write(f"  --ind {os.path.abspath(junk_pipeline_file)} (for regular datasets)\n")
-                    f.write(f"  --tilt-ind {os.path.abspath(junk_pipeline_file)} (for tilt series)\n\n")
-                
-                if output_format in ["both", "good_only"]:
-                    f.write("Good particles (include these):\n")
-                    f.write(f"  --ind {os.path.abspath(good_pipeline_file)} (for regular datasets)\n")
-                    f.write(f"  --tilt-ind {os.path.abspath(good_pipeline_file)} (for tilt series)\n\n")
-                
-                f.write("Example usage:\n")
-                f.write("  # Run pipeline excluding junk particles:\n")
-                if output_format in ["both", "junk_only"]:
-                    f.write(f"  python -m recovar.commands.pipeline particles.star --poses poses.pkl --ctf ctf.pkl --ind {os.path.basename(junk_pipeline_file)} -o output_dir\n\n")
-                
-                f.write("  # Run pipeline with only good particles:\n")
-                if output_format in ["both", "good_only"]:
-                    f.write(f"  python -m recovar.commands.pipeline particles.star --poses poses.pkl --ctf ctf.pkl --ind {os.path.basename(good_pipeline_file)} -o output_dir\n")
-            
-            logger.info(f"Pipeline usage summary saved to: {summary_file}")
-        
-        # Save reconstruction info if reconstructions were saved
-        if save_reconstructions and reconstructions is not None:
-            reconstructions_info_path = os.path.join(output_folder, f'reconstructions_info_{zdim_key}.pkl')
-            with open(reconstructions_info_path, 'wb') as f:
-                pickle.dump(reconstructions, f)
-            logger.info(f"Saved reconstruction info to {reconstructions_info_path}")
-        
-        logger.info(f"Particle mapping completed. Found {len(junk_particles)} junk particles and {len(good_particles)} good particles.")
-        
-    except Exception as e:
-        logger.warning(f"Particle mapping failed: {e}")
+                f.write("Good particles (include these):\n")
+                f.write(f"  --ind {os.path.abspath(good_pipeline_file)} (for regular datasets)\n")
+                f.write(f"  --particle-ind {os.path.abspath(good_pipeline_file)} (for tilt series)\n\n")
+            f.write("Example usage:\n")
+            f.write("  # Run pipeline excluding junk particles:\n")
+            if output_format in ["both", "junk_only"]:
+                f.write(f"  python -m recovar.commands.pipeline particles.star --poses poses.pkl --ctf ctf.pkl --ind {os.path.basename(junk_pipeline_file)} -o output_dir\n\n")
+            f.write("  # Run pipeline with only good particles:\n")
+            if output_format in ["both", "good_only"]:
+                f.write(f"  python -m recovar.commands.pipeline particles.star --poses poses.pkl --ctf ctf.pkl --ind {os.path.basename(good_pipeline_file)} -o output_dir\n")
+        logger.info(f"Pipeline usage summary saved to: {summary_file}")
+    # Save reconstruction info if reconstructions were saved
+    if save_reconstructions and reconstructions is not None:
+        reconstructions_info_path = os.path.join(output_folder, f'reconstructions_info_{zdim_key}.pkl')
+        with open(reconstructions_info_path, 'wb') as f:
+            pickle.dump(reconstructions, f)
+        logger.info(f"Saved reconstruction info to {reconstructions_info_path}")
+    logger.info(f"Particle mapping completed. Found {len(junk_particles)} junk particles and {len(good_particles)} good particles.")
     
     logger.info(f"Junk particle detection complete. Results saved to {output_folder}")
     return junk_info
@@ -2056,8 +2040,8 @@ def add_args(parser):
     parser.add_argument("--output-folder", "-o", type=str, help="Output directory for results (default: recovar_result_dir/junk_detection_zdim)")
     parser.add_argument("--zdim", type=int, default=10, help="Latent space dimension to use (default: 10)")
     parser.add_argument("--n-clusters", type=int, default=100, help="Number of k-means clusters (default: 100)")
-    parser.add_argument("--batch-size", type=int, default=100, help="Batch size for reconstruction (default: 100)")
-    parser.add_argument("--n-particles-per-cluster", type=int, default=100, help="Number of particles per halfmap (default: 100)")
+    parser.add_argument("--batch-size", type=int, help="Batch size for reconstruction (auto: based on GPU memory and grid size)")
+    parser.add_argument("--n-particles-per-cluster", type=int, help="Number of particles per halfmap (auto: min(100, max(10, n_particles/n_clusters)))")
     parser.add_argument("--no-z-regularization", action="store_true", help="Use unregularized embeddings")
     parser.add_argument("--save-reconstructions", action="store_true", help="Save reconstructions to file")
     parser.add_argument("--filter-resolution", type=float, help="Resolution in Angstroms to filter combined reconstructions")
@@ -2070,7 +2054,7 @@ def add_args(parser):
     parser.add_argument("--min-junk-fraction", type=float, default=0.1, help="Minimum fraction of clusters that can be classified as junk (default: 0.1)")
     parser.add_argument("--max-junk-fraction", type=float, default=0.8, help="Maximum fraction of clusters that can be classified as junk (default: 0.8)")
     parser.add_argument("--save-pipeline-indices", action="store_true", 
-                       help="Save particle indices in pipeline-compatible format (for --ind or --tilt-ind)")
+                       help="Save particle indices in pipeline-compatible format (for --ind or --particle-ind)")
     parser.add_argument("--output-format", type=str, default="both", 
                        choices=["both", "junk_only", "good_only"], 
                        help="Which indices to save (default: both)")
@@ -2083,14 +2067,42 @@ def main():
     parser = add_args(parser)
     args = parser.parse_args()
     
+    # Automatically calculate batch_size and n_particles_per_cluster if not provided
+    if args.batch_size is None or args.n_particles_per_cluster is None:
+        # Load pipeline output to get necessary information
+        pipeline_output = output.PipelineOutput(args.recovar_result_dir)
+        
+        # Get GPU memory and grid size for batch size calculation
+        from recovar import utils
+        gpu_memory = utils.get_gpu_memory_total()
+        cryos = pipeline_output.get('dataset')
+        grid_size = cryos[0].grid_size
+        
+        # Calculate automatic batch size like in pipeline
+        auto_batch_size = utils.get_image_batch_size(grid_size, gpu_memory)
+        
+        # Calculate n_particles_per_cluster as min(100, max(10, n_particles/n_clusters))
+        zdim_key = f"{args.zdim}_noreg" if args.no_z_regularization else args.zdim
+        n_particles = len(pipeline_output.get('zs')[zdim_key])
+        auto_n_particles_per_cluster = min(100, max(10, n_particles // args.n_clusters))
+        
+        # Use provided values or auto-calculated values
+        batch_size = args.batch_size if args.batch_size is not None else auto_batch_size
+        n_particles_per_cluster = args.n_particles_per_cluster if args.n_particles_per_cluster is not None else auto_n_particles_per_cluster
+        
+        print(f"Auto-calculated: batch_size={batch_size}, n_particles_per_cluster={n_particles_per_cluster}")
+    else:
+        batch_size = args.batch_size
+        n_particles_per_cluster = args.n_particles_per_cluster
+    
     # Call the unified function with all arguments
     junk_particle_detection(
         args.recovar_result_dir,
         args.output_folder,
         args.zdim,
         args.n_clusters,
-        args.batch_size,
-        args.n_particles_per_cluster,
+        batch_size,
+        n_particles_per_cluster,
         args.no_z_regularization,
         args.save_reconstructions,
         args.filter_resolution,
@@ -2519,7 +2531,7 @@ def save_particle_classifications(junk_particles, good_particles, particle_stats
     with open(results_file, 'wb') as f:
         pickle.dump(results, f)
     
-    # Save indices in pipeline-compatible format (for --ind or --tilt-ind)
+    # Save indices in pipeline-compatible format (for --ind or --particle-ind)
     # These are just the raw numpy arrays that can be directly used
     junk_indices_file = os.path.join(output_folder, f'junk_indices_{zdim_key}.pkl')
     with open(junk_indices_file, 'wb') as f:
