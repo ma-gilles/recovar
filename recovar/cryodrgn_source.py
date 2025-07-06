@@ -341,11 +341,24 @@ class _MRCDataFrameSource(ImageSource):
             self.df["__mrc_filepath"] = self.df["__mrc_filename"]
 
         # Peek into the first mrc file to get image size
-        D = MRCFileSource(self.df["__mrc_filepath"][0]).D
-        self._sources = {
-            filepath: MRCFileSource(filepath)
-            for filepath in self.df["__mrc_filepath"].unique()
-        }
+        first_filepath = str(self.df["__mrc_filepath"].values[0])
+        try:
+            D = MRCFileSource(first_filepath).D
+        except FileNotFoundError:
+            # Provide helpful error message with path analysis
+            self._handle_file_not_found_error(first_filepath, datadir)
+        
+        # Create sources for all unique filepaths with error handling
+        self._sources = {}
+        unique_filepaths = self.df["__mrc_filepath"].unique()
+        for filepath in unique_filepaths:
+            filepath_str = str(filepath)
+            try:
+                self._sources[filepath_str] = MRCFileSource(filepath_str)
+            except FileNotFoundError:
+                # If any file is missing, provide helpful error message
+                self._handle_file_not_found_error(filepath_str, datadir)
+        
         super().__init__(
             D=D,
             n=len(self.df),
@@ -353,6 +366,127 @@ class _MRCDataFrameSource(ImageSource):
             lazy=lazy,
             indices=indices,
         )
+
+    def _handle_file_not_found_error(self, filepath, datadir):
+        """Handle FileNotFoundError with helpful diagnostic information."""
+        # Find the original filename for this filepath
+        original_filename = "unknown"
+        try:
+            # Try to find the original filename from the dataframe
+            for i, row_filepath in enumerate(self.df["__mrc_filepath"]):
+                if str(row_filepath) == filepath:
+                    original_filename = str(self.df["__mrc_filename"][i])
+                    break
+        except (IndexError, KeyError):
+            pass
+        
+        # Analyze the path construction
+        error_msg = f"\nFileNotFoundError: Could not find file: {filepath}\n"
+        error_msg += f"Original path in STAR file: {original_filename}\n"
+        error_msg += f"Data directory: {datadir}\n"
+        
+        # Check if the original filename exists as-is
+        if os.path.exists(original_filename):
+            error_msg += f"✓ The original path exists: {original_filename}\n"
+            error_msg += f"  Try using --datadir without --strip-prefix\n"
+        else:
+            error_msg += f"✗ The original path does not exist: {original_filename}\n"
+        
+        # Check if datadir exists
+        if datadir and not os.path.exists(datadir):
+            error_msg += f"✗ Data directory does not exist: {datadir}\n"
+        elif datadir:
+            error_msg += f"✓ Data directory exists: {datadir}\n"
+        
+        # Suggest possible strip-prefix values based on datadir contents
+        if original_filename.startswith('/') and datadir and os.path.exists(datadir):
+            error_msg += f"\nAnalyzing datadir contents to find correct --strip-prefix...\n"
+            
+            # Get the filename and directory structure from the original path
+            original_dir = os.path.dirname(original_filename)
+            filename_only = os.path.basename(original_filename)
+            
+            # Search for the file in the datadir recursively
+            found_files = []
+            for root, dirs, files in os.walk(datadir):
+                if filename_only in files:
+                    found_path = os.path.join(root, filename_only)
+                    found_files.append(found_path)
+            
+            if found_files:
+                error_msg += f"✓ Found {len(found_files)} matching files in datadir:\n"
+                for found_file in found_files:
+                    # Calculate the relative path from datadir
+                    rel_path = os.path.relpath(found_file, datadir)
+                    # Calculate what strip-prefix would be needed
+                    if original_dir != '/':
+                        # Remove the original directory part from the original path
+                        suggested_strip_prefix = original_dir + '/'
+                        error_msg += f"  File: {found_file}\n"
+                        error_msg += f"  Relative to datadir: {rel_path}\n"
+                        error_msg += f"  Suggested --strip-prefix: '{suggested_strip_prefix}'\n"
+                        error_msg += f"  This would make the path: {rel_path}\n\n"
+            else:
+                # If file not found, try to find similar directory structures
+                error_msg += f"File '{filename_only}' not found in datadir.\n"
+                error_msg += f"Checking for similar directory structures...\n"
+                
+                # Look for directories that might contain the file
+                original_dir_name = os.path.basename(original_dir)
+                found_dirs = []
+                for root, dirs, files in os.walk(datadir):
+                    for dir_name in dirs:
+                        if original_dir_name in dir_name or dir_name in original_dir_name:
+                            found_dirs.append(os.path.join(root, dir_name))
+                
+                if found_dirs:
+                    error_msg += f"Found similar directories in datadir:\n"
+                    for found_dir in found_dirs[:5]:  # Limit to first 5
+                        rel_dir = os.path.relpath(found_dir, datadir)
+                        error_msg += f"  {rel_dir}\n"
+                    error_msg += f"\nTry adjusting --strip-prefix to match one of these directory structures.\n"
+                else:
+                    error_msg += f"No similar directory structures found in datadir.\n"
+        
+        # Also suggest common strip-prefix patterns for absolute paths
+        if original_filename.startswith('/'):
+            error_msg += f"\nCommon --strip-prefix patterns to try:\n"
+            if '/home/' in original_filename:
+                error_msg += f"  --strip-prefix '/home/'\n"
+            if '/scratch/' in original_filename:
+                error_msg += f"  --strip-prefix '/scratch/'\n"
+            if '/tmp/' in original_filename:
+                error_msg += f"  --strip-prefix '/tmp/'\n"
+            if '/data/' in original_filename:
+                error_msg += f"  --strip-prefix '/data/'\n"
+            if '/mnt/' in original_filename:
+                error_msg += f"  --strip-prefix '/mnt/'\n"
+            if '/usr/' in original_filename:
+                error_msg += f"  --strip-prefix '/usr/'\n"
+        
+        # Check if the file exists in the datadir with different path structures
+        if datadir:
+            filename_only = os.path.basename(original_filename)
+            potential_paths = [
+                os.path.join(datadir, filename_only),
+                os.path.join(datadir, original_filename.lstrip('/')),
+                os.path.join(datadir, os.path.basename(os.path.dirname(original_filename)), filename_only)
+            ]
+            
+            for potential_path in potential_paths:
+                if os.path.exists(potential_path):
+                    error_msg += f"✓ Found file at: {potential_path}\n"
+                    error_msg += f"  This suggests the path structure in the STAR file needs adjustment\n"
+                    break
+        
+        error_msg += f"\nTroubleshooting tips:\n"
+        error_msg += f"1. Check that --datadir points to the correct directory containing your image files\n"
+        error_msg += f"2. Use --strip-prefix to remove common path prefixes from the STAR file paths\n"
+        error_msg += f"3. If the data has been moved/copied to a new location, use the suggested --strip-prefix above\n"
+        error_msg += f"4. Verify that all files referenced in the STAR file exist in the expected locations\n"
+        error_msg += f"5. Check file permissions and ensure the files are accessible\n"
+        
+        raise FileNotFoundError(error_msg)
 
     def _images(self, indices: np.ndarray, require_contiguous: bool = False):
         def load_single_mrcs(filepath, df):
@@ -402,6 +536,20 @@ class StarfileSource(_MRCDataFrameSource):
 
         # Handle path stripping if strip_prefix is provided
         if strip_prefix:
+            # Check if strip_prefix actually matches any paths
+            matching_paths = df["__mrc_filename"].str.startswith(strip_prefix)
+            if not matching_paths.any():
+                error_msg = f"\nError: --strip-prefix '{strip_prefix}' does not match any paths in the STAR file.\n"
+                error_msg += f"All paths in the STAR file:\n"
+                unique_paths = df["__mrc_filename"].unique()
+                for path in unique_paths[:5]:  # Show first 5 unique paths
+                    error_msg += f"  {path}\n"
+                if len(unique_paths) > 5:
+                    error_msg += f"  ... and {len(unique_paths) - 5} more paths\n"
+                error_msg += f"\nPlease check your --strip-prefix value or remove it if not needed.\n"
+                raise ValueError(error_msg)
+            
+            # Apply the strip_prefix
             df["__mrc_filename"] = df["__mrc_filename"].apply(
                 lambda filename: filename.replace(strip_prefix, "", 1) if filename.startswith(strip_prefix) else filename
             )

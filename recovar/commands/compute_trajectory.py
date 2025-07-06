@@ -7,6 +7,7 @@ from scipy.spatial import distance_matrix
 import pickle
 import os, argparse
 from recovar import parser_args
+from recovar.utils_core import copy_data_to_temp_folder, cleanup_temp_files, copy_data_from_pipeline_output
 logger = logging.getLogger(__name__)
 
 def add_args(parser: argparse.ArgumentParser):
@@ -72,10 +73,12 @@ def add_args(parser: argparse.ArgumentParser):
 
 
 def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_factor=0, n_bins=30, n_vols_along_path = 6, density_path = None, no_z_reg = False, z_st = None, z_end = None, args = None):
-    # I kind of like the idea of not passing args, but I'm getting lazy.
-    # TODO dont pass args, pass options
-
     po = o.PipelineOutput(recovar_result_dir + '/')
+
+    # Copy data to temp folder if requested
+    path_mapping = None
+    if args is not None and hasattr(args, 'copy_to_folder') and args.copy_to_folder is not None:
+        path_mapping = copy_data_from_pipeline_output(po, args.copy_to_folder)
 
     if zdim is None and len(po.get('zs')) > 1:
         logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --zdim=4")
@@ -155,8 +158,11 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
         # pairs = [ [z_points[0], z_points[40-1]], [z_points[40], z_points[80-1]] ]
         subsampled_path = np.linspace(z_st, z_end, n_vols_along_path)[:,None]
         # move_to_one_folder(path_folder, n_vols_along_path )
-    o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, path_folder, B_factor, n_bins, maskrad_fraction = args.maskrad_fraction, n_min_images = args.n_min_images, save_all_estimates = False)
+    o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, path_folder, B_factor, n_bins, maskrad_fraction = args.maskrad_fraction, n_min_particles = args.n_min_particles, save_all_estimates = False)
 
+    # Clean up temp files at the end
+    if path_mapping is not None and args is not None and not args.no_cleanup:
+        cleanup_temp_files(path_mapping)
 
 from recovar.output import move_to_one_folder
 

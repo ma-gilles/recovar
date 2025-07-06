@@ -34,7 +34,7 @@ def pick_heterogeneity_bins2(ndim, log_likelihoods, q = 0.5, min_images = 50, n_
     return np.linspace(np.sqrt(disc_latent_dist), np.sqrt(max_latent_dist), n_bins ) **2
 
 
-def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos = None, n_bins = 11, output_folder = None, B_factor = 0, metric_used = "locmost_likely", n_min_images = 50 ):
+def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos = None, n_bins = 11, output_folder = None, B_factor = 0, metric_used = "locmost_likely", n_min_particles = 50 ):
 
     cryos = dataset.load_dataset_from_args(results['input_args'], lazy = False) if cryos is None else cryos
     output_folder = results['input_args'].outdir + "/output/" if output_folder is None else output_folder
@@ -50,23 +50,21 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
         # make_volumes_kernel_estimate( heterogeneity_distances, cryos, noise_variance, output_folder, ndim, n_bins) 
     else:
         print("CHOOSING THREHSOLD ONLY BASED ON NUMBER OF IMAGES! FIX?")
-        make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder, -1, n_bins, B_factor, tau = None, n_min_images = n_min_images, metric_used = metric_used)
+        make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder, -1, n_bins, B_factor, tau = None, n_min_particles = n_min_particles, metric_used = metric_used)
     
 
 
-def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_folder, ndim, bins, B_factor, tau = None, n_min_images = 50, metric_used = "locshellmost_likely", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None, kernel_rad = 4, save_all_estimates = False, heterogeneity_kernel = "parabola" ):
+def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_folder, ndim, bins, B_factor, tau = None, n_min_particles = 50, metric_used = "locshellmost_likely", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None, kernel_rad = 4, save_all_estimates = False, heterogeneity_kernel = "parabola" ):
 
-    if cryos[0].tilt_series_flag:
-        images_per_particles = np.max(list(cryos[0].image_stack.counts.values()))
-        logger.warning(f"Picking bins based on number of images only. n_min_images = {n_min_images}.")
-    else:
-        images_per_particles =1
+    # if cryos[0].tilt_series_flag:
+    #     images_per_particles = np.max(list(cryos[0].image_stack.counts.values()))
+    #     logger.warning(f"Picking bins based on number of particles only. n_min_particles = {n_min_particles}.")
+    # else:
+    #     images_per_particles =1
 
     if type(bins) == int:
-        # heterogeneity_bins = pick_heterogeneity_bins2(ndim, heterogeneity_distances[1], 0.5, n_min_images, n_bins = bins)
-        min_particles = np.ceil(n_min_images/images_per_particles).astype(int)
-        logger.warning(f"Picking bins based on number of images only. n_min_images = {n_min_images}, or n_min_particles = {min_particles}.") 
-        heterogeneity_bins = pick_heterogeneity_bins2(-1, heterogeneity_distances[1], 0.5, min_particles, n_bins = bins)
+        logger.warning(f"Picking bins based on number of particles only. n_min_particles = {n_min_particles}") 
+        heterogeneity_bins = pick_heterogeneity_bins2(-1, heterogeneity_distances[1], 0.5, n_min_particles, n_bins = bins)
     else:
         heterogeneity_bins = bins
 

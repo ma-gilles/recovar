@@ -6,6 +6,8 @@ from recovar import dataset, utils, latent_density, embedding, plot_utils
 from scipy.spatial import distance_matrix
 import pickle
 import os, argparse
+import sys
+from recovar.utils_core import copy_data_to_temp_folder, cleanup_temp_files, copy_data_from_pipeline_output
 logger = logging.getLogger(__name__)
 from recovar import parser_args
 
@@ -60,10 +62,25 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
-def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40, n_paths = 0, skip_umap = False, q = None, n_std = None, B_factor=0, n_bins=30, n_vols_along_path = 6, skip_centers = False, normalize_kmeans = False, density_path = None, no_z_reg = False, lazy = False, n_min_images = 0, maskrad_fraction = 0.5, apply_global_filtering = False, fsc_mask_radius = None, fsc_mask_edgewidth = None):
-
+def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40, n_paths = 0, skip_umap = False, q = None, n_std = None, B_factor=0, n_bins=30, n_vols_along_path = 6, skip_centers = False, normalize_kmeans = False, density_path = None, no_z_reg = False, lazy = False, n_min_particles = 0, maskrad_fraction = 0.5, apply_global_filtering = False, fsc_mask_radius = None, fsc_mask_edgewidth = None, args = None):
 
     po = o.PipelineOutput(recovar_result_dir + '/')
+
+    # Copy data to temp folder if requested
+    path_mapping = None
+    if args is not None and hasattr(args, 'copy_to_folder') and args.copy_to_folder is not None:
+        path_mapping = copy_data_from_pipeline_output(po, args.copy_to_folder)
+
+
+
+
+    # if args.particles is not None:
+    #     po.params['input_args'].particles = args.particles
+
+    # if args.datadir is not None:
+    #     po.params['input_args'].datadir = args.datadir
+
+
 
     if zdim is None and len(po.get('zs')) > 1:
         logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --zdim=4")
@@ -193,7 +210,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     if not skip_centers:
         o.compute_and_save_reweighted(
             cryos, centers, zs, cov_zs, output_folder_kmeans_centers, B_factor, n_bins, 
-            n_min_images=n_min_images, maskrad_fraction=maskrad_fraction,
+            n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
             apply_global_filtering=apply_global_filtering,
             fsc_mask=fsc_mask,
             fsc_mask_radius=fsc_mask_radius,
@@ -219,7 +236,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
             logger.info(f"path {pair_idx} done")
             o.compute_and_save_reweighted(
                 cryos, subsampled_path, zs, cov_zs, path_folder, B_factor, n_bins, 
-                n_min_images=n_min_images, maskrad_fraction=maskrad_fraction,
+                n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
                 apply_global_filtering=apply_global_filtering,
                 fsc_mask=fsc_mask,
                 fsc_mask_radius=fsc_mask_radius,
@@ -239,7 +256,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         subsampled_path = np.linspace(z_st, z_end, n_vols_along_path)[:,None]
         o.compute_and_save_reweighted(
             cryos, subsampled_path, zs, cov_zs, path_folder, B_factor, n_bins, 
-            save_all_estimates=False, n_min_images=n_min_images, maskrad_fraction=maskrad_fraction,
+            save_all_estimates=False, n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
             apply_global_filtering=apply_global_filtering,
             fsc_mask=fsc_mask,
             fsc_mask_radius=fsc_mask_radius,
@@ -260,6 +277,10 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
     kmeans_res = { 'centers': centers.tolist(), 'pairs' : pairs }
     pickle.dump(kmeans_res, open(output_folder_kmeans + 'trajectory_endpoints.pkl', 'wb'))
+
+    # Clean up temp files at the end
+    if path_mapping is not None and args is not None and not args.no_cleanup:
+        cleanup_temp_files(path_mapping)
 
 from recovar.output import move_to_one_folder
 
@@ -295,7 +316,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
     logger.info(args)
-    analyze(args.result_dir, output_folder = args.outdir, zdim=  args.zdim, n_clusters = args.n_clusters, n_paths= args.n_trajectories, skip_umap = args.skip_umap, B_factor = args.Bfactor, n_bins = args.n_bins, n_vols_along_path = args.n_vols_along_path, skip_centers = args.skip_centers, normalize_kmeans = args.normalize_kmeans, density_path = args.density, no_z_reg = args.no_z_regularization, lazy = args.lazy, n_min_images = args.n_min_images, maskrad_fraction = args.maskrad_fraction, apply_global_filtering = args.apply_global_filtering, fsc_mask_radius = args.fsc_mask_radius, fsc_mask_edgewidth = args.fsc_mask_edgewidth)
+    analyze(args.result_dir, output_folder = args.outdir, zdim=  args.zdim, n_clusters = args.n_clusters, n_paths= args.n_trajectories, skip_umap = args.skip_umap, B_factor = args.Bfactor, n_bins = args.n_bins, n_vols_along_path = args.n_vols_along_path, skip_centers = args.skip_centers, normalize_kmeans = args.normalize_kmeans, density_path = args.density, no_z_reg = args.no_z_regularization, lazy = args.lazy, n_min_particles = args.n_min_particles, maskrad_fraction = args.maskrad_fraction, apply_global_filtering = args.apply_global_filtering, fsc_mask_radius = args.fsc_mask_radius, fsc_mask_edgewidth = args.fsc_mask_edgewidth, args = args)
 
 if __name__ == "__main__":
     main()

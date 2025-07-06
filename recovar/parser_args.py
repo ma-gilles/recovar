@@ -40,7 +40,7 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze= False):
     )
 
     parser.add_argument(
-        "--n-min-images",  type =int, default=None, dest="n_min_images",help="minimum number of images to compute kernel regression. Default = 100 for SPA, and 10 particles for tilt series. Default works well for most cases. E.g., it was used to generate all figures in the paper. If you are using cryo-ET or very noisy (or very not noisy data), you might want to increase (decrease) this value."
+        "--n-min-particles",  type =int, default=None, dest="n_min_particles",help="minimum number of particles to compute kernel regression. Default = 100. Default works well for most cases. E.g., it was used to generate all figures in the paper. If you are using cryo-ET or very noisy (or very not noisy data), you might want to increase (decrease) this value."
     )
 
     parser.add_argument(
@@ -81,6 +81,13 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze= False):
     parser.add_argument(
         "--fsc-mask-edgewidth", type=float, default=None,
         help="Edge width of FSC mask (in Angstroms). If None, uses 10%% of fsc-mask-radius. Only used if fsc-mask-radius is specified.",
+    )
+
+    parser.add_argument(
+        "--copy-to-folder", dest="copy_to_folder", type=os.path.abspath, help="Copy all input data files to this temporary folder before processing. Original paths will be saved in output."
+    )
+    parser.add_argument(
+        "--no-cleanup", action="store_true", help="Do not clean up temporary files after processing (useful for chaining multiple pipeline calls)"
     )
 
     return parser

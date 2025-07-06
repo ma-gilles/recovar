@@ -422,3 +422,5 @@ class DuplicateFilter(object):
         rv = record.msg not in self.msgs
         self.msgs.add(record.msg)
         return rv
+
+

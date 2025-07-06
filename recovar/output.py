@@ -412,15 +412,12 @@ def plot_umap(output_folder, zs, centers):
 
 
 
-def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_images = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None):
+def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None):
 
     #batch_size = 
 
-    if n_min_images is None:
-        if cryos[0].tilt_series_flag:
-            n_min_images = np.max([100, 10 * np.max(list(cryos[0].image_stack.counts.values()))])
-        else:
-            n_min_images = 100
+    if n_min_particles is None:
+        n_min_particles =100
 
     mkdir_safe(output_folder)
     new_volume_generation = True
@@ -451,13 +448,11 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
             # log_likelihoods = latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], zs, cov_zs)[...,0]
             heterogeneity_distances = [ heterogeneity_distances[:cryos[0].n_units], heterogeneity_distances[cryos[0].n_units:] ]
 
-            # heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder_this, -1, n_bins, B_factor, tau = None, n_min_images = 300, metric_used = "locres_auc")
             from recovar import noise
-            # noise_variance = noise.make_radial_noise(noise_variance, cryos[0].image_shape)
 
             locres_maskrad = cryos[0].grid_size * cryos[0].voxel_size / maskrad_fraction
-            logger.info(f"Mask radius fraction = {maskrad_fraction}. Setting locres_maskrac = locres_sampling = box_size * voxel_size / {maskrad_fraction} = {locres_maskrad:.1f} Angstroms. Using {n_min_images} images for template.")
-            heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_folder_this, ndim, n_bins, B_factor, tau = None, n_min_images = n_min_images, locres_sampling = locres_maskrad, locres_maskrad = locres_maskrad, locres_edgwidth = 0, upsampling_for_ests = 1, use_mask_ests =False, grid_correct_ests = False, save_all_estimates=save_all_estimates, metric_used= 'locshellmost_likely')
+            logger.info(f"Mask radius fraction = {maskrad_fraction}. Setting locres_maskrac = locres_sampling = box_size * voxel_size / {maskrad_fraction} = {locres_maskrad:.1f} Angstroms. Using {n_min_particles} particles for template.")
+            heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_folder_this, ndim, n_bins, B_factor, tau = None, n_min_particles = n_min_particles, locres_sampling = locres_maskrad, locres_maskrad = locres_maskrad, locres_edgwidth = 0, upsampling_for_ests = 1, use_mask_ests =False, grid_correct_ests = False, save_all_estimates=save_all_estimates, metric_used= 'locshellmost_likely')
 
             # Apply global filtering to the generated halfmaps if requested
             if apply_global_filtering:
@@ -689,9 +684,10 @@ class PipelineOutput:
                 return utils.pickle_load(self.result_path + 'model/' + 'particles_halfsets' + '.pkl')
         elif key == 'input_args':
             # Not sure why this is necessary all of the sudden... For backward compatibility
-            if parse_version(self.version) > parse_version('0.3') or isinstance(self.params['input_args'], np.ndarray):# type(self.params['input_args']) is n:
+            # if parse_version(self.version) > parse_version('0.3') or isinstance(self.params['input_args'], np.ndarray):# type(self.params['input_args']) is n:
+            try:
                 return self.params['input_args'].item()
-            else:
+            except:
                 return self.params['input_args']
             
         elif (key in self.params):
@@ -921,6 +917,155 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
     plt.figure(figsize = (8,8))
     ax = plot_utils.plot_mean_fsc(po,None)
     plt.savefig(output_folder + 'mean_fsc.png')
+
+
+
+    # Load latent coordinates with robust error handling
+    try:
+        zs_data = po.get('zs')
+        if zs_data is None:
+            logger.warning("No latent coordinates found in pipeline output. Skipping PC analysis.")
+            return
+            
+        # Try to get 4D latent space, fallback to available dimensions
+        if isinstance(zs_data, dict):
+            if 4 in zs_data:
+                z = zs_data[4]
+            elif len(zs_data) > 0:
+                # Use the first available key
+                first_key = list(zs_data.keys())[0]
+                z = zs_data[first_key]
+                logger.info(f"Using latent space with key {first_key} instead of 4")
+            else:
+                logger.warning("No valid latent coordinates found. Skipping PC analysis.")
+                return
+        elif isinstance(zs_data, (list, tuple)) and len(zs_data) > 4:
+            z = zs_data[4]
+        elif isinstance(zs_data, (list, tuple)) and len(zs_data) > 0:
+            z = zs_data[0]
+            logger.info("Using first available latent space instead of 4D")
+        else:
+            logger.warning("Unexpected format for latent coordinates. Skipping PC analysis.")
+            return
+            
+        if z is None or not hasattr(z, 'shape'):
+            logger.warning("Invalid latent coordinates data. Skipping PC analysis.")
+            return
+            
+        print(f"Latent space shape: {z.shape}")
+        print(f"Number of particles: {z.shape[0]}")
+        print(f"Latent dimensions: {z.shape[1]}")
+        
+        # Validate data quality
+        if z.shape[0] < 10:
+            logger.warning(f"Too few particles ({z.shape[0]}) for meaningful PC analysis. Skipping.")
+            return
+            
+        if z.shape[1] < 2:
+            logger.warning(f"Too few dimensions ({z.shape[1]}) for PC analysis. Skipping.")
+            return
+            
+        # Check for NaN or infinite values
+        if np.any(np.isnan(z)) or np.any(np.isinf(z)):
+            logger.warning("Latent coordinates contain NaN or infinite values. Attempting to clean data.")
+            z = z[~np.any(np.isnan(z) | np.isinf(z), axis=1)]
+            if z.shape[0] < 10:
+                logger.warning("Too few valid particles after cleaning. Skipping PC analysis.")
+                return
+                
+    except Exception as e:
+        logger.error(f"Error loading latent coordinates: {e}")
+        return
+
+    # Determine number of PCs to plot based on available dimensions
+    max_pcs = min(4, z.shape[1])
+    if max_pcs < 2:
+        logger.warning(f"Only {max_pcs} dimensions available, cannot create pairwise plots.")
+        return
+        
+    # Calculate number of subplots needed
+    n_combinations = max_pcs * (max_pcs - 1) // 2
+    if n_combinations == 0:
+        logger.warning("No valid PC combinations to plot.")
+        return
+        
+    # Create appropriate subplot layout
+    if n_combinations <= 3:
+        n_rows, n_cols = 1, n_combinations
+    elif n_combinations <= 6:
+        n_rows, n_cols = 2, 3
+    else:
+        n_rows, n_cols = 3, 3
+        
+    try:
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(6*n_cols, 6*n_rows))
+        if n_combinations == 1:
+            axes = [axes]
+        else:
+            axes = axes.flatten()
+    except Exception as e:
+        logger.error(f"Error creating subplots: {e}")
+        return
+
+    # Generate pairwise combinations
+    combinations = [(i, j) for i in range(max_pcs) for j in range(i+1, max_pcs)]
+    colors = plt.cm.viridis(np.linspace(0, 1, len(combinations)))
+
+    for idx, (i, j) in enumerate(combinations):
+        if idx >= len(axes):
+            break
+            
+        try:
+            # Validate data for this combination
+            x_data = z[:, i]
+            y_data = z[:, j]
+            
+            if np.any(np.isnan(x_data)) or np.any(np.isnan(y_data)):
+                logger.warning(f"Skipping PC{i+1} vs PC{j+1} due to NaN values")
+                continue
+                
+            if np.any(np.isinf(x_data)) or np.any(np.isinf(y_data)):
+                logger.warning(f"Skipping PC{i+1} vs PC{j+1} due to infinite values")
+                continue
+            
+            # Scatter plot
+            axes[idx].scatter(x_data, y_data, alpha=0.6, s=1, c=colors[idx])
+            axes[idx].set_xlabel(f'PC{i+1}')
+            axes[idx].set_ylabel(f'PC{j+1}')
+            axes[idx].set_title(f'PC{i+1} vs PC{j+1}', fontweight='bold')
+            axes[idx].grid(True, alpha=0.3)
+            
+            # Add density contours with error handling
+            try:
+                if len(x_data) > 50:  # Only add hexbin for sufficient data points
+                    axes[idx].hexbin(x_data, y_data, gridsize=min(30, len(x_data)//10), 
+                                   alpha=0.3, cmap='Blues', mincnt=1)
+            except Exception as e:
+                logger.debug(f"Could not add density contours for PC{i+1} vs PC{j+1}: {e}")
+                
+        except Exception as e:
+            logger.error(f"Error plotting PC{i+1} vs PC{j+1}: {e}")
+            # Hide the problematic subplot
+            axes[idx].set_visible(False)
+
+    # Hide unused subplots
+    for idx in range(len(combinations), len(axes)):
+        axes[idx].set_visible(False)
+
+    try:
+        plt.suptitle(f'Principal Component Space Analysis ({max_pcs}D)', fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        
+        # Save with error handling
+        output_path = os.path.join(output_folder, 'principal_component_space_analysis.png')
+        plt.savefig(output_path, bbox_inches='tight', dpi=300)
+        logger.info(f"PC analysis plot saved to {output_path}")
+        
+    except Exception as e:
+        logger.error(f"Error saving PC analysis plot: {e}")
+    finally:
+        plt.close()
+
 
     return
 

@@ -419,8 +419,25 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
 
         return outliers_ind_mapped_back_to_original_indices, inliers_ind_mapped_back_to_original_indices, None, None
 
-    particle_to_tilts, tilts_to_particle = tilt_dataset.TiltSeriesData.parse_particle_tilt(starfile)
-    micrographtilt_to_tilts, tilts_to_micrographtilt = tilt_dataset.TiltSeriesData.parse_micrograph_tilt(starfile)
+    # Only try to parse starfile if it actually has a .star extension
+    particle_to_tilts = None
+    tilts_to_particle = None
+    micrographtilt_to_tilts = None
+    tilts_to_micrographtilt = None
+    
+    if starfile is not None and starfile.endswith('.star'):
+        try:
+            particle_to_tilts, tilts_to_particle = tilt_dataset.TiltSeriesData.parse_particle_tilt(starfile)
+            micrographtilt_to_tilts, tilts_to_micrographtilt = tilt_dataset.TiltSeriesData.parse_micrograph_tilt(starfile)
+        except Exception as e:
+            logger.warning(f"Failed to parse starfile {starfile}: {e}")
+            logger.warning("Skipping particle and micrograph-based outlier detection")
+            particle_to_tilts = None
+            tilts_to_particle = None
+            micrographtilt_to_tilts = None
+            tilts_to_micrographtilt = None
+    else:
+        logger.info(f"Starfile {starfile} is not a .star file, skipping particle and micrograph-based outlier detection")
 
     outliers_image_identified_by_particle = np.zeros(n_images, dtype=bool)
     # Particle-based outlier detection

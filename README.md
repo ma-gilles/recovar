@@ -341,7 +341,7 @@ recovar analyze [result_dir] --zdim=10
 - `--Bfactor BFACTOR`: B-factor for sharpening (default: 0).
 - `--n-bins N_BINS`: Number of bins for kernel regression.
 - `--maskrad-fraction MASKRAD_FRACTION`: Radius of mask used in kernel regression. Default is 20, which means radius = `grid_size/20` pixels, or `grid_size * voxel_size / 20` Å.
-- `--n-min-images N_MIN_IMAGES`: Minimum number of images required for kernel regression. Default is 100 for SPA and 10 particles for tilt series.
+- `--n-min-particles N_MIN_PARTICLES`: Minimum number of particles required for kernel regression. Default is 100.
 - `--density DENSITY`: Path to a `.pkl` file containing density data with keys `density` and `latent_space_bounds`.
 - `--normalize-kmeans`: Normalize latent variables (`z`) before computing k-means clustering.
 - `--no-z-regularization`: Use latent variables without regularization (e.g., use `2_noreg` instead of `2`).
@@ -373,7 +373,7 @@ recovar compute_state [pipeline_output_dir] -o [volume_output_dir] --latent-poin
 - `--Bfactor BFACTOR`: B-factor for sharpening. The B-factor of the consensus reconstruction is likely a good guess. Default is 0, meaning no sharpening.
 - `--n-bins N_BINS`: Number of bins for kernel regression. Default is 50, which works well for most cases. This setting was used to generate all figures in the paper.
 - `--maskrad-fraction MASKRAD_FRACTION`: Radius of mask used in kernel regression. Default is 20, meaning `radius = grid_size/20` pixels or `grid_size * voxel_size / 20` Å. The default setting works well for most cases. This was used for all figures in the paper. If using cryo-ET or very noisy (or very non-noisy) data, you might want to adjust this value accordingly. For low-resolution data (less than 128x128 images), consider increasing this value. For high-resolution data (more than 512x512 images), consider decreasing it.
-- `--n-min-images N_MIN_IMAGES`: Minimum number of images required for kernel regression. The default is 100 for SPA and 10 particles for tilt series. The default works well for most cases, as it was used to generate all figures in the paper. For cryo-ET or very noisy (or very non-noisy) data, consider adjusting this value.
+- `--n-min-particles N_MIN_PARTICLES`: Minimum number of particles required for kernel regression. The default is 100. The default works well for most cases, as it was used to generate all figures in the paper. For cryo-ET or very noisy (or very non-noisy) data, consider adjusting this value.
 - `--zdim1`: Enable this if dimension 1 is used. This setting addresses a specific issue with `np.loadtxt`.
 - `--no-z-regularization`: If set, uses latent variables without regularization.
 - `--lazy`: Enables lazy loading when the full dataset is too large to fit in memory.
@@ -439,7 +439,7 @@ To define the start and end points of the trajectory in latent space, you need t
 - **`--maskrad-fraction MASKRAD_FRACTION`**:
   Radius of mask used in kernel regression. Default is 20, which means `radius = grid_size / 20` pixels, or `grid_size * voxel_size / 20` Å.
 
-- **`--n-min-images N_MIN_IMAGES`**:
+- **`--n-min-particles N_MIN_PARTICLES`**:
   Minimum number of images required for kernel regression. Default is 100 for SPA data.
 
 - **`--lazy`**:
@@ -510,7 +510,7 @@ recovar compute_trajectory -h
 
 ```
 usage: compute_trajectory [-h] -o OUTDIR [--zdim ZDIM] [--Bfactor BFACTOR] [--n-bins N_BINS]
-                             [--maskrad-fraction MASKRAD_FRACTION] [--n-min-images N_MIN_IMAGES] [--zdim1]
+                             [--maskrad-fraction MASKRAD_FRACTION] [--n-min-particles N_MIN_PARTICLES] [--zdim1]
                              [--no-z-regularization] [--override_z_regularization] [--lazy]
                              [--particles PARTICLES] [--datadir DATADIR] [--n-vols-along-path N_VOLS_ALONG_PATH]
                              [--density DENSITY] [--ind IND] [--endpts ENDPTS_FILE]
@@ -529,7 +529,7 @@ optional arguments:
   --n-bins N_BINS       Number of bins for kernel regression. Default is 50 and works well for most cases.
   --maskrad-fraction MASKRAD_FRACTION
                         Radius of mask used in kernel regression. Default = 20, which means radius = grid_size/20 pixels, or grid_size * voxel_size / 20 angstrom.
-  --n-min-images N_MIN_IMAGES
+  --n-min-particles N_MIN_PARTICLES
                         Minimum number of images to compute kernel regression. Default = 100 for SPA, and 10 particles for tilt series.
   --zdim1               Enable if using a 1-dimensional latent space. Addresses an issue with np.loadtxt.
   --no-z-regularization
