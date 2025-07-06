@@ -914,7 +914,7 @@ def filter_with_global_fsc(ft_sum, fsc, voxel_size, filter_edgewidth, mask=None,
     """
     # Apply B-factor sharpening if specified
     if B_factor is not None:
-        B_factor_scaling = simulator.get_B_factor_scaling(ft_sum.shape, voxel_size, B_factor).reshape(ft_sum.shape)
+        B_factor_scaling = simulator.get_B_factor_scaling(ft_sum.shape, voxel_size, -B_factor).reshape(ft_sum.shape)
         ft_sum = ft_sum * B_factor_scaling.astype(ft_sum.dtype)
     
     # Apply FSC weighting

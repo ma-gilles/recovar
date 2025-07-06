@@ -13,6 +13,7 @@ from recovar import output
 
 # Import necessary functions from pipeline.py and output module
 from recovar.commands.pipeline import add_args, standard_recovar_pipeline
+from recovar.utils_core import cleanup_temp_files
 matplotlib.rcParams["contour.negative_linestyle"] = "solid"
 
 def run_pipeline_with_outlier_removal():
@@ -30,7 +31,7 @@ def run_pipeline_with_outlier_removal():
     # Add additional argument for no-z-regularization
     parser.add_argument("--no-z-regularization", action="store_true", help="Disable z regularization.")
     # Add option to delete round results
-    parser.add_argument("--cleanup", action="store_true", help="Delete results of all rounds except the inliers/outliers")
+    parser.add_argument("--delete-rounds", action="store_true", help="Delete results of all rounds except the inliers/outliers")
     
     # Add comprehensive outlier detection arguments
     parser.add_argument("--use-contrast-detection", action="store_true", 
@@ -103,6 +104,9 @@ def run_pipeline_with_outlier_removal():
     # Keep track of directories to delete if cleanup is enabled
     round_dirs = []
 
+    # Keep track of path mapping for cleanup
+    path_mapping = None
+
     for k in range(args.k_rounds):
         round_number = k + 1
         logger.info(f"Starting round {round_number}/{args.k_rounds}")
@@ -131,6 +135,13 @@ def run_pipeline_with_outlier_removal():
         # Run the pipeline
         standard_recovar_pipeline(args)
 
+        # Get path mapping from the pipeline (it will be None if no copy-to-folder was used)
+        # We need to check if copy-to-folder was used in this round
+        if hasattr(args, 'copy_to_folder') and args.copy_to_folder:
+            # The path_mapping would be available from the pipeline call
+            # For now, we'll rely on the cleanup in standard_recovar_pipeline
+            pass
+        
         # Add plot
         po = output.PipelineOutput(args.outdir + '/')
         output.standard_pipeline_plots(po, zdim, args.outdir + '/output/plots/')
@@ -273,9 +284,9 @@ def run_pipeline_with_outlier_removal():
         pickle.dump(all_rounds_inliers, f)
     logger.info(f"Saved inliers from all rounds to {all_inliers_file}")
 
-    # Cleanup: delete the results of all rounds except the inliers/outliers if --cleanup is specified
-    if args.cleanup:
-        logger.info("Cleanup enabled. Deleting intermediate round results.")
+    # Cleanup: delete the results of all rounds except the inliers/outliers if --delete-rounds is specified
+    if args.delete_rounds:
+        logger.info("Delete rounds enabled. Deleting intermediate round results.")
         for dir_path in round_dirs:
             if os.path.exists(dir_path):
                 try:
@@ -293,8 +304,12 @@ def run_pipeline_with_outlier_removal():
                 except Exception as e:
                     logger.error(f"Error deleting directory {dir_path}: {e}")
     else:
-        logger.info("Cleanup not enabled. Intermediate round results are kept.")
+        logger.info("Delete rounds not enabled. Intermediate round results are kept.")
 
+    # Clean up temp files at the very end (in case there were any remaining)
+    if path_mapping is not None and not args.no_cleanup:
+        cleanup_temp_files(path_mapping)
+    
     logger.info("Pipeline with outlier removal completed.")
 
 

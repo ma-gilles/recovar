@@ -8,6 +8,7 @@ import pickle
 import os, argparse
 logger = logging.getLogger(__name__)
 from recovar import parser_args
+from recovar.utils_core import copy_data_to_temp_folder, cleanup_temp_files, copy_data_from_pipeline_output
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -27,9 +28,8 @@ def add_args(parser: argparse.ArgumentParser):
 
 
 def compute_state(args):
-
     po = o.PipelineOutput(args.result_dir + '/')
-
+    
     if args.particles is not None:
         po.params['input_args'].particles = args.particles
 
@@ -38,6 +38,12 @@ def compute_state(args):
 
     if args.strip_prefix is not None:
         po.params['input_args'].strip_prefix = args.strip_prefix
+
+    # Copy data to temp folder if requested
+    path_mapping = None
+    if hasattr(args, 'copy_to_folder') and args.copy_to_folder is not None:
+        path_mapping = copy_data_from_pipeline_output(po, args.copy_to_folder)
+
 
     if args.latent_points.endswith('.pkl'):
         target_zs = pickle.load(open(args.latent_points, 'rb'))
@@ -93,13 +99,17 @@ def compute_state(args):
     o.compute_and_save_reweighted(
         cryos, target_zs, zs, cov_zs, output_folder, args.Bfactor, 
         n_bins=n_bins, maskrad_fraction=args.maskrad_fraction, 
-        n_min_images=args.n_min_images, save_all_estimates=args.save_all_estimates,
+        n_min_particles=args.n_min_particles, save_all_estimates=args.save_all_estimates,
         apply_global_filtering=args.apply_global_filtering,
         fsc_mask=fsc_mask,
         fsc_mask_radius=args.fsc_mask_radius,
         fsc_mask_edgewidth=args.fsc_mask_edgewidth
     )
     o.move_to_one_folder(output_folder, target_zs.shape[0])
+
+    # Clean up temp files at the end
+    if path_mapping is not None and not args.no_cleanup:
+        cleanup_temp_files(path_mapping)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

@@ -11,7 +11,7 @@ import os, argparse, time, pickle, sys, shutil
 from recovar import output as o
 from recovar import dataset, homogeneous, embedding, principal_components, latent_density, mask, utils, constants, noise, output, covariance_estimation
 from recovar.fourier_transform_utils import fourier_transform_utils
-from recovar.utils_core.data_copy import copy_data_to_temp_folder, save_original_paths_info
+from recovar.utils_core import copy_data_to_temp_folder, save_original_paths_info, cleanup_temp_files
 ftu = fourier_transform_utils(jnp)
 # logger.setLevel(logger.info)
 logger = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--copy-to-folder", dest="copy_to_folder", type=os.path.abspath, help="Copy all input data files to this temporary folder before processing. Original paths will be saved in output."
+        "--copy-to-folder", dest="copy_to_folder", default = None, type=os.path.abspath, help="Copy all input data files to this temporary folder before processing. Original paths will be saved in output."
     )
 
     # parser.add_argument(
@@ -310,6 +310,8 @@ def add_args(parser: argparse.ArgumentParser):
                         help = "How many times to dilate the mask. Default = 6 * volume_shape[0] / 128"
                         )
                     
+
+    parser.add_argument("--no-cleanup", action="store_true", help="Do not clean up temporary files after processing (useful for chaining multiple pipeline calls)")
 
     return parser
     
@@ -878,6 +880,34 @@ def standard_recovar_pipeline(args):
     # Add original paths information if data was copied
     if path_mapping is not None:
         result['original_paths'] = path_mapping
+        
+        # Restore original paths in input_args before saving (only for paths that were copied)
+        logger.info("Restoring original paths in input_args before saving...")
+        
+        # Only restore paths that were actually copied (have both original and temp entries)
+        paths_to_restore = [
+            ('original_particles', 'temp_particles', 'particles'),
+            ('original_poses', 'temp_poses', 'poses'),
+            ('original_ctf', 'temp_ctf', 'ctf'),
+            ('original_mask', 'temp_mask', 'mask'),
+            ('original_focus_mask', 'temp_focus_mask', 'focus_mask'),
+            ('original_ind', 'temp_ind', 'ind'),
+            ('original_tilt_ind', 'temp_particle_ind', 'tilt_ind'),
+            ('original_halfsets', 'temp_halfsets', 'halfsets'),
+        ]
+        
+        for orig_key, temp_key, attr_name in paths_to_restore:
+            if orig_key in path_mapping and temp_key in path_mapping:
+                # This path was copied, so restore the original
+                setattr(args, attr_name, path_mapping[orig_key])
+                logger.info(f"Restored {attr_name} path: {path_mapping[orig_key]}")
+            elif orig_key in path_mapping:
+                # Only original exists, meaning it wasn't copied (e.g., datadir)
+                if attr_name == 'datadir' and path_mapping[orig_key]:
+                    setattr(args, attr_name, path_mapping[orig_key])
+                    logger.info(f"Restored {attr_name} path: {path_mapping[orig_key]}")
+                else:
+                    logger.debug(f"Skipping {attr_name} - not copied to temp location")
 
     # Convert all non-None values to numpy arrays where possible
     for key, value in result.items():
@@ -908,6 +938,9 @@ def standard_recovar_pipeline(args):
     logger.info(f"Dumped results to file:, {output_model_folder}results.pkl")
     logger.info(f"total time: {time.time() - st_time}")
     
+    # Clean up temp files at the end
+    if path_mapping is not None and not args.no_cleanup:
+        cleanup_temp_files(path_mapping)
 
     return means, u, s, volume_mask, dilated_volume_mask, noise_var_used 
 
