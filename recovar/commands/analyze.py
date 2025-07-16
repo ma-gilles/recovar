@@ -20,7 +20,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--n-clusters", dest= "n_clusters", type=int, default=40, help="number of k-means clusters (default 40). The clustering is only used to sample the latent space, and the actual cluster labels are not used to generate volumes."
+        "--n-clusters", dest= "n_clusters", type=int, default=20, help="number of k-means clusters (default 20). The clustering is only used to sample the latent space, and the actual cluster labels are not used to generate volumes."
     )
 
     parser.add_argument(
