@@ -172,6 +172,15 @@ def generate(args):
     o.mkdir_safe(args.outdir)
     logger.addHandler(logging.FileHandler(f"{args.outdir}/run.log"))
     logger.info(args)
+
+    if args.tilt_series_ctf is None and args.tilt_series is False:
+        args.tilt_series_ctf = 'cryoem'
+        logger.info("Setting tilt_series_ctf to cryoem")
+    elif args.tilt_series_ctf is None and args.tilt_series is True:
+        args.tilt_series_ctf = 'relion5'
+        logger.info("Setting tilt_series_ctf to relion5")
+
+
     ind_split = dataset.figure_out_halfsets(args)
 
     dataset_loader_dict = dataset.make_dataset_loader_dict(args)

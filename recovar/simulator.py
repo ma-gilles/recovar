@@ -302,7 +302,7 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
     rescale_noise = True
     if rescale_noise:
         # Dont use premultiplied_ctf for
-        main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, _ = generate_simulated_dataset(volumes, voxel_size, volume_distribution, 10, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file, image_offset_n_std= image_offset_n_std, per_particle_contrast=per_particle_contrast, premultiplied_ctf = False )
+        main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, _ = generate_simulated_dataset(volumes, voxel_size, volume_distribution, 10, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers = percent_outliers, dataset_param_generator = dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file, image_offset_n_std= image_offset_n_std, per_particle_contrast=per_particle_contrast, premultiplied_ctf = False )
         norm_image_square = np.mean(main_image_stack**2)
         norm_image = (norm_image_square)
 
@@ -316,7 +316,7 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
         # Scale noise and volumes so that images have approximately std =1?
 
     # First make some dataset to figure out a good scaling?
-    main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file, n_tilts = n_tilts, 
+    main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers = percent_outliers, dataset_param_generator = dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file, n_tilts = n_tilts, 
     dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt, image_offset_n_std= image_offset_n_std , per_particle_contrast=per_particle_contrast, premultiplied_ctf = premultiplied_ctf, noise_increase_per_tilt = noise_increase_per_tilt, percent_tilt_series_outliers = percent_tilt_series_outliers)
 
     # Add additional simulation parameters that weren't set in generate_simulated_dataset
@@ -391,7 +391,7 @@ def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_
     return volumes
 
 
-def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None, n_tilts = -1, dose_per_tilt = None, angle_per_tilt = None, voltage = 100, image_offset_n_std = 0.0, per_particle_contrast= True, premultiplied_ctf = False, noise_increase_per_tilt = None, percent_tilt_series_outliers = 0.0):
+def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers = 0.0, dataset_param_generator = None, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None, n_tilts = -1, dose_per_tilt = None, angle_per_tilt = None, voltage = 100, image_offset_n_std = 0.0, per_particle_contrast= True, premultiplied_ctf = False, noise_increase_per_tilt = None, percent_tilt_series_outliers = 0.0):
     
     # voxel_size = 
     volume_shape = utils.guess_vol_shape_from_vol_size(volumes[0].size)

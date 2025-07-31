@@ -101,6 +101,9 @@ def compute_latent_space_density_at_pts(test_pts, zs, cov_zs):
     return compute_probs_in_batch(test_pts, zs, cov_zs)
 
 def compute_probs_in_batch(test_pts, zs, cov_zs):
+
+    
+
     scale_zs = np.array(compute_det_cov_xs(cov_zs))
     summed_probs = jnp.zeros_like(test_pts[:,0])
     

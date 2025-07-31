@@ -1165,8 +1165,9 @@ def main():
         combined_image_outliers = np.array([], dtype=int)
 
     # Combine particle outliers with image outliers
-    particle_outliers_to_image_outliers = map_particle_original_indexing_to_images_original_indexing(combined_particle_outliers, original_image_indices, starfile)
-    combined_image_outliers = np.union1d(combined_image_outliers, particle_outliers_to_image_outliers)
+    if is_tilt_series:
+        particle_outliers_to_image_outliers = map_particle_original_indexing_to_images_original_indexing(combined_particle_outliers, original_image_indices, starfile)
+        combined_image_outliers = np.union1d(combined_image_outliers, particle_outliers_to_image_outliers)
 
     combined_image_inliers = np.setdiff1d(original_image_indices , combined_image_outliers)
 

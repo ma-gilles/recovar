@@ -185,13 +185,16 @@ def main():
                 'Create target file for reconstruction',
                 'create_target'
             )
-
+            import pickle
             # Test reconstruct_from_external_embedding
+            embeddings = pickle.load(open(f'{dataset_dir}/test_dataset/pipeline_output/model/embeddings.pkl', 'rb'))
+            pickle.dump(embeddings['zs'][2], open(f'{dataset_dir}/test_dataset/embedding_2.pkl', 'wb'))
             run_command(
-                f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/test_dataset/particles.64.mrcs --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --embedding {dataset_dir}/test_dataset/pipeline_output/embeddings.pkl --target {dataset_dir}/test_dataset/target.txt -o {dataset_dir}/test_dataset/reconstruct_output',
+                f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/test_dataset/particles.64.mrcs --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --embedding {dataset_dir}/test_dataset/embedding_2.pkl --target {dataset_dir}/test_dataset/target.txt -o {dataset_dir}/test_dataset/reconstruct_output',
                 'Test reconstruct_from_external_embedding',
                 'reconstruct'
             )
+            
 
     if failed_functions:
         print("The following functions failed:")
