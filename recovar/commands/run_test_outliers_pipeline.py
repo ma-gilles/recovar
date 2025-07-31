@@ -12,7 +12,7 @@ import glob
 
 def main():
     parser = argparse.ArgumentParser(description="Run tests for recovar outliers pipeline")
-    parser.add_argument('--output-dir', '-o', default='/tmp/')
+    parser.add_argument('--output-dir', '-o', default='/tmp/recovar_test/')
     parser.add_argument('--no-delete', action='store_true', help='Do not delete the test dataset directory after successful tests')
     parser.add_argument('--cpu', action='store_true', help='Run on CPU only (skip GPU check)')
     parser.add_argument('--tilt-series', action='store_true', help='Test with tilt series dataset')
@@ -20,6 +20,7 @@ def main():
     parser.add_argument('--k-rounds', type=int, default=2, help='Number of rounds for outlier detection pipeline')
     parser.add_argument('--percent-outliers', type=float, default=0.15, help='Percentage of outliers to inject into dataset')
     parser.add_argument('--percent-tilt-series-outliers', type=float, default=0.1, help='Percentage of tilt outliers to inject into tilt series dataset')
+    parser.add_argument('--copy-to-folder-path', default='/tmp/recovar_tmp', help='Path for copy-to-folder functionality')
     
     # Selective testing flags
     parser.add_argument('--test-basic', action='store_true', help='Test basic outlier detection pipeline')
@@ -47,6 +48,7 @@ def main():
     k_rounds = args.k_rounds
     percent_outliers = args.percent_outliers
     percent_tilt_series_outliers = args.percent_tilt_series_outliers
+    copy_to_folder_path = args.copy_to_folder_path
 
     # Base command is now "recovar" (which dispatches to the appropriate subcommand)
     BASE_CMD = "python -m recovar.command_line"
@@ -79,7 +81,7 @@ def main():
     if not run_on_cpu:
         check_gpu()
 
-    def run_command(command, description, function_name):
+    def run_command(command, description, function_name, should_fail=False):
         print(f"Running: {description}")
         print(f"Command: {command}\n")
         result = subprocess.run(command, shell=True)
@@ -88,7 +90,10 @@ def main():
             passed_functions.append(function_name)
         else:
             print(f"Failed: {description}\n")
-            failed_functions.append(function_name)
+            if not should_fail:
+                failed_functions.append(function_name)
+            else:
+                print(f"But it was expected to fail!")
 
     cpu_string = " --accept-cpu" if run_on_cpu else ""
 
@@ -130,7 +135,7 @@ def main():
                 'pipeline_with_outliers'
             )
 
-    def run_copy_to_folder_tests(test_dataset_dir, is_tilt_series, cpu_string):
+    def run_copy_to_folder_tests(test_dataset_dir, is_tilt_series, cpu_string, copy_to_folder_path):
         """Test copy-to-folder functionality."""
         if is_tilt_series:
             copy_test_dir_tilt = os.path.join(test_dataset_dir, "copy_test_tilt")
@@ -162,13 +167,13 @@ def main():
                 passed_functions.append('pipeline_with_outliers_copy_test_tilt_missing_file')
         else:
             run_command(
-                f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_outliers_copy_test --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --use-junk-detection --save-pipeline-indices --copy-to-folder /tmp {cpu_string}',
+                f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_outliers_copy_test --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --use-junk-detection --save-pipeline-indices --copy-to-folder {copy_to_folder_path} {cpu_string}',
                 'Run pipeline_with_outliers with copy-to-folder option',
                 'pipeline_with_outliers_copy_test'
             )
             
             run_command(
-                f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_outliers_copy_test_no_cleanup --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --use-junk-detection --save-pipeline-indices --copy-to-folder /tmp --no-cleanup {cpu_string}',
+                f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_outliers_copy_test_no_cleanup --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --use-junk-detection --save-pipeline-indices --copy-to-folder {copy_to_folder_path} --no-cleanup {cpu_string}',
                 'Run pipeline_with_outliers with copy-to-folder and no-cleanup options (for chaining)',
                 'pipeline_with_outliers_copy_test_no_cleanup'
             )
@@ -176,72 +181,75 @@ def main():
             missing_star = os.path.join(test_dataset_dir, 'missing_file.star')
             with open(missing_star, 'w') as f:
                 f.write('data_\nloop_\n_rlnImageName #1\n000001@missing_file.mrcs\n')
-            try:
-                run_command(
-                    f'{BASE_CMD} pipeline_with_outliers {missing_star} --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/fail_output --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --use-junk-detection --save-pipeline-indices --copy-to-folder /tmp {cpu_string}',
-                    'Expect failure: missing file referenced in star file with copy-to-folder',
-                    'pipeline_with_outliers_copy_test_missing_file'
-                )
-            except Exception as e:
-                print('Expected failure for missing file in star file:', e)
-                passed_functions.append('pipeline_with_outliers_copy_test_missing_file')
+            run_command(
+                f'{BASE_CMD} pipeline_with_outliers {missing_star} --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/fail_output --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --use-junk-detection --save-pipeline-indices --copy-to-folder {copy_to_folder_path} {cpu_string}',
+                'Expect failure: missing file referenced in star file with copy-to-folder',
+                'pipeline_with_outliers_copy_test_missing_file',
+                should_fail=True
+            )
 
-    def run_chaining_tests(test_dataset_dir, cpu_string):
+    def run_chaining_tests(test_dataset_dir, cpu_string, copy_to_folder_path):
         """Test chaining multiple pipeline calls with --no-cleanup."""
         run_command(
-            f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_chain_test1 --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --save-pipeline-indices --copy-to-folder /tmp --no-cleanup {cpu_string}',
+            f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_chain_test1 --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --save-pipeline-indices --copy-to-folder {copy_to_folder_path} --no-cleanup {cpu_string}',
             'Run first pipeline call in chain (with --no-cleanup)',
             'pipeline_chain_test1'
         )
         
         run_command(
-            f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_chain_test2 --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --save-pipeline-indices --copy-to-folder /tmp --no-cleanup {cpu_string}',
+            f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_chain_test2 --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --save-pipeline-indices --copy-to-folder {copy_to_folder_path} --no-cleanup {cpu_string}',
             'Run second pipeline call in chain (with --no-cleanup)',
             'pipeline_chain_test2'
         )
         
         run_command(
-            f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_chain_test3 --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --save-pipeline-indices --copy-to-folder /tmp {cpu_string}',
+            f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_chain_test3 --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --save-pipeline-indices --copy-to-folder {copy_to_folder_path} {cpu_string}',
             'Run third pipeline call in chain (final call, cleanup happens)',
             'pipeline_chain_test3'
         )
 
-    def run_analyze_chain_tests(test_dataset_dir, cpu_string):
+    def run_analyze_chain_tests(test_dataset_dir, cpu_string, copy_to_folder_path):
         """Test chaining pipeline with analyze command."""
         run_command(
-            f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_analyze_chain --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --save-pipeline-indices --copy-to-folder /tmp --no-cleanup {cpu_string}',
+            f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_analyze_chain --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --save-pipeline-indices --copy-to-folder {copy_to_folder_path} --no-cleanup {cpu_string}',
             'Run pipeline with --no-cleanup for chaining with analyze',
             'pipeline_analyze_chain'
         )
         
         run_command(
-            f'{BASE_CMD} analyze {test_dataset_dir}/test_dataset/pipeline_analyze_chain --outdir {test_dataset_dir}/test_dataset/analyze_chain_output --zdim 4 --copy-to-folder /tmp --no-cleanup {cpu_string}',
+            f'{BASE_CMD} analyze {test_dataset_dir}/test_dataset/pipeline_analyze_chain/round_1 --outdir {test_dataset_dir}/test_dataset/analyze_chain_output --zdim 4 --copy-to-folder {copy_to_folder_path} --no-cleanup {cpu_string}',
             'Run analyze command in chain (with --no-cleanup)',
             'analyze_chain'
         )
         
         run_command(
-            f'{BASE_CMD} analyze {test_dataset_dir}/test_dataset/pipeline_analyze_chain --outdir {test_dataset_dir}/test_dataset/analyze_chain_output2 --zdim 4 --copy-to-folder /tmp {cpu_string}',
+            f'{BASE_CMD} analyze {test_dataset_dir}/test_dataset/pipeline_analyze_chain/round_1 --outdir {test_dataset_dir}/test_dataset/analyze_chain_output2 --zdim 4 --copy-to-folder {copy_to_folder_path} {cpu_string}',
             'Run second analyze command in chain (final call, cleanup happens)',
             'analyze_chain_final'
         )
 
-    def run_trajectory_chain_tests(test_dataset_dir, cpu_string):
+    def run_trajectory_chain_tests(test_dataset_dir, cpu_string, copy_to_folder_path):
         """Test chaining pipeline with compute_trajectory command."""
         run_command(
-            f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_trajectory_chain --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --save-pipeline-indices --copy-to-folder /tmp --no-cleanup {cpu_string}',
+            f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_trajectory_chain --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --save-pipeline-indices --copy-to-folder {copy_to_folder_path} --no-cleanup {cpu_string}',
             'Run pipeline with --no-cleanup for chaining with compute_trajectory',
             'pipeline_trajectory_chain'
         )
         
         run_command(
-            f'{BASE_CMD} compute_trajectory {test_dataset_dir}/test_dataset/pipeline_trajectory_chain --outdir {test_dataset_dir}/test_dataset/trajectory_chain_output --zdim 4 --endpts {test_dataset_dir}/test_dataset/pipeline_trajectory_chain/analysis_4/kmeans_center_coords.txt --copy-to-folder /tmp --no-cleanup {cpu_string}',
+            f'{BASE_CMD} analyze {test_dataset_dir}/test_dataset/pipeline_analyze_chain/round_1 --outdir {test_dataset_dir}/test_dataset/analyze_chain_output --zdim 4 --copy-to-folder {copy_to_folder_path} --no-cleanup {cpu_string}',
+            'Run analyze command in chain (with --no-cleanup)',
+            'analyze_chain'
+        )
+
+        run_command(
+            f'{BASE_CMD} compute_trajectory {test_dataset_dir}/test_dataset/pipeline_trajectory_chain/round_1 --outdir {test_dataset_dir}/test_dataset/trajectory_chain_output --zdim 4 --endpts {test_dataset_dir}/test_dataset/analyze_chain_output/kmeans_center_coords.txt --copy-to-folder {copy_to_folder_path} --no-cleanup {cpu_string}',
             'Run compute_trajectory command in chain (with --no-cleanup)',
             'compute_trajectory_chain'
         )
         
         run_command(
-            f'{BASE_CMD} compute_trajectory {test_dataset_dir}/test_dataset/pipeline_trajectory_chain --outdir {test_dataset_dir}/test_dataset/trajectory_chain_output2 --zdim 4 --endpts {test_dataset_dir}/test_dataset/pipeline_trajectory_chain/analysis_4/kmeans_center_coords.txt --copy-to-folder /tmp {cpu_string}',
+            f'{BASE_CMD} compute_trajectory {test_dataset_dir}/test_dataset/pipeline_trajectory_chain/round_1 --outdir {test_dataset_dir}/test_dataset/trajectory_chain_output2 --zdim 4 --endpts {test_dataset_dir}/test_dataset/analyze_chain_output/kmeans_center_coords.txt --copy-to-folder {copy_to_folder_path} {cpu_string}',
             'Run second compute_trajectory command in chain (final call, cleanup happens)',
             'compute_trajectory_chain_final'
         )
@@ -259,16 +267,16 @@ def main():
         run_basic_tests(test_dataset_dir, args.tilt_series, k_rounds, cpu_string)
     
     if args.run_all or args.test_copy_to_folder:
-        run_copy_to_folder_tests(test_dataset_dir, args.tilt_series, cpu_string)
+        run_copy_to_folder_tests(test_dataset_dir, args.tilt_series, cpu_string, copy_to_folder_path)
     
     if args.run_all or args.test_chaining:
-        run_chaining_tests(test_dataset_dir, cpu_string)
+        run_chaining_tests(test_dataset_dir, cpu_string, copy_to_folder_path)
     
     if args.run_all or args.test_analyze_chain:
-        run_analyze_chain_tests(test_dataset_dir, cpu_string)
+        run_analyze_chain_tests(test_dataset_dir, cpu_string, copy_to_folder_path)
     
     if args.run_all or args.test_trajectory_chain:
-        run_trajectory_chain_tests(test_dataset_dir, cpu_string)
+        run_trajectory_chain_tests(test_dataset_dir, cpu_string, copy_to_folder_path)
     
     if args.run_all or args.test_tilt_series:
         run_tilt_series_tests(test_dataset_dir, k_rounds, cpu_string)

@@ -67,7 +67,7 @@ def main():
     parser.add_argument("--nested-prefix", default="Extract/job193", help="Prefix path for nested structure (default: Extract/job193)")
     parser.add_argument("--tilt-series", action="store_true", help="Generate tilt series dataset instead of single particle dataset")
     parser.add_argument("--outlier-file-input", help="Path to outlier volume file")
-    parser.add_argument("--percent-outliers", type=float, help="Percentage of outliers in the dataset")
+    parser.add_argument("--percent-outliers", default=0.0, type=float, help="Percentage of outliers in the dataset")
     parser.add_argument("--percent-tilt-series-outliers", type=float, default=0.0, help="Percentage of tilt outliers in tilt series dataset")
     
     args = parser.parse_args()

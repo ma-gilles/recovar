@@ -31,12 +31,31 @@ def make_big_test_dataset(input_dir, output_dir, noise_level=0.1, grid_size=128,
                           contrast_std=0.1, n_tilts=-1, premultiplied_ctf=False, noise_increase_per_tilt=None):
     output_folder = os.path.join(output_dir, 'test_dataset')
     output.mkdir_safe(output_folder)
+    from scipy.stats import vonmises
 
+    n_states = 50
+    ## Define density that volumes are resampled from
+    def p(x):
+        means = [np.pi/2, np.pi, 3*np.pi/2]
+        kappas =  [6.0, 6.0, 6.0]
+        weights = np.array([2.0, 1.0, 2.0])
+        weights /= sum(weights)  
+        val = 0
+        for i in range(3): 
+            val += weights[i]*vonmises.pdf(x, loc=means[i], kappa=kappas[i])
+        return val
+
+    x = np.linspace(0, 2*np.pi, n_states)
+    volume_distribution = p(x)
+    volume_distribution /= (np.sum(volume_distribution))
+
+
+    
     voxel_size = 4.25 * 128 / grid_size
     image_stack, sim_info = simulator.generate_synthetic_dataset(
         output_folder, voxel_size, input_dir, int(n_images),
         outlier_file_input=None, grid_size=grid_size,
-        volume_distribution=None, dataset_params_option="uniform",
+        volume_distribution=volume_distribution, dataset_params_option="uniform",
         noise_level=noise_level, noise_model="radial1", put_extra_particles=False,
         percent_outliers=0.0, volume_radius=0.7, trailing_zero_format_in_vol_name=True,
         noise_scale_std=0.0, contrast_std=contrast_std, disc_type='cubic',
@@ -50,7 +69,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run tests for recovar")
     parser.add_argument('--volume-input', '-i', required=True,
                         help='Input directory containing the volume files')
-    parser.add_argument('--output-dir', '-o', default='/tmp/')
+    parser.add_argument('--output-dir', '-o', default='/tmp/recovar_test_all_metrics')
     parser.add_argument('--no-delete', action='store_true',
                         help='Do not delete the test dataset directory after successful tests')
     parser.add_argument('--cpu', action='store_true', help='Run on CPU only (skip GPU check)')
