@@ -100,6 +100,7 @@ def random_sampling_scheme(n_images, grid_size, seed =0, uniform = True ):
         rotations = uniform_rotation_sampling(n_images, grid_size, seed = seed )
     else:
         rotations = nonuniform_rotation_sampling(n_images, grid_size, seed = seed )
+
     translations = np.zeros([n_images,2])
     return ctf_params, rotations, translations
 
@@ -175,8 +176,141 @@ def get_pose_ctf_generator(option):
     elif option == "nonuniform":
         f = lambda x,y=0,z=0: random_sampling_scheme(x, y, z, uniform = False )
         return f
+    elif option == 'kent':
+        return kent_sampling_scheme
+    elif isinstance(option, list):
+        def kent_with_args(n_images, grid_size, seed=0):
+            return kent_sampling_scheme(n_images, grid_size, seed, arguments=option)
+        return kent_with_args
     else:
         return get_params_generator(load_second_dataset_params)
+
+def kent_sampling_scheme(n_images, grid_size, seed =0, arguments = None ):
+
+    """
+    Generate Kent (5-parameter Fisher-Bingham - FB5) distributed data on the unit sphere
+
+    :param numsamp: Number of samples to generate
+    :type numsamp: int
+    :param kappa: Concentration parameter
+    :param beta: Ovalness parameter
+    :param mu: Mean vector of Kent distribution
+    :type mu: np.array
+    :param mu0: Mean vector of the Fisher part
+    :type mu0: np.array
+    :return: Data dictionary of type 'cart' containing numsamp Kent distributed data
+    :rtype: dict
+    """
+
+    np.random.seed(seed)
+    ctf_params, _, _ = generate_simulated_params_from_real(n_images, load_second_dataset_params, grid_size  )
+    try:
+        import sphstat
+        
+    except:
+        raise ImportError("sphstat is not installed. Please install it with `pip install sphstat`")
+
+    if arguments is not None:
+        alpha = float(arguments[0])
+        beta = float(arguments[1])
+        mu = np.array(arguments[2]).astype(float)
+        mu0 = np.array(arguments[3]).astype(float)
+    else:
+        alpha = 10
+        beta = 5
+        mu0 = np.array([0., 1., 0.])
+        mu = np.array([1., 1., 0.])
+        mu = mu / np.linalg.norm(mu)
+
+    sample = sphstat.distributions.kent(n_images, alpha, beta, mu, mu0)
+
+    unit_vectors = sample['points']
+    theta = np.random.rand(n_images) * 2 * np.pi
+    rotations = cryo_rotation_batch(unit_vectors, theta)
+    
+    # Set contrast to 1
+    # ctf_params[:,core.CTFParamIndex.CONTRAST] = 1
+    # ctf_params[:,core.volt_ind] = 300
+    # ctf_params[:,core.CTFParamIndex.W] = -1
+    translations = np.zeros([n_images,2])
+
+    return ctf_params, rotations, translations
+
+import numpy as np
+
+def cryo_rotation_batch(U, theta):
+    """
+    Build rotation matrices from viewing directions U and in-plane angles theta.
+
+    Inputs
+    ------
+    U: array-like, shape (N,3) or (3,)
+        Viewing/propagation directions (needn't be unit; will be normalized).
+    theta: float or array-like
+        In-plane rotation(s) in radians. Can be scalar or shape (N,).
+
+    Returns
+    -------
+    R: ndarray, shape (N,3,3) or (3,3) if input was a single vector
+        Rotation matrices whose columns are [a, b, u], where u is the normalized
+        viewing direction and (a,b) is an orthonormal basis of the plane ⟂ u,
+        rotated by theta (right-hand rule about +u).
+    """
+    U = np.asarray(U, dtype=float)
+    single = (U.ndim == 1)
+    if single:
+        U = U[None, :]
+    if U.shape[1] != 3:
+        raise ValueError("U must have shape (N,3) or (3,)")
+
+    N = U.shape[0]
+    theta = np.asarray(theta, dtype=float)
+    if theta.ndim == 0:
+        theta = np.full(N, float(theta))
+    else:
+        theta = np.broadcast_to(theta, (N,))
+
+    # Normalize u
+    norms = np.linalg.norm(U, axis=1, keepdims=True)
+    if np.any(norms == 0):
+        raise ValueError("All viewing directions must be nonzero.")
+    u = U / norms
+
+    # Choose a stable reference per sample: ex unless u ~ collinear with ex, else ey
+    ex = np.array([1.0, 0.0, 0.0])
+    ey = np.array([0.0, 1.0, 0.0])
+    use_ex = (np.abs(u[:, 0]) < 0.9)  # mask
+    ref = np.where(use_ex[:, None], ex, ey)
+
+    # In-plane canonical basis (a0, b0) with right-handed frame (a0, b0, u)
+    dot_ru = np.sum(ref * u, axis=1, keepdims=True)
+    a0 = ref - dot_ru * u
+    a0 /= np.linalg.norm(a0, axis=1, keepdims=True)
+    b0 = np.cross(u, a0)
+
+    # Rotate (a0, b0) by theta in the plane orthogonal to u
+    c = np.cos(theta)[:, None]
+    s = np.sin(theta)[:, None]
+    a = c * a0 + s * b0
+    b = -s * a0 + c * b0
+
+    R = np.stack([a, b, u], axis=-1)  # columns are a, b, u
+    return R[0] if single else R
+
+# # --- tiny check ---
+# if __name__ == "__main__":
+#     # Single
+#     Rz = cryo_rotation_batch([0,0,1.0], np.pi/6)
+#     assert np.allclose(Rz @ np.array([0,0,1.0]), np.array([0,0,1.0]))
+#     # Batch
+#     U = np.array([[0,0,1.0],[1,1,1.0]])
+#     th = np.array([0.2, -0.3])
+#     R = cryo_rotation_batch(U, th)
+#     assert R.shape == (2,3,3)
+#     # Orthonormal & det=1
+#     assert np.allclose(R @ np.transpose(R, (0,2,1)), np.eye(3)[None,...])
+#     assert np.allclose(np.linalg.det(R), np.ones(2))
+
 
 
 def generate_contrast_params(n_images,noise_scale_std, contrast_std ):
