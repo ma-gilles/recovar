@@ -390,9 +390,9 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     del projections
     logger.info(f"done with norms. Batch size {norm_batch_size}")
 
-    # n_batches = utils.get_number_of_index_batch(n_images, batch_size//10)
-    # for array_indices, _ in utils.subset_and_indices_batch_iter(image_indices, batch_size//10):
-    #     residuals[array_indices] = compute_probability_from_residual_normal_squared_one_image(residuals[array_indices])
+    n_batches = utils.get_number_of_index_batch(n_images, batch_size//10)
+    for array_indices, _ in utils.subset_and_indices_batch_iter(image_indices, batch_size//10):
+        residuals[array_indices] = compute_probability_from_residual_normal_squared_one_image(residuals[array_indices])
 
     logger.info(f"done probs. Batch size {batch_size}")
 
@@ -527,6 +527,18 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
         state_objs[k].mean = means[k]
 
     return state_objs, current_pixel_res, hard_assignments
+
+def probabilities_to_hard_assignment_pose(probabilities, rotation_grid, translation_grid):
+    idx = np.argmax(probabilities.reshape(probabilities.shape[0], -1), axis=-1)
+    return hard_assignment_idx_to_pose(idx, rotation_grid, translation_grid)
+
+def probabilities_to_hard_assignment_idx(probabilities, rotation_grid, translation_grid):
+    idx = np.argmax(probabilities.reshape(probabilities.shape[0], -1), axis=-1)
+    square_shape = (rotation_grid.shape[0], translation_grid.shape[0])
+    maxpos_vect = np.column_stack(np.unravel_index(idx,square_shape))
+    rot_idx = maxpos_vect[:,0]
+    trans_idx = maxpos_vect[:,1]
+    return rot_idx, trans_idx
 
 def hard_assignment_idx_to_pose(indices, rotation_grid, translation_grid):
     square_shape = (rotation_grid.shape[0], translation_grid.shape[0])
@@ -2032,3 +2044,13 @@ def compute_regularized_covariance_columns(cryos, means, mean_signal_variance, c
 #         self.Ft_CTF += Ft_CTF_this
 #         return
     
+
+
+
+
+
+
+
+
+
+# class HeterogeneousEMState():
