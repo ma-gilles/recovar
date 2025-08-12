@@ -328,7 +328,7 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
                 'rlnOriginXAngst', 
                 'rlnOriginYAngst',] 
         # import cryodrgn.utils as cryodrgn_utils
-        rots = R_to_relion_scipy(rotation_matrices)
+        rots = R_to_relion(rotation_matrices)
         values += [ rots[:,0], rots[:,1], rots[:,2], translations[:,0], translations[:,1] ]
     
     if tilt_groups is not None:
@@ -355,7 +355,9 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
     
     return
 
-def R_to_relion_scipy(rot: np.ndarray, degrees: bool = True) -> np.ndarray:
+
+def R_to_relion(rot: np.ndarray, degrees: bool = True) -> np.ndarray:
+    """From cryodrgn"""
     """Nx3x3 rotation matrices to RELION euler angles"""
     from scipy.spatial.transform import Rotation as RR
 
@@ -376,6 +378,25 @@ def R_to_relion_scipy(rot: np.ndarray, degrees: bool = True) -> np.ndarray:
     if not degrees:
         euler *= np.pi / 180
     return euler
+
+def R_from_relion(euler_: np.ndarray, degrees: bool = True) -> np.ndarray:
+    """From cryodrgn"""
+    """Nx3 array of RELION euler angles to rotation matrix"""
+    from scipy.spatial.transform import Rotation as RR
+
+    euler = euler_.copy()
+    if euler.shape == (3,):
+        euler = euler.reshape(1, 3)
+    euler[:, 0] += 90
+    euler[:, 2] -= 90
+    f = np.ones((3, 3))
+    f[0, 1] = -1
+    f[1, 0] = -1
+    f[1, 2] = -1
+    f[2, 1] = -1
+    rot = RR.from_euler("zxz", euler, degrees=degrees).as_matrix() * f
+    return rot
+
 
 def write_starfile_from_cryodrgn_format(ctf_path, pose_path, particles_file_path, output_filename, halfset_indices = None):
     ctf = pickle_load(ctf_path)
