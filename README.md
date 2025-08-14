@@ -98,6 +98,29 @@ see details in [testing your installation](#small-test-dataset).
 The code for the paper was run on [this commit](https://github.com/ma-gilles/recovar/commit/6388bcc8646c535ae1b121952aa5c04e52402455). -->
 
 
+To install the newest version on github:
+
+    # Clone the code
+    git clone https://github.com/ma-gilles/recovar.git
+    cd recovar
+    # Optinally: choose your branch
+    # git checkout <branch>
+
+    # Create a fresh environment
+    conda create --name recovar_dev python=3.11 -y
+
+    # Enable the environment
+    conda activate recovar_dev
+
+    # Install key dependencies that don't play well with pip
+    pip install git+https://github.com/scikit-fmm/scikit-fmm.git
+    pip install -f https://download.pytorch.org/whl/torch_stable.html torch==2.3.1+cpu
+    pip install "jax[cuda12]"==0.5.0    # or use "jax[cpu]"==0.5.0 if no NVIDIA GPU
+
+    # Install recovar from the checked-out code in editable mode
+    # Use the extras your project defines; if none, drop [dev].
+    pip install -e ".[dev]"
+    python -m ipykernel install --user --name=recovar_dev 
 
 ## I. Preprocessing 
 The input interface of RECOVAR is borrowed directly from the excellent [cryoDRGN toolbox](https://cryodrgn.cs.princeton.edu/). 
