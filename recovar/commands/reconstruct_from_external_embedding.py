@@ -50,6 +50,14 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     group.add_argument(
+        "--particle-ind",
+        dest="tilt_ind",
+        type=os.path.abspath,
+        metavar="PKL",
+        help="Filter particles by these indices (only for tilt-series/cryo-ET)",
+    )
+
+    group.add_argument(
         "--uninvert-data",
         dest="uninvert_data",
         default = "false",
@@ -61,6 +69,10 @@ def add_args(parser: argparse.ArgumentParser):
         "--datadir",
         type=os.path.abspath,
         help="Path prefix to particle stack if loading relative paths from a .star or .cs file",
+    )
+    group.add_argument(
+        "--strip-prefix",
+        help="Path prefix to strip from filenames in star file. Useful when star file contains longer paths than available on the system.",
     )
     group.add_argument(
             "--n-images",
@@ -117,6 +129,39 @@ def add_args(parser: argparse.ArgumentParser):
         "--tilt-series", action="store_true",  dest="tilt_series", help="Whether to use tilt_series."
     )
 
+    group.add_argument(
+        "--ntilts",
+        default=None,
+        type=int,
+        help="Number of tilts to use per tilt series. None = all (default)",
+    )
+
+    group.add_argument(
+        "--tilt-series-ctf",
+        default=None,
+        help="What CTF to use for tilt series. Options : cryoem, relion5, warp (windows). Warptools is not yet supported. Default = cryoem if tilt series is False, relion5 if tilt series is True"
+    )
+
+    group.add_argument(
+        "--angle-per-tilt",
+        type=float,
+        default=3.0,
+        help="Angle per tilt in degrees (default: 3.0)"
+    )
+
+    group.add_argument(
+        "--dose-per-tilt",
+        type=float,
+        default=2.9,
+        help="Dose per tilt in e-/Å² (default: 2.9)"
+    )
+
+    group.add_argument(
+        "--premultiplied-ctf",
+        action="store_true",
+        help="Whether CTF is premultiplied in the data"
+    )
+
     return parser
     
 
@@ -127,6 +172,15 @@ def generate(args):
     o.mkdir_safe(args.outdir)
     logger.addHandler(logging.FileHandler(f"{args.outdir}/run.log"))
     logger.info(args)
+
+    if args.tilt_series_ctf is None and args.tilt_series is False:
+        args.tilt_series_ctf = 'cryoem'
+        logger.info("Setting tilt_series_ctf to cryoem")
+    elif args.tilt_series_ctf is None and args.tilt_series is True:
+        args.tilt_series_ctf = 'relion5'
+        logger.info("Setting tilt_series_ctf to relion5")
+
+
     ind_split = dataset.figure_out_halfsets(args)
 
     dataset_loader_dict = dataset.make_dataset_loader_dict(args)
@@ -154,9 +208,13 @@ def generate(args):
     # import pdb; pdb.set_trace()
     # noise_variance = np.ones(zs.shape[0])
     noise_variance, _ = noise.estimate_noise_variance(cryos[0], 100)
-    noise_variance =np.ones(cryos[0].image_size) * noise_variance
+    noise_variance = np.ones(cryos[0].image_shape[0]//2-1) * noise_variance
+
+    for cryo in cryos:
+        cryo.noise = noise.RadialNoiseModel(noise_variance)
+        
     output_folder = args.outdir
-    o.compute_and_save_reweighted(cryos, target, zs, cov_zs, noise_variance, output_folder, args.Bfactor, args.n_bins)
+    o.compute_and_save_reweighted(cryos, target, zs, cov_zs, output_folder, args.Bfactor, args.n_bins)
 
     return 
 

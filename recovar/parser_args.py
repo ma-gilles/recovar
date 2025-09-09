@@ -40,7 +40,7 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze= False):
     )
 
     parser.add_argument(
-        "--n-min-images",  type =int, default=None, dest="n_min_images",help="minimum number of images to compute kernel regression. Default = 100 for SPA, and 10 particles for tilt series. Default works well for most cases. E.g., it was used to generate all figures in the paper. If you are using cryo-ET or very noisy (or very not noisy data), you might want to increase (decrease) this value."
+        "--n-min-particles",  type =int, default=None, dest="n_min_particles",help="minimum number of particles to compute kernel regression. Default = 100. Default works well for most cases. E.g., it was used to generate all figures in the paper. If you are using cryo-ET or very noisy (or very not noisy data), you might want to increase (decrease) this value."
     )
 
     parser.add_argument(
@@ -60,7 +60,34 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze= False):
     parser.add_argument(
         "--datadir",
         type=os.path.abspath,
-        help="Path prefix to particle stack if loading relative paths from a .star or .cs file. Same as the --datadir option in pipeline.py. If you don't pass an argument, the same stack as provided to pipeline.py will be used. You should use this option in case you want to use a higher resolution stack.",
+        help="Path prefix to particle stack if loading relative paths from a .star or .cs file. If not specified, uses the directory of the star file.",
+    )
+    
+    parser.add_argument(
+        "--strip-prefix",
+        help="Path prefix to strip from filenames in star file (using in starfile input ONLY). Useful when star file contains longer paths than available on the system. By default, it strips the full path (except the filename). E.g, if you starfile path is Extract/job193/Subtomograms/XXX/XXX.mrcs, and your directory looks like /your/path/to/Subtomograms, then you can use --strip-prefix Extract/job193 --datadir /your/path/to/.",
+    )
+
+    parser.add_argument(
+        "--apply-global-filtering", action="store_true",
+        help="Apply global FSC filtering to generated halfmaps and save them with _filtered.mrc suffix. Uses the pipeline's volume_mask for FSC estimation.",
+    )
+
+    parser.add_argument(
+        "--fsc-mask-radius", type=float, default=None,
+        help="Radius of spherical mask for FSC estimation (in Angstroms). If None, uses pipeline output volume_mask. Overrides the pipeline mask if specified.",
+    )
+
+    parser.add_argument(
+        "--fsc-mask-edgewidth", type=float, default=None,
+        help="Edge width of FSC mask (in Angstroms). If None, uses 10%% of fsc-mask-radius. Only used if fsc-mask-radius is specified.",
+    )
+
+    parser.add_argument(
+        "--copy-to-folder", dest="copy_to_folder", type=os.path.abspath, help="Copy all input data files to this temporary folder before processing. Original paths will be saved in output."
+    )
+    parser.add_argument(
+        "--no-cleanup", action="store_true", help="Do not clean up temporary files after processing (useful for chaining multiple pipeline calls)"
     )
 
     return parser

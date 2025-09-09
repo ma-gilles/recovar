@@ -3,7 +3,6 @@ import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
 import pickle 
-import tensorflow as tf
 from recovar import plot_utils, core, mask
 import recovar.padding as pad
 from recovar.fourier_transform_utils import fourier_transform_utils
@@ -14,231 +13,19 @@ from recovar import tilt_dataset
 logger = logging.getLogger(__name__)
 
 # Maybe should take out these dependencies?
-
-import torch
 from recovar.cryodrgn_source import ImageSource
 
 
-USE_LAZY = True
-if USE_LAZY:
-    def MRCDataMod(particles_file, ind =None , datadir = None, padding = 0, uninvert_data = False):
-        return tilt_dataset.ImageDataset(particles_file, ind = ind, datadir = datadir, padding = padding, invert_data = uninvert_data, lazy =False)
-else:
-    class MRCDataMod(torch.utils.data.Dataset):
-        # Adapted from cryoDRGN
-        '''
-        Class representing an .mrcs stack file -- images preloaded
-        '''
-        def __init__(self, mrcfile, datadir=None, ind = None, padding = 0, uninvert_data = False, mask = None, lazy = False, max_threads=16 ):
-            
-            self.src = ImageSource.from_file(
-                mrcfile,
-                lazy=lazy,
-                datadir=datadir,
-                indices=ind,
-                max_threads=max_threads,
-            )
-
-            # if ind is not None:
-            #     # particles = dataset.load_particles(mrcfile, True, datadir=datadir)
-            #     # particles = np.array([particles[i].get() for i in ind])
-            #     self.src = ImageSource.from_file(
-            #         mrcfile,
-            #         lazy=lazy,
-            #         datadir=datadir,
-            #         indices=ind,
-            #         max_threads=max_threads,
-            #     )
-
-            #     ImageDataset(data.Dataset)
-            #     ImageDataset(data.Dataset)
-            #     particles = 
-            #     particles = dataset.load_particles(mrcfile, False, datadir=datadir)[ind]
-            # else:
-            #     particles = dataset.load_particles(mrcfile, False, datadir=datadir)
-            # N, ny, nx = particles.shape
-            N = self.src.n
-            ny, nx = self.src.D, self.src.D
-            
-            assert ny == nx, "Images must be square"
-            assert ny % 2 == 0, "Image size must be even. Is this a preprocessed dataset? Use the --preprocessed flag if so."
-            
-            
-            self.n_images = N
-            self.D = (nx + padding) 
-            self.image_size = self.D * self.D
-            self.image_shape = (nx + padding, ny + padding)
-
-            self.dtype = np.complex64 # ???
-            self.unpadded_D = nx
-            self.unpadded_image_shape = (nx, ny)
-            self.mask = set_standard_mask(self.unpadded_D, self.dtype)
-            self.mult = -1 if uninvert_data else 1
-            
-            # Maybe should do do this on CPU?
-            # self.particles = particles #np.array(padded_dft(particles, self.mask, self.image_size))
-            self.padding = padding
-            
-        def get(self, index):
-            if isinstance(index, list):
-                index = np.array(index)#.to(torch.long)
-            particles = self.src.images(index)
-            # TODO - why do I need the [0]
-            return particles[0]
-        
-        # def __getitem__(self, index):
-        #     if isinstance(index, list):
-        #         index = torch.Tensor(index).to(torch.long)
-
-        #     particles = self._process(self.src.images(index).to(self.device))
-
-        #     # this is why it is tricky for index to be allowed to be a list!
-        #     if len(particles.shape) == 2:
-        #         particles = particles[np.newaxis, ...]
-
-        #     if isinstance(index, (int, np.integer)):
-        #         logger.debug(f"ImageDataset returning images at index ({index})")
-        #     else:
-        #         logger.debug(
-        #             f"ImageDataset returning images for {len(index)} indices:"
-        #             f" ({index[0]}..{index[-1]})"
-        #         )
-
-        #     return particles, None, index
+def MRCDataMod(particles_file, ind =None , datadir = None, padding = 0, uninvert_data = False, strip_prefix = None):
+    return tilt_dataset.ImageDataset(particles_file, ind = ind, datadir = datadir, padding = padding, invert_data = uninvert_data, lazy =False, strip_prefix=strip_prefix)
 
 
-
-        def __len__(self):
-            return self.n_images
-
-        def __getitem__(self, index):
-            # import pdb; pdb.set_trace()
-            return self.get(index), index, index
-
-        def process_images(self, images, apply_image_mask = False):
-            if apply_image_mask:
-                images = images * self.mask
-            # logger.warning("CHANGE BACK USE MASK TO FALSE")
-            images = pad.padded_dft(images * self.mult,  self.image_size, self.padding)
-            return images.astype(self.dtype)
-
-        # def get_dataset_generator(self, batch_size, num_workers = 0):
-        #     return tf.data.Dataset.from_tensor_slices((self.src,np.arange(self.n_images),np.arange(self.n_images))).batch(batch_size, num_parallel_calls = tf.data.AUTOTUNE).as_numpy_iterator()
-
-        # def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
-        #     return tf.data.Dataset.from_tensor_slices((self.src[subset_indices], subset_indices, subset_indices)).batch(batch_size, num_parallel_calls = tf.data.AUTOTUNE).as_numpy_iterator()
-
-        def get_dataset_generator(self, batch_size, num_workers = 0):
-            return NumpyLoader(self, batch_size=batch_size, shuffle=False, num_workers = num_workers)
-        
-        def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
-            # raise NotImplementedError
-            # Maybe this would work?
-            return NumpyLoader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, shuffle=False, num_workers = num_workers)
-            # torch.utils.data.Subset(self, subset_indices)
-
-
-
-USE_NEW_LAZY = True
-if USE_NEW_LAZY:
-    def LazyMRCDataMod(particles_file, ind =None , datadir = None, padding = 0, uninvert_data = False):
-        return tilt_dataset.ImageDataset(particles_file, ind = ind, datadir = datadir, padding = padding, invert_data = uninvert_data, lazy =True)
-else:
-    False
-    # Nothing
-    # LazyMRCDataMod = tilt_dataset.ImageDataset
-    # class LazyMRCDataMod(torch.utils.data.Dataset):
-    #     # Adapted from cryoDRGN
-    #     '''
-    #     Class representing an .mrcs stack file -- images loaded on the fly
-    #     '''
-    #     def __init__(self, mrcfile, datadir=None, ind = None, padding = 0, uninvert_data = False ):
-            
-    #         particles = dataset.load_particles(mrcfile, True, datadir=datadir)
-    #         if ind is not None:
-    #             particles = [particles[x] for x in ind]
-                
-    #         N = len(particles)
-    #         ny, nx = particles[0].get().shape
-            
-    #         assert ny == nx, "Images must be square"
-    #         assert ny % 2 == 0, "Image size must be even. Is this a preprocessed dataset? Use the --preprocessed flag if so."
-            
-
-    #         # self.mrcfile = mrcfile
-    #         # self.datadir = datadir
-    #         # self.n_images = N
-    #         # self.D = (nx + padding) 
-    #         # self.image_size = self.D * self.D
-    #         # self.image_shape = (nx + padding, ny + padding)
-    #         # self.dtype = np.complex64 
-
-    #         # self.mean_mask = set_standard_mask(self.D, self.dtype)
-    #         # self.mask = set_standard_mask(self.D, self.dtype)
-    #         # self.mult = -1 if uninvert_data else 1
-            
-    #         # self.unpadded_D = nx
-    #         # self.unpadded_image_shape = (nx, ny)
-
-    #         # # Maybe should do do this on CPU?
-    #         # self.particles = particles 
-    #         # self.padding = padding
-
-
-
-    #         self.n_images = N
-    #         self.D = (nx + padding) 
-    #         self.image_size = self.D * self.D
-    #         self.image_shape = (nx + padding, ny + padding)
-
-    #         self.dtype = np.complex64 # ???
-    #         self.unpadded_D = nx
-    #         self.unpadded_image_shape = (nx, ny)
-    #         self.mask = set_standard_mask(self.unpadded_D, self.dtype)
-    #         self.mult = -1 if uninvert_data else 1
-            
-    #         # Maybe should do do this on CPU?
-    #         self.particles = particles #np.array(padded_dft(particles, self.mask, self.image_size))
-    #         self.padding = padding
-
-            
-    #     def get(self, i):
-    #         return self.particles[i].get()
-
-    #     def __len__(self):
-    #         return self.n_images
-
-    #     def __getitem__(self, index):
-    #         return self.get(index), index, index
-
-    #     def process_images(self, images, apply_image_mask = False):
-            
-    #         if apply_image_mask:
-    #             images = images * self.mask
-
-    #         images = pad.padded_dft(images * self.mult, self.image_size, self.padding)
-    #         return images
-
-    #     def get_dataset_generator(self, batch_size, num_workers = 0):
-    #         return NumpyLoader(self, batch_size=batch_size, shuffle=False, num_workers = num_workers)
-        
-    #     def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
-    #         # raise NotImplementedError
-    #         # Maybe this would work?
-    #         return NumpyLoader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, shuffle=False, num_workers = num_workers)
-    #         # torch.utils.data.Subset(self, subset_indices)
+def LazyMRCDataMod(particles_file, ind =None , datadir = None, padding = 0, uninvert_data = False, strip_prefix = None):
+    return tilt_dataset.ImageDataset(particles_file, ind = ind, datadir = datadir, padding = padding, invert_data = uninvert_data, lazy =True, strip_prefix=strip_prefix)
     
     
-def get_num_images_in_dataset(mrc_path):
-    return ImageSource.from_file(mrc_path, lazy=True).n
-    # from recovar import cryodrgn_source
-    # n_particles = cryodrgn_source.ImageSource.from_file(
-    #         mrc_path,
-    #         lazy=True).n
-    # return n_particles
-    # ImageSource.from_file(mrc_path, lazy=True).n
-    # particles = dataset.load_particles(mrc_path, True)
-    # return ImageSource.from_file(mrc_path, lazy=True).n
+def get_num_images_in_dataset(mrc_path, datadir = None, strip_prefix = None):
+    return ImageSource.from_file(mrc_path, lazy=True, datadir = datadir, strip_prefix = strip_prefix).n
 
 def set_standard_mask(D, dtype):
     return mask.window_mask(D, 0.85, 0.99)
@@ -248,39 +35,39 @@ def set_standard_mask(D, dtype):
 
 # I don't remember why I use two different loaders here.
 
-# This might work. 
-def numpy_collate(batch):
-  if isinstance(batch[0], np.ndarray):
-    return jnp.stack(batch)
-  elif isinstance(batch[0], (tuple,list)):
-    transposed = zip(*batch)
-    return [numpy_collate(samples) for samples in transposed]
-  else:
-    return jnp.array(batch)
+# # This might work. 
+# def numpy_collate(batch):
+#   if isinstance(batch[0], np.ndarray):
+#     return jnp.stack(batch)
+#   elif isinstance(batch[0], (tuple,list)):
+#     transposed = zip(*batch)
+#     return [numpy_collate(samples) for samples in transposed]
+#   else:
+#     return jnp.array(batch)
 
-class NumpyLoader(torch.utils.data.DataLoader):
-  def __init__(self, dataset, batch_size=1,
-                shuffle=False, sampler=None,
-                batch_sampler=None, num_workers=0,
-                pin_memory=False, drop_last=False,
-                timeout=0, worker_init_fn=None):
-    super(self.__class__, self).__init__(dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        sampler=sampler,
-        batch_sampler=batch_sampler,
-        num_workers=num_workers,
-        collate_fn=numpy_collate,
-        pin_memory=pin_memory,
-        drop_last=drop_last,
-        timeout=timeout,
-        worker_init_fn=worker_init_fn)
+# class NumpyLoader(torch.utils.data.DataLoader):
+#   def __init__(self, dataset, batch_size=1,
+#                 shuffle=False, sampler=None,
+#                 batch_sampler=None, num_workers=0,
+#                 pin_memory=False, drop_last=False,
+#                 timeout=0, worker_init_fn=None):
+#     super(self.__class__, self).__init__(dataset,
+#         batch_size=batch_size,
+#         shuffle=shuffle,
+#         sampler=sampler,
+#         batch_sampler=batch_sampler,
+#         num_workers=num_workers,
+#         collate_fn=numpy_collate,
+#         pin_memory=pin_memory,
+#         drop_last=drop_last,
+#         timeout=timeout,
+#         worker_init_fn=worker_init_fn)
     
 
 # A dataset class, that includes images and all other information
 class CryoEMDataset:
 
-    def __init__(self, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.evaluate_ctf_wrapper, dtype = np.complex64, rotation_dtype = np.float32, dataset_indices = None, grid_size = None, volume_upsampling_factor = 1, tilt_series_flag = False  ):
+    def __init__(self, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.evaluate_ctf_wrapper, dtype = np.complex64, rotation_dtype = np.float32, dataset_indices = None, grid_size = None, volume_upsampling_factor = 1, tilt_series_flag = False, premultiplied_ctf = False  ):
         
         if image_stack is not None:
             grid_size = image_stack.D
@@ -320,6 +107,7 @@ class CryoEMDataset:
         
         # self.n_units = self.n_images # This is the number of predictions.
         self.tilt_series_flag = tilt_series_flag # Hopefully can just switch this on and off
+        self.premultiplied_ctf = premultiplied_ctf
 
         # For SPA, it is # of images, for ET, it is # of tilt series
         # For tilt series: A "tilt" is an image. A particle is a full tilt series 
@@ -357,6 +145,12 @@ class CryoEMDataset:
         self.CTF_params = np.array(CTF_params.astype(self.CTF_dtype))
 
         self.dataset_indices = dataset_indices
+        self.noise = None
+
+    def get_noise_variance(self, indices):
+        if self.noise_model is None:            
+            return None
+        return self.noise_model.get(indices)
 
     def delete(self):
         del self.image_stack.particles
@@ -364,6 +158,7 @@ class CryoEMDataset:
         del self.rotation_matrices
         del self.CTF_params
         del self.translations
+        del self.noise_model
 
     def update_volume_upsampling_factor(self, volume_upsampling_factor):
 
@@ -379,13 +174,27 @@ class CryoEMDataset:
     #     self.current_index=0# A very stupid way to do this for now?
     #     return self.image_stack.get_dataset_generator(batch_size,num_workers = num_workers)
 
-    def get_dataset_generator(self, batch_size, num_workers = 0):
-        return self.image_stack.get_dataset_generator(batch_size,num_workers = num_workers)
+    def get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
+        return self.image_stack.get_dataset_generator(batch_size, num_workers=num_workers, **kwargs)
     
-    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
+    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
         if subset_indices is None:
+            return self.get_dataset_generator(batch_size, num_workers=num_workers, **kwargs)
+        return self.image_stack.get_dataset_subset_generator(batch_size, subset_indices, num_workers=num_workers, **kwargs)
+
+    # This is a generator that iterates over individual images rather than tilt groups. For SPA, this is the same as get_dataset_subset_generator.
+    def get_image_subset_generator(self, batch_size, subset_indices, num_workers = 0):
+        if self.tilt_series_flag:
+            return self.image_stack.get_image_subset_generator(batch_size, subset_indices, num_workers = num_workers)
+        else:
+            return self.get_dataset_subset_generator(batch_size, subset_indices, num_workers = num_workers)
+
+    # This is a generator that iterates over individual images rather than tilt groups. For SPA, this is the same as get_dataset_generator.
+    def get_image_generator(self, batch_size, num_workers = 0):
+        if self.tilt_series_flag:
+            return self.image_stack.get_image_generator(batch_size, num_workers = num_workers)
+        else:
             return self.get_dataset_generator(batch_size, num_workers = num_workers)
-        return self.image_stack.get_dataset_subset_generator(batch_size, subset_indices, num_workers = num_workers)
 
 
     def CTF_fun(self,*args):
@@ -424,6 +233,7 @@ class CryoEMDataset:
         if hide_padding:
             im = im[self.hpad:self.image_stack.unpadded_D + self.hpad,self.hpad:self.image_stack.unpadded_D + self.hpad]
         return im
+
 
     def get_slice(self, X, to_real_fn = np.abs, axis = 0):
         # zero_th freq
@@ -497,52 +307,97 @@ class CryoEMDataset:
         return mask2.real
 
 
+    def get_predicted_image(self, indices, volume, skip_ctf = False, spatial = True):
+        """Get predicted images for given indices using forward model.
+        
+        Args:
+            indices: Array of indices to predict images for
+            volume: Volume to use for prediction
+            skip_ctf: Whether to skip CTF application
+            spatial: Whether to return images in real space (True) or Fourier space (False)
+            
+        Returns:
+            Predicted images in real space if spatial=True, otherwise in Fourier space
+        """
+        predicted_images = core.forward_model_from_map(
+            volume,
+            self.CTF_params[indices],
+            self.rotation_matrices[indices],
+            self.image_shape,
+            self.volume_shape,
+            self.voxel_size,
+            self.CTF_fun,
+            'linear_interp',  # Using linear interpolation for better quality
+            skip_ctf = skip_ctf
+        )
+        if spatial:
+            predicted_images = ftu.get_idft2(predicted_images.reshape(-1, *self.image_shape)).real#.reshape(predicted_images.shape[0], -1)
+        return predicted_images
 
 
-def subsample_cryoem_dataset(dataset, indices):
+    def set_radial_noise_model(self, noise_variance):
+        from recovar import noise
+        self.noise = noise.RadialNoiseModel(noise_variance, image_shape = self.image_shape)
 
-    import copy
-    image_stack = copy.copy(dataset.image_stack)
+    def set_variable_radial_noise_model(self, noise_variance_radials):
+        from recovar import noise
+        _, dose_indices = jnp.unique(self.CTF_params[:,core.CTFParamIndex.DOSE], return_inverse=True)
+        self.noise = noise.VariableRadialNoiseModel(noise_variance_radials, dose_indices, image_shape = self.image_shape)
 
-    if type(image_stack.particles) is list:
-        image_stack.particles = [dataset.image_stack.particles[i] for i in indices]
-        image_stack.n_images = len(image_stack.particles)#.shape[0]
-    else:
-        image_stack.particles = dataset.image_stack.particles[indices]
-        image_stack.n_images = image_stack.particles.shape[0]
 
-    return CryoEMDataset( image_stack, dataset.voxel_size, dataset.rotation_matrices[indices], dataset.translations[indices], dataset.CTF_params[indices], CTF_fun = dataset.CTF_fun_inp, dtype = dataset.dtype, rotation_dtype = dataset.rotation_dtype, dataset_indices = dataset.dataset_indices[indices] , volume_upsampling_factor= dataset.volume_upsampling_factor)
+# TODO: This is not used anywhere. Delete?
+# def subsample_cryoem_dataset(dataset, indices):
+
+#     import copy
+#     image_stack = copy.copy(dataset.image_stack)
+
+#     if type(image_stack.particles) is list:
+#         image_stack.particles = [dataset.image_stack.particles[i] for i in indices]
+#         image_stack.n_images = len(image_stack.particles)#.shape[0]
+#     else:
+#         image_stack.particles = dataset.image_stack.particles[indices]
+#         image_stack.n_images = image_stack.particles.shape[0]
+
+#     return CryoEMDataset( image_stack, dataset.voxel_size, dataset.rotation_matrices[indices], dataset.translations[indices], dataset.CTF_params[indices], CTF_fun = dataset.CTF_fun_inp, dtype = dataset.dtype, rotation_dtype = dataset.rotation_dtype, dataset_indices = dataset.dataset_indices[indices] , volume_upsampling_factor= dataset.volume_upsampling_factor)
 
 
 
 # Loads dataset that are stored in the cryoDRGN format
-def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False, tilt_series = False, tilt_series_ctf = None, dose_per_tilt = 2.9, angle_per_tilt = 3 ):
+def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False, tilt_series = False, tilt_series_ctf = None, dose_per_tilt = 2.9, angle_per_tilt = 3, premultiplied_ctf = False, strip_prefix = None):
     
     # For backward compatibility... Delete at some point?
     if tilt_series_ctf is None and tilt_series is False:
         tilt_series_ctf = 'cryoem'
     elif tilt_series_ctf is None and tilt_series is True:
+        tilt_series_ctf = 'relion5'
+    elif tilt_series_ctf == 'warp':
         tilt_series_ctf = 'v2_scale_from_star'
 
-    # else:
-    #     tilt_series_ctf = tilt_series_ctf
-    # tilt_series_ctf = #None if tilt_series_ctf is False else tilt_series_ctf
-
-    # assert tilt_series_ctf in (None, "from_star", "scale_from_star"), "tilt_series_ctf must be None, from_star, or scale_from_star"
-    # tilt_series_ctf = tilt_series if tilt_series_ctf is None else tilt_series_ctf
-
-    sort_with_Bfac = True
         
     if tilt_series:
             from recovar import tilt_dataset
             # particles_to_tilts, tilts_to_particles = tilt_dataset.TiltSeriesData.parse_particle_tilt(particles_file)
+            tilt_file_option = 'relion5' if tilt_series_ctf == 'relion5' else 'warp'
+            dataset = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, tilt_file_option=tilt_file_option, strip_prefix=strip_prefix)
+            # # Use TF-based implementation for tilt series
+            # from recovar import tf_tilt_dataset
+            # tilt_file_option = 'relion5' if tilt_series_ctf == 'relion5' else 'warp'
+            # dataset = tf_tilt_dataset.TFTiltSeriesData(
+            #     particles_file, 
+            #     ind=ind, 
+            #     datadir=datadir, 
+            #     invert_data=uninvert_data, 
+            #     tilt_file_option=tilt_file_option,
+            #     cache_size=1000,  # Adjust based on available memory
+            #     prefetch_size=100  # Adjust based on batch size
+            # )
 
-            dataset = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, sort_with_Bfac = sort_with_Bfac)
     else:
         if lazy:
-            dataset = LazyMRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
+            dataset = LazyMRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data, strip_prefix=strip_prefix)
         else:
-            dataset = MRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data)
+            dataset = MRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data, strip_prefix=strip_prefix)
+
 
     from recovar import cryodrgn_load
     ctf_params = np.array(cryodrgn_load.load_ctf_for_training(dataset.D, ctf_file))
@@ -566,13 +421,22 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
         tilt_dataset_this = dataset
 
     if tilt_series_ctf != 'cryoem':
+
+        if tilt_series_ctf == 'relion5':
+            ctf_params[:,core.CTFParamIndex.CONTRAST+1] = tilt_dataset_this.ctfscalefactor
+            dose = tilt_dataset_this.dose
+            angles = np.zeros_like(dose) # Set angles to 0 - the np.cos factor is included already?
+            ctf_params = np.concatenate( [ctf_params, dose[...,None], angles[...,None]], axis =-1)
+            CTF_fun = core.evaluate_ctf_wrapper_tilt_series_v2
+
+
         # The angles are used to compute a scale factor cos(angles). If scale from star, then the scale factor is already in the star file, so set angle to 0
         if "scale_from_star" in tilt_series_ctf:
             angle_per_tilt = 0
 
         if tilt_series_ctf == "from_star":
-            ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
-            ctf_params[:,core.bfactor_ind+1] = -tilt_dataset_this.ctfBfactor # should be POSITIVE (negative in star file)
+            ctf_params[:,core.CTFParamIndex.CONTRAST+1] = tilt_dataset_this.ctfscalefactor
+            ctf_params[:,core.CTFParamIndex.BFACTOR+1] = -tilt_dataset_this.ctfBfactor # should be POSITIVE (negative in star file)
             logger.info('CTF from star')
 
         elif (tilt_series_ctf == "scale_from_star") or (tilt_series_ctf == "from_dose"):
@@ -580,7 +444,7 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
 
             # + 1 because voxel_size in included.... gross
             if "scale_from_star" in tilt_series_ctf:
-                ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
+                ctf_params[:,core.CTFParamIndex.CONTRAST+1] = tilt_dataset_this.ctfscalefactor
 
             tilt_numbers = tilt_dataset_this.tilt_numbers
             # tilt_angles = dataset.tilt_angles[dataset.tilt_indices]
@@ -601,7 +465,7 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
             angles = jnp.ceil(tilt_numbers/2) * angle_per_tilt 
             if 'scale_from_star' in tilt_series_ctf:
                 # + 1 because voxel_size in included.... gross
-                ctf_params[:,core.contrast_ind+1] = tilt_dataset_this.ctfscalefactor
+                ctf_params[:,core.CTFParamIndex.CONTRAST+1] = tilt_dataset_this.ctfscalefactor
                 # angles *=0 
                 logger.warning("Using scale from star")
 
@@ -631,11 +495,14 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
     rots = np.array(rots).astype(np.float32)
 
     if ind is not None:
-        ind = ind.astype(int)
-
+        ind = np.asarray(ind).astype(int)
 
     return CryoEMDataset( dataset, voxel_size,
-                              rots, translations, ctf_params[:,1:], CTF_fun = CTF_fun, dataset_indices = ind, tilt_series_flag = tilt_series)
+                              rots, translations, ctf_params[:,1:], 
+                              CTF_fun = CTF_fun, 
+                              dataset_indices = ind, 
+                              tilt_series_flag = tilt_series, 
+                              premultiplied_ctf = premultiplied_ctf)
 
 
 
@@ -648,82 +515,152 @@ def get_split_datasets(particles_file, poses_file, ctf_file, datadir,
                                   padding = 0, n_images = None, tilt_series = False,
                                  tilt_series_ctf = None,
                                     angle_per_tilt = 3, dose_per_tilt = 2.9,
-                                   ind_split = None, lazy = False):
+                                   ind_split = None, lazy = False, premultiplied_ctf = False, strip_prefix = None):
     
     cryos = []
     for ind in ind_split:
-        cryos.append(load_cryodrgn_dataset(particles_file, poses_file, ctf_file , datadir = datadir, n_images = n_images, ind = ind, lazy = lazy, padding = padding, uninvert_data = uninvert_data, tilt_series = tilt_series, tilt_series_ctf = tilt_series_ctf, angle_per_tilt = angle_per_tilt, dose_per_tilt = dose_per_tilt))
+        cryos.append(load_cryodrgn_dataset(particles_file, poses_file, ctf_file , datadir = datadir, n_images = n_images, ind = ind, lazy = lazy, padding = padding, uninvert_data = uninvert_data, tilt_series = tilt_series, tilt_series_ctf = tilt_series_ctf, angle_per_tilt = angle_per_tilt, dose_per_tilt = dose_per_tilt, premultiplied_ctf = premultiplied_ctf, strip_prefix = strip_prefix))
     
     return cryos
 
 
-def get_split_indices(particles_file, ind_file = None):
-
+def get_split_indices(particles_file, datadir=None, strip_prefix=None, ind_file=None, split_random_seed=0, validate_split=True):
+    """
+    Get indices for splitting dataset into halfsets.
+    
+    Args:
+        particles_file: Path to particles STAR file
+        datadir: Data directory (optional)
+        strip_prefix: Prefix to strip from file paths (optional)
+        ind_file: File containing specific indices to use (optional)
+        split_random_seed: Random seed for reproducible splits
+        validate_split: Whether to validate the split is balanced
+        
+    Returns:
+        List of two numpy arrays containing indices for each halfset
+    """
     if ind_file is None:
-        n_images = get_num_images_in_dataset(particles_file)
+        n_images = get_num_images_in_dataset(particles_file, datadir=datadir, strip_prefix=strip_prefix)
         indices = np.arange(n_images)
     else:
         if isinstance(ind_file, np.ndarray):
             indices = ind_file
         else:
-            # Get indf
-            with open( ind_file,'rb') as f:
+            # Get indices from file
+            with open(ind_file, 'rb') as f:
                 indices = np.asarray(pickle.load(f))
-  
-    split_indices = split_index_list(indices)
+    
+    if len(indices) == 0:
+        raise ValueError("No valid indices found for dataset splitting")
+    
+    split_indices = split_index_list(indices, split_random_seed=split_random_seed)
+    
+    if validate_split:
+        # Validate split is reasonably balanced
+        n1, n2 = len(split_indices[0]), len(split_indices[1])
+        total = n1 + n2
+        if abs(n1 - n2) > max(1, total * 0.01):  # Allow 1% imbalance
+            logger.warning(f"Split is imbalanced: {n1} vs {n2} images ({abs(n1-n2)/total*100:.1f}% difference)")
+        
+        # Check for overlap
+        overlap = np.intersect1d(split_indices[0], split_indices[1])
+        if len(overlap) > 0:
+            raise ValueError(f"Split contains {len(overlap)} overlapping indices")
+    
+    logger.info(f"Split dataset into halfsets: {len(split_indices[0])} and {len(split_indices[1])} images")
     return split_indices
 
 
-def get_split_tilt_indices(particles_file, ind_file = None, tilt_ind_file =None, ntilts = None, datadir = None):
-    # from cryodrgn import starfile
+def get_split_tilt_indices(
+    particles_file, ind_file=None, tilt_ind_file=None, ntilts=None, datadir=None, particle_halfset_indices_file=None
+):
+    """
+    Split a tilt-series dataset into two halfsets (image indices), supporting optional filtering by image/particle indices and precomputed splits.
+    """
     from recovar import tilt_dataset
+    import pickle
+    import numpy as np
 
-    # dataset = tilt_dataset.parse_particle_tilt(args.particles)
+    # Step 1: Parse STAR file for mapping
     particles_to_tilts, tilts_to_particles = tilt_dataset.TiltSeriesData.parse_particle_tilt(particles_file)
 
+    # Step 2: Optionally get tilt numbers for ntilts filtering
+    tilt_numbers = None
     if ntilts is not None:
-        # A lot of extra compute.
-        # TODO rewrite
-        dataset_tmp = tilt_dataset.TiltSeriesData(particles_file, datadir = datadir)
+        dataset_tmp = tilt_dataset.TiltSeriesData(particles_file, datadir=datadir)
         tilt_numbers = dataset_tmp.tilt_numbers
 
-    n_tilt_series = len(particles_to_tilts)
-    if tilt_ind_file is None:
-        particle_ind = np.arange(n_tilt_series)
-    else:
+    # Step 3: Determine which particles to use
+    if tilt_ind_file is not None:
         particle_ind = pickle.load(open(tilt_ind_file, "rb"))
-        logger.warning("Using tilt-ind file to pick PARTICLES (i.e. tilt series), not images (individual tilts). Use --ind to pick images.")
-        # raise NotImplementedError
+    else:
+        particle_ind = np.arange(len(particles_to_tilts))
 
+    # Map selected particles to image indices
+    allowed_image_indices = tilt_dataset.tilt_series_indices_to_image_indices(particle_ind, particles_file)
+
+    # Step 4: Optionally filter by image indices
     if ind_file is not None:
         ind_images = pickle.load(open(ind_file, "rb"))
+        allowed_image_indices = np.intersect1d(allowed_image_indices, ind_images)
 
-    split_tilt_series_indices = split_index_list(particle_ind)
-    split_image_indices = [None,None]
-    for i in range(2):
-        split_image_indices[i] = np.concatenate([ particles_to_tilts[ind] for ind in split_tilt_series_indices[i]])
-        if ntilts is not None:
-            good_indices = np.where(tilt_numbers[split_image_indices[i]] < ntilts)[0]
-            split_image_indices[i] = split_image_indices[i][good_indices]
-        # intersection = set(split_image_indices[i]) & set(ind_images)
-        # tmp=np.intersect1d(split_image_indices[i], ind_images)
-        split_image_indices[i] = np.intersect1d(split_image_indices[i], ind_images)
+    # Step 5: Keep only particles with at least one allowed image
+    image_to_particle = np.array([tilts_to_particles[i] for i in allowed_image_indices])
+    valid_particles = np.unique(image_to_particle)
+
+    # Step 6: Determine halfset split (by particles)
+    if particle_halfset_indices_file is not None:
+        split_particles = pickle.load(open(particle_halfset_indices_file, "rb"))
+        # If tilt_ind_file is set, intersect with valid_particles
+        if tilt_ind_file is not None:
+            split_particles = [np.intersect1d(split_particles[0], valid_particles),
+                              np.intersect1d(split_particles[1], valid_particles)]
+    else:
+        split_particles = split_index_list(valid_particles)
+
+    # Step 7: For each halfset, get all image indices for those particles, filter by ntilts if needed, and intersect with allowed images
+    split_image_indices = []
+    for half in split_particles:
+        imgs = np.concatenate([particles_to_tilts[ind] for ind in half])
+        if tilt_numbers is not None:
+            imgs = imgs[tilt_numbers[imgs] < ntilts]
+        imgs = np.intersect1d(imgs, allowed_image_indices)
+        split_image_indices.append(imgs)
 
     return split_image_indices
 
 
 
-def split_index_list( all_valid_image_indices, split_random_seed = 0 ):
+def split_index_list(all_valid_image_indices, split_random_seed=0):
+    """
+    Split a list of indices into two balanced halves with reproducible randomization.
+    
+    Args:
+        all_valid_image_indices: Array of indices to split
+        split_random_seed: Random seed for reproducible splits
+        
+    Returns:
+        List of two numpy arrays containing the split indices
+    """
+    if len(all_valid_image_indices) == 0:
+        raise ValueError("Cannot split empty index list")
+    
+    # Set random seed for reproducibility
     np.random.seed(split_random_seed)
-
-    half_ind_size = all_valid_image_indices.size //2
-    shuffled_ind = np.arange(all_valid_image_indices.size)
-
+    
+    n_indices = len(all_valid_image_indices)
+    half_ind_size = n_indices // 2
+    
+    # Create shuffled indices
+    shuffled_ind = np.arange(n_indices)
     np.random.shuffle(shuffled_ind)
+    
+    # Split into two halves
     ind_split = [
-                np.sort(all_valid_image_indices[shuffled_ind[:half_ind_size]]), 
-                np.sort(all_valid_image_indices[shuffled_ind[half_ind_size:]]),
-                ]
+        np.sort(all_valid_image_indices[shuffled_ind[:half_ind_size]]), 
+        np.sort(all_valid_image_indices[shuffled_ind[half_ind_size:]]),
+    ]
+    
     return ind_split
         
 
@@ -739,7 +676,8 @@ def make_dataset_loader_dict(args):
                             'tilt_series_ctf' : 'cryoem',
                             'angle_per_tilt' : None,
                             'dose_per_tilt' : None,
-                            # 'tilt_ind' : None,
+                            'premultiplied_ctf' : False,
+                            'strip_prefix': getattr(args, 'strip_prefix', None),
                             }
     
     # For backward compatibility... Delete at some point?
@@ -748,6 +686,9 @@ def make_dataset_loader_dict(args):
         dataset_loader_dict['tilt_series_ctf'] = args.tilt_series_ctf
         dataset_loader_dict['angle_per_tilt'] = args.angle_per_tilt
         dataset_loader_dict['dose_per_tilt'] = args.dose_per_tilt
+
+    if hasattr(args, 'premultiplied_ctf'):
+        dataset_loader_dict['premultiplied_ctf'] = args.premultiplied_ctf
 
     # if hasattr(args,'tilt_ind'):
     #     dataset_loader_dict['tilt_ind'] = args.tilt_ind
@@ -766,45 +707,39 @@ def figure_out_halfsets(args):
 
     if args.halfsets == None:
         logger.info("Randomly splitting dataset into halfsets")
-        # ind_split = dataset.get_split_indices(args.particles_file, ind_file = args.ind)
-        # # pickle.dump(ind_split, open(args.out))
         if args.tilt_series or args.tilt_series_ctf != 'cryoem':
             halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, tilt_ind_file = args.tilt_ind, ntilts = args.ntilts, datadir = args.datadir)
         else:
-            halfsets = get_split_indices(args.particles, ind_file = args.ind)
-    # else:
-    #     logger.info("Loading halfset from file")
-    #     halfsets = pickle.load(open(args.halfsets, 'rb'))
+            halfsets = get_split_indices(args.particles, datadir = args.datadir, strip_prefix = args.strip_prefix, ind_file = args.ind)
     else:
-        if args.tilt_series or args.tilt_series_ctf!= 'cryoem':
-            halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, tilt_ind_file = args.tilt_ind, ntilts = args.ntilts, datadir = args.datadir)
-            logger.warning("Ignoring halfsets file for tilt series! Using randomly partition instead.")
-            return halfsets
-        
-        logger.info("Loading halfset from file")
-        halfsets = pickle.load(open(args.halfsets, 'rb'))
+        logger.info("Loading halfsets from file")
 
-        # Ensure only the indices in args.ind are used
-        if args.ind is not None:
-            # Load indices from args.ind
-            if isinstance(args.ind, np.ndarray):
-                ind = args.ind
-            else:
-                with open(args.ind, 'rb') as f:
-                    ind = np.asarray(pickle.load(f))
-            # Intersect the loaded halfsets with ind
-            halfsets = [np.intersect1d(halfset, ind) for halfset in halfsets]
+        if args.tilt_series or args.tilt_series_ctf!= 'cryoem':
+            halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, tilt_ind_file = args.tilt_ind, ntilts = args.ntilts, datadir = args.datadir, particle_halfset_indices_file = args.halfsets)
+        else:
+            halfsets = pickle.load(open(args.halfsets, 'rb'))
+            logger.info("Loaded halfsets from file")
+
+            # Ensure only the indices in args.ind are used
+            if args.ind is not None:
+                # Load indices from args.ind
+                if isinstance(args.ind, np.ndarray):
+                    ind = args.ind
+                else:
+                    with open(args.ind, 'rb') as f:
+                        ind = np.asarray(pickle.load(f))
+                # Intersect the loaded halfsets with ind
+                halfsets = [np.intersect1d(halfset, ind) for halfset in halfsets]
 
     if args.n_images > 0:
         halfsets = [ halfset[:args.n_images//2] for halfset in halfsets]
-        logger.info(f"using only {args.n_images} images")
-        if args.tilt_series:
-            raise NotImplementedError
+        logger.info(f"using only {args.n_images} particles")
     return halfsets
 
 
-def load_dataset_from_args(args, lazy = False):
-    ind_split = figure_out_halfsets(args)
+def load_dataset_from_args(args, lazy = False, ind_split = None):
+    if ind_split is None:
+        ind_split = figure_out_halfsets(args)
     dataset_loader_dict = make_dataset_loader_dict(args)
     return get_split_datasets_from_dict(dataset_loader_dict, ind_split, lazy = lazy)
 
@@ -818,14 +753,15 @@ def get_default_dataset_option():
                             'datadir': None,
                             'n_images' : -1,
                             'ind': None,
-                            'tilt_ind': None,
+                            # 'tilt_ind': None,
                             'padding' : 0,
                             # 'lazy': False,
                             'tilt_series' : False,
                             'tilt_series_ctf' : 'cryoem',
                             'angle_per_tilt' : 3,
                             'dose_per_tilt' : 2.9,
-                            'uninvert_data' : False}
+                            'uninvert_data' : False,
+                            'premultiplied_ctf' : False,}
     return dataset_loader_dict
 
 def load_dataset_from_dict(dataset_loader_dict, lazy = True):

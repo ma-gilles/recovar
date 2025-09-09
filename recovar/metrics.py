@@ -115,9 +115,8 @@ def local_fsc_metric(map1, map2, voxel_size, mask, fsc_threshold=1/7, locres_sam
     
     i_loc_res = np.array(i_loc_res)
     i_loc_res[~mask] = None
-    plt.imshow(i_loc_res[128]); plt.show()
 
-    
+    # plt.imshow(i_loc_res[128]); plt.show()
 
     median_locres = np.median(good_resols)
     ninety_pc_locres = np.percentile(good_resols, 90)
@@ -261,21 +260,46 @@ def embed_from_median_label(z, gt_image_assignment):
     return median_labels
 
 def variance_of_zs(z, gt_image_assignment):
+    """
+    Estimate per-label variances and overall variance of z.
 
-    max_im = np.max(gt_image_assignment)+1
-    variances = np.zeros(max_im)
-    total_variance = 0
-    for k in range(max_im):
-        sub_zs = z[gt_image_assignment == k]
-        if sub_zs.size ==0:
+    Parameters
+    ----------
+    z : np.ndarray
+        Array of shape (n_samples, features).
+    gt_image_assignment : np.ndarray
+        Array of shape (n_samples,) with integer labels for each sample.
+
+    Returns
+    -------
+    label_variances : np.ndarray
+        Variance computed for each label (flattened across features).
+    weighted_avg_variance : float
+        Overall variance computed as the weighted average of per-label variances.
+    overall_variance : float
+        Variance computed over the entire z data.
+    """
+    labels = np.unique(gt_image_assignment)
+    label_variances = np.zeros(len(labels))
+    total_sq_diff = 0
+    total_samples = z.shape[0]
+    
+    for idx, lab in enumerate(labels):
+        sub_zs = z[gt_image_assignment == lab]
+        if sub_zs.size == 0:
             continue
         
-        variances[k] = np.var(z[gt_image_assignment == k])
-        mean_label = np.mean(z[gt_image_assignment == k], axis=0)
-        total_variance += np.sum( (z[gt_image_assignment == k] - mean_label)**2)
+        # Compute variance of the sub-array (over all elements)
+        label_variances[idx] = np.var(sub_zs)
+        
+        # Sum of squared differences for weighted average variance
+        mean_lab = np.mean(sub_zs, axis=0)
+        total_sq_diff += np.sum((sub_zs - mean_lab) ** 2)
     
-    var_z = np.sum((z - np.mean(z, axis=0))**2) / z.shape[0]
-    return variances, total_variance / z.shape[0], var_z
+    weighted_avg_variance = total_sq_diff / total_samples
+    overall_variance = np.var(z)
+    
+    return label_variances, weighted_avg_variance / overall_variance
 
 
 def get_embedding_from_median(zs, image_assignment, n_classes = None):

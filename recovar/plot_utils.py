@@ -1,15 +1,23 @@
 from matplotlib import colors as mcolors
 from matplotlib_scalebar.scalebar import ScaleBar
 import matplotlib
+import matplotlib.patheffects as pe
 import warnings
 import matplotlib.pyplot as plt
 import numpy as np
-import dataframe_image as dfi
+import seaborn as sns
+
+# Optional dependency: dataframe_image
+try:
+    import dataframe_image as dfi
+except ImportError:
+    dfi = None  # Functions relying on dfi will check for None and skip saving images
+
 import pandas as pd
 import jax.numpy as jnp
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
-from recovar import regularization, utils
+from recovar import regularization, utils, metrics
 colors = dict(mcolors.BASE_COLORS, **mcolors.CSS4_COLORS)
 
 # I copy pasted this from an older project. Most of this is probably useless
@@ -30,18 +38,158 @@ def plot_power_spectrum(volume, ax = None):
     return avg
 
 def plot_noise_profile(pipeline_output, yscale = 'linear'):
-    plt.figure(figsize = (8,8))
-    results = pipeline_output.params
-    yy = results['noise_var']
-    if results['input_args'].ignore_zero_frequency:
-        yy[0] =0 
-    plt.errorbar(x = np.arange(results['noise_var'].size), y=yy, yerr=2*results['std_noise_var'], capsize=3, alpha = 0.5, label = 'estimated noise power spectrum')
-    plt.errorbar(x = np.arange(results['image_PS'].size), y=results['image_PS'], yerr=2*results['std_image_PS'], capsize=3, alpha = 0.5, label = 'image power spectrum')
-    plt.plot(np.arange(results['image_PS'].size), results['cov_noise']*np.ones_like(results['image_PS']))
-    plt.yscale(yscale)
-    plt.legend()
+    # Set up beautiful styling
+    plt.style.use('default')
+    fig, ax = plt.subplots(figsize = (14, 9))
     
-    return
+    # Get noise variance - use noise_var_used instead of noise_var
+    yy = pipeline_output.get('noise_var_used')
+    
+    # Handle different noise model types
+    if yy.ndim == 1:
+        # Standard radial noise model - 1D array
+        if pipeline_output.get('input_args').ignore_zero_frequency:
+            yy[0] = 0 
+        
+        # Plot estimated noise power spectrum
+        ax.plot(np.arange(yy.size), yy, 'o-', alpha=0.8, linewidth=2.5, markersize=8,
+                label='Estimated noise power spectrum', color='#2E86AB', markerfacecolor='white', markeredgewidth=2)
+        
+    elif yy.ndim == 2:
+        # Radial-per-tilt noise model - 2D array (n_tilts × n_frequency_shells)
+        n_tilts, n_freq = yy.shape
+        
+        # Create a beautiful colormap for the different tilts
+        colors = plt.cm.plasma(np.linspace(0, 1, n_tilts))
+        
+        # Plot each tilt's noise profile with transparency
+        for i in range(n_tilts):
+            tilt_noise = yy[i, :]
+            if pipeline_output.get('input_args').ignore_zero_frequency:
+                tilt_noise[0] = 0
+            
+            ax.plot(np.arange(n_freq), tilt_noise, '-', alpha=0.3, linewidth=1, 
+                    color=colors[i], label=f'Tilt {i+1}' if i < 5 else None)  # Only label first 5 for clarity
+        
+        # Plot mean across all tilts with emphasis
+        mean_noise = np.mean(yy, axis=0)
+        if pipeline_output.get('input_args').ignore_zero_frequency:
+            mean_noise[0] = 0
+        
+        ax.plot(np.arange(n_freq), mean_noise, 'o-', alpha=1.0, linewidth=4, 
+                markersize=10, color='#D62828', label='Mean across tilts', 
+                markerfacecolor='white', markeredgewidth=2, markeredgecolor='#D62828')
+    
+    # Plot image power spectrum with error bars if available
+    image_PS = pipeline_output.get('image_PS')
+    std_image_PS = pipeline_output.get('std_image_PS')
+    
+    if image_PS is not None:
+        try:
+            if (std_image_PS is not None and 
+                hasattr(std_image_PS, 'size') and 
+                std_image_PS.size > 0 and
+                np.issubdtype(std_image_PS.dtype, np.number) and
+                np.all(np.isfinite(std_image_PS))):
+                ax.errorbar(x=np.arange(image_PS.size), y=image_PS, 
+                           yerr=2*std_image_PS, capsize=4, alpha=0.7, 
+                           label='Image power spectrum', color='#06FFA5', linewidth=2.5,
+                           capthick=2, elinewidth=2)
+            else:
+                ax.plot(np.arange(image_PS.size), image_PS, 
+                       's-', alpha=0.8, label='Image power spectrum', color='#06FFA5', 
+                       linewidth=2.5, markersize=8, markerfacecolor='white', markeredgewidth=2)
+        except (TypeError, AttributeError, ValueError):
+            ax.plot(np.arange(image_PS.size), image_PS, 
+                   's-', alpha=0.8, label='Image power spectrum', color='#06FFA5', 
+                   linewidth=2.5, markersize=8, markerfacecolor='white', markeredgewidth=2)
+    
+    # Plot masked image power spectrum if available
+    masked_image_PS = pipeline_output.get('masked_image_PS')
+    std_masked_image_PS = pipeline_output.get('std_masked_image_PS')
+    
+    if masked_image_PS is not None:
+        try:
+            if (std_masked_image_PS is not None and 
+                hasattr(std_masked_image_PS, 'size') and 
+                std_masked_image_PS.size > 0 and
+                np.issubdtype(std_masked_image_PS.dtype, np.number) and
+                np.all(np.isfinite(std_masked_image_PS))):
+                ax.errorbar(x=np.arange(masked_image_PS.size), y=masked_image_PS, 
+                           yerr=2*std_masked_image_PS, capsize=4, alpha=0.7, 
+                           label='Masked image power spectrum', color='#FF9F1C', linewidth=2.5,
+                           capthick=2, elinewidth=2)
+            else:
+                ax.plot(np.arange(masked_image_PS.size), masked_image_PS, 
+                       '^-', alpha=0.8, label='Masked image power spectrum', color='#FF9F1C', 
+                       linewidth=2.5, markersize=8, markerfacecolor='white', markeredgewidth=2)
+        except (TypeError, AttributeError, ValueError):
+            ax.plot(np.arange(masked_image_PS.size), masked_image_PS, 
+                   '^-', alpha=0.8, label='Masked image power spectrum', color='#FF9F1C', 
+                   linewidth=2.5, markersize=8, markerfacecolor='white', markeredgewidth=2)
+    
+    # Plot noise variance from high frequency if available
+    noise_var_from_hf = pipeline_output.get('noise_var_from_hf')
+    if noise_var_from_hf is not None and hasattr(noise_var_from_hf, 'size') and noise_var_from_hf.size > 0:
+        ax.plot(np.arange(noise_var_from_hf.size), noise_var_from_hf, 
+               'D-', alpha=0.8, label='Noise variance from high frequency', 
+               color='#7209B7', linewidth=2.5, markersize=8, markerfacecolor='white', markeredgewidth=2)
+    
+    # Plot radial noise variance outside mask if available
+    radial_noise_var_outside_mask = pipeline_output.get('radial_noise_var_outside_mask')
+    if radial_noise_var_outside_mask is not None and hasattr(radial_noise_var_outside_mask, 'size') and radial_noise_var_outside_mask.size > 0:
+        ax.plot(np.arange(radial_noise_var_outside_mask.size), radial_noise_var_outside_mask, 
+               'v-', alpha=0.8, label='Radial noise variance outside mask', 
+               color='#8B4513', linewidth=2.5, markersize=8, markerfacecolor='white', markeredgewidth=2)
+    
+    # Add constant noise level line if available
+    if yy is not None and yy.size > 0:
+        if yy.ndim == 1:
+            constant_noise = yy[0]  # Use first value as constant noise level
+        else:
+            constant_noise = np.mean(yy[:, 0])  # Mean of first frequency shell across tilts
+        
+        ax.axhline(y=constant_noise, color='#DC143C', linestyle='--', alpha=0.8, linewidth=3,
+                   label=f'Constant noise level ({constant_noise:.2e})')
+    
+    # Beautiful styling
+    ax.set_xlabel('Frequency Shell', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Power Spectrum', fontsize=14, fontweight='bold')
+    ax.set_title('Noise Profile Analysis', fontsize=16, fontweight='bold', pad=20)
+    ax.set_yscale(yscale)
+    
+    # Enhanced legend
+    if yy.ndim == 2 and n_tilts > 5:
+        # For many tilts, show a simplified legend
+        handles, labels = ax.get_legend_handles_labels()
+        # Keep only the mean and other important lines
+        important_labels = ['Mean across tilts', 'Image power spectrum', 'Masked image power spectrum', 
+                           'Noise variance from high frequency', 'Radial noise variance outside mask', 
+                           'Constant noise level']
+        important_handles = []
+        important_labels_final = []
+        for handle, label in zip(handles, labels):
+            if any(important in label for important in important_labels):
+                important_handles.append(handle)
+                important_labels_final.append(label)
+        ax.legend(important_handles, important_labels_final, loc='upper right', fontsize=12, 
+                 frameon=True, fancybox=True, shadow=True, framealpha=0.9)
+    else:
+        ax.legend(loc='upper right', fontsize=12, frameon=True, fancybox=True, shadow=True, framealpha=0.9)
+    
+    # Grid and styling
+    ax.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_linewidth(1.5)
+    ax.spines['bottom'].set_linewidth(1.5)
+    
+    # Background color
+    ax.set_facecolor('#f8f9fa')
+    fig.patch.set_facecolor('white')
+    
+    plt.tight_layout()
+    return fig, ax
 
 def compare_two_volumes(cryo, vol1, vol2, from_ft_inp = True):
     import matplotlib
@@ -111,7 +259,7 @@ def compare_two_volumes(cryo, vol1, vol2, from_ft_inp = True):
 
     return
 
-def plot_summary_t(pipeline_output,cryos, n_eigs = 3, filename = None):
+def plot_summary_t(pipeline_output, n_eigs = 3, filename = None):
     plt.rcParams.update({
         # "text.usetex": True,
         # "font.family": "serif",
@@ -126,16 +274,50 @@ def plot_summary_t(pipeline_output,cryos, n_eigs = 3, filename = None):
     global is_first
     is_first = True
     
+    # Infer volume shape from mean volume
+    mean_vol = pipeline_output.get('mean')
+    volume_shape = tuple(np.round(np.power(mean_vol.size, 1/3)).astype(int) for _ in range(3))
+    
+    def get_projection(vol_1d, axis):
+        """Get projection along specified axis"""
+        vol_3d = vol_1d.reshape(volume_shape)
+        if axis == 0:
+            proj = np.sum(vol_3d, axis=0)
+        elif axis == 1:
+            proj = np.sum(vol_3d, axis=1)
+        elif axis == 2:
+            proj = np.sum(vol_3d, axis=2)
+        
+        # Handle complex data by taking the real part
+        if np.iscomplexobj(proj):
+            proj = np.real(proj)
+        return proj
+    
+    def get_slice_real(vol_1d, axis):
+        """Get central slice along specified axis"""
+        vol_3d = vol_1d.reshape(volume_shape)
+        center = vol_3d.shape[axis] // 2
+        if axis == 0:
+            slice_data = vol_3d[center, :, :]
+        elif axis == 1:
+            slice_data = vol_3d[:, center, :]
+        elif axis == 2:
+            slice_data = vol_3d[:, :, center]
+        
+        # Handle complex data by taking the real part
+        if np.iscomplexobj(slice_data):
+            slice_data = np.real(slice_data)
+        return slice_data
+    
     def plot_vol(vol, n_plot, from_ft = True, cmap = 'viridis', name ="", symmetric = False):
-        if not from_ft:
-            vol = ftu.get_dft3(vol.reshape(cryos[0].volume_shape)).reshape(-1)
+        if from_ft:
+            vol = ftu.get_idft3(vol.reshape(volume_shape)).reshape(-1)
         global is_first
         
         axs[n_plot,0].set_ylabel(name)
 
         for k in range(3):
-
-            img = cryos[0].get_proj(vol, axis =k )
+            img = get_projection(vol, axis=k)
             
             if symmetric:
                 vmax = np.max(np.abs(img))
@@ -147,11 +329,8 @@ def plot_summary_t(pipeline_output,cryos, n_eigs = 3, filename = None):
             if is_first:            
                 axs[n_plot,k].set_title(f"projection {k}")
 
-                # axs[n_plot,k].set_ylabel(name)#f"projection {k}")#, fontsize = 20)
-
         for k in range(3,6):
-
-            img = cryos[0].get_slice_real(vol, axis =k-3 )
+            img = get_slice_real(vol, axis=k-3)
             
             if symmetric:
                 vmax = np.max(np.abs(img))
@@ -166,7 +345,6 @@ def plot_summary_t(pipeline_output,cryos, n_eigs = 3, filename = None):
 
         is_first = False
         return
-
 
     plot_vol(pipeline_output.get('mean'), 0, from_ft = True, name = 'mean')
     plot_vol(pipeline_output.get('volume_mask'), 1, from_ft = False,name = 'mask')
@@ -293,7 +471,7 @@ def plot_volume_sequence(volumes,cryos):
         is_first = False
             
     for vol_idx,vol in enumerate(volumes):
-        plot_vol(results['means']['combined'], vol_idx, from_ft = True, name = f"vol{vol_idx}")
+        plot_vol(vol, vol_idx, from_ft = True, name = f"vol{vol_idx}")
 
     plt.subplots_adjust(wspace=0, hspace=0)
     
@@ -354,7 +532,7 @@ def plot_cov_results(u,s, max_eig = 40, savefile = None):
             pkey = key  
 
             max_subspace_size = np.min([15, u[key].shape[-1]])
-            angles[key] = utils.subspace_angles(u[key], u[gt_key], max_subspace_size)
+            angles[key] = metrics.subspace_angles(u[key], u[gt_key], max_subspace_size)
             plt.plot( np.arange(1,1+len(angles[key])), angles[key], "-"+m[m_idx], label = pkey, alpha = 0.5,  ms = 15)
             m_idx = (m_idx + 1) % len(m)
         plt.ylim([-0.05,1.05])
@@ -412,7 +590,7 @@ def plot_mean_result(cryo, means, cov_noise):
     plt.legend()
 
     # GSFSC
-    plot_fsc_function_paper_simple()
+    # plot_fsc_function_paper_simple()  # Requires fsc_curves, grid_size, voxel_size arguments
 
     score = cryo.plot_FSC(means["corrected0"], means["corrected1"], threshold = 1/7 )
     
@@ -435,7 +613,9 @@ def plot_mean_result(cryo, means, cov_noise):
 
         
         
-def plot_fsc_new(image1, image2, volume_shape, voxel_size,  curve = None, ax = None, threshold = 1/7, filename = None, volume_mask = None, name = "", fmat = ""):
+def plot_fsc_new(image1, image2, volume_shape = None, voxel_size=1,  curve = None, ax = None, threshold = 1/7, filename = None, volume_mask = None, name = "", fmat = ""):
+    volume_shape = utils.guess_vol_shape_from_vol_size(image1.size) if volume_shape is None else volume_shape
+    
     grid_size = volume_shape[0]
     input_ax_is_none = ax is None
     if input_ax_is_none:
@@ -719,3 +899,97 @@ def plot_sample_with_scale(image, save_filepath, voxel_size, vmin , vmax , save_
             cbar = fig.colorbar(pos, orientation="horizontal")
             cbar.ax.tick_params(labelsize=14)
             plt.savefig(save_filepath + "colorbar" , bbox_inches='tight')
+
+def plot_latent_space_scatter(z, axes=None, centers=None, labels=None, title="Latent Space Analysis", 
+                             figsize=(18, 12), save_path=None, show_plot=True):
+    """
+    Create improved scatter plots for latent space visualization similar to the notebook style.
+    
+    Parameters:
+    -----------
+    z : np.ndarray
+        Latent coordinates of shape (n_particles, n_dimensions)
+    axes : list of tuples, optional
+        List of (i, j) tuples specifying which dimensions to plot. 
+        If None, plots all pairwise combinations of first 4 dimensions
+    centers : np.ndarray, optional
+        Cluster centers to plot
+    labels : list, optional
+        Labels for cluster centers
+    title : str
+        Main title for the plot
+    figsize : tuple
+        Figure size
+    save_path : str, optional
+        Path to save the plot
+    show_plot : bool
+        Whether to display the plot
+    """
+    if axes is None:
+        # Default to all pairwise combinations of first 4 dimensions
+        n_dims = min(4, z.shape[1])
+        axes = [(i, j) for i in range(n_dims) for j in range(i+1, n_dims)]
+    
+    n_plots = len(axes)
+    n_cols = min(3, n_plots)
+    n_rows = (n_plots + n_cols - 1) // n_cols
+    
+    fig, axes_plt = plt.subplots(n_rows, n_cols, figsize=figsize)
+    if n_plots == 1:
+        axes_plt = [axes_plt]
+    elif n_rows == 1:
+        axes_plt = axes_plt.flatten()
+    else:
+        axes_plt = axes_plt.flatten()
+    
+    # Generate colors for different plots
+    colors = plt.cm.viridis(np.linspace(0, 1, len(axes)))
+    
+    for idx, (i, j) in enumerate(axes):
+        if idx < len(axes_plt):
+            ax = axes_plt[idx]
+            
+            # Create hexbin density plot for background
+            try:
+                ax.hexbin(z[:, i], z[:, j], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
+            except:
+                pass
+            
+            # Main scatter plot
+            ax.scatter(z[:, i], z[:, j], alpha=0.6, s=1, c=colors[idx], edgecolors='none')
+            
+            # Plot centers if provided
+            if centers is not None:
+                ax.scatter(centers[:, i], centers[:, j], c='red', edgecolor='black', 
+                          s=100, zorder=3, linewidth=1)
+                
+                # Add labels if provided
+                if labels is not None:
+                    for k, label in enumerate(labels):
+                        ax.annotate(str(label), centers[k, [i, j]] + np.array([0.1, 0.1]), 
+                                  fontsize=12, fontweight='bold', color='white',
+                                  path_effects=[pe.withStroke(linewidth=3, foreground="black")])
+            
+            # Improve styling
+            ax.grid(True, alpha=0.3)
+            ax.set_facecolor('white')
+            ax.set_xlabel(f'PC{i+1}', fontweight='bold')
+            ax.set_ylabel(f'PC{j+1}', fontweight='bold')
+            ax.set_title(f'PC{i+1} vs PC{j+1}', fontweight='bold')
+    
+    # Hide unused subplots
+    for idx in range(n_plots, len(axes_plt)):
+        axes_plt[idx].set_visible(False)
+    
+    plt.suptitle(title, fontsize=16, fontweight='bold')
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=300)
+    
+    if show_plot:
+        plt.show()
+    else:
+        plt.close()
+    
+    return fig, axes_plt

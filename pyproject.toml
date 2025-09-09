@@ -35,7 +35,7 @@ dependencies = [
     "matplotlib_scalebar==0.9.0",
     "more_itertools==10.6.0",
     "mrcfile==1.5.4",
-    "numpy",
+    "numpy<2.3.0",
     "pandas==2.2.3",
     "plotly==6.0.0",
     "scikit-learn==1.6.1",
@@ -46,12 +46,13 @@ dependencies = [
     "seaborn==0.13.2",
     "scikit-image",
     "starfile==0.5.11",
-    "tensorflow_cpu==2.18.0",
+    "tensorflow_cpu",
     "typing_extensions==4.12.2",
     "twine",
     "ipykernel",
     "scikit-fmm",
-    "umap-learn"
+    "umap-learn[plot]",
+    "optax"
 ]
 
 [project.optional-dependencies]

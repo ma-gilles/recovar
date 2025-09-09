@@ -13,9 +13,11 @@ from recovar import trajectory
 from recovar import utils
 from recovar import dataset
 from recovar import regularization
+from recovar import noise
 import matplotlib.patheffects as pe
 from packaging.version import parse as parse_version
 import time
+import recovar.utils as utils
 
 def get_resampled_distances(gt_vols):
     return trajectory.get_cum_curvelength(gt_vols)
@@ -194,8 +196,10 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
 
             #     in_bound_points[k] = z_to_grid(in_bound_points[k])
             # in_bound_points = np.where(points > (points > np.array(density.shape)[None]), 0, points)
-            plt.scatter(points[out_of_bounds_points,axis_x], points[out_of_bounds_points,axis_y], color = 'r', s = 100, edgecolors= 'k')
-            plt.scatter(points[~out_of_bounds_points,axis_x], points[~out_of_bounds_points,axis_y], color = 'w', s = 100, edgecolors= 'k')
+            ax.scatter(points[out_of_bounds_points,axis_x], points[out_of_bounds_points,axis_y], 
+                      color = 'red', s = 100, edgecolors= 'black', linewidth=1, alpha=0.8)
+            ax.scatter(points[~out_of_bounds_points,axis_x], points[~out_of_bounds_points,axis_y], 
+                      color = 'cornflowerblue', s = 100, edgecolors= 'black', linewidth=1, alpha=0.8)
             if annotate:
                 for i in range(points.shape[0]):
                     plt.annotate(str(i), points[i, axes] + np.array([0.1, 0.1]), color='white', path_effects=[pe.withStroke(linewidth=4, foreground="black")])
@@ -210,13 +214,16 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
                 if subsampled is not None:
                     # subs = subsampled[traj_idx]
                     subs = z_to_grid(subsampled[traj_idx].copy())
-                    plt.scatter(subs[:,axis_x], subs[:,axis_y], marker = 'o', c=colors[traj_idx], edgecolors = 'w', s = 500, zorder =2)
+                    ax.scatter(subs[:,axis_x], subs[:,axis_y], marker = 'o', c=colors[traj_idx], 
+                             edgecolors = 'w', s = 500, zorder=2, linewidth=1)
                 
                 if not same_st_end or traj_idx ==0:
                     g_st = traj[0]
                     g_end = traj[-1]
-                    plt.scatter(g_st[axis_x], g_st[axis_y], marker = '*', c='w', edgecolors = colors[traj_idx], s = 1800, zorder =2)
-                    plt.scatter(g_end[axis_x], g_end[axis_y], marker = 's', c='w', edgecolors = colors[traj_idx], s = 600, zorder =2)
+                    ax.scatter(g_st[axis_x], g_st[axis_y], marker = '*', c='w', 
+                             edgecolors = colors[traj_idx], s = 1800, zorder=2, linewidth=2)
+                    ax.scatter(g_end[axis_x], g_end[axis_y], marker = 's', c='w', 
+                             edgecolors = colors[traj_idx], s = 600, zorder=2, linewidth=2)
                             
         ax.axis("off")
         if plot_folder is not None:
@@ -268,9 +275,11 @@ def plot_kmeans_over_density(density, centers, plot_folder = None, cmap = 'infer
         ax.imshow((density_pl.T), origin='lower', cmap = cmap, interpolation = 'bilinear')#[...,25,25])
         # plt.colorbar()
         
-        ax.scatter(centers[:,axis_x], centers[:,axis_y] )
+        ax.scatter(centers[:,axis_x], centers[:,axis_y], c='red', edgecolor='black', s=100, zorder=3, linewidth=1)
         for i in range(centers.shape[0]):
-            ax.annotate(str(i), centers[i, axes] + np.array([0.1, 0.1]), c = 'w')
+            ax.annotate(str(i), centers[i, axes] + np.array([0.1, 0.1]), c = 'white', 
+                       fontsize=12, fontweight='bold',
+                       path_effects=[pe.withStroke(linewidth=3, foreground="black")])
         
 
         ax.axis("off")
@@ -403,15 +412,12 @@ def plot_umap(output_folder, zs, centers):
 
 
 
-def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_variance, output_folder, B_factor, n_bins = 30, n_min_images = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20 ):
+def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None):
 
     #batch_size = 
 
-    if n_min_images is None:
-        if cryos[0].tilt_series_flag:
-            n_min_images = np.max([100, 10 * np.max(list(cryos[0].image_stack.counts.values()))])
-        else:
-            n_min_images = 100
+    if n_min_particles is None:
+        n_min_particles =100
 
     mkdir_safe(output_folder)
     new_volume_generation = True
@@ -442,14 +448,48 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs, noise_varian
             # log_likelihoods = latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], zs, cov_zs)[...,0]
             heterogeneity_distances = [ heterogeneity_distances[:cryos[0].n_units], heterogeneity_distances[cryos[0].n_units:] ]
 
-            # heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder_this, -1, n_bins, B_factor, tau = None, n_min_images = 300, metric_used = "locres_auc")
             from recovar import noise
-            noise_variance = noise.make_radial_noise(noise_variance, cryos[0].image_shape)
 
             locres_maskrad = cryos[0].grid_size * cryos[0].voxel_size / maskrad_fraction
-            logger.info(f"Mask radius fraction = {maskrad_fraction}. Setting locres_maskrac = locres_sampling = box_size * voxel_size / {maskrad_fraction} = {locres_maskrad:.1f} Angstroms. Using {n_min_images} images for template.")
-            heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder_this, ndim, n_bins, B_factor, tau = None, n_min_images = n_min_images, locres_sampling = locres_maskrad, locres_maskrad = locres_maskrad, locres_edgwidth = 0, upsampling_for_ests = 1, use_mask_ests =False, grid_correct_ests = False, save_all_estimates=save_all_estimates, metric_used= 'locshellmost_likely')
+            logger.info(f"Mask radius fraction = {maskrad_fraction}. Setting locres_maskrac = locres_sampling = box_size * voxel_size / {maskrad_fraction} = {locres_maskrad:.1f} Angstroms. Using {n_min_particles} particles for template.")
+            heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_folder_this, ndim, n_bins, B_factor, tau = None, n_min_particles = n_min_particles, locres_sampling = locres_maskrad, locres_maskrad = locres_maskrad, locres_edgwidth = 0, upsampling_for_ests = 1, use_mask_ests =False, grid_correct_ests = False, save_all_estimates=save_all_estimates, metric_used= 'locshellmost_likely')
 
+            # Apply global filtering to the generated halfmaps if requested
+            if apply_global_filtering:
+                from recovar import locres
+                import glob
+                
+                # Find the halfmap files that were just generated
+                halfmap_files = glob.glob(output_folder_this + "half*_unfil.mrc")
+                if len(halfmap_files) >= 2:
+                    # Load the halfmaps
+                    halfmap1_path = output_folder_this + "halfmap1.mrc"
+                    halfmap2_path = output_folder_this + "halfmap2.mrc"
+                    
+                    if os.path.exists(halfmap1_path) and os.path.exists(halfmap2_path):
+                        halfmap1 = utils.load_mrc(halfmap1_path)
+                        halfmap2 = utils.load_mrc(halfmap2_path)
+                        
+                        # Apply global filtering
+                        filtered_combined, fsc, global_resol = locres.filter_maps_with_global_fsc(
+                            halfmap1, halfmap2, cryos[0].voxel_size, fsc_mask = fsc_mask
+                        )
+                        
+                        # Save filtered halfmaps with _filtered suffix
+                        filtered_half1_path = output_folder_this + "halfmap1_filtered.mrc"
+                        filtered_half2_path = output_folder_this + "halfmap2_filtered.mrc"
+                        
+                        utils.write_mrc(filtered_half1_path, filtered_combined, voxel_size=cryos[0].voxel_size)
+                        utils.write_mrc(filtered_half2_path, filtered_combined, voxel_size=cryos[0].voxel_size)
+                        
+                        logger.info(f"Applied global filtering to volume {k}. Resolution: {global_resol:.2f} Angstroms")
+                        logger.info(f"Saved filtered halfmaps: {filtered_half1_path}, {filtered_half2_path}")
+                    else:
+                        logger.warning(f"Halfmap files not found for volume {k}, skipping global filtering")
+                else:
+                    logger.warning(f"Not enough halfmap files found for volume {k}, skipping global filtering")
+
+            # filter the volumes with the global FSC
             logger.info(f"Done with volume generation {k} stored in {output_folder_this}")
         move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'locres_filtered.mrc', new_stringname = 'vol' )
         move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'locres.mrc', new_stringname = 'locres' )
@@ -489,15 +529,34 @@ def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path, like
     plt.ioff()
     for k in range(likelihoods.shape[1]):
         fig, ax = plt.subplots(figsize = (8,8))
+        
+        # Create hexbin density plot for background
+        try:
+            ax.hexbin(zs[:,0], zs[:,1], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
+        except:
+            pass
+        
         greater_x = likelihoods[:,k] > vmin
-        plt.scatter(zs[~greater_x,0], zs[~greater_x,1], c='black', alpha = 0.1, s = 2, edgecolors='none')  
+        ax.scatter(zs[~greater_x,0], zs[~greater_x,1], c='black', alpha = 0.3, s = 2, edgecolors='none')  
 
-        plt.scatter(zs[greater_x,0], zs[greater_x,1], c= likelihoods[greater_x,k]  , cmap='rainbow', s = 5, alpha = 1, norm=matplotlib.colors.LogNorm(vmin=vmin, vmax=vmax, clip = True), edgecolors='none')
+        scatter = ax.scatter(zs[greater_x,0], zs[greater_x,1], c= likelihoods[greater_x,k], cmap='rainbow', 
+                           s = 5, alpha = 0.8, norm=matplotlib.colors.LogNorm(vmin=vmin, vmax=vmax, clip = True), 
+                           edgecolors='none')
 
-        plt.xticks([], [])
-        plt.yticks([], [])
+        # Add grid and improve styling
+        ax.grid(True, alpha=0.3)
+        ax.set_facecolor('white')
+        ax.set_xlabel('PC1', fontweight='bold')
+        ax.set_ylabel('PC2', fontweight='bold')
+        ax.set_title(f'Likelihood Analysis - Component {k}', fontweight='bold')
+        
+        # Add colorbar
+        plt.colorbar(scatter, ax=ax, label='Likelihood')
+
+        ax.set_xticks([])
+        ax.set_yticks([])
         save_filepath = save_path +  format(k, '04d') + '.png' # output_folder + 'plots/' + 'vol_weights' +str(k) + '.png'
-        plt.savefig(save_filepath, bbox_inches='tight')
+        plt.savefig(save_filepath, bbox_inches='tight', dpi=300)
         if k > 0:
             plt.close(fig)
         else:
@@ -593,6 +652,12 @@ class PipelineOutput:
             noise_level = self.get('noise_var_used')
             snr = utils.make_radial_image(PS/noise_level, tuple(vol_shape[:2]))
             return snr
+        elif key == 'image_snr_radial':
+            vol_shape = self.get('volume_shape')
+            PS = regularization.average_over_shells(np.abs((self.get('mean').reshape( self.get('volume_shape'))))**2, self.get('volume_shape'))
+            noise_level = self.get('noise_var_used')
+            return PS/noise_level
+
         elif key == 'variance':
             return utils.load_mrc(self.result_path + 'output/volumes/' + 'variance10' + '.mrc')
         elif key == 'variance20':
@@ -605,10 +670,11 @@ class PipelineOutput:
             return utils.load_mrc(self.result_path + 'output/volumes/' + 'dilated_mask' + '.mrc')
         elif key == 'covariance_cols':
             return utils.pickle_load(self.result_path + 'model/' + 'covariance_cols' + '.pkl')
-        elif key == 'dataset':
-            return dataset.load_dataset_from_args(self.get('input_args'), lazy = False) 
-        elif key == 'lazy_dataset':
-            return dataset.load_dataset_from_args(self.get('input_args'), lazy = True) 
+        elif key == 'dataset' or key == 'lazy_dataset':
+            cryos = dataset.load_dataset_from_args(self.get('input_args'), lazy = 'lazy' in key, ind_split = self.get('halfsets'))
+            add_noise_to_loaded_dataset(cryos , self.get('noise_var_used'))
+            return cryos
+        
         elif key == 'halfsets':
             return utils.pickle_load(self.result_path + 'model/' + 'halfsets' + '.pkl')
         elif key == 'particles_halfsets':
@@ -618,9 +684,10 @@ class PipelineOutput:
                 return utils.pickle_load(self.result_path + 'model/' + 'particles_halfsets' + '.pkl')
         elif key == 'input_args':
             # Not sure why this is necessary all of the sudden... For backward compatibility
-            if parse_version(self.version) > parse_version('0.3') or isinstance(self.params['input_args'], np.ndarray):# type(self.params['input_args']) is n:
+            # if parse_version(self.version) > parse_version('0.3') or isinstance(self.params['input_args'], np.ndarray):# type(self.params['input_args']) is n:
+            try:
                 return self.params['input_args'].item()
-            else:
+            except:
                 return self.params['input_args']
             
         elif (key in self.params):
@@ -634,16 +701,12 @@ class PipelineOutput:
         return keys
 
 
-
-def load_results_newest(datadir):
-    model_folder = datadir +'model'  + '/'
-    output_folder = datadir +'output'  + '/'
-    with open(model_folder + 'results.pkl', 'rb') as f:
-        results = pickle.load( f)
-    # results['dataset_loader_dict']['compute_ground_truth'] = False
-    # dataset_loader = dataset.get_dataset_loader_from_dict(results['dataset_loader_dict'])
-    # grid_to_z, z_to_grid = ld.get_grid_z_mappings(results['latent_space_bounds'], results['density'].shape[0])
-    return results#, results['dataset_loader_dict'], grid_to_z, z_to_grid
+def add_noise_to_loaded_dataset(cryos, noise_variance):
+    for cryo in cryos:
+        if noise_variance.ndim == 1:
+            cryo.set_radial_noise_model(noise_variance)
+        else:
+            cryo.set_variable_radial_noise_model(noise_variance)
 
 
 def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False,  input_density = None, latent_space_bounds = None):
@@ -767,43 +830,55 @@ def plot_trajectories_over_scatter(trajectories,  subsampled = None, colors = No
 
         axis_x = axes[0]
         axis_y = axes[1]
-            
-        if axis_x > axis_y:
-            density_pl = density_pl.T
         
-        ax.scatter(zs[:,axis_x], zs[:,axis_y], s = 1, alpha = 0.05)
+        # Create hexbin density plot for background
+        try:
+            ax.hexbin(zs[:,axis_x], zs[:,axis_y], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
+        except:
+            pass
+        
+        # Main scatter plot with improved styling
+        ax.scatter(zs[:,axis_x], zs[:,axis_y], s=1, alpha=0.6, c='cornflowerblue', edgecolors='none')
         
         if path_exists:
             # path_grid = z_to_grid(path)
             for traj_idx, traj in enumerate(trajectories):
                                 
-                plt.plot(traj[:,axis_x], traj[:,axis_y], '-o', c=colors[traj_idx], linewidth=3, zorder =3)
+                ax.plot(traj[:,axis_x], traj[:,axis_y], '-o', c=colors[traj_idx], linewidth=3, zorder=3, markersize=4)
                 # plt.plot(traj[:,axis_x], traj[:,axis_y], '--', c=colors[traj_idx], dashes=[3], linewidth=6)
 
                 if subsampled is not None:
                     subs = subsampled[traj_idx]
                     if subs is not None:
-                        plt.scatter(subs[:,axis_x], subs[:,axis_y], marker = '>', c=colors[traj_idx], edgecolors = 'w', s = 200, zorder =3)
+                        ax.scatter(subs[:,axis_x], subs[:,axis_y], marker = '>', c=colors[traj_idx], 
+                                 edgecolors = 'w', s = 200, zorder=3, linewidth=1)
 
             # for traj_idx, traj in enumerate(trajectories):
                 if not same_st_end or traj_idx ==0:
                     g_st = traj[0]
                     g_end = traj[-1]
-                    plt.scatter(g_st[axis_x], g_st[axis_y], marker = '*', c='w', edgecolors = colors[traj_idx], s = 1800, zorder =2)
-                    plt.scatter(g_end[axis_x], g_end[axis_y], marker = 's', c='w', edgecolors = colors[traj_idx], s = 600, zorder =2)
+                    ax.scatter(g_st[axis_x], g_st[axis_y], marker = '*', c='w', 
+                             edgecolors = colors[traj_idx], s = 1800, zorder=2, linewidth=2)
+                    ax.scatter(g_end[axis_x], g_end[axis_y], marker = 's', c='w', 
+                             edgecolors = colors[traj_idx], s = 600, zorder=2, linewidth=2)
 
-        # ax.axis("off")
+        # Add grid and improve styling
+        ax.grid(True, alpha=0.3)
+        ax.set_facecolor('white')
+        ax.set_xlabel(f'PC{axis_x+1}', fontweight='bold')
+        ax.set_ylabel(f'PC{axis_y+1}', fontweight='bold')
+        ax.set_title(f'PC{axis_x+1} vs PC{axis_y+1}', fontweight='bold')
             
         if plot_folder is not None:
             save_filepath = plot_folder  + 'density_' + str(axes[0]) + str(axes[1]) + '.png'    
-            plt.savefig(save_filepath, bbox_inches='tight')
+            plt.savefig(save_filepath, bbox_inches='tight', dpi=300)
             
     traj_dim = trajectories[0].shape[1] if trajectories is not None else 4
     # print(traj_dim)
     for k1 in range(np.min([traj_dim,3])):
         for k2 in range(k1+1, traj_dim):
-            plot_traj_along_axes([k1, k2])            
-        
+            plot_traj_along_axes([k1, k2])
+
 
 def umap_latent_space(zs):
     import umap
@@ -817,10 +892,9 @@ def umap_latent_space(zs):
 
 
 def standard_pipeline_plots(po, zdim_key, output_folder):
-    cryos = po.get('lazy_dataset')
     from recovar import plot_utils
     mkdir_safe(output_folder)
-    plot_utils.plot_summary_t(po,cryos, n_eigs = 10, filename = output_folder + "mean_variance_eigenvolume_plots.png")
+    plot_utils.plot_summary_t(po, n_eigs = 10, filename = output_folder + "mean_variance_eigenvolume_plots.png")
 
     import matplotlib.pyplot as plt
     plt.figure(figsize = (10,10))
@@ -844,6 +918,155 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
     ax = plot_utils.plot_mean_fsc(po,None)
     plt.savefig(output_folder + 'mean_fsc.png')
 
+
+
+    # Load latent coordinates with robust error handling
+    try:
+        zs_data = po.get('zs')
+        if zs_data is None:
+            logger.warning("No latent coordinates found in pipeline output. Skipping PC analysis.")
+            return
+            
+        # Try to get 4D latent space, fallback to available dimensions
+        if isinstance(zs_data, dict):
+            if 4 in zs_data:
+                z = zs_data[4]
+            elif len(zs_data) > 0:
+                # Use the first available key
+                first_key = list(zs_data.keys())[0]
+                z = zs_data[first_key]
+                logger.info(f"Using latent space with key {first_key} instead of 4")
+            else:
+                logger.warning("No valid latent coordinates found. Skipping PC analysis.")
+                return
+        elif isinstance(zs_data, (list, tuple)) and len(zs_data) > 4:
+            z = zs_data[4]
+        elif isinstance(zs_data, (list, tuple)) and len(zs_data) > 0:
+            z = zs_data[0]
+            logger.info("Using first available latent space instead of 4D")
+        else:
+            logger.warning("Unexpected format for latent coordinates. Skipping PC analysis.")
+            return
+            
+        if z is None or not hasattr(z, 'shape'):
+            logger.warning("Invalid latent coordinates data. Skipping PC analysis.")
+            return
+            
+        print(f"Latent space shape: {z.shape}")
+        print(f"Number of particles: {z.shape[0]}")
+        print(f"Latent dimensions: {z.shape[1]}")
+        
+        # Validate data quality
+        if z.shape[0] < 10:
+            logger.warning(f"Too few particles ({z.shape[0]}) for meaningful PC analysis. Skipping.")
+            return
+            
+        if z.shape[1] < 2:
+            logger.warning(f"Too few dimensions ({z.shape[1]}) for PC analysis. Skipping.")
+            return
+            
+        # Check for NaN or infinite values
+        if np.any(np.isnan(z)) or np.any(np.isinf(z)):
+            logger.warning("Latent coordinates contain NaN or infinite values. Attempting to clean data.")
+            z = z[~np.any(np.isnan(z) | np.isinf(z), axis=1)]
+            if z.shape[0] < 10:
+                logger.warning("Too few valid particles after cleaning. Skipping PC analysis.")
+                return
+                
+    except Exception as e:
+        logger.error(f"Error loading latent coordinates: {e}")
+        return
+
+    # Determine number of PCs to plot based on available dimensions
+    max_pcs = min(4, z.shape[1])
+    if max_pcs < 2:
+        logger.warning(f"Only {max_pcs} dimensions available, cannot create pairwise plots.")
+        return
+        
+    # Calculate number of subplots needed
+    n_combinations = max_pcs * (max_pcs - 1) // 2
+    if n_combinations == 0:
+        logger.warning("No valid PC combinations to plot.")
+        return
+        
+    # Create appropriate subplot layout
+    if n_combinations <= 3:
+        n_rows, n_cols = 1, n_combinations
+    elif n_combinations <= 6:
+        n_rows, n_cols = 2, 3
+    else:
+        n_rows, n_cols = 3, 3
+        
+    try:
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(6*n_cols, 6*n_rows))
+        if n_combinations == 1:
+            axes = [axes]
+        else:
+            axes = axes.flatten()
+    except Exception as e:
+        logger.error(f"Error creating subplots: {e}")
+        return
+
+    # Generate pairwise combinations
+    combinations = [(i, j) for i in range(max_pcs) for j in range(i+1, max_pcs)]
+    colors = plt.cm.viridis(np.linspace(0, 1, len(combinations)))
+
+    for idx, (i, j) in enumerate(combinations):
+        if idx >= len(axes):
+            break
+            
+        try:
+            # Validate data for this combination
+            x_data = z[:, i]
+            y_data = z[:, j]
+            
+            if np.any(np.isnan(x_data)) or np.any(np.isnan(y_data)):
+                logger.warning(f"Skipping PC{i+1} vs PC{j+1} due to NaN values")
+                continue
+                
+            if np.any(np.isinf(x_data)) or np.any(np.isinf(y_data)):
+                logger.warning(f"Skipping PC{i+1} vs PC{j+1} due to infinite values")
+                continue
+            
+            # Scatter plot
+            axes[idx].scatter(x_data, y_data, alpha=0.6, s=1, c=colors[idx])
+            axes[idx].set_xlabel(f'PC{i+1}')
+            axes[idx].set_ylabel(f'PC{j+1}')
+            axes[idx].set_title(f'PC{i+1} vs PC{j+1}', fontweight='bold')
+            axes[idx].grid(True, alpha=0.3)
+            
+            # Add density contours with error handling
+            try:
+                if len(x_data) > 50:  # Only add hexbin for sufficient data points
+                    axes[idx].hexbin(x_data, y_data, gridsize=min(30, len(x_data)//10), 
+                                   alpha=0.3, cmap='Blues', mincnt=1)
+            except Exception as e:
+                logger.debug(f"Could not add density contours for PC{i+1} vs PC{j+1}: {e}")
+                
+        except Exception as e:
+            logger.error(f"Error plotting PC{i+1} vs PC{j+1}: {e}")
+            # Hide the problematic subplot
+            axes[idx].set_visible(False)
+
+    # Hide unused subplots
+    for idx in range(len(combinations), len(axes)):
+        axes[idx].set_visible(False)
+
+    try:
+        plt.suptitle(f'Principal Component Space Analysis ({max_pcs}D)', fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        
+        # Save with error handling
+        output_path = os.path.join(output_folder, 'principal_component_space_analysis.png')
+        plt.savefig(output_path, bbox_inches='tight', dpi=300)
+        logger.info(f"PC analysis plot saved to {output_path}")
+        
+    except Exception as e:
+        logger.error(f"Error saving PC analysis plot: {e}")
+    finally:
+        plt.close()
+
+
     return
 
 
@@ -865,12 +1088,20 @@ def scatter_annotate(
     centers_ind: Optional[np.ndarray] = None,
     annotate: bool = True,
     labels: Optional[np.ndarray] = None,
-    alpha: Union[float, np.ndarray, None] = 0.1,
+    alpha: Union[float, np.ndarray, None] = 0.6,
     s: Union[float, np.ndarray, None] = 1,
     colors: Union[list, str, None] = None,
 ) -> Tuple[Figure, Axes]:
-    fig, ax = plt.subplots(figsize=(4, 4))
-    plt.scatter(x, y, alpha=alpha, s=s, rasterized=True)
+    fig, ax = plt.subplots(figsize=(8, 8))
+    
+    # Create hexbin density plot for background
+    try:
+        ax.hexbin(x, y, gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
+    except:
+        pass
+    
+    # Main scatter plot with improved styling
+    scatter = ax.scatter(x, y, alpha=alpha, s=s, c='cornflowerblue', edgecolors='none', rasterized=True)
 
     # plot cluster centers
     if centers_ind is not None:
@@ -878,15 +1109,22 @@ def scatter_annotate(
         centers = np.array([[x[i], y[i]] for i in centers_ind])
     if centers is not None:
         if colors is None:
-            colors = "k"
-        plt.scatter(centers[:, 0], centers[:, 1], c=colors, edgecolor="black")
+            colors = "red"
+        ax.scatter(centers[:, 0], centers[:, 1], c=colors, edgecolor="black", s=100, zorder=3)
     if annotate:
         assert centers is not None
         if labels is None:
             labels = np.arange(len(centers))
         assert labels is not None
         for i in labels:
-            ax.annotate(str(i), centers[i, 0:2] + np.array([0.1, 0.1]))
+            ax.annotate(str(i), centers[i, 0:2] + np.array([0.1, 0.1]), 
+                       fontsize=12, fontweight='bold', color='white',
+                       path_effects=[pe.withStroke(linewidth=3, foreground="black")])
+    
+    # Add grid and improve styling
+    ax.grid(True, alpha=0.3)
+    ax.set_facecolor('white')
+    
     return fig, ax
 
 def get_nearest_point(

@@ -8,6 +8,7 @@ import os, argparse
 logger = logging.getLogger(__name__)
 import matplotlib.pyplot as plt
 from recovar import parser_args
+from pathlib import Path
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Estimate conformational density from recovar results")
@@ -42,7 +43,12 @@ def estimate_conformational_density(recovar_result_dir, output_dir = None, pca_d
         else:
             num_disc_points = 1000
             
-    pipeline_output = o.PipelineOutput(recovar_result_dir + '/')
+    # Robust path handling
+    recovar_result_dir = Path(recovar_result_dir).expanduser().resolve()
+    if not recovar_result_dir.exists():
+        raise FileNotFoundError(f"recovar_result_dir {recovar_result_dir} does not exist")
+
+    pipeline_output = o.PipelineOutput(str(recovar_result_dir))
 
     if z_dim_used is None:
         z_dim_all = np.array(pipeline_output.get('input_args').zdim)
@@ -50,12 +56,11 @@ def estimate_conformational_density(recovar_result_dir, output_dir = None, pca_d
         z_dim_used = np.min(z_dim_all)
 
 
-    assert os.path.exists(recovar_result_dir), f"recovar_result_dir {recovar_result_dir} does not exist"
     assert (pca_dim <= z_dim_used), f"pca_dim {pca_dim} should be less than or equal to z_dim_used {z_dim_used}"
     assert (pca_dim <= 6), f"pca_dim {pca_dim} should be less than or equal to 6. It will take very long even for 5."
 
-    output_dir = recovar_result_dir + '/density/' if output_dir is None else output_dir
-    output.mkdir_safe(output_dir )
+    output_dir = Path(output_dir).expanduser().resolve() if output_dir is not None else recovar_result_dir / 'density'
+    output.mkdir_safe(str(output_dir))
 
 
 
@@ -68,7 +73,7 @@ def estimate_conformational_density(recovar_result_dir, output_dir = None, pca_d
     )
     logger.info(f"Deconvolution done, size = {density.shape}")
     deconvolve_density.plot_density(lbfgsb_sols, density, alphas)
-    plt.savefig(output_dir + '/all_densities.png')
+    plt.savefig(str(output_dir / 'all_densities.png'))
 
 
     from kneed import KneeLocator
@@ -81,12 +86,13 @@ def estimate_conformational_density(recovar_result_dir, output_dir = None, pca_d
 
 
 
-    output.mkdir_safe(output_dir + '/all_densities/' )
+    all_densities_dir = output_dir / 'all_densities'
+    output.mkdir_safe(str(all_densities_dir))
     for idx in range(len(lbfgsb_sols)):
-        utils.pickle_dump({ 'density' : lbfgsb_sols[idx], 'latent_space_bounds' : bounds, 'alpha' : alphas[idx] }, output_dir + '/all_densities/' + f'deconv_density_{idx}.pkl')
+        utils.pickle_dump({ 'density' : lbfgsb_sols[idx], 'latent_space_bounds' : bounds, 'alpha' : alphas[idx] }, str(all_densities_dir / f'deconv_density_{idx}.pkl'))
 
     idx = knee_idx
-    utils.pickle_dump({ 'density' : lbfgsb_sols[idx], 'latent_space_bounds' : bounds, 'alpha' : alphas[idx] }, output_dir + f'deconv_density_knee.pkl')
+    utils.pickle_dump({ 'density' : lbfgsb_sols[idx], 'latent_space_bounds' : bounds, 'alpha' : alphas[idx] }, str(output_dir / 'deconv_density_knee.pkl'))
     plt.figure(figsize = (12,10))
     for i, (alpha, c) in enumerate(zip(alphas, cost)):
         plt.text(alpha, c, str(i), fontsize=18)
@@ -97,7 +103,7 @@ def estimate_conformational_density(recovar_result_dir, output_dir = None, pca_d
     plt.xlabel('Lambda (regularization parameter)')
 
     plt.gca().invert_xaxis()
-    plt.savefig(output_dir + 'Lcurve.png', transparent = True)
+    plt.savefig(str(output_dir / 'Lcurve.png'), transparent = True)
 
 
 def main():

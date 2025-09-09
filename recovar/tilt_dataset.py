@@ -1,10 +1,9 @@
-
 import numpy as np
 from collections import Counter, OrderedDict
 import logging
 import torch
 from torch.utils import data
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, List, Dict
 # from cryodrgn import fft, starfile
 
 from recovar.cryodrgn_source import ImageSource
@@ -15,6 +14,12 @@ from recovar import mask
 from recovar import cryodrgn_starfile as starfile
 import time
 logger = logging.getLogger(__name__)
+
+
+# A tilt is a single image (more commonly called a subtilt) 
+# A particle is a collection of tilts, supposedly of the same object, that form a tilt series (typically 10-100)
+# A tomogram tilt is single big image. Tomogram tilts are never loaded or used directly in this code, but it is occasionally important to know which collection of tilt come from the same tomogram tilt
+# A tomogram is a collection of tomogram tilt (typically 10-100)
 
 ## Very awkward... Probably should just move things to one file...
 def set_standard_mask(D, dtype):
@@ -36,6 +41,7 @@ class ImageDataset(data.Dataset):
         max_threads=16,
         padding=0,
         device: Union[str, torch.device] = "cpu",
+        strip_prefix: str = None,
     ):
         assert padding == 0, "Padding not implemented yet"
         assert not keepreal, "Not implemented yet"
@@ -47,6 +53,7 @@ class ImageDataset(data.Dataset):
             datadir=datadir,
             indices=ind,
             max_threads=max_threads,
+            strip_prefix=strip_prefix,
         )
 
         ny = self.src.D
@@ -69,47 +76,9 @@ class ImageDataset(data.Dataset):
         self.unpadded_image_shape = (ny, ny)
         self.image_shape = (ny, ny)
         self.image_size = ny * ny
-        self.mask = jnp.array(set_standard_mask(self.unpadded_D, self.dtype))
+        self.mask = np.array(set_standard_mask(self.unpadded_D, self.dtype))
         self.mult = -1 if invert_data else 1
         self.padding=0
-        # self.mask = np.ones(self.image_shape, dtype = np.float32)
-
-
-
-
-
-    # def estimate_normalization(self, n=1000):
-    #     n = min(n, self.N) if n is not None else self.N
-    #     indices = range(0, self.N, self.N // n)  # FIXME: what if the data is not IID??
-    #     imgs = self.src.images(indices)
-
-    #     particleslist = []
-    #     for img in imgs:
-    #         particleslist.append(fft.ht2_center(img))
-    #     imgs = torch.stack(particleslist)
-
-    #     if self.invert_data:
-    #         imgs *= -1
-
-    #     imgs = fft.symmetrize_ht(imgs)
-    #     norm = (0, torch.std(imgs))
-    #     logger.info("Normalizing HT by {} +/- {}".format(*norm))
-    #     return norm
-
-    # def _process(self, data):
-    #     if data.ndim == 2:
-    #         data = data[np.newaxis, ...]
-    #     if self.window is not None:
-    #         data *= self.window
-    #     data = fft.ht2_center(data)
-    #     if self.invert_data:
-    #         data *= -1
-    #     data = fft.symmetrize_ht(data)
-    #     # data = (data - self.norm[0]) / self.norm[1]
-    #     images = ftu.get_dft2(images)
-    #     images = pad.padded_dft(images * self.mult,  self.image_size, self.padding)
-
-    #     return data
 
     def process_images(self, images, apply_image_mask = False):
         if apply_image_mask:
@@ -124,12 +93,7 @@ class ImageDataset(data.Dataset):
         return self.N
 
     def __getitem__(self, index):
-        # if isinstance(index, list):
-        #     index = torch.Tensor(index).to(torch.long)
-
-        #particles = self._process(self.src.images(index).to(self.device))
         particles = self.src.images(index)
-        # import pdb; pdb.set_trace() 
         # this is why it is tricky for index to be allowed to be a list!
         if len(particles.shape) == 2:
             particles = particles[np.newaxis, ...]
@@ -151,14 +115,13 @@ class ImageDataset(data.Dataset):
             None,
         )
 
-    def get_dataset_generator(self, batch_size, num_workers = 0):
-        return NumpyLoader(self, batch_size=batch_size, shuffle=False, num_workers = num_workers)
+    def get_dataset_generator(self, batch_size, num_workers=0, pad_to_batch_size=False, mode='tilt_series', **kwargs):
+        # For ImageDataset, ignore pad_to_batch_size, mode, and any additional kwargs for compatibility
+        return NumpyLoader(self, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     
-    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers = 0):
-        # raise NotImplementedError
-        # Maybe this would work?
-        return NumpyLoader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, shuffle=False, num_workers = num_workers)
-        # torch.utils.data.Subset(self, subset_indices)
+    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, pad_to_batch_size=False, mode='tilt_series', **kwargs):
+        # For ImageDataset, ignore pad_to_batch_size, mode, and any additional kwargs for compatibility
+        return NumpyLoader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
 
 class TiltSeriesData(ImageDataset):
@@ -177,25 +140,21 @@ class TiltSeriesData(ImageDataset):
         expected_res=None,
         dose_per_tilt=None,
         angle_per_tilt=None,
-        sort_with_Bfac=True,
+        tilt_file_option='relion5',
         **kwargs,
     ):
         self._load_start_time = time.time()
         # Note: ind is the indices of the *tilts*, not the particles
-        super().__init__(tiltstar, ind=ind, **kwargs)
+        super().__init__(tiltstar, lazy=lazy, ind=ind, **kwargs)
         # Parse unique particles from _rlnGroupName
         elapsed = time.time() - self._load_start_time
         print(f"Tilt series loaded in {elapsed:.2f} seconds")
 
         s = starfile.Starfile.load(tiltstar)
         elapsed = time.time() - self._load_start_time
-        print(f"Tilt series loaded in {elapsed:.2f} seconds")
+        print(f"starfile loaded in {elapsed:.2f} seconds")
 
-        unique_sorted_group_names = []
-        unique_sorted_group_names = list(s.df["_rlnGroupName"].unique())
-        # for name in s.df["_rlnGroupName"]:
-        #     if name not in unique_sorted_group_names:
-        #         unique_sorted_group_names.append(name)
+        unique_sorted_group_names = get_canonical_group_names(s.df)
 
         if ind is not None:
             s.df = s.df.loc[ind]
@@ -220,20 +179,31 @@ class TiltSeriesData(ImageDataset):
         if '_rlnCtfBfactor' in s.df.columns:
             self.ctfBfactor = np.asarray(s.df["_rlnCtfBfactor"], dtype=np.float32)
 
-        self.tilt_numbers = np.zeros(self.N)
-        if sort_with_Bfac:
-            logger.info("Sorting tilt series with Bfactor")
-        else:
-            logger.info("Sorting tilt series with scale factor!")
-            logger.warning("Sorting tilt series with scale factor!! May be wrong.")
-        for ind in self.particles:
-            if sort_with_Bfac:
-                sort_idxs = self.ctfBfactor[ind].argsort()
-                # logger.info("Sorting with Bfactor")
-            else:
-                sort_idxs = self.ctfscalefactor[ind].argsort()
-                # logger.info("Sorting with ctf scale factor")
+        if tilt_file_option == 'relion5':
+            self.dose = np.asarray(s.df["_rlnMicrographPreExposure"], dtype=np.float32)
 
+
+        if tilt_file_option == 'relion5':
+            # The rest are swapped so swap it too...
+            logger.info("Sorting tilt series with dose  (_rlnMicrographPreExposure) - relion5")
+        elif tilt_file_option == 'warp':
+            logger.info("Sorting tilt series with Bfactor - warp (windows)")
+        else:
+            raise ValueError(f"Invalid tilt file option: {tilt_file_option}. Only relion5 and warp are supported.")
+        # else:
+        #     logger.info("Sorting tilt series with scale factor!")
+        #     logger.warning("Sorting tilt series with scale factor!! May be wrong.")
+
+
+        self.tilt_numbers = np.zeros(self.N)
+        for ind in self.particles:
+            if tilt_file_option == 'relion5':
+                # The rest are swapped so swap it too...
+                sort_idxs = (-self.dose[ind]).argsort()
+            elif tilt_file_option == 'warp':
+                sort_idxs = self.ctfBfactor[ind].argsort()
+
+            
             ranks = np.empty_like(sort_idxs)
             ranks[sort_idxs[::-1]] = np.arange(len(ind))
             self.tilt_numbers[ind] = ranks
@@ -259,7 +229,7 @@ class TiltSeriesData(ImageDataset):
             # self.tilt_angles = angle_per_tilt * torch.ceil(self.tilt_numbers / 2)
             # self.tilt_angles = torch.tensor(self.tilt_angles).to(self.device)
         elapsed = time.time() - self._load_start_time
-        logger.info(f"Tilt series loaded in {elapsed:.2f} seconds")
+        logger.info(f"Tilt series loaded and sorted in {elapsed:.2f} seconds")
 
     def __len__(self):
         return self.Np
@@ -274,50 +244,128 @@ class TiltSeriesData(ImageDataset):
                     self.particles[ii], self.ntilts, replace=False
                 )
             else:
-                # take the first ntilts
-                tilt_index = self.particles[ii][0: self.ntilts]
+                # Get the tilt numbers for this particle's tilts
+                particle_tilt_numbers = self.tilt_numbers[self.particles[ii]]
+                # Sort indices by tilt numbers and take first ntilts
+                sorted_indices = np.argsort(particle_tilt_numbers)
+                tilt_index = self.particles[ii][sorted_indices[:self.ntilts]]
             tilt_indices.append(tilt_index)
-
         tilt_indices = np.concatenate(tilt_indices)
-        images = self.src.images(tilt_indices)#.to(self.device))
-        return images, index, tilt_indices#, index
-
+        images = self.src.images(tilt_indices)
+        return images, index, tilt_indices
 
 
     @classmethod
     def parse_particle_tilt(
-        cls, tiltstar: str
-    ) -> Tuple[list[np.ndarray], dict[int, int]]:
-        # Parse unique particles from _rlnGroupName
+        cls, tiltstar: str, ind =None,
+    ) -> Tuple[List[np.ndarray], Dict[int, int]]:
+        """
+        Parse unique particles from _rlnGroupName efficiently for large datasets.
+        Group names are always returned in canonical (sorted) order for robustness and reproducibility.
+        """
+        import pandas as pd
+        # Load starfile
         s = starfile.Starfile.load(tiltstar)
-        group_name = list(s.df["_rlnGroupName"])
-        particles = OrderedDict()
+        df = s.df
+        assert df is not None, "DataFrame loaded from starfile is None!"
+        if ind is not None:
+            df = df.loc[ind]
+        # Use pandas groupby for efficient grouping
+        grouped = df.groupby('_rlnGroupName').groups
+        # Get canonical (sorted) group names for robust ordering
+        canonical_group_names = get_canonical_group_names(df)
+        # Build particles_to_tilts in canonical order
+        particles_to_tilts = [np.asarray(grouped[gn], dtype=int) for gn in canonical_group_names]
+        # Create reverse mapping efficiently using numpy operations
+        tilts_to_particles = np.full(len(df), -1, dtype=int)
+        for particle_idx, indices in enumerate(particles_to_tilts):
+            tilts_to_particles[indices] = particle_idx
+        tilts_to_particles_dict = {i: val for i, val in enumerate(tilts_to_particles)}
+        return particles_to_tilts, tilts_to_particles_dict
 
-        for ii, gn in enumerate(group_name):
-            if gn not in particles:
-                particles[gn] = []
-            particles[gn].append(ii)
+    @classmethod
+    def parse_micrograph_tilt(
+        cls, tiltstar: str
+    ) -> Tuple[List[np.ndarray], Dict[int, int]]:
+        """
+        Parse unique tomogram tilts from rlnTiltName efficiently for large datasets.
+        
+        Optimized for datasets with millions of particles by:
+        - Using pandas groupby operations instead of Python loops
+        - Pre-allocating arrays instead of growing lists
+        - Using vectorized operations where possible
+        """
+        import pandas as pd
+        
+        # Load starfile
+        s = starfile.Starfile.load(tiltstar)
+        df = s.df
+        
+        # Find tilt name column
+        tilt_col = None
+        for col in ['_rlnTiltName', 'rlnTiltName']:
+            if col in df.columns:
+                tilt_col = col
+                break
+        if tilt_col is None:
+            raise ValueError(f"No tilt name column found in starfile. Columns: {list(df.columns)}")
+        
+        # Use pandas groupby for efficient grouping by tilt name
+        grouped = df.groupby(tilt_col).groups
+        
+        # Convert to numpy arrays directly
+        tomogramtilts_to_tilts = [np.asarray(indices, dtype=int) for indices in grouped.values()]
+        
+        # Create reverse mapping efficiently using numpy operations
+        n_groups = len(tomogramtilts_to_tilts)
+        
+        # Pre-allocate the reverse mapping array
+        tilts_to_tomogramtilts = np.full(len(df), -1, dtype=int)
+        
+        # Use vectorized assignment
+        for group_idx, group_indices in enumerate(tomogramtilts_to_tilts):
+            tilts_to_tomogramtilts[group_indices] = group_idx
+        
+        # Convert to dict for compatibility
+        tilts_to_tomogramtilts_dict = {i: val for i, val in enumerate(tilts_to_tomogramtilts)}
+        
+        return tomogramtilts_to_tilts, tilts_to_tomogramtilts_dict
 
-        particles = [np.asarray(pp, dtype=int) for pp in particles.values()]
-        particles_to_tilts = particles
-        tilts_to_particles = {}
+    # @classmethod
+    # def parse_tomogramtilt_tilt(
+    #     cls, tiltstar: str
+    # ) -> Tuple[list[np.ndarray], dict[int, int]]:
+    #     # Parse unique particles from _rlnGroupName
+    #     s = starfile.Starfile.load(tiltstar)
+    #     group_name = list(s.df["_rlnGroupName"])
+    #     dose = list(s.df['_rlnCtfBfactor'])
+    #     groups = OrderedDict()
+    #     for i, (gn, d) in enumerate(zip(group_name, dose)):
+    #         key = (gn, d)
+    #         groups.setdefault(key, []).append(i)
 
-        for i, j in enumerate(particles):
-            for jj in j:
-                tilts_to_particles[jj] = i
+    #     groups = [np.asarray(pp, dtype=int) for pp in groups.values()]
+    #     tomogramtilts_to_tilts = groups
+    #     tilts_to_tomogramtilts = {}
 
-        return particles_to_tilts, tilts_to_particles
+    #     for i, j in enumerate(groups):
+    #         for jj in j:
+    #             tilts_to_tomogramtilts[jj] = i
+
+    #     return tomogramtilts_to_tilts, tilts_to_tomogramtilts
+
+
 
     @classmethod
     def particles_to_tilts(
-        cls, particles_to_tilts: list[np.ndarray], particles: np.ndarray
+        cls, particles_to_tilts: List[np.ndarray], particles: np.ndarray
     ) -> np.ndarray:
         tilts = [particles_to_tilts[int(i)] for i in particles]
         tilts = np.concatenate(tilts)
         return tilts
 
     @classmethod
-    def tilts_to_particles(cls, tilts_to_particles, tilts):
+    def tilts_to_particles(cls, tilts_to_particles: Dict[int,int], tilts):
         particles = [tilts_to_particles[i] for i in tilts]
         particles = np.array(sorted(set(particles)))
         return particles
@@ -325,40 +373,146 @@ class TiltSeriesData(ImageDataset):
     def get_tilt(self, index):
         return super().__getitem__(index)
 
-    def get_slice(self, start: int, stop: int) -> Tuple[np.ndarray, np.ndarray]:
-        # we have to fetch all the tilts to stay contiguous, and then subset
-        tilt_indices = [self.particles[index] for index in range(start, stop)]
-        cat_tilt_indices = np.concatenate(tilt_indices)
-        images = self.src.images(cat_tilt_indices, require_contiguous=True)
+    def get_image_generator(self, batch_size, num_workers=0):
+        """
+        This generator iterates over individual images rather than tilt groups.
+        Different from get_dataset_generator which batches by tilt series.
+        """
+        class SingleImageDataset(torch.utils.data.Dataset):
+            def __init__(self, src):
+                self.src = src
 
-        tilt_masks = []
-        for tilt_idx in tilt_indices:
-            tilt_mask = np.zeros(len(tilt_idx), dtype=bool)
-            if self.random_tilts:
-                tilt_mask_idx = np.random.choice(
-                    len(tilt_idx), self.ntilts, replace=False
+            def __len__(self):
+                return self.src.n
+
+            def __getitem__(self, index):
+                # Fetch a single image. If the image is 2D, add a new axis.
+                image = self.src.images(index)
+                if image.ndim == 2:
+                    image = image[np.newaxis, ...]
+                return image, np.inf, index
+
+        return NumpyLoader(SingleImageDataset(self.src), batch_size=batch_size, shuffle=False, num_workers=num_workers)
+        
+    def get_image_subset_generator(self, batch_size, subset_indices, num_workers=0):
+        """
+        This generator iterates over individual images rather than tilt groups.
+        Different from get_dataset_subset_generator which batches by tilt series.
+        """
+        class SingleImageDataset(torch.utils.data.Dataset):
+            def __init__(self, src):
+                self.src = src
+
+            def __len__(self):
+                return self.src.n
+
+            def __getitem__(self, index):
+                # Ensure index is a scalar
+                if isinstance(index, (list, tuple, np.ndarray)):
+                    index = index[0]
+                image = self.src.images(index)
+                if image.ndim == 2:
+                    image = image[np.newaxis, ...]
+                return image, np.inf, index
+        
+        if subset_indices is None:
+            return self.get_image_generator(batch_size, num_workers)
+        
+        # Convert subset_indices to numpy array and ensure it's 1D
+        if not isinstance(subset_indices, np.ndarray):
+            subset_indices = np.array(subset_indices)
+        if subset_indices.ndim == 0:
+            subset_indices = np.array([subset_indices])
+        elif subset_indices.ndim > 1:
+            subset_indices = subset_indices.flatten()
+        
+        # Create dataset and dataloader
+        dataset = SingleImageDataset(self.src)
+        subset_dataset = torch.utils.data.Subset(dataset, subset_indices)
+                
+        return NumpyLoader(subset_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+
+    def get_dataset_generator(self, batch_size, num_workers=0, pad_to_batch_size=False, mode='tilt_series', **kwargs):
+        """
+        Create a data generator with different batching modes.
+        
+        Args:
+            batch_size: Target batch size
+            num_workers: Number of workers for data loading
+            pad_to_batch_size: If True, pad the last batch to exact batch_size with zeros
+            mode: Batching mode:
+                - 'images': Batch by total image count (combines tilt series)
+                - 'tilt_series': Batch by tilt series count (original behavior - DEFAULT)
+            **kwargs: Additional arguments (ignored but accepted for compatibility)
+            
+        Returns:
+            Generator yielding batches based on the selected mode
+        """
+        if mode == 'images':
+            # Validate batch size against maximum tilt series size
+            max_tilts_per_series = self._get_max_tilts_per_series()
+            if batch_size < max_tilts_per_series:
+                raise ValueError(
+                    f"Batch size ({batch_size}) is smaller than the maximum number of tilts "
+                    f"in a single tilt series ({max_tilts_per_series}). "
+                    f"Either increase batch_size or use mode='tilt_series'."
                 )
-                tilt_mask[tilt_mask_idx] = True
+            
+            return ImageBatchDataLoader(self, batch_size=batch_size, num_workers=num_workers, 
+                                       pad_to_batch_size=pad_to_batch_size)
+        elif mode == 'tilt_series':
+            # Original behavior: batch by tilt series count
+            return make_dataloader(self, batch_size=batch_size, num_workers=num_workers) #super().get_dataset_generator(batch_size, num_workers=num_workers)
+        else:
+            raise ValueError(f"Invalid mode '{mode}'. Must be 'images' or 'tilt_series'.")
+
+    def _get_max_tilts_per_series(self):
+        """Get the maximum number of tilts in any single tilt series."""
+        max_tilts = 0
+        for i in range(len(self)):
+            if self.ntilts is not None:
+                # If ntilts is specified, use min of ntilts and available tilts
+                available_tilts = len(self.particles[i])
+                actual_tilts = min(self.ntilts, available_tilts)
             else:
-                # if self.ntilts == -1:
-                #     self.ntilts = len(tilt_idx)
-                i = 0#(len(tilt_idx) - self.ntilts) // 2
-                # if self.n_tilts == -1:
-                #     title_mask = np.ones(len(tilt_idx), dtype=bool)
-                # else:
-                tilt_mask[i: i + self.ntilts] = True
-            tilt_masks.append(tilt_mask)
+                # Use all available tilts for this particle
+                actual_tilts = len(self.particles[i])
+            max_tilts = max(max_tilts, actual_tilts)
+        return max_tilts
 
-        tilt_mask = np.concatenate(tilt_masks)
-        return images.numpy(), tilt_mask
-
-    def get_dataset_generator(self, batch_size, num_workers = 0):
-        return make_dataloader(self, batch_size=batch_size, num_workers=num_workers)
-
-    def get_dataset_subset_generator(self, batch_size, subset_indices , num_workers = 0):
-        return make_dataloader(torch.utils.data.Subset(self, subset_indices), batch_size=batch_size, num_workers=num_workers) #torch.utils.data(make_dataloader(self, batch_size=batch_size, num_workers=num_workers), subset_indices)
-
-
+    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, pad_to_batch_size=False, mode='tilt_series', **kwargs):
+        """
+        Create a data generator for a subset of particles with different batching modes.
+        
+        Args:
+            batch_size: Target batch size
+            subset_indices: Indices of particles to include
+            num_workers: Number of workers for data loading
+            pad_to_batch_size: If True, pad the last batch to exact batch_size with zeros
+            mode: Batching mode ('images' or 'tilt_series' - DEFAULT)
+            **kwargs: Additional arguments (ignored but accepted for compatibility)
+        """
+        if subset_indices is None:
+            return self.get_dataset_generator(batch_size, num_workers, pad_to_batch_size, mode, **kwargs)
+        
+        if mode == 'images':
+            # Create a subset dataset and validate batch size
+            subset_dataset = TiltSeriesSubset(self, subset_indices)
+            max_tilts_per_series = subset_dataset._get_max_tilts_per_series()
+            if batch_size < max_tilts_per_series:
+                raise ValueError(
+                    f"Batch size ({batch_size}) is smaller than the maximum number of tilts "
+                    f"in a single tilt series ({max_tilts_per_series}) in the subset. "
+                    f"Either increase batch_size or use mode='tilt_series'."
+                )
+            
+            return ImageBatchDataLoader(subset_dataset, batch_size=batch_size, num_workers=num_workers, 
+                                       pad_to_batch_size=pad_to_batch_size)
+        elif mode == 'tilt_series':
+            # Original behavior with subset
+            return make_dataloader(self, batch_size=batch_size, num_workers=num_workers) #super().get_dataset_generator(batch_size, num_workers=num_workers)
+        else:
+            raise ValueError(f"Invalid mode '{mode}'. Must be 'images' or 'tilt_series'.")
 
 
 def make_dataloader(
@@ -379,15 +533,6 @@ def make_dataloader(
         batch_size=1
         return NumpyLoader(data, batch_size=batch_size, shuffle=False, num_workers = num_workers)
 
-        return DataLoader(
-            data,
-            num_workers=num_workers,
-            sampler=BatchSampler(
-                sampler_cls(data), batch_size=batch_size, drop_last=False
-            ),
-            batch_size=None,
-            multiprocessing_context="spawn" if num_workers > 0 else None,
-        )
 import jax.numpy as jnp
 
 def numpy_collate(batch):
@@ -420,483 +565,171 @@ class NumpyLoader(torch.utils.data.DataLoader):
         worker_init_fn=worker_init_fn)
 
 
-# class NumpySubsetLoader(torch.utils.data.Subset):
-  
-#   def __init__(self, dataset, indices, batch_size=1,
-#                 shuffle=False, sampler=None,
-#                 batch_sampler=None, num_workers=0,
-#                 pin_memory=False, drop_last=False,
-#                 timeout=0, worker_init_fn=None):
+class ImageBatchDataLoader:
+    """
+    Custom data loader that batches tilt series by total image count rather than series count.
+    """
     
-#     torch.utils.data.Subset(super(self.__class__, self).__init__(dataset,
-#         batch_size=batch_size,
-#         shuffle=shuffle,
-#         sampler=sampler,
-#         batch_sampler=batch_sampler,
-#         num_workers=num_workers,
-#         collate_fn=numpy_collate,
-#         pin_memory=pin_memory,
-#         drop_last=drop_last,
-#         timeout=timeout,
-#         worker_init_fn=worker_init_fn), indices)
+    def __init__(self, dataset, batch_size, num_workers=0, pad_to_batch_size=False):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.pad_to_batch_size = pad_to_batch_size
+        
+        # Pre-compute the number of tilts per particle for efficient batching
+        self.tilts_per_particle = []
+        for i in range(len(dataset)):
+            if dataset.ntilts is not None:
+                # If ntilts is specified, use min of ntilts and available tilts
+                available_tilts = len(dataset.particles[i])
+                self.tilts_per_particle.append(min(dataset.ntilts, available_tilts))
+            else:
+                # Use all available tilts for this particle
+                self.tilts_per_particle.append(len(dataset.particles[i]))
+        
+        self.tilts_per_particle = np.array(self.tilts_per_particle)
+        self.total_images = np.sum(self.tilts_per_particle)
+        
+    def __iter__(self):
+        """
+        Iterate over batches, collecting tilt series until reaching target image count.
+        """
+        particle_idx = 0
+        
+        while particle_idx < len(self.dataset):
+            batch_images = []
+            batch_particle_indices = []
+            batch_tilt_indices = []
+            current_batch_size = 0
+            
+            # Collect tilt series until we reach the target batch size
+            while (particle_idx < len(self.dataset) and 
+                   current_batch_size < self.batch_size):
+                
+                # Get the next tilt series
+                images, p_idx, t_indices = self.dataset[particle_idx]
+                
+                # How many images are in this tilt series?
+                n_images = images.shape[0]
+                
+                # Check if adding this series would exceed batch size
+                if current_batch_size + n_images > self.batch_size and current_batch_size > 0:
+                    # Don't add this series to current batch, save for next batch
+                    break
+                
+                # Add this tilt series to the batch
+                batch_images.append(images)
+                
+                # Create particle indices for this tilt series
+                particle_indices_for_series = np.full(n_images, particle_idx, dtype=np.int32)
+                batch_particle_indices.append(particle_indices_for_series)
+                
+                # Add tilt indices
+                batch_tilt_indices.append(t_indices)
+                
+                current_batch_size += n_images
+                particle_idx += 1
+            
+            # If no images were added (e.g., single tilt series larger than batch_size)
+            if len(batch_images) == 0:
+                if particle_idx < len(self.dataset):
+                    # Get the oversized tilt series anyway
+                    images, p_idx, t_indices = self.dataset[particle_idx]
+                    batch_images.append(images)
+                    batch_particle_indices.append(np.full(images.shape[0], particle_idx, dtype=np.int32))
+                    batch_tilt_indices.append(t_indices)
+                    current_batch_size = images.shape[0]
+                    particle_idx += 1
+                else:
+                    break
+            
+            # Concatenate all images and indices
+            if len(batch_images) > 0:
+                batch_images = np.concatenate(batch_images, axis=0)
+                batch_particle_indices = np.concatenate(batch_particle_indices, axis=0)
+                batch_tilt_indices = np.concatenate(batch_tilt_indices, axis=0)
+                
+                # Pad to exact batch size if requested
+                if self.pad_to_batch_size and current_batch_size < self.batch_size:
+                    padding_needed = self.batch_size - current_batch_size
+                    
+                    # Pad images with zeros
+                    image_shape = batch_images.shape[1:]
+                    padding_images = np.zeros((padding_needed,) + image_shape, dtype=batch_images.dtype)
+                    batch_images = np.concatenate([batch_images, padding_images], axis=0)
+                    
+                    # Pad indices with invalid values (-1)
+                    padding_particle_indices = np.full(padding_needed, -1, dtype=np.int32)
+                    padding_tilt_indices = np.full(padding_needed, -1, dtype=batch_tilt_indices.dtype)
+                    
+                    batch_particle_indices = np.concatenate([batch_particle_indices, padding_particle_indices], axis=0)
+                    batch_tilt_indices = np.concatenate([batch_tilt_indices, padding_tilt_indices], axis=0)
+                
+                yield batch_images, batch_particle_indices, batch_tilt_indices
+    
+    def __len__(self):
+        """
+        Estimate the number of batches.
+        This is approximate since tilt series have variable sizes.
+        """
+        if self.pad_to_batch_size:
+            return int(np.ceil(self.total_images / self.batch_size))
+        else:
+            # Conservative estimate - could be slightly different due to variable tilt series sizes
+            return int(np.ceil(self.total_images / self.batch_size))
+
+
+class TiltSeriesSubset:
+    """A subset of TiltSeriesData for efficient batching."""
+    
+    def __init__(self, dataset, indices):
+        self.dataset = dataset
+        self.indices = indices
+        # Delegate important attributes from the underlying dataset
+        self.ntilts = getattr(dataset, 'ntilts', None)
+        self.particles = getattr(dataset, 'particles', None)
+    
+    def __len__(self):
+        return len(self.indices)
+    
+    def __getitem__(self, idx):
+        return self.dataset[self.indices[idx]]
+    
+    def _get_max_tilts_per_series(self):
+        """Get the maximum number of tilts in any single tilt series in this subset."""
+        max_tilts = 0
+        for idx in self.indices:
+            if self.dataset.ntilts is not None:
+                # If ntilts is specified, use min of ntilts and available tilts
+                available_tilts = len(self.dataset.particles[idx])
+                actual_tilts = min(self.dataset.ntilts, available_tilts)
+            else:
+                # Use all available tilts for this particle
+                actual_tilts = len(self.dataset.particles[idx])
+            max_tilts = max(max_tilts, actual_tilts)
+        return max_tilts
+
+
+
+def tilt_series_indices_to_image_indices(tilt_series_indices, starfile, image_indices_subset = None):
+    particle_to_tilts, _ = TiltSeriesData.parse_particle_tilt(starfile)
+    images_indices = np.concatenate([particle_to_tilts[i] for i in tilt_series_indices])
+    if image_indices_subset is not None:
+        images_indices = np.intersect1d(images_indices, image_indices_subset)
+    return images_indices
+
+
+# def tilt_series_indices_to_tilt_series_names(tilt_series_indices, starfile):
+#     particle_to_tilts, _ = TiltSeriesData.parse_particle_tilt(starfile)
+#     tilt_series_names = [particle_to_tilts[i] for i in range(len(tilt_series_indices))]
+#     return tilt_series_names
+
+
+def get_canonical_group_names(df, group_col='_rlnGroupName'):
+    """
+    Return a sorted list of unique group names for robust, reproducible, and transparent ordering.
+    This canonical order should be used everywhere group names are mapped to indices or iterated over.
+    Sorting ensures that the order is not dependent on DataFrame construction, shuffling, or pandas internals.
+    """
+    return sorted(df[group_col].unique())
 
-
-
-# import numpy as np
-# from collections import Counter, OrderedDict
-
-# import logging
-# import torch
-# from torch.utils import data
-# from typing import Optional, Tuple, Union
-# from cryodrgn import fft, starfile
-# from cryodrgn.source import ImageSource
-# from cryodrgn.utils import window_mask
-
-# from torch.utils.data import DataLoader
-# from torch.utils.data.sampler import BatchSampler, RandomSampler, SequentialSampler
-# from recovar.fourier_transform_utils import fourier_transform_utils
-# ftu = fourier_transform_utils(jnp)
-
-# logger = logging.getLogger(__name__)
-
-
-# class ImageDataset(torch.utils.data.Dataset):
-#     def __init__(
-#         self,
-#         mrcfile,
-#         lazy=True,
-#         norm=None,
-#         keepreal=False,
-#         invert_data=False,
-#         ind=None,
-#         window=True,
-#         datadir=None,
-#         window_r=0.85,
-#         max_threads=16,
-#         device: Union[str, torch.device] = "cpu",
-#     ):
-#         assert not keepreal, "Not implemented yet"
-#         datadir = datadir or ""
-#         self.ind = ind
-#         self.src = ImageSource.from_file(
-#             mrcfile,
-#             lazy=lazy,
-#             datadir=datadir,
-#             indices=ind,
-#             max_threads=max_threads,
-#         )
-
-#         ny = self.src.D
-#         assert ny % 2 == 0, "Image size must be even."
-
-#         self.N = self.src.n
-#         self.D = ny + 1  # after symmetrization
-#         self.invert_data = invert_data
-#         self.window = window_mask(ny, window_r, 0.99).to(device) if window else None
-#         norm = norm or self.estimate_normalization()
-#         self.norm = [float(x) for x in norm]
-#         self.device = device
-#         self.lazy = lazy
-
-#     def estimate_normalization(self, n=1000):
-#         n = min(n, self.N) if n is not None else self.N
-#         indices = range(0, self.N, self.N // n)  # FIXME: what if the data is not IID??
-#         imgs = self.src.images(indices)
-
-#         particleslist = []
-#         for img in imgs:
-#             particleslist.append(fft.ht2_center(img))
-#         imgs = torch.stack(particleslist)
-
-#         if self.invert_data:
-#             imgs *= -1
-
-#         imgs = fft.symmetrize_ht(imgs)
-#         norm = (0, torch.std(imgs))
-#         logger.info("Normalizing HT by {} +/- {}".format(*norm))
-#         return norm
-
-#     def _process(self, data):
-#         if data.ndim == 2:
-#             data = data[np.newaxis, ...]
-#         if self.window is not None:
-#             data *= self.window
-#         data = fft.ht2_center(data)
-#         if self.invert_data:
-#             data *= -1
-#         data = fft.symmetrize_ht(data)
-#         data = (data - self.norm[0]) / self.norm[1]
-#         return data
-
-#     def __len__(self):
-#         return self.N
-
-#     def __getitem__(self, index):
-#         if isinstance(index, list):
-#             index = torch.Tensor(index).to(torch.long)
-
-#         particles = self._process(self.src.images(index).to(self.device))
-
-#         # this is why it is tricky for index to be allowed to be a list!
-#         if len(particles.shape) == 2:
-#             particles = particles[np.newaxis, ...]
-
-#         if isinstance(index, (int, np.integer)):
-#             logger.debug(f"ImageDataset returning images at index ({index})")
-#         else:
-#             logger.debug(
-#                 f"ImageDataset returning images for {len(index)} indices ({index[0]}..{index[-1]})"
-#             )
-
-#         return particles, None, index
-
-#     def get_slice(
-#         self, start: int, stop: int
-#     ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
-#         return (
-#             self.src.images(slice(start, stop), require_contiguous=True).numpy(),
-#             None,
-#         )
-
-
-# class TiltSeriesData(ImageDataset):
-#     """
-#     Class representing tilt series
-#     """
-
-#     def __init__(
-#         self,
-#         tiltstar,
-#         ntilts,
-#         random_tilts=False,
-#         ind=None,
-#         voltage=None,
-#         expected_res=None,
-#         dose_per_tilt=None,
-#         angle_per_tilt=None,
-#         **kwargs,
-#     ):
-#         # Note: ind is the indices of the *tilts*, not the particles
-#         super().__init__(tiltstar, ind=ind, **kwargs)
-
-#         # Parse unique particles from _rlnGroupName
-#         s = starfile.Starfile.load(tiltstar)
-#         if ind is not None:
-#             s.df = s.df.loc[ind]
-#         group_name = list(s.df["_rlnGroupName"])
-#         particles = OrderedDict()
-#         for ii, gn in enumerate(group_name):
-#             if gn not in particles:
-#                 particles[gn] = []
-#             particles[gn].append(ii)
-#         self.particles = [np.asarray(pp, dtype=int) for pp in particles.values()]
-#         self.Np = len(particles)
-#         self.ctfscalefactor = np.asarray(s.df["_rlnCtfScalefactor"], dtype=np.float32)
-#         self.tilt_numbers = np.zeros(self.N)
-#         for ind in self.particles:
-#             sort_idxs = self.ctfscalefactor[ind].argsort()
-#             ranks = np.empty_like(sort_idxs)
-#             ranks[sort_idxs[::-1]] = np.arange(len(ind))
-#             self.tilt_numbers[ind] = ranks
-#         # self.tilt_numbers = torch.tensor(self.tilt_numbers).to(self.device)
-#         logger.info(f"Loaded {self.N} tilts for {self.Np} particles")
-#         counts = Counter(group_name)
-#         unique_counts = set(counts.values())
-#         logger.info(f"{unique_counts} tilts per particle")
-#         self.counts = counts
-#         assert ntilts <= min(unique_counts)
-#         self.ntilts = ntilts
-#         self.random_tilts = random_tilts
-
-#         self.voltage = voltage
-#         self.dose_per_tilt = dose_per_tilt
-
-#         # Assumes dose-symmetric tilt scheme
-#         # As implemented in Hagen, Wan, Briggs J. Struct. Biol. 2017
-#         self.tilt_angles = None
-#         if angle_per_tilt is not None:
-#             self.tilt_angles = angle_per_tilt * torch.ceil(self.tilt_numbers / 2)
-#             #self.tilt_angles = torch.tensor(self.tilt_angles).to(self.device)
-
-#     def __len__(self):
-#         return self.Np
-
-#     def __getitem__(self, index):
-#         if isinstance(index, list):
-#             index = np.array(index)#.to(torch.long)
-#         tilt_indices = []
-#         for ii in index:
-#             if self.random_tilts:
-#                 tilt_index = np.random.choice(
-#                     self.particles[ii], self.ntilts, replace=False
-#                 )
-#             else:
-#                 # take the first ntilts
-#                 tilt_index = self.particles[ii][0 : self.ntilts]
-#             tilt_indices.append(tilt_index)
-#         tilt_indices = np.concatenate(tilt_indices)
-#         images = self._process(self.src.images(tilt_indices).to(self.device))
-#         return images, tilt_indices, index
-
-#     @classmethod
-#     def parse_particle_tilt(
-#         cls, tiltstar: str
-#     ) -> tuple[list[np.ndarray], dict[np.int64, int]]:
-#         # Parse unique particles from _rlnGroupName
-#         s = starfile.Starfile.load(tiltstar)
-#         group_name = list(s.df["_rlnGroupName"])
-#         particles = OrderedDict()
-
-#         for ii, gn in enumerate(group_name):
-#             if gn not in particles:
-#                 particles[gn] = []
-#             particles[gn].append(ii)
-
-#         particles = [np.asarray(pp, dtype=int) for pp in particles.values()]
-#         particles_to_tilts = particles
-#         tilts_to_particles = {}
-
-#         for i, j in enumerate(particles):
-#             for jj in j:
-#                 tilts_to_particles[jj] = i
-
-#         return particles_to_tilts, tilts_to_particles
-
-#     @classmethod
-#     def particles_to_tilts(
-#         cls, particles_to_tilts: list[np.ndarray], particles: np.ndarray
-#     ) -> np.ndarray:
-#         tilts = [particles_to_tilts[int(i)] for i in particles]
-#         tilts = np.concatenate(tilts)
-
-#         return tilts
-
-#     @classmethod
-#     def tilts_to_particles(cls, tilts_to_particles, tilts):
-#         particles = [tilts_to_particles[i] for i in tilts]
-#         particles = np.array(sorted(set(particles)))
-#         return particles
-
-#     def get_tilt(self, index):
-#         return super().__getitem__(index)
-
-#     def get_slice(self, start: int, stop: int) -> Tuple[np.ndarray, np.ndarray]:
-#         # we have to fetch all the tilts to stay contiguous, and then subset
-#         tilt_indices = [self.particles[index] for index in range(start, stop)]
-#         cat_tilt_indices = np.concatenate(tilt_indices)
-#         images = self.src.images(cat_tilt_indices, require_contiguous=True)
-
-#         tilt_masks = []
-#         for tilt_idx in tilt_indices:
-#             tilt_mask = np.zeros(len(tilt_idx), dtype=np.bool)
-#             if self.random_tilts:
-#                 tilt_mask_idx = np.random.choice(
-#                     len(tilt_idx), self.ntilts, replace=False
-#                 )
-#                 tilt_mask[tilt_mask_idx] = True
-#             else:
-#                 i = (len(tilt_idx) - self.ntilts) // 2
-#                 tilt_mask[i : i + self.ntilts] = True
-#             tilt_masks.append(tilt_mask)
-#         tilt_masks = np.concatenate(tilt_masks)
-#         selected_images = images[tilt_masks]
-#         selected_tilt_indices = cat_tilt_indices[tilt_masks]
-
-#         return selected_images.numpy(), selected_tilt_indices
-
-#     def critical_exposure(self, freq, voltage):
-# #         assert (
-# #             voltage is not None
-# #         ), "Critical exposure calculation requires voltage"
-
-#         # From Grant and Grigorieff, 2015
-#         scale_factor = 1
-#         if voltage == 200:
-#             scale_factor = 0.75
-#         scale_factor = jnp.where(jnp.isclose(voltage, 200), 0.75, 1)
-# #         critical_exp = jnp.pow(freq, -1.665)
-#         critical_exp = freq ** (-1.665)
-#         critical_exp = critical_exp *  scale_factor * 0.245
-#         return critical_exp +  2.81
-
-
-#     def optimal_exposure(self, freq):
-#         return 2.51284 * self.critical_exposure(freq)
-
-
-# class DataShuffler:
-#     def __init__(
-#         self, dataset: ImageDataset, batch_size, buffer_size, dtype=np.float32
-#     ):
-#         if not all(dataset.src.indices == np.arange(dataset.N)):
-#             raise NotImplementedError(
-#                 "Sorry dude, --ind is not supported for the data shuffler. "
-#                 "The purpose of the shuffler is to load chunks contiguously during lazy loading on huge datasets, which doesn't work with --ind. "
-#                 "If you really need this, maybe you should probably use `--ind` during preprocessing (e.g. cryodrgn downsample)."
-#             )
-#         self.dataset = dataset
-#         self.batch_size = batch_size
-#         self.buffer_size = buffer_size
-#         self.dtype = dtype
-#         assert self.buffer_size % self.batch_size == 0, (
-#             self.buffer_size,
-#             self.batch_size,
-#         )  # FIXME
-#         self.batch_capacity = self.buffer_size // self.batch_size
-#         assert self.buffer_size <= len(self.dataset), (
-#             self.buffer_size,
-#             len(self.dataset),
-#         )
-#         self.ntilts = getattr(dataset, "ntilts", 1)  # FIXME
-
-#     def __iter__(self):
-#         return _DataShufflerIterator(self)
-
-
-# class _DataShufflerIterator:
-#     def __init__(self, shuffler: DataShuffler):
-#         self.dataset = shuffler.dataset
-#         self.buffer_size = shuffler.buffer_size
-#         self.batch_size = shuffler.batch_size
-#         self.batch_capacity = shuffler.batch_capacity
-#         self.dtype = shuffler.dtype
-#         self.ntilts = shuffler.ntilts
-
-#         self.buffer = np.empty(
-#             (self.buffer_size, self.ntilts, self.dataset.D - 1, self.dataset.D - 1),
-#             dtype=self.dtype,
-#         )
-#         self.index_buffer = np.full((self.buffer_size,), -1, dtype=np.int64)
-#         self.tilt_index_buffer = np.full(
-#             (self.buffer_size, self.ntilts), -1, dtype=np.int64
-#         )
-#         self.num_batches = (
-#             len(self.dataset) // self.batch_size
-#         )  # FIXME off-by-one? Nah, lets leave the last batch behind
-#         self.chunk_order = torch.randperm(self.num_batches)
-#         self.count = 0
-#         self.flush_remaining = -1  # at the end of the epoch, got to flush the buffer
-#         # pre-fill
-#         logger.info("Pre-filling data shuffler buffer...")
-#         for i in range(self.batch_capacity):
-#             chunk, maybe_tilt_indices, chunk_indices = self._get_next_chunk()
-#             self.buffer[i * self.batch_size : (i + 1) * self.batch_size] = chunk
-#             self.index_buffer[
-#                 i * self.batch_size : (i + 1) * self.batch_size
-#             ] = chunk_indices
-#             if maybe_tilt_indices is not None:
-#                 self.tilt_index_buffer[
-#                     i * self.batch_size : (i + 1) * self.batch_size
-#                 ] = maybe_tilt_indices
-#         logger.info(
-#             f"Filled buffer with {self.buffer_size} images ({self.batch_capacity} contiguous chunks)."
-#         )
-
-#     def _get_next_chunk(self) -> Tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
-#         chunk_idx = int(self.chunk_order[self.count])
-#         self.count += 1
-#         particles, maybe_tilt_indices = self.dataset.get_slice(
-#             chunk_idx * self.batch_size, (chunk_idx + 1) * self.batch_size
-#         )
-#         particle_indices = np.arange(
-#             chunk_idx * self.batch_size, (chunk_idx + 1) * self.batch_size
-#         )
-#         particles = particles.reshape(
-#             self.batch_size, self.ntilts, *particles.shape[1:]
-#         )
-#         if maybe_tilt_indices is not None:
-#             maybe_tilt_indices = maybe_tilt_indices.reshape(
-#                 self.batch_size, self.ntilts
-#             )
-#         return particles, maybe_tilt_indices, particle_indices
-
-#     def __iter__(self):
-#         return self
-
-#     def __next__(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-#         """Returns a batch of images, and the indices of those images in the dataset.
-
-#         The buffer starts filled with `batch_capacity` random contiguous chunks.
-#         Each time a batch is requested, `batch_size` random images are selected from the buffer,
-#         and refilled with the next random contiguous chunk from disk.
-
-#         Once all the chunks have been fetched from disk, the buffer is randomly permuted and then
-#         flushed sequentially.
-#         """
-#         if self.count == self.num_batches and self.flush_remaining == -1:
-#             logger.info(
-#                 "Finished fetching chunks. Flushing buffer for remaining batches..."
-#             )
-#             # since we're going to flush the buffer sequentially, we need to shuffle it first
-#             perm = np.random.permutation(self.buffer_size)
-#             self.buffer = self.buffer[perm]
-#             self.index_buffer = self.index_buffer[perm]
-#             self.flush_remaining = self.buffer_size
-
-#         if self.flush_remaining != -1:
-#             # we're in flush mode, just return chunks out of the buffer
-#             assert self.flush_remaining % self.batch_size == 0
-#             if self.flush_remaining == 0:
-#                 raise StopIteration()
-#             particles = self.buffer[
-#                 self.flush_remaining - self.batch_size : self.flush_remaining
-#             ]
-#             particle_indices = self.index_buffer[
-#                 self.flush_remaining - self.batch_size : self.flush_remaining
-#             ]
-#             tilt_indices = self.tilt_index_buffer[
-#                 self.flush_remaining - self.batch_size : self.flush_remaining
-#             ]
-#             self.flush_remaining -= self.batch_size
-#         else:
-#             indices = np.random.choice(
-#                 self.buffer_size, size=self.batch_size, replace=False
-#             )
-#             particles = self.buffer[indices]
-#             particle_indices = self.index_buffer[indices]
-#             tilt_indices = self.tilt_index_buffer[indices]
-
-#             chunk, maybe_tilt_indices, chunk_indices = self._get_next_chunk()
-#             self.buffer[indices] = chunk
-#             self.index_buffer[indices] = chunk_indices
-#             if maybe_tilt_indices is not None:
-#                 self.tilt_index_buffer[indices] = maybe_tilt_indices
-
-#         particles = torch.from_numpy(particles)
-#         particle_indices = torch.from_numpy(particle_indices)
-#         tilt_indices = torch.from_numpy(tilt_indices)
-
-#         # merge the batch and tilt dimension
-#         particles = particles.view(-1, *particles.shape[2:])
-#         tilt_indices = tilt_indices.view(-1, *tilt_indices.shape[2:])
-
-#         particles = self.dataset._process(particles.to(self.dataset.device))
-#         # print('ZZZ', particles.shape, tilt_indices.shape, particle_indices.shape)
-#         return particles, tilt_indices, particle_indices
-
-
-# def make_dataloader(
-#     data: ImageDataset,
-#     *,
-#     batch_size: int,
-#     num_workers: int = 0,
-#     shuffler_size: int = 0,
-#     shuffle=True,
-# ):
-#     if shuffler_size > 0 and shuffle:
-#         assert data.lazy, "Only enable a data shuffler for lazy loading"
-#         return DataShuffler(data, batch_size=batch_size, buffer_size=shuffler_size)
-#     else:
-#         # see https://github.com/zhonge/cryodrgn/pull/221#discussion_r1120711123
-#         # for discussion of why we use BatchSampler, etc.
-#         sampler_cls = RandomSampler if shuffle else SequentialSampler
-#         return DataLoader(
-#             data,
-#             num_workers=num_workers,
-#             sampler=BatchSampler(
-#                 sampler_cls(data), batch_size=batch_size, drop_last=False
-#             ),
-#             batch_size=None,
-#             multiprocessing_context="spawn" if num_workers > 0 else None,
-#         )

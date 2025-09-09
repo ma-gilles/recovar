@@ -59,7 +59,7 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
         image_mask = pad.pad_images_spatial_domain(image_mask, padding)[0]
 
     if binary:
-        proj_mask = (proj_mask > mask_threshold)  * image_mask[None]    
+        proj_mask = (proj_mask > mask_threshold)  * ( image_mask[None]  if image_mask is not None else 1)
         
     if soften > 0:
         # Soft mask
@@ -91,11 +91,16 @@ def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape):
     return proj_eigen
 
 
-# Compute y_i - P_i mu terms
-@functools.partial(jax.jit, static_argnums = [5,6,7,8,9,10])    
-def get_centered_images(images, mean, CTF_params, rotation_matrices, translations, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type  ):    
+# Compute y_i - P_i mu terms. If premultiplied_ctf is true, this computes z_i - CTF_i P_i mu where z_i = y_i CTF_i is the premultiplied image.
+@functools.partial(jax.jit, static_argnums = [5,6,7,8,9,10, 11], static_argnames = ('premultiplied_ctf'))    
+def get_centered_images(images, mean, CTF_params, rotation_matrices, translations, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type, premultiplied_ctf = False  ):    
+
     translated_images = core.translate_images(images, translations, image_shape)
-    centered_images = translated_images - core.forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type)
+    if premultiplied_ctf:
+        centered_images = translated_images - core.forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf = True) * CTF_fun(CTF_params, image_shape, voxel_size)**2
+    else:
+        centered_images = translated_images - core.forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf = False)
+    
     return centered_images
 
 def check_mask(mask):
@@ -114,9 +119,8 @@ def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shap
     return projected_mean
 
 
-batch_over_vol_forward_model_from_map = jax.vmap(core.forward_model_from_map, in_axes = (0, None, None, None, None, None, None, None))
+batch_over_vol_forward_model_from_map = jax.vmap(core.forward_model_from_map, in_axes = (0, None, None, None, None, None, None, None, None))
 
-import jax
 
 # # Are there at most 4 or 5 within one dist? or 9?
 # def find_points_near_grid(gridpoints, gridpoint_target, max_n_points = 5):
@@ -182,19 +186,5 @@ def evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel = "triangular",
         raise ValueError("Kernel function not recognized")
     return kernel_vals
 
-    # if kernel == "triangular":
-    #     k_xi_x1 = covariance_core.triangular_kernel(plane_coords, target_coord, kernel_width = kernel_width) 
-    # elif kernel == "square":
-    #     k_xi_x1 = covariance_core.square_kernel(plane_coords, target_coord, kernel_width = kernel_width) 
-    # else:
-    #     raise ValueError("Kernel not implemented")
-
-
-# Are there at most 4 or 5 within one dist? or 9?
-#@jax.vmap(in_axes=[0,0,None])
-# def sum_up_over_near_grid_points(image, gridpoints, gridpoint_target):
-#     kernel_vals = triangular_kernel(gridpoints, gridpoint_target)
-#     kernel_estimated = jnp.sum(kernel_vals * image)
-#     return kernel_estimated, jnp.sum(kernel_vals)
 
 

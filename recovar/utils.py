@@ -135,14 +135,78 @@ def guess_vol_shape_from_vol_size(vol_size):
 # These should probably be set more intelligently
 # Sometimes, memory can grow like O(vol_batch_size * image_batch_size)
 def get_image_batch_size(grid_size, gpu_memory):
-    # return int(2*(2**24)/ (grid_size**2)  * gpu_memory / 38 / 3) 
-    return int((2**18) / (grid_size**2) * gpu_memory) 
+    """Calculate batch size for image processing.
+    
+    Args:
+        grid_size: Size of the grid
+        gpu_memory: Available GPU memory in GB
+        
+    Returns:
+        Integer batch size with reasonable bounds
+    """
+    if grid_size < 1:
+        raise ValueError("grid_size must be positive")
+    if gpu_memory <= 0:
+        raise ValueError("gpu_memory must be positive")
+        
+    # Use floating point arithmetic to avoid integer overflow
+    # Convert to float before any calculations
+    grid_size_f = float(grid_size)
+    gpu_memory_f = float(gpu_memory)
+    
+    # Calculate batch size using floating point
+    batch_size = (2.0**18.0) / (grid_size_f * grid_size_f) * gpu_memory_f
+    
+    # Add reasonable bounds
+    max_batch_size = 2**20  # Reduced from 2**30 to be more conservative
+    min_batch_size = 1
+    
+    # Clip to reasonable bounds
+    batch_size = max(min_batch_size, min(max_batch_size, batch_size))
+    
+    return int(batch_size)
 
 def get_vol_batch_size(grid_size, gpu_memory):
-    return int(25 * (256 / grid_size)**3 * gpu_memory / 38)
+    """Calculate batch size for volume processing."""
+    if grid_size < 1:
+        raise ValueError("grid_size must be positive")
+    if gpu_memory <= 0:
+        raise ValueError("gpu_memory must be positive")
+        
+    # Use floating point arithmetic
+    grid_size_f = float(grid_size)
+    gpu_memory_f = float(gpu_memory)
+    
+    # Calculate using floating point
+    batch_size = 25.0 * (256.0 / grid_size_f)**3.0 * gpu_memory_f / 38.0
+    
+    # Add reasonable bounds
+    max_batch_size = 2**20  # Reduced from 2**30
+    min_batch_size = 1
+    
+    batch_size = max(min_batch_size, min(max_batch_size, batch_size))
+    return int(batch_size)
 
 def get_column_batch_size(grid_size, gpu_memory):
-    return int(50 * ((256/grid_size)**3) * gpu_memory / 38)
+    """Calculate batch size for column processing."""
+    if grid_size < 1:
+        raise ValueError("grid_size must be positive")
+    if gpu_memory <= 0:
+        raise ValueError("gpu_memory must be positive")
+        
+    # Use floating point arithmetic
+    grid_size_f = float(grid_size)
+    gpu_memory_f = float(gpu_memory)
+    
+    # Calculate using floating point
+    batch_size = 50.0 * (256.0/grid_size_f)**3.0 * gpu_memory_f / 38.0
+    
+    # Add reasonable bounds
+    max_batch_size = 2**20  # Reduced from 2**30
+    min_batch_size = 1
+    
+    batch_size = max(min_batch_size, min(max_batch_size, batch_size))
+    return int(batch_size)
 
 def get_latent_density_batch_size(test_pts,zdim, gpu_memory):
     return np.max([int(gpu_memory /(3 * (get_size_in_gb(test_pts) * zdim**1))), 1])
@@ -248,9 +312,11 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
     #_rlnGroupName #20
 
     keys = ['rlnImageName', 'rlnMicrographName', 'rlnDefocusU', 'rlnDefocusV',
-       'rlnDefocusAngle', 'rlnPhaseShift', 'rlnOpticsGroup']
+       'rlnDefocusAngle', 'rlnPhaseShift', 'rlnOpticsGroup', 'rlnTiltName']
     
-    values = [ image_names, micrograph_names, CTF_params[:,0].astype(dtype), CTF_params[:,1].astype(dtype), CTF_params[:,2].astype(dtype), CTF_params[:, 6].astype(dtype), optics_group ]
+    # Give each image its own tilt name for compatibility with tilt series parsing
+    tilt_names = [f'tilt_{k+1}' for k in range(n_images)]
+    values = [ image_names, micrograph_names, CTF_params[:,0].astype(dtype), CTF_params[:,1].astype(dtype), CTF_params[:,2].astype(dtype), CTF_params[:, 6].astype(dtype), optics_group, tilt_names ]
 
     rotation_matrices = rotation_matrices.astype(np.float32)
     translations = translations.astype(np.float32)
@@ -262,19 +328,22 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
                 'rlnOriginXAngst', 
                 'rlnOriginYAngst',] 
         # import cryodrgn.utils as cryodrgn_utils
-        rots = R_to_relion_scipy(rotation_matrices)
+        rots = R_to_relion(rotation_matrices)
         values += [ rots[:,0], rots[:,1], rots[:,2], translations[:,0], translations[:,1] ]
     
     if tilt_groups is not None:
         keys += ['rlnGroupName']
-        group_names = [f'tilt_{group_n+1}' for group_n in tilt_groups]
+        group_names = [f'tilt_{group_n+1:07d}' for i, group_n in enumerate(tilt_groups)]
         values += [group_names]
         # Also write contrast variation if using tilt groups?
         keys += ['rlnCtfScalefactor']
-        values += [CTF_params[:,core.contrast_ind]]
+        values += [CTF_params[:,core.CTFParamIndex.CONTRAST]]
         keys += ['rlnCtfBfactor']
-        values += [CTF_params[:,core.bfactor_ind]]
-        
+        values += [CTF_params[:,core.CTFParamIndex.BFACTOR]]
+        keys += ['rlnMicrographPreExposure']
+        values += [CTF_params[:,core.CTFParamIndex.DOSE]]
+
+
     if halfset_indices is not None:
         keys += ['rlnRandomSubset']
         values += [halfset_indices]
@@ -286,7 +355,9 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
     
     return
 
-def R_to_relion_scipy(rot: np.ndarray, degrees: bool = True) -> np.ndarray:
+
+def R_to_relion(rot: np.ndarray, degrees: bool = True) -> np.ndarray:
+    """From cryodrgn"""
     """Nx3x3 rotation matrices to RELION euler angles"""
     from scipy.spatial.transform import Rotation as RR
 
@@ -307,6 +378,25 @@ def R_to_relion_scipy(rot: np.ndarray, degrees: bool = True) -> np.ndarray:
     if not degrees:
         euler *= np.pi / 180
     return euler
+
+def R_from_relion(euler_: np.ndarray, degrees: bool = True) -> np.ndarray:
+    """From cryodrgn"""
+    """Nx3 array of RELION euler angles to rotation matrix"""
+    from scipy.spatial.transform import Rotation as RR
+
+    euler = euler_.copy()
+    if euler.shape == (3,):
+        euler = euler.reshape(1, 3)
+    euler[:, 0] += 90
+    euler[:, 2] -= 90
+    f = np.ones((3, 3))
+    f[0, 1] = -1
+    f[1, 0] = -1
+    f[1, 2] = -1
+    f[2, 1] = -1
+    rot = RR.from_euler("zxz", euler, degrees=degrees).as_matrix() * f
+    return rot
+
 
 def write_starfile_from_cryodrgn_format(ctf_path, pose_path, particles_file_path, output_filename, halfset_indices = None):
     ctf = pickle_load(ctf_path)
@@ -353,3 +443,5 @@ class DuplicateFilter(object):
         rv = record.msg not in self.msgs
         self.msgs.add(record.msg)
         return rv
+
+
