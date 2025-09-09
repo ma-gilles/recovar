@@ -687,6 +687,7 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
     
     # Print debug info about input parameters
     # print(f"Image subset type: {type(image_subset)}")
+
     # if image_subset is not None:
     #     print(f"Image subset shape: {image_subset.shape if hasattr(image_subset, 'shape') else 'no shape'}")
     

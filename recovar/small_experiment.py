@@ -16,20 +16,22 @@ def indices_to_coo(grid_indices, n, data= None):
     return sparse.BCOO((data.flatten(), np.array([image_index, grid_indices]).T), shape=(grid_indices.shape[0], n))
 
 
+
 def subsample_coo_columns(sparse_mat, right_indices):
     good_indices = jnp.where(jnp.isin(sparse_mat.indices[:,1], right_indices))[0]
-    neCTFParamIndex.Wices = sparse_mat.indices[good_indices,1]
+    new_indices = sparse_mat.indices[good_indices,1]
 
-    # Find positions of neCTFParamIndex.Wices inside right_indices
+    # Find positions of new_indices inside right_indices
     for new_col, old_col in enumerate(right_indices):
-        neCTFParamIndex.Wices = neCTFParamIndex.Wices.at[neCTFParamIndex.Wices == old_col].set(new_col)
+        new_indices = new_indices.at[new_indices == old_col].set(new_col)
         # import pdb; pdb.set_trace()
     # Update column indices
-    # neCTFParamIndex.Wices = sparse_mat.indices[good_indices].at[:,1].set(mapped_indices)
-    neCTFParamIndex.Wices_all = sparse_mat.indices[good_indices]
-    neCTFParamIndex.Wices_all = neCTFParamIndex.Wices_all.at[:,1].set(neCTFParamIndex.Wices)
+    # new_indices = sparse_mat.indices[good_indices].at[:,1].set(mapped_indices)
+    new_indices_all = sparse_mat.indices[good_indices]
+    new_indices_all = new_indices_all.at[:,1].set(new_indices)
 
-    return sparse.BCOO((sparse_mat.data[good_indices], neCTFParamIndex.Wices_all), shape=(sparse_mat.shape[0], right_indices.size))
+    return sparse.BCOO((sparse_mat.data[good_indices], new_indices_all), shape=(sparse_mat.shape[0], right_indices.size))
+
 
 def covar_estimate_sparse(y, P, noise_variance, right_indices, covar_regularization = None):
 
@@ -311,7 +313,7 @@ def high_d_PCA_by_projected_covar(y, indices, noise_variance, covar_indices, n, 
     return U2, eigs 
 
 
-def high_d_PCA_by_low_rank_completion(y, indices, n, mu = .8):
+def high_d_PCA_by_low_rank_completion(y, indices, n, mu = .8, U = None):
     # Restriction operator
     # sub = 0.4
     # nsub = int(ny*nx*sub)
@@ -327,6 +329,11 @@ def high_d_PCA_by_low_rank_completion(y, indices, n, mu = .8):
     # coo.indices = coo.indices[:,0] * y.shape[1] + coo.indices
     import pylops, pyproximal
     Rop = pylops.Restriction(mat_size, coo_ind)
+    z = np.zeros(mat_size)
+    y2 = Rop.matvec(U)
+    y_diff = y - y2
+    print(np.linalg.norm(y_diff))
+    import pdb; pdb.set_trace()
 
     f = pyproximal.L2(Rop, y.T.flatten())
     g = pyproximal.Nuclear(mat_shape, mu)
