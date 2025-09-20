@@ -588,55 +588,7 @@ def standard_recovar_pipeline(args):
 
         # This works in place?
         variance_est, ub_noise_var_by_var_est = noise.upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, cryos, means, batch_size, dilated_volume_mask)
-        # variance_fsc = None
-        # if noise_model == "radial_per_tilt":
-        #     # Recompute variance with the new noise variance. If tilt_series noise model this is needed
-        # This computes the variance once more which is unnecessary. TODO: rewrite this
         variance_est, _, variance_fsc, _, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, use_regularization = True, disc_type = 'cubic')
-
-
-
-        # # Now, estimate the variance of the signal. If the variance estimate ends up negative, we have overestimated the noise variance.
-        # for noise_repeat in range(2):
-        #     ## TODO Does Tilt series for anything for variance??
-        #     variance_time = time.time()
-        #     variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, use_regularization = True, disc_type = 'cubic')
-        #     # print('using regul in variance est?!?')
-        #     logger.info(f"variance estimation time: {time.time() - variance_time}")
-        #     utils.report_memory_device(logger=logger)
-
-        #     # def upper_bound_noise_var(noise_var_used, variance_est, noise_p_variance_est):
-        #     rad_grid = np.array(ftu.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
-        #     # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
-        #     n_shell_to_ub = np.min([32, cryos[0].grid_size//2 -1])
-        #     ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
-        #     variance_est_low_res_5_pc = np.zeros(n_shell_to_ub, dtype = np.float32)
-        #     variance_est_low_res_median = np.zeros(n_shell_to_ub, dtype = np.float32)
-
-        #     for k in range(n_shell_to_ub):
-        #         if np.sum(rad_grid==k) >0:
-        #             ub_noise_var_by_var_est[k] = np.percentile(noise_p_variance_est[rad_grid==k], 5)
-        #             ub_noise_var_by_var_est[k] = np.max([0, ub_noise_var_by_var_est[k]])
-        #             variance_est_low_res_5_pc[k] = np.percentile(variance_est['combined'][rad_grid==k], 5)
-        #             variance_est_low_res_median[k] = np.median(variance_est['combined'][rad_grid==k])
-
-        #     if np.any(ub_noise_var_by_var_est >  noise_var_used[:n_shell_to_ub]):
-        #         logger.info("Estimated noise greater than upper bound. Bounding noise using estimated upper bound")
-
-        #     if np.any(variance_est_low_res_5_pc < 0):
-        #         logger.info("Estimated variance resolutino is < 0. This probably means that the noise was incorrectly estimated. Recomputing noise")
-        #         print("5 percentile:", variance_est_low_res_5_pc)
-        #         print("5 percentile/median over low shells:", variance_est_low_res_5_pc/variance_est_low_res_median)
-
-        #     # if not cryos[0].premultiplied_ctf:
-        #         # This is a bit of a hack. We are using the variance estimate to bound the noise variance
-        #         # This is not correct, but it is better than nothing
-        #     noise_var_used[:n_shell_to_ub] = np.where( noise_var_used[:n_shell_to_ub] > ub_noise_var_by_var_est, ub_noise_var_by_var_est, noise_var_used[:n_shell_to_ub])
-
-
-        #     noise_var_used = noise_var_used.astype(cryos[0].dtype_real)
-        # _update_noise_variance(noise_var_used)
-
 
 
         if args.test_covar_options:
@@ -691,13 +643,20 @@ def standard_recovar_pipeline(args):
         zdim_for_rest = 20 # Maybe should make this an option
         n_pcs_to_keep = np.max( np.append(options['zs_dim_to_test'], 50))
 
-        ## FIXME
         ignore_zero_frequency = options['ignore_zero_frequency']
         # mean_for_contrast_correction = means['combined_regularized'] if args.contrast_use_reg_mean else means['combined']
 
         # options['ignore_zero_frequency'] = False
         for idx, focus_mask in enumerate(focus_masks):
             u_this,s_this, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory, covariance_options = covariance_options, variance_estimate = variance_est['combined'], use_reg_mean_in_contrast = args.use_reg_mean_in_contrast)
+            
+            # PPCA:
+            ppca_dim = 10
+            W_est = u_this[:,:ppca_dim] * s_this[:ppca_dim]**0.5
+            W_prior = regularization.average_over_shells(W_est**2, cryos[0].volume_shape)
+            W_prior_avg = regularization.batch_average_over_shells(W_est**2, cryos[0].volume_shape)
+            u_this, s_this = ppca.EM(cryos, means['combined'], W_est, W_prior,  EM_iter = 20, basis_size = ppca_dim)
+
             if idx == num_foc_masks -1:
                 s.append(s_this['rescaled'][:n_pcs_to_keep].copy())
                 u.append(u_this['rescaled'][:,:n_pcs_to_keep].copy())
@@ -705,6 +664,9 @@ def standard_recovar_pipeline(args):
                 s.append(s_this['rescaled'][:zdim_for_rest].copy())
                 u.append(u_this['rescaled'][:,:zdim_for_rest].copy())
             del u_this, s_this
+
+
+
         u = { 'rescaled' : np.concatenate(u, axis = 1), 'real' : None}
         s =  { 'rescaled' : np.concatenate(s, axis = 0), 'real': None}
         options['ignore_zero_frequency'] = ignore_zero_frequency

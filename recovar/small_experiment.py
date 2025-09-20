@@ -154,7 +154,7 @@ def make_random_sampling_scheme(grid_size, m, seed = 0):
 
 
 
-def generate_cryo_like_experiment(grid_size, m, b, snr, eig_decay = 0.75, random_sampling = False, voxel_size = 4, Bfactor = 60, return_mat = False):
+def generate_cryo_like_experiment(grid_size, m, b, snr, eig_decay = 0.75, random_sampling = False, voxel_size = 4, Bfactor = 0, return_mat = False):
 
     image_shape = (grid_size, grid_size)
     volume_shape = (grid_size, grid_size, grid_size)
@@ -163,14 +163,16 @@ def generate_cryo_like_experiment(grid_size, m, b, snr, eig_decay = 0.75, random
     # indices = core.get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape)
 
     radial_distances = ftu.get_grid_of_radial_distances(volume_shape).reshape(-1)
-    signal_decay_power = 2
+    signal_decay_power = 0
     U = np.random.randn(volume_size,b) * ((1.0 /(1+radial_distances[:,None]) ) ** signal_decay_power)
     from recovar import simulator
     B_fac = simulator.get_B_factor_scaling(volume_shape, voxel_size, B_factor = Bfactor)
     U *= B_fac[...,None]
 
     radial_mask = mask.get_radial_mask(volume_shape).reshape(-1)
-    U *= radial_mask[...,None]
+
+    #U *= radial_mask[...,None]
+
     U,_ = np.linalg.qr(U)
     eigs = (eig_decay)**np.arange(b)
     noise_variance = eigs[0] / snr
@@ -314,36 +316,57 @@ def high_d_PCA_by_projected_covar(y, indices, noise_variance, covar_indices, n, 
 
 
 def high_d_PCA_by_low_rank_completion(y, indices, n, mu = .8, U = None):
+
+    mat_shape = (y.shape[0], n)
+    ny, nx = mat_shape
+    mat_size = np.prod(mat_shape)
+    coo = indices_to_coo(indices, n, data= None)
+    #Flattened coo.indices
+    coo_ind = coo.indices[:,0] * mat_shape[1] + coo.indices[:,1]
+    del coo
+    # coo.indices = coo.indices[:,0] * y.shape[1] + coo.indices
+    import pylops, pyproximal
+    Rop = pylops.Restriction(mat_size, coo_ind)
+
+    f = pyproximal.L2(Rop, y.ravel())
+    g = pyproximal.Nuclear((ny, nx), mu)
+
+    Xpg = pyproximal.optimization.primal.ProximalGradient(f, g, np.zeros(mat_size), acceleration='vandenberghe',tau=1., niter=100, show=True)
+
+    # z = np.zeros(mat_size)
+    # y2 = Rop * mat.ravel()
+    # y_diff = y.ravel() - y2
+    # print(np.linalg.norm(y_diff))
     # Restriction operator
     # sub = 0.4
     # nsub = int(ny*nx*sub)
     # nsub
     # iava = np.random.permutation(np.arange(ny*nx))[:nsub]
     # n = U.shape[0]
-    mat_shape = (n, y.shape[0])
-    mat_size = np.prod(mat_shape)
-    coo = indices_to_coo(indices, n, data= None)
-    #Flattened coo.indices
-    coo_ind = coo.indices[:,0] * mat_shape[0] + coo.indices[:,1]
-    del coo
-    # coo.indices = coo.indices[:,0] * y.shape[1] + coo.indices
-    import pylops, pyproximal
-    Rop = pylops.Restriction(mat_size, coo_ind)
-    z = np.zeros(mat_size)
-    y2 = Rop.matvec(U)
-    y_diff = y - y2
-    print(np.linalg.norm(y_diff))
-    import pdb; pdb.set_trace()
+    # mat_shape = (n, y.shape[0])
+    # mat_size = np.prod(mat_shape)
+    # coo = indices_to_coo(indices, n, data= None)
+    # #Flattened coo.indices
+    # coo_ind = coo.indices[:,0] * mat_shape[0] + coo.indices[:,1]
+    # del coo
+    # # coo.indices = coo.indices[:,0] * y.shape[1] + coo.indices
+    # import pylops, pyproximal
+    # Rop = pylops.Restriction(mat_size, coo_ind)
+    # z = np.zeros(mat_size)
+    # y2 = Rop * U.ravel()
+    # y_diff = y - y2
+    # print(np.linalg.norm(y_diff))
+    # import pdb; pdb.set_trace()
 
-    f = pyproximal.L2(Rop, y.T.flatten())
-    g = pyproximal.Nuclear(mat_shape, mu)
+    # f = pyproximal.L2(Rop, y.T.flatten())
+    # g = pyproximal.Nuclear(mat_shape, mu)
 
-    Xpg = pyproximal.optimization.primal.ProximalGradient(f, g, np.zeros(mat_size), acceleration='vandenberghe',
-                                                        tau=1., niter=100, show=True)
-    Xpg = Xpg.reshape(*mat_shape)
+    # Xpg = pyproximal.optimization.primal.ProximalGradient(f, g, np.zeros(mat_size), acceleration='vandenberghe',
+    #                                                     tau=1., niter=100, show=True)
+    # Xpg = Xpg.reshape(*mat_shape)
 
-    # Recompute SVD and see how the singular values look like
-    Upg, Spg, _ = np.linalg.svd(Xpg, full_matrices=False)
+    # # Recompute SVD and see how the singular values look like
+    Upg, Spg, _ = np.linalg.svd(Xpg.reshape(ny, nx).T, full_matrices=False)
 
     return Upg, Spg**2 / y.shape[0], Xpg
 

@@ -28,18 +28,6 @@ class CTFParamIndex(IntEnum):
     DOSE = 9             # Dose (for tilt series)
     TILT_ANGLE = 10      # Tilt angle (for tilt series)
 
-# # Backward compatibility aliases
-# dfu_ind = CTFParamIndex.DFU
-# dfv_ind = CTFParamIndex.DFV
-# dfang_ind = CTFParamIndex.DFANG
-# volt_ind = CTFParamIndex.VOLT
-# cs_ind = CTFParamIndex.CS
-# CTFParamIndex.W = CTFParamIndex.W
-# CTFParamIndex.PHASE_SHIFT = CTFParamIndex.PHASE_SHIFT
-# CTFParamIndex.BFACTOR = CTFParamIndex.BFACTOR
-# CTFParamIndex.CONTRAST = CTFParamIndex.CONTRAST
-# dose_ind = CTFParamIndex.DOSE
-# tilt_angle_ind = CTFParamIndex.TILT_ANGLE
 
 @functools.partial(jax.jit, static_argnums=[1])
 def vol_indices_to_vec_indices(vol_indices, vol_shape):

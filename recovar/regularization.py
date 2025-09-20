@@ -342,21 +342,6 @@ def downsample_from_fsc(array, fsc, volume_shape):
 prior_iteration_batch = jax.vmap(prior_iteration, in_axes = (0,0,0,0, 0, 0, None, None, None) )
 prior_iteration_relion_style_batch = jax.vmap(prior_iteration_relion_style, in_axes = (0,0,0,0, 0, 0, None, None, None, None, None, None, None, None))
 
-
-# def compute_masked_fscs(H0, B0, H1, B1, prior, volume_shape, volume_mask):
-#     volumes1 =  covariance_update_col(H0,B0, prior)
-#     volumes2 =  covariance_update_col(H1,B1, prior)
-    
-#     def apply_masks(volumes):
-#         vols_real = ftu.get_idft3(volumes.reshape([-1, *volume_shape])) * volume_mask
-#         return ftu.get_dft3(vols_real).reshape([vols_real.shape[0], -1])
-    
-#     volumes1_masked = apply_masks(volumes1)
-#     volumes2_masked = apply_masks(volumes2)
-    
-#     _, fsc, _ = compute_fsc_prior_gpu_v2(volume_shape, volumes1_masked, volumes2_masked, H0 , prior, frequency_shift = 0)
-#     return fsc
-
 batch_average_over_shells = jax.vmap(average_over_shells, in_axes = (0,None,None))
 
 

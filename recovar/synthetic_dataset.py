@@ -128,8 +128,8 @@ class HeterogeneousVolumeDistribution():
 
         return u,s,v
 
-    def get_covariance_eigendecomposition(self, contrasted = False):
-        u,s,_ = self.get_vol_svd(contrasted)
+    def get_covariance_eigendecomposition(self, real_space = False, random_svd_pcs = None, contrasted = False):
+        u,s,_ = self.get_vol_svd(real_space = real_space, random_svd_pcs = random_svd_pcs, contrasted = contrasted)
         zero_freq = core.frequencies_to_vec_indices( jnp.array([[0,0,0]] ), self.volume_shape)
         # u[zero_freq] == np.sum(Fu)== < Fu, 1 > 
         # ip = u[zero_freq,:] / np.abs(u[zero_freq,:])

@@ -327,6 +327,8 @@ def variance_relion_style_triangular_kernel_batch_trilinear(mean_estimate, image
         if premultiplied_ctf:
             noise_variances = noise_variances * CTF**2
         cov_noise = noise.get_masked_noise_variance_from_noise_variance(image_mask, noise_variances, image_shape)
+    else:
+        cov_noise = noise.get_masked_noise_variance_from_noise_variance(jnp.repeat(image_mask[None], images.shape[0], axis = 0), noise_variances, image_shape)
 
     # Maybe apply mask
     images_squared = jnp.abs(images)**2  - cov_noise.reshape(images.shape) #* np.sum(mask) # May need to do something with mask
