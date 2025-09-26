@@ -15,7 +15,6 @@ batch_over_vol_slice_volume_by_map = jax.vmap(core.slice_volume_by_map, in_axes 
 
 
 def check_imaginary_part(x, image_shape, name, skip_ft = False ):
-    return 0
     if not skip_ft:
         if len(image_shape) == 2:
             y = ftu.get_idft2(x.reshape(-1, *image_shape))
@@ -39,8 +38,8 @@ def E_M_step_batch(images, lhs_summed, rhs_summed, mean, W, CTF_params, rotation
     CTF = CTF_fun( CTF_params, image_shape, voxel_size) / jnp.sqrt(noise_variance)
     projected_mean = core.forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf = False) / jnp.sqrt(noise_variance)
 
-    check_imaginary_part(projected_mean, image_shape, 'projected_mean' )
-    check_imaginary_part(images, image_shape, 'images' )
+    # check_imaginary_part(projected_mean, image_shape, 'projected_mean' )
+    # check_imaginary_part(images, image_shape, 'images' )
 
     ctf_squared_over_noise_variance = CTF**2 
     # 
@@ -48,8 +47,8 @@ def E_M_step_batch(images, lhs_summed, rhs_summed, mean, W, CTF_params, rotation
     # n_images x n_basis_functions x image_size
     PW *= CTF[...,None,:]
 
-    check_imaginary_part(PW, image_shape, 'PW' )
-    check_imaginary_part(W.T, volume_shape, 'W' )
+    # check_imaginary_part(PW, image_shape, 'PW' )
+    # check_imaginary_part(W.T, volume_shape, 'W' )
 
 
     # Swap axes to get n_images x n_basis_functions x image_size
@@ -60,12 +59,12 @@ def E_M_step_batch(images, lhs_summed, rhs_summed, mean, W, CTF_params, rotation
     
     centered_images = images - projected_mean
     b_n = jnp.conj(PW) @ centered_images[...,None]
-    check_imaginary_part(b_n, volume_shape, 'bn', skip_ft = True )
+    # check_imaginary_part(b_n, volume_shape, 'bn', skip_ft = True )
 
     M_n_inv = jax.numpy.linalg.pinv(M_n, hermitian=True)
     expected_zs = (M_n_inv @ b_n).squeeze(-1)
-    check_imaginary_part(expected_zs, volume_shape, '<z>', skip_ft = True )
-    check_imaginary_part(M_n_inv, volume_shape, 'Var(z)', skip_ft = True )
+    # check_imaginary_part(expected_zs, volume_shape, '<z>', skip_ft = True )
+    # check_imaginary_part(M_n_inv, volume_shape, 'Var(z)', skip_ft = True )
 
     # print('np.mean(expected_zs, axis=0), np.var(expected_zs, axis=0)', np.mean(expected_zs, axis=0), np.var(expected_zs, axis=0))
 
@@ -87,8 +86,10 @@ def E_M_step_batch(images, lhs_summed, rhs_summed, mean, W, CTF_params, rotation
 
 
 
+batch1_symmetrize_ft_volume = jax.vmap(utils.symmetrize_ft_volume, in_axes = (1, None), out_axes = 1)
+
 # @functools.partial(jax.jit, static_argnums = [5])    
-def EM_step(experiment_datasets, mean_estimate, W_estimate, batch_size, W_prior ):
+def EM_step(experiment_datasets, mean_estimate, W_estimate, batch_size, W_prior, sparse_PCA = False):
     
             
     basis_size = W_estimate.shape[-1]
@@ -118,14 +119,45 @@ def EM_step(experiment_datasets, mean_estimate, W_estimate, batch_size, W_prior 
     expected_zs = np.concatenate(expected_zs, axis=0)
     second_moment_zs = np.concatenate(second_moment_zs, axis=0)
     print('np.mean(expected_zs, axis=0), np.var(expected_zs, axis=0)', np.mean(expected_zs, axis=0), np.var(expected_zs, axis=0))
+
+
+
     # Solve least squares
-    lhs_summed = lhs_summed.reshape(experiment_dataset.volume_size, basis_size, basis_size)
     # V = jax.vmap(jnp.diag)(1 / (W_prior + 1e-16 ))
     # import pdb; pdb.set_trace()
-    lhs_summed = lhs_summed  + jax.vmap(jnp.diag)(1 / (W_prior + 1e-16 ) )
-    # import pdb; pdb.set_trace()
-    # W = linalg.batch_hermitian_linear_solver(lhs_summed, rhs_summed)
-    W = linalg.batch_linear_solver(lhs_summed, rhs_summed[...,None])[...,0]
+
+    if sparse_PCA:
+        cryos = experiment_datasets
+        volume_size = cryos[0].volume_size
+        volume_shape = cryos[0].volume_shape
+
+        
+        # mean_real = (ftu.get_idft3(W_estimate[:,0].reshape(volume_shape)) * np.sqrt(volume_size)).real
+        # from recovar.ppca import sparse_PCA
+        # variance_estimate_coeffs, level_results = sparse_PCA.wavelet_avg_square_by_level_both(mean_real, wavelet_type='db1')
+        # laplace_coeff_estimate = jnp.sqrt(variance_estimate_coeffs/2)
+        # sigma_scalar = (np.real((np.array(1/laplace_coeff_estimate[:,None])))) 
+        # sigma_scalar = sigma_scalar.repeat(basis_size, axis = 1)
+
+        lhs_summed = batch1_symmetrize_ft_volume(lhs_summed, volume_shape)
+        lhs_summed = lhs_summed.reshape(experiment_dataset.volume_size, basis_size, basis_size)
+
+        rhs_summed = batch1_symmetrize_ft_volume(rhs_summed, volume_shape)
+        W_estimate = batch1_symmetrize_ft_volume(W_estimate, volume_shape)
+        normal_size = W_estimate.shape
+
+        from recovar.admm_test import admm_wavelet
+        W, Z_rec = admm_wavelet( lhs_summed, rhs_summed, W_prior, 0.9, 100, volume_shape, normal_size, W_estimate)
+
+    else:
+        lhs_summed = lhs_summed.reshape(experiment_dataset.volume_size, basis_size, basis_size)
+
+        lhs_summed = lhs_summed  + jax.vmap(jnp.diag)(1 / (W_prior + 1e-16 ) )
+        # import pdb; pdb.set_trace()
+        # W = linalg.batch_hermitian_linear_solver(lhs_summed, rhs_summed)
+        W = linalg.batch_linear_solver(lhs_summed, rhs_summed[...,None])[...,0]
+
+
 
     if jnp.isnan(W).any():
         import pdb; pdb.set_trace()
@@ -142,7 +174,7 @@ def batch_unvec(x):
 
 import matplotlib.pyplot as plt
 
-def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter = 20):
+def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter = 20, sparse_PCA = False, U_gt = None, S_gt = None):
 
     # Initialize
     # import jax.random as jr
@@ -157,7 +189,7 @@ def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter = 20):
     disc_type = 'nearest'
     W = W_initial
     for iter_i in range(EM_iter):
-        W, expected_zs, second_moment_zs = EM_step(experiment_dataset, mean_estimate, W, batch_size, W_prior)
+        W, expected_zs, second_moment_zs = EM_step(experiment_dataset, mean_estimate, W, batch_size, W_prior, sparse_PCA)
 
         #Make real
         W = W.T.reshape(basis_size, *experiment_dataset[0].volume_shape)
@@ -177,7 +209,33 @@ def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter = 20):
 
         logger.info(f"Done with EM step {iter_i}")
         print(f"Done with EM step {iter_i}")
-        
+
+
+        if U_gt is not None:
+            U, S, _ = jnp.linalg.svd(W, full_matrices=False)
+            from recovar import metrics
+            variance, rel_var, norm_var = metrics.get_all_variance_scores(U, U_gt, S_gt)
+
+
+            max_size_this = np.min([20, U.shape[-1]])
+            plt.figure()
+            plt.plot(rel_var)
+            plt.title('relative variance expained at iteration ' + str(iter_i))
+            plt.show()
+            print(rel_var)
+            u = { 'ppca': U, 'gt': U_gt}
+            cryos = experiment_dataset
+            u_key = list(u.keys())[0]
+            fig, axes = plt.subplots( len(u.keys()), np.max([2, u[u_key].shape[-1]]), figsize=(6, 6))
+            for i, u_key in enumerate(u.keys()):
+                # Plot PPCA components
+                for j in range(u[u_key].shape[-1]):
+                    axes[i, j].imshow(cryos[0].get_proj(u[u_key][:,j].reshape(-1)))
+                    axes[i, j].set_title(f'{u_key} PC{j+1}')
+
+            plt.tight_layout()
+            plt.show()
+
     # Orthogonalize
     U, S, _ = jnp.linalg.svd(W, full_matrices=False)
     return U, S**2, W, expected_zs, second_moment_zs

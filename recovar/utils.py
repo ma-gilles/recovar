@@ -110,8 +110,13 @@ def load_mrc(filepath, return_voxel_size = False):
 def symmetrize_ft_volume(vol, volume_shape):
     og_volume_shape = vol.shape
     vol = vol.reshape(volume_shape)
-    vol = vol.at[1:,1:,1:].set( 0.5 * (np.conj(np.flip(vol[1:,1:,1:])) + vol[1:,1:,1:]) )
-    return vol.reshape(og_volume_shape)
+    volume_output = jnp.zeros_like(vol) 
+    volume_output = volume_output.reshape(volume_shape)
+    volume_output = volume_output.at[1:,1:,1:].set( 0.5 * (jnp.conj(jnp.flip(vol[1:,1:,1:])) + vol[1:,1:,1:]) )
+    
+    return volume_output.reshape(og_volume_shape)
+
+
 
 # def symmetrize_ft_image(vol, volume_shape):
 #     og_volume_shape = vol.shape

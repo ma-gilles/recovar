@@ -379,4 +379,3 @@ def simulate_C(U, eigs, indices, noise_variance, volume_shape, decay=1):
     
     return covar
 
-
