@@ -7,14 +7,15 @@ import sys
 import argparse
 
 
-def make_test_dataset(output_dir, noise_level = 0.1, n_images = None, create_nested_structure = False, nested_prefix = "Extract/job193", tilt_series = False, outlier_file_input = None, percent_outliers = 0.0, percent_tilt_series_outliers = 0.0):
-    grid_size =64
+def make_test_dataset(output_dir, image_size = 64, noise_level = 0.1, n_images = None, create_nested_structure = False, nested_prefix = "Extract/job193", tilt_series = False, outlier_file_input = None, percent_outliers = 0.0, percent_tilt_series_outliers = 0.0):
+    grid_size =image_size
     this_dir = os.path.dirname(__file__)
     volume_folder_input =  this_dir+ '/../data/vol'
     print(volume_folder_input)
+    
     output_folder = output_dir + '/test_dataset/'
     output.mkdir_safe(output_folder)
-    n_images = 1000 if n_images is None else n_images
+    n_images = 1000 if n_images is None else int(n_images)
     voxel_size = 4.25 * 128 / grid_size 
 
     volume_distribution = np.array([1/4, 1/4, 1/2])
@@ -63,6 +64,8 @@ def main():
     parser.add_argument("output_dir", nargs='?', default=os.getcwd(), help="Output directory for the test dataset")
     parser.add_argument("--noise-level", type=float, default=0.1, help="Noise level for the dataset")
     parser.add_argument("--n-images", type=int, help="Number of images to generate")
+    parser.add_argument("--image-size", type=int, help="Image size (default: 128 for 128x128 images)")
+
     parser.add_argument("--create-nested-structure", action="store_true", help="Create a nested folder structure to test strip_prefix functionality")
     parser.add_argument("--nested-prefix", default="Extract/job193", help="Prefix path for nested structure (default: Extract/job193)")
     parser.add_argument("--tilt-series", action="store_true", help="Generate tilt series dataset instead of single particle dataset")
@@ -72,7 +75,7 @@ def main():
     
     args = parser.parse_args()
     
-    make_test_dataset(args.output_dir, args.noise_level, args.n_images, args.create_nested_structure, args.nested_prefix, args.tilt_series, args.outlier_file_input, args.percent_outliers, args.percent_tilt_series_outliers)
+    make_test_dataset(args.output_dir, args.image_size, args.noise_level, args.n_images, args.create_nested_structure, args.nested_prefix, args.tilt_series, args.outlier_file_input, args.percent_outliers, args.percent_tilt_series_outliers)
     print("Done")        
 
 if __name__ == '__main__':
