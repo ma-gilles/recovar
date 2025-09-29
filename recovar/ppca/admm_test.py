@@ -6,7 +6,7 @@ from pyproximal import ProxOperator, Nuclear, L1
 from pyproximal.optimization.primal import ADMM
 from pyproximal.ProxOperator import _check_tau
 from recovar import linalg
-from recovar.ppca import Wavelet_multilvl
+from recovar.ppca.sparse_PCA import Wavelet_multilvl
 
 # Enable JAX GPU if available
 print(f"JAX backend: {jax.default_backend()}")
@@ -41,7 +41,6 @@ class LeastSquareFromNormalEqs(ProxOperator):
         # Apply to all elements in batch
         losses = vmap(single_loss)(X, self.lhs, self.rhs)
         loss  = jnp.sum(losses)
-        print(f"Loss: {loss}")
         return jnp.real(loss)  # Ensure real output
     
     def _compute_batch_prox(self, x, tau):
@@ -269,12 +268,16 @@ def admm_wavelet(lhs, rhs, sigma, tau, niter, volume_shape, normal_size, X0):
     
     # X_rec = X_rec.reshape(normal_size)
     
-    total_loss, data_loss, reg_loss = compute_total_loss(X0, prox_lstsr, prox_wavelet)
-    print(f"  Initial losses: total={total_loss:.6f}, data={data_loss:.6f}, reg={reg_loss:.6f}")
+    total_loss_init, data_loss_init, reg_loss_init = compute_total_loss(X0, prox_lstsr, prox_wavelet)
+    # print(f"  Initial losses: total={total_loss:.6f}, data={data_loss:.6f}, reg={reg_loss:.6f}")
 
     # Compute final losses
     total_loss, data_loss, reg_loss = compute_total_loss(X_rec, prox_lstsr, prox_wavelet)
-    print(f"  Final losses: total={total_loss:.6f}, data={data_loss:.6f}, reg={reg_loss:.6f}")
+    # print(f"  Final losses: total={total_loss:.6f}, data={data_loss:.6f}, reg={reg_loss:.6f}")
+
+    if total_loss_init < total_loss:
+        print(f" ADMM did not improve the solution!! initial loss: {total_loss_init:.6f}, final loss: {total_loss:.6f}")
+
     return X_rec, Z_rec
 
 

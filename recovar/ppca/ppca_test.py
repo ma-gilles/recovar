@@ -123,9 +123,9 @@ print("Wavelet analysis complete.")
 
 from recovar import relion_functions
 import recovar
-import recovar.admm_test
-reload(recovar)
-reload(recovar.admm_test)
+import recovar.ppca.admm_test
+reload(recovar.ppca)
+reload(recovar.ppca.admm_test)
 
 disc_type = 'linear_interp'
 batch_size = 500
@@ -144,7 +144,7 @@ X0_flatten = X0.flatten().reshape(-1, 1)
 X0_wavelet_format = X0_flatten.T  # Shape: (1, volume_size)
 
 # Setup proximal operators with correct dimensions
-from recovar.admm_test import LeastSquareFromNormalEqs
+from recovar.ppca.admm_test import LeastSquareFromNormalEqs
 
 # Reshape data for batch processing and ensure real numbers
 lhs = (ft_ctf.reshape(volume_size, 1, 1))  # (volume_size, 1, 1) - force real
@@ -177,7 +177,7 @@ ppca.check_imaginary_part(rhs / (lhs[..., -1] + 0.001), volume_shape, 'rhs / lhs
 #%%
 
 
-prox_wavelet = recovar.admm_test.WaveletL1(normal_size, volume_shape, 'db1', sigma=sigma_scalar)
+prox_wavelet = recovar.ppca.admm_test.WaveletL1(normal_size, volume_shape, 'db1', sigma=sigma_scalar)
 from pyproximal.proximal import L1
 # prox_wavelet = L1(sigma_scalar)
 
@@ -299,10 +299,10 @@ X0 = means['combined'].reshape(-1, 1)
 #     gfirst=True
 # )[0]
 
-from recovar.admm_test import admm_wavelet
-reload(recovar.admm_test)
+from recovar.ppca.admm_test import admm_wavelet
+reload(recovar.ppca.admm_test)
 multiplier = 1e-0
-X_rec, Z_rec = recovar.admm_test.admm_wavelet(lhs, rhs, multiplier * sigma_scalar, 0.9, 40, volume_shape, normal_size, X0)
+X_rec, Z_rec = recovar.ppca.admm_test.admm_wavelet(lhs, rhs, multiplier * sigma_scalar, 0.9, 40, volume_shape, normal_size, X0)
 
 # X_rec_real = ftu.get_idft3(X_rec.reshape(volume_shape))
 # print(np.linalg.norm(X_rec_real.imag) / np.linalg.norm(X_rec_real))
@@ -361,17 +361,17 @@ print('sigma_scalar.size', sigma_scalar.size)
 
 
 # %%
-# %autoreload 2
+# %autoreload 2b
 
 import jax.numpy as jnp
-U_initial, s_initial, _ = gt_results.get_vol_svd() 
+U_gt, s_gt, _ = gt_results.get_vol_svd() 
 basis_size = 10
 # U_initial = U_initial[:,:basis_size]
 # s_initial = s_initial[:basis_size]
 # Square root of covar
-W_initial = U_initial[:,:basis_size] * s_initial[:basis_size]
+W_gt = U_gt[:,:basis_size] * s_gt[:basis_size]
 
-w_gt_averaged = regularization.batch_average_over_shells(jnp.abs(W_initial.T)**2, gt_results.volume_shape, 0 )
+w_gt_averaged = regularization.batch_average_over_shells(jnp.abs(W_gt.T)**2, gt_results.volume_shape, 0 )
 W_prior = utils.batch_make_radial_image(w_gt_averaged, gt_results.volume_shape, True).T
 
 
@@ -380,28 +380,57 @@ from recovar import fourier_transform_utils
 ftu = fourier_transform_utils.fourier_transform_utils(jnp)
 
 
-reload(ppca)
-import recovar.ppca
-reload(recovar.ppca)
-reload(recovar)
+# More reliable reloading approach
+import importlib
+import sys
+
+# Remove the modules from cache to force reload
+modules_to_reload = ['ppca', 'recovar.ppca', 'recovar', 'recovar.ppca.ppca']
+for module_name in modules_to_reload:
+    if module_name in sys.modules:
+        importlib.reload(sys.modules[module_name])
+
+# Re-import after reload
+import recovar.ppca.ppca as ppca
 W_initial = np.random.randn(*W_prior.shape).T
 W_initial = W_initial.reshape(W_initial.shape[0], *cryos[0].volume_shape)
 W_initial = ftu.get_dft3(W_initial).reshape(W_initial.shape[0], -1).T
-
-# import pdb; pdb.set_trace()
 prior_multiplier = 1e-1
-u_ppca, s_ppca, W, expected_zs, second_moment_zs = recovar.ppca.EM(cryos, mean_estimate, W_initial , W_prior * prior_multiplier, U_gt = U_initial, S_gt = s_initial**2)
+u_ppca, s_ppca, W, expected_zs, second_moment_zs = recovar.ppca.EM(cryos, mean_estimate, W_initial , W_prior * prior_multiplier, U_gt = U_gt, S_gt = s_gt**2, EM_iter = 20)
 
 # %%
-mean_real = (ftu.get_idft3(W_initial[:,0].reshape(volume_shape)) * np.sqrt(volume_size)).real
-from recovar.ppca import sparse_PCA
-variance_estimate_coeffs, level_results = sparse_PCA.wavelet_avg_square_by_level_both(mean_real, wavelet_type='db1') 
-variance_estimate_coeffs = variance_estimate_coeffs * prior_multiplier
-laplace_coeff_estimate = jnp.sqrt(variance_estimate_coeffs/2)
-sigma_scalar = (np.real((np.array(1/laplace_coeff_estimate[:,None])))) 
 basis_size = W_initial.shape[-1]
-sigma_scalar = sigma_scalar.repeat(basis_size, axis = 1) * 1e2
 
-u_ppca, s_ppca, W, expected_zs, second_moment_zs = recovar.ppca.EM(cryos, mean_estimate, W , sigma_scalar , sparse_PCA = True, U_gt = U_initial, S_gt = s_initial**2)
+sigma_scalars = []
+for k in range(W.shape[-1]):
+    mean_real = (ftu.get_idft3(W_gt[:,k].reshape(volume_shape)) * np.sqrt(volume_size)).real
+    from recovar.ppca import sparse_PCA
+    variance_estimate_coeffs, level_results = sparse_PCA.wavelet_avg_square_by_level_both(mean_real, wavelet_type='db1') 
+    variance_estimate_coeffs = variance_estimate_coeffs * prior_multiplier
+    laplace_coeff_estimate = jnp.sqrt(variance_estimate_coeffs/2)
+    sigma_scalar = (np.real((np.array(1/laplace_coeff_estimate[:,None])))) * np.ones(laplace_coeff_estimate.shape)[:,None]
+    # sigma_scalar = sigma_scalar.repeat(basis_size, axis = 1) 
+    sigma_scalars.append(sigma_scalar)
+
+sigma_scalars = np.concatenate(sigma_scalars, axis = 1) * 1e0
+
+
+u_ppca, s_ppca, W, expected_zs, second_moment_zs = recovar.ppca.EM(cryos, mean_estimate, W_initial , sigma_scalar , sparse_PCA = True, U_gt = U_gt, S_gt = s_gt**2, EM_iter = 20)
+# %%
+plt.imshow(mean_real.sum(axis=2))
+
+# %%
+
+max_size_this = np.min([20, u_ppca.shape[-1]])
+u = { 'ppca': u_ppca, 'gt': U_initial}
+cryos = experiment_dataset
+ppca_key = 'ppca'
+fig, axes = plt.subplots( len(u.keys()), np.max([2, u[ppca_key].shape[-1]]), figsize=(6, 6))
+for i, u_key in enumerate(u.keys()):
+    # Plot PPCA components
+    for j in range(u[ppca_key].shape[-1]):
+        axes[i, j].imshow(cryos[0].get_proj(u[u_key][:,j].reshape(-1)))
+        axes[i, j].set_title(f'{u_key} PC{j+1}')
+
 
 # %%

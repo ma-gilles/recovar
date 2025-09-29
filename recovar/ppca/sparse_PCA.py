@@ -14,7 +14,7 @@ import jaxwt
 ftu_np = fourier_transform_utils(np)
 ftu_jax = fourier_transform_utils(jnp)
 
-use_jaxwt = False
+use_jaxwt = True
 
 def jax_ift(u, volume_shape):
     return ftu_jax.get_idft3(u.reshape([u.shape[0], *volume_shape])).reshape(u.shape )
@@ -205,8 +205,10 @@ class Wavelet(Basis):
         return wavelet_vec
 
     def to_basis(self, images):
-        cols_real =  get_ft_U(images, self.volume_shape, inverse = True) * np.sqrt(self.volume_size) 
-        cols_all_wavelet = self.image_ft_to_basis_single(cols_real)
+        cols_real =  get_ft_U(images, self.volume_shape, inverse = True) * np.sqrt(self.volume_size)
+        if np.linalg.norm(cols_real.imag) > 1e-6 * np.linalg.norm(cols_real.real):
+            print("Imaginary part is non-zero! ratio of imaginary to real:", np.linalg.norm(cols_real.imag) / np.linalg.norm(cols_real.real))
+        cols_all_wavelet = self.image_ft_to_basis_single(cols_real.real)
         return cols_all_wavelet
 
     def to_image(self, basis_coeffs):
@@ -224,7 +226,7 @@ class Wavelet_multilvl(Basis):
             wavelet_decn_dict  = jaxwt.wavedec3(np.zeros(volume_shape), wavelet = wavelet_type, mode = wavelet_mode, axes = (-3,-2,-1))
         else:
             wavelet_decn_dict  = pywt.wavedecn(np.zeros(volume_shape), wavelet = wavelet_type, mode = wavelet_mode ) 
-        arr, coeff_slices = pywt.coeffs_to_array(wavelet_decn_dict)
+        arr, coeff_slices = coeffs_to_array(wavelet_decn_dict, axes = (-3,-2,-1))
         wavelet_decn_arr_shape = arr.shape
         self.volume_shape = volume_shape
         self.wavelet_type = wavelet_type
@@ -242,7 +244,7 @@ class Wavelet_multilvl(Basis):
             wavelet_dict  = jaxwt.wavedec3(real_image.reshape([-1] + list(self.volume_shape)), wavelet = self.wavelet_type, mode = self.wavelet_mode, axes = (-3,-2,-1))
         else:            
             wavelet_dict  = pywt.wavedecn(real_image.reshape([-1] + list(self.volume_shape)), wavelet = self.wavelet_type, mode = self.wavelet_mode , axes = (-3, -2, -1))
-        arr, sizes = pywt.coeffs_to_array(wavelet_dict, axes = (-3,-2,-1))
+        arr, sizes = coeffs_to_array(wavelet_dict, axes = (-3,-2,-1))
         if real_image.shape[0] > 0:
             self.coeffs_slices_batch = sizes
         return arr.reshape([real_image.shape[0], -1])
@@ -333,6 +335,21 @@ class Identity(Basis):
 
 
 
+def coeffs_to_array(coeff_dict, axes = (-3,-2,-1)):
+
+    if use_jaxwt:
+        for i in range(len(coeff_dict)):
+            if isinstance(coeff_dict[i], dict):
+                # Handle dictionary case
+                for k in coeff_dict[i].keys():
+                    coeff_dict[i][k] = np.array(coeff_dict[i][k])
+            else:
+                # Handle non-dictionary case (e.g. approximation coefficients)
+                coeff_dict[i] = np.array(coeff_dict[i])
+
+    coeffs_array, _ = pywt.coeffs_to_array(coeff_dict, axes = axes)
+    return coeffs_array
+
 
 def wavelet_avg_square_by_level_both(volume, wavelet_type='db1'):
     """
@@ -343,7 +360,7 @@ def wavelet_avg_square_by_level_both(volume, wavelet_type='db1'):
     """
 
     if use_jaxwt:
-        coeff_dict = jaxwt.wavedec3(volume, wavelet=wavelet_type, mode='periodization', axes = (-3,-2,-1))
+        coeff_dict = jaxwt.wavedec3(volume[None], wavelet=wavelet_type, mode='symmetric', axes = (-3,-2,-1))
     else:
         coeff_dict = pywt.wavedecn(volume, wavelet=wavelet_type, mode='periodization')
     # coeff_dict2 = pywt.wavedecn(volume, wavelet=wavelet_type, mode='periodization')
@@ -354,7 +371,7 @@ def wavelet_avg_square_by_level_both(volume, wavelet_type='db1'):
     #             print("BAD")
     # import ipdb; ipdb.set_trace()
     # Get all coefficients as a flat array
-    coeffs_array, _ = pywt.coeffs_to_array(coeff_dict)
+    coeffs_array, _ = coeffs_to_array(coeff_dict, axes = (-3,-2,-1))
     total_coeffs = coeffs_array.size
     
     # Initialize result array
