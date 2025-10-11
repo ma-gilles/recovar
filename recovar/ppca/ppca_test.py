@@ -175,6 +175,15 @@ ppca.check_imaginary_part(rhs / (lhs[..., -1] + 0.001), volume_shape, 'rhs / lhs
 
 
 #%%
+# More reliable reloading approach
+import importlib
+import sys
+
+# Remove the modules from cache to force reload
+modules_to_reload = ['ppca', 'recovar.ppca', 'recovar', 'recovar.ppca.ppca', 'recovar.ppca.admm_test']
+for module_name in modules_to_reload:
+    if module_name in sys.modules:
+        importlib.reload(sys.modules[module_name])
 
 
 prox_wavelet = recovar.ppca.admm_test.WaveletL1(normal_size, volume_shape, 'db1', sigma=sigma_scalar)
@@ -185,6 +194,7 @@ print("Proximal operators created successfully.")
 print(f"LHS shape: {lhs.shape}, RHS shape: {rhs.shape}")
 print(f"Normal size: {normal_size}, Volume shape: {volume_shape}")
 print(f"Sigma: {sigma_scalar}")
+
 
 # # Test basic functionality
 # print("\nTesting basic proximal operator functionality...")
@@ -302,6 +312,8 @@ X0 = means['combined'].reshape(-1, 1)
 from recovar.ppca.admm_test import admm_wavelet
 reload(recovar.ppca.admm_test)
 multiplier = 1e-0
+#%%
+
 X_rec, Z_rec = recovar.ppca.admm_test.admm_wavelet(lhs, rhs, multiplier * sigma_scalar, 0.9, 40, volume_shape, normal_size, X0)
 
 # X_rec_real = ftu.get_idft3(X_rec.reshape(volume_shape))

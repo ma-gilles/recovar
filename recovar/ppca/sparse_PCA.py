@@ -3,8 +3,8 @@ from recovar.fourier_transform_utils import fourier_transform_utils
 import numpy as np
 import functools
 import jax
-use_np = True
-use_np_ft = use_np
+use_np = False
+use_np_ft = False  # Always use JAX FFT for GPU acceleration
 if use_np:
     jnp = np
 else:
@@ -16,67 +16,55 @@ ftu_jax = fourier_transform_utils(jnp)
 
 use_jaxwt = True
 
+# Keep these for backward compatibility (exported in __init__.py)
 def jax_ift(u, volume_shape):
-    return ftu_jax.get_idft3(u.reshape([u.shape[0], *volume_shape])).reshape(u.shape )
+    """Inverse FFT - wrapper for compatibility."""
+    return get_ft_U(u, volume_shape, inverse=True)
 
 def jax_ft(u, volume_shape):
-    return ftu_jax.get_dft3(u.reshape([u.shape[0], *volume_shape])).reshape(u.shape )
+    """Forward FFT - wrapper for compatibility."""
+    return get_ft_U(u, volume_shape, inverse=False)
 
-debug_ft = False
-
-def get_ft_U(u, volume_shape, inverse = True):
-    if debug_ft:
-        print("shape:", u.shape)
-        u = u.astype(np.complex64)
-        print(u.dtype)
-
-    # vol_shape = 
-    if inverse:
-        def ift(u):
-            return jax_ift(u, volume_shape)
-
-        if use_np_ft:
-            u_ft = ftu_np.get_idft3(u.reshape([u.shape[0], *volume_shape])).reshape([u.shape[0], np.prod(volume_shape)])
+def get_ft_U(u, volume_shape, inverse=True):
+    """
+    Optimized Fourier transform utility.
+    
+    Args:
+        u: Input array of shape (batch, volume_size)
+        volume_shape: 3D volume shape tuple
+        inverse: If True, compute inverse FFT; else forward FFT
+    
+    Returns:
+        Transformed array of shape (batch, volume_size)
+    """
+    expected_vol_size = np.prod(volume_shape)
+    
+    if use_np_ft:
+        # CPU FFT
+        if inverse:
+            return ftu_np.get_idft3(u.reshape([u.shape[0], *volume_shape])).reshape([u.shape[0], expected_vol_size])
         else:
-            u_ft = np.array(jax.jit(ift)(u))
-            
-        if debug_ft:
-            u_ft4 = np.array(jax.jit(ift)(u))
-
-            u_ftnp = ftu_np.get_idft3(u.reshape([u.shape[0], *volume_shape])).reshape([u.shape[0], -1])
-            u_ft2 = np.array(jax_ift(jnp.array(u),volume_shape))
-            u_ft3 = np.array(jax_ift(jnp.array(u.copy()),volume_shape))
-
-            print("reverse", np.linalg.norm(u_ftnp - u_ft2) / np.linalg.norm(u_ftnp))
-            print("reverse", np.linalg.norm(u_ft2 - u_ft3) / np.linalg.norm(u_ftnp))
-            print("reverse", np.linalg.norm(u_ftnp - u_ft4) / np.linalg.norm(u_ftnp))
-            print("reverse", np.linalg.norm(u_ft - u_ftnp) / np.linalg.norm(u_ftnp))
-
-            # if np.linalg.norm(u_ft - u_ft2) / np.linalg.norm(u_ft) > 0.1:
-            #     import pdb; pdb.set_trace()
-
-        
+            return ftu_np.get_dft3(u.reshape([u.shape[0], *volume_shape])).reshape([u.shape[0], expected_vol_size])
     else:
-        def ft(u):
-            return jax_ft(u, volume_shape)
-
-        
-        if use_np_ft:
-            u_ft = ftu_np.get_dft3(u.reshape([u.shape[0], *volume_shape])).reshape([u.shape[0], np.prod(volume_shape)])
+        # GPU FFT (optimized path)
+        # Convert to JAX if needed (check type to avoid unnecessary conversion)
+        if not isinstance(u, jnp.ndarray):
+            u_jax = jnp.array(u)
         else:
-            u_ft = np.array(jax.jit(ft)(jnp.array(u)))
+            u_jax = u
         
-        if debug_ft:
-            u_ft = ftu_np.get_dft3(u.reshape([u.shape[0], *volume_shape])).reshape([u.shape[0], -1])
-            u_ft2 = np.array(jax_ft(jnp.array(u),volume_shape))
-            u_ft3 = np.array(jax_ft(jnp.array(u.copy()),volume_shape))
-
-            print("forward", np.linalg.norm(u_ft - u_ft2) / np.linalg.norm(u_ft))
-            print("forward", np.linalg.norm(u_ft3 - u_ft2) / np.linalg.norm(u_ft3))
-            print("forward", np.linalg.norm(u_ft - u_ft3) / np.linalg.norm(u_ft2))
-
-            
-    return u_ft
+        # Ensure correct shape for FFT
+        if u_jax.shape[1] != expected_vol_size:
+            raise ValueError(f"Input shape {u_jax.shape} doesn't match volume_shape {volume_shape}. "
+                           f"Expected ({u_jax.shape[0]}, {expected_vol_size}) but got {u_jax.shape}")
+        
+        if inverse:
+            u_ft = ftu_jax.get_idft3(u_jax.reshape([u_jax.shape[0], *volume_shape]))
+        else:
+            u_ft = ftu_jax.get_dft3(u_jax.reshape([u_jax.shape[0], *volume_shape]))
+        
+        # Reshape back to (batch, volume_size)
+        return u_ft.reshape([u_ft.shape[0], expected_vol_size])
 
 
 def get_sparse_PCA_in_basis(u, sigma, to_basis_fun, from_basis_fun, percentile_used):
@@ -173,7 +161,7 @@ class Basis():
 
 
 class Wavelet(Basis):
-    def __init__(self, volume_shape, wavelet_type, wavelet_mode = 'periodization'):
+    def __init__(self, volume_shape, wavelet_type, wavelet_mode = 'symmetric'):
         wavelet_dict_tmp  = pywt.dwtn(np.zeros(volume_shape), wavelet = wavelet_type, mode = wavelet_mode ) 
 
         keys_order = list(wavelet_dict_tmp.keys())
@@ -220,38 +208,70 @@ class Wavelet(Basis):
         return self.base_name + self.wavelet_type
 
 class Wavelet_multilvl(Basis):
-    def __init__(self, volume_shape, wavelet_type, wavelet_mode = 'periodization', mask=None):
-
-        if use_jaxwt:
-            wavelet_decn_dict  = jaxwt.wavedec3(np.zeros(volume_shape), wavelet = wavelet_type, mode = wavelet_mode, axes = (-3,-2,-1))
-        else:
-            wavelet_decn_dict  = pywt.wavedecn(np.zeros(volume_shape), wavelet = wavelet_type, mode = wavelet_mode ) 
-        arr, coeff_slices = coeffs_to_array(wavelet_decn_dict, axes = (-3,-2,-1))
-        wavelet_decn_arr_shape = arr.shape
+    def __init__(self, volume_shape, wavelet_type, wavelet_mode = 'symmetric', mask=None):
+        """
+        Multi-level wavelet basis using new vector conversion functions.
+        Now uses jaxwt_coeffs_to_flat_vector and flat_vector_to_jaxwt_coeffs
+        for cleaner, more robust coefficient handling.
+        """
         self.volume_shape = volume_shape
         self.wavelet_type = wavelet_type
         self.wavelet_mode = wavelet_mode
-        self.coeff_slices = coeff_slices
-        self.wavelet_decn_arr_shape = wavelet_decn_arr_shape
         self.volume_size = np.prod(volume_shape)
-        self.coeffs_slices_batch = None
         self.base_name = "wavelet_multilvl"
         self.from_ft = True
         self.mask = mask
         
-    def image_ft_to_basis_single(self, real_image):
+        # Initialize metadata by doing a dummy transform
+        dummy = np.zeros([1, *volume_shape])
         if use_jaxwt:
-            wavelet_dict  = jaxwt.wavedec3(real_image.reshape([-1] + list(self.volume_shape)), wavelet = self.wavelet_type, mode = self.wavelet_mode, axes = (-3,-2,-1))
+            dummy_coeffs = jaxwt.wavedec3(dummy, wavelet=wavelet_type, mode=wavelet_mode, axes=(-3,-2,-1))
+        else:
+            dummy_coeffs = pywt.wavedecn(dummy, wavelet=wavelet_type, mode=wavelet_mode, axes=(-3,-2,-1))
+        
+        _, self.shapes_info = jaxwt_coeffs_to_flat_vector(dummy_coeffs)
+        
+    def image_ft_to_basis_single(self, real_image):
+        """Convert real-space images to wavelet coefficient vectors."""
+        # Handle both batched and non-batched inputs
+        if real_image.ndim == 1:
+            # Single image without batch dimension: (volume_size,)
+            real_image = real_image[None, :]  # Add batch dimension
+            squeeze_output = True
+        else:
+            squeeze_output = False
+        
+        # Reshape to (batch, d, d, d)
+        batch_size = real_image.shape[0]
+        real_image_3d = real_image.reshape([batch_size] + list(self.volume_shape))
+        
+        # Wavelet transform
+        if use_jaxwt:
+            wavelet_coeffs = jaxwt.wavedec3(real_image_3d, wavelet=self.wavelet_type, 
+                                           mode=self.wavelet_mode, axes=(-3,-2,-1))
         else:            
-            wavelet_dict  = pywt.wavedecn(real_image.reshape([-1] + list(self.volume_shape)), wavelet = self.wavelet_type, mode = self.wavelet_mode , axes = (-3, -2, -1))
-        arr, sizes = coeffs_to_array(wavelet_dict, axes = (-3,-2,-1))
-        if real_image.shape[0] > 0:
-            self.coeffs_slices_batch = sizes
-        return arr.reshape([real_image.shape[0], -1])
+            wavelet_coeffs = pywt.wavedecn(real_image_3d, wavelet=self.wavelet_type, 
+                                          mode=self.wavelet_mode, axes=(-3,-2,-1))
+        
+        # Convert to flat vector
+        flat_vec, _ = jaxwt_coeffs_to_flat_vector(wavelet_coeffs)
+        
+        # Remove batch dimension if input didn't have one
+        if squeeze_output:
+            flat_vec = flat_vec[0]
+        
+        return flat_vec
 
     def to_basis(self, images):
+        """Convert Fourier-space images to wavelet coefficient vectors."""
+        # Handle both batched and non-batched inputs
+        input_is_1d = images.ndim == 1
+        if input_is_1d:
+            images = images[None, :]  # Add batch dimension
+        
         if self.from_ft:
-            cols_real =  (get_ft_U(images, self.volume_shape, inverse = True) * np.sqrt(self.volume_size))#.real
+            # Inverse Fourier transform to real space
+            cols_real = get_ft_U(images, self.volume_shape, inverse=True) * np.sqrt(self.volume_size)
         else:
             cols_real = images
 
@@ -259,38 +279,63 @@ class Wavelet_multilvl(Basis):
             cols_real *= self.mask[None]
 
         cols_all_wavelet = self.image_ft_to_basis_single(cols_real)
+        
+        # Remove batch dimension if input didn't have one
+        if input_is_1d:
+            cols_all_wavelet = cols_all_wavelet[0]
+        
         return cols_all_wavelet
 
     def to_image_ft_single(self, wavelet_vec):
-        
-        # # Doesn't seem to work for a batch of 1...?
-        # wavelet_dict_2 = pywt.array_to_coeffs(wavelet_vec.reshape([-1] + list(self.wavelet_decn_arr_shape)), self.coeff_slices)
-        # image  = pywt.waverecn(wavelet_dict_2, wavelet = self.wavelet_type, mode = self.wavelet_mode, axes = (-3,-2,-1) )
-
-        if wavelet_vec.shape[0] > 1:
-            wavelet_dict_2 = pywt.array_to_coeffs(wavelet_vec.reshape([-1] + list(self.wavelet_decn_arr_shape)), self.coeffs_slices_batch)
-            if use_jaxwt:
-                image  = pywt.waverec3(wavelet_dict_2, wavelet = self.wavelet_type, mode = self.wavelet_mode, axes = (-3,-2,-1) )
-            else:
-                image  = pywt.waverecn(wavelet_dict_2, wavelet = self.wavelet_type, mode = self.wavelet_mode, axes = (-3,-2,-1) )
+        """Convert wavelet coefficient vectors back to real-space images."""
+        # Handle both batched and non-batched inputs
+        if wavelet_vec.ndim == 1:
+            # Single vector without batch dimension
+            wavelet_vec = wavelet_vec[None, :]  # Add batch dimension
+            squeeze_output = True
         else:
-            wavelet_dict_2 = pywt.array_to_coeffs(wavelet_vec.reshape( list(self.wavelet_decn_arr_shape)), self.coeff_slices)
-            if use_jaxwt:
-                image  = pywt.waverec3(wavelet_dict_2, wavelet = self.wavelet_type, mode = self.wavelet_mode, axes = (-3,-2,-1) )
-            else:
-                image  = pywt.waverecn(wavelet_dict_2, wavelet = self.wavelet_type, mode = self.wavelet_mode, axes = (-3,-2,-1) )
-
-        return image.reshape(-1, np.prod(self.volume_shape))
+            squeeze_output = False
+        
+        # Convert flat vector to wavelet coefficients
+        # Use JAX arrays if using jaxwt for proper type compatibility
+        wavelet_coeffs = flat_vector_to_jaxwt_coeffs(wavelet_vec, self.shapes_info, use_jax=use_jaxwt)
+        
+        # Inverse wavelet transform
+        if use_jaxwt:
+            image = jaxwt.waverec3(wavelet_coeffs, wavelet=self.wavelet_type, axes=(-3,-2,-1))
+        else:
+            image = pywt.waverecn(wavelet_coeffs, wavelet=self.wavelet_type, 
+                                 mode=self.wavelet_mode, axes=(-3,-2,-1))
+        
+        # Reshape to (batch, volume_size)
+        image_flat = image.reshape(-1, np.prod(self.volume_shape))
+        
+        # Remove batch dimension if input didn't have one
+        if squeeze_output:
+            image_flat = image_flat[0]
+        
+        return image_flat
 
     def to_image(self, basis_coeffs):
-        # Thresholded wavelet to real 
+        """Convert wavelet coefficient vectors back to Fourier-space images."""
+        # Handle both batched and non-batched inputs
+        input_is_1d = basis_coeffs.ndim == 1
+        if input_is_1d:
+            basis_coeffs = basis_coeffs[None, :]  # Add batch dimension
+        
+        # Inverse wavelet transform to real space
         BT_ET_EBFU = self.to_image_ft_single(basis_coeffs)
 
         if self.from_ft:
-            FT_BT_ET_EBFU = get_ft_U(BT_ET_EBFU, self.volume_shape, inverse = False) / np.sqrt(self.volume_size)
+            # Forward Fourier transform to Fourier space
+            FT_BT_ET_EBFU = get_ft_U(BT_ET_EBFU, self.volume_shape, inverse=False) / np.sqrt(self.volume_size)
         else:
             FT_BT_ET_EBFU = BT_ET_EBFU
 
+        # Remove batch dimension if input didn't have one
+        if input_is_1d:
+            FT_BT_ET_EBFU = FT_BT_ET_EBFU[0]
+        
         return FT_BT_ET_EBFU
 
     def name(self):
@@ -348,7 +393,128 @@ def coeffs_to_array(coeff_dict, axes = (-3,-2,-1)):
                 coeff_dict[i] = np.array(coeff_dict[i])
 
     coeffs_array, _ = pywt.coeffs_to_array(coeff_dict, axes = axes)
-    return coeffs_array
+    return coeffs_array, _
+
+
+def wavelet_coeffs_to_vector(coeff_list):
+    """
+    Convert jaxwt wavedec3 output (list of arrays/dicts) to a flat vector.
+    Works with batches and is JAX-jittable.
+    
+    Args:
+        coeff_list: Output from jaxwt.wavedec3, a list where:
+            - coeff_list[0] is approximation coefficients with shape (batch, d0, d1, d2)
+            - coeff_list[i] for i>0 are dicts with keys like 'aad', 'ada', etc.
+              each containing arrays of shape (batch, d0, d1, d2)
+    
+    Returns:
+        vector: Flattened array of shape (batch, total_coeffs)
+        metadata: Dictionary with shapes and structure info for reconstruction
+    """
+    batch_size = coeff_list[0].shape[0]
+    vectors = []
+    metadata = {'batch_size': batch_size, 'structure': []}
+    
+    for level_idx, level_coeffs in enumerate(coeff_list):
+        if isinstance(level_coeffs, dict):
+            # Detail coefficients - store in consistent order
+            level_meta = {'type': 'dict', 'keys': []}
+            for key in sorted(level_coeffs.keys()):  # Sort for consistency
+                arr = level_coeffs[key]
+                level_meta['keys'].append((key, arr.shape))
+                # Reshape: (batch, d0, d1, d2) -> (batch, d0*d1*d2)
+                vectors.append(arr.reshape(batch_size, -1))
+            metadata['structure'].append(level_meta)
+        else:
+            # Approximation coefficients
+            level_meta = {'type': 'array', 'shape': level_coeffs.shape}
+            vectors.append(level_coeffs.reshape(batch_size, -1))
+            metadata['structure'].append(level_meta)
+    
+    # Concatenate all vectors along the feature dimension
+    vector = jnp.concatenate(vectors, axis=1) if not use_np else np.concatenate(vectors, axis=1)
+    
+    return vector, metadata
+
+
+def vector_to_wavelet_coeffs(vector, metadata):
+    """
+    Convert flat vector back to jaxwt wavedec3 format.
+    Works with batches and is JAX-jittable.
+    
+    Args:
+        vector: Flattened array of shape (batch, total_coeffs)
+        metadata: Dictionary returned by wavelet_coeffs_to_vector
+    
+    Returns:
+        coeff_list: List structure compatible with jaxwt.waverec3
+    """
+    batch_size = metadata['batch_size']
+    coeff_list = []
+    current_idx = 0
+    
+    for level_meta in metadata['structure']:
+        if level_meta['type'] == 'dict':
+            # Reconstruct detail coefficients dictionary
+            level_dict = {}
+            for key, shape in level_meta['keys']:
+                n_elements = np.prod(shape[1:])  # Elements per sample
+                level_dict[key] = vector[:, current_idx:current_idx + n_elements].reshape(shape)
+                current_idx += n_elements
+            coeff_list.append(level_dict)
+        else:
+            # Reconstruct approximation coefficients
+            shape = level_meta['shape']
+            n_elements = np.prod(shape[1:])
+            coeff_list.append(vector[:, current_idx:current_idx + n_elements].reshape(shape))
+            current_idx += n_elements
+    
+    return coeff_list
+
+
+# JAX-jittable versions using static metadata
+def create_wavelet_transform_functions(volume_shape, wavelet_type='db1', wavelet_mode='symmetric'):
+    """
+    Create JAX-jittable forward and inverse wavelet transform functions with fixed metadata.
+    
+    Args:
+        volume_shape: Shape of 3D volume (d, d, d)
+        wavelet_type: Wavelet type (e.g., 'db1')
+        wavelet_mode: Mode for padding (e.g., 'symmetric')
+    
+    Returns:
+        to_vector: Function (batch, d, d, d) -> (batch, n_coeffs)
+        from_vector: Function (batch, n_coeffs) -> (batch, d, d, d)
+        metadata: Static metadata for the transforms
+    """
+    # Get metadata from a dummy transform
+    dummy = np.zeros([1, *volume_shape])
+    if use_jaxwt:
+        dummy_coeffs = jaxwt.wavedec3(dummy, wavelet=wavelet_type, mode=wavelet_mode, axes=(-3,-2,-1))
+    else:
+        dummy_coeffs = pywt.wavedecn(dummy, wavelet=wavelet_type, mode=wavelet_mode, axes=(-3,-2,-1))
+    
+    _, metadata = wavelet_coeffs_to_vector(dummy_coeffs)
+    
+    def to_vector(images):
+        """Convert images to wavelet coefficient vectors."""
+        if use_jaxwt:
+            coeffs = jaxwt.wavedec3(images, wavelet=wavelet_type, mode=wavelet_mode, axes=(-3,-2,-1))
+        else:
+            coeffs = pywt.wavedecn(images, wavelet=wavelet_type, mode=wavelet_mode, axes=(-3,-2,-1))
+        vec, _ = wavelet_coeffs_to_vector(coeffs)
+        return vec
+    
+    def from_vector(vector):
+        """Convert wavelet coefficient vectors back to images."""
+        coeffs = vector_to_wavelet_coeffs(vector, metadata)
+        if use_jaxwt:
+            images = jaxwt.waverec3(coeffs, wavelet=wavelet_type, mode=wavelet_mode, axes=(-3,-2,-1))
+        else:
+            images = pywt.waverecn(coeffs, wavelet=wavelet_type, mode=wavelet_mode, axes=(-3,-2,-1))
+        return images
+    
+    return to_vector, from_vector, metadata
 
 
 def wavelet_avg_square_by_level_both(volume, wavelet_type='db1'):
@@ -417,3 +583,203 @@ def wavelet_avg_square_by_level_both(volume, wavelet_type='db1'):
         print(f"{level_key} ({level_type}): {n_coefficients} coeffs, avg square: {avg_square:.6f}")
     
     return avg_square_array, level_results
+
+
+# =============================================================================
+# Standalone wavelet coefficient conversion functions for linear algebra
+# =============================================================================
+
+def jaxwt_coeffs_to_flat_vector(coeff_list):
+    """
+    Convert jaxwt.wavedec3 coefficient list to a flat vector for linear algebra.
+    Works with batches. JAX-jittable if coeff_list contains JAX arrays.
+    
+    Args:
+        coeff_list: Output from jaxwt.wavedec3, a list where:
+            - coeff_list[0]: approximation coefficients, shape (batch, d0, d1, d2)
+            - coeff_list[i] (i>0): dict with keys like 'aad', 'ada', 'add', 'daa', 'dad', 'dda', 'ddd'
+              each containing arrays of shape (batch, d0, d1, d2)
+    
+    Returns:
+        flat_vector: Array of shape (batch, total_coeffs)
+        shapes_info: List of (type, shape_or_keys) for reconstruction
+    """
+    batch_size = coeff_list[0].shape[0]
+    flat_parts = []
+    shapes_info = []
+    
+    for level_idx, level_data in enumerate(coeff_list):
+        if isinstance(level_data, dict):
+            # Detail coefficients - process in sorted key order for consistency
+            keys_sorted = sorted(level_data.keys())
+            for key in keys_sorted:
+                arr = level_data[key]
+                spatial_shape = arr.shape[1:]  # (d0, d1, d2)
+                flat_parts.append(arr.reshape(batch_size, -1))
+                shapes_info.append(('dict_key', key, spatial_shape))
+        else:
+            # Approximation coefficients
+            spatial_shape = level_data.shape[1:]  # (d0, d1, d2)
+            flat_parts.append(level_data.reshape(batch_size, -1))
+            shapes_info.append(('approx', spatial_shape))
+    
+    # Concatenate along feature dimension
+    if use_np:
+        flat_vector = np.concatenate(flat_parts, axis=1)
+    else:
+        flat_vector = jnp.concatenate(flat_parts, axis=1)
+    
+    return flat_vector, shapes_info
+
+
+def flat_vector_to_jaxwt_coeffs(flat_vector, shapes_info, use_jax=None):
+    """
+    Convert flat vector back to jaxwt.wavedec3 coefficient list format.
+    Works with batches. JAX-jittable if flat_vector is a JAX array.
+    
+    Args:
+        flat_vector: Array of shape (batch, total_coeffs)
+        shapes_info: List of (type, shape_or_keys) from jaxwt_coeffs_to_flat_vector
+        use_jax: If True, convert to JAX arrays. If None, infer from input type.
+    
+    Returns:
+        coeff_list: List structure compatible with jaxwt.waverec3
+    """
+    batch_size = flat_vector.shape[0]
+    coeff_list = []
+    current_idx = 0
+    current_dict = None
+    prev_key = None
+    
+    # Determine if we should use JAX arrays
+    if use_jax is None:
+        # Check if input is JAX array
+        use_jax = hasattr(flat_vector, '__array_namespace__') or str(type(flat_vector)).find('jax') >= 0
+    
+    # Import jax if needed
+    if use_jax:
+        import jax.numpy as jnp_local
+    
+    for info in shapes_info:
+        if info[0] == 'approx':
+            # Approximation coefficients - always add any pending dict first
+            if current_dict is not None:
+                coeff_list.append(current_dict)
+                current_dict = None
+                prev_key = None
+            
+            spatial_shape = info[1]
+            n_elements = np.prod(spatial_shape)
+            arr = flat_vector[:, current_idx:current_idx + n_elements].reshape(batch_size, *spatial_shape)
+            if use_jax:
+                arr = jnp_local.array(arr)
+            coeff_list.append(arr)
+            current_idx += n_elements
+        elif info[0] == 'dict_key':
+            # Detail coefficients
+            key = info[1]
+            spatial_shape = info[2]
+            n_elements = np.prod(spatial_shape)
+            arr = flat_vector[:, current_idx:current_idx + n_elements].reshape(batch_size, *spatial_shape)
+            if use_jax:
+                arr = jnp_local.array(arr)
+            
+            # Start a new dict if:
+            # 1. No current dict exists, OR
+            # 2. The key cycles back (e.g., 'ddd' -> 'aad' indicates new level)
+            if current_dict is None or (prev_key is not None and key <= prev_key):
+                if current_dict is not None:
+                    coeff_list.append(current_dict)
+                current_dict = {}
+            
+            current_dict[key] = arr
+            prev_key = key
+            current_idx += n_elements
+    
+    # Don't forget the last dict
+    if current_dict is not None:
+        coeff_list.append(current_dict)
+    
+    return coeff_list
+
+
+def test_wavelet_vector_conversion(volume_shape=(32, 32, 32), batch_size=3, wavelet_type='db1', wavelet_mode='symmetric'):
+    """
+    Test function to verify the conversion works correctly.
+    
+    Args:
+        volume_shape: Shape of 3D volumes
+        batch_size: Number of volumes in batch
+        wavelet_type: Wavelet type
+        wavelet_mode: Wavelet mode
+    
+    Returns:
+        bool: True if test passes
+    """
+    print(f"Testing wavelet vector conversion...")
+    print(f"  Volume shape: {volume_shape}")
+    print(f"  Batch size: {batch_size}")
+    print(f"  Wavelet: {wavelet_type}, mode: {wavelet_mode}")
+    
+    # Create random test volumes
+    test_volumes = np.random.randn(batch_size, *volume_shape)
+    
+    # Forward transform
+    if use_jaxwt:
+        coeffs = jaxwt.wavedec3(test_volumes, wavelet=wavelet_type, mode=wavelet_mode, axes=(-3,-2,-1))
+    else:
+        coeffs = pywt.wavedecn(test_volumes, wavelet=wavelet_type, mode=wavelet_mode, axes=(-3,-2,-1))
+    
+    print(f"\nOriginal coeffs structure:")
+    for i, c in enumerate(coeffs):
+        if isinstance(c, dict):
+            print(f"  Level {i}: dict with keys {list(c.keys())}, shapes: {[c[k].shape for k in c.keys()]}")
+        else:
+            print(f"  Level {i}: array with shape {c.shape}")
+    
+    # Convert to flat vector
+    flat_vec, shapes_info = jaxwt_coeffs_to_flat_vector(coeffs)
+    print(f"\nFlat vector shape: {flat_vec.shape}")
+    print(f"Shapes info: {len(shapes_info)} entries")
+    
+    # Convert back (use JAX arrays for jaxwt compatibility)
+    coeffs_reconstructed = flat_vector_to_jaxwt_coeffs(flat_vec, shapes_info, use_jax=use_jaxwt)
+    
+    print(f"\nReconstructed coeffs structure:")
+    for i, c in enumerate(coeffs_reconstructed):
+        if isinstance(c, dict):
+            print(f"  Level {i}: dict with keys {list(c.keys())}, shapes: {[c[k].shape for k in c.keys()]}")
+        else:
+            print(f"  Level {i}: array with shape {c.shape}")
+    
+    # Verify reconstruction
+    max_error = 0
+    for i, (orig, recon) in enumerate(zip(coeffs, coeffs_reconstructed)):
+        if isinstance(orig, dict):
+            for key in orig.keys():
+                error = np.linalg.norm(orig[key] - recon[key])
+                max_error = max(max_error, error)
+                if error > 1e-10:
+                    print(f"  Level {i}, key {key}: error = {error}")
+        else:
+            error = np.linalg.norm(orig - recon)
+            max_error = max(max_error, error)
+            if error > 1e-10:
+                print(f"  Level {i}: error = {error}")
+    
+    print(f"\nMax reconstruction error: {max_error}")
+    
+    # Inverse transform
+    if use_jaxwt:
+        volumes_reconstructed = jaxwt.waverec3(coeffs_reconstructed, wavelet=wavelet_type, axes=(-3,-2,-1))
+    else:
+        volumes_reconstructed = pywt.waverecn(coeffs_reconstructed, wavelet=wavelet_type, mode=wavelet_mode, axes=(-3,-2,-1))
+    
+    # Check final reconstruction
+    volume_error = np.linalg.norm(test_volumes - volumes_reconstructed) / np.linalg.norm(test_volumes)
+    print(f"Volume reconstruction relative error: {volume_error}")
+    
+    success = max_error < 1e-8 and volume_error < 1e-8
+    print(f"\n{'✓ TEST PASSED' if success else '✗ TEST FAILED'}")
+    
+    return success, flat_vec, shapes_info

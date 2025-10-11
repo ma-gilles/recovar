@@ -7,13 +7,43 @@ from pyproximal.optimization.primal import ADMM
 from pyproximal.ProxOperator import _check_tau
 from recovar import linalg
 from recovar.ppca.sparse_PCA import Wavelet_multilvl
+import jaxwt
 
 # Enable JAX GPU if available
 print(f"JAX backend: {jax.default_backend()}")
 print(f"JAX devices: {jax.devices()}")
 
 debug = False
-use_jaxwt = False
+use_jaxwt = True
+
+
+def _softthreshold(x, thresh):
+    r"""Soft thresholding.
+
+    Applies soft thresholding to vector ``x - g``.
+
+    Parameters
+    ----------
+    x : :obj:`numpy.ndarray`
+        Vector
+    thresh : :obj:`float`
+        Threshold
+
+    Returns
+    -------
+    x1 : :obj:`numpy.ndarray`
+        Tresholded vector
+
+    """
+    if jnp.iscomplexobj(x):
+        # https://stats.stackexchange.com/questions/357339/soft-thresholding-
+        # for-the-lasso-with-complex-valued-data
+        x1 = jnp.maximum(jnp.abs(x) - thresh, 0.0) * jnp.exp(1j * jnp.angle(x))
+    else:
+        x1 = jnp.maximum(jnp.abs(x) - thresh, 0.0) * jnp.sign(x)
+
+    return x1
+
 
 class LeastSquareFromNormalEqs(ProxOperator):
     r"""Proximal operator for \sum_i 0.5 * \|P_i x - b\|_2^2, where \sum P_i^* P_i and \sum P_i^* b are precomputed
@@ -57,7 +87,8 @@ class LeastSquareFromNormalEqs(ProxOperator):
         # Apply to all elements in batch
         Y = vmap(solve_single)(self.lhs, self.rhs, X)
 
-        return Y
+        # Flatten to match input format
+        return Y.flatten()
 
     def __call__(self, x):
         # Input validation
@@ -88,7 +119,7 @@ class LeastSquareFromNormalEqs(ProxOperator):
         if debug:
             print('done with lstsr prox')
 
-        return np.array(result)  # Convert back to numpy for compatibility
+        return result  # Convert back to numpy for compatibility
 
 
 class WaveletL1(L1):
@@ -129,7 +160,7 @@ class WaveletL1(L1):
         # Convert all basis functions to wavelet basis at once (NumPy operation)
         x_wavelet_all = self.wavelet.to_basis(basis_stack)  # Shape: (n_basis, n_wavelet_coeffs)
         # Compute total L1 norm across all basis functions
-        return float(np.sum(self.sigma * np.abs(x_wavelet_all.T)))
+        return float(jnp.sum(self.sigma * jnp.abs(x_wavelet_all.T)))
 
     @_check_tau
     def prox(self, x, tau):
@@ -141,9 +172,10 @@ class WaveletL1(L1):
         total_start = time.time()
         
         # Reshape to handle all basis functions at once
-        # X = x.reshape(self.dim)
-        # Stack all basis functions: (n_basis, volume_size) -> (n_basis, volume_size)
-        basis_stack = x.T  # Shape: (n_basis, volume_size)
+        # Input x is flattened: (volume_size * n_basis,)
+        # Need to reshape to (volume_size, n_basis) first, then transpose to (n_basis, volume_size)
+        X = x.reshape(self.dim)  # Shape: (volume_size, n_basis)
+        basis_stack = X.T  # Shape: (n_basis, volume_size)
         # Convert all basis functions to wavelet basis at once (NumPy operation)
         wavelet_start = time.time()
         x_wavelet_all = self.wavelet.to_basis(basis_stack)  # Shape: (n_basis, n_wavelet_coeffs)
@@ -151,7 +183,8 @@ class WaveletL1(L1):
         
         # Apply L1 proximal operator
         prox_start = time.time()
-        x_wavelet_all = super().prox(x_wavelet_all.T, tau)
+        # x_wavelet_all = super().prox(x_wavelet_all.T, tau)
+        x_wavelet_all = _softthreshold(x_wavelet_all.T, tau * self.sigma)
         prox_time = time.time() - prox_start
         
         # Convert back to image space
@@ -161,6 +194,7 @@ class WaveletL1(L1):
         
         # Reshape back to original format
         Y = x_result_all.T  # Shape: (volume_size, n_basis)
+        Y = Y.flatten()  # Flatten to match input format: (volume_size * n_basis,)
         
         # Timing
         if debug:   
@@ -228,7 +262,7 @@ def compute_total_loss(x, prox_lstsr, prox_wavelet):
     return total_loss, data_fit_loss, reg_loss  
 
 
-def admm_wavelet(lhs, rhs, sigma, tau, niter, volume_shape, normal_size, X0):
+def admm_wavelet(lhs, rhs, sigma, tau, niter, volume_shape, normal_size, X0, prox_lstsr=None, prox_wavelet=None):
     """
     ADMM optimization with wavelet L1 regularization
     
@@ -236,23 +270,31 @@ def admm_wavelet(lhs, rhs, sigma, tau, niter, volume_shape, normal_size, X0):
         lhs: Left-hand side matrices for least squares
         rhs: Right-hand side vectors for least squares
         sigma: Regularization parameter for wavelet L1
-        mu: Weight for regularization term
+        tau: ADMM penalty parameter
         niter: Number of ADMM iterations
         volume_shape: Shape of the 3D volume
         normal_size: Shape of the 2D basis function matrix
         X0: Initial guess
+        prox_lstsr: Optional pre-created LeastSquare prox (avoids JIT recompilation)
+        prox_wavelet: Optional pre-created Wavelet prox (avoids JIT recompilation)
     
     Returns:
         X_rec: Reconstructed solution
+        Z_rec: Auxiliary variable
     """
-    # print(f"Running ADMM with wavelet L1 regularization...")
-    # print(f"  Parameters: sigma={sigma}, tau={tau}, niter={niter}")
-    # print(f"  Volume shape: {volume_shape}")
-    # print(f"  Normal size: {normal_size}")
+    # Create proximal operators if not provided (allows reuse across EM iterations)
+    if prox_lstsr is None:
+        prox_lstsr = LeastSquareFromNormalEqs(normal_size, lhs, rhs)
+    else:
+        # Update lhs and rhs if prox was reused
+        prox_lstsr.lhs = jnp.array(lhs)
+        prox_lstsr.rhs = jnp.array(rhs)
     
-    # Create proximal operators
-    prox_lstsr = LeastSquareFromNormalEqs(normal_size, lhs, rhs)
-    prox_wavelet = WaveletL1(normal_size, volume_shape, 'db1', sigma=sigma)
+    if prox_wavelet is None:
+        prox_wavelet = WaveletL1(normal_size, volume_shape, 'db1', sigma=sigma)
+    else:
+        # Update sigma if needed
+        prox_wavelet.sigma = sigma
     # prox_wavelet = L1(sigma)
 
     # Run ADMM optimization
@@ -319,11 +361,12 @@ def analyze_wavelet_coefficient_variance(x, volume_shape, wavelet_type='db1', le
     all_coeffs = np.array(all_coeffs)  # Shape: (n_samples, n_coeffs)
     
     # Perform multi-level decomposition on a single volume to get level structure
-    test_volume = np.zeros(volume_shape)
+    test_volume = np.zeros(1, *volume_shape)
     if use_jaxwt:
-        coeff_dict = pywt.wavedec3(test_volume, wavelet=wavelet_type, mode='periodization', axes=(-3,-2,-1))
+        coeff_dict = jaxwt.wavedec3(test_volume, wavelet=wavelet_type, mode='periodization', axes=(-3,-2,-1))
     else:
         coeff_dict = pywt.wavedecn(test_volume, wavelet=wavelet_type, mode='periodization')
+
     coeff_array, coeff_slices = pywt.coeffs_to_array(coeff_dict)
     
     # Analyze variance at each decomposition level

@@ -175,7 +175,7 @@ def EM_step(experiment_datasets, mean_estimate, W_estimate, batch_size, W_prior,
         W_estimate = batch1_symmetrize_ft_volume(W_estimate, volume_shape)
 
         from recovar.ppca.admm_test import admm_wavelet
-        W, Z_rec = admm_wavelet( lhs_summed, rhs_summed, W_prior, 0.9, 100, volume_shape, normal_size, W_estimate)
+        W, Z_rec = admm_wavelet( lhs_summed, rhs_summed, W_prior, 0.9, 20, volume_shape, normal_size, W_estimate)
 
     else:
         lhs_summed = lhs_summed.reshape(experiment_dataset.volume_size, basis_size, basis_size)
