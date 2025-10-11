@@ -31,7 +31,7 @@ def print_ctf_params(params: np.ndarray) -> None:
     logger.info("w                 : {}".format(params[7]))
     logger.info("Phase shift (deg) : {}".format(params[8]))
 
-def load_ctf_for_training(D: int, ctf_params_pkl: str) -> np.ndarray:
+def load_ctf_params(D: int, ctf_params_pkl: str) -> np.ndarray:
     assert D % 2 == 0
     ctf_params = utils.pickle_load(ctf_params_pkl)
     assert ctf_params.shape[1] == 9
@@ -105,5 +105,4 @@ def load_poses(
         else:
             logger.warning("WARNING: No translations provided")
             trans = None
-
         return rots, trans, D#, emb_type#, device=device)

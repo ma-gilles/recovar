@@ -399,8 +399,8 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
             dataset = MRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data, strip_prefix=strip_prefix)
 
 
-    from recovar import cryodrgn_load
-    ctf_params = np.array(cryodrgn_load.load_ctf_for_training(dataset.D, ctf_file))
+    from recovar import load_utils
+    ctf_params = np.array(load_utils.load_ctf_params(dataset.D, ctf_file))
         
     ctf_params = ctf_params if ind is None else ctf_params[ind]
     
@@ -481,8 +481,8 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
             
 
     # posetracker = PoseTracker.load( poses_file, dataset.n_images, dataset.unpadded_D, ind = ind) #,   None, ind, device=device)
-    # from recovar import cryodrgn_load
-    rots, trans, _ = cryodrgn_load.load_poses( poses_file, dataset.n_images, dataset.unpadded_D, ind = ind) #,   None, ind, device=device)
+    # from recovar import load_utils
+    rots, trans, _ = load_utils.load_poses( poses_file, dataset.n_images, dataset.unpadded_D, ind = ind) #,   None, ind, device=device)
 
 
     voxel_sizes = ctf_params[:,0]
