@@ -8,12 +8,12 @@ import recovar.padding as pad
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 ftu_np = fourier_transform_utils(np)
-from recovar import tilt_dataset
+from recovar import cryo_dataset as tilt_dataset
 
 logger = logging.getLogger(__name__)
 
 # Maybe should take out these dependencies?
-from recovar.cryodrgn_source import ImageSource
+from recovar.image_loader import ImageSource
 
 
 def MRCDataMod(particles_file, ind =None , datadir = None, padding = 0, uninvert_data = False, strip_prefix = None):

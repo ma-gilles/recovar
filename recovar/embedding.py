@@ -87,9 +87,9 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
 
     if USE_CUBIC:
         disc_type = 'cubic'
-        from recovar import cryojax_map_coordinates
-        mean = cryojax_map_coordinates.compute_spline_coefficients(mean.reshape(cryos[0].volume_shape))
-        # vmap_coeffs = jax.vmap(cryojax_map_coordinates.compute_spline_coefficients, in_axes = 0, out_axes = 0)
+        from recovar import cubic_interpolation
+        mean = cubic_interpolation.compute_spline_coefficients(mean.reshape(cryos[0].volume_shape))
+        # vmap_coeffs = jax.vmap(cubic_interpolation.compute_spline_coefficients, in_axes = 0, out_axes = 0)
         # basis = vmap_coeffs(basis.reshape(-1, *cryos[0].volume_shape))#.reshape(basis.shape)
         from recovar import covariance_estimation
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, cryos[0].volume_shape, gpu_memory= None)

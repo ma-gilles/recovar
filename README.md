@@ -1441,7 +1441,7 @@ You can use all tilts by not passing the argument --ntilts.
 - *Other ones, probably?*: if you run into issues, please let me know. 
 
 ## Acknowledgement
-A lot of code in RECOVAR is based on cryoDRGN (https://cryodrgn.cs.princeton.edu/) and RELION (https://relion.readthedocs.io/en/release-5.0/). Hopefully, it is clear from the code naming/comments.
+The input/output (reading/writing/loading) part of the code is reimplemented version of cryoDRGN (https://cryodrgn.cs.princeton.edu/) and some algorithms are inspired by RELION (https://relion.readthedocs.io/en/release-5.0/). Hopefully, it is clear from the code naming/comments.
 Much of this documentation is generated using chatGTP4.
 
 ## Citation

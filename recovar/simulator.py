@@ -784,8 +784,8 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
         if disc_type == "nufft":
             vol_real = ftu.get_idft3(volumes[vol_idx].reshape(experiment_dataset.volume_shape))
         elif 'cubic' in disc_type:
-            from recovar import cryojax_map_coordinates
-            volume = cryojax_map_coordinates.compute_spline_coefficients(volumes[vol_idx].reshape(experiment_dataset.volume_shape))
+            from recovar import cubic_interpolation
+            volume = cubic_interpolation.compute_spline_coefficients(volumes[vol_idx].reshape(experiment_dataset.volume_shape))
         else:
             volume = volumes[vol_idx]
 

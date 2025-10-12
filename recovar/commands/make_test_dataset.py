@@ -64,7 +64,7 @@ def main():
     parser.add_argument("output_dir", nargs='?', default=os.getcwd(), help="Output directory for the test dataset")
     parser.add_argument("--noise-level", type=float, default=0.1, help="Noise level for the dataset")
     parser.add_argument("--n-images", type=int, help="Number of images to generate")
-    parser.add_argument("--image-size", type=int, help="Image size (default: 128 for 128x128 images)")
+    parser.add_argument("--image-size", type=int, default=64, help="Image size (default: 128 for 128x128 images)")
 
     parser.add_argument("--create-nested-structure", action="store_true", help="Create a nested folder structure to test strip_prefix functionality")
     parser.add_argument("--nested-prefix", default="Extract/job193", help="Prefix path for nested structure (default: Extract/job193)")
