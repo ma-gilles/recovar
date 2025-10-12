@@ -357,45 +357,94 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
 
 
 def R_to_relion(rot: np.ndarray, degrees: bool = True) -> np.ndarray:
-    """From cryodrgn"""
-    """Nx3x3 rotation matrices to RELION euler angles"""
-    from scipy.spatial.transform import Rotation as RR
-
-    if rot.shape == (3, 3):
-        rot = rot.reshape(1, 3, 3)
-    assert len(rot.shape) == 3, "Input must have dim Nx3x3"
-    f = np.ones((3, 3))
-    f[0, 1] = -1
-    f[1, 0] = -1
-    f[1, 2] = -1
-    f[2, 1] = -1
-    euler = RR.from_matrix(rot * f).as_euler("zxz", degrees=True)
-    euler[:, 0] -= 90
-    euler[:, 2] += 90
-    euler += 180
-    euler %= 360
-    euler -= 180
+    """Convert rotation matrices to RELION Euler angles.
+    
+    Converts rotation matrices to RELION's ZXZ Euler angle convention
+    with appropriate coordinate frame transformations.
+    
+    Args:
+        rot: Rotation matrix or matrices of shape (3,3) or (N,3,3)
+        degrees: If True, return angles in degrees; otherwise radians
+        
+    Returns:
+        Euler angles in RELION convention, shape (N,3)
+    """
+    from scipy.spatial.transform import Rotation as SciPyRot
+    
+    # Ensure batch dimension
+    matrices = rot.reshape(1, 3, 3) if rot.shape == (3, 3) else rot
+    
+    if matrices.ndim != 3 or matrices.shape[1:] != (3, 3):
+        raise ValueError(f"Expected shape (N,3,3), got {rot.shape}")
+    
+    # Create coordinate frame adjustment matrix
+    # RELION uses different handedness conventions
+    frame_adjust = np.array([[1, -1, 1],
+                             [-1, 1, -1],
+                             [1, -1, 1]], dtype=np.float64)
+    
+    # Apply frame adjustment
+    adjusted_matrices = matrices * frame_adjust
+    
+    # Convert to ZXZ Euler angles
+    scipy_rot = SciPyRot.from_matrix(adjusted_matrices)
+    angles = scipy_rot.as_euler('zxz', degrees=True)
+    
+    # Apply RELION-specific angle offsets
+    # Adjust first rotation (around Z)
+    angles[:, 0] = angles[:, 0] - 90.0
+    # Adjust third rotation (around Z)
+    angles[:, 2] = angles[:, 2] + 90.0
+    
+    # Normalize to [-180, 180] range
+    angles = (angles + 180.0) % 360.0 - 180.0
+    
+    # Convert to radians if requested
     if not degrees:
-        euler *= np.pi / 180
-    return euler
+        angles = np.deg2rad(angles)
+    
+    return angles
+
 
 def R_from_relion(euler_: np.ndarray, degrees: bool = True) -> np.ndarray:
-    """From cryodrgn"""
-    """Nx3 array of RELION euler angles to rotation matrix"""
-    from scipy.spatial.transform import Rotation as RR
-
-    euler = euler_.copy()
-    if euler.shape == (3,):
-        euler = euler.reshape(1, 3)
-    euler[:, 0] += 90
-    euler[:, 2] -= 90
-    f = np.ones((3, 3))
-    f[0, 1] = -1
-    f[1, 0] = -1
-    f[1, 2] = -1
-    f[2, 1] = -1
-    rot = RR.from_euler("zxz", euler, degrees=degrees).as_matrix() * f
-    return rot
+    """Convert RELION Euler angles to rotation matrices.
+    
+    Converts RELION's ZXZ Euler angle convention to rotation matrices
+    with appropriate coordinate frame transformations.
+    
+    Args:
+        euler_: Euler angles of shape (3,) or (N,3) in RELION convention
+        degrees: If True, input angles are in degrees; otherwise radians
+        
+    Returns:
+        Rotation matrices of shape (N,3,3)
+    """
+    from scipy.spatial.transform import Rotation as SciPyRot
+    
+    # Work with a copy to avoid modifying input
+    angles = euler_.copy()
+    
+    # Ensure batch dimension
+    angles = angles.reshape(1, 3) if angles.shape == (3,) else angles
+    
+    # Reverse RELION-specific angle offsets
+    # These are the inverse of the operations in R_to_relion
+    angles[:, 0] = angles[:, 0] + 90.0
+    angles[:, 2] = angles[:, 2] - 90.0
+    
+    # Convert to rotation matrices using ZXZ convention
+    scipy_rot = SciPyRot.from_euler('zxz', angles, degrees=degrees)
+    matrices = scipy_rot.as_matrix()
+    
+    # Create inverse coordinate frame adjustment matrix
+    frame_adjust = np.array([[1, -1, 1],
+                             [-1, 1, -1],
+                             [1, -1, 1]], dtype=np.float64)
+    
+    # Apply inverse frame adjustment
+    result = matrices * frame_adjust
+    
+    return result
 
 
 def write_starfile_from_cryodrgn_format(ctf_path, pose_path, particles_file_path, output_filename, halfset_indices = None):

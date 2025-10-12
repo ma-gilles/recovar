@@ -131,10 +131,12 @@ class ImageLoader:
         if indices is None:
             return np.arange(self._num_images)
         
-        if isinstance(indices, int):
-            if indices < 0 or indices >= self._num_images:
-                raise IndexError(f"Index {indices} out of range [0, {self._num_images})")
-            return np.array([indices])
+        # Handle int and numpy integer types
+        if isinstance(indices, (int, np.integer)):
+            idx = int(indices)  # Convert numpy int to python int
+            if idx < 0 or idx >= self._num_images:
+                raise IndexError(f"Index {idx} out of range [0, {self._num_images})")
+            return np.array([idx])
         
         if isinstance(indices, slice):
             return np.arange(*indices.indices(self._num_images))
@@ -145,6 +147,12 @@ class ImageLoader:
         if isinstance(indices, np.ndarray):
             if indices.dtype == bool:
                 indices = np.where(indices)[0]
+            # Handle 0-d arrays (scalars)
+            if indices.ndim == 0:
+                idx = int(indices)
+                if idx < 0 or idx >= self._num_images:
+                    raise IndexError(f"Index {idx} out of range [0, {self._num_images})")
+                return np.array([idx])
             if np.any(indices < 0) or np.any(indices >= self._num_images):
                 raise IndexError("Index out of range")
             return indices
@@ -377,7 +385,7 @@ class StarLoader(MultiMRCLoader):
             max_threads: Threads for parallel I/O
             strip_prefix: Prefix to remove from paths
         """
-        from recovar.cryodrgn_starfile import Starfile
+        from recovar.starfile import Starfile
         
         # Parse STAR file
         star = Starfile.load(filepath)

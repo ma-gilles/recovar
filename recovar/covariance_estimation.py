@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import jax, time
 import functools
-from recovar import core, covariance_core, regularization, utils, constants, noise, cryojax_map_coordinates
+from recovar import core, covariance_core, regularization, utils, constants, noise, cubic_interpolation
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 
@@ -396,7 +396,7 @@ def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset
     noise_p_variance_rhs = 2 * [None]
 
     if disc_type == 'cubic':
-        mean_estimate = cryojax_map_coordinates.compute_spline_coefficients(mean_estimate.reshape(cryos[0].volume_shape))
+        mean_estimate = cubic_interpolation.compute_spline_coefficients(mean_estimate.reshape(cryos[0].volume_shape))
 
 
     for idx, cryo in enumerate(cryos):
@@ -626,8 +626,7 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
 
     if options['disc_type'] == 'cubic':
         these_disc = 'cubic'
-        from recovar import cryojax_map_coordinates
-        mean_estimate = cryojax_map_coordinates.compute_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
+        mean_estimate = cubic_interpolation.compute_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
     else:
         these_disc = 'linear_interp'
 
@@ -706,8 +705,8 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
     return H, B
 
 
-from recovar import cryojax_map_coordinates
-vmap_compute_spline_coefficients = jax.vmap(cryojax_map_coordinates.compute_spline_coefficients, in_axes = 0, out_axes = 0)
+from recovar import cubic_interpolation
+vmap_compute_spline_coefficients = jax.vmap(cubic_interpolation.compute_spline_coefficients, in_axes = 0, out_axes = 0)
 
 def compute_spline_coeffs_in_batch(basis, volume_shape, gpu_memory= None):
     gpu_memory = utils.get_gpu_memory_total() if gpu_memory is None else gpu_memory
@@ -740,7 +739,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     logger.info(f"batch size in compute_projected_covariance {batch_size}")
 
     if disc_type == 'cubic':
-        mean_estimate = cryojax_map_coordinates.compute_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
+        mean_estimate = cubic_interpolation.compute_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
 
     if disc_type_u == 'cubic':
         basis = compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)

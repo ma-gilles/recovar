@@ -403,7 +403,8 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
     # logger.info(f"batch size in compute_projected_covariance {batch_size}")
 
     if disc_type_mean == 'cubic':
-        mean = covariance_estimation.cryojax_map_coordinates.compute_spline_coefficients(mean.reshape(experiment_dataset.volume_shape))
+        from recovar import cubic_interpolation
+        mean = cubic_interpolation.compute_spline_coefficients(mean.reshape(experiment_dataset.volume_shape))
 
     if disc_type_u == 'cubic':
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)

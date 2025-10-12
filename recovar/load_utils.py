@@ -21,7 +21,7 @@ def print_ctf_params(params: np.ndarray) -> None:
         raise ValueError(f"Expected 9 CTF parameters, got {len(params)}")
     
     param_names = [
-        ("Image size (pix)", int(params[0])),
+        ("Image size (pix)", int(params[0])),   
         ("A/pix", params[1]),
         ("DefocusU (A)", params[2]),
         ("DefocusV (A)", params[3]),
@@ -36,7 +36,7 @@ def print_ctf_params(params: np.ndarray) -> None:
         logger.info(f"{name:18s}: {value}")
 
 
-def load_ctf_for_training(D: int, ctf_params_pkl: str) -> np.ndarray:
+def load_ctf_params(D: int, ctf_params_pkl: str) -> np.ndarray:
     """Load and adjust CTF parameters for a given image size.
     
     Args:
