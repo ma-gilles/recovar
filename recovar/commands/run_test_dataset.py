@@ -71,7 +71,7 @@ def main():
         
         # Generate a test dataset for tilt series testing (without nested structure)
         run_command(
-            f'{BASE_CMD} make_test_dataset {dataset_dir}/tilt_test --n-images 100 --tilt-series',
+            f'{BASE_CMD} make_test_dataset {dataset_dir}/tilt_test --n-images 10000 --tilt-series',
             'Generate a test dataset for tilt series',
             'make_test_dataset_tilt'
         )
