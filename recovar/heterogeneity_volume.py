@@ -17,7 +17,9 @@ def pick_minimum_discretization_size(ndim, log_likelihoods, q = 0.5, min_images 
         disc_latent_dist = recovar.latent_density.get_log_likelihood_threshold(k = ndim, q=0.5)
     else:
         disc_latent_dist = -1
-    
+    if log_likelihoods.size < min_images:
+        logger.warning(f"Not enough images for minimum discretization size. Using {min_images} images.")
+        return disc_latent_dist
     value = np.max( [ np.sort(log_likelihoods)[min_images], disc_latent_dist] ) # Bump a lil bit
     # import pdb; pdb.set_trace()
     return value * ( 1 + 1e-8)
