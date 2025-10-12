@@ -8,7 +8,7 @@ import recovar.padding as pad
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 ftu_np = fourier_transform_utils(np)
-from recovar import cryo_dataset as tilt_dataset
+from recovar import tilt_dataset
 
 logger = logging.getLogger(__name__)
 
