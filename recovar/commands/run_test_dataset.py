@@ -55,12 +55,49 @@ def main():
     def run_command(command, description, function_name):
         print(f"Running: {description}")
         print(f"Command: {command}\n")
-        result = subprocess.run(command, shell=True)
-        if result.returncode == 0:
-            print(f"Success: {description}\n")
+        
+        # Create log file path
+        log_file = os.path.join(dataset_dir, 'run.log')
+        
+        # Write header to log file
+        with open(log_file, 'a') as log:
+            log.write(f"\n{'='*80}\n")
+            log.write(f"Running: {description}\n")
+            log.write(f"Command: {command}\n")
+            log.write(f"{'='*80}\n\n")
+            log.flush()
+        
+        # Run command and capture output in real-time
+        # Using Popen to stream output line by line
+        process = subprocess.Popen(
+            command,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+        
+        # Stream output to both console and log file in real-time
+        with open(log_file, 'a') as log:
+            for line in process.stdout:
+                print(line, end='')  # Print to console
+                log.write(line)      # Write to log file
+                log.flush()          # Ensure it's written immediately
+        
+        # Wait for process to complete and get return code
+        return_code = process.wait()
+        
+        # Write exit code to log
+        with open(log_file, 'a') as log:
+            log.write(f"\nExit code: {return_code}\n")
+        
+        if return_code == 0:
+            print(f"\nSuccess: {description}\n")
             passed_functions.append(function_name)
         else:
-            print(f"Failed: {description}\n")
+            print(f"\nFailed: {description} (exit code: {return_code})\n")
+            print(f"See {log_file} for full details\n")
             failed_functions.append(function_name)
 
     cpu_string = " --accept-cpu" if run_on_cpu else ""
@@ -71,7 +108,7 @@ def main():
         
         # Generate a test dataset for tilt series testing (without nested structure)
         run_command(
-            f'{BASE_CMD} make_test_dataset {dataset_dir}/tilt_test --n-images 10000 --tilt-series',
+            f'{BASE_CMD} make_test_dataset {dataset_dir}/tilt_test --n-images 100[[00 --tilt-series',
             'Generate a test dataset for tilt series',
             'make_test_dataset_tilt'
         )

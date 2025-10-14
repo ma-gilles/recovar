@@ -225,7 +225,7 @@ echo "STEP 3: Compare results"
 echo "=========================================="
 
 # Run comparison script
-python "$BASE_DIR/compare_test_results.py" "$RESULTS_DIR" "$OLD_TIME" "$NEW_TIME"
+python "$BASE_DIR/scripts/compare_test_results.py" "$RESULTS_DIR" "$OLD_TIME" "$NEW_TIME"
 
 EXIT_CODE=$?
 
