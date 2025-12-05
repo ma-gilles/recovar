@@ -1,5 +1,10 @@
 # RECOVAR: Tools for cryo-EM heterogeneity analysis
 
+
+**License**: the code has been modified and is now under the PU-RL v2.0 license, and the code imports libraries that are under non-PU-RL v2.0 (including GPL) licenses.
+
+---
+
 RECOVAR is a software tool for analyzing different conformations in heterogeneous cryo-EM and cryo-ET datasets. RECOVAR can reconstruct high-resolution volumes, estimate conformational density and low free-energy motions, and automatically identify subsets of images with a particular volume feature.
 
 
