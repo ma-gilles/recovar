@@ -54,9 +54,6 @@ recovar make_test_dataset $DATASET_DIR --image-size=128 --n-images=100000
 
 cd $DATASET_DIR/test_dataset/
 
-echo "Running test..."
-recovar run_test_dataset --o ~/mytigress/test_dataset/ 
-
 # Run pipeline - Should take about 30 min - This the step we want to profile first!
 echo "Running pipeline..."
 recovar pipeline particles.128.mrcs --ctf ctf.pkl --poses poses.pkl --mask=from_halfmaps -o pipeline_output

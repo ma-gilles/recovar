@@ -1,0 +1,158 @@
+[project]
+name = "recovar"
+version = "0.1.0"
+description = "RECOVAR cryo-EM heterogeneity analysis"
+authors = ["Marc Aurele Gilles <gilles@princeton.edu>"]
+channels = ["conda-forge", "pytorch", "nvidia"]
+platforms = ["linux-64"]
+
+[system-requirements]
+cuda = "12.6"
+
+[dependencies]
+python = ">=3.11, <3.12"
+pip = "*"
+setuptools = "*"
+wheel = "*"
+git = "*"
+
+# Core scientific computing packages available in conda-forge
+numpy = ">=2.2.0,<2.3.0"
+scipy = ">=1.15.0"
+matplotlib = ">=3.10.0"
+pandas = ">=2.2.0"
+scikit-learn = ">=1.6.0"
+scikit-image = "*"
+
+# Jupyter ecosystem
+jupyterlab = "*"
+notebook = "<7"
+ipython = ">=8.12.0"
+ipywidgets = ">=8.1.0"
+ipykernel = "*"
+
+# Image processing
+pillow = "*"
+
+# Data visualization
+seaborn = ">=0.13.0"
+plotly = ">=6.0.0"
+
+# File I/O
+h5py = "*"
+
+# Type hints
+typing_extensions = "*"
+
+# profiling
+nvtx = ">=0.2.13"
+
+[pypi-dependencies]
+# PyPI packages that need to be installed via pip
+scikit-fmm = "==2025.6.23"
+jax = { extras = ["cuda12"], version = "==0.5.0" }
+# Build tools
+twine = "*"
+# Specialized packages not available in conda-forge
+dataframe_image = "==0.2.7"
+finufft = "==2.3.1"
+healpy = "==1.18.0"
+jax_finufft = "==0.1.0"
+jaxopt = "==0.8.3"
+jaxtyping = "==0.2.38"
+kneed = "==0.8.5"
+lineax = "==0.0.7"
+matplotlib_scalebar = "==0.9.0"
+more_itertools = "==10.6.0"
+mrcfile = "==1.5.4"
+cufflinks = "*"
+starfile = "==0.5.11"
+tensorflow_cpu = "*"
+umap-learn = { extras = ["plot"] }
+optax = "*"
+
+[feature.cuda.dependencies]
+# CUDA dependencies for GPU acceleration
+pytorch = { version = "==2.3.1", channel = "pytorch" }
+
+[environments]
+default = { features = ["cuda"] }
+
+[tasks]
+# Install RECOVAR in editable mode without dependencies
+install-recovar = "pip install -e . --no-deps"
+
+# Test installation
+test-recovar = "recovar run_test_dataset"
+
+# Dataset creation tasks
+create-dataset-small = "bash ./scripts/run_test.sh create 128 100000"
+create-dataset-large = "bash ./scripts/run_test.sh create 256 300000"
+
+# Pipeline tasks  
+pipeline-small = "bash ./scripts/run_test.sh pipeline 128 100000"
+pipeline-large = "bash ./scripts/run_test.sh pipeline 256 300000"
+
+# Pipeline tasks with lazy loading (saves memory)
+pipeline-small-lazy = "bash ./scripts/run_test.sh pipeline 128 100000 lazy"
+pipeline-large-lazy = "bash ./scripts/run_test.sh pipeline 256 300000 lazy"
+
+# Comparison tasks
+compare-pipeline-outputs = "python scripts/compare_pipeline_runs.py data-128-100000/test_dataset/pipeline_output data-128-100000/test_dataset/pipeline_output_run2 --output data-128-100000/test_dataset/pipeline_output_run2/comparison"
+
+# Multi-GPU testing tasks
+test-1gpu = "bash ./scripts/run_test_multigpu.sh 1"
+test-2gpu = "bash ./scripts/run_test_multigpu.sh 2"
+test-4gpu = "bash ./scripts/run_test_multigpu.sh 4"
+test-8gpu = "bash ./scripts/run_test_multigpu.sh 8"
+
+# Compare multi-GPU outputs for correctness verification
+compare-outputs = "python compare_outputs.py"
+compare-all-multigpu = "python compare_all_multigpu_outputs.py"
+
+# Multi-GPU profiling tasks (with --capture-range=cudaProfilerApi)
+# 128-100k dataset (using 50k images)
+profile-1gpu = "bash ./scripts/run_profile_multigpu.sh 1"
+profile-2gpu = "bash ./scripts/run_profile_multigpu.sh 2"
+profile-4gpu = "bash ./scripts/run_profile_multigpu.sh 4"
+
+# 256-300k dataset profiling
+profile-1gpu-256 = "bash ./scripts/run_profile_multigpu_256.sh 1"
+profile-2gpu-256 = "bash ./scripts/run_profile_multigpu_256.sh 2"
+profile-4gpu-256 = "bash ./scripts/run_profile_multigpu_256.sh 4"
+
+# Full workflow tasks
+full-workflow-small = "bash ./scripts/run_test.sh all 128 100000"
+full-workflow-large = "bash ./scripts/run_test.sh all 256 300000"
+
+# Full workflow tasks with lazy loading
+full-workflow-small-lazy = "bash ./scripts/run_test.sh all 128 100000 lazy"
+full-workflow-large-lazy = "bash ./scripts/run_test.sh all 256 300000 lazy"
+
+# Profiling tasks - focused on compute_H_B domain only (cleaner profiles)
+profile-recovar = "nsys profile -t cuda,nvtx -f true --sampling-frequency 200 --nvtx-domain-include=\"compute_H_B\" -o test_profile_$(date +%Y%m%d_%H%M%S).nsys-rep recovar run_test_dataset"
+profile-pipeline-small = "nsys profile -t cuda,nvtx -f true -d 1000 --nvtx-domain-include=\"compute_H_B\" -o recovar-pipeline-128-1e5_$(date +%Y%m%d_%H%M%S).nsys-rep bash ./scripts/run_test.sh pipeline 128 100000"
+profile-pipeline-large = "nsys profile -t cuda,nvtx -f true -d 3000 --nvtx-domain-include=\"compute_H_B\" -o recovar-pipeline-256-3e5_$(date +%Y%m%d_%H%M%S).nsys-rep bash ./scripts/run_test.sh pipeline 256 300000"
+
+# Profiling tasks with lazy loading
+profile-pipeline-small-lazy = "nsys profile -t cuda,nvtx -f true -d 1500 --nvtx-domain-include=\"compute_H_B\" -o recovar-pipeline-128-1e5-lazy_$(date +%Y%m%d_%H%M%S).nsys-rep bash ./scripts/run_test.sh pipeline 128 100000 lazy"
+profile-pipeline-large-lazy = "nsys profile -t cuda,nvtx -f true -d 4000 --nvtx-domain-include=\"compute_H_B\" -o recovar-pipeline-256-3e5-lazy_$(date +%Y%m%d_%H%M%S).nsys-rep bash ./scripts/run_test.sh pipeline 256 300000 lazy"
+
+# Profiling tasks with data I/O annotations (standard loading)
+profile-pipeline-small-with-io = "nsys profile -t cuda,nvtx -f true -d 1500 --nvtx-domain-include=\"compute_H_B,data_io\" -o recovar-pipeline-128-1e5-with-io_$(date +%Y%m%d_%H%M%S).nsys-rep bash ./scripts/run_test.sh pipeline 128 100000"
+profile-pipeline-large-with-io = "nsys profile -t cuda,nvtx -f true -d 4000 --nvtx-domain-include=\"compute_H_B,data_io\" -o recovar-pipeline-256-3e5-with-io_$(date +%Y%m%d_%H%M%S).nsys-rep bash ./scripts/run_test.sh pipeline 256 300000"
+
+# Profiling tasks with lazy loading AND data I/O annotations
+profile-pipeline-small-lazy-with-io = "nsys profile -t cuda,nvtx -f true -d 1500 --nvtx-domain-include=\"compute_H_B,data_io\" -o recovar-pipeline-128-1e5-lazy-with-io_$(date +%Y%m%d_%H%M%S).nsys-rep bash ./scripts/run_test.sh pipeline 128 100000 lazy"
+profile-pipeline-large-lazy-with-io = "nsys profile -t cuda,nvtx -f true -d 4000 --nvtx-domain-include=\"compute_H_B,data_io\" -o recovar-pipeline-256-3e5-lazy-with-io_$(date +%Y%m%d_%H%M%S).nsys-rep bash ./scripts/run_test.sh pipeline 256 300000 lazy"
+
+# Comparison run - for reproducibility testing
+profile-pipeline-comparison = "bash ./scripts/run_pipeline_comparison.sh"
+
+# Profiling tasks - full capture (all NVTX annotations)
+profile-pipeline-small-full = "nsys profile -t cuda,nvtx -f true -d 1000 -o recovar-pipeline-128-1e5-full_$(date +%Y%m%d_%H%M%S).nsys-rep bash ./scripts/run_test.sh pipeline 128 100000"
+profile-pipeline-large-full = "nsys profile -t cuda,nvtx -f true -d 3000 -o recovar-pipeline-256-3e5-full_$(date +%Y%m%d_%H%M%S).nsys-rep bash ./scripts/run_test.sh pipeline 256 300000"
+
+# Profiling tasks - exclude compute_H_B (for analyzing everything else)
+profile-pipeline-small-no-hb = "nsys profile -t cuda,nvtx -f true -d 1000 --nvtx-domain-exclude=\"compute_H_B\" -o recovar-pipeline-128-1e5-no-hb_$(date +%Y%m%d_%H%M%S).nsys-rep bash ./scripts/run_test.sh pipeline 128 100000"
+profile-pipeline-large-no-hb = "nsys profile -t cuda,nvtx -f true -d 3000 --nvtx-domain-exclude=\"compute_H_B\" -o recovar-pipeline-256-3e5-no-hb_$(date +%Y%m%d_%H%M%S).nsys-rep bash ./scripts/run_test.sh pipeline 256 300000"

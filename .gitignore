@@ -128,3 +128,22 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+
+.pixi/
+data/
+
+# Cluster batch scripts and output files
+scripts/job_scripts/
+scripts/output/
+scripts/profiling/
+
+# Old batch scripts (legacy)
+.recovar_batch_*.sh
+scripts/recovar_batch_*.sh
+
+# SLURM output files  
+slurm-*.out
+
+# NVTX profiling files
+*.nsys-rep
