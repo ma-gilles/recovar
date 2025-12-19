@@ -56,7 +56,7 @@ if [ "$N_GPUS" -eq 1 ]; then
         --mask=from_halfmaps \
         -o pipeline_output_${N_GPUS}gpu_profile \
         --n-images $N_IMAGES_SUBSET \
-        --lazy-loading"
+        --lazy"
 else
     # Multi-GPU profiling
     echo "Running multi-GPU profiling ($N_GPUS GPUs)"
@@ -68,7 +68,7 @@ else
         --n-gpus $N_GPUS \
         -o pipeline_output_${N_GPUS}gpu_profile \
         --n-images $N_IMAGES_SUBSET \
-        --lazy-loading"
+        --lazy"
 fi
 
 # Run with profiling

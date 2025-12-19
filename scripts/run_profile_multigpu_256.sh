@@ -54,7 +54,7 @@ if [ "$N_GPUS" -eq 1 ]; then
         --poses poses.pkl \
         --mask=from_halfmaps \
         -o pipeline_output_${N_GPUS}gpu_profile \
-        --lazy-loading"
+        --lazy"
 else
     # Multi-GPU profiling
     echo "Running multi-GPU profiling ($N_GPUS GPUs)"
@@ -65,7 +65,7 @@ else
         --multi-gpu \
         --n-gpus $N_GPUS \
         -o pipeline_output_${N_GPUS}gpu_profile \
-        --lazy-loading"
+        --lazy"
 fi
 
 # Run with profiling
