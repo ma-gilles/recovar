@@ -13,7 +13,6 @@ import mrcfile
 # from cryodrgn.pose import PoseTracker
 from recovar import load_utils
 # xx = Path(__file__).resolve()
-import recovar.simulate_scattering_potential as gsm
 import logging
 import recovar.utils as utils
 CONSTANT_CTF=False
@@ -30,6 +29,12 @@ def get_dataset_params(n_images, grid_size, ctf_file, poses_file):
     
     # Initialize constrast == 1
     ctf_params = np.concatenate( [ctf_params, np.ones_like(ctf_params[:,0][...,None])], axis =-1)
+
+    # Ensure tilt-series fields exist (dose, tilt_angle) for compatibility with core.CTFParamIndex
+    ctf_params = np.concatenate(
+        [ctf_params, np.zeros_like(ctf_params[:, 0][..., None]), np.zeros_like(ctf_params[:, 0][..., None])],
+        axis=-1,
+    )
     rots, trans, _ = load_utils.load_poses(poses_file, n_images, grid_size, ind = None) 
     return ctf_params, np.array(rots), np.array(trans)
 
@@ -94,8 +99,21 @@ def get_params_generator(dataset_params_fn ):
 def random_sampling_scheme(n_images, grid_size, seed =0, uniform = True ):
     
     np.random.seed(seed)
-    dataset_params_fn = load_first_dataset_params
-    ctf_params, _, _ = generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  )
+    try:
+        dataset_params_fn = load_first_dataset_params
+        ctf_params, _, _ = generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  )
+    except Exception as e:
+        logger.warning(f"Falling back to synthetic CTF params (could not load dataset params): {e}")
+        ctf_params = np.zeros([n_images, int(core.CTFParamIndex.TILT_ANGLE) + 1], dtype=np.float32)
+        ctf_params[:, core.CTFParamIndex.DFU] = 15000.0
+        ctf_params[:, core.CTFParamIndex.DFV] = 15000.0
+        ctf_params[:, core.CTFParamIndex.DFANG] = 0.0
+        ctf_params[:, core.CTFParamIndex.VOLT] = 300.0
+        ctf_params[:, core.CTFParamIndex.CS] = 2.7
+        ctf_params[:, core.CTFParamIndex.W] = 0.07
+        ctf_params[:, core.CTFParamIndex.PHASE_SHIFT] = 0.0
+        ctf_params[:, core.CTFParamIndex.BFACTOR] = 0.0
+        ctf_params[:, core.CTFParamIndex.CONTRAST] = 1.0
     if uniform:
         rotations = uniform_rotation_sampling(n_images, grid_size, seed = seed )
     else:
@@ -109,12 +127,16 @@ def random_sampling_scheme(n_images, grid_size, seed =0, uniform = True ):
 def noctf_random_sampling_scheme(n_images, grid_size, seed =0, uniform = True ):
     
     np.random.seed(seed)
-    dataset_params_fn = load_first_dataset_params
-    ctf_params, _, _ = generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  )
+    try:
+        dataset_params_fn = load_first_dataset_params
+        ctf_params, _, _ = generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  )
+    except Exception as e:
+        logger.warning(f"Falling back to synthetic CTF params (could not load dataset params): {e}")
+        ctf_params = np.zeros([n_images, int(core.CTFParamIndex.TILT_ANGLE) + 1], dtype=np.float32)
 
     ctf_params = ctf_params * 0
     ctf_params[:,core.CTFParamIndex.CONTRAST]=1
-    ctf_params[:,core.volt_ind]=300
+    ctf_params[:,core.CTFParamIndex.VOLT]=300
     ctf_params[:,core.CTFParamIndex.W]=-1
     if uniform:
         rotations = uniform_rotation_sampling(n_images, grid_size, seed = seed )
@@ -391,7 +413,10 @@ def get_noise_model(option, grid_size):
         return np.ones(grid_size//2-1) 
     elif option == "radial1":
         noise_file = os.path.join(data_path, 'noise_10076.pkl')
-        return utils.pickle_load(noise_file)
+        if os.path.exists(noise_file):
+            return utils.pickle_load(noise_file)
+        logger.warning(f"Noise model file not found ({noise_file}); falling back to white noise model.")
+        return np.ones(grid_size//2-1)
 
 
 def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_images, outlier_file_input = None, grid_size = 128,
@@ -761,6 +786,7 @@ roll_batch = jax.vmap(lambda x,y,z: jax.numpy.roll(x,y,axis = z), in_axes = (0, 
 def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = 'linear_interp', mrc_file = None, pad_before_translate = False, Bfactor=100, premultiplied_ctf = False ):
 
     if disc_type == "pdb":
+        from recovar import simulate_scattering_potential as gsm
         gt_vols = [gsm.generate_volume_from_atoms(vol, voxel_size = experiment_dataset.voxel_size,  grid_size = experiment_dataset.grid_size,  freq_coords = None, jax_backend = False).reshape(-1) for vol in volumes ]
         B_fac_vols = [Bfactorize_vol(volume, experiment_dataset.voxel_size, Bfactor, experiment_dataset.volume_shape) for volume in gt_vols]
         gt_vols_norm = np.mean(np.linalg.norm(B_fac_vols, axis =(-1)))
@@ -1046,6 +1072,7 @@ def simulate_nufft_data_batch_from_pdb(atom_group, rotation_matrices, translatio
 
 
 def compute_projections_with_nufft(atom_group, plane_coords, voxel_size):
+    from recovar import simulate_scattering_potential as gsm
     # plane_coords = cu.get_unrotated_plane_coords(image_shape, voxel_size, scaled =True )
 
     plane_coords_vec = np.array(plane_coords.reshape(-1, 3)).astype(np.float64)
@@ -1064,6 +1091,7 @@ def get_nufft_slices(volume, rotation_matrices, image_shape, volume_shape, grid_
     return clean_image_mol
 
 def compute_volume_projections_with_nufft(volume, plane_coords, voxel_size):
+    from recovar import simulate_scattering_potential as gsm
     # This is here because I don't want to impose the dependencies for nufft. If you want to run this, you should 
     # pip install finufft
     # plane_coords = cu.get_unrotated_plane_coords(image_shape, voxel_size, scaled =True )
