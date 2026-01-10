@@ -85,6 +85,9 @@ install-recovar = "pip install -e . --no-deps"
 # Test installation
 test-recovar = "recovar run_test_dataset"
 
+# Quick smoke test: verifies the environment can import the package without running workloads.
+smoke-import-recovar = "python -c \"import recovar; print('recovar_import_ok')\""
+
 # Dataset creation tasks
 create-dataset-small = "bash ./scripts/run_test.sh create 128 100000"
 create-dataset-large = "bash ./scripts/run_test.sh create 256 300000"
