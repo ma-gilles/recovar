@@ -1,10 +1,14 @@
 import jax.numpy as jnp
 import numpy as np
 import jax, functools
+import nvtx
 
 from recovar import core, constants
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
+
+# NVTX domain for regularization operations
+NVTX_DOMAIN_REG = "regularization"
 
 ## Mean prior computation
 
@@ -67,6 +71,7 @@ def get_fsc(vol1, vol2, volume_shape, substract_shell_mean = False, frequency_sh
     return get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean, frequency_shift)
 
 # @functools.partial(jax.jit, static_argnums = [7,8,9,10, 11, 12,13])    
+@nvtx.annotate("get_fsc_gpu", color="blue", domain=NVTX_DOMAIN_REG)
 def get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean = False, frequency_shift = 0):
     
     if substract_shell_mean:
@@ -90,6 +95,7 @@ def get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean = False, frequenc
 
 
 # @functools.partial(jax.jit, static_argnums = [1,2])
+@nvtx.annotate("average_over_shells", color="green", domain=NVTX_DOMAIN_REG)
 def average_over_shells(input_vec, volume_shape, frequency_shift = 0 ):
     radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1) 
     labels = radial_distances.reshape(-1)
@@ -215,6 +221,7 @@ def downsample_lhs(lhs, volume_shape, upsampling_factor = 1):
 
 
 @functools.partial(jax.jit, static_argnums = [0,6, 7])    
+@nvtx.annotate("compute_fsc_prior_gpu_v2", color="cyan", domain=NVTX_DOMAIN_REG)
 def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequency_shift , substract_shell_mean = False, upsampling_factor = 1 ):
     epsilon = constants.FSC_ZERO_THRESHOLD
     # FSC top:
@@ -251,6 +258,7 @@ def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequenc
 
 
 
+@nvtx.annotate("covariance_update_col", color="yellow", domain=NVTX_DOMAIN_REG)
 def covariance_update_col(H, B, prior, epsilon = constants.EPSILON):
     # H is not divided by sigma.
     cov = jnp.where( jnp.abs(H) < epsilon , 0,  B / ( H + (1 / prior) ) )
@@ -285,6 +293,7 @@ def prior_iteration(H0, H1, B0, B1, frequency_shift, init_regularization, substr
 
 from recovar import relion_functions
 @functools.partial(jax.jit, static_argnums = [6,7,8,9,10, 12,13])    
+@nvtx.annotate("prior_iteration_relion_style", color="red", domain=NVTX_DOMAIN_REG)
 def prior_iteration_relion_style(H0, H1, B0, B1, frequency_shift, init_regularization, substract_shell_mean, volume_shape, kernel = 'triangular', use_spherical_mask = True, grid_correct = True, volume_mask = None, prior_iterations = 3, downsample_from_fsc_flag = False):
     # assert substract_shell_mean == False
     # assert jnp.linalg.norm(frequency_shift) < 1e-8

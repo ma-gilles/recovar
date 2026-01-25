@@ -2,12 +2,16 @@ import logging
 import jax.numpy as jnp
 import numpy as np
 import functools, time, jax
+import nvtx
 from recovar import core, covariance_core, latent_density, homogeneous, constants, utils, dataset, linalg
 
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 
 logger = logging.getLogger(__name__)
+
+# NVTX domain for embedding/latent variable operations
+NVTX_DOMAIN_EMBED = "embedding"
 USE_CUBIC = True
 
 def split_weights(weight, cryos):
@@ -54,6 +58,7 @@ def generate_conformation_from_reprojection(xs, mean, u ):
 
 
 
+@nvtx.annotate("get_per_image_embedding", color="purple", domain=NVTX_DOMAIN_EMBED)
 def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None):
 
     assert u.shape[0] == cryos[0].volume_size, "input u should be volume_size x basis_size"
@@ -127,6 +132,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
 
 
 # @functools.partial(jax.jit, static_argnums = [5])    
+@nvtx.annotate("get_coords_in_basis_and_contrast", color="blue", domain=NVTX_DOMAIN_EMBED)
 def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None, force_not_shared_label = False, contrast_shared_across_tilt_series = False):
     # If skip_image_i_in_series is not None, it will skip that image in the tilt series. This is useful for detecting bad tilt images.
     # not_shared_contrast = not contrast_shared_across_tilt_series

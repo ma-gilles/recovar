@@ -2,16 +2,21 @@ import logging
 import jax.numpy as jnp
 import numpy as np
 import jax, time
+import nvtx
 
 from recovar import core, covariance_estimation, embedding, plot_utils, linalg, constants, utils, noise
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 
 logger = logging.getLogger(__name__)
+
+# NVTX domain for principal components operations
+NVTX_DOMAIN_PCA = "principal_components"
 # from guppy import hpy
 # h = hpy()
 
 
+@nvtx.annotate("estimate_principal_components", color="purple", domain=NVTX_DOMAIN_PCA)
 def estimate_principal_components(cryos, options,  means, mean_prior, volume_mask,
                                 dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use,
                                 covariance_options = None, variance_estimate = None, use_reg_mean_in_contrast = False, use_multi_gpu = False, n_gpus = None):
@@ -156,6 +161,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
     return u, s, covariance_cols, picked_frequencies, column_fscs
 
 
+@nvtx.annotate("get_cov_svds", color="blue", domain=NVTX_DOMAIN_PCA)
 def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,  vol_batch_size, gpu_memory_to_use, ignore_zero_frequency, randomized_sketch_size ):
     u = {}; s = {}    
     
@@ -172,6 +178,7 @@ def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,
     return u, s
 
 
+@nvtx.annotate("pca_by_projected_covariance", color="green", domain=NVTX_DOMAIN_PCA)
 def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = -1):
 
     # basis_size = basis.shape[-1]
@@ -334,6 +341,7 @@ def get_all_copied_columns(columns, picked_frequencies, volume_shape):
 
 # IMPLEMENTS THE TWO MATVECS WE NEED TO RUN THE RANDOMIZED SVD.
 
+@nvtx.annotate("right_matvec_with_spatial_Sigma", color="orange", domain=NVTX_DOMAIN_PCA)
 def right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40):
     st_time = time.time()
     # Some precompute
@@ -425,6 +433,7 @@ def right_matvec_with_spatial_Sigma_v2(test_mat, columns, picked_frequency_indic
 
 
 
+@nvtx.annotate("left_matvec_with_spatial_Sigma", color="yellow", domain=NVTX_DOMAIN_PCA)
 def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40):
     st_time =time.time()
     # Some precompute
@@ -545,6 +554,7 @@ def left_matvec_with_spatial_Sigma_v2(Q, columns, picked_frequency_indices, volu
     return Q_F_C_F
 
 
+@nvtx.annotate("randomized_real_svd_of_columns", color="red", domain=NVTX_DOMAIN_PCA)
 def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, test_size = 300, gpu_memory_to_use= 40, ignore_zero_frequency = False):
     st_time = time.time()
 
