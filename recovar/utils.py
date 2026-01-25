@@ -51,21 +51,36 @@ def get_gpu_memory_total(device =0):
     if GPU_MEMORY_LIMIT is not None:
         return GPU_MEMORY_LIMIT
     if jax_has_gpu():
-        return int(jax.local_devices()[device].memory_stats()['bytes_limit']/1e9)
+        mem_stats = jax.local_devices()[device].memory_stats()
+        if mem_stats is not None and 'bytes_limit' in mem_stats:
+            return int(mem_stats['bytes_limit']/1e9)
+        else:
+            logger.warning("get_gpu_memory_total: Could not read GPU memory_stats bytes_limit via JAX (memory_stats() returned None/empty). Falling back to 80GB.")
+            return int(80)
     else:
         logger.warning("GPU not found. Using default value of 80GB for batching computation on CPU.")
         return int(80)
 
 def get_gpu_memory_used(device =0):
     if jax_has_gpu():
-        return int(jax.local_devices()[device].memory_stats()['bytes_in_use']/1e9)
+        mem_stats = jax.local_devices()[device].memory_stats()
+        if mem_stats is not None and 'bytes_in_use' in mem_stats:
+            return int(mem_stats['bytes_in_use']/1e9)
+        else:
+            logger.warning("get_gpu_memory_used: Could not read GPU memory_stats bytes_in_use via JAX (memory_stats() returned None/empty). Returning 0.")
+            return int(0)
     else:
         logger.warning("GPU not found. Using default value of 80GB for batching computation on CPU.")
         return int(0)
     
 def get_peak_gpu_memory_used(device =0):
     if jax_has_gpu():
-        return int(jax.local_devices()[device].memory_stats()['peak_bytes_in_use']/1e9)
+        mem_stats = jax.local_devices()[device].memory_stats()
+        if mem_stats is not None and 'peak_bytes_in_use' in mem_stats:
+            return int(mem_stats['peak_bytes_in_use']/1e9)
+        else:
+            logger.warning("get_peak_gpu_memory_used: Could not read GPU memory_stats peak_bytes_in_use via JAX (memory_stats() returned None/empty). Returning 0.")
+            return int(0)
     else:
         logger.warning("GPU not found. Peak =0")
         return int(0)

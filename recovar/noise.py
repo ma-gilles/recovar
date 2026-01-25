@@ -3,12 +3,16 @@ import jax.numpy as jnp
 import numpy as np
 import jax, time
 import functools
+import nvtx
 from recovar import core, covariance_core, regularization, utils, constants
 from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 import os
 
 logger = logging.getLogger(__name__)
+
+# NVTX domain for noise operations
+NVTX_DOMAIN_NOISE = "noise"
 ## There is currently two ways to estimate noise:
 # White and radial
 # From my observations, white seems fine for most datasets but some need some other noise distribution
@@ -339,6 +343,7 @@ DEBUG = False
     # Use the above function to jaxopt your way to a noise model. Should impose >=0, and perhaps some smoothness.
     
 
+@nvtx.annotate("fit_noise_model_to_images", color="red", domain=NVTX_DOMAIN_NOISE)
 def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, image_subset, batch_size, invert_mask, disc_type='linear_interp', use_batch_solver=True, tilt_dose_inner=False, image_n_iter=1e4):
     """Fit noise model to images, handling tilt series data specially.
     
@@ -630,6 +635,7 @@ def upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, cryos, means,
         return upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size, dilated_volume_mask, noise_ind_subset = None)
 
 
+@nvtx.annotate("upper_bound_noise_by_signal_p_noise", color="green", domain=NVTX_DOMAIN_NOISE)
 def upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size, dilated_volume_mask, noise_ind_subset = None):
         # Now, estimate the variance of the signal. If the variance estimate ends up negative, we have overestimated the noise variance.
         for noise_repeat in range(2):
@@ -681,6 +687,7 @@ def upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size
 
 
 
+@nvtx.annotate("estimate_noise_level_no_masks", color="orange", domain=NVTX_DOMAIN_NOISE)
 def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimate, batch_size, disc_type='linear_interp'):
     lhs = 0
     rhs = 0 
@@ -750,6 +757,7 @@ def batch_make_radial_noise(average_image_PS, image_shape):
     # Perhaps it should be mean at low freq and median at high freq?
 mean_fn = np.mean
 
+@nvtx.annotate("estimate_noise_variance", color="yellow", domain=NVTX_DOMAIN_NOISE)
 def estimate_noise_variance(experiment_dataset, batch_size, max_images = 10000):
     sum_sq = 0
 

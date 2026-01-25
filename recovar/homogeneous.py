@@ -2,6 +2,7 @@ import logging
 import jax.numpy as jnp
 import numpy as np
 import jax, functools, time
+import nvtx
 
 from recovar import core, regularization, constants, noise
 from recovar.fourier_transform_utils import fourier_transform_utils
@@ -10,7 +11,11 @@ from recovar import utils
 
 logger = logging.getLogger(__name__)
 
+# NVTX domain for homogeneous reconstruction
+NVTX_DOMAIN_HOMO = "homogeneous"
 
+
+@nvtx.annotate("get_mean_conformation_relion", color="blue", domain=NVTX_DOMAIN_HOMO)
 def get_mean_conformation_relion(cryos, batch_size, noise_variance=None, use_regularization=False, 
                                 upsampling_factor=2, disc_type='linear_interp', tau=None, 
                                 use_spherical_mask=True, grid_correct=True):

@@ -2,6 +2,7 @@ import logging
 import jax
 import jax.numpy as jnp
 import numpy as np
+import nvtx
 
 import recovar.padding as pad
 import functools
@@ -10,6 +11,9 @@ from recovar.fourier_transform_utils import fourier_transform_utils
 ftu = fourier_transform_utils(jnp)
 
 logger = logging.getLogger(__name__)
+
+# NVTX domain for covariance core operations
+NVTX_DOMAIN_COV_CORE = "covariance_core"
 
 # Covariance computation
 
@@ -29,6 +33,7 @@ def get_picked_frequencies(volume_shape, radius = 2, use_half = True):
     return picked_frequency_indices
 
 @functools.partial(jax.jit, static_argnums = [4,5,6,7,8,9,10])    
+@nvtx.annotate("get_per_image_tight_mask", color="green", domain=NVTX_DOMAIN_COV_CORE)
 def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_threshold, image_shape, volume_shape, grid_size, padding, disc_type, binary = True, soften = -1):
     
     disc_type = 'linear_interp'
@@ -76,6 +81,7 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
 
 
 @functools.partial(jax.jit, static_argnums = [2])    
+@nvtx.annotate("apply_image_masks", color="cyan", domain=NVTX_DOMAIN_COV_CORE)
 def apply_image_masks(images, image_masks, image_shape):
     images = ftu.get_idft2(images.reshape([images.shape[0], *image_shape]))
     images = images * image_masks
@@ -84,6 +90,7 @@ def apply_image_masks(images, image_masks, image_shape):
 
 
 @functools.partial(jax.jit, static_argnums = [2])    
+@nvtx.annotate("apply_image_masks_to_eigen", color="cyan", domain=NVTX_DOMAIN_COV_CORE)
 def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape):
     proj_eigen = ftu.get_idft2(proj_eigen.reshape([*proj_eigen.shape[0:2], *image_shape]))
     proj_eigen = proj_eigen * image_masks
@@ -93,6 +100,7 @@ def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape):
 
 # Compute y_i - P_i mu terms. If premultiplied_ctf is true, this computes z_i - CTF_i P_i mu where z_i = y_i CTF_i is the premultiplied image.
 @functools.partial(jax.jit, static_argnums = [5,6,7,8,9,10, 11], static_argnames = ('premultiplied_ctf'))    
+@nvtx.annotate("get_centered_images", color="yellow", domain=NVTX_DOMAIN_COV_CORE)
 def get_centered_images(images, mean, CTF_params, rotation_matrices, translations, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type, premultiplied_ctf = False  ):    
 
     translated_images = core.translate_images(images, translations, image_shape)
@@ -112,6 +120,7 @@ def check_mask(mask):
 batch_forward_model = jax.vmap(core.forward_model, in_axes = (0, None, None))
 
 @functools.partial(jax.jit, static_argnums = [3,4,5,6,7])    
+@nvtx.annotate("batch_over_vol_forward_model", color="blue", domain=NVTX_DOMAIN_COV_CORE)
 def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):
     batch_grid_pt_vec_ind_of_images = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape )
     batch_CTF = CTF_fun( CTF_params, image_shape, voxel_size)
@@ -165,6 +174,7 @@ def square_kernel(gridpoints, gridpoint_target, kernel_width = 1):
 
 # Are there at most 4 or 5 within one dist? or 9?
 #@jax.vmap(in_axes=[0,0,None])
+@nvtx.annotate("sum_up_over_near_grid_points", color="orange", domain=NVTX_DOMAIN_COV_CORE)
 def sum_up_over_near_grid_points(image, gridpoints, gridpoint_target, kernel = "triangular", kernel_width = 1):
     # if kernel == "triangular":
     #     kernel_vals = triangular_kernel(gridpoints, gridpoint_target, kernel_width = kernel_width)
@@ -177,6 +187,7 @@ def sum_up_over_near_grid_points(image, gridpoints, gridpoint_target, kernel = "
     kernel_estimated = jnp.sum(kernel_vals * image, axis =-1)
     return kernel_estimated #, jnp.sum(kernel_vals)
 
+@nvtx.annotate("evaluate_kernel_on_grid", color="magenta", domain=NVTX_DOMAIN_COV_CORE)
 def evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel = "triangular", kernel_width = 1):
     if kernel == "triangular":
         kernel_vals = triangular_kernel(gridpoints, gridpoint_target, kernel_width = kernel_width)
