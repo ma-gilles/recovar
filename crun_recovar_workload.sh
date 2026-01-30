@@ -108,8 +108,9 @@ submit_job() {
     batch_script=$(generate_batch_script "$task_cmd")
     echo "Generated batch script: $batch_script"
     
-    # Submit using crun
-    crun -q "$GPU_QUERY" --gpus="$num_gpus" -t "$time_limit" --cpu-arch-agnostic -b "$batch_script"
+    # Submit using crun with explicit output directory
+    crun -q "$GPU_QUERY" --gpus="$num_gpus" -t "$time_limit" --cpu-arch-agnostic \
+        --output-dir="$SCRIPT_DIR/scripts/output" -b "$batch_script"
     
     echo "Job submitted successfully!"
     echo ""
