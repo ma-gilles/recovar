@@ -13,7 +13,7 @@ BASE_DIR="/workspace"
 N_GPUS=${1:-1}
 IMAGE_SIZE=128
 N_IMAGES=100000
-N_IMAGES_SUBSET=50000  # Use subset for faster profiling
+N_IMAGES_SUBSET=100000  # Use full dataset for profiling
 
 # Dataset directory
 DATASET_DIR="${BASE_DIR}/data-${IMAGE_SIZE}-${N_IMAGES}"
@@ -35,7 +35,7 @@ echo "=========================================="
 echo "Multi-GPU Profiling (128-100k dataset)"
 echo "Dataset directory: $DATASET_DIR/test_dataset"
 echo "Number of GPUs: $N_GPUS"
-echo "Images to process: $N_IMAGES_SUBSET (subset)"
+echo "Images to process: $N_IMAGES_SUBSET"
 echo "=========================================="
 
 cd "$DATASET_DIR/test_dataset/"
