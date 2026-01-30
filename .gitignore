@@ -131,6 +131,7 @@ dmypy.json
 
 
 .pixi/
+data-*/
 data/
 
 # Cluster batch scripts and output files
