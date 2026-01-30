@@ -159,3 +159,10 @@ profile-pipeline-large-full = "nsys profile -t cuda,nvtx -f true -d 3000 -o reco
 # Profiling tasks - exclude compute_H_B (for analyzing everything else)
 profile-pipeline-small-no-hb = "nsys profile -t cuda,nvtx -f true -d 1000 --nvtx-domain-exclude=\"compute_H_B\" -o recovar-pipeline-128-1e5-no-hb_$(date +%Y%m%d_%H%M%S).nsys-rep bash ./scripts/run_test.sh pipeline 128 100000"
 profile-pipeline-large-no-hb = "nsys profile -t cuda,nvtx -f true -d 3000 --nvtx-domain-exclude=\"compute_H_B\" -o recovar-pipeline-256-3e5-no-hb_$(date +%Y%m%d_%H%M%S).nsys-rep bash ./scripts/run_test.sh pipeline 256 300000"
+
+# Stacking optimization benchmarks
+bench-stack = "python stacking_bench/benchmark_stack.py --output stacking_bench/benchmark_results.json --runs 3"
+bench-stack-production = "python stacking_bench/benchmark_stack.py --output stacking_bench/benchmark_results_prod.json --runs 3 --skip-oom-risk"
+bench-stack-async = "python stacking_bench/benchmark_stack.py --output stacking_bench/benchmark_results_async.json --runs 3 --test-async --skip-oom-risk"
+bench-stack-large = "python stacking_bench/benchmark_stack.py --output stacking_bench/benchmark_results_large.json --volume-size 16777216 --n-picked 300 --runs 2 --skip-oom-risk"
+analyze-profile-2gpu = "python stacking_bench/analyze_profile.py data-128-100000/test_dataset/recovar_2gpu_profile.sqlite --output stacking_bench/profile_analysis.json"

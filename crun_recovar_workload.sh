@@ -25,7 +25,7 @@ generate_batch_script() {
     
     cat > "$batch_script" <<'EOF'
 #!/bin/bash
-#SBATCH --output=/home/scratch.dleshchev_other/recovar/scripts/output/slurm-%j.out
+#SBATCH --output=/home/scratch.dleshchev_other/heterogeneity_dev/scripts/output/slurm-%j.out
 set -e
 
 echo "=========================================="
@@ -36,7 +36,7 @@ echo "GPUs: $(nvidia-smi -L)"
 echo "=========================================="
 
 # Configuration
-SCRIPT_DIR="/home/scratch.dleshchev_other/recovar"
+SCRIPT_DIR="/home/scratch.dleshchev_other/heterogeneity_dev"
 CONTAINER_IMAGE="recovar:latest"
 TASK_CMD="TASK_CMD_PLACEHOLDER"
 
@@ -141,6 +141,13 @@ if [ -z "$ACTION" ]; then
     echo "    profile-2gpu-256 - Profile 2 GPU run (2h)"
     echo "    profile-4gpu-256 - Profile 4 GPU run (1.5h)"
     echo ""
+    echo "  Optimization benchmarks:"
+    echo "    bench-stack-1gpu       - Benchmark stacking strategies (1 GPU, 15m)"
+    echo "    bench-stack-2gpu       - Benchmark stacking strategies (2 GPU, 15m)"
+    echo "    bench-stack-async      - Benchmark with async strategy (1 GPU, 20m)"
+    echo "    bench-stack-large      - Benchmark with larger arrays (1 GPU, 25m)"
+    echo "    analyze-profile        - Analyze existing profile data (1 GPU, 5m)"
+    echo ""
     echo "  Dataset creation:"
     echo "    create-small    - Create 128-100k dataset (1h)"
     echo "    create-large    - Create 256-300k dataset (2h)"
@@ -172,15 +179,15 @@ case $ACTION in
         submit_job "Compare Multi-GPU Outputs" "pixi run compare-all-multigpu" 1 "00:10:00"
         ;;
     
-    # Profiling (128-100k dataset)
+    # Profiling (128-100k dataset, full 100k images)
     profile-1gpu)
         submit_job "Profile 1 GPU (128-100k)" "pixi run profile-1gpu" 1 "01:00:00"
         ;;
     profile-2gpu)
-        submit_job "Profile 2 GPUs (128-100k)" "pixi run profile-2gpu" 2 "00:45:00"
+        submit_job "Profile 2 GPUs (128-100k)" "pixi run profile-2gpu" 2 "01:30:00"
         ;;
     profile-4gpu)
-        submit_job "Profile 4 GPUs (128-100k)" "pixi run profile-4gpu" 4 "00:30:00"
+        submit_job "Profile 4 GPUs (128-100k)" "pixi run profile-4gpu" 4 "00:45:00"
         ;;
     
     # Profiling (256-300k dataset)
@@ -208,6 +215,23 @@ case $ACTION in
         ;;
     pipeline-large)
         submit_job "Pipeline Large" "pixi run pipeline-large" 1 "02:00:00"
+        ;;
+    
+    # Optimization benchmarks
+    bench-stack-1gpu)
+        submit_job "Stack Benchmark 1 GPU" "pixi run bench-stack" 1 "00:15:00"
+        ;;
+    bench-stack-2gpu)
+        submit_job "Stack Benchmark 2 GPUs" "pixi run bench-stack" 2 "00:15:00"
+        ;;
+    bench-stack-async)
+        submit_job "Stack Benchmark Async" "pixi run bench-stack-async" 1 "00:20:00"
+        ;;
+    bench-stack-large)
+        submit_job "Stack Benchmark Large Arrays" "pixi run bench-stack-large" 1 "00:25:00"
+        ;;
+    analyze-profile)
+        submit_job "Analyze Profile Data" "pixi run analyze-profile-2gpu" 1 "00:05:00"
         ;;
     
     *)
