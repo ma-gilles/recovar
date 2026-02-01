@@ -1,11 +1,6 @@
 #%%
-
 import os
-
-
 os.environ["CUDA_VISIBLE_DEVICES"] = "2"
-
-
 import jax
 print(f"JAX devices: {jax.devices()}")
 

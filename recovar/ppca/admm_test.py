@@ -123,14 +123,28 @@ class LeastSquareFromNormalEqs(ProxOperator):
 
 
 class WaveletL1(L1):
-    r"""Proximal operator for the wavelet L1 regularization."""
+    r"""Proximal operator for the wavelet L1 regularization.
+    
+    Supports both scalar sigma and level-dependent sigma (array).
+    
+    Args:
+        dim: Shape (volume_size, n_basis)
+        volume_shape: 3D shape tuple
+        wavelet_type: Type of wavelet (default 'db1')
+        sigma: Regularization weight. Can be:
+            - scalar: same threshold for all wavelet coefficients
+            - array of shape (n_wavelet_coeffs,): level-dependent thresholds
+              (use wavelet_avg_square_by_level_both to compute level-dependent weights)
+    """
     def __init__(self, dim, volume_shape, wavelet_type='db1', sigma=1.):
-        super().__init__(sigma)
+        # Pass scalar to parent (for compatibility)
+        super().__init__(np.mean(sigma) if hasattr(sigma, '__len__') else sigma)
         self.dim = dim
         self.volume_shape = volume_shape
         self.volume_size = np.prod(volume_shape)
         self.wavelet_type = wavelet_type
-        self.sigma = sigma
+        self.sigma = sigma  # Can be scalar or array
+        self.sigma_is_array = hasattr(sigma, '__len__') and len(sigma) > 1
         # Create the wavelet transform (keep original for compatibility)
         self.wavelet = Wavelet_multilvl(volume_shape, wavelet_type)
         
@@ -159,8 +173,15 @@ class WaveletL1(L1):
         
         # Convert all basis functions to wavelet basis at once (NumPy operation)
         x_wavelet_all = self.wavelet.to_basis(basis_stack)  # Shape: (n_basis, n_wavelet_coeffs)
-        # Compute total L1 norm across all basis functions
-        return float(jnp.sum(self.sigma * jnp.abs(x_wavelet_all.T)))
+        
+        # Compute total weighted L1 norm
+        if self.sigma_is_array:
+            # Level-dependent: sum_i sigma[i] * sum_j |x_wavelet[j, i]|
+            sigma_broadcast = jnp.array(self.sigma)[:, None]  # Shape: (n_wavelet_coeffs, 1)
+            return float(jnp.sum(sigma_broadcast * jnp.abs(x_wavelet_all.T)))
+        else:
+            # Scalar sigma
+            return float(jnp.sum(self.sigma * jnp.abs(x_wavelet_all.T)))
 
     @_check_tau
     def prox(self, x, tau):
@@ -181,10 +202,17 @@ class WaveletL1(L1):
         x_wavelet_all = self.wavelet.to_basis(basis_stack)  # Shape: (n_basis, n_wavelet_coeffs)
         wavelet_forward_time = time.time() - wavelet_start
         
-        # Apply L1 proximal operator
+        # Apply L1 proximal operator with level-dependent or scalar sigma
         prox_start = time.time()
-        # x_wavelet_all = super().prox(x_wavelet_all.T, tau)
-        x_wavelet_all = _softthreshold(x_wavelet_all.T, tau * self.sigma)
+        if self.sigma_is_array:
+            # Level-dependent sigma: shape (n_wavelet_coeffs,)
+            # x_wavelet_all.T has shape (n_wavelet_coeffs, n_basis)
+            # Broadcasting: threshold[i] applies to all basis functions for coefficient i
+            sigma_broadcast = np.array(self.sigma)[:, None]  # Shape: (n_wavelet_coeffs, 1)
+            x_wavelet_all = _softthreshold(x_wavelet_all.T, tau * sigma_broadcast)
+        else:
+            # Scalar sigma
+            x_wavelet_all = _softthreshold(x_wavelet_all.T, tau * self.sigma)
         prox_time = time.time() - prox_start
         
         # Convert back to image space
@@ -297,16 +325,20 @@ def admm_wavelet(lhs, rhs, sigma, tau, niter, volume_shape, normal_size, X0, pro
         prox_wavelet.sigma = sigma
     # prox_wavelet = L1(sigma)
 
-    # Run ADMM optimization
+    # Run ADMM optimization - X0 needs to be flattened
+    X0_flat = X0.flatten() if hasattr(X0, 'flatten') else np.array(X0).flatten()
     X_rec, Z_rec = ADMM(
         prox_lstsr, 
         prox_wavelet, 
-        x0=X0,
+        x0=X0_flat,
         tau=tau, 
         niter=niter,
         show = False,
         gfirst=True
     )
+    
+    # Reshape back to original size
+    X_rec = np.array(X_rec).reshape(normal_size)
     
     # X_rec = X_rec.reshape(normal_size)
     

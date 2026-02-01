@@ -234,7 +234,7 @@ def E_M_step_batch(images, lhs_summed, rhs_summed, mean, W, CTF_params, rotation
 batch1_symmetrize_ft_volume = jax.vmap(utils.symmetrize_ft_volume, in_axes = (1, None), out_axes = 1)
 
 # @functools.partial(jax.jit, static_argnums = [5])    
-def EM_step(experiment_datasets, mean_estimate, W_estimate, batch_size, W_prior, sparse_PCA = False, use_whitening=False, l1_sigma=None, disc_type_mean='nearest', disc_type='nearest'):
+def EM_step(experiment_datasets, mean_estimate, W_estimate, batch_size, W_prior, sparse_PCA = False, use_whitening=False, l1_sigma=None, disc_type_mean='cubic', disc_type='nearest'):
     """
     Perform one EM step for PPCA.
     
@@ -381,7 +381,7 @@ def batch_unvec(x):
     return x.reshape(-1,n,n).swapaxes(-1,-2)
 
 
-def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter = 20, sparse_PCA = False, U_gt = None, S_gt = None, make_plots = False, use_whitening=False, l1_sigma=None, disc_type_mean='nearest', disc_type='nearest'):
+def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter = 20, sparse_PCA = False, U_gt = None, S_gt = None, make_plots = False, use_whitening=False, l1_sigma=None, disc_type_mean='cubic', disc_type='nearest'):
     """
     Run EM algorithm for PPCA.
     
@@ -446,9 +446,8 @@ def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter = 20, spar
     # =============================================================================
     if sparse_PCA:
         if l1_sigma is None:
-            # Use W_prior as l1_sigma like the old code did
-            l1_sigma = W_prior
-            print(f"L1 regularization: using W_prior as sigma (like old code)")
+            raise ValueError("sparse_PCA=True requires l1_sigma to be specified. "
+                           "Pass a scalar (e.g., l1_sigma=0.1) for uniform regularization.")
         if np.isscalar(l1_sigma):
             print(f"L1 regularization: sigma={l1_sigma:.6f} (uniform)")
         else:

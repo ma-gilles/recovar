@@ -158,6 +158,8 @@ def adjoint_slice_volume_by_map(slices, rotation_matrices, image_shape, volume_s
     _, u = vjp(f,jnp.zeros(volume_size, dtype = slices.dtype ))
     return u(slices)[0]
 
+batch_over_vol_adjoint_slice_volume_by_map = jax.vmap( adjoint_slice_volume_by_map, in_axes = (-1, None,None, None,None), out_axes = ( -1))
+
 # This is what people called the backprojection
 # Computes \sum_i S_i v_i where S_i: N^2 -> N^3 is sparse, v_i \in N^2
 @functools.partial(jax.jit, static_argnums=0)
@@ -169,21 +171,6 @@ def summed_adjoint_slice_by_nearest(volume_size, image_vecs, plane_indices_on_gr
 
 batch_over_vol_summed_adjoint_slice_by_nearest = jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, -1,None, -1), out_axes = ( -1))
 
-
-# def batch_over_vol_summed_adjoint_slice_by_nearest_add():
-#     return jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, -1,None, -1), out_axes = ( -1))
-# batch_over_vol_summed_adjoint_slice_by_nearest = jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, -1,None, -1), out_axes = ( -1))
-
-
-# # Computes \sum_i S_i v_i where S_i: N^2 -> N^3 is sparse, v_i \in N^2
-# @functools.partial(jax.jit, static_argnums=0)
-# def summed_adjoint_slice_by_nearest(volume_size, image_vecs, plane_indices_on_grids):
-#     volume_vec = jnp.zeros(volume_size, dtype = image_vecs.dtype)
-#     volume_vec = volume_vec.at[plane_indices_on_grids.reshape(-1)].add((image_vecs).reshape(-1))
-#     return volume_vec
-
-
-# batch_over_vol_summed_adjoint_slice_by_nearest = jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, -1,None), out_axes = ( -1))
 
 nosummed_adjoint_slice_by_nearest = jax.vmap( summed_adjoint_slice_by_nearest, in_axes = (None, 0,0)) 
 
@@ -197,10 +184,6 @@ def forward_model(volume_vec, CTF_val_on_grid_stacked, plane_indices_on_grid_sta
     return batch_slice_volume_by_nearest(volume_vec, plane_indices_on_grid_stacked) * CTF_val_on_grid_stacked
 
 
-# @jax.jit
-# def translate_single_image(image, translation, lattice):
-#     phase_shift = jnp.exp( 1j * -2 * jnp.pi * (lattice @ translation[:,None] ) )[...,0]
-#     return image.reshape(-1) * phase_shift
 
 @jax.jit
 def translate_single_image(image, translation, lattice):
