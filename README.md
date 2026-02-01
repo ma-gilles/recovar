@@ -1,9 +1,6 @@
 # RECOVAR: Tools for cryo-EM heterogeneity analysis
 
-
-**License**: the code has been modified and is now under the PU-RL v2.0 license, and the code imports libraries that are under non-PU-RL v2.0 (including GPL) licenses.
-
----
+License note: the code has been modified and is now under the PU-RL v2.0 license, and the code imports libraries that are under non-PU-RL v2.0 (including GPL) licenses
 
 RECOVAR is a software tool for analyzing different conformations in heterogeneous cryo-EM and cryo-ET datasets. RECOVAR can reconstruct high-resolution volumes, estimate conformational density and low free-energy motions, and automatically identify subsets of images with a particular volume feature.
 
@@ -20,7 +17,7 @@ RECOVAR is a software tool for analyzing different conformations in heterogeneou
 </details>
 
 If you are interested in the research and methods
-[see paper here](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122) and [recorded talk here](https://www.youtube.com/watch?v=7ycfzGcWOVI).
+[see paper here](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122) and recorded talk [here](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s) (the talk is a little outdated).
 
 [Installation](#installation)
 
@@ -1446,7 +1443,7 @@ You can use all tilts by not passing the argument --ntilts.
 - *Other ones, probably?*: if you run into issues, please let me know. 
 
 ## Acknowledgement
-The input/output (reading/writing/loading) part of the code is reimplemented version of cryoDRGN (https://cryodrgn.cs.princeton.edu/) and some algorithms are inspired by RELION (https://relion.readthedocs.io/en/release-5.0/). Hopefully, it is clear from the code naming/comments.
+A lot of code in RECOVAR is based on cryoDRGN (https://cryodrgn.cs.princeton.edu/) and RELION (https://relion.readthedocs.io/en/release-5.0/). Hopefully, it is clear from the code naming/comments.
 Much of this documentation is generated using chatGTP4.
 
 ## Citation
