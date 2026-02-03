@@ -174,15 +174,18 @@ def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,
 
 def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = -1):
 
+    gpu_memory_to_use = gpu_memory_to_use if gpu_memory_to_use is not None else utils.get_gpu_memory_total()
+
     # basis_size = basis.shape[-1]
     basis_size = n_pcs_to_compute
     basis = basis[:,:basis_size]
 
     ####
-    memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() -  2*basis_size**4*8/1e9
+    memory_left_over_after_kron_allocate = gpu_memory_to_use -  2*basis_size**4*8/1e9
     batch_size = utils.get_embedding_batch_size(basis, cryos[0].image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate )
 
     logger.info('batch size for covariance computation: ' + str(batch_size))
+    print('batch size for covariance computation: ' + str(batch_size))
 
     covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, batch_size,  disc_type, disc_type_u, parallel_analysis = parallel_analysis, do_mask_images = use_mask )
 

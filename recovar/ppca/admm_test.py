@@ -3,7 +3,6 @@ import jax.numpy as jnp
 import jax
 from jax import jit, vmap, lax
 from pyproximal import ProxOperator, Nuclear, L1
-from pyproximal.optimization.primal import ADMM
 from pyproximal.ProxOperator import _check_tau
 from recovar import linalg
 from recovar.ppca.sparse_PCA import Wavelet_multilvl
@@ -125,7 +124,8 @@ class LeastSquareFromNormalEqs(ProxOperator):
 class WaveletL1(L1):
     r"""Proximal operator for the wavelet L1 regularization.
     
-    Supports both scalar sigma and level-dependent sigma (array).
+    Supports scalar sigma, level-dependent sigma (1D array),
+    or per-basis level-dependent sigma (2D array).
     
     Args:
         dim: Shape (volume_size, n_basis)
@@ -134,7 +134,8 @@ class WaveletL1(L1):
         sigma: Regularization weight. Can be:
             - scalar: same threshold for all wavelet coefficients
             - array of shape (n_wavelet_coeffs,): level-dependent thresholds
-              (use wavelet_avg_square_by_level_both to compute level-dependent weights)
+            - array of shape (n_basis, n_wavelet_coeffs): per-basis level-dependent thresholds
+              (use wavelet_avg_square_by_level_both per basis)
     """
     def __init__(self, dim, volume_shape, wavelet_type='db1', sigma=1.):
         # Pass scalar to parent (for compatibility)
@@ -143,8 +144,9 @@ class WaveletL1(L1):
         self.volume_shape = volume_shape
         self.volume_size = np.prod(volume_shape)
         self.wavelet_type = wavelet_type
-        self.sigma = sigma  # Can be scalar or array
-        self.sigma_is_array = hasattr(sigma, '__len__') and len(sigma) > 1
+        self.sigma = sigma  # Can be scalar, 1D, or 2D array
+        self.sigma_is_array = hasattr(sigma, '__len__') and len(np.array(sigma).shape) >= 1
+        self.sigma_ndim = np.array(sigma).ndim if self.sigma_is_array else 0
         # Create the wavelet transform (keep original for compatibility)
         self.wavelet = Wavelet_multilvl(volume_shape, wavelet_type)
         
@@ -176,9 +178,16 @@ class WaveletL1(L1):
         
         # Compute total weighted L1 norm
         if self.sigma_is_array:
-            # Level-dependent: sum_i sigma[i] * sum_j |x_wavelet[j, i]|
-            sigma_broadcast = jnp.array(self.sigma)[:, None]  # Shape: (n_wavelet_coeffs, 1)
-            return float(jnp.sum(sigma_broadcast * jnp.abs(x_wavelet_all.T)))
+            if self.sigma_ndim == 1:
+                # Level-dependent: sum_i sigma[i] * sum_j |x_wavelet[j, i]|
+                sigma_broadcast = jnp.array(self.sigma)[:, None]  # (n_wavelet_coeffs, 1)
+                return float(jnp.sum(sigma_broadcast * jnp.abs(x_wavelet_all.T)))
+            elif self.sigma_ndim == 2:
+                # Per-basis, per-level: sum_{b,i} sigma[b,i] * |x_wavelet[b,i]|
+                sigma_broadcast = jnp.array(self.sigma)
+                return float(jnp.sum(sigma_broadcast * jnp.abs(x_wavelet_all)))
+            else:
+                raise ValueError(f"Unsupported sigma ndim: {self.sigma_ndim}")
         else:
             # Scalar sigma
             return float(jnp.sum(self.sigma * jnp.abs(x_wavelet_all.T)))
@@ -205,19 +214,26 @@ class WaveletL1(L1):
         # Apply L1 proximal operator with level-dependent or scalar sigma
         prox_start = time.time()
         if self.sigma_is_array:
-            # Level-dependent sigma: shape (n_wavelet_coeffs,)
-            # x_wavelet_all.T has shape (n_wavelet_coeffs, n_basis)
-            # Broadcasting: threshold[i] applies to all basis functions for coefficient i
-            sigma_broadcast = np.array(self.sigma)[:, None]  # Shape: (n_wavelet_coeffs, 1)
-            x_wavelet_all = _softthreshold(x_wavelet_all.T, tau * sigma_broadcast)
+            if self.sigma_ndim == 1:
+                # Level-dependent sigma: shape (n_wavelet_coeffs,)
+                # x_wavelet_all.T has shape (n_wavelet_coeffs, n_basis)
+                # Broadcasting: threshold[i] applies to all basis functions for coefficient i
+                sigma_broadcast = np.array(self.sigma)[:, None]  # (n_wavelet_coeffs, 1)
+                x_wavelet_all = _softthreshold(x_wavelet_all.T, tau * sigma_broadcast).T
+            elif self.sigma_ndim == 2:
+                # Per-basis, per-level sigma: shape (n_basis, n_wavelet_coeffs)
+                sigma_broadcast = np.array(self.sigma)
+                x_wavelet_all = _softthreshold(x_wavelet_all, tau * sigma_broadcast)
+            else:
+                raise ValueError(f"Unsupported sigma ndim: {self.sigma_ndim}")
         else:
             # Scalar sigma
-            x_wavelet_all = _softthreshold(x_wavelet_all.T, tau * self.sigma)
+            x_wavelet_all = _softthreshold(x_wavelet_all.T, tau * self.sigma).T
         prox_time = time.time() - prox_start
         
         # Convert back to image space
         wavelet_back_start = time.time()
-        x_result_all = self.wavelet.to_image(x_wavelet_all.T)
+        x_result_all = self.wavelet.to_image(x_wavelet_all)
         wavelet_backward_time = time.time() - wavelet_back_start
         
         # Reshape back to original format
@@ -290,7 +306,9 @@ def compute_total_loss(x, prox_lstsr, prox_wavelet):
     return total_loss, data_fit_loss, reg_loss  
 
 
-def admm_wavelet(lhs, rhs, sigma, tau, niter, volume_shape, normal_size, X0, prox_lstsr=None, prox_wavelet=None):
+def admm_wavelet(lhs, rhs, sigma, tau, niter, volume_shape, normal_size, X0,
+                 prox_lstsr=None, prox_wavelet=None, log_residuals=True,
+                 log_every=10, rtol=1e-3, atol=1e-4, stop=True):
     """
     ADMM optimization with wavelet L1 regularization
     
@@ -305,6 +323,11 @@ def admm_wavelet(lhs, rhs, sigma, tau, niter, volume_shape, normal_size, X0, pro
         X0: Initial guess
         prox_lstsr: Optional pre-created LeastSquare prox (avoids JIT recompilation)
         prox_wavelet: Optional pre-created Wavelet prox (avoids JIT recompilation)
+        log_residuals: If True, print primal/dual residuals during ADMM
+        log_every: Print residuals every N iterations
+        rtol: Relative tolerance for stopping
+        atol: Absolute tolerance for stopping
+        stop: If True, stop when residuals satisfy tolerances
     
     Returns:
         X_rec: Reconstructed solution
@@ -325,17 +348,45 @@ def admm_wavelet(lhs, rhs, sigma, tau, niter, volume_shape, normal_size, X0, pro
         prox_wavelet.sigma = sigma
     # prox_wavelet = L1(sigma)
 
-    # Run ADMM optimization - X0 needs to be flattened
+    # Run ADMM optimization (custom loop for residual logging and stopping)
     X0_flat = X0.flatten() if hasattr(X0, 'flatten') else np.array(X0).flatten()
-    X_rec, Z_rec = ADMM(
-        prox_lstsr, 
-        prox_wavelet, 
-        x0=X0_flat,
-        tau=tau, 
-        niter=niter,
-        show = False,
-        gfirst=True
-    )
+    x = np.array(X0_flat, copy=True)
+    z = np.array(X0_flat, copy=True)
+    u = np.zeros_like(x)
+    n = x.size
+    sqrt_n = np.sqrt(n)
+
+    if log_residuals:
+        print("ADMM residuals: iter | ||r||_2 | eps_pri | ||s||_2 | eps_dual")
+
+    for k in range(niter):
+        z_prev = z
+
+        # Standard ADMM updates
+        z = np.array(prox_wavelet.prox(x + u, tau))
+        x = np.array(prox_lstsr.prox(z - u, tau))
+        u = u + x - z
+
+        if stop or log_residuals:
+            r = x - z
+            s = tau * (z - z_prev)
+            r_norm = np.linalg.norm(r)
+            s_norm = np.linalg.norm(s)
+            x_norm = np.linalg.norm(x)
+            z_norm = np.linalg.norm(z)
+            u_norm = np.linalg.norm(u)
+            eps_pri = sqrt_n * atol + rtol * max(x_norm, z_norm)
+            eps_dual = sqrt_n * atol + rtol * u_norm
+
+            if log_residuals and (k % max(1, log_every) == 0 or k == niter - 1):
+                print(f"  {k+1:4d} | {r_norm:9.3e} | {eps_pri:8.3e} | {s_norm:9.3e} | {eps_dual:8.3e}")
+
+            if stop and (r_norm <= eps_pri) and (s_norm <= eps_dual):
+                if log_residuals:
+                    print(f"  converged at iter {k + 1} (r={r_norm:.2e}, s={s_norm:.2e})")
+                break
+
+    X_rec, Z_rec = x, z
     
     # Reshape back to original size
     X_rec = np.array(X_rec).reshape(normal_size)

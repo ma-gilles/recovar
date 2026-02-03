@@ -10,6 +10,35 @@ import more_itertools
 more_itertools.chunked
 logger = logging.getLogger(__name__)
 
+
+def to_cpu(x):
+    """Move JAX arrays to CPU. Handles single arrays or nested structures (lists, dicts, tuples)."""
+    cpu_device = jax.devices("cpu")[0]
+
+    def _put(a):
+        if isinstance(a, (jax.Array, jnp.ndarray)):
+            return jax.device_put(a, cpu_device)
+        return a
+
+    return jax.tree_util.tree_map(_put, x)
+
+
+def to_gpu(x):
+    """Move JAX arrays to default GPU. Handles single arrays or nested structures (lists, dicts, tuples). If no GPU is available, returns x unchanged."""
+    gpu_devices = jax.devices("gpu")
+    if not gpu_devices:
+        return x
+
+    gpu_device = gpu_devices[0]
+
+    def _put(a):
+        if isinstance(a, (jax.Array, jnp.ndarray)):
+            return jax.device_put(a, gpu_device)
+        return a
+
+    return jax.tree_util.tree_map(_put, x)
+
+
 @functools.partial(jax.jit, static_argnums = [1,2])    
 def make_radial_image(average_image_PS, image_shape, extend_last_frequency = True):
     if extend_last_frequency:
