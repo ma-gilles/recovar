@@ -40,6 +40,80 @@ def compute_Cz_from_second_moments(second_moment_zs):
     return jnp.mean(second_moment_zs, axis=0)
 
 
+def whitening_penalty_and_grad_batched(W, B_n, b_n, batch_size=128):
+    """
+    Compute F(W) = 0.5 * ||Cz(W) - I||_F^2 and its gradient w.r.t. W using batches.
+
+    This follows constraint_Gradient.tex (Eq. 16 in that file for the gradient template).
+
+    Args:
+        W: (d, q) loading matrix.
+        B_n: (N, d, d) per-sample symmetric matrices.
+        b_n: (N, d) per-sample vectors.
+        batch_size: number of samples per batch.
+
+    Returns:
+        F: scalar whitening penalty value.
+        grad_W: (d, q) gradient of F w.r.t. W.
+        C_z: (q, q) empirical posterior covariance.
+    """
+    N = B_n.shape[0]
+    if N == 0:
+        raise ValueError("B_n must have at least one sample.")
+
+    q = W.shape[1]
+    I = jnp.eye(q, dtype=W.dtype)
+
+    # -------------------------------------------------------------------------
+    # First pass: compute Cz(W)
+    # -------------------------------------------------------------------------
+    C_z_sum = jnp.zeros((q, q), dtype=W.dtype)
+    for start in range(0, N, batch_size):
+        end = min(start + batch_size, N)
+        B = B_n[start:end]
+        b = b_n[start:end]
+
+        BW = jnp.einsum('ndd,dq->ndq', B, W)
+        A = jnp.einsum('dq,ndq->nqq', W, BW) + I
+        Sigma = jnp.linalg.inv(A)
+        s = jnp.einsum('dq,nd->nq', W, b)
+        mu = jnp.einsum('nqq,nq->nq', Sigma, s)
+        C_z_sum = C_z_sum + jnp.sum(Sigma + jnp.einsum('ni,nj->nij', mu, mu), axis=0)
+
+    C_z = C_z_sum / float(N)
+    G = C_z - I
+    F = 0.5 * jnp.sum(G * G)
+
+    # -------------------------------------------------------------------------
+    # Second pass: compute gradient
+    # -------------------------------------------------------------------------
+    grad_sum = jnp.zeros_like(W)
+    for start in range(0, N, batch_size):
+        end = min(start + batch_size, N)
+        B = B_n[start:end]
+        b = b_n[start:end]
+
+        BW = jnp.einsum('ndd,dq->ndq', B, W)
+        A = jnp.einsum('dq,ndq->nqq', W, BW) + I
+        Sigma = jnp.linalg.inv(A)
+        s = jnp.einsum('dq,nd->nq', W, b)
+        mu = jnp.einsum('nqq,nq->nq', Sigma, s)
+
+        u = jnp.einsum('qq,nq->nq', G, mu)
+        suT = s[:, :, None] * u[:, None, :]
+        H = G[None, :, :] + suT + jnp.swapaxes(suT, -1, -2)
+        K = jnp.matmul(Sigma, jnp.matmul(H, Sigma))
+
+        term1 = -2.0 * jnp.einsum('ndq,nqk->ndk', BW, K)
+        Sigma_u = jnp.einsum('nqq,nq->nq', Sigma, u)
+        term2 = 2.0 * b[:, :, None] * Sigma_u[:, None, :]
+
+        grad_sum = grad_sum + jnp.sum(term1 + term2, axis=0)
+
+    grad_W = grad_sum / float(N)
+    return F, grad_W, C_z
+
+
 def apply_whitening_constraint(W, C_z, n_whitening_iters=10, tol=1e-8):
     """
     Apply the whitening constraint Ĉ_z = I to the loading matrix W.
