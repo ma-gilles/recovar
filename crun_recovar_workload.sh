@@ -142,6 +142,13 @@ if [ -z "$ACTION" ]; then
     echo "    profile-2gpu-256 - Profile 2 GPU run (2h)"
     echo "    profile-4gpu-256 - Profile 4 GPU run (1.5h)"
     echo ""
+    echo "  Optimization benchmarks:"
+    echo "    bench-stack-1gpu       - Benchmark stacking strategies (1 GPU, 15m)"
+    echo "    bench-stack-2gpu       - Benchmark stacking strategies (2 GPU, 15m)"
+    echo "    bench-stack-async      - Benchmark with async strategy (1 GPU, 20m)"
+    echo "    bench-stack-large      - Benchmark with larger arrays (1 GPU, 25m)"
+    echo "    analyze-profile        - Analyze existing profile data (1 GPU, 5m)"
+    echo ""
     echo "  Dataset creation:"
     echo "    create-small    - Create 128-100k dataset (1h)"
     echo "    create-large    - Create 256-300k dataset (2h)"
@@ -209,6 +216,23 @@ case $ACTION in
         ;;
     pipeline-large)
         submit_job "Pipeline Large" "pixi run pipeline-large" 1 "02:00:00"
+        ;;
+    
+    # Optimization benchmarks
+    bench-stack-1gpu)
+        submit_job "Stack Benchmark 1 GPU" "pixi run bench-stack" 1 "00:15:00"
+        ;;
+    bench-stack-2gpu)
+        submit_job "Stack Benchmark 2 GPUs" "pixi run bench-stack" 2 "00:15:00"
+        ;;
+    bench-stack-async)
+        submit_job "Stack Benchmark Async" "pixi run bench-stack-async" 1 "00:20:00"
+        ;;
+    bench-stack-large)
+        submit_job "Stack Benchmark Large Arrays" "pixi run bench-stack-large" 1 "00:25:00"
+        ;;
+    analyze-profile)
+        submit_job "Analyze Profile Data" "pixi run analyze-profile-2gpu" 1 "00:05:00"
         ;;
     
     *)

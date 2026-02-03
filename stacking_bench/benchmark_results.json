@@ -1,0 +1,194 @@
+{
+  "config": {
+    "volume_size": 2097152,
+    "n_picked": 300,
+    "dtype": "<class 'numpy.complex64'>",
+    "warmup_runs": 1,
+    "benchmark_runs": 3,
+    "jax_version": "0.5.0",
+    "jax_devices": [
+      "cuda:0"
+    ]
+  },
+  "raw_results": [
+    {
+      "name": "current_np_stack",
+      "time_seconds": 5.63221285698819,
+      "shape": [
+        2097152,
+        300
+      ],
+      "size_mb": 4800.0
+    },
+    {
+      "name": "jax_stack_single_transfer",
+      "time_seconds": 1.2848866949789226,
+      "shape": [
+        2097152,
+        300
+      ],
+      "size_mb": 4800.0
+    },
+    {
+      "name": "preallocated_direct",
+      "time_seconds": 4.390260821994161,
+      "shape": [
+        2097152,
+        300
+      ],
+      "size_mb": 4800.0
+    },
+    {
+      "name": "batched_transfer_b10",
+      "time_seconds": 3.035710547992494,
+      "shape": [
+        2097152,
+        300
+      ],
+      "size_mb": 4800.0
+    },
+    {
+      "name": "batched_transfer_b50",
+      "time_seconds": 2.3650049069838133,
+      "shape": [
+        2097152,
+        300
+      ],
+      "size_mb": 4800.0
+    },
+    {
+      "name": "current_np_stack",
+      "time_seconds": 4.9236704090144485,
+      "shape": [
+        2097152,
+        300
+      ],
+      "size_mb": 4800.0
+    },
+    {
+      "name": "jax_stack_single_transfer",
+      "time_seconds": 0.9353757879871409,
+      "shape": [
+        2097152,
+        300
+      ],
+      "size_mb": 4800.0
+    },
+    {
+      "name": "preallocated_direct",
+      "time_seconds": 4.393495386000723,
+      "shape": [
+        2097152,
+        300
+      ],
+      "size_mb": 4800.0
+    },
+    {
+      "name": "batched_transfer_b10",
+      "time_seconds": 2.9624827719817404,
+      "shape": [
+        2097152,
+        300
+      ],
+      "size_mb": 4800.0
+    },
+    {
+      "name": "batched_transfer_b50",
+      "time_seconds": 2.2744826869748067,
+      "shape": [
+        2097152,
+        300
+      ],
+      "size_mb": 4800.0
+    },
+    {
+      "name": "current_np_stack",
+      "time_seconds": 4.92611450701952,
+      "shape": [
+        2097152,
+        300
+      ],
+      "size_mb": 4800.0
+    },
+    {
+      "name": "jax_stack_single_transfer",
+      "time_seconds": 0.9337638509750832,
+      "shape": [
+        2097152,
+        300
+      ],
+      "size_mb": 4800.0
+    },
+    {
+      "name": "preallocated_direct",
+      "time_seconds": 4.3850684110075235,
+      "shape": [
+        2097152,
+        300
+      ],
+      "size_mb": 4800.0
+    },
+    {
+      "name": "batched_transfer_b10",
+      "time_seconds": 2.941720262024319,
+      "shape": [
+        2097152,
+        300
+      ],
+      "size_mb": 4800.0
+    },
+    {
+      "name": "batched_transfer_b50",
+      "time_seconds": 2.2381304820009973,
+      "shape": [
+        2097152,
+        300
+      ],
+      "size_mb": 4800.0
+    }
+  ],
+  "summary": [
+    {
+      "strategy": "current_np_stack",
+      "mean_time_s": 5.160665924340719,
+      "std_time_s": 0.333435526672142,
+      "speedup": 1.0,
+      "improvement_pct": 0.0
+    },
+    {
+      "strategy": "jax_stack_single_transfer",
+      "mean_time_s": 1.0513421113137156,
+      "std_time_s": 0.16514226998712125,
+      "speedup": 4.90864569087997,
+      "improvement_pct": 79.62778202024333
+    },
+    {
+      "strategy": "preallocated_direct",
+      "mean_time_s": 4.3896082063341355,
+      "std_time_s": 0.00347111003223115,
+      "speedup": 1.1756552479772477,
+      "improvement_pct": 14.941050812257084
+    },
+    {
+      "strategy": "batched_transfer_b10",
+      "mean_time_s": 2.9799711939995177,
+      "std_time_s": 0.040314820621360783,
+      "speedup": 1.7317838288948086,
+      "improvement_pct": 42.25607241995204
+    },
+    {
+      "strategy": "batched_transfer_b50",
+      "mean_time_s": 2.292539358653206,
+      "std_time_s": 0.05334674293560432,
+      "speedup": 2.251069716583818,
+      "improvement_pct": 55.57667571852987
+    }
+  ],
+  "recommendation": {
+    "strategy": "jax_stack_single_transfer",
+    "mean_time_s": 1.0513421113137156,
+    "std_time_s": 0.16514226998712125,
+    "speedup": 4.90864569087997,
+    "improvement_pct": 79.62778202024333
+  }
+}
