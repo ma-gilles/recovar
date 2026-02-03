@@ -873,37 +873,13 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
             del image_mask
             del images, batch_CTF, batch_grid_pt_vec_ind_of_images
     
-    # Stack arrays in batches to avoid GPU memory exhaustion
-    # OPTIMIZATION: Batched GPU stack + batched transfers
-    # Previous approach: np.stack() triggered 300+ sequential DtoH transfers (~15s)
-    # New approach: Batched stack + transfer (~7s) - 2.25x speedup, 55.6% improvement
-    # Note: Full GPU stack (Strategy A) is faster but can cause OOM in multi-GPU mode
-    # See stacking_bench/benchmark_results.json for benchmarking results
+    # Stack the list of JAX arrays into NumPy arrays
+    # This converts from JAX to NumPy only once at the end
+    with nvtx.annotate("stack_results", color="yellow", domain=NVTX_DOMAIN_H_B):
+        H = np.stack(H, axis=1)
+        B = np.stack(B, axis=1)
     
-    # Pre-allocate output arrays
-    H_out = np.empty([volume_size, n_picked_indices], dtype=experiment_dataset.dtype)
-    B_out = np.empty([volume_size, n_picked_indices], dtype=experiment_dataset.dtype)
-    
-    # Transfer in batches to balance memory and performance
-    batch_size = 50  # Empirically determined from benchmarks
-    with nvtx.annotate("batched_stack_transfer", color="yellow", domain=NVTX_DOMAIN_H_B):
-        for batch_start in range(0, n_picked_indices, batch_size):
-            batch_end = min(batch_start + batch_size, n_picked_indices)
-            
-            # Stack batch on GPU
-            with nvtx.annotate(f"stack_batch_{batch_start}", color="orange", domain=NVTX_DOMAIN_H_B):
-                H_batch_jax = jnp.stack(H[batch_start:batch_end], axis=1)
-                B_batch_jax = jnp.stack(B[batch_start:batch_end], axis=1)
-            
-            # Transfer batch to CPU
-            with nvtx.annotate(f"transfer_batch_{batch_start}", color="cyan", domain=NVTX_DOMAIN_H_B):
-                H_out[:, batch_start:batch_end] = np.asarray(H_batch_jax)
-                B_out[:, batch_start:batch_end] = np.asarray(B_batch_jax)
-            
-            # Clean up batch
-            del H_batch_jax, B_batch_jax
-    
-    return H_out, B_out
+    return H, B
 
 
 from recovar import cubic_interpolation
