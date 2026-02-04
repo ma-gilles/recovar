@@ -82,6 +82,11 @@ target/
 profile_default/
 ipython_config.py
 
+# Prototype outputs
+multinode_covariance_bench/prototype_output*/
+multinode_covariance_bench/benchmark_results*/
+multinode_covariance_bench/test_outputs*/
+
 # pyenv
 .python-version
 
