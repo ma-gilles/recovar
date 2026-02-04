@@ -317,11 +317,85 @@ def add_args(parser: argparse.ArgumentParser):
     
     parser.add_argument("--n-gpus", type=int, default=None, dest="n_gpus", help="Number of GPUs to use (default: use all available GPUs)")
 
+    # Multi-node frequency-parallel arguments
+    parser.add_argument("--frequency-parallel", action="store_true", dest="frequency_parallel", 
+                        help="Enable frequency-parallel distribution across multiple nodes")
+    
+    parser.add_argument("--node-rank", type=int, default=None, dest="node_rank",
+                        help="Rank of this node in multi-node computation (default: read from SLURM_PROCID)")
+    
+    parser.add_argument("--n-nodes", type=int, default=None, dest="n_nodes",
+                        help="Total number of nodes in multi-node computation (default: read from SLURM_NTASKS)")
+
     return parser
+
+
+def get_distributed_context(args):
+    """
+    Determine distributed execution context from args and environment.
+    
+    Returns dict with:
+        - is_distributed: bool
+        - node_rank: int (0-indexed)
+        - n_nodes: int
+        - output_suffix: str (e.g., "_node000")
+    """
+    # Check if frequency-parallel mode is enabled
+    if not args.frequency_parallel:
+        return {
+            'is_distributed': False,
+            'node_rank': 0,
+            'n_nodes': 1,
+            'output_suffix': ''
+        }
+    
+    # Get node rank from args or SLURM environment
+    if args.node_rank is not None:
+        node_rank = args.node_rank
+    else:
+        node_rank = int(os.environ.get('SLURM_PROCID', 0))
+    
+    # Get total nodes from args or SLURM environment
+    if args.n_nodes is not None:
+        n_nodes = args.n_nodes
+    else:
+        n_nodes = int(os.environ.get('SLURM_NTASKS', 1))
+    
+    # Validate
+    if n_nodes < 2:
+        logger.warning(f"Frequency-parallel mode enabled but n_nodes={n_nodes}. Disabling distributed mode.")
+        return {
+            'is_distributed': False,
+            'node_rank': 0,
+            'n_nodes': 1,
+            'output_suffix': ''
+        }
+    
+    if node_rank >= n_nodes:
+        raise ValueError(f"Invalid node_rank={node_rank} for n_nodes={n_nodes}")
+    
+    # Create output suffix with zero-padded node number
+    output_suffix = f"_node{node_rank:03d}"
+    
+    logger.info("=" * 70)
+    logger.info("FREQUENCY-PARALLEL MULTI-NODE MODE ENABLED")
+    logger.info(f"Node: {node_rank}/{n_nodes}")
+    logger.info(f"Output suffix: {output_suffix}")
+    logger.info("=" * 70)
+    
+    return {
+        'is_distributed': True,
+        'node_rank': node_rank,
+        'n_nodes': n_nodes,
+        'output_suffix': output_suffix
+    }
     
 
 def standard_recovar_pipeline(args):
     st_time = time.time()
+
+    # Get distributed execution context
+    dist_context = get_distributed_context(args)
 
     # Copy data to temporary folder if requested
     path_mapping = copy_data_to_temp_folder(args)
@@ -701,7 +775,7 @@ def standard_recovar_pipeline(args):
 
         # options['ignore_zero_frequency'] = False
         for idx, focus_mask in enumerate(focus_masks):
-            u_this,s_this, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory, covariance_options = covariance_options, variance_estimate = variance_est['combined'], use_reg_mean_in_contrast = args.use_reg_mean_in_contrast, use_multi_gpu = args.multi_gpu, n_gpus = args.n_gpus)
+            u_this,s_this, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory, covariance_options = covariance_options, variance_estimate = variance_est['combined'], use_reg_mean_in_contrast = args.use_reg_mean_in_contrast, use_multi_gpu = args.multi_gpu, n_gpus = args.n_gpus, dist_context = dist_context)
             if idx == num_foc_masks -1:
                 s.append(s_this['rescaled'][:n_pcs_to_keep].copy())
                 u.append(u_this['rescaled'][:,:n_pcs_to_keep].copy())
@@ -709,6 +783,28 @@ def standard_recovar_pipeline(args):
                 s.append(s_this['rescaled'][:zdim_for_rest].copy())
                 u.append(u_this['rescaled'][:,:zdim_for_rest].copy())
             del u_this, s_this
+        
+        # Early exit for distributed mode: covariance computation is complete
+        if dist_context['is_distributed']:
+            logger.info("=" * 70)
+            logger.info(f"Node {dist_context['node_rank']}: Covariance computation complete")
+            logger.info(f"Results saved with suffix: {dist_context['output_suffix']}")
+            logger.info("Exiting early (distributed mode)")
+            logger.info("=" * 70)
+            logger.info(f"Node {dist_context['node_rank']} total time: {time.time() - st_time:.2f}s")
+            
+            # Save pipeline args for continuation
+            args_file = os.path.join(args.outdir, 'pipeline_args.pkl')
+            with open(args_file, 'wb') as f:
+                pickle.dump(args, f)
+            logger.info(f"Saved pipeline args to {args_file}")
+            
+            # Clean up temp files if requested
+            if path_mapping is not None and not args.no_cleanup:
+                cleanup_temp_files(path_mapping)
+            
+            return None, None, None, None, None, None
+        
         u = { 'rescaled' : np.concatenate(u, axis = 1), 'real' : None}
         s =  { 'rescaled' : np.concatenate(s, axis = 0), 'real': None}
         options['ignore_zero_frequency'] = ignore_zero_frequency
