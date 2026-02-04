@@ -19,7 +19,7 @@ NVTX_DOMAIN_PCA = "principal_components"
 @nvtx.annotate("estimate_principal_components", color="purple", domain=NVTX_DOMAIN_PCA)
 def estimate_principal_components(cryos, options,  means, mean_prior, volume_mask,
                                 dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use,
-                                covariance_options = None, variance_estimate = None, use_reg_mean_in_contrast = False, use_multi_gpu = False, n_gpus = None):
+                                covariance_options = None, variance_estimate = None, use_reg_mean_in_contrast = False, use_multi_gpu = False, n_gpus = None, dist_context = None):
     
     covariance_options = covariance_estimation.get_default_covariance_computation_options() if covariance_options is None else covariance_options
 
@@ -70,7 +70,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
     else:
         raise NotImplementedError('unrecognized column sampling scheme')
     
-    covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, covariance_options, picked_frequencies, use_multi_gpu = use_multi_gpu, n_gpus = n_gpus)
+    covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, covariance_options, picked_frequencies, use_multi_gpu = use_multi_gpu, n_gpus = n_gpus, dist_context = dist_context)
     
     # Check for NaN or Inf values in covariance_cols
     for col in covariance_cols.values():
