@@ -25,7 +25,7 @@ generate_batch_script() {
     
     cat > "$batch_script" <<'EOF'
 #!/bin/bash
-#SBATCH --output=/home/scratch.dleshchev_other/recovar/scripts/output/slurm-%j.out
+#SBATCH --output=/home/scratch.dleshchev_other/heterogeneity_dev/scripts/output/slurm-%j.out
 set -e
 
 echo "=========================================="
@@ -36,7 +36,7 @@ echo "GPUs: $(nvidia-smi -L)"
 echo "=========================================="
 
 # Configuration
-SCRIPT_DIR="/home/scratch.dleshchev_other/recovar"
+SCRIPT_DIR="/home/scratch.dleshchev_other/heterogeneity_dev"
 CONTAINER_IMAGE="recovar:latest"
 TASK_CMD="TASK_CMD_PLACEHOLDER"
 
@@ -108,11 +108,54 @@ submit_job() {
     batch_script=$(generate_batch_script "$task_cmd")
     echo "Generated batch script: $batch_script"
     
-    # Submit using crun with explicit output directory
-    crun -q "$GPU_QUERY" --gpus="$num_gpus" -t "$time_limit" --cpu-arch-agnostic \
-        --output-dir="$SCRIPT_DIR/scripts/output" -b "$batch_script"
+    # Submit using crun and capture output
+    # Note: crun controls output location and places files in the working directory
+    # The SLURM --output directive in the batch script is ignored by crun
+    local crun_output=$(crun -q "$GPU_QUERY" --gpus="$num_gpus" -t "$time_limit" --cpu-arch-agnostic \
+        -b "$batch_script" 2>&1)
+    
+    echo "$crun_output"
+    
+    # Extract job ID from crun output
+    local job_id=$(echo "$crun_output" | grep "Job Id" | awk '{print $NF}')
+    
+    if [ -n "$job_id" ]; then
+        echo ""
+        echo "Job ID: $job_id"
+        echo "Output file: slurm-$job_id.out"
+        echo ""
+        echo "To monitor: tail -f slurm-$job_id.out"
+        echo "To organize outputs later, run: ./crun_recovar_workload.sh organize-outputs"
+    fi
     
     echo "Job submitted successfully!"
+    echo ""
+}
+
+# Function to submit a multi-node job
+submit_multinode_job() {
+    local task_name=$1
+    local script_path=$2
+    local num_nodes=$3
+    local num_gpus=$4
+    local time_limit=$5
+    
+    echo "========================================"
+    echo "Submitting MULTI-NODE job: $task_name"
+    echo "Script: $script_path"
+    echo "Number of nodes: $num_nodes"
+    echo "GPUs per node: $num_gpus"
+    echo "Time limit: $time_limit"
+    echo "GPU query: $GPU_QUERY"
+    echo "========================================"
+    
+    # For multi-node jobs, we use crun's multi-node support
+    # crun will handle the SLURM submission with proper node allocation
+    crun -q "$GPU_QUERY" --nodes="$num_nodes" --gpus="$num_gpus" -t "$time_limit" --cpu-arch-agnostic \
+        -b "$script_path"
+    
+    echo "Multi-node job submitted successfully!"
+    echo "Monitor with: tail -f $SCRIPT_DIR/scripts/output/slurm-*.out"
     echo ""
 }
 
@@ -150,6 +193,16 @@ if [ -z "$ACTION" ]; then
     echo "    pipeline-small  - Run pipeline on 128-100k dataset (1h)"
     echo "    pipeline-large  - Run pipeline on 256-300k dataset (2h)"
     echo ""
+    echo "  Multi-node frequency-parallel (2 GPU testing):"
+    echo "    freq-parallel-2node  - Frequency-parallel with 2 nodes, 2 GPUs each (1h)"
+    echo ""
+    echo "  Speedup testing:"
+    echo "    test-baseline-2gpu   - Single-node baseline with 2 GPUs (20k images, 1h)"
+    echo "    test-2node-freq      - 2-node frequency-parallel, 2 GPUs each (20k images, 1h)"
+    echo ""
+    echo "  Utilities:"
+    echo "    organize-outputs     - Move all slurm-*.out files to scripts/output/"
+    echo ""
     exit 1
 fi
 
@@ -173,15 +226,15 @@ case $ACTION in
         submit_job "Compare Multi-GPU Outputs" "pixi run compare-all-multigpu" 1 "00:10:00"
         ;;
     
-    # Profiling (128-100k dataset)
+    # Profiling (128-100k dataset, full 100k images)
     profile-1gpu)
         submit_job "Profile 1 GPU (128-100k)" "pixi run profile-1gpu" 1 "01:00:00"
         ;;
     profile-2gpu)
-        submit_job "Profile 2 GPUs (128-100k)" "pixi run profile-2gpu" 2 "00:45:00"
+        submit_job "Profile 2 GPUs (128-100k)" "pixi run profile-2gpu" 2 "01:30:00"
         ;;
     profile-4gpu)
-        submit_job "Profile 4 GPUs (128-100k)" "pixi run profile-4gpu" 4 "00:30:00"
+        submit_job "Profile 4 GPUs (128-100k)" "pixi run profile-4gpu" 4 "00:45:00"
         ;;
     
     # Profiling (256-300k dataset)
@@ -209,6 +262,47 @@ case $ACTION in
         ;;
     pipeline-large)
         submit_job "Pipeline Large" "pixi run pipeline-large" 1 "02:00:00"
+        ;;
+    
+    # Multi-node frequency-parallel
+    freq-parallel-2node)
+        submit_multinode_job "Freq-Parallel 2 Nodes" "$SCRIPT_DIR/scripts/run_frequency_parallel_multigpu.sh" 2 2 "01:00:00"
+        ;;
+    
+    # Speedup testing
+    test-baseline-2gpu)
+        submit_job "Speedup-Baseline-2GPU-20k" "pixi run speedup-baseline-2gpu" 2 "01:00:00"
+        ;;
+    
+    test-2node-freq)
+        echo "========================================"
+        echo "IMPORTANT: Multi-node jobs need custom SLURM script"
+        echo "========================================"
+        echo "For 2-node testing, use:"
+        echo "  sbatch scripts/submit_2node_speedup_test.sh"
+        echo ""
+        echo "This is because crun's multi-node support requires special handling."
+        exit 1
+        ;;
+    
+    organize-outputs)
+        echo "========================================"
+        echo "Organizing output files"
+        echo "========================================"
+        # Find all slurm output files in the root directory
+        shopt -s nullglob
+        files=("$SCRIPT_DIR"/slurm-*.out)
+        if [ ${#files[@]} -eq 0 ]; then
+            echo "No slurm output files found in root directory"
+        else
+            echo "Moving ${#files[@]} files to scripts/output/"
+            for file in "${files[@]}"; do
+                filename=$(basename "$file")
+                echo "  Moving $filename"
+                mv "$file" "$OUTPUT_DIR/"
+            done
+            echo "Done! All output files moved to scripts/output/"
+        fi
         ;;
     
     *)
