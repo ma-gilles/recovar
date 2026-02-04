@@ -281,17 +281,51 @@ def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_rad
 
 
 @nvtx.annotate("compute_regularized_covariance_columns_in_batch", color="purple")
-def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, options, picked_frequencies, use_multi_gpu = False, n_gpus = None):
+def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, options, picked_frequencies, use_multi_gpu = False, n_gpus = None, dist_context = None):
+    
+    # Handle distributed frequency-parallel mode
+    if dist_context is not None and dist_context['is_distributed']:
+        logger.info("=" * 70)
+        logger.info("FREQUENCY-PARALLEL MODE: Splitting frequencies across nodes")
+        logger.info(f"Total frequencies to compute: {picked_frequencies.size}")
+        logger.info(f"This node: {dist_context['node_rank']}/{dist_context['n_nodes']}")
+        
+        # Split frequencies evenly among nodes
+        n_freqs = picked_frequencies.size
+        n_nodes = dist_context['n_nodes']
+        node_rank = dist_context['node_rank']
+        
+        # Calculate frequency range for this node
+        freqs_per_node = n_freqs // n_nodes
+        remainder = n_freqs % n_nodes
+        
+        # Distribute remainder across first nodes
+        if node_rank < remainder:
+            freq_start = node_rank * (freqs_per_node + 1)
+            freq_end = freq_start + freqs_per_node + 1
+        else:
+            freq_start = node_rank * freqs_per_node + remainder
+            freq_end = freq_start + freqs_per_node
+        
+        # Extract this node's frequency subset
+        picked_frequencies_local = picked_frequencies[freq_start:freq_end]
+        
+        logger.info(f"Node {node_rank} computing frequencies [{freq_start}:{freq_end}] ({picked_frequencies_local.size} freqs)")
+        logger.info("=" * 70)
+    else:
+        picked_frequencies_local = picked_frequencies
+        freq_start = 0
+        freq_end = picked_frequencies.size
     
     frequency_batch = utils.get_column_batch_size(cryos[0].grid_size, gpu_memory)    
 
     covariance_cols = []
     fscs = []
-    for k in range(0, int(np.ceil(picked_frequencies.size/frequency_batch))):
+    for k in range(0, int(np.ceil(picked_frequencies_local.size/frequency_batch))):
         batch_st = int(k * frequency_batch)
-        batch_end = int(np.min( [(k+1) * frequency_batch ,picked_frequencies.size  ]))
+        batch_end = int(np.min( [(k+1) * frequency_batch ,picked_frequencies_local.size  ]))
 
-        covariance_cols_b, _, fscs_b = compute_regularized_covariance_columns(cryos, means, mean_prior,  volume_mask, dilated_volume_mask, valid_idx, gpu_memory,  options, picked_frequencies[batch_st:batch_end], use_multi_gpu = use_multi_gpu, n_gpus = n_gpus)
+        covariance_cols_b, _, fscs_b = compute_regularized_covariance_columns(cryos, means, mean_prior,  volume_mask, dilated_volume_mask, valid_idx, gpu_memory,  options, picked_frequencies_local[batch_st:batch_end], use_multi_gpu = use_multi_gpu, n_gpus = n_gpus)
         logger.info(f'batch of col done: {batch_st}, {batch_end}')
 
         covariance_cols.append(covariance_cols_b['est_mask'])
@@ -299,7 +333,40 @@ def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, vo
 
     covariance_cols = {'est_mask' : np.concatenate(covariance_cols, axis = -1)}
     fscs = np.concatenate(fscs, axis = 0)
-    return covariance_cols, picked_frequencies, fscs
+    
+    # Save results to disk in distributed mode
+    if dist_context is not None and dist_context['is_distributed']:
+        import os
+        import pickle
+        
+        # Create output directory
+        output_dir = os.path.join(os.getcwd(), 'covariance_parts')
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Save covariance results for this node
+        output_file = os.path.join(output_dir, f"covariance{dist_context['output_suffix']}.pkl")
+        
+        result = {
+            'covariance_cols': covariance_cols,
+            'picked_frequencies': picked_frequencies_local,
+            'picked_frequencies_global_indices': np.arange(freq_start, freq_end),
+            'column_fscs': fscs,
+            'node_rank': dist_context['node_rank'],
+            'n_nodes': dist_context['n_nodes'],
+            'freq_start': freq_start,
+            'freq_end': freq_end
+        }
+        
+        with open(output_file, 'wb') as f:
+            pickle.dump(result, f)
+        
+        logger.info("=" * 70)
+        logger.info(f"SAVED: Node {dist_context['node_rank']} covariance results")
+        logger.info(f"File: {output_file}")
+        logger.info(f"Frequencies: [{freq_start}:{freq_end}] ({picked_frequencies_local.size} total)")
+        logger.info("=" * 70)
+    
+    return covariance_cols, picked_frequencies_local, fscs
 
 
 @nvtx.annotate("compute_regularized_covariance_columns", color="purple")
