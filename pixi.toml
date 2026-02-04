@@ -162,3 +162,9 @@ profile-pipeline-large-no-hb = "nsys profile -t cuda,nvtx -f true -d 3000 --nvtx
 
 # Multi-node covariance prototype test
 prototype-test = "bash ./multinode_covariance_bench/test_prototype.sh"
+
+# Multi-node frequency-parallel tasks (submit via crun_recovar_workload.sh)
+# Note: These are executed via crun on allocated nodes, not directly via pixi
+freq-parallel-2node = "bash ./scripts/run_frequency_parallel_multigpu.sh"
+concatenate-covariance = "python -m recovar.commands.concatenate_covariance"
+continue-from-covariance = "python -m recovar.commands.continue_from_covariance"
