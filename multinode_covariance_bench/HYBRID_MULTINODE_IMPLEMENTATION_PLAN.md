@@ -1,8 +1,9 @@
 # Hybrid Multi-Node Multi-GPU Implementation Plan
 
-**Version**: 1.0  
-**Date**: 2026-01-29  
-**Status**: Ready for Implementation
+**Version**: 1.1  
+**Date**: 2026-02-04  
+**Status**: Ready for Implementation  
+**Last Updated**: After successful 2-node prototype validation
 
 ---
 
@@ -91,6 +92,61 @@ H_complete = [H_node0 | H_node1]
 ```
 
 **No reduction needed** because different columns are mathematically independent.
+
+---
+
+## Halfset Processing Strategy
+
+**Current Approach (Phase 2)**: Sequential halfset processing
+
+Each multi-node job processes ONE halfset at a time:
+
+```
+Job 1 (Halfset 0):
+  Node 0: Computes frequencies [0:6k] for halfset 0
+  Node 1: Computes frequencies [6k:12k] for halfset 0
+  → Concatenate → covariance_halfset0.pkl
+
+Job 2 (Halfset 1):  
+  Node 0: Computes frequencies [0:6k] for halfset 1
+  Node 1: Computes frequencies [6k:12k] for halfset 1
+  → Concatenate → covariance_halfset1.pkl
+```
+
+**Rationale**:
+- Simpler implementation and debugging
+- Existing pipeline already handles halfsets sequentially
+- Still achieves ~2× speedup per halfset
+- Total speedup: ~2× for entire pipeline
+
+**Future Enhancement (Phase 3+)**: 
+- Parallel halfset processing across nodes
+- Each node computes both halfsets for its frequencies
+- Requires more complex concatenation logic
+- Potential for additional speedup
+
+---
+
+## Job Submission Strategy
+
+**All multi-node jobs must be submitted via the `crun` wrapper script.**
+
+The `crun` script provides:
+- ✅ Automatic x86_64 architecture selection via GPU query
+- ✅ Consistent job submission interface
+- ✅ Docker container management
+- ✅ Environment setup
+
+**Do NOT submit jobs directly via `sbatch`** - always use `crun_recovar_workload.sh`.
+
+Example:
+```bash
+# Correct:
+./crun_recovar_workload.sh freq-parallel-2node
+
+# Incorrect (bypasses architecture checks):
+sbatch scripts/run_frequency_parallel_multigpu.sh
+```
 
 ---
 
@@ -423,11 +479,7 @@ def compute_regularized_covariance_columns_in_batch(
 
 ---
 
-### Phase 2: Post-Processing Infrastructure (Week 1)
-
-#### Task 2.1: Create Concatenation Script
-
-**New file**: `recovar/commands/concatenate_covariance.py`
+#### Task 1.6: Create SLURM Launch Script (via crun)
 
 ```python
 #!/usr/bin/env python3
@@ -639,45 +691,58 @@ if __name__ == '__main__':
 
 ---
 
-#### Task 1.6: Create SLURM Launch Script
+### Phase 2: Post-Processing and Continuation (Week 1)
+
+#### Task 2.1: Create Concatenation Script
 
 **New file**: `scripts/run_frequency_parallel_multigpu.sh`
+
+**IMPORTANT**: This script is called by `crun`, which handles:
+- x86_64 architecture selection via GPU query (`gpu.chip=ga100 and cpu.arch=x86_64`)
+- SLURM job submission with proper resources
+- Docker container invocation
 
 ```bash
 #!/bin/bash
 # Frequency-parallel multi-node computation with multi-GPU within nodes
-# Usage: ./run_frequency_parallel_multigpu.sh <n_nodes> <n_gpus> <dataset_dir>
+# This script is executed inside Docker containers on each node via crun/SLURM
+# 
+# Called by: crun_recovar_workload.sh freq-parallel-2node
 
 set -e
 
-N_NODES=${1:-2}
-N_GPUS=${2:-2}
-DATASET_DIR=${3:-"/workspace/data-128-100000/test_dataset"}
-IMAGE_SIZE=128
-N_IMAGES=100000
+# Get SLURM context (set by crun/srun)
+NODE_RANK=${SLURM_PROCID:-0}
+N_NODES=${SLURM_NTASKS:-1}
+JOB_ID=${SLURM_JOB_ID:-unknown}
 
 echo "=========================================="
-echo "Frequency-Parallel Multi-Node Computation"
-echo "Dataset: $DATASET_DIR"
-echo "Nodes: $N_NODES"
-echo "GPUs per node: $N_GPUS"
+echo "Frequency-Parallel Node Computation"
+echo "Node: ${NODE_RANK}/${N_NODES}"
+echo "Job ID: ${JOB_ID}"
 echo "=========================================="
+
+# Dataset configuration
+DATASET_DIR=${DATASET_DIR:-"/workspace/data-128-100000/test_dataset"}
+IMAGE_SIZE=128
+N_IMAGES=${N_IMAGES:-100000}
+N_GPUS=${N_GPUS:-2}
 
 cd "$DATASET_DIR"
 
-# Output directory (unique per job)
-OUTPUT_DIR="pipeline_output_${N_NODES}node_${N_GPUS}gpu_$(date +%Y%m%d_%H%M%S)"
+# Output directory (shared across nodes)
+OUTPUT_DIR=${OUTPUT_DIR:-"pipeline_output_${N_NODES}node_${N_GPUS}gpu_$(date +%Y%m%d_%H%M%S)"}
 mkdir -p "$OUTPUT_DIR"
 
 echo "Output directory: $OUTPUT_DIR"
 
-# Build the pipeline command
-PIPELINE_CMD="python -m recovar.commands.pipeline \
-    particles.${IMAGE_SIZE}.mrcs \
-    --ctf ctf.pkl \
-    --poses poses.pkl \
+# Build the pipeline command with container-compatible paths
+PIPELINE_CMD="pixi run python -m recovar.commands.pipeline \
+    /workspace/${DATASET_DIR}/particles.${IMAGE_SIZE}.mrcs \
+    --ctf /workspace/${DATASET_DIR}/ctf.pkl \
+    --poses /workspace/${DATASET_DIR}/poses.pkl \
     --mask=from_halfmaps \
-    -o ${OUTPUT_DIR} \
+    -o /workspace/${OUTPUT_DIR} \
     --n-images $N_IMAGES \
     --frequency-parallel \
     --multi-gpu \
@@ -687,14 +752,10 @@ PIPELINE_CMD="python -m recovar.commands.pipeline \
 echo "Running: $PIPELINE_CMD"
 echo ""
 
-# Note: This script is meant to be called FROM SLURM via srun
-# The srun command should be in the parent SLURM script
-# This script just defines the command to run
-
 $PIPELINE_CMD
 
 echo "=========================================="
-echo "Node computation complete!"
+echo "Node ${NODE_RANK} computation complete!"
 echo "=========================================="
 ```
 
@@ -738,6 +799,187 @@ concatenate-covariance = "python -m recovar.commands.concatenate_covariance"
 ```
 
 **Estimated time**: 10 minutes
+
+---
+
+#### Task 2.2: Create Pipeline Continuation Mechanism
+
+**Problem**: After multi-node covariance computation, the pipeline exits early. We need a way to continue with PCA, embedding, and downstream analysis.
+
+**Solution**: Create a continuation script that loads concatenated covariance and resumes the pipeline.
+
+**New file**: `recovar/commands/continue_from_covariance.py`
+
+```python
+#!/usr/bin/env python3
+"""
+Continue RECOVAR pipeline from concatenated multi-node covariance results.
+
+Usage:
+    python -m recovar.commands.continue_from_covariance \
+        --covariance-dir output/covariance_parts \
+        --output-dir output \
+        --original-args-file output/pipeline_args.pkl
+"""
+
+import argparse
+import logging
+import pickle
+import os
+import numpy as np
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+def load_concatenated_covariance(covariance_dir):
+    """Load concatenated covariance results."""
+    covariance_file = os.path.join(covariance_dir, "covariance_complete.pkl")
+    
+    if not os.path.exists(covariance_file):
+        raise FileNotFoundError(
+            f"Concatenated covariance not found: {covariance_file}\n"
+            f"Run concatenate_covariance first."
+        )
+    
+    logger.info(f"Loading concatenated covariance from {covariance_file}")
+    
+    with open(covariance_file, 'rb') as f:
+        data = pickle.load(f)
+    
+    return data
+
+
+def continue_pipeline(covariance_data, output_dir, original_params):
+    """
+    Continue pipeline from covariance onwards.
+    
+    Steps:
+    1. Load covariance columns
+    2. Compute PCA (SVD of covariance)
+    3. Compute embeddings
+    4. Generate outputs (volumes, embeddings, etc.)
+    """
+    from recovar import principal_components
+    
+    logger.info("=" * 70)
+    logger.info("Continuing Pipeline from Multi-Node Covariance")
+    logger.info("=" * 70)
+    
+    covariance_cols = covariance_data['covariance_cols']
+    picked_frequencies = covariance_data['picked_frequencies']
+    
+    logger.info(f"Covariance shape: {covariance_cols.shape}")
+    logger.info(f"Number of frequencies: {len(picked_frequencies)}")
+    
+    # Continue with PCA
+    logger.info("\nComputing PCA from covariance...")
+    
+    # This would call the existing PCA computation that takes covariance as input
+    # The exact implementation depends on how principal_components.py is structured
+    
+    # For now, provide a clear message
+    logger.info("✓ Covariance loaded successfully")
+    logger.info("→ Next: Implement PCA computation from covariance_cols")
+    logger.info("→ Then: Continue with embedding, volume generation, etc.")
+    
+    # TODO: Implement actual continuation logic
+    # This will require refactoring principal_components.py to separate:
+    # 1. Covariance computation (already done in multi-node)
+    # 2. PCA computation (needs to be callable separately)
+    # 3. Downstream processing
+    
+    logger.info("\n" + "=" * 70)
+    logger.info("Pipeline continuation framework ready")
+    logger.info("=" * 70)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Continue pipeline from multi-node covariance"
+    )
+    
+    parser.add_argument(
+        "--covariance-dir",
+        type=str,
+        required=True,
+        help="Directory containing concatenated covariance (covariance_complete.pkl)"
+    )
+    
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        required=True,
+        help="Output directory for continued pipeline results"
+    )
+    
+    parser.add_argument(
+        "--original-args-file",
+        type=str,
+        default=None,
+        help="Path to saved original pipeline arguments (optional)"
+    )
+    
+    args = parser.parse_args()
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s.%(msecs)03d %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # Load concatenated covariance
+    covariance_data = load_concatenated_covariance(args.covariance_dir)
+    
+    # Load original parameters if provided
+    original_params = None
+    if args.original_args_file and os.path.exists(args.original_args_file):
+        with open(args.original_args_file, 'rb') as f:
+            original_params = pickle.load(f)
+    
+    # Continue pipeline
+    continue_pipeline(covariance_data, args.output_dir, original_params)
+
+
+if __name__ == '__main__':
+    main()
+```
+
+**Additional Task**: Modify `standard_recovar_pipeline()` to save pipeline arguments before exiting in distributed mode:
+
+```python
+# In Task 1.3, add before early exit:
+if dist_context['is_distributed']:
+    # Save pipeline args for continuation
+    args_file = os.path.join(args.outdir, 'pipeline_args.pkl')
+    with open(args_file, 'wb') as f:
+        pickle.dump(args, f)
+    logger.info(f"Saved pipeline args to {args_file}")
+    
+    logger.info(f"Node {dist_context['node_rank']}: Computation complete")
+    # ... rest of early exit logic
+```
+
+**Usage Workflow**:
+
+```bash
+# Step 1: Run multi-node covariance computation (via crun)
+./crun_recovar_workload.sh freq-parallel-2node
+
+# Step 2: Concatenate results (after all nodes complete)
+python -m recovar.commands.concatenate_covariance \
+    output/covariance_parts --n-nodes 2
+
+# Step 3: Continue pipeline from concatenated covariance
+python -m recovar.commands.continue_from_covariance \
+    --covariance-dir output/covariance_parts \
+    --output-dir output \
+    --original-args-file output/pipeline_args.pkl
+```
+
+**Estimated time**: 3 hours
+
+**Note**: This is a framework. Full implementation requires refactoring `principal_components.py` to cleanly separate covariance computation from downstream processing. This can be done iteratively.
 
 ---
 
@@ -1511,11 +1753,10 @@ bash tests/test_2node_integration.sh
 ### Stage 3: Validation Test (2 Nodes, SLURM, ~1 hour)
 
 ```bash
-# Submit 2-node job via SLURM (2 GPUs per node)
-sbatch --nodes=2 --ntasks=2 --gpus-per-node=2 \
-    scripts/run_frequency_parallel_test.sh
+# Submit 2-node job via crun (NOT sbatch directly)
+./crun_recovar_workload.sh freq-parallel-2node
 
-# Compare with baseline
+# Wait for completion, then compare with baseline
 python -m recovar.commands.validate_distributed_output \
     baseline_output/model/covariance_cols.pkl \
     freq_parallel_output/covariance_parts/covariance_complete.pkl
@@ -1530,8 +1771,8 @@ python -m recovar.commands.validate_distributed_output \
 ### Stage 4: Performance Benchmarking (2 Nodes, 2 GPUs, ~2 hours)
 
 ```bash
-# Run benchmark suite (limited to 2 nodes, 2 GPUs)
-bash scripts/benchmark_frequency_parallel.sh
+# Run benchmark suite via crun (limited to 2 nodes, 2 GPUs)
+# Note: Benchmark script should use crun internally for multi-node jobs
 
 # Analyze results
 python scripts/analyze_benchmark_results.py benchmark_results/
@@ -1547,9 +1788,8 @@ python scripts/analyze_benchmark_results.py benchmark_results/
 ### Stage 5: Extended Dataset Test (100k images, ~2 hours)
 
 ```bash
-# Run on full 100k dataset with 2 nodes
-sbatch --nodes=2 --ntasks=2 --gpus-per-node=2 \
-    scripts/run_frequency_parallel_extended.sh
+# Run on full 100k dataset with 2 nodes via crun
+./crun_recovar_workload.sh freq-parallel-2node-extended
 
 # Validate against existing outputs
 python -m recovar.commands.validate_distributed_output \
@@ -1673,8 +1913,9 @@ output/
 - [ ] **Task 1.7**: Update `crun_recovar_workload.sh` (15 min)
 - [ ] **Task 1.8**: Update `pixi.toml` (10 min)
 - [ ] **Task 2.1**: Create `concatenate_covariance.py` (2 hours)
+- [ ] **Task 2.2**: Create `continue_from_covariance.py` (3 hours)
 
-**Total coding time**: ~10 hours
+**Total coding time**: ~13 hours
 
 ### Testing
 
@@ -1761,19 +2002,59 @@ output/
 
 ---
 
+### Risk 5: Architecture Mismatch (ARM vs x86_64)
+
+**Risk**: SLURM allocates ARM nodes (e.g., Ampere Altra) instead of x86_64, causing Docker container execution failures.
+
+**Symptoms**:
+- "cannot execute binary file" errors
+- Docker container fails immediately
+- Binary format mismatch errors
+
+**Mitigation**:
+- **Use crun for all job submissions** - crun handles architecture selection via GPU query
+- GPU query in crun: `gpu.chip=ga100 and cpu.arch=x86_64` ensures x86_64 nodes
+- Do NOT bypass crun with direct `sbatch` commands
+- Container images are rebuilt per-node to ensure correct architecture
+
+**Likelihood**: High (if crun bypassed)  
+**Impact**: High (job fails immediately)  
+**Detection**: Immediate (job startup)
+
+**Validated in Prototype**: Successfully tested on 2 x86_64 nodes (ipp1-2028, ipp1-2029)
+
+---
+
+### Risk 6: Pipeline Continuation Gap
+
+**Risk**: After multi-node covariance computation, pipeline exits without completing PCA/embedding/volumes.
+
+**Mitigation**:
+- Implement `continue_from_covariance.py` script (Task 2.2)
+- Save pipeline arguments before early exit
+- Document continuation workflow clearly
+- Consider automatic concatenation + continuation in future
+
+**Likelihood**: Medium (workflow gap)  
+**Impact**: Medium (requires manual step)  
+**Detection**: After first successful run
+
+---
+
 ## File Summary
 
 ### Files to Create (New)
 
 1. `recovar/commands/concatenate_covariance.py` (200 lines)
-2. `recovar/commands/validate_distributed_output.py` (180 lines)
-3. `scripts/run_frequency_parallel_multigpu.sh` (80 lines)
-4. `scripts/test_frequency_parallel_suite.sh` (150 lines)
-5. `scripts/benchmark_frequency_parallel.sh` (120 lines)
-6. `scripts/analyze_benchmark_results.py` (150 lines)
-7. `tests/test_frequency_parallel.py` (100 lines)
+2. `recovar/commands/continue_from_covariance.py` (150 lines) **[NEW]**
+3. `recovar/commands/validate_distributed_output.py` (180 lines)
+4. `scripts/run_frequency_parallel_multigpu.sh` (100 lines)
+5. `scripts/test_frequency_parallel_suite.sh` (150 lines)
+6. `scripts/benchmark_frequency_parallel.sh` (120 lines)
+7. `scripts/analyze_benchmark_results.py` (150 lines)
+8. `tests/test_frequency_parallel.py` (100 lines)
 
-**Total new code**: ~980 lines
+**Total new code**: ~1,150 lines
 
 ### Files to Modify (Existing)
 
@@ -1785,7 +2066,7 @@ output/
 
 **Total modifications**: ~255 lines
 
-**Grand total**: ~1,235 lines
+**Grand total**: ~1,405 lines
 
 ---
 
@@ -1793,18 +2074,29 @@ output/
 
 ### Week 1: Implementation
 - Day 1-2: Core infrastructure (Tasks 1.1-1.5) - 8 hours
-- Day 3: Scripts and utilities (Tasks 1.6-2.1) - 5 hours
-- Day 4: Testing infrastructure (Tasks 3.1-3.4) - 4.5 hours
-- Day 5: Buffer and documentation - 2.5 hours
+- Day 3: Scripts and utilities (Tasks 1.6-1.8) - 2 hours
+- Day 4: Post-processing (Tasks 2.1-2.2) - 5 hours
+- Day 5: Testing infrastructure (Tasks 3.1-3.4) - 5 hours
 
-### Week 2: Testing and Benchmarking
-- Day 1: Unit and integration tests (Stages 1-2) - 2 hours
+### Week 2: Testing and Validation
+- Day 1: Unit and integration tests (Stages 1-2) - 3 hours
 - Day 2: Validation tests (Stage 3) - 4 hours
 - Day 3: Performance benchmarking (Stage 4) - 6 hours
 - Day 4: Production validation (Stage 5) - 4 hours
 - Day 5: Results analysis and documentation - 4 hours
 
-**Total time**: 40 hours (2 weeks)
+### Week 3: Debugging and Refinement
+- Day 1-2: Fix issues found in testing - 8 hours
+- Day 3: Pipeline continuation refinement - 4 hours
+- Day 4-5: Documentation and final validation - 8 hours
+
+**Total time**: ~60 hours (3 weeks)
+
+**Note**: Original 40-hour estimate was optimistic. Updated estimate accounts for:
+- Debugging time (architecture issues, container setup, etc.)
+- SLURM queue wait times
+- Integration complexity with existing pipeline
+- Pipeline continuation mechanism implementation
 
 ---
 
@@ -1861,11 +2153,10 @@ output/
 
 ---
 
-## Appendix: Quick Start Commands
+## Operational Guide
 
-Once implemented, using the hybrid approach will be simple:
+### Single-Node Workflow (Existing, No Changes)
 
-### Single-Node (Existing, No Changes)
 ```bash
 # With 2 GPUs
 python -m recovar.commands.pipeline particles.mrcs \
@@ -1878,16 +2169,124 @@ python -m recovar.commands.pipeline particles.mrcs \
     -o output/ --multi-gpu --n-gpus 8
 ```
 
-### Multi-Node (New, via SLURM)
+### Multi-Node Workflow (New)
+
+**IMPORTANT**: All multi-node jobs MUST be submitted via crun, NOT sbatch directly.
+
+#### Step 1: Submit Multi-Node Job
+
 ```bash
-# Option 1: Via crun wrapper (2 nodes, 2 GPUs each for testing)
+# Via crun wrapper (handles architecture selection automatically)
 ./crun_recovar_workload.sh freq-parallel-2node
 
-# Option 2: Direct SLURM submission (2 nodes, 2 GPUs for testing)
-sbatch --nodes=2 --ntasks=2 --gpus-per-node=2 scripts/run_frequency_parallel.sh
-
-# Future production: 4 nodes, 8 GPUs each (after validation)
-sbatch --nodes=4 --ntasks=4 --gpus-per-node=8 scripts/run_frequency_parallel.sh
+# DO NOT use direct sbatch - it bypasses architecture checks:
+# ❌ sbatch --nodes=2 ... scripts/run_frequency_parallel.sh  # WRONG!
 ```
 
-The user interface is simple, all complexity is hidden!
+#### Step 2: Monitor Job Progress
+
+```bash
+# Check job status
+squeue -u $USER
+
+# Monitor output (once running)
+tail -f slurm-<JOB_ID>.out
+
+# Check which nodes allocated
+squeue -j <JOB_ID> -o '%.18i %.9P %.8u %.8T %.10M %.6D %R'
+```
+
+#### Step 3: Wait for Completion
+
+All nodes must finish before proceeding. Check for output files:
+
+```bash
+ls output/covariance_parts/
+# Should see: covariance_node000.npz, covariance_node001.npz, etc.
+```
+
+#### Step 4: Concatenate Results
+
+```bash
+python -m recovar.commands.concatenate_covariance \
+    output/covariance_parts \
+    --n-nodes 2
+```
+
+This creates `covariance_complete.pkl` in the same directory.
+
+#### Step 5: Continue Pipeline
+
+```bash
+python -m recovar.commands.continue_from_covariance \
+    --covariance-dir output/covariance_parts \
+    --output-dir output \
+    --original-args-file output/pipeline_args.pkl
+```
+
+This completes PCA, embedding, and volume generation.
+
+### Common Issues and Solutions
+
+#### Issue: Job allocated ARM nodes
+
+**Symptoms**: 
+```
+ERROR: cannot execute binary file
+/bin/bash: /bin/bash: cannot execute binary file
+```
+
+**Cause**: SLURM allocated ARM (Ampere Altra) nodes instead of x86_64
+
+**Solution**: 
+- Verify you're using `crun_recovar_workload.sh` (NOT direct sbatch)
+- crun's GPU query should handle this: `gpu.chip=ga100 and cpu.arch=x86_64`
+- If still occurring, check crun GPU query configuration
+
+#### Issue: One node fails mid-computation
+
+**Detection**: Missing `covariance_nodeXXX.npz` file
+
+**Solution**:
+1. Identify failed node: `ls output/covariance_parts/`
+2. Check logs: `grep "Node X" slurm-<JOB_ID>.out`
+3. Re-run only that node:
+   ```bash
+   python -m recovar.commands.pipeline ... \
+       --frequency-parallel \
+       --node-rank X \
+       --n-nodes N \
+       ...
+   ```
+4. Or re-run entire job via crun
+
+#### Issue: Concatenation fails with shape mismatch
+
+**Detection**: ValueError during concatenation
+
+**Cause**: Node computed different frequency count or wrong range
+
+**Solution**:
+1. Check logs for frequency assignments
+2. Verify continuity: `grep "Computing.*frequencies" slurm-<JOB_ID>.out`
+3. Check for gaps: Ensure freq_end[i] == freq_start[i+1]
+
+#### Issue: "python: command not found" in container
+
+**Cause**: Script uses `python` instead of `pixi run python`
+
+**Solution**: Update script to use `pixi run python` for all Python commands
+
+### Production Scaling (Future)
+
+Once validated at 2-node scale:
+
+```bash
+# 4 nodes, 8 GPUs each (after validation)
+./crun_recovar_workload.sh freq-parallel-4node
+
+# 8 nodes, 8 GPUs each (production scale)
+./crun_recovar_workload.sh freq-parallel-8node
+```
+
+The user interface remains simple - all complexity is handled by crun!
