@@ -58,57 +58,47 @@ class LeastSquareFromNormalEqs(ProxOperator):
         self._jit_loss = jit(self._compute_batch_loss)
         self._jit_prox = jit(self._compute_batch_prox)
         
-    def _compute_batch_loss(self, x):
-        """Compute batch least squares loss using JAX"""
+    def _compute_batch_loss(self, x, lhs, rhs):
+        """Compute batch least squares loss using JAX. lhs/rhs are args to avoid JAX capturing them as constants (~1.6 GB)."""
         X = x.reshape(self.dim)  # Shape: (n_volumes, n_basis)
         
         # Vectorized computation: X[i]^T @ LHS[i] @ X[i] - 2 * X[i]^T @ RHS[i]
-        # Use vmap to apply across the batch dimension
         def single_loss(x_i, lhs_i, rhs_i):
             return 0.5 * (jnp.dot(jnp.conj(x_i), lhs_i @ x_i) - 2 * jnp.dot(jnp.conj(x_i), rhs_i).real )
         
-        # Apply to all elements in batch
-        losses = vmap(single_loss)(X, self.lhs, self.rhs)
+        losses = vmap(single_loss)(X, lhs, rhs)
         loss  = jnp.sum(losses)
-        return jnp.real(loss)  # Ensure real output
+        return jnp.real(loss)
     
-    def _compute_batch_prox(self, x, tau):
-        """Compute batch proximal operator using JAX"""
+    def _compute_batch_prox(self, x, tau, lhs, rhs):
+        """Compute batch proximal operator using JAX. lhs/rhs are args to avoid JAX capturing them as constants."""
         X = x.reshape(self.dim)  # Shape: (n_volumes, n_basis)
         
-        # Vectorized linear system solving
         def solve_single(lhs_i, rhs_i, x_i):
-            # Solve (tau * LHS + I) * y = tau * RHS + x
             lhs_reg = tau * lhs_i + jnp.eye(lhs_i.shape[-1])
             rhs_reg = tau * rhs_i + x_i
             return jnp.linalg.solve(lhs_reg, rhs_reg)
         
-        # Apply to all elements in batch
-        Y = vmap(solve_single)(self.lhs, self.rhs, X)
-
-        # Flatten to match input format
+        Y = vmap(solve_single)(lhs, rhs, X)
         return Y.flatten()
 
     def __call__(self, x):
-        # Input validation
         if x is None or len(x) == 0:
             return float('inf')
         
         x_jax = jnp.array(x)
-        result = self._jit_loss(x_jax)
+        result = self._jit_loss(x_jax, self.lhs, self.rhs)
         return float(result)
 
     @_check_tau
     def prox(self, x, tau):
-        # Input validation
         if x is None or len(x) == 0:
             return np.zeros(np.prod(self.dim))
         
-        # Timing
         start_time = time.time()
         
         x_jax = jnp.array(x)
-        result = self._jit_prox(x_jax, tau)
+        result = self._jit_prox(x_jax, tau, self.lhs, self.rhs)
         
         # Timing
         end_time = time.time()
