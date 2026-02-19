@@ -24,10 +24,9 @@ batch_vol_slice_volume_by_map = jax.vmap(core.slice_volume_by_map, in_axes = (0,
 
 
 
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(jnp)
+import recovar.fourier_transform_utils as fourier_transform_utils
 def crosscorr_from_ft(many_images, one_image, image_shape):
-    return ftu.get_idft2( jnp.conj(one_image.reshape(1, *image_shape)) * (many_images.reshape(-1, *image_shape)))#.reshape(-1, *image_shape)).reshape(-1, *image_shape)
+    return fourier_transform_utils.get_idft2( jnp.conj(one_image.reshape(1, *image_shape)) * (many_images.reshape(-1, *image_shape)))#.reshape(-1, *image_shape)).reshape(-1, *image_shape)
 
 def norm_squared_residuals_from_ft_one_image(many_images, one_image, image_shape):
     many_images_of_shape = many_images.shape

@@ -114,15 +114,44 @@ To install the newest version on github:
     # Enable the environment
     conda activate recovar_dev
 
+    # Keep installs isolated to this env (avoid ~/.local package leakage)
+    export PYTHONNOUSERSITE=1
+    unset PIP_USER
+
+    # Upgrade packaging tooling in-env
+    python -m pip install -U pip setuptools wheel
+
     # Install key dependencies that don't play well with pip
-    pip install git+https://github.com/scikit-fmm/scikit-fmm.git
-    pip install -f https://download.pytorch.org/whl/torch_stable.html torch==2.3.1+cpu
-    pip install "jax[cuda12]"==0.5.0    # or use "jax[cpu]"==0.5.0 if no NVIDIA GPU
+    python -m pip install git+https://github.com/scikit-fmm/scikit-fmm.git
+    python -m pip install -f https://download.pytorch.org/whl/torch_stable.html torch==2.3.1+cpu
+    python -m pip install "jax[cuda12]"==0.5.0    # or use "jax[cpu]"==0.5.0 if no NVIDIA GPU
+
+    # Required by current command/profiling paths
+    python -m pip install nvtx
 
     # Install recovar from the checked-out code in editable mode
     # Use the extras your project defines; if none, drop [dev].
-    pip install -e ".[dev]"
+    python -m pip install -e ".[dev]"
+
+    # Verify environment consistency
+    python -m pip check
+    python -c "import jax, ml_dtypes, matplotlib, nvtx; print('env ok')"
+
     python -m ipykernel install --user --name=recovar_dev 
+
+### Running the test suite
+
+For development, use the standardized pytest runner:
+
+    ./scripts/run_pytests.sh fast
+
+Other modes:
+
+    ./scripts/run_pytests.sh integration
+    ./scripts/run_pytests.sh gpu
+    ./scripts/run_pytests.sh full
+
+See `tests/README.md` for test layout, markers, and extension guidelines.
 
 ## I. Preprocessing 
 The input interface of RECOVAR is borrowed directly from the excellent [cryoDRGN toolbox](https://cryodrgn.cs.princeton.edu/). 

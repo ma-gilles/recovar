@@ -80,7 +80,7 @@ default = { features = ["cuda"] }
 
 [tasks]
 # Install RECOVAR in editable mode without dependencies
-install-recovar = "pip install -e . --no-deps"
+install-recovar = "pip install -e . --no-deps --no-build-isolation --ignore-installed"
 
 # Test installation
 test-recovar = "recovar run_test_dataset"

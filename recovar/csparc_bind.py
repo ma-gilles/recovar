@@ -12,9 +12,8 @@ import plotly.offline as py
 from recovar import simulator
 import jax
 import warnings
-from recovar.fourier_transform_utils import fourier_transform_utils
+import recovar.fourier_transform_utils as fourier_transform_utils
 import jax.numpy as jnp
-ftu = fourier_transform_utils(jnp)
 from os.path import exists
 
 def load_3dva_results(root, dft = False):
@@ -31,11 +30,11 @@ def load_3dva_results(root, dft = False):
     if dft == False:
         return mean, components.reshape([components.shape[0], -1]).T , zs
 
-    dft = ftu.get_dft3(components) 
+    dft = fourier_transform_utils.get_dft3(components) 
     dft = dft.reshape([dft.shape[0], -1])
     dft /= np.sqrt(dft.shape[0])
     
-    return ftu.get_dft3(mean).reshape(-1)  , dft , zs.T *  np.sqrt(dft.shape[0])
+    return fourier_transform_utils.get_dft3(mean).reshape(-1)  , dft , zs.T *  np.sqrt(dft.shape[0])
 
 
 def load_3dflex_results(root, dft = False):
@@ -52,8 +51,8 @@ def load_3dflex_results(root, dft = False):
     if dft == False:
         return mean, components.reshape([components.shape[0], -1]).T , zs
 
-    dft = ftu.get_dft3(components) 
+    dft = fourier_transform_utils.get_dft3(components) 
     dft = dft.reshape([dft.shape[0], -1])
     dft /= np.sqrt(dft.shape[0])
     
-    return ftu.get_dft3(mean).reshape(-1)  , dft , zs.T *  np.sqrt(dft.shape[0])
+    return fourier_transform_utils.get_dft3(mean).reshape(-1)  , dft , zs.T *  np.sqrt(dft.shape[0])

@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 import logging
 from sklearn.cluster import KMeans
 from recovar import output, relion_functions, plot_utils, utils
-from recovar.fourier_transform_utils import fourier_transform_utils
+import recovar.fourier_transform_utils as fourier_transform_utils
 import jax.numpy as jnp
 import seaborn as sns
 import mrcfile
@@ -39,7 +39,6 @@ import umap
 import argparse
 
 matplotlib.rcParams["contour.negative_linestyle"] = "solid"
-ftu = fourier_transform_utils(jnp)
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +48,7 @@ def compute_fsc_auc(fsc_curve, grid_size, voxel_size, threshold=1/7):
     Compute the Area Under Curve (AUC) of the FSC curve above threshold.
     Higher AUC indicates better quality.
     """
-    freq = ftu.get_1d_frequency_grid(2*grid_size, voxel_size=0.5*voxel_size, scaled=True)
+    freq = fourier_transform_utils.get_1d_frequency_grid(2*grid_size, voxel_size=0.5*voxel_size, scaled=True)
     freq = freq[freq >= 0]
     
     # Ensure both arrays have the same length
@@ -122,7 +121,7 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
     
     # Get mean reconstruction for comparison
     mean_volume = pipeline_output.get('mean').reshape(volume_shape)
-    mean_real = ftu.get_idft3(mean_volume)
+    mean_real = fourier_transform_utils.get_idft3(mean_volume)
     
     fsc_scores = {}
     fsc_auc_scores = {}
@@ -194,12 +193,12 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
             raise Exception("Half-map generation failed")
 
         # Convert to real space for FSC computation
-        halfmap1_real = ftu.get_idft3(halfmaps[0].reshape(volume_shape))
-        halfmap2_real = ftu.get_idft3(halfmaps[1].reshape(volume_shape))
+        halfmap1_real = fourier_transform_utils.get_idft3(halfmaps[0].reshape(volume_shape))
+        halfmap2_real = fourier_transform_utils.get_idft3(halfmaps[1].reshape(volume_shape))
         
         # Compute combined reconstruction
         combined_recon = (halfmaps[0] + halfmaps[1]) / 2
-        combined_real = ftu.get_idft3(combined_recon.reshape(volume_shape))
+        combined_real = fourier_transform_utils.get_idft3(combined_recon.reshape(volume_shape))
         
         # Apply low-pass filtering if requested
         if filter_resolution is not None:
@@ -209,7 +208,7 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
             freq_threshold = 1.0 / filter_resolution  # 1/Angstrom
             
             # Get frequency grid
-            freq_grid = ftu.get_k_coordinate_of_each_pixel_3d(volume_shape, voxel_size=voxel_size, scaled=True)
+            freq_grid = fourier_transform_utils.get_k_coordinate_of_each_pixel_3d(volume_shape, voxel_size=voxel_size, scaled=True)
             freq_magnitude = jnp.linalg.norm(freq_grid, axis=-1)
             
             # Create low-pass filter
@@ -219,7 +218,7 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
             
             # Apply filter in Fourier space
             combined_recon_filtered = combined_recon * low_pass_filter.reshape(-1)
-            combined_real_filtered = ftu.get_idft3(combined_recon_filtered.reshape(volume_shape))
+            combined_real_filtered = fourier_transform_utils.get_idft3(combined_recon_filtered.reshape(volume_shape))
             
             logger.info(f"Cluster {cluster_idx}: Applied low-pass filter at {filter_resolution:.1f} Angstroms ({filter_fourier_shells} Fourier shells)")
             

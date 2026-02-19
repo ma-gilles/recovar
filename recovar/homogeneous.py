@@ -5,8 +5,7 @@ import jax, functools, time
 import nvtx
 
 from recovar import core, regularization, constants, noise
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(jnp)
+import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar import utils
 
 logger = logging.getLogger(__name__)

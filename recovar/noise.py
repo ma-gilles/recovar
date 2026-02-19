@@ -5,8 +5,7 @@ import jax, time
 import functools
 import nvtx
 from recovar import core, covariance_core, regularization, utils, constants
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(jnp)
+import recovar.fourier_transform_utils as fourier_transform_utils
 import os
 
 logger = logging.getLogger(__name__)
@@ -142,7 +141,7 @@ def noise_variance_loss(images, noise_variance, translations, CTF_params, voxel_
     predicted_noise_variance = predict_noise_variance(noise_variance, CTF_params, voxel_size, CTF_fun, image_masks, image_shape, radial, premultiplied_ctf)
 
     # import matplotlib.pyplot as plt
-    # plt.imshow(ftu.get_idft2(masked_images[0]).real)
+    # plt.imshow(fourier_transform_utils.get_idft2(masked_images[0]).real)
     # plt.colorbar()
     # plt.show()
 
@@ -306,7 +305,7 @@ DEBUG = False
 #     # Initialize noise_variance with some reasonable starting values
 
 #     initial_noise_variance = jnp.ones(int(experiment_dataset.grid_size / 2 *  np.sqrt(2) ), dtype=np.float64) 
-#     average_PS = jnp.mean(jnp.abs(ftu.get_dft2(experiment_dataset.get_image_real(0)))**2)
+#     average_PS = jnp.mean(jnp.abs(fourier_transform_utils.get_dft2(experiment_dataset.get_image_real(0)))**2)
 #     initial_noise_variance= initial_noise_variance * average_PS
 #     print(f"initial_noise_variance={average_PS:.2e}")
 #     loss = loss_function(initial_noise_variance)
@@ -648,7 +647,7 @@ def upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size
             utils.report_memory_device(logger=logger)
 
             # def upper_bound_noise_var(noise_var_used, variance_est, noise_p_variance_est):
-            rad_grid = np.array(ftu.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
+            rad_grid = np.array(fourier_transform_utils.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
             # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
             n_shell_to_ub = np.min([32, cryos[0].grid_size//2 -1])
             ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
@@ -988,7 +987,7 @@ def estimate_noise_variance_from_outside_mask_inner(batch, volume_mask, rotation
 
     image_size = batch.shape[-1]
     # Integral of mask:
-    image_mask_2 = ftu.get_dft2(image_mask)
+    image_mask_2 = fourier_transform_utils.get_dft2(image_mask)
     image_mask_sums = jnp.sum(jnp.abs(image_mask_2)**2, axis =(-2, -1)) / image_size**2 
     masked_image_PS = regularization.batch_average_over_shells(jnp.abs(batch)**2, image_shape, 0) / image_mask_sums[:,None]
 
@@ -1178,10 +1177,10 @@ def get_average_residual_square_inner(batch, mean_estimate, volume_mask, basis, 
 #     batch = core.translate_images(batch, translations , image_shape)
 #     diff = batch - projected_vols
 #     # import matplotlib.pyplot as plt
-#     # plt.imshow(ftu.get_idft2(batch[0].reshape(image_shape)).real)
+#     # plt.imshow(fourier_transform_utils.get_idft2(batch[0].reshape(image_shape)).real)
 #     # plt.show()
 #     # plt.figure()
-#     # plt.imshow(ftu.get_idft2(projected_vols[0].reshape(image_shape)).real)
+#     # plt.imshow(fourier_transform_utils.get_idft2(projected_vols[0].reshape(image_shape)).real)
 #     # plt.show()
 #     # import pdb; pdb.set_trace()
 

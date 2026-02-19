@@ -15,8 +15,7 @@ except ImportError:
 
 import pandas as pd
 import jax.numpy as jnp
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(jnp)
+import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar import regularization, utils, metrics
 colors = dict(mcolors.BASE_COLORS, **mcolors.CSS4_COLORS)
 
@@ -209,7 +208,7 @@ def compare_two_volumes(cryo, vol1, vol2, from_ft_inp = True):
     
     def plot_vol(vol, n_plot, from_ft = True, cmap = 'viridis', name ="", symmetric = False):
         if not from_ft:
-            vol = ftu.get_dft3(vol.reshape(cryo.volume_shape)).reshape(-1)
+            vol = fourier_transform_utils.get_dft3(vol.reshape(cryo.volume_shape)).reshape(-1)
         global is_first
         
         axs[n_plot,0].set_ylabel(name)
@@ -251,7 +250,7 @@ def compare_two_volumes(cryo, vol1, vol2, from_ft_inp = True):
 
     plot_vol(vol1, 0, from_ft = from_ft_inp, name = 'vol1')
     plot_vol(vol2, 1, from_ft = from_ft_inp,name = 'vol2')
-    vol_diff = ftu.get_idft3((vol1-vol2).reshape(cryo.volume_shape)).reshape(-1)
+    vol_diff = fourier_transform_utils.get_idft3((vol1-vol2).reshape(cryo.volume_shape)).reshape(-1)
     plot_vol(vol_diff,2, from_ft = not from_ft_inp,name = 'diff')
     plot_vol(np.abs(vol_diff),3, from_ft = not from_ft_inp,name = '||diff||')
     
@@ -311,7 +310,7 @@ def plot_summary_t(pipeline_output, n_eigs = 3, filename = None):
     
     def plot_vol(vol, n_plot, from_ft = True, cmap = 'viridis', name ="", symmetric = False):
         if from_ft:
-            vol = ftu.get_idft3(vol.reshape(volume_shape)).reshape(-1)
+            vol = fourier_transform_utils.get_idft3(vol.reshape(volume_shape)).reshape(-1)
         global is_first
         
         axs[n_plot,0].set_ylabel(name)
@@ -378,7 +377,7 @@ def plot_summary(results,cryos, n_eigs = 3):
     
     def plot_vol(vol, n_plot, from_ft = True, cmap = 'viridis', name ="", symmetric = False):
         if not from_ft:
-            vol = ftu.get_dft3(vol.reshape(cryos[0].volume_shape)).reshape(-1)
+            vol = fourier_transform_utils.get_dft3(vol.reshape(cryos[0].volume_shape)).reshape(-1)
         global is_first
         axs[0, n_plot].set_title(name)
         for k in range(3):
@@ -438,7 +437,7 @@ def plot_volume_sequence(volumes,cryos):
     
     def plot_vol(vol, n_plot, from_ft = True, cmap = 'viridis', name ="", symmetric = False):
         if not from_ft:
-            vol = ftu.get_dft3(vol.reshape(cryos[0].volume_shape)).reshape(-1)
+            vol = fourier_transform_utils.get_dft3(vol.reshape(cryos[0].volume_shape)).reshape(-1)
         global is_first
         axs[0, n_plot].set_title(name)
         for k in range(3):
@@ -623,10 +622,10 @@ def plot_fsc_new(image1, image2, volume_shape = None, voxel_size=1,  curve = Non
         ax = plt.gca() 
 
     if volume_mask is not None:
-        image1 = ftu.get_idft3(image1.reshape(volume_shape))
-        image2 = ftu.get_idft3(image2.reshape(volume_shape))
-        image1 = ftu.get_dft3(image1 * volume_mask)
-        image2 = ftu.get_dft3(image2 * volume_mask)
+        image1 = fourier_transform_utils.get_idft3(image1.reshape(volume_shape))
+        image2 = fourier_transform_utils.get_idft3(image2.reshape(volume_shape))
+        image1 = fourier_transform_utils.get_dft3(image1 * volume_mask)
+        image2 = fourier_transform_utils.get_dft3(image2 * volume_mask)
 
     # get_fsc_gpu
     if curve is None:
@@ -634,7 +633,7 @@ def plot_fsc_new(image1, image2, volume_shape = None, voxel_size=1,  curve = Non
     
     # import pdb; pdb.set_trace()
     # Huuuh why is there a 1/2 here??
-    freq = ftu.get_1d_frequency_grid(grid_size, voxel_size = voxel_size, scaled = True)
+    freq = fourier_transform_utils.get_1d_frequency_grid(grid_size, voxel_size = voxel_size, scaled = True)
     freq = freq[freq >= 0 ]
     freq = freq[:grid_size//2 ]
     max_idx = min(curve.size, freq.size)
@@ -715,7 +714,7 @@ def FSC(image1, image2, r_dict = None):
 
 def fsc_score(fsc_curve, grid_size, voxel_size, threshold = 0.5 ):
     # First index below 0.5
-    freq = ftu.get_1d_frequency_grid(2*grid_size, voxel_size = 0.5*voxel_size, scaled = True)
+    freq = fourier_transform_utils.get_1d_frequency_grid(2*grid_size, voxel_size = 0.5*voxel_size, scaled = True)
     freq = freq[freq >= 0 ]
 
     freq = freq[1:]
@@ -805,7 +804,7 @@ def plot_fsc_function_paper(fsc_curves, global_name, names, grid_size, voxel_siz
         plt.figure(figsize=(9, 8))
         ax = plt.gca()
         # plt.rcParams['text.usetex'] = False
-        freq = ftu.get_1d_frequency_grid(2*grid_size, voxel_size = 0.5*voxel_size, scaled = True)
+        freq = fourier_transform_utils.get_1d_frequency_grid(2*grid_size, voxel_size = 0.5*voxel_size, scaled = True)
         freq = freq[freq >= 0 ]
         freq = freq[:grid_size//2 ]
 

@@ -1,9 +1,7 @@
 import logging
 import jax.numpy as jnp
 import numpy as np
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(jnp)
-ftu_np = fourier_transform_utils(np)
+import recovar.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
 import skimage
 from scipy.ndimage import binary_dilation, distance_transform_edt
@@ -69,8 +67,8 @@ def make_mask_from_half_maps_from_means_dict(means, smax = 3 ):
     # x = MaskedMaps()
     # x.smax = smax
     vol_shape = utils.guess_vol_shape_from_vol_size(means['corrected0'].size)
-    halfmap1 = ftu.get_idft3(means['corrected0reg'].reshape(vol_shape)).real
-    halfmap2 = ftu.get_idft3(means['corrected1reg'].reshape(vol_shape)).real
+    halfmap1 = fourier_transform_utils.get_idft3(means['corrected0reg'].reshape(vol_shape)).real
+    halfmap2 = fourier_transform_utils.get_idft3(means['corrected1reg'].reshape(vol_shape)).real
     return make_mask_from_half_maps(halfmap1, halfmap2, smax = smax )
 
 
@@ -88,7 +86,6 @@ def make_mask_from_half_maps(halfmap1, halfmap2, smax = 3 ):
 
 def make_mask_from_gt(gt_map_ft, smax = 3, iter = 10, from_ft = True ):
     # from emda.ext.maskmap_class import MaskedMaps
-    ftu = fourier_transform_utils(np)
     x = MaskedMaps()
     x.smax = smax
     if iter is not None:
@@ -96,10 +93,10 @@ def make_mask_from_gt(gt_map_ft, smax = 3, iter = 10, from_ft = True ):
     # x.iter = x.iter +5
     vol_shape = utils.guess_vol_shape_from_vol_size(gt_map_ft.size)
     if from_ft:
-        x.arr1 = ftu.get_idft3(gt_map_ft.reshape(vol_shape)).real
+        x.arr1 = fourier_transform_utils.get_idft3(gt_map_ft.reshape(vol_shape)).real
     else:
         x.arr1 = gt_map_ft.reshape(vol_shape)
-    # x.arr2 = ftu.get_idft3(means['corrected1'].reshape(vol_shape)).real
+    # x.arr2 = fourier_transform_utils.get_idft3(means['corrected1'].reshape(vol_shape)).real
     x.generate_mask_from_gt()
     return x.mask
 
@@ -113,7 +110,7 @@ def create_soft_edged_kernel_pxl(r1, shape):
         boxsize = 2 * r1 + 1
     
     # Are these offset by 1 pixel ? or 1/2 or something
-    volume_coords =  ftu.get_k_coordinate_of_each_pixel(shape, voxel_size = 1, scaled = False).reshape(list(shape) + [len(list(shape))]) + 1
+    volume_coords =  fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size = 1, scaled = False).reshape(list(shape) + [len(list(shape))]) + 1
     distances =  jnp.linalg.norm(volume_coords, axis =-1)
     half_boxsize = boxsize // 2
     r1 = half_boxsize
@@ -129,7 +126,7 @@ def create_soft_edged_kernel_pxl(r1, shape):
 def create_hard_edged_kernel_pxl(r1, shape):
     
     # Are these offset by 1 pixel ? or 1/2 or something
-    volume_coords =  ftu.get_k_coordinate_of_each_pixel(shape, voxel_size = 1, scaled = False).reshape(list(shape) + [len(list(shape))]) + 1
+    volume_coords =  fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size = 1, scaled = False).reshape(list(shape) + [len(list(shape))]) + 1
     distances =  jnp.linalg.norm(volume_coords, axis =-1)
     
     kern_sphere_soft = jnp.where((distances <= r1), jnp.ones_like(distances), jnp.zeros_like(distances))
@@ -154,7 +151,7 @@ def soften_volume_mask_new(binary_volume_mask, kernel_size):
 
 def get_radial_mask(shape, radius = None):
     radius = shape[0]//2-1 if radius is None else radius
-    volume_coords =  ftu.get_k_coordinate_of_each_pixel(shape, voxel_size = 1, scaled = False).reshape(list(shape) + [len(list(shape))])
+    volume_coords =  fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size = 1, scaled = False).reshape(list(shape) + [len(list(shape))])
     zero_out_outside_sphere_small =  jnp.linalg.norm(volume_coords, axis =-1) < radius + 1e-7
     return zero_out_outside_sphere_small
 
@@ -248,7 +245,7 @@ def smooth_circular_mask(image_size, radius, thickness):
 
 def raised_cosine_mask( volume_shape, radius, radius_p, offset):
     # adapted from relion
-    grid = ftu.get_k_coordinate_of_each_pixel_3d(volume_shape, voxel_size = 1, scaled = False)
+    grid = fourier_transform_utils.get_k_coordinate_of_each_pixel_3d(volume_shape, voxel_size = 1, scaled = False)
     grid -= offset
 
     distances =  jnp.linalg.norm(grid, axis =-1)
@@ -275,7 +272,7 @@ def soft_mask_outside_map(vol, radius=-1, cosine_width=3, Mnoise=None):
     shape = vol.shape
 
     # Not very clear whether this should be 0 or 1
-    volume_coords =  ftu.get_k_coordinate_of_each_pixel(shape, voxel_size = 1, scaled = False).reshape(list(shape) + [len(list(shape))]) + 0
+    volume_coords =  fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size = 1, scaled = False).reshape(list(shape) + [len(list(shape))]) + 0
 
     # r, i, j = np.ogrid[:vol.shape[0], :vol.shape[1], :vol.shape[2]]
     r = jnp.linalg.norm(volume_coords, axis =-1)

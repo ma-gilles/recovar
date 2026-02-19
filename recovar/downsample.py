@@ -3,7 +3,7 @@
 # import jax.numpy as jnp
 # import numpy as np
 # import dataset
-# from recovar.fourier_transform_utils import fourier_transform_utils
+# import recovar.fourier_transform_utils as fourier_transform_utils
 # ftu = fourier_transform_utils(jnp)
 
 # from cryodrgn import mrc
@@ -16,11 +16,11 @@
 #     new = np.empty((n_images, D, D), dtype=np.float32)
 
 #     def downsample_images2(imgs):
-#         oldft = ftu.get_dft2(imgs)
+#         oldft = fourier_transform_utils.get_dft2(imgs)
 #         newft = oldft[:, start:stop, start:stop]
 #         newft = newft.at[:,0].set(0)
 #         newft = newft.at[:,:,0].set(0)
-#         new = ftu.get_idft2(newft).real
+#         new = fourier_transform_utils.get_idft2(newft).real
 #         return new
 
 #     data_generator = dataset.NumpyLoader(image_stack, batch_size=batch_size, shuffle=False)

@@ -4,8 +4,8 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from recovar import core
+import recovar.fourier_transform_utils as fourier_transform_utils
 from .sampling import translations_to_indices
-from .core import ftu
 from .core import VOL_AXIS
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ def sum_up_translate_one_image(image, probabilities, translations, image_shape, 
         translations_indices = translations_to_indices(translations, image_shape)
         # This allows for duplicates which may or may not be good?
         images_probs = images_probs.at[...,translations_indices].add(probabilities)
-        images_probs = ftu.get_dft2(images_probs.reshape(*images_probs.shape[:-1], *image_shape))
+        images_probs = fourier_transform_utils.get_dft2(images_probs.reshape(*images_probs.shape[:-1], *image_shape))
         summed_up_images = (image) * (images_probs.reshape(*images_probs.shape[:-2], np.prod(image_shape)))
     else:  
         
@@ -40,18 +40,18 @@ def backproject_one_image(probabilities, images_i, rotation_matrices, translatio
     # print(jnp.linalg.norm(images3 - images2)/jnp.linalg.norm(images))
     # # print(jnp.linalg.norm(images3 - images2, axis = (0,1,2) )/jnp.linalg.norm(images, axis = (0,1,2) ))
     # kk=0
-    # plt.imshow(ftu.get_idft2((images2-images3)[0,0,kk].reshape(image_shape)).real); plt.colorbar(); plt.title(f'diff k {kk}'); plt.show()
-    # plt.imshow(ftu.get_idft2((images3)[0,0,kk].reshape(image_shape)).real); plt.title(f'fft k {kk}'); plt.colorbar(); plt.show()
-    # plt.imshow(ftu.get_idft2((images2)[0,0,kk].reshape(image_shape)).real);  plt.title(f'nofft k {kk}');  plt.colorbar(); plt.show()
-    # plt.imshow(ftu.get_idft2((images)[0].reshape(image_shape)).real); plt.title(f'raw k {kk}'); plt.colorbar(); plt.show()
-    # plt.imshow(ftu.get_idft2((images2)[0,0,kk].reshape(image_shape)).real/ ftu.get_idft2((images3)[0,0,kk].reshape(image_shape)).real);  plt.title(f'ratio k {kk}');  plt.colorbar(); plt.show()
+    # plt.imshow(fourier_transform_utils.get_idft2((images2-images3)[0,0,kk].reshape(image_shape)).real); plt.colorbar(); plt.title(f'diff k {kk}'); plt.show()
+    # plt.imshow(fourier_transform_utils.get_idft2((images3)[0,0,kk].reshape(image_shape)).real); plt.title(f'fft k {kk}'); plt.colorbar(); plt.show()
+    # plt.imshow(fourier_transform_utils.get_idft2((images2)[0,0,kk].reshape(image_shape)).real);  plt.title(f'nofft k {kk}');  plt.colorbar(); plt.show()
+    # plt.imshow(fourier_transform_utils.get_idft2((images)[0].reshape(image_shape)).real); plt.title(f'raw k {kk}'); plt.colorbar(); plt.show()
+    # plt.imshow(fourier_transform_utils.get_idft2((images2)[0,0,kk].reshape(image_shape)).real/ fourier_transform_utils.get_idft2((images3)[0,0,kk].reshape(image_shape)).real);  plt.title(f'ratio k {kk}');  plt.colorbar(); plt.show()
 
 
     # kk=1
-    # plt.imshow(ftu.get_idft2((images2-images3)[0,0,kk].reshape(image_shape)).real); plt.colorbar(); plt.title(f'diff k {kk}'); plt.show()
-    # plt.imshow(ftu.get_idft2((images3)[0,0,kk].reshape(image_shape)).real); plt.title(f'fft k {kk}'); plt.colorbar(); plt.show()
-    # plt.imshow(ftu.get_idft2((images2)[0,0,kk].reshape(image_shape)).real);  plt.title(f'nofft k {kk}');  plt.colorbar(); plt.show()
-    # plt.imshow(ftu.get_idft2((images)[0].reshape(image_shape)).real); plt.title(f'raw k {kk}'); plt.colorbar(); plt.show()
+    # plt.imshow(fourier_transform_utils.get_idft2((images2-images3)[0,0,kk].reshape(image_shape)).real); plt.colorbar(); plt.title(f'diff k {kk}'); plt.show()
+    # plt.imshow(fourier_transform_utils.get_idft2((images3)[0,0,kk].reshape(image_shape)).real); plt.title(f'fft k {kk}'); plt.colorbar(); plt.show()
+    # plt.imshow(fourier_transform_utils.get_idft2((images2)[0,0,kk].reshape(image_shape)).real);  plt.title(f'nofft k {kk}');  plt.colorbar(); plt.show()
+    # plt.imshow(fourier_transform_utils.get_idft2((images)[0].reshape(image_shape)).real); plt.title(f'raw k {kk}'); plt.colorbar(); plt.show()
     images = sum_up_translations(images_i, probabilities, translations, image_shape, translation_fn)
     # images = sum_up_translations(images_i, probabilities, translations, image_shape, translation_fn)
     # images = sum_up_translations(images_i, probabilities, translations, image_shape, translation_fn)

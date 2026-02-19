@@ -2,8 +2,7 @@ import logging
 import jax.numpy as jnp
 import numpy as np
 from recovar import core
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(jnp)
+import recovar.fourier_transform_utils as fourier_transform_utils
 
 # @functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19, 23, 24])    
 def compute_residual(batch, mean_estimate,  CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, disc_type,  noise_variance, process_fn, CTF_fun):
@@ -24,17 +23,17 @@ def compute_residual(batch, mean_estimate,  CTF_params, rotation_matrices, trans
     difference /= jnp.sqrt(noise_variance)[None]
 
     # import matplotlib.pyplot as plt
-    # plt.imshow(ftu.get_idft2(projected_mean[0].reshape(image_shape)).real)
+    # plt.imshow(fourier_transform_utils.get_idft2(projected_mean[0].reshape(image_shape)).real)
     # plt.colorbar()
     # plt.show()
 
     # plt.figure()
-    # plt.imshow(ftu.get_idft2(batch[0].reshape(image_shape)).real)
+    # plt.imshow(fourier_transform_utils.get_idft2(batch[0].reshape(image_shape)).real)
     # plt.colorbar()
     # plt.show()
 
     # plt.figure()
-    # plt.imshow(ftu.get_idft2((batch[0] - projected_mean[0]).reshape(image_shape)).real)
+    # plt.imshow(fourier_transform_utils.get_idft2((batch[0] - projected_mean[0]).reshape(image_shape)).real)
     # plt.colorbar()
     # plt.show()
 

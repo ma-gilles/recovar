@@ -5,8 +5,7 @@ import jax, time
 import functools
 import nvtx
 from recovar import core, covariance_core, regularization, utils, constants, noise, cubic_interpolation
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(jnp)
+import recovar.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +178,7 @@ def greedy_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_radius 
     if n_samples < 1 or n_samples > sampling_vec.size:
         raise ValueError("n_samples should be between 1 and the size of sampling_vec")
 
-    radial_distances = ftu.get_grid_of_radial_distances(volume_shape)
+    radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape)
     sampling_vec *= radial_distances.reshape(-1) < keep_only_below_freq
 
     sorted_idx = jnp.argsort(-sampling_vec)

@@ -5,8 +5,7 @@ import functools, time, jax
 import nvtx
 from recovar import core, covariance_core, latent_density, homogeneous, constants, utils, dataset, linalg
 
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(jnp)
+import recovar.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
 

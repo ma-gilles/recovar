@@ -3,8 +3,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import functools
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(jnp)
+import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar import utils
 
 # Some functions that do linear algera on batch in GPU. I find it strange that there is not already a decent library to do this, but I couldn't find one.
@@ -185,7 +184,7 @@ def randomized_svd(A, n_pcs = 200):
 def idft3(x, vec_shape ):
     x = x.reshape([*vec_shape, x.shape[-1]]) 
     # x = x.T
-    x = ftu.get_idft3(x, axes =(0,1,2))
+    x = fourier_transform_utils.get_idft3(x, axes =(0,1,2))
     # x = x.T
     x = x.reshape([-1, x.shape[-1]])
     return x
@@ -194,7 +193,7 @@ def idft3(x, vec_shape ):
 def dft3(x, vec_shape):
     x = x.reshape([*vec_shape, x.shape[-1]])
     # x = x.T
-    x = ftu.get_dft3(x, axes =(0,1,2))
+    x = fourier_transform_utils.get_dft3(x, axes =(0,1,2))
     # x = x.T
     x = x.reshape([-1, x.shape[-1]])
     return x

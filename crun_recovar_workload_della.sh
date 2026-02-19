@@ -7,8 +7,18 @@ set -e
 
 # Configuration (paths)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-JOB_SCRIPTS_DIR="$SCRIPT_DIR/scripts/job_scripts"
-OUTPUT_DIR="$SCRIPT_DIR/scripts/output"
+# Store job scripts and Slurm output on scratch/tigress, not home (set RECOVAR_WORK_BASE to override)
+RECOVAR_WORK_BASE="${RECOVAR_WORK_BASE:-}"
+if [ -z "$RECOVAR_WORK_BASE" ] && [ -d /scratch/gpfs/AMITS/mg6942 ]; then
+  RECOVAR_WORK_BASE="/scratch/gpfs/AMITS/mg6942/recovar_profiling"
+fi
+if [ -n "$RECOVAR_WORK_BASE" ]; then
+  JOB_SCRIPTS_DIR="$RECOVAR_WORK_BASE/job_scripts"
+  OUTPUT_DIR="$RECOVAR_WORK_BASE/output"
+else
+  JOB_SCRIPTS_DIR="$SCRIPT_DIR/scripts/job_scripts"
+  OUTPUT_DIR="$SCRIPT_DIR/scripts/output"
+fi
 
 # Configuration (scheduler + container)
 # - Scheduler: slurm|local|auto (auto picks slurm if sbatch exists, else local)
@@ -27,6 +37,7 @@ SLURM_PARTITION="${SLURM_PARTITION:-}"
 SLURM_ACCOUNT="${SLURM_ACCOUNT:-}"
 SLURM_QOS="${SLURM_QOS:-}"
 SLURM_CONSTRAINT="${SLURM_CONSTRAINT:-}"   # e.g. "a100|h100"
+SLURM_DEPENDENCY="${SLURM_DEPENDENCY:-}"   # e.g. "afterok:123456"
 SLURM_NODES="${SLURM_NODES:-1}"
 SLURM_NTASKS="${SLURM_NTASKS:-1}"
 # GPU request style:
@@ -41,9 +52,9 @@ WORKDIR_IN_CONTAINER="${WORKDIR_IN_CONTAINER:-/workspace}"
 SKIP_IMAGE_BUILD="${SKIP_IMAGE_BUILD:-0}"
 SKIP_PIXI_ENV_INSTALL="${SKIP_PIXI_ENV_INSTALL:-0}"
 SKIP_RECOVAR_INSTALL="${SKIP_RECOVAR_INSTALL:-0}"
+DATA_BASE="${DATA_BASE:-/scratch/gpfs/AMITS/mg6942/recovar_profiling/data}"
 
-# Pixi storage overrides (strongly recommended on HPC to avoid repo/home quotas)
-# These are passed into the container and (if /scratch exists) we bind-mount /scratch.
+# Pixi storage: use scratch so nothing is written to home (set via batch script when /scratch exists).
 PIXI_HOME="${PIXI_HOME:-}"
 RATTLER_CACHE_DIR="${RATTLER_CACHE_DIR:-}"
 PIXI_DETACHED_ENVIRONMENTS="${PIXI_DETACHED_ENVIRONMENTS:-1}"
@@ -95,6 +106,7 @@ slurm_directives() {
     if [ -n "$SLURM_ACCOUNT" ]; then echo "#SBATCH --account=${SLURM_ACCOUNT}"; fi
     if [ -n "$SLURM_QOS" ]; then echo "#SBATCH --qos=${SLURM_QOS}"; fi
     if [ -n "$SLURM_CONSTRAINT" ]; then echo "#SBATCH --constraint=${SLURM_CONSTRAINT}"; fi
+    if [ -n "$SLURM_DEPENDENCY" ]; then echo "#SBATCH --dependency=${SLURM_DEPENDENCY}"; fi
     if [ -n "$SLURM_CPUS_PER_TASK" ]; then echo "#SBATCH --cpus-per-task=${SLURM_CPUS_PER_TASK}"; fi
     if [ -n "$SLURM_MEM" ]; then echo "#SBATCH --mem=${SLURM_MEM}"; fi
 }
@@ -140,9 +152,30 @@ NSYS_BIN="${NSYS_BIN:-__NSYS_BIN__}"
 PIXI_HOME="${PIXI_HOME:-__PIXI_HOME__}"
 RATTLER_CACHE_DIR="${RATTLER_CACHE_DIR:-__RATTLER_CACHE_DIR__}"
 PIXI_DETACHED_ENVIRONMENTS="${PIXI_DETACHED_ENVIRONMENTS:-__PIXI_DETACHED_ENVIRONMENTS__}"
+DATA_BASE="${DATA_BASE:-__DATA_BASE__}"
+CONTAINER_SIF="${CONTAINER_SIF:-__CONTAINER_SIF__}"
 TASK_CMD="TASK_CMD_PLACEHOLDER"
 
 cd "$SCRIPT_DIR"
+
+# Ensure pixi/rattler use writable dirs (container inherits these; avoids read-only /usr/local)
+if [ -d /scratch ]; then
+  export PIXI_HOME="${PIXI_HOME:-/scratch/gpfs/AMITS/mg6942/recovar_profiling/pixi}"
+  export RATTLER_CACHE_DIR="${RATTLER_CACHE_DIR:-$PIXI_HOME/rattler-cache}"
+  export TMPDIR="${TMPDIR:-/scratch/gpfs/AMITS/mg6942/recovar_profiling/tmp}"
+  export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/scratch/gpfs/AMITS/mg6942/recovar_profiling/xdg-cache}"
+  export XDG_STATE_HOME="${XDG_STATE_HOME:-/scratch/gpfs/AMITS/mg6942/recovar_profiling/xdg-state}"
+  export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-/scratch/gpfs/AMITS/mg6942/recovar_profiling/xdg-config}"
+  export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-/scratch/gpfs/AMITS/mg6942/recovar_profiling/apptainer-cache}"
+  export SINGULARITY_CACHEDIR="${SINGULARITY_CACHEDIR:-$APPTAINER_CACHEDIR}"
+  mkdir -p "$PIXI_HOME" "$RATTLER_CACHE_DIR"
+  mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_CONFIG_HOME" "$APPTAINER_CACHEDIR"
+  # Prefer full path to recovar so container/nsys can find it (container inherits RECOVAR_BIN)
+  if [ -z "${RECOVAR_BIN:-}" ] && [ -d "$RATTLER_CACHE_DIR/envs" ]; then
+    RECOVAR_BIN=$(find "$RATTLER_CACHE_DIR/envs" -name recovar -type f -executable 2>/dev/null | head -1)
+    [ -n "$RECOVAR_BIN" ] && export RECOVAR_BIN
+  fi
+fi
 
 echo "Task command: $TASK_CMD"
 echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-<unset>}"
@@ -207,6 +240,17 @@ run_in_container() {
         set -e
         unset PYTHONPATH PYTHONHOME
         export PYTHONNOUSERSITE=1
+        if [ -n "${DATA_BASE:-}" ]; then
+          export DATA_BASE="$DATA_BASE"
+        fi
+        if [ -d /scratch ]; then
+          USER_NAME=\${USER:-\$(id -un)}
+          export TMPDIR="\${TMPDIR:-/scratch/\$USER_NAME/recovar_profiling/tmp}"
+          export XDG_CACHE_HOME="\${XDG_CACHE_HOME:-/scratch/\$USER_NAME/recovar_profiling/xdg-cache}"
+          export XDG_STATE_HOME="\${XDG_STATE_HOME:-/scratch/\$USER_NAME/recovar_profiling/xdg-state}"
+          export XDG_CONFIG_HOME="\${XDG_CONFIG_HOME:-/scratch/\$USER_NAME/recovar_profiling/xdg-config}"
+          mkdir -p "\$TMPDIR" "\$XDG_CACHE_HOME" "\$XDG_STATE_HOME" "\$XDG_CONFIG_HOME"
+        fi
         # If requested, force a specific host-provided Nsight Systems version (controls .nsys-rep format).
         if [ -n \"\$NSYS_BIN\" ]; then
           if [ -x \"\$NSYS_BIN\" ]; then
@@ -235,8 +279,13 @@ run_in_container() {
         fi
 
         if ! command -v pixi >/dev/null 2>&1; then
-          echo 'pixi not found in image; installing to \$HOME/.pixi...'
-          PIXI_HOME=\"\${PIXI_HOME:-\$HOME/.pixi}\"
+          echo 'pixi not found in image; installing to scratch/tmp (not home)...'
+          if [ -d /scratch ]; then
+            USER_NAME=\${USER:-\$(id -un)}
+            PIXI_HOME=\"\${PIXI_HOME:-/scratch/\$USER_NAME/pixi}\"
+          else
+            PIXI_HOME=\"\${PIXI_HOME:-/tmp/\${USER:-\$(id -un)}/pixi}\"
+          fi
           if command -v curl >/dev/null 2>&1; then
             curl -fsSL https://pixi.sh/install.sh | PIXI_HOME=\"\$PIXI_HOME\" PIXI_NO_PATH_UPDATE=1 bash
           elif command -v wget >/dev/null 2>&1; then
@@ -280,10 +329,33 @@ run_in_container() {
     apptainer_bin="singularity"
   fi
 
-  # For apptainer, CONTAINER_IMAGE should typically be a .sif path or URI like docker://...
+  # For apptainer, CONTAINER_IMAGE must be a .sif path (compute nodes often cannot pull from Docker).
+  # If CONTAINER_IMAGE is a docker:// URI or recovar:latest, try CONTAINER_SIF or common .sif locations.
+  if [[ "$CONTAINER_IMAGE" == *"://"* ]] || [ "$CONTAINER_IMAGE" = "recovar:latest" ]; then
+    local resolved=""
+    if [ -n "${CONTAINER_SIF:-}" ] && [ -f "${CONTAINER_SIF}" ]; then
+      resolved="$CONTAINER_SIF"
+    elif [ -f "$SCRIPT_DIR/recovar.sif" ]; then
+      resolved="$SCRIPT_DIR/recovar.sif"
+    elif [ -f "$SCRIPT_DIR/scripts/recovar.sif" ]; then
+      resolved="$SCRIPT_DIR/scripts/recovar.sif"
+    elif [ -f "/scratch/gpfs/AMITS/mg6942/recovar_profiling/recovar.sif" ]; then
+      resolved="/scratch/gpfs/AMITS/mg6942/recovar_profiling/recovar.sif"
+    fi
+    if [ -n "$resolved" ]; then
+      echo "Using .sif image (compute nodes cannot pull from Docker): $resolved"
+      CONTAINER_IMAGE="$resolved"
+    else
+      echo "Error: CONTAINER_IMAGE='$CONTAINER_IMAGE' but compute nodes cannot pull from Docker (no network)." >&2
+      echo "Build a .sif on a node with Docker: apptainer build recovar.sif docker-daemon://recovar:latest" >&2
+      echo "Then set CONTAINER_IMAGE=/path/to/recovar.sif or CONTAINER_SIF=/path/to/recovar.sif" >&2
+      echo "Or put recovar.sif in: $SCRIPT_DIR or $SCRIPT_DIR/scripts or /scratch/gpfs/AMITS/mg6942/recovar_profiling/" >&2
+      exit 1
+    fi
+  fi
   if [ ! -f "$CONTAINER_IMAGE" ] && [[ "$CONTAINER_IMAGE" != *"://"* ]]; then
     echo "Error: CONTAINER_IMAGE='$CONTAINER_IMAGE' does not exist as a file." >&2
-    echo "For Apptainer/Singularity, set CONTAINER_IMAGE to a .sif path or a URI like 'docker://nvidia/cuda:12.6.0-devel-ubuntu22.04'." >&2
+    echo "For Apptainer/Singularity, set CONTAINER_IMAGE to a .sif path." >&2
     exit 1
   fi
 
@@ -302,6 +374,17 @@ run_in_container() {
       set -e
       unset PYTHONPATH PYTHONHOME
       export PYTHONNOUSERSITE=1
+      if [ -n "${DATA_BASE:-}" ]; then
+        export DATA_BASE="$DATA_BASE"
+      fi
+      if [ -d /scratch ]; then
+        USER_NAME=\${USER:-\$(id -un)}
+        export TMPDIR="\${TMPDIR:-/scratch/\$USER_NAME/recovar_profiling/tmp}"
+        export XDG_CACHE_HOME="\${XDG_CACHE_HOME:-/scratch/\$USER_NAME/recovar_profiling/xdg-cache}"
+        export XDG_STATE_HOME="\${XDG_STATE_HOME:-/scratch/\$USER_NAME/recovar_profiling/xdg-state}"
+        export XDG_CONFIG_HOME="\${XDG_CONFIG_HOME:-/scratch/\$USER_NAME/recovar_profiling/xdg-config}"
+        mkdir -p "\$TMPDIR" "\$XDG_CACHE_HOME" "\$XDG_STATE_HOME" "\$XDG_CONFIG_HOME"
+      fi
       # If requested, force a specific host-provided Nsight Systems version (controls .nsys-rep format).
       if [ -n \"\$NSYS_BIN\" ]; then
         if [ -x \"\$NSYS_BIN\" ]; then
@@ -330,8 +413,13 @@ run_in_container() {
       fi
 
       if ! command -v pixi >/dev/null 2>&1; then
-        echo 'pixi not found in image; installing to \$HOME/.pixi...'
-        PIXI_HOME=\"\${PIXI_HOME:-\$HOME/.pixi}\"
+        echo 'pixi not found in image; installing to scratch/tmp (not home)...'
+        if [ -d /scratch ]; then
+          USER_NAME=\${USER:-\$(id -un)}
+          PIXI_HOME=\"\${PIXI_HOME:-/scratch/\$USER_NAME/pixi}\"
+        else
+          PIXI_HOME=\"\${PIXI_HOME:-/tmp/\${USER:-\$(id -un)}/pixi}\"
+        fi
         if command -v curl >/dev/null 2>&1; then
           curl -fsSL https://pixi.sh/install.sh | PIXI_HOME=\"\$PIXI_HOME\" PIXI_NO_PATH_UPDATE=1 bash
         elif command -v wget >/dev/null 2>&1; then
@@ -395,8 +483,10 @@ EOF
     escaped_pixi_home="$(escape_sed_replacement "$PIXI_HOME")"
     escaped_rattler_cache="$(escape_sed_replacement "$RATTLER_CACHE_DIR")"
     escaped_detached_envs="$(escape_sed_replacement "$PIXI_DETACHED_ENVIRONMENTS")"
-    local escaped_nsys_bin
+    local escaped_nsys_bin escaped_data_base escaped_container_sif
     escaped_nsys_bin="$(escape_sed_replacement "$NSYS_BIN")"
+    escaped_data_base="$(escape_sed_replacement "$DATA_BASE")"
+    escaped_container_sif="$(escape_sed_replacement "${CONTAINER_SIF:-}")"
 
     sed -i "s|__SCRIPT_DIR__|$escaped_script_dir|g" "$batch_script"
     sed -i "s|__OUTPUT_DIR__|$escaped_output_dir|g" "$batch_script"
@@ -410,7 +500,9 @@ EOF
     sed -i "s|__PIXI_HOME__|$escaped_pixi_home|g" "$batch_script"
     sed -i "s|__RATTLER_CACHE_DIR__|$escaped_rattler_cache|g" "$batch_script"
     sed -i "s|__PIXI_DETACHED_ENVIRONMENTS__|$escaped_detached_envs|g" "$batch_script"
-    
+    sed -i "s|__DATA_BASE__|$escaped_data_base|g" "$batch_script"
+    sed -i "s|__CONTAINER_SIF__|$escaped_container_sif|g" "$batch_script"
+
     # Make the script executable
     chmod +x "$batch_script"
     
@@ -467,9 +559,11 @@ if [ -z "$ACTION" ]; then
     echo "Usage: $0 <action>"
     echo ""
     echo "Environment overrides:"
+    echo "  RECOVAR_WORK_BASE=<path>               (job_scripts + Slurm output; default: /scratch/.../recovar_profiling, not home)"
     echo "  SCHEDULER=slurm|local|auto            (default: auto)"
     echo "  CONTAINER_TOOL=docker|apptainer|auto  (default: auto)"
     echo "  CONTAINER_IMAGE=<image>               (docker tag or apptainer .sif/URI; default: recovar:latest)"
+    echo "  CONTAINER_SIF=/path/to/recovar.sif    (use this .sif when image is docker://; compute nodes cannot pull)"
     echo "  WORKDIR_IN_CONTAINER=/workspace       (default: /workspace)"
     echo "  NSYS_BIN=/path/to/nsys                (force a specific Nsight Systems CLI; controls .nsys-rep version)"
     echo "  SKIP_IMAGE_BUILD=1                    (skip docker image check/build)"
@@ -477,7 +571,7 @@ if [ -z "$ACTION" ]; then
     echo "  SKIP_RECOVAR_INSTALL=1                (skip 'pixi run install-recovar' inside the container)"
     echo ""
     echo "Slurm env overrides (optional):"
-    echo "  SLURM_PARTITION=...  SLURM_ACCOUNT=...  SLURM_QOS=...  SLURM_CONSTRAINT=...  SLURM_NODES=...  SLURM_NTASKS=...  SLURM_GPU_REQUEST_STYLE=gpus|gres  SLURM_CPUS_PER_TASK=...  SLURM_MEM=..."
+    echo "  SLURM_PARTITION=...  SLURM_ACCOUNT=...  SLURM_QOS=...  SLURM_CONSTRAINT=...  SLURM_DEPENDENCY=...  SLURM_NODES=...  SLURM_NTASKS=...  SLURM_GPU_REQUEST_STYLE=gpus|gres  SLURM_CPUS_PER_TASK=...  SLURM_MEM=..."
     echo ""
     echo "Available actions:"
     echo "  Smoke tests:"
@@ -499,17 +593,19 @@ if [ -z "$ACTION" ]; then
     echo "    profile-4gpu    - Profile 4 GPU run (30m)"
     echo ""
     echo "  Profiling (256-300k dataset):"
-    echo "    profile-1gpu-256 - Profile 1 GPU run (3h)"
-    echo "    profile-2gpu-256 - Profile 2 GPU run (2h)"
+    echo "    profile-1gpu-256 - Profile 1 GPU run (12h)"
+    echo "    profile-2gpu-256 - Profile 2 GPU run (12h)"
     echo "    profile-4gpu-256 - Profile 4 GPU run (3h)"
     echo ""
     echo "  Dataset creation:"
-    echo "    create-small    - Create 128-100k dataset (1h)"
-    echo "    create-large    - Create 256-300k dataset (2h)"
+    echo "    create-small          - Create 128-100k dataset (1h)"
+    echo "    create-large          - Create 256-300k dataset (2h)"
     echo ""
-    echo "  Pipeline runs:"
-    echo "    pipeline-small  - Run pipeline on 128-100k dataset (1h)"
-    echo "    pipeline-large  - Run pipeline on 256-300k dataset (2h)"
+    echo "  Pipeline runs (no profiling):"
+    echo "    pipeline-small        - Run pipeline on 128-100k dataset (1h)"
+    echo "    pipeline-large        - Run pipeline on 256-300k dataset (2h)"
+    echo "    pipeline-large-lazy   - Run pipeline on 256-300k dataset with lazy loading (6-8h)"
+    echo "    pipeline-large-nolazy - Run pipeline on 256-300k dataset without lazy loading (800G RAM)"
     echo ""
     exit 1
 fi
@@ -550,7 +646,7 @@ case $ACTION in
     
     # Profiling (128-100k dataset)
     profile-1gpu)
-        submit_job "Profile 1 GPU (128-100k)" "pixi run --frozen --locked --no-install profile-1gpu" 1 "01:00:00"
+        submit_job "Profile 1 GPU (128-100k)" "pixi run --frozen --locked --no-install profile-1gpu" 1 "02:00:00"
         ;;
     profile-2gpu)
         submit_job "Profile 2 GPUs (128-100k)" "pixi run --frozen --locked --no-install profile-2gpu" 2 "00:45:00"
@@ -559,23 +655,26 @@ case $ACTION in
         submit_job "Profile 4 GPUs (128-100k)" "pixi run --frozen --locked --no-install profile-4gpu" 4 "00:30:00"
         ;;
     
-    # Profiling (256-300k dataset)
+    # Profiling (256-300k dataset) - require 500G RAM to avoid OOM
     profile-1gpu-256)
-        submit_job "Profile 1 GPU (256-300k)" "pixi run --frozen --locked --no-install profile-1gpu-256" 1 "03:00:00"
+        SLURM_MEM="${SLURM_MEM:-500G}"
+        submit_job "Profile 1 GPU (256-300k)" "pixi run --frozen --locked --no-install profile-1gpu-256" 1 "${PROFILE_1GPU_256_TIME:-12:00:00}"
         ;;
     profile-2gpu-256)
-        submit_job "Profile 2 GPUs (256-300k)" "pixi run --frozen --locked --no-install profile-2gpu-256" 2 "02:00:00"
+        SLURM_MEM="${SLURM_MEM:-500G}"
+        submit_job "Profile 2 GPUs (256-300k)" "pixi run --frozen --locked --no-install profile-2gpu-256" 2 "12:00:00"
         ;;
     profile-4gpu-256)
-        submit_job "Profile 4 GPUs (256-300k)" "pixi run --frozen --locked --no-install profile-4gpu-256" 4 "03:00:00"
+        SLURM_MEM="${SLURM_MEM:-500G}"
+        submit_job "Profile 4 GPUs (256-300k)" "pixi run --frozen --locked --no-install profile-4gpu-256" 4 "12:00:00"
         ;;
     
     # Dataset creation
     create-small)
-        submit_job "Create Small Dataset" "pixi run create-dataset-small" 1 "01:00:00"
+        submit_job "Create Small Dataset" "pixi run --frozen --locked --no-install create-dataset-small" 1 "01:00:00"
         ;;
     create-large)
-        submit_job "Create Large Dataset" "pixi run create-dataset-large" 1 "02:00:00"
+        submit_job "Create Large Dataset" "pixi run --frozen --locked --no-install create-dataset-large" 1 "02:00:00"
         ;;
     
     # Pipeline runs
@@ -585,6 +684,16 @@ case $ACTION in
     pipeline-large)
         submit_job "Pipeline Large" "pixi run pipeline-large" 1 "02:00:00"
         ;;
+    pipeline-large-lazy)
+        # Match 256-300k profiling memory to avoid OOM
+        SLURM_MEM="${SLURM_MEM:-500G}"
+        submit_job "Pipeline Large Lazy (256-300k)" "PIPELINE_OUTPUT_DIR=pipeline_output_\${SLURM_JOB_ID} pixi run --frozen --locked --no-install pipeline-large-lazy" 1 "12:00:00"
+        ;;
+    pipeline-large-nolazy)
+        # Non-lazy 256-300k is memory hungry; reserve 800G by default.
+        SLURM_MEM="${SLURM_MEM:-800G}"
+        submit_job "Pipeline Large NoLazy (256-300k)" "PIPELINE_OUTPUT_DIR=pipeline_output_\${SLURM_JOB_ID} pixi run --frozen --locked --no-install pipeline-large" 1 "12:00:00"
+        ;;
     
     *)
         echo "Error: Unknown action '$ACTION'"
@@ -592,4 +701,3 @@ case $ACTION in
         exit 1
         ;;
 esac
-

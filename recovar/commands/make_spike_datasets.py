@@ -5,9 +5,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.graph_objs as go
 import plotly.offline as py
-from recovar.fourier_transform_utils import fourier_transform_utils
+import recovar.fourier_transform_utils as fourier_transform_utils
 import jax.numpy as jnp
-ftu = fourier_transform_utils(jnp)
 from recovar import image_assignment, noise
 from sklearn.metrics import confusion_matrix
 from recovar import simulate_scattering_potential as ssp
@@ -59,9 +58,9 @@ def main():
     output.mkdir_safe(volume_folder)
     output.save_volumes( Bfaced_vols, volume_folder, from_ft= True)
 
-    # plt.imshow(ftu.get_idft3(Bfaced_vols[0].reshape(volume_shape)).sum(axis=0).real)
+    # plt.imshow(fourier_transform_utils.get_idft3(Bfaced_vols[0].reshape(volume_shape)).sum(axis=0).real)
     # plt.figure()
-    # plt.imshow(ftu.get_idft3(Bfaced_vols[1].reshape(volume_shape)).sum(axis=0).real)
+    # plt.imshow(fourier_transform_utils.get_idft3(Bfaced_vols[1].reshape(volume_shape)).sum(axis=0).real)
     
 
     error_observed = np.zeros(noise_level_tests.size)

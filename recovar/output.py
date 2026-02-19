@@ -5,8 +5,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import matplotlib, pickle, os, json
 import recovar.latent_density as ld
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(jnp)
+import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar import embedding
 from recovar import linalg
 from recovar import trajectory
@@ -40,7 +39,7 @@ def mkdir_safe(folder):
 def save_volume(vol, path, volume_shape = None, from_ft = True, voxel_size = None):
     volume_shape = 3*[utils.guess_grid_size_from_vol_size(vol.size)] if volume_shape is None else volume_shape
     if from_ft:
-        vol =  np.real(ftu.get_idft3(vol.reshape(volume_shape)))
+        vol =  np.real(fourier_transform_utils.get_idft3(vol.reshape(volume_shape)))
     else:
         vol = np.real(vol.reshape(volume_shape))
     utils.write_mrc(path + '.mrc', vol.astype(np.float32), voxel_size = voxel_size)
@@ -638,13 +637,13 @@ class PipelineOutput:
                 return u
             else:
                 #return self.params['volume_shape'], 10).reshape(n_pcs, -1)
-                return ftu.get_dft3(u).reshape(n_pcs, -1)
+                return fourier_transform_utils.get_dft3(u).reshape(n_pcs, -1)
         elif key == 'mean':
-            return ftu.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/' + 'mean' + '.mrc')).reshape(-1)
+            return fourier_transform_utils.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/' + 'mean' + '.mrc')).reshape(-1)
         
         elif key == 'mean_halfmaps':
-            half1 = ftu.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/' + 'mean_half1_unfil' + '.mrc')).reshape(-1)
-            half2 = ftu.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/' + 'mean_half2_unfil' + '.mrc')).reshape(-1)
+            half1 = fourier_transform_utils.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/' + 'mean_half1_unfil' + '.mrc')).reshape(-1)
+            half2 = fourier_transform_utils.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/' + 'mean_half2_unfil' + '.mrc')).reshape(-1)
             return half1, half2
         elif key == 'image_snr':
             vol_shape = self.get('volume_shape')

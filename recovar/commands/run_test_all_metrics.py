@@ -9,10 +9,10 @@ import matplotlib.pyplot as plt
 import jax
 import jax.numpy as jnp
 
-from recovar import output, metrics, plot_utils, synthetic_dataset, utils, simulator, fourier_transform_utils, recovar
+from recovar import output, metrics, plot_utils, synthetic_dataset, utils, simulator, recovar
+import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar.commands import pipeline, compute_state
 
-ftu = fourier_transform_utils.fourier_transform_utils(jnp)
 
 # Set up logging configuration
 def setup_logging(output_dir):
@@ -343,7 +343,7 @@ def main():
         plt.close()
 
     for l_idx, l in enumerate(labels_to_plot):
-        gt_map = ftu.get_idft3(synt.volumes[l].reshape(cryos[0].volume_shape)).real
+        gt_map = fourier_transform_utils.get_idft3(synt.volumes[l].reshape(cryos[0].volume_shape)).real
         estimate_map = utils.load_mrc(
             Path(output_state_dir, 'all_volumes', f'vol{l_idx:04d}.mrc')
         )

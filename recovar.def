@@ -1,0 +1,20 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/cuda:12.6.0-devel-ubuntu22.04
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y --no-install-recommends \
+        curl wget git build-essential ca-certificates \
+        && rm -rf /var/lib/apt/lists/*
+    # Install pixi
+    curl -fsSL https://pixi.sh/install.sh | PIXI_HOME=/usr/local bash
+    export PATH="/usr/local/bin:$PATH"
+
+%environment
+    export PATH="/usr/local/bin:$PATH"
+    export PIXI_HOME="/usr/local"
+
+%runscript
+    exec /bin/bash "$@"
+%startscript
+    exec /bin/bash "$@"

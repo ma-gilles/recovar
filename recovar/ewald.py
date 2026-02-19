@@ -10,10 +10,10 @@ import logging
 import jax 
 import jax.numpy as jnp
 import numpy as np
-from recovar import core, fourier_transform_utils, utils
+from recovar import core, utils
+import recovar.fourier_transform_utils as fourier_transform_utils
 from jax import vjp
 import functools
-ftu = fourier_transform_utils.fourier_transform_utils(jax.numpy)
 from recovar import mask
 # reload(simulator)
 # from ewald_core import *
@@ -32,7 +32,7 @@ if PLANE_MODE:
 ## Get unrotated coordinates for the ewald sphere 
 def get_unrotated_ewald_sphere_coords(image_shape, voxel_size, lam, scaled=True, sphere_sign = 1):
     ## Pass scaled = true
-    freqs = ftu.get_k_coordinate_of_each_pixel(image_shape, voxel_size=voxel_size, scaled=True)
+    freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, voxel_size=voxel_size, scaled=True)
     r = 1/lam
     z = r - jnp.sqrt(r**2 - jnp.linalg.norm(freqs, axis =-1)**2)
     z = z.reshape(-1,1) * sphere_sign
@@ -582,7 +582,7 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
     # utils.pickle_dump((volume_real, volume_imag), outdir + 'volume_real_imag.pkl')
 
     volume_real, volume_imag = unvec_masked(x_result, experiment_dataset.volume_shape, mask_size)
-    vol = ftu.get_idft3((volume_real + 1j * volume_imag).reshape(experiment_dataset.volume_shape))#.real
+    vol = fourier_transform_utils.get_idft3((volume_real + 1j * volume_imag).reshape(experiment_dataset.volume_shape))#.real
 
     return vol, ress
 

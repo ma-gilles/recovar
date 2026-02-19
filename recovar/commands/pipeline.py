@@ -10,9 +10,8 @@ import numpy as np
 import os, argparse, time, pickle, sys, shutil
 from recovar import output as o
 from recovar import dataset, homogeneous, embedding, principal_components, latent_density, mask, utils, constants, noise, output, covariance_estimation
-from recovar.fourier_transform_utils import fourier_transform_utils
+import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar.utils_core import copy_data_to_temp_folder, save_original_paths_info, cleanup_temp_files
-ftu = fourier_transform_utils(jnp)
 # logger.setLevel(logger.info)
 logger = logging.getLogger(__name__)
 
@@ -460,7 +459,7 @@ def standard_recovar_pipeline(args):
         utils.report_memory_device(logger=logger)
 
 
-        mean_real = ftu.get_idft3(means['combined'].reshape(cryos[0].volume_shape))
+        mean_real = fourier_transform_utils.get_idft3(means['combined'].reshape(cryos[0].volume_shape))
 
         ## DECIDE IF WE SHOULD UNINVERT DATA
         uninvert_check = np.sum((mean_real.real**3 * cryos[0].get_volume_radial_mask(cryos[0].grid_size//3).reshape(cryos[0].volume_shape))) < 0
@@ -504,8 +503,8 @@ def standard_recovar_pipeline(args):
 
         # Filter and save mean
         from recovar import locres
-        half1 = ftu.get_idft3(means['corrected0'].reshape(cryos[0].volume_shape))
-        half2 = ftu.get_idft3(means['corrected1'].reshape(cryos[0].volume_shape))
+        half1 = fourier_transform_utils.get_idft3(means['corrected0'].reshape(cryos[0].volume_shape))
+        half2 = fourier_transform_utils.get_idft3(means['corrected1'].reshape(cryos[0].volume_shape))
         best_filtered_nob, _, _, _, _ = locres.local_resolution(half1, half2, 0, cryos[0].voxel_size, use_filter = True, fsc_threshold = 1/7, use_v2 = True)
         o.save_volume(best_filtered_nob, output_folder + 'volumes/' + 'mean_filt', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
 
@@ -610,7 +609,7 @@ def standard_recovar_pipeline(args):
         #     utils.report_memory_device(logger=logger)
 
         #     # def upper_bound_noise_var(noise_var_used, variance_est, noise_p_variance_est):
-        #     rad_grid = np.array(ftu.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
+        #     rad_grid = np.array(fourier_transform_utils.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
         #     # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
         #     n_shell_to_ub = np.min([32, cryos[0].grid_size//2 -1])
         #     ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
