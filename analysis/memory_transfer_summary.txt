@@ -1,0 +1,16 @@
+
+NOTICE: Existing SQLite export found: /tigress/CRYOEM/singerlab/mg6942/recovar_profiling/data/data-256-300000/test_dataset/recovar_1gpu_profile_4355455.sqlite
+        It is assumed file was previously exported from: /tigress/CRYOEM/singerlab/mg6942/recovar_profiling/data/data-256-300000/test_dataset/recovar_1gpu_profile_4355455.nsys-rep
+        Consider using --force-export=true if needed.
+
+Processing [/tigress/CRYOEM/singerlab/mg6942/recovar_profiling/data/data-256-300000/test_dataset/recovar_1gpu_profile_4355455.sqlite] with [/opt/nvidia/nsight-systems/2025.3.2/host-linux-x64/reports/cuda_gpu_mem_time_sum.py]... 
+
+ ** CUDA GPU MemOps Summary (by Time) (cuda_gpu_mem_time_sum):
+
+ Time (%)  Total Time (ns)    Count    Avg (ns)   Med (ns)  Min (ns)    Max (ns)     StdDev (ns)            Operation           
+ --------  ---------------  ---------  ---------  --------  --------  -------------  -----------  ------------------------------
+     48.5  119,218,101,431  7,261,206   16,418.5   7,520.0     1,088  2,074,446,364  1,825,052.8  [CUDA memcpy Host-to-Device]  
+     41.5  102,059,969,451  6,380,621   15,995.3   2,432.0     1,440      3,026,684     42,531.3  [CUDA memcpy Device-to-Device]
+     10.0   24,492,291,176    210,809  116,182.4   1,984.0     1,184      6,057,535    746,216.4  [CUDA memcpy Device-to-Host]  
+      0.0           79,264         37    2,142.3   2,240.0     1,120          2,784        379.0  [CUDA memset]                 
+

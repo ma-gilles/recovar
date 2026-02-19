@@ -1,13 +1,17 @@
-import logging, functools
+import functools
+import logging
+import os
+import pickle
+
 import jax
 import jax.numpy as jnp
+import mrcfile
 import numpy as np
-import mrcfile, os , psutil, pickle
-from recovar.fourier_transform_utils import fourier_transform_utils
+import psutil
+import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar import core
-ftu = fourier_transform_utils(jax.numpy)
 import more_itertools
-more_itertools.chunked
+
 logger = logging.getLogger(__name__)
 
 @functools.partial(jax.jit, static_argnums = [1,2])    
@@ -15,7 +19,7 @@ def make_radial_image(average_image_PS, image_shape, extend_last_frequency = Tru
     if extend_last_frequency:
         last_noise_band = average_image_PS[-1]
         average_image_PS = jnp.concatenate( [average_image_PS, last_noise_band * jnp.ones_like(average_image_PS) ] )
-    radial_distances = ftu.get_grid_of_radial_distances(image_shape, scaled = False, frequency_shift = 0).astype(int).reshape(-1)
+    radial_distances = fourier_transform_utils.get_grid_of_radial_distances(image_shape, scaled = False, frequency_shift = 0).astype(int).reshape(-1)
     prior = jnp.asarray(average_image_PS)[radial_distances]
     return prior
 
@@ -24,11 +28,6 @@ batch_make_radial_image = jax.vmap(make_radial_image, in_axes = (0,None,None))
 
 def index_batch_iter(n_units, batch_size):
     return more_itertools.chunked(np.arange(n_units),batch_size)
-
-def subset_batch_iter(subset_indices, batch_size):
-    return more_itertools.chunked(subset_indices,batch_size)
-    # for k in range(get_number_of_index_batch(n_images, batch_size)):
-    #     yield get_batch_of_indices(n_images, batch_size, k)
 
 def subset_batch_iter(subset_indices, batch_size):
     return more_itertools.chunked(subset_indices,batch_size)
@@ -127,13 +126,6 @@ def symmetrize_ft_volume(vol, volume_shape):
     vol = vol.reshape(volume_shape)
     vol = vol.at[1:,1:,1:].set( 0.5 * (np.conj(np.flip(vol[1:,1:,1:])) + vol[1:,1:,1:]) )
     return vol.reshape(og_volume_shape)
-
-# def symmetrize_ft_image(vol, volume_shape):
-#     og_volume_shape = vol.shape
-#     vol = vol.reshape(volume_shape)
-#     vol = vol.at[1:,1:].set( 0.5 * (np.conj(np.flip(vol[1:,1:])) + vol[1:,1:]) )
-#     return vol.reshape(og_volume_shape)
-
 
 def get_all_dataset_indices(cryos):
     return np.concatenate([cryo.dataset_indices for cryo in cryos])
@@ -290,7 +282,7 @@ def jax_has_gpu():
     try:
         _ = jax.device_put(jax.numpy.ones(1), device=jax.devices('gpu')[0])
         return True
-    except:
+    except Exception:
         return False
 
 def dtype_to_real(rvs_dtype):
@@ -471,21 +463,24 @@ def write_starfile_from_cryodrgn_format(ctf_path, pose_path, particles_file_path
     # import pdb; pdb.set_trace()
     write_starfile(ctf[:,2:], rots, trans, ctf[0,1], ctf[0,0], particles_file_path, output_filename, halfset_indices = None)
 
-# make_starfile(cryo_dataset.CTF_params, cryo_dataset.rotation_matrices, cryo_dataset.translations, cryo_dataset.voxel_size, cryo_dataset.volume_shape[0], dataset_dict['particles_file'], output_filename = output_folder + 'sim_newest.star', halfset_indices = array_indices )
-
-
 def downsample_vol_by_fourier_truncation(vol_input, target_grid_size):
-    X = ftu.get_dft3(vol_input)
-    input_grid_size = vol_input.shape[0]
-    diff_size = input_grid_size - target_grid_size 
-    half_diff_size = diff_size//2
-    X = X[half_diff_size:-half_diff_size,half_diff_size:-half_diff_size,half_diff_size:-half_diff_size ]
+    input_grid_size = int(vol_input.shape[0])
+    target_grid_size = int(target_grid_size)
+    if target_grid_size < 1:
+        raise ValueError("target_grid_size must be positive")
+    if target_grid_size > input_grid_size:
+        raise ValueError("target_grid_size must be <= input grid size")
+
+    X = fourier_transform_utils.get_dft3(vol_input)
+    crop_start = (input_grid_size - target_grid_size) // 2
+    crop_end = crop_start + target_grid_size
+    X = X[crop_start:crop_end, crop_start:crop_end, crop_start:crop_end]
     X = np.array(X)
     X[0,:,:] = X[0,:,:].real
     X[:,0,:] = X[:,0,:].real
     X[:,:,0] = X[:,:,0].real
     # X = np.asarray(X)
-    return ftu.get_idft3(X)
+    return fourier_transform_utils.get_idft3(X)
     # return vol_ft.reshape(-1)
 
 def basic_config_logger(output_folder):
@@ -507,5 +502,3 @@ class DuplicateFilter(object):
         rv = record.msg not in self.msgs
         self.msgs.add(record.msg)
         return rv
-
-

@@ -1,9 +1,8 @@
 import numpy as np
 from recovar import core
 from recovar import regularization, constants, utils, padding, mask
-from recovar.fourier_transform_utils import fourier_transform_utils
+import recovar.fourier_transform_utils as fourier_transform_utils
 import jax.numpy as jnp
-ftu = fourier_transform_utils(jnp)
 import logging, functools, jax
 
 logger = logging.getLogger(__name__)
@@ -12,7 +11,7 @@ logger = logging.getLogger(__name__)
 def griddingCorrect(vol_in, ori_size, padding_factor, order = 0,):
 
     # Correct real-space map by dividing it by the Fourier transform of the interpolator(s)
-    pixels = ftu.get_k_coordinate_of_each_pixel(vol_in.shape, 1, scaled = False) + 0.
+    pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(vol_in.shape, 1, scaled = False) + 0.
     og_shape = vol_in.shape
     r = np.linalg.norm(pixels, axis = -1)
     vol_in = vol_in.reshape(-1)
@@ -38,7 +37,7 @@ def griddingCorrect(vol_in, ori_size, padding_factor, order = 0,):
 def griddingCorrect_square(vol_in, ori_size, padding_factor, order = 0,):
     og_shape = vol_in.shape
 
-    pixels = ftu.get_k_coordinate_of_each_pixel(vol_in.shape, 1, scaled = False) 
+    pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(vol_in.shape, 1, scaled = False) 
     pixels_rescaled = pixels / (ori_size * padding_factor)
 
     def sinc(ar):
@@ -240,7 +239,7 @@ def upscale_tau(tau, padding_factor, volume_shape, tau_is_1d = False):
     # RFLOAT invtau2;
     # if (DIRECT_A1D_ELEM(tau2, ires) > 0.)
 
-    pixels = ftu.get_k_coordinate_of_each_pixel(np.array(volume_shape)*padding_factor, 1, scaled = False)
+    pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(np.array(volume_shape)*padding_factor, 1, scaled = False)
     radius = jnp.round(jnp.linalg.norm(pixels, axis = -1) / padding_factor).astype(jnp.int32)
     upscaled_tau = tau[radius]
 
@@ -311,7 +310,7 @@ def post_process_from_filter(cryo, Ft_ctf, F_ty, tau = None, disc_type = 'neares
     myreliontest = F_ty / Ft_ctf2
     
     # Window real space
-    myreliontest = ftu.get_idft3(myreliontest.reshape(cryo.upsampled_volume_shape))
+    myreliontest = fourier_transform_utils.get_idft3(myreliontest.reshape(cryo.upsampled_volume_shape))
     from recovar import padding, mask
 
     myreliontest = padding.unpad_volume_spatial_domain(myreliontest, (cryo.upsampled_grid_size - cryo.grid_size) )
@@ -325,7 +324,7 @@ def post_process_from_filter(cryo, Ft_ctf, F_ty, tau = None, disc_type = 'neares
         order = 1 if disc_type == 'linear_interp' else 0
         grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
         myreliontest, sinc = grid_fn(myreliontest.reshape(cryo.volume_shape), cryo.grid_size, cryo.volume_upsampling_factor/kernel_width, order = order)
-    myreliontest = ftu.get_dft3(myreliontest.reshape(cryo.volume_shape))
+    myreliontest = fourier_transform_utils.get_dft3(myreliontest.reshape(cryo.volume_shape))
 
     return myreliontest
 
@@ -345,7 +344,7 @@ def post_process_from_filter_v2(Ft_ctf, F_ty, og_volume_shape, volume_upsampling
     myreliontest = F_ty / Ft_ctf2
     
     # Window real space
-    myreliontest = ftu.get_idft3(myreliontest.reshape(upsampled_volume_shape))
+    myreliontest = fourier_transform_utils.get_idft3(myreliontest.reshape(upsampled_volume_shape))
 
     myreliontest = padding.unpad_volume_spatial_domain(myreliontest, (upsampled_volume_shape[0] - og_volume_shape[0]) )
     
@@ -378,7 +377,7 @@ def post_process_from_filter_v2(Ft_ctf, F_ty, og_volume_shape, volume_upsampling
         # plt.imshow(sinc[sinc.shape[0]//2])
         # plt.colorbar()
         # plt.show()
-    myreliontest = ftu.get_dft3(myreliontest.reshape(og_volume_shape))
+    myreliontest = fourier_transform_utils.get_dft3(myreliontest.reshape(og_volume_shape))
 
 
     return myreliontest.astype(F_ty.dtype)

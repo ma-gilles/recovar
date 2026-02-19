@@ -56,7 +56,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = []
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+test = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/ma-gilles/recovar"
@@ -72,3 +79,13 @@ local_scheme = "no-local-version"
 [project.scripts]
 recovar = "recovar.command_line:main_commands"
 
+[tool.pytest.ini_options]
+minversion = "7.4"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers --strict-config"
+xfail_strict = true
+filterwarnings = [
+  "default::DeprecationWarning",
+  "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
+]

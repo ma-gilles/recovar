@@ -6,11 +6,10 @@ import os
 import glob
 import numpy as np
 from recovar import utils, locres
-from recovar.fourier_transform_utils import fourier_transform_utils
+import recovar.fourier_transform_utils as fourier_transform_utils
 import jax.numpy as jnp
 
 logger = logging.getLogger(__name__)
-ftu = fourier_transform_utils(jnp)
 
 def add_args(parser: argparse.ArgumentParser):
     """Add command line arguments for postprocessing filtering."""
@@ -256,7 +255,7 @@ def estimate_bfactor_from_halfmaps(halfmap1, voxel_size, plot_path=None):
     try:
         # Step 1: Compute power spectrum
         logger.debug("Computing power spectrum...")
-        ft = ftu.get_dft3(halfmap1)
+        ft = fourier_transform_utils.get_dft3(halfmap1)
         power = np.abs(ft) ** 2
         
         # Step 2: Radial averaging with proper frequency calculation
@@ -596,7 +595,7 @@ def estimate_bfactor_from_fsc_weighted_halfmaps(halfmap1, halfmap2, voxel_size, 
     bfactor_results = []
 
     # Compute FT of both halfmaps (for all masks)
-    ft_sum = 0.5 * (ftu.get_dft3(halfmap1) + ftu.get_dft3(halfmap2))
+    ft_sum = 0.5 * (fourier_transform_utils.get_dft3(halfmap1) + fourier_transform_utils.get_dft3(halfmap2))
     shape = np.array(halfmap1.shape)
     center = shape // 2
     coords = np.indices(tuple(shape))
@@ -627,8 +626,8 @@ def estimate_bfactor_from_fsc_weighted_halfmaps(halfmap1, halfmap2, voxel_size, 
         # Compute FSC if not provided
         if fsc_external is None:
             from recovar.regularization import get_fsc
-            ft1 = ftu.get_dft3(map1)
-            ft2 = ftu.get_dft3(map2)
+            ft1 = fourier_transform_utils.get_dft3(map1)
+            ft2 = fourier_transform_utils.get_dft3(map2)
             fsc = get_fsc(ft1, ft2, volume_shape=map1.shape)
         else:
             fsc = fsc_external

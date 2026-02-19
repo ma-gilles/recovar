@@ -18,8 +18,7 @@ def check_prody():
 
 import numpy as np
 from collections import defaultdict
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(np)
+import recovar.fourier_transform_utils as fourier_transform_utils
 FINUFFT_EPS = 1e-8
 
 # This code simulated the scattering potential of a molecule using a nufft, and the atomic positions, and the atomic shape function that was experimentally determined in a paper
@@ -49,7 +48,7 @@ atom_coeffs = atom_coeffs2
 
 def generate_bag_of_atom_projection(grid_size, radius, voxel_size, N_atoms, atom_shape_fn):
     ft_mol = generate_synthetic_spectrum_of_molecule(radius, grid_size, voxel_size, atom_shape_fn, N_atoms)
-    image = np.real(ftu.get_inverse_fourier_transform(ft_mol[grid_size//2], voxel_size = voxel_size))#.astype(np.float)
+    image = np.real(fourier_transform_utils.get_inverse_fourier_transform(ft_mol[grid_size//2], voxel_size = voxel_size))#.astype(np.float)
     return image
 
 
@@ -130,7 +129,7 @@ def gaussian_atom_shape_fn(psi, sigma ):
     return cst * np.exp(-rs**2 * expo)    
 
 def compute_gaussian_on_k_grid(sigma, grid_size, voxel_size):
-    rs = ftu.get_grid_of_radial_distances(3*[grid_size], voxel_size = voxel_size, scaled = True)
+    rs = fourier_transform_utils.get_grid_of_radial_distances(3*[grid_size], voxel_size = voxel_size, scaled = True)
     expo, cst = get_exponent_and_constant_of_gaussian_FT(sigma, dim = 3)
     return cst * np.exp(-rs**2 * expo)
 
@@ -159,7 +158,7 @@ def generate_spectrum_of_molecule_from_atom_coords(atom_coords, voxel_size,  gri
     weights = np.ones(atom_coords.shape[0], dtype = atom_coords.dtype ).astype(complex)
     fourier_transform = get_fourier_transform_of_molecules_on_k_grid(atom_coords, weights , voxel_size,  grid_size, jax_backend= jax_backend )
 
-    k_coords = ftu.get_k_coordinate_of_each_pixel(3*[grid_size], voxel_size= voxel_size, scaled=True)
+    k_coords = fourier_transform_utils.get_k_coordinate_of_each_pixel(3*[grid_size], voxel_size= voxel_size, scaled=True)
     weight = atom_shape_fn(k_coords).reshape(fourier_transform.shape)        
 
     return fourier_transform * weight

@@ -13,14 +13,33 @@
 set -e  # Exit on error
 
 # Default values
-BASE_DIR="/workspace"
+BASE_DIR="${BASE_DIR:-${DATA_BASE:-/workspace}}"
 ACTION=${1:-help}
 IMAGE_SIZE=${2:-128}
 N_IMAGES=${3:-100000}
 LAZY_MODE=${4:-}  # Optional: "lazy" to enable lazy loading
+PIPELINE_OUTPUT_DIR="${PIPELINE_OUTPUT_DIR:-pipeline_output}"
 
 # Construct dataset directory name
 DATASET_DIR="${BASE_DIR}/data-${IMAGE_SIZE}-${N_IMAGES}"
+
+# Resolve recovar executable (works with detached pixi env on scratch/tigress)
+if [ -n "${RECOVAR_BIN:-}" ] && [ -x "$RECOVAR_BIN" ]; then
+    :
+elif command -v pixi >/dev/null 2>&1; then
+    PIXI_PREFIX=$(pixi info -p 2>/dev/null) || true
+    if [ -n "$PIXI_PREFIX" ] && [ -x "$PIXI_PREFIX/bin/recovar" ]; then
+        export PATH="$PIXI_PREFIX/bin:$PATH"
+    fi
+    RECOVAR_BIN="$(which recovar 2>/dev/null)" || true
+fi
+if [ -z "${RECOVAR_BIN:-}" ] && [ -n "${RATTLER_CACHE_DIR:-}" ] && [ -d "$RATTLER_CACHE_DIR/envs" ]; then
+    RECOVAR_BIN=$(find "$RATTLER_CACHE_DIR/envs" -name recovar -type f -executable 2>/dev/null | head -1)
+fi
+if [ -z "${RECOVAR_BIN:-}" ] || [ ! -x "$RECOVAR_BIN" ]; then
+    echo "Error: recovar executable not found. Set RECOVAR_BIN or run: pixi run install-recovar" >&2
+    exit 1
+fi
 
 # Function to print usage
 usage() {
@@ -62,7 +81,7 @@ create_dataset() {
     echo "Number of images: $N_IMAGES"
     echo "=========================================="
     
-    recovar make_test_dataset "$DATASET_DIR" \
+    "$RECOVAR_BIN" make_test_dataset "$DATASET_DIR" \
         --image-size="$IMAGE_SIZE" \
         --n-images="$N_IMAGES"
     
@@ -75,6 +94,7 @@ run_pipeline() {
     echo "Running recovar pipeline..."
     echo "Dataset directory: $DATASET_DIR"
     echo "Image size: $IMAGE_SIZE"
+    echo "Output directory name: $PIPELINE_OUTPUT_DIR"
     echo "Lazy loading: $([ "$LAZY_MODE" == "lazy" ] && echo "ENABLED" || echo "DISABLED")"
     echo "=========================================="
     
@@ -88,7 +108,7 @@ run_pipeline() {
     cd "$DATASET_DIR/test_dataset/"
     
     # Build the command with optional lazy flag
-    PIPELINE_CMD="recovar pipeline particles.${IMAGE_SIZE}.mrcs --ctf ctf.pkl --poses poses.pkl --mask=from_halfmaps -o pipeline_output"
+    PIPELINE_CMD="$RECOVAR_BIN pipeline particles.${IMAGE_SIZE}.mrcs --ctf ctf.pkl --poses poses.pkl --mask=from_halfmaps -o ${PIPELINE_OUTPUT_DIR}"
     
     if [ "$LAZY_MODE" == "lazy" ]; then
         PIPELINE_CMD="$PIPELINE_CMD --lazy"
@@ -100,7 +120,7 @@ run_pipeline() {
     eval "$PIPELINE_CMD"
     
     echo "Pipeline completed successfully!"
-    echo "Output at: $DATASET_DIR/test_dataset/pipeline_output"
+    echo "Output at: $DATASET_DIR/test_dataset/$PIPELINE_OUTPUT_DIR"
 }
 
 # Main script logic

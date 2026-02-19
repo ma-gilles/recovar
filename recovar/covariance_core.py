@@ -7,8 +7,7 @@ import nvtx
 import recovar.padding as pad
 import functools
 from recovar import core, mask
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(jnp)
+import recovar.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +45,7 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
         extra_padding = grid_size if ( padding == 0 ) else 0
         # Do this in half precision? Shouldn't matter much.
         volume_mask = pad.pad_volume_spatial_domain(volume_mask, extra_padding).real
-        mask_ft = ftu.get_dft3(volume_mask).reshape(-1)
+        mask_ft = fourier_transform_utils.get_dft3(volume_mask).reshape(-1)
 
     padded_image_shape = tuple(np.array(image_shape) + extra_padding)
     padded_volume_shape = tuple(np.array(volume_shape) + extra_padding)
@@ -55,7 +54,7 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
     proj_mask = core.slice_volume_by_map(mask_ft, rotation_matrices, padded_image_shape,
                                padded_volume_shape, disc_type)
     
-    proj_mask = ftu.get_idft2(proj_mask.reshape([-1] + list(padded_image_shape)))
+    proj_mask = fourier_transform_utils.get_idft2(proj_mask.reshape([-1] + list(padded_image_shape)))
                              
     if extra_padding > 0:
         proj_mask = pad.unpad_images_spatial_domain(proj_mask, extra_padding)
@@ -71,11 +70,11 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
         soft_edge_kernel = mask.create_soft_edged_kernel_pxl(soften, image_shape).astype(volume_mask.dtype)
         
         # Convolve
-        soft_edge_kernel_ft = ftu.get_dft2(soft_edge_kernel)
-        proj_mask_ft = ftu.get_dft2(proj_mask.reshape([-1] + list(image_shape)))
+        soft_edge_kernel_ft = fourier_transform_utils.get_dft2(soft_edge_kernel)
+        proj_mask_ft = fourier_transform_utils.get_dft2(proj_mask.reshape([-1] + list(image_shape)))
 
         proj_mask_ft = proj_mask_ft * soft_edge_kernel_ft[None]
-        proj_mask = ftu.get_idft2(proj_mask_ft.reshape([-1] + list(image_shape))).real
+        proj_mask = fourier_transform_utils.get_idft2(proj_mask_ft.reshape([-1] + list(image_shape))).real
 
     return proj_mask
 
@@ -83,18 +82,18 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
 @functools.partial(jax.jit, static_argnums = [2])    
 @nvtx.annotate("apply_image_masks", color="cyan", domain=NVTX_DOMAIN_COV_CORE)
 def apply_image_masks(images, image_masks, image_shape):
-    images = ftu.get_idft2(images.reshape([images.shape[0], *image_shape]))
+    images = fourier_transform_utils.get_idft2(images.reshape([images.shape[0], *image_shape]))
     images = images * image_masks
-    images = ftu.get_dft2(images).reshape([images.shape[0] , -1])
+    images = fourier_transform_utils.get_dft2(images).reshape([images.shape[0] , -1])
     return images
 
 
 @functools.partial(jax.jit, static_argnums = [2])    
 @nvtx.annotate("apply_image_masks_to_eigen", color="cyan", domain=NVTX_DOMAIN_COV_CORE)
 def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape):
-    proj_eigen = ftu.get_idft2(proj_eigen.reshape([*proj_eigen.shape[0:2], *image_shape]))
+    proj_eigen = fourier_transform_utils.get_idft2(proj_eigen.reshape([*proj_eigen.shape[0:2], *image_shape]))
     proj_eigen = proj_eigen * image_masks
-    proj_eigen = ftu.get_dft2(proj_eigen).reshape([*proj_eigen.shape[0:2], -1])
+    proj_eigen = fourier_transform_utils.get_dft2(proj_eigen).reshape([*proj_eigen.shape[0:2], -1])
     return proj_eigen
 
 

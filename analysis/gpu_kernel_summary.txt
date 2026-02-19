@@ -1,0 +1,8 @@
+
+NOTICE: Existing SQLite export found: /tigress/CRYOEM/singerlab/mg6942/recovar_profiling/data/data-256-300000/test_dataset/recovar_1gpu_profile_4355455.sqlite
+        It is assumed file was previously exported from: /tigress/CRYOEM/singerlab/mg6942/recovar_profiling/data/data-256-300000/test_dataset/recovar_1gpu_profile_4355455.nsys-rep
+        Consider using --force-export=true if needed.
+
+Processing [/tigress/CRYOEM/singerlab/mg6942/recovar_profiling/data/data-256-300000/test_dataset/recovar_1gpu_profile_4355455.sqlite] with [gpukernsum]... 
+ERROR: Report 'gpukernsum' could not be found.
+

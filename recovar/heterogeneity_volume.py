@@ -7,10 +7,9 @@ import jax.scipy
 from recovar import locres, utils
 from recovar import adaptive_kernel_discretization
 import logging
-from recovar.fourier_transform_utils import fourier_transform_utils
+import recovar.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
 import nvtx
-ftu = fourier_transform_utils(jnp)
 logger = logging.getLogger(__name__)
 
 def pick_minimum_discretization_size(ndim, log_likelihoods, q = 0.5, min_images = 50  ):
@@ -76,7 +75,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         cryos[k].update_volume_upsampling_factor(upsampling_for_ests)
 
         estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], None, heterogeneity_distances[k], heterogeneity_bins, tau= tau, grid_correct=grid_correct_ests, use_spherical_mask=use_mask_ests, heterogeneity_kernel= heterogeneity_kernel)
-        estimates[k] = ftu.get_idft3(estimates[k].reshape(-1, *cryos[0].volume_shape)).real.astype(np.float32)
+        estimates[k] = fourier_transform_utils.get_idft3(estimates[k].reshape(-1, *cryos[0].volume_shape)).real.astype(np.float32)
         logger.info(f"Computing estimates done")
 
         cryos[k].update_volume_upsampling_factor(1)
@@ -86,7 +85,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         lhs[k] = adaptive_kernel_discretization.half_volume_to_full_volume(lhs[k][0], cryos[k].volume_shape)
         # Zero out things after Nyquist - these won't be used in CV
         lhs[k] = (lhs[k] * cryos[0].get_valid_frequency_indices()).reshape(cryos[0].volume_shape)
-        cross_validation_estimators[k] = ftu.get_idft3(cross_validation_estimators[k].reshape(cryos[0].volume_shape)).real.astype(np.float32)
+        cross_validation_estimators[k] = fourier_transform_utils.get_idft3(cross_validation_estimators[k].reshape(cryos[0].volume_shape)).real.astype(np.float32)
         cryos[k].update_volume_upsampling_factor(upsampling_for_ests)
 
 
@@ -111,7 +110,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         logger.info(f"Computing estimates start")
         cryos[k].update_volume_upsampling_factor(2)
         estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k],  None, heterogeneity_distances[k], heterogeneity_bins, tau= None, grid_correct=True, use_spherical_mask=True,heterogeneity_kernel= heterogeneity_kernel)
-        estimates[k] = ftu.get_idft3(estimates[k].reshape(-1, *cryos[0].volume_shape)).real.astype(np.float32)
+        estimates[k] = fourier_transform_utils.get_idft3(estimates[k].reshape(-1, *cryos[0].volume_shape)).real.astype(np.float32)
 
 
 
@@ -248,7 +247,7 @@ def smooth_shell_error(shell_error, voxel_size, subarray_size, sum_up_up_to_res 
     shell_choice_new = vmapped_convolve(shell_error, kernel, 'same')
 
     # For very low frequencies, just sum up
-    full_grids = ftu.get_1d_frequency_grid(subarray_size, voxel_size, scaled = True)
+    full_grids = fourier_transform_utils.get_1d_frequency_grid(subarray_size, voxel_size, scaled = True)
 
     ### TODO: WHY AM I THROWING AWAY THE LAST SHELL??
     grids = full_grids[-shell_error.shape[-1]-1:-1]
@@ -357,7 +356,7 @@ def get_inds_for_subvolume(path_to_vol_folder, subvolume_idx):
     # maskrad_pix = np.round(locres_maskrad / params['voxel_size']).astype(int)
     subvolume_size = locres.get_local_error_subvolume_size(locres_maskrad, params['voxel_size'])
     # Find the shell where the locres is...
-    frequency_shells = ftu.get_1d_frequency_grid(subvolume_size, params['voxel_size'], scaled = True)
+    frequency_shells = fourier_transform_utils.get_1d_frequency_grid(subvolume_size, params['voxel_size'], scaled = True)
     ### TODO: WHY AM I THROWING AWAY THE LAST SHELL??
     ## I AM DOING IT HERE TO BE CONSISTENT WITH THE SMOOTHING.
     frequency_shells = frequency_shells[frequency_shells>=0][:-1]

@@ -1,10 +1,9 @@
 import numpy as np
 import jax.numpy as jnp
 from recovar import mask as mask_fn
-from recovar.fourier_transform_utils import fourier_transform_utils
+import recovar.fourier_transform_utils as fourier_transform_utils
 import recovar
 from recovar import utils, simulator
-ftu = fourier_transform_utils(jnp)
 import logging
 # from tqdm.notebook import tqdm
 import jax
@@ -52,7 +51,7 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
 
     # logger.info(f"Starting...")
 
-    # grid = np.array(ftu.get_1d_frequency_grid(map1.shape[0], 1, scaled = False)[::step_size])
+    # grid = np.array(fourier_transform_utils.get_1d_frequency_grid(map1.shape[0], 1, scaled = False)[::step_size])
     # for kk in grid:
     #     for ii in grid:
     #         for jj in grid:
@@ -72,13 +71,13 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
 
     # logger.info(f"Calculating local resolution in {nr_samplings} sampling points ...")
     if filter_map1:
-        ft_sum = ftu.get_dft3(map1)
+        ft_sum = fourier_transform_utils.get_dft3(map1)
     else:
-        ft_sum = 0.5*(ftu.get_dft3(map1) + ftu.get_dft3(map2))
+        ft_sum = 0.5*(fourier_transform_utils.get_dft3(map1) + fourier_transform_utils.get_dft3(map2))
     # Need to apply B-factor here I guess
     ft_sum *= simulator.get_B_factor_scaling(map1.shape, voxel_size, -B_factor).reshape(map1.shape).astype(map1.dtype)
 
-    i_ft_sum_orig = ftu.get_idft3(ft_sum).real
+    i_ft_sum_orig = fourier_transform_utils.get_idft3(ft_sum).real
 
 
     # for now will do batch of 1.
@@ -274,7 +273,7 @@ def compute_local_fsc_v2(offset, ift_sum_orig, map1, map2, maskrad_pix, edgewidt
     map1_sub = map1_sub * mask
     map2_sub = map2_sub * mask
 
-    fsc = recovar.regularization.get_fsc(ftu.get_dft3(map1_sub), ftu.get_dft3(map2_sub), volume_shape = map1_sub.shape)
+    fsc = recovar.regularization.get_fsc(fourier_transform_utils.get_dft3(map1_sub), fourier_transform_utils.get_dft3(map2_sub), volume_shape = map1_sub.shape)
 
 
     # local_resol = jnp.argmin(fsc >= fsc_treshold)
@@ -286,7 +285,7 @@ def compute_local_fsc_v2(offset, ift_sum_orig, map1, map2, maskrad_pix, edgewidt
 
 
     if use_filter:
-        ft_sum_sub = ftu.get_dft3(ift_sum_sub)
+        ft_sum_sub = fourier_transform_utils.get_dft3(ift_sum_sub)
         ift_sum = filter_with_local_fsc(ft_sum_sub, fsc, local_resol, voxel_size, filter_edgewidth)
         # if jnp.isnan(ift_sum).any():
         #     import pdb; pdb.set_trace()
@@ -309,7 +308,7 @@ def compute_local_fsc(offset, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, lo
     mask = mask_fn.raised_cosine_mask(ft_sum.shape, maskrad_pix, maskrad_pix + edgewidth_pix, offset)
     map1 = map1 * mask
     map2 = map2 * mask
-    fsc = recovar.regularization.get_fsc(ftu.get_dft3(map1), ftu.get_dft3(map2), volume_shape = map1.shape)
+    fsc = recovar.regularization.get_fsc(fourier_transform_utils.get_dft3(map1), fourier_transform_utils.get_dft3(map2), volume_shape = map1.shape)
 
     # first fsc above threshold
 
@@ -357,7 +356,7 @@ def find_fsc_resol(fsc_curve, threshold = 1/7):
 def apply_fsc_weighting(FT, fsc):
 	#  Find resolution where fsc_true drops below zero for the first time
 	#  Set all weights to zero beyond that resolution
-    distances = ftu.get_grid_of_radial_distances(FT.shape,)
+    distances = fourier_transform_utils.get_grid_of_radial_distances(FT.shape,)
 
     # ires_max = jnp.argmin(fsc >= 0.0001)
     ires_max = find_first_zero_in_bool(fsc >= 0.0001)
@@ -374,7 +373,7 @@ def filter_with_local_fsc(ft_sum, fsc, local_resol, voxel_size, filter_edgewidth
     # ft_sum_inp = ft_sum.copy()
     ft_sum  = apply_fsc_weighting(ft_sum, fsc) # 
     ft_sum = low_pass_filter_map(ft_sum, ft_sum.shape[0], local_resol, voxel_size, filter_edgewidth)#.astype(ft_sum.dtype)
-    ift_sum = ftu.get_idft3(ft_sum).real
+    ift_sum = fourier_transform_utils.get_idft3(ft_sum).real
     # import pdb; pdb.set_trace()
     return  ift_sum
 
@@ -386,7 +385,7 @@ def low_pass_filter_map(FT, ori_size, low_pass, voxel_size, filter_edgewidth, do
     edge_low = jnp.maximum(0., (ires_filter - filter_edge_halfwidth) / ori_size)
     edge_high = jnp.minimum(FT.shape[0], (ires_filter + filter_edge_halfwidth) / ori_size)
     edge_width = edge_high - edge_low
-    res = ftu.get_grid_of_radial_distances(FT.shape) / ori_size
+    res = fourier_transform_utils.get_grid_of_radial_distances(FT.shape) / ori_size
     if do_highpass_instead:
         filter = jnp.where(res <  edge_low , 0, 1)
         filter = jnp.where((res >= edge_low) * (res < edge_high), 0.5 - 0.5 * jnp.cos(jnp.pi * (res - edge_low) / edge_width), filter)
@@ -413,24 +412,24 @@ def local_error(map1, map2, voxel_size, locres_sampling = 25, locres_maskrad= No
     
     if low_pass_filter_res is not None:
         map1_ft = low_pass_filter_map(map1_ft, map1_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
-        map1 = ftu.get_idft3(map1_ft).real
+        map1 = fourier_transform_utils.get_idft3(map1_ft).real
 
         map2_ft = low_pass_filter_map(map2_ft, map1_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
-        map2 = ftu.get_idft3(map2_ft).real
+        map2 = fourier_transform_utils.get_idft3(map2_ft).real
 
-    mask_ft = ftu.get_dft3(mask)
-    map1_square_ft = ftu.get_dft3(map1*map1)
-    map2_square_ft = ftu.get_dft3(map2*map2)
-    map1map2_ft = ftu.get_dft3(map1*map2)
-    # map2_ft = ftu.get_dft3(map2)
+    mask_ft = fourier_transform_utils.get_dft3(mask)
+    map1_square_ft = fourier_transform_utils.get_dft3(map1*map1)
+    map2_square_ft = fourier_transform_utils.get_dft3(map2*map2)
+    map1map2_ft = fourier_transform_utils.get_dft3(map1*map2)
+    # map2_ft = fourier_transform_utils.get_dft3(map2)
 
-    local_errors = (ftu.get_idft3(map1_square_ft * mask_ft).real ) \
-    - 2 * ftu.get_idft3(map1map2_ft * mask_ft) \
-    + (ftu.get_idft3(map2_square_ft * mask_ft) )
+    local_errors = (fourier_transform_utils.get_idft3(map1_square_ft * mask_ft).real ) \
+    - 2 * fourier_transform_utils.get_idft3(map1map2_ft * mask_ft) \
+    + (fourier_transform_utils.get_idft3(map2_square_ft * mask_ft) )
     
-    # local_errors = (ftu.get_idft3(map1_ft * mask_ft).real )**2 \
-    # - 2 * ftu.get_idft3(map1_ft * map2_ft * mask_ft) \
-    # + (ftu.get_idft3(map2_ft * mask_ft) )**2
+    # local_errors = (fourier_transform_utils.get_idft3(map1_ft * mask_ft).real )**2 \
+    # - 2 * fourier_transform_utils.get_idft3(map1_ft * map2_ft * mask_ft) \
+    # + (fourier_transform_utils.get_idft3(map2_ft * mask_ft) )**2
     
     local_errors = local_errors.real
 
@@ -453,26 +452,26 @@ def local_error_with_cov(map1, map2, voxel_size, locres_sampling = 25, locres_ma
     # Compute error with convolution
     if low_pass_filter_res is not None:
         map1_ft = low_pass_filter_map(map1_ft, map1_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
-        map1 = ftu.get_idft3(map1_ft).real
+        map1 = fourier_transform_utils.get_idft3(map1_ft).real
 
         map2_ft = low_pass_filter_map(map2_ft, map1_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
-        map2 = ftu.get_idft3(map2_ft).real
+        map2 = fourier_transform_utils.get_idft3(map2_ft).real
 
     ## Whiten maps
     if noise_variance is not None:
         noise_variance = noise_variance.reshape(map1.shape)
-        map1 = ftu.get_idft3(ftu.get_dft3(map1) * jnp.sqrt(noise_variance).reshape(map1.shape)).real
-        map2 = ftu.get_idft3(ftu.get_dft3(map2) * jnp.sqrt(noise_variance).reshape(map1.shape)).real
+        map1 = fourier_transform_utils.get_idft3(fourier_transform_utils.get_dft3(map1) * jnp.sqrt(noise_variance).reshape(map1.shape)).real
+        map2 = fourier_transform_utils.get_idft3(fourier_transform_utils.get_dft3(map2) * jnp.sqrt(noise_variance).reshape(map1.shape)).real
 
-    mask_ft = ftu.get_dft3(mask)
-    map1_square_ft = ftu.get_dft3(map1*map1)
-    map2_square_ft = ftu.get_dft3(map2*map2)
-    map1map2_ft = ftu.get_dft3(map1*map2)
-    # map2_ft = ftu.get_dft3(map2)
+    mask_ft = fourier_transform_utils.get_dft3(mask)
+    map1_square_ft = fourier_transform_utils.get_dft3(map1*map1)
+    map2_square_ft = fourier_transform_utils.get_dft3(map2*map2)
+    map1map2_ft = fourier_transform_utils.get_dft3(map1*map2)
+    # map2_ft = fourier_transform_utils.get_dft3(map2)
 
-    local_errors = (ftu.get_idft3(map1_square_ft * mask_ft).real ) \
-    - 2 * ftu.get_idft3(map1map2_ft * mask_ft) \
-    + (ftu.get_idft3(map2_square_ft * mask_ft) )
+    local_errors = (fourier_transform_utils.get_idft3(map1_square_ft * mask_ft).real ) \
+    - 2 * fourier_transform_utils.get_idft3(map1map2_ft * mask_ft) \
+    + (fourier_transform_utils.get_idft3(map2_square_ft * mask_ft) )
         
     local_errors = local_errors.real
 
@@ -514,7 +513,7 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
 
     # # logger.info(f"Starting...")
 
-    # grid = np.array(ftu.get_1d_frequency_grid(map1.shape[0], 1, scaled = False)[::step_size])
+    # grid = np.array(fourier_transform_utils.get_1d_frequency_grid(map1.shape[0], 1, scaled = False)[::step_size])
     # for kk in grid:
     #     for ii in grid:
     #         for jj in grid:
@@ -543,7 +542,7 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
     # if np.log2(map1.shape[0]) % 1 != 0:
     #     raise ValueError("Map size must be a power of 2")
     
-    # sqrt_noise_variance_real = ftu.get_idft3(jnp.sqrt(noise_variance))
+    # sqrt_noise_variance_real = fourier_transform_utils.get_idft3(jnp.sqrt(noise_variance))
     # radius = maskrad_pix + edgewidth_pix
     # multiplier = 2
     # want_size = 2*(multiplier*radius)
@@ -555,11 +554,11 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
         # multiplier = 3
         # rad = maskrad_pix * multiplier
         rad = get_local_error_subvolume_rad(locres_maskrad, voxel_size)
-        # downsampled_noise_variance_ift = ftu.get_idft3(jnp.sqrt(noise_variance) )
-        downsampled_noise_variance_ift = ftu.get_idft3((noise_variance) )#.real
+        # downsampled_noise_variance_ift = fourier_transform_utils.get_idft3(jnp.sqrt(noise_variance) )
+        downsampled_noise_variance_ift = fourier_transform_utils.get_idft3((noise_variance) )#.real
 
         downsampled_noise_variance_ift_subs = subsample_array(downsampled_noise_variance_ift, map1.shape[0]//2+1, rad)
-        noise_variance_small = ftu.get_dft3(downsampled_noise_variance_ift_subs ) * noise_variance.size / downsampled_noise_variance_ift_subs.size
+        noise_variance_small = fourier_transform_utils.get_dft3(downsampled_noise_variance_ift_subs ) * noise_variance.size / downsampled_noise_variance_ift_subs.size
 
 
     # map1_sub = subsample_array(diff, offset, multiplier*radius)
@@ -647,7 +646,7 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
 @functools.partial(jax.jit, static_argnums = [3,4])    
 def masked_noisy_error(diff, noise_variance, offset, maskrad_pix, edgewidth_pix ):
     mask = mask_fn.raised_cosine_mask(diff.shape, maskrad_pix, maskrad_pix + edgewidth_pix, offset)
-    diff = ftu.get_dft3((diff) * mask) * jnp.sqrt(noise_variance)
+    diff = fourier_transform_utils.get_dft3((diff) * mask) * jnp.sqrt(noise_variance)
     return jnp.linalg.norm(diff)**2
 
 
@@ -670,17 +669,17 @@ def masked_noisy_error_3(diff, noise_variance_small, offset, maskrad_pix, edgewi
     diff_masked = diff * mask
     # import pdb; pdb.set_trace()
 
-    diff_masked = ftu.get_dft3(diff_masked) * jnp.sqrt(noise_variance_small)
+    diff_masked = fourier_transform_utils.get_dft3(diff_masked) * jnp.sqrt(noise_variance_small)
 
     # import pdb; pdb.set_trace()
     # mask = mask_fn.raised_cosine_mask(diff.shape, maskrad_pix, maskrad_pix + edgewidth_pix, offset)
-    # diff = ftu.get_dft3((diff) * mask) * jnp.sqrt(noise_variance)
+    # diff = fourier_transform_utils.get_dft3((diff) * mask) * jnp.sqrt(noise_variance)
     return jnp.linalg.norm(diff_masked)**2
 
 
 
 def split_by_shells(input_vec, volume_shape ):
-    radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = 0).astype(int).reshape(-1) 
+    radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = 0).astype(int).reshape(-1) 
     
     split_by_shell = jnp.zeros((input_vec.size, volume_shape[0]//2 ), dtype = input_vec.dtype)
     split_by_shell = split_by_shell.at[(jnp.arange(input_vec.size), radial_distances)].set(input_vec)
@@ -712,7 +711,7 @@ def masked_noisy_error_split_over_shells(diff, noise_variance_small, offset, mas
     diff = subsample_array(diff, offset, multiplier*maskrad_pix)
     mask = mask_fn.raised_cosine_mask(diff.shape, maskrad_pix, edgewidth_pix, 0)
     diff_masked = diff * mask
-    diff_masked = ftu.get_dft3(diff_masked) * jnp.sqrt(noise_variance_small)
+    diff_masked = fourier_transform_utils.get_dft3(diff_masked) * jnp.sqrt(noise_variance_small)
 
     diff_masked_norm = regularization.sum_over_shells(jnp.abs(diff_masked)**2, diff_masked.shape)
 
@@ -727,20 +726,20 @@ def masked_noisy_error_split_over_shells_v2(diff, noise_variance_small, offset, 
     # y = S M diff
     diff = subsample_array(diff, offset, multiplier*maskrad_pix)
     mask = mask_fn.raised_cosine_mask(diff.shape, maskrad_pix, edgewidth_pix, 0)
-    diff_ft = ftu.get_dft3(diff_masked)
+    diff_ft = fourier_transform_utils.get_dft3(diff_masked)
 
     # Now to compute (S M D M^* S^*)^dagger
     # = 
     split_diff = split_by_shells(diff_ft, diff.shape ) #* jnp.sqrt(noise_variance_small)
-    split_diff = ftu.get_idft3(split_diff) * mask
-    split_diff = ftu.get_dft3(split_diff) * jnp.sqrt(noise_variance_small)
+    split_diff = fourier_transform_utils.get_idft3(split_diff) * mask
+    split_diff = fourier_transform_utils.get_dft3(split_diff) * jnp.sqrt(noise_variance_small)
 
     diff_masked_norm = jnp.sum(jnp.abs(split_diff)**2, axis=(-1,-2,-3))
 
     return diff_masked_norm
 
 def split_by_shells(input_vec, volume_shape ):
-    radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = 0).astype(int).reshape(-1) 
+    radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = 0).astype(int).reshape(-1) 
     
     split_by_shell = jnp.zeros((volume_shape[0]//2 , input_vec.size), dtype = input_vec.dtype)
     # split_by_shell = split_by_shell.at[(jnp.arange(input_vec.size), radial_distances)].set(input_vec)
@@ -774,12 +773,12 @@ def recombine_with_choice(estimators, choice, offset, maskrad_pix, edgewidth_pix
 
     mask = mask_fn.raised_cosine_mask(estimators_subsampled.shape[1:], maskrad_pix, edgewidth_pix, 0)
     estimators_subsampled = estimators_subsampled * mask[None]
-    estimators_subsampled_ft = ftu.get_dft3(estimators_subsampled)
+    estimators_subsampled_ft = fourier_transform_utils.get_dft3(estimators_subsampled)
 
     choice_radial = utils.make_radial_image(choice, estimators_subsampled.shape[1:]).reshape(estimators_subsampled.shape[1:])
     # combined_est = jnp.take(estimators_subsampled, choice_radial, axis = 0)
     combined_est = jnp.take_along_axis(estimators_subsampled_ft , choice_radial[None], axis=0)[0]
-    combined_est = ftu.get_idft3(combined_est).real
+    combined_est = fourier_transform_utils.get_idft3(combined_est).real
 
     return combined_est
 
@@ -815,7 +814,7 @@ def recombine_estimates(estimators, choice, voxel_size, locres_sampling = 25, lo
     sampling_points = get_sampling_points(estimators.shape[1], locres_sampling, locres_maskrad, voxel_size)
     # sampling_points = []
     # # TODO: REally need to put this in a function
-    # grid = np.array(ftu.get_1d_frequency_grid(estimators.shape[1], 1, scaled = False)[::step_size])
+    # grid = np.array(fourier_transform_utils.get_1d_frequency_grid(estimators.shape[1], 1, scaled = False)[::step_size])
     # for kk in grid:
     #     for ii in grid:
     #         for jj in grid:
@@ -854,7 +853,7 @@ def get_sampling_points(grid_size, locres_sampling, locres_maskrad, voxel_size):
     myrad = grid_size//2 - maskrad_pix
 
     sampling_points = []
-    grid = np.array(ftu.get_1d_frequency_grid(grid_size, 1, scaled = False)[::step_size])
+    grid = np.array(fourier_transform_utils.get_1d_frequency_grid(grid_size, 1, scaled = False)[::step_size])
     for kk in grid:
         for ii in grid:
             for jj in grid:
@@ -928,7 +927,7 @@ def filter_with_global_fsc(ft_sum, fsc, voxel_size, filter_edgewidth, mask=None,
     ft_sum = low_pass_filter_map(ft_sum, ft_sum.shape[0], global_resol, voxel_size, filter_edgewidth)
     
     # Convert to real space
-    ift_sum = ftu.get_idft3(ft_sum).real
+    ift_sum = fourier_transform_utils.get_idft3(ft_sum).real
     
     # Apply mask if provided
     if mask is not None:
@@ -1012,14 +1011,14 @@ def filter_maps_with_global_fsc(map1, map2, voxel_size, filter_edgewidth=2, mask
     map2_for_fsc = map2 * fsc_mask if fsc_mask is not None else map2
     
     # Compute FSC between the masked maps
-    fsc = regularization.get_fsc(ftu.get_dft3(map1_for_fsc), ftu.get_dft3(map2_for_fsc), volume_shape=map1.shape)
+    fsc = regularization.get_fsc(fourier_transform_utils.get_dft3(map1_for_fsc), fourier_transform_utils.get_dft3(map2_for_fsc), volume_shape=map1.shape)
     
     # Find global resolution
     global_resol_idx = find_fsc_resol(fsc, fsc_threshold)
     global_resol = map1.shape[0] * voxel_size / global_resol_idx if global_resol_idx > 0 else 999
     
     # Create combined Fourier transform (average of both maps)
-    ft_sum = 0.5 * (ftu.get_dft3(map1) + ftu.get_dft3(map2))
+    ft_sum = 0.5 * (fourier_transform_utils.get_dft3(map1) + fourier_transform_utils.get_dft3(map2))
     
     # Create final mask if specified and no custom mask provided
     if mask is None and mask_radius is not None:
@@ -1079,7 +1078,7 @@ def filter_single_map_with_global_fsc(map1, map2, voxel_size, filter_edgewidth=2
     map2_for_fsc = map2 * fsc_mask if fsc_mask is not None else map2
     
     # Compute FSC between the masked maps
-    fsc = regularization.get_fsc(ftu.get_dft3(map1_for_fsc), ftu.get_dft3(map2_for_fsc), volume_shape=map1.shape)
+    fsc = regularization.get_fsc(fourier_transform_utils.get_dft3(map1_for_fsc), fourier_transform_utils.get_dft3(map2_for_fsc), volume_shape=map1.shape)
     
     # Find global resolution
     global_resol_idx = find_fsc_resol(fsc, fsc_threshold)
@@ -1098,7 +1097,7 @@ def filter_single_map_with_global_fsc(map1, map2, voxel_size, filter_edgewidth=2
         mask = mask_fn.raised_cosine_mask(map1.shape, maskrad_pix, maskrad_pix + edgewidth_pix, -1)
     
     # Apply global filtering to map1
-    ft1 = ftu.get_dft3(map1)
+    ft1 = fourier_transform_utils.get_dft3(map1)
     filtered_map = filter_with_global_fsc(ft1, fsc, voxel_size, filter_edgewidth, mask, None, B_factor)
     
     return filtered_map, fsc, global_resol

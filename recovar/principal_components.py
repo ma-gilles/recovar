@@ -5,8 +5,7 @@ import jax, time
 import nvtx
 
 from recovar import core, covariance_estimation, embedding, plot_utils, linalg, constants, utils, noise
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(jnp)
+import recovar.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +46,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         lhs = regularization.downsample_lhs(means['lhs'].reshape(upsampled_volume_shape), volume_shape, upsampling_factor = upsampling_factor).reshape(-1)
         # At low freqs, signal variance decays as ~1/rad^2
 
-        dist = (ftu.get_grid_of_radial_distances(volume_shape)+1)**2
+        dist = (fourier_transform_utils.get_grid_of_radial_distances(volume_shape)+1)**2
         if covariance_options['column_sampling_scheme'] == 'high_snr':
             lhs = lhs / dist.reshape(-1)
         if covariance_options['column_sampling_scheme'] == 'high_snr_p':
@@ -217,7 +216,7 @@ def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_s
     # u2_norm = np.linalg.norm(u_real, axis =0)
 
     # Mask mean
-    masked_mean = ( ftu.get_idft3(mean.reshape(volume_shape)) * volume_mask.reshape(volume_shape) ).reshape(-1).real
+    masked_mean = ( fourier_transform_utils.get_idft3(mean.reshape(volume_shape)) * volume_mask.reshape(volume_shape) ).reshape(-1).real
     masked_mean /= np.linalg.norm(masked_mean)
     
     # Make it orthogonal to mask
@@ -732,7 +731,7 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
                 estimators[cryo_idx], lhs[cryo_idx], rhs[cryo_idx] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[cryo_idx], noise_variance.astype(np.float32), None, best_likelihood, single_bin, tau= None, grid_correct=False, use_spherical_mask=False, return_lhs_rhs=True)
                 lhs[cryo_idx] = adaptive_kernel_discretization.half_volume_to_full_volume(lhs[cryo_idx][0], cryos[cryo_idx].volume_shape)
                 lhs[cryo_idx] = (lhs[cryo_idx] * cryos[0].get_valid_frequency_indices())#.reshape(cryos[0].volume_shape)
-                real_estimators[cryo_idx] = ftu.get_idft3(estimators[cryo_idx].reshape(cryos[0].volume_shape))
+                real_estimators[cryo_idx] = fourier_transform_utils.get_idft3(estimators[cryo_idx].reshape(cryos[0].volume_shape))
                 all_estimators[zdim][cryo_idx] = estimators[cryo_idx]
                 all_lhs[zdim][cryo_idx] = lhs[cryo_idx]
 

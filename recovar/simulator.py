@@ -2,8 +2,7 @@ import jax.numpy as jnp
 import numpy as np
 import jax, functools
 from recovar import core, dataset, noise
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(jnp)
+import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar import utils
 import jax.scipy.spatial.transform
 import os
@@ -347,7 +346,6 @@ def generate_volumes_from_mrcs(mrc_names, grid_size_i = None, padding= 0 ):
     Xs_vec = []
     first_vol = True
     idx = 0 
-    ftu = fourier_transform_utils(jnp)
     for mrc_name in mrc_names:
         if idx % 100 == 0:
             logger.info(f"Loading volume {idx}")
@@ -373,11 +371,11 @@ def generate_volumes_from_mrcs(mrc_names, grid_size_i = None, padding= 0 ):
 
         if mrc_grid_size == grid_size:
             # if return_ft:
-            #     X_padded = ftu.get_dft3(data)
-            X_padded = ftu.get_dft3(data)
+            #     X_padded = fourier_transform_utils.get_dft3(data)
+            X_padded = fourier_transform_utils.get_dft3(data)
         else:
             # Zero out grid_sizes outside radius
-            X = ftu.get_dft3(data)
+            X = fourier_transform_utils.get_dft3(data)
             # Downsample/Upsample
             if mrc_grid_size > grid_size:
                 diff_size = mrc_grid_size - grid_size 
@@ -396,13 +394,13 @@ def generate_volumes_from_mrcs(mrc_names, grid_size_i = None, padding= 0 ):
                 X = jnp.asarray(X_new)
 
             # Pad in real space.
-            X = ftu.get_idft3(X)
+            X = fourier_transform_utils.get_idft3(X)
             X_padded = np.zeros_like(X, shape = np.array(X.shape) + padding )
             half_pad = padding//2
             X_padded[half_pad:X.shape[0] + half_pad,half_pad:X.shape[1] + half_pad,half_pad:X.shape[2] + half_pad] = X
             
             # Back to FT space
-            X_padded = ftu.get_dft3(X_padded)
+            X_padded = fourier_transform_utils.get_dft3(X_padded)
 
         Xs_vec.append(np.array(X_padded.reshape(-1)))
     voxel_size = voxel_size / grid_size * mrc_grid_size
@@ -435,12 +433,12 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
 
     vol_shape = utils.guess_vol_shape_from_vol_size(volumes.shape[-1])
     # import matplotlib.pyplot as plt
-    # plt.imshow(ftu.get_idft3(volumes[0].reshape(vol_shape)).real.sum(axis=0))
+    # plt.imshow(fourier_transform_utils.get_idft3(volumes[0].reshape(vol_shape)).real.sum(axis=0))
     # Maybe normalize volumes?
     # volumes /= np.linalg.norm(volumes, axis =(-1))
     volume_distribution = np.ones(volumes.shape[0]) / volumes.shape[0] if volume_distribution is None else volume_distribution
 
-    outlier_volume = ftu.get_dft3(utils.load_mrc(outlier_file_input)).reshape(-1) if outlier_file_input is not None else None
+    outlier_volume = fourier_transform_utils.get_dft3(utils.load_mrc(outlier_file_input)).reshape(-1) if outlier_file_input is not None else None
 
     dataset_param_generator = get_pose_ctf_generator(dataset_params_option)
     noise_variance = get_noise_model(noise_model, grid_size) / 50000 * noise_level
@@ -808,7 +806,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
         n_images = img_indices.size
         
         if disc_type == "nufft":
-            vol_real = ftu.get_idft3(volumes[vol_idx].reshape(experiment_dataset.volume_shape))
+            vol_real = fourier_transform_utils.get_idft3(volumes[vol_idx].reshape(experiment_dataset.volume_shape))
         elif 'cubic' in disc_type:
             from recovar import cubic_interpolation
             volume = cubic_interpolation.compute_spline_coefficients(volumes[vol_idx].reshape(experiment_dataset.volume_shape))
@@ -916,7 +914,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 
                 images_batch = padding.pad_images_fourier_domain(images_batch,  experiment_dataset.image_shape, experiment_dataset.grid_size * (upsample_factor-1))
                 images_batch = images_batch * upsampled_CTF
-                images_batch = ftu.get_idft2(images_batch.reshape([-1, *upsampled_shape]))
+                images_batch = fourier_transform_utils.get_idft2(images_batch.reshape([-1, *upsampled_shape]))
 
                 ## adjust the radial noise to handle the upsampling
                 # Interpolate noise_variance onto a grid that is twice as fine
@@ -940,9 +938,9 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 images_batch = (images_batch + noise_batch).real
 
                 if premultiplied_ctf:
-                    images_batch = ftu.get_dft2(images_batch)
+                    images_batch = fourier_transform_utils.get_dft2(images_batch)
                     images_batch = images_batch * upsampled_CTF.reshape(-1, *upsampled_shape)
-                    images_batch = ftu.get_idft2(images_batch)
+                    images_batch = fourier_transform_utils.get_idft2(images_batch)
 
                 if pad_before_translate:
                     images_batch = roll_batch(images_batch, -np.round(experiment_dataset.translations[indices]).astype(int)[:,0], -1 )
@@ -977,7 +975,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                     # import pdb; pdb.set_trace()
                     images_batch = images_batch2
                 
-                images_batch = ftu.get_idft2(images_batch.reshape([-1, *experiment_dataset.image_shape]))
+                images_batch = fourier_transform_utils.get_idft2(images_batch.reshape([-1, *experiment_dataset.image_shape]))
                 # import pdb; pdb.set_trace()
                 images_batch = images_batch.real
                 key, subkey = jax.random.split(key)
@@ -1010,9 +1008,9 @@ def make_noise_batch(subkey, noise_image, images_batch_shape):
     # if recovar.fourier_transform_utils.DEFAULT_FFT_NORM == "backward":
     #     noise_batch = noise_batch /  jnp.sqrt(image_size)
 
-    noise_batch_ft = ftu.get_dft2(noise_batch.reshape(images_batch_shape))
+    noise_batch_ft = fourier_transform_utils.get_dft2(noise_batch.reshape(images_batch_shape))
     noise_batch_ft *= jnp.sqrt(noise_image)
-    noise_batch = ftu.get_idft2(noise_batch_ft.reshape(images_batch_shape)).real
+    noise_batch = fourier_transform_utils.get_idft2(noise_batch_ft.reshape(images_batch_shape)).real
     return noise_batch
 
 

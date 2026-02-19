@@ -6,8 +6,7 @@ import pickle
 import os
 
 from recovar import core, regularization, constants, noise, linalg, relion_functions, dataset
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(jnp)
+import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar import utils
 
 logger = logging.getLogger(__name__)
@@ -1555,7 +1554,7 @@ def estimate_signal_variance_from_correlation(vol1, vol2, lhs, prior, volume_sha
     # prior_avg = jnp.where( sum_top > 0 , correlation_avg  , constants.ROOT_EPSILON )
 
     # Put back in array
-    radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = np.array([0,0,0])).astype(int).reshape(-1)
+    radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = np.array([0,0,0])).astype(int).reshape(-1)
     prior = prior_avg[radial_distances]
 
     return prior

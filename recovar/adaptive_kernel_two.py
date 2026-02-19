@@ -4,7 +4,7 @@
 # import jax, functools, time
 
 # from recovar import core, regularization, constants, noise, linalg
-# from recovar.fourier_transform_utils import fourier_transform_utils
+# import recovar.fourier_transform_utils as fourier_transform_utils
 # ftu = fourier_transform_utils(jnp)
 # from recovar import utils
 

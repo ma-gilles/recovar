@@ -3,7 +3,8 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import jax
 from jax.experimental import sparse
-from recovar import core, simulator, fourier_transform_utils, mask, utils, covariance_estimation
+from recovar import core, simulator, mask, utils, covariance_estimation
+import recovar.fourier_transform_utils as fourier_transform_utils
 import logging
 logger = logging.getLogger(__name__)
 
@@ -100,8 +101,7 @@ def covar_estimate_batch_sparse_U(y, indices, U, noise_variance, regularization 
     covar = unvec(covar)
     return covar
 
-from recovar import core, simulator, fourier_transform_utils, mask, utils
-ftu = fourier_transform_utils.fourier_transform_utils()
+from recovar import core, simulator, mask, utils
 from jax import device_put
 
 @jax.jit
@@ -113,8 +113,8 @@ batch_slice_array = jax.vmap(slice_array, (None, 0))
 batch_slice = jax.vmap(batch_slice_array, in_axes = (1, None), out_axes = -1)
                                                                                               
 def make_random_sampling_scheme(grid_size, m, seed = 0):
-    image_rads = ftu.get_grid_of_radial_distances((grid_size, grid_size)).flatten()
-    volume_rads = ftu.get_grid_of_radial_distances((grid_size, grid_size, grid_size)).flatten()
+    image_rads = fourier_transform_utils.get_grid_of_radial_distances((grid_size, grid_size)).flatten()
+    volume_rads = fourier_transform_utils.get_grid_of_radial_distances((grid_size, grid_size, grid_size)).flatten()
     # running_idx = 0
     # indices = np.zeros((m, grid_size*grid_size), dtype=np.int32)  
     # for rad in range(0, 2*grid_size):
@@ -162,7 +162,7 @@ def generate_cryo_like_experiment(grid_size, m, b, snr, eig_decay = 0.75, random
     # rotation_matrices = simulator.uniform_rotation_sampling(m, grid_size, seed = 0 )
     # indices = core.get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape)
 
-    radial_distances = ftu.get_grid_of_radial_distances(volume_shape).reshape(-1)
+    radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape).reshape(-1)
     signal_decay_power = 2
     U = np.random.randn(volume_size,b) * ((1.0 /(1+radial_distances[:,None]) ) ** signal_decay_power)
     from recovar import simulator
@@ -348,12 +348,11 @@ def high_d_PCA_by_low_rank_completion(y, indices, n, mu = .8, U = None):
     return Upg, Spg**2 / y.shape[0], Xpg
 
 def simulate_C(U, eigs, indices, noise_variance, volume_shape, decay=1):
-    radial_distances = ftu.get_grid_of_radial_distances(volume_shape).reshape(-1) ** decay
+    radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape).reshape(-1) ** decay
     U = to_gpu(U)
     covar = (U * eigs ) @ U[indices].T
     noise_variance_decay = radial_distances @ radial_distances[indices].T * noise_variance
     covar += np.random.randn(*covar.shape) * np.sqrt(noise_variance_decay)
     
     return covar
-
 

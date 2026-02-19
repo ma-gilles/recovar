@@ -4,8 +4,7 @@ import jax, functools
 import nvtx
 
 from recovar import core, constants
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(jnp)
+import recovar.fourier_transform_utils as fourier_transform_utils
 
 # NVTX domain for regularization operations
 NVTX_DOMAIN_REG = "regularization"
@@ -78,7 +77,7 @@ def get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean = False, frequenc
         # Center two volumes.
         vol1_avg = average_over_shells(vol1, volume_shape, frequency_shift = frequency_shift)
         vol2_avg = average_over_shells(vol2, volume_shape, frequency_shift = frequency_shift)
-        radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1)
+        radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1)
         vol1 -= vol1_avg[radial_distances].reshape(vol1.shape)
         vol2 -= vol2_avg[radial_distances].reshape(vol2.shape)
 
@@ -97,7 +96,7 @@ def get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean = False, frequenc
 # @functools.partial(jax.jit, static_argnums = [1,2])
 @nvtx.annotate("average_over_shells", color="green", domain=NVTX_DOMAIN_REG)
 def average_over_shells(input_vec, volume_shape, frequency_shift = 0 ):
-    radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1) 
+    radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1) 
     labels = radial_distances.reshape(-1)
     indices = jnp.arange(0, volume_shape[0]//2 - 1)        ## I  wish there wasn't a -1 here, hmmmm
     return jax_scipy_nd_image_mean(input_vec.reshape(-1), labels = labels, index = indices)    
@@ -147,7 +146,7 @@ def jax_scipy_nd_image_mean_inner(input, labels=None, index=None):
 
 
 def sum_over_shells(input_vec, volume_shape, frequency_shift = 0 ):
-    radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1) 
+    radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1) 
     labels = radial_distances.reshape(-1)
     indices = jnp.arange(0, volume_shape[0]//2 - 1)
     return jax_scipy_nd_image_sum(input_vec.reshape(-1), labels = labels, index = indices)    
@@ -202,7 +201,7 @@ def compute_fsc_prior_gpu(volume_shape, image0, image1, bottom_of_fraction = Non
         prior_avg = jnp.where( bottom_avg > 0 , SNR / bottom_avg, constants.EPSILON )
     
     # Put back in array
-    radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1)
+    radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1)
     prior = prior_avg[radial_distances]
     
     return prior, fsc, prior_avg
@@ -210,7 +209,7 @@ def compute_fsc_prior_gpu(volume_shape, image0, image1, bottom_of_fraction = Non
 
 def downsample_lhs(lhs, volume_shape, upsampling_factor = 1):
     # Downsample lhs by a factor of 2
-    # radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = -1)
+    # radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = -1)
     # lhs_inp_shape = lhs.shape
     kernel = jnp.ones( 3 * [2 * upsampling_factor - 1], dtype = jnp.float32)
     kernel = kernel / jnp.sum(kernel)
@@ -251,7 +250,7 @@ def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequenc
     prior_avg = jnp.where( sum_top > 0 , SNR * sum_bot / sum_top , constants.EPSILON ).real
     
     # Put back in array
-    radial_distances = ftu.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1)
+    radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1)
     prior = prior_avg[radial_distances]
 
     return prior, fsc_raw, prior_avg
@@ -267,7 +266,7 @@ def covariance_update_col(H, B, prior, epsilon = constants.EPSILON):
 def covariance_update_col_with_mask(H, B, prior, volume_mask, valid_idx, volume_shape, epsilon = constants.EPSILON):
     # H is not divided by sigma.
     cov = (jnp.where( jnp.abs(H) < epsilon , 0,  B / ( H + (1 / prior) ) ) * valid_idx).reshape(volume_shape)
-    cov = ftu.get_dft3( ftu.get_idft3(cov ) * volume_mask ).reshape(-1)
+    cov = fourier_transform_utils.get_dft3( fourier_transform_utils.get_idft3(cov ) * volume_mask ).reshape(-1)
     return cov
 
 @functools.partial(jax.jit, static_argnums = [6,7,8])    
@@ -343,7 +342,7 @@ def downsample_from_fsc(array, fsc, volume_shape):
     ires_max = locres.find_first_zero_in_bool(fsc_above_threshold)
 
     downsample_ar = jnp.where( jnp.arange(fsc.size) < ires_max, fsc, 0)
-    distances = ftu.get_grid_of_radial_distances(volume_shape)
+    distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape)
     fsc_mask = downsample_ar[distances]
     return array * fsc_mask.reshape(-1)
 
@@ -357,8 +356,8 @@ prior_iteration_relion_style_batch = jax.vmap(prior_iteration_relion_style, in_a
 #     volumes2 =  covariance_update_col(H1,B1, prior)
     
 #     def apply_masks(volumes):
-#         vols_real = ftu.get_idft3(volumes.reshape([-1, *volume_shape])) * volume_mask
-#         return ftu.get_dft3(vols_real).reshape([vols_real.shape[0], -1])
+#         vols_real = fourier_transform_utils.get_idft3(volumes.reshape([-1, *volume_shape])) * volume_mask
+#         return fourier_transform_utils.get_dft3(vols_real).reshape([vols_real.shape[0], -1])
     
 #     volumes1_masked = apply_masks(volumes1)
 #     volumes2_masked = apply_masks(volumes2)

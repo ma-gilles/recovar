@@ -5,9 +5,7 @@ import matplotlib.pyplot as plt
 import pickle 
 from recovar import plot_utils, core, mask
 import recovar.padding as pad
-from recovar.fourier_transform_utils import fourier_transform_utils
-ftu = fourier_transform_utils(jnp)
-ftu_np = fourier_transform_utils(np)
+import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar import tilt_dataset
 
 logger = logging.getLogger(__name__)
@@ -229,7 +227,7 @@ class CryoEMDataset:
         return mask.get_radial_mask(self.image_shape, radius = radius).reshape(-1)
 
     def get_proj(self, X, to_real = np.real, axis = 0, hide_padding = True):
-        im = to_real(ftu.get_idft2(jnp.take(X.reshape(self.volume_shape), self.grid_size//2, axis = axis)))
+        im = to_real(fourier_transform_utils.get_idft2(jnp.take(X.reshape(self.volume_shape), self.grid_size//2, axis = axis)))
         if hide_padding:
             im = im[self.hpad:self.image_stack.unpadded_D + self.hpad,self.hpad:self.image_stack.unpadded_D + self.hpad]
         return im
@@ -242,7 +240,7 @@ class CryoEMDataset:
         return im
 
     def get_slice_real(self, X, to_real_fn = np.real, axis = 0):
-        im = to_real_fn(ftu.get_idft3(X.reshape(self.volume_shape)))
+        im = to_real_fn(fourier_transform_utils.get_idft3(X.reshape(self.volume_shape)))
         im2 = jnp.take(im, self.grid_size//2, axis = axis)
         return to_real_fn(im2)
 
@@ -264,9 +262,9 @@ class CryoEMDataset:
     def get_image_real(self,i, tilt_idx = None, to_real= np.real, hide_padding = True):
         hpad= self.image_stack.padding//2
         if hide_padding:
-            return to_real(ftu.get_idft2(self.get_image(i,tilt_idx))[hpad:self.image_shape[0]-hpad,hpad:self.image_shape[1]-hpad])
+            return to_real(fourier_transform_utils.get_idft2(self.get_image(i,tilt_idx))[hpad:self.image_shape[0]-hpad,hpad:self.image_shape[1]-hpad])
         else:
-            return to_real(ftu.get_idft2(self.get_image(i,tilt_idx)))
+            return to_real(fourier_transform_utils.get_idft2(self.get_image(i,tilt_idx)))
 
 
     def get_denoised_image(self,i, tilt_idx=None, to_real= np.real, hide_padding = True, weiner_param =1):
@@ -287,9 +285,9 @@ class CryoEMDataset:
         images = (CTFs / (CTFs**2 + weiner_param)) * images  # CTF correction
         images = images.reshape(self.image_shape)
         # if hide_padding:
-        #     return to_real(ftu.get_idft2(self.get_image(i))[hpad:self.image_shape[0]-hpad,hpad:self.image_shape[1]-hpad])
+        #     return to_real(fourier_transform_utils.get_idft2(self.get_image(i))[hpad:self.image_shape[0]-hpad,hpad:self.image_shape[1]-hpad])
         # else:
-        return to_real(ftu.get_idft2(images))
+        return to_real(fourier_transform_utils.get_idft2(images))
 
 
     def plot_FSC(self, image1 = None, image2 = None, filename = None, threshold = 0.5, curve = None, ax = None):
@@ -300,10 +298,10 @@ class CryoEMDataset:
         indices = np.asarray(indices).astype(int)
         from recovar import covariance_core # Not sure I want this depency to exist... Could make some circular imports
         mask = covariance_core.get_per_image_tight_mask(mask, self.rotation_matrices[indices], self.image_stack.mask, self.volume_mask_threshold, self.image_shape, self.volume_shape, self.grid_size, self.padding, disc_type = 'linear_interp',  binary = binary, soften = soften)
-        mask_ft = ftu.get_dft2(mask).reshape(mask.shape[0], -1)
+        mask_ft = fourier_transform_utils.get_dft2(mask).reshape(mask.shape[0], -1)
         # Usually images are translated, here we translate back.
         batch = core.translate_images(mask_ft, -self.translations[indices].astype(int) , self.image_shape)
-        mask2 = ftu.get_idft2(batch.reshape(-1, *self.image_shape))
+        mask2 = fourier_transform_utils.get_idft2(batch.reshape(-1, *self.image_shape))
         return mask2.real
 
 
@@ -331,7 +329,7 @@ class CryoEMDataset:
             skip_ctf = skip_ctf
         )
         if spatial:
-            predicted_images = ftu.get_idft2(predicted_images.reshape(-1, *self.image_shape)).real#.reshape(predicted_images.shape[0], -1)
+            predicted_images = fourier_transform_utils.get_idft2(predicted_images.reshape(-1, *self.image_shape)).real#.reshape(predicted_images.shape[0], -1)
         return predicted_images
 
 
