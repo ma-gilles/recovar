@@ -1,10 +1,10 @@
 import logging
+
 import jax.numpy as jnp
 import numpy as np
-import matplotlib.pyplot as plt
 import pickle 
+
 from recovar import plot_utils, core, mask
-import recovar.padding as pad
 import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar import tilt_dataset
 
@@ -27,39 +27,6 @@ def get_num_images_in_dataset(mrc_path, datadir = None, strip_prefix = None):
 
 def set_standard_mask(D, dtype):
     return mask.window_mask(D, 0.85, 0.99)
-    # return np.ones([D,D], dtype = dtype).real
-    
-# Image loader functions - supposed to give quick access to images to GPU
-
-# I don't remember why I use two different loaders here.
-
-# # This might work. 
-# def numpy_collate(batch):
-#   if isinstance(batch[0], np.ndarray):
-#     return jnp.stack(batch)
-#   elif isinstance(batch[0], (tuple,list)):
-#     transposed = zip(*batch)
-#     return [numpy_collate(samples) for samples in transposed]
-#   else:
-#     return jnp.array(batch)
-
-# class NumpyLoader(torch.utils.data.DataLoader):
-#   def __init__(self, dataset, batch_size=1,
-#                 shuffle=False, sampler=None,
-#                 batch_sampler=None, num_workers=0,
-#                 pin_memory=False, drop_last=False,
-#                 timeout=0, worker_init_fn=None):
-#     super(self.__class__, self).__init__(dataset,
-#         batch_size=batch_size,
-#         shuffle=shuffle,
-#         sampler=sampler,
-#         batch_sampler=batch_sampler,
-#         num_workers=num_workers,
-#         collate_fn=numpy_collate,
-#         pin_memory=pin_memory,
-#         drop_last=drop_last,
-#         timeout=timeout,
-#         worker_init_fn=worker_init_fn)
     
 
 # A dataset class, that includes images and all other information
@@ -78,7 +45,6 @@ class CryoEMDataset:
 
         self.volume_upsampling_factor = volume_upsampling_factor
         self.upsampled_grid_size = self.grid_size * volume_upsampling_factor
-        self.grid_size = grid_size
 
         self.volume_shape = tuple(3*[self.grid_size ])
         self.volume_size = np.prod(self.volume_shape)
@@ -86,8 +52,6 @@ class CryoEMDataset:
         self.upsampled_volume_shape = tuple(3*[self.grid_size * volume_upsampling_factor ])
         self.upsampled_volume_size = np.prod(self.upsampled_volume_shape)
 
-        # self.original_volume_shape = tuple(3*[image_stack.unpadded_D])
-        # self.volume_shape = tuple(3*[image_stack.unpadded_D])
         # Allows for passing None as image_stack (for simulation)
         if image_stack is None:
             self.image_stack = None
@@ -103,7 +67,6 @@ class CryoEMDataset:
             self.padding = image_stack.padding
 
         
-        # self.n_units = self.n_images # This is the number of predictions.
         self.tilt_series_flag = tilt_series_flag # Hopefully can just switch this on and off
         self.premultiplied_ctf = premultiplied_ctf
 
@@ -111,8 +74,6 @@ class CryoEMDataset:
         # For tilt series: A "tilt" is an image. A particle is a full tilt series 
         self.n_units = self.image_stack.Np if self.tilt_series_flag else self.n_images
 
-        # For SPA, it is # of images, for ET, it is # of tilt series 
-        # self.CTF_FUNCTION_OPTION = "cryodrgn"
         self.CTF_fun_inp = CTF_fun
         self.hpad = self.padding//2
         self.volume_mask_threshold = 4 * self.grid_size / 128 # At around 128 resolution, 4 seems good, so scale up accordingly. This probably should have a less heuristic value here. This is assuming the mask is scaled between [0,1]
@@ -146,9 +107,9 @@ class CryoEMDataset:
         self.noise = None
 
     def get_noise_variance(self, indices):
-        if self.noise_model is None:            
+        if self.noise is None:
             return None
-        return self.noise_model.get(indices)
+        return self.noise.get(indices)
 
     def delete(self):
         del self.image_stack.particles
@@ -156,7 +117,7 @@ class CryoEMDataset:
         del self.rotation_matrices
         del self.CTF_params
         del self.translations
-        del self.noise_model
+        del self.noise
 
     def update_volume_upsampling_factor(self, volume_upsampling_factor):
 
@@ -167,10 +128,6 @@ class CryoEMDataset:
         self.upsampled_volume_size = np.prod(self.upsampled_volume_shape)
 
         return
-
-    # def get_tilt_dataset_generator(self, batch_size, num_workers = 0):
-    #     self.current_index=0# A very stupid way to do this for now?
-    #     return self.image_stack.get_dataset_generator(batch_size,num_workers = num_workers)
 
     def get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
         return self.image_stack.get_dataset_generator(batch_size, num_workers=num_workers, **kwargs)
@@ -279,14 +236,11 @@ class CryoEMDataset:
             CTFs = self.CTF_fun(self.CTF_params[image_ind[tilt_idx]][None], self.image_shape, self.voxel_size) # Compute CTF
         else:
             images, _, _ = self.image_stack.__getitem__(i)
-            images = images#[None]
+            images = images
             CTFs = self.CTF_fun(self.CTF_params[i][None], self.image_shape, self.voxel_size) # Compute CTF
         images = self.image_stack.process_images(images) # Compute DFT, masking
         images = (CTFs / (CTFs**2 + weiner_param)) * images  # CTF correction
         images = images.reshape(self.image_shape)
-        # if hide_padding:
-        #     return to_real(fourier_transform_utils.get_idft2(self.get_image(i))[hpad:self.image_shape[0]-hpad,hpad:self.image_shape[1]-hpad])
-        # else:
         return to_real(fourier_transform_utils.get_idft2(images))
 
 
@@ -329,7 +283,7 @@ class CryoEMDataset:
             skip_ctf = skip_ctf
         )
         if spatial:
-            predicted_images = fourier_transform_utils.get_idft2(predicted_images.reshape(-1, *self.image_shape)).real#.reshape(predicted_images.shape[0], -1)
+            predicted_images = fourier_transform_utils.get_idft2(predicted_images.reshape(-1, *self.image_shape)).real
         return predicted_images
 
 
@@ -342,26 +296,25 @@ class CryoEMDataset:
         _, dose_indices = jnp.unique(self.CTF_params[:,core.CTFParamIndex.DOSE], return_inverse=True)
         self.noise = noise.VariableRadialNoiseModel(noise_variance_radials, dose_indices, image_shape = self.image_shape)
 
-
-# TODO: This is not used anywhere. Delete?
-# def subsample_cryoem_dataset(dataset, indices):
-
-#     import copy
-#     image_stack = copy.copy(dataset.image_stack)
-
-#     if type(image_stack.particles) is list:
-#         image_stack.particles = [dataset.image_stack.particles[i] for i in indices]
-#         image_stack.n_images = len(image_stack.particles)#.shape[0]
-#     else:
-#         image_stack.particles = dataset.image_stack.particles[indices]
-#         image_stack.n_images = image_stack.particles.shape[0]
-
-#     return CryoEMDataset( image_stack, dataset.voxel_size, dataset.rotation_matrices[indices], dataset.translations[indices], dataset.CTF_params[indices], CTF_fun = dataset.CTF_fun_inp, dtype = dataset.dtype, rotation_dtype = dataset.rotation_dtype, dataset_indices = dataset.dataset_indices[indices] , volume_upsampling_factor= dataset.volume_upsampling_factor)
-
-
-
 # Loads dataset that are stored in the cryoDRGN format
-def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, n_images = None, ind = None, lazy = True, padding = 0, uninvert_data = False, tilt_series = False, tilt_series_ctf = None, dose_per_tilt = 2.9, angle_per_tilt = 3, premultiplied_ctf = False, strip_prefix = None):
+def load_cryodrgn_dataset(
+    particles_file,
+    poses_file,
+    ctf_file,
+    datadir=None,
+    n_images=None,
+    ind=None,
+    lazy=True,
+    padding=0,
+    uninvert_data=False,
+    tilt_series=False,
+    tilt_series_ctf=None,
+    dose_per_tilt=2.9,
+    angle_per_tilt=3,
+    premultiplied_ctf=False,
+    strip_prefix=None,
+    sort_with_Bfac=False,
+):
     
     # For backward compatibility... Delete at some point?
     if tilt_series_ctf is None and tilt_series is False:
@@ -374,21 +327,8 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
         
     if tilt_series:
             from recovar import tilt_dataset
-            # particles_to_tilts, tilts_to_particles = tilt_dataset.TiltSeriesData.parse_particle_tilt(particles_file)
             tilt_file_option = 'relion5' if tilt_series_ctf == 'relion5' else 'warp'
             dataset = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, tilt_file_option=tilt_file_option, strip_prefix=strip_prefix)
-            # # Use TF-based implementation for tilt series
-            # from recovar import tf_tilt_dataset
-            # tilt_file_option = 'relion5' if tilt_series_ctf == 'relion5' else 'warp'
-            # dataset = tf_tilt_dataset.TFTiltSeriesData(
-            #     particles_file, 
-            #     ind=ind, 
-            #     datadir=datadir, 
-            #     invert_data=uninvert_data, 
-            #     tilt_file_option=tilt_file_option,
-            #     cache_size=1000,  # Adjust based on available memory
-            #     prefetch_size=100  # Adjust based on batch size
-            # )
 
     else:
         if lazy:
@@ -414,7 +354,13 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
     # It means, that it will use the cryo-EM pipeline but the cryoET CTF.
     if (tilt_series is False) and (tilt_series_ctf != 'cryoem'):
         from recovar import tilt_dataset
-        tilt_dataset_this = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, sort_with_Bfac = sort_with_Bfac)
+        tilt_dataset_this = tilt_dataset.TiltSeriesData(
+            particles_file,
+            ind=ind,
+            datadir=datadir,
+            invert_data=uninvert_data,
+            sort_with_Bfac=sort_with_Bfac,
+        )
     else:
         tilt_dataset_this = dataset
 
@@ -478,9 +424,7 @@ def load_cryodrgn_dataset(particles_file, poses_file, ctf_file, datadir = None, 
             logger.info('CTF from dose weighting - V2')
             
 
-    # posetracker = PoseTracker.load( poses_file, dataset.n_images, dataset.unpadded_D, ind = ind) #,   None, ind, device=device)
-    # from recovar import load_utils
-    rots, trans, _ = load_utils.load_poses( poses_file, dataset.n_images, dataset.unpadded_D, ind = ind) #,   None, ind, device=device)
+    rots, trans, _ = load_utils.load_poses(poses_file, dataset.n_images, dataset.unpadded_D, ind=ind)
 
 
     voxel_sizes = ctf_params[:,0]
@@ -640,18 +584,17 @@ def split_index_list(all_valid_image_indices, split_random_seed=0):
     Returns:
         List of two numpy arrays containing the split indices
     """
+    all_valid_image_indices = np.asarray(all_valid_image_indices)
     if len(all_valid_image_indices) == 0:
         raise ValueError("Cannot split empty index list")
-    
-    # Set random seed for reproducibility
-    np.random.seed(split_random_seed)
     
     n_indices = len(all_valid_image_indices)
     half_ind_size = n_indices // 2
     
     # Create shuffled indices
     shuffled_ind = np.arange(n_indices)
-    np.random.shuffle(shuffled_ind)
+    rng = np.random.default_rng(split_random_seed)
+    rng.shuffle(shuffled_ind)
     
     # Split into two halves
     ind_split = [
@@ -688,22 +631,18 @@ def make_dataset_loader_dict(args):
     if hasattr(args, 'premultiplied_ctf'):
         dataset_loader_dict['premultiplied_ctf'] = args.premultiplied_ctf
 
-    # if hasattr(args,'tilt_ind'):
-    #     dataset_loader_dict['tilt_ind'] = args.tilt_ind
-
-
     if args.uninvert_data == "automatic" or  args.uninvert_data == "false":
         dataset_loader_dict['uninvert_data'] = False
     elif args.uninvert_data == "true":
         dataset_loader_dict['uninvert_data'] = True
     else:
-        raise Exception("input uninvert-data option is wrong. Should be automatic, true or false ")
+        raise ValueError("input uninvert-data option is wrong. Should be automatic, true or false ")
     
     return dataset_loader_dict
 
 def figure_out_halfsets(args):
 
-    if args.halfsets == None:
+    if args.halfsets is None:
         logger.info("Randomly splitting dataset into halfsets")
         if args.tilt_series or args.tilt_series_ctf != 'cryoem':
             halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, tilt_ind_file = args.tilt_ind, ntilts = args.ntilts, datadir = args.datadir)
@@ -763,24 +702,18 @@ def get_default_dataset_option():
     return dataset_loader_dict
 
 def load_dataset_from_dict(dataset_loader_dict, lazy = True):
-    # if dataset_loader_dict['lazy']:
-    #     return load_cryodrgn_dataset(**dataset_loader_dict, lazy = lazy)
     return load_cryodrgn_dataset(**dataset_loader_dict, lazy = lazy)
 
 
 def reorder_to_original_indexing(arr, cryos, use_tilt_indices = False):
-    # if cryos[0].tilt_series_flag:
     if use_tilt_indices:
         dataset_indices = [ cryo.image_stack.dataset_tilt_indices for cryo in cryos]
     else:
         dataset_indices = [ cryo.dataset_indices for cryo in cryos]
     return reorder_to_original_indexing_from_halfsets(arr, dataset_indices)
 
-    # inv_argsort = np.argsort(dataset_indices)
-    # return arr[inv_argsort]
-
 def reorder_to_original_indexing_from_halfsets(arr, halfsets, num_images = None ):
-    if type(arr) is list:
+    if isinstance(arr, list):
         arr = np.concatenate(arr)
     
     dataset_indices = np.concatenate(halfsets)
@@ -790,4 +723,3 @@ def reorder_to_original_indexing_from_halfsets(arr, halfsets, num_images = None 
     arr_reorder = np.ones(arr_reorder_shape) * np.nan # nan things which are not in halfsets. They have been filtered out.
     arr_reorder[dataset_indices] = arr
     return arr_reorder
-
