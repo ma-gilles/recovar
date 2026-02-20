@@ -1,19 +1,17 @@
-import jax.numpy as jnp
-import numpy as np
-import jax, functools
-from recovar import core, dataset, noise
-import recovar.fourier_transform_utils as fourier_transform_utils
-from recovar import utils
-import jax.scipy.spatial.transform
-import os
-import mrcfile
-# import matplotlib.pyplot as plt
-# from cryodrgn import ctf
-# from cryodrgn.pose import PoseTracker
-from recovar import load_utils
-# xx = Path(__file__).resolve()
 import logging
+import os
+import functools
+
+import jax
+import jax.numpy as jnp
+import mrcfile
+import numpy as np
+
+import recovar.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
+from recovar import core, dataset, noise
+from recovar import load_utils
+
 CONSTANT_CTF=False
 logger = logging.getLogger(__name__)
 
@@ -77,16 +75,10 @@ def generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  
 
     ind = np.random.choice(ctf_params_data.shape[0], n_images)
     sample_trans = trans_data[ind]
-    # if not sample_trans:
-    #     sample_trans = 0 * sample_trans # in theory, distribution of rotations doesn't matter, but it can make the particle leave the image and such
-        # However, when using masks, it is unclear that this is necessarily true, since the mask may exit the image or something.
-    # import pdb; pdb.set_trace()
 
     sample_ctf_params = sample_ctf_params[...,1:]
-    # import pdb; pdb.set_trace()
     if CONSTANT_CTF:
         sample_ctf_params = set_constant_ctf(sample_ctf_params)
-    # import pdb; pdb.set_trace()
     return sample_ctf_params, sample_rots, sample_trans
 
 def get_params_generator(dataset_params_fn ):
@@ -150,39 +142,22 @@ def noctf_random_sampling_scheme(n_images, grid_size, seed =0, uniform = True ):
 
 def uniform_rotation_sampling(n_images, grid_size, seed = 0 ):
     from scipy.spatial.transform import Rotation
-    # Rotation.random(type cls, num=None, random_state=None)
-    # key = jax.random.PRNGKey(seed)
-    # rotations = np.array(jax.scipy.spatial.transform.Rotation.random(key, n_images))
-    rotations = Rotation.random(n_images).as_matrix()
+    rotations = Rotation.random(n_images, random_state=seed).as_matrix()
     return rotations
 
 def nonuniform_rotation_sampling(n_images, grid_size, seed = 0 ):
     from scipy.spatial.transform import Rotation 
+    rng = np.random.default_rng(seed)
     rotation_matrices = [] 
-    xs = []
-    for rot_idx in range(n_images):
+    for _ in range(n_images):
 
-        y = np.random.randn(1)*np.pi * 0.02 + np.pi/2
-        x = np.random.randn(1)*np.pi * 0.1 + np.pi/2
+        y = rng.normal(size=1) * np.pi * 0.02 + np.pi / 2
+        x = rng.normal(size=1) * np.pi * 0.1 + np.pi / 2
 
         random_rot = Rotation.from_euler('xyz', [y[0],x[0],0 ] )
         rotation_matrices.append(random_rot.as_matrix())
-        xs.append(x)
-
-    # rotation_matrices[0] = Rotation.from_euler('xyz', [0,0,0] ).as_matrix()
-    # rotation_matrices[1] = Rotation.from_euler('xyz', [0,np.pi/2,0] ).as_matrix()
-    # rotation_matrices[2] = Rotation.from_euler('xyz', [np.pi/2,0,0] ).as_matrix()
-    # rotation_matrices[3] = Rotation.from_euler('xyz', [0,0,np.pi/2] ).as_matrix()
-    # rotation_matrices[4] = Rotation.from_euler('xyz', [0,0,0] ).as_matrix()
-    # rotation_matrices[5] = Rotation.from_euler('xyz', [0,np.pi,0] ).as_matrix()
-    # rotation_matrices[6] = Rotation.from_euler('xyz', [np.pi,0,0] ).as_matrix()
-    # rotation_matrices[7] = Rotation.from_euler('xyz', [0,0,np.pi] ).as_matrix()
 
     rotation_matrices = np.array(rotation_matrices)
-    # uniform_rots = uniform_rotation_sampling(n_images, grid_size, seed = seed)
-    # rand_pick = np.random.randint(0, n_images, n_images//10)
-    # rotation_matrices[rand_pick,:] = uniform_rots[rand_pick,:]
-
     return rotation_matrices
 
 
@@ -228,7 +203,7 @@ def kent_sampling_scheme(n_images, grid_size, seed =0, arguments = None ):
     try:
         import sphstat
         
-    except:
+    except Exception:
         raise ImportError("sphstat is not installed. Please install it with `pip install sphstat`")
 
     if arguments is not None:
@@ -256,8 +231,6 @@ def kent_sampling_scheme(n_images, grid_size, seed =0, arguments = None ):
     translations = np.zeros([n_images,2])
 
     return ctf_params, rotations, translations
-
-import numpy as np
 
 def cryo_rotation_batch(U, theta):
     """
@@ -317,20 +290,6 @@ def cryo_rotation_batch(U, theta):
 
     R = np.stack([a, b, u], axis=-1)  # columns are a, b, u
     return R[0] if single else R
-
-# # --- tiny check ---
-# if __name__ == "__main__":
-#     # Single
-#     Rz = cryo_rotation_batch([0,0,1.0], np.pi/6)
-#     assert np.allclose(Rz @ np.array([0,0,1.0]), np.array([0,0,1.0]))
-#     # Batch
-#     U = np.array([[0,0,1.0],[1,1,1.0]])
-#     th = np.array([0.2, -0.3])
-#     R = cryo_rotation_batch(U, th)
-#     assert R.shape == (2,3,3)
-#     # Orthonormal & det=1
-#     assert np.allclose(R @ np.transpose(R, (0,2,1)), np.eye(3)[None,...])
-#     assert np.allclose(np.linalg.det(R), np.ones(2))
 
 
 
