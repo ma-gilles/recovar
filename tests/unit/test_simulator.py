@@ -41,7 +41,12 @@ def test_cryo_rotation_batch_properties_and_shapes():
     theta = np.array([0.2, -0.1])
     batch = simulator.cryo_rotation_batch(U, theta)
     assert batch.shape == (2, 3, 3)
-    np.testing.assert_allclose(batch @ np.transpose(batch, (0, 2, 1)), np.eye(3)[None, ...], atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(
+        batch @ np.transpose(batch, (0, 2, 1)),
+        np.broadcast_to(np.eye(3), batch.shape),
+        atol=1e-6,
+        rtol=1e-6,
+    )
 
 
 def test_cryo_rotation_batch_rejects_bad_inputs():

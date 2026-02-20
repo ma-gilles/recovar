@@ -44,13 +44,12 @@ def blockwise_X_T_X(X, batch_size = None, memory_to_use = 10):
     n_rows = X.shape[0]
     XX = jnp.zeros_like(X, shape =[X.shape[-1], X.shape[-1]])
     square_jit = jax.jit( lambda x: jnp.conj(x).T @ x)
+    logger.info(f"X^T @ X in {int(np.ceil(n_rows / batch_size))} blocks")
     
     for k in range(0, int(np.ceil(n_rows/batch_size))):
-        print(str(k)+",", end="") 
         batch_st, batch_end = batch_st_end(k, batch_size, n_rows)
         Z = jnp.array(X[batch_st:batch_end])
         XX += square_jit(Z) #jnp.conj(Z).T @ Z
-        utils.report_memory_device(logger =logger)
 
     return np.array(XX)        
             
@@ -284,5 +283,8 @@ def solve_by_SVD(A,b, hermitian = False):
 
 
 def l2_distance(X,Y):
-    l2_dist = jnp.linalg.norm(X, axis=-1)**2 - 2 * np.conj(X) @ Y.T + jnp.linalg.norm(Y, axis=-1)**2
+    x_norm = jnp.sum(jnp.abs(X) ** 2, axis=-1, keepdims=True)
+    y_norm = jnp.sum(jnp.abs(Y) ** 2, axis=-1)[None, :]
+    cross = jnp.conj(X) @ Y.T
+    l2_dist = x_norm - 2 * cross + y_norm
     return l2_dist.real

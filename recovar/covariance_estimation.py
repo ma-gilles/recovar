@@ -152,13 +152,6 @@ def get_default_covariance_computation_options(grid_size=None):
         "downsample_from_fsc" : False,
     }
     
-    print( "--------------------------------" )
-    print( "--------------------------------" )
-    print( "mask_images_in_proj changed" )
-    print( "mask_images_in_proj changed" )
-    print( "--------------------------------" )
-    print( "--------------------------------" )
-
     return options
 
 @nvtx.annotate("set_covariance_options", color="red")
@@ -196,6 +189,8 @@ def greedy_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_radius 
             if picked_frequency[0,0] < 0:
                 picked_frequency = -picked_frequency # Take the complex conjugate instead
                 idx = int(core.frequencies_to_vec_indices(picked_frequency, volume_shape)[0])
+                if idx in picked_set:
+                    continue
             picked.append(idx)
             n_picked += 1
             if n_picked >= n_samples:
@@ -237,12 +232,13 @@ def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_rad
     running_vec = sampling_vec.copy().astype(np.float64)
 
     probs = running_vec/np.sum(running_vec)
-    random_choices = np.random.choice(running_vec.size, size = n_samples * 100, p = probs, replace=False)
+    draw_size = min(running_vec.size, n_samples * 100)
+    random_choices = np.random.choice(running_vec.size, size=draw_size, p=probs, replace=False)
     test_idx =0 
 
     while n_picked < n_samples:
         if test_idx >= random_choices.size:
-            random_choices = np.random.choice(running_vec.size, n_samples * 100, p = probs, replace=False)[0]
+            random_choices = np.random.choice(running_vec.size, size=draw_size, p=probs, replace=False)
             test_idx =0 
 
         idx = random_choices[test_idx]
@@ -1402,4 +1398,3 @@ def preprocess_tilt_labels_for_batch(tilt_labels):
     
     # inverse_indices already gives us the mapping to consecutive indices
     return inverse_indices
-

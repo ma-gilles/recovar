@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 
 def integral_fsc(fsc, fourier_pixel_size = 1):
     last_idx = find_first_zero_in_bool(fsc>=0)
-    good_idx = jnp.where(jnp.arange(fsc.size) <= last_idx, 1, 0)
+    include_upto = jnp.where((last_idx == 0) & (fsc[0] >= 0), fsc.size, last_idx)
+    good_idx = jnp.where(jnp.arange(fsc.size) < include_upto, 1, 0)
     return np.sum(fsc * good_idx) * fourier_pixel_size
 
 integral_fscs = jax.vmap(integral_fsc, in_axes = [0, None])
@@ -487,7 +488,7 @@ def get_local_error_subvolume_size(locres_maskrad, voxel_size, multiplier=3):
     # locres_maskrad= 0.5 *locres_sampling if locres_maskrad is None else locres_maskrad
     # maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
     # rad = maskrad_pix * multiplier
-    return 2*get_local_error_subvolume_rad(locres_maskrad, voxel_size, multiplier=3)
+    return 2 * get_local_error_subvolume_rad(locres_maskrad, voxel_size, multiplier=multiplier)
 
 
 ### This is the metric which is actually used
@@ -878,23 +879,6 @@ def make_sampling_volume(grid_size, locres_sampling, voxel_size, locres_maskrad)
         volume[sampling_points[k,0]-half_step:sampling_points[k,0]+half_step, sampling_points[k,1]-half_step:sampling_points[k,1]+half_step, sampling_points[k,2]-half_step:sampling_points[k,2]+half_step] = k
     return volume
 
-
-
-def make_sampling_volume(grid_size, locres_sampling, voxel_size, locres_maskrad):
-    maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
-    step_size = np.round(locres_sampling / voxel_size).astype(int)
-
-    sampling_points = get_sampling_points(grid_size, locres_sampling, locres_maskrad, voxel_size)
-    # Sampling points are centered at 0. We need to recenter them at half the grid
-    sampling_points += grid_size//2
-    # Dump 
-    volume = np.ones((grid_size, grid_size, grid_size), dtype = np.float16) * -1
-    for k in range(sampling_points.shape[0]):
-        half_step = step_size // 2
-        volume[sampling_points[k,0]-half_step:sampling_points[k,0]+half_step, sampling_points[k,1]-half_step:sampling_points[k,1]+half_step, sampling_points[k,2]-half_step:sampling_points[k,2]+half_step] = k
-    return volume
-
-
 def filter_with_global_fsc(ft_sum, fsc, voxel_size, filter_edgewidth, mask=None, fsc_mask=None, B_factor=None):
     """
     Apply global FSC-based filtering to a Fourier transform.
@@ -1101,4 +1085,3 @@ def filter_single_map_with_global_fsc(map1, map2, voxel_size, filter_edgewidth=2
     filtered_map = filter_with_global_fsc(ft1, fsc, voxel_size, filter_edgewidth, mask, None, B_factor)
     
     return filtered_map, fsc, global_resol
-

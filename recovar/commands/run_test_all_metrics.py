@@ -33,8 +33,16 @@ def make_big_test_dataset(input_dir, output_dir, noise_level=0.1, grid_size=128,
     output.mkdir_safe(output_folder)
     from scipy.stats import vonmises
 
-    n_states = 50
-    ## Define density that volumes are resampled from
+    # Count available volumes from prefix input_dir + "####.mrc" to match simulator loader behavior.
+    n_states = 0
+    while os.path.isfile(f"{input_dir}{n_states:04d}.mrc"):
+        n_states += 1
+    if n_states == 0:
+        raise ValueError(
+            f"No volumes found for prefix {input_dir}. Expected files like {input_dir}0000.mrc, {input_dir}0001.mrc, ..."
+        )
+
+    # Define density that volumes are resampled from.
     def p(x):
         means = [np.pi/2, np.pi, 3*np.pi/2]
         kappas =  [6.0, 6.0, 6.0]
@@ -45,7 +53,7 @@ def make_big_test_dataset(input_dir, output_dir, noise_level=0.1, grid_size=128,
             val += weights[i]*vonmises.pdf(x, loc=means[i], kappa=kappas[i])
         return val
 
-    x = np.linspace(0, 2*np.pi, n_states)
+    x = np.linspace(0, 2*np.pi, n_states, endpoint=False)
     volume_distribution = p(x)
     volume_distribution /= (np.sum(volume_distribution))
 
@@ -188,12 +196,13 @@ def main():
     output.mkdir_safe(plots_dir)
 
     pipeline_output = output.PipelineOutput(pipeline_output_dir)
+    unsorted_embedding = pipeline_output.get('unsorted_embedding')
     particle_assignment = sim_info['image_assignment'] if not tilt_series else sim_info['tilt_series_assignment']
 
     max_classes = np.max(sim_info['image_assignment']) + 1
     labels_to_plot = [0, max_classes // 2]
 
-    unsorted_zs = pipeline_output.get('unsorted_embedding')['zs'][10]
+    unsorted_zs = unsorted_embedding['zs'][10]
     zs_assignment = np.array([
         np.mean(unsorted_zs[particle_assignment == l], axis=0)
         for l in labels_to_plot
@@ -307,18 +316,21 @@ def main():
               filename=os.path.join(plots_dir, 'eigs.png'))
 
     # Embedding variance errors
-    unsorted_zs = pipeline_output.get('unsorted_embedding')['zs'][4]
+    unsorted_zs = unsorted_embedding['zs'][4]
     _, averaged_variance = metrics.variance_of_zs(unsorted_zs, particle_assignment)
     all_scores['embedding_squared_error_4'] = averaged_variance
 
-    unsorted_zs = pipeline_output.get('unsorted_embedding')['zs'][10]
+    unsorted_zs = unsorted_embedding['zs'][10]
     _, averaged_variance = metrics.variance_of_zs(unsorted_zs, particle_assignment)
     all_scores['embedding_squared_error_10'] = averaged_variance
 
     gt_contrasts = synt.contrasts
     for idx in [4, 10, '4_noreg', '10_noreg']:
-        unsorted_contrast = pipeline_output.get('unsorted_embedding')['contrasts'][idx]
-        all_scores[f'constrasts_{idx}'] = np.mean(np.abs(gt_contrasts - unsorted_contrast))
+        unsorted_contrast = unsorted_embedding['contrasts'][idx]
+        contrast_abs_error = np.mean(np.abs(gt_contrasts - unsorted_contrast))
+        all_scores[f'contrasts_{idx}'] = contrast_abs_error
+        # Backward-compatible key for existing comparison scripts.
+        all_scores[f'constrasts_{idx}'] = contrast_abs_error
         
         # Create contrast comparison plot
         plt.figure(figsize=(10, 6))
@@ -537,7 +549,7 @@ def main():
     
     # Plot 5: Contrast comparison for zdim=4
     plt.subplot(3, 3, 5)
-    unsorted_contrast_4 = pipeline_output.get('unsorted_embedding')['contrasts'][4]
+    unsorted_contrast_4 = unsorted_embedding['contrasts'][4]
     plt.scatter(gt_contrasts, unsorted_contrast_4, alpha=0.5, label='Particle contrasts')
     plt.plot([0, 1], [0, 1], 'r--', label='Perfect correlation')
     plt.xlabel('Ground Truth Contrast')
@@ -556,7 +568,7 @@ def main():
     
     # Plot 7: Contrast comparison for zdim=10
     plt.subplot(3, 3, 7)
-    unsorted_contrast_10 = pipeline_output.get('unsorted_embedding')['contrasts'][10]
+    unsorted_contrast_10 = unsorted_embedding['contrasts'][10]
     plt.scatter(gt_contrasts, unsorted_contrast_10, alpha=0.5, label='Particle contrasts')
     plt.plot([0, 1], [0, 1], 'r--', label='Perfect correlation')
     plt.xlabel('Ground Truth Contrast')
