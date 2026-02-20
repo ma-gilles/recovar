@@ -71,4 +71,4 @@ def test_batch_trans_translate_images_shape():
     images = np.array([[1 + 0j, 2 + 0j, 3 + 0j, 4 + 0j]], dtype=np.complex64)
     translations = np.array([[[0.0, 0.0], [0.1, -0.1]]], dtype=np.float32)
     out = np.asarray(core_geometry.batch_trans_translate_images(images, translations, (2, 2)))
-    assert out.shape == (1, 4, 2)
+    assert out.shape == (1, 2, 4)

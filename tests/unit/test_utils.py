@@ -150,7 +150,7 @@ def test_latent_and_embedding_batch_size(caplog):
     image_size = 64 * 64
     contrast_grid = np.zeros((16,), dtype=np.float64)
     with caplog.at_level("WARNING"):
-        out = utils.get_embedding_batch_size(basis, image_size, contrast_grid, zdim=8, gpu_memory=1)
+        out = utils.get_embedding_batch_size(basis, image_size, contrast_grid, zdim=8, gpu_memory=0.001)
     assert out == 1
     out2 = utils.get_embedding_batch_size(
         basis=np.zeros((10, 10), dtype=np.float64),

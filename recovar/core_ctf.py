@@ -77,9 +77,10 @@ def get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage):
     s2 = freqs[..., 0] ** 2 + freqs[..., 1] ** 2
     s = jnp.sqrt(s2)
 
-    cd_tile = cumulative_dose[:, None] * jnp.ones([n, n_pixels])
+    # Keep broadcasted arrays lightweight; avoid explicit ones/repeat materialization.
+    cd_tile = cumulative_dose[:, None]
     ce = critical_exposure(s, voltage)
-    ce_tile = jnp.repeat(ce[None], n, axis=0)
+    ce_tile = jnp.broadcast_to(ce[None], (n, n_pixels))
 
     oe_tile = ce_tile * 2.51284
     oe_mask = cd_tile < oe_tile
@@ -87,7 +88,7 @@ def get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage):
     freq_correction = jnp.multiply(freq_correction, oe_mask)
 
     angle_correction = jnp.cos(tilt_angles * np.pi / 180)
-    ac_tile = angle_correction[:, None] * jnp.ones([n, n_pixels])
+    ac_tile = angle_correction[:, None]
     return freq_correction * ac_tile
 
 

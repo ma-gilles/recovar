@@ -78,7 +78,7 @@ def test_evaluate_ctf_wrapper_tilt_series_uses_voltage(monkeypatch):
     captured = {}
 
     def fake_dose_filters(Apix, image_shape, dose_per_tilt, angle_per_tilt, tilt_numbers, voltage):
-        captured["voltage"] = float(voltage)
+        captured["voltage"] = voltage
         return np.ones((len(tilt_numbers), image_shape[0] * image_shape[1]), dtype=np.float32)
 
     monkeypatch.setattr(core_ctf, "get_dose_filters_from_tilt_number", fake_dose_filters)
@@ -94,7 +94,8 @@ def test_evaluate_ctf_wrapper_tilt_series_uses_voltage(monkeypatch):
     ctf_params[:, core_ctf.CTFParamIndex.DOSE] = np.array([1.0, 2.0])
     ctf_params[:, core_ctf.CTFParamIndex.CS] = 2.7
     ctf_params[:, core_ctf.CTFParamIndex.VOLT] = 300.0
-    core_ctf.evaluate_ctf_wrapper_tilt_series(
+    # Call the un-jitted Python function so monkeypatched side effects are concrete.
+    core_ctf.evaluate_ctf_wrapper_tilt_series.__wrapped__(
         ctf_params,
         image_shape=(2, 2),
         voxel_size=1.0,
@@ -112,3 +113,39 @@ def test_evaluate_ctf_wrapper_antialiasing_shape():
     ctf_params[:, core_ctf.CTFParamIndex.CONTRAST] = 1.0
     out = np.asarray(core_ctf.evaluate_ctf_wrapper(ctf_params, image_shape=(4, 4), voxel_size=1.0, antialiasing=True))
     assert out.shape == (1, 16)
+
+
+def test_evaluate_ctf_wrapper_tilt_series_v2_shape():
+    ctf_params = np.zeros((3, 11), dtype=np.float32)
+    ctf_params[:, core_ctf.CTFParamIndex.DOSE] = np.array([0.0, 1.0, 2.0], dtype=np.float32)
+    ctf_params[:, core_ctf.CTFParamIndex.TILT_ANGLE] = np.array([0.0, 3.0, 6.0], dtype=np.float32)
+    ctf_params[:, core_ctf.CTFParamIndex.VOLT] = 300.0
+    ctf_params[:, core_ctf.CTFParamIndex.CS] = 2.7
+    ctf_params[:, core_ctf.CTFParamIndex.W] = 0.1
+    ctf_params[:, core_ctf.CTFParamIndex.CONTRAST] = 1.0
+
+    out = np.asarray(core_ctf.evaluate_ctf_wrapper_tilt_series_v2(ctf_params, image_shape=(4, 4), voxel_size=1.0))
+    assert out.shape == (3, 16)
+    assert np.isfinite(out).all()
+
+
+def test_get_cryo_et_ctf_fun_matches_wrapper_call():
+    ctf_params = np.zeros((2, 11), dtype=np.float32)
+    ctf_params[:, core_ctf.CTFParamIndex.DOSE] = np.array([0.0, 1.0], dtype=np.float32)
+    ctf_params[:, core_ctf.CTFParamIndex.VOLT] = 300.0
+    ctf_params[:, core_ctf.CTFParamIndex.CS] = 2.7
+    ctf_params[:, core_ctf.CTFParamIndex.W] = 0.1
+    ctf_params[:, core_ctf.CTFParamIndex.CONTRAST] = 1.0
+
+    ctf_fun = core_ctf.get_cryo_ET_CTF_fun(dose_per_tilt=2.9, angle_per_tilt=3.0)
+    out_fun = np.asarray(ctf_fun(ctf_params, (4, 4), 1.0))
+    out_ref = np.asarray(
+        core_ctf.evaluate_ctf_wrapper_tilt_series(
+            ctf_params,
+            image_shape=(4, 4),
+            voxel_size=1.0,
+            dose_per_tilt=2.9,
+            angle_per_tilt=3.0,
+        )
+    )
+    np.testing.assert_allclose(out_fun, out_ref, atol=1e-6, rtol=1e-6)
