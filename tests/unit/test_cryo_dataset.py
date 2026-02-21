@@ -111,6 +111,20 @@ def test_tilt_series_to_images_with_subset(monkeypatch):
     assert np.all(out == np.array([1, 4]))
 
 
+def test_tilt_series_to_images_with_subset_preserves_order_and_duplicates(monkeypatch):
+    monkeypatch.setattr(
+        cryo_dataset.TiltSeriesDataset,
+        "parse_particle_tilt",
+        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0}),
+    )
+    out = cryo_dataset.tilt_series_to_images(
+        np.array([1, 1], dtype=np.int32),
+        "dummy.star",
+        image_subset=np.array([3, 2], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(out, np.array([2, 3, 2, 3], dtype=np.int32))
+
+
 def test_tilt_series_to_images_empty_and_duplicate_particle_indices(monkeypatch):
     monkeypatch.setattr(
         cryo_dataset.TiltSeriesDataset,
@@ -123,6 +137,9 @@ def test_tilt_series_to_images_empty_and_duplicate_particle_indices(monkeypatch)
 
     dup = cryo_dataset.tilt_series_to_images(np.array([1, 1], dtype=np.int32), "dummy.star")
     np.testing.assert_array_equal(dup, np.array([2, 3, 2, 3]))
+
+    with pytest.raises(IndexError):
+        cryo_dataset.tilt_series_to_images(np.array([9], dtype=np.int32), "dummy.star")
 
 
 def test_image_count_batch_loader_batches_and_padding():
@@ -461,3 +478,149 @@ def test_tiltseries_image_subset_generator_none_matches_full(monkeypatch):
     assert len(full) == len(none_subset)
     for a, b in zip(full, none_subset):
         np.testing.assert_array_equal(np.array(a[2]), np.array(b[2]))
+
+
+def test_collate_to_jax_handles_none_scalar_ndarray_and_nested_sequences():
+    # ndarray branch
+    arr = [np.ones((1, 2), dtype=np.float32), np.zeros((1, 2), dtype=np.float32)]
+    out = cryo_dataset.collate_to_jax(arr)
+    np.testing.assert_array_equal(np.array(out), np.array([[1.0, 1.0], [0.0, 0.0]], dtype=np.float32))
+
+    # scalar branch
+    out_scalar = cryo_dataset.collate_to_jax([1, 2, 3])
+    np.testing.assert_array_equal(np.array(out_scalar), np.array([1, 2, 3]))
+
+    # none branch
+    assert cryo_dataset.collate_to_jax(None) is None
+
+    # tuple/list recursion branch
+    nested = [
+        (np.ones((1, 1), dtype=np.float32), np.array([5], dtype=np.int32)),
+        (np.zeros((1, 1), dtype=np.float32), np.array([7], dtype=np.int32)),
+    ]
+    out_nested = cryo_dataset.collate_to_jax(nested)
+    assert isinstance(out_nested, list)
+    np.testing.assert_array_equal(np.array(out_nested[0]), np.array([[1.0], [0.0]], dtype=np.float32))
+    np.testing.assert_array_equal(np.array(out_nested[1]), np.array([5, 7], dtype=np.int32))
+
+
+def test_tiltseries_subset_generator_preserves_subset_order_and_duplicates(monkeypatch):
+    class _Source:
+        def __init__(self):
+            self.n = 6
+            self.D = 8
+            self._store = np.arange(self.n * self.D * self.D, dtype=np.float32).reshape(self.n, self.D, self.D)
+
+        def images(self, index, require_contiguous=False):
+            _ = require_contiguous
+            if isinstance(index, (int, np.integer)):
+                return self._store[int(index)]
+            return self._store[np.asarray(index)]
+
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["g1", "g1", "g2", "g2", "g3", "g3"],
+            "_rlnMicrographPreExposure": [1.0, 2.0, 1.0, 2.0, 1.0, 2.0],
+            "_rlnCtfScalefactor": [1, 1, 1, 1, 1, 1],
+            "_rlnCtfBfactor": [-1, -2, -1, -2, -1, -2],
+        }
+    )
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+
+    ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=1, random_tilts=False, tilt_file_option="relion5")
+    subset_indices = np.array([2, 0, 2], dtype=np.int32)
+    loader = ds.get_dataset_subset_generator(batch_size=8, subset_indices=subset_indices, mode="tilt_series")
+    batches = list(loader)
+
+    # simple_dataloader uses batch_size=1 for tilt_series mode.
+    assert len(batches) == 3
+    out_particle_ids = [int(np.array(b[1]).reshape(-1)[0]) for b in batches]
+    out_tilt_ids = [int(np.array(b[2]).reshape(-1)[0]) for b in batches]
+    assert out_particle_ids == [2, 0, 2]
+    # For this deterministic setup with num_tilts=1 and relion5 ordering.
+    assert out_tilt_ids == [4, 0, 4]
+
+
+def test_tiltseries_image_subset_generator_preserves_requested_image_order_and_duplicates(monkeypatch):
+    class _Source:
+        def __init__(self):
+            self.n = 5
+            self.D = 8
+            self._store = np.arange(self.n * self.D * self.D, dtype=np.float32).reshape(self.n, self.D, self.D)
+
+        def images(self, index, require_contiguous=False):
+            _ = require_contiguous
+            if isinstance(index, (int, np.integer)):
+                return self._store[int(index)]
+            return self._store[np.asarray(index)]
+
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["g1", "g1", "g2", "g2", "g3"],
+            "_rlnMicrographPreExposure": [1.0, 2.0, 1.0, 2.0, 1.0],
+            "_rlnCtfScalefactor": [1, 1, 1, 1, 1],
+            "_rlnCtfBfactor": [-1, -2, -1, -2, -1],
+        }
+    )
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+
+    ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=None, random_tilts=False, tilt_file_option="relion5")
+    subset_indices = np.array([3, 1, 3], dtype=np.int32)
+    loader = ds.get_image_subset_generator(batch_size=2, subset_indices=subset_indices)
+    batches = list(loader)
+
+    got = []
+    for _imgs, _pidx, tidx in batches:
+        got.extend(np.array(tidx).reshape(-1).tolist())
+    assert got == [3, 1, 3]
+
+
+def test_tiltseries_dataset_ind_subset_preserves_image_tilt_alignment(monkeypatch):
+    class _Source:
+        def __init__(self, indices=None):
+            base_n = 6
+            self.D = 8
+            full = np.arange(base_n * self.D * self.D, dtype=np.float32).reshape(base_n, self.D, self.D)
+            if indices is None:
+                self._store = full
+            else:
+                self._store = full[np.asarray(indices)]
+            self.n = self._store.shape[0]
+
+        def images(self, index, require_contiguous=False):
+            _ = require_contiguous
+            if isinstance(index, (int, np.integer)):
+                return self._store[int(index)]
+            return self._store[np.asarray(index)]
+
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["g1", "g1", "g2", "g2", "g3", "g3"],
+            "_rlnMicrographPreExposure": [1.0, 2.0, 1.0, 2.0, 5.0, 6.0],
+            "_rlnCtfScalefactor": [1, 1, 1, 1, 1, 1],
+            "_rlnCtfBfactor": [-1, -2, -1, -2, -1, -2],
+        }
+    )
+    monkeypatch.setattr(
+        cryo_dataset.ImageSource,
+        "from_file",
+        lambda *_args, **kwargs: _Source(indices=kwargs.get("indices")),
+    )
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+
+    # Reordered subset over original row indices.
+    subset = np.array([5, 2, 4, 1], dtype=np.int32)
+    ds = cryo_dataset.TiltSeriesDataset("dummy.star", ind=subset, num_tilts=1, random_tilts=False, tilt_file_option="relion5")
+
+    # Direct tilt fetch should map to subset-local order: local 0 == original 5.
+    img0, _pidx0, tidx0 = ds.get_tilt(0)
+    assert int(tidx0) == 0
+    np.testing.assert_array_equal(img0[0], ds.source._store[0])
+
+    # For g3 in subset (locals 0 and 2), relion5 ordering picks lower dose first -> local 2.
+    imgs, particle_idx, selected = ds[2]  # canonical order: g1, g2, g3
+    assert int(particle_idx) == 2
+    np.testing.assert_array_equal(selected, np.array([2], dtype=np.int32))
+    np.testing.assert_array_equal(imgs[0], ds.source._store[2])

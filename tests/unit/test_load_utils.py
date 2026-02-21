@@ -28,6 +28,11 @@ def test_load_ctf_params_rescales_apix_and_drops_size_column(monkeypatch):
     assert np.allclose(out[:, 1], [10000, 12000])
 
 
+def test_print_ctf_params_rejects_wrong_length():
+    with pytest.raises(ValueError, match="Expected 9 CTF parameters"):
+        load_utils.print_ctf_params(np.zeros((8,), dtype=np.float32))
+
+
 def test_load_ctf_params_rejects_odd_dimension():
     with pytest.raises(ValueError, match="must be even"):
         load_utils.load_ctf_params(D=65, ctf_params_pkl="dummy.pkl")
@@ -95,6 +100,20 @@ def test_load_poses_rejects_bad_shapes(monkeypatch):
     monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: bad_rots)
     with pytest.raises(ValueError, match="Rotation array has shape"):
         load_utils.load_poses("poses.pkl", Nimg=2, D=64)
+
+
+def test_load_poses_rejects_invalid_number_of_input_files():
+    with pytest.raises(ValueError, match="Expected 1 or 2 input files"):
+        load_utils.load_poses(["a.pkl", "b.pkl", "c.pkl"], Nimg=2, D=64)
+
+
+def test_load_poses_rotations_only_returns_none_translation(monkeypatch):
+    rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 3, axis=0)
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: rots)
+    rots_out, trans_out, D_out = load_utils.load_poses("poses.pkl", Nimg=3, D=32)
+    assert D_out == 32
+    np.testing.assert_array_equal(rots_out, rots)
+    assert trans_out is None
 
 
 def test_load_ctf_params_from_tiny_file_roundtrip(tmp_path):

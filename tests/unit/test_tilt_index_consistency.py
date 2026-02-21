@@ -161,6 +161,32 @@ def test_get_split_tilt_indices_with_precomputed_particle_halfsets_is_stable(tmp
     np.testing.assert_array_equal(np.sort(np.concatenate(split)), np.array([1, 2, 7], dtype=np.int32))
 
 
+def test_get_split_tilt_indices_precomputed_halfsets_respected_with_image_filter(tmp_path):
+    star_path = _make_tilt_fixture(tmp_path)
+
+    ind_file = tmp_path / "ind_subset.pkl"
+    halfsets_file = tmp_path / "halfsets.pkl"
+
+    with open(ind_file, "wb") as f:
+        # Keep only images from canonical particles 0 and 2.
+        pickle.dump(np.array([1, 2, 4, 7], dtype=np.int32), f)
+    with open(halfsets_file, "wb") as f:
+        # Explicit split: half0 has particles 0 and 2, half1 has particle 1.
+        pickle.dump([np.array([0, 2], dtype=np.int32), np.array([1], dtype=np.int32)], f)
+
+    split = dataset.get_split_tilt_indices(
+        particles_file=str(star_path),
+        ind_file=str(ind_file),
+        datadir=str(tmp_path),
+        particle_halfset_indices_file=str(halfsets_file),
+    )
+
+    np.testing.assert_array_equal(split[0], np.array([1, 2, 4, 7], dtype=np.int32))
+    np.testing.assert_array_equal(split[1], np.array([], dtype=np.int32))
+    assert np.intersect1d(split[0], split[1]).size == 0
+    np.testing.assert_array_equal(np.sort(np.concatenate(split)), np.array([1, 2, 4, 7], dtype=np.int32))
+
+
 @pytest.mark.parametrize(
     "tilt_file_option",
     ["relion5", "warp"],

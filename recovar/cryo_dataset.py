@@ -630,12 +630,12 @@ def collate_to_jax(batch):
         JAX arrays
     """
     with nvtx.annotate("numpy_to_jax_transfer", color="purple", domain=NVTX_DOMAIN_DATA_IO):
+        if batch is None:
+            return None
         if isinstance(batch[0], np.ndarray):
             return jnp.concatenate(batch, axis=0)
         elif isinstance(batch[0], (tuple, list)):
             return [collate_to_jax(samples) for samples in zip(*batch)]
-        elif batch is None:
-            return None
         else:
             return jnp.array(batch)
 
@@ -804,8 +804,9 @@ def tilt_series_to_images(tilt_series_indices: np.ndarray, starfile_path: str,
     image_indices = np.concatenate([particle_tilts[i] for i in tilt_series_indices])
     
     if image_subset is not None:
-        image_indices = np.intersect1d(image_indices, image_subset)
-    
+        # Preserve original order and multiplicity from image_indices.
+        image_indices = image_indices[np.isin(image_indices, np.asarray(image_subset))]
+
     return image_indices
 
 

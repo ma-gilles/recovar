@@ -192,6 +192,75 @@ def test_copy_specific_files_to_temp_and_clear_cache(tmp_path):
     assert data_copy.get_cache_stats()["cached_files"] == 0
 
 
+def test_copy_data_to_temp_folder_returns_none_when_disabled(tmp_path):
+    particles, poses, ctf = _make_basic_files(tmp_path)
+    args = SimpleNamespace(
+        copy_to_folder=None,
+        particles=str(particles),
+        poses=str(poses),
+        ctf=str(ctf),
+        datadir=None,
+        strip_prefix=None,
+        mask=None,
+        focus_mask=None,
+        ind=None,
+        tilt_ind=None,
+        halfsets=None,
+    )
+    assert data_copy.copy_data_to_temp_folder(args) is None
+
+
+def test_copy_data_to_temp_folder_copies_datadir_tree(tmp_path):
+    particles, poses, ctf = _make_basic_files(tmp_path)
+    datadir = tmp_path / "datadir"
+    datadir.mkdir()
+    nested = datadir / "nested"
+    nested.mkdir()
+    (nested / "file.txt").write_text("ok")
+
+    temp_folder = tmp_path / "tmpcopy"
+    args = SimpleNamespace(
+        copy_to_folder=str(temp_folder),
+        particles=str(particles),
+        poses=str(poses),
+        ctf=str(ctf),
+        datadir=str(datadir),
+        strip_prefix=None,
+        mask=None,
+        focus_mask=None,
+        ind=None,
+        tilt_ind=None,
+        halfsets=None,
+    )
+    mapping = data_copy.copy_data_to_temp_folder(args)
+    assert "temp_datadir" in mapping
+    assert (temp_folder / "datadir" / "nested" / "file.txt").exists()
+
+
+def test_copy_specific_files_to_temp_respects_file_types_filter(tmp_path):
+    f = tmp_path / "a.txt"
+    f.write_text("x")
+    d = tmp_path / "d"
+    d.mkdir()
+    (d / "k.txt").write_text("y")
+    temp_folder = tmp_path / "tmpcopy"
+
+    mapping = data_copy.copy_specific_files_to_temp(
+        {"file_a": str(f), "dir_d": str(d)},
+        str(temp_folder),
+        file_types=["file_a"],
+    )
+    assert (temp_folder / "a.txt").exists()
+    assert not (temp_folder / "d").exists()
+    assert "temp_file_a" in mapping
+    assert "temp_dir_d" not in mapping
+
+
+def test_cleanup_temp_files_noop_on_none():
+    # Should not raise.
+    data_copy.cleanup_temp_files(None)
+
+
 def test_copy_data_to_temp_folder_auto_uses_mkdtemp(tmp_path, monkeypatch):
     particles, poses, ctf = _make_basic_files(tmp_path)
     auto_dir = tmp_path / "auto_tmp"
