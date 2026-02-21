@@ -63,7 +63,14 @@ def compute_embedding(recovar_result_dir):
 
     gpu_memory = utils.get_gpu_memory_total()
     # Compute embeddings
-    zs = {}; cov_zs = {}; est_contrasts = {} 
+    zs = {}; cov_zs = {}; est_contrasts = {}
+    zdims = sorted(results.get('zs', {}).keys())
+    if not zdims:
+        input_zdim = getattr(results.get('input_args', None), 'zdim', None)
+        if input_zdim is None:
+            raise ValueError("Could not determine latent dimensions to embed (missing results['zs'] and input_args.zdim)")
+        zdims = list(input_zdim) if isinstance(input_zdim, (list, tuple, np.ndarray)) else [int(input_zdim)]
+
     for zdim in zdims:
         z_time = time.time()
         zs[zdim], cov_zs[zdim], est_contrasts[zdim] = embedding.get_per_image_embedding(

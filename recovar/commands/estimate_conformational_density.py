@@ -64,7 +64,6 @@ def estimate_conformational_density(recovar_result_dir, output_dir = None, pca_d
 
 
 
-    percentile_reject = 10
     alphas = np.flip(np.logspace(-9, 1, 11)) if alphas is None else np.array(alphas)
 
     zdim = f"{z_dim_used}_noreg"

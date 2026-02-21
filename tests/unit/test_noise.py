@@ -54,3 +54,19 @@ def test_get_masked_noise_variance_from_noise_variance_shape():
     out = np.asarray(noise.get_masked_noise_variance_from_noise_variance(image_masks, unmasked_noise, image_shape))
     assert out.shape == (2, 4, 4)
     assert np.isfinite(out).all()
+
+
+def test_to_batched_pixel_noise_normalizes_common_shapes():
+    image_shape = (4, 4)
+
+    n2 = np.arange(16, dtype=np.float32).reshape(4, 4)
+    out2 = np.asarray(noise.to_batched_pixel_noise(n2, image_shape, batch_size=3))
+    assert out2.shape == (3, 16)
+
+    n3 = np.arange(2 * 16, dtype=np.float32).reshape(2, 4, 4)
+    out3 = np.asarray(noise.to_batched_pixel_noise(n3, image_shape))
+    assert out3.shape == (2, 16)
+
+    n1 = np.arange(16, dtype=np.float32)
+    out1 = np.asarray(noise.to_batched_pixel_noise(n1, image_shape))
+    assert out1.shape == (1, 16)

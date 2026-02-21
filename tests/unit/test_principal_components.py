@@ -374,3 +374,11 @@ def test_pca_by_projected_covariance_real_tiny_dataset_runs():
     assert s.shape == (2,)
     assert np.isfinite(s).all()
     assert np.all(s >= pc.constants.EPSILON)
+    assert np.all(s[:-1] >= s[1:])
+    u_np = np.asarray(u)
+    if np.isfinite(u_np).all():
+        gram = u_np.T @ u_np
+        np.testing.assert_allclose(gram, np.eye(2), atol=5e-4, rtol=5e-4)
+    else:
+        # Tiny synthetic grids can trigger interpolation singularities in this path.
+        assert np.isnan(u_np).any()

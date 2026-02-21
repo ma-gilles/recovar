@@ -596,7 +596,8 @@ class TiltSeriesDataset(ParticleImageDataset):
                 raise ValueError(f"Batch size ({batch_size}) < max tilts ({max_tilts})")
             return ImageCountBatchLoader(subset, batch_size, num_workers, pad_to_batch_size)
         else:
-            return simple_dataloader(self, batch_size=batch_size, num_workers=num_workers)
+            subset = Subset(self, subset_indices)
+            return simple_dataloader(subset, batch_size=batch_size, num_workers=num_workers)
 
 
 def simple_dataloader(dataset, batch_size: int, num_workers: int = 0, 
@@ -708,7 +709,7 @@ class ImageCountBatchLoader:
                     break
                 
                 batch_images.append(images)
-                batch_particle_ids.append(np.full(n_images, particle_idx, dtype=np.int32))
+                batch_particle_ids.append(np.full(n_images, p_idx, dtype=np.int32))
                 batch_tilt_ids.append(t_indices)
                 
                 current_count += n_images
@@ -718,7 +719,7 @@ class ImageCountBatchLoader:
             if len(batch_images) == 0 and particle_idx < len(self.dataset):
                 images, p_idx, t_indices = self.dataset[particle_idx]
                 batch_images.append(images)
-                batch_particle_ids.append(np.full(images.shape[0], particle_idx, dtype=np.int32))
+                batch_particle_ids.append(np.full(images.shape[0], p_idx, dtype=np.int32))
                 batch_tilt_ids.append(t_indices)
                 current_count = images.shape[0]
                 particle_idx += 1

@@ -298,15 +298,18 @@ def plot_kmeans_over_density(density, centers, plot_folder = None, cmap = 'infer
 def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us_to_save = 50, us_to_var = [4,10,20], voxel_size = None):
      
     mkdir_safe(output_folder + 'volumes/')
-    save_volumes([ u[...,k] for k in range (us_to_save)], output_folder + 'volumes/' +  'eigen_pos', volume_shape = volume_shape,   voxel_size = voxel_size)
+    n_available = int(u.shape[-1])
+    n_to_save = min(int(us_to_save), n_available)
+    save_volumes([u[..., k] for k in range(n_to_save)], output_folder + 'volumes/' + 'eigen_pos', volume_shape=volume_shape, voxel_size=voxel_size)
     # save_volumes([ -u[...,k] for k in range (us_to_save)], output_folder + 'volumes/' +  'eigen_neg', volume_shape = volume_shape,   voxel_size = voxel_size)
     save_volume(mean, output_folder + 'volumes/' + 'mean', volume_shape = volume_shape,   voxel_size = voxel_size)
     
     grid_size = np.round((mean.shape[0])**(1/3)).astype(int)
     vol_batch_size = int((2**24)/ (grid_size**3) )
     for n_eigs in us_to_var:
-        u_real = linalg.batch_idft3(u[...,:n_eigs], volume_shape, vol_batch_size ) 
-        variance_real = utils.estimate_variance(u_real.T, s['rescaled'][:n_eigs])
+        n_eigs_eff = min(int(n_eigs), n_available)
+        u_real = linalg.batch_idft3(u[..., :n_eigs_eff], volume_shape, vol_batch_size )
+        variance_real = utils.estimate_variance(u_real.T, s['rescaled'][:n_eigs_eff])
         save_volume(variance_real, output_folder + 'volumes/' + 'variance' + str(n_eigs), volume_shape, from_ft = False,   voxel_size = voxel_size)
 
 # def kmeans_analysis_from_dict(output_folder, pipeline_output, cryos, likelihood_threshold,  n_clusters = 20, generate_volumes = True, zdim =-1, compute_reproj = False):

@@ -338,6 +338,9 @@ def prior_iteration_relion_style(H0, H1, B0, B1, frequency_shift, init_regulariz
 
 def downsample_from_fsc(array, fsc, volume_shape):
     from recovar import locres
+    # Accept both NumPy and JAX arrays.
+    fsc = jnp.asarray(fsc)
+    array = jnp.asarray(array)
     fsc_above_threshold = fsc >= 0.0001 #* #0.001
     # Sometimes the FSC dips at low resolution. We want to avoid that case.
     fsc_above_threshold = fsc_above_threshold.at[:16].set(1)
@@ -368,4 +371,3 @@ prior_iteration_relion_style_batch = jax.vmap(prior_iteration_relion_style, in_a
 #     return fsc
 
 batch_average_over_shells = jax.vmap(average_over_shells, in_axes = (0,None,None))
-

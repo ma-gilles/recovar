@@ -1,10 +1,13 @@
 import numpy as np
+from pathlib import Path
+import pandas as pd
 
 import recovar.simulator as simulator
 import recovar.synthetic_dataset as synthetic_dataset
 from recovar import dataset
 from recovar import core
 import recovar.fourier_transform_utils as fourier_transform_utils
+from recovar import utils, starfile
 
 
 def tiny_ctf_pose_generator(n_images, grid_size):
@@ -143,8 +146,75 @@ def make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8, seed=0):
         translations=trans,
         CTF_params=ctf_params,
         CTF_fun=core.evaluate_ctf_wrapper,
-        dataset_indices=None,
+        dataset_indices=np.arange(image_stack.n_images, dtype=np.int32),
         grid_size=grid_size,
     )
     cryo.noise = TinyRadialNoise(image_size=np.prod(cryo.image_shape))
     return cryo
+
+
+def make_tiny_loader_files(
+    out_dir,
+    grid_size=8,
+    n_images=6,
+    n_particles=3,
+):
+    """Create tiny on-disk files for dataset loading tests.
+
+    Returns dict with:
+      particles_mrcs, particles_star, poses_pkl, ctf_pkl
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Tiny real-space stack (n_images, D, D)
+    images = np.arange(n_images * grid_size * grid_size, dtype=np.float32).reshape(n_images, grid_size, grid_size)
+    particles_mrcs = out_dir / "particles.mrcs"
+    utils.write_mrc(str(particles_mrcs), images)
+
+    # Build a tiny STAR where rows map to the same MRCS stack and grouped particles.
+    # Particles are assigned cyclically to keep deterministic groups.
+    groups = [f"g{(i % n_particles) + 1}" for i in range(n_images)]
+    image_names = [f"{i+1}@{particles_mrcs.name}" for i in range(n_images)]
+    df = pd.DataFrame(
+        {
+        "_rlnImageName": image_names,
+        "_rlnGroupName": groups,
+        "_rlnMicrographPreExposure": np.linspace(1.0, float(n_images), n_images, dtype=np.float32),
+        "_rlnCtfScalefactor": np.ones(n_images, dtype=np.float32),
+        "_rlnCtfBfactor": -np.linspace(1.0, float(n_images), n_images, dtype=np.float32),
+        }
+    )
+    particles_star = out_dir / "particles.star"
+    starfile.write_star(str(particles_star), data=df)
+
+    # CTF pickle expected by load_utils.load_ctf_params: (N, 9)
+    # [D, Apix, DFU, DFV, DFANG, VOLT, CS, W, phase]
+    ctf = np.zeros((n_images, 9), dtype=np.float32)
+    ctf[:, 0] = float(grid_size)
+    ctf[:, 1] = 1.5
+    ctf[:, 2] = 15000.0
+    ctf[:, 3] = 15000.0
+    ctf[:, 4] = 0.0
+    ctf[:, 5] = 300.0
+    ctf[:, 6] = 2.7
+    ctf[:, 7] = 0.1
+    ctf[:, 8] = 0.0
+    ctf_pkl = out_dir / "ctf.pkl"
+    utils.pickle_dump(ctf, str(ctf_pkl))
+
+    # Pose pickle expected by load_utils.load_poses:
+    # (rots, trans_frac) with trans in fractional units.
+    rots = np.tile(np.eye(3, dtype=np.float32), (n_images, 1, 1))
+    trans = np.zeros((n_images, 2), dtype=np.float32)
+    poses_pkl = out_dir / "poses.pkl"
+    utils.pickle_dump((rots, trans), str(poses_pkl))
+
+    return {
+        "particles_mrcs": str(particles_mrcs),
+        "particles_star": str(particles_star),
+        "poses_pkl": str(poses_pkl),
+        "ctf_pkl": str(ctf_pkl),
+        "n_images": n_images,
+        "grid_size": grid_size,
+    }

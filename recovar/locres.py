@@ -126,7 +126,7 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
             #     logger.info(f"Sampling point batch {k} out of {n_batch} done")
 
             if jnp.isnan(i_fil).any() or jnp.isnan(i_loc_res).any():
-                import pdb; pdb.set_trace()
+                logger.warning("NaNs encountered in local_resolution accumulation.")
 
     fscs = np.concatenate(fscs)
     local_resols = np.concatenate(local_resols)
@@ -493,10 +493,9 @@ def get_local_error_subvolume_size(locres_maskrad, voxel_size, multiplier=3):
 
 ### This is the metric which is actually used
 def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, use_v2 = False, debug = False, split_shell = False):
-
-    # Took out these - likely to cause bugs
-    # locres_maskrad=  0.5 *locres_sampling if locres_maskrad is None else locres_maskrad
-    # locres_edgwidth = locres_sampling if locres_edgwidth is None else locres_edgwidth
+    # Keep defaults consistent with legacy behavior when optional args are omitted.
+    locres_maskrad = 0.5 * locres_sampling if locres_maskrad is None else locres_maskrad
+    locres_edgwidth = locres_sampling if locres_edgwidth is None else locres_edgwidth
 
 
 
@@ -793,9 +792,9 @@ batch_masked_noisy_error_split_over_shells = jax.vmap(masked_noisy_error_split_o
 batch_masked_noisy_error_split_over_shells_v2 = jax.vmap(masked_noisy_error_split_over_shells_v2, in_axes = (None,None,0, None, None) )
 
 def recombine_estimates(estimators, choice, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None):
-    assert locres_edgwidth ==0
     locres_maskrad= 0.5 *locres_sampling if locres_maskrad is None else locres_maskrad
-    locres_edgwidth = locres_sampling if locres_edgwidth is None else locres_edgwidth
+    # Default edge width kept at 0 for recombination path.
+    locres_edgwidth = 0 if locres_edgwidth is None else locres_edgwidth
     
     logger.info(f"Recombining estimate with sampling = {locres_sampling} and radius = {locres_maskrad} and edgewidth = {locres_edgwidth}")
 
@@ -849,6 +848,7 @@ def recombine_estimates(estimators, choice, voxel_size, locres_sampling = 25, lo
 
 
 def get_sampling_points(grid_size, locres_sampling, locres_maskrad, voxel_size):
+    locres_maskrad = 0.5 * locres_sampling if locres_maskrad is None else locres_maskrad
     maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
     step_size = np.round(locres_sampling / voxel_size).astype(int)
     myrad = grid_size//2 - maskrad_pix
@@ -866,6 +866,7 @@ def get_sampling_points(grid_size, locres_sampling, locres_maskrad, voxel_size):
 
 
 def make_sampling_volume(grid_size, locres_sampling, voxel_size, locres_maskrad):
+    locres_maskrad = 0.5 * locres_sampling if locres_maskrad is None else locres_maskrad
     maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
     step_size = np.round(locres_sampling / voxel_size).astype(int)
 
