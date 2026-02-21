@@ -1,0 +1,95 @@
+import numpy as np
+import pytest
+
+pytest.importorskip("jax")
+
+from recovar import load_utils
+
+pytestmark = pytest.mark.unit
+
+
+def test_load_ctf_params_rescales_apix_and_drops_size_column(monkeypatch):
+    ctf = np.array(
+        [
+            [128, 1.5, 10000, 11000, 0.0, 300, 2.7, 0.1, 0.0],
+            [128, 1.5, 12000, 13000, 5.0, 300, 2.7, 0.1, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: ctf.copy())
+
+    out = load_utils.load_ctf_params(D=64, ctf_params_pkl="dummy.pkl")
+
+    assert out.shape == (2, 8)
+    # original_D * original_Apix / D = 128 * 1.5 / 64 = 3.0
+    assert np.allclose(out[:, 0], 3.0)
+    assert np.allclose(out[:, 1], [10000, 12000])
+
+
+def test_load_ctf_params_rejects_odd_dimension():
+    with pytest.raises(ValueError, match="must be even"):
+        load_utils.load_ctf_params(D=65, ctf_params_pkl="dummy.pkl")
+
+
+def test_load_ctf_params_rejects_bad_param_width(monkeypatch):
+    bad = np.zeros((3, 8), dtype=np.float32)
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: bad)
+    with pytest.raises(ValueError, match="Expected 9 CTF parameters"):
+        load_utils.load_ctf_params(D=64, ctf_params_pkl="dummy.pkl")
+
+
+def test_load_poses_single_file_with_translations_scales_by_D(monkeypatch):
+    rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 3, axis=0)
+    trans_frac = np.array([[0.0, 0.5], [1.0, 0.25], [0.1, 0.2]], dtype=np.float32)
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: (rots, trans_frac))
+
+    rots_out, trans_out, D_out = load_utils.load_poses("poses.pkl", Nimg=3, D=128)
+
+    assert D_out == 128
+    assert rots_out.shape == (3, 3, 3)
+    assert trans_out.shape == (3, 2)
+    assert np.allclose(trans_out, trans_frac * 128)
+
+
+def test_load_poses_two_file_input(monkeypatch):
+    rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 2, axis=0)
+    trans_frac = np.array([[0.25, 0.75], [0.5, 0.5]], dtype=np.float32)
+
+    def fake_pickle_load(path):
+        if path == "rots.pkl":
+            return rots
+        if path == "trans.pkl":
+            return trans_frac
+        raise AssertionError("unexpected path")
+
+    monkeypatch.setattr(load_utils.utils, "pickle_load", fake_pickle_load)
+    rots_out, trans_out, _ = load_utils.load_poses(["rots.pkl", "trans.pkl"], Nimg=2, D=64)
+    assert np.allclose(rots_out, rots)
+    assert np.allclose(trans_out, trans_frac * 64)
+
+
+def test_load_poses_index_filter_applies_when_input_is_longer(monkeypatch):
+    rots_all = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 5, axis=0)
+    trans_all = np.linspace(0.0, 0.9, 10, dtype=np.float32).reshape(5, 2)
+    ind = np.array([0, 2, 4], dtype=np.int32)
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: (rots_all, trans_all))
+
+    rots_out, trans_out, _ = load_utils.load_poses("poses.pkl", Nimg=3, D=100, ind=ind)
+    assert rots_out.shape == (3, 3, 3)
+    assert trans_out.shape == (3, 2)
+    assert np.allclose(trans_out, trans_all[ind] * 100)
+
+
+def test_load_poses_rejects_old_pixel_translation_format(monkeypatch):
+    rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 2, axis=0)
+    trans_pixels = np.array([[2.0, 3.0], [4.0, 5.0]], dtype=np.float32)
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: (rots, trans_pixels))
+    with pytest.raises(ValueError, match="fractional units"):
+        load_utils.load_poses("poses.pkl", Nimg=2, D=64)
+
+
+def test_load_poses_rejects_bad_shapes(monkeypatch):
+    bad_rots = np.zeros((2, 2, 2), dtype=np.float32)
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: bad_rots)
+    with pytest.raises(ValueError, match="Rotation array has shape"):
+        load_utils.load_poses("poses.pkl", Nimg=2, D=64)
