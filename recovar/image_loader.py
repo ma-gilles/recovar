@@ -116,7 +116,7 @@ class ImageLoader:
         else:
             result = self._load(idx_array)
         
-        return result.astype(self._dtype)
+        return result.astype(self._dtype, copy=False)
     
     def images(self, indices=None, require_contiguous: bool = False) -> np.ndarray:
         """Compatibility alias for get().
@@ -157,6 +157,8 @@ class ImageLoader:
                 if idx < 0 or idx >= self._num_images:
                     raise IndexError(f"Index {idx} out of range [0, {self._num_images})")
                 return np.array([idx])
+            if indices.dtype.kind not in ("i", "u"):
+                raise TypeError(f"Indices array must be integer or bool dtype, got {indices.dtype}")
             if np.any(indices < 0) or np.any(indices >= self._num_images):
                 raise IndexError("Index out of range")
             return indices
@@ -463,4 +465,3 @@ MRCFileSource = MRCLoader
 StarfileSource = StarLoader
 TxtFileSource = MultiMRCLoader
 CsSource = CryoSparcLoader
-

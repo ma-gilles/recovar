@@ -142,7 +142,9 @@ def jax_scipy_nd_image_mean_inner(input, labels=None, index=None):
     sums = sums[idxs]
 
     sums = numpy.where(sums, sums, 0)
-    return sums / counts
+    valid = counts > 0
+    safe_counts = numpy.where(valid, counts, 1)
+    return numpy.where(valid, sums / safe_counts, 0)
 
 
 def sum_over_shells(input_vec, volume_shape, frequency_shift = 0 ):
@@ -366,5 +368,4 @@ prior_iteration_relion_style_batch = jax.vmap(prior_iteration_relion_style, in_a
 #     return fsc
 
 batch_average_over_shells = jax.vmap(average_over_shells, in_axes = (0,None,None))
-
 

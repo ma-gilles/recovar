@@ -101,7 +101,6 @@ def covar_estimate_batch_sparse_U(y, indices, U, noise_variance, regularization 
     covar = unvec(covar)
     return covar
 
-from recovar import core, simulator, mask, utils
 from jax import device_put
 
 @jax.jit
@@ -355,4 +354,3 @@ def simulate_C(U, eigs, indices, noise_variance, volume_shape, decay=1):
     covar += np.random.randn(*covar.shape) * np.sqrt(noise_variance_decay)
     
     return covar
-

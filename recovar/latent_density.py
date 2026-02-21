@@ -236,7 +236,6 @@ def compute_latent_quadratic_forms_in_batch(test_pts, zs, cov_zs):
 
     quads = np.zeros([zs.shape[0], test_pts.shape[0]] )
     n_images = zs.shape[0]
-    utils
     batch_size_x = utils.get_latent_density_batch_size(test_pts, zs.shape[-1], utils.get_gpu_memory_total() ) 
     logger.info(f"batch size in latent computation: {batch_size_x}")
     for k in range(0, utils.get_number_of_index_batch(n_images, batch_size_x)):
@@ -278,7 +277,6 @@ def compute_det_cov_xs(cov_xs):
     vs = compute_log_det_cov(cov_xs)
     # Determinants are exp(vs) now..., but only care about the ratio so:
     # we exp(vs_i) / exp(vs_j) = exp(vs_i - vs_j)
-    print("is this right?!?")
     vs_subs_min = (vs - jnp.max(vs))
     return jnp.exp(vs_subs_min)
 
@@ -327,6 +325,5 @@ def compute_latent_space_density_kde(zs, pca_dim_max = 4, num_points = 50, gauss
     end_time = time.time()
     logger.info(f"latent space computation:, {end_time - st_time}")
     return summed_probs_sq, latent_space_bounds#, grids_flat.reshape(*grids[0].shape, pca_dim_max )
-
 
 

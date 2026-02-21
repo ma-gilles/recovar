@@ -168,7 +168,7 @@ class ParticleImageDataset(Dataset):
         import recovar.padding as pad
         images = pad.padded_dft(images * self.data_multiplier, self.D, self.padding)
         
-        return images.astype(self.dtype)
+        return images.astype(self.dtype, copy=False)
     
     def process_images(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:
         """Compatibility alias for apply_preprocessing."""
@@ -828,4 +828,3 @@ tilt_series_indices_to_image_indices = tilt_series_to_images
 def set_standard_mask(D, dtype):
     """Compatibility wrapper for create_window_mask (dtype ignored)."""
     return create_window_mask(D, inner_radius=0.85, outer_radius=0.99)
-
