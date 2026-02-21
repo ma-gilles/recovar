@@ -1142,9 +1142,10 @@ def summed_batch_kron(X):
 
 @nvtx.annotate("summed_batch_kron_scan", color="gray")
 def summed_batch_kron_scan(X):
+    init = jnp.zeros((X.shape[1] * X.shape[1],), dtype=X.dtype)
     def fori_loop_body(i, val):
         return val + jnp.kron(X[i], X[i])
-    summed_kron = jax.lax.fori_loop(0, X.shape[0], fori_loop_body, 0.)
+    summed_kron = jax.lax.fori_loop(0, X.shape[0], fori_loop_body, init)
     return summed_kron
 
 

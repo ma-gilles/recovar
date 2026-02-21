@@ -38,7 +38,7 @@ def resample_at_uniform_pts2(gt_vols, n_vols_along_path = 6):
     lower_idx = np.clip(lower_idx, 0, distances_between_volumes.size-1)
     upper_idx = np.clip(upper_idx, 0, distances_between_volumes.size-1)
 
-    for k in range(gt_vols.shape[-1]):
+    for k in range(n_vols_along_path):
         lower_x = distances_between_volumes[lower_idx[k]]
         upper_x = distances_between_volumes[upper_idx[k]]
         lower_val = gt_vols[:,lower_idx[k]]

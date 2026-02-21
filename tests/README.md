@@ -26,6 +26,9 @@ This repository uses `pytest` with explicit test tiers to keep validation fast a
   - `./scripts/run_pytests.sh gpu`
 - Full:
   - `./scripts/run_pytests.sh full`
+- Long metrics regression (opt-in, typically 1h+):
+  - `./scripts/run_pytests.sh long-metrics`
+  - Requires env vars described in `scripts/run_long_metrics_regression.sh`
 
 You can always pass extra pytest args, e.g.:
 
@@ -37,4 +40,3 @@ You can always pass extra pytest args, e.g.:
 - Use `integration` marker only when test setup spans multiple modules.
 - Prefer deterministic random seeds and avoid global mutable state.
 - Keep tests small and focused; one behavior per test.
-
