@@ -534,7 +534,8 @@ def get_split_tilt_indices(
 
     # Step 3: Determine which particles to use
     if tilt_ind_file is not None:
-        particle_ind = pickle.load(open(tilt_ind_file, "rb"))
+        with open(tilt_ind_file, "rb") as f:
+            particle_ind = pickle.load(f)
     else:
         particle_ind = np.arange(len(particles_to_tilts))
 
@@ -543,16 +544,21 @@ def get_split_tilt_indices(
 
     # Step 4: Optionally filter by image indices
     if ind_file is not None:
-        ind_images = pickle.load(open(ind_file, "rb"))
+        with open(ind_file, "rb") as f:
+            ind_images = pickle.load(f)
         allowed_image_indices = np.intersect1d(allowed_image_indices, ind_images)
 
     # Step 5: Keep only particles with at least one allowed image
     image_to_particle = np.array([tilts_to_particles[i] for i in allowed_image_indices])
     valid_particles = np.unique(image_to_particle)
+    if valid_particles.size == 0:
+        empty = np.array([], dtype=np.int32)
+        return [empty, empty]
 
     # Step 6: Determine halfset split (by particles)
     if particle_halfset_indices_file is not None:
-        split_particles = pickle.load(open(particle_halfset_indices_file, "rb"))
+        with open(particle_halfset_indices_file, "rb") as f:
+            split_particles = pickle.load(f)
         # If tilt_ind_file is set, intersect with valid_particles
         if tilt_ind_file is not None:
             split_particles = [np.intersect1d(split_particles[0], valid_particles),
@@ -563,6 +569,9 @@ def get_split_tilt_indices(
     # Step 7: For each halfset, get all image indices for those particles, filter by ntilts if needed, and intersect with allowed images
     split_image_indices = []
     for half in split_particles:
+        if len(half) == 0:
+            split_image_indices.append(np.array([], dtype=np.int32))
+            continue
         imgs = np.concatenate([particles_to_tilts[ind] for ind in half])
         if tilt_numbers is not None:
             imgs = imgs[tilt_numbers[imgs] < ntilts]

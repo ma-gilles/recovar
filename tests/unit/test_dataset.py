@@ -412,6 +412,74 @@ def test_get_split_tilt_indices_with_filters(tmp_path, monkeypatch):
     np.testing.assert_array_equal(out[1], np.array([4]))
 
 
+def test_get_split_tilt_indices_with_precomputed_halfsets_handles_empty_half(tmp_path, monkeypatch):
+    class _FakeTiltSeriesData:
+        @staticmethod
+        def parse_particle_tilt(_particles_file):
+            particles_to_tilts = [np.array([0, 1]), np.array([2, 3]), np.array([4, 5])]
+            tilts_to_particles = [0, 0, 1, 1, 2, 2]
+            return particles_to_tilts, tilts_to_particles
+
+    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(
+        dataset.tilt_dataset,
+        "tilt_series_indices_to_image_indices",
+        lambda particle_ind, particles_file: np.concatenate(
+            [[np.array([0, 1]), np.array([2, 3]), np.array([4, 5])][i] for i in particle_ind]
+        ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
+    )
+
+    # Keep only particle 2 through tilt_ind_file, but precomputed halfsets request [0] and [1].
+    # Both halves become empty after intersection with valid particles; should not crash.
+    tilt_ind_file = tmp_path / "tilt_ind.pkl"
+    halfsets_file = tmp_path / "halfsets.pkl"
+    with open(tilt_ind_file, "wb") as f:
+        pickle.dump(np.array([2], dtype=np.int32), f)
+    with open(halfsets_file, "wb") as f:
+        pickle.dump([np.array([0], dtype=np.int32), np.array([1], dtype=np.int32)], f)
+
+    out = dataset.get_split_tilt_indices(
+        particles_file="particles.star",
+        tilt_ind_file=str(tilt_ind_file),
+        particle_halfset_indices_file=str(halfsets_file),
+        datadir=None,
+    )
+    np.testing.assert_array_equal(out[0], np.array([], dtype=np.int32))
+    np.testing.assert_array_equal(out[1], np.array([], dtype=np.int32))
+
+
+def test_get_split_tilt_indices_no_allowed_images_returns_empty_halfsets(tmp_path, monkeypatch):
+    class _FakeTiltSeriesData:
+        @staticmethod
+        def parse_particle_tilt(_particles_file):
+            particles_to_tilts = [np.array([0, 1]), np.array([2, 3])]
+            tilts_to_particles = [0, 0, 1, 1]
+            return particles_to_tilts, tilts_to_particles
+
+    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(
+        dataset.tilt_dataset,
+        "tilt_series_indices_to_image_indices",
+        lambda particle_ind, particles_file: np.concatenate(
+            [[np.array([0, 1]), np.array([2, 3])][i] for i in particle_ind]
+        ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
+    )
+
+    # ind_file excludes every image.
+    ind_file = tmp_path / "ind_none.pkl"
+    with open(ind_file, "wb") as f:
+        pickle.dump(np.array([], dtype=np.int32), f)
+
+    out = dataset.get_split_tilt_indices(
+        particles_file="particles.star",
+        ind_file=str(ind_file),
+        datadir=None,
+    )
+    assert len(out) == 2
+    np.testing.assert_array_equal(out[0], np.array([], dtype=np.int32))
+    np.testing.assert_array_equal(out[1], np.array([], dtype=np.int32))
+
+
 def test_get_split_indices_from_pickle_file_path(tmp_path, monkeypatch):
     ind_file = tmp_path / "ind.pkl"
     with open(ind_file, "wb") as f:

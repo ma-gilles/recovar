@@ -100,6 +100,18 @@ def test_make_big_test_dataset_uses_detected_state_count(monkeypatch, tmp_path):
     assert captured["args"][3] == 25
 
 
+def test_make_big_test_dataset_raises_when_no_input_volumes(monkeypatch, tmp_path):
+    monkeypatch.setattr(rtam.os.path, "isfile", lambda _p: False)
+    monkeypatch.setattr(rtam.output, "mkdir_safe", lambda *_: None)
+    with pytest.raises(ValueError, match="No volumes found for prefix"):
+        rtam.make_big_test_dataset(
+            input_dir="/tmp/nonexistent_prefix_",
+            output_dir=str(tmp_path),
+            n_images=10,
+            grid_size=16,
+        )
+
+
 def test_generate_compact_support_test_volumes_has_high_freq_content(tmp_path):
     prefix = rtam.generate_compact_support_test_volumes(
         output_dir=str(tmp_path),
@@ -166,6 +178,17 @@ def test_resolve_metrics_baseline_path_explicit_wins(tmp_path):
     assert rtam.resolve_metrics_baseline_path(args) == explicit
 
 
+def test_resolve_metrics_baseline_path_returns_none_when_not_generated_and_not_explicit(tmp_path):
+    args = SimpleNamespace(
+        metrics_baseline_json=None,
+        generate_volumes=False,
+        output_dir=str(tmp_path),
+        grid_size=64,
+        generated_n_volumes=10,
+    )
+    assert rtam.resolve_metrics_baseline_path(args) is None
+
+
 def test_normalize_scores_for_json_handles_numpy_scalars_and_arrays():
     inp = {
         "a": np.float32(1.25),
@@ -212,3 +235,57 @@ def test_compare_scores_against_baseline_applies_direction_and_tolerance():
     assert len(failures) == 1
     assert "mean_fsc" in failures[0]
     assert not details["mean_fsc"]["ok"]
+
+
+def test_compare_metric_handles_non_finite_values():
+    ok, msg = rtam.compare_metric(np.nan, 1.0, direction="higher", tol_frac=0.05)
+    assert not ok
+    assert "non-finite values" in msg
+
+    ok, msg = rtam.compare_metric(1.0, np.inf, direction="lower", tol_frac=0.05)
+    assert not ok
+    assert "non-finite values" in msg
+
+
+def test_metric_direction_recognizes_known_tokens_and_defaults_to_ignore():
+    assert rtam.metric_direction("mean_fsc") == "higher"
+    assert rtam.metric_direction("noise_mean_relative_error") == "lower"
+    # Keep backward compatibility for existing typo-ed keys.
+    assert rtam.metric_direction("constrasts_4") == "lower"
+    assert rtam.metric_direction("unclassified_metric_name") == "ignore"
+
+
+def test_compare_scores_against_baseline_skips_non_numeric_values():
+    current = {
+        "mean_fsc": 0.80,
+        "meta_list": [1, 2, 3],   # should be ignored
+        "meta_dict": {"a": 1},    # should be ignored
+    }
+    baseline = {
+        "mean_fsc": 0.79,
+        "meta_list": [1, 2, 3],
+        "meta_dict": {"a": 1},
+    }
+    checked, failures, details = rtam.compare_scores_against_baseline(current, baseline, tol_frac=0.01)
+    assert checked == 1
+    assert failures == []
+    assert sorted(details.keys()) == ["mean_fsc"]
+
+
+def test_compute_noise_variance_metrics_per_tilt_without_dose_indices_returns_empty(tmp_path):
+    gt = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    est = np.array(
+        [
+            [1.0, 2.1, 2.9],
+            [1.2, 2.2, 3.4],
+        ],
+        dtype=np.float64,
+    )
+    scores = rtam.compute_noise_variance_metrics(
+        gt,
+        est,
+        str(tmp_path),
+        _logger(),
+        dose_indices=None,
+    )
+    assert scores == {}

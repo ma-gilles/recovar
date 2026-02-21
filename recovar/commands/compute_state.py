@@ -2,13 +2,12 @@ import recovar.config
 import logging
 import numpy as np
 from recovar import output as o
-from recovar import dataset, utils, latent_density, embedding
-from scipy.spatial import distance_matrix
+from recovar import embedding
 import pickle
 import os, argparse
 logger = logging.getLogger(__name__)
 from recovar import parser_args
-from recovar.utils_core import copy_data_to_temp_folder, cleanup_temp_files, copy_data_from_pipeline_output
+from recovar.utils_core import cleanup_temp_files, copy_data_from_pipeline_output
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -29,6 +28,9 @@ def add_args(parser: argparse.ArgumentParser):
 
 def compute_state(args):
     po = o.PipelineOutput(args.result_dir + '/')
+    zs_all = po.get('zs')
+    cov_zs_all = po.get('cov_zs')
+    contrasts_all = po.get('contrasts')
     
     input_args = po.params.get('input_args') if hasattr(po, "params") else None
     if input_args is not None:
@@ -48,31 +50,39 @@ def compute_state(args):
 
 
     if args.latent_points.endswith('.pkl'):
-        target_zs = pickle.load(open(args.latent_points, 'rb'))
+        with open(args.latent_points, 'rb') as f:
+            target_zs = pickle.load(f)
     elif args.latent_points.endswith('.txt'):
         target_zs = np.loadtxt(args.latent_points)
     else:
         raise ValueError("Target zs should be a .txt or .pkl file")
+    target_zs = np.asarray(target_zs)
 
     output_folder = args.outdir + '/'
 
     if args.zdim1:
+        if target_zs.ndim > 1 and target_zs.shape[-1] != 1:
+            raise ValueError(
+                f"--zdim1 expects scalar/1D latent points or Nx1 arrays; got shape {target_zs.shape}"
+            )
         zdim =1
-        target_zs = np.atleast_1d(target_zs)[:, None]
+        target_zs = np.atleast_1d(target_zs).reshape(-1, 1)
     else:
+        if target_zs.ndim == 0:
+            raise ValueError("Scalar latent point requires --zdim1.")
         zdim = target_zs.shape[-1]
         if target_zs.ndim ==1:
             logger.warning("Did you mean to use --zdim1?")
             target_zs = target_zs[None]
 
-    if zdim not in po.get('zs'):
-        options = ','.join(str(e) for e in po.get('zs').keys())
+    if zdim not in zs_all:
+        options = ','.join(str(e) for e in zs_all.keys())
         raise ValueError(f"zdim {zdim} from provided latent points is not found in embedding results. Options are: {options}")
 
     zdim_key = f"{zdim}_noreg" if args.no_z_regularization else zdim
-    if zdim_key not in po.get('contrasts') or zdim_key not in po.get('cov_zs'):
+    if zdim_key not in zs_all or zdim_key not in contrasts_all or zdim_key not in cov_zs_all:
         raise ValueError(
-            f"Requested embedding key {zdim_key} is missing in pipeline output contrasts/cov_zs."
+            f"Requested embedding key {zdim_key} is missing in pipeline output zs/contrasts/cov_zs."
         )
 
     cryos = po.get('lazy_dataset') if args.lazy else po.get('dataset')
@@ -86,9 +96,9 @@ def compute_state(args):
     #     cryo.premultiplied_ctf = True
     # [ cryo.premultiplied_ctf = False for cryo in cryos ] 
 
-    embedding.set_contrasts_in_cryos(cryos, po.get('contrasts')[zdim_key])
-    zs = po.get('zs')[zdim_key]
-    cov_zs = po.get('cov_zs')[zdim_key]
+    embedding.set_contrasts_in_cryos(cryos, contrasts_all[zdim_key])
+    zs = zs_all[zdim_key]
+    cov_zs = cov_zs_all[zdim_key]
     noise_variance = po.get('noise_var_used')
     n_bins = args.n_bins
     o.mkdir_safe(output_folder)    
