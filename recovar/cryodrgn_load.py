@@ -7,15 +7,11 @@ import logging
 
 # import pickle
 from typing import Optional, Tuple, Union, List
-import logging
 import numpy as np
 # import torch
 # import torch.nn as nn
 # from torch import Tensor
 # from cryodrgn import lie_tools, utils
-
-logger = logging.getLogger(__name__)
-
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,7 @@ import jax.numpy as jnp
 pytest.importorskip("jax")
 
 import recovar.covariance_estimation as cov_est
-from helpers.tiny_synthetic import make_tiny_cryo_dataset
+from helpers.tiny_synthetic import make_tiny_cryo_dataset, make_tiny_cryo_dataset_with_images
 
 pytestmark = pytest.mark.unit
 
@@ -347,3 +347,52 @@ def test_compute_variance_orchestration_with_stubbed_kernels(monkeypatch):
     assert lhs.shape == (vol_size,)
     assert noise_p_variance_est.shape == (vol_size,)
     np.testing.assert_allclose(variance["corrected0"], np.ones(vol_size, dtype=np.float32) * 0.4, atol=1e-6, rtol=1e-6)
+
+
+def test_compute_h_b_runs_on_tiny_image_dataset():
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=6, seed=0)
+    options = cov_est.get_default_covariance_computation_options(grid_size=4)
+    options.update(
+        {
+            "disc_type": "linear_interp",
+            "covariance_fn": "kernel",
+            "left_kernel": "triangular",
+            "right_kernel": "triangular",
+            "right_kernel_width": 1,
+            "mask_images_in_H_B": False,
+        }
+    )
+
+    H, B = cov_est.compute_H_B(
+        experiment_dataset=cryo,
+        mean_estimate=np.zeros(cryo.volume_size, dtype=np.complex64),
+        volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
+        picked_frequency_indices=np.array([0, 1], dtype=np.int32),
+        batch_size=3,
+        diag_prior=np.zeros(cryo.volume_size, dtype=np.float32),
+        options=options,
+    )
+
+    assert H.shape == (cryo.volume_size, 2)
+    assert B.shape == (cryo.volume_size, 2)
+    assert np.isfinite(np.asarray(H)).all()
+
+
+def test_compute_projected_covariance_runs_on_tiny_image_dataset():
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=6, seed=0)
+    basis = np.eye(cryo.volume_size, 4, dtype=np.complex64)
+    covar = cov_est.compute_projected_covariance(
+        experiment_datasets=[cryo],
+        mean_estimate=np.zeros(cryo.volume_size, dtype=np.complex64),
+        basis=basis,
+        volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
+        batch_size=3,
+        disc_type="linear_interp",
+        disc_type_u="linear_interp",
+        parallel_analysis=False,
+        do_mask_images=False,
+    )
+
+    # Full projected-covariance reduction path on real tiny simulated images.
+    assert covar.shape == (4, 4)
+    assert np.asarray(covar).dtype in (np.float32, np.float64)

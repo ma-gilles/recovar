@@ -124,18 +124,23 @@ def gradient_descent_nd(travel_time, x_st, x_end, dx, step_size = 0.25, n_theta 
     def f_lambda(pts):
         return evaluate_function_off_grid(travel_time, pts)#scipy.ndimage.map_coordinates(travel_time, pts.T, order = 1)
     
-    x_grid = np.linspace(-1, 1.01, n_theta)
-    grids = np.meshgrid( *(x_st.shape[0] * [ x_grid]), copy=True, sparse=False, indexing='xy')
-    directions = np.stack( [ g.reshape(-1) for g in grids] , axis =-1) 
-    directions /= np.linalg.norm(directions, axis =-1)[:,None]
-    
+    x_grid = np.linspace(-1.0, 1.0, n_theta, dtype=np.float32)
+    grids = np.meshgrid(*(x_st.shape[0] * [x_grid]), copy=False, sparse=False, indexing="xy")
+    directions = np.stack([g.reshape(-1) for g in grids], axis=-1).astype(np.float32)
+    direction_norms = np.linalg.norm(directions, axis=-1)
+    # Remove zero-norm directions to avoid NaNs and unstable path updates.
+    nonzero = direction_norms > 1e-12
+    directions = directions[nonzero]
+    direction_norms = direction_norms[nonzero]
+    directions /= direction_norms[:, None]
+
+    dx = np.asarray(dx, dtype=np.float32)
     directions /= (dx / np.mean(dx))
     #  
     
     path = [x_end]
     x_cur = x_end
     k = 0 
-    distances = []
     #if within one cell, end.
     while np.linalg.norm(x_cur - x_st) >  np.sqrt(travel_time.ndim):#np.sqrt(travel_time.ndim):#step_size:
 
@@ -145,7 +150,6 @@ def gradient_descent_nd(travel_time, x_st, x_end, dx, step_size = 0.25, n_theta 
         x_cur = x_next[x_cur_idx]
         path.append(x_cur)
         k += 1
-        distances.append(np.linalg.norm(x_cur - x_st))
         
         if k > max_steps:
             cur_path = np.flip(np.stack(path), axis =0)

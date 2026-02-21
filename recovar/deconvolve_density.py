@@ -4,7 +4,6 @@ import jax, jaxopt
 from jaxopt import ScipyBoundedMinimize
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from jax.scipy.stats import norm
 
 def get_raw_density(pipeline_output, zdim = 10, pca_dim_max = 5, percentile_reject = 10, num_points = 50, percentile_bound = 0.1):
 
@@ -55,9 +54,9 @@ def estimate_kernel_by_sampling(grids_inp, cov_zs, gauss_kde_covariance,  num_sa
     grids = jnp.meshgrid(*coord_pca_1D, indexing="ij")
     grids_flat = jnp.transpose(jnp.vstack([jnp.reshape(g, -1) for g in grids])).astype(np.float32) 
 
-    kernel_on_grid =0
-    for k in range(num_samples):
-        idx = np.random.choice(cov_zs.shape[0], 1)[0]
+    kernel_on_grid = jnp.zeros((grids_flat.shape[0],), dtype=jnp.float32)
+    sampled_indices = np.random.randint(0, cov_zs.shape[0], size=num_samples)
+    for idx in sampled_indices:
         covar_data = jnp.linalg.pinv(cov_zs[idx])
         total_covar = covar_data + gauss_kde_covariance
         kernel_on_grid += jax.scipy.stats.multivariate_normal.pdf(grids_flat, np.zeros(total_covar.shape[0]), total_covar)
@@ -92,7 +91,7 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
     elif kernel_option == 'avg_cov':
         kernel_on_grid = compute_kernel_on_grid_nd(grids).astype(np.float32)
     else:
-        NotImplementedError()
+        raise NotImplementedError(f"Unknown kernel_option={kernel_option}")
 
     # kernel_on_grid = kernel #compute_kernel_on_grid_nd(grids).astype(np.float32)
 

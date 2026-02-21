@@ -6,7 +6,7 @@ pytest.importorskip("jax")
 import recovar.principal_components as pc
 import recovar.core as core
 from recovar import dataset
-from helpers.tiny_synthetic import make_tiny_simulation
+from helpers.tiny_synthetic import make_tiny_simulation, make_tiny_cryo_dataset_with_images
 
 pytestmark = pytest.mark.unit
 
@@ -351,3 +351,26 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
     np.testing.assert_array_equal(picked_frequencies, np.array([0, 1]))
     np.testing.assert_array_equal(column_fscs, np.array([0.1, 0.2]))
     assert covariance_cols["est_mask"] is None
+
+
+def test_pca_by_projected_covariance_real_tiny_dataset_runs():
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=6, seed=0)
+    basis = np.eye(cryo.volume_size, 4, dtype=np.complex64)
+
+    u, s = pc.pca_by_projected_covariance(
+        cryos=[cryo],
+        basis=basis,
+        mean=np.zeros(cryo.volume_size, dtype=np.complex64),
+        volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
+        disc_type="linear_interp",
+        disc_type_u="linear_interp",
+        gpu_memory_to_use=8,
+        use_mask=False,
+        parallel_analysis=False,
+        n_pcs_to_compute=2,
+    )
+
+    assert u.shape == (cryo.volume_size, 2)
+    assert s.shape == (2,)
+    assert np.isfinite(s).all()
+    assert np.all(s >= pc.constants.EPSILON)
