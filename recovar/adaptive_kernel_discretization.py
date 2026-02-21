@@ -65,7 +65,7 @@ def find_smaller_pol_indices(max_pol_degree, target_pol_degree):
 
     indices = np.zeros(target_triu_indices.shape[0], dtype = int)
     for k , searchval in enumerate(target_triu_indices):
-        indices[k] = np.where(np.linalg.norm(max_triu_indices - searchval, axis=-1) == 0)[0]
+        indices[k] = int(np.where(np.linalg.norm(max_triu_indices - searchval, axis=-1) == 0)[0][0])
     return indices
 
 def find_diagonal_pol_indices(max_pol_degree):
@@ -75,7 +75,7 @@ def find_diagonal_pol_indices(max_pol_degree):
     diagonal_indices = np.concatenate([np.arange(max_num_pol_params)[...,None],np.arange(max_num_pol_params)[...,None]], axis=-1)
     indices = np.zeros(diagonal_indices.shape[0], dtype = int)
     for k, searchval in enumerate(diagonal_indices):
-        indices[k] = np.where(np.linalg.norm(max_triu_indices - searchval, axis=-1) == 0)[0]
+        indices[k] = int(np.where(np.linalg.norm(max_triu_indices - searchval, axis=-1) == 0)[0][0])
     return indices
 
 undo_keep_upper_triangular = jax.vmap(undo_keep_upper_triangular_one, in_axes = (0), out_axes = 0)
@@ -1763,11 +1763,18 @@ def compute_summed_XWX_F_only(volume_shape, XWX, F, pol_degree, h):
     # NOTE the 1.0x is a weird hack to make sure that JAX doesn't compile store some arrays when compiling. I don't know why it does that.
     threed_frequencies = core.vec_indices_to_vol_indices(np.arange(volume_size), volume_shape ) * 1.0
     
-    XWX_s = np.zeros_like(XWX)[...,None]
-    F_s = np.zeros_like(F)
-
     XWX = jnp.asarray(XWX)
     F = jnp.asarray(F)
+    # compute_summed_XWX_F requires at least 2-D arrays (last dim = gram/feature size).
+    # After callers strip the bin dimension for the single-bin case the arrays can be
+    # 1-D (half_vol_size,); reshape them here so the downstream vmap over the last
+    # axis works correctly.
+    if XWX.ndim == 1:
+        XWX = XWX[..., None]
+    if F.ndim == 1:
+        F = F[..., None]
+    XWX_s = np.zeros_like(XWX)[...,None]
+    F_s = np.zeros_like(F)
     memory_per_pixel = (2*h +1)**3 * big_gram_matrix_size(pol_degree) * 2 * 8 * 4
 
     batch_size = int((utils.get_gpu_memory_total() -  utils.get_size_in_gb(XWX) - utils.get_size_in_gb(F)  )/ (memory_per_pixel   /1e9  )  ) 

@@ -643,7 +643,7 @@ def plot_fsc_new(image1, image2, volume_shape = None, voxel_size=1,  curve = Non
     if threshold is not None:
         score = fsc_score(curve, grid_size, voxel_size, threshold = threshold)
 
-        label = name + " "+ "{:.2f}".format(1 / score)+ "\AA"
+        label = name + " "+ "{:.2f}".format(1 / score)+ "\\AA"
         n_dots_in_line = 20
         ax.plot(np.ones(n_dots_in_line) * score, np.linspace(0,1, n_dots_in_line), "-", color = color, label= label)
         ax.plot(freq, threshold * np.ones(freq.size), "k--")

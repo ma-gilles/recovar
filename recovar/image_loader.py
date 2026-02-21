@@ -8,7 +8,37 @@ import pandas as pd
 from typing import Optional, Union, List, Tuple, Iterator
 from concurrent.futures import ThreadPoolExecutor
 import logging
-import nvtx
+try:
+    import nvtx
+    _NVTX_AVAILABLE = True
+except ImportError:
+    import contextlib
+
+    class _NvtxStub:
+        """No-op stub used when nvtx is not installed."""
+
+        @staticmethod
+        def annotate(msg="", color=None, domain=None):
+            """Works as both a decorator and a context manager."""
+            import functools
+
+            class _NoOp:
+                def __call__(self, fn):
+                    @functools.wraps(fn)
+                    def wrapper(*args, **kwargs):
+                        return fn(*args, **kwargs)
+                    return wrapper
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *exc):
+                    return False
+
+            return _NoOp()
+
+    nvtx = _NvtxStub()
+    _NVTX_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
