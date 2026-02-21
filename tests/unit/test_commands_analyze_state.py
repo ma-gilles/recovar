@@ -224,6 +224,99 @@ def test_compute_state_rejects_unknown_latent_extension(monkeypatch, tmp_path):
         compute_state_cmd.compute_state(args)
 
 
+def test_compute_state_rejects_missing_zdim_with_clear_error(monkeypatch, tmp_path):
+    latent_points = np.array([[0.0, 1.0], [2.0, 3.0]], dtype=np.float32)  # zdim=2
+    latent_path = tmp_path / "latent.txt"
+    np.savetxt(latent_path, latent_points)
+
+    payload = {
+        "zs": {1: np.zeros((4, 1), dtype=np.float32)},
+        "cov_zs": {1: np.zeros((4, 1, 1), dtype=np.float32)},
+        "contrasts": {1: np.ones(4, dtype=np.float32)},
+        "dataset": ["d0"],
+        "lazy_dataset": ["ld0"],
+        "noise_var_used": np.ones(4, dtype=np.float32),
+        "input_args": SimpleNamespace(particles="p", datadir=None, strip_prefix=None),
+    }
+    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _fake_pipeline_output(payload))
+
+    args = SimpleNamespace(
+        result_dir=str(tmp_path / "pipeline_out"),
+        particles=None,
+        datadir=None,
+        strip_prefix=None,
+        copy_to_folder=None,
+        no_cleanup=False,
+        latent_points=str(latent_path),
+        outdir=str(tmp_path / "state_out"),
+        zdim1=False,
+        no_z_regularization=False,
+        lazy=True,
+        n_bins=20,
+        Bfactor=0.0,
+        maskrad_fraction=0.5,
+        n_min_particles=1,
+        save_all_estimates=False,
+        apply_global_filtering=False,
+        fsc_mask_radius=None,
+        fsc_mask_edgewidth=None,
+    )
+    with pytest.raises(ValueError, match="zdim 2 .* not found"):
+        compute_state_cmd.compute_state(args)
+
+
+def test_compute_state_missing_input_args_ignores_overrides(monkeypatch, tmp_path):
+    latent_points = np.array([[0.0], [1.0]], dtype=np.float32)
+    latent_path = tmp_path / "latent.txt"
+    np.savetxt(latent_path, latent_points)
+
+    class _PO:
+        def __init__(self, _path):
+            self.params = {}  # missing input_args
+            self._payload = {
+                "zs": {1: np.zeros((3, 1), dtype=np.float32)},
+                "cov_zs": {1: np.zeros((3, 1, 1), dtype=np.float32)},
+                "contrasts": {1: np.ones(3, dtype=np.float32)},
+                "dataset": ["d0"],
+                "lazy_dataset": ["ld0"],
+                "noise_var_used": np.ones(4, dtype=np.float32),
+                "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
+            }
+
+        def get(self, key):
+            return self._payload[key]
+
+    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _PO)
+    monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(compute_state_cmd.o, "compute_and_save_reweighted", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
+    args = SimpleNamespace(
+        result_dir=str(tmp_path / "pipeline_out"),
+        particles="override_particles",
+        datadir="override_datadir",
+        strip_prefix="override_prefix",
+        copy_to_folder=None,
+        no_cleanup=False,
+        latent_points=str(latent_path),
+        outdir=str(tmp_path / "state_out"),
+        zdim1=True,
+        no_z_regularization=False,
+        lazy=True,
+        n_bins=20,
+        Bfactor=0.0,
+        maskrad_fraction=0.5,
+        n_min_particles=1,
+        save_all_estimates=False,
+        apply_global_filtering=False,
+        fsc_mask_radius=None,
+        fsc_mask_edgewidth=None,
+    )
+    # Should run without KeyError even though params['input_args'] is missing.
+    compute_state_cmd.compute_state(args)
+
+
 def test_compute_state_main_dispatches(monkeypatch, tmp_path):
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -359,6 +452,98 @@ def test_compute_state_copy_to_folder_triggers_cleanup_unless_no_cleanup(monkeyp
     args.no_cleanup = True
     compute_state_cmd.compute_state(args)
     assert cleaned["count"] == 1
+
+
+def test_compute_state_zdim1_handles_scalar_txt_latent_point(monkeypatch, tmp_path):
+    latent_path = tmp_path / "latent_scalar.txt"
+    latent_path.write_text("0.75\n")
+
+    payload = {
+        "zs": {1: np.zeros((3, 1), dtype=np.float32)},
+        "cov_zs": {1: np.zeros((3, 1, 1), dtype=np.float32)},
+        "contrasts": {1: np.ones(3, dtype=np.float32)},
+        "dataset": ["d0"],
+        "lazy_dataset": ["ld0"],
+        "noise_var_used": np.ones(4, dtype=np.float32),
+        "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
+    }
+    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _fake_pipeline_output(payload))
+    monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
+
+    captured = {}
+    monkeypatch.setattr(
+        compute_state_cmd.o,
+        "compute_and_save_reweighted",
+        lambda cryos, target_zs, *_args, **_kwargs: captured.setdefault("shape", target_zs.shape),
+    )
+    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
+    args = SimpleNamespace(
+        result_dir=str(tmp_path / "pipeline_out"),
+        particles=None,
+        datadir=None,
+        strip_prefix=None,
+        copy_to_folder=None,
+        no_cleanup=False,
+        latent_points=str(latent_path),
+        outdir=str(tmp_path / "state_out"),
+        zdim1=True,
+        no_z_regularization=False,
+        lazy=False,
+        n_bins=20,
+        Bfactor=0.0,
+        maskrad_fraction=0.5,
+        n_min_particles=1,
+        save_all_estimates=False,
+        apply_global_filtering=False,
+        fsc_mask_radius=None,
+        fsc_mask_edgewidth=None,
+    )
+    compute_state_cmd.compute_state(args)
+    assert captured["shape"] == (1, 1)
+
+
+def test_compute_state_rejects_missing_contrasts_or_cov_zs_key(monkeypatch, tmp_path):
+    latent_points = np.array([[0.0, 1.0], [1.0, 2.0]], dtype=np.float32)
+    latent_path = tmp_path / "latent.txt"
+    np.savetxt(latent_path, latent_points)
+
+    payload = {
+        "zs": {2: np.zeros((3, 2), dtype=np.float32)},
+        "cov_zs": {2: np.zeros((3, 2, 2), dtype=np.float32)},
+        # Missing 2_noreg key on purpose.
+        "contrasts": {2: np.ones(3, dtype=np.float32)},
+        "dataset": ["d0"],
+        "lazy_dataset": ["ld0"],
+        "noise_var_used": np.ones(4, dtype=np.float32),
+        "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
+    }
+    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _fake_pipeline_output(payload))
+
+    args = SimpleNamespace(
+        result_dir=str(tmp_path / "pipeline_out"),
+        particles=None,
+        datadir=None,
+        strip_prefix=None,
+        copy_to_folder=None,
+        no_cleanup=False,
+        latent_points=str(latent_path),
+        outdir=str(tmp_path / "state_out"),
+        zdim1=False,
+        no_z_regularization=True,  # requests 2_noreg
+        lazy=False,
+        n_bins=20,
+        Bfactor=0.0,
+        maskrad_fraction=0.5,
+        n_min_particles=1,
+        save_all_estimates=False,
+        apply_global_filtering=False,
+        fsc_mask_radius=None,
+        fsc_mask_edgewidth=None,
+    )
+    with pytest.raises(ValueError, match="Requested embedding key 2_noreg is missing"):
+        compute_state_cmd.compute_state(args)
 
 
 def test_analyze_main_dispatches(monkeypatch, tmp_path):

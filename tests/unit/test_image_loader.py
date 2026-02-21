@@ -125,6 +125,30 @@ def test_multi_mrc_loader_indices_filtering_preserves_order(tmp_path):
     np.testing.assert_allclose(out[2], b[0])
 
 
+def test_multi_mrc_loader_get_with_duplicate_indices(tmp_path):
+    a = np.arange(3 * 4 * 4, dtype=np.float32).reshape(3, 4, 4)
+    b = (100 + np.arange(2 * 4 * 4, dtype=np.float32)).reshape(2, 4, 4)
+    a_path = tmp_path / "a.mrcs"
+    b_path = tmp_path / "b.mrcs"
+    utils.write_mrc(str(a_path), a)
+    utils.write_mrc(str(b_path), b)
+
+    df = pd.DataFrame(
+        {
+            "mrc_file": [str(a_path), str(a_path), str(a_path), str(b_path), str(b_path)],
+            "mrc_index": [0, 1, 2, 0, 1],
+        }
+    )
+    loader = image_loader.MultiMRCLoader(df, lazy=True, max_threads=2)
+    req = np.array([4, 1, 4, 0], dtype=np.int32)
+    out = loader.get(req)
+    assert out.shape == (4, 4, 4)
+    np.testing.assert_allclose(out[0], b[1])
+    np.testing.assert_allclose(out[1], a[1])
+    np.testing.assert_allclose(out[2], b[1])  # duplicate preserved
+    np.testing.assert_allclose(out[3], a[0])
+
+
 def test_star_loader_and_strip_prefix(tmp_path):
     data = np.arange(3 * 4 * 4, dtype=np.float32).reshape(3, 4, 4)
     rel_dir = tmp_path / "rel"

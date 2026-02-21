@@ -111,6 +111,20 @@ def test_tilt_series_to_images_with_subset(monkeypatch):
     assert np.all(out == np.array([1, 4]))
 
 
+def test_tilt_series_to_images_empty_and_duplicate_particle_indices(monkeypatch):
+    monkeypatch.setattr(
+        cryo_dataset.TiltSeriesDataset,
+        "parse_particle_tilt",
+        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0}),
+    )
+    empty = cryo_dataset.tilt_series_to_images(np.array([], dtype=np.int32), "dummy.star")
+    assert empty.shape == (0,)
+    assert empty.dtype == np.int32
+
+    dup = cryo_dataset.tilt_series_to_images(np.array([1, 1], dtype=np.int32), "dummy.star")
+    np.testing.assert_array_equal(dup, np.array([2, 3, 2, 3]))
+
+
 def test_image_count_batch_loader_batches_and_padding():
     class _FakeTiltDataset:
         def __init__(self):
@@ -212,6 +226,68 @@ def test_tiltseries_dataset_getitem_deterministic_selection(monkeypatch):
     np.testing.assert_array_equal(selected, np.array([0, 2]))
 
 
+def test_tiltseries_dataset_getitem_deterministic_selection_warp(monkeypatch):
+    class _Source:
+        def __init__(self):
+            self.n = 4
+            self.D = 8
+            self._store = np.arange(self.n * self.D * self.D, dtype=np.float32).reshape(self.n, self.D, self.D)
+
+        def images(self, index, require_contiguous=False):
+            _ = require_contiguous
+            if isinstance(index, (int, np.integer)):
+                return self._store[int(index)]
+            return self._store[np.asarray(index)]
+
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["g1", "g1", "g1", "g2"],
+            "_rlnMicrographPreExposure": [1.0, 2.0, 3.0, 4.0],
+            "_rlnCtfScalefactor": [1, 1, 1, 1],
+            "_rlnCtfBfactor": [-5.0, -1.0, -3.0, -2.0],
+        }
+    )
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+
+    ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=2, random_tilts=False, tilt_file_option="warp")
+    _imgs, pidx, selected = ds[0]
+    assert pidx == 0
+    # Stable expectation from current B-factor ordering implementation.
+    np.testing.assert_array_equal(selected, np.array([1, 2]))
+
+
+def test_tiltseries_get_tilt_returns_single_image_tuple(monkeypatch):
+    class _Source:
+        def __init__(self):
+            self.n = 3
+            self.D = 8
+            self._store = np.arange(self.n * self.D * self.D, dtype=np.float32).reshape(self.n, self.D, self.D)
+
+        def images(self, index, require_contiguous=False):
+            _ = require_contiguous
+            if isinstance(index, (int, np.integer)):
+                return self._store[int(index)]
+            return self._store[np.asarray(index)]
+
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["g1", "g1", "g2"],
+            "_rlnMicrographPreExposure": [1.0, 2.0, 3.0],
+            "_rlnCtfScalefactor": [1, 1, 1],
+            "_rlnCtfBfactor": [-1.0, -2.0, -3.0],
+        }
+    )
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+    ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=None, random_tilts=False, tilt_file_option="relion5")
+
+    img, pidx, tidx = ds.get_tilt(2)
+    assert img.shape == (1, 8, 8)
+    assert pidx == 2
+    assert tidx == 2
+
+
 def test_tiltseries_dataset_images_mode_batch_size_validation(monkeypatch):
     class _Source:
         def __init__(self):
@@ -240,6 +316,36 @@ def test_tiltseries_dataset_images_mode_batch_size_validation(monkeypatch):
     # max tilts per particle is 3; batch_size=2 should fail in images mode.
     with pytest.raises(ValueError, match="Batch size"):
         ds.get_dataset_generator(batch_size=2, mode="images")
+
+
+def test_tiltseries_subset_generator_images_mode_batch_size_validation(monkeypatch):
+    class _Source:
+        def __init__(self):
+            self.n = 5
+            self.D = 8
+            self._store = np.zeros((self.n, self.D, self.D), dtype=np.float32)
+
+        def images(self, index, require_contiguous=False):
+            _ = require_contiguous
+            if isinstance(index, (int, np.integer)):
+                return self._store[int(index)]
+            return self._store[np.asarray(index)]
+
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["g1", "g1", "g1", "g2", "g2"],
+            "_rlnMicrographPreExposure": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "_rlnCtfScalefactor": [1, 1, 1, 1, 1],
+            "_rlnCtfBfactor": [-1, -1, -1, -1, -1],
+        }
+    )
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+
+    ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=None, random_tilts=False, tilt_file_option="relion5")
+    # Subset includes particle g1 with 3 tilts; batch_size=2 should fail for images mode.
+    with pytest.raises(ValueError, match="Batch size"):
+        ds.get_dataset_subset_generator(batch_size=2, subset_indices=np.array([0], dtype=np.int32), mode="images")
 
 
 def test_simple_dataloader_forces_batch_size_one(monkeypatch):
