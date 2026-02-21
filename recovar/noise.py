@@ -55,6 +55,29 @@ class VariableRadialNoiseModel():
     def set_variance(self, noise_variance_radials):
         self.noise_variance_radials = noise_variance_radials
 
+
+def to_batched_pixel_noise(noise_variances, image_shape, batch_size=None):
+    """Normalize noise variance into shape (B, D*D).
+
+    Accepts common forms used in the codebase:
+    - (D, D)
+    - (1, D, D) or (B, D, D)
+    - (D*D,)
+    - (1, D*D) or (B, D*D)
+    """
+    arr = jnp.asarray(noise_variances)
+
+    if arr.ndim == 3:
+        arr = arr.reshape(arr.shape[0], -1)
+    elif arr.ndim == 2 and tuple(arr.shape) == tuple(image_shape):
+        arr = arr.reshape(1, -1)
+    elif arr.ndim == 1:
+        arr = arr.reshape(1, -1)
+
+    if batch_size is not None and arr.ndim == 2 and arr.shape[0] == 1 and batch_size > 1:
+        arr = jnp.repeat(arr, batch_size, axis=0)
+    return arr
+
 @functools.partial(jax.jit, static_argnums=(3,4,6))
 def get_image_masks(volume_mask, rotation_matrices, volume_mask_threshold, volume_shape, image_shape, image_mask, invert_mask):
     if volume_mask is not None:

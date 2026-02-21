@@ -44,8 +44,8 @@ def decide_subvolume_index_from_mask(mask, sampling_points):
     # Load the mask
     center_of_mass_mask = center_of_mass(mask)
     # Find the nearest point in the sampling points to the center of mass
-    nearest_point_index = nearest_point_index(center_of_mass_mask, sampling_points)
-    return nearest_point_index
+    nearest_idx = nearest_point_index(center_of_mass_mask, sampling_points)
+    return nearest_idx
 
 
 

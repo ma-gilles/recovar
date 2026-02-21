@@ -178,3 +178,38 @@ def test_make_volumes_kernel_estimate_local_smoke(tmp_path):
         locres_sampling=2,
         kernel_rad=1,
     )
+
+
+def test_choice_most_likely_split_with_smoothing_runs():
+    rng = np.random.default_rng(1)
+    shape = (8, 8, 8)
+    n_estimators = 3
+
+    estimates0 = rng.normal(size=(n_estimators, *shape)).astype(np.float32)
+    estimates1 = rng.normal(size=(n_estimators, *shape)).astype(np.float32)
+    target0 = rng.normal(size=shape).astype(np.float32)
+    target1 = rng.normal(size=shape).astype(np.float32)
+    noise0 = np.ones(shape, dtype=np.float32)
+    noise1 = np.ones(shape, dtype=np.float32)
+
+    choice, errors = hv.choice_most_likely_split(
+        estimates0=estimates0,
+        estimates1=estimates1,
+        target0=target0,
+        target1=target1,
+        noise_variances_target0=noise0,
+        noise_variances_target1=noise1,
+        voxel_size=1.5,
+        locres_sampling=2,
+        locres_maskrad=None,
+        locres_edgwidth=None,
+        smooth_error=True,
+    )
+
+    choice = np.asarray(choice)
+    errors = np.asarray(errors)
+    assert choice.ndim == 2
+    assert errors.shape[0] == n_estimators
+    assert np.isfinite(errors).all()
+    assert np.all(choice >= 0)
+    assert np.all(choice < n_estimators)

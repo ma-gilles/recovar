@@ -1,0 +1,116 @@
+import numpy as np
+import pytest
+
+pytest.importorskip("jax")
+pytest.importorskip("torch")
+
+from helpers import tiny_synthetic
+from recovar import dataset, core
+
+pytestmark = pytest.mark.unit
+
+
+def test_load_cryodrgn_dataset_tiny_spa_files(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
+    ind = np.array([1, 4], dtype=np.int32)
+
+    cryo = dataset.load_cryodrgn_dataset(
+        particles_file=files["particles_mrcs"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=str(tmp_path),
+        ind=ind,
+        lazy=True,
+        tilt_series=False,
+        tilt_series_ctf="cryoem",
+    )
+
+    assert cryo.tilt_series_flag is False
+    assert cryo.n_images == ind.size
+    assert cryo.n_units == ind.size
+    np.testing.assert_array_equal(cryo.dataset_indices, ind)
+    assert cryo.CTF_params.shape[0] == ind.size
+    assert cryo.CTF_fun_inp is core.evaluate_ctf_wrapper
+
+
+def test_load_cryodrgn_dataset_tiny_tilt_series_files_and_subset_generators(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
+    cryo = dataset.load_cryodrgn_dataset(
+        particles_file=files["particles_star"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=str(tmp_path),
+        lazy=True,
+        tilt_series=True,
+        tilt_series_ctf="relion5",
+    )
+
+    assert cryo.tilt_series_flag is True
+    assert cryo.n_images == files["n_images"]
+    assert cryo.n_units == 3  # number of particle groups in fixture
+    assert cryo.CTF_fun_inp is core.evaluate_ctf_wrapper_tilt_series_v2
+
+    # Particle-subset generator should preserve requested particle order.
+    subset_particles = np.array([2, 0], dtype=np.int32)
+    batches = list(cryo.get_dataset_subset_generator(batch_size=8, subset_indices=subset_particles, mode="tilt_series"))
+    got_particles = [int(np.array(b[1]).reshape(-1)[0]) for b in batches]
+    assert got_particles == subset_particles.tolist()
+
+    # Image-subset generator should only emit requested image indices, in order.
+    subset_images = np.array([5, 1, 4], dtype=np.int32)
+    image_batches = list(cryo.get_image_subset_generator(batch_size=2, subset_indices=subset_images))
+    got_images = []
+    for b in image_batches:
+        got_images.extend(np.array(b[2]).reshape(-1).tolist())
+    assert got_images == subset_images.tolist()
+
+
+def test_tiny_tilt_get_split_tilt_indices_with_particle_subset_file(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
+    # Keep only particle ids 0 and 2.
+    tilt_ind_file = tmp_path / "tilt_ind.pkl"
+    import pickle
+    with open(tilt_ind_file, "wb") as f:
+        pickle.dump(np.array([0, 2], dtype=np.int32), f)
+
+    split = dataset.get_split_tilt_indices(
+        particles_file=files["particles_star"],
+        tilt_ind_file=str(tilt_ind_file),
+        datadir=str(tmp_path),
+    )
+    assert len(split) == 2
+    merged = np.sort(np.concatenate(split))
+    # With 3 particles and cyclic assignment over 6 images:
+    # g1 -> [0,3], g2 -> [1,4], g3 -> [2,5]. Keeping g1 and g3 gives [0,2,3,5].
+    np.testing.assert_array_equal(merged, np.array([0, 2, 3, 5], dtype=np.int32))
+    assert np.intersect1d(split[0], split[1]).size == 0
+
+
+def test_tiny_tilt_figure_out_halfsets_respects_ind_intersection(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
+    import pickle
+    halfsets_path = tmp_path / "halfsets.pkl"
+    ind_path = tmp_path / "ind.pkl"
+    with open(halfsets_path, "wb") as f:
+        pickle.dump([np.array([0, 1, 2]), np.array([3, 4, 5])], f)
+    with open(ind_path, "wb") as f:
+        pickle.dump(np.array([1, 4, 5], dtype=np.int32), f)
+
+    class _Args:
+        pass
+
+    args = _Args()
+    args.halfsets = str(halfsets_path)
+    args.tilt_series = False
+    args.tilt_series_ctf = "cryoem"
+    args.particles = files["particles_star"]
+    args.ind = str(ind_path)
+    args.tilt_ind = None
+    args.ntilts = None
+    args.datadir = str(tmp_path)
+    args.strip_prefix = None
+    args.n_images = -1
+
+    hs = dataset.figure_out_halfsets(args)
+    np.testing.assert_array_equal(hs[0], np.array([1], dtype=np.int32))
+    np.testing.assert_array_equal(hs[1], np.array([4, 5], dtype=np.int32))

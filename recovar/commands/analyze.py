@@ -90,6 +90,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         zdim = list(po.get('zs').keys())[0]
         logger.info(f"using zdim={zdim}")
     zdim_key = f"{zdim}_noreg" if no_z_reg else zdim
+    contrast_key = zdim_key
 
     if output_folder is None:
         output_folder = recovar_result_dir + f'/analysis_{zdim_key}/' 
@@ -106,7 +107,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         cryos = po.get('lazy_dataset')
     else:
         cryos = po.get('dataset')
-    embedding.set_contrasts_in_cryos(cryos, po.get('contrasts')[zdim_key])
+    embedding.set_contrasts_in_cryos(cryos, po.get('contrasts')[contrast_key])
 
     # Get the mask from pipeline output for FSC filtering
     fsc_mask = None
@@ -152,7 +153,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
     import matplotlib.pyplot as plt
     plt.figure(figsize = (10,10))
-    plt.hist(po.get('contrasts')[zdim_key],bins =50)
+    plt.hist(po.get('contrasts')[contrast_key],bins =50)
     plt.xlabel('Contrast')
     plt.ylabel('Number of particles')
     plt.savefig(output_folder_kmeans + 'contrast_histogram.png')

@@ -4,6 +4,8 @@ import pytest
 pytest.importorskip("jax")
 
 from recovar import load_utils
+from helpers import tiny_synthetic
+from recovar import utils
 
 pytestmark = pytest.mark.unit
 
@@ -93,3 +95,35 @@ def test_load_poses_rejects_bad_shapes(monkeypatch):
     monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: bad_rots)
     with pytest.raises(ValueError, match="Rotation array has shape"):
         load_utils.load_poses("poses.pkl", Nimg=2, D=64)
+
+
+def test_load_ctf_params_from_tiny_file_roundtrip(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=5, n_particles=2)
+    out = load_utils.load_ctf_params(D=8, ctf_params_pkl=files["ctf_pkl"])
+    assert out.shape == (5, 8)
+    # Column 0 in return is Apix and should stay 1.5 when D is unchanged.
+    assert np.allclose(out[:, 0], 1.5)
+    assert np.allclose(out[:, 4], 300.0)  # voltage
+
+
+def test_load_poses_from_tiny_file_roundtrip(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
+    rots, trans, D_out = load_utils.load_poses(files["poses_pkl"], Nimg=6, D=8)
+    assert D_out == 8
+    assert rots.shape == (6, 3, 3)
+    assert trans.shape == (6, 2)
+    # tiny helper writes zero fractional shifts; conversion to pixels keeps zeros.
+    np.testing.assert_array_equal(trans, np.zeros((6, 2), dtype=np.float32))
+
+
+def test_load_poses_two_file_real_pickles(tmp_path):
+    rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 4, axis=0)
+    trans_frac = np.array([[0.0, 0.0], [0.25, 0.5], [0.5, 0.25], [1.0, 1.0]], dtype=np.float32)
+    rots_pkl = tmp_path / "rots.pkl"
+    trans_pkl = tmp_path / "trans.pkl"
+    utils.pickle_dump(rots, str(rots_pkl))
+    utils.pickle_dump(trans_frac, str(trans_pkl))
+    rots_out, trans_out, D_out = load_utils.load_poses([str(rots_pkl), str(trans_pkl)], Nimg=4, D=10)
+    assert D_out == 10
+    np.testing.assert_array_equal(rots_out, rots)
+    np.testing.assert_allclose(trans_out, trans_frac * 10.0)

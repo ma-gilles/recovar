@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from pathlib import Path
 
 pytest.importorskip("jax")
 
@@ -35,3 +36,10 @@ def test_make_tiny_simulation_and_hvd_end_to_end():
     assert hvd.volumes.shape == vols.shape
     assert sim_info2["image_assignment"].shape[0] == 6
     assert np.isfinite(hvd.get_mean()).all()
+
+
+def test_make_tiny_loader_files(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
+    assert set(["particles_mrcs", "particles_star", "poses_pkl", "ctf_pkl"]).issubset(files.keys())
+    for key in ["particles_mrcs", "particles_star", "poses_pkl", "ctf_pkl"]:
+        assert (tmp_path / Path(files[key]).name).exists()

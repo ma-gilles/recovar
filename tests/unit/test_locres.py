@@ -40,3 +40,35 @@ def test_sampling_points_and_volume_shapes():
     vol = locres.make_sampling_volume(grid_size=16, locres_sampling=4, voxel_size=1.0, locres_maskrad=4)
     assert vol.shape == (16, 16, 16)
     assert np.isfinite(vol).all()
+
+
+def test_sampling_helpers_accept_none_maskrad_defaults():
+    sp = np.asarray(locres.get_sampling_points(grid_size=8, locres_sampling=2, locres_maskrad=None, voxel_size=1.5))
+    assert sp.ndim == 2 and sp.shape[1] == 3
+    assert sp.shape[0] > 0
+
+    vol = np.asarray(locres.make_sampling_volume(grid_size=8, locres_sampling=2, voxel_size=1.5, locres_maskrad=None))
+    assert vol.shape == (8, 8, 8)
+    assert np.isfinite(vol).all()
+
+
+def test_expensive_local_error_with_cov_accepts_none_defaults():
+    rng = np.random.default_rng(0)
+    map1 = rng.normal(size=(8, 8, 8)).astype(np.float32)
+    map2 = rng.normal(size=(8, 8, 8)).astype(np.float32)
+    noise_variance = np.ones((8, 8, 8), dtype=np.float32)
+
+    out = locres.expensive_local_error_with_cov(
+        map1=map1,
+        map2=map2,
+        voxel_size=1.5,
+        noise_variance=noise_variance,
+        locres_sampling=2,
+        locres_maskrad=None,
+        locres_edgwidth=None,
+        use_v2=True,
+        split_shell=False,
+    )
+    out = np.asarray(out)
+    assert out.shape == map1.shape
+    assert np.isfinite(out).all()

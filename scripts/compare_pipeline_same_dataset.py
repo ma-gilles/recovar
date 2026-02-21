@@ -38,6 +38,7 @@ def run_recovar_command(
     python_bin: str,
     subcommand: str,
     args: list[str],
+    output_base: Path,
 ) -> None:
     env = os.environ.copy()
     # Force imports to resolve from the target repo root.
@@ -53,10 +54,39 @@ def run_recovar_command(
         """
     ).strip()
     print(f"[{label}] provenance probe")
-    subprocess.run([python_bin, "-c", probe], check=True, env=env, cwd=str(repo_root))
+    probe_out = subprocess.check_output([python_bin, "-c", probe], env=env, cwd=str(repo_root), text=True)
+    print(probe_out, end="")
+    prov_path = output_base / "provenance.txt"
+    with prov_path.open("a") as f:
+        f.write(f"[{label}]\n")
+        f.write(probe_out)
+        if not probe_out.endswith("\n"):
+            f.write("\n")
     cmd = [python_bin, "-m", "recovar.command_line", subcommand, *args]
     print(f"[{label}] {' '.join(shlex.quote(x) for x in cmd)}")
     subprocess.run(cmd, check=True, env=env, cwd=str(repo_root))
+
+
+def sanitize_pipeline_extra_args(pipe_extra: list[str]) -> list[str]:
+    """Drop unsafe low-memory settings that force tiny PC counts in old codepaths."""
+    out: list[str] = []
+    i = 0
+    removed_very_low = False
+    while i < len(pipe_extra):
+        tok = pipe_extra[i]
+        if tok == "--very-low-memory-option":
+            removed_very_low = True
+            i += 1
+            continue
+        out.append(tok)
+        i += 1
+
+    if removed_very_low:
+        print(
+            "[sanitize] Removed '--very-low-memory-option' from pipeline-extra-args "
+            "to avoid 30-PC mode in older checkouts."
+        )
+    return out
 
 
 def main() -> None:
@@ -130,7 +160,7 @@ def main() -> None:
         "-o",
         "",  # placeholder
     ]
-    pipe_extra = shlex.split(args.pipeline_extra_args)
+    pipe_extra = sanitize_pipeline_extra_args(shlex.split(args.pipeline_extra_args))
 
     cur_args = base_pipe_args.copy()
     cur_args[6] = str(cur_pipe)
@@ -141,6 +171,7 @@ def main() -> None:
         python_bin=args.python_bin,
         subcommand="pipeline",
         args=cur_args,
+        output_base=output_base,
     )
 
     oth_args = base_pipe_args.copy()
@@ -152,6 +183,7 @@ def main() -> None:
         python_bin=args.python_bin,
         subcommand="pipeline",
         args=oth_args,
+        output_base=output_base,
     )
 
     if args.run_compute_state:
@@ -173,6 +205,7 @@ def main() -> None:
             python_bin=args.python_bin,
             subcommand="compute_state",
             args=cur_cs_args,
+            output_base=output_base,
         )
         run_recovar_command(
             label="other:compute_state",
@@ -180,6 +213,7 @@ def main() -> None:
             python_bin=args.python_bin,
             subcommand="compute_state",
             args=oth_cs_args,
+            output_base=output_base,
         )
 
     print(f"Done. Output base: {output_base}")

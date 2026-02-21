@@ -1,5 +1,5 @@
 import numpy as np
-from recovar import core
+from recovar import core, noise
 from recovar import regularization, constants, utils, padding, mask
 import recovar.fourier_transform_utils as fourier_transform_utils
 import jax.numpy as jnp
@@ -92,6 +92,7 @@ def relion_style_triangular_kernel(experiment_dataset , cov_noise,  batch_size =
 
 @functools.partial(jax.jit, static_argnums=[4,5,6,7,8,10,11])#, static_argnames=('premultiplied_ctf'))
 def relion_style_triangular_kernel_batch(images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, noise_variances, premultiplied_ctf, use_upsampled_ctf  ):
+    noise_variances = noise.to_batched_pixel_noise(noise_variances, image_shape, batch_size=images.shape[0])
     
     images = core.translate_images(images, translations, image_shape) / noise_variances
     Ft_y = core.adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf=premultiplied_ctf) 
@@ -395,5 +396,3 @@ def relion_reconstruct(cryo, noise_variance, batch_size = 100, disc_type = 'line
     cryo.update_volume_upsampling_factor(og_upsampling)
 
     return estimate, Ft_ctf
-
-

@@ -69,3 +69,15 @@ def test_main_commands_requires_module_main(monkeypatch, capsys):
         command_line.main_commands()
     assert exc.value.code == 1
     assert "does not define a main() function" in capsys.readouterr().out
+
+
+def test_main_commands_ignores_non_python_files(monkeypatch, capsys):
+    monkeypatch.setattr(command_line.os, "listdir", lambda _: ["foo.py", "README.md", "bar.txt", "__init__.py"])
+    monkeypatch.setattr(command_line.sys, "argv", ["recovar"])
+
+    with pytest.raises(SystemExit):
+        command_line.main_commands()
+    out = capsys.readouterr().out
+    assert "foo" in out
+    assert "README" not in out
+    assert "bar.txt" not in out
