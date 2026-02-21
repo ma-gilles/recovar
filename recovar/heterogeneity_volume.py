@@ -6,10 +6,37 @@ import jax.numpy as jnp
 import jax.scipy
 from recovar import locres, utils
 from recovar import adaptive_kernel_discretization
+import recovar.latent_density
 import logging
 import recovar.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
-import nvtx
+try:
+    import nvtx
+except ImportError:
+    import contextlib
+
+    class _NvtxStub:
+        @staticmethod
+        def annotate(msg="", color=None, domain=None):
+            import functools
+
+            class _NoOp:
+                def __call__(self, fn):
+                    @functools.wraps(fn)
+                    def wrapper(*args, **kwargs):
+                        return fn(*args, **kwargs)
+                    return wrapper
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *exc):
+                    return False
+
+            return _NoOp()
+
+    nvtx = _NvtxStub()
+
 logger = logging.getLogger(__name__)
 
 def pick_minimum_discretization_size(ndim, log_likelihoods, q = 0.5, min_images = 50  ):
@@ -349,7 +376,7 @@ def get_inds_for_subvolume(path_to_vol_folder, subvolume_idx):
 
     point = sampling_points[subvolume_idx].astype(int) + grid_size // 2
     locres_at_point = locres_ar[point[0], point[1], point[2]]
-    logger.info("Local resolution at point is %f \AA", locres_at_point)
+    logger.info("Local resolution at point is %f \\AA", locres_at_point)
     # Now need to change into which shell this corresponds to...
 
     locres_maskrad= 0.5 * params['locres_sampling'] if params['locres_maskrad'] is None else params['locres_maskrad']

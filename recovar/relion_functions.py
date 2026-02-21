@@ -288,7 +288,7 @@ def adjust_regularization_relion_style(filter, volume_shape, tau = None, padding
         max_res_shell = volume_shape[0]//2 - 1
         # avged_reg = avged_reg.at[max_res_shell:].set(avged_reg[max_res_shell - 1])
 
-    avged_reg_volume_shape = utils.make_radial_image(avged_reg, volume_shape)
+    avged_reg_volume_shape = utils.make_radial_image(avged_reg, volume_shape).reshape(regularized_filter.shape)
 
     regularized_filter = jnp.maximum(regularized_filter, avged_reg_volume_shape)
     regularized_filter = jnp.maximum(regularized_filter, constants.EPSILON)

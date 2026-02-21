@@ -723,3 +723,76 @@ def reorder_to_original_indexing_from_halfsets(arr, halfsets, num_images = None 
     arr_reorder = np.ones(arr_reorder_shape) * np.nan # nan things which are not in halfsets. They have been filtered out.
     arr_reorder[dataset_indices] = arr
     return arr_reorder
+
+
+class _SubsampledImageStack:
+    """Lightweight image-stack wrapper that exposes a boolean/integer index subset."""
+
+    def __init__(self, image_stack, subset_indices):
+        self._stack = image_stack
+        self._idx = np.asarray(subset_indices, dtype=np.int32)
+        # Re-map to 0..n-1 so indices returned to the dataset are contiguous.
+        self.n_images = len(self._idx)
+        self.Np = self.n_images
+        self.D = image_stack.D
+        self.unpadded_D = getattr(image_stack, "unpadded_D", self.D)
+        self.padding = getattr(image_stack, "padding", 0)
+        self.image_shape = image_stack.image_shape
+        self.mask = getattr(image_stack, "mask", None)
+
+    def process_images(self, images, apply_image_mask=True):
+        return self._stack.process_images(images, apply_image_mask=apply_image_mask)
+
+    def get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
+        for start in range(0, self.n_images, batch_size):
+            local_idx = np.arange(start, min(start + batch_size, self.n_images), dtype=np.int32)
+            orig_idx = self._idx[local_idx]
+            for images, _, _ in self._stack.get_dataset_subset_generator(
+                batch_size, orig_idx, num_workers=num_workers
+            ):
+                yield images, local_idx, local_idx
+                break  # one batch per yield
+
+    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
+        subset_indices = np.asarray(subset_indices, dtype=np.int32)
+        orig_idx = self._idx[subset_indices]
+        for images, _, _ in self._stack.get_dataset_subset_generator(
+            batch_size, orig_idx, num_workers=num_workers
+        ):
+            yield images, subset_indices, subset_indices
+            break
+
+    def get_image_subset_generator(self, batch_size, subset_indices, num_workers=0):
+        return self.get_dataset_subset_generator(batch_size, subset_indices, num_workers=num_workers)
+
+
+def subsample_cryoem_dataset(cryo, good_indices):
+    """Return a new CryoEMDataset containing only the images at *good_indices*.
+
+    *good_indices* may be a boolean mask or an array of integer indices.
+    The returned dataset has re-numbered per-image arrays so index ``i`` always
+    refers to the i-th kept image.
+    """
+    good_indices = np.asarray(good_indices)
+    if good_indices.dtype == bool:
+        good_indices = np.where(good_indices)[0]
+    good_indices = good_indices.astype(np.int32)
+
+    new_stack = _SubsampledImageStack(cryo.image_stack, good_indices) if cryo.image_stack is not None else None
+
+    sub = CryoEMDataset(
+        image_stack=new_stack,
+        voxel_size=cryo.voxel_size,
+        rotation_matrices=cryo.rotation_matrices[good_indices],
+        translations=cryo.translations[good_indices],
+        CTF_params=cryo.CTF_params[good_indices],
+        CTF_fun=cryo.CTF_fun_inp,
+        grid_size=cryo.grid_size,
+        volume_upsampling_factor=cryo.volume_upsampling_factor,
+        tilt_series_flag=cryo.tilt_series_flag,
+        premultiplied_ctf=cryo.premultiplied_ctf,
+        dataset_indices=good_indices,
+    )
+    if cryo.noise is not None:
+        sub.noise = cryo.noise
+    return sub

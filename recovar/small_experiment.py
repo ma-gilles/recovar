@@ -11,10 +11,11 @@ logger = logging.getLogger(__name__)
 def indices_to_coo(grid_indices, n, data= None):
     if data is None:
         data = np.ones(grid_indices.size)
-    image_index = np.arange(grid_indices.shape[0])
+    n_rows = grid_indices.shape[0]
+    image_index = np.arange(n_rows)
     image_index = np.repeat(image_index, grid_indices.shape[1])
     grid_indices = grid_indices.flatten()
-    return sparse.BCOO((data.flatten(), np.array([image_index, grid_indices]).T), shape=(grid_indices.shape[0], n))
+    return sparse.BCOO((data.flatten(), np.array([image_index, grid_indices]).T), shape=(n_rows, n))
 
 
 
