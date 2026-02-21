@@ -9,6 +9,7 @@ import re
 import shlex
 import subprocess
 from pathlib import Path
+import textwrap
 
 
 def infer_grid_size(dataset_dir: Path) -> int:
@@ -39,11 +40,23 @@ def run_recovar_command(
     args: list[str],
 ) -> None:
     env = os.environ.copy()
-    old_pp = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = str(repo_root) if not old_pp else f"{repo_root}:{old_pp}"
+    # Force imports to resolve from the target repo root.
+    # Do not prepend caller cwd/venv paths; they can shadow the intended codebase.
+    env["PYTHONPATH"] = str(repo_root)
+    probe = textwrap.dedent(
+        """
+        import pathlib, subprocess, recovar
+        root = pathlib.Path(recovar.__file__).resolve().parents[1]
+        commit = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+        print(f'imported={recovar.__file__}')
+        print(f'commit={commit}')
+        """
+    ).strip()
+    print(f"[{label}] provenance probe")
+    subprocess.run([python_bin, "-c", probe], check=True, env=env, cwd=str(repo_root))
     cmd = [python_bin, "-m", "recovar.command_line", subcommand, *args]
     print(f"[{label}] {' '.join(shlex.quote(x) for x in cmd)}")
-    subprocess.run(cmd, check=True, env=env)
+    subprocess.run(cmd, check=True, env=env, cwd=str(repo_root))
 
 
 def main() -> None:
