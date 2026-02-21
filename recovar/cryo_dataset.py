@@ -271,6 +271,7 @@ class TiltSeriesDataset(ParticleImageDataset):
         
         # Group tilts by particle
         self.particle_groups = self._build_particle_groups(star.df, canonical_groups)
+        self._particle_tilts = list(self.particle_groups.values())
         self.num_particles = len(self.particle_groups)
         self.dataset_tilt_indices = [canonical_groups.index(gn) for gn in self.particle_groups.keys()]
         
@@ -365,7 +366,7 @@ class TiltSeriesDataset(ParticleImageDataset):
         Returns:
             Tuple of (images, particle_index, tilt_indices)
         """
-        particle_tilts = list(self.particle_groups.values())[particle_index]
+        particle_tilts = self._particle_tilts[particle_index]
         
         if self.random_tilts and self.num_tilts is not None:
             # Random selection
@@ -492,7 +493,7 @@ class TiltSeriesDataset(ParticleImageDataset):
     def _max_tilts_per_particle(self) -> int:
         """Get maximum number of tilts in any particle."""
         max_tilts = 0
-        for tilts in self.particle_groups.values():
+        for tilts in self._particle_tilts:
             n_available = len(tilts)
             n_actual = min(self.num_tilts, n_available) if self.num_tilts else n_available
             max_tilts = max(max_tilts, n_actual)
@@ -681,8 +682,9 @@ class ImageCountBatchLoader:
         
         # Precompute tilts per particle
         self.tilts_counts = []
+        particle_tilts_list = getattr(dataset, "_particle_tilts", list(dataset.particle_groups.values()))
         for particle_idx in range(len(dataset)):
-            particle_tilts = list(dataset.particle_groups.values())[particle_idx]
+            particle_tilts = particle_tilts_list[particle_idx]
             n_available = len(particle_tilts)
             n_actual = min(dataset.num_tilts, n_available) if dataset.num_tilts else n_available
             self.tilts_counts.append(n_actual)
@@ -774,8 +776,9 @@ class ParticleSubset:
     def _max_tilts_per_particle(self) -> int:
         """Get max tilts in subset."""
         max_tilts = 0
+        particle_tilts_list = getattr(self.dataset, "_particle_tilts", list(self.dataset.particle_groups.values()))
         for idx in self.indices:
-            particle_tilts = list(self.dataset.particle_groups.values())[idx]
+            particle_tilts = particle_tilts_list[idx]
             n_available = len(particle_tilts)
             n_actual = min(self.dataset.num_tilts, n_available) if self.dataset.num_tilts else n_available
             max_tilts = max(max_tilts, n_actual)
@@ -795,6 +798,9 @@ def tilt_series_to_images(tilt_series_indices: np.ndarray, starfile_path: str,
         Array of image indices
     """
     particle_tilts, _ = TiltSeriesDataset.parse_particle_tilt(starfile_path)
+    tilt_series_indices = np.asarray(tilt_series_indices, dtype=np.int32)
+    if tilt_series_indices.size == 0:
+        return np.array([], dtype=np.int32)
     image_indices = np.concatenate([particle_tilts[i] for i in tilt_series_indices])
     
     if image_subset is not None:

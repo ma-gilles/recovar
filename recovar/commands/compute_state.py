@@ -30,14 +30,16 @@ def add_args(parser: argparse.ArgumentParser):
 def compute_state(args):
     po = o.PipelineOutput(args.result_dir + '/')
     
-    if args.particles is not None:
-        po.params['input_args'].particles = args.particles
-
-    if args.datadir is not None:
-        po.params['input_args'].datadir = args.datadir
-
-    if args.strip_prefix is not None:
-        po.params['input_args'].strip_prefix = args.strip_prefix
+    input_args = po.params.get('input_args') if hasattr(po, "params") else None
+    if input_args is not None:
+        if args.particles is not None:
+            input_args.particles = args.particles
+        if args.datadir is not None:
+            input_args.datadir = args.datadir
+        if args.strip_prefix is not None:
+            input_args.strip_prefix = args.strip_prefix
+    elif args.particles is not None or args.datadir is not None or args.strip_prefix is not None:
+        logger.warning("Pipeline output is missing input_args; ignoring particles/datadir/strip-prefix overrides.")
 
     # Copy data to temp folder if requested
     path_mapping = None
@@ -56,7 +58,7 @@ def compute_state(args):
 
     if args.zdim1:
         zdim =1
-        target_zs = target_zs[:,None]
+        target_zs = np.atleast_1d(target_zs)[:, None]
     else:
         zdim = target_zs.shape[-1]
         if target_zs.ndim ==1:
@@ -64,9 +66,14 @@ def compute_state(args):
             target_zs = target_zs[None]
 
     if zdim not in po.get('zs'):
-        logger.error("zdim of provided latent points are not found in embedding results. Options are:" + ','.join(str(e) for e in po.get('zs').keys()))
+        options = ','.join(str(e) for e in po.get('zs').keys())
+        raise ValueError(f"zdim {zdim} from provided latent points is not found in embedding results. Options are: {options}")
 
     zdim_key = f"{zdim}_noreg" if args.no_z_regularization else zdim
+    if zdim_key not in po.get('contrasts') or zdim_key not in po.get('cov_zs'):
+        raise ValueError(
+            f"Requested embedding key {zdim_key} is missing in pipeline output contrasts/cov_zs."
+        )
 
     cryos = po.get('lazy_dataset') if args.lazy else po.get('dataset')
 

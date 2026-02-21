@@ -343,7 +343,9 @@ class MultiMRCLoader(ImageLoader):
     
     def _load(self, indices: np.ndarray) -> np.ndarray:
         """Load images from multiple files."""
-        subset = self._file_map.iloc[indices]
+        subset = self._file_map.iloc[indices].copy()
+        # Preserve requested output order (including duplicated indices).
+        subset["_out_pos"] = np.arange(len(indices), dtype=np.int32)
         output = np.empty((len(indices), self._image_size, self._image_size), 
                          dtype=self._dtype)
         
@@ -358,24 +360,19 @@ class MultiMRCLoader(ImageLoader):
                     loader = self._loaders[filepath]
                     mrc_idx = group['mrc_index'].to_numpy()
                     future = executor.submit(loader._load, mrc_idx)
-                    futures[future] = group.index.to_numpy()
+                    futures[future] = group['_out_pos'].to_numpy()
                 
-                for future, output_idx in futures.items():
+                for future, out_pos in futures.items():
                     images = future.result()
-                    for i, pos in enumerate(output_idx):
-                        # Map to position in output array
-                        output_pos = np.where(indices == pos)[0][0]
-                        output[output_pos] = images[i]
+                    output[out_pos] = images
         else:
             # Sequential loading
             for filepath, group in groups:
                 loader = self._loaders[filepath]
                 mrc_idx = group['mrc_index'].to_numpy()
                 images = loader._load(mrc_idx)
-                
-                for i, original_idx in enumerate(group.index):
-                    output_pos = np.where(indices == original_idx)[0][0]
-                    output[output_pos] = images[i]
+                out_pos = group['_out_pos'].to_numpy()
+                output[out_pos] = images
         
         return output
     
