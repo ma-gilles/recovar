@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import argparse
+import math
 from pathlib import Path
 import logging
 import numpy as np
@@ -12,6 +13,24 @@ import jax.numpy as jnp
 from recovar import output, metrics, plot_utils, synthetic_dataset, utils, simulator, recovar
 import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar.commands import pipeline, compute_state
+
+LOWER_IS_BETTER_TOKENS = (
+    "error",
+    "locres",
+    "angle",
+    "loss",
+    "rmse",
+    "mse",
+    "bias",
+    "constrast",
+    "contrast",
+)
+
+HIGHER_IS_BETTER_TOKENS = (
+    "fsc",
+    "correlation",
+    "variance_explained",
+)
 
 
 # Set up logging configuration
@@ -26,6 +45,115 @@ def setup_logging(output_dir):
         ]
     )
     return logging.getLogger(__name__)
+
+
+def generate_compact_support_test_volumes(
+    output_dir,
+    grid_size=128,
+    n_volumes=50,
+    voxel_size=4.25,
+    prefix_name="vol",
+    output_prefix=None,
+):
+    """
+    Generate deterministic real-space MRC volumes with compact support.
+
+    Geometry:
+    - A static chain of Gaussian/ball-like blobs on one line.
+    - One additional compact ball moving horizontally on a parallel line.
+
+    Returns
+    -------
+    str
+        Prefix path to generated files, suitable for --volume-input
+        (e.g., "<...>/generated_volumes/vol" for files vol0000.mrc, ...).
+    """
+    if output_prefix is None:
+        vols_dir = Path(output_dir) / "generated_volumes"
+        output.mkdir_safe(str(vols_dir))
+        volume_prefix = str(vols_dir / prefix_name)
+    else:
+        volume_prefix = str(output_prefix)
+        output.mkdir_safe(str(Path(volume_prefix).parent))
+
+    # Normalized coordinate grid in [-1, 1]^3.
+    x = np.linspace(-1.0, 1.0, grid_size, dtype=np.float32)
+    xx, yy, zz = np.meshgrid(x, x, x, indexing="ij")
+    rr = np.sqrt(xx**2 + yy**2 + zz**2)
+
+    # Soft compact support mask to keep maps object-like.
+    support = np.clip((0.88 - rr) / 0.08, 0.0, 1.0)
+    support = support**2
+
+    # Static line of compact balls on y=0, z=-0.15.
+    static_xs = np.array([-0.55, -0.30, -0.05, 0.20, 0.45], dtype=np.float32)
+    static_y = 0.0
+    static_z = -0.15
+    static_radii = np.array([0.13, 0.11, 0.12, 0.11, 0.13], dtype=np.float32)
+    static_edges = np.array([0.02, 0.02, 0.02, 0.02, 0.02], dtype=np.float32)
+    static_amps = np.array([1.00, 0.85, 0.95, 0.80, 0.90], dtype=np.float32)
+
+    for idx in range(n_volumes):
+        t = idx / max(n_volumes - 1, 1)
+        vol = np.zeros((grid_size, grid_size, grid_size), dtype=np.float32)
+
+        # Static compact balls with mild high-frequency texture.
+        for cx, radius, edge, amp in zip(static_xs, static_radii, static_edges, static_amps):
+            sr = np.sqrt((xx - cx) ** 2 + (yy - static_y) ** 2 + (zz - static_z) ** 2)
+            static_ball = np.clip((radius - sr) / edge, 0.0, 1.0)
+            static_tex = (
+                np.cos((xx - cx) * (10.0 * np.pi))
+                * np.cos((yy - static_y) * (8.0 * np.pi))
+                * np.cos((zz - static_z) * (9.0 * np.pi))
+            )
+            vol += amp * (static_ball + 0.25 * static_ball * static_tex)
+
+        # Moving compact ball on a different (parallel) line y=0.32, z=0.18.
+        moving_x = -0.70 + 1.40 * t
+        moving_y = 0.32
+        moving_z = 0.18
+        moving_radius = 0.16
+        moving_edge = 0.03
+        moving_r = np.sqrt((xx - moving_x) ** 2 + (yy - moving_y) ** 2 + (zz - moving_z) ** 2)
+        moving_ball = np.clip((moving_radius - moving_r) / moving_edge, 0.0, 1.0)
+
+        # Add high-resolution content in the moving piece:
+        # a compact ripple texture whose phase drifts over states.
+        # This boosts high-frequency Fourier content for resolution-metric tests
+        # while keeping support local and physically bounded.
+        phase = 2.0 * np.pi * t
+        hf_osc = (
+            np.cos((xx - moving_x) * (18.0 * np.pi) + phase)
+            * np.cos((yy - moving_y) * (14.0 * np.pi) - 0.5 * phase)
+            * np.cos((zz - moving_z) * (16.0 * np.pi) + 0.25 * phase)
+        )
+        moving_component = 1.20 * moving_ball + 0.45 * moving_ball * hf_osc
+        vol += moving_component
+
+        # Apply compact support and normalize scale.
+        vol *= support
+        vol -= np.mean(vol)
+        norm = np.linalg.norm(vol.ravel())
+        if norm > 0:
+            vol /= norm
+
+        utils.write_mrc(f"{volume_prefix}{idx:04d}.mrc", vol.astype(np.float32), voxel_size=voxel_size)
+
+    return volume_prefix
+
+
+def validate_storage_args_for_generated_volumes(args, argv):
+    """
+    Enforce explicit output location when auto-generating volumes.
+    """
+    if args.volume_input is not None:
+        return
+    if ("--output-dir" not in argv) and ("-o" not in argv):
+        raise ValueError(
+            "When --volume-input is omitted (auto-generated volumes), you must pass --output-dir/-o "
+            "explicitly to avoid unintended storage locations."
+        )
+
 
 def make_big_test_dataset(input_dir, output_dir, noise_level=0.1, grid_size=128, n_images=50000,
                           contrast_std=0.1, n_tilts=-1, premultiplied_ctf=False, noise_increase_per_tilt=None):
@@ -73,10 +201,221 @@ def make_big_test_dataset(input_dir, output_dir, noise_level=0.1, grid_size=128,
     return sim_info
 
 
+def compute_noise_variance_metrics(
+    gt_noise_base,
+    est_noise,
+    plots_dir,
+    logger,
+    dose_indices=None,
+    noise_increase_per_tilt=None,
+):
+    scores = {}
+    if gt_noise_base is None:
+        logger.warning("No ground truth noise variance found in simulation info")
+        return scores
+
+    logger.info(f"Ground truth noise shape: {gt_noise_base.shape}")
+    logger.info(
+        f"Estimated noise shape: {est_noise.shape if isinstance(est_noise, np.ndarray) else 'not array'}"
+    )
+
+    if isinstance(est_noise, np.ndarray) and est_noise.ndim > 1:
+        logger.info("Processing variable noise per tilt...")
+        if dose_indices is None:
+            logger.warning("No dose indices found for variable noise comparison")
+            return scores
+
+        unique_tilts, tilt_counts = np.unique(dose_indices, return_counts=True)
+        n_tilts = len(unique_tilts)
+        tilt_correlations = np.zeros(n_tilts)
+        tilt_mean_errors = np.zeros(n_tilts)
+        tilt_median_errors = np.zeros(n_tilts)
+
+        fig, axes = plt.subplots(n_tilts, 1, figsize=(10, 4 * n_tilts))
+        if n_tilts == 1:
+            axes = [axes]
+
+        for i, tilt_idx in enumerate(unique_tilts):
+            if noise_increase_per_tilt is not None:
+                tilt_scale = 1 + noise_increase_per_tilt * tilt_idx
+                tilt_gt_noise = gt_noise_base * tilt_scale
+            else:
+                tilt_scale = None
+                tilt_gt_noise = gt_noise_base
+
+            tilt_est_noise = est_noise[tilt_idx]
+            min_len = min(len(tilt_gt_noise), len(tilt_est_noise))
+            tilt_gt_noise = tilt_gt_noise[:min_len]
+            tilt_est_noise = tilt_est_noise[:min_len]
+
+            noise_relative_error = np.abs(tilt_est_noise - tilt_gt_noise) / (np.abs(tilt_gt_noise) + 1e-10)
+            tilt_correlations[i] = np.corrcoef(tilt_est_noise, tilt_gt_noise)[0, 1]
+            tilt_mean_errors[i] = np.mean(noise_relative_error)
+            tilt_median_errors[i] = np.median(noise_relative_error)
+
+            ax = axes[i]
+            ax.plot(tilt_gt_noise, label='Ground Truth', alpha=0.7)
+            ax.plot(tilt_est_noise, label='Estimated', alpha=0.7)
+            ax.set_xlabel('Radial Frequency Index')
+            ax.set_ylabel('Noise Variance')
+            if tilt_scale is None:
+                ax.set_title(f'Noise Variance Estimation (Tilt {tilt_idx}, {tilt_counts[i]} images)')
+            else:
+                ax.set_title(
+                    f'Noise Variance Estimation (Tilt {tilt_idx}, {tilt_counts[i]} images, scale={tilt_scale:.2f})'
+                )
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            ax.text(
+                0.02,
+                0.98,
+                (
+                    f'Correlation: {tilt_correlations[i]:.3f}\n'
+                    f'Mean Rel. Error: {tilt_mean_errors[i]:.3f}\n'
+                    f'Median Rel. Error: {tilt_median_errors[i]:.3f}'
+                ),
+                transform=ax.transAxes,
+                verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+            )
+
+        plt.tight_layout()
+        noise_plot_path = os.path.join(plots_dir, "noise_variance_comparison_per_tilt.png")
+        plt.savefig(noise_plot_path)
+        plt.close()
+        logger.info(f"Noise variance comparison plot (per tilt) saved to: {noise_plot_path}")
+
+        scores['noise_mean_relative_error'] = np.mean(tilt_mean_errors)
+        scores['noise_median_relative_error'] = np.mean(tilt_median_errors)
+        scores['noise_max_relative_error'] = np.max(tilt_mean_errors)
+        scores['noise_correlation'] = np.mean(tilt_correlations)
+        scores['noise_correlation_per_tilt'] = tilt_correlations.tolist()
+        scores['noise_mean_error_per_tilt'] = tilt_mean_errors.tolist()
+        scores['noise_median_error_per_tilt'] = tilt_median_errors.tolist()
+        return scores
+
+    min_len = min(len(gt_noise_base), len(est_noise))
+    gt_noise_base = gt_noise_base[:min_len]
+    est_noise = est_noise[:min_len]
+
+    noise_relative_error = np.abs(est_noise - gt_noise_base) / (np.abs(gt_noise_base) + 1e-10)
+    noise_correlation = np.corrcoef(est_noise, gt_noise_base)[0, 1]
+
+    scores['noise_mean_relative_error'] = np.mean(noise_relative_error)
+    scores['noise_median_relative_error'] = np.median(noise_relative_error)
+    scores['noise_max_relative_error'] = np.max(noise_relative_error)
+    scores['noise_correlation'] = noise_correlation
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(gt_noise_base, label='Ground Truth', alpha=0.7)
+    plt.plot(est_noise, label='Estimated', alpha=0.7)
+    plt.xlabel('Radial Frequency Index')
+    plt.ylabel('Noise Variance')
+    plt.title('Noise Variance Estimation')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.text(
+        0.02,
+        0.98,
+        (
+            f'Correlation: {noise_correlation:.3f}\n'
+            f'Mean Rel. Error: {np.mean(noise_relative_error):.3f}\n'
+            f'Median Rel. Error: {np.median(noise_relative_error):.3f}'
+        ),
+        transform=plt.gca().transAxes,
+        verticalalignment='top',
+        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+    )
+
+    noise_plot_path = os.path.join(plots_dir, "noise_variance_comparison.png")
+    plt.savefig(noise_plot_path)
+    plt.close()
+    logger.info(f"Noise variance comparison plot saved to: {noise_plot_path}")
+    return scores
+
+
+def metric_direction(metric_name):
+    name = metric_name.lower()
+    if any(tok in name for tok in LOWER_IS_BETTER_TOKENS):
+        return "lower"
+    if any(tok in name for tok in HIGHER_IS_BETTER_TOKENS):
+        return "higher"
+    return "ignore"
+
+
+def compare_metric(current, baseline, direction, tol_frac):
+    if not (math.isfinite(current) and math.isfinite(baseline)):
+        return False, f"non-finite values current={current} baseline={baseline}"
+    scale = max(abs(baseline), 1e-12)
+    delta = (current - baseline) / scale
+    if direction == "lower":
+        ok = delta <= tol_frac
+        msg = f"increase={delta:.4f} allowed={tol_frac:.4f}"
+        return ok, msg
+    if direction == "higher":
+        ok = delta >= -tol_frac
+        msg = f"drop={-delta:.4f} allowed={tol_frac:.4f}"
+        return ok, msg
+    return True, "ignored"
+
+
+def normalize_scores_for_json(scores_dict):
+    normalized = {}
+    for key, val in scores_dict.items():
+        if isinstance(val, np.ndarray):
+            normalized[key] = np.asarray(val).tolist()
+        elif isinstance(val, (np.floating, np.integer)):
+            normalized[key] = float(val)
+        elif isinstance(val, (float, int)):
+            normalized[key] = float(val)
+        else:
+            normalized[key] = val
+    return normalized
+
+
+def resolve_metrics_baseline_path(args):
+    if args.metrics_baseline_json is not None:
+        return Path(args.metrics_baseline_json)
+    if args.generate_volumes:
+        return Path(args.output_dir) / "generated_volumes" / (
+            f"metrics_baseline_grid{args.grid_size}_nvol{args.generated_n_volumes}.json"
+        )
+    return None
+
+
+def compare_scores_against_baseline(current_scores, baseline_scores, tol_frac):
+    checked = 0
+    failures = []
+    details = {}
+    for key in sorted(set(current_scores.keys()) & set(baseline_scores.keys())):
+        cur = current_scores[key]
+        base = baseline_scores[key]
+        if not isinstance(cur, (int, float, np.floating, np.integer)):
+            continue
+        if not isinstance(base, (int, float, np.floating, np.integer)):
+            continue
+        direction = metric_direction(key)
+        if direction == "ignore":
+            continue
+        checked += 1
+        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac)
+        details[key] = {
+            "current": float(cur),
+            "baseline": float(base),
+            "direction": direction,
+            "ok": bool(ok),
+            "message": msg,
+        }
+        if not ok:
+            failures.append(f"{key}: current={float(cur):.6g} baseline={float(base):.6g} ({msg})")
+    return checked, failures, details
+
+
 def main():
+    argv = list(sys.argv[1:])
     parser = argparse.ArgumentParser(description="Run tests for recovar")
-    parser.add_argument('--volume-input', '-i', required=True,
-                        help='Input directory containing the volume files')
+    parser.add_argument('--volume-input', '-i', required=False, default=None,
+                        help='Input volume prefix containing files like <prefix>0000.mrc, <prefix>0001.mrc, ...')
     parser.add_argument('--output-dir', '-o', default='/tmp/recovar_test_all_metrics')
     parser.add_argument('--no-delete', action='store_true',
                         help='Do not delete the test dataset directory after successful tests')
@@ -97,10 +436,46 @@ def main():
                         help='Noise model for the test dataset')
     parser.add_argument('--new-noise-est', action='store_true',
                         help='Use new noise estimation method')
+    parser.add_argument('--generate-volumes', action='store_true',
+                        help='Generate synthetic compact-support test volumes if you do not want to provide --volume-input.')
+    parser.add_argument('--generated-n-volumes', type=int, default=50,
+                        help='Number of generated test volumes when --generate-volumes is used (default: 50).')
+    parser.add_argument('--generated-volumes-prefix', type=str, default=None,
+                        help='Optional generated volume prefix path (default: <output-dir>/generated_volumes/vol).')
+    parser.add_argument('--metrics-baseline-json', type=str, default=None,
+                        help='Path to baseline all_scores JSON. If omitted with generated volumes, a default baseline file under generated_volumes is used.')
+    parser.add_argument('--metrics-regression-tol-frac', type=float, default=0.03,
+                        help='Allowed relative degradation fraction before failing regression checks (default: 0.03).')
+    parser.add_argument('--skip-metrics-regression-check', action='store_true',
+                        help='Do not fail the run when baseline comparison detects regressions.')
+    parser.add_argument('--overwrite-metrics-baseline', action='store_true',
+                        help='Overwrite baseline JSON with current scores after this run.')
 
     args = parser.parse_args()
+    validate_storage_args_for_generated_volumes(args, argv)
     output.mkdir_safe(args.output_dir)
     logger = setup_logging(args.output_dir)
+
+    if args.volume_input is None:
+        args.generate_volumes = True
+
+    if args.generate_volumes:
+        gen_prefix = args.generated_volumes_prefix
+        if gen_prefix is None:
+            gen_prefix = str(Path(args.output_dir) / "generated_volumes" / "vol")
+        logger.info(
+            f"Generating compact-support test volumes at prefix {gen_prefix} "
+            f"(n={args.generated_n_volumes}, grid_size={args.grid_size})"
+        )
+        args.volume_input = generate_compact_support_test_volumes(
+            output_dir=args.output_dir,
+            grid_size=args.grid_size,
+            n_volumes=args.generated_n_volumes,
+            voxel_size=4.25 * 128 / args.grid_size,
+            prefix_name=Path(gen_prefix).name,
+            output_prefix=gen_prefix,
+        )
+        logger.info(f"Using generated volume input prefix: {args.volume_input}")
 
     # Dump parser arguments to a JSON file.
     dump_json_path = os.path.join(args.output_dir, "parser_args.json")
@@ -373,143 +748,17 @@ def main():
             utils.write_mrc(mask_path, mask.astype(np.float32), voxel_size=cryos[0].voxel_size)
             logger.info(f"Mask written to: {mask_path}")
 
-        # Add noise variance estimation metrics
-        logger.info("Computing noise variance estimation metrics...")
-        
-        # Get ground truth noise from simulation
-        gt_noise_base = sim_info.get('noise_variance')
-        if gt_noise_base is None:
-            logger.warning("No ground truth noise variance found in simulation info")
-        else:
-            # Get estimated noise from pipeline output
-            est_noise = pipeline_output.get('noise_var_used')
-            
-            # Log shapes for debugging
-            logger.info(f"Ground truth noise shape: {gt_noise_base.shape}")
-            logger.info(f"Estimated noise shape: {est_noise.shape if isinstance(est_noise, np.ndarray) else 'not array'}")
-            
-            # Handle both single noise model and variable noise per tilt cases
-            if isinstance(est_noise, np.ndarray) and est_noise.ndim > 1:
-                # Variable noise per tilt case
-                logger.info("Processing variable noise per tilt...")
-                
-                # Get dose indices from simulation info
-                dose_indices = sim_info.get('dose_indices')
-                if dose_indices is None:
-                    logger.warning("No dose indices found for variable noise comparison")
-                else:
-                    # Get unique tilts and their counts
-                    unique_tilts, tilt_counts = np.unique(dose_indices, return_counts=True)
-                    n_tilts = len(unique_tilts)
-                    
-                    # Initialize arrays for per-tilt metrics
-                    tilt_correlations = np.zeros(n_tilts)
-                    tilt_mean_errors = np.zeros(n_tilts)
-                    tilt_median_errors = np.zeros(n_tilts)
-                    
-                    # Create a figure with subplots for each tilt
-                    fig, axes = plt.subplots(n_tilts, 1, figsize=(10, 4*n_tilts))
-                    if n_tilts == 1:
-                        axes = [axes]
-                    
-                    # Get noise increase per tilt if it exists
-                    noise_increase_per_tilt = sim_info.get('noise_increase_per_tilt')
-                    
-                    # Compute metrics for each tilt
-                    for i, tilt_idx in enumerate(unique_tilts):
-                        # Reconstruct ground truth noise for this tilt
-                        if noise_increase_per_tilt is not None:
-                            # Scale noise by tilt number if noise_increase_per_tilt is set
-                            tilt_scale = 1 + noise_increase_per_tilt * tilt_idx
-                            tilt_gt_noise = gt_noise_base * tilt_scale
-                        else:
-                            tilt_gt_noise = gt_noise_base
-                            
-                        tilt_est_noise = est_noise[tilt_idx]
-                        
-                        # Ensure shapes match by truncating to shorter length
-                        min_len = min(len(tilt_gt_noise), len(tilt_est_noise))
-                        tilt_gt_noise = tilt_gt_noise[:min_len]
-                        tilt_est_noise = tilt_est_noise[:min_len]
-                        
-                        # Compute metrics
-                        noise_relative_error = np.abs(tilt_est_noise - tilt_gt_noise) / (np.abs(tilt_gt_noise) + 1e-10)
-                        tilt_correlations[i] = np.corrcoef(tilt_est_noise, tilt_gt_noise)[0,1]
-                        tilt_mean_errors[i] = np.mean(noise_relative_error)
-                        tilt_median_errors[i] = np.median(noise_relative_error)
-                        
-                        # Plot for this tilt
-                        ax = axes[i]
-                        ax.plot(tilt_gt_noise, label='Ground Truth', alpha=0.7)
-                        ax.plot(tilt_est_noise, label='Estimated', alpha=0.7)
-                        ax.set_xlabel('Radial Frequency Index')
-                        ax.set_ylabel('Noise Variance')
-                        ax.set_title(f'Noise Variance Estimation (Tilt {tilt_idx}, {tilt_counts[i]} images)')
-                        if noise_increase_per_tilt is not None:
-                            ax.set_title(f'Noise Variance Estimation (Tilt {tilt_idx}, {tilt_counts[i]} images, scale={tilt_scale:.2f})')
-                        ax.legend()
-                        ax.grid(True, alpha=0.3)
-                        
-                        # Add metrics to subplot
-                        ax.text(0.02, 0.98, 
-                               f'Correlation: {tilt_correlations[i]:.3f}\nMean Rel. Error: {tilt_mean_errors[i]:.3f}\nMedian Rel. Error: {tilt_median_errors[i]:.3f}',
-                               transform=ax.transAxes,
-                               verticalalignment='top',
-                               bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-                    
-                    plt.tight_layout()
-                    noise_plot_path = os.path.join(plots_dir, "noise_variance_comparison_per_tilt.png")
-                    plt.savefig(noise_plot_path)
-                    plt.close()
-                    logger.info(f"Noise variance comparison plot (per tilt) saved to: {noise_plot_path}")
-                    
-                    # Store aggregate metrics
-                    all_scores['noise_mean_relative_error'] = np.mean(tilt_mean_errors)
-                    all_scores['noise_median_relative_error'] = np.mean(tilt_median_errors)
-                    all_scores['noise_max_relative_error'] = np.max(tilt_mean_errors)
-                    all_scores['noise_correlation'] = np.mean(tilt_correlations)
-                    all_scores['noise_correlation_per_tilt'] = tilt_correlations.tolist()
-                    all_scores['noise_mean_error_per_tilt'] = tilt_mean_errors.tolist()
-                    all_scores['noise_median_error_per_tilt'] = tilt_median_errors.tolist()
-                    
-            else:
-                # Single noise model case
-                # Ensure shapes match by truncating to shorter length
-                min_len = min(len(gt_noise_base), len(est_noise))
-                gt_noise_base = gt_noise_base[:min_len]
-                est_noise = est_noise[:min_len]
-                
-                # Compute metrics
-                noise_relative_error = np.abs(est_noise - gt_noise_base) / (np.abs(gt_noise_base) + 1e-10)
-                noise_correlation = np.corrcoef(est_noise, gt_noise_base)[0,1]
-                
-                # Store metrics
-                all_scores['noise_mean_relative_error'] = np.mean(noise_relative_error)
-                all_scores['noise_median_relative_error'] = np.median(noise_relative_error)
-                all_scores['noise_max_relative_error'] = np.max(noise_relative_error)
-                all_scores['noise_correlation'] = noise_correlation
-                
-                # Plot noise comparison
-                plt.figure(figsize=(10, 6))
-                plt.plot(gt_noise_base, label='Ground Truth', alpha=0.7)
-                plt.plot(est_noise, label='Estimated', alpha=0.7)
-                plt.xlabel('Radial Frequency Index')
-                plt.ylabel('Noise Variance')
-                plt.title('Noise Variance Estimation')
-                plt.legend()
-                plt.grid(True, alpha=0.3)
-                
-                # Add correlation and error metrics to plot
-                plt.text(0.02, 0.98, 
-                        f'Correlation: {noise_correlation:.3f}\nMean Rel. Error: {np.mean(noise_relative_error):.3f}\nMedian Rel. Error: {np.median(noise_relative_error):.3f}',
-                        transform=plt.gca().transAxes,
-                        verticalalignment='top',
-                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-                
-                noise_plot_path = os.path.join(plots_dir, "noise_variance_comparison.png")
-                plt.savefig(noise_plot_path)
-                plt.close()
-                logger.info(f"Noise variance comparison plot saved to: {noise_plot_path}")
+    logger.info("Computing noise variance estimation metrics...")
+    all_scores.update(
+        compute_noise_variance_metrics(
+            sim_info.get('noise_variance'),
+            pipeline_output.get('noise_var_used'),
+            plots_dir,
+            logger,
+            dose_indices=sim_info.get('dose_indices'),
+            noise_increase_per_tilt=sim_info.get('noise_increase_per_tilt'),
+        )
+    )
 
 
     # Create a single figure with all plots
@@ -633,13 +882,73 @@ def main():
     else:
         logger.info("No previous scores file found; skipping comparison.")
 
-    # Ensure scores are of type float64 before saving.
-    for key in all_scores:
-        all_scores[key] = np.float64(all_scores[key])
+    all_scores = normalize_scores_for_json(all_scores)
 
     with open(scores_file, "w") as f:
         json.dump(all_scores, f, indent=2)
     logger.info(f"All scores saved to: {scores_file}")
+
+    baseline_path = resolve_metrics_baseline_path(args)
+    if baseline_path is None:
+        logger.info("No baseline path configured (explicit --volume-input without --metrics-baseline-json).")
+        return
+
+    output.mkdir_safe(str(baseline_path.parent))
+    regression_report_path = os.path.join(plots_dir, "metrics_regression_report.json")
+    write_baseline = args.overwrite_metrics_baseline or (not baseline_path.exists())
+    if write_baseline:
+        with open(baseline_path, "w") as f:
+            json.dump(all_scores, f, indent=2)
+        logger.info(f"Metrics baseline written to: {baseline_path}")
+        with open(regression_report_path, "w") as f:
+            json.dump(
+                {
+                    "status": "baseline_written",
+                    "baseline_path": str(baseline_path),
+                    "tolerance_fraction": args.metrics_regression_tol_frac,
+                },
+                f,
+                indent=2,
+            )
+        return
+
+    with open(baseline_path, "r") as f:
+        baseline_scores = json.load(f)
+
+    checked, failures, details = compare_scores_against_baseline(
+        all_scores,
+        baseline_scores,
+        tol_frac=args.metrics_regression_tol_frac,
+    )
+    with open(regression_report_path, "w") as f:
+        json.dump(
+            {
+                "status": "checked",
+                "baseline_path": str(baseline_path),
+                "checked_metrics": checked,
+                "failures": failures,
+                "details": details,
+                "tolerance_fraction": args.metrics_regression_tol_frac,
+            },
+            f,
+            indent=2,
+        )
+
+    if checked == 0:
+        logger.warning("No numeric directional metrics were checked against baseline.")
+        return
+
+    if failures:
+        logger.error("Metric regressions detected against baseline:")
+        for failure in failures:
+            logger.error(f"  {failure}")
+        if not args.skip_metrics_regression_check:
+            error_message(
+                f"{len(failures)} metric regressions detected. See {regression_report_path} "
+                "or pass --skip-metrics-regression-check to continue."
+            )
+    else:
+        logger.info(f"Metrics regression check passed for {checked} metrics (tol={args.metrics_regression_tol_frac}).")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import os
 import pytest
 
 import recovar.constants as constants
+pytest.importorskip("jax")
 import recovar.config as config
 
 pytestmark = pytest.mark.unit

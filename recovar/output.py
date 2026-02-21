@@ -115,7 +115,7 @@ def half_slice_other(density, axes, *args, **kwargs):
     axes = [i for i in range(density.ndim) if i not in axes]
     axes = np.sort(axes)
     for i in range(len(axes)-1, -1, -1):
-        density = np.take(density, density.shape[0]//2, axis = axes[i])
+        density = np.take(density, density.shape[axes[i]] // 2, axis = axes[i])
     return density
 
 def slice_at_point(density, axes, point, *args, **kwargs):

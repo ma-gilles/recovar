@@ -1,9 +1,11 @@
 import numpy as np
 import pytest
+import jax.numpy as jnp
 
 pytest.importorskip("jax")
 
 import recovar.covariance_estimation as cov_est
+from helpers.tiny_synthetic import make_tiny_cryo_dataset
 
 pytestmark = pytest.mark.unit
 
@@ -56,3 +58,292 @@ def test_randomized_column_choice_basic_properties():
     assert picked.shape == (4,)
     assert freqs.shape == (4, 3)
     assert len(np.unique(picked)) == 4
+
+
+def test_set_covariance_options_updates_only_present_keys():
+    opts = {"a": 1, "b": 2}
+    args = {"a": 5, "c": 9}
+    out = cov_est.set_covariance_options(args, opts.copy())
+    assert out["a"] == 5
+    assert out["b"] == 2
+    assert "c" not in out
+
+
+def test_compute_regularized_covariance_columns_in_batch_concatenates(monkeypatch):
+    cryos = [type("Cryo", (), {"grid_size": 4})()]
+    picked_frequencies = np.arange(10)
+
+    monkeypatch.setattr(cov_est.utils, "get_column_batch_size", lambda *_: 4)
+
+    calls = []
+
+    def fake_compute_regularized_covariance_columns(
+        cryos_in,
+        means,
+        mean_prior,
+        volume_mask,
+        dilated_volume_mask,
+        valid_idx,
+        gpu_memory,
+        options,
+        picked_frequencies_batch,
+        use_multi_gpu=False,
+        n_gpus=None,
+    ):
+        calls.append(np.array(picked_frequencies_batch))
+        n = len(picked_frequencies_batch)
+        cols = np.tile(np.array(picked_frequencies_batch)[None, :], (3, 1)).astype(np.complex64)
+        fsc = np.arange(n, dtype=np.float32) + 0.5
+        return {"est_mask": cols}, None, fsc
+
+    monkeypatch.setattr(cov_est, "compute_regularized_covariance_columns", fake_compute_regularized_covariance_columns)
+
+    covariance_cols, picked_out, fscs = cov_est.compute_regularized_covariance_columns_in_batch(
+        cryos=cryos,
+        means={},
+        mean_prior=None,
+        volume_mask=None,
+        dilated_volume_mask=None,
+        valid_idx=None,
+        gpu_memory=8,
+        options={},
+        picked_frequencies=picked_frequencies,
+    )
+
+    assert len(calls) == 3
+    np.testing.assert_array_equal(calls[0], np.array([0, 1, 2, 3]))
+    np.testing.assert_array_equal(calls[1], np.array([4, 5, 6, 7]))
+    np.testing.assert_array_equal(calls[2], np.array([8, 9]))
+    np.testing.assert_array_equal(picked_out, picked_frequencies)
+    assert covariance_cols["est_mask"].shape == (3, 10)
+    assert fscs.shape == (10,)
+
+
+def test_compute_regularized_covariance_columns_with_real_tiny_dataset(monkeypatch):
+    cryo = make_tiny_cryo_dataset(grid_size=4, n_images=6, seed=0)
+
+    class _Noise:
+        @staticmethod
+        def get_average_radial_noise():
+            return np.ones(cryo.grid_size // 2 - 1, dtype=np.float32)
+
+    cryo.noise = _Noise()
+
+    monkeypatch.setattr(cov_est.utils, "report_memory_device", lambda logger=None: None)
+    monkeypatch.setattr(cov_est, "CUDA_PROFILER_AVAILABLE", False)
+    monkeypatch.setattr(
+        cov_est,
+        "compute_both_H_B",
+        lambda *args, **kwargs: (["H0", "H1"], ["B0", "B1"]),
+    )
+    monkeypatch.setattr(
+        cov_est.noise,
+        "make_radial_noise",
+        lambda avg, volume_shape: np.ones(volume_shape, dtype=np.float32),
+    )
+
+    def _fake_reg_relion(Hs, Bs, mean_prior, picked_frequencies, volume_noise_var, mask_final, volume_shape, gpu_memory, reg_init_multiplier, options):
+        n_cols = len(picked_frequencies)
+        vol_size = int(np.prod(volume_shape))
+        est = np.ones((n_cols, vol_size), dtype=np.complex64)
+        prior = np.ones((n_cols,), dtype=np.float32)
+        fscs = np.linspace(0.2, 0.8, n_cols, dtype=np.float32)
+        return est, prior, fscs
+
+    monkeypatch.setattr(cov_est, "compute_covariance_regularization_relion_style", _fake_reg_relion)
+
+    options = {"reg_fn": "new"}
+    picked_frequencies = np.array([0, 1, 2], dtype=np.int32)
+    covariance_cols, picked_out, fscs = cov_est.compute_regularized_covariance_columns(
+        cryos=[cryo],
+        means={},
+        mean_prior=np.ones(cryo.volume_size, dtype=np.float32),
+        volume_mask=np.ones(cryo.volume_size, dtype=np.float32),
+        dilated_volume_mask=np.ones(cryo.volume_size, dtype=np.float32),
+        valid_idx=np.ones(cryo.volume_size, dtype=np.float32),
+        gpu_memory=8,
+        options=options,
+        picked_frequencies=picked_frequencies,
+    )
+
+    assert covariance_cols["est_mask"].shape == (cryo.volume_size, picked_frequencies.size)
+    np.testing.assert_array_equal(picked_out, picked_frequencies)
+    assert fscs.shape == (picked_frequencies.size,)
+
+
+def test_compute_both_h_b_selects_combined_or_corrected_mean(monkeypatch):
+    cryos = [make_tiny_cryo_dataset(grid_size=4, n_images=4, seed=0), make_tiny_cryo_dataset(grid_size=4, n_images=4, seed=1)]
+    means = {
+        "combined": np.array([11], dtype=np.float32),
+        "corrected0": np.array([21], dtype=np.float32),
+        "corrected1": np.array([31], dtype=np.float32),
+    }
+
+    chosen_means = []
+
+    def _fake_compute_h_b_in_volume_batch(cryo, mean, *args, **kwargs):
+        chosen_means.append(float(np.asarray(mean).reshape(-1)[0]))
+        return np.ones((2, 2), dtype=np.complex64), np.ones((2, 2), dtype=np.complex64) * 2
+
+    monkeypatch.setattr(cov_est, "compute_H_B_in_volume_batch", _fake_compute_h_b_in_volume_batch)
+
+    options = {"use_combined_mean": True}
+    Hs, Bs = cov_est.compute_both_H_B(cryos, means, None, np.array([0, 1]), 8, False, options)
+    assert len(Hs) == 2 and len(Bs) == 2
+    assert chosen_means == [11.0, 11.0]
+
+    chosen_means.clear()
+    options = {"use_combined_mean": False}
+    cov_est.compute_both_H_B(cryos, means, None, np.array([0, 1]), 8, False, options)
+    assert chosen_means == [21.0, 31.0]
+
+
+def test_summed_batch_kron_matches_scan():
+    x = jnp.array([[1.0, 2.0], [3.0, 4.0]], dtype=jnp.float32)
+    out1 = cov_est.summed_batch_kron(x)
+    out2 = cov_est.summed_batch_kron_scan(x)
+    np.testing.assert_allclose(np.asarray(out1), np.asarray(out2), atol=1e-6, rtol=1e-6)
+
+
+def test_summed_outer_products_matches_manual():
+    a = jnp.array([[1 + 1j, 2 + 0j], [3 + 0j, 4 - 1j]], dtype=jnp.complex64)
+    out = cov_est.summed_outer_products(a)
+    expected = np.asarray(a).T @ np.conj(np.asarray(a))
+    np.testing.assert_allclose(np.asarray(out), expected, atol=1e-6, rtol=1e-6)
+
+
+def test_group_sum_by_labels_and_preprocess_labels():
+    labels = jnp.array([10, 20, 10, 30], dtype=jnp.int32)
+    mapped = cov_est.preprocess_tilt_labels_for_batch(labels)
+    # mapped labels are consecutive ids with same equality structure
+    assert mapped.shape == labels.shape
+    assert mapped[0] == mapped[2]
+    assert mapped[0] != mapped[1] and mapped[1] != mapped[3]
+
+    arr = jnp.array([[1.0], [2.0], [3.0], [4.0]], dtype=jnp.float32)
+    grouped = cov_est.group_sum_by_labels(arr, jnp.array([0, 1, 0, 1], dtype=jnp.int32), max_groups=4)
+    np.testing.assert_allclose(np.asarray(grouped).reshape(-1), np.array([4.0, 6.0, 4.0, 6.0]), atol=1e-6, rtol=1e-6)
+
+
+def test_adjoint_kernel_slice_dispatch_and_noise_term(monkeypatch):
+    monkeypatch.setattr(cov_est.core, "adjoint_slice_volume_by_trilinear", lambda images, *_: images + 1)
+    monkeypatch.setattr(cov_est.core, "adjoint_slice_volume_by_map", lambda images, *_: images + 2)
+
+    images = jnp.ones((2, 4), dtype=jnp.complex64)
+    out_tri = cov_est.adjoint_kernel_slice(images, None, (2, 2), (2, 2, 1), kernel="triangular")
+    out_sq = cov_est.adjoint_kernel_slice(images, None, (2, 2), (2, 2, 1), kernel="square")
+    np.testing.assert_allclose(np.asarray(out_tri), np.asarray(images + 1))
+    np.testing.assert_allclose(np.asarray(out_sq), np.asarray(images + 2))
+    with pytest.raises(ValueError):
+        cov_est.adjoint_kernel_slice(images, None, (2, 2), (2, 2, 1), kernel="bad")
+
+    monkeypatch.setattr(cov_est.covariance_core, "evaluate_kernel_on_grid", lambda *args, **kwargs: jnp.ones((2, 4), dtype=jnp.complex64))
+    monkeypatch.setattr(cov_est.covariance_core, "apply_image_masks", lambda x, *_: x)
+    ctf = jnp.ones((2, 4), dtype=jnp.complex64) * (2 + 0j)
+    noise_var = jnp.ones((2, 4), dtype=jnp.float32) * 3
+
+    out_nonpremult = cov_est.compute_noise_term(None, None, ctf, (2, 2), None, noise_var, premultiplied_ctf=False)
+    out_premult = cov_est.compute_noise_term(None, None, ctf, (2, 2), None, noise_var, premultiplied_ctf=True)
+    assert out_nonpremult.shape == (2, 4)
+    assert out_premult.shape == (2, 4)
+    assert np.all(np.isfinite(np.asarray(out_nonpremult)))
+    assert np.all(np.isfinite(np.asarray(out_premult)))
+
+
+def test_compute_h_b_in_volume_batch_batches_frequency_chunks(monkeypatch):
+    cryo = make_tiny_cryo_dataset(grid_size=4, n_images=6, seed=0)
+    picked_frequencies = np.array([0, 1, 2, 3, 4], dtype=np.int32)
+
+    monkeypatch.setattr(cov_est.utils, "get_image_batch_size", lambda *args, **kwargs: 4)
+    monkeypatch.setattr(cov_est.utils, "get_column_batch_size", lambda *args, **kwargs: 2)
+
+    calls = []
+
+    def _fake_compute_h_b(experiment_dataset, mean_estimate, volume_mask, picked_frequency_indices, batch_size, diag_prior, **kwargs):
+        calls.append(np.array(picked_frequency_indices))
+        n = len(picked_frequency_indices)
+        h = np.tile(np.array(picked_frequency_indices, dtype=np.float32)[None, :], (experiment_dataset.volume_size, 1))
+        b = h + 100.0
+        return h.astype(experiment_dataset.dtype), b.astype(experiment_dataset.dtype)
+
+    monkeypatch.setattr(cov_est, "compute_H_B", _fake_compute_h_b)
+
+    options = {"disc_type": "linear_interp"}
+    H, B = cov_est.compute_H_B_in_volume_batch(
+        cryo=cryo,
+        mean=np.ones(cryo.volume_size, dtype=np.complex64),
+        dilated_volume_mask=np.ones(cryo.volume_size, dtype=np.float32),
+        picked_frequencies=picked_frequencies,
+        gpu_memory=8,
+        parallel_analysis=False,
+        options=options,
+        use_multi_gpu=False,
+        n_gpus=None,
+    )
+
+    assert len(calls) == 3
+    np.testing.assert_array_equal(calls[0], np.array([0, 1]))
+    np.testing.assert_array_equal(calls[1], np.array([2, 3]))
+    np.testing.assert_array_equal(calls[2], np.array([4]))
+    assert H.shape == (cryo.volume_size, picked_frequencies.size)
+    assert B.shape == (cryo.volume_size, picked_frequencies.size)
+    np.testing.assert_allclose(H[0], np.array([0, 1, 2, 3, 4], dtype=np.complex64))
+    np.testing.assert_allclose(B[0], np.array([100, 101, 102, 103, 104], dtype=np.complex64))
+
+
+def test_compute_variance_orchestration_with_stubbed_kernels(monkeypatch):
+    vol_shape = (2, 2, 2)
+    vol_size = int(np.prod(vol_shape))
+
+    class _Cryo:
+        def __init__(self, scale):
+            self.scale = scale
+            self.volume_shape = vol_shape
+            self.volume_size = vol_size
+            self.dtype_real = np.float32
+
+        def get_valid_frequency_indices(self, rad=None):
+            return np.ones(self.volume_size, dtype=np.float32)
+
+    cryos = [_Cryo(1.0), _Cryo(2.0)]
+
+    def _fake_var_kernel(cryo, mean_estimate, batch_size, image_subset=None, volume_mask=None, disc_type=""):
+        lhs = np.ones(vol_size, dtype=np.float32) * (10.0 * cryo.scale)
+        rhs = np.ones(vol_size, dtype=np.float32) * (4.0 * cryo.scale)
+        noise_lhs = np.ones(vol_size, dtype=np.float32) * (2.0 * cryo.scale)
+        noise_rhs = np.ones(vol_size, dtype=np.float32) * (1.0 * cryo.scale)
+        return lhs, rhs, noise_lhs, noise_rhs
+
+    monkeypatch.setattr(cov_est, "variance_relion_style_triangular_kernel", _fake_var_kernel)
+    import recovar.relion_functions as relion_functions
+    monkeypatch.setattr(relion_functions, "adjust_regularization_relion_style", lambda lhs, *args, **kwargs: lhs)
+    monkeypatch.setattr(
+        cov_est.regularization,
+        "compute_fsc_prior_gpu_v2",
+        lambda *args, **kwargs: (
+            jnp.ones(vol_size, dtype=jnp.float32) * 0.5,
+            jnp.ones(vol_size, dtype=jnp.float32) * 0.7,
+            jnp.ones(vol_size, dtype=jnp.float32),
+        ),
+    )
+
+    variance, variance_prior, fsc, lhs, noise_p_variance_est = cov_est.compute_variance(
+        cryos=cryos,
+        mean_estimate=np.ones(vol_size, dtype=np.complex64),
+        batch_size=2,
+        volume_mask=np.ones(vol_size, dtype=np.float32),
+        image_subset=None,
+        use_regularization=False,
+        disc_type="linear_interp",
+    )
+
+    assert variance["corrected0"].shape == (vol_size,)
+    assert variance["corrected1"].shape == (vol_size,)
+    assert variance["combined"].shape == (vol_size,)
+    assert variance["prior"].shape == (vol_size,)
+    assert variance["lhs"].shape == (vol_size,)
+    assert variance_prior.shape == (vol_size,)
+    assert fsc.shape == (vol_size,)
+    assert lhs.shape == (vol_size,)
+    assert noise_p_variance_est.shape == (vol_size,)
+    np.testing.assert_allclose(variance["corrected0"], np.ones(vol_size, dtype=np.float32) * 0.4, atol=1e-6, rtol=1e-6)
