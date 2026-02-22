@@ -98,6 +98,13 @@ def cryodrgn_CTF(CTF_params, image_shape, voxel_size):
 
 
 @functools.partial(jax.jit, static_argnums=[1])
+def cryodrgn_CTF_half(CTF_params, image_shape, voxel_size):
+    """Half-spectrum CTF (packed real-FFT layout), equivalent to full CTF mapped to half."""
+    full = cryodrgn_CTF(CTF_params, image_shape, voxel_size)
+    return fourier_transform_utils.full_image_to_half_image(full, image_shape)
+
+
+@functools.partial(jax.jit, static_argnums=[1])
 def evaluate_ctf_wrapper_tilt_series_v2(CTF_params, image_shape, voxel_size):
     dose_filter = get_dose_filters(
         voxel_size,
@@ -107,6 +114,13 @@ def evaluate_ctf_wrapper_tilt_series_v2(CTF_params, image_shape, voxel_size):
         CTF_params[0, CTFParamIndex.VOLT],
     )
     return dose_filter * cryodrgn_CTF(CTF_params[:, :9], image_shape, voxel_size)
+
+
+@functools.partial(jax.jit, static_argnums=[1])
+def evaluate_ctf_wrapper_tilt_series_v2_half(CTF_params, image_shape, voxel_size):
+    """Half-spectrum tilt-series CTF wrapper, equivalent to mapped full output."""
+    full = evaluate_ctf_wrapper_tilt_series_v2(CTF_params, image_shape, voxel_size)
+    return fourier_transform_utils.full_image_to_half_image(full, image_shape)
 
 
 @functools.partial(jax.jit, static_argnums=[1])
@@ -122,9 +136,31 @@ def evaluate_ctf_wrapper_tilt_series(CTF_params, image_shape, voxel_size, dose_p
     return dose_filter * cryodrgn_CTF(CTF_params[:, :9], image_shape, voxel_size)
 
 
+@functools.partial(jax.jit, static_argnums=[1])
+def evaluate_ctf_wrapper_tilt_series_half(CTF_params, image_shape, voxel_size, dose_per_tilt=None, angle_per_tilt=None):
+    """Half-spectrum tilt-series CTF wrapper, equivalent to mapped full output."""
+    full = evaluate_ctf_wrapper_tilt_series(
+        CTF_params,
+        image_shape,
+        voxel_size,
+        dose_per_tilt=dose_per_tilt,
+        angle_per_tilt=angle_per_tilt,
+    )
+    return fourier_transform_utils.full_image_to_half_image(full, image_shape)
+
+
 def get_cryo_ET_CTF_fun(dose_per_tilt=2.9, angle_per_tilt=3):
     def CTF_ET_fun(*args):
         return evaluate_ctf_wrapper_tilt_series(*args, dose_per_tilt=dose_per_tilt, angle_per_tilt=angle_per_tilt)
+
+    return CTF_ET_fun
+
+
+def get_cryo_ET_CTF_fun_half(dose_per_tilt=2.9, angle_per_tilt=3):
+    def CTF_ET_fun(*args):
+        return evaluate_ctf_wrapper_tilt_series_half(
+            *args, dose_per_tilt=dose_per_tilt, angle_per_tilt=angle_per_tilt
+        )
 
     return CTF_ET_fun
 
@@ -155,6 +191,12 @@ def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, antialiasing=False
     ctf = jnp.squeeze(ctf, axis=1)
     ctf = ctf[:, ::upsample_factor, ::upsample_factor]
     return ctf.reshape(ctf.shape[0], -1)
+
+
+def evaluate_ctf_wrapper_half(CTF_params, image_shape, voxel_size, antialiasing=False):
+    """Half-spectrum CTF wrapper, equivalent to mapped full output."""
+    full = evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, antialiasing=antialiasing)
+    return fourier_transform_utils.full_image_to_half_image(full, image_shape)
 
 
 class CTFParams:
@@ -230,10 +272,15 @@ __all__ = [
     "evaluate_ctf_wrapper_tilt_series_v2",
     "evaluate_ctf_wrapper_tilt_series",
     "get_cryo_ET_CTF_fun",
+    "get_cryo_ET_CTF_fun_half",
     "critical_exposure",
     "get_dose_filters_from_tilt_number",
     "get_dose_filters",
     "evaluate_ctf_wrapper",
     "cryodrgn_CTF",
+    "evaluate_ctf_wrapper_half",
+    "evaluate_ctf_wrapper_tilt_series_half",
+    "evaluate_ctf_wrapper_tilt_series_v2_half",
+    "cryodrgn_CTF_half",
     "CTFParams",
 ]

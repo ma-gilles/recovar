@@ -234,6 +234,136 @@ def broadcast_dot(x,y):
 def broadcast_outer(x,y):
     return jax.lax.batch_matmul(x[...,:,None],jnp.conj(y[...,None,:]))
 
+
+def inner_product(x, y):
+    """Conjugate inner product for non-batched arrays of identical shape."""
+    x = jnp.asarray(x)
+    y = jnp.asarray(y)
+    if x.shape != y.shape:
+        raise ValueError(f"x and y must have the same shape, got {x.shape} and {y.shape}")
+    return jnp.vdot(x, y)
+
+
+def batch_inner_product(x, y):
+    """Conjugate inner product over batch dimension 0.
+
+    Accepts arrays shaped `(B, ...)` and returns `(B,)`.
+    """
+    x = jnp.asarray(x)
+    y = jnp.asarray(y)
+    if x.shape != y.shape:
+        raise ValueError(f"x and y must have the same shape, got {x.shape} and {y.shape}")
+    if x.ndim < 2:
+        raise ValueError(f"batch_inner_product expects batched input with ndim>=2, got {x.ndim}")
+    x_flat = x.reshape((x.shape[0], -1))
+    y_flat = y.reshape((y.shape[0], -1))
+    return jnp.sum(jnp.conj(x_flat) * y_flat, axis=-1)
+
+
+def _half_spectrum_to_full_spectrum(x_half, full_shape):
+    full_shape = tuple(int(s) for s in full_shape)
+    if len(full_shape) == 2:
+        return fourier_transform_utils.half_image_to_full_image(x_half, full_shape)
+    if len(full_shape) == 3:
+        return fourier_transform_utils.half_volume_to_full_volume(x_half, full_shape)
+    raise ValueError(f"full_shape must have 2 or 3 dims, got {full_shape}")
+
+
+def half_spectrum_last_axis_weights(last_axis_size, dtype=jnp.float32):
+    """Weights to recover full-spectrum inner products from packed real FFT coefficients."""
+    n = int(last_axis_size)
+    if n <= 0:
+        raise ValueError(f"last_axis_size must be positive, got {n}")
+    m = n // 2 + 1
+    w = jnp.ones((m,), dtype=dtype)
+    if n % 2 == 0:
+        if m > 2:
+            w = w.at[1:-1].set(2)
+    else:
+        if m > 1:
+            w = w.at[1:].set(2)
+    return w
+
+
+def _coerce_half_grid(arr, full_shape, name):
+    full_shape = tuple(int(s) for s in full_shape)
+    if len(full_shape) == 2:
+        half_shape = fourier_transform_utils.image_shape_to_half_image_shape(full_shape)
+    elif len(full_shape) == 3:
+        half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(full_shape)
+    else:
+        raise ValueError(f"full_shape must have 2 or 3 dims, got {full_shape}")
+
+    arr = jnp.asarray(arr)
+    flat_size = int(np.prod(half_shape))
+    if arr.ndim == len(half_shape) and tuple(arr.shape) == half_shape:
+        return arr, False
+    if arr.ndim == 1 and int(arr.shape[0]) == flat_size:
+        return arr.reshape(half_shape), True
+    if arr.ndim == len(half_shape) + 1 and tuple(arr.shape[-len(half_shape):]) == half_shape:
+        return arr, False
+    if arr.ndim == 2 and int(arr.shape[-1]) == flat_size:
+        return arr.reshape((arr.shape[0],) + half_shape), True
+
+    raise ValueError(
+        f"{name} must be half-spectrum grid {half_shape}, flat {flat_size}, batched grid (B,*half_shape), "
+        f"or batched flat (B,{flat_size}); got {arr.shape}"
+    )
+
+
+def _weighted_half_inner_products(x_half_grid, y_half_grid, full_shape, batched):
+    # For packed real-FFT spectra:
+    # - edge bins (k=0 and Nyquist when present) are kept as-is;
+    # - interior bins represent one element of a Hermitian pair, so contribute
+    #   a + conj(a) = 2*Re(a), not 2*a.
+    w = half_spectrum_last_axis_weights(full_shape[-1], dtype=x_half_grid.real.dtype)
+    prod = jnp.conj(x_half_grid) * y_half_grid
+    edge_mask = (w == 1).astype(prod.dtype)
+    interior_mask = (w == 2).astype(prod.dtype)
+    weighted = prod * edge_mask + (prod + jnp.conj(prod)) * interior_mask
+    if batched:
+        axes = tuple(range(1, weighted.ndim))
+    else:
+        axes = tuple(range(weighted.ndim))
+    return jnp.sum(weighted, axis=axes)
+
+
+def half_spectrum_inner_product(x_half, y_half, full_shape):
+    """Inner product from packed half-spectrum inputs, equivalent to full-spectrum inner product.
+
+    This computes the weighted packed-spectrum sum directly (no full-spectrum
+    reconstruction), applying factor-2 to non-edge frequencies on the packed axis.
+    """
+    full_shape = tuple(int(s) for s in full_shape)
+    x_half_grid, _ = _coerce_half_grid(x_half, full_shape, "x_half")
+    y_half_grid, _ = _coerce_half_grid(y_half, full_shape, "y_half")
+    if x_half_grid.shape != y_half_grid.shape:
+        raise ValueError(f"x_half and y_half must have matching shapes, got {x_half_grid.shape} and {y_half_grid.shape}")
+    if x_half_grid.ndim != len(full_shape):
+        raise ValueError(
+            f"half_spectrum_inner_product expects non-batched input with ndim={len(full_shape)}, "
+            f"got shape {x_half_grid.shape}. Use batch_half_spectrum_inner_product for batched input."
+        )
+    return _weighted_half_inner_products(x_half_grid, y_half_grid, full_shape, batched=False)
+
+
+def batch_half_spectrum_inner_product(x_half, y_half, full_shape):
+    """Batched inner products from packed half-spectrum inputs.
+
+    Equivalent to computing full-spectrum batched inner products.
+    """
+    full_shape = tuple(int(s) for s in full_shape)
+    x_half_grid, _ = _coerce_half_grid(x_half, full_shape, "x_half")
+    y_half_grid, _ = _coerce_half_grid(y_half, full_shape, "y_half")
+    if x_half_grid.shape != y_half_grid.shape:
+        raise ValueError(f"x_half and y_half must have matching shapes, got {x_half_grid.shape} and {y_half_grid.shape}")
+    if x_half_grid.ndim != len(full_shape) + 1:
+        raise ValueError(
+            f"batch_half_spectrum_inner_product expects batched input with ndim={len(full_shape)+1}, "
+            f"got shape {x_half_grid.shape}"
+        )
+    return _weighted_half_inner_products(x_half_grid, y_half_grid, full_shape, batched=True)
+
 def multiply_along_axis(A, B, axis):
     return jnp.swapaxes(jnp.swapaxes(A, axis, -1) * B, -1, axis)
 

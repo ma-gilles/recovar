@@ -102,6 +102,42 @@ def test_tiltseries_parse_particle_tilt_and_reverse_map(monkeypatch):
     assert t2p[1] == 0 and t2p[0] == 1 and t2p[4] == 2
 
 
+def test_tiltseries_parse_particle_tilt_accepts_boolean_indices(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["g2", "g1", "g2", "g1", "g3"],
+        }
+    )
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+    mask = np.array([False, True, False, True, True], dtype=bool)
+    p2t, t2p = cryo_dataset.TiltSeriesDataset.parse_particle_tilt("dummy.star", indices=mask)
+
+    assert len(p2t) == 2
+    np.testing.assert_array_equal(p2t[0], np.array([1, 3], dtype=int))  # g1
+    np.testing.assert_array_equal(p2t[1], np.array([4], dtype=int))     # g3
+    assert t2p == {1: 0, 3: 0, 4: 1}
+
+
+def test_tiltseries_parse_particle_tilt_rejects_bad_subset_indices(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["g2", "g1", "g2", "g1", "g3"],
+        }
+    )
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+
+    with pytest.raises(ValueError, match="must match total size"):
+        cryo_dataset.TiltSeriesDataset.parse_particle_tilt(
+            "dummy.star",
+            indices=np.array([True, False], dtype=bool),
+        )
+    with pytest.raises(TypeError, match="integer indices or boolean mask"):
+        cryo_dataset.TiltSeriesDataset.parse_particle_tilt(
+            "dummy.star",
+            indices=np.array([0.0, 1.0], dtype=np.float32),
+        )
+
+
 def test_tiltseries_parse_particle_tilt_missing_group_column_raises(monkeypatch):
     df = pd.DataFrame({"_rlnImageName": ["1@a.mrcs", "2@a.mrcs"]})
     monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
