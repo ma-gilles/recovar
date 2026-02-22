@@ -227,18 +227,19 @@ def threshold_map(arr, prob = 0.99, dthresh=None):
 
 
 def smooth_circular_mask(image_size, radius, thickness):
-    # Copy pasted from Dynamight https://github.com/3dem/DynaMight/blob/main/dynamight/data/handlers/grid.py
-    y, x = np.meshgrid(
-        np.linspace(-image_size // 2, image_size // 2 - 1, image_size),
-        np.linspace(-image_size // 2, image_size // 2 - 1, image_size)
-    )
-    r = np.sqrt(x ** 2 + y ** 2)
-    band_mask = (radius <= r) & (r <= radius + thickness)
-    r_band_mask = r[band_mask]
+    """Circular mask with a raised-cosine transition band.
+
+    Values are 1 inside radius, 0 outside radius+thickness, and follow a
+    cosine taper in the band [radius, radius+thickness].
+    """
+    half = image_size // 2
+    coords = np.arange(-half, image_size - half, dtype=float)
+    gx, gy = np.meshgrid(coords, coords, indexing="xy")
+    r = np.sqrt(gx ** 2 + gy ** 2)
+    band = (r >= radius) & (r <= radius + thickness)
     mask = np.zeros((image_size, image_size))
-    mask[r < radius] = 1
-    mask[band_mask] = np.cos(np.pi * (r_band_mask - radius) / thickness) / 2 + .5
-    mask[radius + thickness < r] = 0
+    mask[r < radius] = 1.0
+    mask[band] = 0.5 + 0.5 * np.cos(np.pi * (r[band] - radius) / thickness)
     return mask
 
 

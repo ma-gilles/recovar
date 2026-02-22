@@ -237,6 +237,80 @@ def test_save_covar_output_volumes_large_grid_clamps_batch_size_to_one(monkeypat
     assert seen["vol_batch_size"] == [1]
 
 
+def test_get_nearest_point_finds_closest():
+    data = np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]], dtype=np.float32)
+    query = np.array([[0.1, 0.0], [1.9, 0.1]], dtype=np.float32)
+    points, indices = output.get_nearest_point(data, query)
+    assert indices[0] == 0
+    assert indices[1] == 2
+    np.testing.assert_allclose(points[0], data[0])
+    np.testing.assert_allclose(points[1], data[2])
+
+
+def test_get_nearest_point_single_data_point():
+    data = np.array([[3.0, 4.0]], dtype=np.float32)
+    query = np.array([[0.0, 0.0], [10.0, 10.0]], dtype=np.float32)
+    points, indices = output.get_nearest_point(data, query)
+    assert list(indices) == [0, 0]
+    np.testing.assert_allclose(points, np.tile(data, (2, 1)))
+
+
+def test_cluster_kmeans_shapes_and_label_count():
+    rng = np.random.default_rng(0)
+    z = rng.standard_normal((60, 2)).astype(np.float32)
+    labels, centers = output.cluster_kmeans(z, K=3)
+    assert labels.shape == (60,)
+    assert centers.shape == (3, 2)
+    assert set(labels) == {0, 1, 2}
+
+
+def test_cluster_kmeans_reorder_false_skips_sort():
+    rng = np.random.default_rng(1)
+    z = rng.standard_normal((40, 2)).astype(np.float32)
+    labels, centers = output.cluster_kmeans(z, K=2, reorder=False)
+    assert labels.shape == (40,)
+    assert centers.shape == (2, 2)
+
+
+def test_scatter_annotate_returns_figure_axes():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    x = np.array([0.0, 1.0, 2.0, 3.0])
+    y = np.array([0.0, 1.0, 2.0, 3.0])
+    # annotate=False so no centers are needed
+    fig, ax = output.scatter_annotate(x, y, annotate=False)
+    assert hasattr(fig, "savefig")
+    assert hasattr(ax, "scatter")
+    plt.close(fig)
+
+
+def test_scatter_annotate_with_centers_ind():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    x = np.array([0.0, 1.0, 2.0, 3.0])
+    y = np.array([0.0, 1.0, 2.0, 3.0])
+    fig, ax = output.scatter_annotate(x, y, centers_ind=np.array([0, 2]), annotate=True)
+    assert hasattr(fig, "savefig")
+    plt.close(fig)
+
+
+def test_scatter_annotate_with_explicit_centers():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    x = np.linspace(0, 1, 20)
+    y = np.linspace(0, 1, 20)
+    centers = np.array([[0.25, 0.25], [0.75, 0.75]])
+    fig, ax = output.scatter_annotate(x, y, centers=centers, annotate=False)
+    assert hasattr(fig, "savefig")
+    plt.close(fig)
+
+
 def test_move_to_one_folder_copies_expected_files(tmp_path):
     root = tmp_path / "state_out"
     n_vols = 3
