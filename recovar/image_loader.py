@@ -267,25 +267,23 @@ class MRCLoader(ImageLoader):
             indices: Optional subset of indices
             lazy: If False, load all images immediately
         """
-        from recovar.cryodrgn_mrcfile import MRCHeader
-        
+        import mrcfile
+
         self._filepath = filepath
-        self._header = MRCHeader.parse(filepath)
-        
-        # Get dimensions
-        nz = self._header.fields["nz"]
-        ny = self._header.fields["ny"]
-        nx = self._header.fields["nx"]
-        
+
+        with mrcfile.open(filepath, mode='r', permissive=True) as mrc:
+            nz, ny, nx = mrc.data.shape
+            self._file_dtype = mrc.data.dtype
+            extended_header_size = mrc.extended_header.nbytes if mrc.extended_header is not None else 0
+
         if ny != nx:
             raise ValueError(f"Non-square images not supported: {ny} x {nx}")
-        
+
         # Calculate file layout
-        self._data_start = 1024 + self._header.fields["next"]
+        self._data_start = 1024 + extended_header_size
         self._pixels_per_image = ny * nx
-        self._bytes_per_image = self._header.dtype().itemsize * self._pixels_per_image
-        self._file_dtype = self._header.dtype
-        
+        self._bytes_per_image = self._file_dtype.itemsize * self._pixels_per_image
+
         # Set up index mapping
         self._file_indices = _normalize_selection_indices(indices, nz, "MRCLoader indices")
         
