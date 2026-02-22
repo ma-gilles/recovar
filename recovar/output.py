@@ -1179,13 +1179,10 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
 
 
 
-''' Copied from cryoDRGN '''
-
 from typing import Optional, Union, Tuple
 from sklearn.cluster import KMeans
 import seaborn as sns
 from matplotlib.figure import Figure, Axes
-from scipy.spatial.distance import cdist
 import numpy.typing as npt
 
 
@@ -1200,73 +1197,64 @@ def scatter_annotate(
     s: Union[float, np.ndarray, None] = 1,
     colors: Union[list, str, None] = None,
 ) -> Tuple[Figure, Axes]:
+    """Scatter plot with optional cluster-center markers and annotations."""
     fig, ax = plt.subplots(figsize=(8, 8))
-    
-    # Create hexbin density plot for background
-    try:
-        ax.hexbin(x, y, gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
-    except:
-        pass
-    
-    # Main scatter plot with improved styling
-    scatter = ax.scatter(x, y, alpha=alpha, s=s, c='cornflowerblue', edgecolors='none', rasterized=True)
+    ax.scatter(x, y, alpha=alpha, s=s, rasterized=True)
 
-    # plot cluster centers
     if centers_ind is not None:
         assert centers is None
-        centers = np.array([[x[i], y[i]] for i in centers_ind])
+        centers = np.column_stack([x[centers_ind], y[centers_ind]])
     if centers is not None:
-        if colors is None:
-            colors = "red"
-        ax.scatter(centers[:, 0], centers[:, 1], c=colors, edgecolor="black", s=100, zorder=3)
+        c = "red" if colors is None else colors
+        ax.scatter(centers[:, 0], centers[:, 1], c=c, edgecolor="black", s=100, zorder=3)
     if annotate:
         assert centers is not None
-        if labels is None:
-            labels = np.arange(len(centers))
-        assert labels is not None
-        for i in labels:
-            ax.annotate(str(i), centers[i, 0:2] + np.array([0.1, 0.1]), 
-                       fontsize=12, fontweight='bold', color='white',
-                       path_effects=[pe.withStroke(linewidth=3, foreground="black")])
-    
-    # Add grid and improve styling
-    ax.grid(True, alpha=0.3)
-    ax.set_facecolor('white')
-    
+        lbl = np.arange(len(centers)) if labels is None else labels
+        for i in lbl:
+            ax.annotate(
+                str(i),
+                centers[i, :2] + np.array([0.1, 0.1]),
+                fontsize=12,
+                fontweight="bold",
+                color="white",
+                path_effects=[pe.withStroke(linewidth=3, foreground="black")],
+            )
+
     return fig, ax
+
 
 def get_nearest_point(
     data: np.ndarray, query: np.ndarray
 ) -> Tuple[npt.NDArray[np.float32], np.ndarray]:
-    """
-    Find closest point in @data to @query
-    Return datapoint, index
-    """
-    ind = cdist(query, data).argmin(axis=1)
+    """For each row of query, return the closest row of data and its index."""
+    dists = np.linalg.norm(data[np.newaxis, :] - query[:, np.newaxis, :], axis=-1)
+    ind = dists.argmin(axis=1)
     return data[ind], ind
+
 
 def cluster_kmeans(
     z: np.ndarray, K: int, on_data: bool = True, reorder: bool = True
 ) -> Tuple[np.ndarray, np.ndarray]:
+    """K-means clustering of z into K clusters.
+
+    Returns (labels, centers). If reorder=True, clusters are sorted by
+    agglomerative linkage of their centers.
     """
-    Cluster z by K means clustering
-    Returns cluster labels, cluster centers
-    If reorder=True, reorders clusters according to agglomerative clustering of cluster centers
-    """
-    kmeans = KMeans(n_clusters=K, random_state=0, max_iter=10)
-    labels = kmeans.fit_predict(z)
-    centers = kmeans.cluster_centers_
+    km = KMeans(n_clusters=K, random_state=0, max_iter=10)
+    labels = km.fit_predict(z)
+    centers = km.cluster_centers_
 
     centers_ind = None
     if on_data:
         centers, centers_ind = get_nearest_point(z, centers)
 
     if reorder:
-        g = sns.clustermap(centers)
-        reordered = g.dendrogram_row.reordered_ind
-        centers = centers[reordered]
+        cg = sns.clustermap(centers)
+        order = cg.dendrogram_row.reordered_ind
+        centers = centers[order]
         if centers_ind is not None:
-            centers_ind = centers_ind[reordered]
-        tmp = {k: i for i, k in enumerate(reordered)}
-        labels = np.array([tmp[k] for k in labels])
+            centers_ind = centers_ind[order]
+        remap = {old_k: new_k for new_k, old_k in enumerate(order)}
+        labels = np.array([remap[lbl] for lbl in labels])
+
     return labels, centers
