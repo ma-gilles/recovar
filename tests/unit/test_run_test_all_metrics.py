@@ -272,6 +272,15 @@ def test_compare_scores_against_baseline_skips_non_numeric_values():
     assert sorted(details.keys()) == ["mean_fsc"]
 
 
+def test_compare_scores_against_baseline_with_no_comparable_metrics():
+    current = {"meta_a": [1, 2], "meta_b": {"x": 1}}
+    baseline = {"meta_a": [1, 2], "meta_b": {"x": 1}}
+    checked, failures, details = rtam.compare_scores_against_baseline(current, baseline, tol_frac=0.01)
+    assert checked == 0
+    assert failures == []
+    assert details == {}
+
+
 def test_compute_noise_variance_metrics_per_tilt_without_dose_indices_returns_empty(tmp_path):
     gt = np.array([1.0, 2.0, 3.0], dtype=np.float64)
     est = np.array(
@@ -289,3 +298,119 @@ def test_compute_noise_variance_metrics_per_tilt_without_dose_indices_returns_em
         dose_indices=None,
     )
     assert scores == {}
+
+
+def test_compute_noise_variance_metrics_per_tilt_handles_noncontiguous_dose_labels(tmp_path):
+    gt = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    # Two modeled tilt rows, but dose labels are 3 and 7.
+    est = np.array(
+        [
+            [1.0, 2.1, 2.9],
+            [1.2, 2.2, 3.4],
+        ],
+        dtype=np.float64,
+    )
+    dose_indices = np.array([3, 3, 7, 7], dtype=np.int64)
+
+    scores = rtam.compute_noise_variance_metrics(
+        gt,
+        est,
+        str(tmp_path),
+        _logger(),
+        dose_indices=dose_indices,
+        noise_increase_per_tilt=0.05,
+    )
+    assert "noise_correlation_per_tilt" in scores
+    assert len(scores["noise_correlation_per_tilt"]) == 2
+    assert (tmp_path / "noise_variance_comparison_per_tilt.png").exists()
+
+
+def test_compute_noise_variance_metrics_per_tilt_skips_unmatched_labels_without_zero_bias(tmp_path):
+    gt = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    # Only one estimated row is available.
+    est = np.array(
+        [
+            [1.0, 2.1, 2.9],
+        ],
+        dtype=np.float64,
+    )
+    # Two labels present; second label cannot be matched and should be skipped.
+    dose_indices = np.array([0, 0, 5, 5], dtype=np.int64)
+
+    scores = rtam.compute_noise_variance_metrics(
+        gt,
+        est,
+        str(tmp_path),
+        _logger(),
+        dose_indices=dose_indices,
+        noise_increase_per_tilt=0.0,
+    )
+    assert "noise_correlation_per_tilt" in scores
+    assert len(scores["noise_correlation_per_tilt"]) == 1
+    assert len(scores["noise_mean_error_per_tilt"]) == 1
+    assert len(scores["noise_median_error_per_tilt"]) == 1
+
+
+def test_compute_noise_variance_metrics_per_tilt_all_unmatched_returns_empty(tmp_path):
+    gt = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    est = np.array([], dtype=np.float64).reshape(0, 3)
+    dose_indices = np.array([4, 4, 9, 9], dtype=np.int64)
+
+    scores = rtam.compute_noise_variance_metrics(
+        gt,
+        est,
+        str(tmp_path),
+        _logger(),
+        dose_indices=dose_indices,
+        noise_increase_per_tilt=0.0,
+    )
+    assert scores == {}
+
+
+def test_compute_noise_variance_metrics_single_case_zero_overlap_returns_empty(tmp_path):
+    gt = np.array([], dtype=np.float64)
+    est = np.array([], dtype=np.float64)
+    scores = rtam.compute_noise_variance_metrics(gt, est, str(tmp_path), _logger())
+    assert scores == {}
+
+
+def test_compute_noise_variance_metrics_per_tilt_zero_overlap_skips_and_returns_empty(tmp_path):
+    gt = np.array([], dtype=np.float64)
+    est = np.array([[]], dtype=np.float64)  # shape (1, 0)
+    dose_indices = np.array([0, 0], dtype=np.int64)
+    scores = rtam.compute_noise_variance_metrics(
+        gt,
+        est,
+        str(tmp_path),
+        _logger(),
+        dose_indices=dose_indices,
+        noise_increase_per_tilt=0.0,
+    )
+    assert scores == {}
+
+
+def test_compute_noise_variance_metrics_single_case_nonfinite_corr_is_stabilized(tmp_path):
+    # Constant vectors produce NaN correlation from np.corrcoef.
+    gt = np.ones(5, dtype=np.float64)
+    est = np.ones(5, dtype=np.float64)
+    scores = rtam.compute_noise_variance_metrics(gt, est, str(tmp_path), _logger())
+    assert "noise_correlation" in scores
+    assert np.isfinite(scores["noise_correlation"])
+    assert scores["noise_correlation"] == 0.0
+
+
+def test_compute_noise_variance_metrics_per_tilt_nonfinite_corr_is_stabilized(tmp_path):
+    gt = np.ones(4, dtype=np.float64)
+    est = np.ones((2, 4), dtype=np.float64)
+    dose_indices = np.array([0, 0, 1, 1], dtype=np.int64)
+    scores = rtam.compute_noise_variance_metrics(
+        gt,
+        est,
+        str(tmp_path),
+        _logger(),
+        dose_indices=dose_indices,
+        noise_increase_per_tilt=0.0,
+    )
+    assert "noise_correlation_per_tilt" in scores
+    assert all(np.isfinite(c) for c in scores["noise_correlation_per_tilt"])
+    assert scores["noise_correlation_per_tilt"] == [0.0, 0.0]

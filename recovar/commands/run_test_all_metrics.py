@@ -209,6 +209,22 @@ def compute_noise_variance_metrics(
     dose_indices=None,
     noise_increase_per_tilt=None,
 ):
+    def _safe_corrcoef(x, y):
+        x = np.asarray(x)
+        y = np.asarray(y)
+        if x.size == 0 or y.size == 0:
+            logger.warning("Empty vectors for noise correlation; using 0.0")
+            return 0.0
+        # Avoid np.corrcoef warnings/NaN when either input has (near-)zero variance.
+        if np.std(x) < 1e-12 or np.std(y) < 1e-12:
+            logger.warning("Near-constant vector for noise correlation; using 0.0")
+            return 0.0
+        corr = float(np.corrcoef(x, y)[0, 1])
+        if not np.isfinite(corr):
+            logger.warning("Non-finite noise correlation encountered; replacing with 0.0")
+            return 0.0
+        return corr
+
     scores = {}
     if gt_noise_base is None:
         logger.warning("No ground truth noise variance found in simulation info")
@@ -227,9 +243,9 @@ def compute_noise_variance_metrics(
 
         unique_tilts, tilt_counts = np.unique(dose_indices, return_counts=True)
         n_tilts = len(unique_tilts)
-        tilt_correlations = np.zeros(n_tilts)
-        tilt_mean_errors = np.zeros(n_tilts)
-        tilt_median_errors = np.zeros(n_tilts)
+        tilt_correlations = []
+        tilt_mean_errors = []
+        tilt_median_errors = []
 
         fig, axes = plt.subplots(n_tilts, 1, figsize=(10, 4 * n_tilts))
         if n_tilts == 1:
@@ -243,15 +259,61 @@ def compute_noise_variance_metrics(
                 tilt_scale = None
                 tilt_gt_noise = gt_noise_base
 
-            tilt_est_noise = est_noise[tilt_idx]
+            # Prefer direct dose-index lookup when available; otherwise fall back
+            # to row position for datasets where dose labels are non-contiguous.
+            if 0 <= int(tilt_idx) < est_noise.shape[0]:
+                tilt_est_noise = est_noise[int(tilt_idx)]
+            elif i < est_noise.shape[0]:
+                logger.warning(
+                    "Dose index %s is out of est_noise bounds %s; falling back to row %s.",
+                    int(tilt_idx),
+                    est_noise.shape[0],
+                    i,
+                )
+                tilt_est_noise = est_noise[i]
+            else:
+                logger.warning(
+                    "Skipping dose index %s because est_noise has only %s rows.",
+                    int(tilt_idx),
+                    est_noise.shape[0],
+                )
+                axes[i].set_title(
+                    f'Noise Variance Estimation (Tilt {tilt_idx}, {tilt_counts[i]} images) - skipped'
+                )
+                axes[i].text(
+                    0.02,
+                    0.98,
+                    "Skipped: no matching estimated row",
+                    transform=axes[i].transAxes,
+                    verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                )
+                continue
             min_len = min(len(tilt_gt_noise), len(tilt_est_noise))
+            if min_len == 0:
+                logger.warning(
+                    "Skipping tilt %s because overlapping noise profile length is zero.",
+                    int(tilt_idx),
+                )
+                axes[i].set_title(
+                    f'Noise Variance Estimation (Tilt {tilt_idx}, {tilt_counts[i]} images) - skipped'
+                )
+                axes[i].text(
+                    0.02,
+                    0.98,
+                    "Skipped: zero-length overlap",
+                    transform=axes[i].transAxes,
+                    verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                )
+                continue
             tilt_gt_noise = tilt_gt_noise[:min_len]
             tilt_est_noise = tilt_est_noise[:min_len]
 
             noise_relative_error = np.abs(tilt_est_noise - tilt_gt_noise) / (np.abs(tilt_gt_noise) + 1e-10)
-            tilt_correlations[i] = np.corrcoef(tilt_est_noise, tilt_gt_noise)[0, 1]
-            tilt_mean_errors[i] = np.mean(noise_relative_error)
-            tilt_median_errors[i] = np.median(noise_relative_error)
+            tilt_correlations.append(_safe_corrcoef(tilt_est_noise, tilt_gt_noise))
+            tilt_mean_errors.append(float(np.mean(noise_relative_error)))
+            tilt_median_errors.append(float(np.median(noise_relative_error)))
 
             ax = axes[i]
             ax.plot(tilt_gt_noise, label='Ground Truth', alpha=0.7)
@@ -270,9 +332,9 @@ def compute_noise_variance_metrics(
                 0.02,
                 0.98,
                 (
-                    f'Correlation: {tilt_correlations[i]:.3f}\n'
-                    f'Mean Rel. Error: {tilt_mean_errors[i]:.3f}\n'
-                    f'Median Rel. Error: {tilt_median_errors[i]:.3f}'
+                    f'Correlation: {tilt_correlations[-1]:.3f}\n'
+                    f'Mean Rel. Error: {tilt_mean_errors[-1]:.3f}\n'
+                    f'Median Rel. Error: {tilt_median_errors[-1]:.3f}'
                 ),
                 transform=ax.transAxes,
                 verticalalignment='top',
@@ -285,21 +347,28 @@ def compute_noise_variance_metrics(
         plt.close()
         logger.info(f"Noise variance comparison plot (per tilt) saved to: {noise_plot_path}")
 
-        scores['noise_mean_relative_error'] = np.mean(tilt_mean_errors)
-        scores['noise_median_relative_error'] = np.mean(tilt_median_errors)
-        scores['noise_max_relative_error'] = np.max(tilt_mean_errors)
-        scores['noise_correlation'] = np.mean(tilt_correlations)
-        scores['noise_correlation_per_tilt'] = tilt_correlations.tolist()
-        scores['noise_mean_error_per_tilt'] = tilt_mean_errors.tolist()
-        scores['noise_median_error_per_tilt'] = tilt_median_errors.tolist()
+        if len(tilt_mean_errors) == 0:
+            logger.warning("No valid per-tilt noise rows were processed; skipping aggregate metrics.")
+            return scores
+
+        scores['noise_mean_relative_error'] = float(np.mean(tilt_mean_errors))
+        scores['noise_median_relative_error'] = float(np.mean(tilt_median_errors))
+        scores['noise_max_relative_error'] = float(np.max(tilt_mean_errors))
+        scores['noise_correlation'] = float(np.mean(tilt_correlations))
+        scores['noise_correlation_per_tilt'] = list(tilt_correlations)
+        scores['noise_mean_error_per_tilt'] = list(tilt_mean_errors)
+        scores['noise_median_error_per_tilt'] = list(tilt_median_errors)
         return scores
 
     min_len = min(len(gt_noise_base), len(est_noise))
+    if min_len == 0:
+        logger.warning("Skipping single-noise comparison because overlapping length is zero.")
+        return scores
     gt_noise_base = gt_noise_base[:min_len]
     est_noise = est_noise[:min_len]
 
     noise_relative_error = np.abs(est_noise - gt_noise_base) / (np.abs(gt_noise_base) + 1e-10)
-    noise_correlation = np.corrcoef(est_noise, gt_noise_base)[0, 1]
+    noise_correlation = _safe_corrcoef(est_noise, gt_noise_base)
 
     scores['noise_mean_relative_error'] = np.mean(noise_relative_error)
     scores['noise_median_relative_error'] = np.median(noise_relative_error)
