@@ -3,6 +3,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import jax.numpy as jnp
 
 pytest.importorskip("jax")
 
@@ -152,6 +153,12 @@ def test_validate_storage_args_for_generated_volumes_requires_explicit_outdir():
 
     args_with_input = SimpleNamespace(volume_input="/scratch/vol")
     rtam.validate_storage_args_for_generated_volumes(args_with_input, argv=["--grid-size", "32"])
+
+
+def test_validate_storage_args_for_generated_volumes_accepts_equals_style_flags():
+    args = SimpleNamespace(volume_input=None)
+    rtam.validate_storage_args_for_generated_volumes(args, argv=["--output-dir=/scratch/tmp/out"])
+    rtam.validate_storage_args_for_generated_volumes(args, argv=["-o=/scratch/tmp/out"])
 
 
 def test_resolve_metrics_baseline_path_defaults_for_generated_volumes(tmp_path):
@@ -457,3 +464,65 @@ def test_compute_noise_variance_metrics_per_tilt_nonfinite_corr_is_stabilized(tm
     assert "noise_correlation_per_tilt" in scores
     assert all(np.isfinite(c) for c in scores["noise_correlation_per_tilt"])
     assert scores["noise_correlation_per_tilt"] == [0.0, 0.0]
+
+
+def test_compute_noise_variance_metrics_accepts_jax_arrays_for_per_tilt_branch(tmp_path):
+    gt = jnp.array([1.0, 2.0, 3.0], dtype=jnp.float32)
+    est = jnp.array(
+        [
+            [1.0, 2.1, 2.9],
+            [1.1, 2.0, 3.1],
+        ],
+        dtype=jnp.float32,
+    )
+    dose_indices = np.array([0, 0, 1, 1], dtype=np.int32)
+
+    scores = rtam.compute_noise_variance_metrics(
+        gt,
+        est,
+        str(tmp_path),
+        _logger(),
+        dose_indices=dose_indices,
+        noise_increase_per_tilt=0.0,
+    )
+
+    assert "noise_correlation_per_tilt" in scores
+    assert len(scores["noise_correlation_per_tilt"]) == 2
+    assert (tmp_path / "noise_variance_comparison_per_tilt.png").exists()
+
+
+def test_compute_noise_variance_metrics_accepts_jax_arrays_for_single_noise(tmp_path):
+    gt = jnp.array([1.0, 2.0, 3.0, 4.0], dtype=jnp.float32)
+    est = jnp.array([0.9, 2.1, 2.8, 4.2], dtype=jnp.float32)
+
+    scores = rtam.compute_noise_variance_metrics(gt, est, str(tmp_path), _logger())
+
+    assert "noise_mean_relative_error" in scores
+    assert "noise_correlation" in scores
+    assert np.isfinite(scores["noise_correlation"])
+    assert (tmp_path / "noise_variance_comparison.png").exists()
+
+
+def test_compute_noise_variance_metrics_accepts_scalar_estimate(tmp_path):
+    gt = np.array([1.0], dtype=np.float64)
+    est = np.float64(0.8)
+    scores = rtam.compute_noise_variance_metrics(gt, est, str(tmp_path), _logger())
+    assert "noise_mean_relative_error" in scores
+    assert np.isfinite(scores["noise_correlation"])
+
+
+def test_compute_noise_variance_metrics_accepts_python_lists_for_per_tilt(tmp_path):
+    gt = [1.0, 2.0, 3.0]
+    est = [[1.0, 2.1, 2.9], [0.9, 2.0, 3.2]]
+    dose_indices = [0, 0, 1, 1]
+
+    scores = rtam.compute_noise_variance_metrics(
+        gt,
+        est,
+        str(tmp_path),
+        _logger(),
+        dose_indices=dose_indices,
+        noise_increase_per_tilt=0.0,
+    )
+    assert "noise_correlation_per_tilt" in scores
+    assert len(scores["noise_correlation_per_tilt"]) == 2

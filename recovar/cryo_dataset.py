@@ -371,8 +371,13 @@ class TiltSeriesDataset(ParticleImageDataset):
         particle_tilts = self._particle_tilts[particle_index]
         
         if self.random_tilts and self.num_tilts is not None:
-            # Random selection
-            selected = np.random.choice(particle_tilts, self.num_tilts, replace=False)
+            # Random selection. Clamp to available tilts so small/filtered groups
+            # do not fail when num_tilts > n_available.
+            n_select = min(int(self.num_tilts), len(particle_tilts))
+            if n_select <= 0:
+                selected = particle_tilts[:0]
+            else:
+                selected = np.random.choice(particle_tilts, n_select, replace=False)
         else:
             # Ordered selection
             tilt_orders = self.tilt_order[particle_tilts]
@@ -807,10 +812,26 @@ def tilt_series_to_images(tilt_series_indices: np.ndarray, starfile_path: str,
     if tilt_series_indices.size == 0:
         return np.array([], dtype=np.int32)
     image_indices = np.concatenate([particle_tilts[i] for i in tilt_series_indices])
+    max_image_index = max((int(np.max(t)) for t in particle_tilts if np.asarray(t).size > 0), default=-1)
+    n_images_total = max_image_index + 1
     
     if image_subset is not None:
+        subset_arr = np.asarray(image_subset)
+        if subset_arr.dtype == bool:
+            if subset_arr.ndim != 1:
+                raise ValueError("image_subset boolean mask must be 1D")
+            if subset_arr.size != n_images_total:
+                raise ValueError(
+                    f"image_subset boolean mask length {subset_arr.size} "
+                    f"must match number of images {n_images_total}"
+                )
+            subset_arr = np.flatnonzero(subset_arr).astype(np.int32)
+        elif subset_arr.ndim == 0:
+            subset_arr = subset_arr.reshape(1).astype(np.int32)
+        else:
+            subset_arr = subset_arr.astype(np.int32, copy=False)
         # Preserve original order and multiplicity from image_indices.
-        image_indices = image_indices[np.isin(image_indices, np.asarray(image_subset))]
+        image_indices = image_indices[np.isin(image_indices, subset_arr)]
 
     return image_indices
 

@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from pathlib import Path
 
 from recovar import image_loader
 from recovar import starfile
@@ -31,6 +32,18 @@ def test_parse_indices_int_slice_array_and_bool():
     assert np.all(loader._parse_indices(slice(2, 6, 2)) == np.array([2, 4]))
     assert np.all(loader._parse_indices(np.array([1, 5], dtype=np.int32)) == np.array([1, 5]))
     assert np.all(loader._parse_indices(np.array([True, False, True, False, False, False, False, False])) == np.array([0, 2]))
+
+
+def test_parse_indices_rejects_non_1d_arrays_and_bad_boolean_masks():
+    loader = _DummyLoader(n=4, D=2)
+    with pytest.raises(ValueError, match="Indices array must be 1D"):
+        loader._parse_indices(np.array([[0, 1], [2, 3]], dtype=np.int32))
+
+    with pytest.raises(ValueError, match="Boolean indices must be a 1D mask"):
+        loader._parse_indices(np.array([[True, False], [False, True]], dtype=bool))
+
+    with pytest.raises(ValueError, match="must match number of images"):
+        loader._parse_indices(np.array([True, False], dtype=bool))
 
 
 def test_parse_indices_rejects_non_integer_ndarray():
@@ -70,6 +83,29 @@ def test_mrc_loader_reads_real_file_sequential_and_random(tmp_path):
     assert rnd.shape == (3, 4, 4)
     np.testing.assert_allclose(seq, data[[0, 1, 2]])
     np.testing.assert_allclose(rnd, data[[4, 2, 0]])
+
+
+def test_mrc_loader_constructor_accepts_boolean_subset_mask(tmp_path):
+    data = np.arange(5 * 4 * 4, dtype=np.float32).reshape(5, 4, 4)
+    mrc_path = tmp_path / "particles.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    keep = np.array([True, False, True, False, True], dtype=bool)
+    loader = image_loader.MRCLoader(str(mrc_path), indices=keep, lazy=True)
+    out = loader.get(np.array([0, 1, 2], dtype=np.int32))
+    np.testing.assert_allclose(out, data[[0, 2, 4]])
+
+
+def test_mrc_loader_constructor_rejects_bad_subset_masks(tmp_path):
+    data = np.arange(5 * 4 * 4, dtype=np.float32).reshape(5, 4, 4)
+    mrc_path = tmp_path / "particles.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    with pytest.raises(ValueError, match="boolean mask must be 1D"):
+        image_loader.MRCLoader(str(mrc_path), indices=np.array([[True, False, True, False, True]], dtype=bool), lazy=True)
+
+    with pytest.raises(ValueError, match="must match available length"):
+        image_loader.MRCLoader(str(mrc_path), indices=np.array([True, False], dtype=bool), lazy=True)
 
 
 def test_mrc_loader_rejects_non_square_images(tmp_path):
@@ -124,6 +160,49 @@ def test_multi_mrc_loader_indices_filtering_preserves_order(tmp_path):
     np.testing.assert_allclose(out[0], b[1])
     np.testing.assert_allclose(out[1], a[1])
     np.testing.assert_allclose(out[2], b[0])
+
+
+def test_multi_mrc_loader_constructor_accepts_boolean_subset_mask(tmp_path):
+    a = np.arange(3 * 4 * 4, dtype=np.float32).reshape(3, 4, 4)
+    b = (100 + np.arange(2 * 4 * 4, dtype=np.float32)).reshape(2, 4, 4)
+    a_path = tmp_path / "a.mrcs"
+    b_path = tmp_path / "b.mrcs"
+    utils.write_mrc(str(a_path), a)
+    utils.write_mrc(str(b_path), b)
+
+    df = pd.DataFrame(
+        {
+            "mrc_file": [str(a_path), str(a_path), str(a_path), str(b_path), str(b_path)],
+            "mrc_index": [0, 1, 2, 0, 1],
+        }
+    )
+    mask = np.array([False, True, False, True, True], dtype=bool)
+    loader = image_loader.MultiMRCLoader(df, indices=mask, lazy=True, max_threads=2)
+    out = loader.get(np.array([0, 1, 2], dtype=np.int32))
+    np.testing.assert_allclose(out[0], a[1])
+    np.testing.assert_allclose(out[1], b[0])
+    np.testing.assert_allclose(out[2], b[1])
+
+
+def test_multi_mrc_loader_constructor_rejects_bad_subset_masks(tmp_path):
+    a = np.arange(3 * 4 * 4, dtype=np.float32).reshape(3, 4, 4)
+    a_path = tmp_path / "a.mrcs"
+    utils.write_mrc(str(a_path), a)
+    df = pd.DataFrame(
+        {
+            "mrc_file": [str(a_path), str(a_path), str(a_path)],
+            "mrc_index": [0, 1, 2],
+        }
+    )
+
+    with pytest.raises(ValueError, match="boolean mask must be 1D"):
+        image_loader.MultiMRCLoader(df, indices=np.array([[True, False, True]], dtype=bool), lazy=True, max_threads=1)
+
+    with pytest.raises(ValueError, match="must match available length"):
+        image_loader.MultiMRCLoader(df, indices=np.array([True, False], dtype=bool), lazy=True, max_threads=1)
+
+    with pytest.raises(ValueError, match="indices must be 1D"):
+        image_loader.MultiMRCLoader(df, indices=np.array([[0, 1]], dtype=np.int32), lazy=True, max_threads=1)
 
 
 def test_multi_mrc_loader_get_with_duplicate_indices(tmp_path):
@@ -382,3 +461,193 @@ def test_image_loader_parse_indices_rejects_bad_type():
     loader = _DummyLoader(n=4, D=2)
     with pytest.raises(TypeError, match="Cannot index with type"):
         loader._parse_indices({"bad": "type"})
+
+
+def test_load_images_dispatches_to_expected_loader(monkeypatch):
+    sentinels = {
+        "mrc": object(),
+        "star": object(),
+        "txt": object(),
+        "cs": object(),
+    }
+    calls = {}
+
+    def _fake_mrc(filepath, indices, lazy):
+        calls["mrc"] = (filepath, indices, lazy)
+        return sentinels["mrc"]
+
+    def _fake_star(filepath, indices, datadir, lazy, max_threads, strip_prefix):
+        calls["star"] = (filepath, indices, datadir, lazy, max_threads, strip_prefix)
+        return sentinels["star"]
+
+    def _fake_cs(filepath, indices, datadir, lazy, max_threads):
+        calls["cs"] = (filepath, indices, datadir, lazy, max_threads)
+        return sentinels["cs"]
+
+    class _FakeMulti:
+        @staticmethod
+        def from_txt(filepath, indices, lazy, max_threads):
+            calls["txt"] = (filepath, indices, lazy, max_threads)
+            return sentinels["txt"]
+
+    monkeypatch.setattr(image_loader, "MRCLoader", _fake_mrc)
+    monkeypatch.setattr(image_loader, "StarLoader", _fake_star)
+    monkeypatch.setattr(image_loader, "CryoSparcLoader", _fake_cs)
+    monkeypatch.setattr(image_loader, "MultiMRCLoader", _FakeMulti)
+
+    idx = np.array([0, 2], dtype=np.int32)
+    assert image_loader.load_images("particles.mrcs", indices=idx, lazy=False) is sentinels["mrc"]
+    assert image_loader.load_images("particles.mrc", indices=idx, lazy=True) is sentinels["mrc"]
+    assert image_loader.load_images(
+        "particles.star",
+        indices=idx,
+        datadir="/tmp/data",
+        lazy=True,
+        max_threads=8,
+        strip_prefix="old/",
+    ) is sentinels["star"]
+    assert image_loader.load_images("particles.txt", indices=idx, lazy=True, max_threads=4) is sentinels["txt"]
+    assert image_loader.load_images("particles.cs", indices=idx, datadir="/tmp/cs", lazy=False, max_threads=2) is sentinels["cs"]
+
+    np.testing.assert_array_equal(calls["mrc"][1], idx)
+    np.testing.assert_array_equal(calls["star"][1], idx)
+    np.testing.assert_array_equal(calls["txt"][1], idx)
+    np.testing.assert_array_equal(calls["cs"][1], idx)
+    assert calls["star"][2:] == ("/tmp/data", True, 8, "old/")
+    assert calls["txt"][2:] == (True, 4)
+    assert calls["cs"][2:] == ("/tmp/cs", False, 2)
+
+
+def test_cryosparc_loader_rejects_negative_blob_indices(tmp_path):
+    cs_dtype = np.dtype([("blob/idx", np.int32), ("blob/path", "U64")])
+    cs = np.zeros(2, dtype=cs_dtype)
+    cs["blob/idx"] = np.array([0, -1], dtype=np.int32)
+    cs["blob/path"] = np.array([">stack.mrcs", ">stack.mrcs"])
+    cs_path = tmp_path / "bad_negative.cs"
+    with open(cs_path, "wb") as f:
+        np.save(f, cs)
+
+    with pytest.raises(ValueError, match="negative blob/idx"):
+        image_loader.CryoSparcLoader(str(cs_path), datadir=str(tmp_path), lazy=True)
+
+
+def test_cryosparc_loader_resolves_relative_datadir_against_cs_file(tmp_path):
+    data = np.arange(3 * 4 * 4, dtype=np.float32).reshape(3, 4, 4)
+    run_dir = tmp_path / "job" / "run"
+    data_dir = tmp_path / "job" / "data"
+    run_dir.mkdir(parents=True)
+    data_dir.mkdir(parents=True)
+    mrc_path = data_dir / "stack.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    cs_dtype = np.dtype([("blob/idx", np.int32), ("blob/path", "U64")])
+    cs = np.zeros(3, dtype=cs_dtype)
+    cs["blob/idx"] = np.array([2, 0, 1], dtype=np.int32)
+    cs["blob/path"] = np.array([">stack.mrcs", ">stack.mrcs", ">stack.mrcs"])
+    cs_path = run_dir / "particles.cs"
+    with open(cs_path, "wb") as f:
+        np.save(f, cs)
+
+    loader = image_loader.CryoSparcLoader(str(cs_path), datadir="../data", lazy=True)
+    out = loader.get(np.array([0, 1, 2], dtype=np.int32))
+    np.testing.assert_allclose(out[0], data[2])
+    np.testing.assert_allclose(out[1], data[0])
+    np.testing.assert_allclose(out[2], data[1])
+
+
+def test_load_images_star_from_simulator_tiny_tilt_preserves_duplicates_and_order(tmp_path):
+    from helpers import tiny_synthetic
+
+    files = tiny_synthetic.make_tiny_tilt_loader_files_from_simulator(
+        tmp_path / "sim_tiny_tilt",
+        grid_size=8,
+        n_images=18,
+        n_tilts=3,
+        n_volumes=4,
+    )
+    datadir = str(Path(files["particles_star"]).parent)
+    req = np.array([5, 1, 5, 0], dtype=np.int32)
+
+    star_loader = image_loader.load_images(files["particles_star"], indices=None, datadir=datadir, lazy=True)
+    mrc_loader = image_loader.MRCLoader(files["particles_mrcs"], lazy=True)
+    got = star_loader.get(req)
+    expected = mrc_loader.get(req)
+    np.testing.assert_allclose(got, expected)
+
+
+def test_load_images_star_with_constructor_indices_from_simulator_preserves_local_order_and_duplicates(tmp_path):
+    from helpers import tiny_synthetic
+
+    files = tiny_synthetic.make_tiny_tilt_loader_files_from_simulator(
+        tmp_path / "sim_tiny_tilt_subset",
+        grid_size=8,
+        n_images=18,
+        n_tilts=3,
+        n_volumes=4,
+    )
+    datadir = str(Path(files["particles_star"]).parent)
+    selected_global = np.array([7, 2, 7, 1], dtype=np.int32)
+    local_request = np.array([3, 0, 2, 1], dtype=np.int32)
+
+    loader = image_loader.load_images(
+        files["particles_star"],
+        indices=selected_global,
+        datadir=datadir,
+        lazy=True,
+    )
+    got = loader.get(local_request)
+
+    mrc_loader = image_loader.MRCLoader(files["particles_mrcs"], lazy=True)
+    expected = mrc_loader.get(selected_global[local_request])
+    np.testing.assert_allclose(got, expected)
+
+
+def test_load_images_star_with_boolean_constructor_mask_from_simulator(tmp_path):
+    from helpers import tiny_synthetic
+
+    files = tiny_synthetic.make_tiny_tilt_loader_files_from_simulator(
+        tmp_path / "sim_tiny_tilt_mask",
+        grid_size=8,
+        n_images=18,
+        n_tilts=3,
+        n_volumes=4,
+    )
+    datadir = str(Path(files["particles_star"]).parent)
+    mask = np.zeros(files["n_images"], dtype=bool)
+    mask[[7, 2, 1]] = True
+    local_request = np.array([2, 0, 1], dtype=np.int32)
+
+    loader = image_loader.load_images(
+        files["particles_star"],
+        indices=mask,
+        datadir=datadir,
+        lazy=True,
+    )
+    got = loader.get(local_request)
+
+    mrc_loader = image_loader.MRCLoader(files["particles_mrcs"], lazy=True)
+    # mask selects global indices [1,2,7] in ascending order; local_request [2,0,1]
+    # should map to global [7,1,2].
+    expected = mrc_loader.get(np.array([7, 1, 2], dtype=np.int32))
+    np.testing.assert_allclose(got, expected)
+
+
+def test_load_images_star_rejects_wrong_length_boolean_constructor_mask(tmp_path):
+    from helpers import tiny_synthetic
+
+    files = tiny_synthetic.make_tiny_tilt_loader_files_from_simulator(
+        tmp_path / "sim_tiny_tilt_badmask",
+        grid_size=8,
+        n_images=18,
+        n_tilts=3,
+        n_volumes=4,
+    )
+    datadir = str(Path(files["particles_star"]).parent)
+
+    with pytest.raises(ValueError, match="must match available length"):
+        image_loader.load_images(
+            files["particles_star"],
+            indices=np.array([True, False, True], dtype=bool),
+            datadir=datadir,
+            lazy=True,
+        )
