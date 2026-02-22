@@ -78,7 +78,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
 
     batch_size = utils.get_embedding_batch_size(basis, cryos[0].image_size, contrast_grid, basis_size, gpu_memory) * 1
     logger.info(f"embedding batch size? {batch_size}")
-    batch_size = batch_size//10
+    batch_size = max(1, int(batch_size // 10))
     # mean = cryojax_map_coordinates.compute_spline_coefficients(mean.reshape(cryos[0].volume_shape))
 
     # It is not so clear whether this step should ever use the mask. But when using the options['ignore_zero_frequency'] option, there is a good reason not to do it
@@ -99,7 +99,11 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, cryos[0].volume_shape, gpu_memory= None)
 
 
-    zs = [None]*2; cov_zs = [None]*2; est_contrasts = [None]*2; bias = [None]*2
+    n_cryos = len(cryos)
+    zs = [None] * n_cryos
+    cov_zs = [None] * n_cryos
+    est_contrasts = [None] * n_cryos
+    bias = [None] * n_cryos
     for cryo_idx,cryo in enumerate(cryos):
         zs[cryo_idx], cov_zs[cryo_idx], est_contrasts[cryo_idx], bias[cryo_idx] = get_coords_in_basis_and_contrast_3(
             cryo, mean, basis, eigenvalues[:basis.shape[0]], volume_mask,

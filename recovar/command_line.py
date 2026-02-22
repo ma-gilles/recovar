@@ -19,11 +19,11 @@ def main_commands() -> None:
     """Primary commands installed with recovar as `recovar <cmd_module_name>`."""
     cmd_dir = os.path.join(os.path.dirname(__file__), "commands")
     
-    available_cmds = [
+    available_cmds = sorted([
         os.path.splitext(filename)[0]
         for filename in os.listdir(cmd_dir)
         if filename.endswith(".py") and filename != "__init__.py"
-    ]
+    ])
     
     if len(sys.argv) < 2:
         print("Usage: recovar <command>")

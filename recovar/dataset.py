@@ -518,8 +518,20 @@ def load_cryodrgn_dataset(
 
     # Make sure everything is in correct dtype:
     ctf_params = ctf_params.astype(np.float32)
-    translations = np.array(trans).astype(np.float32)
-    rots = np.array(rots).astype(np.float32)
+    rots = np.asarray(rots, dtype=np.float32)
+    if rots.ndim != 3 or rots.shape[1:] != (3, 3):
+        raise ValueError(f"Rotation array must have shape (N, 3, 3), got {rots.shape}")
+
+    if trans is None:
+        # Support rotation-only pose files by assuming zero in-plane shifts.
+        translations = np.zeros((rots.shape[0], 2), dtype=np.float32)
+    else:
+        translations = np.asarray(trans, dtype=np.float32)
+        expected_t_shape = (rots.shape[0], 2)
+        if translations.shape != expected_t_shape:
+            raise ValueError(
+                f"Translation array must have shape {expected_t_shape}, got {translations.shape}"
+            )
 
     return CryoEMDataset( dataset, voxel_size,
                               rots, translations, ctf_params[:,1:], 

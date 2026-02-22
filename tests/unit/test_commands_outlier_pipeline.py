@@ -179,3 +179,49 @@ def test_pipeline_with_outliers_restores_argv_and_uses_previous_round_image_indi
 
     # Restore for hygiene in case later tests introspect process argv.
     monkeypatch.setattr(pipeline_with_outliers.sys, "argv", original_argv)
+
+
+def test_pipeline_with_outliers_restores_argv_when_outlier_detection_raises(monkeypatch, tmp_path):
+    def fake_standard_recovar_pipeline(args):
+        model_dir = os.path.join(args.outdir, "model")
+        os.makedirs(model_dir, exist_ok=True)
+        embeddings = {"zs": {4: np.zeros((4, 4), dtype=np.float32)}}
+        with open(os.path.join(model_dir, "embeddings.pkl"), "wb") as f:
+            pickle.dump(embeddings, f)
+
+    def fake_outlier_main():
+        raise RuntimeError("forced-outlier-failure")
+
+    monkeypatch.setattr(pipeline_with_outliers, "standard_recovar_pipeline", fake_standard_recovar_pipeline)
+    monkeypatch.setattr(pipeline_with_outliers.output, "PipelineOutput", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(pipeline_with_outliers.output, "standard_pipeline_plots", lambda *_args, **_kwargs: None)
+
+    import recovar.commands.outlier_detection as outlier_detection_cmd
+
+    monkeypatch.setattr(outlier_detection_cmd, "main", fake_outlier_main)
+
+    original_argv = list(pipeline_with_outliers.sys.argv)
+    new_argv = [
+        "pipeline_with_outliers",
+        str(tmp_path / "particles.64.mrcs"),
+        "--poses",
+        str(tmp_path / "poses.pkl"),
+        "--ctf",
+        str(tmp_path / "ctf.pkl"),
+        "-o",
+        str(tmp_path / "pipeline_out"),
+        "--mask",
+        "from_halfmaps",
+        "--zdim",
+        "4",
+        "--k-rounds",
+        "1",
+        "--accept-cpu",
+    ]
+    monkeypatch.setattr(pipeline_with_outliers.sys, "argv", new_argv)
+
+    with pytest.raises(RuntimeError, match="forced-outlier-failure"):
+        pipeline_with_outliers.main()
+
+    assert list(pipeline_with_outliers.sys.argv) == new_argv
+    monkeypatch.setattr(pipeline_with_outliers.sys, "argv", original_argv)

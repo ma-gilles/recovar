@@ -291,3 +291,54 @@ def test_load_poses_rejects_rotation_translation_count_mismatch(monkeypatch):
 
     with pytest.raises(ValueError, match="count mismatch"):
         load_utils.load_poses("poses.pkl", Nimg=3, D=8)
+
+
+def test_load_poses_from_tiny_tilt_simulator_subset_preserves_duplicates_and_alignment(tmp_path):
+    files = tiny_synthetic.make_tiny_tilt_loader_files_from_simulator(
+        tmp_path / "tiny_tilt_pose_subset",
+        grid_size=8,
+        n_images=12,
+        n_tilts=3,
+        n_volumes=3,
+    )
+    requested = np.array([5, 1, 5, 9], dtype=np.int32)
+
+    rots_all, trans_all, _ = load_utils.load_poses(files["poses_pkl"], Nimg=12, D=8)
+    rots_sub, trans_sub, D_out = load_utils.load_poses(
+        files["poses_pkl"],
+        Nimg=len(requested),
+        D=8,
+        ind=requested,
+    )
+
+    assert D_out == 8
+    np.testing.assert_allclose(rots_sub, rots_all[requested])
+    np.testing.assert_allclose(trans_sub, trans_all[requested])
+
+
+def test_load_poses_from_tiny_tilt_simulator_boolean_mask_subset_matches_integer_selection(tmp_path):
+    files = tiny_synthetic.make_tiny_tilt_loader_files_from_simulator(
+        tmp_path / "tiny_tilt_pose_mask",
+        grid_size=8,
+        n_images=10,
+        n_tilts=2,
+        n_volumes=3,
+    )
+    mask = np.array([True, False, True, False, False, True, False, True, False, False], dtype=bool)
+    requested = np.flatnonzero(mask)
+
+    rots_mask, trans_mask, _ = load_utils.load_poses(
+        files["poses_pkl"],
+        Nimg=int(mask.sum()),
+        D=8,
+        ind=mask,
+    )
+    rots_idx, trans_idx, _ = load_utils.load_poses(
+        files["poses_pkl"],
+        Nimg=len(requested),
+        D=8,
+        ind=requested,
+    )
+
+    np.testing.assert_allclose(rots_mask, rots_idx)
+    np.testing.assert_allclose(trans_mask, trans_idx)

@@ -1,0 +1,100 @@
+import importlib
+import sys
+import types
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+pytest.importorskip("jax")
+
+pytestmark = pytest.mark.unit
+
+
+class _FakeAtoms:
+    def __init__(self):
+        self._coords = np.zeros((4, 3), dtype=np.float32)
+
+    def getCoords(self):
+        return self._coords.copy()
+
+    def setCoords(self, coords):
+        self._coords = np.asarray(coords, dtype=np.float32)
+
+
+def test_make_spike_main_uses_utils_pickle_dump(monkeypatch, tmp_path):
+    monkeypatch.setitem(
+        sys.modules,
+        "prody",
+        types.SimpleNamespace(parsePDB=lambda _path: _FakeAtoms()),
+    )
+    sys.modules.pop("recovar.commands.make_spike_datasets", None)
+    msd = importlib.import_module("recovar.commands.make_spike_datasets")
+
+    calls = {"pickle_paths": [], "assignment_disc_type": None, "dataset_lazy": None}
+
+    monkeypatch.setattr(msd.ssp, "get_center_coord_offset", lambda _coords: np.zeros(3, dtype=np.float32))
+    monkeypatch.setattr(
+        msd.ssp,
+        "generate_molecule_spectrum_from_pdb_id",
+        lambda *_args, **_kwargs: np.ones((8,), dtype=np.complex64),
+    )
+    monkeypatch.setattr(msd.simulator, "Bfactorize_vol", lambda vol, *_args, **_kwargs: np.asarray(vol))
+    monkeypatch.setattr(msd.output, "mkdir_safe", lambda path: None)
+    monkeypatch.setattr(msd.output, "save_volumes", lambda *_args, **_kwargs: None)
+
+    monkeypatch.setattr(
+        msd.simulator,
+        "generate_synthetic_dataset",
+        lambda *_args, **_kwargs: (
+            None,
+            {
+                "volumes_path_root": str(tmp_path / "vols" / "vol"),
+                "grid_size": 8,
+                "trailing_zero_format_in_vol_name": True,
+                "scale_vol": 1.0,
+                "noise_variance": np.array([1.0, 1.0], dtype=np.float32),
+                "image_assignment": np.array([0, 1], dtype=np.int32),
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        msd.simulator,
+        "load_volumes_from_folder",
+        lambda *_args, **_kwargs: np.ones((2, 8), dtype=np.float32),
+    )
+
+    monkeypatch.setattr(msd.dataset, "get_default_dataset_option", lambda: {})
+
+    def _fake_load_dataset_from_dict(_opts, lazy=False):
+        calls["dataset_lazy"] = lazy
+        return SimpleNamespace(image_shape=(2, 2))
+
+    monkeypatch.setattr(msd.dataset, "load_dataset_from_dict", _fake_load_dataset_from_dict)
+    monkeypatch.setattr(
+        msd.noise,
+        "make_radial_noise",
+        lambda *_args, **_kwargs: np.ones((2, 2), dtype=np.float32),
+    )
+
+    def _fake_compute_image_assignment(_cryo, _vols, _noise_cov, _batch_size, disc_type=None):
+        calls["assignment_disc_type"] = disc_type
+        return np.array([[0.1, 0.9], [0.9, 0.1]], dtype=np.float32)
+
+    monkeypatch.setattr(msd.image_assignment, "compute_image_assignment", _fake_compute_image_assignment)
+    monkeypatch.setattr(msd.image_assignment, "estimate_false_positive_rate", lambda *_args, **_kwargs: 0.25)
+    monkeypatch.setattr(msd.utils, "pickle_dump", lambda _obj, path: calls["pickle_paths"].append(path))
+    monkeypatch.setattr(msd.plt, "show", lambda: None)
+
+    msd.main(
+        output_folder=str(tmp_path),
+        pdb_folder=str(tmp_path),
+        n_images=2,
+        grid_size=8,
+        noise_level_tests=np.array([10.0], dtype=np.float32),
+    )
+
+    assert calls["dataset_lazy"] is False
+    assert calls["assignment_disc_type"] == "cubic"
+    assert any(path.endswith("dataset0/result.pkl") for path in calls["pickle_paths"])
+    assert any(path.endswith("curve.pkl") for path in calls["pickle_paths"])

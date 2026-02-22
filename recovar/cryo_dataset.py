@@ -459,7 +459,10 @@ class TiltSeriesDataset(ParticleImageDataset):
             raise ValueError("STAR data is missing required column: _rlnGroupName")
         
         if indices is not None:
-            df = df.loc[indices]
+            norm_indices = _normalize_subset_indices(indices, len(df), name="indices")
+            # Keep original STAR row ids in outputs so downstream mappings stay
+            # consistent with image indices used elsewhere.
+            df = df.loc[norm_indices]
         
         # Get canonical ordering
         canonical_groups = sorted(df['_rlnGroupName'].unique())
@@ -690,10 +693,16 @@ def collate_to_jax(batch):
         if batch is None:
             return None
         if isinstance(batch[0], np.ndarray):
+            # Tilt-series loaders emit many batch_size=1 items. Avoid an extra
+            # concatenate/copy in that common case.
+            if len(batch) == 1:
+                return jnp.asarray(batch[0])
             # Concatenate in NumPy first, then perform a single host->device
             # transfer to reduce conversion overhead.
             return jnp.asarray(np.concatenate(batch, axis=0))
         if isinstance(batch[0], torch.Tensor):
+            if len(batch) == 1:
+                return jnp.asarray(batch[0].cpu().numpy())
             # Keep host copy explicit; DataLoader tensors are CPU by default.
             return jnp.asarray(torch.cat(batch, dim=0).cpu().numpy())
         elif isinstance(batch[0], (tuple, list)):
@@ -738,6 +747,12 @@ class ImageCountBatchLoader:
             num_workers: Number of workers (not used)
             pad_to_batch: Whether to pad last batch
         """
+        if not isinstance(batch_size, (int, np.integer)):
+            raise TypeError(f"batch_size must be an integer, got {type(batch_size).__name__}")
+        batch_size = int(batch_size)
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
+
         self.dataset = dataset
         self.batch_size = batch_size
         self.pad_to_batch = pad_to_batch

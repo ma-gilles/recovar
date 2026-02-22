@@ -66,7 +66,7 @@ def compute_fsc_auc(fsc_curve, grid_size, voxel_size, threshold=1/7):
     # Find where FSC drops below threshold
     above_threshold = fsc_curve >= threshold
     if np.all(above_threshold):
-        return np.trapz(fsc_curve, freq)
+        return np.trapezoid(fsc_curve, freq)
 
     if np.all(~above_threshold):
         return 0.0
@@ -77,7 +77,7 @@ def compute_fsc_auc(fsc_curve, grid_size, voxel_size, threshold=1/7):
         return 0.0
 
     # Compute AUC up to that point
-    auc = np.trapz(fsc_curve[:idx], freq[:idx])
+    auc = np.trapezoid(fsc_curve[:idx], freq[:idx])
     return auc
 
 
@@ -2550,4 +2550,3 @@ def save_particle_classifications(junk_particles, good_particles, particle_stats
 
 if __name__ == "__main__":
     main()
-
