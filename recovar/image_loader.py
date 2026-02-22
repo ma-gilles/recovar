@@ -46,6 +46,31 @@ logger = logging.getLogger(__name__)
 NVTX_DOMAIN_DATA_IO = "data_io"
 
 
+def _normalize_selection_indices(indices, n_total: int, name: str) -> np.ndarray:
+    """Normalize optional subset indices used at loader construction time."""
+    if indices is None:
+        return np.arange(int(n_total), dtype=np.int32)
+    arr = np.asarray(indices)
+    if arr.dtype == bool:
+        if arr.ndim != 1:
+            raise ValueError(f"{name} boolean mask must be 1D")
+        if arr.size != int(n_total):
+            raise ValueError(
+                f"{name} boolean mask length {arr.size} must match available length {int(n_total)}"
+            )
+        return np.flatnonzero(arr).astype(np.int32, copy=False)
+    if arr.ndim == 0:
+        arr = arr.reshape(1)
+    if arr.ndim != 1:
+        raise ValueError(f"{name} indices must be 1D")
+    if arr.dtype.kind not in ("i", "u"):
+        raise TypeError(f"{name} indices must be integer or boolean mask")
+    arr = arr.astype(np.int64, copy=False)
+    if np.any(arr < 0) or np.any(arr >= int(n_total)):
+        raise IndexError(f"{name} indices out of range [0, {int(n_total)})")
+    return arr.astype(np.int32, copy=False)
+
+
 def load_images(filepath: str, indices: Optional[np.ndarray] = None, 
                 datadir: str = "", lazy: bool = True, max_threads: int = 1,
                 strip_prefix: Optional[str] = None):
@@ -180,13 +205,21 @@ class ImageLoader:
         
         if isinstance(indices, np.ndarray):
             if indices.dtype == bool:
-                indices = np.where(indices)[0]
+                if indices.ndim != 1:
+                    raise ValueError("Boolean indices must be a 1D mask")
+                if indices.size != self._num_images:
+                    raise ValueError(
+                        f"Boolean index mask length {indices.size} must match number of images {self._num_images}"
+                    )
+                indices = np.flatnonzero(indices)
             # Handle 0-d arrays (scalars)
             if indices.ndim == 0:
                 idx = int(indices)
                 if idx < 0 or idx >= self._num_images:
                     raise IndexError(f"Index {idx} out of range [0, {self._num_images})")
                 return np.array([idx])
+            if indices.ndim != 1:
+                raise ValueError("Indices array must be 1D")
             if indices.dtype.kind not in ("i", "u"):
                 raise TypeError(f"Indices array must be integer or bool dtype, got {indices.dtype}")
             if np.any(indices < 0) or np.any(indices >= self._num_images):
@@ -254,7 +287,7 @@ class MRCLoader(ImageLoader):
         self._file_dtype = self._header.dtype
         
         # Set up index mapping
-        self._file_indices = indices if indices is not None else np.arange(nz)
+        self._file_indices = _normalize_selection_indices(indices, nz, "MRCLoader indices")
         
         super().__init__(len(self._file_indices), ny, self._file_dtype)
         
@@ -319,7 +352,8 @@ class MultiMRCLoader(ImageLoader):
 
         # Apply index filter if provided
         if indices is not None:
-            self._file_map = self._file_map.iloc[indices].reset_index(drop=True)
+            iloc_idx = _normalize_selection_indices(indices, len(self._file_map), "MultiMRCLoader indices")
+            self._file_map = self._file_map.iloc[iloc_idx].reset_index(drop=True)
 
         if len(self._file_map) == 0:
             raise ValueError("No images selected for MultiMRCLoader")

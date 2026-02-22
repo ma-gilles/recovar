@@ -630,3 +630,157 @@ def test_run_test_dataset_no_delete_flag_skips_cleanup(monkeypatch, tmp_path):
 
     assert commands
     assert removed == []
+
+
+def test_run_test_dataset_does_not_cleanup_when_any_command_fails(monkeypatch, tmp_path):
+    commands = []
+    removed = []
+
+    def fake_run(command, shell):
+        assert shell is True
+        commands.append(command)
+        # Fail one pipeline command to force failed_functions branch.
+        if " pipeline " in command:
+            return SimpleNamespace(returncode=1)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        run_test_dataset.jax,
+        "devices",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("GPU check should not run with --cpu")),
+    )
+    monkeypatch.setattr(run_test_dataset.os.path, "exists", lambda _p: True)
+    monkeypatch.setattr(run_test_dataset.shutil, "rmtree", lambda p: removed.append(p))
+    monkeypatch.setattr(
+        run_test_dataset.sys,
+        "argv",
+        ["run_test_dataset", "--output-dir", str(tmp_path), "--cpu"],
+    )
+
+    run_test_dataset.main()
+
+    assert commands
+    assert removed == []
+
+
+def test_run_test_dataset_exits_early_when_no_gpu_and_not_cpu(monkeypatch, tmp_path):
+    commands = []
+
+    def fake_run(command, shell):
+        commands.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
+    monkeypatch.setattr(run_test_dataset.jax, "devices", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        run_test_dataset.sys,
+        "argv",
+        ["run_test_dataset", "--output-dir", str(tmp_path)],
+    )
+
+    with pytest.raises(SystemExit):
+        run_test_dataset.main()
+    assert commands == []
+
+
+def test_run_test_dataset_quotes_paths_with_spaces(monkeypatch, tmp_path):
+    import shlex
+
+    commands = []
+    outdir = tmp_path / "with space"
+
+    def fake_run(command, shell):
+        assert shell is True
+        commands.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        run_test_dataset.jax,
+        "devices",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("GPU check should not run with --cpu")),
+    )
+    monkeypatch.setattr(
+        run_test_dataset.sys,
+        "argv",
+        ["run_test_dataset", "--output-dir", str(outdir), "--cpu", "--tilt-series-only", "--no-delete"],
+    )
+
+    run_test_dataset.main()
+
+    assert commands
+    quoted_tilt_root = shlex.quote(str(outdir / "tilt_test"))
+    quoted_target = shlex.quote(str(outdir / "tilt_test" / "test_dataset" / "target.txt"))
+    assert any(f"make_test_dataset {quoted_tilt_root} " in cmd for cmd in commands)
+    assert any(f"> {quoted_target}" in cmd for cmd in commands)
+
+
+def test_run_test_dataset_quotes_non_tilt_pipeline_paths_with_spaces(monkeypatch, tmp_path):
+    import shlex
+
+    commands = []
+    outdir = tmp_path / "with space"
+
+    def fake_run(command, shell):
+        assert shell is True
+        commands.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        run_test_dataset.jax,
+        "devices",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("GPU check should not run with --cpu")),
+    )
+    monkeypatch.setattr(run_test_dataset.os.path, "exists", lambda _p: False)
+    monkeypatch.setattr(
+        run_test_dataset.sys,
+        "argv",
+        ["run_test_dataset", "--output-dir", str(outdir), "--cpu", "--no-delete"],
+    )
+
+    run_test_dataset.main()
+
+    assert commands
+    quoted_particles = shlex.quote(str(outdir / "test_dataset" / "particles.64.mrcs"))
+    quoted_pipeline_out = shlex.quote(str(outdir / "test_dataset" / "pipeline_output"))
+    assert any(f"pipeline {quoted_particles} " in cmd for cmd in commands)
+    assert any(f"-o {quoted_pipeline_out} " in cmd for cmd in commands)
+
+
+def test_run_test_dataset_all_tests_quotes_reconstruct_paths_with_spaces(monkeypatch, tmp_path):
+    import shlex
+
+    commands = []
+    outdir = tmp_path / "with space"
+    embeddings_path = outdir / "test_dataset" / "pipeline_output" / "model" / "embeddings.pkl"
+    embeddings_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(embeddings_path, "wb") as f:
+        pickle.dump({"zs": {2: np.zeros((4, 2), dtype=np.float32)}}, f)
+
+    def fake_run(command, shell):
+        assert shell is True
+        commands.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        run_test_dataset.jax,
+        "devices",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("GPU check should not run with --cpu")),
+    )
+    monkeypatch.setattr(
+        run_test_dataset.sys,
+        "argv",
+        ["run_test_dataset", "--output-dir", str(outdir), "--cpu", "--all-tests", "--no-delete"],
+    )
+
+    run_test_dataset.main()
+
+    reconstruct_cmds = [c for c in commands if "reconstruct_from_external_embedding" in c]
+    assert reconstruct_cmds
+    quoted_embedding = shlex.quote(str(outdir / "test_dataset" / "embedding_2.pkl"))
+    quoted_target = shlex.quote(str(outdir / "test_dataset" / "target.txt"))
+    assert any(f"--embedding {quoted_embedding} " in c for c in reconstruct_cmds)
+    assert any(f"--target {quoted_target} " in c for c in reconstruct_cmds)

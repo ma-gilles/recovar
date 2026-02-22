@@ -218,3 +218,76 @@ def make_tiny_loader_files(
         "n_images": n_images,
         "grid_size": grid_size,
     }
+
+
+def make_tiny_tilt_loader_files_from_simulator(
+    out_dir,
+    grid_size=8,
+    n_images=24,
+    n_tilts=3,
+    n_volumes=4,
+    voxel_size=1.5,
+):
+    """Create tiny on-disk cryo-ET files via simulator for robust loader tests.
+
+    Returns dict with:
+      particles_star, particles_mrcs, poses_pkl, ctf_pkl, simulation_info_pkl, n_images, grid_size, n_tilts
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Real-space compact volumes with a moving blob.
+    x = np.linspace(-1.0, 1.0, grid_size, dtype=np.float32)
+    xx, yy, zz = np.meshgrid(x, x, x, indexing="ij")
+    vol_prefix = out_dir / "vol"
+    for i in range(n_volumes):
+        t = i / max(n_volumes - 1, 1)
+        static = np.exp(-((xx + 0.25) ** 2 + (yy + 0.1) ** 2 + (zz + 0.05) ** 2) / (2 * 0.18**2))
+        moving = np.exp(-((xx - (-0.45 + 0.9 * t)) ** 2 + (yy - 0.25) ** 2 + (zz - 0.2) ** 2) / (2 * 0.16**2))
+        vol = (static + 0.8 * moving).astype(np.float32)
+        vol -= vol.mean()
+        denom = np.linalg.norm(vol.ravel())
+        if denom > 0:
+            vol /= denom
+        utils.write_mrc(f"{vol_prefix}{i:04d}.mrc", vol, voxel_size=voxel_size)
+
+    sim_out = out_dir / "simulated_dataset"
+    sim_out.mkdir(parents=True, exist_ok=True)
+    _, sim_info = simulator.generate_synthetic_dataset(
+        str(sim_out),
+        voxel_size,
+        str(vol_prefix),
+        int(n_images),
+        outlier_file_input=None,
+        grid_size=grid_size,
+        volume_distribution=np.ones(n_volumes, dtype=np.float32) / float(n_volumes),
+        dataset_params_option="uniform",
+        noise_level=0.5,
+        noise_model="radial1",
+        put_extra_particles=False,
+        percent_outliers=0.0,
+        volume_radius=0.7,
+        trailing_zero_format_in_vol_name=True,
+        noise_scale_std=0.0,
+        contrast_std=0.0,
+        disc_type="linear_interp",
+        n_tilts=int(n_tilts),
+    )
+
+    particles_star = sim_out / "particles.star"
+    particles_mrcs = sim_out / f"particles.{grid_size}.mrcs"
+    ctf_pkl = sim_out / "ctf.pkl"
+    poses_pkl = sim_out / "poses.pkl"
+    sim_info_pkl = sim_out / "simulation_info.pkl"
+
+    return {
+        "particles_star": str(particles_star),
+        "particles_mrcs": str(particles_mrcs),
+        "poses_pkl": str(poses_pkl),
+        "ctf_pkl": str(ctf_pkl),
+        "simulation_info_pkl": str(sim_info_pkl),
+        "n_images": int(n_images),
+        "grid_size": int(grid_size),
+        "n_tilts": int(n_tilts),
+        "sim_info": sim_info,
+    }

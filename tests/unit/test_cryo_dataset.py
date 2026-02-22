@@ -41,6 +41,24 @@ def test_particle_image_dataset_basic_getitem_and_preprocess(monkeypatch):
     assert processed.dtype == np.complex64
 
 
+def test_particle_image_dataset_subset_generators_preserve_order_and_duplicates(monkeypatch):
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _DummySource(n=5, D=8))
+    ds = cryo_dataset.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+
+    subset = np.array([3, 1, 3], dtype=np.int32)
+    batches = list(ds.get_dataset_subset_generator(batch_size=2, subset_indices=subset))
+    got = []
+    for _imgs, _pidx, tidx in batches:
+        got.extend(np.array(tidx).reshape(-1).tolist())
+    assert got == [3, 1, 3]
+
+    image_batches = list(ds.get_image_subset_generator(batch_size=2, subset_indices=subset))
+    got_img = []
+    for _imgs, _pidx, tidx in image_batches:
+        got_img.extend(np.array(tidx).reshape(-1).tolist())
+    assert got_img == [3, 1, 3]
+
+
 def test_tiltseries_parse_particle_tilt_and_reverse_map(monkeypatch):
     df = pd.DataFrame(
         {
@@ -131,6 +149,47 @@ def test_tilt_series_to_images_with_subset_preserves_order_and_duplicates(monkey
         image_subset=np.array([3, 2], dtype=np.int32),
     )
     np.testing.assert_array_equal(out, np.array([2, 3, 2, 3], dtype=np.int32))
+
+
+def test_tilt_series_to_images_with_boolean_subset_mask(monkeypatch):
+    monkeypatch.setattr(
+        cryo_dataset.TiltSeriesDataset,
+        "parse_particle_tilt",
+        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0}),
+    )
+    mask = np.array([False, True, False, True, True], dtype=bool)
+    out = cryo_dataset.tilt_series_to_images(np.array([0, 2, 0], dtype=np.int32), "dummy.star", image_subset=mask)
+    np.testing.assert_array_equal(out, np.array([1, 4, 1], dtype=np.int32))
+
+
+def test_tilt_series_to_images_rejects_non_1d_boolean_subset_mask(monkeypatch):
+    monkeypatch.setattr(
+        cryo_dataset.TiltSeriesDataset,
+        "parse_particle_tilt",
+        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0}),
+    )
+    bad_mask = np.array([[True, False], [False, True]], dtype=bool)
+    with pytest.raises(ValueError, match="boolean mask must be 1D"):
+        cryo_dataset.tilt_series_to_images(
+            np.array([0], dtype=np.int32),
+            "dummy.star",
+            image_subset=bad_mask,
+        )
+
+
+def test_tilt_series_to_images_rejects_wrong_length_boolean_subset_mask(monkeypatch):
+    monkeypatch.setattr(
+        cryo_dataset.TiltSeriesDataset,
+        "parse_particle_tilt",
+        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0}),
+    )
+    bad_mask = np.array([True, False, True], dtype=bool)  # should have length 5
+    with pytest.raises(ValueError, match="must match number of images"):
+        cryo_dataset.tilt_series_to_images(
+            np.array([0, 2], dtype=np.int32),
+            "dummy.star",
+            image_subset=bad_mask,
+        )
 
 
 def test_tilt_series_to_images_empty_and_duplicate_particle_indices(monkeypatch):
@@ -249,6 +308,48 @@ def test_tiltseries_dataset_getitem_deterministic_selection(monkeypatch):
     assert selected.shape == (2,)
     # Deterministic order induced by _compute_tilt_ordering implementation.
     np.testing.assert_array_equal(selected, np.array([0, 2]))
+
+
+def test_tiltseries_dataset_random_selection_clamps_when_num_tilts_exceeds_available(monkeypatch):
+    class _Source:
+        def __init__(self):
+            self.n = 5
+            self.D = 8
+            self._store = np.arange(self.n * self.D * self.D, dtype=np.float32).reshape(self.n, self.D, self.D)
+
+        def images(self, index, require_contiguous=False):
+            _ = require_contiguous
+            if isinstance(index, (int, np.integer)):
+                return self._store[int(index)]
+            return self._store[np.asarray(index)]
+
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["g1", "g1", "g2", "g2", "g2"],
+            "_rlnMicrographPreExposure": [1.0, 2.0, 1.0, 2.0, 3.0],
+            "_rlnCtfScalefactor": [1, 1, 1, 1, 1],
+            "_rlnCtfBfactor": [-1.0, -2.0, -3.0, -4.0, -5.0],
+        }
+    )
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+
+    np.random.seed(0)
+    ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=10, random_tilts=True, tilt_file_option="relion5")
+
+    # g1 has only 2 tilts; should clamp instead of raising from np.random.choice.
+    imgs0, pidx0, selected0 = ds[0]
+    assert pidx0 == 0
+    assert len(selected0) == 2
+    assert len(np.unique(selected0)) == 2
+    np.testing.assert_allclose(imgs0, _Source()._store[selected0])
+
+    # g2 has 3 tilts; clamp there as well.
+    imgs1, pidx1, selected1 = ds[1]
+    assert pidx1 == 1
+    assert len(selected1) == 3
+    assert len(np.unique(selected1)) == 3
+    np.testing.assert_allclose(imgs1, _Source()._store[selected1])
 
 
 def test_tiltseries_dataset_getitem_deterministic_selection_warp(monkeypatch):

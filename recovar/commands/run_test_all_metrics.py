@@ -148,7 +148,15 @@ def validate_storage_args_for_generated_volumes(args, argv):
     """
     if args.volume_input is not None:
         return
-    if ("--output-dir" not in argv) and ("-o" not in argv):
+    has_explicit_outdir = False
+    for tok in argv:
+        if tok in ("--output-dir", "-o"):
+            has_explicit_outdir = True
+            break
+        if tok.startswith("--output-dir=") or tok.startswith("-o="):
+            has_explicit_outdir = True
+            break
+    if not has_explicit_outdir:
         raise ValueError(
             "When --volume-input is omitted (auto-generated volumes), you must pass --output-dir/-o "
             "explicitly to avoid unintended storage locations."
@@ -209,6 +217,11 @@ def compute_noise_variance_metrics(
     dose_indices=None,
     noise_increase_per_tilt=None,
 ):
+    gt_noise_base = None if gt_noise_base is None else np.asarray(gt_noise_base).reshape(-1)
+    est_noise = None if est_noise is None else np.asarray(est_noise)
+    if est_noise is not None and est_noise.ndim == 0:
+        est_noise = est_noise.reshape(1)
+
     def _safe_corrcoef(x, y):
         x = np.asarray(x)
         y = np.asarray(y)
@@ -231,9 +244,7 @@ def compute_noise_variance_metrics(
         return scores
 
     logger.info(f"Ground truth noise shape: {gt_noise_base.shape}")
-    logger.info(
-        f"Estimated noise shape: {est_noise.shape if isinstance(est_noise, np.ndarray) else 'not array'}"
-    )
+    logger.info(f"Estimated noise shape: {est_noise.shape if isinstance(est_noise, np.ndarray) else 'not array'}")
 
     if isinstance(est_noise, np.ndarray) and est_noise.ndim > 1:
         logger.info("Processing variable noise per tilt...")

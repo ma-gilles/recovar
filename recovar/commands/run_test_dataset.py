@@ -1,6 +1,7 @@
 import subprocess
 import shutil
 import os
+import shlex
 import jax
 import sys
 import argparse
@@ -67,6 +68,14 @@ def main():
 
     cpu_string = " --accept-cpu" if run_on_cpu else ""
 
+    def _p(*parts):
+        return os.path.join(dataset_dir, *parts)
+
+    def _pq(*parts):
+        return shlex.quote(_p(*parts))
+
+    dataset_dir_q = shlex.quote(dataset_dir)
+
     if tilt_series_only:
         # Run only tilt series tests
         print("Running tilt series tests only...")
@@ -74,35 +83,35 @@ def main():
         
         # Generate a test dataset for tilt series testing (without nested structure)
         run_command(
-            f'{BASE_CMD} make_test_dataset {dataset_dir}/tilt_test --n-images 10000 --tilt-series',
+            f'{BASE_CMD} make_test_dataset {_pq("tilt_test")} --n-images 10000 --tilt-series',
             'Generate a test dataset for tilt series',
             'make_test_dataset_tilt'
         )
 
         # Test pipeline with tilt series functionality
         run_command(
-            f'{BASE_CMD} pipeline {dataset_dir}/tilt_test/test_dataset/particles.star --poses {dataset_dir}/tilt_test/test_dataset/poses.pkl --ctf {dataset_dir}/tilt_test/test_dataset/ctf.pkl --tilt-series --tilt-series-ctf=relion5 --correct-contrast -o {dataset_dir}/tilt_test/test_dataset/pipeline_tilt_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
+            f'{BASE_CMD} pipeline {_pq("tilt_test", "test_dataset", "particles.star")} --poses {_pq("tilt_test", "test_dataset", "poses.pkl")} --ctf {_pq("tilt_test", "test_dataset", "ctf.pkl")} --tilt-series --tilt-series-ctf=relion5 --correct-contrast -o {_pq("tilt_test", "test_dataset", "pipeline_tilt_output")} --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
             'Run pipeline with tilt series functionality',
             'pipeline_tilt'
         )
 
         # Run analyze with tilt series functionality
         run_command(
-            f'{BASE_CMD} analyze {dataset_dir}/tilt_test/test_dataset/pipeline_tilt_output --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=0',
+            f'{BASE_CMD} analyze {_pq("tilt_test", "test_dataset", "pipeline_tilt_output")} --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=0',
             'Run analyze with tilt series',
             'analyze_tilt'
         )
 
         # Create a simple target file for tilt series reconstruction testing
         run_command(
-            f'echo "0.0 0.0" > {dataset_dir}/tilt_test/test_dataset/target.txt',
+            f'echo "0.0 0.0" > {_pq("tilt_test", "test_dataset", "target.txt")}',
             'Create target file for tilt series reconstruction',
             'create_target_tilt'
         )
 
         # Test reconstruct_from_external_embedding with tilt series
         run_command(
-            f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/tilt_test/test_dataset/particles.star --poses {dataset_dir}/tilt_test/test_dataset/poses.pkl --ctf {dataset_dir}/tilt_test/test_dataset/ctf.pkl --tilt-series --embedding {dataset_dir}/tilt_test/test_dataset/pipeline_tilt_output/embeddings.pkl --target {dataset_dir}/tilt_test/test_dataset/target.txt -o {dataset_dir}/tilt_test/test_dataset/reconstruct_tilt_output',
+            f'{BASE_CMD} reconstruct_from_external_embedding {_pq("tilt_test", "test_dataset", "particles.star")} --poses {_pq("tilt_test", "test_dataset", "poses.pkl")} --ctf {_pq("tilt_test", "test_dataset", "ctf.pkl")} --tilt-series --embedding {_pq("tilt_test", "test_dataset", "pipeline_tilt_output", "embeddings.pkl")} --target {_pq("tilt_test", "test_dataset", "target.txt")} -o {_pq("tilt_test", "test_dataset", "reconstruct_tilt_output")}',
             'Test reconstruct_from_external_embedding with tilt series',
             'reconstruct_tilt'
         )
@@ -111,35 +120,35 @@ def main():
         # Generate a small test dataset - should take about 30 sec
         cleanup_paths.append(os.path.join(dataset_dir, "test_dataset"))
         run_command(
-            f'{BASE_CMD} make_test_dataset {dataset_dir}',
+            f'{BASE_CMD} make_test_dataset {dataset_dir_q}',
             'Generate a small test dataset',
             'make_test_dataset'
         )
 
         # Run pipeline, first variant - should take about 2 min
         run_command(
-            f'{BASE_CMD} pipeline {dataset_dir}/test_dataset/particles.64.mrcs --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {dataset_dir}/test_dataset/pipeline_output --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
+            f'{BASE_CMD} pipeline {_pq("test_dataset", "particles.64.mrcs")} --poses {_pq("test_dataset", "poses.pkl")} --ctf {_pq("test_dataset", "ctf.pkl")} --correct-contrast -o {_pq("test_dataset", "pipeline_output")} --mask=from_halfmaps --lazy --ignore-zero-frequency {cpu_string}',
             'Run pipeline (variant 1)',
             'pipeline'
         )
 
         # Run pipeline, second variant - should take about 2 min
         run_command(
-            f'{BASE_CMD} pipeline {dataset_dir}/test_dataset/particles.64.mrcs --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {dataset_dir}/test_dataset/pipeline_output --mask=from_halfmaps --lazy {cpu_string}',
+            f'{BASE_CMD} pipeline {_pq("test_dataset", "particles.64.mrcs")} --poses {_pq("test_dataset", "poses.pkl")} --ctf {_pq("test_dataset", "ctf.pkl")} --correct-contrast -o {_pq("test_dataset", "pipeline_output")} --mask=from_halfmaps --lazy {cpu_string}',
             'Run pipeline (variant 2)',
             'pipeline'
         )
 
         # Run analyze with 2D embedding and no z-regularization on latent space (better for density estimation) - should take about 5 min
         run_command(
-            f'{BASE_CMD} analyze {dataset_dir}/test_dataset/pipeline_output --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=0',
+            f'{BASE_CMD} analyze {_pq("test_dataset", "pipeline_output")} --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=0',
             'Run analyze',
             'analyze'
         )
 
         # Estimate conformational density
         run_command(
-            f'{BASE_CMD} estimate_conformational_density {dataset_dir}/test_dataset/pipeline_output --pca_dim 2',
+            f'{BASE_CMD} estimate_conformational_density {_pq("test_dataset", "pipeline_output")} --pca_dim 2',
             'Estimate conformational density',
             'estimate_conformational_density'
         )
@@ -150,48 +159,48 @@ def main():
 
             # Run pipeline_with_outliers with K rounds
             run_command(
-                f'{BASE_CMD} pipeline_with_outliers {dataset_dir}/test_dataset/particles.64.mrcs --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {dataset_dir}/test_dataset/pipeline_with_outliers_output --mask=from_halfmaps --lazy --zdim 4 --k-rounds {K}',
+                f'{BASE_CMD} pipeline_with_outliers {_pq("test_dataset", "particles.64.mrcs")} --poses {_pq("test_dataset", "poses.pkl")} --ctf {_pq("test_dataset", "ctf.pkl")} --correct-contrast -o {_pq("test_dataset", "pipeline_with_outliers_output")} --mask=from_halfmaps --lazy --zdim 4 --k-rounds {K}',
                 f'Run pipeline_with_outliers for {K} rounds',
                 'pipeline_with_outliers'
             )
 
             # Run analyze with density and trajectory estimation - should take about 5 min
             run_command(
-                f'{BASE_CMD} analyze {dataset_dir}/test_dataset/pipeline_output --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=1 --density {dataset_dir}/test_dataset/pipeline_output/density/deconv_density_knee.pkl --skip-centers',
+                f'{BASE_CMD} analyze {_pq("test_dataset", "pipeline_output")} --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=1 --density {_pq("test_dataset", "pipeline_output", "density", "deconv_density_knee.pkl")} --skip-centers',
                 'Run analyze with density',
                 'analyze'
             )
 
             # Compute trajectory - option 1
             run_command(
-                f'{BASE_CMD} compute_trajectory {dataset_dir}/test_dataset/pipeline_output -o {dataset_dir}/test_dataset/pipeline_output/trajectory1 --endpts {dataset_dir}/test_dataset/pipeline_output/analysis_2_noreg/kmeans_center_coords.txt --ind=0,1 --density {dataset_dir}/test_dataset/pipeline_output/density/deconv_density_knee.pkl --zdim=2 --n-vols-along-path=3',
+                f'{BASE_CMD} compute_trajectory {_pq("test_dataset", "pipeline_output")} -o {_pq("test_dataset", "pipeline_output", "trajectory1")} --endpts {_pq("test_dataset", "pipeline_output", "analysis_2_noreg", "kmeans_center_coords.txt")} --ind=0,1 --density {_pq("test_dataset", "pipeline_output", "density", "deconv_density_knee.pkl")} --zdim=2 --n-vols-along-path=3',
                 'Compute trajectory (option 1)',
                 'compute_trajectory (option 1)'
             )
 
             # Compute trajectory - option 2
             run_command(
-                f'{BASE_CMD} compute_trajectory {dataset_dir}/test_dataset/pipeline_output -o {dataset_dir}/test_dataset/pipeline_output/trajectory2 --z_st {dataset_dir}/test_dataset/pipeline_output/analysis_2_noreg/kmeans_center_volumes/vol0000/latent_coords.txt --z_end {dataset_dir}/test_dataset/pipeline_output/analysis_2_noreg/kmeans_center_volumes/vol0002/latent_coords.txt --density {dataset_dir}/test_dataset/pipeline_output/density/deconv_density_knee.pkl --zdim=2 --n-vols-along-path=0',
+                f'{BASE_CMD} compute_trajectory {_pq("test_dataset", "pipeline_output")} -o {_pq("test_dataset", "pipeline_output", "trajectory2")} --z_st {_pq("test_dataset", "pipeline_output", "analysis_2_noreg", "kmeans_center_volumes", "vol0000", "latent_coords.txt")} --z_end {_pq("test_dataset", "pipeline_output", "analysis_2_noreg", "kmeans_center_volumes", "vol0002", "latent_coords.txt")} --density {_pq("test_dataset", "pipeline_output", "density", "deconv_density_knee.pkl")} --zdim=2 --n-vols-along-path=0',
                 'Compute trajectory (option 2)',
                 'compute_trajectory (option 2)'
             )
 
             # Run estimate_stable_states
             run_command(
-                f'{BASE_CMD} estimate_stable_states {dataset_dir}/test_dataset/pipeline_output/density/all_densities/deconv_density_1.pkl --percent_top=10 --n_local_maxs=-1 -o {dataset_dir}/test_dataset/pipeline_output/stable_states',
+                f'{BASE_CMD} estimate_stable_states {_pq("test_dataset", "pipeline_output", "density", "all_densities", "deconv_density_1.pkl")} --percent_top=10 --n_local_maxs=-1 -o {_pq("test_dataset", "pipeline_output", "stable_states")}',
                 'Estimate stable states',
                 'estimate_stable_states'
             )
 
             # Create a simple target file for reconstruction testing
             run_command(
-                f'echo "0.0 0.0" > {dataset_dir}/test_dataset/target.txt',
+                f'echo "0.0 0.0" > {_pq("test_dataset", "target.txt")}',
                 'Create target file for reconstruction',
                 'create_target'
             )
             # Test reconstruct_from_external_embedding
-            embedding_model_path = f'{dataset_dir}/test_dataset/pipeline_output/model/embeddings.pkl'
-            embedding_2_path = f'{dataset_dir}/test_dataset/embedding_2.pkl'
+            embedding_model_path = _p("test_dataset", "pipeline_output", "model", "embeddings.pkl")
+            embedding_2_path = _p("test_dataset", "embedding_2.pkl")
             if not os.path.exists(embedding_model_path):
                 print(f"Failed: prepare embedding for reconstruction (missing {embedding_model_path})\n")
                 failed_functions.append('prepare_embedding_for_reconstruct')
@@ -206,7 +215,7 @@ def main():
                     failed_functions.append('prepare_embedding_for_reconstruct')
                 else:
                     run_command(
-                        f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/test_dataset/particles.64.mrcs --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --embedding {embedding_2_path} --target {dataset_dir}/test_dataset/target.txt -o {dataset_dir}/test_dataset/reconstruct_output',
+                        f'{BASE_CMD} reconstruct_from_external_embedding {_pq("test_dataset", "particles.64.mrcs")} --poses {_pq("test_dataset", "poses.pkl")} --ctf {_pq("test_dataset", "ctf.pkl")} --embedding {shlex.quote(embedding_2_path)} --target {_pq("test_dataset", "target.txt")} -o {_pq("test_dataset", "reconstruct_output")}',
                         'Test reconstruct_from_external_embedding',
                         'reconstruct'
                     )

@@ -43,3 +43,31 @@ def test_make_tiny_loader_files(tmp_path):
     assert set(["particles_mrcs", "particles_star", "poses_pkl", "ctf_pkl"]).issubset(files.keys())
     for key in ["particles_mrcs", "particles_star", "poses_pkl", "ctf_pkl"]:
         assert (tmp_path / Path(files[key]).name).exists()
+
+
+def test_make_tiny_tilt_loader_files_from_simulator(tmp_path):
+    files = tiny_synthetic.make_tiny_tilt_loader_files_from_simulator(
+        tmp_path,
+        grid_size=8,
+        n_images=24,
+        n_tilts=3,
+        n_volumes=4,
+    )
+    expected = [
+        "particles_star",
+        "particles_mrcs",
+        "poses_pkl",
+        "ctf_pkl",
+        "simulation_info_pkl",
+        "n_images",
+        "grid_size",
+        "n_tilts",
+        "sim_info",
+    ]
+    assert set(expected).issubset(files.keys())
+    for key in ["particles_star", "particles_mrcs", "poses_pkl", "ctf_pkl", "simulation_info_pkl"]:
+        assert Path(files[key]).exists()
+    assert files["n_images"] == 24
+    assert files["grid_size"] == 8
+    assert files["n_tilts"] == 3
+    assert "dose_indices" in files["sim_info"]

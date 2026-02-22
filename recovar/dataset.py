@@ -1,4 +1,5 @@
 import logging
+from collections import defaultdict, deque
 
 import jax.numpy as jnp
 import numpy as np
@@ -27,6 +28,58 @@ def get_num_images_in_dataset(mrc_path, datadir = None, strip_prefix = None):
 
 def set_standard_mask(D, dtype):
     return mask.window_mask(D, 0.85, 0.99)
+
+
+def _load_index_like(value):
+    if value is None:
+        return None
+    if isinstance(value, (np.ndarray, list, tuple)):
+        return value
+    with open(value, "rb") as f:
+        return pickle.load(f)
+
+
+def _normalize_image_indices(values, n_images_total=None, name="indices"):
+    arr = np.asarray(values)
+    if arr.dtype == bool:
+        if n_images_total is None:
+            raise ValueError(f"{name} boolean mask requires known dataset size for validation")
+        if arr.ndim != 1:
+            raise ValueError(f"{name} boolean mask must be 1D")
+        if arr.size != int(n_images_total):
+            raise ValueError(
+                f"{name} boolean mask length {arr.size} must match number of images {int(n_images_total)}"
+            )
+        return np.flatnonzero(arr).astype(np.int32, copy=False)
+
+    if arr.ndim == 0:
+        arr = arr.reshape(1)
+    if arr.ndim != 1:
+        raise ValueError(f"{name} indices must be 1D")
+    if arr.dtype.kind not in ("i", "u"):
+        raise TypeError(f"{name} indices must be integer or boolean mask")
+
+    arr = arr.astype(np.int64, copy=False).reshape(-1)
+    if arr.size == 0:
+        return arr.astype(np.int32, copy=False)
+
+    if np.any(arr < 0):
+        raise ValueError(f"{name} indices must be non-negative")
+    if n_images_total is not None and np.any(arr >= int(n_images_total)):
+        raise ValueError(f"{name} indices contain values >= number of images ({int(n_images_total)})")
+
+    return arr.astype(np.int32, copy=False)
+
+
+def _deduplicate_preserve_order(values, name):
+    values = np.asarray(values)
+    if values.size == 0:
+        return values
+    _, first_idx = np.unique(values, return_index=True)
+    if first_idx.size != values.size:
+        dropped = int(values.size - first_idx.size)
+        logger.warning("Dropping %d duplicate entries from %s.", dropped, name)
+    return values[np.sort(first_idx)]
     
 
 # A dataset class, that includes images and all other information
@@ -483,14 +536,14 @@ def get_split_indices(particles_file, datadir=None, strip_prefix=None, ind_file=
     """
     if ind_file is None:
         n_images = get_num_images_in_dataset(particles_file, datadir=datadir, strip_prefix=strip_prefix)
-        indices = np.arange(n_images)
+        indices = np.arange(n_images, dtype=np.int32)
     else:
-        if isinstance(ind_file, np.ndarray):
-            indices = ind_file
-        else:
-            # Get indices from file
-            with open(ind_file, 'rb') as f:
-                indices = np.asarray(pickle.load(f))
+        raw_indices = _load_index_like(ind_file)
+        n_images_total = None
+        if np.asarray(raw_indices).dtype == bool:
+            n_images_total = get_num_images_in_dataset(particles_file, datadir=datadir, strip_prefix=strip_prefix)
+        indices = _normalize_image_indices(raw_indices, n_images_total=n_images_total, name="ind_file")
+        indices = _deduplicate_preserve_order(indices, name="ind_file").astype(np.int32, copy=False)
     
     if len(indices) == 0:
         raise ValueError("No valid indices found for dataset splitting")
@@ -538,27 +591,96 @@ def get_split_tilt_indices(
             return values.astype(np.int32, copy=False)
         return values[np.isin(values, allowed)]
 
+    def _normalize_particle_ids(values, n_particles_total):
+        arr = np.asarray(values)
+        if arr.dtype == bool:
+            if arr.ndim != 1:
+                raise ValueError("tilt_ind_file/particle halfset boolean mask must be 1D")
+            if arr.size != int(n_particles_total):
+                raise ValueError(
+                    f"tilt_ind_file/particle halfset boolean mask length {arr.size} "
+                    f"must match number of particles {int(n_particles_total)}"
+                )
+            return np.flatnonzero(arr).astype(np.int64, copy=False)
+        if arr.ndim == 0:
+            arr = arr.reshape(1)
+        if arr.ndim != 1:
+            raise ValueError("tilt_ind_file/particle halfset ids must be 1D")
+        if arr.dtype.kind not in ("i", "u"):
+            raise TypeError("tilt_ind_file/particle halfset ids must be integer or boolean mask")
+        return arr.astype(np.int64, copy=False).reshape(-1)
+
+    def _normalize_image_ids(values, n_images_total):
+        arr = np.asarray(values)
+        if arr.dtype == bool:
+            if arr.ndim != 1:
+                raise ValueError("ind_file boolean mask must be 1D")
+            if arr.size != int(n_images_total):
+                raise ValueError(
+                    f"ind_file boolean mask length {arr.size} must match number of images {int(n_images_total)}"
+                )
+            return np.flatnonzero(arr).astype(np.int32, copy=False)
+        if arr.ndim == 0:
+            arr = arr.reshape(1)
+        if arr.ndim != 1:
+            raise ValueError("ind_file image ids must be 1D")
+        if arr.dtype.kind not in ("i", "u"):
+            raise TypeError("ind_file image ids must be integer or boolean mask")
+        return arr.astype(np.int32, copy=False).reshape(-1)
+
+    def _sanitize_particle_ids(values, n_particles_total, allowed_particles):
+        values = _normalize_particle_ids(values, n_particles_total=n_particles_total)
+        if values.size == 0:
+            return values.astype(np.int32, copy=False)
+        in_bounds = (values >= 0) & (values < int(n_particles_total))
+        if not np.all(in_bounds):
+            dropped = int(np.sum(~in_bounds))
+            logger.warning("Dropping %d out-of-range particle ids from precomputed halfset.", dropped)
+        values = values[in_bounds]
+        values = _filter_preserve_order(values, allowed_particles)
+        if values.size > 0:
+            # Remove duplicate particle ids while preserving first-seen order.
+            _, first_idx = np.unique(values, return_index=True)
+            if first_idx.size != values.size:
+                dropped = int(values.size - first_idx.size)
+                logger.warning("Dropping %d duplicate particle ids from precomputed halfset.", dropped)
+            values = values[np.sort(first_idx)]
+        return values.astype(np.int32, copy=False)
+
     # Step 1: Parse STAR file for mapping
     particles_to_tilts, tilts_to_particles = tilt_dataset.TiltSeriesData.parse_particle_tilt(particles_file)
 
     # Step 2: Optionally get tilt numbers for ntilts filtering
     tilt_numbers = None
-    if ntilts is not None:
+    if ntilts is not None and ntilts > 0:
         dataset_tmp = tilt_dataset.TiltSeriesData(particles_file, datadir=datadir)
         tilt_numbers = dataset_tmp.tilt_numbers
 
+    n_particles_total = len(particles_to_tilts)
+
     # Step 3: Determine which particles to use
     if tilt_ind_file is not None:
-        particle_ind = np.asarray(_load_index_like(tilt_ind_file), dtype=np.int32)
+        particle_ind = _sanitize_particle_ids(
+            _load_index_like(tilt_ind_file),
+            n_particles_total=n_particles_total,
+            allowed_particles=np.arange(n_particles_total, dtype=np.int32),
+        )
     else:
-        particle_ind = np.arange(len(particles_to_tilts))
+        particle_ind = np.arange(n_particles_total, dtype=np.int32)
+
+    if particle_ind.size == 0:
+        empty = np.array([], dtype=np.int32)
+        return [empty, empty]
 
     # Map selected particles to image indices
     allowed_image_indices = tilt_dataset.tilt_series_indices_to_image_indices(particle_ind, particles_file)
 
     # Step 4: Optionally filter by image indices
     if ind_file is not None:
-        ind_images = np.asarray(_load_index_like(ind_file), dtype=np.int32)
+        ind_images = _normalize_image_ids(
+            _load_index_like(ind_file),
+            n_images_total=len(tilts_to_particles),
+        )
         allowed_image_indices = _filter_preserve_order(allowed_image_indices, ind_images)
 
     # Step 5: Keep only particles with at least one allowed image
@@ -573,13 +695,10 @@ def get_split_tilt_indices(
         split_particles_raw = _load_index_like(particle_halfset_indices_file)
         if len(split_particles_raw) != 2:
             raise ValueError("particle_halfset_indices_file must contain exactly two halfsets")
-        split_particles = [np.asarray(split_particles_raw[0]), np.asarray(split_particles_raw[1])]
-        # If tilt_ind_file is set, intersect with valid_particles
-        if tilt_ind_file is not None:
-            split_particles = [
-                _filter_preserve_order(split_particles[0], valid_particles),
-                _filter_preserve_order(split_particles[1], valid_particles),
-            ]
+        split_particles = [
+            _sanitize_particle_ids(split_particles_raw[0], n_particles_total=n_particles_total, allowed_particles=valid_particles),
+            _sanitize_particle_ids(split_particles_raw[1], n_particles_total=n_particles_total, allowed_particles=valid_particles),
+        ]
     else:
         split_particles = split_index_list(valid_particles)
 
@@ -590,8 +709,11 @@ def get_split_tilt_indices(
             split_image_indices.append(np.array([], dtype=np.int32))
             continue
         imgs = np.concatenate([particles_to_tilts[ind] for ind in half])
-        if tilt_numbers is not None:
-            imgs = imgs[tilt_numbers[imgs] < ntilts]
+        if ntilts is not None:
+            if ntilts <= 0:
+                imgs = imgs[:0]
+            else:
+                imgs = imgs[tilt_numbers[imgs] < ntilts]
         imgs = _filter_preserve_order(imgs, allowed_image_indices)
         split_image_indices.append(imgs)
 
@@ -682,17 +804,34 @@ def figure_out_halfsets(args):
         else:
             halfsets = pickle.load(open(args.halfsets, 'rb'))
             logger.info("Loaded halfsets from file")
+            if len(halfsets) != 2:
+                raise ValueError("halfsets file must contain exactly two halfsets")
+
+            needs_n_images = any(np.asarray(h).dtype == bool for h in halfsets)
+            n_images_total = None
+            if needs_n_images:
+                n_images_total = get_num_images_in_dataset(
+                    args.particles,
+                    datadir=args.datadir,
+                    strip_prefix=args.strip_prefix,
+                )
+            halfsets = [
+                _normalize_image_indices(halfsets[0], n_images_total=n_images_total, name="halfsets[0]"),
+                _normalize_image_indices(halfsets[1], n_images_total=n_images_total, name="halfsets[1]"),
+            ]
 
             # Ensure only the indices in args.ind are used
             if args.ind is not None:
-                # Load indices from args.ind
-                if isinstance(args.ind, np.ndarray):
-                    ind = args.ind
-                else:
-                    with open(args.ind, 'rb') as f:
-                        ind = np.asarray(pickle.load(f))
-                # Intersect the loaded halfsets with ind
-                halfsets = [np.intersect1d(halfset, ind) for halfset in halfsets]
+                ind_raw = _load_index_like(args.ind)
+                if n_images_total is None and np.asarray(ind_raw).dtype == bool:
+                    n_images_total = get_num_images_in_dataset(
+                        args.particles,
+                        datadir=args.datadir,
+                        strip_prefix=args.strip_prefix,
+                    )
+                ind = _normalize_image_indices(ind_raw, n_images_total=n_images_total, name="ind")
+                # Intersect while preserving halfset order.
+                halfsets = [np.asarray(halfset)[np.isin(np.asarray(halfset), ind)] for halfset in halfsets]
 
     if args.n_images > 0:
         halfsets = [ halfset[:args.n_images//2] for halfset in halfsets]
@@ -740,11 +879,35 @@ def reorder_to_original_indexing(arr, cryos, use_tilt_indices = False):
 
 def reorder_to_original_indexing_from_halfsets(arr, halfsets, num_images = None ):
     if isinstance(arr, list):
-        arr = np.concatenate(arr)
-    
+        if len(arr) == 0:
+            arr = np.array([])
+        else:
+            arr = np.concatenate(arr)
+
     dataset_indices = np.concatenate(halfsets)
-    
-    num_images = (np.max(dataset_indices)+1) if num_images is None else num_images 
+    dataset_indices = np.asarray(dataset_indices).reshape(-1)
+    if dataset_indices.size == 0:
+        if num_images is None:
+            num_images = 0
+    else:
+        if np.any(dataset_indices < 0):
+            raise ValueError("dataset indices must be non-negative")
+        unique_count = np.unique(dataset_indices).size
+        if unique_count != dataset_indices.size:
+            raise ValueError("dataset indices contain duplicates across halfsets")
+        inferred_num_images = int(np.max(dataset_indices)) + 1
+        if num_images is None:
+            num_images = inferred_num_images
+        elif num_images < inferred_num_images:
+            raise ValueError(
+                f"num_images={num_images} is smaller than required size {inferred_num_images} from dataset indices"
+            )
+
+    if arr.shape[0] != dataset_indices.size:
+        raise ValueError(
+            f"arr first dimension ({arr.shape[0]}) must match number of dataset indices ({dataset_indices.size})"
+        )
+
     arr_reorder_shape = (num_images, *arr.shape[1:])
     arr_reorder = np.ones(arr_reorder_shape) * np.nan # nan things which are not in halfsets. They have been filtered out.
     arr_reorder[dataset_indices] = arr
@@ -769,19 +932,31 @@ class _SubsampledImageStack:
     def process_images(self, images, apply_image_mask=True):
         return self._stack.process_images(images, apply_image_mask=apply_image_mask)
 
+    def _build_orig_to_local(self, local_indices, orig_indices):
+        out = defaultdict(deque)
+        for local, orig in zip(np.asarray(local_indices).reshape(-1), np.asarray(orig_indices).reshape(-1)):
+            out[int(orig)].append(int(local))
+        return out
+
     def _map_orig_to_local(self, indices, orig_to_local):
         idx_arr = np.asarray(indices)
         if idx_arr.size == 0:
             return idx_arr.astype(np.int32, copy=False)
         flat = idx_arr.reshape(-1)
-        mapped = np.array([orig_to_local[int(i)] for i in flat], dtype=np.int32)
+        mapped_vals = []
+        for i in flat:
+            key = int(i)
+            if key not in orig_to_local or len(orig_to_local[key]) == 0:
+                raise KeyError(f"Original index {key} was not found in local mapping.")
+            mapped_vals.append(orig_to_local[key].popleft())
+        mapped = np.asarray(mapped_vals, dtype=np.int32)
         return mapped.reshape(idx_arr.shape)
 
     def get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
         for start in range(0, self.n_images, batch_size):
             local_idx = np.arange(start, min(start + batch_size, self.n_images), dtype=np.int32)
             orig_idx = self._idx[local_idx]
-            orig_to_local = {int(orig): int(local) for local, orig in zip(local_idx, orig_idx)}
+            orig_to_local = self._build_orig_to_local(local_idx, orig_idx)
             for images, _, image_indices in self._stack.get_dataset_subset_generator(
                 batch_size, orig_idx, num_workers=num_workers
             ):
@@ -793,7 +968,7 @@ class _SubsampledImageStack:
     def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
         subset_indices = np.asarray(subset_indices, dtype=np.int32)
         orig_idx = self._idx[subset_indices]
-        orig_to_local = {int(orig): int(local) for local, orig in zip(subset_indices, orig_idx)}
+        orig_to_local = self._build_orig_to_local(subset_indices, orig_idx)
         for images, _, image_indices in self._stack.get_dataset_subset_generator(
             batch_size, orig_idx, num_workers=num_workers
         ):
@@ -811,10 +986,7 @@ def subsample_cryoem_dataset(cryo, good_indices):
     The returned dataset has re-numbered per-image arrays so index ``i`` always
     refers to the i-th kept image.
     """
-    good_indices = np.asarray(good_indices)
-    if good_indices.dtype == bool:
-        good_indices = np.where(good_indices)[0]
-    good_indices = good_indices.astype(np.int32)
+    good_indices = _normalize_image_indices(good_indices, n_images_total=cryo.n_images, name="good_indices")
 
     new_stack = _SubsampledImageStack(cryo.image_stack, good_indices) if cryo.image_stack is not None else None
 
