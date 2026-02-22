@@ -60,9 +60,20 @@ def read_star(filepath: str) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
     for block_name, block_data in data_blocks.items():
         if not block_data['rows']:
             continue
-            
-        rows_array = np.array(block_data['rows'])
         cols = block_data['columns']
+
+        # Validate row lengths explicitly before constructing ndarray so we
+        # raise a deterministic parse error instead of NumPy ragged errors.
+        row_lengths = [len(row) for row in block_data['rows']]
+        if len(set(row_lengths)) != 1:
+            raise ValueError(f"Inconsistent row lengths in {block_name}")
+        if row_lengths[0] != len(cols):
+            raise ValueError(
+                f"Column count mismatch in {block_name}: "
+                f"{row_lengths[0]} values vs {len(cols)} headers"
+            )
+
+        rows_array = np.array(block_data['rows'])
         
         # Validation
         if rows_array.ndim != 2:
@@ -335,4 +346,3 @@ class StarFile:
 # Compatibility aliases
 parse_star = read_star
 Starfile = StarFile
-

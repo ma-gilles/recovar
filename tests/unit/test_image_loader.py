@@ -5,6 +5,7 @@ import pytest
 from recovar import image_loader
 from recovar import starfile
 from recovar import utils
+from recovar import cryo_dataset
 
 pytestmark = pytest.mark.unit
 
@@ -149,6 +150,68 @@ def test_multi_mrc_loader_get_with_duplicate_indices(tmp_path):
     np.testing.assert_allclose(out[3], a[0])
 
 
+def test_multi_mrc_loader_indices_only_load_selected_files(tmp_path):
+    a = np.arange(2 * 4 * 4, dtype=np.float32).reshape(2, 4, 4)
+    a_path = tmp_path / "a.mrcs"
+    utils.write_mrc(str(a_path), a)
+
+    missing_path = tmp_path / "missing.mrcs"  # intentionally not created
+    df = pd.DataFrame(
+        {
+            "mrc_file": [str(a_path), str(a_path), str(missing_path)],
+            "mrc_index": [0, 1, 0],
+        }
+    )
+
+    # Select only rows that point to the existing file.
+    loader = image_loader.MultiMRCLoader(df, indices=np.array([1, 0], dtype=np.int32), lazy=True, max_threads=2)
+    out = loader.get(np.array([0, 1], dtype=np.int32))
+    np.testing.assert_allclose(out[0], a[1])
+    np.testing.assert_allclose(out[1], a[0])
+
+
+def test_multi_mrc_loader_empty_selection_raises_clear_error(tmp_path):
+    a = np.arange(2 * 4 * 4, dtype=np.float32).reshape(2, 4, 4)
+    a_path = tmp_path / "a.mrcs"
+    utils.write_mrc(str(a_path), a)
+    df = pd.DataFrame({"mrc_file": [str(a_path), str(a_path)], "mrc_index": [0, 1]})
+    with pytest.raises(ValueError, match="No images selected"):
+        image_loader.MultiMRCLoader(df, indices=np.array([], dtype=np.int32), lazy=True, max_threads=1)
+
+
+def test_tilt_series_dataset_strip_prefix_with_tiny_real_files(tmp_path):
+    from helpers import tiny_synthetic
+
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path / "tiny", grid_size=8, n_images=6, n_particles=3)
+    bad_prefix = "/unmounted/prefix"
+    mrcs_name = (tmp_path / "tiny" / "particles.mrcs").name
+
+    sf = starfile.Starfile.load(files["particles_star"])
+    sf.df["_rlnImageName"] = [f"{i+1}@{bad_prefix}/{mrcs_name}" for i in range(files["n_images"])]
+    prefixed_star = tmp_path / "prefixed.star"
+    starfile.write_star(str(prefixed_star), data=sf.df)
+
+    # Without strip_prefix the prefixed path is unresolved.
+    with pytest.raises(Exception):
+        cryo_dataset.TiltSeriesDataset(str(prefixed_star), datadir=str(tmp_path / "tiny"), lazy=True, tilt_file_option="relion5")
+
+    ds = cryo_dataset.TiltSeriesDataset(
+        str(prefixed_star),
+        datadir=str(tmp_path / "tiny"),
+        strip_prefix=bad_prefix + "/",
+        lazy=True,
+        tilt_file_option="relion5",
+        random_tilts=False,
+        num_tilts=1,
+    )
+    assert len(ds) == 3
+    batches = list(ds.get_image_subset_generator(batch_size=2, subset_indices=np.array([5, 1, 4], dtype=np.int32)))
+    got = []
+    for _imgs, _pidx, tidx in batches:
+        got.extend(np.array(tidx).reshape(-1).tolist())
+    assert got == [5, 1, 4]
+
+
 def test_star_loader_and_strip_prefix(tmp_path):
     data = np.arange(3 * 4 * 4, dtype=np.float32).reshape(3, 4, 4)
     rel_dir = tmp_path / "rel"
@@ -195,6 +258,36 @@ def test_star_loader_uses_star_parent_when_datadir_missing(tmp_path):
     np.testing.assert_allclose(out[0], data[1])
 
 
+def test_star_loader_rejects_missing_rlnimagename_column(tmp_path):
+    df = pd.DataFrame({"_rlnDefocusU": [10000, 11000]})
+    star_path = tmp_path / "particles.star"
+    starfile.write_star(str(star_path), data=df)
+    with pytest.raises(ValueError, match="_rlnImageName"):
+        image_loader.StarLoader(str(star_path), lazy=True)
+
+
+def test_star_loader_rejects_malformed_image_name_entries(tmp_path):
+    data = np.arange(2 * 4 * 4, dtype=np.float32).reshape(2, 4, 4)
+    rel_dir = tmp_path / "rel"
+    rel_dir.mkdir()
+    mrc_path = rel_dir / "stack.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    # Missing '@' separator.
+    df_bad = pd.DataFrame({"_rlnImageName": [f"1{mrc_path.name}", f"2@{mrc_path.name}"]})
+    bad_star = tmp_path / "bad.star"
+    starfile.write_star(str(bad_star), data=df_bad)
+    with pytest.raises(ValueError, match="Malformed _rlnImageName"):
+        image_loader.StarLoader(str(bad_star), datadir=str(rel_dir), lazy=True)
+
+    # Zero index (must be >= 1 in STAR convention).
+    df_zero = pd.DataFrame({"_rlnImageName": [f"0@{mrc_path.name}", f"1@{mrc_path.name}"]})
+    zero_star = tmp_path / "zero.star"
+    starfile.write_star(str(zero_star), data=df_zero)
+    with pytest.raises(ValueError, match="indices must be >= 1"):
+        image_loader.StarLoader(str(zero_star), datadir=str(rel_dir), lazy=True)
+
+
 def test_cryosparc_loader_reads_structured_cs(tmp_path):
     data = np.arange(3 * 4 * 4, dtype=np.float32).reshape(3, 4, 4)
     mrc_path = tmp_path / "stack.mrcs"
@@ -213,6 +306,37 @@ def test_cryosparc_loader_reads_structured_cs(tmp_path):
     assert out.shape == (2, 4, 4)
     np.testing.assert_allclose(out[0], data[1])
     np.testing.assert_allclose(out[1], data[2])
+
+
+def test_cryosparc_loader_supports_byte_blob_paths(tmp_path):
+    data = np.arange(3 * 4 * 4, dtype=np.float32).reshape(3, 4, 4)
+    mrc_path = tmp_path / "stack.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    cs_dtype = np.dtype([("blob/idx", np.int32), ("blob/path", "S64")])
+    cs = np.zeros(3, dtype=cs_dtype)
+    cs["blob/idx"] = np.array([0, 2, 1], dtype=np.int32)
+    cs["blob/path"] = np.array([b">stack.mrcs", b">stack.mrcs", b">stack.mrcs"], dtype="S64")
+    cs_path = tmp_path / "particles_bytes.cs"
+    with open(cs_path, "wb") as f:
+        np.save(f, cs)
+
+    loader = image_loader.CryoSparcLoader(str(cs_path), datadir=str(tmp_path), lazy=True)
+    out = loader.get(np.array([0, 1, 2], dtype=np.int32))
+    np.testing.assert_allclose(out[0], data[0])
+    np.testing.assert_allclose(out[1], data[2])
+    np.testing.assert_allclose(out[2], data[1])
+
+
+def test_cryosparc_loader_rejects_missing_required_fields(tmp_path):
+    cs_dtype = np.dtype([("blob/path", "U64")])
+    cs = np.zeros(2, dtype=cs_dtype)
+    cs["blob/path"] = np.array([">a.mrcs", ">a.mrcs"])
+    cs_path = tmp_path / "bad.cs"
+    with open(cs_path, "wb") as f:
+        np.save(f, cs)
+    with pytest.raises(ValueError, match="blob/idx"):
+        image_loader.CryoSparcLoader(str(cs_path), datadir=str(tmp_path), lazy=True)
 
 
 def test_image_loader_from_file_alias_and_dtype_preserved():

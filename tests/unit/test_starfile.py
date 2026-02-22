@@ -95,3 +95,33 @@ def test_flatten_to_relion30_includes_optics_fields():
 
     assert "_rlnImagePixelSize" in flattened.columns
     np.testing.assert_allclose(flattened["_rlnImagePixelSize"].astype(float).values, np.array([1.1, 1.2]))
+
+
+def test_read_star_rejects_duplicate_data_blocks(tmp_path):
+    path = tmp_path / "dup.star"
+    path.write_text(
+        "data_particles\n\nloop_\n_rlnImageName #1\n1@a.mrcs\n\n"
+        "data_particles\n\nloop_\n_rlnImageName #1\n2@a.mrcs\n"
+    )
+    with pytest.raises(ValueError, match="Duplicate data block"):
+        read_star(str(path))
+
+
+def test_read_star_rejects_inconsistent_row_lengths(tmp_path):
+    path = tmp_path / "bad_rows.star"
+    path.write_text(
+        "data_particles\n\nloop_\n"
+        "_rlnImageName #1\n"
+        "_rlnDefocusU #2\n"
+        "1@a.mrcs 10000\n"
+        "2@a.mrcs\n"
+    )
+    with pytest.raises(ValueError, match="Inconsistent row lengths"):
+        read_star(str(path))
+
+
+def test_read_star_rejects_when_no_nonempty_data_table_exists(tmp_path):
+    path = tmp_path / "no_data.star"
+    path.write_text("data_particles\n\nloop_\n_rlnImageName #1\n")
+    with pytest.raises(ValueError, match="No data table found"):
+        read_star(str(path))

@@ -316,20 +316,23 @@ class MultiMRCLoader(ImageLoader):
         """
         self._file_map = file_map.copy()
         self._max_threads = max_threads
-        
-        # Get image size from first file
-        first_file = str(file_map['mrc_file'].iloc[0])
+
+        # Apply index filter if provided
+        if indices is not None:
+            self._file_map = self._file_map.iloc[indices].reset_index(drop=True)
+
+        if len(self._file_map) == 0:
+            raise ValueError("No images selected for MultiMRCLoader")
+
+        # Get image size from first selected file.
+        first_file = str(self._file_map['mrc_file'].iloc[0])
         first_loader = MRCLoader(first_file, lazy=True)
         img_size = first_loader.image_size
         dtype = first_loader._file_dtype
         
-        # Apply index filter if provided
-        if indices is not None:
-            self._file_map = self._file_map.iloc[indices].reset_index(drop=True)
-        
         # Create loaders for unique files
         self._loaders = {}
-        for filepath in file_map['mrc_file'].unique():
+        for filepath in self._file_map['mrc_file'].unique():
             try:
                 self._loaders[filepath] = MRCLoader(filepath, lazy=True)
             except FileNotFoundError:
@@ -427,10 +430,20 @@ class StarLoader(MultiMRCLoader):
         # Parse STAR file
         star = Starfile.load(filepath)
         df = star.df.copy()
+
+        if '_rlnImageName' not in df.columns:
+            raise ValueError("STAR file is missing required column: _rlnImageName")
         
         # Parse image names (format: "index@filepath")
         parts = df['_rlnImageName'].str.split('@', n=1, expand=True)
-        df['mrc_index'] = parts[0].astype(int) - 1  # Convert to 0-indexed
+        if parts.shape[1] < 2 or parts[1].isna().any():
+            raise ValueError("Malformed _rlnImageName entries: expected '<index>@<path>' format")
+        try:
+            df['mrc_index'] = parts[0].astype(int) - 1  # Convert to 0-indexed
+        except Exception as exc:
+            raise ValueError("Malformed _rlnImageName entries: index part is not an integer") from exc
+        if (df['mrc_index'] < 0).any():
+            raise ValueError("Malformed _rlnImageName entries: image indices must be >= 1")
         df['mrc_file'] = parts[1]
         
         # Apply prefix stripping
@@ -466,12 +479,23 @@ class CryoSparcLoader(MultiMRCLoader):
         """
         # Load cryoSPARC metadata
         cs_data = np.load(filepath)
-        
+
+        if 'blob/idx' not in cs_data.dtype.names or 'blob/path' not in cs_data.dtype.names:
+            raise ValueError("CS file must contain fields: 'blob/idx' and 'blob/path'")
+
         blob_idx = cs_data['blob/idx']
         blob_paths = cs_data['blob/path']
+        if np.any(blob_idx < 0):
+            raise ValueError("CS file contains negative blob/idx values")
         
         # Clean paths (remove leading '>')
-        clean_paths = [str(p).lstrip('>') for p in blob_paths]
+        clean_paths = []
+        for p in blob_paths:
+            if isinstance(p, (bytes, np.bytes_)):
+                p = p.decode("utf-8", errors="replace")
+            else:
+                p = str(p)
+            clean_paths.append(p.lstrip('>'))
         
         # Resolve datadir
         if not datadir:

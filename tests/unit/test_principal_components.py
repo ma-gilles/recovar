@@ -382,3 +382,69 @@ def test_pca_by_projected_covariance_real_tiny_dataset_runs():
     else:
         # Tiny synthetic grids can trigger interpolation singularities in this path.
         assert np.isnan(u_np).any()
+
+
+def test_right_matvec_with_spatial_sigma_v2_matches_v1_small_problem(monkeypatch):
+    monkeypatch.setattr(pc.utils, "report_memory_device", lambda *args, **kwargs: None)
+
+    volume_shape = (4, 4, 4)
+    vol_size = int(np.prod(volume_shape))
+    rng = np.random.default_rng(0)
+    picked = rng.choice(vol_size, size=8, replace=False).astype(np.int32)
+    columns = (rng.normal(size=(vol_size, picked.size)) + 1j * rng.normal(size=(vol_size, picked.size))).astype(np.complex64)
+
+    picked_freqs = core.vec_indices_to_frequencies(picked, volume_shape)
+    smaller_size = int(2 * (np.max(np.abs(np.asarray(picked_freqs))) + 1))
+    smaller_vol_size = smaller_size ** 3
+    test_mat = rng.normal(size=(smaller_vol_size, 3)).astype(np.float32)
+
+    out_v1 = pc.right_matvec_with_spatial_Sigma(
+        test_mat=test_mat,
+        columns=columns,
+        picked_frequency_indices=picked,
+        volume_shape=volume_shape,
+        vol_batch_size=2,
+        memory_to_use=8,
+    )
+    out_v2 = pc.right_matvec_with_spatial_Sigma_v2(
+        test_mat=test_mat,
+        columns=columns,
+        picked_frequency_indices=picked,
+        volume_shape=volume_shape,
+        vol_batch_size=2,
+        memory_to_use=8,
+    )
+
+    np.testing.assert_allclose(np.asarray(out_v1), np.asarray(out_v2), atol=2e-5, rtol=2e-5)
+
+
+def test_left_matvec_with_spatial_sigma_v2_matches_v1_small_problem(monkeypatch):
+    monkeypatch.setattr(pc.utils, "report_memory_device", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pc, "report_memory", False)
+
+    volume_shape = (4, 4, 4)
+    vol_size = int(np.prod(volume_shape))
+    rng = np.random.default_rng(1)
+    picked = rng.choice(vol_size, size=7, replace=False).astype(np.int32)
+    columns = (rng.normal(size=(vol_size, picked.size)) + 1j * rng.normal(size=(vol_size, picked.size))).astype(np.complex64)
+
+    Q = (rng.normal(size=(vol_size, 3)) + 1j * rng.normal(size=(vol_size, 3))).astype(np.complex64)
+
+    out_v1 = pc.left_matvec_with_spatial_Sigma(
+        Q=Q,
+        columns=columns,
+        picked_frequency_indices=picked,
+        volume_shape=volume_shape,
+        vol_batch_size=2,
+        memory_to_use=8,
+    )
+    out_v2 = pc.left_matvec_with_spatial_Sigma_v2(
+        Q=Q,
+        columns=columns,
+        picked_frequency_indices=picked,
+        volume_shape=volume_shape,
+        vol_batch_size=2,
+        memory_to_use=8,
+    )
+
+    np.testing.assert_allclose(np.asarray(out_v1), np.asarray(out_v2), atol=2e-5, rtol=2e-5)

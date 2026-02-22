@@ -7,6 +7,7 @@ import pytest
 pytest.importorskip("torch")
 
 from recovar import cryo_dataset
+from helpers import tiny_synthetic
 
 pytestmark = pytest.mark.unit
 
@@ -54,6 +55,13 @@ def test_tiltseries_parse_particle_tilt_and_reverse_map(monkeypatch):
     assert np.all(p2t[1] == np.array([0, 2]))
     assert np.all(p2t[2] == np.array([4]))
     assert t2p[1] == 0 and t2p[0] == 1 and t2p[4] == 2
+
+
+def test_tiltseries_parse_particle_tilt_missing_group_column_raises(monkeypatch):
+    df = pd.DataFrame({"_rlnImageName": ["1@a.mrcs", "2@a.mrcs"]})
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+    with pytest.raises(ValueError, match="_rlnGroupName"):
+        cryo_dataset.TiltSeriesDataset.parse_particle_tilt("dummy.star")
 
 
 def test_tiltseries_parse_micrograph_tilt_mapping(monkeypatch):
@@ -449,6 +457,33 @@ def test_tiltseries_dataset_invalid_tilt_file_option_raises(monkeypatch):
         cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=1, random_tilts=False, tilt_file_option="bad")
 
 
+def test_tiltseries_dataset_missing_group_column_raises(monkeypatch):
+    class _Source:
+        def __init__(self):
+            self.n = 2
+            self.D = 8
+            self._store = np.zeros((2, 8, 8), dtype=np.float32)
+
+        def images(self, index, require_contiguous=False):
+            _ = require_contiguous
+            if isinstance(index, (int, np.integer)):
+                return self._store[int(index)]
+            return self._store[np.asarray(index)]
+
+    df = pd.DataFrame(
+        {
+            "_rlnMicrographPreExposure": [1.0, 2.0],
+            "_rlnCtfScalefactor": [1.0, 1.0],
+            "_rlnCtfBfactor": [-1.0, -1.0],
+        }
+    )
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+
+    with pytest.raises(ValueError, match="_rlnGroupName"):
+        cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=1, random_tilts=False, tilt_file_option="relion5")
+
+
 def test_tiltseries_image_subset_generator_none_matches_full(monkeypatch):
     class _Source:
         def __init__(self):
@@ -613,6 +648,7 @@ def test_tiltseries_dataset_ind_subset_preserves_image_tilt_alignment(monkeypatc
     # Reordered subset over original row indices.
     subset = np.array([5, 2, 4, 1], dtype=np.int32)
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", ind=subset, num_tilts=1, random_tilts=False, tilt_file_option="relion5")
+    assert ds.dataset_tilt_indices == [0, 1, 2]
 
     # Direct tilt fetch should map to subset-local order: local 0 == original 5.
     img0, _pidx0, tidx0 = ds.get_tilt(0)
@@ -624,3 +660,28 @@ def test_tiltseries_dataset_ind_subset_preserves_image_tilt_alignment(monkeypatc
     assert int(particle_idx) == 2
     np.testing.assert_array_equal(selected, np.array([2], dtype=np.int32))
     np.testing.assert_array_equal(imgs[0], ds.source._store[2])
+
+
+def test_parse_particle_tilt_real_tiny_star_preserves_original_indices_with_subset(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
+    subset = np.array([5, 1, 4], dtype=np.int32)
+
+    p2t, t2p = cryo_dataset.TiltSeriesDataset.parse_particle_tilt(files["particles_star"], indices=subset)
+
+    # Original STAR groups are cyclic: g1,g2,g3,g1,g2,g3.
+    # Keeping rows [5,1,4] leaves groups g2:[1,4], g3:[5] in canonical order.
+    np.testing.assert_array_equal(p2t[0], np.array([1, 4], dtype=np.int32))
+    np.testing.assert_array_equal(p2t[1], np.array([5], dtype=np.int32))
+    assert t2p[1] == 0 and t2p[4] == 0 and t2p[5] == 1
+
+
+def test_parse_particle_tilt_real_tiny_star_subset_with_duplicate_tilt_indices(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
+    subset = np.array([5, 1, 5, 4], dtype=np.int32)
+
+    p2t, t2p = cryo_dataset.TiltSeriesDataset.parse_particle_tilt(files["particles_star"], indices=subset)
+
+    # Groups after subset are g2:[1,4] and g3:[5,5], preserving duplicate tilt requests.
+    np.testing.assert_array_equal(p2t[0], np.array([1, 4], dtype=np.int32))
+    np.testing.assert_array_equal(p2t[1], np.array([5, 5], dtype=np.int32))
+    assert t2p[1] == 0 and t2p[4] == 0 and t2p[5] == 1
