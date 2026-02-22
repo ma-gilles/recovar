@@ -206,6 +206,28 @@ def test_figure_out_halfsets_from_file_intersects_with_ind(tmp_path):
     np.testing.assert_array_equal(out[1], np.array([4]))
 
 
+def test_figure_out_halfsets_from_file_intersects_with_ind_ndarray(tmp_path):
+    halfsets_file = tmp_path / "halfsets.pkl"
+    with open(halfsets_file, "wb") as f:
+        pickle.dump([np.array([0, 1, 2]), np.array([3, 4, 5])], f)
+
+    args = SimpleNamespace(
+        halfsets=str(halfsets_file),
+        tilt_series=False,
+        tilt_series_ctf="cryoem",
+        particles="particles.star",
+        ind=np.array([2, 3, 5], dtype=np.int32),
+        tilt_ind=None,
+        ntilts=None,
+        datadir=None,
+        strip_prefix=None,
+        n_images=-1,
+    )
+    out = dataset.figure_out_halfsets(args)
+    np.testing.assert_array_equal(out[0], np.array([2], dtype=np.int32))
+    np.testing.assert_array_equal(out[1], np.array([3, 5], dtype=np.int32))
+
+
 class _FakeImageStack:
     def __init__(self, n_images=4, D=4, padding=0, Np=2):
         self.n_images = n_images
@@ -579,6 +601,53 @@ def test_load_dataset_from_args_computes_split_when_missing(monkeypatch):
     assert called["v"][2] is False
 
 
+def test_make_dataset_loader_dict_without_strip_prefix_attr():
+    args = SimpleNamespace(
+        particles="p.star",
+        ctf="c.pkl",
+        poses="r.pkl",
+        datadir=None,
+        n_images=-1,
+        ind=None,
+        padding=0,
+        uninvert_data="false",
+        tilt_series=False,
+        tilt_series_ctf="cryoem",
+        angle_per_tilt=3.0,
+        dose_per_tilt=2.9,
+        premultiplied_ctf=False,
+    )
+    out = dataset.make_dataset_loader_dict(args)
+    assert out["strip_prefix"] is None
+
+
+def test_get_split_datasets_calls_loader_once_per_halfset(monkeypatch):
+    calls = []
+
+    def _fake_load(*args, **kwargs):
+        calls.append(kwargs)
+        return kwargs["ind"]
+
+    monkeypatch.setattr(dataset, "load_cryodrgn_dataset", _fake_load)
+    ind_split = [np.array([2, 0], dtype=np.int32), np.array([5], dtype=np.int32)]
+    out = dataset.get_split_datasets(
+        particles_file="particles.mrcs",
+        poses_file="poses.pkl",
+        ctf_file="ctf.pkl",
+        datadir="/tmp/data",
+        ind_split=ind_split,
+        lazy=True,
+        tilt_series=True,
+        tilt_series_ctf="relion5",
+    )
+    assert len(calls) == 2
+    np.testing.assert_array_equal(out[0], ind_split[0])
+    np.testing.assert_array_equal(out[1], ind_split[1])
+    assert calls[0]["lazy"] is True
+    assert calls[0]["tilt_series"] is True
+    assert calls[0]["tilt_series_ctf"] == "relion5"
+
+
 def test_subsample_cryoem_dataset_reindexes_and_slices_metadata():
     class _GenImageStack:
         def __init__(self, n=5, D=4):
@@ -681,3 +750,159 @@ def test_get_split_indices_from_empty_ind_file_raises(tmp_path):
         pickle.dump(np.array([], dtype=np.int32), f)
     with pytest.raises(ValueError, match="No valid indices found"):
         dataset.get_split_indices("unused.star", ind_file=str(ind_file))
+
+
+def test_get_split_tilt_indices_accepts_array_inputs_for_all_index_args(monkeypatch):
+    class _FakeTiltSeriesData:
+        @staticmethod
+        def parse_particle_tilt(_particles_file):
+            particles_to_tilts = [
+                np.array([0, 1], dtype=np.int32),
+                np.array([2, 3], dtype=np.int32),
+                np.array([4, 5], dtype=np.int32),
+            ]
+            tilts_to_particles = [0, 0, 1, 1, 2, 2]
+            return particles_to_tilts, tilts_to_particles
+
+        def __init__(self, particles_file, datadir=None):
+            self.tilt_numbers = np.array([0, 1, 0, 1, 0, 1], dtype=np.int32)
+
+    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(
+        dataset.tilt_dataset,
+        "tilt_series_indices_to_image_indices",
+        lambda particle_ind, particles_file: np.concatenate(
+            [[np.array([0, 1]), np.array([2, 3]), np.array([4, 5])][int(i)] for i in np.asarray(particle_ind)]
+        ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
+    )
+
+    out = dataset.get_split_tilt_indices(
+        particles_file="particles.star",
+        # Keep only particles 0 and 2.
+        tilt_ind_file=np.array([0, 2], dtype=np.int32),
+        # Keep only these image ids globally.
+        ind_file=np.array([0, 1, 4, 5], dtype=np.int32),
+        # Precomputed particle halfsets as an in-memory value (not file path).
+        particle_halfset_indices_file=[np.array([0], dtype=np.int32), np.array([2], dtype=np.int32)],
+        ntilts=1,
+    )
+    np.testing.assert_array_equal(out[0], np.array([0], dtype=np.int32))
+    np.testing.assert_array_equal(out[1], np.array([4], dtype=np.int32))
+
+
+def test_get_split_tilt_indices_rejects_invalid_halfset_container(monkeypatch):
+    class _FakeTiltSeriesData:
+        @staticmethod
+        def parse_particle_tilt(_particles_file):
+            particles_to_tilts = [np.array([0, 1], dtype=np.int32), np.array([2, 3], dtype=np.int32)]
+            tilts_to_particles = [0, 0, 1, 1]
+            return particles_to_tilts, tilts_to_particles
+
+    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(
+        dataset.tilt_dataset,
+        "tilt_series_indices_to_image_indices",
+        lambda particle_ind, particles_file: np.concatenate(
+            [[np.array([0, 1]), np.array([2, 3])][int(i)] for i in np.asarray(particle_ind)]
+        ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
+    )
+
+    with pytest.raises(ValueError, match="exactly two halfsets"):
+        dataset.get_split_tilt_indices(
+            particles_file="particles.star",
+            particle_halfset_indices_file=[np.array([0], dtype=np.int32)],
+        )
+
+
+def test_get_split_tilt_indices_ind_filter_preserves_allowed_image_order(monkeypatch):
+    class _FakeTiltSeriesData:
+        @staticmethod
+        def parse_particle_tilt(_particles_file):
+            particles_to_tilts = [
+                np.array([5, 1], dtype=np.int32),
+                np.array([4, 2], dtype=np.int32),
+            ]
+            tilts_to_particles = [0, 0, 1, 1, 1, 0]
+            return particles_to_tilts, tilts_to_particles
+
+    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(
+        dataset.tilt_dataset,
+        "tilt_series_indices_to_image_indices",
+        lambda particle_ind, particles_file: np.concatenate(
+            [[np.array([5, 1]), np.array([4, 2])][int(i)] for i in np.asarray(particle_ind)]
+        ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
+    )
+
+    split = dataset.get_split_tilt_indices(
+        particles_file="particles.star",
+        tilt_ind_file=np.array([0, 1], dtype=np.int32),
+        ind_file=np.array([2, 5, 4], dtype=np.int32),
+        particle_halfset_indices_file=[np.array([0, 1], dtype=np.int32), np.array([], dtype=np.int32)],
+    )
+    # Preserve source ordering from selected particles/tilts: [5,1,4,2] -> keep {2,5,4} => [5,4,2].
+    np.testing.assert_array_equal(split[0], np.array([5, 4, 2], dtype=np.int32))
+    np.testing.assert_array_equal(split[1], np.array([], dtype=np.int32))
+
+
+def test_get_split_tilt_indices_preserves_precomputed_particle_halfset_order(monkeypatch):
+    class _FakeTiltSeriesData:
+        @staticmethod
+        def parse_particle_tilt(_particles_file):
+            particles_to_tilts = [
+                np.array([0], dtype=np.int32),
+                np.array([1], dtype=np.int32),
+                np.array([2], dtype=np.int32),
+            ]
+            tilts_to_particles = [0, 1, 2]
+            return particles_to_tilts, tilts_to_particles
+
+    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(
+        dataset.tilt_dataset,
+        "tilt_series_indices_to_image_indices",
+        lambda particle_ind, particles_file: np.concatenate(
+            [[np.array([0]), np.array([1]), np.array([2])][int(i)] for i in np.asarray(particle_ind)]
+        ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
+    )
+
+    split = dataset.get_split_tilt_indices(
+        particles_file="particles.star",
+        # valid particles are only 1 and 2
+        tilt_ind_file=np.array([1, 2], dtype=np.int32),
+        # halfset keeps custom order [2,0,1] and should become [2,1] after filtering
+        particle_halfset_indices_file=[np.array([2, 0, 1], dtype=np.int32), np.array([], dtype=np.int32)],
+    )
+    np.testing.assert_array_equal(split[0], np.array([2, 1], dtype=np.int32))
+    np.testing.assert_array_equal(split[1], np.array([], dtype=np.int32))
+
+
+def test_figure_out_halfsets_tilt_series_with_halfsets_file_uses_tilt_splitter(monkeypatch):
+    captured = {}
+
+    def _fake_get_split_tilt_indices(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return [np.array([0, 2], dtype=np.int32), np.array([1, 3], dtype=np.int32)]
+
+    args = SimpleNamespace(
+        halfsets="halfsets.pkl",
+        tilt_series=True,
+        tilt_series_ctf="relion5",
+        particles="particles.star",
+        ind=np.array([0, 1, 2, 3], dtype=np.int32),
+        tilt_ind=np.array([0, 2], dtype=np.int32),
+        ntilts=2,
+        datadir="/tmp/data",
+        strip_prefix=None,
+        n_images=-1,
+    )
+
+    monkeypatch.setattr(dataset, "get_split_tilt_indices", _fake_get_split_tilt_indices)
+    out = dataset.figure_out_halfsets(args)
+
+    np.testing.assert_array_equal(out[0], np.array([0, 2], dtype=np.int32))
+    np.testing.assert_array_equal(out[1], np.array([1, 3], dtype=np.int32))
+    assert captured["kwargs"]["ind_file"] is args.ind
+    assert captured["kwargs"]["tilt_ind_file"] is args.tilt_ind
+    assert captured["kwargs"]["ntilts"] == 2
+    assert captured["kwargs"]["particle_halfset_indices_file"] == "halfsets.pkl"

@@ -459,6 +459,8 @@ def compare_scores_against_baseline(current_scores, baseline_scores, tol_frac):
     for key in sorted(set(current_scores.keys()) & set(baseline_scores.keys())):
         cur = current_scores[key]
         base = baseline_scores[key]
+        if isinstance(cur, bool) or isinstance(base, bool):
+            continue
         if not isinstance(cur, (int, float, np.floating, np.integer)):
             continue
         if not isinstance(base, (int, float, np.floating, np.integer)):
@@ -478,6 +480,19 @@ def compare_scores_against_baseline(current_scores, baseline_scores, tol_frac):
         if not ok:
             failures.append(f"{key}: current={float(cur):.6g} baseline={float(base):.6g} ({msg})")
     return checked, failures, details
+
+
+def load_u_real_for_metrics(pipeline_output, n_pcs):
+    """
+    Load only the requested number of real-space eigen volumes when supported.
+    Falls back to legacy `get('u_real')` API.
+    """
+    n_pcs = int(n_pcs)
+    if n_pcs <= 0:
+        raise ValueError(f"n_pcs must be positive, got {n_pcs}")
+    if hasattr(pipeline_output, "get_u_real"):
+        return np.asarray(pipeline_output.get_u_real(n_pcs))
+    return np.asarray(pipeline_output.get('u_real')[:n_pcs])
 
 
 def main():
@@ -715,9 +730,14 @@ def main():
     take_n_pcs = 20
     u = {}
     s = {}
-    u[0] = (np.array(pipeline_output.get('u_real')[:take_n_pcs].reshape(take_n_pcs, -1)).T *
-            np.sqrt(np.prod(pipeline_output.get('volume_shape'))))
-    s[0] = pipeline_output.get('s') / (np.sqrt(np.prod(pipeline_output.get('volume_shape'))) ** 2)
+    u_real_subset = load_u_real_for_metrics(pipeline_output, take_n_pcs)
+    take_n_pcs_eff = int(u_real_subset.shape[0])
+    if take_n_pcs_eff == 0:
+        raise ValueError("No principal-component volumes available for metric computation.")
+    vol_norm = np.sqrt(np.prod(pipeline_output.get('volume_shape')))
+    u[0] = np.array(u_real_subset.reshape(take_n_pcs_eff, -1)).T * vol_norm
+    s_all = np.asarray(pipeline_output.get('s'))
+    s[0] = s_all[:take_n_pcs_eff] / (vol_norm ** 2)
 
     rel_var = {}
     norm_var = {}
@@ -725,14 +745,15 @@ def main():
         if key == 'gt':
             continue
         variance, rel_var[key], norm_var[key] = metrics.get_all_variance_scores(u[key], u_gt, s_gt)
-        all_scores['pcs_relative_variance_4'] = rel_var[key][4]
-        all_scores['pcs_relative_variance_10'] = rel_var[key][10]
+        all_scores['pcs_relative_variance_4'] = rel_var[key][4] if rel_var[key].size > 4 else np.nan
+        all_scores['pcs_relative_variance_10'] = rel_var[key][10] if rel_var[key].size > 10 else np.nan
 
     angles = {}
     for key in u:
         if key == 'gt':
             continue
-        angles[key] = recovar.metrics.subspace_angles(u_gt, u[key], max_rank=20)
+        max_rank = int(min(20, u_gt.shape[1], u[key].shape[1]))
+        angles[key] = recovar.metrics.subspace_angles(u_gt, u[key], max_rank=max_rank)
 
     b = 20
     def plot_dict(data_dict, title, max_size=b, log_scale=False, filename=None):

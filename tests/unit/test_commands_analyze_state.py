@@ -238,6 +238,59 @@ def test_compute_state_accepts_pathlike_latent_points(monkeypatch, tmp_path):
     np.testing.assert_array_equal(captured["target_zs"], latent_points)
 
 
+def test_compute_state_accepts_pathlike_result_and_out_dirs(monkeypatch, tmp_path):
+    latent_points = np.array([[0.0, 1.0], [2.0, 3.0]], dtype=np.float32)
+    latent_path = tmp_path / "latent.txt"
+    np.savetxt(latent_path, latent_points)
+
+    payload = {
+        "zs": {2: np.zeros((5, 2), dtype=np.float32)},
+        "cov_zs": {2: np.zeros((5, 2, 2), dtype=np.float32)},
+        "contrasts": {2: np.ones(5, dtype=np.float32)},
+        "dataset": ["d0"],
+        "lazy_dataset": ["ld0"],
+        "noise_var_used": np.ones(4, dtype=np.float32),
+        "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
+    }
+    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _fake_pipeline_output(payload))
+    monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
+
+    captured = {}
+    monkeypatch.setattr(
+        compute_state_cmd.o,
+        "compute_and_save_reweighted",
+        lambda _cryos, _target_zs, _zs, _cov_zs, output_folder, *_args, **_kwargs: captured.setdefault(
+            "output_folder", output_folder
+        ),
+    )
+    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
+    args = SimpleNamespace(
+        result_dir=tmp_path / "pipeline_out",  # Path object
+        particles=None,
+        datadir=None,
+        strip_prefix=None,
+        copy_to_folder=None,
+        no_cleanup=False,
+        latent_points=latent_path,
+        outdir=tmp_path / "state_out",  # Path object
+        zdim1=False,
+        no_z_regularization=False,
+        lazy=False,
+        n_bins=20,
+        Bfactor=0.0,
+        maskrad_fraction=0.5,
+        n_min_particles=1,
+        save_all_estimates=False,
+        apply_global_filtering=False,
+        fsc_mask_radius=None,
+        fsc_mask_edgewidth=None,
+    )
+    compute_state_cmd.compute_state(args)
+    assert captured["output_folder"].endswith("state_out/")
+
+
 def test_compute_state_reads_pkl_latent_points(monkeypatch, tmp_path):
     latent_points = np.array([[0.0, 1.0], [2.0, 3.0]], dtype=np.float32)
     latent_path = tmp_path / "latent.pkl"
@@ -344,6 +397,157 @@ def test_compute_state_uses_noreg_key_when_requested(monkeypatch, tmp_path):
     zs_used, cov_used = captured["vals"]
     np.testing.assert_array_equal(zs_used, payload["zs"]["2_noreg"])
     np.testing.assert_array_equal(cov_used, payload["cov_zs"]["2_noreg"])
+
+
+def test_compute_state_uses_embedding_component_api_when_available(monkeypatch, tmp_path):
+    latent_points = np.array([[0.0, 1.0], [2.0, 3.0]], dtype=np.float32)
+    latent_path = tmp_path / "latent.txt"
+    np.savetxt(latent_path, latent_points)
+
+    class _PO:
+        def __init__(self, _path):
+            self.params = {}
+            self._forbidden_gets = {"zs", "cov_zs", "contrasts"}
+            self._payload = {
+                "dataset": ["d0"],
+                "lazy_dataset": ["ld0"],
+                "noise_var_used": np.ones(4, dtype=np.float32),
+                "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
+            }
+            self._emb = {
+                "zs": {2: np.full((5, 2), 7.0, dtype=np.float32)},
+                "cov_zs": {2: np.full((5, 2, 2), 3.0, dtype=np.float32)},
+                "contrasts": {2: np.full(5, 2.0, dtype=np.float32)},
+            }
+
+        def get(self, key):
+            if key in self._forbidden_gets:
+                raise AssertionError(f"compute_state should not call get('{key}') when key-level API exists")
+            return self._payload[key]
+
+        def get_embedding_keys(self, entry):
+            return list(self._emb[entry].keys())
+
+        def get_embedding_component(self, entry, key):
+            return self._emb[entry][key]
+
+    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _PO)
+    monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
+    captured = {}
+    monkeypatch.setattr(
+        compute_state_cmd.embedding,
+        "set_contrasts_in_cryos",
+        lambda _cryos, contrasts: captured.setdefault("contrasts", contrasts.copy()),
+    )
+    monkeypatch.setattr(
+        compute_state_cmd.o,
+        "compute_and_save_reweighted",
+        lambda _cryos, _target_zs, zs, cov_zs, *_args, **_kwargs: captured.setdefault(
+            "vals", (zs.copy(), cov_zs.copy())
+        ),
+    )
+
+    args = SimpleNamespace(
+        result_dir=str(tmp_path / "pipeline_out"),
+        particles=None,
+        datadir=None,
+        strip_prefix=None,
+        copy_to_folder=None,
+        no_cleanup=False,
+        latent_points=str(latent_path),
+        outdir=str(tmp_path / "state_out"),
+        zdim1=False,
+        no_z_regularization=False,
+        lazy=False,
+        n_bins=20,
+        Bfactor=0.0,
+        maskrad_fraction=0.5,
+        n_min_particles=1,
+        save_all_estimates=False,
+        apply_global_filtering=False,
+        fsc_mask_radius=None,
+        fsc_mask_edgewidth=None,
+    )
+    compute_state_cmd.compute_state(args)
+    zs_used, cov_used = captured["vals"]
+    np.testing.assert_array_equal(captured["contrasts"], np.full(5, 2.0, dtype=np.float32))
+    np.testing.assert_array_equal(zs_used, np.full((5, 2), 7.0, dtype=np.float32))
+    np.testing.assert_array_equal(cov_used, np.full((5, 2, 2), 3.0, dtype=np.float32))
+
+
+def test_compute_state_casts_embedding_arrays_to_float32(monkeypatch, tmp_path):
+    latent_points = np.array([[0.0, 1.0], [2.0, 3.0]], dtype=np.float32)
+    latent_path = tmp_path / "latent.txt"
+    np.savetxt(latent_path, latent_points)
+
+    class _PO:
+        def __init__(self, _path):
+            self.params = {}
+            self._payload = {
+                "dataset": ["d0"],
+                "lazy_dataset": ["ld0"],
+                "noise_var_used": np.ones(4, dtype=np.float32),
+                "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
+            }
+            self._emb = {
+                "zs": {2: np.full((5, 2), 7.0, dtype=np.float64)},
+                "cov_zs": {2: np.full((5, 2, 2), 3.0, dtype=np.float64)},
+                "contrasts": {2: np.full(5, 2.0, dtype=np.float64)},
+            }
+
+        def get(self, key):
+            return self._payload[key]
+
+        def get_embedding_keys(self, entry):
+            return list(self._emb[entry].keys())
+
+        def get_embedding_component(self, entry, key):
+            return self._emb[entry][key]
+
+    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _PO)
+    monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
+    captured = {}
+    monkeypatch.setattr(
+        compute_state_cmd.embedding,
+        "set_contrasts_in_cryos",
+        lambda _cryos, contrasts: captured.setdefault("contrast_dtype", contrasts.dtype),
+    )
+    monkeypatch.setattr(
+        compute_state_cmd.o,
+        "compute_and_save_reweighted",
+        lambda _cryos, _target_zs, zs, cov_zs, *_args, **_kwargs: captured.setdefault(
+            "dtypes", (zs.dtype, cov_zs.dtype)
+        ),
+    )
+
+    args = SimpleNamespace(
+        result_dir=str(tmp_path / "pipeline_out"),
+        particles=None,
+        datadir=None,
+        strip_prefix=None,
+        copy_to_folder=None,
+        no_cleanup=False,
+        latent_points=str(latent_path),
+        outdir=str(tmp_path / "state_out"),
+        zdim1=False,
+        no_z_regularization=False,
+        lazy=False,
+        n_bins=20,
+        Bfactor=0.0,
+        maskrad_fraction=0.5,
+        n_min_particles=1,
+        save_all_estimates=False,
+        apply_global_filtering=False,
+        fsc_mask_radius=None,
+        fsc_mask_edgewidth=None,
+    )
+    compute_state_cmd.compute_state(args)
+    assert captured["contrast_dtype"] == np.float32
+    assert captured["dtypes"] == (np.float32, np.float32)
 
 
 def test_compute_state_rejects_unknown_latent_extension(monkeypatch, tmp_path):
@@ -730,6 +934,58 @@ def test_compute_state_allows_missing_override_attrs_on_args(monkeypatch, tmp_pa
         fsc_mask_edgewidth=None,
     )
     compute_state_cmd.compute_state(args)
+
+
+def test_compute_state_uses_defaults_when_optional_attrs_missing(monkeypatch, tmp_path):
+    latent_points = np.array([[0.0, 1.0]], dtype=np.float32)
+    latent_path = tmp_path / "latent.txt"
+    np.savetxt(latent_path, latent_points)
+
+    payload = {
+        "zs": {2: np.zeros((3, 2), dtype=np.float32)},
+        "cov_zs": {2: np.zeros((3, 2, 2), dtype=np.float32)},
+        "contrasts": {2: np.ones(3, dtype=np.float32)},
+        "dataset": ["d0"],
+        "lazy_dataset": ["ld0"],
+        "noise_var_used": np.ones(4, dtype=np.float32),
+        "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
+    }
+
+    class _PO:
+        def __init__(self, _path):
+            self.params = None
+            self._payload = payload
+
+        def get(self, key):
+            return self._payload[key]
+
+    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _PO)
+    monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
+
+    captured = {}
+    monkeypatch.setattr(
+        compute_state_cmd.o,
+        "compute_and_save_reweighted",
+        lambda _cryos, _target_zs, _zs, _cov_zs, _out, _bf, **kwargs: captured.setdefault("kwargs", kwargs),
+    )
+    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
+    # Intentionally omit many optional attributes; code should use parser defaults.
+    args = SimpleNamespace(
+        result_dir=str(tmp_path / "pipeline_out"),
+        latent_points=str(latent_path),
+        outdir=str(tmp_path / "state_out"),
+    )
+    compute_state_cmd.compute_state(args)
+
+    assert captured["kwargs"]["n_bins"] == 50
+    assert captured["kwargs"]["maskrad_fraction"] == 20
+    assert captured["kwargs"]["n_min_particles"] is None
+    assert captured["kwargs"]["save_all_estimates"] is False
+    assert captured["kwargs"]["apply_global_filtering"] is False
+    assert captured["kwargs"]["fsc_mask_radius"] is None
+    assert captured["kwargs"]["fsc_mask_edgewidth"] is None
 
 
 def test_compute_state_apply_global_filtering_without_volume_mask(monkeypatch, tmp_path):

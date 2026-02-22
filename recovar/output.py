@@ -593,33 +593,141 @@ class PipelineOutput:
         self.params = utils.pickle_load(result_path + '/model/params.pkl')
         self.embedding = None
         self.embedding_loaded = False
+        self._embedding_key_cache = {}
+        self._embedding_halfsets_cache = None
         self.result_path = result_path + '/'
         self.version = str(self.params['version']) if 'version' in self.params else '0'
 
+    def _ensure_embedding_raw_loaded(self):
+        if self.embedding is None:
+            self.embedding = utils.pickle_load(self.result_path + 'model/' + 'embeddings' + '.pkl')
+
+    def _get_input_args_compat(self):
+        if not hasattr(self.params, "get") or "input_args" not in self.params:
+            return None
+        input_args = self.params["input_args"]
+        try:
+            return input_args.item()
+        except Exception:
+            return input_args
+
+    def _use_image_halfsets_for_unshared_tilt_contrast(self):
+        input_args = self._get_input_args_compat()
+        if input_args is None:
+            return False
+        if isinstance(input_args, dict):
+            tilt_series = bool(input_args.get("tilt_series", False))
+            shared = bool(input_args.get("shared_contrast_across_tilts", True))
+        else:
+            tilt_series = bool(getattr(input_args, "tilt_series", False))
+            shared = bool(getattr(input_args, "shared_contrast_across_tilts", True))
+        return tilt_series and not shared
+
+    def _get_embedding_halfsets(self):
+        if self._embedding_halfsets_cache is not None:
+            return self._embedding_halfsets_cache
+        if self.version == '0':
+            self._embedding_halfsets_cache = (None, None)
+            return self._embedding_halfsets_cache
+        if self.version == '0.1':
+            particle_halfsets = np.concatenate(self.get('halfsets'))
+        else:
+            particle_halfsets = np.concatenate(self.get('particles_halfsets'))
+        image_halfsets = np.concatenate(self.get('halfsets'))
+        self._embedding_halfsets_cache = (particle_halfsets, image_halfsets)
+        return self._embedding_halfsets_cache
+
+    def get_embedding_keys(self, entry):
+        self._ensure_embedding_raw_loaded()
+        return list(self.embedding[entry].keys())
+
+    def has_embedding_key(self, entry, key):
+        return key in self.get_embedding_keys(entry)
+
+    def get_embedding_component(self, entry, key):
+        if self.embedding_loaded:
+            return self.embedding[entry][key]
+        cache_key = (entry, key)
+        if cache_key in self._embedding_key_cache:
+            return self._embedding_key_cache[cache_key]
+
+        self._ensure_embedding_raw_loaded()
+        if key not in self.embedding[entry]:
+            raise KeyError(f"Embedding key {key} not found in {entry}.")
+
+        values = self.embedding[entry][key]
+        if self.version != '0':
+            particle_halfsets, image_halfsets = self._get_embedding_halfsets()
+            if entry == 'contrasts' and self._use_image_halfsets_for_unshared_tilt_contrast():
+                values = values[image_halfsets]
+            else:
+                values = values[particle_halfsets]
+        self._embedding_key_cache[cache_key] = values
+        return values
+
     def load_embedding(self):
-        self.embedding = utils.pickle_load(self.result_path + 'model/' + 'embeddings' + '.pkl')
+        self._ensure_embedding_raw_loaded()
 
         if self.version != '0':
-            if self.version == '0.1':
-                halfsets = np.concatenate(self.get('halfsets'))
-            else:
-                halfsets = np.concatenate(self.get('particles_halfsets'))
-
-            image_halfsets = np.concatenate(self.get('halfsets'))
+            halfsets, image_halfsets = self._get_embedding_halfsets()
 
             # embedding_dict = self.embedding
             for entry in self.embedding:
                 for key in self.embedding[entry]:
                     # Handling the case where the contrasts are not shared across tilts...
                     # import pdb; pdb.set_trace()
-                    if entry == 'contrasts' and self.get('input_args').tilt_series and not self.get('input_args').shared_contrast_across_tilts:
+                    if entry == 'contrasts' and self._use_image_halfsets_for_unshared_tilt_contrast():
                         self.embedding[entry][key] = self.embedding[entry][key][image_halfsets]
                     else:
                         self.embedding[entry][key] = self.embedding[entry][key][halfsets]
                 # for key in self.embedding[entry]:
                 #     self.embedding[entry][key] = self.embedding[entry][key][halfsets]
         self.embedding_loaded = True
+        self._embedding_key_cache = {}
         return 
+
+    def _list_saved_eigenvector_indices(self):
+        vols_dir = self.result_path + 'output/volumes/'
+        if not os.path.isdir(vols_dir):
+            return []
+        prefix = 'eigen_pos'
+        suffix = '.mrc'
+        indices = []
+        for name in os.listdir(vols_dir):
+            if not (name.startswith(prefix) and name.endswith(suffix)):
+                continue
+            num_str = name[len(prefix):-len(suffix)]
+            if num_str.isdigit():
+                indices.append(int(num_str))
+        indices.sort()
+        return indices
+
+    def _select_saved_eigenvector_indices(self, n_pcs=50):
+        saved_indices = self._list_saved_eigenvector_indices()
+        if len(saved_indices) == 0:
+            raise ValueError("No eigenvector volumes found in output/volumes (expected files like eigen_pos0000.mrc).")
+        if n_pcs is None:
+            n_pcs = 50
+        n_pcs = int(n_pcs)
+        if n_pcs <= 0:
+            raise ValueError(f"n_pcs must be positive, got {n_pcs}")
+        return saved_indices[: min(n_pcs, len(saved_indices))]
+
+    def get_u_real(self, n_pcs=50):
+        selected_indices = self._select_saved_eigenvector_indices(n_pcs)
+        out = np.empty([len(selected_indices), *(self.params['volume_shape'])], dtype=np.float32)
+        for i, eig_idx in enumerate(selected_indices):
+            out[i] = utils.load_mrc(self.result_path + 'output/volumes/' + 'eigen_pos' + format(eig_idx, '04d') + '.mrc')
+        return out
+
+    def get_u(self, n_pcs=50):
+        selected_indices = self._select_saved_eigenvector_indices(n_pcs)
+        vol_size = int(np.prod(self.params['volume_shape']))
+        out = np.empty((len(selected_indices), vol_size), dtype=np.complex64)
+        for i, eig_idx in enumerate(selected_indices):
+            vol = utils.load_mrc(self.result_path + 'output/volumes/' + 'eigen_pos' + format(eig_idx, '04d') + '.mrc')
+            out[i] = np.asarray(fourier_transform_utils.get_dft3(vol), dtype=np.complex64).reshape(-1)
+        return out
 
     def get(self,key):
 
@@ -632,15 +740,10 @@ class PipelineOutput:
             return utils.pickle_load(self.result_path + 'model/' + 'embeddings' + '.pkl')
 
         elif key == 'u' or key == 'u_real':
-            n_pcs = 50
-            u = np.zeros([n_pcs, *(self.params['volume_shape'])])
-            for i in range(n_pcs):
-                u[i] = utils.load_mrc(self.result_path + 'output/volumes/' + 'eigen_pos' + format(i, '04d') + '.mrc')
             if key == 'u_real':
-                return u
+                return self.get_u_real(50)
             else:
-                #return self.params['volume_shape'], 10).reshape(n_pcs, -1)
-                return fourier_transform_utils.get_dft3(u).reshape(n_pcs, -1)
+                return self.get_u(50)
         elif key == 'mean':
             return fourier_transform_utils.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/' + 'mean' + '.mrc')).reshape(-1)
         

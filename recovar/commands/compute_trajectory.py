@@ -80,89 +80,123 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
     if args is not None and hasattr(args, 'copy_to_folder') and args.copy_to_folder is not None:
         path_mapping = copy_data_from_pipeline_output(po, args.copy_to_folder)
 
-    if zdim is None and len(po.get('zs')) > 1:
-        logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --zdim=4")
-        raise Exception("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --zdim=4")
-    
-    elif zdim is None:
-        zdim = list(po.get('zs').keys())[0]
-        logger.info(f"using zdim={zdim}")
-    zdim_key = f"{zdim}_noreg" if no_z_reg else zdim
-    logger.info(f"using zdim_key={zdim_key}")
-    assert output_folder is not None
-    # if output_folder is None:
-    #     output_folder = recovar_result_dir + f'/output/analysis_{zdim_key}/' 
+    try:
+        if hasattr(po, "get_embedding_keys"):
+            zs_keys = list(po.get_embedding_keys("zs"))
+            cov_keys = list(po.get_embedding_keys("cov_zs"))
+            contrast_keys = list(po.get_embedding_keys("contrasts"))
+            zs_all = cov_zs_all = contrasts_all = None
+        else:
+            zs_all = po.get('zs')
+            cov_zs_all = po.get('cov_zs')
+            contrasts_all = po.get('contrasts')
+            zs_keys = list(zs_all.keys())
+            cov_keys = list(cov_zs_all.keys())
+            contrast_keys = list(contrasts_all.keys())
 
-    if zdim not in po.get('zs'):
-        logger.error("z-dim not found in results. Options are:" + ','.join(str(e) for e in po.get('zs').keys()))
+        if zdim is None and len(zs_keys) > 1:
+            logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --zdim=4")
+            raise Exception("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --zdim=4")
 
-    zs = po.get('zs')[zdim_key]
-    cov_zs = po.get('cov_zs')[zdim_key]
-    cryos = po.get('dataset')
-    embedding.set_contrasts_in_cryos(cryos, po.get('contrasts')[zdim_key])
-
-    if density_path is not None:
-        dens_pkl = utils.pickle_load(density_path)
-        input_density = dens_pkl['density']
-        latent_space_bounds = dens_pkl['latent_space_bounds']
-        logger.warning(f"density dimension is less than zs dimension, truncate zs dimension to match density dimension = {input_density.ndim}")
-        zdim = input_density.ndim
+        elif zdim is None:
+            zdim = zs_keys[0]
+            logger.info(f"using zdim={zdim}")
         zdim_key = f"{zdim}_noreg" if no_z_reg else zdim
-        zs = zs[:,:zdim]
-        cov_zs = cov_zs[:,:zdim,:zdim]
-    else:
-        density, latent_space_bounds  = latent_density.compute_latent_space_density(zs, cov_zs, pca_dim_max = np.min([4,zs.shape[-1]]), num_points = 50, density_option = 'kde')
-        po.params['density'] = density
-        # latent_space_bounds = None
-        input_density = None
-        latent_space_bounds = None
-        
-    # if zdim is None and len(po.get('zs']) > 1:
-    #     logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --z-dim=4")
+        logger.info(f"using zdim_key={zdim_key}")
+        assert output_folder is not None
 
-    # cryos = po.get('dataset')
-    # embedding.set_contrasts_in_cryos(cryos, po.get('contrasts')[zdim])
-    
-    if zs.shape[1] > z_st.shape[0]:
-        z_st = np.concatenate([z_st, np.zeros(zs.shape[1] - z_st.shape[0])])
-        z_end = np.concatenate([z_end, np.zeros(zs.shape[1] - z_end.shape[0])])
-        logger.warning(f"endpoints are padded with 0 to match zs dimension = {zs.shape[1]}")
-    elif zs.shape[1] < z_st.shape[0]:
-        z_st = z_st[:zs.shape[1]]
-        z_end = z_end[:zs.shape[1]]
-        logger.warning(f"endpoints are truncated to match zs dimension = {zs.shape[1]}")
+        if zdim not in zs_keys:
+            logger.error("z-dim not found in results. Options are:" + ','.join(str(e) for e in zs_keys))
+            raise ValueError("Requested zdim was not found in embedding outputs.")
 
-    B_factor = args.Bfactor
-    n_bins = args.n_bins
-    output_folder_kmeans = output_folder + '/' #+ '/kmeans'+'_'+ str(n_clusters) + '/'    
-    o.mkdir_safe(output_folder_kmeans)    
-    # logger.addHandler(logging.FileHandler(f"{output_folder_kmeans}/run.log"))
-    logger.info(args)
+        if zdim_key not in zs_keys or zdim_key not in cov_keys or zdim_key not in contrast_keys:
+            raise ValueError(
+                f"Requested embedding key {zdim_key} is missing in pipeline output zs/contrasts/cov_zs."
+            )
 
-    if zdim > 1:
-        path_folder = output_folder_kmeans       
-        o.mkdir_safe(path_folder)
-        full_path, subsampled_path = o.make_trajectory_plots_from_results(po, zdim_key, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = False, input_density = input_density, latent_space_bounds = latent_space_bounds)
-        logger.info(f"path done")
-        # move_to_one_folder(path_folder, n_vols_along_path )
+        if hasattr(po, "get_embedding_component"):
+            zs = po.get_embedding_component('zs', zdim_key)
+            cov_zs = po.get_embedding_component('cov_zs', zdim_key)
+            contrasts = po.get_embedding_component('contrasts', zdim_key)
+        else:
+            zs = zs_all[zdim_key]
+            cov_zs = cov_zs_all[zdim_key]
+            contrasts = contrasts_all[zdim_key]
 
-    else:
-        path_folder = output_folder_kmeans + 'path' + str(0) + '/'        
-        o.mkdir_safe(path_folder)
-        q = 0.03
-        pairs = np.percentile(po.get('zs')[zdim], [q, 100-q])
-        z_st = pairs[0]
-        z_end = pairs[1]
-        # n_vols_along_path = 80
-        # z_points = np.linspace(z_st, z_end, n_vols_along_path)
-        # pairs = [ [z_points[0], z_points[40-1]], [z_points[40], z_points[80-1]] ]
-        subsampled_path = np.linspace(z_st, z_end, n_vols_along_path)[:,None]
-        # move_to_one_folder(path_folder, n_vols_along_path )
-    o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, path_folder, B_factor, n_bins, maskrad_fraction = args.maskrad_fraction, n_min_particles = args.n_min_particles, save_all_estimates = False)
+        # Keep memory footprint low for downstream JAX kernels.
+        zs = np.asarray(zs).astype(np.float32, copy=False)
+        cov_zs = np.asarray(cov_zs).astype(np.float32, copy=False)
+        contrasts = np.asarray(contrasts).astype(np.float32, copy=False)
 
-    # Clean up temp files at the end
-    if path_mapping is not None and args is not None and not args.no_cleanup:
-        cleanup_temp_files(path_mapping)
+        cryos = po.get('dataset')
+        embedding.set_contrasts_in_cryos(cryos, contrasts)
+
+        if density_path is not None:
+            dens_pkl = utils.pickle_load(density_path)
+            input_density = dens_pkl['density']
+            latent_space_bounds = dens_pkl['latent_space_bounds']
+            logger.warning(f"density dimension is less than zs dimension, truncate zs dimension to match density dimension = {input_density.ndim}")
+            zdim = input_density.ndim
+            zdim_key = f"{zdim}_noreg" if no_z_reg else zdim
+            zs = zs[:, :zdim]
+            cov_zs = cov_zs[:, :zdim, :zdim]
+        else:
+            density, latent_space_bounds = latent_density.compute_latent_space_density(
+                zs, cov_zs, pca_dim_max=np.min([4, zs.shape[-1]]), num_points=50, density_option='kde'
+            )
+            po.params['density'] = density
+            input_density = None
+            latent_space_bounds = None
+
+        if zs.shape[1] > z_st.shape[0]:
+            z_st = np.concatenate([z_st, np.zeros(zs.shape[1] - z_st.shape[0])])
+            z_end = np.concatenate([z_end, np.zeros(zs.shape[1] - z_end.shape[0])])
+            logger.warning(f"endpoints are padded with 0 to match zs dimension = {zs.shape[1]}")
+        elif zs.shape[1] < z_st.shape[0]:
+            z_st = z_st[:zs.shape[1]]
+            z_end = z_end[:zs.shape[1]]
+            logger.warning(f"endpoints are truncated to match zs dimension = {zs.shape[1]}")
+
+        if args is not None:
+            B_factor = args.Bfactor
+            n_bins = args.n_bins
+            maskrad_fraction = args.maskrad_fraction
+            n_min_particles = args.n_min_particles
+        else:
+            maskrad_fraction = 20
+            n_min_particles = 100
+
+        output_folder_kmeans = output_folder + '/'
+        o.mkdir_safe(output_folder_kmeans)
+        logger.info(args)
+
+        if zdim > 1:
+            path_folder = output_folder_kmeans
+            o.mkdir_safe(path_folder)
+            full_path, subsampled_path = o.make_trajectory_plots_from_results(
+                po, zdim_key, path_folder, cryos=cryos, z_st=z_st, z_end=z_end, gt_volumes=None,
+                n_vols_along_path=n_vols_along_path, plot_llh=False, input_density=input_density,
+                latent_space_bounds=latent_space_bounds
+            )
+            logger.info("path done")
+
+        else:
+            path_folder = output_folder_kmeans + 'path' + str(0) + '/'
+            o.mkdir_safe(path_folder)
+            q = 0.03
+            zs_1d = np.asarray(zs).reshape(-1)
+            pairs = np.percentile(zs_1d, [q, 100 - q])
+            z_st = pairs[0]
+            z_end = pairs[1]
+            subsampled_path = np.linspace(z_st, z_end, n_vols_along_path)[:, None]
+        o.compute_and_save_reweighted(
+            cryos, subsampled_path, zs, cov_zs, path_folder, B_factor, n_bins,
+            maskrad_fraction=maskrad_fraction, n_min_particles=n_min_particles, save_all_estimates=False
+        )
+    finally:
+        # Clean up temp files at the end (including failures).
+        if path_mapping is not None and args is not None and not getattr(args, "no_cleanup", False):
+            cleanup_temp_files(path_mapping)
 
 from recovar.output import move_to_one_folder
 
