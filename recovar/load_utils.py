@@ -11,6 +11,34 @@ from typing import Optional, Tuple, Union, List
 logger = logging.getLogger(__name__)
 
 
+def _normalize_pose_indices(ind: np.ndarray, n_total: int) -> np.ndarray:
+    """Normalize pose-selection indices (integer ids or boolean mask)."""
+    arr = np.asarray(ind)
+    if arr.dtype == bool:
+        if arr.ndim != 1:
+            raise ValueError("Pose index boolean mask must be 1D")
+        if arr.size != int(n_total):
+            raise ValueError(
+                f"Pose index boolean mask length {arr.size} must match number of poses {int(n_total)}"
+            )
+        return np.flatnonzero(arr).astype(np.int32, copy=False)
+
+    if arr.ndim == 0:
+        arr = arr.reshape(1)
+    if arr.ndim != 1:
+        raise ValueError("Pose indices must be 1D")
+    if arr.dtype.kind not in ("i", "u"):
+        raise TypeError("Pose indices must be integer or boolean mask")
+
+    arr = arr.astype(np.int64, copy=False).reshape(-1)
+    if arr.size > 0:
+        if np.any(arr < 0):
+            raise IndexError("Pose indices contain negative values")
+        if np.any(arr >= int(n_total)):
+            raise IndexError(f"Pose indices contain values >= number of poses ({int(n_total)})")
+    return arr.astype(np.int32, copy=False)
+
+
 def print_ctf_params(params: np.ndarray) -> None:
     """Log CTF parameters in a readable format.
     
@@ -115,26 +143,30 @@ def load_poses(
     
     # Extract rotations
     rots = poses[0]
-    
-    # Apply index filter if provided
-    if ind is not None and len(rots) > Nimg:
-        rots = rots[ind]
-    
+
     # Validate rotation shape
     expected_rot_shape = (Nimg, 3, 3)
+    pose_ind = None
+    if ind is not None and len(rots) > Nimg:
+        pose_ind = _normalize_pose_indices(ind, n_total=len(rots))
+        rots = rots[pose_ind]
+
     if rots.shape != expected_rot_shape:
-        raise ValueError(
-            f"Rotation array has shape {rots.shape}, expected {expected_rot_shape}"
-        )
+        raise ValueError(f"Rotation array has shape {rots.shape}, expected {expected_rot_shape}")
     
     # Extract translations if available
     trans = None
     if len(poses) == 2:
         trans = poses[1]
-        
-        # Apply index filter if provided
-        if ind is not None and len(trans) > Nimg:
-            trans = trans[ind]
+
+        if len(poses[0]) != len(trans):
+            raise ValueError(
+                f"Rotation/translation count mismatch: {len(poses[0])} rotations vs {len(trans)} translations"
+            )
+
+        # Apply the same pose subset as rotations to preserve row alignment.
+        if pose_ind is not None:
+            trans = trans[pose_ind]
         
         # Validate translation shape
         expected_trans_shape = (Nimg, 2)
@@ -156,4 +188,3 @@ def load_poses(
         logger.warning("No translations found in pose file")
     
     return rots, trans, D
-

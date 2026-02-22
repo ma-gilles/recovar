@@ -242,6 +242,9 @@ def compute_noise_variance_metrics(
     if gt_noise_base is None:
         logger.warning("No ground truth noise variance found in simulation info")
         return scores
+    if est_noise is None:
+        logger.warning("No estimated noise variance found in pipeline output")
+        return scores
 
     logger.info(f"Ground truth noise shape: {gt_noise_base.shape}")
     logger.info(f"Estimated noise shape: {est_noise.shape if isinstance(est_noise, np.ndarray) else 'not array'}")
@@ -250,6 +253,9 @@ def compute_noise_variance_metrics(
         logger.info("Processing variable noise per tilt...")
         if dose_indices is None:
             logger.warning("No dose indices found for variable noise comparison")
+            return scores
+        if len(dose_indices) == 0:
+            logger.warning("Empty dose indices for variable noise comparison")
             return scores
 
         unique_tilts, tilt_counts = np.unique(dose_indices, return_counts=True)
@@ -442,7 +448,9 @@ def compare_metric(current, baseline, direction, tol_frac):
 def normalize_scores_for_json(scores_dict):
     normalized = {}
     for key, val in scores_dict.items():
-        if isinstance(val, np.ndarray):
+        if isinstance(val, (bool, np.bool_)):
+            normalized[key] = bool(val)
+        elif isinstance(val, np.ndarray):
             normalized[key] = np.asarray(val).tolist()
         elif isinstance(val, (np.floating, np.integer)):
             normalized[key] = float(val)
@@ -470,7 +478,7 @@ def compare_scores_against_baseline(current_scores, baseline_scores, tol_frac):
     for key in sorted(set(current_scores.keys()) & set(baseline_scores.keys())):
         cur = current_scores[key]
         base = baseline_scores[key]
-        if isinstance(cur, bool) or isinstance(base, bool):
+        if isinstance(cur, (bool, np.bool_)) or isinstance(base, (bool, np.bool_)):
             continue
         if not isinstance(cur, (int, float, np.floating, np.integer)):
             continue
@@ -504,6 +512,110 @@ def load_u_real_for_metrics(pipeline_output, n_pcs):
     if hasattr(pipeline_output, "get_u_real"):
         return np.asarray(pipeline_output.get_u_real(n_pcs))
     return np.asarray(pipeline_output.get('u_real')[:n_pcs])
+
+
+def load_unsorted_embedding_component(pipeline_output, entry, key, legacy_cache=None):
+    """
+    Load one unsorted embedding component with minimal I/O when supported.
+
+    Prefer `PipelineOutput.get_embedding_component(entry, key)` to avoid loading
+    the entire embeddings payload. Fall back to legacy `get('unsorted_embedding')`.
+    """
+    if legacy_cache is None:
+        legacy_cache = {}
+
+    cache_key = ("component", entry, key)
+    if cache_key in legacy_cache:
+        return legacy_cache[cache_key]
+
+    if hasattr(pipeline_output, "get_embedding_component"):
+        value = np.asarray(pipeline_output.get_embedding_component(entry, key))
+    else:
+        if "__root__" not in legacy_cache:
+            legacy_cache["__root__"] = pipeline_output.get('unsorted_embedding')
+        value = np.asarray(legacy_cache["__root__"][entry][key])
+
+    legacy_cache[cache_key] = value
+    return value
+
+
+def select_state_target_latent_points(unsorted_zs, particle_assignment, preferred_labels, max_points=2):
+    """
+    Pick representative latent points for compute_state without producing NaNs.
+
+    Preferred labels are used when present; otherwise, non-empty labels with the
+    highest particle counts are used as fallback.
+    """
+    max_points = int(max_points)
+    if max_points <= 0:
+        raise ValueError(f"max_points must be positive, got {max_points}")
+
+    zs = np.asarray(unsorted_zs)
+    if zs.ndim != 2:
+        raise ValueError(f"unsorted_zs must be 2D, got shape {zs.shape}")
+
+    labels = np.asarray(particle_assignment).reshape(-1)
+    if labels.size != zs.shape[0]:
+        raise ValueError(
+            f"Length mismatch: particle_assignment has {labels.size} items, "
+            f"but unsorted_zs has {zs.shape[0]} rows."
+        )
+    if labels.size == 0:
+        raise ValueError("particle_assignment is empty.")
+
+    if not np.issubdtype(labels.dtype, np.integer):
+        rounded = np.round(labels)
+        if not np.allclose(labels, rounded):
+            raise ValueError("particle_assignment must be integer-like.")
+        labels = rounded.astype(np.int64)
+    else:
+        labels = labels.astype(np.int64, copy=False)
+
+    finite_row_mask = np.all(np.isfinite(zs), axis=1)
+    if not np.any(finite_row_mask):
+        raise ValueError("All rows in unsorted_zs are non-finite.")
+    if not np.all(finite_row_mask):
+        zs = zs[finite_row_mask]
+        labels = labels[finite_row_mask]
+
+    unique_labels, counts = np.unique(labels, return_counts=True)
+    if unique_labels.size == 0:
+        raise ValueError("No non-empty labels available for latent point selection.")
+
+    selected_labels = []
+    present = set(unique_labels.tolist())
+    for label in preferred_labels:
+        label_int = int(label)
+        if label_int in present and label_int not in selected_labels:
+            selected_labels.append(label_int)
+            if len(selected_labels) >= max_points:
+                break
+
+    # Fill remaining slots by largest class size, tie-broken by smaller label.
+    if len(selected_labels) < max_points:
+        order = np.lexsort((unique_labels, -counts))
+        for idx in order:
+            label_int = int(unique_labels[idx])
+            if label_int not in selected_labels:
+                selected_labels.append(label_int)
+            if len(selected_labels) >= max_points:
+                break
+
+    selected_points = []
+    used_labels = []
+    for label_int in selected_labels:
+        label_mask = labels == label_int
+        if not np.any(label_mask):
+            continue
+        z_mean = np.mean(zs[label_mask], axis=0)
+        if np.all(np.isfinite(z_mean)):
+            selected_points.append(np.asarray(z_mean, dtype=np.float32))
+            used_labels.append(label_int)
+
+    if not selected_points:
+        raise ValueError("Could not compute finite latent target points from assignments.")
+
+    return np.asarray(selected_points, dtype=np.float32), used_labels
 
 
 def main():
@@ -666,17 +778,25 @@ def main():
     output.mkdir_safe(plots_dir)
 
     pipeline_output = output.PipelineOutput(pipeline_output_dir)
-    unsorted_embedding = pipeline_output.get('unsorted_embedding')
+    legacy_embedding_cache = {}
     particle_assignment = sim_info['image_assignment'] if not tilt_series else sim_info['tilt_series_assignment']
 
-    max_classes = np.max(sim_info['image_assignment']) + 1
-    labels_to_plot = [0, max_classes // 2]
-
-    unsorted_zs = unsorted_embedding['zs'][10]
-    zs_assignment = np.array([
-        np.mean(unsorted_zs[particle_assignment == l], axis=0)
-        for l in labels_to_plot
-    ])
+    max_classes = int(np.max(sim_info['image_assignment'])) + 1
+    requested_labels = [0, max_classes // 2]
+    unsorted_zs = load_unsorted_embedding_component(
+        pipeline_output, 'zs', 10, legacy_cache=legacy_embedding_cache
+    )
+    zs_assignment, labels_to_plot = select_state_target_latent_points(
+        unsorted_zs=unsorted_zs,
+        particle_assignment=particle_assignment,
+        preferred_labels=requested_labels,
+        max_points=2,
+    )
+    logger.info(
+        "Selected state target labels %s (requested %s)",
+        labels_to_plot,
+        requested_labels,
+    )
 
     # Compute state with latent points
     output_state_dir = os.path.join(pipeline_output_dir, 'state')
@@ -792,17 +912,23 @@ def main():
               filename=os.path.join(plots_dir, 'eigs.png'))
 
     # Embedding variance errors
-    unsorted_zs = unsorted_embedding['zs'][4]
+    unsorted_zs = load_unsorted_embedding_component(
+        pipeline_output, 'zs', 4, legacy_cache=legacy_embedding_cache
+    )
     _, averaged_variance = metrics.variance_of_zs(unsorted_zs, particle_assignment)
     all_scores['embedding_squared_error_4'] = averaged_variance
 
-    unsorted_zs = unsorted_embedding['zs'][10]
+    unsorted_zs = load_unsorted_embedding_component(
+        pipeline_output, 'zs', 10, legacy_cache=legacy_embedding_cache
+    )
     _, averaged_variance = metrics.variance_of_zs(unsorted_zs, particle_assignment)
     all_scores['embedding_squared_error_10'] = averaged_variance
 
     gt_contrasts = synt.contrasts
     for idx in [4, 10, '4_noreg', '10_noreg']:
-        unsorted_contrast = unsorted_embedding['contrasts'][idx]
+        unsorted_contrast = load_unsorted_embedding_component(
+            pipeline_output, 'contrasts', idx, legacy_cache=legacy_embedding_cache
+        )
         contrast_abs_error = np.mean(np.abs(gt_contrasts - unsorted_contrast))
         all_scores[f'contrasts_{idx}'] = contrast_abs_error
         # Backward-compatible key for existing comparison scripts.
@@ -899,7 +1025,9 @@ def main():
     
     # Plot 5: Contrast comparison for zdim=4
     plt.subplot(3, 3, 5)
-    unsorted_contrast_4 = unsorted_embedding['contrasts'][4]
+    unsorted_contrast_4 = load_unsorted_embedding_component(
+        pipeline_output, 'contrasts', 4, legacy_cache=legacy_embedding_cache
+    )
     plt.scatter(gt_contrasts, unsorted_contrast_4, alpha=0.5, label='Particle contrasts')
     plt.plot([0, 1], [0, 1], 'r--', label='Perfect correlation')
     plt.xlabel('Ground Truth Contrast')
@@ -918,7 +1046,9 @@ def main():
     
     # Plot 7: Contrast comparison for zdim=10
     plt.subplot(3, 3, 7)
-    unsorted_contrast_10 = unsorted_embedding['contrasts'][10]
+    unsorted_contrast_10 = load_unsorted_embedding_component(
+        pipeline_output, 'contrasts', 10, legacy_cache=legacy_embedding_cache
+    )
     plt.scatter(gt_contrasts, unsorted_contrast_10, alpha=0.5, label='Particle contrasts')
     plt.plot([0, 1], [0, 1], 'r--', label='Perfect correlation')
     plt.xlabel('Ground Truth Contrast')

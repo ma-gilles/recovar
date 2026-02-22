@@ -85,6 +85,63 @@ def test_mrc_loader_reads_real_file_sequential_and_random(tmp_path):
     np.testing.assert_allclose(rnd, data[[4, 2, 0]])
 
 
+def test_mrc_loader_duplicate_indices_preserve_order_and_duplicates(tmp_path):
+    data = np.arange(5 * 4 * 4, dtype=np.float32).reshape(5, 4, 4)
+    mrc_path = tmp_path / "particles.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    loader = image_loader.MRCLoader(str(mrc_path), lazy=True)
+    req = np.array([4, 2, 4, 0], dtype=np.int32)
+    out = loader.get(req)
+    np.testing.assert_allclose(out, data[req])
+
+
+def test_mrc_loader_deduplicates_disk_reads_for_duplicate_indices(monkeypatch, tmp_path):
+    data = np.arange(6 * 4 * 4, dtype=np.float32).reshape(6, 4, 4)
+    mrc_path = tmp_path / "particles.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    loader = image_loader.MRCLoader(str(mrc_path), lazy=True)
+    req = np.array([5, 2, 5, 0], dtype=np.int32)  # unique non-sequential: [0,2,5]
+
+    orig_fromfile = np.fromfile
+    calls = {"n": 0}
+
+    def _counting_fromfile(*args, **kwargs):
+        calls["n"] += 1
+        return orig_fromfile(*args, **kwargs)
+
+    monkeypatch.setattr(np, "fromfile", _counting_fromfile)
+    out = loader.get(req)
+
+    np.testing.assert_allclose(out, data[req])
+    # Random-access path should read once per unique index, not per request element.
+    assert calls["n"] == 3
+
+
+def test_mrc_loader_deduplicates_disk_reads_when_all_indices_are_same(monkeypatch, tmp_path):
+    data = np.arange(6 * 4 * 4, dtype=np.float32).reshape(6, 4, 4)
+    mrc_path = tmp_path / "particles.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    loader = image_loader.MRCLoader(str(mrc_path), lazy=True)
+    req = np.array([3, 3, 3, 3], dtype=np.int32)
+
+    orig_fromfile = np.fromfile
+    calls = {"n": 0}
+
+    def _counting_fromfile(*args, **kwargs):
+        calls["n"] += 1
+        return orig_fromfile(*args, **kwargs)
+
+    monkeypatch.setattr(np, "fromfile", _counting_fromfile)
+    out = loader.get(req)
+
+    np.testing.assert_allclose(out, data[req])
+    # Single contiguous read for one unique index.
+    assert calls["n"] == 1
+
+
 def test_mrc_loader_constructor_accepts_boolean_subset_mask(tmp_path):
     data = np.arange(5 * 4 * 4, dtype=np.float32).reshape(5, 4, 4)
     mrc_path = tmp_path / "particles.mrcs"

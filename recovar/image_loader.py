@@ -299,39 +299,53 @@ class MRCLoader(ImageLoader):
         """Load images from MRC file."""
         # Map requested indices to file indices
         file_idx = self._file_indices[indices]
-        
-        output = np.empty((len(file_idx), self._image_size, self._image_size), 
-                         dtype=self._file_dtype)
+        if len(file_idx) == 0:
+            return np.empty((0, self._image_size, self._image_size), dtype=self._file_dtype)
+
+        # De-duplicate repeated file indices to avoid redundant disk reads.
+        # Keep inverse map so returned array preserves request order/duplicates.
+        unique_idx, inverse = np.unique(file_idx, return_inverse=True)
+        has_duplicates = unique_idx.size != file_idx.size
+        read_idx = unique_idx if has_duplicates else file_idx
+
+        read_output = np.empty((len(read_idx), self._image_size, self._image_size), dtype=self._file_dtype)
         
         with nvtx.annotate(f"disk_read_{len(file_idx)}_images", color="cyan", domain=NVTX_DOMAIN_DATA_IO):
             with open(self._filepath, 'rb') as f:
                 # Check if we can do a single contiguous read
-                if len(file_idx) > 0:
-                    sorted_order = np.argsort(file_idx)
-                    sorted_idx = file_idx[sorted_order]
-                    
-                    is_sequential = np.all(np.diff(sorted_idx) == 1) if len(sorted_idx) > 1 else True
-                    
-                    if is_sequential:
-                        # Single read for contiguous block
-                        with nvtx.annotate("sequential_read", color="green", domain=NVTX_DOMAIN_DATA_IO):
-                            offset = self._data_start + sorted_idx[0] * self._bytes_per_image
+                sorted_order = np.argsort(read_idx)
+                sorted_idx = read_idx[sorted_order]
+
+                is_sequential = np.all(np.diff(sorted_idx) == 1) if len(sorted_idx) > 1 else True
+
+                if is_sequential:
+                    # Single read for contiguous block.
+                    with nvtx.annotate("sequential_read", color="green", domain=NVTX_DOMAIN_DATA_IO):
+                        offset = self._data_start + int(sorted_idx[0]) * self._bytes_per_image
+                        f.seek(offset)
+                        data = np.fromfile(
+                            f,
+                            dtype=self._file_dtype,
+                            count=self._pixels_per_image * len(sorted_idx),
+                        )
+                        data = data.reshape(len(sorted_idx), self._image_size, self._image_size)
+                        read_output[sorted_order] = data
+                else:
+                    # Individual reads.
+                    with nvtx.annotate("random_access_read", color="red", domain=NVTX_DOMAIN_DATA_IO):
+                        for i, idx in enumerate(read_idx):
+                            offset = self._data_start + int(idx) * self._bytes_per_image
                             f.seek(offset)
-                            data = np.fromfile(f, dtype=self._file_dtype, 
-                                              count=self._pixels_per_image * len(sorted_idx))
-                            data = data.reshape(len(sorted_idx), self._image_size, self._image_size)
-                            output[sorted_order] = data
-                    else:
-                        # Individual reads
-                        with nvtx.annotate("random_access_read", color="red", domain=NVTX_DOMAIN_DATA_IO):
-                            for i, idx in enumerate(file_idx):
-                                offset = self._data_start + idx * self._bytes_per_image
-                                f.seek(offset)
-                                data = np.fromfile(f, dtype=self._file_dtype, 
-                                                 count=self._pixels_per_image)
-                                output[i] = data.reshape(self._image_size, self._image_size)
-        
-        return output
+                            data = np.fromfile(
+                                f,
+                                dtype=self._file_dtype,
+                                count=self._pixels_per_image,
+                            )
+                            read_output[i] = data.reshape(self._image_size, self._image_size)
+
+        if has_duplicates:
+            return read_output[inverse]
+        return read_output
 
 
 class MultiMRCLoader(ImageLoader):

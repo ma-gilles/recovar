@@ -1,12 +1,13 @@
 import numpy as np
 import pytest
 from pathlib import Path
+from types import SimpleNamespace
 
 pytest.importorskip("jax")
 pytest.importorskip("torch")
 
 from helpers import tiny_synthetic
-from recovar import dataset, core, utils, starfile
+from recovar import dataset, core, utils, starfile, cryo_dataset
 from recovar import tilt_dataset
 
 pytestmark = pytest.mark.unit
@@ -47,6 +48,75 @@ def test_load_cryodrgn_dataset_tiny_spa_files(tmp_path):
     assert cryo.CTF_fun_inp is core.evaluate_ctf_wrapper
 
 
+def test_load_cryodrgn_dataset_tiny_spa_boolean_ind_preserves_dataset_indices_and_image_identity(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
+    mask = np.array([False, True, True, False, True, False], dtype=bool)
+    selected = np.flatnonzero(mask).astype(np.int32)
+
+    cryo = dataset.load_cryodrgn_dataset(
+        particles_file=files["particles_mrcs"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=str(tmp_path),
+        ind=mask,
+        lazy=True,
+        tilt_series=False,
+        tilt_series_ctf="cryoem",
+    )
+
+    np.testing.assert_array_equal(np.asarray(cryo.dataset_indices), selected)
+    assert cryo.n_images == selected.size
+    assert cryo.CTF_params.shape[0] == selected.size
+
+    batches = list(cryo.get_image_generator(batch_size=2))
+    got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
+    got_local_idx = np.concatenate([np.array(b[2]).reshape(-1) for b in batches], axis=0)
+    np.testing.assert_array_equal(got_local_idx, np.arange(selected.size, dtype=np.int32))
+
+    original_images = utils.load_mrc(files["particles_mrcs"])
+    np.testing.assert_allclose(got_images, original_images[selected], atol=1e-6)
+
+
+def test_load_cryodrgn_dataset_tiny_spa_duplicate_ind_preserves_order_duplicates_and_ctf_alignment(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
+    requested = np.array([4, 1, 4, 0], dtype=np.int32)
+    ctf = np.asarray(utils.pickle_load(files["ctf_pkl"]))
+
+    cryo = dataset.load_cryodrgn_dataset(
+        particles_file=files["particles_mrcs"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=str(tmp_path),
+        ind=requested,
+        lazy=True,
+        tilt_series=False,
+        tilt_series_ctf="cryoem",
+    )
+
+    np.testing.assert_array_equal(np.asarray(cryo.dataset_indices, dtype=np.int32), requested)
+    assert cryo.n_images == requested.size
+
+    # CTF rows should align exactly with requested (including duplicates).
+    np.testing.assert_allclose(
+        np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.DFU],
+        ctf[requested, 2],
+        atol=1e-7,
+    )
+    np.testing.assert_allclose(
+        np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.DFV],
+        ctf[requested, 3],
+        atol=1e-7,
+    )
+
+    batches = list(cryo.get_image_generator(batch_size=2))
+    got_images = np.concatenate([np.asarray(b[0]) for b in batches], axis=0)
+    got_local_idx = np.concatenate([np.asarray(b[2]).reshape(-1) for b in batches], axis=0)
+    np.testing.assert_array_equal(got_local_idx, np.arange(requested.size, dtype=np.int32))
+
+    source_images = utils.load_mrc(files["particles_mrcs"])
+    np.testing.assert_allclose(got_images, source_images[requested], atol=1e-6)
+
+
 def test_load_cryodrgn_dataset_tiny_tilt_series_files_and_subset_generators(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
     cryo = dataset.load_cryodrgn_dataset(
@@ -77,6 +147,232 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_files_and_subset_generators(tmp_
     for b in image_batches:
         got_images.extend(np.array(b[2]).reshape(-1).tolist())
     assert got_images == subset_images.tolist()
+
+
+def test_load_cryodrgn_dataset_tiny_tilt_series_boolean_ind_preserves_dataset_indices(sim_tiny_tilt_files):
+    files = sim_tiny_tilt_files
+    datadir = str(Path(files["particles_star"]).parent)
+    mask = np.zeros(files["n_images"], dtype=bool)
+    mask[[1, 4, 7, 10]] = True
+    selected = np.flatnonzero(mask).astype(np.int32)
+
+    cryo = dataset.load_cryodrgn_dataset(
+        particles_file=files["particles_star"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=datadir,
+        ind=mask,
+        lazy=True,
+        tilt_series=True,
+        tilt_series_ctf="relion5",
+    )
+
+    assert cryo.tilt_series_flag is True
+    np.testing.assert_array_equal(np.asarray(cryo.dataset_indices), selected)
+    assert cryo.n_images == selected.size
+    assert cryo.CTF_params.shape[0] == selected.size
+
+    batches = list(cryo.get_image_generator(batch_size=2))
+    got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
+    got_local_idx = np.concatenate([np.array(b[2]).reshape(-1) for b in batches], axis=0)
+    np.testing.assert_array_equal(got_local_idx, np.arange(selected.size, dtype=np.int32))
+
+    original_images = utils.load_mrc(files["particles_mrcs"])
+    np.testing.assert_allclose(got_images, original_images[selected], atol=1e-6)
+
+
+def test_load_cryodrgn_dataset_tiny_tilt_series_duplicate_ind_preserves_order_duplicates_and_image_identity(
+    sim_tiny_tilt_files,
+):
+    files = sim_tiny_tilt_files
+    datadir = str(Path(files["particles_star"]).parent)
+    requested = np.array([9, 2, 9, 0], dtype=np.int32)
+    ctf = np.asarray(utils.pickle_load(files["ctf_pkl"]))
+
+    cryo = dataset.load_cryodrgn_dataset(
+        particles_file=files["particles_star"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=datadir,
+        ind=requested,
+        lazy=True,
+        tilt_series=True,
+        tilt_series_ctf="relion5",
+    )
+
+    np.testing.assert_array_equal(np.asarray(cryo.dataset_indices, dtype=np.int32), requested)
+    assert cryo.n_images == requested.size
+    np.testing.assert_allclose(
+        np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.DFU],
+        ctf[requested, 2],
+        atol=1e-7,
+    )
+
+    batches = list(cryo.get_image_generator(batch_size=2))
+    got_images = np.concatenate([np.asarray(b[0]) for b in batches], axis=0)
+    got_local_idx = np.concatenate([np.asarray(b[2]).reshape(-1) for b in batches], axis=0)
+    np.testing.assert_array_equal(got_local_idx, np.arange(requested.size, dtype=np.int32))
+
+    source_images = utils.load_mrc(files["particles_mrcs"])
+    np.testing.assert_allclose(got_images, source_images[requested], atol=1e-6)
+
+
+def test_load_cryodrgn_dataset_rejects_invalid_ind_values(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
+
+    with pytest.raises(IndexError, match="out of range|negative"):
+        dataset.load_cryodrgn_dataset(
+            particles_file=files["particles_mrcs"],
+            poses_file=files["poses_pkl"],
+            ctf_file=files["ctf_pkl"],
+            datadir=str(tmp_path),
+            ind=np.array([0, -1], dtype=np.int32),
+            lazy=True,
+            tilt_series=False,
+            tilt_series_ctf="cryoem",
+        )
+
+    with pytest.raises(IndexError, match="out of range|number of images"):
+        dataset.load_cryodrgn_dataset(
+            particles_file=files["particles_mrcs"],
+            poses_file=files["poses_pkl"],
+            ctf_file=files["ctf_pkl"],
+            datadir=str(tmp_path),
+            ind=np.array([0, 9], dtype=np.int32),
+            lazy=True,
+            tilt_series=False,
+            tilt_series_ctf="cryoem",
+        )
+
+    with pytest.raises(ValueError, match="boolean mask length"):
+        dataset.load_cryodrgn_dataset(
+            particles_file=files["particles_mrcs"],
+            poses_file=files["poses_pkl"],
+            ctf_file=files["ctf_pkl"],
+            datadir=str(tmp_path),
+            ind=np.array([True, False], dtype=bool),
+            lazy=True,
+            tilt_series=False,
+            tilt_series_ctf="cryoem",
+        )
+
+
+def test_tiny_spa_loading_rejects_ctf_count_mismatch_without_subset(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
+    ctf = utils.pickle_load(files["ctf_pkl"])
+    utils.pickle_dump(ctf[:-1], files["ctf_pkl"])
+
+    with pytest.raises(ValueError, match="CTF parameter count"):
+        dataset.load_cryodrgn_dataset(
+            particles_file=files["particles_mrcs"],
+            poses_file=files["poses_pkl"],
+            ctf_file=files["ctf_pkl"],
+            datadir=str(tmp_path),
+            lazy=True,
+            tilt_series=False,
+            tilt_series_ctf="cryoem",
+        )
+
+
+def test_tiny_spa_loading_allows_short_ctf_when_subset_fits(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
+    ctf = utils.pickle_load(files["ctf_pkl"])
+    short_ctf_pkl = Path(tmp_path) / "ctf_short.pkl"
+    utils.pickle_dump(ctf[:4], str(short_ctf_pkl))
+    requested = np.array([0, 2, 3], dtype=np.int32)
+
+    cryo = dataset.load_cryodrgn_dataset(
+        particles_file=files["particles_mrcs"],
+        poses_file=files["poses_pkl"],
+        ctf_file=str(short_ctf_pkl),
+        datadir=str(tmp_path),
+        ind=requested,
+        lazy=True,
+        tilt_series=False,
+        tilt_series_ctf="cryoem",
+    )
+    np.testing.assert_array_equal(np.asarray(cryo.dataset_indices, dtype=np.int32), requested)
+    assert cryo.n_images == requested.size
+
+
+def test_tiny_spa_loading_rejects_short_ctf_when_subset_exceeds_bounds(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
+    ctf = utils.pickle_load(files["ctf_pkl"])
+    short_ctf_pkl = Path(tmp_path) / "ctf_short.pkl"
+    utils.pickle_dump(ctf[:4], str(short_ctf_pkl))
+
+    with pytest.raises(IndexError, match="number of images"):
+        dataset.load_cryodrgn_dataset(
+            particles_file=files["particles_mrcs"],
+            poses_file=files["poses_pkl"],
+            ctf_file=str(short_ctf_pkl),
+            datadir=str(tmp_path),
+            ind=np.array([0, 4], dtype=np.int32),
+            lazy=True,
+            tilt_series=False,
+            tilt_series_ctf="cryoem",
+        )
+
+
+def test_simulator_tiny_tilt_loading_rejects_ctf_count_mismatch_without_subset(sim_tiny_tilt_files):
+    files = sim_tiny_tilt_files
+    datadir = str(Path(files["particles_star"]).parent)
+    ctf = utils.pickle_load(files["ctf_pkl"])
+    bad_ctf_pkl = Path(datadir) / "ctf_bad_short.pkl"
+    utils.pickle_dump(ctf[:-2], str(bad_ctf_pkl))
+
+    with pytest.raises(ValueError, match="CTF parameter count"):
+        dataset.load_cryodrgn_dataset(
+            particles_file=files["particles_star"],
+            poses_file=files["poses_pkl"],
+            ctf_file=str(bad_ctf_pkl),
+            datadir=datadir,
+            lazy=True,
+            tilt_series=True,
+            tilt_series_ctf="relion5",
+        )
+
+
+def test_simulator_tiny_tilt_loading_allows_short_ctf_when_subset_fits(sim_tiny_tilt_files):
+    files = sim_tiny_tilt_files
+    datadir = str(Path(files["particles_star"]).parent)
+    ctf = utils.pickle_load(files["ctf_pkl"])
+    short_ctf_pkl = Path(datadir) / "ctf_short_subset_ok.pkl"
+    utils.pickle_dump(ctf[:10], str(short_ctf_pkl))
+    requested = np.array([0, 7, 9], dtype=np.int32)
+
+    cryo = dataset.load_cryodrgn_dataset(
+        particles_file=files["particles_star"],
+        poses_file=files["poses_pkl"],
+        ctf_file=str(short_ctf_pkl),
+        datadir=datadir,
+        ind=requested,
+        lazy=True,
+        tilt_series=True,
+        tilt_series_ctf="relion5",
+    )
+    np.testing.assert_array_equal(np.asarray(cryo.dataset_indices, dtype=np.int32), requested)
+    assert cryo.n_images == requested.size
+
+
+def test_simulator_tiny_tilt_loading_rejects_short_ctf_when_subset_exceeds_bounds(sim_tiny_tilt_files):
+    files = sim_tiny_tilt_files
+    datadir = str(Path(files["particles_star"]).parent)
+    ctf = utils.pickle_load(files["ctf_pkl"])
+    short_ctf_pkl = Path(datadir) / "ctf_short_subset_bad.pkl"
+    utils.pickle_dump(ctf[:10], str(short_ctf_pkl))
+
+    with pytest.raises(IndexError, match="number of images"):
+        dataset.load_cryodrgn_dataset(
+            particles_file=files["particles_star"],
+            poses_file=files["poses_pkl"],
+            ctf_file=str(short_ctf_pkl),
+            datadir=datadir,
+            ind=np.array([0, 11], dtype=np.int32),
+            lazy=True,
+            tilt_series=True,
+            tilt_series_ctf="relion5",
+        )
 
 
 def test_load_cryodrgn_dataset_tiny_tilt_series_warp_path(tmp_path):
@@ -834,3 +1130,554 @@ def test_tiny_tilt_loading_with_strip_prefix_resolves_prefixed_star_paths(tmp_pa
     for batch in batches:
         got.extend(np.array(batch[2]).reshape(-1).tolist())
     assert got == [5, 1, 4]
+
+
+def test_simulator_tiny_tilt_subsample_cryoem_dataset_preserves_local_order_and_image_identity(sim_tiny_tilt_files):
+    files = sim_tiny_tilt_files
+    datadir = str(Path(files["particles_star"]).parent)
+    cryo = dataset.load_cryodrgn_dataset(
+        particles_file=files["particles_star"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=datadir,
+        lazy=True,
+        tilt_series=True,
+        tilt_series_ctf="relion5",
+    )
+
+    requested = np.array([7, 2, 7, 1], dtype=np.int32)
+    sub = dataset.subsample_cryoem_dataset(cryo, requested)
+    np.testing.assert_array_equal(np.asarray(sub.dataset_indices), requested)
+    assert sub.n_images == requested.size
+    assert sub.tilt_series_flag is True
+
+    original_images = utils.load_mrc(files["particles_mrcs"])
+
+    full_local = np.arange(sub.n_images, dtype=np.int32)
+    full_batches = list(sub.get_image_subset_generator(batch_size=2, subset_indices=full_local))
+    got_full_images = np.concatenate([np.array(b[0]) for b in full_batches], axis=0)
+    got_full_local = np.concatenate([np.array(b[2]).reshape(-1) for b in full_batches], axis=0)
+    np.testing.assert_array_equal(got_full_local, full_local)
+    np.testing.assert_allclose(got_full_images, original_images[requested], atol=1e-6)
+
+    local_subset = np.array([3, 0, 3, 1], dtype=np.int32)
+    subset_batches = list(sub.get_image_subset_generator(batch_size=2, subset_indices=local_subset))
+    got_subset_images = np.concatenate([np.array(b[0]) for b in subset_batches], axis=0)
+    got_subset_local = np.concatenate([np.array(b[2]).reshape(-1) for b in subset_batches], axis=0)
+    np.testing.assert_array_equal(got_subset_local, local_subset)
+    np.testing.assert_allclose(got_subset_images, original_images[requested[local_subset]], atol=1e-6)
+
+
+def test_simulator_tiny_tilt_load_dataset_from_args_preserves_halfset_image_identity(sim_tiny_tilt_files):
+    files = sim_tiny_tilt_files
+    datadir = str(Path(files["particles_star"]).parent)
+    args = SimpleNamespace(
+        particles=files["particles_star"],
+        poses=files["poses_pkl"],
+        ctf=files["ctf_pkl"],
+        datadir=datadir,
+        n_images=-1,
+        ind=None,
+        padding=0,
+        uninvert_data="false",
+        tilt_series=True,
+        tilt_series_ctf="relion5",
+        angle_per_tilt=3.0,
+        dose_per_tilt=2.9,
+        premultiplied_ctf=False,
+        strip_prefix=None,
+        halfsets=None,
+        tilt_ind=None,
+        ntilts=None,
+    )
+
+    cryos = dataset.load_dataset_from_args(args, lazy=True)
+    assert len(cryos) == 2
+
+    half0 = np.asarray(cryos[0].dataset_indices, dtype=np.int32)
+    half1 = np.asarray(cryos[1].dataset_indices, dtype=np.int32)
+    assert np.intersect1d(half0, half1).size == 0
+    all_selected = np.sort(np.concatenate([half0, half1]))
+    np.testing.assert_array_equal(all_selected, np.arange(files["n_images"], dtype=np.int32))
+
+    original_images = utils.load_mrc(files["particles_mrcs"])
+    for cryo in cryos:
+        local = np.arange(cryo.n_images, dtype=np.int32)
+        batches = list(cryo.get_image_subset_generator(batch_size=3, subset_indices=local))
+        got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
+        got_local = np.concatenate([np.array(b[2]).reshape(-1) for b in batches], axis=0)
+        np.testing.assert_array_equal(got_local, local)
+        np.testing.assert_allclose(
+            got_images,
+            original_images[np.asarray(cryo.dataset_indices, dtype=np.int32)],
+            atol=1e-6,
+        )
+
+
+def test_simulator_tiny_tilt_get_split_datasets_preserves_half_order_and_duplicates(sim_tiny_tilt_files):
+    files = sim_tiny_tilt_files
+    datadir = str(Path(files["particles_star"]).parent)
+    ind_split = [
+        np.array([7, 2, 7, 1], dtype=np.int32),
+        np.array([0, 5, 0], dtype=np.int32),
+    ]
+    cryos = dataset.get_split_datasets(
+        particles_file=files["particles_star"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=datadir,
+        ind_split=ind_split,
+        lazy=True,
+        tilt_series=True,
+        tilt_series_ctf="relion5",
+    )
+
+    assert len(cryos) == 2
+    original_images = utils.load_mrc(files["particles_mrcs"])
+    for half, cryo in zip(ind_split, cryos):
+        np.testing.assert_array_equal(np.asarray(cryo.dataset_indices), half)
+        local = np.arange(len(half), dtype=np.int32)
+        batches = list(cryo.get_image_subset_generator(batch_size=2, subset_indices=local))
+        got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
+        np.testing.assert_allclose(got_images, original_images[half], atol=1e-6)
+
+
+def test_simulator_tiny_tilt_load_dataset_from_dict_preserves_ind_order_and_duplicates(sim_tiny_tilt_files):
+    files = sim_tiny_tilt_files
+    datadir = str(Path(files["particles_star"]).parent)
+    requested = np.array([7, 2, 7, 1], dtype=np.int32)
+
+    cryo = dataset.load_dataset_from_dict(
+        {
+            "particles_file": files["particles_star"],
+            "poses_file": files["poses_pkl"],
+            "ctf_file": files["ctf_pkl"],
+            "datadir": datadir,
+            "ind": requested,
+            "tilt_series": True,
+            "tilt_series_ctf": "relion5",
+        },
+        lazy=True,
+    )
+
+    np.testing.assert_array_equal(np.asarray(cryo.dataset_indices), requested)
+    assert cryo.tilt_series_flag is True
+    assert cryo.n_images == requested.size
+
+    original_images = utils.load_mrc(files["particles_mrcs"])
+    local = np.arange(requested.size, dtype=np.int32)
+    batches = list(cryo.get_image_subset_generator(batch_size=2, subset_indices=local))
+    got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
+    np.testing.assert_allclose(got_images, original_images[requested], atol=1e-6)
+
+
+def test_simulator_tiny_tilt_get_split_datasets_from_dict_matches_direct_api(sim_tiny_tilt_files):
+    files = sim_tiny_tilt_files
+    datadir = str(Path(files["particles_star"]).parent)
+    ind_split = [
+        np.array([7, 2, 7, 1], dtype=np.int32),
+        np.array([0, 5, 0], dtype=np.int32),
+    ]
+    loader_dict = {
+        "particles_file": files["particles_star"],
+        "poses_file": files["poses_pkl"],
+        "ctf_file": files["ctf_pkl"],
+        "datadir": datadir,
+        "tilt_series": True,
+        "tilt_series_ctf": "relion5",
+    }
+
+    by_wrapper = dataset.get_split_datasets_from_dict(loader_dict, ind_split=ind_split, lazy=True)
+    direct = dataset.get_split_datasets(ind_split=ind_split, lazy=True, **loader_dict)
+
+    assert len(by_wrapper) == len(direct) == 2
+    for c0, c1 in zip(by_wrapper, direct):
+        np.testing.assert_array_equal(np.asarray(c0.dataset_indices), np.asarray(c1.dataset_indices))
+        assert c0.n_images == c1.n_images
+
+
+def test_simulator_tiny_tilt_load_dataset_from_args_with_explicit_split_skips_halfset_builder(
+    sim_tiny_tilt_files, monkeypatch
+):
+    files = sim_tiny_tilt_files
+    datadir = str(Path(files["particles_star"]).parent)
+    ind_split = [
+        np.array([7, 2, 7, 1], dtype=np.int32),
+        np.array([0, 5, 0], dtype=np.int32),
+    ]
+
+    def _should_not_be_called(_args):
+        raise AssertionError("figure_out_halfsets should not be called when ind_split is explicitly provided")
+
+    monkeypatch.setattr(dataset, "figure_out_halfsets", _should_not_be_called)
+
+    args = SimpleNamespace(
+        particles=files["particles_star"],
+        poses=files["poses_pkl"],
+        ctf=files["ctf_pkl"],
+        datadir=datadir,
+        n_images=-1,
+        ind=None,
+        padding=0,
+        uninvert_data="false",
+        tilt_series=True,
+        tilt_series_ctf="relion5",
+        angle_per_tilt=3.0,
+        dose_per_tilt=2.9,
+        premultiplied_ctf=False,
+        strip_prefix=None,
+        halfsets=None,
+        tilt_ind=None,
+        ntilts=None,
+    )
+
+    cryos = dataset.load_dataset_from_args(args, lazy=True, ind_split=ind_split)
+    assert len(cryos) == 2
+    original_images = utils.load_mrc(files["particles_mrcs"])
+    for half, cryo in zip(ind_split, cryos):
+        np.testing.assert_array_equal(np.asarray(cryo.dataset_indices), half)
+        local = np.arange(len(half), dtype=np.int32)
+        batches = list(cryo.get_image_subset_generator(batch_size=2, subset_indices=local))
+        got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
+        np.testing.assert_allclose(got_images, original_images[half], atol=1e-6)
+
+
+def test_simulator_tiny_tilt_load_dataset_from_dict_eager_mode_preserves_identity(sim_tiny_tilt_files):
+    files = sim_tiny_tilt_files
+    datadir = str(Path(files["particles_star"]).parent)
+    requested = np.array([7, 2, 7, 1], dtype=np.int32)
+
+    cryo = dataset.load_dataset_from_dict(
+        {
+            "particles_file": files["particles_star"],
+            "poses_file": files["poses_pkl"],
+            "ctf_file": files["ctf_pkl"],
+            "datadir": datadir,
+            "ind": requested,
+            "tilt_series": True,
+            "tilt_series_ctf": "relion5",
+        },
+        lazy=False,
+    )
+
+    np.testing.assert_array_equal(np.asarray(cryo.dataset_indices), requested)
+    assert cryo.n_images == requested.size
+    original_images = utils.load_mrc(files["particles_mrcs"])
+
+    local = np.arange(requested.size, dtype=np.int32)
+    batches = list(cryo.get_image_subset_generator(batch_size=2, subset_indices=local))
+    got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
+    np.testing.assert_allclose(got_images, original_images[requested], atol=1e-6)
+
+
+def test_tiny_tilt_loading_preserves_pose_and_ctf_row_alignment_with_reordered_duplicates(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=8, n_particles=4)
+    n = files["n_images"]
+
+    # Build unique per-row CTF/pose values so index shuffles are observable.
+    ctf = np.zeros((n, 9), dtype=np.float32)
+    ctf[:, 0] = float(files["grid_size"])  # D
+    ctf[:, 1] = 1.5  # Apix
+    ctf[:, 2] = 10_000.0 + np.arange(n, dtype=np.float32) * 101.0  # DFU
+    ctf[:, 3] = 11_000.0 + np.arange(n, dtype=np.float32) * 103.0  # DFV
+    ctf[:, 4] = np.arange(n, dtype=np.float32) * 2.0               # DFANG
+    ctf[:, 5] = 300.0
+    ctf[:, 6] = 2.7
+    ctf[:, 7] = 0.1
+    ctf[:, 8] = np.arange(n, dtype=np.float32) * 0.25              # phase shift
+    utils.pickle_dump(ctf, files["ctf_pkl"])
+
+    rots = np.repeat(np.eye(3, dtype=np.float32)[None], n, axis=0)
+    rots[:, 0, 0] = np.arange(1, n + 1, dtype=np.float32)
+    trans_frac = np.stack(
+        [
+            np.linspace(0.0, 0.7, n, dtype=np.float32),
+            np.linspace(0.1, 0.8, n, dtype=np.float32),
+        ],
+        axis=1,
+    )
+    utils.pickle_dump((rots, trans_frac), files["poses_pkl"])
+
+    requested = np.array([6, 2, 6, 1], dtype=np.int32)
+    cryo = dataset.load_cryodrgn_dataset(
+        particles_file=files["particles_star"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=str(tmp_path),
+        ind=requested,
+        lazy=True,
+        tilt_series=True,
+        tilt_series_ctf="relion5",
+    )
+
+    np.testing.assert_array_equal(np.asarray(cryo.dataset_indices, dtype=np.int32), requested)
+    np.testing.assert_allclose(np.asarray(cryo.rotation_matrices), rots[requested], atol=1e-7)
+    np.testing.assert_allclose(np.asarray(cryo.translations), trans_frac[requested] * files["grid_size"], atol=1e-7)
+    np.testing.assert_allclose(
+        np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.DFU],
+        ctf[requested, 2],
+        atol=1e-7,
+    )
+    np.testing.assert_allclose(
+        np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.DFV],
+        ctf[requested, 3],
+        atol=1e-7,
+    )
+    np.testing.assert_allclose(
+        np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.PHASE_SHIFT],
+        ctf[requested, 8],
+        atol=1e-7,
+    )
+
+
+def test_tiny_spa_with_tilt_ctf_preserves_pose_and_ctf_row_alignment(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=8, n_particles=4)
+    n = files["n_images"]
+
+    ctf = np.zeros((n, 9), dtype=np.float32)
+    ctf[:, 0] = float(files["grid_size"])  # D
+    ctf[:, 1] = 1.5
+    ctf[:, 2] = 9_000.0 + np.arange(n, dtype=np.float32) * 89.0
+    ctf[:, 3] = 9_500.0 + np.arange(n, dtype=np.float32) * 97.0
+    ctf[:, 4] = np.arange(n, dtype=np.float32) * 1.5
+    ctf[:, 5] = 300.0
+    ctf[:, 6] = 2.7
+    ctf[:, 7] = 0.1
+    ctf[:, 8] = np.arange(n, dtype=np.float32) * 0.3
+    utils.pickle_dump(ctf, files["ctf_pkl"])
+
+    rots = np.repeat(np.eye(3, dtype=np.float32)[None], n, axis=0)
+    rots[:, 1, 1] = np.arange(1, n + 1, dtype=np.float32)
+    trans_frac = np.stack(
+        [
+            np.linspace(0.0, 0.6, n, dtype=np.float32),
+            np.linspace(0.2, 0.8, n, dtype=np.float32),
+        ],
+        axis=1,
+    )
+    utils.pickle_dump((rots, trans_frac), files["poses_pkl"])
+
+    requested = np.array([7, 1, 7, 3], dtype=np.int32)
+    cryo = dataset.load_cryodrgn_dataset(
+        particles_file=files["particles_star"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=str(tmp_path),
+        ind=requested,
+        lazy=True,
+        tilt_series=False,
+        tilt_series_ctf="relion5",
+    )
+
+    np.testing.assert_array_equal(np.asarray(cryo.dataset_indices, dtype=np.int32), requested)
+    np.testing.assert_allclose(np.asarray(cryo.rotation_matrices), rots[requested], atol=1e-7)
+    np.testing.assert_allclose(np.asarray(cryo.translations), trans_frac[requested] * files["grid_size"], atol=1e-7)
+    np.testing.assert_allclose(
+        np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.DFU],
+        ctf[requested, 2],
+        atol=1e-7,
+    )
+    np.testing.assert_allclose(
+        np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.DFV],
+        ctf[requested, 3],
+        atol=1e-7,
+    )
+
+
+def test_tiny_tilt_get_split_datasets_preserves_pose_and_ctf_alignment(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=8, n_particles=4)
+    n = files["n_images"]
+
+    ctf = np.zeros((n, 9), dtype=np.float32)
+    ctf[:, 0] = float(files["grid_size"])  # D
+    ctf[:, 1] = 1.5
+    ctf[:, 2] = 12_000.0 + np.arange(n, dtype=np.float32) * 41.0
+    ctf[:, 3] = 13_000.0 + np.arange(n, dtype=np.float32) * 43.0
+    ctf[:, 4] = np.arange(n, dtype=np.float32) * 1.25
+    ctf[:, 5] = 300.0
+    ctf[:, 6] = 2.7
+    ctf[:, 7] = 0.1
+    ctf[:, 8] = np.arange(n, dtype=np.float32) * 0.2
+    utils.pickle_dump(ctf, files["ctf_pkl"])
+
+    rots = np.repeat(np.eye(3, dtype=np.float32)[None], n, axis=0)
+    rots[:, 2, 2] = np.arange(1, n + 1, dtype=np.float32)
+    trans_frac = np.stack(
+        [
+            np.linspace(0.0, 0.6, n, dtype=np.float32),
+            np.linspace(0.2, 0.8, n, dtype=np.float32),
+        ],
+        axis=1,
+    )
+    utils.pickle_dump((rots, trans_frac), files["poses_pkl"])
+
+    ind_split = [
+        np.array([7, 1, 7, 3], dtype=np.int32),
+        np.array([0, 5, 0], dtype=np.int32),
+    ]
+    cryos = dataset.get_split_datasets(
+        particles_file=files["particles_star"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=str(tmp_path),
+        ind_split=ind_split,
+        lazy=True,
+        tilt_series=True,
+        tilt_series_ctf="relion5",
+    )
+
+    assert len(cryos) == 2
+    for half, cryo in zip(ind_split, cryos):
+        np.testing.assert_array_equal(np.asarray(cryo.dataset_indices, dtype=np.int32), half)
+        np.testing.assert_allclose(np.asarray(cryo.rotation_matrices), rots[half], atol=1e-7)
+        np.testing.assert_allclose(np.asarray(cryo.translations), trans_frac[half] * files["grid_size"], atol=1e-7)
+        np.testing.assert_allclose(
+            np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.DFU],
+            ctf[half, 2],
+            atol=1e-7,
+        )
+        np.testing.assert_allclose(
+            np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.DFV],
+            ctf[half, 3],
+            atol=1e-7,
+        )
+
+
+@pytest.mark.parametrize("tilt_series", [True, False])
+def test_tiny_relion5_ctf_channels_preserve_requested_order_with_duplicates(tmp_path, tilt_series):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=8, n_particles=4)
+    n = files["n_images"]
+    requested = np.array([7, 1, 7, 3], dtype=np.int32)
+
+    star = starfile.Starfile.load(files["particles_star"])
+    exposure = np.array([9.0, 1.0, 7.0, 3.0, 8.0, 2.0, 6.0, 4.0], dtype=np.float32)
+    scale = np.array([0.9, 0.1, 0.7, 0.3, 0.8, 0.2, 0.6, 0.4], dtype=np.float32)
+    star.df["_rlnMicrographPreExposure"] = exposure
+    star.df["_rlnCtfScalefactor"] = scale
+    starfile.write_star(files["particles_star"], data=star.df)
+
+    # Keep CTF pickle valid but distinctive in DFU/DFV as an extra sanity check.
+    ctf = np.zeros((n, 9), dtype=np.float32)
+    ctf[:, 0] = float(files["grid_size"])
+    ctf[:, 1] = 1.5
+    ctf[:, 2] = 14_000.0 + np.arange(n, dtype=np.float32) * 31.0
+    ctf[:, 3] = 15_000.0 + np.arange(n, dtype=np.float32) * 37.0
+    ctf[:, 4] = 0.0
+    ctf[:, 5] = 300.0
+    ctf[:, 6] = 2.7
+    ctf[:, 7] = 0.1
+    ctf[:, 8] = 0.0
+    utils.pickle_dump(ctf, files["ctf_pkl"])
+
+    cryo = dataset.load_cryodrgn_dataset(
+        particles_file=files["particles_star"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=str(tmp_path),
+        ind=requested,
+        lazy=True,
+        tilt_series=tilt_series,
+        tilt_series_ctf="relion5",
+    )
+
+    np.testing.assert_array_equal(np.asarray(cryo.dataset_indices, dtype=np.int32), requested)
+    np.testing.assert_allclose(
+        np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.DFU],
+        ctf[requested, 2],
+        atol=1e-7,
+    )
+    np.testing.assert_allclose(
+        np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.DFV],
+        ctf[requested, 3],
+        atol=1e-7,
+    )
+    np.testing.assert_allclose(
+        np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.CONTRAST],
+        scale[requested],
+        atol=1e-7,
+    )
+    np.testing.assert_allclose(
+        np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.DOSE],
+        exposure[requested],
+        atol=1e-7,
+    )
+    np.testing.assert_allclose(
+        np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.TILT_ANGLE],
+        np.zeros(requested.size, dtype=np.float32),
+        atol=1e-7,
+    )
+
+
+def test_tiny_tilt_image_count_batch_loader_subset_len_matches_emitted_images(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=7, n_particles=3)
+    ds = tilt_dataset.TiltSeriesData(
+        files["particles_star"],
+        datadir=str(tmp_path),
+        lazy=True,
+        num_tilts=None,
+        random_tilts=False,
+        tilt_file_option="relion5",
+    )
+
+    # Duplicate/reordered subset over particles with uneven tilt counts.
+    subset = cryo_dataset.ParticleSubset(ds, np.array([2, 2], dtype=np.int32))
+    loader = cryo_dataset.ImageCountBatchLoader(subset, batch_size=4, pad_to_batch=False)
+
+    # Particle 2 has 2 tilts in this tiny STAR, duplicated twice => 4 total images.
+    assert loader.total_images == 4
+    assert len(loader) == 1
+
+    batches = list(loader)
+    assert len(batches) == len(loader)
+    total_emitted = int(sum(np.asarray(b[0]).shape[0] for b in batches))
+    assert total_emitted == loader.total_images
+
+    pidx = np.concatenate([np.asarray(b[1]).reshape(-1) for b in batches], axis=0)
+    tidx = np.concatenate([np.asarray(b[2]).reshape(-1) for b in batches], axis=0)
+    assert np.all(pidx == 2)
+    np.testing.assert_array_equal(np.sort(np.unique(tidx)), np.sort(np.asarray(ds._particle_tilts[2], dtype=np.int32)))
+
+
+def test_simulator_tiny_tilt_image_count_batch_loader_reports_consistent_lengths(sim_tiny_tilt_files):
+    files = sim_tiny_tilt_files
+    datadir = str(Path(files["particles_star"]).parent)
+    ds = tilt_dataset.TiltSeriesData(
+        files["particles_star"],
+        datadir=datadir,
+        lazy=True,
+        num_tilts=2,
+        random_tilts=False,
+        tilt_file_option="relion5",
+    )
+    subset = cryo_dataset.ParticleSubset(ds, np.array([2, 0, 2], dtype=np.int32))
+    loader = cryo_dataset.ImageCountBatchLoader(subset, batch_size=3, pad_to_batch=False)
+
+    batches = list(loader)
+    assert len(loader) == len(batches)
+    total_emitted = int(sum(np.asarray(b[0]).shape[0] for b in batches))
+    assert total_emitted == loader.total_images
+
+
+def test_simulator_tiny_tilt_simple_dataloader_forces_batch_size_one_and_particle_order(sim_tiny_tilt_files):
+    files = sim_tiny_tilt_files
+    datadir = str(Path(files["particles_star"]).parent)
+    ds = tilt_dataset.TiltSeriesData(
+        files["particles_star"],
+        datadir=datadir,
+        lazy=True,
+        num_tilts=1,
+        random_tilts=False,
+        tilt_file_option="relion5",
+    )
+
+    loader = cryo_dataset.simple_dataloader(ds, batch_size=128, shuffle=True, buffer_size=999)
+    assert loader.batch_size == 1
+
+    got_particles = []
+    for idx, batch in enumerate(loader):
+        pidx = np.asarray(batch[1]).reshape(-1)
+        got_particles.append(int(pidx[0]))
+        if idx >= 4:
+            break
+
+    np.testing.assert_array_equal(np.asarray(got_particles, dtype=np.int32), np.arange(len(got_particles), dtype=np.int32))

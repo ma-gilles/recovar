@@ -368,6 +368,33 @@ def load_cryodrgn_dataset(
     strip_prefix=None,
     sort_with_Bfac=False,
 ):
+    def _normalize_dataset_indices(ind_value, n_total):
+        if ind_value is None:
+            return None
+        arr = np.asarray(ind_value)
+        if arr.dtype == bool:
+            if arr.ndim != 1:
+                raise ValueError("ind boolean mask must be 1D")
+            if arr.size != int(n_total):
+                raise ValueError(
+                    f"ind boolean mask length {arr.size} must match number of images {int(n_total)}"
+                )
+            return np.flatnonzero(arr).astype(np.int32, copy=False)
+
+        if arr.ndim == 0:
+            arr = arr.reshape(1)
+        if arr.ndim != 1:
+            raise ValueError("ind must be 1D")
+        if arr.dtype.kind not in ("i", "u"):
+            raise TypeError("ind must be integer indices or boolean mask")
+
+        arr = arr.astype(np.int64, copy=False).reshape(-1)
+        if arr.size > 0:
+            if np.any(arr < 0):
+                raise IndexError("ind contains negative indices")
+            if np.any(arr >= int(n_total)):
+                raise IndexError(f"ind contains values >= number of images ({int(n_total)})")
+        return arr.astype(np.int32, copy=False)
     
     # For backward compatibility... Delete at some point?
     if tilt_series_ctf is None and tilt_series is False:
@@ -391,9 +418,14 @@ def load_cryodrgn_dataset(
 
 
     from recovar import load_utils
-    ctf_params = np.array(load_utils.load_ctf_params(dataset.D, ctf_file))
-        
-    ctf_params = ctf_params if ind is None else ctf_params[ind]
+    ctf_params_all = np.array(load_utils.load_ctf_params(dataset.D, ctf_file))
+    dataset_indices = _normalize_dataset_indices(ind, n_total=ctf_params_all.shape[0])
+    if dataset_indices is None and ctf_params_all.shape[0] != dataset.n_images:
+        raise ValueError(
+            f"CTF parameter count ({ctf_params_all.shape[0]}) must match loaded image count ({dataset.n_images}) "
+            "when ind is not provided"
+        )
+    ctf_params = ctf_params_all if dataset_indices is None else ctf_params_all[dataset_indices]
     
     # Initialize bfactor == 0
     ctf_params = np.concatenate( [ctf_params, np.zeros_like(ctf_params[:,0][...,None])], axis =-1)
@@ -477,7 +509,7 @@ def load_cryodrgn_dataset(
             logger.info('CTF from dose weighting - V2')
             
 
-    rots, trans, _ = load_utils.load_poses(poses_file, dataset.n_images, dataset.unpadded_D, ind=ind)
+    rots, trans, _ = load_utils.load_poses(poses_file, dataset.n_images, dataset.unpadded_D, ind=dataset_indices)
 
 
     voxel_sizes = ctf_params[:,0]
@@ -489,13 +521,10 @@ def load_cryodrgn_dataset(
     translations = np.array(trans).astype(np.float32)
     rots = np.array(rots).astype(np.float32)
 
-    if ind is not None:
-        ind = np.asarray(ind).astype(int)
-
     return CryoEMDataset( dataset, voxel_size,
                               rots, translations, ctf_params[:,1:], 
                               CTF_fun = CTF_fun, 
-                              dataset_indices = ind, 
+                              dataset_indices = dataset_indices, 
                               tilt_series_flag = tilt_series, 
                               premultiplied_ctf = premultiplied_ctf)
 
@@ -683,8 +712,17 @@ def get_split_tilt_indices(
         )
         allowed_image_indices = _filter_preserve_order(allowed_image_indices, ind_images)
 
-    # Step 5: Keep only particles with at least one allowed image
-    image_to_particle = np.array([tilts_to_particles[i] for i in allowed_image_indices])
+    if len(allowed_image_indices) == 0:
+        empty = np.array([], dtype=np.int32)
+        return [empty, empty]
+
+    # Step 5: Keep only particles with at least one allowed image.
+    # Use fromiter to avoid materializing an intermediate Python list for large ET datasets.
+    image_to_particle = np.fromiter(
+        (tilts_to_particles[int(i)] for i in np.asarray(allowed_image_indices).reshape(-1)),
+        dtype=np.int32,
+        count=len(allowed_image_indices),
+    )
     valid_particles = np.unique(image_to_particle)
     if valid_particles.size == 0:
         empty = np.array([], dtype=np.int32)
@@ -952,12 +990,23 @@ class _SubsampledImageStack:
         mapped = np.asarray(mapped_vals, dtype=np.int32)
         return mapped.reshape(idx_arr.shape)
 
+    def _get_backing_image_subset_generator(self, batch_size, subset_indices, num_workers=0):
+        # Prefer image-level generator for tilt-series stacks where dataset-level
+        # subset APIs are particle-indexed.
+        if hasattr(self._stack, "get_image_subset_generator"):
+            return self._stack.get_image_subset_generator(
+                batch_size, subset_indices, num_workers=num_workers
+            )
+        return self._stack.get_dataset_subset_generator(
+            batch_size, subset_indices, num_workers=num_workers
+        )
+
     def get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
         for start in range(0, self.n_images, batch_size):
             local_idx = np.arange(start, min(start + batch_size, self.n_images), dtype=np.int32)
             orig_idx = self._idx[local_idx]
             orig_to_local = self._build_orig_to_local(local_idx, orig_idx)
-            for images, _, image_indices in self._stack.get_dataset_subset_generator(
+            for images, _, image_indices in self._get_backing_image_subset_generator(
                 batch_size, orig_idx, num_workers=num_workers
             ):
                 # Some image-stack implementations may emit one or many batches.
@@ -966,14 +1015,22 @@ class _SubsampledImageStack:
                 yield images, local_image_indices, local_image_indices
 
     def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
-        subset_indices = np.asarray(subset_indices, dtype=np.int32)
+        if subset_indices is None:
+            subset_indices = np.arange(self.n_images, dtype=np.int32)
+        else:
+            subset_indices = _normalize_image_indices(
+                subset_indices, n_images_total=self.n_images, name="subset_indices"
+            )
         orig_idx = self._idx[subset_indices]
         orig_to_local = self._build_orig_to_local(subset_indices, orig_idx)
-        for images, _, image_indices in self._stack.get_dataset_subset_generator(
+        for images, _, image_indices in self._get_backing_image_subset_generator(
             batch_size, orig_idx, num_workers=num_workers
         ):
             local_image_indices = self._map_orig_to_local(image_indices, orig_to_local)
             yield images, local_image_indices, local_image_indices
+
+    def get_image_generator(self, batch_size, num_workers=0):
+        return self.get_dataset_generator(batch_size, num_workers=num_workers)
 
     def get_image_subset_generator(self, batch_size, subset_indices, num_workers=0):
         return self.get_dataset_subset_generator(batch_size, subset_indices, num_workers=num_workers)

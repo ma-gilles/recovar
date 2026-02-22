@@ -43,6 +43,36 @@ def create_window_mask(image_size: int, inner_radius: float = 0.85,
     return mask.window_mask(image_size, inner_radius, outer_radius)
 
 
+def _normalize_subset_indices(indices: Optional[np.ndarray], n_total: int, name: str = "subset_indices") -> np.ndarray:
+    """Normalize integer or boolean-mask subset indices with strict validation."""
+    arr = np.asarray(indices)
+    if arr.dtype == bool:
+        if arr.ndim != 1:
+            raise ValueError(f"{name} boolean mask must be 1D")
+        if arr.size != int(n_total):
+            raise ValueError(
+                f"{name} boolean mask length {arr.size} must match total size {int(n_total)}"
+            )
+        return np.flatnonzero(arr).astype(np.int32, copy=False)
+
+    if arr.ndim == 0:
+        arr = arr.reshape(1)
+    if arr.ndim != 1:
+        raise ValueError(f"{name} must be 1D")
+    if arr.dtype.kind not in ("i", "u"):
+        raise TypeError(f"{name} must be integer indices or boolean mask")
+
+    arr = arr.astype(np.int64, copy=False).reshape(-1)
+    if arr.size == 0:
+        return arr.astype(np.int32, copy=False)
+    if np.any(arr < 0):
+        raise IndexError(f"{name} contains negative indices")
+    if np.any(arr >= int(n_total)):
+        raise IndexError(f"{name} contains out-of-range indices for total size {int(n_total)}")
+
+    return arr.astype(np.int32, copy=False)
+
+
 class ParticleImageDataset(Dataset):
     """PyTorch Dataset for cryo-EM particle images.
     
@@ -197,6 +227,9 @@ class ParticleImageDataset(Dataset):
                                     num_workers: int = 0, pad_to_batch_size: bool = False,
                                     mode: str = 'tilt_series', **kwargs):
         """Create data generator for subset."""
+        subset_indices = _normalize_subset_indices(
+            subset_indices, self.num_images, name="subset_indices"
+        )
         subset = Subset(self, subset_indices)
         return JAXDataLoader(subset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     
@@ -545,6 +578,9 @@ class TiltSeriesDataset(ParticleImageDataset):
         """Create image dataloader for subset of images."""
         if subset_indices is None:
             return self.create_image_dataloader(batch_size, num_workers)
+        subset_indices = _normalize_subset_indices(
+            subset_indices, self.source.n, name="subset_indices"
+        )
         
         class ImageView(Dataset):
             def __init__(self, source, num_images):
@@ -599,6 +635,9 @@ class TiltSeriesDataset(ParticleImageDataset):
         """Create data generator for particle subset."""
         if subset_indices is None:
             return self.get_dataset_generator(batch_size, num_workers, pad_to_batch_size, mode)
+        subset_indices = _normalize_subset_indices(
+            subset_indices, len(self), name="subset_indices"
+        )
         
         if mode == 'images':
             subset = ParticleSubset(self, subset_indices)
@@ -643,11 +682,16 @@ def collate_to_jax(batch):
         if batch is None:
             return None
         if isinstance(batch[0], np.ndarray):
-            return jnp.concatenate(batch, axis=0)
+            # Concatenate in NumPy first, then perform a single host->device
+            # transfer to reduce conversion overhead.
+            return jnp.asarray(np.concatenate(batch, axis=0))
+        if isinstance(batch[0], torch.Tensor):
+            # Keep host copy explicit; DataLoader tensors are CPU by default.
+            return jnp.asarray(torch.cat(batch, dim=0).cpu().numpy())
         elif isinstance(batch[0], (tuple, list)):
             return [collate_to_jax(samples) for samples in zip(*batch)]
         else:
-            return jnp.array(batch)
+            return jnp.asarray(batch)
 
 
 class JAXDataLoader(DataLoader):
@@ -690,17 +734,69 @@ class ImageCountBatchLoader:
         self.batch_size = batch_size
         self.pad_to_batch = pad_to_batch
         
-        # Precompute tilts per particle
+        # Precompute tilts per particle. For subset wrappers, map subset indices
+        # back to parent particle ids so duplicate/reordered subsets are counted
+        # correctly in total_images and __len__.
         self.tilts_counts = []
-        particle_tilts_list = getattr(dataset, "_particle_tilts", list(dataset.particle_groups.values()))
-        for particle_idx in range(len(dataset)):
-            particle_tilts = particle_tilts_list[particle_idx]
+        particle_tilts_list = None
+        if hasattr(dataset, "_particle_tilts"):
+            particle_tilts_src = dataset._particle_tilts
+            particle_tilts_list = [particle_tilts_src[i] for i in range(len(dataset))]
+        else:
+            subset_indices = getattr(dataset, "indices", None)
+            parent_dataset = getattr(dataset, "dataset", None)
+            if subset_indices is not None and parent_dataset is not None and hasattr(parent_dataset, "_particle_tilts"):
+                mapped_indices = _normalize_subset_indices(
+                    np.asarray(subset_indices),
+                    len(parent_dataset._particle_tilts),
+                    name="subset indices",
+                )
+                particle_tilts_src = parent_dataset._particle_tilts
+                particle_tilts_list = [particle_tilts_src[i] for i in mapped_indices]
+
+        if particle_tilts_list is None:
+            particle_groups = getattr(dataset, "particle_groups", None)
+            if particle_groups is None:
+                raise AttributeError(
+                    "ImageCountBatchLoader dataset must expose _particle_tilts, "
+                    "or provide particle_groups (or subset indices with parent _particle_tilts)."
+                )
+            particle_tilts_list = list(particle_groups.values())[:len(dataset)]
+
+        for particle_tilts in particle_tilts_list:
             n_available = len(particle_tilts)
             n_actual = min(dataset.num_tilts, n_available) if dataset.num_tilts else n_available
             self.tilts_counts.append(n_actual)
         
-        self.tilts_counts = np.array(self.tilts_counts)
-        self.total_images = np.sum(self.tilts_counts)
+        # int32 is enough for per-particle tilt counts and reduces memory footprint.
+        self.tilts_counts = np.asarray(self.tilts_counts, dtype=np.int32)
+        self.total_images = int(np.sum(self.tilts_counts, dtype=np.int64))
+        self._n_batches = self._compute_n_batches(self.tilts_counts, self.batch_size)
+
+    @staticmethod
+    def _compute_n_batches(tilts_counts: np.ndarray, batch_size: int) -> int:
+        n_batches = 0
+        particle_idx = 0
+        n_particles = len(tilts_counts)
+
+        while particle_idx < n_particles:
+            current_count = 0
+            while particle_idx < n_particles and current_count < batch_size:
+                n_images = int(tilts_counts[particle_idx])
+                if current_count + n_images > batch_size and current_count > 0:
+                    break
+                current_count += n_images
+                particle_idx += 1
+
+            # Mirror oversized/empty guard in __iter__.
+            if current_count == 0 and particle_idx < n_particles:
+                current_count = int(tilts_counts[particle_idx])
+                particle_idx += 1
+
+            if current_count > 0:
+                n_batches += 1
+
+        return n_batches
     
     def __iter__(self):
         """Iterate over batches of images."""
@@ -758,8 +854,8 @@ class ImageCountBatchLoader:
                 yield batch_images, batch_particle_ids, batch_tilt_ids
     
     def __len__(self) -> int:
-        """Estimate number of batches."""
-        return int(np.ceil(self.total_images / self.batch_size))
+        """Return exact number of batches produced by __iter__."""
+        return self._n_batches
 
 
 class ParticleSubset:
@@ -773,7 +869,7 @@ class ParticleSubset:
             indices: Particle indices to include
         """
         self.dataset = dataset
-        self.indices = indices
+        self.indices = _normalize_subset_indices(indices, len(dataset), name="indices")
         self.num_tilts = getattr(dataset, 'num_tilts', None)
         self.particle_groups = getattr(dataset, 'particle_groups', None)
     
@@ -807,13 +903,39 @@ def tilt_series_to_images(tilt_series_indices: np.ndarray, starfile_path: str,
     Returns:
         Array of image indices
     """
-    particle_tilts, _ = TiltSeriesDataset.parse_particle_tilt(starfile_path)
-    tilt_series_indices = np.asarray(tilt_series_indices, dtype=np.int32)
+    particle_tilts, tilts_to_particles = TiltSeriesDataset.parse_particle_tilt(starfile_path)
+    n_particles_total = len(particle_tilts)
+    raw_indices = np.asarray(tilt_series_indices)
+    if raw_indices.dtype == bool:
+        if raw_indices.ndim != 1:
+            raise ValueError("tilt_series_indices boolean mask must be 1D")
+        if raw_indices.size != n_particles_total:
+            raise ValueError(
+                f"tilt_series_indices boolean mask length {raw_indices.size} "
+                f"must match number of particles {n_particles_total}"
+            )
+        tilt_series_indices = np.flatnonzero(raw_indices).astype(np.int32, copy=False)
+    else:
+        if raw_indices.ndim == 0:
+            raw_indices = raw_indices.reshape(1)
+        if raw_indices.ndim != 1:
+            raise ValueError("tilt_series_indices must be 1D")
+        if raw_indices.dtype.kind not in ("i", "u"):
+            raise TypeError("tilt_series_indices must be integer indices or boolean mask")
+        tilt_series_indices = raw_indices.astype(np.int32, copy=False).reshape(-1)
+
     if tilt_series_indices.size == 0:
         return np.array([], dtype=np.int32)
-    image_indices = np.concatenate([particle_tilts[i] for i in tilt_series_indices])
-    max_image_index = max((int(np.max(t)) for t in particle_tilts if np.asarray(t).size > 0), default=-1)
-    n_images_total = max_image_index + 1
+    if np.any(tilt_series_indices < 0) or np.any(tilt_series_indices >= n_particles_total):
+        raise IndexError(
+            f"tilt_series_indices contain out-of-range values for number of particles {n_particles_total}"
+        )
+
+    image_indices = np.concatenate([particle_tilts[i] for i in tilt_series_indices]).astype(np.int32, copy=False)
+    # Prefer parsed reverse-map size, but keep robust behavior for mocked/incomplete
+    # reverse maps in tests by inferring from particle_tilts as fallback.
+    inferred_n_images = max((int(np.max(t)) for t in particle_tilts if np.asarray(t).size > 0), default=-1) + 1
+    n_images_total = max(int(len(tilts_to_particles)), inferred_n_images)
     
     if image_subset is not None:
         subset_arr = np.asarray(image_subset)
@@ -827,9 +949,19 @@ def tilt_series_to_images(tilt_series_indices: np.ndarray, starfile_path: str,
                 )
             subset_arr = np.flatnonzero(subset_arr).astype(np.int32)
         elif subset_arr.ndim == 0:
+            if subset_arr.dtype.kind not in ("i", "u"):
+                raise TypeError("image_subset must be integer indices or boolean mask")
             subset_arr = subset_arr.reshape(1).astype(np.int32)
         else:
+            if subset_arr.ndim != 1:
+                raise ValueError("image_subset indices must be 1D")
+            if subset_arr.dtype.kind not in ("i", "u"):
+                raise TypeError("image_subset must be integer indices or boolean mask")
             subset_arr = subset_arr.astype(np.int32, copy=False)
+        if subset_arr.size > 0 and (np.any(subset_arr < 0) or np.any(subset_arr >= n_images_total)):
+            raise IndexError(
+                f"image_subset contains out-of-range values for number of images {n_images_total}"
+            )
         # Preserve original order and multiplicity from image_indices.
         image_indices = image_indices[np.isin(image_indices, subset_arr)]
 
