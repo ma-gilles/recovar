@@ -39,6 +39,17 @@ def test_batch_iter_helpers():
     assert [list(y) for _, y in paired] == [[5, 1], [9, 2]]
 
 
+def test_batch_iter_helpers_validate_batch_size_and_counts():
+    with pytest.raises(ValueError, match="batch_size must be >= 1"):
+        list(utils.index_batch_iter(10, 0))
+    with pytest.raises(ValueError, match="n_units must be >= 0"):
+        list(utils.index_batch_iter(-1, 2))
+    with pytest.raises(ValueError, match="batch_size must be >= 1"):
+        list(utils.subset_batch_iter([1, 2, 3], 0))
+    with pytest.raises(ValueError, match="batch_size must be >= 1"):
+        list(utils.subset_and_indices_batch_iter([1, 2, 3], 0))
+
+
 def test_estimate_variance():
     u = np.array([[1 + 1j, 2], [3, 4 - 1j]], dtype=np.complex64)
     s = np.array([2.0, 3.0], dtype=np.float32)
@@ -191,6 +202,13 @@ def test_get_variances_and_batch_index_helpers():
     assert utils.get_batch_of_indices(10, 3, 2) == (6, 9)
     np.testing.assert_array_equal(utils.get_batch_of_indices_arange(10, 3, 2), np.array([6, 7, 8]))
     assert utils.get_batch_of_indices(10, 3, 3) == (9, 10)
+
+
+def test_get_number_of_index_batch_validates_inputs():
+    with pytest.raises(ValueError, match="batch_size must be >= 1"):
+        utils.get_number_of_index_batch(10, 0)
+    with pytest.raises(ValueError, match="n_images must be >= 0"):
+        utils.get_number_of_index_batch(-1, 3)
 
 
 def test_jax_has_gpu_returns_bool():

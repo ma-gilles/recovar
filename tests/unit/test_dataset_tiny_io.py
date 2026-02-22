@@ -205,6 +205,32 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_files_and_subset_generators(tmp_
     assert got_images == subset_images.tolist()
 
 
+def test_load_cryodrgn_dataset_tiny_tilt_series_image_subset_preserves_duplicate_order_and_identity(
+    sim_tiny_tilt_files,
+):
+    files = sim_tiny_tilt_files
+    datadir = str(Path(files["particles_star"]).parent)
+    cryo = dataset.load_cryodrgn_dataset(
+        particles_file=files["particles_star"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=datadir,
+        lazy=True,
+        tilt_series=True,
+        tilt_series_ctf="relion5",
+    )
+
+    subset_images = np.array([7, 1, 7, 4], dtype=np.int32)
+    image_batches = list(cryo.get_image_subset_generator(batch_size=2, subset_indices=subset_images))
+
+    got_indices = np.concatenate([np.array(b[2]).reshape(-1) for b in image_batches], axis=0)
+    got_images = np.concatenate([np.array(b[0]) for b in image_batches], axis=0)
+    source_images = utils.load_mrc(files["particles_mrcs"])
+
+    np.testing.assert_array_equal(got_indices, subset_images)
+    np.testing.assert_allclose(got_images, source_images[subset_images], atol=1e-6)
+
+
 def test_load_cryodrgn_dataset_tiny_tilt_series_boolean_ind_preserves_dataset_indices(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)

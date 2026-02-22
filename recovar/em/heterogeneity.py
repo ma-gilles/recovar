@@ -197,6 +197,10 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
     volume_size = experiment_dataset.volume_size
     n_picked_indices = picked_frequency_indices.size
     n_rotations = rotations.shape[0]
+    if n_rotations <= 0:
+        raise ValueError("compute_H_B requires at least one rotation")
+    if translations.shape[0] <= 0:
+        raise ValueError("compute_H_B requires at least one translation")
 
     H = [jnp.zeros(volume_size, dtype = experiment_dataset.dtype_real )] * n_picked_indices
     B = [jnp.zeros(volume_size, dtype = experiment_dataset.dtype )] * n_picked_indices
@@ -217,7 +221,7 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
 
 
     gpu_memory = utils.get_gpu_memory_total()
-    batch_size = utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) * 10
+    batch_size = max(1, int(utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) * 10))
     n_batches = utils.get_number_of_index_batch(n_rotations, batch_size)
 
     mean_projections = np.zeros((rotations.shape[0], image_size), dtype = np.complex64)
@@ -236,7 +240,7 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
     # Allocate this to GPU.
     mean_projections = jnp.asarray(mean_projections)
     data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = image_indices)
-    rotation_batch = rotations.shape[0]//10
+    rotation_batch = max(1, rotations.shape[0] // 10)
 
     start_idx =0 
     for images, _, indices in data_generator:
@@ -410,10 +414,14 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)
     
     n_rotations = rotations.shape[0]
+    if n_rotations <= 0:
+        raise ValueError("compute_projected_covariance_rhs_lhs requires at least one rotation")
+    if translations.shape[0] <= 0:
+        raise ValueError("compute_projected_covariance_rhs_lhs requires at least one translation")
     n_principal_components = basis.shape[0]
     image_size = experiment_dataset.image_size
 
-    batch_size = utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total())
+    batch_size = max(1, int(utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total())))
 
     u_projections = np.empty((rotations.shape[0], n_principal_components, image_size), dtype = np.complex64)
     # Compute all mean and principal component projections
@@ -429,7 +437,7 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
     basis_size = u_projections.shape[1]
 
     # batch_size = 100
-    rotation_batch = rotations.shape[0]//10
+    rotation_batch = max(1, rotations.shape[0] // 10)
 
     memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() -  (2*basis_size**4*8/1e9 + utils.get_size_in_gb(mean_projections[:rotation_batch])* ( 1 + basis_size**2) )
     batch_size = utils.get_image_batch_size(experiment_dataset.grid_size, memory_left_over_after_kron_allocate) / translations.shape[0] * 1
@@ -439,7 +447,7 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
     logger.info('batch size for projected covariance computation: ' + str(batch_size))
 
     # change_device= False
-    rotation_batch = rotations.shape[0]//10
+    rotation_batch = max(1, rotations.shape[0] // 10)
 
     # for experiment_dataset in experiment_datasets:
     data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = image_indices)

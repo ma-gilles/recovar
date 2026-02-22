@@ -658,6 +658,24 @@ def main():
                         help='Overwrite baseline JSON with current scores after this run.')
 
     args = parser.parse_args()
+    if args.grid_size <= 0:
+        raise ValueError(f"--grid-size must be positive, got {args.grid_size}")
+    if args.n_images <= 0:
+        raise ValueError(f"--n-images must be positive, got {args.n_images}")
+    if args.noise_level < 0:
+        raise ValueError(f"--noise-level must be non-negative, got {args.noise_level}")
+    if args.contrast_std < 0:
+        raise ValueError(f"--contrast-std must be non-negative, got {args.contrast_std}")
+    if args.metrics_regression_tol_frac < 0:
+        raise ValueError(
+            f"--metrics-regression-tol-frac must be non-negative, got {args.metrics_regression_tol_frac}"
+        )
+    if args.generate_volumes or args.volume_input is None:
+        if args.generated_n_volumes <= 0:
+            raise ValueError(
+                f"--generated-n-volumes must be positive when generating volumes, got {args.generated_n_volumes}"
+            )
+
     validate_storage_args_for_generated_volumes(args, argv)
     output.mkdir_safe(args.output_dir)
     logger = setup_logging(args.output_dir)

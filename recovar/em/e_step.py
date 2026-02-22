@@ -26,13 +26,17 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     image_size = experiment_dataset.image_size
     n_rotations = rotations.shape[0]
     n_translations = translations.shape[0]
+    if n_rotations <= 0:
+        raise ValueError("E_with_precompute requires at least one rotation")
+    if n_translations <= 0:
+        raise ValueError("E_with_precompute requires at least one translation")
     n_images = experiment_dataset.n_images if image_indices is None else len(image_indices)
     use_heterogeneous = u is not None
     n_principal_components = u.shape[0] if use_heterogeneous else 0
     from recovar import utils
 
     gpu_memory = utils.get_gpu_memory_total()
-    batch_size = utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) * 5
+    batch_size = max(1, int(utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) * 5))
     n_batches = utils.get_number_of_index_batch(n_rotations, batch_size)
 
     projections = np.zeros((rotations.shape[0], image_size), dtype = np.complex64)
@@ -76,7 +80,7 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
         logger.info(f"done with u_proj {batch_size}")
         data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=dot_product_batch_size, subset_indices = image_indices)
         
-        rotation_batch = rotations.shape[0]//10
+        rotation_batch = max(1, rotations.shape[0] // 10)
         start_idx = 0
         for batch, _, indices in data_generator:
             batch = jnp.asarray(batch)
@@ -95,7 +99,10 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     utils.report_memory_device(logger=logger)
     # For the \|C_i Proj_j\|^2 term
 
-    norm_batch_size = utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory - utils.get_size_in_gb(projections)) * 3
+    norm_batch_size = max(
+        1,
+        int(utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory - utils.get_size_in_gb(projections)) * 3),
+    )
     
     for array_indices, dataset_indices in utils.subset_and_indices_batch_iter(image_indices, norm_batch_size):
         # indices = utils.get_batch_of_indices_arange(n_images, norm_batch_size, k)
@@ -107,8 +114,9 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     del projections
     logger.info(f"done with norms. Batch size {norm_batch_size}")
 
-    n_batches = utils.get_number_of_index_batch(n_images, batch_size//10)
-    for array_indices, _ in utils.subset_and_indices_batch_iter(image_indices, batch_size//10):
+    prob_batch_size = max(1, batch_size // 10)
+    n_batches = utils.get_number_of_index_batch(n_images, prob_batch_size)
+    for array_indices, _ in utils.subset_and_indices_batch_iter(image_indices, prob_batch_size):
         residuals[array_indices] = compute_probability_from_residual_normal_squared_one_image(residuals[array_indices])
 
     logger.info(f"done probs. Batch size {batch_size}")

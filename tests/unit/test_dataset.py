@@ -531,6 +531,53 @@ def test_load_cryodrgn_dataset_propagates_premultiplied_ctf_flag(monkeypatch):
     assert out.premultiplied_ctf is True
 
 
+def test_load_cryodrgn_dataset_rotation_only_pose_defaults_zero_translations(monkeypatch):
+    fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
+    monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: fake_stack)
+    monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
+
+    def _poses_no_trans(_poses_file, n_images, _D, ind=None):
+        _ = ind
+        rots = np.tile(np.eye(3, dtype=np.float32), (n_images, 1, 1))
+        return rots, None, None
+
+    monkeypatch.setattr(load_utils, "load_poses", _poses_no_trans)
+
+    out = dataset.load_cryodrgn_dataset(
+        particles_file="p.mrcs",
+        poses_file="poses.pkl",
+        ctf_file="ctf.pkl",
+        lazy=True,
+        tilt_series=False,
+        tilt_series_ctf="cryoem",
+    )
+    np.testing.assert_array_equal(out.translations, np.zeros((4, 2), dtype=np.float32))
+
+
+def test_load_cryodrgn_dataset_rejects_translation_shape_mismatch(monkeypatch):
+    fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
+    monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: fake_stack)
+    monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
+
+    def _poses_bad_trans(_poses_file, n_images, _D, ind=None):
+        _ = ind
+        rots = np.tile(np.eye(3, dtype=np.float32), (n_images, 1, 1))
+        trans = np.zeros((n_images, 3), dtype=np.float32)
+        return rots, trans, None
+
+    monkeypatch.setattr(load_utils, "load_poses", _poses_bad_trans)
+
+    with pytest.raises(ValueError, match="Translation array must have shape"):
+        dataset.load_cryodrgn_dataset(
+            particles_file="p.mrcs",
+            poses_file="poses.pkl",
+            ctf_file="ctf.pkl",
+            lazy=True,
+            tilt_series=False,
+            tilt_series_ctf="cryoem",
+        )
+
+
 def test_load_cryodrgn_dataset_from_dose_branch(monkeypatch):
     fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
     monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: fake_stack)

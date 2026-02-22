@@ -27,12 +27,20 @@ batch_make_radial_image = jax.vmap(make_radial_image, in_axes = (0,None,None))
 
 
 def index_batch_iter(n_units, batch_size):
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+    if n_units < 0:
+        raise ValueError("n_units must be >= 0")
     return more_itertools.chunked(np.arange(n_units),batch_size)
 
 def subset_batch_iter(subset_indices, batch_size):
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
     return more_itertools.chunked(subset_indices,batch_size)
 
 def subset_and_indices_batch_iter(subset_indices, batch_size):
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
     return zip(subset_batch_iter(np.arange(len(subset_indices)), batch_size), subset_batch_iter(subset_indices, batch_size))
 
 def estimate_variance(u, s):
@@ -265,6 +273,10 @@ def get_variances(covariance_cols, picked_frequencies = None):
     return variances
 
 def get_number_of_index_batch(n_images, batch_size):
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+    if n_images < 0:
+        raise ValueError("n_images must be >= 0")
     return int(np.ceil(n_images/batch_size))
 
 def get_batch_of_indices(n_images, batch_size, k):

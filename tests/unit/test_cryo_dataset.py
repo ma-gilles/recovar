@@ -337,6 +337,29 @@ def test_image_count_batch_loader_batches_and_padding():
     assert b0_tid.shape[0] == 4
 
 
+def test_image_count_batch_loader_rejects_nonpositive_or_noninteger_batch_size():
+    class _FakeTiltDataset:
+        def __init__(self):
+            self.particle_groups = {"a": np.array([0, 1])}
+            self.num_tilts = None
+
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, idx):
+            _ = idx
+            imgs = np.ones((2, 8, 8), dtype=np.float32)
+            t = np.array([0, 1], dtype=np.int32)
+            return imgs, 0, t
+
+    with pytest.raises(ValueError, match="batch_size must be positive"):
+        cryo_dataset.ImageCountBatchLoader(_FakeTiltDataset(), batch_size=0, pad_to_batch=False)
+    with pytest.raises(ValueError, match="batch_size must be positive"):
+        cryo_dataset.ImageCountBatchLoader(_FakeTiltDataset(), batch_size=-3, pad_to_batch=False)
+    with pytest.raises(TypeError, match="batch_size must be an integer"):
+        cryo_dataset.ImageCountBatchLoader(_FakeTiltDataset(), batch_size=2.5, pad_to_batch=False)
+
+
 def test_image_count_batch_loader_handles_oversized_single_particle():
     class _OversizedDataset:
         def __init__(self):
@@ -1045,6 +1068,30 @@ def test_collate_to_jax_handles_torch_tensor_batch():
     np.testing.assert_array_equal(np.array(out), np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
 
 
+def test_collate_to_jax_single_numpy_batch_skips_concatenate(monkeypatch):
+    arr = np.arange(6, dtype=np.float32).reshape(1, 2, 3)
+    monkeypatch.setattr(
+        cryo_dataset.np,
+        "concatenate",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("single-item fast path should skip concatenate")),
+    )
+
+    out = cryo_dataset.collate_to_jax([arr])
+    np.testing.assert_array_equal(np.array(out), arr)
+
+
+def test_collate_to_jax_single_torch_batch_skips_cat(monkeypatch):
+    t = torch.tensor([[5.0, 7.0]], dtype=torch.float32)
+    monkeypatch.setattr(
+        cryo_dataset.torch,
+        "cat",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("single-item fast path should skip torch.cat")),
+    )
+
+    out = cryo_dataset.collate_to_jax([t])
+    np.testing.assert_array_equal(np.array(out), np.array([[5.0, 7.0]], dtype=np.float32))
+
+
 def test_tiltseries_subset_generator_preserves_subset_order_and_duplicates(monkeypatch):
     class _Source:
         def __init__(self):
@@ -1113,6 +1160,40 @@ def test_tiltseries_subset_generator_accepts_boolean_particle_mask(monkeypatch):
     batches = list(loader)
     out_particle_ids = [int(np.array(b[1]).reshape(-1)[0]) for b in batches]
     assert out_particle_ids == [0, 2]
+
+
+def test_tiltseries_subset_generator_images_mode_accepts_boolean_particle_mask(monkeypatch):
+    class _Source:
+        def __init__(self):
+            self.n = 6
+            self.D = 8
+            self._store = np.arange(self.n * self.D * self.D, dtype=np.float32).reshape(self.n, self.D, self.D)
+
+        def images(self, index, require_contiguous=False):
+            _ = require_contiguous
+            if isinstance(index, (int, np.integer)):
+                return self._store[int(index)]
+            return self._store[np.asarray(index)]
+
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["g1", "g1", "g2", "g2", "g3", "g3"],
+            "_rlnMicrographPreExposure": [1.0, 2.0, 1.0, 2.0, 1.0, 2.0],
+            "_rlnCtfScalefactor": [1, 1, 1, 1, 1, 1],
+            "_rlnCtfBfactor": [-1, -2, -1, -2, -1, -2],
+        }
+    )
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+
+    ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=1, random_tilts=False, tilt_file_option="relion5")
+    particle_mask = np.array([True, False, True], dtype=bool)
+    loader = ds.get_dataset_subset_generator(batch_size=4, subset_indices=particle_mask, mode="images")
+    batches = list(loader)
+
+    emitted_particles = np.concatenate([np.asarray(b[1]).reshape(-1) for b in batches], axis=0)
+    # num_tilts=1 means one emitted image per selected particle.
+    np.testing.assert_array_equal(np.sort(emitted_particles), np.array([0, 2], dtype=np.int32))
 
 
 def test_tiltseries_subset_generator_rejects_bad_particle_masks(monkeypatch):

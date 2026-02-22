@@ -8,6 +8,10 @@ logger = logging.getLogger(__name__)
 
 def E_M_batches_2(experiment_dataset, state_obj, rotations, translations, disc_type, memory_to_use = 128, volume_mask = None):
 
+    if rotations.shape[0] <= 0:
+        raise ValueError("E_M_batches_2 requires at least one rotation")
+    if translations.shape[0] <= 0:
+        raise ValueError("E_M_batches_2 requires at least one translation")
     total_hidden = rotations.shape[0] * translations.shape[0]
     logger.info(f"starting precomp proj. Num rotations {rotations.shape[0]}, num translations {translations.shape[0]}. Total = {total_hidden}")
     n_images_batch = int(memory_to_use * 1e9 / ( total_hidden * 8  ))
@@ -19,7 +23,10 @@ def E_M_batches_2(experiment_dataset, state_obj, rotations, translations, disc_t
     logger.info(f"n_images_batch {n_images_batch}. Number of batches {int(np.ceil(experiment_dataset.n_units / n_images_batch))}")   
     
     if state_obj.name =='SGD':
-        n_images_batch = state_obj.sgd_batchsize
+        sgd_batch = int(state_obj.sgd_batchsize)
+        if sgd_batch < 1:
+            raise ValueError("SGD batch size must be >= 1")
+        n_images_batch = sgd_batch
 
     hard_assignment = np.empty(experiment_dataset.n_units, dtype = int)
 

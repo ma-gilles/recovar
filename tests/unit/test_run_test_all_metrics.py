@@ -546,6 +546,52 @@ def test_validate_storage_args_for_generated_volumes_accepts_equals_style_flags(
     rtam.validate_storage_args_for_generated_volumes(args, argv=["-o=/scratch/tmp/out"])
 
 
+@pytest.mark.parametrize(
+    ("argv_extra", "msg"),
+    [
+        (["--grid-size", "0"], "--grid-size must be positive"),
+        (["--n-images", "0"], "--n-images must be positive"),
+        (["--noise-level", "-1"], "--noise-level must be non-negative"),
+        (["--contrast-std", "-0.1"], "--contrast-std must be non-negative"),
+        (["--metrics-regression-tol-frac", "-0.01"], "--metrics-regression-tol-frac must be non-negative"),
+    ],
+)
+def test_main_rejects_invalid_numeric_cli_args_early(monkeypatch, tmp_path, argv_extra, msg):
+    monkeypatch.setattr(
+        rtam.sys,
+        "argv",
+        [
+            "run_test_all_metrics",
+            "--volume-input",
+            str(tmp_path / "vol_prefix_"),
+            "--output-dir",
+            str(tmp_path),
+            "--cpu",
+            *argv_extra,
+        ],
+    )
+    with pytest.raises(ValueError, match=msg):
+        rtam.main()
+
+
+def test_main_rejects_nonpositive_generated_n_volumes_when_generating(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        rtam.sys,
+        "argv",
+        [
+            "run_test_all_metrics",
+            "--output-dir",
+            str(tmp_path),
+            "--cpu",
+            "--generate-volumes",
+            "--generated-n-volumes",
+            "0",
+        ],
+    )
+    with pytest.raises(ValueError, match="--generated-n-volumes must be positive"):
+        rtam.main()
+
+
 def test_resolve_metrics_baseline_path_defaults_for_generated_volumes(tmp_path):
     args = SimpleNamespace(
         metrics_baseline_json=None,

@@ -81,3 +81,14 @@ def test_main_commands_ignores_non_python_files(monkeypatch, capsys):
     assert "foo" in out
     assert "README" not in out
     assert "bar.txt" not in out
+
+
+def test_main_commands_lists_available_commands_in_sorted_order(monkeypatch, capsys):
+    monkeypatch.setattr(command_line.os, "listdir", lambda _: ["zeta.py", "alpha.py", "__init__.py"])
+    monkeypatch.setattr(command_line.sys, "argv", ["recovar"])
+
+    with pytest.raises(SystemExit):
+        command_line.main_commands()
+    out = capsys.readouterr().out
+
+    assert out.index("alpha") < out.index("zeta")

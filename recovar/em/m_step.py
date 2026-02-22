@@ -136,11 +136,15 @@ def M_with_precompute(experiment_dataset, probabilities, rotations, translations
     image_shape = experiment_dataset.image_shape
     n_rotations = rotations.shape[0]
     n_translations = translations.shape[0]
+    if n_rotations <= 0:
+        raise ValueError("M_with_precompute requires at least one rotation")
+    if n_translations <= 0:
+        raise ValueError("M_with_precompute requires at least one translation")
     n_images = experiment_dataset.n_images if image_indices is None else len(image_indices)
     from recovar import utils
 
     gpu_memory = utils.get_gpu_memory_total()
-    batch_size = utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) // translations.shape[0] * 20
+    batch_size = max(1, (utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) // translations.shape[0]) * 20)
 
     data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = image_indices)
     
@@ -148,7 +152,7 @@ def M_with_precompute(experiment_dataset, probabilities, rotations, translations
     
     # n_rotation_batch = rotations.shape[0]//10
     mult = 5
-    rotation_batch = rotations.shape[0]//mult
+    rotation_batch = max(1, rotations.shape[0] // mult)
     logger.info(f"Starting sum up images. Batch size {batch_size}, rotation batch {rotation_batch}")
     start_idx = 0
     for batch, _, indices in data_generator:
