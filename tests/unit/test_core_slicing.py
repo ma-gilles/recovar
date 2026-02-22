@@ -7,6 +7,7 @@ import sys
 import textwrap
 
 pytest.importorskip("jax")
+import jax
 import recovar.core as core
 import recovar.core_slicing as core_slicing
 import recovar.fourier_transform_utils as fourier_transform_utils
@@ -192,6 +193,27 @@ def test_forward_model_from_half_ctf_matches_full_mapping():
     np.testing.assert_allclose(got_half, expected_half, atol=1e-5, rtol=1e-5)
 
 
+def test_forward_model_from_half_ctf_accepts_prepacked_half_plane_indices():
+    rng = np.random.default_rng(111)
+    image_shape = (4, 8)
+    n_images = 3
+    volume_size = 64
+    volume = rng.standard_normal(volume_size).astype(np.float32)
+    full_plane_idx = rng.integers(0, volume_size, size=(n_images, np.prod(image_shape)), dtype=np.int32)
+    half_primary_idx, _ = core_slicing.split_full_plane_indices_for_half(image_shape, full_plane_idx)
+
+    ctf_real = rng.standard_normal((n_images,) + image_shape).astype(np.float32)
+    ctf_half = np.asarray(fourier_transform_utils.get_dft2_real(ctf_real)).reshape(n_images, -1)
+
+    out_from_full_idx = np.asarray(
+        core_slicing.forward_model_from_half_ctf(volume, ctf_half, image_shape, full_plane_idx)
+    )
+    out_from_half_idx = np.asarray(
+        core_slicing.forward_model_from_half_ctf(volume, ctf_half, image_shape, half_primary_idx)
+    )
+    np.testing.assert_allclose(out_from_half_idx, out_from_full_idx, atol=1e-5, rtol=1e-5)
+
+
 def test_summed_adjoint_slice_by_nearest_accumulates():
     volume_size = 4
     image_vecs = np.array([[1, 2], [3, 4]], dtype=np.float32)
@@ -222,6 +244,18 @@ def test_sum_adj_forward_model_from_half_matches_full():
     )
     np.testing.assert_allclose(out_half, out_full, atol=1e-5, rtol=1e-5)
 
+    half_primary_idx, half_partner_idx = core_slicing.split_full_plane_indices_for_half(image_shape, plane_idx)
+    out_half_from_tuple = np.asarray(
+        core_slicing.sum_adj_forward_model_from_half(
+            volume_size,
+            images_half,
+            ctf_half,
+            image_shape,
+            (half_primary_idx, half_partner_idx),
+        )
+    )
+    np.testing.assert_allclose(out_half_from_tuple, out_full, atol=1e-5, rtol=1e-5)
+
 
 def test_sum_adj_forward_model_from_half_to_half_matches_full_mapped():
     rng = np.random.default_rng(105)
@@ -247,6 +281,18 @@ def test_sum_adj_forward_model_from_half_to_half_matches_full_mapped():
         )
     )
     np.testing.assert_allclose(got_half_volume, expected_half_volume, atol=1e-5, rtol=1e-5)
+
+    half_primary_idx, half_partner_idx = core_slicing.split_full_plane_indices_for_half(image_shape, plane_idx)
+    got_half_volume_from_tuple = np.asarray(
+        core_slicing.sum_adj_forward_model_from_half_to_half(
+            volume_shape,
+            images_half,
+            ctf_half,
+            image_shape,
+            (half_primary_idx, half_partner_idx),
+        )
+    )
+    np.testing.assert_allclose(got_half_volume_from_tuple, expected_half_volume, atol=1e-5, rtol=1e-5)
 
 
 def test_sum_adj_forward_model_adjointness_full_and_half_consistent_inputs():
@@ -686,6 +732,84 @@ def test_adjoint_slice_volume_by_half_images_rejects_invalid_shapes():
         core_slicing.adjoint_slice_volume_by_map_from_half_images(
             bad_half, rots, image_shape=image_shape, volume_shape=volume_shape, disc_type="nearest"
         )
+
+
+def _first_gpu_or_skip():
+    gpus = jax.devices("gpu")
+    if not gpus:
+        pytest.skip("No GPU device available")
+    return gpus[0]
+
+
+@pytest.mark.gpu
+def test_half_trilinear_backprojection_matches_full_on_gpu():
+    device = _first_gpu_or_skip()
+    rng = np.random.default_rng(801)
+    image_shape = (4, 8)
+    volume_shape = (8, 8, 8)
+    rots = np.stack(
+        [np.eye(3, dtype=np.float32), _rotation_z(np.pi / 4.0)],
+        axis=0,
+    )
+    real_images = rng.standard_normal((2,) + image_shape).astype(np.float32)
+    half_images = fourier_transform_utils.get_dft2_real(real_images)
+    full_images = np.asarray(fourier_transform_utils.get_dft2(real_images)).reshape(2, -1)
+
+    with jax.default_device(device):
+        out_half = np.asarray(
+            core_slicing.adjoint_slice_volume_by_trilinear_from_half_images(
+                jax.device_put(half_images),
+                jax.device_put(rots),
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+            )
+        )
+        out_full = np.asarray(
+            core_slicing.adjoint_slice_volume_by_trilinear(
+                jax.device_put(full_images),
+                jax.device_put(rots),
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+            )
+        )
+    np.testing.assert_allclose(out_half, out_full, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("disc_type", ["nearest", "linear_interp"])
+def test_half_map_backprojection_matches_full_on_gpu(disc_type):
+    device = _first_gpu_or_skip()
+    rng = np.random.default_rng(802)
+    image_shape = (4, 8)
+    volume_shape = (8, 8, 8)
+    rots = np.stack(
+        [np.eye(3, dtype=np.float32), _rotation_y(np.pi / 5.0)],
+        axis=0,
+    )
+    real_images = rng.standard_normal((2,) + image_shape).astype(np.float32)
+    half_images = fourier_transform_utils.get_dft2_real(real_images)
+    full_images = np.asarray(fourier_transform_utils.get_dft2(real_images)).reshape(2, -1)
+
+    with jax.default_device(device):
+        out_half = np.asarray(
+            core_slicing.adjoint_slice_volume_by_map_from_half_images(
+                jax.device_put(half_images),
+                jax.device_put(rots),
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+                disc_type=disc_type,
+            )
+        )
+        out_full = np.asarray(
+            core_slicing.adjoint_slice_volume_by_map(
+                jax.device_put(full_images),
+                jax.device_put(rots),
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+                disc_type=disc_type,
+            )
+        )
+    np.testing.assert_allclose(out_half, out_full, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.slow

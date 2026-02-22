@@ -29,6 +29,16 @@ This repository uses `pytest` with explicit test tiers to keep validation fast a
 - Full + long regressions:
   - `./scripts/run_pytests.sh full-long`
   - Runs full suite, then both long metrics regressions (standard + cryo-ET subsampling)
+- Full real-dataset regression gate (strict):
+  - `./scripts/run_pytests.sh real-regression`
+  - Requires:
+    - `LONG_METRICS_VOLUMES_DIR`
+    - `LONG_METRICS_BASELINE_JSON`
+    - `LONG_METRICS_OUTPUT_BASE`
+  - Also checks long outliers regressions (SPA + cryo-ET) using:
+    - `OUTLIERS_VOLUMES_DIR` (defaults to `LONG_METRICS_VOLUMES_DIR`)
+    - `OUTLIERS_BASELINE_JSON` (defaults from `LONG_METRICS_BASELINE_JSON`)
+  - Fails fast if baselines are missing (unless `*_WRITE_BASELINE=1` is set).
 - Long metrics regression (opt-in, typically 1h+):
   - `./scripts/run_pytests.sh long-metrics`
   - Requires env vars described in `scripts/run_long_metrics_regression.sh`
