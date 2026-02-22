@@ -81,6 +81,7 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
         path_mapping = copy_data_from_pipeline_output(po, args.copy_to_folder)
 
     try:
+        lazy = bool(getattr(args, "lazy", False))
         if hasattr(po, "get_embedding_keys"):
             zs_keys = list(po.get_embedding_keys("zs"))
             cov_keys = list(po.get_embedding_keys("cov_zs"))
@@ -128,7 +129,7 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
         cov_zs = np.asarray(cov_zs).astype(np.float32, copy=False)
         contrasts = np.asarray(contrasts).astype(np.float32, copy=False)
 
-        cryos = po.get('dataset')
+        cryos = po.get('lazy_dataset') if lazy else po.get('dataset')
         embedding.set_contrasts_in_cryos(cryos, contrasts)
 
         if density_path is not None:

@@ -4,6 +4,7 @@ import os
 import jax
 import sys
 import argparse
+import pickle
 
 def main():
 
@@ -26,6 +27,7 @@ def main():
 
     passed_functions = []
     failed_functions = []
+    cleanup_paths = []
 
     def error_message():
         print("--------------------------------------------")
@@ -68,6 +70,7 @@ def main():
     if tilt_series_only:
         # Run only tilt series tests
         print("Running tilt series tests only...")
+        cleanup_paths.append(os.path.join(dataset_dir, "tilt_test"))
         
         # Generate a test dataset for tilt series testing (without nested structure)
         run_command(
@@ -106,6 +109,7 @@ def main():
         
     else:
         # Generate a small test dataset - should take about 30 sec
+        cleanup_paths.append(os.path.join(dataset_dir, "test_dataset"))
         run_command(
             f'{BASE_CMD} make_test_dataset {dataset_dir}',
             'Generate a small test dataset',
@@ -185,15 +189,27 @@ def main():
                 'Create target file for reconstruction',
                 'create_target'
             )
-            import pickle
             # Test reconstruct_from_external_embedding
-            embeddings = pickle.load(open(f'{dataset_dir}/test_dataset/pipeline_output/model/embeddings.pkl', 'rb'))
-            pickle.dump(embeddings['zs'][2], open(f'{dataset_dir}/test_dataset/embedding_2.pkl', 'wb'))
-            run_command(
-                f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/test_dataset/particles.64.mrcs --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --embedding {dataset_dir}/test_dataset/embedding_2.pkl --target {dataset_dir}/test_dataset/target.txt -o {dataset_dir}/test_dataset/reconstruct_output',
-                'Test reconstruct_from_external_embedding',
-                'reconstruct'
-            )
+            embedding_model_path = f'{dataset_dir}/test_dataset/pipeline_output/model/embeddings.pkl'
+            embedding_2_path = f'{dataset_dir}/test_dataset/embedding_2.pkl'
+            if not os.path.exists(embedding_model_path):
+                print(f"Failed: prepare embedding for reconstruction (missing {embedding_model_path})\n")
+                failed_functions.append('prepare_embedding_for_reconstruct')
+            else:
+                try:
+                    with open(embedding_model_path, 'rb') as f:
+                        embeddings = pickle.load(f)
+                    with open(embedding_2_path, 'wb') as f:
+                        pickle.dump(embeddings['zs'][2], f)
+                except Exception as e:
+                    print(f"Failed: prepare embedding for reconstruction ({e})\n")
+                    failed_functions.append('prepare_embedding_for_reconstruct')
+                else:
+                    run_command(
+                        f'{BASE_CMD} reconstruct_from_external_embedding {dataset_dir}/test_dataset/particles.64.mrcs --poses {dataset_dir}/test_dataset/poses.pkl --ctf {dataset_dir}/test_dataset/ctf.pkl --embedding {embedding_2_path} --target {dataset_dir}/test_dataset/target.txt -o {dataset_dir}/test_dataset/reconstruct_output',
+                        'Test reconstruct_from_external_embedding',
+                        'reconstruct'
+                    )
             
 
     if failed_functions:
@@ -204,9 +220,15 @@ def main():
     else:
         print("All functions completed successfully!")
         # Delete the test_dataset directory since all steps passed
-        if delete_everything and os.path.exists('test_dataset'):
-            shutil.rmtree('test_dataset')
-            print("Test dataset directory 'test_dataset' has been deleted.")
+        if delete_everything:
+            deleted_any = False
+            for path in cleanup_paths:
+                if os.path.exists(path):
+                    shutil.rmtree(path)
+                    print(f"Test dataset directory '{path}' has been deleted.")
+                    deleted_any = True
+            if not deleted_any:
+                print("No generated test dataset directories found to delete.")
 
 if __name__ == "__main__":
     # parser = argparse.ArgumentParser(description=__doc__)

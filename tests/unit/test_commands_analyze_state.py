@@ -124,6 +124,143 @@ def test_analyze_runs_centers_and_trajectories_with_density(monkeypatch, tmp_pat
     assert calls["reweighted"][0][3] == (n_images, 2, 2)
 
 
+def test_analyze_uses_embedding_component_api_when_available(monkeypatch, tmp_path):
+    component_calls = []
+    captured = {}
+
+    class _PO:
+        def __init__(self, _path):
+            self.params = {}
+
+        def get_embedding_keys(self, _entry):
+            return [2]
+
+        def get_embedding_component(self, entry, key):
+            assert key == 2
+            component_calls.append(entry)
+            if entry == "zs":
+                return np.zeros((6, 2), dtype=np.float64)
+            if entry == "cov_zs":
+                return np.repeat(np.eye(2, dtype=np.float64)[None, :, :], 6, axis=0)
+            if entry == "contrasts":
+                return np.ones(6, dtype=np.float64)
+            raise KeyError(entry)
+
+        def get(self, key):
+            if key in {"zs", "cov_zs", "contrasts"}:
+                raise AssertionError(f"analyze should not call get('{key}') when component API exists")
+            if key == "dataset":
+                return ["d0"]
+            if key == "particles_halfsets":
+                return [np.array([0, 1, 2], dtype=np.int32), np.array([3, 4, 5], dtype=np.int32)]
+            if key == "volume_mask":
+                return np.ones((4, 4, 4), dtype=np.float32)
+            raise KeyError(key)
+
+    monkeypatch.setattr(analyze_cmd.o, "PipelineOutput", _PO)
+    monkeypatch.setattr(
+        analyze_cmd.embedding,
+        "set_contrasts_in_cryos",
+        lambda _cryos, contrasts: captured.setdefault("contrast_dtype", np.asarray(contrasts).dtype),
+    )
+    monkeypatch.setattr(analyze_cmd.dataset, "reorder_to_original_indexing_from_halfsets", lambda arr, _h: np.asarray(arr))
+    monkeypatch.setattr(analyze_cmd.utils, "basic_config_logger", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        analyze_cmd.latent_density,
+        "compute_latent_space_density",
+        lambda *_args, **_kwargs: (np.ones((4, 4), dtype=np.float32), {"x": [-1, 1]}),
+    )
+    monkeypatch.setattr(analyze_cmd.o, "kmeans_analysis", lambda *_args, **_kwargs: (np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32), np.array([0, 1, 0, 1, 0, 1], dtype=np.int32)))
+    monkeypatch.setattr(analyze_cmd.o, "mkdir_safe", lambda path: os.makedirs(path, exist_ok=True))
+    monkeypatch.setattr(
+        analyze_cmd.o,
+        "compute_and_save_reweighted",
+        lambda *_args, **_kwargs: captured.__setitem__("reweighted_calls", captured.get("reweighted_calls", 0) + 1),
+    )
+    monkeypatch.setattr(plt, "savefig", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(plt, "close", lambda *_args, **_kwargs: None)
+
+    analyze_cmd.analyze(
+        recovar_result_dir=str(tmp_path / "pipeline_out"),
+        output_folder=str(tmp_path / "analysis"),
+        zdim=2,
+        n_clusters=2,
+        n_paths=0,
+        skip_umap=True,
+        skip_centers=False,
+        density_path=None,
+        no_z_reg=False,
+        lazy=False,
+        args=SimpleNamespace(copy_to_folder=None, no_cleanup=False),
+    )
+
+    assert component_calls.count("zs") == 1
+    assert component_calls.count("cov_zs") == 1
+    assert component_calls.count("contrasts") == 1
+    assert captured["contrast_dtype"] == np.float32
+    assert captured["reweighted_calls"] == 1
+
+
+def test_analyze_copy_to_folder_cleans_up_on_failure(monkeypatch, tmp_path):
+    cleaned = {"count": 0}
+
+    class _PO:
+        def __init__(self, _path):
+            self.params = {}
+
+        def get_embedding_keys(self, _entry):
+            return [2]
+
+        def get_embedding_component(self, entry, _key):
+            if entry == "zs":
+                return np.zeros((4, 2), dtype=np.float32)
+            if entry == "cov_zs":
+                return np.repeat(np.eye(2, dtype=np.float32)[None, :, :], 4, axis=0)
+            if entry == "contrasts":
+                return np.ones(4, dtype=np.float32)
+            raise KeyError(entry)
+
+        def get(self, key):
+            if key == "dataset":
+                return ["d0"]
+            if key == "particles_halfsets":
+                return [np.array([0, 1], dtype=np.int32), np.array([2, 3], dtype=np.int32)]
+            raise KeyError(key)
+
+    monkeypatch.setattr(analyze_cmd.o, "PipelineOutput", _PO)
+    monkeypatch.setattr(analyze_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(analyze_cmd.dataset, "reorder_to_original_indexing_from_halfsets", lambda arr, _h: np.asarray(arr))
+    monkeypatch.setattr(analyze_cmd.utils, "basic_config_logger", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        analyze_cmd.latent_density,
+        "compute_latent_space_density",
+        lambda *_args, **_kwargs: (np.ones((3, 3), dtype=np.float32), {"x": [-1, 1]}),
+    )
+    monkeypatch.setattr(analyze_cmd.o, "kmeans_analysis", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(analyze_cmd.o, "mkdir_safe", lambda path: os.makedirs(path, exist_ok=True))
+    monkeypatch.setattr(analyze_cmd, "copy_data_from_pipeline_output", lambda *_args, **_kwargs: {"temp": "/tmp/fake"})
+    monkeypatch.setattr(analyze_cmd, "cleanup_temp_files", lambda _m: cleaned.__setitem__("count", cleaned["count"] + 1))
+    monkeypatch.setattr(plt, "savefig", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(plt, "close", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        analyze_cmd.analyze(
+            recovar_result_dir=str(tmp_path / "pipeline_out"),
+            output_folder=str(tmp_path / "analysis"),
+            zdim=2,
+            n_clusters=2,
+            n_paths=0,
+            skip_umap=True,
+            skip_centers=False,
+            density_path=None,
+            no_z_reg=False,
+            lazy=False,
+            args=SimpleNamespace(copy_to_folder="auto", no_cleanup=False),
+        )
+
+    assert cleaned["count"] == 1
+
+
 def test_compute_state_reads_txt_and_reweights(monkeypatch, tmp_path):
     latent_points = np.array([[0.0, 1.0], [2.0, 3.0]], dtype=np.float32)
     latent_path = tmp_path / "latent.txt"

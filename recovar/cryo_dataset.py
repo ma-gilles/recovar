@@ -309,6 +309,8 @@ class TiltSeriesDataset(ParticleImageDataset):
     
     def _get_canonical_groups(self, df: 'pd.DataFrame') -> List[str]:
         """Get sorted list of unique group names for consistent ordering."""
+        if '_rlnGroupName' not in df.columns:
+            raise ValueError("STAR data is missing required column: _rlnGroupName")
         return sorted(df['_rlnGroupName'].unique())
     
     def _build_particle_groups(self, df: 'pd.DataFrame', canonical_groups: List[str]) -> OrderedDict:
@@ -406,6 +408,9 @@ class TiltSeriesDataset(ParticleImageDataset):
         """
         star = starfile.Starfile.load(starfile_path)
         df = star.df
+
+        if '_rlnGroupName' not in df.columns:
+            raise ValueError("STAR data is missing required column: _rlnGroupName")
         
         if indices is not None:
             df = df.loc[indices]

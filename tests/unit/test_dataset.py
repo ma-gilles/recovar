@@ -359,6 +359,163 @@ def test_load_cryodrgn_dataset_tilt_series_relion5_branch(monkeypatch):
     )
 
 
+def test_load_cryodrgn_dataset_tilt_series_warp_alias_maps_to_v2_scale(monkeypatch):
+    called = {}
+
+    class _FakeTiltSeriesData(_FakeImageStack):
+        def __init__(self, *args, **kwargs):
+            called["tilt_file_option"] = kwargs.get("tilt_file_option")
+            super().__init__(n_images=4, D=8, padding=0, Np=2)
+            self.ctfscalefactor = np.array([0.95, 1.05, 0.9, 1.1], dtype=np.float32)
+            # WARP convention used by loader: dose ~ -B/4.
+            self.ctfBfactor = np.array([-4.0, -8.0, -12.0, -16.0], dtype=np.float32)
+            self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.float32)
+
+    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
+    monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
+
+    out = dataset.load_cryodrgn_dataset(
+        particles_file="p.star",
+        poses_file="poses.pkl",
+        ctf_file="ctf.pkl",
+        lazy=True,
+        tilt_series=True,
+        tilt_series_ctf="warp",  # alias branch
+        angle_per_tilt=3.0,
+    )
+    assert called["tilt_file_option"] == "warp"
+    assert out.tilt_series_flag is True
+    assert out.CTF_fun_inp is core.evaluate_ctf_wrapper_tilt_series_v2
+    # Baseline 8 + bfactor + contrast + (dose,angle) then drop voxel_size => 11.
+    assert out.CTF_params.shape[1] == 11
+    np.testing.assert_array_equal(
+        out.CTF_params[:, core.CTFParamIndex.CONTRAST],
+        np.array([0.95, 1.05, 0.9, 1.1], dtype=np.float32),
+    )
+
+
+def test_load_cryodrgn_dataset_defaults_tilt_series_ctf_by_mode(monkeypatch):
+    calls = {"tilt_init": 0}
+
+    class _FakeTiltSeriesData(_FakeImageStack):
+        def __init__(self, *args, **kwargs):
+            calls["tilt_init"] += 1
+            calls["tilt_file_option"] = kwargs.get("tilt_file_option")
+            super().__init__(n_images=4, D=8, padding=0, Np=2)
+            self.ctfscalefactor = np.ones(4, dtype=np.float32)
+            self.ctfBfactor = -4 * np.ones(4, dtype=np.float32)
+            self.tilt_numbers = np.arange(4, dtype=np.float32)
+            self.dose = np.arange(4, dtype=np.float32)
+
+    monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
+    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
+    monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
+
+    # tilt_series=False with tilt_series_ctf=None should default to cryoem and not instantiate TiltSeriesData.
+    out_spa = dataset.load_cryodrgn_dataset(
+        particles_file="p.mrcs",
+        poses_file="poses.pkl",
+        ctf_file="ctf.pkl",
+        lazy=True,
+        tilt_series=False,
+        tilt_series_ctf=None,
+    )
+    assert out_spa.CTF_fun_inp is core.evaluate_ctf_wrapper
+    assert calls["tilt_init"] == 0
+
+    # tilt_series=True with tilt_series_ctf=None should default to relion5.
+    out_tilt = dataset.load_cryodrgn_dataset(
+        particles_file="p.star",
+        poses_file="poses.pkl",
+        ctf_file="ctf.pkl",
+        lazy=True,
+        tilt_series=True,
+        tilt_series_ctf=None,
+    )
+    assert out_tilt.CTF_fun_inp is core.evaluate_ctf_wrapper_tilt_series_v2
+    assert calls["tilt_init"] == 1
+    assert calls["tilt_file_option"] == "relion5"
+
+
+def test_load_cryodrgn_dataset_from_star_branch_sets_contrast_and_bfactor(monkeypatch):
+    captured = {}
+
+    class _FakeTiltSeriesData:
+        def __init__(self, *args, **kwargs):
+            captured["sort_with_Bfac"] = kwargs.get("sort_with_Bfac")
+            self.ctfscalefactor = np.array([0.9, 1.0, 1.1, 1.2], dtype=np.float32)
+            # STAR convention: negative B-factors.
+            self.ctfBfactor = np.array([-5.0, -10.0, -15.0, -20.0], dtype=np.float32)
+            self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.float32)
+
+    monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
+    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
+    monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
+
+    out = dataset.load_cryodrgn_dataset(
+        particles_file="p.mrcs",
+        poses_file="poses.pkl",
+        ctf_file="ctf.pkl",
+        lazy=True,
+        tilt_series=False,
+        tilt_series_ctf="from_star",
+        sort_with_Bfac=True,
+    )
+    assert captured["sort_with_Bfac"] is True
+    assert out.CTF_fun_inp is core.evaluate_ctf_wrapper
+    assert out.CTF_params.shape[1] == 9
+    np.testing.assert_array_equal(
+        out.CTF_params[:, core.CTFParamIndex.CONTRAST],
+        np.array([0.9, 1.0, 1.1, 1.2], dtype=np.float32),
+    )
+    # Loader flips sign to positive in-memory.
+    np.testing.assert_array_equal(
+        out.CTF_params[:, core.CTFParamIndex.BFACTOR],
+        np.array([5.0, 10.0, 15.0, 20.0], dtype=np.float32),
+    )
+
+
+def test_load_cryodrgn_dataset_v2_scale_from_star_uses_star_scaling_and_zero_angles(monkeypatch):
+    class _FakeTiltSeriesData:
+        def __init__(self, *args, **kwargs):
+            self.ctfscalefactor = np.array([0.7, 0.8, 0.9, 1.0], dtype=np.float32)
+            self.ctfBfactor = np.array([-4.0, -8.0, -12.0, -16.0], dtype=np.float32)
+            self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.float32)
+
+    monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
+    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
+    monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
+
+    out = dataset.load_cryodrgn_dataset(
+        particles_file="p.mrcs",
+        poses_file="poses.pkl",
+        ctf_file="ctf.pkl",
+        lazy=True,
+        tilt_series=False,
+        tilt_series_ctf="v2_scale_from_star",
+        dose_per_tilt=None,
+        angle_per_tilt=3.0,
+    )
+    assert out.CTF_fun_inp is core.evaluate_ctf_wrapper_tilt_series_v2
+    # Baseline 8 + bfactor + contrast + (dose,angle) then drop voxel_size => 11.
+    assert out.CTF_params.shape[1] == 11
+    np.testing.assert_array_equal(
+        out.CTF_params[:, core.CTFParamIndex.CONTRAST],
+        np.array([0.7, 0.8, 0.9, 1.0], dtype=np.float32),
+    )
+    # scale_from_star forces angle_per_tilt=0 => angle channel should be all zeros.
+    np.testing.assert_array_equal(out.CTF_params[:, -1], np.zeros(4, dtype=np.float32))
+    # dose_per_tilt=None branch uses dose from star: -Bfactor/4.
+    np.testing.assert_array_equal(
+        out.CTF_params[:, core.CTFParamIndex.DOSE],
+        np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32),
+    )
+
+
 def test_cryoemdataset_predicted_image_and_generators(monkeypatch):
     stack = _FakeImageStack(n_images=3, D=4, padding=0, Np=2)
     ctf_params = np.zeros((3, 9), dtype=np.float32)
@@ -742,6 +899,64 @@ def test_subsampled_image_stack_image_subset_generator_alias():
     _imgs, pidx, iidx = next(gen)
     np.testing.assert_array_equal(pidx, np.array([1], dtype=np.int32))
     np.testing.assert_array_equal(iidx, np.array([1], dtype=np.int32))
+
+
+def test_subsampled_image_stack_subset_generator_handles_multiple_underlying_batches():
+    class _BackingStack:
+        def __init__(self, D=4):
+            self.D = D
+            self.unpadded_D = D
+            self.padding = 0
+            self.image_shape = (D, D)
+            self.mask = np.ones((D, D), dtype=np.float32)
+
+        def process_images(self, images, apply_image_mask=True):
+            return np.asarray(images)
+
+        def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
+            subset_indices = np.asarray(subset_indices, dtype=np.int32)
+            for start in range(0, subset_indices.size, batch_size):
+                chunk = subset_indices[start:start + batch_size]
+                imgs = np.zeros((chunk.size, self.D * self.D), dtype=np.complex64)
+                # Return original-image indices from backing stack.
+                yield imgs, chunk, chunk
+
+    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([7, 3, 5, 9], dtype=np.int32))
+    gen = wrapped.get_dataset_subset_generator(batch_size=2, subset_indices=np.array([3, 0, 2, 1], dtype=np.int32))
+
+    got = []
+    for _imgs, pidx, iidx in gen:
+        np.testing.assert_array_equal(pidx, iidx)
+        got.extend(np.asarray(iidx).reshape(-1).tolist())
+
+    # Must preserve requested local subset order across all emitted batches.
+    assert got == [3, 0, 2, 1]
+
+
+def test_subsampled_image_stack_dataset_generator_emits_all_local_indices():
+    class _BackingStack:
+        def __init__(self, D=4):
+            self.D = D
+            self.unpadded_D = D
+            self.padding = 0
+            self.image_shape = (D, D)
+            self.mask = np.ones((D, D), dtype=np.float32)
+
+        def process_images(self, images, apply_image_mask=True):
+            return np.asarray(images)
+
+        def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
+            subset_indices = np.asarray(subset_indices, dtype=np.int32)
+            imgs = np.zeros((subset_indices.size, self.D * self.D), dtype=np.complex64)
+            yield imgs, subset_indices, subset_indices
+
+    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([10, 4, 8, 2, 6], dtype=np.int32))
+    got = []
+    for _imgs, pidx, iidx in wrapped.get_dataset_generator(batch_size=2):
+        np.testing.assert_array_equal(pidx, iidx)
+        got.extend(np.asarray(iidx).reshape(-1).tolist())
+
+    np.testing.assert_array_equal(np.asarray(got, dtype=np.int32), np.array([0, 1, 2, 3, 4], dtype=np.int32))
 
 
 def test_get_split_indices_from_empty_ind_file_raises(tmp_path):

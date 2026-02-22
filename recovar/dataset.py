@@ -769,24 +769,36 @@ class _SubsampledImageStack:
     def process_images(self, images, apply_image_mask=True):
         return self._stack.process_images(images, apply_image_mask=apply_image_mask)
 
+    def _map_orig_to_local(self, indices, orig_to_local):
+        idx_arr = np.asarray(indices)
+        if idx_arr.size == 0:
+            return idx_arr.astype(np.int32, copy=False)
+        flat = idx_arr.reshape(-1)
+        mapped = np.array([orig_to_local[int(i)] for i in flat], dtype=np.int32)
+        return mapped.reshape(idx_arr.shape)
+
     def get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
         for start in range(0, self.n_images, batch_size):
             local_idx = np.arange(start, min(start + batch_size, self.n_images), dtype=np.int32)
             orig_idx = self._idx[local_idx]
-            for images, _, _ in self._stack.get_dataset_subset_generator(
+            orig_to_local = {int(orig): int(local) for local, orig in zip(local_idx, orig_idx)}
+            for images, _, image_indices in self._stack.get_dataset_subset_generator(
                 batch_size, orig_idx, num_workers=num_workers
             ):
-                yield images, local_idx, local_idx
-                break  # one batch per yield
+                # Some image-stack implementations may emit one or many batches.
+                # Always map yielded original indices back to contiguous local ones.
+                local_image_indices = self._map_orig_to_local(image_indices, orig_to_local)
+                yield images, local_image_indices, local_image_indices
 
     def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
         subset_indices = np.asarray(subset_indices, dtype=np.int32)
         orig_idx = self._idx[subset_indices]
-        for images, _, _ in self._stack.get_dataset_subset_generator(
+        orig_to_local = {int(orig): int(local) for local, orig in zip(subset_indices, orig_idx)}
+        for images, _, image_indices in self._stack.get_dataset_subset_generator(
             batch_size, orig_idx, num_workers=num_workers
         ):
-            yield images, subset_indices, subset_indices
-            break
+            local_image_indices = self._map_orig_to_local(image_indices, orig_to_local)
+            yield images, local_image_indices, local_image_indices
 
     def get_image_subset_generator(self, batch_size, subset_indices, num_workers=0):
         return self.get_dataset_subset_generator(batch_size, subset_indices, num_workers=num_workers)
