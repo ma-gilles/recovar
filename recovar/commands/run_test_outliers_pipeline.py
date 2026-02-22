@@ -308,56 +308,39 @@ def create_outlier_volume(output_path, grid_size=64):
     # Create directory if it doesn't exist
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     
-    # Create a random anisotropic volume with different characteristics
+    # Vectorized generation avoids slow Python triple-loops while preserving
+    # anisotropic, high-frequency content used for outlier stress tests.
     volume_shape = (grid_size, grid_size, grid_size)
     center = grid_size // 2
-    
-    # Set random seed for reproducibility but different from normal volumes
-    np.random.seed(42)  # Different seed from normal volumes
-    
-    # Create base volume with random noise
-    volume = np.random.rand(*volume_shape).astype(np.float32) * 0.1
-    
-    # Add anisotropic features that look different from different directions
-    for i in range(grid_size):
-        for j in range(grid_size):
-            for k in range(grid_size):
-                # Distance from center
-                dist = np.sqrt((i - center)**2 + (j - center)**2 + (k - center)**2)
-                
-                # Create anisotropic structure - ellipsoid with random orientation
-                # Scale factors for anisotropy
-                scale_x = 0.8 + 0.4 * np.random.rand()
-                scale_y = 0.6 + 0.8 * np.random.rand() 
-                scale_z = 0.7 + 0.6 * np.random.rand()
-                
-                # Ellipsoid equation with random orientation
-                normalized_dist = np.sqrt(
-                    ((i - center) * scale_x)**2 + 
-                    ((j - center) * scale_y)**2 + 
-                    ((k - center) * scale_z)**2
-                )
-                
-                # Add some random protrusions and indentations
-                angle_factor = np.sin(0.3 * i) * np.cos(0.2 * j) * np.sin(0.25 * k)
-                random_factor = 0.5 + 0.5 * np.random.rand()
-                
-                # Create irregular surface
-                if 0.25 * center < normalized_dist < 0.7 * center:
-                    # Add varying density based on position
-                    density = 0.3 + 0.7 * random_factor + 0.2 * angle_factor
-                    volume[i, j, k] = density
-                
-                # Add some random internal structures
-                if normalized_dist < 0.2 * center:
-                    volume[i, j, k] += 0.5 * np.random.rand()
-    
-    # Add some high-frequency noise to make it more irregular
-    noise = np.random.rand(*volume_shape).astype(np.float32) * 0.1
-    volume += noise
-    
-    # Normalize the volume
-    volume = (volume - np.min(volume)) / (np.max(volume) - np.min(volume))
+    rng = np.random.default_rng(42)
+
+    coords = np.indices(volume_shape, dtype=np.float32)
+    x = coords[0] - center
+    y = coords[1] - center
+    z = coords[2] - center
+
+    scale_x = rng.uniform(0.8, 1.2, size=volume_shape).astype(np.float32)
+    scale_y = rng.uniform(0.6, 1.4, size=volume_shape).astype(np.float32)
+    scale_z = rng.uniform(0.7, 1.3, size=volume_shape).astype(np.float32)
+
+    normalized_dist = np.sqrt((x * scale_x) ** 2 + (y * scale_y) ** 2 + (z * scale_z) ** 2)
+    shell_mask = (normalized_dist > (0.25 * center)) & (normalized_dist < (0.7 * center))
+    core_mask = normalized_dist < (0.2 * center)
+
+    angle_factor = np.sin(0.3 * (x + center)) * np.cos(0.2 * (y + center)) * np.sin(0.25 * (z + center))
+    random_factor = 0.5 + 0.5 * rng.random(volume_shape, dtype=np.float32)
+    shell_density = 0.3 + 0.7 * random_factor + 0.2 * angle_factor.astype(np.float32)
+
+    volume = (rng.random(volume_shape, dtype=np.float32) * 0.1).astype(np.float32)
+    volume[shell_mask] = shell_density[shell_mask]
+    volume += (0.5 * rng.random(volume_shape, dtype=np.float32)) * core_mask.astype(np.float32)
+    volume += rng.random(volume_shape, dtype=np.float32) * 0.1
+
+    # Normalize robustly to [0, 1]
+    vmin = float(np.min(volume))
+    vmax = float(np.max(volume))
+    denom = max(vmax - vmin, 1e-8)
+    volume = ((volume - vmin) / denom).astype(np.float32, copy=False)
     
     # Save as MRC file
     with mrcfile.new(output_path, overwrite=True) as mrc:

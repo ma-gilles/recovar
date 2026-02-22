@@ -27,11 +27,25 @@ def test_load_images_rejects_unknown_extension():
 
 def test_parse_indices_int_slice_array_and_bool():
     loader = _DummyLoader(n=8, D=2)
-    assert np.all(loader._parse_indices(None) == np.arange(8))
-    assert np.all(loader._parse_indices(3) == np.array([3]))
-    assert np.all(loader._parse_indices(slice(2, 6, 2)) == np.array([2, 4]))
-    assert np.all(loader._parse_indices(np.array([1, 5], dtype=np.int32)) == np.array([1, 5]))
-    assert np.all(loader._parse_indices(np.array([True, False, True, False, False, False, False, False])) == np.array([0, 2]))
+    parsed_none = loader._parse_indices(None)
+    assert parsed_none.dtype == np.int32
+    assert np.all(parsed_none == np.arange(8))
+
+    parsed_int = loader._parse_indices(3)
+    assert parsed_int.dtype == np.int32
+    assert np.all(parsed_int == np.array([3]))
+
+    parsed_slice = loader._parse_indices(slice(2, 6, 2))
+    assert parsed_slice.dtype == np.int32
+    assert np.all(parsed_slice == np.array([2, 4]))
+
+    parsed_array = loader._parse_indices(np.array([1, 5], dtype=np.int32))
+    assert parsed_array.dtype == np.int32
+    assert np.all(parsed_array == np.array([1, 5]))
+
+    parsed_bool = loader._parse_indices(np.array([True, False, True, False, False, False, False, False]))
+    assert parsed_bool.dtype == np.int32
+    assert np.all(parsed_bool == np.array([0, 2]))
 
 
 def test_parse_indices_rejects_non_1d_arrays_and_bad_boolean_masks():
@@ -94,6 +108,17 @@ def test_mrc_loader_duplicate_indices_preserve_order_and_duplicates(tmp_path):
     req = np.array([4, 2, 4, 0], dtype=np.int32)
     out = loader.get(req)
     np.testing.assert_allclose(out, data[req])
+
+
+def test_mrc_loader_empty_request_returns_empty_batch(tmp_path):
+    data = np.arange(5 * 4 * 4, dtype=np.float32).reshape(5, 4, 4)
+    mrc_path = tmp_path / "particles.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    loader = image_loader.MRCLoader(str(mrc_path), lazy=True)
+    out = loader.get(np.array([], dtype=np.int32))
+    assert out.shape == (0, 4, 4)
+    assert out.dtype == data.dtype
 
 
 def test_mrc_loader_deduplicates_disk_reads_for_duplicate_indices(monkeypatch, tmp_path):
@@ -286,6 +311,17 @@ def test_multi_mrc_loader_get_with_duplicate_indices(tmp_path):
     np.testing.assert_allclose(out[3], a[0])
 
 
+def test_multi_mrc_loader_empty_request_returns_empty_batch(tmp_path):
+    a = np.arange(3 * 4 * 4, dtype=np.float32).reshape(3, 4, 4)
+    a_path = tmp_path / "a.mrcs"
+    utils.write_mrc(str(a_path), a)
+    df = pd.DataFrame({"mrc_file": [str(a_path), str(a_path), str(a_path)], "mrc_index": [0, 1, 2]})
+    loader = image_loader.MultiMRCLoader(df, lazy=True, max_threads=1)
+    out = loader.get(np.array([], dtype=np.int32))
+    assert out.shape == (0, 4, 4)
+    assert out.dtype == a.dtype
+
+
 def test_multi_mrc_loader_indices_only_load_selected_files(tmp_path):
     a = np.arange(2 * 4 * 4, dtype=np.float32).reshape(2, 4, 4)
     a_path = tmp_path / "a.mrcs"
@@ -313,6 +349,48 @@ def test_multi_mrc_loader_empty_selection_raises_clear_error(tmp_path):
     df = pd.DataFrame({"mrc_file": [str(a_path), str(a_path)], "mrc_index": [0, 1]})
     with pytest.raises(ValueError, match="No images selected"):
         image_loader.MultiMRCLoader(df, indices=np.array([], dtype=np.int32), lazy=True, max_threads=1)
+
+
+def test_multi_mrc_loader_rejects_out_of_range_mrc_indices_at_construction(tmp_path):
+    a = np.arange(2 * 4 * 4, dtype=np.float32).reshape(2, 4, 4)
+    a_path = tmp_path / "a.mrcs"
+    utils.write_mrc(str(a_path), a)
+    df = pd.DataFrame(
+        {
+            "mrc_file": [str(a_path), str(a_path)],
+            "mrc_index": [0, 2],  # second index is out of range for 2-image stack
+        }
+    )
+    with pytest.raises(ValueError, match="out of range"):
+        image_loader.MultiMRCLoader(df, lazy=True, max_threads=1)
+
+
+def test_multi_mrc_loader_rejects_negative_mrc_index_values_at_construction(tmp_path):
+    a = np.arange(2 * 4 * 4, dtype=np.float32).reshape(2, 4, 4)
+    a_path = tmp_path / "a.mrcs"
+    utils.write_mrc(str(a_path), a)
+    df = pd.DataFrame(
+        {
+            "mrc_file": [str(a_path), str(a_path)],
+            "mrc_index": [0, -1],
+        }
+    )
+    with pytest.raises(ValueError, match="must be non-negative"):
+        image_loader.MultiMRCLoader(df, lazy=True, max_threads=1)
+
+
+def test_multi_mrc_loader_rejects_noninteger_mrc_index_values_at_construction(tmp_path):
+    a = np.arange(2 * 4 * 4, dtype=np.float32).reshape(2, 4, 4)
+    a_path = tmp_path / "a.mrcs"
+    utils.write_mrc(str(a_path), a)
+    df = pd.DataFrame(
+        {
+            "mrc_file": [str(a_path), str(a_path)],
+            "mrc_index": [0.0, 1.0],  # float metadata should be rejected
+        }
+    )
+    with pytest.raises(ValueError, match="must be integers"):
+        image_loader.MultiMRCLoader(df, lazy=True, max_threads=1)
 
 
 def test_tilt_series_dataset_strip_prefix_with_tiny_real_files(tmp_path):
@@ -402,6 +480,21 @@ def test_star_loader_rejects_missing_rlnimagename_column(tmp_path):
         image_loader.StarLoader(str(star_path), lazy=True)
 
 
+def test_star_loader_rejects_nonnumeric_image_index_tokens(tmp_path):
+    data = np.arange(2 * 4 * 4, dtype=np.float32).reshape(2, 4, 4)
+    rel_dir = tmp_path / "rel"
+    rel_dir.mkdir()
+    mrc_path = rel_dir / "stack.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    # Numeric-looking prefix is required; nonnumeric token should fail clearly.
+    df_bad = pd.DataFrame({"_rlnImageName": [f"one@{mrc_path.name}", f"2@{mrc_path.name}"]})
+    bad_star = tmp_path / "bad_nonnumeric_token.star"
+    starfile.write_star(str(bad_star), data=df_bad)
+    with pytest.raises(ValueError, match="index part is not an integer"):
+        image_loader.StarLoader(str(bad_star), datadir=str(rel_dir), lazy=True)
+
+
 def test_star_loader_rejects_malformed_image_name_entries(tmp_path):
     data = np.arange(2 * 4 * 4, dtype=np.float32).reshape(2, 4, 4)
     rel_dir = tmp_path / "rel"
@@ -422,6 +515,37 @@ def test_star_loader_rejects_malformed_image_name_entries(tmp_path):
     starfile.write_star(str(zero_star), data=df_zero)
     with pytest.raises(ValueError, match="indices must be >= 1"):
         image_loader.StarLoader(str(zero_star), datadir=str(rel_dir), lazy=True)
+
+
+def test_star_loader_rejects_non_integer_image_indices(tmp_path):
+    data = np.arange(2 * 4 * 4, dtype=np.float32).reshape(2, 4, 4)
+    rel_dir = tmp_path / "rel"
+    rel_dir.mkdir()
+    mrc_path = rel_dir / "stack.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    df_bad = pd.DataFrame({"_rlnImageName": [f"a@{mrc_path.name}", f"2@{mrc_path.name}"]})
+    bad_star = tmp_path / "bad_non_integer.star"
+    starfile.write_star(str(bad_star), data=df_bad)
+
+    with pytest.raises(ValueError, match="index part is not an integer"):
+        image_loader.StarLoader(str(bad_star), datadir=str(rel_dir), lazy=True)
+
+
+def test_star_loader_rejects_image_indices_out_of_range_for_stack(tmp_path):
+    data = np.arange(2 * 4 * 4, dtype=np.float32).reshape(2, 4, 4)
+    rel_dir = tmp_path / "rel"
+    rel_dir.mkdir()
+    mrc_path = rel_dir / "stack.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    # Third image requested from a two-image stack.
+    df_bad = pd.DataFrame({"_rlnImageName": [f"1@{mrc_path.name}", f"3@{mrc_path.name}"]})
+    bad_star = tmp_path / "bad_out_of_range.star"
+    starfile.write_star(str(bad_star), data=df_bad)
+
+    with pytest.raises(ValueError, match="out of range"):
+        image_loader.StarLoader(str(bad_star), datadir=str(rel_dir), lazy=True)
 
 
 def test_cryosparc_loader_reads_structured_cs(tmp_path):
@@ -472,6 +596,23 @@ def test_cryosparc_loader_rejects_missing_required_fields(tmp_path):
     with open(cs_path, "wb") as f:
         np.save(f, cs)
     with pytest.raises(ValueError, match="blob/idx"):
+        image_loader.CryoSparcLoader(str(cs_path), datadir=str(tmp_path), lazy=True)
+
+
+def test_cryosparc_loader_rejects_blob_indices_out_of_range_for_stack(tmp_path):
+    data = np.arange(2 * 4 * 4, dtype=np.float32).reshape(2, 4, 4)
+    mrc_path = tmp_path / "stack.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    cs_dtype = np.dtype([("blob/idx", np.int32), ("blob/path", "U64")])
+    cs = np.zeros(2, dtype=cs_dtype)
+    cs["blob/idx"] = np.array([0, 2], dtype=np.int32)  # second index out of range
+    cs["blob/path"] = np.array([">stack.mrcs", ">stack.mrcs"])
+    cs_path = tmp_path / "bad_out_of_range.cs"
+    with open(cs_path, "wb") as f:
+        np.save(f, cs)
+
+    with pytest.raises(ValueError, match="out of range"):
         image_loader.CryoSparcLoader(str(cs_path), datadir=str(tmp_path), lazy=True)
 
 

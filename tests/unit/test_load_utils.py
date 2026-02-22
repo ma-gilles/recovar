@@ -45,6 +45,44 @@ def test_load_ctf_params_rejects_bad_param_width(monkeypatch):
         load_utils.load_ctf_params(D=64, ctf_params_pkl="dummy.pkl")
 
 
+def test_load_ctf_params_accepts_list_payload(monkeypatch):
+    ctf_list = [
+        [128, 1.5, 10000, 11000, 0.0, 300, 2.7, 0.1, 0.0],
+        [128, 1.5, 12000, 13000, 5.0, 300, 2.7, 0.1, 0.0],
+    ]
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: ctf_list)
+
+    out = load_utils.load_ctf_params(D=64, ctf_params_pkl="dummy.pkl")
+    assert out.shape == (2, 8)
+    assert np.allclose(out[:, 0], 3.0)
+
+
+def test_load_ctf_params_rejects_non_2d_payload(monkeypatch):
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: np.zeros((9,), dtype=np.float32))
+    with pytest.raises(ValueError, match="must be a 2D array"):
+        load_utils.load_ctf_params(D=64, ctf_params_pkl="dummy.pkl")
+
+
+def test_load_ctf_params_rejects_nonnumeric_payload(monkeypatch):
+    bad = np.array([["a"] * 9], dtype=object)
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: bad)
+    with pytest.raises(ValueError, match="must be numeric"):
+        load_utils.load_ctf_params(D=64, ctf_params_pkl="dummy.pkl")
+
+
+def test_load_ctf_params_rejects_empty_payload(monkeypatch):
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: np.zeros((0, 9), dtype=np.float32))
+    with pytest.raises(ValueError, match="are empty"):
+        load_utils.load_ctf_params(D=64, ctf_params_pkl="dummy.pkl")
+
+
+def test_load_ctf_params_rejects_nonfinite_payload(monkeypatch):
+    bad = np.array([[128, 1.5, np.nan, 11000, 0.0, 300, 2.7, 0.1, 0.0]], dtype=np.float32)
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: bad)
+    with pytest.raises(ValueError, match="non-finite"):
+        load_utils.load_ctf_params(D=64, ctf_params_pkl="dummy.pkl")
+
+
 def test_load_poses_single_file_with_translations_scales_by_D(monkeypatch):
     rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 3, axis=0)
     trans_frac = np.array([[0.0, 0.5], [1.0, 0.25], [0.1, 0.2]], dtype=np.float32)
@@ -75,6 +113,18 @@ def test_load_poses_two_file_input(monkeypatch):
     assert np.allclose(trans_out, trans_frac * 64)
 
 
+def test_load_poses_accepts_list_payload_and_applies_indices(monkeypatch):
+    rots_list = [np.eye(3, dtype=np.float32) * (i + 1) for i in range(4)]
+    trans_list = [[0.0, 0.1], [0.2, 0.3], [0.4, 0.5], [0.6, 0.7]]
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: (rots_list, trans_list))
+
+    ind = np.array([3, 1, 3], dtype=np.int32)
+    rots_out, trans_out, D_out = load_utils.load_poses("poses.pkl", Nimg=3, D=10, ind=ind)
+    assert D_out == 10
+    np.testing.assert_allclose(rots_out[:, 0, 0], np.array([4.0, 2.0, 4.0], dtype=np.float32))
+    np.testing.assert_allclose(trans_out, np.array([[0.6, 0.7], [0.2, 0.3], [0.6, 0.7]], dtype=np.float32) * 10.0)
+
+
 def test_load_poses_index_filter_applies_when_input_is_longer(monkeypatch):
     rots_all = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 5, axis=0)
     trans_all = np.linspace(0.0, 0.9, 10, dtype=np.float32).reshape(5, 2)
@@ -98,6 +148,29 @@ def test_load_poses_index_filter_accepts_boolean_mask_when_input_is_longer(monke
     np.testing.assert_allclose(trans_out, trans_all[[0, 2, 4]] * 80.0)
 
 
+def test_load_poses_applies_index_filter_when_lengths_match_for_duplicate_permuted_indices(monkeypatch):
+    rots_all = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 6, axis=0)
+    rots_all[:, 0, 0] = np.arange(1, 7, dtype=np.float32)
+    trans_all = np.array(
+        [
+            [0.0, 0.1],
+            [0.2, 0.3],
+            [0.4, 0.5],
+            [0.6, 0.7],
+            [0.8, 0.9],
+            [0.1, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    requested = np.array([5, 0, 5, 1, 2, 3], dtype=np.int32)  # len == Nimg, with duplicates/permutation
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: (rots_all, trans_all))
+
+    rots_out, trans_out, _ = load_utils.load_poses("poses.pkl", Nimg=6, D=20, ind=requested)
+
+    np.testing.assert_allclose(rots_out[:, 0, 0], rots_all[requested, 0, 0])
+    np.testing.assert_allclose(trans_out, trans_all[requested] * 20.0)
+
+
 def test_load_poses_index_filter_rejects_bad_masks_or_indices(monkeypatch):
     rots_all = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 5, axis=0)
     trans_all = np.linspace(0.0, 0.9, 10, dtype=np.float32).reshape(5, 2)
@@ -118,6 +191,43 @@ def test_load_poses_rejects_old_pixel_translation_format(monkeypatch):
     trans_pixels = np.array([[2.0, 3.0], [4.0, 5.0]], dtype=np.float32)
     monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: (rots, trans_pixels))
     with pytest.raises(ValueError, match="fractional units"):
+        load_utils.load_poses("poses.pkl", Nimg=2, D=64)
+
+
+def test_load_poses_rejects_negative_values_with_abs_gt_one(monkeypatch):
+    rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 2, axis=0)
+    trans_bad = np.array([[-1.2, 0.1], [0.2, -1.1]], dtype=np.float32)
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: (rots, trans_bad))
+    with pytest.raises(ValueError, match=r"\|value\| <= 1"):
+        load_utils.load_poses("poses.pkl", Nimg=2, D=64)
+
+
+def test_load_poses_rejects_nonnumeric_rotation_or_translation(monkeypatch):
+    rots_bad = np.array([[["a"] * 3] * 3] * 2, dtype=object)
+    trans_ok = np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: (rots_bad, trans_ok))
+    with pytest.raises(ValueError, match="Rotation array must be numeric"):
+        load_utils.load_poses("poses.pkl", Nimg=2, D=64)
+
+    rots_ok = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 2, axis=0)
+    trans_bad = np.array([["x", "y"], ["u", "v"]], dtype=object)
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: (rots_ok, trans_bad))
+    with pytest.raises(ValueError, match="Translation array must be numeric"):
+        load_utils.load_poses("poses.pkl", Nimg=2, D=64)
+
+
+def test_load_poses_rejects_nonfinite_rotation_or_translation(monkeypatch):
+    rots_bad = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 2, axis=0)
+    rots_bad[1, 0, 0] = np.nan
+    trans_ok = np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: (rots_bad, trans_ok))
+    with pytest.raises(ValueError, match="Rotation array contains non-finite"):
+        load_utils.load_poses("poses.pkl", Nimg=2, D=64)
+
+    rots_ok = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 2, axis=0)
+    trans_bad = np.array([[0.1, 0.2], [np.inf, 0.4]], dtype=np.float32)
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: (rots_ok, trans_bad))
+    with pytest.raises(ValueError, match="Translation array contains non-finite"):
         load_utils.load_poses("poses.pkl", Nimg=2, D=64)
 
 

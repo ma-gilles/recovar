@@ -202,9 +202,35 @@ def generate_potential_at_freqs_from_atoms(atoms, voxel_size, freq_coords):
 
 def generate_volume_from_atom_positions_and_types(atom_coords, atom_types, voxel_size, grid_size = None, freq_coords = None, jax_backend = False):
     use_freq_coords = freq_coords is not None
+    atom_coords = np.asarray(atom_coords)
+    atom_types = np.asarray(atom_types).reshape(-1)
+    if atom_coords.ndim != 2 or atom_coords.shape[1] != 3:
+        raise ValueError(f"atom_coords must have shape (N, 3), got {atom_coords.shape}")
+    if atom_coords.shape[0] != atom_types.shape[0]:
+        raise ValueError(
+            f"atom_coords and atom_types length mismatch: {atom_coords.shape[0]} vs {atom_types.shape[0]}"
+        )
+    # Accept mixed/lowercase element names from synthetic inputs by canonicalizing
+    # to the uppercase keys used in atom_coeffs.
+    atom_types = np.char.upper(atom_types.astype(str))
+    unknown = sorted({name for name in np.unique(atom_types) if name not in atom_coeffs})
+    if unknown:
+        preview = ", ".join(unknown[:5])
+        raise ValueError(
+            f"Unknown atom types: {preview}. "
+            "Expected element symbols present in recovar atom_coeffs."
+        )
+    out_real_dtype = np.result_type(atom_coords.dtype, np.float32)
+    if use_freq_coords:
+        out_real_dtype = np.result_type(out_real_dtype, np.asarray(freq_coords).dtype)
+    if np.dtype(out_real_dtype).itemsize <= np.dtype(np.float32).itemsize:
+        out_complex_dtype = np.complex64
+    else:
+        out_complex_dtype = np.complex128
 
     atom_indices = defaultdict(list)
-    [ atom_indices[atom_types[k]].append(k) for k in range(len(atom_types)) ]
+    for k in range(len(atom_types)):
+        atom_indices[atom_types[k]].append(k)
 
     atoms_grouped_by_elements = {}
     for atom_name in atom_indices:
@@ -215,17 +241,17 @@ def generate_volume_from_atom_positions_and_types(atom_coords, atom_types, voxel
 
     # Compute density for each kind of element
     output_shape = freq_coords.shape[0] if use_freq_coords else 3*[grid_size]
-    density = np.zeros(output_shape, dtype = complex)
+    density = np.zeros(output_shape, dtype=out_complex_dtype)
     for atom_name in atoms_grouped_by_elements:
         
         atom_shape_fn = lambda x: five_gaussian_atom_shape(x, atom_coeffs[atom_name])
         if use_freq_coords:
             # density += generate_spectrum_of_molecule_from_atom_coords_at_freq_coords(atoms_grouped_by_elements[atom_name], voxel_size,  freq_coords = freq_coords,  atom_shape_fn = atom_shape_fn, jax_backend = jax_backend)
             xx = generate_spectrum_of_molecule_from_atom_coords_at_freq_coords(atoms_grouped_by_elements[atom_name], voxel_size,  freq_coords = freq_coords,  atom_shape_fn = atom_shape_fn, jax_backend = jax_backend)
-            densityold = density
-            density = densityold + xx
+            density = density + xx.astype(out_complex_dtype, copy=False)
         else:
-            density += generate_spectrum_of_molecule_from_atom_coords(atoms_grouped_by_elements[atom_name],voxel_size , grid_size = grid_size,  atom_shape_fn = atom_shape_fn, jax_backend = jax_backend)
+            xx = generate_spectrum_of_molecule_from_atom_coords(atoms_grouped_by_elements[atom_name],voxel_size , grid_size = grid_size,  atom_shape_fn = atom_shape_fn, jax_backend = jax_backend)
+            density = density + xx.astype(out_complex_dtype, copy=False)
         
         if np.isnan(np.sum(density)):
             import pdb; pdb.set_trace()
@@ -254,7 +280,8 @@ def get_average_atom_shape_fn(atoms):
     # Group atoms by elements
     atom_names = atoms.getData('element')
     atom_indices = defaultdict(list)
-    [ atom_indices[atom_names[k]].append(k) for k in range(len(atom_names)) ]
+    for k in range(len(atom_names)):
+        atom_indices[atom_names[k]].append(k)
 
 
     atom_shape_fns = {}; atom_proportions = {}
@@ -389,4 +416,3 @@ def voltage_to_wavelength(voltage):
     :return: float, The electron wavelength in nm.
     """
     return 12.2643247 / np.sqrt(voltage * 1e3 + 0.978466 * voltage ** 2)
-

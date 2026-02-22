@@ -1,9 +1,11 @@
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from helpers.metrics_regression import compare_metric, metric_direction
@@ -35,11 +37,91 @@ def _run_metrics(output_dir, volumes_prefix, run_args):
         str(output_dir),
     ]
     if run_args:
-        cmd.extend(run_args.split())
+        cmd.extend(shlex.split(run_args))
     subprocess.run(cmd, check=True)
     score_path = output_dir / "test_dataset" / "metrics_plot" / "all_scores.json"
     assert score_path.exists(), f"missing score file at {score_path}"
     return _load_json(score_path)
+
+
+def _resolve_output_dir(tmp_path: Path, name: str) -> Path:
+    """
+    Resolve large-output directory for long tests.
+
+    If LONG_METRICS_OUTPUT_BASE is set, write under that base (recommended on
+    /scratch or /tigress). Otherwise, fall back to pytest tmp_path.
+    """
+    base = os.environ.get("LONG_METRICS_OUTPUT_BASE")
+    if base:
+        out_dir = Path(base) / "pytest_long_metrics" / name
+    else:
+        out_dir = tmp_path / name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir
+
+
+def _assert_cryo_et_subsampling_consistency(particles_star: Path):
+    """Validate tilt/image/ntilts subsampling invariants on a real generated ET STAR."""
+    from recovar import dataset as recovar_dataset
+    from recovar import tilt_dataset
+
+    particles_to_tilts, _ = tilt_dataset.TiltSeriesData.parse_particle_tilt(str(particles_star))
+    n_particles = len(particles_to_tilts)
+    assert n_particles > 0, "expected at least one particle group in tilt STAR"
+
+    keep_a = 0
+    keep_b = 1 if n_particles > 1 else 0
+
+    tilt_ind_file = np.array([keep_a, keep_b, keep_a, -3, n_particles + 100], dtype=np.int32)
+    candidate_images = np.concatenate(
+        [
+            np.asarray(particles_to_tilts[keep_a], dtype=np.int32),
+            np.asarray(particles_to_tilts[keep_b], dtype=np.int32),
+        ]
+    )
+    assert candidate_images.size > 0, "expected non-empty tilt indices for selected particles"
+
+    ind_file = np.array(
+        [
+            int(candidate_images[-1]),
+            int(candidate_images[0]),
+            int(candidate_images[-1]),
+            int(candidate_images[0]) + 100_000,  # out-of-range image id (should be ignored)
+        ],
+        dtype=np.int32,
+    )
+
+    split = recovar_dataset.get_split_tilt_indices(
+        particles_file=str(particles_star),
+        ind_file=ind_file,
+        tilt_ind_file=tilt_ind_file,
+        particle_halfset_indices_file=[
+            np.array([keep_b, keep_a, keep_b], dtype=np.int32),
+            np.array([], dtype=np.int32),
+        ],
+    )
+    half0 = np.asarray(split[0], dtype=np.int32)
+    half1 = np.asarray(split[1], dtype=np.int32)
+
+    assert np.intersect1d(half0, half1).size == 0
+    allowed_image_values = set(candidate_images.tolist()) & set(ind_file.tolist())
+    assert set(half0.tolist()).issubset(allowed_image_values)
+    assert half1.size == 0
+
+    # ntilts subsampling: at most one tilt kept per selected particle when ntilts=1.
+    split_ntilts = recovar_dataset.get_split_tilt_indices(
+        particles_file=str(particles_star),
+        tilt_ind_file=np.array([keep_a, keep_b], dtype=np.int32),
+        ntilts=1,
+        particle_halfset_indices_file=[
+            np.array([keep_a, keep_b], dtype=np.int32),
+            np.array([], dtype=np.int32),
+        ],
+    )
+    kept = np.asarray(split_ntilts[0], dtype=np.int32)
+    for pidx in np.unique(np.array([keep_a, keep_b], dtype=np.int32)):
+        particle_tilts = np.asarray(particles_to_tilts[int(pidx)], dtype=np.int32)
+        assert np.intersect1d(kept, particle_tilts).size <= 1
 
 
 def test_run_test_all_metrics_regression_against_baseline(tmp_path):
@@ -64,7 +146,7 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
     if not Path(f"{volumes_prefix}0000.mrc").exists():
         pytest.skip(f"invalid LONG_METRICS_VOLUMES_DIR prefix: {volumes_prefix}")
 
-    current = _run_metrics(tmp_path / "current", volumes_prefix, run_args)
+    current = _run_metrics(_resolve_output_dir(tmp_path, "current"), volumes_prefix, run_args)
 
     if write_baseline or (not baseline_json.exists()):
         baseline_json.parent.mkdir(parents=True, exist_ok=True)
@@ -92,3 +174,67 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
 
     assert checked > 0, "no numeric metrics were checked; verify baseline/current score files"
     assert not failures, "metric regressions:\n" + "\n".join(failures)
+
+
+def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tmp_path):
+    """
+    Very long cryo-ET regression + subsampling consistency test.
+
+    Runs run_test_all_metrics with ET settings and validates:
+    - tilt/image subsampling behavior on generated particles.star
+    - numeric metric regression against a dedicated ET baseline
+    """
+    volumes_prefix = _require_env("LONG_METRICS_VOLUMES_DIR")
+    shared_baseline = Path(_require_env("LONG_METRICS_BASELINE_JSON"))
+    baseline_json = Path(
+        os.environ.get(
+            "LONG_METRICS_ET_BASELINE_JSON",
+            str(shared_baseline.with_name(shared_baseline.stem + "_cryo_et.json")),
+        )
+    )
+    run_args = os.environ.get(
+        "LONG_METRICS_ET_RUN_ARGS",
+        "--grid-size 128 --n-images 50000 --noise-level 1.0 --contrast-std 0.1 "
+        "--tomo-tilts 7 --noise-model radial_per_tilt --noise-increase-per-tilt 0.05",
+    )
+    tol_frac = float(os.environ.get("LONG_METRICS_ET_TOL_FRAC", os.environ.get("LONG_METRICS_TOL_FRAC", "0.10")))
+    write_baseline = os.environ.get("LONG_METRICS_WRITE_BASELINE", "0") == "1" or (
+        os.environ.get("LONG_METRICS_ET_WRITE_BASELINE", "0") == "1"
+    )
+
+    if not Path(f"{volumes_prefix}0000.mrc").exists():
+        pytest.skip(f"invalid LONG_METRICS_VOLUMES_DIR prefix: {volumes_prefix}")
+
+    output_dir = _resolve_output_dir(tmp_path, "current_cryo_et")
+    current = _run_metrics(output_dir, volumes_prefix, run_args)
+
+    particles_star = output_dir / "test_dataset" / "particles.star"
+    assert particles_star.exists(), f"expected cryo-ET particles.star at {particles_star}"
+    _assert_cryo_et_subsampling_consistency(particles_star)
+
+    if write_baseline or (not baseline_json.exists()):
+        baseline_json.parent.mkdir(parents=True, exist_ok=True)
+        with open(baseline_json, "w") as f:
+            json.dump(current, f, indent=2, sort_keys=True)
+        pytest.skip(f"ET baseline written to {baseline_json}")
+
+    baseline = _load_json(baseline_json)
+
+    failures = []
+    checked = 0
+    shared_keys = sorted(set(current.keys()) & set(baseline.keys()))
+    for key in shared_keys:
+        cur = current[key]
+        base = baseline[key]
+        if not isinstance(cur, (int, float)) or not isinstance(base, (int, float)):
+            continue
+        direction = metric_direction(key)
+        if direction == "ignore":
+            continue
+        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac)
+        checked += 1
+        if not ok:
+            failures.append(f"{key}: current={cur} baseline={base} ({msg})")
+
+    assert checked > 0, "no numeric ET metrics were checked; verify ET baseline/current score files"
+    assert not failures, "ET metric regressions:\n" + "\n".join(failures)

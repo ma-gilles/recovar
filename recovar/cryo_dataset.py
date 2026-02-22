@@ -286,6 +286,14 @@ class TiltSeriesDataset(ParticleImageDataset):
             tilt_file_option: 'relion5' or 'warp' for tilt ordering
         """
         start_time = time.time()
+
+        if num_tilts is not None:
+            if not isinstance(num_tilts, (int, np.integer)):
+                raise TypeError("num_tilts must be an integer or None")
+            num_tilts = int(num_tilts)
+            if num_tilts < 0:
+                logger.warning("num_tilts=%d < 0; using all available tilts per particle", num_tilts)
+                num_tilts = None
         
         # Initialize base dataset
         super().__init__(starfile_path, lazy=lazy, ind=ind, **kwargs)
@@ -538,7 +546,7 @@ class TiltSeriesDataset(ParticleImageDataset):
         max_tilts = 0
         for tilts in self._particle_tilts:
             n_available = len(tilts)
-            n_actual = min(self.num_tilts, n_available) if self.num_tilts else n_available
+            n_actual = min(self.num_tilts, n_available) if self.num_tilts is not None else n_available
             max_tilts = max(max_tilts, n_actual)
         return max_tilts
     
@@ -733,6 +741,7 @@ class ImageCountBatchLoader:
         self.dataset = dataset
         self.batch_size = batch_size
         self.pad_to_batch = pad_to_batch
+        effective_num_tilts = getattr(dataset, "num_tilts", None)
         
         # Precompute tilts per particle. For subset wrappers, map subset indices
         # back to parent particle ids so duplicate/reordered subsets are counted
@@ -745,14 +754,31 @@ class ImageCountBatchLoader:
         else:
             subset_indices = getattr(dataset, "indices", None)
             parent_dataset = getattr(dataset, "dataset", None)
-            if subset_indices is not None and parent_dataset is not None and hasattr(parent_dataset, "_particle_tilts"):
+            if subset_indices is not None and parent_dataset is not None:
                 mapped_indices = _normalize_subset_indices(
                     np.asarray(subset_indices),
-                    len(parent_dataset._particle_tilts),
+                    len(parent_dataset),
                     name="subset indices",
                 )
-                particle_tilts_src = parent_dataset._particle_tilts
-                particle_tilts_list = [particle_tilts_src[i] for i in mapped_indices]
+                parent_cursor = parent_dataset
+                while True:
+                    if effective_num_tilts is None:
+                        effective_num_tilts = getattr(parent_cursor, "num_tilts", None)
+                    if hasattr(parent_cursor, "_particle_tilts"):
+                        particle_tilts_src = parent_cursor._particle_tilts
+                        particle_tilts_list = [particle_tilts_src[i] for i in mapped_indices]
+                        break
+                    nested_indices = getattr(parent_cursor, "indices", None)
+                    nested_parent = getattr(parent_cursor, "dataset", None)
+                    if nested_indices is None or nested_parent is None:
+                        break
+                    nested_mapped_indices = _normalize_subset_indices(
+                        np.asarray(nested_indices),
+                        len(nested_parent),
+                        name="subset indices",
+                    )
+                    mapped_indices = nested_mapped_indices[mapped_indices]
+                    parent_cursor = nested_parent
 
         if particle_tilts_list is None:
             particle_groups = getattr(dataset, "particle_groups", None)
@@ -765,7 +791,7 @@ class ImageCountBatchLoader:
 
         for particle_tilts in particle_tilts_list:
             n_available = len(particle_tilts)
-            n_actual = min(dataset.num_tilts, n_available) if dataset.num_tilts else n_available
+            n_actual = min(effective_num_tilts, n_available) if effective_num_tilts is not None else n_available
             self.tilts_counts.append(n_actual)
         
         # int32 is enough for per-particle tilt counts and reduces memory footprint.
@@ -811,6 +837,11 @@ class ImageCountBatchLoader:
             while particle_idx < len(self.dataset) and current_count < self.batch_size:
                 images, p_idx, t_indices = self.dataset[particle_idx]
                 n_images = images.shape[0]
+
+                # Skip particles that currently yield zero selected tilts/images.
+                if n_images <= 0:
+                    particle_idx += 1
+                    continue
                 
                 # Check if adding would exceed batch size
                 if current_count + n_images > self.batch_size and current_count > 0:
@@ -826,10 +857,11 @@ class ImageCountBatchLoader:
             # Handle empty batch or oversized single particle
             if len(batch_images) == 0 and particle_idx < len(self.dataset):
                 images, p_idx, t_indices = self.dataset[particle_idx]
-                batch_images.append(images)
-                batch_particle_ids.append(np.full(images.shape[0], p_idx, dtype=np.int32))
-                batch_tilt_ids.append(t_indices)
-                current_count = images.shape[0]
+                if images.shape[0] > 0:
+                    batch_images.append(images)
+                    batch_particle_ids.append(np.full(images.shape[0], p_idx, dtype=np.int32))
+                    batch_tilt_ids.append(t_indices)
+                    current_count = images.shape[0]
                 particle_idx += 1
             
             if len(batch_images) > 0:
@@ -882,11 +914,18 @@ class ParticleSubset:
     def _max_tilts_per_particle(self) -> int:
         """Get max tilts in subset."""
         max_tilts = 0
-        particle_tilts_list = getattr(self.dataset, "_particle_tilts", list(self.dataset.particle_groups.values()))
+        particle_tilts_list = getattr(self.dataset, "_particle_tilts", None)
+        if particle_tilts_list is None:
+            particle_groups = getattr(self.dataset, "particle_groups", None)
+            if particle_groups is None:
+                raise AttributeError(
+                    "ParticleSubset parent dataset must expose _particle_tilts or particle_groups"
+                )
+            particle_tilts_list = list(particle_groups.values())
         for idx in self.indices:
             particle_tilts = particle_tilts_list[idx]
             n_available = len(particle_tilts)
-            n_actual = min(self.dataset.num_tilts, n_available) if self.dataset.num_tilts else n_available
+            n_actual = min(self.dataset.num_tilts, n_available) if self.dataset.num_tilts is not None else n_available
             max_tilts = max(max_tilts, n_actual)
         return max_tilts
 

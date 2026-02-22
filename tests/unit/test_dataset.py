@@ -202,6 +202,25 @@ def test_cryoemdataset_minimal_and_noise_access():
     assert ctf.dtype == ds.CTF_dtype
 
 
+def test_cryoemdataset_casts_arrays_to_expected_dtypes():
+    ctf_params = np.zeros((2, 9), dtype=np.float64)
+    rots = np.tile(np.eye(3, dtype=np.float64), (2, 1, 1))
+    trans = np.array([[1, 2], [3, 4]], dtype=np.float64)
+
+    ds = dataset.CryoEMDataset(
+        image_stack=None,
+        voxel_size=1.0,
+        rotation_matrices=rots,
+        translations=trans,
+        CTF_params=ctf_params,
+        grid_size=4,
+    )
+
+    assert ds.rotation_matrices.dtype == np.float32
+    assert ds.translations.dtype == np.float32
+    assert ds.CTF_params.dtype == np.float32
+
+
 def test_get_default_dataset_option_has_expected_keys():
     d = dataset.get_default_dataset_option()
     for key in [
