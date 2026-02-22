@@ -29,7 +29,7 @@ class RadialNoiseModel():
         self.noise_variance_radial = noise_variance_radial
         self.image_shape = image_shape if image_shape is not None else (2 * (len(noise_variance_radial)+1) , 2 * (len(noise_variance_radial)+1) )
     def get(self, *args, **kwargs):
-        return make_radial_noise(self.noise_variance_radial, self.image_shape)[None]
+        return make_radial_noise(self.noise_variance_radial, self.image_shape).reshape(1, -1)
     
     def set_variance(self, noise_variance_radial):
         self.noise_variance_radial = noise_variance_radial
