@@ -5,7 +5,7 @@ pytest.importorskip("jax")
 pytest.importorskip("torch")
 
 from helpers import tiny_synthetic
-from recovar import dataset, core
+from recovar import dataset, core, utils
 
 pytestmark = pytest.mark.unit
 
@@ -114,3 +114,48 @@ def test_tiny_tilt_figure_out_halfsets_respects_ind_intersection(tmp_path):
     hs = dataset.figure_out_halfsets(args)
     np.testing.assert_array_equal(hs[0], np.array([1], dtype=np.int32))
     np.testing.assert_array_equal(hs[1], np.array([4, 5], dtype=np.int32))
+
+
+def test_tiny_tilt_loading_with_reordered_ind_preserves_image_identity(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
+    reordered_ind = np.array([5, 1, 4], dtype=np.int32)
+
+    cryo = dataset.load_cryodrgn_dataset(
+        particles_file=files["particles_star"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=str(tmp_path),
+        ind=reordered_ind,
+        lazy=True,
+        tilt_series=True,
+        tilt_series_ctf="relion5",
+    )
+
+    # Image loader returns subset-local indices [0..n-1], but image payloads must
+    # correspond exactly to the requested original rows in `reordered_ind`.
+    batches = list(cryo.get_image_generator(batch_size=2))
+    got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
+    got_local_idx = np.concatenate([np.array(b[2]).reshape(-1) for b in batches], axis=0)
+    np.testing.assert_array_equal(got_local_idx, np.array([0, 1, 2], dtype=np.int32))
+
+    original_images = utils.load_mrc(files["particles_mrcs"])
+    np.testing.assert_allclose(got_images, original_images[reordered_ind], atol=1e-6)
+
+
+def test_tiny_tilt_split_indices_accepts_in_memory_halfsets_and_arrays(tmp_path):
+    files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
+
+    split = dataset.get_split_tilt_indices(
+        particles_file=files["particles_star"],
+        # Keep particle groups g1 and g3 only.
+        tilt_ind_file=np.array([0, 2], dtype=np.int32),
+        # Restrict to these allowed image indices.
+        ind_file=np.array([0, 2, 3, 5], dtype=np.int32),
+        # Deterministic particle halfsets in-memory, no pickle file.
+        particle_halfset_indices_file=[np.array([0], dtype=np.int32), np.array([2], dtype=np.int32)],
+        datadir=str(tmp_path),
+        ntilts=1,
+    )
+    # ntilts=1 keeps one image per particle according to deterministic tilt ordering.
+    np.testing.assert_array_equal(split[0], np.array([0], dtype=np.int32))
+    np.testing.assert_array_equal(split[1], np.array([2], dtype=np.int32))

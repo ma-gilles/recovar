@@ -181,7 +181,9 @@ def test_get_split_tilt_indices_precomputed_halfsets_respected_with_image_filter
         particle_halfset_indices_file=str(halfsets_file),
     )
 
-    np.testing.assert_array_equal(split[0], np.array([1, 2, 4, 7], dtype=np.int32))
+    # Preserve particle/tilt traversal order from halfset [0,2]:
+    # particle 0 contributes [1,4], particle 2 contributes [2,7].
+    np.testing.assert_array_equal(split[0], np.array([1, 4, 2, 7], dtype=np.int32))
     np.testing.assert_array_equal(split[1], np.array([], dtype=np.int32))
     assert np.intersect1d(split[0], split[1]).size == 0
     np.testing.assert_array_equal(np.sort(np.concatenate(split)), np.array([1, 2, 4, 7], dtype=np.int32))

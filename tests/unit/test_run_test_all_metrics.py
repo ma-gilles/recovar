@@ -255,6 +255,39 @@ def test_metric_direction_recognizes_known_tokens_and_defaults_to_ignore():
     assert rtam.metric_direction("unclassified_metric_name") == "ignore"
 
 
+def test_load_u_real_for_metrics_prefers_selective_api():
+    class _PO:
+        def get_u_real(self, n_pcs):
+            assert n_pcs == 3
+            return np.ones((3, 2, 2, 2), dtype=np.float32)
+
+        def get(self, key):
+            raise AssertionError("legacy get('u_real') should not be called when get_u_real exists")
+
+    out = rtam.load_u_real_for_metrics(_PO(), 3)
+    assert out.shape == (3, 2, 2, 2)
+
+
+def test_load_u_real_for_metrics_falls_back_to_legacy_get():
+    class _PO:
+        def get(self, key):
+            assert key == "u_real"
+            return np.arange(5 * 2, dtype=np.float32).reshape(5, 2)
+
+    out = rtam.load_u_real_for_metrics(_PO(), 3)
+    assert out.shape == (3, 2)
+    np.testing.assert_array_equal(out, np.arange(6, dtype=np.float32).reshape(3, 2))
+
+
+def test_load_u_real_for_metrics_rejects_nonpositive_request():
+    class _PO:
+        def get(self, key):
+            return np.zeros((1, 2), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="n_pcs must be positive"):
+        rtam.load_u_real_for_metrics(_PO(), 0)
+
+
 def test_compare_scores_against_baseline_skips_non_numeric_values():
     current = {
         "mean_fsc": 0.80,
@@ -279,6 +312,16 @@ def test_compare_scores_against_baseline_with_no_comparable_metrics():
     assert checked == 0
     assert failures == []
     assert details == {}
+
+
+def test_compare_scores_against_baseline_skips_boolean_values():
+    current = {"flag_metric": True, "mean_fsc": 0.8}
+    baseline = {"flag_metric": False, "mean_fsc": 0.79}
+    checked, failures, details = rtam.compare_scores_against_baseline(current, baseline, tol_frac=0.01)
+    assert checked == 1
+    assert failures == []
+    assert "flag_metric" not in details
+    assert "mean_fsc" in details
 
 
 def test_compute_noise_variance_metrics_per_tilt_without_dose_indices_returns_empty(tmp_path):

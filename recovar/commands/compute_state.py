@@ -28,10 +28,22 @@ def add_args(parser: argparse.ArgumentParser):
 
 
 def compute_state(args):
-    po = o.PipelineOutput(args.result_dir + '/')
-    zs_all = po.get('zs')
-    cov_zs_all = po.get('cov_zs')
-    contrasts_all = po.get('contrasts')
+    # Support programmatic callers that may pass a minimal args namespace.
+    zdim1 = bool(getattr(args, "zdim1", False))
+    no_z_regularization = bool(getattr(args, "no_z_regularization", False))
+    lazy = bool(getattr(args, "lazy", False))
+    n_bins = getattr(args, "n_bins", 50)
+    bfactor = getattr(args, "Bfactor", 0.0)
+    maskrad_fraction = getattr(args, "maskrad_fraction", 20)
+    n_min_particles = getattr(args, "n_min_particles", None)
+    save_all_estimates = bool(getattr(args, "save_all_estimates", False))
+    apply_global_filtering = bool(getattr(args, "apply_global_filtering", False))
+    fsc_mask_radius = getattr(args, "fsc_mask_radius", None)
+    fsc_mask_edgewidth = getattr(args, "fsc_mask_edgewidth", None)
+
+    result_dir = os.fspath(args.result_dir)
+    outdir = os.fspath(args.outdir)
+    po = o.PipelineOutput(os.path.join(result_dir, ""))
     
     params = getattr(po, "params", None)
     input_args = params.get('input_args') if hasattr(params, "get") else None
@@ -79,9 +91,9 @@ def compute_state(args):
         if not np.all(np.isfinite(target_zs)):
             raise ValueError("Target zs contains non-finite values (NaN/Inf).")
 
-        output_folder = args.outdir + '/'
+        output_folder = os.path.join(outdir, "")
 
-        if args.zdim1:
+        if zdim1:
             if target_zs.ndim > 1 and target_zs.shape[-1] != 1:
                 raise ValueError(
                     f"--zdim1 expects scalar/1D latent points or Nx1 arrays; got shape {target_zs.shape}"
@@ -96,27 +108,52 @@ def compute_state(args):
                 logger.warning("Did you mean to use --zdim1?")
                 target_zs = target_zs[None]
 
-        if zdim not in zs_all:
-            options = ','.join(str(e) for e in zs_all.keys())
+        if hasattr(po, "get_embedding_keys"):
+            zs_keys = po.get_embedding_keys("zs")
+            cov_keys = po.get_embedding_keys("cov_zs")
+            contrast_keys = po.get_embedding_keys("contrasts")
+        else:
+            zs_all = po.get('zs')
+            cov_zs_all = po.get('cov_zs')
+            contrasts_all = po.get('contrasts')
+            zs_keys = list(zs_all.keys())
+            cov_keys = list(cov_zs_all.keys())
+            contrast_keys = list(contrasts_all.keys())
+
+        if zdim not in zs_keys:
+            options = ','.join(str(e) for e in zs_keys)
             raise ValueError(f"zdim {zdim} from provided latent points is not found in embedding results. Options are: {options}")
 
-        zdim_key = f"{zdim}_noreg" if args.no_z_regularization else zdim
-        if zdim_key not in zs_all or zdim_key not in contrasts_all or zdim_key not in cov_zs_all:
+        zdim_key = f"{zdim}_noreg" if no_z_regularization else zdim
+        if zdim_key not in zs_keys or zdim_key not in contrast_keys or zdim_key not in cov_keys:
             raise ValueError(
                 f"Requested embedding key {zdim_key} is missing in pipeline output zs/contrasts/cov_zs."
             )
 
-        cryos = po.get('lazy_dataset') if args.lazy else po.get('dataset')
-        embedding.set_contrasts_in_cryos(cryos, contrasts_all[zdim_key])
-        zs = zs_all[zdim_key]
-        cov_zs = cov_zs_all[zdim_key]
-        n_bins = args.n_bins
+        if hasattr(po, "get_embedding_component"):
+            contrasts_key = po.get_embedding_component('contrasts', zdim_key)
+            zs_key = po.get_embedding_component('zs', zdim_key)
+            cov_zs_key = po.get_embedding_component('cov_zs', zdim_key)
+        else:
+            contrasts_key = contrasts_all[zdim_key]
+            zs_key = zs_all[zdim_key]
+            cov_zs_key = cov_zs_all[zdim_key]
+
+        # Keep memory footprint low for downstream JAX kernels.
+        contrasts_key = np.asarray(contrasts_key).astype(np.float32, copy=False)
+        zs_key = np.asarray(zs_key).astype(np.float32, copy=False)
+        cov_zs_key = np.asarray(cov_zs_key).astype(np.float32, copy=False)
+
+        cryos = po.get('lazy_dataset') if lazy else po.get('dataset')
+        embedding.set_contrasts_in_cryos(cryos, contrasts_key)
+        zs = zs_key
+        cov_zs = cov_zs_key
         o.mkdir_safe(output_folder)
         logger.info(args)
 
         # Get the mask from pipeline output for FSC filtering
         fsc_mask = None
-        if args.apply_global_filtering:
+        if apply_global_filtering:
             try:
                 fsc_mask = po.get('volume_mask')
                 logger.info("Using pipeline output volume_mask for FSC filtering")
@@ -124,13 +161,13 @@ def compute_state(args):
                 logger.warning("Could not load volume_mask from pipeline output, proceeding without FSC mask")
 
         o.compute_and_save_reweighted(
-            cryos, target_zs, zs, cov_zs, output_folder, args.Bfactor,
-            n_bins=n_bins, maskrad_fraction=args.maskrad_fraction,
-            n_min_particles=args.n_min_particles, save_all_estimates=args.save_all_estimates,
-            apply_global_filtering=args.apply_global_filtering,
+            cryos, target_zs, zs, cov_zs, output_folder, bfactor,
+            n_bins=n_bins, maskrad_fraction=maskrad_fraction,
+            n_min_particles=n_min_particles, save_all_estimates=save_all_estimates,
+            apply_global_filtering=apply_global_filtering,
             fsc_mask=fsc_mask,
-            fsc_mask_radius=args.fsc_mask_radius,
-            fsc_mask_edgewidth=args.fsc_mask_edgewidth
+            fsc_mask_radius=fsc_mask_radius,
+            fsc_mask_edgewidth=fsc_mask_edgewidth
         )
         o.move_to_one_folder(output_folder, target_zs.shape[0])
     finally:

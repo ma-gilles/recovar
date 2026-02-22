@@ -275,7 +275,16 @@ def plot_summary_t(pipeline_output, n_eigs = 3, filename = None):
     
     # Infer volume shape from mean volume
     mean_vol = pipeline_output.get('mean')
-    volume_shape = tuple(np.round(np.power(mean_vol.size, 1/3)).astype(int) for _ in range(3))
+    D = int(np.round(np.power(mean_vol.size, 1 / 3)))
+    volume_shape = (D, D, D)
+
+    def _load_u_real_for_summary(pipeline_output_obj, n_requested):
+        n_requested = int(n_requested)
+        if n_requested <= 0:
+            return np.empty((0, *volume_shape), dtype=np.float32)
+        if hasattr(pipeline_output_obj, "get_u_real"):
+            return np.asarray(pipeline_output_obj.get_u_real(n_requested))
+        return np.asarray(pipeline_output_obj.get('u_real')[:n_requested])
     
     def get_projection(vol_1d, axis):
         """Get projection along specified axis"""
@@ -349,8 +358,9 @@ def plot_summary_t(pipeline_output, n_eigs = 3, filename = None):
     plot_vol(pipeline_output.get('volume_mask'), 1, from_ft = False,name = 'mask')
     plot_vol(pipeline_output.get('variance'), 2, from_ft = False,name = 'variance')
 
-    u = pipeline_output.get('u_real')
-    for k in range(n_eigs):
+    u = _load_u_real_for_summary(pipeline_output, n_eigs)
+    n_eigs_eff = int(min(n_eigs, u.shape[0]))
+    for k in range(n_eigs_eff):
         plot_vol(u[k], k+3, from_ft = False, cmap = 'seismic' ,name = f"PC {k}", symmetric = True)
 
     plt.subplots_adjust(wspace=0, hspace=0)

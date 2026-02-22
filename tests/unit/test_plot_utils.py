@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import matplotlib.pyplot as plt
 
 pytest.importorskip("jax")
 
@@ -65,3 +66,38 @@ def test_plot_noise_profile_2d_per_tilt():
     )
     fig, ax = plot_utils.plot_noise_profile(po, yscale="log")
     assert fig is not None and ax is not None
+
+
+def test_plot_summary_t_prefers_selective_get_u_real_api():
+    calls = {"get_u_real": 0}
+
+    class _PO:
+        def get(self, key):
+            if key == "u_real":
+                raise AssertionError("legacy get('u_real') path should not be used")
+            if key in {"mean", "volume_mask", "variance"}:
+                return np.zeros(8, dtype=np.float32)
+            raise KeyError(key)
+
+        def get_u_real(self, n_pcs):
+            calls["get_u_real"] += 1
+            assert n_pcs == 2
+            return np.zeros((2, 2, 2, 2), dtype=np.float32)
+
+    plot_utils.plot_summary_t(_PO(), n_eigs=2, filename=None)
+    assert calls["get_u_real"] == 1
+    plt.close("all")
+
+
+def test_plot_summary_t_clamps_n_eigs_to_available_components():
+    class _PO:
+        def get(self, key):
+            if key in {"mean", "volume_mask", "variance"}:
+                return np.zeros(8, dtype=np.float32)
+            if key == "u_real":
+                return np.zeros((1, 2, 2, 2), dtype=np.float32)
+            raise KeyError(key)
+
+    # Request more eigenvectors than available: should not raise.
+    plot_utils.plot_summary_t(_PO(), n_eigs=5, filename=None)
+    plt.close("all")

@@ -43,7 +43,11 @@ def test_main_strips_very_low_memory_from_pipeline_commands(monkeypatch, tmp_pat
         calls.append((list(cmd), cwd))
         return 0
 
+    def fake_check_output(cmd, env, cwd, text):
+        return "imported=/tmp/fake/recovar/__init__.py\ncommit=deadbeef\n"
+
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(mod.subprocess, "check_output", fake_check_output)
 
     argv = [
         "compare_pipeline_same_dataset.py",
