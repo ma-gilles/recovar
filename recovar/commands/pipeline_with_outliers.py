@@ -169,7 +169,7 @@ def run_pipeline_with_outlier_removal():
         logger.info("Running comprehensive outlier detection...")
         
         # Create command line arguments for outlier detection
-        original_argv = sys.argv
+        original_argv = list(sys.argv)
         
         # Build argument list for outlier detection
         outlier_argv = [
@@ -210,17 +210,15 @@ def run_pipeline_with_outlier_removal():
             if hasattr(args, 'particles_per_cluster') and args.particles_per_cluster is not None:
                 outlier_argv.extend(['--particles-per-cluster', str(args.particles_per_cluster)])
         
-        # Temporarily replace sys.argv and run outlier detection
+        # Temporarily replace sys.argv and run outlier detection.
+        # Always restore argv to avoid leaking command-line state to subsequent calls.
         sys.argv = outlier_argv
-        from recovar.commands.outlier_detection import main as outlier_main
-        outlier_main()
-        logger.info("Comprehensive outlier detection completed successfully.")
-        # except Exception as e:
-        #     logger.error(f"Comprehensive outlier detection failed: {e}")
-        #     sys.exit(1)
-        # finally:
-        #     # Restore original argv
-        #     sys.argv = original_argv
+        try:
+            from recovar.commands.outlier_detection import main as outlier_main
+            outlier_main()
+            logger.info("Comprehensive outlier detection completed successfully.")
+        finally:
+            sys.argv = original_argv
         
         # Load the combined inliers indices for the next round
         outlier_output_dir = os.path.join(args.outdir, 'outlier_detection')
@@ -318,4 +316,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -380,6 +380,66 @@ def test_image_count_batch_loader_padding_marks_invalid_entries():
     np.testing.assert_array_equal(tidx, np.array([0, 1, -1], dtype=np.int32))
 
 
+def test_image_count_batch_loader_skips_zero_image_particles():
+    class _SparseTiltDataset:
+        def __init__(self):
+            self.particle_groups = {
+                "p0": np.array([], dtype=np.int32),          # 0 selected
+                "p1": np.array([10, 11], dtype=np.int32),    # 2 selected
+                "p2": np.array([], dtype=np.int32),          # 0 selected
+                "p3": np.array([30], dtype=np.int32),        # 1 selected
+            }
+            self.num_tilts = None
+
+        def __len__(self):
+            return 4
+
+        def __getitem__(self, idx):
+            tilts = list(self.particle_groups.values())[int(idx)]
+            images = np.ones((len(tilts), 8, 8), dtype=np.float32) * (int(idx) + 1)
+            return images, int(idx), tilts
+
+    loader = cryo_dataset.ImageCountBatchLoader(_SparseTiltDataset(), batch_size=2, pad_to_batch=False)
+
+    assert loader.total_images == 3
+    assert len(loader) == 2
+
+    batches = list(loader)
+    assert len(batches) == len(loader)
+    np.testing.assert_array_equal(
+        [np.asarray(batch[0]).shape[0] for batch in batches],
+        np.array([2, 1], dtype=np.int32),
+    )
+    emitted_particles = np.concatenate([np.asarray(b[1]).reshape(-1) for b in batches], axis=0)
+    np.testing.assert_array_equal(emitted_particles, np.array([1, 1, 3], dtype=np.int32))
+
+
+def test_image_count_batch_loader_all_zero_particles_emits_no_batches():
+    class _AllZeroTiltDataset:
+        def __init__(self):
+            self.particle_groups = {
+                "p0": np.array([], dtype=np.int32),
+                "p1": np.array([], dtype=np.int32),
+            }
+            self.num_tilts = None
+
+        def __len__(self):
+            return 2
+
+        def __getitem__(self, idx):
+            _ = idx
+            return (
+                np.zeros((0, 8, 8), dtype=np.float32),
+                -1,
+                np.zeros((0,), dtype=np.int32),
+            )
+
+    loader = cryo_dataset.ImageCountBatchLoader(_AllZeroTiltDataset(), batch_size=3, pad_to_batch=True)
+    assert loader.total_images == 0
+    assert len(loader) == 0
+    assert list(loader) == []
+
+
 def test_image_count_batch_loader_subset_wrapper_preserves_duplicate_parent_mapping():
     class _ParentTiltDataset:
         def __init__(self):
@@ -414,6 +474,128 @@ def test_image_count_batch_loader_subset_wrapper_preserves_duplicate_parent_mapp
 
     np.testing.assert_array_equal(emitted_particles, np.array([2, 0, 0, 2], dtype=np.int32))
     np.testing.assert_array_equal(emitted_tilts, np.array([30, 10, 11, 30], dtype=np.int32))
+
+
+def test_image_count_batch_loader_subset_wrapper_uses_parent_num_tilts_cap():
+    class _ParentTiltDataset:
+        def __init__(self):
+            self._particle_tilts = [
+                np.array([0, 1, 2], dtype=np.int32),
+                np.array([10, 11], dtype=np.int32),
+            ]
+            self.num_tilts = 1
+
+        def __len__(self):
+            return len(self._particle_tilts)
+
+        def __getitem__(self, idx):
+            tilt_ids = self._particle_tilts[int(idx)]
+            tilt_ids = tilt_ids[: self.num_tilts]
+            images = np.ones((len(tilt_ids), 8, 8), dtype=np.float32)
+            return images, int(idx), tilt_ids
+
+    subset = torch.utils.data.Subset(_ParentTiltDataset(), [0, 1, 0])
+    loader = cryo_dataset.ImageCountBatchLoader(subset, batch_size=2, pad_to_batch=False)
+
+    assert loader.total_images == 3
+    assert len(loader) == 2
+    batches = list(loader)
+    assert len(batches) == len(loader)
+    emitted_tilts = np.concatenate([np.asarray(b[2]).reshape(-1) for b in batches], axis=0)
+    np.testing.assert_array_equal(emitted_tilts, np.array([0, 10, 0], dtype=np.int32))
+
+
+def test_image_count_batch_loader_nested_subset_wrapper_preserves_mapping_and_duplicates():
+    class _ParentTiltDataset:
+        def __init__(self):
+            self._particle_tilts = [
+                np.array([0, 1], dtype=np.int32),       # 2 images
+                np.array([10], dtype=np.int32),         # 1 image
+                np.array([20, 21, 22], dtype=np.int32), # 3 images
+                np.array([30], dtype=np.int32),         # 1 image
+            ]
+            self.num_tilts = None
+
+        def __len__(self):
+            return len(self._particle_tilts)
+
+        def __getitem__(self, idx):
+            tilt_ids = self._particle_tilts[int(idx)]
+            images = np.ones((len(tilt_ids), 8, 8), dtype=np.float32) * (int(idx) + 1)
+            return images, int(idx), tilt_ids
+
+    parent = _ParentTiltDataset()
+    subset_lvl1 = torch.utils.data.Subset(parent, [3, 1, 0])      # maps local->[3,1,0]
+    subset_lvl2 = torch.utils.data.Subset(subset_lvl1, [2, 0, 2]) # maps to base [0,3,0]
+
+    loader = cryo_dataset.ImageCountBatchLoader(subset_lvl2, batch_size=3, pad_to_batch=False)
+
+    assert loader.total_images == 5  # base[0]=2 + base[3]=1 + base[0]=2
+    assert len(loader) == 2
+
+    batches = list(loader)
+    assert len(batches) == len(loader)
+    emitted_particles = np.concatenate([np.asarray(b[1]).reshape(-1) for b in batches], axis=0)
+    emitted_tilts = np.concatenate([np.asarray(b[2]).reshape(-1) for b in batches], axis=0)
+    np.testing.assert_array_equal(emitted_particles, np.array([0, 0, 3, 0, 0], dtype=np.int32))
+    np.testing.assert_array_equal(emitted_tilts, np.array([0, 1, 30, 0, 1], dtype=np.int32))
+
+
+def test_particle_subset_max_tilts_uses_parent_particle_tilts_without_particle_groups():
+    class _ParentTiltDataset:
+        def __init__(self):
+            self._particle_tilts = [
+                np.array([0, 1, 2], dtype=np.int32),
+                np.array([10, 11], dtype=np.int32),
+            ]
+            self.num_tilts = 2
+
+        def __len__(self):
+            return len(self._particle_tilts)
+
+        def __getitem__(self, idx):
+            tilt_ids = self._particle_tilts[int(idx)][: self.num_tilts]
+            images = np.ones((len(tilt_ids), 8, 8), dtype=np.float32)
+            return images, int(idx), tilt_ids
+
+    subset = cryo_dataset.ParticleSubset(_ParentTiltDataset(), np.array([1, 0, 1], dtype=np.int32))
+    assert subset._max_tilts_per_particle() == 2
+
+
+def test_particle_subset_max_tilts_respects_zero_num_tilts():
+    class _ParentTiltDataset:
+        def __init__(self):
+            self._particle_tilts = [
+                np.array([0, 1, 2], dtype=np.int32),
+                np.array([10, 11], dtype=np.int32),
+            ]
+            self.num_tilts = 0
+
+        def __len__(self):
+            return len(self._particle_tilts)
+
+        def __getitem__(self, idx):
+            _ = idx
+            return np.zeros((0, 8, 8), dtype=np.float32), int(idx), np.zeros((0,), dtype=np.int32)
+
+    subset = cryo_dataset.ParticleSubset(_ParentTiltDataset(), np.array([1, 0, 1], dtype=np.int32))
+    assert subset._max_tilts_per_particle() == 0
+
+
+def test_particle_subset_max_tilts_raises_when_parent_has_no_group_metadata():
+    class _ParentNoGroups:
+        num_tilts = None
+
+        def __len__(self):
+            return 2
+
+        def __getitem__(self, idx):
+            images = np.ones((1, 8, 8), dtype=np.float32)
+            return images, int(idx), np.array([int(idx)], dtype=np.int32)
+
+    subset = cryo_dataset.ParticleSubset(_ParentNoGroups(), np.array([0], dtype=np.int32))
+    with pytest.raises(AttributeError, match="must expose _particle_tilts or particle_groups"):
+        subset._max_tilts_per_particle()
 
 
 def test_image_count_batch_loader_rejects_dataset_without_group_metadata():
@@ -504,6 +686,68 @@ def test_tiltseries_dataset_random_selection_clamps_when_num_tilts_exceeds_avail
     assert len(selected1) == 3
     assert len(np.unique(selected1)) == 3
     np.testing.assert_allclose(imgs1, _Source()._store[selected1])
+
+
+def test_tiltseries_dataset_negative_num_tilts_matches_all_tilts(monkeypatch):
+    class _Source:
+        def __init__(self):
+            self.n = 6
+            self.D = 8
+            self._store = np.arange(self.n * self.D * self.D, dtype=np.float32).reshape(self.n, self.D, self.D)
+
+        def images(self, index, require_contiguous=False):
+            _ = require_contiguous
+            if isinstance(index, (int, np.integer)):
+                return self._store[int(index)]
+            return self._store[np.asarray(index)]
+
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["g1", "g1", "g1", "g2", "g2", "g2"],
+            "_rlnMicrographPreExposure": [1.0, 3.0, 2.0, 2.0, 5.0, 1.0],
+            "_rlnCtfScalefactor": [1, 1, 1, 1, 1, 1],
+            "_rlnCtfBfactor": [-1, -2, -3, -4, -5, -6],
+        }
+    )
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+
+    ds_all = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=None, random_tilts=False, tilt_file_option="relion5")
+    ds_neg = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=-1, random_tilts=False, tilt_file_option="relion5")
+
+    assert ds_neg.num_tilts is None
+    for pidx in range(len(ds_all)):
+        _imgs_all, _pid_all, sel_all = ds_all[pidx]
+        _imgs_neg, _pid_neg, sel_neg = ds_neg[pidx]
+        np.testing.assert_array_equal(sel_neg, sel_all)
+
+
+def test_tiltseries_dataset_non_integer_num_tilts_raises(monkeypatch):
+    class _Source:
+        def __init__(self):
+            self.n = 2
+            self.D = 8
+            self._store = np.zeros((2, 8, 8), dtype=np.float32)
+
+        def images(self, index, require_contiguous=False):
+            _ = require_contiguous
+            if isinstance(index, (int, np.integer)):
+                return self._store[int(index)]
+            return self._store[np.asarray(index)]
+
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["g1", "g1"],
+            "_rlnMicrographPreExposure": [1.0, 2.0],
+            "_rlnCtfScalefactor": [1, 1],
+            "_rlnCtfBfactor": [-1, -1],
+        }
+    )
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+
+    with pytest.raises(TypeError, match="num_tilts must be an integer or None"):
+        cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=1.5, random_tilts=False, tilt_file_option="relion5")
 
 
 def test_tiltseries_dataset_getitem_deterministic_selection_warp(monkeypatch):

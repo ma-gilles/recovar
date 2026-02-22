@@ -8,7 +8,6 @@ import logging
 import numpy as np
 import matplotlib.pyplot as plt
 import jax
-import jax.numpy as jnp
 
 from recovar import output, metrics, plot_utils, synthetic_dataset, utils, simulator, recovar
 import recovar.fourier_transform_utils as fourier_transform_utils
@@ -196,7 +195,7 @@ def make_big_test_dataset(input_dir, output_dir, noise_level=0.1, grid_size=128,
 
     
     voxel_size = 4.25 * 128 / grid_size
-    image_stack, sim_info = simulator.generate_synthetic_dataset(
+    _image_stack, sim_info = simulator.generate_synthetic_dataset(
         output_folder, voxel_size, input_dir, int(n_images),
         outlier_file_input=None, grid_size=grid_size,
         volume_distribution=volume_distribution, dataset_params_option="uniform",
@@ -853,7 +852,7 @@ def main():
     all_scores['variance_fsc'] = score
 
     # SVD metrics
-    synt = synthetic_dataset.load_heterogeneous_reconstruction(sim_info_path)
+    synt = gt_thing
     u_gt, s_gt, vh = synt.get_vol_svd(
         contrasted=False, real_space=True, random_svd_pcs=200
     )
@@ -1082,14 +1081,9 @@ def main():
             old_scores = json.load(f)
         all_keys = set(old_scores.keys()) | set(all_scores.keys())
         old_vals, new_vals, labels = [], [], []
-        diff_scores = {}
         for key in sorted(all_keys):
             old_val = old_scores.get(key)
             new_val = all_scores.get(key)
-            if isinstance(old_val, (int, float)) and isinstance(new_val, (int, float)):
-                diff_scores[key] = new_val - old_val
-            else:
-                diff_scores[key] = {"old": old_val, "new": new_val}
             old_vals.append(old_val if isinstance(old_val, (int, float)) else 0)
             new_vals.append(new_val if isinstance(new_val, (int, float)) else 0)
             labels.append(key)

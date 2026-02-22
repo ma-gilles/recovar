@@ -78,10 +78,17 @@ def load_ctf_params(D: int, ctf_params_pkl: str) -> np.ndarray:
         raise ValueError(f"Image dimension D must be even, got {D}")
     
     # Load parameters from pickle
-    ctf_params = utils.pickle_load(ctf_params_pkl)
-    
+    ctf_params = np.asarray(utils.pickle_load(ctf_params_pkl))
+    if ctf_params.ndim != 2:
+        raise ValueError(f"CTF parameters must be a 2D array of shape (N, 9), got ndim={ctf_params.ndim}")
+    if ctf_params.shape[0] == 0:
+        raise ValueError("CTF parameters are empty")
     if ctf_params.shape[1] != 9:
         raise ValueError(f"Expected 9 CTF parameters per image, got {ctf_params.shape[1]}")
+    if not np.issubdtype(ctf_params.dtype, np.number):
+        raise ValueError("CTF parameters must be numeric")
+    if not np.all(np.isfinite(ctf_params)):
+        raise ValueError("CTF parameters contain non-finite values (NaN/Inf)")
     
     # Adjust pixel size based on original and target dimensions
     original_D = ctf_params[0, 0]
@@ -142,12 +149,18 @@ def load_poses(
             poses = (poses,)
     
     # Extract rotations
-    rots = poses[0]
+    rots = np.asarray(poses[0])
+    if not np.issubdtype(rots.dtype, np.number):
+        raise ValueError("Rotation array must be numeric")
+    if not np.all(np.isfinite(rots)):
+        raise ValueError("Rotation array contains non-finite values (NaN/Inf)")
 
     # Validate rotation shape
     expected_rot_shape = (Nimg, 3, 3)
     pose_ind = None
-    if ind is not None and len(rots) > Nimg:
+    if ind is not None:
+        # Always honor explicit pose selection. This is critical for duplicate or
+        # reordered index sets where len(ind) may still equal Nimg.
         pose_ind = _normalize_pose_indices(ind, n_total=len(rots))
         rots = rots[pose_ind]
 
@@ -157,7 +170,11 @@ def load_poses(
     # Extract translations if available
     trans = None
     if len(poses) == 2:
-        trans = poses[1]
+        trans = np.asarray(poses[1])
+        if not np.issubdtype(trans.dtype, np.number):
+            raise ValueError("Translation array must be numeric")
+        if not np.all(np.isfinite(trans)):
+            raise ValueError("Translation array contains non-finite values (NaN/Inf)")
 
         if len(poses[0]) != len(trans):
             raise ValueError(
@@ -176,9 +193,9 @@ def load_poses(
             )
         
         # Check that translations are in fractional units (0-1 range)
-        if not np.all(trans <= 1):
+        if not np.all(np.abs(trans) <= 1):
             raise ValueError(
-                "Translations must be in fractional units (0-1 range). "
+                "Translations must be in fractional units with |value| <= 1. "
                 "Old pose format with pixel units is not supported."
             )
         

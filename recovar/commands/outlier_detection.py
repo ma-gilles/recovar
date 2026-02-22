@@ -352,20 +352,11 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
     
     input_args = pipeline_output.get('input_args')
     starfile = getattr(input_args, 'particles', None)
-    datadir = getattr(input_args, 'datadir', None)
-    strip_prefix = getattr(input_args, 'strip_prefix', None)
-
     contrasts = pipeline_output.get('contrasts')[zdim_key]
-
-    # Ensure contrasts is a numpy array
-    if not isinstance(contrasts, np.ndarray):
-        contrasts = np.array(contrasts, dtype=float)
-    
-    contrast_array = contrasts
+    contrast_array = np.asarray(contrasts, dtype=np.float32)
     
     # Parse starfile for grouping information
     # Check if this is a tilt-series dataset by looking at pipeline input arguments
-    input_args = pipeline_output.get('input_args')
     is_tilt_series = getattr(input_args, 'tilt_series', False)
     shared_contrast_across_tilts = getattr(input_args, 'shared_contrast_across_tilts', False)
     

@@ -137,8 +137,8 @@ class CryoEMDataset:
         # Note that images are stored in float 32 but rotations are stored in float 64.
         # There seems to be a JAX-bug with float 32 when doing the nearest neighbor approximation...
         self.rotation_dtype = rotation_dtype
-        self.rotation_matrices = np.array(rotation_matrices.astype(rotation_dtype))
-        self.translations = np.array(translations)
+        self.rotation_matrices = np.asarray(rotation_matrices, dtype=rotation_dtype)
+        self.translations = np.asarray(translations, dtype=self.dtype_real)
 
         '''
             0 - dfu (float or Bx1 tensor): DefocusU (Angstrom)
@@ -154,7 +154,7 @@ class CryoEMDataset:
             For tilt series only:
             9 - tilt number
         '''
-        self.CTF_params = np.array(CTF_params.astype(self.CTF_dtype))
+        self.CTF_params = np.asarray(CTF_params, dtype=self.CTF_dtype)
 
         self.dataset_indices = dataset_indices
         self.noise = None
@@ -207,7 +207,7 @@ class CryoEMDataset:
 
     def CTF_fun(self,*args):
         # Force dtype
-        return self.CTF_fun_inp(*args).astype(self.CTF_dtype)
+        return self.CTF_fun_inp(*args).astype(self.CTF_dtype, copy=False)
 
     def get_valid_frequency_indices(self,rad = None):
         rad = self.grid_size//2 -1 if rad is None else rad

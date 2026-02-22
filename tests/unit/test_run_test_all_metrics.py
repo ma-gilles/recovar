@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from pathlib import Path
+import json
 
 import numpy as np
 import pytest
@@ -14,6 +15,384 @@ pytestmark = pytest.mark.unit
 
 def _logger():
     return SimpleNamespace(info=lambda *_: None, warning=lambda *_: None)
+
+
+def _install_main_runtime_stubs(monkeypatch, tmp_path, *, mean_fsc=0.5, variance_fsc=0.4):
+    class _ArgsParser:
+        def parse_args(self, _cmd):
+            return SimpleNamespace()
+
+    monkeypatch.setattr(rtam.pipeline, "add_args", lambda _p: _ArgsParser())
+    monkeypatch.setattr(rtam.pipeline, "standard_recovar_pipeline", lambda _args: None)
+    monkeypatch.setattr(rtam.compute_state, "add_args", lambda _p: _ArgsParser())
+    monkeypatch.setattr(rtam.compute_state, "compute_state", lambda _args: None)
+
+    monkeypatch.setattr(
+        rtam,
+        "make_big_test_dataset",
+        lambda *_args, **_kwargs: {
+            "image_assignment": np.array([0, 1], dtype=np.int32),
+            "noise_variance": np.array([1.0, 1.0], dtype=np.float32),
+            "dose_indices": None,
+        },
+    )
+    monkeypatch.setattr(
+        rtam,
+        "generate_compact_support_test_volumes",
+        lambda **_kwargs: str(tmp_path / "generated_volumes" / "vol"),
+    )
+    monkeypatch.setattr(
+        rtam,
+        "compute_noise_variance_metrics",
+        lambda *_args, **_kwargs: {
+            "noise_mean_relative_error": 0.1,
+            "noise_correlation": 0.9,
+        },
+    )
+
+    def _fake_plot_fsc_new(*_args, **kwargs):
+        name = kwargs.get("name", "")
+        if name == "Mean FSC":
+            return None, float(mean_fsc)
+        if name == "Variance FSC":
+            return None, float(variance_fsc)
+        return None, 0.0
+
+    monkeypatch.setattr(rtam.plot_utils, "plot_fsc_new", _fake_plot_fsc_new)
+    monkeypatch.setattr(
+        rtam.metrics,
+        "get_all_variance_scores",
+        lambda *_args, **_kwargs: (
+            None,
+            np.linspace(0.0, 1.0, 20, dtype=np.float32),
+            np.linspace(0.0, 1.0, 20, dtype=np.float32),
+        ),
+    )
+    monkeypatch.setattr(rtam.metrics, "variance_of_zs", lambda *_args, **_kwargs: (None, 0.01))
+    monkeypatch.setattr(
+        rtam.metrics,
+        "compute_volume_error_metrics_from_gt",
+        lambda *_args, **_kwargs: {"ninety_pc_locres": 1.0, "median_locres": 1.0, "mask": None},
+    )
+    monkeypatch.setattr(
+        rtam.recovar.metrics,
+        "subspace_angles",
+        lambda *_args, **_kwargs: np.linspace(0.0, 1.0, 20, dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        rtam.fourier_transform_utils,
+        "get_idft3",
+        lambda arr: np.asarray(arr).reshape(2, 2, 2),
+    )
+    monkeypatch.setattr(
+        rtam.utils,
+        "load_mrc",
+        lambda _path: np.zeros((2, 2, 2), dtype=np.float32),
+    )
+
+    class _PipelineOutput:
+        def __init__(self, _path):
+            self._embedding = {
+                "zs": {
+                    4: np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32),
+                    10: np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32),
+                },
+                "contrasts": {
+                    4: np.array([0.25, 0.75], dtype=np.float32),
+                    10: np.array([0.30, 0.70], dtype=np.float32),
+                    "4_noreg": np.array([0.20, 0.80], dtype=np.float32),
+                    "10_noreg": np.array([0.35, 0.65], dtype=np.float32),
+                },
+            }
+            self._u_real = np.ones((20, 2, 2, 2), dtype=np.float32)
+            self._s = np.linspace(1.0, 2.0, 20, dtype=np.float32)
+            self._cryos = [SimpleNamespace(volume_shape=(2, 2, 2), voxel_size=1.0)]
+
+        def get_embedding_component(self, entry, key):
+            return self._embedding[entry][key]
+
+        def get_u_real(self, n_pcs):
+            return self._u_real[: int(n_pcs)]
+
+        def get(self, key):
+            mapping = {
+                "lazy_dataset": self._cryos,
+                "mean": np.zeros((2, 2, 2), dtype=np.float32),
+                "variance": np.zeros((2, 2, 2), dtype=np.float32),
+                "volume_shape": (2, 2, 2),
+                "s": self._s,
+                "noise_var_used": np.array([1.0, 1.0], dtype=np.float32),
+            }
+            return mapping[key]
+
+    monkeypatch.setattr(rtam.output, "PipelineOutput", _PipelineOutput)
+
+    class _SyntheticGT:
+        def __init__(self):
+            self.contrasts = np.array([0.3, 0.7], dtype=np.float32)
+            self.volumes = np.stack(
+                [
+                    np.zeros((8,), dtype=np.complex64),
+                    np.ones((8,), dtype=np.complex64),
+                ],
+                axis=0,
+            )
+
+        def get_mean(self):
+            return np.zeros((2, 2, 2), dtype=np.float32)
+
+        def get_spatial_variances(self, contrasted=False):
+            _ = contrasted
+            return np.zeros((2, 2, 2), dtype=np.float32)
+
+        def get_vol_svd(self, contrasted=False, real_space=True, random_svd_pcs=200):
+            _ = (contrasted, real_space, random_svd_pcs)
+            return (
+                np.zeros((8, 20), dtype=np.float32),
+                np.ones((20,), dtype=np.float32),
+                np.zeros((20, 8), dtype=np.float32),
+            )
+
+    monkeypatch.setattr(
+        rtam.synthetic_dataset,
+        "load_heterogeneous_reconstruction",
+        lambda _path: _SyntheticGT(),
+    )
+
+
+def test_main_generated_run_writes_default_baseline_when_missing(monkeypatch, tmp_path):
+    _install_main_runtime_stubs(monkeypatch, tmp_path, mean_fsc=0.55, variance_fsc=0.45)
+    monkeypatch.setattr(
+        rtam.sys,
+        "argv",
+        [
+            "run_test_all_metrics",
+            "--output-dir",
+            str(tmp_path),
+            "--cpu",
+            "--generate-volumes",
+            "--generated-n-volumes",
+            "3",
+            "--grid-size",
+            "8",
+        ],
+    )
+
+    rtam.main()
+
+    baseline_path = tmp_path / "generated_volumes" / "metrics_baseline_grid8_nvol3.json"
+    report_path = tmp_path / "test_dataset" / "metrics_plot" / "metrics_regression_report.json"
+    assert baseline_path.exists()
+    assert report_path.exists()
+
+    with open(baseline_path, "r") as f:
+        baseline_scores = json.load(f)
+    with open(report_path, "r") as f:
+        report = json.load(f)
+
+    assert baseline_scores["mean_fsc"] == pytest.approx(0.55)
+    assert baseline_scores["variance_fsc"] == pytest.approx(0.45)
+    assert report["status"] == "baseline_written"
+
+
+def test_main_regression_fail_raises_without_skip(monkeypatch, tmp_path):
+    _install_main_runtime_stubs(monkeypatch, tmp_path, mean_fsc=0.50, variance_fsc=0.40)
+    baseline_path = tmp_path / "baseline.json"
+    with open(baseline_path, "w") as f:
+        json.dump({"mean_fsc": 0.99, "variance_fsc": 0.99}, f, indent=2)
+
+    monkeypatch.setattr(
+        rtam.sys,
+        "argv",
+        [
+            "run_test_all_metrics",
+            "--output-dir",
+            str(tmp_path),
+            "--cpu",
+            "--volume-input",
+            str(tmp_path / "fixed_vol_prefix_"),
+            "--metrics-baseline-json",
+            str(baseline_path),
+            "--metrics-regression-tol-frac",
+            "0.01",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="1"):
+        rtam.main()
+
+    report_path = tmp_path / "test_dataset" / "metrics_plot" / "metrics_regression_report.json"
+    assert report_path.exists()
+    with open(report_path, "r") as f:
+        report = json.load(f)
+    assert report["status"] == "checked"
+    assert report["checked_metrics"] >= 2
+    assert len(report["failures"]) >= 1
+
+
+def test_main_regression_fail_is_allowed_with_skip_flag(monkeypatch, tmp_path):
+    _install_main_runtime_stubs(monkeypatch, tmp_path, mean_fsc=0.50, variance_fsc=0.40)
+    baseline_path = tmp_path / "baseline.json"
+    with open(baseline_path, "w") as f:
+        json.dump({"mean_fsc": 0.99, "variance_fsc": 0.99}, f, indent=2)
+
+    monkeypatch.setattr(
+        rtam.sys,
+        "argv",
+        [
+            "run_test_all_metrics",
+            "--output-dir",
+            str(tmp_path),
+            "--cpu",
+            "--volume-input",
+            str(tmp_path / "fixed_vol_prefix_"),
+            "--metrics-baseline-json",
+            str(baseline_path),
+            "--metrics-regression-tol-frac",
+            "0.01",
+            "--skip-metrics-regression-check",
+        ],
+    )
+
+    rtam.main()
+
+    report_path = tmp_path / "test_dataset" / "metrics_plot" / "metrics_regression_report.json"
+    with open(report_path, "r") as f:
+        report = json.load(f)
+    assert report["status"] == "checked"
+    assert len(report["failures"]) >= 1
+
+
+def test_main_overwrite_metrics_baseline_forces_rewrite(monkeypatch, tmp_path):
+    _install_main_runtime_stubs(monkeypatch, tmp_path, mean_fsc=0.61, variance_fsc=0.51)
+    baseline_path = tmp_path / "baseline.json"
+    with open(baseline_path, "w") as f:
+        json.dump({"mean_fsc": 0.1, "variance_fsc": 0.1}, f, indent=2)
+
+    monkeypatch.setattr(
+        rtam.sys,
+        "argv",
+        [
+            "run_test_all_metrics",
+            "--output-dir",
+            str(tmp_path),
+            "--cpu",
+            "--volume-input",
+            str(tmp_path / "fixed_vol_prefix_"),
+            "--metrics-baseline-json",
+            str(baseline_path),
+            "--overwrite-metrics-baseline",
+        ],
+    )
+
+    rtam.main()
+
+    report_path = tmp_path / "test_dataset" / "metrics_plot" / "metrics_regression_report.json"
+    with open(baseline_path, "r") as f:
+        baseline_scores = json.load(f)
+    with open(report_path, "r") as f:
+        report = json.load(f)
+
+    assert baseline_scores["mean_fsc"] == pytest.approx(0.61)
+    assert baseline_scores["variance_fsc"] == pytest.approx(0.51)
+    assert report["status"] == "baseline_written"
+
+
+def test_main_regression_pass_writes_checked_report_without_failures(monkeypatch, tmp_path):
+    _install_main_runtime_stubs(monkeypatch, tmp_path, mean_fsc=0.62, variance_fsc=0.52)
+    baseline_path = tmp_path / "baseline.json"
+    with open(baseline_path, "w") as f:
+        json.dump(
+            {
+                "mean_fsc": 0.60,
+                "variance_fsc": 0.50,
+                "noise_mean_relative_error": 0.20,
+            },
+            f,
+            indent=2,
+        )
+
+    monkeypatch.setattr(
+        rtam.sys,
+        "argv",
+        [
+            "run_test_all_metrics",
+            "--output-dir",
+            str(tmp_path),
+            "--cpu",
+            "--volume-input",
+            str(tmp_path / "fixed_vol_prefix_"),
+            "--metrics-baseline-json",
+            str(baseline_path),
+            "--metrics-regression-tol-frac",
+            "0.001",
+        ],
+    )
+
+    rtam.main()
+
+    report_path = tmp_path / "test_dataset" / "metrics_plot" / "metrics_regression_report.json"
+    with open(report_path, "r") as f:
+        report = json.load(f)
+
+    assert report["status"] == "checked"
+    assert report["checked_metrics"] >= 3
+    assert report["failures"] == []
+
+
+def test_main_explicit_volume_without_baseline_skips_regression_report(monkeypatch, tmp_path):
+    _install_main_runtime_stubs(monkeypatch, tmp_path, mean_fsc=0.55, variance_fsc=0.45)
+    monkeypatch.setattr(
+        rtam.sys,
+        "argv",
+        [
+            "run_test_all_metrics",
+            "--output-dir",
+            str(tmp_path),
+            "--cpu",
+            "--volume-input",
+            str(tmp_path / "fixed_vol_prefix_"),
+        ],
+    )
+
+    rtam.main()
+
+    scores_path = tmp_path / "test_dataset" / "metrics_plot" / "all_scores.json"
+    report_path = tmp_path / "test_dataset" / "metrics_plot" / "metrics_regression_report.json"
+    assert scores_path.exists()
+    assert not report_path.exists()
+
+
+def test_main_regression_with_zero_comparable_metrics_writes_checked_report(monkeypatch, tmp_path):
+    _install_main_runtime_stubs(monkeypatch, tmp_path, mean_fsc=0.55, variance_fsc=0.45)
+    baseline_path = tmp_path / "baseline.json"
+    with open(baseline_path, "w") as f:
+        json.dump({"unknown_metric_name": 123.0}, f, indent=2)
+
+    monkeypatch.setattr(
+        rtam.sys,
+        "argv",
+        [
+            "run_test_all_metrics",
+            "--output-dir",
+            str(tmp_path),
+            "--cpu",
+            "--volume-input",
+            str(tmp_path / "fixed_vol_prefix_"),
+            "--metrics-baseline-json",
+            str(baseline_path),
+        ],
+    )
+
+    rtam.main()
+
+    report_path = tmp_path / "test_dataset" / "metrics_plot" / "metrics_regression_report.json"
+    with open(report_path, "r") as f:
+        report = json.load(f)
+
+    assert report["status"] == "checked"
+    assert report["checked_metrics"] == 0
+    assert report["failures"] == []
 
 
 def test_compute_noise_variance_metrics_single_noise(tmp_path):

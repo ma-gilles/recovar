@@ -188,17 +188,17 @@ class ImageLoader:
     def _parse_indices(self, indices) -> np.ndarray:
         """Convert various index formats to array."""
         if indices is None:
-            return np.arange(self._num_images)
+            return np.arange(self._num_images, dtype=np.int32)
         
         # Handle int and numpy integer types
         if isinstance(indices, (int, np.integer)):
             idx = int(indices)  # Convert numpy int to python int
             if idx < 0 or idx >= self._num_images:
                 raise IndexError(f"Index {idx} out of range [0, {self._num_images})")
-            return np.array([idx])
+            return np.array([idx], dtype=np.int32)
         
         if isinstance(indices, slice):
-            return np.arange(*indices.indices(self._num_images))
+            return np.arange(*indices.indices(self._num_images), dtype=np.int32)
         
         if isinstance(indices, (list, tuple)):
             indices = np.array(indices)
@@ -211,20 +211,20 @@ class ImageLoader:
                     raise ValueError(
                         f"Boolean index mask length {indices.size} must match number of images {self._num_images}"
                     )
-                indices = np.flatnonzero(indices)
+                indices = np.flatnonzero(indices).astype(np.int32, copy=False)
             # Handle 0-d arrays (scalars)
             if indices.ndim == 0:
                 idx = int(indices)
                 if idx < 0 or idx >= self._num_images:
                     raise IndexError(f"Index {idx} out of range [0, {self._num_images})")
-                return np.array([idx])
+                return np.array([idx], dtype=np.int32)
             if indices.ndim != 1:
                 raise ValueError("Indices array must be 1D")
             if indices.dtype.kind not in ("i", "u"):
                 raise TypeError(f"Indices array must be integer or bool dtype, got {indices.dtype}")
             if np.any(indices < 0) or np.any(indices >= self._num_images):
                 raise IndexError("Index out of range")
-            return indices
+            return indices.astype(np.int32, copy=False)
         
         raise TypeError(f"Cannot index with type {type(indices)}")
     
@@ -372,6 +372,13 @@ class MultiMRCLoader(ImageLoader):
         if len(self._file_map) == 0:
             raise ValueError("No images selected for MultiMRCLoader")
 
+        # Require integer index metadata up front to avoid ambiguous/fallback
+        # behavior later in random file access.
+        mrc_index_values = np.asarray(self._file_map["mrc_index"])
+        if mrc_index_values.dtype.kind not in ("i", "u"):
+            raise ValueError("mrc_index values must be integers")
+        self._file_map["mrc_index"] = mrc_index_values.astype(np.int64, copy=False)
+
         # Get image size from first selected file.
         first_file = str(self._file_map['mrc_file'].iloc[0])
         first_loader = MRCLoader(first_file, lazy=True)
@@ -386,6 +393,21 @@ class MultiMRCLoader(ImageLoader):
             except FileNotFoundError:
                 logger.error(f"Cannot find MRC file: {filepath}")
                 raise
+
+        # Validate mapped per-file indices once at construction time so
+        # malformed metadata fails early with a clear message.
+        if (self._file_map["mrc_index"] < 0).any():
+            raise ValueError("mrc_index values must be non-negative")
+        for filepath, group in self._file_map.groupby("mrc_file"):
+            max_valid = int(self._loaders[filepath].num_images) - 1
+            requested = group["mrc_index"].to_numpy()
+            bad = (requested < 0) | (requested > max_valid)
+            if np.any(bad):
+                bad_values = np.unique(requested[bad]).tolist()
+                raise ValueError(
+                    f"mrc_index values {bad_values} out of range for file {filepath}; "
+                    f"valid range is [0, {max_valid}]"
+                )
         
         super().__init__(len(self._file_map), img_size, dtype)
         
@@ -394,37 +416,40 @@ class MultiMRCLoader(ImageLoader):
     
     def _load(self, indices: np.ndarray) -> np.ndarray:
         """Load images from multiple files."""
-        subset = self._file_map.iloc[indices].copy()
-        # Preserve requested output order (including duplicated indices).
-        subset["_out_pos"] = np.arange(len(indices), dtype=np.int32)
-        output = np.empty((len(indices), self._image_size, self._image_size), 
-                         dtype=self._dtype)
-        
-        # Group by file for efficient loading
-        groups = subset.groupby('mrc_file')
-        
-        if self._max_threads > 1 and len(groups) > 1:
-            # Parallel loading
+        n_out = int(len(indices))
+        output = np.empty((n_out, self._image_size, self._image_size), dtype=self._dtype)
+        if n_out == 0:
+            return output
+
+        subset = self._file_map.iloc[indices]
+        out_pos = np.arange(n_out, dtype=np.int32)
+        file_paths = subset["mrc_file"].to_numpy()
+        mrc_indices = subset["mrc_index"].to_numpy(dtype=np.int64, copy=False)
+
+        # Group by file without DataFrame groupby/copies to reduce per-call overhead.
+        unique_paths, path_group = np.unique(file_paths, return_inverse=True)
+        group_order = np.argsort(path_group, kind="stable")
+        split_points = np.flatnonzero(np.diff(path_group[group_order])) + 1
+        grouped_positions = np.split(group_order, split_points)
+
+        if self._max_threads > 1 and unique_paths.size > 1:
             with ThreadPoolExecutor(max_workers=self._max_threads) as executor:
                 futures = {}
-                for filepath, group in groups:
-                    loader = self._loaders[filepath]
-                    mrc_idx = group['mrc_index'].to_numpy()
-                    future = executor.submit(loader._load, mrc_idx)
-                    futures[future] = group['_out_pos'].to_numpy()
-                
-                for future, out_pos in futures.items():
-                    images = future.result()
-                    output[out_pos] = images
+                for pos in grouped_positions:
+                    group_id = int(path_group[int(pos[0])])
+                    filepath = unique_paths[group_id]
+                    future = executor.submit(self._loaders[filepath]._load, mrc_indices[pos])
+                    futures[future] = out_pos[pos]
+
+                for future, group_out_pos in futures.items():
+                    output[group_out_pos] = future.result()
         else:
-            # Sequential loading
-            for filepath, group in groups:
-                loader = self._loaders[filepath]
-                mrc_idx = group['mrc_index'].to_numpy()
-                images = loader._load(mrc_idx)
-                out_pos = group['_out_pos'].to_numpy()
-                output[out_pos] = images
-        
+            for pos in grouped_positions:
+                group_id = int(path_group[int(pos[0])])
+                filepath = unique_paths[group_id]
+                images = self._loaders[filepath]._load(mrc_indices[pos])
+                output[out_pos[pos]] = images
+
         return output
     
     @staticmethod
@@ -483,7 +508,8 @@ class StarLoader(MultiMRCLoader):
             raise ValueError("STAR file is missing required column: _rlnImageName")
         
         # Parse image names (format: "index@filepath")
-        parts = df['_rlnImageName'].str.split('@', n=1, expand=True)
+        image_names = df["_rlnImageName"].astype(str)
+        parts = image_names.str.split('@', n=1, expand=True)
         if parts.shape[1] < 2 or parts[1].isna().any():
             raise ValueError("Malformed _rlnImageName entries: expected '<index>@<path>' format")
         try:
