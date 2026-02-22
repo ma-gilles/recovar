@@ -1199,7 +1199,13 @@ def scatter_annotate(
 ) -> Tuple[Figure, Axes]:
     """Scatter plot with optional cluster-center markers and annotations."""
     fig, ax = plt.subplots(figsize=(8, 8))
-    ax.scatter(x, y, alpha=alpha, s=s, rasterized=True)
+
+    try:
+        ax.hexbin(x, y, gridsize=30, alpha=0.3, cmap="Blues", mincnt=1)
+    except Exception:
+        pass
+
+    ax.scatter(x, y, alpha=alpha, s=s, c="cornflowerblue", edgecolors="none", rasterized=True)
 
     if centers_ind is not None:
         assert centers is None
@@ -1220,6 +1226,8 @@ def scatter_annotate(
                 path_effects=[pe.withStroke(linewidth=3, foreground="black")],
             )
 
+    ax.grid(True, alpha=0.3)
+    ax.set_facecolor("white")
     return fig, ax
 
 
