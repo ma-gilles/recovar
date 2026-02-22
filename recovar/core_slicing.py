@@ -8,6 +8,7 @@ from jax import vjp
 import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar.core_geometry import (
     get_stencil,
+    get_unrotated_plane_grid_points,
     rotations_to_grid_point_coords,
 )
 from recovar.core_indexing import vol_indices_to_vec_indices
@@ -130,6 +131,84 @@ def _half_image_geometry_maps(image_shape):
 
 
 @functools.lru_cache(maxsize=None)
+def _half_plane_unrotated_and_partner_coords(image_shape, volume_shape):
+    image_shape = tuple(int(s) for s in image_shape)
+    volume_shape = tuple(int(s) for s in volume_shape)
+    if len(image_shape) != 2:
+        raise ValueError(f"image_shape must have 2 dims, got {image_shape}")
+    if len(volume_shape) != 3:
+        raise ValueError(f"volume_shape must have 3 dims, got {volume_shape}")
+    if not _supports_direct_half_symmetry(image_shape):
+        raise ValueError(
+            f"Direct packed-half geometry requires even image width, got image_shape={image_shape}"
+        )
+
+    upsampling = int(volume_shape[0] // image_shape[0])
+    full_plane = get_unrotated_plane_grid_points(image_shape, three_d_upsampling_factor=upsampling)
+    (
+        packed_full_pixel_indices,
+        _,
+        _,
+        packed_partner_full_pixel_indices,
+        packed_needs_explicit_partner_term,
+    ) = _half_image_geometry_maps(image_shape)
+    packed_full_pixel_indices = jnp.asarray(packed_full_pixel_indices, dtype=jnp.int32)
+    packed_partner_full_pixel_indices = jnp.asarray(packed_partner_full_pixel_indices, dtype=jnp.int32)
+    half_plane = jnp.take(full_plane, packed_full_pixel_indices, axis=0)
+    partner_plane = jnp.take(full_plane, packed_partner_full_pixel_indices, axis=0)
+
+    partner_mask = jnp.asarray(packed_needs_explicit_partner_term, dtype=bool)
+    return half_plane.astype(jnp.float32), partner_plane.astype(jnp.float32), partner_mask
+
+
+def _rotate_unrotated_plane_coords(unrotated_plane_coords, rotation_matrices, volume_shape):
+    rotation_matrices = jnp.asarray(rotation_matrices)
+    rotated = jnp.einsum(
+        "pc,ncd->npd",
+        jnp.asarray(unrotated_plane_coords),
+        rotation_matrices,
+        precision=jax.lax.Precision.HIGHEST,
+    )
+    return rotated + (volume_shape[0] // 2)
+
+
+def _rotated_half_and_partner_coords(rotation_matrices, image_shape, volume_shape):
+    image_shape = tuple(int(s) for s in image_shape)
+    volume_shape = tuple(int(s) for s in volume_shape)
+    half_plane, partner_plane, partner_mask = _half_plane_unrotated_and_partner_coords(
+        image_shape, volume_shape
+    )
+    rotated_primary = _rotate_unrotated_plane_coords(half_plane, rotation_matrices, volume_shape)
+    rotated_partner = _rotate_unrotated_plane_coords(partner_plane, rotation_matrices, volume_shape)
+    return rotated_primary, rotated_partner, partner_mask
+
+
+def _nearest_indices_and_valid_mask_from_rotated_coords(rotated_coords, volume_shape):
+    rounded = jax.lax.round(rotated_coords).astype(jnp.int32)
+    vol_shape = jnp.asarray(volume_shape, dtype=jnp.int32)
+    valid = jnp.all((rounded >= 0) & (rounded < vol_shape[None, None, :]), axis=-1)
+    nearest_indices = vol_indices_to_vec_indices(rounded, volume_shape)
+    return nearest_indices, valid
+
+
+def _half_plane_nearest_indices_and_masks(rotation_matrices, image_shape, volume_shape):
+    primary_coords, partner_coords, partner_mask_1d = _rotated_half_and_partner_coords(
+        rotation_matrices, image_shape, volume_shape
+    )
+    primary_indices, primary_valid = _nearest_indices_and_valid_mask_from_rotated_coords(
+        primary_coords, volume_shape
+    )
+    partner_indices, partner_valid = _nearest_indices_and_valid_mask_from_rotated_coords(
+        partner_coords, volume_shape
+    )
+    partner_mask = jnp.broadcast_to(
+        partner_mask_1d[None, :],
+        primary_valid.shape,
+    )
+    return primary_indices, primary_valid, partner_indices, partner_valid, partner_mask
+
+
+@functools.lru_cache(maxsize=None)
 def _full_volume_to_half_index_map(volume_shape):
     volume_shape = tuple(int(s) for s in volume_shape)
     if len(volume_shape) != 3:
@@ -170,6 +249,102 @@ def _coerce_half_image_to_flat(arr, image_shape, name):
     )
 
 
+def _half_image_sizes(image_shape):
+    image_shape = tuple(int(s) for s in image_shape)
+    n_full = int(np.prod(image_shape))
+    n_half = int(np.prod(fourier_transform_utils.image_shape_to_half_image_shape(image_shape)))
+    return n_full, n_half
+
+
+def _coerce_full_plane_indices(image_shape, plane_indices_on_grid_stacked):
+    n_full, _ = _half_image_sizes(image_shape)
+    arr = jnp.asarray(plane_indices_on_grid_stacked)
+    if arr.ndim < 1 or int(arr.shape[-1]) != n_full:
+        raise ValueError(
+            f"plane_indices_on_grid_stacked must have trailing size {n_full} (full grid), got {arr.shape}"
+        )
+    return arr
+
+
+def split_full_plane_indices_for_half(image_shape, plane_indices_on_grid_stacked):
+    """Split full-grid plane indices into packed-primary and packed-partner indices."""
+    full_plane_indices = _coerce_full_plane_indices(image_shape, plane_indices_on_grid_stacked)
+    packed_full_pixel_indices, _, _, packed_partner_full_pixel_indices, _ = _half_image_geometry_maps(
+        tuple(int(s) for s in image_shape)
+    )
+    packed_full_pixel_indices = jnp.asarray(packed_full_pixel_indices, dtype=jnp.int32)
+    packed_partner_full_pixel_indices = jnp.asarray(packed_partner_full_pixel_indices, dtype=jnp.int32)
+    primary_indices = jnp.take(full_plane_indices, packed_full_pixel_indices, axis=-1)
+    partner_indices = jnp.take(full_plane_indices, packed_partner_full_pixel_indices, axis=-1)
+    return primary_indices, partner_indices
+
+
+def _coerce_half_plane_indices_primary(image_shape, plane_indices_on_grid_stacked):
+    _, n_half = _half_image_sizes(image_shape)
+    if isinstance(plane_indices_on_grid_stacked, (tuple, list)):
+        if len(plane_indices_on_grid_stacked) != 2:
+            raise ValueError(
+                "When passing half-plane indices as tuple/list, use (primary_indices, partner_indices)."
+            )
+        primary = jnp.asarray(plane_indices_on_grid_stacked[0])
+        if primary.ndim < 1 or int(primary.shape[-1]) != n_half:
+            raise ValueError(
+                f"primary half-plane indices must have trailing size {n_half}, got {primary.shape}"
+            )
+        return primary
+
+    arr = jnp.asarray(plane_indices_on_grid_stacked)
+    if arr.ndim < 1:
+        raise ValueError(f"plane_indices_on_grid_stacked must be at least 1D, got {arr.shape}")
+    trailing = int(arr.shape[-1])
+    if trailing == n_half:
+        return arr
+    n_full, _ = _half_image_sizes(image_shape)
+    if trailing == n_full:
+        primary, _ = split_full_plane_indices_for_half(image_shape, arr)
+        return primary
+    raise ValueError(
+        f"plane_indices_on_grid_stacked must have trailing size {n_half} (half) or {n_full} (full), got {arr.shape}"
+    )
+
+
+def _coerce_half_plane_indices_with_partner(image_shape, plane_indices_on_grid_stacked):
+    _, n_half = _half_image_sizes(image_shape)
+    if isinstance(plane_indices_on_grid_stacked, (tuple, list)):
+        if len(plane_indices_on_grid_stacked) != 2:
+            raise ValueError(
+                "When passing half-plane indices as tuple/list, use (primary_indices, partner_indices)."
+            )
+        primary = jnp.asarray(plane_indices_on_grid_stacked[0])
+        partner = jnp.asarray(plane_indices_on_grid_stacked[1])
+        if primary.ndim < 1 or int(primary.shape[-1]) != n_half:
+            raise ValueError(
+                f"primary half-plane indices must have trailing size {n_half}, got {primary.shape}"
+            )
+        if partner.ndim < 1 or int(partner.shape[-1]) != n_half:
+            raise ValueError(
+                f"partner half-plane indices must have trailing size {n_half}, got {partner.shape}"
+            )
+        return primary, partner
+
+    arr = jnp.asarray(plane_indices_on_grid_stacked)
+    if arr.ndim < 1:
+        raise ValueError(f"plane_indices_on_grid_stacked must be at least 1D, got {arr.shape}")
+    n_full, _ = _half_image_sizes(image_shape)
+    trailing = int(arr.shape[-1])
+    if trailing == n_full:
+        return split_full_plane_indices_for_half(image_shape, arr)
+    if trailing == n_half:
+        raise ValueError(
+            "Half-plane indices for adjoint must include partner indices; pass tuple "
+            "(primary_indices, partner_indices), or pass full-grid indices."
+        )
+    raise ValueError(
+        f"plane_indices_on_grid_stacked must have trailing size {n_full} (full), "
+        f"or tuple of half-plane indices with trailing size {n_half}, got {arr.shape}"
+    )
+
+
 def _restore_half_image_from_flat(arr_flat, image_shape, return_grid):
     if not return_grid:
         return arr_flat
@@ -177,38 +352,21 @@ def _restore_half_image_from_flat(arr_flat, image_shape, return_grid):
     return arr_flat.reshape(tuple(arr_flat.shape[:-1]) + half_shape)
 
 
-def _reconstruct_full_image_flat_from_half(half_flat, image_shape):
-    image_shape = tuple(int(s) for s in image_shape)
-    if not _supports_direct_half_symmetry(image_shape):
-        return fourier_transform_utils.half_image_to_full_image(half_flat, image_shape)
-    _, source_half_flat_idx, source_conjugate, _, _ = _half_image_geometry_maps(tuple(int(s) for s in image_shape))
-    source_half_flat_idx = jnp.asarray(source_half_flat_idx, dtype=jnp.int32)
-    source_conjugate = jnp.asarray(source_conjugate, dtype=bool)
-
-    full_flat = jnp.take(half_flat, source_half_flat_idx, axis=-1)
-    conj_mask = source_conjugate.reshape((1,) * (full_flat.ndim - 1) + (full_flat.shape[-1],))
-    return jnp.where(conj_mask, jnp.conj(full_flat), full_flat)
-
-
 def _half_products_to_full_contribution_terms(
-    half_images_flat, half_ctf_flat, image_shape, plane_indices_on_grid_stacked
+    half_images_flat, half_ctf_flat, image_shape, primary_indices, partner_indices
 ):
     (
-        packed_full_pixel_indices,
         _,
         _,
-        packed_partner_full_pixel_indices,
+        _,
+        _,
         packed_needs_explicit_partner_term,
     ) = _half_image_geometry_maps(tuple(int(s) for s in image_shape))
 
-    packed_full_pixel_indices = jnp.asarray(packed_full_pixel_indices, dtype=jnp.int32)
-    packed_partner_full_pixel_indices = jnp.asarray(packed_partner_full_pixel_indices, dtype=jnp.int32)
     packed_needs_explicit_partner_term = jnp.asarray(packed_needs_explicit_partner_term, dtype=bool)
 
-    primary_indices = jnp.take(plane_indices_on_grid_stacked, packed_full_pixel_indices, axis=-1)
     primary_values = half_images_flat * jnp.conj(half_ctf_flat)
 
-    partner_indices = jnp.take(plane_indices_on_grid_stacked, packed_partner_full_pixel_indices, axis=-1)
     partner_values = jnp.conj(half_images_flat) * half_ctf_flat
     partner_mask = packed_needs_explicit_partner_term.reshape(
         (1,) * (partner_values.ndim - 1) + (partner_values.shape[-1],)
@@ -218,72 +376,88 @@ def _half_products_to_full_contribution_terms(
     return primary_indices, primary_values, partner_indices, partner_values
 
 
-def _half_values_to_full_contribution_terms(
-    half_values_flat, image_shape, plane_indices_on_grid_stacked, valid_mask_full=None
-):
-    (
-        packed_full_pixel_indices,
-        _,
-        _,
-        packed_partner_full_pixel_indices,
-        packed_needs_explicit_partner_term,
-    ) = _half_image_geometry_maps(tuple(int(s) for s in image_shape))
-    packed_full_pixel_indices = jnp.asarray(packed_full_pixel_indices, dtype=jnp.int32)
-    packed_partner_full_pixel_indices = jnp.asarray(packed_partner_full_pixel_indices, dtype=jnp.int32)
-    packed_needs_explicit_partner_term = jnp.asarray(packed_needs_explicit_partner_term, dtype=bool)
+def _volume_shapes_and_sizes(volume_shape):
+    volume_shape = tuple(int(s) for s in volume_shape)
+    full_volume_size = int(np.prod(volume_shape))
+    half_volume_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+    half_volume_size = int(np.prod(half_volume_shape))
+    return volume_shape, full_volume_size, half_volume_shape, half_volume_size
 
-    primary_indices = jnp.take(plane_indices_on_grid_stacked, packed_full_pixel_indices, axis=-1)
-    primary_values = half_values_flat
-    if valid_mask_full is not None:
-        valid_primary = jnp.take(valid_mask_full, packed_full_pixel_indices, axis=-1)
-        primary_values = jnp.where(valid_primary, primary_values, 0)
-        primary_indices = jnp.where(valid_primary, primary_indices, 0)
 
-    partner_indices = jnp.take(plane_indices_on_grid_stacked, packed_partner_full_pixel_indices, axis=-1)
-    partner_values = jnp.conj(half_values_flat)
-    partner_mask = packed_needs_explicit_partner_term.reshape(
-        (1,) * (partner_values.ndim - 1) + (partner_values.shape[-1],)
+def _normalize_full_volume_seed(volume, full_volume_size):
+    if volume is None:
+        return None
+    volume = jnp.asarray(volume)
+    if int(volume.shape[-1]) != full_volume_size:
+        raise ValueError(f"volume must have trailing size {full_volume_size}, got {volume.shape}")
+    return volume
+
+
+def _normalize_half_volume_seed(volume, volume_shape, full_volume_size, half_volume_size):
+    if volume is None:
+        return None
+    volume = jnp.asarray(volume)
+    trailing = int(volume.shape[-1])
+    if trailing == half_volume_size:
+        return volume
+    if trailing == full_volume_size:
+        return fourier_transform_utils.full_volume_to_half_volume(volume, volume_shape)
+    raise ValueError(
+        f"volume must have trailing size {half_volume_size} (half) or {full_volume_size} (full), got {volume.shape}"
     )
-    if valid_mask_full is not None:
-        valid_partner = jnp.take(valid_mask_full, packed_partner_full_pixel_indices, axis=-1)
-        partner_mask = jnp.logical_and(partner_mask, valid_partner)
-    partner_values = jnp.where(partner_mask, partner_values, 0)
-    partner_indices = jnp.where(partner_mask, partner_indices, 0)
-    return primary_indices, primary_values, partner_indices, partner_values
 
 
-def _nearest_plane_indices_and_valid_mask(rotation_matrices, image_shape, volume_shape):
-    grid_coords, grid_coords_og_shape = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
-    rounded_grid = jax.lax.round(grid_coords.T).astype(jnp.int32)
-    vol_shape = jnp.asarray(volume_shape, dtype=jnp.int32)
-    valid_flat = jnp.all((rounded_grid >= 0) & (rounded_grid < vol_shape[None, :]), axis=-1)
-    nearest_indices_flat = vol_indices_to_vec_indices(rounded_grid, volume_shape)
-    nearest_indices = nearest_indices_flat.reshape(grid_coords_og_shape[:-1])
-    valid_mask = valid_flat.reshape(grid_coords_og_shape[:-1])
-    return nearest_indices, valid_mask
+def _normalize_full_volume_seed_from_any(volume, volume_shape, full_volume_size, half_volume_size):
+    if volume is None:
+        return None
+    volume = jnp.asarray(volume)
+    trailing = int(volume.shape[-1])
+    if trailing == full_volume_size:
+        return volume
+    if trailing == half_volume_size:
+        return fourier_transform_utils.half_volume_to_full_volume(volume, volume_shape)
+    raise ValueError(
+        f"volume must have trailing size {half_volume_size} (half) or {full_volume_size} (full), got {volume.shape}"
+    )
 
 
-def _get_packed_and_partner_image_rows(image_shape, n_images):
-    (
-        packed_full_pixel_indices,
-        _,
-        _,
-        packed_partner_full_pixel_indices,
-        packed_needs_explicit_partner_term,
-    ) = _half_image_geometry_maps(tuple(int(s) for s in image_shape))
-    packed_full_pixel_indices = jnp.asarray(packed_full_pixel_indices, dtype=jnp.int32)
-    packed_partner_full_pixel_indices = jnp.asarray(packed_partner_full_pixel_indices, dtype=jnp.int32)
-    packed_needs_explicit_partner_term = jnp.asarray(packed_needs_explicit_partner_term, dtype=bool)
+def _mask_mapped_half_indices(mapped_indices, values):
+    valid = mapped_indices >= 0
+    safe_indices = jnp.where(valid, mapped_indices, 0)
+    safe_values = jnp.where(valid, values, 0)
+    return safe_indices, safe_values
 
-    n_pixels = int(np.prod(image_shape))
-    image_offsets = (jnp.arange(n_images, dtype=jnp.int32) * n_pixels)[:, None]
-    packed_rows = (image_offsets + packed_full_pixel_indices[None, :]).reshape(-1)
-    partner_rows = (image_offsets + packed_partner_full_pixel_indices[None, :]).reshape(-1)
-    partner_mask_flat = jnp.broadcast_to(
-        packed_needs_explicit_partner_term[None, :],
-        (n_images, packed_needs_explicit_partner_term.size),
-    ).reshape(-1)
-    return packed_rows, partner_rows, partner_mask_flat
+
+def _accumulate_full_index_terms_into_half_volume(
+    volume_shape,
+    primary_indices,
+    primary_values,
+    partner_indices,
+    partner_values,
+    volume=None,
+):
+    volume_shape, full_volume_size, _, half_volume_size = _volume_shapes_and_sizes(volume_shape)
+    full_to_half_map = jnp.asarray(_full_volume_to_half_index_map(volume_shape), dtype=jnp.int32)
+
+    mapped_primary_indices = jnp.take(full_to_half_map, primary_indices, axis=0)
+    safe_primary_indices, safe_primary_values = _mask_mapped_half_indices(mapped_primary_indices, primary_values)
+
+    mapped_partner_indices = jnp.take(full_to_half_map, partner_indices, axis=0)
+    safe_partner_indices, safe_partner_values = _mask_mapped_half_indices(mapped_partner_indices, partner_values)
+
+    half_seed = _normalize_half_volume_seed(volume, volume_shape, full_volume_size, half_volume_size)
+    out = summed_adjoint_slice_by_nearest(
+        half_volume_size, safe_primary_values, safe_primary_indices, volume_vec=half_seed
+    )
+    return summed_adjoint_slice_by_nearest(
+        half_volume_size, safe_partner_values, safe_partner_indices, volume_vec=out
+    )
+
+
+def _adjoint_map_from_half_via_full(half_images_flat, rotation_matrices, image_shape, volume_shape, disc_type, volume=None):
+    full_images_flat = fourier_transform_utils.half_image_to_full_image(half_images_flat, image_shape)
+    out = adjoint_slice_volume_by_map(full_images_flat, rotation_matrices, image_shape, volume_shape, disc_type)
+    return out if volume is None else out + volume
 
 
 @functools.partial(jax.jit, static_argnums=0)
@@ -305,13 +479,12 @@ def forward_model_from_half_ctf(volume_vec, half_CTF_val_on_grid_stacked, image_
         half_CTF_val_on_grid_stacked, image_shape, name="half_CTF_val_on_grid_stacked"
     )
     if not _supports_direct_half_symmetry(image_shape):
+        plane_indices_full = _coerce_full_plane_indices(image_shape, plane_indices_on_grid_stacked)
         full_ctf_flat = fourier_transform_utils.half_image_to_full_image(half_ctf_flat, image_shape)
-        full_images_flat = forward_model(volume_vec, full_ctf_flat, plane_indices_on_grid_stacked)
+        full_images_flat = forward_model(volume_vec, full_ctf_flat, plane_indices_full)
         half_images_flat = fourier_transform_utils.full_image_to_half_image(full_images_flat, image_shape)
         return _restore_half_image_from_flat(half_images_flat, image_shape, return_grid)
-    packed_full_pixel_indices, _, _, _, _ = _half_image_geometry_maps(tuple(int(s) for s in image_shape))
-    packed_full_pixel_indices = jnp.asarray(packed_full_pixel_indices, dtype=jnp.int32)
-    plane_indices_half = jnp.take(plane_indices_on_grid_stacked, packed_full_pixel_indices, axis=-1)
+    plane_indices_half = _coerce_half_plane_indices_primary(image_shape, plane_indices_on_grid_stacked)
     half_images_flat = batch_slice_volume_by_nearest(volume_vec, plane_indices_half) * half_ctf_flat
     return _restore_half_image_from_flat(half_images_flat, image_shape, return_grid)
 
@@ -326,11 +499,15 @@ def sum_adj_forward_model_from_half(
         half_CTF_val_on_grid_stacked, image_shape, name="half_CTF_val_on_grid_stacked"
     )
     if not _supports_direct_half_symmetry(image_shape):
+        plane_indices_full = _coerce_full_plane_indices(image_shape, plane_indices_on_grid_stacked)
         full_images_flat = fourier_transform_utils.half_image_to_full_image(half_images_flat, image_shape)
         full_ctf_flat = fourier_transform_utils.half_image_to_full_image(half_ctf_flat, image_shape)
-        return sum_adj_forward_model(volume_size, full_images_flat, full_ctf_flat, plane_indices_on_grid_stacked)
+        return sum_adj_forward_model(volume_size, full_images_flat, full_ctf_flat, plane_indices_full)
+    primary_indices, partner_indices = _coerce_half_plane_indices_with_partner(
+        image_shape, plane_indices_on_grid_stacked
+    )
     primary_indices, primary_values, partner_indices, partner_values = _half_products_to_full_contribution_terms(
-        half_images_flat, half_ctf_flat, image_shape, plane_indices_on_grid_stacked
+        half_images_flat, half_ctf_flat, image_shape, primary_indices, partner_indices
     )
     volume = summed_adjoint_slice_by_nearest(volume_size, primary_values, primary_indices)
     return summed_adjoint_slice_by_nearest(volume_size, partner_values, partner_indices, volume_vec=volume)
@@ -345,39 +522,32 @@ def sum_adj_forward_model_from_half_to_half(
     Equivalent to full adjoint followed by full->half selection, but computed
     directly without constructing a full volume array.
     """
-    volume_shape = tuple(int(s) for s in volume_shape)
+    volume_shape, full_volume_size, _, _ = _volume_shapes_and_sizes(volume_shape)
     half_images_flat, _ = _coerce_half_image_to_flat(half_images, image_shape, name="half_images")
     half_ctf_flat, _ = _coerce_half_image_to_flat(
         half_CTF_val_on_grid_stacked, image_shape, name="half_CTF_val_on_grid_stacked"
     )
     if not _supports_direct_half_symmetry(image_shape):
-        volume_size = int(np.prod(volume_shape))
+        plane_indices_full = _coerce_full_plane_indices(image_shape, plane_indices_on_grid_stacked)
         full_images_flat = fourier_transform_utils.half_image_to_full_image(half_images_flat, image_shape)
         full_ctf_flat = fourier_transform_utils.half_image_to_full_image(half_ctf_flat, image_shape)
-        full_volume = sum_adj_forward_model(volume_size, full_images_flat, full_ctf_flat, plane_indices_on_grid_stacked)
+        full_volume = sum_adj_forward_model(
+            full_volume_size, full_images_flat, full_ctf_flat, plane_indices_full
+        )
         return fourier_transform_utils.full_volume_to_half_volume(full_volume, volume_shape)
-    primary_indices, primary_values, partner_indices, partner_values = _half_products_to_full_contribution_terms(
-        half_images_flat, half_ctf_flat, image_shape, plane_indices_on_grid_stacked
+    primary_indices, partner_indices = _coerce_half_plane_indices_with_partner(
+        image_shape, plane_indices_on_grid_stacked
     )
-
-    full_to_half_map = jnp.asarray(_full_volume_to_half_index_map(volume_shape), dtype=jnp.int32)
-    target_primary_indices = jnp.take(full_to_half_map, primary_indices, axis=0)
-    valid_primary = target_primary_indices >= 0
-    safe_primary_indices = jnp.where(valid_primary, target_primary_indices, 0)
-    safe_primary_values = jnp.where(valid_primary, primary_values, 0)
-
-    target_partner_indices = jnp.take(full_to_half_map, partner_indices, axis=0)
-    valid_partner = target_partner_indices >= 0
-    safe_partner_indices = jnp.where(valid_partner, target_partner_indices, 0)
-    safe_partner_values = jnp.where(valid_partner, partner_values, 0)
-
-    half_volume_size = int(np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)))
-    half_volume = summed_adjoint_slice_by_nearest(half_volume_size, safe_primary_values, safe_primary_indices)
-    return summed_adjoint_slice_by_nearest(
-        half_volume_size,
-        safe_partner_values,
-        safe_partner_indices,
-        volume_vec=half_volume,
+    primary_indices, primary_values, partner_indices, partner_values = _half_products_to_full_contribution_terms(
+        half_images_flat, half_ctf_flat, image_shape, primary_indices, partner_indices
+    )
+    return _accumulate_full_index_terms_into_half_volume(
+        volume_shape,
+        primary_indices,
+        primary_values,
+        partner_indices,
+        partner_values,
+        volume=None,
     )
 
 
@@ -431,17 +601,20 @@ def adjoint_slice_volume_by_trilinear_from_half_images(
         )
     half_images_2d = half_images_flat.reshape(-1, half_images_flat.shape[-1])
     n_images = int(half_images_2d.shape[0])
-    grid_coords, _ = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
-    grid_points, weights = get_trilinear_weights_and_vol_indices(grid_coords.T, volume_shape)
-    grid_vec_indices = vol_indices_to_vec_indices(grid_points, volume_shape)
+    n_half = int(half_images_2d.shape[-1])
 
-    packed_rows, partner_rows, partner_mask_flat = _get_packed_and_partner_image_rows(image_shape, n_images)
-    packed_indices = jnp.take(grid_vec_indices, packed_rows, axis=0)
-    packed_weights = jnp.take(weights, packed_rows, axis=0)
-    partner_indices = jnp.take(grid_vec_indices, partner_rows, axis=0)
-    partner_weights = jnp.take(weights, partner_rows, axis=0)
+    primary_coords, partner_coords, partner_mask_1d = _rotated_half_and_partner_coords(
+        rotation_matrices, image_shape, volume_shape
+    )
+    packed_points, packed_weights = get_trilinear_weights_and_vol_indices(primary_coords.reshape(-1, 3), volume_shape)
+    packed_indices = vol_indices_to_vec_indices(packed_points, volume_shape)
+    partner_points, partner_weights = get_trilinear_weights_and_vol_indices(
+        partner_coords.reshape(-1, 3), volume_shape
+    )
+    partner_indices = vol_indices_to_vec_indices(partner_points, volume_shape)
 
     packed_values = half_images_2d.reshape(-1)
+    partner_mask_flat = jnp.broadcast_to(partner_mask_1d[None, :], (n_images, n_half)).reshape(-1)
     partner_values = jnp.where(partner_mask_flat, jnp.conj(half_images_2d).reshape(-1), 0)
 
     volume = adjoint_slice_volume_by_trilinear_from_weights(
@@ -456,22 +629,9 @@ def adjoint_slice_volume_by_trilinear_from_half_images_to_half_volume(
     half_images, rotation_matrices, image_shape, volume_shape, volume=None
 ):
     """Adjoint trilinear slicing from packed half images to packed half volumes."""
-    volume_shape = tuple(int(s) for s in volume_shape)
-    full_volume_size = int(np.prod(volume_shape))
-    half_volume_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
-    half_volume_size = int(np.prod(half_volume_shape))
+    volume_shape, full_volume_size, _, half_volume_size = _volume_shapes_and_sizes(volume_shape)
     if not _supports_direct_half_symmetry(image_shape):
-        full_seed = None
-        if volume is not None:
-            volume = jnp.asarray(volume)
-            if int(volume.shape[-1]) == half_volume_size:
-                full_seed = fourier_transform_utils.half_volume_to_full_volume(volume, volume_shape)
-            elif int(volume.shape[-1]) == full_volume_size:
-                full_seed = volume
-            else:
-                raise ValueError(
-                    f"volume must have trailing size {half_volume_size} (half) or {full_volume_size} (full), got {volume.shape}"
-                )
+        full_seed = _normalize_full_volume_seed_from_any(volume, volume_shape, full_volume_size, half_volume_size)
         full_volume = adjoint_slice_volume_by_trilinear_from_half_images(
             half_images, rotation_matrices, image_shape, volume_shape, volume=full_seed
         )
@@ -480,53 +640,30 @@ def adjoint_slice_volume_by_trilinear_from_half_images_to_half_volume(
     half_images_flat, _ = _coerce_half_image_to_flat(half_images, image_shape, name="half_images")
     half_images_2d = half_images_flat.reshape(-1, half_images_flat.shape[-1])
     n_images = int(half_images_2d.shape[0])
+    n_half = int(half_images_2d.shape[-1])
 
-    grid_coords, _ = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
-    grid_points, weights = get_trilinear_weights_and_vol_indices(grid_coords.T, volume_shape)
-    grid_vec_indices = vol_indices_to_vec_indices(grid_points, volume_shape)
-
-    packed_rows, partner_rows, partner_mask_flat = _get_packed_and_partner_image_rows(image_shape, n_images)
-    packed_indices = jnp.take(grid_vec_indices, packed_rows, axis=0)
-    packed_weights = jnp.take(weights, packed_rows, axis=0)
-    partner_indices = jnp.take(grid_vec_indices, partner_rows, axis=0)
-    partner_weights = jnp.take(weights, partner_rows, axis=0)
+    primary_coords, partner_coords, partner_mask_1d = _rotated_half_and_partner_coords(
+        rotation_matrices, image_shape, volume_shape
+    )
+    packed_points, packed_weights = get_trilinear_weights_and_vol_indices(primary_coords.reshape(-1, 3), volume_shape)
+    packed_indices = vol_indices_to_vec_indices(packed_points, volume_shape)
+    partner_points, partner_weights = get_trilinear_weights_and_vol_indices(
+        partner_coords.reshape(-1, 3), volume_shape
+    )
+    partner_indices = vol_indices_to_vec_indices(partner_points, volume_shape)
 
     packed_values = half_images_2d.reshape(-1)
+    partner_mask_flat = jnp.broadcast_to(partner_mask_1d[None, :], (n_images, n_half)).reshape(-1)
     partner_values = jnp.where(partner_mask_flat, jnp.conj(half_images_2d).reshape(-1), 0)
     packed_weighted_vals = packed_weights * packed_values.reshape(-1, 1)
     partner_weighted_vals = partner_weights * partner_values.reshape(-1, 1)
-
-    full_to_half_map = jnp.asarray(_full_volume_to_half_index_map(tuple(int(s) for s in volume_shape)), dtype=jnp.int32)
-    mapped_packed_indices = jnp.take(full_to_half_map, packed_indices, axis=0)
-    valid_packed = mapped_packed_indices >= 0
-    safe_packed_indices = jnp.where(valid_packed, mapped_packed_indices, 0)
-    safe_packed_vals = jnp.where(valid_packed, packed_weighted_vals, 0)
-
-    mapped_partner_indices = jnp.take(full_to_half_map, partner_indices, axis=0)
-    valid_partner = mapped_partner_indices >= 0
-    safe_partner_indices = jnp.where(valid_partner, mapped_partner_indices, 0)
-    safe_partner_vals = jnp.where(valid_partner, partner_weighted_vals, 0)
-
-    if volume is not None:
-        volume = jnp.asarray(volume)
-        if int(volume.shape[-1]) == full_volume_size:
-            volume = fourier_transform_utils.full_volume_to_half_volume(volume, volume_shape)
-        elif int(volume.shape[-1]) != half_volume_size:
-            raise ValueError(
-                f"volume must have trailing size {half_volume_size} (half) or {full_volume_size} (full), got {volume.shape}"
-            )
-
-    half_volume = summed_adjoint_slice_by_nearest(
-        half_volume_size,
-        safe_packed_vals,
-        safe_packed_indices,
-        volume_vec=volume,
-    )
-    return summed_adjoint_slice_by_nearest(
-        half_volume_size,
-        safe_partner_vals,
-        safe_partner_indices,
-        volume_vec=half_volume,
+    return _accumulate_full_index_terms_into_half_volume(
+        volume_shape,
+        packed_indices,
+        packed_weighted_vals,
+        partner_indices,
+        partner_weighted_vals,
+        volume=volume,
     )
 
 
@@ -538,62 +675,42 @@ def adjoint_slice_volume_by_map_from_half_images(
     Uses the same geometry and interpolation order as `adjoint_slice_volume_by_map`.
     """
     half_images_flat, _ = _coerce_half_image_to_flat(half_images, image_shape, name="half_images")
-    volume_shape = tuple(int(s) for s in volume_shape)
-    volume_size = int(np.prod(volume_shape))
-    if volume is not None:
-        volume = jnp.asarray(volume)
-        if int(volume.shape[-1]) != volume_size:
-            raise ValueError(f"volume must have trailing size {volume_size}, got {volume.shape}")
+    volume_shape, full_volume_size, _, _ = _volume_shapes_and_sizes(volume_shape)
+    volume = _normalize_full_volume_seed(volume, full_volume_size)
     if not _supports_direct_half_symmetry(image_shape):
-        full_images_flat = fourier_transform_utils.half_image_to_full_image(half_images_flat, image_shape)
-        out = adjoint_slice_volume_by_map(
-            full_images_flat, rotation_matrices, image_shape, volume_shape, disc_type
+        return _adjoint_map_from_half_via_full(
+            half_images_flat, rotation_matrices, image_shape, volume_shape, disc_type, volume=volume
         )
-        return out if volume is None else out + volume
 
     if disc_type == "nearest":
-        plane_indices_on_grid_stacked, valid_mask_full = _nearest_plane_indices_and_valid_mask(
+        primary_indices, primary_valid, partner_indices, partner_valid, partner_mask = _half_plane_nearest_indices_and_masks(
             rotation_matrices, image_shape, volume_shape
         )
-        primary_indices, primary_values, partner_indices, partner_values = _half_values_to_full_contribution_terms(
-            half_images_flat, image_shape, plane_indices_on_grid_stacked, valid_mask_full=valid_mask_full
-        )
-        out = summed_adjoint_slice_by_nearest(volume_size, primary_values, primary_indices, volume_vec=volume)
-        return summed_adjoint_slice_by_nearest(volume_size, partner_values, partner_indices, volume_vec=out)
+        primary_values = jnp.where(primary_valid, half_images_flat, 0)
+        primary_indices = jnp.where(primary_valid, primary_indices, 0)
+        partner_active = jnp.logical_and(partner_valid, partner_mask)
+        partner_values = jnp.where(partner_active, jnp.conj(half_images_flat), 0)
+        partner_indices = jnp.where(partner_active, partner_indices, 0)
+        out = summed_adjoint_slice_by_nearest(full_volume_size, primary_values, primary_indices, volume_vec=volume)
+        return summed_adjoint_slice_by_nearest(full_volume_size, partner_values, partner_indices, volume_vec=out)
 
     if disc_type == "linear_interp":
         return adjoint_slice_volume_by_trilinear_from_half_images(
             half_images, rotation_matrices, image_shape, volume_shape, volume=volume
         )
 
-    full_images_flat = _reconstruct_full_image_flat_from_half(half_images_flat, image_shape)
-    return adjoint_slice_volume_by_map(
-        full_images_flat, rotation_matrices, image_shape, volume_shape, disc_type
-    ) if volume is None else adjoint_slice_volume_by_map(
-        full_images_flat, rotation_matrices, image_shape, volume_shape, disc_type
-    ) + volume
+    return _adjoint_map_from_half_via_full(
+        half_images_flat, rotation_matrices, image_shape, volume_shape, disc_type, volume=volume
+    )
 
 
 def adjoint_slice_volume_by_map_from_half_images_to_half_volume(
     half_images, rotation_matrices, image_shape, volume_shape, disc_type, volume=None
 ):
     """Adjoint map-based slicing from packed half images to packed half volumes."""
-    volume_shape = tuple(int(s) for s in volume_shape)
-    full_volume_size = int(np.prod(volume_shape))
-    half_volume_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
-    half_volume_size = int(np.prod(half_volume_shape))
+    volume_shape, full_volume_size, _, half_volume_size = _volume_shapes_and_sizes(volume_shape)
     if not _supports_direct_half_symmetry(image_shape):
-        full_seed = None
-        if volume is not None:
-            volume = jnp.asarray(volume)
-            if int(volume.shape[-1]) == half_volume_size:
-                full_seed = fourier_transform_utils.half_volume_to_full_volume(volume, volume_shape)
-            elif int(volume.shape[-1]) == full_volume_size:
-                full_seed = volume
-            else:
-                raise ValueError(
-                    f"volume must have trailing size {half_volume_size} (half) or {full_volume_size} (full), got {volume.shape}"
-                )
+        full_seed = _normalize_full_volume_seed_from_any(volume, volume_shape, full_volume_size, half_volume_size)
         full_volume = adjoint_slice_volume_by_map_from_half_images(
             half_images, rotation_matrices, image_shape, volume_shape, disc_type, volume=full_seed
         )
@@ -601,38 +718,21 @@ def adjoint_slice_volume_by_map_from_half_images_to_half_volume(
 
     if disc_type == "nearest":
         half_images_flat, _ = _coerce_half_image_to_flat(half_images, image_shape, name="half_images")
-        plane_indices_on_grid_stacked, valid_mask_full = _nearest_plane_indices_and_valid_mask(
+        primary_indices, primary_valid, partner_indices, partner_valid, partner_mask = _half_plane_nearest_indices_and_masks(
             rotation_matrices, image_shape, volume_shape
         )
-        primary_indices, primary_values, partner_indices, partner_values = _half_values_to_full_contribution_terms(
-            half_images_flat, image_shape, plane_indices_on_grid_stacked, valid_mask_full=valid_mask_full
-        )
-        full_to_half_map = jnp.asarray(_full_volume_to_half_index_map(volume_shape), dtype=jnp.int32)
-
-        mapped_primary_indices = jnp.take(full_to_half_map, primary_indices, axis=0)
-        valid_primary = mapped_primary_indices >= 0
-        safe_primary_indices = jnp.where(valid_primary, mapped_primary_indices, 0)
-        safe_primary_values = jnp.where(valid_primary, primary_values, 0)
-
-        mapped_partner_indices = jnp.take(full_to_half_map, partner_indices, axis=0)
-        valid_partner = mapped_partner_indices >= 0
-        safe_partner_indices = jnp.where(valid_partner, mapped_partner_indices, 0)
-        safe_partner_values = jnp.where(valid_partner, partner_values, 0)
-
-        if volume is not None:
-            volume = jnp.asarray(volume)
-            if int(volume.shape[-1]) == full_volume_size:
-                volume = fourier_transform_utils.full_volume_to_half_volume(volume, volume_shape)
-            elif int(volume.shape[-1]) != half_volume_size:
-                raise ValueError(
-                    f"volume must have trailing size {half_volume_size} (half) or {full_volume_size} (full), got {volume.shape}"
-                )
-
-        out = summed_adjoint_slice_by_nearest(
-            half_volume_size, safe_primary_values, safe_primary_indices, volume_vec=volume
-        )
-        return summed_adjoint_slice_by_nearest(
-            half_volume_size, safe_partner_values, safe_partner_indices, volume_vec=out
+        primary_values = jnp.where(primary_valid, half_images_flat, 0)
+        primary_indices = jnp.where(primary_valid, primary_indices, 0)
+        partner_active = jnp.logical_and(partner_valid, partner_mask)
+        partner_values = jnp.where(partner_active, jnp.conj(half_images_flat), 0)
+        partner_indices = jnp.where(partner_active, partner_indices, 0)
+        return _accumulate_full_index_terms_into_half_volume(
+            volume_shape,
+            primary_indices,
+            primary_values,
+            partner_indices,
+            partner_values,
+            volume=volume,
         )
 
     if disc_type == "linear_interp":
@@ -640,18 +740,7 @@ def adjoint_slice_volume_by_map_from_half_images_to_half_volume(
             half_images, rotation_matrices, image_shape, volume_shape, volume=volume
         )
 
-    full_seed = None
-    if volume is not None:
-        volume = jnp.asarray(volume)
-        if int(volume.shape[-1]) == half_volume_size:
-            full_seed = fourier_transform_utils.half_volume_to_full_volume(volume, volume_shape)
-        elif int(volume.shape[-1]) == full_volume_size:
-            full_seed = volume
-        else:
-            raise ValueError(
-                f"volume must have trailing size {half_volume_size} (half) or {full_volume_size} (full), got {volume.shape}"
-            )
-
+    full_seed = _normalize_full_volume_seed_from_any(volume, volume_shape, full_volume_size, half_volume_size)
     full_volume = adjoint_slice_volume_by_map_from_half_images(
         half_images, rotation_matrices, image_shape, volume_shape, disc_type, volume=full_seed
     )
@@ -703,6 +792,7 @@ __all__ = [
     "sum_adj_forward_model",
     "forward_model",
     "forward_model_from_half_ctf",
+    "split_full_plane_indices_for_half",
     "sum_adj_forward_model_from_half",
     "sum_adj_forward_model_from_half_to_half",
     "get_trilinear_weights_and_vol_indices",

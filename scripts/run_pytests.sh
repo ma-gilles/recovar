@@ -8,6 +8,7 @@ set -euo pipefail
 #   gpu          - includes GPU-marked tests
 #   full         - includes integration + gpu + slow
 #   full-long    - full suite + long metrics regressions (standard + cryo-ET)
+#   real-regression - full suite + strict real-dataset quality gates
 #   long-metrics - opt-in very long run_test_all_metrics regression (1h+)
 
 MODE="${1:-fast}"
@@ -34,13 +35,17 @@ case "$MODE" in
     pytest --run-integration --run-gpu --run-slow "$@"
     ./scripts/run_long_metrics_regression.sh
     ;;
+  real-regression)
+    shift || true
+    ./scripts/run_full_real_dataset_regression.sh "$@"
+    ;;
   long-metrics)
     shift || true
     ./scripts/run_long_metrics_regression.sh "$@"
     ;;
   *)
     echo "Unknown mode: $MODE"
-    echo "Usage: $0 [fast|integration|gpu|full|full-long|long-metrics] [extra pytest args...]"
+    echo "Usage: $0 [fast|integration|gpu|full|full-long|real-regression|long-metrics] [extra pytest args...]"
     exit 2
     ;;
 esac
