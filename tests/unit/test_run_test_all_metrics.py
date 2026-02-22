@@ -61,6 +61,12 @@ def test_compute_noise_variance_metrics_missing_gt_returns_empty(tmp_path):
     assert scores == {}
 
 
+def test_compute_noise_variance_metrics_missing_estimate_returns_empty(tmp_path):
+    gt = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    scores = rtam.compute_noise_variance_metrics(gt, None, str(tmp_path), _logger())
+    assert scores == {}
+
+
 def test_compute_noise_variance_metrics_truncates_mismatched_lengths(tmp_path):
     gt = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64)
     est = np.array([1.1, 1.9], dtype=np.float64)
@@ -202,12 +208,16 @@ def test_normalize_scores_for_json_handles_numpy_scalars_and_arrays():
         "b": np.int64(7),
         "c": np.array([1.0, 2.0], dtype=np.float32),
         "d": "ok",
+        "flag_py": True,
+        "flag_np": np.bool_(False),
     }
     out = rtam.normalize_scores_for_json(inp)
     assert out["a"] == 1.25
     assert out["b"] == 7.0
     assert out["c"] == [1.0, 2.0]
     assert out["d"] == "ok"
+    assert out["flag_py"] is True
+    assert out["flag_np"] is False
 
 
 def test_compare_scores_against_baseline_applies_direction_and_tolerance():
@@ -295,6 +305,191 @@ def test_load_u_real_for_metrics_rejects_nonpositive_request():
         rtam.load_u_real_for_metrics(_PO(), 0)
 
 
+def test_load_unsorted_embedding_component_prefers_selective_api_and_caches_by_component():
+    class _PO:
+        def __init__(self):
+            self.calls = []
+
+        def get_embedding_component(self, entry, key):
+            self.calls.append((entry, key))
+            return np.array([len(self.calls), int(key)], dtype=np.float32)
+
+    po = _PO()
+    cache = {}
+
+    first = rtam.load_unsorted_embedding_component(po, "zs", 10, cache)
+    second = rtam.load_unsorted_embedding_component(po, "zs", 10, cache)
+    third = rtam.load_unsorted_embedding_component(po, "zs", 4, cache)
+
+    # Same component is loaded once; different key triggers another load.
+    assert po.calls == [("zs", 10), ("zs", 4)]
+    np.testing.assert_array_equal(first, second)
+    assert not np.array_equal(first, third)
+
+
+def test_load_unsorted_embedding_component_legacy_fallback_caches_root_and_component():
+    class _PO:
+        def __init__(self):
+            self.get_calls = 0
+            self.root = {
+                "zs": {
+                    4: np.array([[1.0, 2.0]], dtype=np.float32),
+                },
+                "contrasts": {
+                    4: np.array([0.5], dtype=np.float32),
+                },
+            }
+
+        def get(self, key):
+            assert key == "unsorted_embedding"
+            self.get_calls += 1
+            return self.root
+
+    po = _PO()
+    cache = {}
+    z_first = rtam.load_unsorted_embedding_component(po, "zs", 4, cache)
+    z_second = rtam.load_unsorted_embedding_component(po, "zs", 4, cache)
+    c_first = rtam.load_unsorted_embedding_component(po, "contrasts", 4, cache)
+    c_second = rtam.load_unsorted_embedding_component(po, "contrasts", 4, cache)
+
+    assert po.get_calls == 1
+    np.testing.assert_array_equal(z_first, z_second)
+    np.testing.assert_array_equal(c_first, c_second)
+
+
+def test_select_state_target_latent_points_falls_back_to_nonempty_labels():
+    unsorted_zs = np.array(
+        [
+            [0.0, 0.0],
+            [2.0, 0.0],
+            [4.0, 0.0],
+            [6.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    particle_assignment = np.array([1, 1, 3, 3], dtype=np.int64)
+
+    points, labels = rtam.select_state_target_latent_points(
+        unsorted_zs=unsorted_zs,
+        particle_assignment=particle_assignment,
+        preferred_labels=[0, 25],
+        max_points=2,
+    )
+
+    assert labels == [1, 3]
+    np.testing.assert_allclose(points, np.array([[1.0, 0.0], [5.0, 0.0]], dtype=np.float32))
+
+
+def test_select_state_target_latent_points_filters_nonfinite_rows():
+    unsorted_zs = np.array(
+        [
+            [1.0, 2.0],
+            [np.nan, 0.0],
+            [3.0, 4.0],
+        ],
+        dtype=np.float32,
+    )
+    particle_assignment = np.array([0, 0, 1], dtype=np.int64)
+
+    points, labels = rtam.select_state_target_latent_points(
+        unsorted_zs=unsorted_zs,
+        particle_assignment=particle_assignment,
+        preferred_labels=[0, 1],
+        max_points=2,
+    )
+
+    assert labels == [0, 1]
+    assert np.all(np.isfinite(points))
+    np.testing.assert_allclose(points[0], np.array([1.0, 2.0], dtype=np.float32))
+    np.testing.assert_allclose(points[1], np.array([3.0, 4.0], dtype=np.float32))
+
+
+def test_select_state_target_latent_points_rejects_length_mismatch():
+    unsorted_zs = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    particle_assignment = np.array([0], dtype=np.int64)
+
+    with pytest.raises(ValueError, match="Length mismatch"):
+        rtam.select_state_target_latent_points(
+            unsorted_zs=unsorted_zs,
+            particle_assignment=particle_assignment,
+            preferred_labels=[0, 1],
+            max_points=2,
+        )
+
+
+def test_select_state_target_latent_points_rejects_nonpositive_max_points():
+    unsorted_zs = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    particle_assignment = np.array([0, 1], dtype=np.int64)
+    with pytest.raises(ValueError, match="max_points must be positive"):
+        rtam.select_state_target_latent_points(
+            unsorted_zs=unsorted_zs,
+            particle_assignment=particle_assignment,
+            preferred_labels=[0, 1],
+            max_points=0,
+        )
+
+
+def test_select_state_target_latent_points_rejects_non_integer_like_assignments():
+    unsorted_zs = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    particle_assignment = np.array([0.1, 1.9], dtype=np.float32)
+    with pytest.raises(ValueError, match="integer-like"):
+        rtam.select_state_target_latent_points(
+            unsorted_zs=unsorted_zs,
+            particle_assignment=particle_assignment,
+            preferred_labels=[0, 1],
+            max_points=2,
+        )
+
+
+def test_select_state_target_latent_points_accepts_integer_like_float_assignments():
+    unsorted_zs = np.array([[0.0, 0.0], [2.0, 0.0], [4.0, 0.0], [6.0, 0.0]], dtype=np.float32)
+    particle_assignment = np.array([0.0, 0.0, 1.0, 1.0], dtype=np.float32)
+    points, labels = rtam.select_state_target_latent_points(
+        unsorted_zs=unsorted_zs,
+        particle_assignment=particle_assignment,
+        preferred_labels=[1, 0],
+        max_points=2,
+    )
+    assert labels == [1, 0]
+    np.testing.assert_allclose(points, np.array([[5.0, 0.0], [1.0, 0.0]], dtype=np.float32))
+
+
+def test_select_state_target_latent_points_rejects_all_nonfinite_rows():
+    unsorted_zs = np.array([[np.nan, 0.0], [np.inf, -1.0]], dtype=np.float32)
+    particle_assignment = np.array([0, 1], dtype=np.int64)
+    with pytest.raises(ValueError, match="All rows in unsorted_zs are non-finite"):
+        rtam.select_state_target_latent_points(
+            unsorted_zs=unsorted_zs,
+            particle_assignment=particle_assignment,
+            preferred_labels=[0, 1],
+            max_points=2,
+        )
+
+
+def test_load_u_real_for_metrics_legacy_get_handles_shorter_arrays():
+    class _PO:
+        def get(self, key):
+            assert key == "u_real"
+            return np.arange(2 * 3, dtype=np.float32).reshape(2, 3)
+
+    out = rtam.load_u_real_for_metrics(_PO(), 10)
+    assert out.shape == (2, 3)
+    np.testing.assert_array_equal(out, np.arange(2 * 3, dtype=np.float32).reshape(2, 3))
+
+
+def test_generate_compact_support_test_volumes_default_prefix_and_count(tmp_path):
+    prefix = rtam.generate_compact_support_test_volumes(
+        output_dir=str(tmp_path),
+        grid_size=16,
+        n_volumes=6,
+        voxel_size=1.0,
+    )
+    assert str(Path(prefix).parent) == str(tmp_path / "generated_volumes")
+    assert Path(prefix).name == "vol"
+    for i in range(6):
+        assert Path(f"{prefix}{i:04d}.mrc").exists()
+
+
 def test_compare_scores_against_baseline_skips_non_numeric_values():
     current = {
         "mean_fsc": 0.80,
@@ -331,6 +526,16 @@ def test_compare_scores_against_baseline_skips_boolean_values():
     assert "mean_fsc" in details
 
 
+def test_compare_scores_against_baseline_skips_numpy_boolean_values():
+    current = {"flag_metric": np.bool_(True), "mean_fsc": 0.8}
+    baseline = {"flag_metric": np.bool_(False), "mean_fsc": 0.79}
+    checked, failures, details = rtam.compare_scores_against_baseline(current, baseline, tol_frac=0.01)
+    assert checked == 1
+    assert failures == []
+    assert "flag_metric" not in details
+    assert "mean_fsc" in details
+
+
 def test_compute_noise_variance_metrics_per_tilt_without_dose_indices_returns_empty(tmp_path):
     gt = np.array([1.0, 2.0, 3.0], dtype=np.float64)
     est = np.array(
@@ -346,6 +551,25 @@ def test_compute_noise_variance_metrics_per_tilt_without_dose_indices_returns_em
         str(tmp_path),
         _logger(),
         dose_indices=None,
+    )
+    assert scores == {}
+
+
+def test_compute_noise_variance_metrics_per_tilt_with_empty_dose_indices_returns_empty(tmp_path):
+    gt = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    est = np.array(
+        [
+            [1.0, 2.1, 2.9],
+            [1.2, 2.2, 3.4],
+        ],
+        dtype=np.float64,
+    )
+    scores = rtam.compute_noise_variance_metrics(
+        gt,
+        est,
+        str(tmp_path),
+        _logger(),
+        dose_indices=np.array([], dtype=np.int32),
     )
     assert scores == {}
 

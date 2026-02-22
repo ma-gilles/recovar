@@ -87,6 +87,32 @@ def test_load_poses_index_filter_applies_when_input_is_longer(monkeypatch):
     assert np.allclose(trans_out, trans_all[ind] * 100)
 
 
+def test_load_poses_index_filter_accepts_boolean_mask_when_input_is_longer(monkeypatch):
+    rots_all = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 5, axis=0)
+    trans_all = np.linspace(0.0, 0.9, 10, dtype=np.float32).reshape(5, 2)
+    mask = np.array([True, False, True, False, True], dtype=bool)
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: (rots_all, trans_all))
+
+    rots_out, trans_out, _ = load_utils.load_poses("poses.pkl", Nimg=3, D=80, ind=mask)
+    assert rots_out.shape == (3, 3, 3)
+    np.testing.assert_allclose(trans_out, trans_all[[0, 2, 4]] * 80.0)
+
+
+def test_load_poses_index_filter_rejects_bad_masks_or_indices(monkeypatch):
+    rots_all = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 5, axis=0)
+    trans_all = np.linspace(0.0, 0.9, 10, dtype=np.float32).reshape(5, 2)
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: (rots_all, trans_all))
+
+    with pytest.raises(ValueError, match="boolean mask must be 1D"):
+        load_utils.load_poses("poses.pkl", Nimg=3, D=64, ind=np.array([[True, False, True, False, True]], dtype=bool))
+    with pytest.raises(ValueError, match="must match number of poses"):
+        load_utils.load_poses("poses.pkl", Nimg=3, D=64, ind=np.array([True, False], dtype=bool))
+    with pytest.raises(IndexError, match="negative"):
+        load_utils.load_poses("poses.pkl", Nimg=3, D=64, ind=np.array([0, -1, 2], dtype=np.int32))
+    with pytest.raises(IndexError, match="number of poses"):
+        load_utils.load_poses("poses.pkl", Nimg=3, D=64, ind=np.array([0, 2, 9], dtype=np.int32))
+
+
 def test_load_poses_rejects_old_pixel_translation_format(monkeypatch):
     rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 2, axis=0)
     trans_pixels = np.array([[2.0, 3.0], [4.0, 5.0]], dtype=np.float32)
@@ -146,3 +172,12 @@ def test_load_poses_two_file_real_pickles(tmp_path):
     assert D_out == 10
     np.testing.assert_array_equal(rots_out, rots)
     np.testing.assert_allclose(trans_out, trans_frac * 10.0)
+
+
+def test_load_poses_rejects_rotation_translation_count_mismatch(monkeypatch):
+    rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 3, axis=0)
+    trans_frac = np.zeros((4, 2), dtype=np.float32)
+    monkeypatch.setattr(load_utils.utils, "pickle_load", lambda _: (rots, trans_frac))
+
+    with pytest.raises(ValueError, match="count mismatch"):
+        load_utils.load_poses("poses.pkl", Nimg=3, D=8)

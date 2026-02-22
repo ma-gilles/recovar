@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 
 pytest.importorskip("torch")
 
@@ -57,6 +58,32 @@ def test_particle_image_dataset_subset_generators_preserve_order_and_duplicates(
     for _imgs, _pidx, tidx in image_batches:
         got_img.extend(np.array(tidx).reshape(-1).tolist())
     assert got_img == [3, 1, 3]
+
+
+def test_particle_image_dataset_subset_generators_accept_boolean_mask(monkeypatch):
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _DummySource(n=5, D=8))
+    ds = cryo_dataset.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+
+    mask = np.array([False, True, False, True, False], dtype=bool)
+    batches = list(ds.get_dataset_subset_generator(batch_size=2, subset_indices=mask))
+    got = []
+    for _imgs, _pidx, tidx in batches:
+        got.extend(np.array(tidx).reshape(-1).tolist())
+    assert got == [1, 3]
+
+
+def test_particle_image_dataset_subset_generators_reject_invalid_masks(monkeypatch):
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _DummySource(n=5, D=8))
+    ds = cryo_dataset.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+
+    with pytest.raises(ValueError, match="boolean mask must be 1D"):
+        list(ds.get_dataset_subset_generator(batch_size=2, subset_indices=np.array([[True, False]], dtype=bool)))
+    with pytest.raises(ValueError, match="must match total size"):
+        list(ds.get_dataset_subset_generator(batch_size=2, subset_indices=np.array([True, False], dtype=bool)))
+    with pytest.raises(IndexError, match="negative"):
+        list(ds.get_dataset_subset_generator(batch_size=2, subset_indices=np.array([0, -1], dtype=np.int32)))
+    with pytest.raises(IndexError, match="out-of-range"):
+        list(ds.get_dataset_subset_generator(batch_size=2, subset_indices=np.array([5], dtype=np.int32)))
 
 
 def test_tiltseries_parse_particle_tilt_and_reverse_map(monkeypatch):
@@ -162,6 +189,35 @@ def test_tilt_series_to_images_with_boolean_subset_mask(monkeypatch):
     np.testing.assert_array_equal(out, np.array([1, 4, 1], dtype=np.int32))
 
 
+def test_tilt_series_to_images_accepts_boolean_particle_mask(monkeypatch):
+    monkeypatch.setattr(
+        cryo_dataset.TiltSeriesDataset,
+        "parse_particle_tilt",
+        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0, 1: 0, 2: 1, 3: 1, 4: 2}),
+    )
+    particle_mask = np.array([True, False, True], dtype=bool)
+    out = cryo_dataset.tilt_series_to_images(particle_mask, "dummy.star")
+    np.testing.assert_array_equal(out, np.array([0, 1, 4], dtype=np.int32))
+
+
+def test_tilt_series_to_images_rejects_bad_particle_indices(monkeypatch):
+    monkeypatch.setattr(
+        cryo_dataset.TiltSeriesDataset,
+        "parse_particle_tilt",
+        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0, 1: 0, 2: 1, 3: 1, 4: 2}),
+    )
+    with pytest.raises(IndexError, match="out-of-range"):
+        cryo_dataset.tilt_series_to_images(np.array([3], dtype=np.int32), "dummy.star")
+    with pytest.raises(IndexError, match="out-of-range"):
+        cryo_dataset.tilt_series_to_images(np.array([-1], dtype=np.int32), "dummy.star")
+    with pytest.raises(ValueError, match="must be 1D"):
+        cryo_dataset.tilt_series_to_images(np.array([[0, 1]], dtype=np.int32), "dummy.star")
+    with pytest.raises(ValueError, match="must match number of particles"):
+        cryo_dataset.tilt_series_to_images(np.array([True, False], dtype=bool), "dummy.star")
+    with pytest.raises(TypeError, match="integer indices or boolean mask"):
+        cryo_dataset.tilt_series_to_images(np.array([0.0, 1.0], dtype=np.float32), "dummy.star")
+
+
 def test_tilt_series_to_images_rejects_non_1d_boolean_subset_mask(monkeypatch):
     monkeypatch.setattr(
         cryo_dataset.TiltSeriesDataset,
@@ -190,6 +246,54 @@ def test_tilt_series_to_images_rejects_wrong_length_boolean_subset_mask(monkeypa
             "dummy.star",
             image_subset=bad_mask,
         )
+
+
+def test_tilt_series_to_images_rejects_out_of_range_image_subset_values(monkeypatch):
+    monkeypatch.setattr(
+        cryo_dataset.TiltSeriesDataset,
+        "parse_particle_tilt",
+        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0, 1: 0, 2: 1, 3: 1, 4: 2}),
+    )
+    with pytest.raises(IndexError, match="out-of-range"):
+        cryo_dataset.tilt_series_to_images(
+            np.array([0, 2], dtype=np.int32),
+            "dummy.star",
+            image_subset=np.array([0, 9], dtype=np.int32),
+        )
+
+
+def test_tilt_series_to_images_rejects_non_integer_image_subset_values(monkeypatch):
+    monkeypatch.setattr(
+        cryo_dataset.TiltSeriesDataset,
+        "parse_particle_tilt",
+        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0, 1: 0, 2: 1, 3: 1, 4: 2}),
+    )
+    with pytest.raises(TypeError, match="integer indices or boolean mask"):
+        cryo_dataset.tilt_series_to_images(
+            np.array([0, 2], dtype=np.int32),
+            "dummy.star",
+            image_subset=np.array([0.0, 1.0], dtype=np.float32),
+        )
+    with pytest.raises(TypeError, match="integer indices or boolean mask"):
+        cryo_dataset.tilt_series_to_images(
+            np.array([0], dtype=np.int32),
+            "dummy.star",
+            image_subset=np.array(1.5, dtype=np.float32),
+        )
+
+
+def test_tilt_series_to_images_accepts_scalar_integer_image_subset(monkeypatch):
+    monkeypatch.setattr(
+        cryo_dataset.TiltSeriesDataset,
+        "parse_particle_tilt",
+        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0, 1: 0, 2: 1, 3: 1, 4: 2}),
+    )
+    out = cryo_dataset.tilt_series_to_images(
+        np.array([0, 2], dtype=np.int32),
+        "dummy.star",
+        image_subset=np.array(1, dtype=np.int32),
+    )
+    np.testing.assert_array_equal(out, np.array([1], dtype=np.int32))
 
 
 def test_tilt_series_to_images_empty_and_duplicate_particle_indices(monkeypatch):
@@ -274,6 +378,56 @@ def test_image_count_batch_loader_padding_marks_invalid_entries():
     assert imgs.shape[0] == 3
     np.testing.assert_array_equal(pidx, np.array([0, 1, -1], dtype=np.int32))
     np.testing.assert_array_equal(tidx, np.array([0, 1, -1], dtype=np.int32))
+
+
+def test_image_count_batch_loader_subset_wrapper_preserves_duplicate_parent_mapping():
+    class _ParentTiltDataset:
+        def __init__(self):
+            self._particle_tilts = [
+                np.array([10, 11], dtype=np.int32),          # 2 images
+                np.array([20, 21, 22], dtype=np.int32),      # 3 images
+                np.array([30], dtype=np.int32),              # 1 image
+            ]
+            self.num_tilts = None
+
+        def __len__(self):
+            return len(self._particle_tilts)
+
+        def __getitem__(self, idx):
+            tilt_ids = self._particle_tilts[int(idx)]
+            images = np.ones((len(tilt_ids), 8, 8), dtype=np.float32) * (idx + 1)
+            return images, int(idx), tilt_ids
+
+    parent = _ParentTiltDataset()
+    # Exercise Subset path with duplicate/reordered parent indices: [2, 0, 2].
+    subset = torch.utils.data.Subset(parent, [2, 0, 2])
+    loader = cryo_dataset.ImageCountBatchLoader(subset, batch_size=3, pad_to_batch=False)
+
+    assert loader.total_images == 4  # 1 + 2 + 1
+    assert len(loader) == 2
+
+    batches = list(loader)
+    assert len(batches) == len(loader)
+
+    emitted_particles = np.concatenate([np.asarray(b[1]).reshape(-1) for b in batches], axis=0)
+    emitted_tilts = np.concatenate([np.asarray(b[2]).reshape(-1) for b in batches], axis=0)
+
+    np.testing.assert_array_equal(emitted_particles, np.array([2, 0, 0, 2], dtype=np.int32))
+    np.testing.assert_array_equal(emitted_tilts, np.array([30, 10, 11, 30], dtype=np.int32))
+
+
+def test_image_count_batch_loader_rejects_dataset_without_group_metadata():
+    class _NoGroupDataset:
+        num_tilts = None
+
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, idx):
+            return np.ones((1, 8, 8), dtype=np.float32), int(idx), np.array([0], dtype=np.int32)
+
+    with pytest.raises(AttributeError, match="must expose _particle_tilts"):
+        cryo_dataset.ImageCountBatchLoader(_NoGroupDataset(), batch_size=2, pad_to_batch=False)
 
 
 def test_tiltseries_dataset_getitem_deterministic_selection(monkeypatch):
@@ -640,6 +794,13 @@ def test_collate_to_jax_handles_none_scalar_ndarray_and_nested_sequences():
     np.testing.assert_array_equal(np.array(out_nested[1]), np.array([5, 7], dtype=np.int32))
 
 
+def test_collate_to_jax_handles_torch_tensor_batch():
+    t0 = torch.tensor([[1.0, 2.0]], dtype=torch.float32)
+    t1 = torch.tensor([[3.0, 4.0]], dtype=torch.float32)
+    out = cryo_dataset.collate_to_jax([t0, t1])
+    np.testing.assert_array_equal(np.array(out), np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
+
+
 def test_tiltseries_subset_generator_preserves_subset_order_and_duplicates(monkeypatch):
     class _Source:
         def __init__(self):
@@ -678,6 +839,71 @@ def test_tiltseries_subset_generator_preserves_subset_order_and_duplicates(monke
     assert out_tilt_ids == [4, 0, 4]
 
 
+def test_tiltseries_subset_generator_accepts_boolean_particle_mask(monkeypatch):
+    class _Source:
+        def __init__(self):
+            self.n = 6
+            self.D = 8
+            self._store = np.arange(self.n * self.D * self.D, dtype=np.float32).reshape(self.n, self.D, self.D)
+
+        def images(self, index, require_contiguous=False):
+            _ = require_contiguous
+            if isinstance(index, (int, np.integer)):
+                return self._store[int(index)]
+            return self._store[np.asarray(index)]
+
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["g1", "g1", "g2", "g2", "g3", "g3"],
+            "_rlnMicrographPreExposure": [1.0, 2.0, 1.0, 2.0, 1.0, 2.0],
+            "_rlnCtfScalefactor": [1, 1, 1, 1, 1, 1],
+            "_rlnCtfBfactor": [-1, -2, -1, -2, -1, -2],
+        }
+    )
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+
+    ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=1, random_tilts=False, tilt_file_option="relion5")
+    particle_mask = np.array([True, False, True], dtype=bool)
+    loader = ds.get_dataset_subset_generator(batch_size=8, subset_indices=particle_mask, mode="tilt_series")
+    batches = list(loader)
+    out_particle_ids = [int(np.array(b[1]).reshape(-1)[0]) for b in batches]
+    assert out_particle_ids == [0, 2]
+
+
+def test_tiltseries_subset_generator_rejects_bad_particle_masks(monkeypatch):
+    class _Source:
+        def __init__(self):
+            self.n = 6
+            self.D = 8
+            self._store = np.arange(self.n * self.D * self.D, dtype=np.float32).reshape(self.n, self.D, self.D)
+
+        def images(self, index, require_contiguous=False):
+            _ = require_contiguous
+            if isinstance(index, (int, np.integer)):
+                return self._store[int(index)]
+            return self._store[np.asarray(index)]
+
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["g1", "g1", "g2", "g2", "g3", "g3"],
+            "_rlnMicrographPreExposure": [1.0, 2.0, 1.0, 2.0, 1.0, 2.0],
+            "_rlnCtfScalefactor": [1, 1, 1, 1, 1, 1],
+            "_rlnCtfBfactor": [-1, -2, -1, -2, -1, -2],
+        }
+    )
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+
+    ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=1, random_tilts=False, tilt_file_option="relion5")
+    with pytest.raises(ValueError, match="boolean mask must be 1D"):
+        list(ds.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([[True, False, True]], dtype=bool), mode="tilt_series"))
+    with pytest.raises(ValueError, match="must match total size"):
+        list(ds.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([True, False], dtype=bool), mode="tilt_series"))
+    with pytest.raises(IndexError, match="negative"):
+        list(ds.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([-1], dtype=np.int32), mode="tilt_series"))
+
+
 def test_tiltseries_image_subset_generator_preserves_requested_image_order_and_duplicates(monkeypatch):
     class _Source:
         def __init__(self):
@@ -711,6 +937,73 @@ def test_tiltseries_image_subset_generator_preserves_requested_image_order_and_d
     for _imgs, _pidx, tidx in batches:
         got.extend(np.array(tidx).reshape(-1).tolist())
     assert got == [3, 1, 3]
+
+
+def test_tiltseries_image_subset_generator_accepts_boolean_image_mask(monkeypatch):
+    class _Source:
+        def __init__(self):
+            self.n = 5
+            self.D = 8
+            self._store = np.arange(self.n * self.D * self.D, dtype=np.float32).reshape(self.n, self.D, self.D)
+
+        def images(self, index, require_contiguous=False):
+            _ = require_contiguous
+            if isinstance(index, (int, np.integer)):
+                return self._store[int(index)]
+            return self._store[np.asarray(index)]
+
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["g1", "g1", "g2", "g2", "g3"],
+            "_rlnMicrographPreExposure": [1.0, 2.0, 1.0, 2.0, 1.0],
+            "_rlnCtfScalefactor": [1, 1, 1, 1, 1],
+            "_rlnCtfBfactor": [-1, -2, -1, -2, -1],
+        }
+    )
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+
+    ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=None, random_tilts=False, tilt_file_option="relion5")
+    mask = np.array([False, True, False, True, False], dtype=bool)
+    loader = ds.get_image_subset_generator(batch_size=2, subset_indices=mask)
+    batches = list(loader)
+    got = []
+    for _imgs, _pidx, tidx in batches:
+        got.extend(np.array(tidx).reshape(-1).tolist())
+    assert got == [1, 3]
+
+
+def test_tiltseries_image_subset_generator_rejects_bad_image_masks(monkeypatch):
+    class _Source:
+        def __init__(self):
+            self.n = 5
+            self.D = 8
+            self._store = np.arange(self.n * self.D * self.D, dtype=np.float32).reshape(self.n, self.D, self.D)
+
+        def images(self, index, require_contiguous=False):
+            _ = require_contiguous
+            if isinstance(index, (int, np.integer)):
+                return self._store[int(index)]
+            return self._store[np.asarray(index)]
+
+    df = pd.DataFrame(
+        {
+            "_rlnGroupName": ["g1", "g1", "g2", "g2", "g3"],
+            "_rlnMicrographPreExposure": [1.0, 2.0, 1.0, 2.0, 1.0],
+            "_rlnCtfScalefactor": [1, 1, 1, 1, 1],
+            "_rlnCtfBfactor": [-1, -2, -1, -2, -1],
+        }
+    )
+    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.starfile.Starfile, "load", lambda _p: SimpleNamespace(df=df))
+
+    ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=None, random_tilts=False, tilt_file_option="relion5")
+    with pytest.raises(ValueError, match="boolean mask must be 1D"):
+        list(ds.get_image_subset_generator(batch_size=2, subset_indices=np.array([[True, False]], dtype=bool)))
+    with pytest.raises(ValueError, match="must match total size"):
+        list(ds.get_image_subset_generator(batch_size=2, subset_indices=np.array([True, False], dtype=bool)))
+    with pytest.raises(IndexError, match="out-of-range"):
+        list(ds.get_image_subset_generator(batch_size=2, subset_indices=np.array([9], dtype=np.int32)))
 
 
 def test_tiltseries_dataset_ind_subset_preserves_image_tilt_alignment(monkeypatch):

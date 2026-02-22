@@ -467,6 +467,33 @@ def test_load_cryodrgn_dataset_cryoem_branch(monkeypatch):
     np.testing.assert_array_equal(out.dataset_indices, np.array([0, 2], dtype=int))
 
 
+def test_load_cryodrgn_dataset_rejects_ctf_count_mismatch_when_no_subset(monkeypatch):
+    fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
+    monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: fake_stack)
+    monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
+
+    def _short_ctf(D, ctf_file):
+        _ = (D, ctf_file)
+        ctf = np.zeros((3, 8), dtype=np.float32)
+        ctf[:, 0] = 1.5
+        ctf[:, 4] = 300.0
+        ctf[:, 5] = 2.7
+        ctf[:, 6] = 0.1
+        return ctf
+
+    monkeypatch.setattr(load_utils, "load_ctf_params", _short_ctf)
+
+    with pytest.raises(ValueError, match="CTF parameter count"):
+        dataset.load_cryodrgn_dataset(
+            particles_file="p.mrcs",
+            poses_file="poses.pkl",
+            ctf_file="ctf.pkl",
+            lazy=True,
+            tilt_series=False,
+            tilt_series_ctf="cryoem",
+        )
+
+
 def test_load_cryodrgn_dataset_propagates_premultiplied_ctf_flag(monkeypatch):
     fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
     monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: fake_stack)
@@ -1155,6 +1182,148 @@ def test_subsampled_image_stack_image_subset_generator_alias():
     _imgs, pidx, iidx = next(gen)
     np.testing.assert_array_equal(pidx, np.array([1], dtype=np.int32))
     np.testing.assert_array_equal(iidx, np.array([1], dtype=np.int32))
+
+
+def test_subsampled_image_stack_image_subset_generator_none_emits_full_local_range():
+    class _BackingStack:
+        def __init__(self, D=4):
+            self.D = D
+            self.unpadded_D = D
+            self.padding = 0
+            self.image_shape = (D, D)
+            self.mask = np.ones((D, D), dtype=np.float32)
+
+        def process_images(self, images, apply_image_mask=True):
+            return np.asarray(images)
+
+        def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
+            subset_indices = np.asarray(subset_indices, dtype=np.int32)
+            for start in range(0, subset_indices.size, batch_size):
+                chunk = subset_indices[start:start + batch_size]
+                imgs = np.zeros((chunk.size, self.D * self.D), dtype=np.complex64)
+                yield imgs, chunk, chunk
+
+    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([4, 8, 2], dtype=np.int32))
+    got = []
+    for _imgs, pidx, iidx in wrapped.get_image_subset_generator(batch_size=2, subset_indices=None):
+        np.testing.assert_array_equal(pidx, iidx)
+        got.extend(np.asarray(iidx).reshape(-1).tolist())
+    assert got == [0, 1, 2]
+
+
+def test_subsampled_image_stack_image_generator_alias_emits_all_local_indices():
+    class _BackingStack:
+        def __init__(self, D=4):
+            self.D = D
+            self.unpadded_D = D
+            self.padding = 0
+            self.image_shape = (D, D)
+            self.mask = np.ones((D, D), dtype=np.float32)
+
+        def process_images(self, images, apply_image_mask=True):
+            return np.asarray(images)
+
+        def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
+            subset_indices = np.asarray(subset_indices, dtype=np.int32)
+            for start in range(0, subset_indices.size, batch_size):
+                chunk = subset_indices[start:start + batch_size]
+                imgs = np.zeros((chunk.size, self.D * self.D), dtype=np.complex64)
+                yield imgs, chunk, chunk
+
+    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([9, 5, 1, 6], dtype=np.int32))
+    got = []
+    for _imgs, pidx, iidx in wrapped.get_image_generator(batch_size=3):
+        np.testing.assert_array_equal(pidx, iidx)
+        got.extend(np.asarray(iidx).reshape(-1).tolist())
+    assert got == [0, 1, 2, 3]
+
+
+def test_subsampled_image_stack_prefers_backing_image_subset_generator_when_available():
+    class _BackingStack:
+        def __init__(self, D=4):
+            self.D = D
+            self.unpadded_D = D
+            self.padding = 0
+            self.image_shape = (D, D)
+            self.mask = np.ones((D, D), dtype=np.float32)
+
+        def process_images(self, images, apply_image_mask=True):
+            return np.asarray(images)
+
+        def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
+            subset_indices = np.asarray(subset_indices, dtype=np.int32)
+            # Simulate particle-index semantics (wrong for image remapping).
+            bad = subset_indices + 1000
+            imgs = np.zeros((subset_indices.size, self.D * self.D), dtype=np.complex64)
+            yield imgs, bad, bad
+
+        def get_image_subset_generator(self, batch_size, subset_indices, num_workers=0):
+            subset_indices = np.asarray(subset_indices, dtype=np.int32)
+            imgs = np.zeros((subset_indices.size, self.D * self.D), dtype=np.complex64)
+            yield imgs, subset_indices, subset_indices
+
+    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([7, 2, 7, 1], dtype=np.int32))
+    req = np.array([3, 0, 2], dtype=np.int32)
+    gen = wrapped.get_dataset_subset_generator(batch_size=2, subset_indices=req)
+    got = []
+    for _imgs, pidx, iidx in gen:
+        np.testing.assert_array_equal(pidx, iidx)
+        got.extend(np.asarray(iidx).reshape(-1).tolist())
+    assert got == [3, 0, 2]
+
+
+def test_subsampled_image_stack_subset_generator_accepts_boolean_mask():
+    class _BackingStack:
+        def __init__(self, D=4):
+            self.D = D
+            self.unpadded_D = D
+            self.padding = 0
+            self.image_shape = (D, D)
+            self.mask = np.ones((D, D), dtype=np.float32)
+
+        def process_images(self, images, apply_image_mask=True):
+            return np.asarray(images)
+
+        def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
+            subset_indices = np.asarray(subset_indices, dtype=np.int32)
+            imgs = np.zeros((subset_indices.size, self.D * self.D), dtype=np.complex64)
+            yield imgs, subset_indices, subset_indices
+
+    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([4, 8, 2, 9], dtype=np.int32))
+    mask = np.array([False, True, False, True], dtype=bool)
+    _imgs, pidx, iidx = next(wrapped.get_dataset_subset_generator(batch_size=8, subset_indices=mask))
+    np.testing.assert_array_equal(pidx, np.array([1, 3], dtype=np.int32))
+    np.testing.assert_array_equal(iidx, np.array([1, 3], dtype=np.int32))
+
+
+def test_subsampled_image_stack_subset_generator_rejects_bad_subset_indices():
+    class _BackingStack:
+        def __init__(self, D=4):
+            self.D = D
+            self.unpadded_D = D
+            self.padding = 0
+            self.image_shape = (D, D)
+            self.mask = np.ones((D, D), dtype=np.float32)
+
+        def process_images(self, images, apply_image_mask=True):
+            return np.asarray(images)
+
+        def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
+            subset_indices = np.asarray(subset_indices, dtype=np.int32)
+            imgs = np.zeros((subset_indices.size, self.D * self.D), dtype=np.complex64)
+            yield imgs, subset_indices, subset_indices
+
+    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([4, 8, 2, 9], dtype=np.int32))
+    with pytest.raises(ValueError, match="boolean mask must be 1D"):
+        list(wrapped.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([[True, False, True, False]], dtype=bool)))
+    with pytest.raises(ValueError, match="must match number of images"):
+        list(wrapped.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([True, False], dtype=bool)))
+    with pytest.raises(ValueError, match="non-negative"):
+        list(wrapped.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([-1], dtype=np.int32)))
+    with pytest.raises(ValueError, match="number of images"):
+        list(wrapped.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([4], dtype=np.int32)))
+    with pytest.raises(TypeError, match="integer or boolean mask"):
+        list(wrapped.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([1.5], dtype=np.float32)))
 
 
 def test_subsampled_image_stack_subset_generator_handles_multiple_underlying_batches():
