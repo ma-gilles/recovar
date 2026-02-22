@@ -274,9 +274,6 @@ def get_differences_zero(pol_degree, differences):
         assert(NotImplementedError)
     return differences_zero
 
-def compute_summed_XWX_F_only():
-    return
-
 @functools.partial(jax.jit, static_argnums = [2,5,6])
 def compute_summed_XWX_F(XWX, F, max_grid_dist, grid_distances, frequencies, volume_shape, pol_degree, extra_dimensions = None):
 

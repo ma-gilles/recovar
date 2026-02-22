@@ -145,29 +145,35 @@ def test_make_volumes_kernel_estimate_local_smoke(tmp_path):
     """
     make_volumes_kernel_estimate_local must run without crashing on tiny data.
     Output files are written to a temporary directory so nothing leaks.
+
+    The pipeline requires two halfsets with non-overlapping dataset_indices, so
+    we create two independent 4-image datasets with indices [0-3] and [4-7].
     """
-    cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8)
-    noise_variance = np.ones(cryo.grid_size // 2 - 1, dtype=np.float32) * 0.1
-    # The pipeline reads per-image noise via cryo.noise.get(indices), so we
-    # must attach a noise model before calling.
-    cryo.set_radial_noise_model(noise_variance)
+    noise_variance = np.ones(4 // 2 - 1, dtype=np.float32) * 0.1  # grid_size=4 → 1 shell
 
-    n_images = cryo.n_images
+    # Half-dataset 0: images indexed 0-3 in the global particle stack
+    cryo0 = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=4, seed=0)
+    cryo0.dataset_indices = np.array([0, 1, 2, 3], dtype=np.int32)
+    cryo0.set_radial_noise_model(noise_variance)
+
+    # Half-dataset 1: images indexed 4-7 in the global particle stack
+    cryo1 = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=4, seed=1)
+    cryo1.dataset_indices = np.array([4, 5, 6, 7], dtype=np.int32)
+    cryo1.set_radial_noise_model(noise_variance)
+
     rng = np.random.default_rng(0)
-
-    # Fake heterogeneity distances for two half-datasets
+    # 4 distance values per half-dataset
     het_dists = [
-        rng.exponential(scale=2.0, size=n_images).astype(np.float32),
-        rng.exponential(scale=2.0, size=n_images).astype(np.float32),
+        rng.exponential(scale=2.0, size=4).astype(np.float32),
+        rng.exponential(scale=2.0, size=4).astype(np.float32),
     ]
     bins = hv.pick_heterogeneity_bins2(ndim=2, log_likelihoods=np.concatenate(het_dists), n_bins=3)
 
     output_folder = str(tmp_path / "hv_output")
 
-    # This exercises the full local estimation path.
     hv.make_volumes_kernel_estimate_local(
         heterogeneity_distances=het_dists,
-        cryos=[cryo, cryo],
+        cryos=[cryo0, cryo1],
         output_folder=output_folder,
         ndim=2,
         bins=bins,
