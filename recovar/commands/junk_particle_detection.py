@@ -553,23 +553,25 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     plt.savefig(os.path.join(output_folder, f'bottom_10_clusters_fsc_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
+    # Pad to at least 2 columns for 2D scatter/hexbin plots
+    zs_2d = zs if zs.shape[1] >= 2 else np.column_stack([zs, np.zeros(len(zs))])
+    centers_2d = (cluster_centers if cluster_centers.shape[1] >= 2
+                  else np.column_stack([cluster_centers, np.zeros(len(cluster_centers))]))
+
     # --- Create main summary plot with improved hexbin visualizations ---
     fig, axes = plt.subplots(2, 2, figsize=(16, 16))
-    fig.suptitle(f'Junk Particle Detection Summary (zdim={zdim_key}, n_clusters={len(cluster_centers)})', 
+    fig.suptitle(f'Junk Particle Detection Summary (zdim={zdim_key}, n_clusters={len(cluster_centers)})',
                  fontsize=20, y=0.95, fontweight='bold')
 
     # 1. Latent space colored by cluster (hexbin density plot like output.py)
     ax = axes[0, 0]
-    
+
     # Create hexbin density plot for background
-    # try:
-    hb = ax.hexbin(zs[:, 0], zs[:, 1], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
-    # except:
-    #     pass
-    
+    hb = ax.hexbin(zs_2d[:, 0], zs_2d[:, 1], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
+
     # Main scatter plot with improved styling (like output.py)
-    ax.scatter(zs[:, 0], zs[:, 1], s=1, alpha=0.6, c=colors['scatter'], edgecolors='none', rasterized=True)
-    ax.scatter(cluster_centers[:, 0], cluster_centers[:, 1], c='red', marker='x', s=100, 
+    ax.scatter(zs_2d[:, 0], zs_2d[:, 1], s=1, alpha=0.6, c=colors['scatter'], edgecolors='none', rasterized=True)
+    ax.scatter(centers_2d[:, 0], centers_2d[:, 1], c='red', marker='x', s=100,
                linewidth=2, label='Cluster Centers', zorder=10)
     ax.set_title('Latent Space by Cluster ID', fontweight='bold')
     ax.set_xlabel('z₁', fontweight='bold')
@@ -581,7 +583,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     # 2. Latent space colored by Half-map FSC AUC (hexbin)
     ax = axes[0, 1]
     particle_halfmap_aucs = np.array([halfmap_aucs[i] for i in cluster_indices])
-    hb = ax.hexbin(zs[:, 0], zs[:, 1], C=particle_halfmap_aucs, gridsize=30, 
+    hb = ax.hexbin(zs_2d[:, 0], zs_2d[:, 1], C=particle_halfmap_aucs, gridsize=30,
                    cmap='viridis', reduce_C_function=np.mean, mincnt=1)
     cbar = fig.colorbar(hb, ax=ax)
     cbar.set_label('Mean Half-map FSC AUC', fontweight='bold')
@@ -594,7 +596,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     # 3. Latent space colored by FSC vs Mean AUC (hexbin)
     ax = axes[1, 0]
     particle_vs_mean_aucs = np.array([vs_mean_aucs[i] for i in cluster_indices])
-    hb = ax.hexbin(zs[:, 0], zs[:, 1], C=particle_vs_mean_aucs, gridsize=30, 
+    hb = ax.hexbin(zs_2d[:, 0], zs_2d[:, 1], C=particle_vs_mean_aucs, gridsize=30,
                    cmap='viridis', reduce_C_function=np.mean, mincnt=1)
     cbar = fig.colorbar(hb, ax=ax)
     cbar.set_label('Mean FSC vs Mean AUC', fontweight='bold')
@@ -1915,7 +1917,8 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
     zs = zs_data[zdim_key]
     logger.info(f"Loaded embeddings with shape: {zs.shape}")
     
-    # Perform k-means clustering
+    # Perform k-means clustering (cap clusters at sample count)
+    n_clusters = min(n_clusters, len(zs))
     logger.info(f"Performing k-means clustering with {n_clusters} clusters...")
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     cluster_indices = kmeans.fit_predict(zs)

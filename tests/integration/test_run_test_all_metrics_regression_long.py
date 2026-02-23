@@ -11,14 +11,16 @@ import pytest
 from helpers.metrics_regression import compare_metric, metric_direction
 
 
-pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io]
+pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io, pytest.mark.long_test]
 
-
-def _require_env(name):
-    val = os.environ.get(name)
-    if not val:
-        pytest.skip(f"set {name} to run this long regression test")
-    return val
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+# Default in-repo baseline paths (auto-created on first run).
+_DEFAULT_LONG_METRICS_BASELINE_JSON = (
+    _REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics" / "long_generated" / "all_scores.json"
+)
+_DEFAULT_LONG_METRICS_ET_BASELINE_JSON = (
+    _REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics" / "long_generated" / "all_scores_cryo_et.json"
+)
 
 
 def _load_json(path):
@@ -26,16 +28,19 @@ def _load_json(path):
         return json.load(f)
 
 
-def _run_metrics(output_dir, volumes_prefix, run_args):
+def _run_metrics(output_dir, run_args, volumes_prefix=None):
+    """Run run_test_all_metrics; generate volumes synthetically when volumes_prefix is None."""
     cmd = [
         sys.executable,
         "-m",
         "recovar.commands.run_test_all_metrics",
-        "--volume-input",
-        volumes_prefix,
         "--output-dir",
         str(output_dir),
     ]
+    if volumes_prefix is not None:
+        cmd += ["--volume-input", volumes_prefix]
+    else:
+        cmd += ["--generate-volumes"]
     if run_args:
         cmd.extend(shlex.split(run_args))
     subprocess.run(cmd, check=True)
@@ -128,25 +133,26 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
     """
     Very long regression test (typically ~1h+) for run_test_all_metrics.
 
-    Required env:
-    - LONG_METRICS_VOLUMES_DIR: prefix path to volumes (expects <prefix>0000.mrc)
-    - LONG_METRICS_BASELINE_JSON: where baseline metrics are stored/read
+    Volumes are generated synthetically (--generate-volumes) so no external
+    data path is required; tests can be run from any machine with a GPU.
 
     Optional env:
+    - LONG_METRICS_VOLUMES_DIR: if set, use real volumes instead of synthetic ones
+    - LONG_METRICS_BASELINE_JSON: baseline path; defaults to in-repo
+      tests/baselines/run_test_all_metrics/long_generated/all_scores.json
     - LONG_METRICS_RUN_ARGS: extra args for run_test_all_metrics
     - LONG_METRICS_TOL_FRAC: tolerated relative degradation (default 0.10)
     - LONG_METRICS_WRITE_BASELINE: set to 1 to (re)write baseline from current run
     """
-    volumes_prefix = _require_env("LONG_METRICS_VOLUMES_DIR")
-    baseline_json = Path(_require_env("LONG_METRICS_BASELINE_JSON"))
+    volumes_prefix = os.environ.get("LONG_METRICS_VOLUMES_DIR") or None
+    if volumes_prefix and not Path(f"{volumes_prefix}0000.mrc").exists():
+        pytest.skip(f"invalid LONG_METRICS_VOLUMES_DIR prefix: {volumes_prefix}")
+    baseline_json = Path(os.environ.get("LONG_METRICS_BASELINE_JSON", str(_DEFAULT_LONG_METRICS_BASELINE_JSON)))
     run_args = os.environ.get("LONG_METRICS_RUN_ARGS", "--grid-size 128 --n-images 50000 --noise-level 1.0 --contrast-std 0.1")
     tol_frac = float(os.environ.get("LONG_METRICS_TOL_FRAC", "0.10"))
     write_baseline = os.environ.get("LONG_METRICS_WRITE_BASELINE", "0") == "1"
 
-    if not Path(f"{volumes_prefix}0000.mrc").exists():
-        pytest.skip(f"invalid LONG_METRICS_VOLUMES_DIR prefix: {volumes_prefix}")
-
-    current = _run_metrics(_resolve_output_dir(tmp_path, "current"), volumes_prefix, run_args)
+    current = _run_metrics(_resolve_output_dir(tmp_path, "current"), run_args, volumes_prefix=volumes_prefix)
 
     if write_baseline or (not baseline_json.exists()):
         baseline_json.parent.mkdir(parents=True, exist_ok=True)
@@ -180,17 +186,23 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
     """
     Very long cryo-ET regression + subsampling consistency test.
 
+    Volumes are generated synthetically so no external data path is required.
     Runs run_test_all_metrics with ET settings and validates:
     - tilt/image subsampling behavior on generated particles.star
     - numeric metric regression against a dedicated ET baseline
+
+    Optional env:
+    - LONG_METRICS_VOLUMES_DIR: if set, use real volumes instead of synthetic ones
+    - LONG_METRICS_ET_BASELINE_JSON: baseline path; defaults to in-repo
+      tests/baselines/run_test_all_metrics/long_generated/all_scores_cryo_et.json
+    - LONG_METRICS_ET_RUN_ARGS / LONG_METRICS_ET_TOL_FRAC / LONG_METRICS_WRITE_BASELINE /
+      LONG_METRICS_ET_WRITE_BASELINE: see SPA test above
     """
-    volumes_prefix = _require_env("LONG_METRICS_VOLUMES_DIR")
-    shared_baseline = Path(_require_env("LONG_METRICS_BASELINE_JSON"))
+    volumes_prefix = os.environ.get("LONG_METRICS_VOLUMES_DIR") or None
+    if volumes_prefix and not Path(f"{volumes_prefix}0000.mrc").exists():
+        pytest.skip(f"invalid LONG_METRICS_VOLUMES_DIR prefix: {volumes_prefix}")
     baseline_json = Path(
-        os.environ.get(
-            "LONG_METRICS_ET_BASELINE_JSON",
-            str(shared_baseline.with_name(shared_baseline.stem + "_cryo_et.json")),
-        )
+        os.environ.get("LONG_METRICS_ET_BASELINE_JSON", str(_DEFAULT_LONG_METRICS_ET_BASELINE_JSON))
     )
     run_args = os.environ.get(
         "LONG_METRICS_ET_RUN_ARGS",
@@ -202,11 +214,8 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
         os.environ.get("LONG_METRICS_ET_WRITE_BASELINE", "0") == "1"
     )
 
-    if not Path(f"{volumes_prefix}0000.mrc").exists():
-        pytest.skip(f"invalid LONG_METRICS_VOLUMES_DIR prefix: {volumes_prefix}")
-
     output_dir = _resolve_output_dir(tmp_path, "current_cryo_et")
-    current = _run_metrics(output_dir, volumes_prefix, run_args)
+    current = _run_metrics(output_dir, run_args, volumes_prefix=volumes_prefix)
 
     particles_star = output_dir / "test_dataset" / "particles.star"
     assert particles_star.exists(), f"expected cryo-ET particles.star at {particles_star}"
