@@ -1,0 +1,20 @@
+{
+  "constrasts_10": 0.08518258231186654,
+  "constrasts_10_noreg": 0.08392643201262975,
+  "constrasts_4": 0.08466446409702652,
+  "constrasts_4_noreg": 0.08641803759666654,
+  "embedding_squared_error_10": 1.1835021621963817,
+  "embedding_squared_error_4": 0.35839857727046376,
+  "mean_fsc": 0.23345588147640228,
+  "noise_correlation": 0.9928795512837385,
+  "noise_max_relative_error": 1.1274991035461426,
+  "noise_mean_relative_error": 0.03186383098363876,
+  "noise_median_relative_error": 0.0054947379976511,
+  "pcs_relative_variance_10": 0.5466925577124865,
+  "pcs_relative_variance_4": 0.44079405109256203,
+  "state_0_median_locres": 25.22451400756836,
+  "state_0_ninety_pc_locres": 46.591156005859375,
+  "state_1_median_locres": 13.147488594055176,
+  "state_1_ninety_pc_locres": 37.427818298339844,
+  "variance_fsc": 0.09875081446153228
+}

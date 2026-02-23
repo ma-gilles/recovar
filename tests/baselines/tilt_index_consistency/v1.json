@@ -1,0 +1,43 @@
+{
+  "canonical_groups": [
+    "gA",
+    "gB",
+    "gC"
+  ],
+  "particles_to_tilts": [
+    [
+      1,
+      4
+    ],
+    [
+      0,
+      3,
+      6
+    ],
+    [
+      2,
+      5,
+      7
+    ]
+  ],
+  "tilts_to_particles": {
+    "0": 1,
+    "1": 0,
+    "2": 2,
+    "3": 1,
+    "4": 0,
+    "5": 2,
+    "6": 1,
+    "7": 2
+  },
+  "subset_particles": [
+    2,
+    0
+  ],
+  "subset_image_intersection": [
+    2,
+    7,
+    1,
+    4
+  ]
+}
