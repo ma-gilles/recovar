@@ -27,6 +27,18 @@ def pytest_addoption(parser):
         default=False,
         help="run tiny end-to-end metrics/outliers integration tests (no large dataset required)",
     )
+    parser.addoption(
+        "--long-test",
+        action="store_true",
+        default=False,
+        help=(
+            "run long quality-regression tests (cryo-EM SPA, cryo-ET, pipeline with "
+            "outliers, pipeline with --ind/--particle-ind). Implies --run-slow, "
+            "--run-gpu, --run-integration. Volumes are generated synthetically so no "
+            "external data is required. Baselines auto-created in tests/baselines/ on "
+            "first run. Set LONG_METRICS_OUTPUT_BASE=/scratch/... to redirect large outputs."
+        ),
+    )
 
 
 def pytest_configure(config):
@@ -36,18 +48,26 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "slow: long-running tests")
     config.addinivalue_line("markers", "io: filesystem/network-like I/O tests")
     config.addinivalue_line("markers", "tiny_metrics: tiny end-to-end metrics/outliers tests")
+    config.addinivalue_line(
+        "markers",
+        "long_test: long quality regression tests (cryo-EM SPA, cryo-ET, outliers, "
+        "with/without indices); requires --long-test flag; volumes generated synthetically",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
-    run_slow = config.getoption("--run-slow")
-    run_gpu = config.getoption("--run-gpu")
-    run_integration = config.getoption("--run-integration")
+    run_long_test = config.getoption("--long-test")
+    # --long-test implies all the sub-flags so long tests are not doubly skipped
+    run_slow = config.getoption("--run-slow") or run_long_test
+    run_gpu = config.getoption("--run-gpu") or run_long_test
+    run_integration = config.getoption("--run-integration") or run_long_test
     run_tiny_metrics = config.getoption("--run-tiny-metrics")
 
     skip_slow = pytest.mark.skip(reason="need --run-slow to run")
     skip_gpu = pytest.mark.skip(reason="need --run-gpu to run")
     skip_integration = pytest.mark.skip(reason="need --run-integration to run")
     skip_tiny_metrics = pytest.mark.skip(reason="need --run-tiny-metrics to run")
+    skip_long_test = pytest.mark.skip(reason="need --long-test to run")
 
     for item in items:
         if "slow" in item.keywords and not run_slow:
@@ -58,6 +78,8 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_integration)
         if "tiny_metrics" in item.keywords and not run_tiny_metrics:
             item.add_marker(skip_tiny_metrics)
+        if "long_test" in item.keywords and not run_long_test:
+            item.add_marker(skip_long_test)
 
 
 @pytest.fixture(autouse=True)

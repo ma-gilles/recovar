@@ -36,15 +36,36 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
     # Identify valid entries (rows without NaNs)
     zs = zs
 
+    n_features = zs.shape[1]
+    total_samples = zs.shape[0]
+
+    # If too few samples, anomaly detection is not meaningful — mark all as inliers
+    min_samples = max(5, n_features + 2)
+    if total_samples < min_samples:
+        logger.warning(
+            f"Too few samples ({total_samples}) for anomaly detection "
+            f"(need >= {min_samples}). Marking all particles as inliers."
+        )
+        all_inliers = np.arange(total_samples)
+        all_inliers_orig = original_indices
+        with open(os.path.join(folder_name, "inliers_consensus.pkl"), "wb") as f:
+            pickle.dump(all_inliers_orig, f)
+        with open(os.path.join(folder_name, "outliers_consensus.pkl"), "wb") as f:
+            pickle.dump(np.array([], dtype=int), f)
+        return
+
     # Compute UMAP on valid zs
     umapper = output.umap_latent_space(zs)
     umap_valid = umapper.embedding_
+
+    # Cap LOF n_neighbors to avoid crash when n_samples is small
+    lof_n_neighbors = min(35, total_samples - 1)
 
     # Define anomaly detection algorithms
     anomaly_algorithms = [
         # ("Robust covariance", EllipticEnvelope(random_state=42)),  # Will be added later after contamination is calculated
         ("Isolation Forest", IsolationForest(random_state=42)),
-        ("Local Outlier Factor", LocalOutlierFactor(n_neighbors=35)),
+        ("Local Outlier Factor", LocalOutlierFactor(n_neighbors=lof_n_neighbors)),
     ]
 
     # Initialize lists to store predictions, algorithm names, and outlier percentages
@@ -53,7 +74,6 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
     outlier_percentages = []
 
     # Fit each algorithm (excluding Robust Covariance for now) and store predictions
-    total_samples = zs.shape[0]
     for name, algorithm in anomaly_algorithms:
         if name == "Local Outlier Factor":
             y_pred = algorithm.fit_predict(zs)
@@ -87,33 +107,39 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
     # Ensure contamination is within (0, 0.5)
     avg_contamination = min(max(avg_contamination, 0.001), 0.5)
 
-    # Now add Robust Covariance
-    robust_covariance = ("Robust covariance", EllipticEnvelope(random_state=42, contamination=avg_contamination))
-    anomaly_algorithms.insert(0, robust_covariance)  # Insert at the beginning
+    # Now add Robust Covariance (EllipticEnvelope uses MCD which requires n_samples > n_features + 1)
+    if total_samples > n_features + 1:
+        robust_covariance = ("Robust covariance", EllipticEnvelope(random_state=42, contamination=avg_contamination))
+        anomaly_algorithms.insert(0, robust_covariance)  # Insert at the beginning
 
-    # Fit Robust Covariance
-    name, algorithm = robust_covariance
-    y_pred = algorithm.fit(zs).predict(zs)
-    predictions.insert(0, y_pred)
-    algorithm_names.insert(0, name)
+        # Fit Robust Covariance
+        name, algorithm = robust_covariance
+        y_pred = algorithm.fit(zs).predict(zs)
+        predictions.insert(0, y_pred)
+        algorithm_names.insert(0, name)
 
-    # Save indices of inliers and outliers in original indexing
-    inliers_indices = np.where(y_pred == 1)[0]
-    outliers_indices = np.where(y_pred == -1)[0]
+        # Save indices of inliers and outliers in original indexing
+        inliers_indices = np.where(y_pred == 1)[0]
+        outliers_indices = np.where(y_pred == -1)[0]
 
-    # Sanitize algorithm name for filename
-    safe_name = name.replace(" ", "_").lower()
+        # Sanitize algorithm name for filename
+        safe_name = name.replace(" ", "_").lower()
 
-    # Save indices to pickle files in the specified folder
-    with open(os.path.join(folder_name, f"inliers_{safe_name}.pkl"), "wb") as f:
-        pickle.dump(inliers_indices, f)
-    with open(os.path.join(folder_name, f"outliers_{safe_name}.pkl"), "wb") as f:
-        pickle.dump(outliers_indices, f)
+        # Save indices to pickle files in the specified folder
+        with open(os.path.join(folder_name, f"inliers_{safe_name}.pkl"), "wb") as f:
+            pickle.dump(inliers_indices, f)
+        with open(os.path.join(folder_name, f"outliers_{safe_name}.pkl"), "wb") as f:
+            pickle.dump(outliers_indices, f)
 
-    # Update outlier percentages and total samples
-    num_outliers = np.sum(y_pred == -1)
-    percentage_outliers = (num_outliers / total_samples)
-    outlier_percentages.insert(0, percentage_outliers)
+        # Update outlier percentages and total samples
+        num_outliers = np.sum(y_pred == -1)
+        percentage_outliers = (num_outliers / total_samples)
+        outlier_percentages.insert(0, percentage_outliers)
+    else:
+        logger.warning(
+            f"Skipping EllipticEnvelope (Robust covariance): too few samples "
+            f"({total_samples}) for n_features={n_features}."
+        )
 
     # Compute consensus
     # Convert predictions to numpy array
@@ -165,54 +191,58 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
         percentage_outliers = (num_outliers / total_samples) * 100
 
         # --- Plot zs[:, 0] vs zs[:, 1] ---
-        ax = axes[0, i_algo]
-        if np.sum(inliers) > 1:
-            # Compute axis limits based on inliers
-            x_min, x_max = np.percentile(zs[inliers, 0], [0.1, 99.9])
-            y_min, y_max = np.percentile(zs[inliers, 1], [0.1, 99.9])
+        if zs.shape[1] >= 2:
+            ax = axes[0, i_algo]
+            if np.sum(inliers) > 1:
+                # Compute axis limits based on inliers
+                x_min, x_max = np.percentile(zs[inliers, 0], [0.1, 99.9])
+                y_min, y_max = np.percentile(zs[inliers, 1], [0.1, 99.9])
 
-            hb = ax.hexbin(
-                zs[inliers, 0],
-                zs[inliers, 1],
-                gridsize=50,
-                cmap='Blues',
-                bins='log',
-                mincnt=1
+                hb = ax.hexbin(
+                    zs[inliers, 0],
+                    zs[inliers, 1],
+                    gridsize=50,
+                    cmap='Blues',
+                    bins='log',
+                    mincnt=1
+                )
+                # Add colorbar
+                cb = fig.colorbar(hb, ax=ax)
+                cb.set_label('log$_{10}$(N)')
+            else:
+                ax.text(0.5, 0.5, "Insufficient inliers for hexbin", transform=ax.transAxes,
+                        ha='center', va='center', fontsize=12)
+                x_min, x_max = zs[:, 0].min(), zs[:, 0].max()
+                y_min, y_max = zs[:, 1].min(), zs[:, 1].max()
+
+            # Overlay outliers
+            if np.sum(outliers) > 0:
+                ax.scatter(
+                    zs[outliers, 0],
+                    zs[outliers, 1],
+                    s=10,
+                    c="red",
+                    alpha=0.8,
+                    label="Outliers",
+                    edgecolor="k",
+                    linewidth=0.5,
+                )
+            # Set axis limits for zs plots
+            ax.set_xlim(x_min, x_max)
+            ax.set_ylim(y_min, y_max)
+
+            # Add title with number and percentage of outliers
+            ax.set_title(
+                f"{name}\n(zs[0] vs zs[1])\nOutliers: {num_outliers} ({percentage_outliers:.2f}%)",
+                fontsize=12,
             )
-            # Add colorbar
-            cb = fig.colorbar(hb, ax=ax)
-            cb.set_label('log$_{10}$(N)')
+            if i_algo == 0:
+                ax.set_ylabel("zs[1]", fontsize=10)
+            ax.set_xlabel("zs[0]", fontsize=10)
+            ax.legend(loc="upper right")
         else:
-            ax.text(0.5, 0.5, "Insufficient inliers for hexbin", transform=ax.transAxes,
-                    ha='center', va='center', fontsize=12)
-            x_min, x_max = zs[:, 0].min(), zs[:, 0].max()
-            y_min, y_max = zs[:, 1].min(), zs[:, 1].max()
-
-        # Overlay outliers
-        if np.sum(outliers) > 0:
-            ax.scatter(
-                zs[outliers, 0],
-                zs[outliers, 1],
-                s=10,
-                c="red",
-                alpha=0.8,
-                label="Outliers",
-                edgecolor="k",
-                linewidth=0.5,
-            )
-        # Set axis limits for zs plots
-        ax.set_xlim(x_min, x_max)
-        ax.set_ylim(y_min, y_max)
-
-        # Add title with number and percentage of outliers
-        ax.set_title(
-            f"{name}\n(zs[0] vs zs[1])\nOutliers: {num_outliers} ({percentage_outliers:.2f}%)",
-            fontsize=12,
-        )
-        if i_algo == 0:
-            ax.set_ylabel("zs[1]", fontsize=10)
-        ax.set_xlabel("zs[0]", fontsize=10)
-        ax.legend(loc="upper right")
+            # If zs has less than 2 dimensions, hide the subplot
+            axes[0, i_algo].axis('off')
 
         # --- Plot zs[:, 2] vs zs[:, 3] if available ---
         if zs.shape[1] >= 4:
@@ -268,45 +298,49 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
             axes[1, i_algo].axis('off')
 
         # --- Plot umap[:, 0] vs umap[:, 1] ---
-        ax = axes[2, i_algo]
-        if np.sum(inliers) > 1:
-            hb = ax.hexbin(
-                umap_valid[inliers, 0],
-                umap_valid[inliers, 1],
-                gridsize=50,
-                cmap='Blues',
-                bins='log',
-                mincnt=1
-            )
-            # Add colorbar
-            cb = fig.colorbar(hb, ax=ax)
-            cb.set_label('log$_{10}$(N)')
-        else:
-            ax.text(0.5, 0.5, "Insufficient inliers for hexbin", transform=ax.transAxes,
-                    ha='center', va='center', fontsize=12)
-        # Overlay outliers
-        if np.sum(outliers) > 0:
-            ax.scatter(
-                umap_valid[outliers, 0],
-                umap_valid[outliers, 1],
-                s=10,
-                c="red",
-                alpha=0.8,
-                label="Outliers",
-                edgecolor="k",
-                linewidth=0.5,
-            )
-        # Do not set axis limits for umap plots
+        if umap_valid.shape[1] >= 2:
+            ax = axes[2, i_algo]
+            if np.sum(inliers) > 1:
+                hb = ax.hexbin(
+                    umap_valid[inliers, 0],
+                    umap_valid[inliers, 1],
+                    gridsize=50,
+                    cmap='Blues',
+                    bins='log',
+                    mincnt=1
+                )
+                # Add colorbar
+                cb = fig.colorbar(hb, ax=ax)
+                cb.set_label('log$_{10}$(N)')
+            else:
+                ax.text(0.5, 0.5, "Insufficient inliers for hexbin", transform=ax.transAxes,
+                        ha='center', va='center', fontsize=12)
+            # Overlay outliers
+            if np.sum(outliers) > 0:
+                ax.scatter(
+                    umap_valid[outliers, 0],
+                    umap_valid[outliers, 1],
+                    s=10,
+                    c="red",
+                    alpha=0.8,
+                    label="Outliers",
+                    edgecolor="k",
+                    linewidth=0.5,
+                )
+            # Do not set axis limits for umap plots
 
-        # Add title with number and percentage of outliers
-        ax.set_title(
-            f"{name}\n(umap[0] vs umap[1])\nOutliers: {num_outliers} ({percentage_outliers:.2f}%)",
-            fontsize=12,
-        )
-        if i_algo == 0:
-            ax.set_ylabel("umap[1]", fontsize=10)
-        ax.set_xlabel("umap[0]", fontsize=10)
-        ax.legend(loc="upper right")
+            # Add title with number and percentage of outliers
+            ax.set_title(
+                f"{name}\n(umap[0] vs umap[1])\nOutliers: {num_outliers} ({percentage_outliers:.2f}%)",
+                fontsize=12,
+            )
+            if i_algo == 0:
+                ax.set_ylabel("umap[1]", fontsize=10)
+            ax.set_xlabel("umap[0]", fontsize=10)
+            ax.legend(loc="upper right")
+        else:
+            # If umap has less than 2 dimensions, hide the subplot
+            axes[2, i_algo].axis('off')
 
     plt.suptitle("Anomaly Detection Results Including Consensus", fontsize=16)
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
@@ -1329,6 +1363,12 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
     umapper = output.umap_latent_space(zs)
     umap_coords = umapper.embedding_
     has_umap = True
+    # Pad to at least 4 dimensions so all 2D scatter/hexbin plots work
+    n_pad = max(0, 4 - zs.shape[1])
+    if n_pad > 0:
+        zs = np.column_stack([zs, np.zeros((len(zs), n_pad))])
+    if umap_coords.shape[1] < 2:
+        umap_coords = np.column_stack([umap_coords, np.zeros(len(umap_coords))])
 
     # Create visualization directory
     viz_dir = os.path.join(output_dir, 'outlier_visualizations')
