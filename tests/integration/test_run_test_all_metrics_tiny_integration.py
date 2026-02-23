@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 
-pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io]
+pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io, pytest.mark.tiny_metrics]
 
 
 def _make_real_volume(idx, n_vols, grid):
@@ -37,8 +37,6 @@ def _write_volumes(prefix: Path, n_vols=12, grid=32, voxel_size=4.25):
 
 
 def test_run_test_all_metrics_tiny_integration(tmp_path):
-    if os.environ.get("RUN_TINY_METRICS_INTEGRATION", "0") != "1":
-        pytest.skip("set RUN_TINY_METRICS_INTEGRATION=1 to run")
 
     vols_prefix = tmp_path / "vol"
     _write_volumes(vols_prefix, n_vols=12, grid=32, voxel_size=4.25)

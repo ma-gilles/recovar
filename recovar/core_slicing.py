@@ -41,7 +41,18 @@ def slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, di
 @functools.partial(jax.jit, static_argnums=[2, 3, 4])
 def adjoint_slice_volume_by_map(slices, rotation_matrices, image_shape, volume_shape, disc_type):
     volume_size = np.prod(volume_shape)
-    f = lambda volume: slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type)
+    order = decide_order(disc_type)
+    if order == 3:
+        # For cubic, slice_volume_by_map expects pre-computed spline coefficients (shape N+2 per dim).
+        # The VJP must be defined over the flat raw volume space, so we compute the coefficients
+        # inside the function-to-differentiate so the gradient flows back to the flat volume.
+        from recovar import cubic_interpolation
+
+        def f(volume_flat):
+            coeffs = cubic_interpolation.compute_spline_coefficients(volume_flat.reshape(volume_shape))
+            return map_coordinates_on_slices(coeffs, rotation_matrices, image_shape, volume_shape, 3)
+    else:
+        f = lambda volume: slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type)
     _, u = vjp(f, jnp.zeros(volume_size, dtype=slices.dtype))
     return u(slices)[0]
 
@@ -767,7 +778,7 @@ def map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_sha
         from recovar import cubic_interpolation
 
         slices = cubic_interpolation.map_coordinates_with_cubic_spline(
-            volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, mode="fill", cval=0.0
+            volume, batch_grid_pt_vec_ind_of_images, mode="fill", cval=0.0
         ).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1]).astype(volume.dtype)
     else:
         slices = jax.scipy.ndimage.map_coordinates(
