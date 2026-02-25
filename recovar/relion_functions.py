@@ -1,9 +1,12 @@
 import numpy as np
 from recovar import core, noise
 from recovar import regularization, constants, utils, padding, mask
+from recovar.configs import ForwardModelConfig
+import recovar.core_forward as core_forward
 import recovar.fourier_transform_utils as fourier_transform_utils
 import jax.numpy as jnp
 import logging, functools, jax
+import equinox as eqx
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +207,85 @@ def residual_relion_style_triangular_kernel_batch_trilinear(mean_estimate, image
     return Ft_y, Ft_ctf
 
 
+# ============================================================================
+# New Equinox-based API
+# ============================================================================
+
+
+@eqx.filter_jit
+def relion_kernel_batch(
+    config: ForwardModelConfig,
+    images: jax.Array,
+    ctf_params: jax.Array,
+    rotation_matrices: jax.Array,
+    translations: jax.Array,
+    noise_variances: jax.Array,
+    use_upsampled_ctf: bool = False,
+):
+    """RELION-style triangular kernel batch — Equinox API."""
+    noise_variances = noise.to_batched_pixel_noise(
+        noise_variances, config.image_shape, batch_size=images.shape[0]
+    )
+    images = core.translate_images(images, translations, config.image_shape) / noise_variances
+    Ft_y = core_forward.adjoint_forward_model(
+        config, images, ctf_params, rotation_matrices,
+        skip_ctf=config.premultiplied_ctf,
+    )
+    CTF = config.compute_ctf(ctf_params) / noise_variances
+
+    if use_upsampled_ctf:
+        upsample_factor = 2
+        upsampled_shape = tuple(np.array(config.image_shape) * upsample_factor)
+        upsampled_CTF_squared = config.CTF_fun(ctf_params, upsampled_shape, config.voxel_size) ** 2
+        batch_size = upsampled_CTF_squared.shape[0]
+        ctf = upsampled_CTF_squared.reshape(batch_size, *upsampled_shape)
+        kernel_size = upsample_factor + upsample_factor // 2
+        kernel = jnp.ones((kernel_size, kernel_size), dtype=ctf.dtype) / (kernel_size * kernel_size)
+        ctf = jnp.expand_dims(ctf, 1)
+        kernel = kernel.reshape(1, 1, kernel_size, kernel_size)
+        ctf = jax.lax.conv_general_dilated(
+            ctf, kernel, window_strides=(1, 1), padding='SAME',
+            dimension_numbers=('NCHW', 'IOHW', 'NCHW'),
+        )
+        ctf = jnp.squeeze(ctf, axis=1)[:, ::upsample_factor, ::upsample_factor]
+        CTF_squared = ctf.reshape(batch_size, -1) / noise_variances
+        Ft_ctf = core_forward.adjoint_forward_model(
+            config, CTF_squared, ctf_params, rotation_matrices, skip_ctf=True,
+        )
+        return Ft_y, Ft_ctf
+
+    Ft_ctf = core_forward.adjoint_forward_model(
+        config, CTF, ctf_params, rotation_matrices,
+    )
+    return Ft_y, Ft_ctf
+
+
+@eqx.filter_jit
+def residual_relion_kernel_trilinear(
+    config: ForwardModelConfig,
+    mean_estimate: jax.Array,
+    images: jax.Array,
+    ctf_params: jax.Array,
+    rotation_matrices: jax.Array,
+    translations: jax.Array,
+    cov_noise: jax.Array,
+):
+    """Residual RELION-style kernel (trilinear) — Equinox API."""
+    CTF_squared = config.compute_ctf(ctf_params)
+    images = core.translate_images(images, translations, config.image_shape)
+    images = images - core.slice_volume_by_trilinear(
+        mean_estimate, rotation_matrices, config.image_shape, config.volume_shape,
+    ) * CTF_squared
+    images_squared = jnp.abs(images) ** 2 - cov_noise
+    CTF_squared = CTF_squared ** 2
+
+    Ft_y = core.adjoint_slice_volume_by_trilinear(
+        images_squared, rotation_matrices, config.image_shape, config.volume_shape,
+    )
+    Ft_ctf = core.adjoint_slice_volume_by_trilinear(
+        CTF_squared ** 2, rotation_matrices, config.image_shape, config.volume_shape,
+    )
+    return Ft_y, Ft_ctf
 
 
 # My understanding of what relion does.

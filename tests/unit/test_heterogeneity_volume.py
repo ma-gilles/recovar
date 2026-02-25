@@ -20,6 +20,7 @@ import jax
 import jax.numpy as jnp
 
 import recovar.heterogeneity_volume as hv
+from recovar.dataset import CryoEMHalfsets
 from helpers.tiny_synthetic import make_tiny_cryo_dataset_with_images
 
 pytestmark = pytest.mark.unit
@@ -173,7 +174,7 @@ def test_make_volumes_kernel_estimate_local_smoke(tmp_path):
 
     hv.make_volumes_kernel_estimate_local(
         heterogeneity_distances=het_dists,
-        cryos=[cryo0, cryo1],
+        cryos=CryoEMHalfsets(cryo0, cryo1),
         output_folder=output_folder,
         ndim=2,
         bins=bins,

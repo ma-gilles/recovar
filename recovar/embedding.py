@@ -3,7 +3,10 @@ import jax.numpy as jnp
 import numpy as np
 import functools, time, jax
 import nvtx
+import equinox as eqx
 from recovar import core, covariance_core, latent_density, homogeneous, constants, utils, dataset, linalg
+from recovar.configs import ForwardModelConfig, BatchData, ModelState, EmbeddingOpts
+import recovar.core_forward as core_forward
 
 import recovar.fourier_transform_utils as fourier_transform_utils
 
@@ -60,7 +63,7 @@ def generate_conformation_from_reprojection(xs, mean, u ):
 @nvtx.annotate("get_per_image_embedding", color="purple", domain=NVTX_DOMAIN_EMBED)
 def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None):
 
-    assert u.shape[0] == cryos[0].volume_size, "input u should be volume_size x basis_size"
+    assert u.shape[0] == cryos.volume_size, "input u should be volume_size x basis_size"
     st_time = time.time()    
     basis = np.asarray(u[:, :basis_size]).T
     eigenvalues = (s + constants.ROOT_EPSILON)
@@ -76,7 +79,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
     
     basis_size = u.shape[-1] if basis_size == -1 else basis_size
 
-    batch_size = utils.get_embedding_batch_size(basis, cryos[0].image_size, contrast_grid, basis_size, gpu_memory) * 1
+    batch_size = utils.get_embedding_batch_size(basis, cryos.image_size, contrast_grid, basis_size, gpu_memory) * 1
     logger.info(f"embedding batch size? {batch_size}")
     batch_size = max(1, int(batch_size // 10))
     # mean = cryojax_map_coordinates.compute_spline_coefficients(mean.reshape(cryos[0].volume_shape))
@@ -92,11 +95,11 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
     if USE_CUBIC:
         disc_type = 'cubic'
         from recovar import cubic_interpolation
-        mean = cubic_interpolation.compute_spline_coefficients(mean.reshape(cryos[0].volume_shape))
+        mean = cubic_interpolation.compute_spline_coefficients(mean.reshape(cryos.volume_shape))
         # vmap_coeffs = jax.vmap(cubic_interpolation.compute_spline_coefficients, in_axes = 0, out_axes = 0)
-        # basis = vmap_coeffs(basis.reshape(-1, *cryos[0].volume_shape))#.reshape(basis.shape)
+        # basis = vmap_coeffs(basis.reshape(-1, *cryos.volume_shape))#.reshape(basis.shape)
         from recovar import covariance_estimation
-        basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, cryos[0].volume_shape, gpu_memory= None)
+        basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, cryos.volume_shape, gpu_memory= None)
 
 
     n_cryos = len(cryos)
@@ -134,81 +137,72 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
 
 
 
-# @functools.partial(jax.jit, static_argnums = [5])    
 @nvtx.annotate("get_coords_in_basis_and_contrast", color="blue", domain=NVTX_DOMAIN_EMBED)
 def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None, force_not_shared_label = False, contrast_shared_across_tilt_series = False):
-    # If skip_image_i_in_series is not None, it will skip that image in the tilt series. This is useful for detecting bad tilt images.
-    # not_shared_contrast = not contrast_shared_across_tilt_series
 
-    # This is the handle the case where we want to assign a label to each image despite them from the same tilt series. E.g, for tilt cleaning.
     shared_label = experiment_dataset.tilt_series_flag and not force_not_shared_label
     n_units = experiment_dataset.n_units if not force_not_shared_label else experiment_dataset.n_images
 
-
-    basis = basis.astype(experiment_dataset.dtype)
-        
-    # Make sure variables used in every iteration are on gpu.
-    basis = jnp.asarray(basis)
+    # Transfer arrays to GPU once before the batch loop
+    basis = jnp.asarray(basis.astype(experiment_dataset.dtype))
     volume_mask = jnp.array(volume_mask).astype(experiment_dataset.dtype_real)
     mean_estimate = jnp.array(mean_estimate).astype(experiment_dataset.dtype)
     eigenvalues = jnp.array(eigenvalues).astype(experiment_dataset.dtype)
     contrast_grid = contrast_grid.astype(experiment_dataset.dtype_real)
-    
+
+    # Construct structured parameters once outside the loop
+    config = ForwardModelConfig.from_dataset(
+        experiment_dataset, disc_type=disc_type,
+        process_fn=experiment_dataset.image_stack.process_images,
+    )
+    model = ModelState(
+        mean_estimate=mean_estimate,
+        volume_mask=volume_mask,
+        basis=basis,
+        eigenvalues=eigenvalues[:basis.shape[0]],
+    )
+    opts = EmbeddingOpts(
+        compute_covariances=compute_covariances,
+        compute_bias=compute_bias,
+        shared_label=shared_label,
+        contrast_shared_across_tilt_series=contrast_shared_across_tilt_series,
+    )
+
     basis_size = basis.shape[0]
-    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
-    
-    xs = np.zeros((n_units, basis_size), dtype = basis.dtype)
-    image_latent_covariances = np.zeros((n_units, basis_size, basis_size), dtype = basis.dtype) if compute_covariances else None
-    image_latent_bias = np.zeros((n_units, basis_size, basis_size), dtype = basis.dtype) if compute_bias else None
+    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
 
-    # Size depends on whether we are sharing contrast or not
-    contrast_units = n_units if contrast_shared_across_tilt_series else experiment_dataset.n_images 
-    estimated_contrasts = np.zeros(contrast_units, dtype = basis.dtype).real
-    batch_idx =0 
+    xs = np.zeros((n_units, basis_size), dtype=basis.dtype)
+    image_latent_covariances = np.zeros((n_units, basis_size, basis_size), dtype=basis.dtype) if compute_covariances else None
+    image_latent_bias = np.zeros((n_units, basis_size, basis_size), dtype=basis.dtype) if compute_bias else None
 
-    invalid_particles = []
-
+    contrast_units = n_units if contrast_shared_across_tilt_series else experiment_dataset.n_images
+    estimated_contrasts = np.zeros(contrast_units, dtype=basis.dtype).real
 
     for batch, particles_ind, batch_image_ind in data_generator:
-        
-        # TODO this should probably be changed to a more general way of handling this
-        ## Tilt series are always processed one by one so index == position in tilt series
+
+        # Handle tilt series image subsetting
         if image_subset_in_tilt_series is not None:
-            # 
-            subset_image_subset_in_tilt_series = image_subset_in_tilt_series.copy()
+            subset = image_subset_in_tilt_series
             if np.max(image_subset_in_tilt_series) >= batch.shape[0]:
-                subset_image_subset_in_tilt_series = image_subset_in_tilt_series[image_subset_in_tilt_series < batch.shape[0]]
-                # logger.warning("image_subset_in_tilt_series is larger than the batch size. Skipping this batch")
-
-            batch = jnp.array(batch[subset_image_subset_in_tilt_series])
-            batch_image_ind = batch_image_ind[subset_image_subset_in_tilt_series]
-
-            # batch = jnp.delete(batch, skip_image_i_in_series, axis = 0)
-            # batch_image_ind = np.delete(batch_image_ind, skip_image_i_in_series)
+                subset = image_subset_in_tilt_series[image_subset_in_tilt_series < batch.shape[0]]
+            batch = jnp.array(batch[subset])
+            batch_image_ind = batch_image_ind[subset]
 
         noise_variances = experiment_dataset.noise.get(batch_image_ind)
-        xs_single, contrast_single, cov_batch, bias = compute_single_batch_coords_split(batch, mean_estimate, volume_mask, 
-                                                                        basis, eigenvalues,
-                                                                        experiment_dataset.CTF_params[batch_image_ind],
-                                                                        experiment_dataset.rotation_matrices[batch_image_ind],
-                                                                        experiment_dataset.translations[batch_image_ind],
-                                                                        experiment_dataset.image_stack.mask,
-                                                                        experiment_dataset.volume_mask_threshold,
-                                                                        experiment_dataset.image_shape, 
-                                                                        experiment_dataset.volume_shape, 
-                                                                        experiment_dataset.grid_size, 
-                                                                        experiment_dataset.voxel_size, 
-                                                                        experiment_dataset.padding, 
-                                                                        disc_type, 
-                                                                        compute_covariances, np.array(noise_variances),
-                                                                        experiment_dataset.image_stack.process_images,
-                                                                       experiment_dataset.CTF_fun, contrast_grid,
-                                                                       contrast_mean, contrast_variance, compute_bias, 
-                                                                       shared_label = shared_label,
-                                                                       contrast_shared_across_tilt_series = contrast_shared_across_tilt_series,
-                                                                       premultiplied_ctf = experiment_dataset.premultiplied_ctf)
-        
-        # If we are not sharing labels, we need to make sure we are assigning the correct label to each particle
+        batch_data = BatchData(
+            images=batch,
+            ctf_params=experiment_dataset.CTF_params[batch_image_ind],
+            rotation_matrices=experiment_dataset.rotation_matrices[batch_image_ind],
+            translations=experiment_dataset.translations[batch_image_ind],
+            noise_variance=np.array(noise_variances),
+        )
+
+        xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
+            config, batch_data, model, opts,
+            experiment_dataset.image_stack.mask, contrast_grid,
+            contrast_mean, contrast_variance,
+        )
+
         if force_not_shared_label:
             particles_ind = batch_image_ind
 
@@ -224,14 +218,6 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
 
         if compute_bias:
             image_latent_bias[np.array(particles_ind)] = bias
-
-
-        # if (batch_idx % 50 == 49) and (batch_idx > 0):
-        #     compute_single_batch_coords_split._clear_cache() 
-        
-        batch_idx +=1
-
-
 
     return xs, image_latent_covariances, estimated_contrasts, image_latent_bias
 
@@ -256,13 +242,14 @@ def compute_single_batch_coords_split(batch, mean_estimate, volume_mask, basis, 
     #     masked_noises = jnp.repeat(noise_variance[None], axis =0, repeats = batch.shape[0])#  * jnp.ones(batch.shape[0], dtype = noise_variance.dtype) 
 
     if shared_label and not contrast_shared_across_tilt_series:
-        ## keep a copy of all of these before summing to get the best contrast for each image later
-        AU_t_images_unsummed = AU_t_images.copy()
-        AU_t_Amean_unsummed = AU_t_Amean.copy()
-        AU_t_AU_unsummed = AU_t_AU.copy()
-        image_T_A_mean_unsummed = image_T_A_mean.copy()
-        A_mean_norm_sq_unsummed = A_mean_norm_sq.copy()
-        image_norms_sq_unsummed = image_norms_sq.copy()
+        ## keep a reference before summing to get the best contrast for each image later
+        ## JAX arrays are immutable so jnp.sum(...) below creates new arrays, not mutating these
+        AU_t_images_unsummed = AU_t_images
+        AU_t_Amean_unsummed = AU_t_Amean
+        AU_t_AU_unsummed = AU_t_AU
+        image_T_A_mean_unsummed = image_T_A_mean
+        A_mean_norm_sq_unsummed = A_mean_norm_sq
+        image_norms_sq_unsummed = image_norms_sq
 
     
     if shared_label:
@@ -450,6 +437,169 @@ def slice_ar(indx, arr):
 batch_slice_ar = jax.jit(jax.vmap(slice_ar, in_axes =(0, 0)))
 batch_x_T_y = jax.vmap(  lambda x,y : jnp.conj(x).T @ y, in_axes = (0,0))
 
+
+# ============================================================================
+# New Equinox-based embedding API
+# ============================================================================
+
+
+def _compute_batch_coords_p1(
+    config: ForwardModelConfig,
+    batch_data: BatchData,
+    model: ModelState,
+):
+    """Phase 1: compute inner products AU^T images, AU^T Amean, etc.
+
+    Internal helper used by :func:`compute_batch_coords`.
+    """
+    batch = batch_data.images
+    ctf_params = batch_data.ctf_params
+    rotation_matrices = batch_data.rotation_matrices
+    translations = batch_data.translations
+    noise_variance = batch_data.noise_variance
+
+    if config.process_fn is not None:
+        batch = config.process_fn(batch)
+    batch = core.translate_images(batch, translations, config.image_shape)
+
+    projected_mean = core_forward.forward_model(
+        config, model.mean_estimate, ctf_params, rotation_matrices,
+        skip_ctf=config.premultiplied_ctf,
+    )
+
+    AUs = covariance_core.batch_over_vol_forward_model_from_map(
+        model.basis, ctf_params, rotation_matrices,
+        config.image_shape, config.volume_shape, config.voxel_size,
+        config.CTF_fun, config.disc_type, config.premultiplied_ctf,
+    )
+    AUs = AUs.transpose(1, 2, 0)
+
+    # Noise normalization
+    batch /= jnp.sqrt(noise_variance)
+    projected_mean /= jnp.sqrt(noise_variance)
+    AUs /= jnp.sqrt(noise_variance)[..., None]
+
+    if config.premultiplied_ctf:
+        AU_t_images = batch_x_T_y(AUs, batch)
+        image_T_A_mean = batch_x_T_y(batch, projected_mean)
+        CTF = config.compute_ctf(ctf_params)
+        AUs *= CTF[..., None]
+        projected_mean *= CTF
+    else:
+        AU_t_images = batch_x_T_y(AUs, batch)
+        image_T_A_mean = batch_x_T_y(batch, projected_mean)
+
+    AU_t_Amean = batch_x_T_y(AUs, projected_mean)
+    AU_t_AU = batch_x_T_y(AUs, AUs)
+    A_mean_norm_sq = jnp.linalg.norm(projected_mean, axis=-1) ** 2
+    image_norms_sq = jnp.linalg.norm(batch, axis=-1) ** 2
+
+    return AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq
+
+
+@eqx.filter_jit
+def compute_batch_coords(
+    config: ForwardModelConfig,
+    batch_data: BatchData,
+    model: ModelState,
+    opts: EmbeddingOpts,
+    image_mask: jax.Array,
+    contrast_grid: jax.Array,
+    contrast_mean: float = 1.0,
+    contrast_variance: float = np.inf,
+):
+    """Compute latent coordinates for a batch — Equinox API.
+
+    Replaces the 27-param ``compute_single_batch_coords_split``.
+    """
+    contrast_grid = jnp.array(contrast_grid)
+    eigenvalues = model.eigenvalues
+
+    AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq = \
+        _compute_batch_coords_p1(config, batch_data, model)
+
+    if opts.shared_label and not opts.contrast_shared_across_tilt_series:
+        # Save unsummed copies for per-image contrast refinement.
+        # No .copy() needed — JAX arrays are immutable; rebinding below
+        # creates new arrays without mutating the originals.
+        AU_t_images_unsummed = AU_t_images
+        AU_t_Amean_unsummed = AU_t_Amean
+        AU_t_AU_unsummed = AU_t_AU
+        image_T_A_mean_unsummed = image_T_A_mean
+        A_mean_norm_sq_unsummed = A_mean_norm_sq
+        image_norms_sq_unsummed = image_norms_sq
+
+    if opts.shared_label:
+        AU_t_images = jnp.sum(AU_t_images, axis=0, keepdims=True)
+        AU_t_Amean = jnp.sum(AU_t_Amean, axis=0, keepdims=True)
+        AU_t_AU = jnp.sum(AU_t_AU, axis=0, keepdims=True)
+        image_T_A_mean = jnp.sum(image_T_A_mean, axis=0, keepdims=True)
+        A_mean_norm_sq = jnp.sum(A_mean_norm_sq, axis=0, keepdims=True)
+        image_norms_sq = jnp.sum(image_norms_sq, axis=0, keepdims=True)
+
+    xs_batch_contrast = batch_over_images_and_contrast_solve_contrast_linear_system(
+        AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, contrast_grid
+    )
+    residuals_fit, residuals_prior = batch_compute_contrast_residual_fast_2(
+        xs_batch_contrast, AU_t_images, image_norms_sq, AU_t_Amean,
+        A_mean_norm_sq, image_T_A_mean, AU_t_AU, eigenvalues, contrast_grid,
+    )
+    contrast_prior = (contrast_grid - contrast_mean) ** 2 / contrast_variance
+    res_sum1 = residuals_fit + residuals_prior + contrast_prior
+    best_idx = jnp.argmin(res_sum1, axis=1).astype(int)
+
+    xs_single = batch_slice_ar(best_idx, xs_batch_contrast)
+    contrast_single = contrast_grid[best_idx]
+
+    if opts.shared_label and not opts.contrast_shared_across_tilt_series:
+        # Per-image contrast refinement via iterative optimization
+        contrast_est = jnp.ones(batch_data.images.shape[0], dtype=contrast_single.dtype) * contrast_single
+
+        def refine_contrast(i, contrast_est):
+            _AU_t_images = jnp.sum(AU_t_images_unsummed * contrast_est[:, None], axis=0, keepdims=True)
+            _AU_t_Amean = jnp.sum(AU_t_Amean_unsummed * contrast_est[:, None] ** 2, axis=0, keepdims=True)
+            _AU_t_AU = jnp.sum(AU_t_AU_unsummed * contrast_est[:, None, None] ** 2, axis=0, keepdims=True)
+
+            _xs = solve_contrast_linear_system(_AU_t_images, _AU_t_Amean, _AU_t_AU, eigenvalues, 1)[None]
+            _xs_repeat = jnp.repeat(_xs, axis=0, repeats=batch_data.images.shape[0])
+            _xs_repeat = jnp.repeat(_xs_repeat, axis=1, repeats=contrast_grid.shape[0])
+
+            _res_fit, _res_prior = batch_compute_contrast_residual_fast_2(
+                _xs_repeat, AU_t_images_unsummed, image_norms_sq_unsummed,
+                AU_t_Amean_unsummed, A_mean_norm_sq_unsummed,
+                image_T_A_mean_unsummed, AU_t_AU_unsummed, eigenvalues, contrast_grid,
+            )
+            _contrast_prior = (contrast_grid - contrast_mean) ** 2 / contrast_variance
+            _res_sum = _res_fit + _res_prior + _contrast_prior[None]
+            _best_idx = jnp.argmin(_res_sum, axis=1).astype(int)
+            return contrast_grid[_best_idx]
+
+        contrast_single = jax.lax.fori_loop(0, 10, refine_contrast, contrast_est)
+
+    # Covariance computation
+    if opts.compute_covariances:
+        if opts.shared_label and not opts.contrast_shared_across_tilt_series:
+            gram = jnp.sum(AU_t_AU_unsummed * contrast_single[:, None, None] ** 2, axis=0, keepdims=True)
+        else:
+            gram = (contrast_single ** 2)[:, None, None] * AU_t_AU
+        cov_batch = gram + jnp.diag(1 / eigenvalues)
+        cov_batch = cov_batch @ jnp.linalg.pinv(gram, rcond=1e-6, hermitian=True) @ cov_batch
+    else:
+        cov_batch = None
+
+    # Bias computation
+    if opts.compute_bias:
+        if opts.shared_label and not opts.contrast_shared_across_tilt_series:
+            gram = jnp.sum(AU_t_AU_unsummed * contrast_single[:, None, None] ** 2, axis=0, keepdims=True)
+        else:
+            gram = (contrast_single ** 2)[:, None, None] * AU_t_AU
+        _cov = gram + jnp.diag(1 / eigenvalues)
+        bias = jnp.linalg.pinv(_cov, rcond=1e-6, hermitian=True) @ gram
+    else:
+        bias = None
+
+    return xs_single, contrast_single, cov_batch, bias
+
 # Naive functions, without precompute
 def compute_contrast_residual_naive(image, AU, projected_mean, xs, eigenvalues, noise_variance, contrast_grid):
     fit_residual =  jnp.linalg.norm( (contrast_grid * (AU @ xs.T + projected_mean[...,None]) - image[...,None])) #/ jnp.sqrt(noise_variance), axis =0)**2 what is this???
@@ -498,10 +648,10 @@ batch_over_images_and_contrast_solve_contrast_linear_system = jax.vmap(batch_ove
 
 def set_contrasts_in_cryos(cryos, contrasts):
 
-    if cryos[0].tilt_series_flag:
-        
+    if cryos.tilt_series_flag:
+
         # If it's a per image assignment
-        if contrasts.shape[0] == cryos[0].n_images + cryos[1].n_images:
+        if contrasts.shape[0] == cryos.n_total_images:
             running_idx = 0 
             for i in range(2): # Untested
                 cryos[i].CTF_params[:,core.CTFParamIndex.CONTRAST] *= contrasts[running_idx:running_idx+cryos[i].n_images]

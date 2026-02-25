@@ -3,7 +3,9 @@ import logging
 import numpy as np
 import jax
 import jax.numpy as jnp
+import equinox as eqx
 from recovar import core
+from recovar.configs import ForwardModelConfig
 import recovar.fourier_transform_utils as fourier_transform_utils
 from .sampling import translations_to_indices
 from .core import VOL_AXIS
@@ -86,6 +88,54 @@ def backproject_one_image(probabilities, images_i, rotation_matrices, translatio
 batch_vol_adjoint_slice_volume = jax.vmap(core.adjoint_slice_volume_by_trilinear, in_axes = (VOL_AXIS, VOL_AXIS, None, None, None), out_axes=0 )
 
 
+# ============================================================================
+# Equinox-based M-step API
+# ============================================================================
+
+@eqx.filter_jit
+def backproject_one_image_eqx(config: ForwardModelConfig, probabilities, images_i, rotation_matrices, translations, ctf_params, noise_variance, translation_fn="fft"):
+    """Equinox version of backproject_one_image (12 → 8 params)."""
+    images = sum_up_translations(images_i, probabilities, translations, config.image_shape, translation_fn)
+    CTF = config.compute_ctf(ctf_params)
+    images *= (CTF[:,None,None] / noise_variance)
+    Ft_y = batch_vol_adjoint_slice_volume(images, rotation_matrices, config.image_shape, config.volume_shape, None)
+    probabilites_summed_over_translations = jnp.sum(probabilities, axis=-1)[...,None]
+    CTF_probs = (CTF**2 / noise_variance)[:,None,None] * probabilites_summed_over_translations
+    Ft_ctf = batch_vol_adjoint_slice_volume(CTF_probs, rotation_matrices, config.image_shape, config.volume_shape, None)
+    return Ft_y, Ft_ctf
+
+
+@eqx.filter_jit
+def sum_up_images_fixed_rots_eqx(config: ForwardModelConfig, batch, probabilities, translations, rotations, ctf_params, noise_variance, Ft_y=0, Ft_ctf=0):
+    """Equinox version of sum_up_images_fixed_rots (13 → 9 params)."""
+    assert(probabilities.shape[0] == batch.shape[0])
+    assert(probabilities.shape[1] == rotations.shape[0])
+    assert(probabilities.shape[2] == translations.shape[0])
+    n_rotations = rotations.shape[0]
+    n_translations = translations.shape[0]
+    n_images = batch.shape[0]
+    n_shifted_images = n_images * n_translations
+
+    CTF = config.compute_ctf(ctf_params)
+    batch = config.process_fn(batch, apply_image_mask=False) * CTF / noise_variance
+    shifted_images = core.batch_trans_translate_images(batch, jnp.repeat(translations[None], batch.shape[0], axis=0), config.image_shape)
+    shifted_images = shifted_images.reshape(n_shifted_images, shifted_images.shape[-1])
+
+    P = probabilities.swapaxes(0,1).reshape(n_rotations, n_shifted_images)
+    summed_images = P @ shifted_images
+    Ft_y = core.adjoint_slice_volume_by_trilinear(summed_images, rotations, config.image_shape, config.volume_shape, Ft_y)
+
+    probabilites_summed_over_translations = jnp.sum(probabilities, axis=-1)
+    CTF_probs = probabilites_summed_over_translations.T @ (CTF**2 / noise_variance)
+    Ft_ctf = core.adjoint_slice_volume_by_trilinear(CTF_probs, rotations, config.image_shape, config.volume_shape, Ft_ctf)
+
+    return Ft_y, Ft_ctf
+
+
+# ============================================================================
+# Legacy M-step API
+# ============================================================================
+
 @functools.partial(jax.jit, static_argnums=[5,8,9,10])
 def sum_up_images_fixed_rots(batch, probabilities, translations, rotations, CTF_params, CTF_fun, noise_variance, voxel_size, image_shape, volume_shape, process_images, Ft_y = 0, Ft_ctf = 0):
 
@@ -143,13 +193,18 @@ def M_with_precompute(experiment_dataset, probabilities, rotations, translations
     n_images = experiment_dataset.n_images if image_indices is None else len(image_indices)
     from recovar import utils
 
+    config = ForwardModelConfig.from_dataset(
+        experiment_dataset, disc_type=disc_type,
+        process_fn=experiment_dataset.image_stack.process_images,
+    )
+
     gpu_memory = utils.get_gpu_memory_total()
     batch_size = max(1, (utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) // translations.shape[0]) * 20)
 
     data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = image_indices)
-    
+
     Ft_y, Ft_ctf = jnp.zeros((experiment_dataset.volume_size), dtype = experiment_dataset.dtype), jnp.zeros((experiment_dataset.volume_size), experiment_dataset.dtype)
-    
+
     # n_rotation_batch = rotations.shape[0]//10
     mult = 5
     rotation_batch = max(1, rotations.shape[0] // mult)
@@ -163,7 +218,13 @@ def M_with_precompute(experiment_dataset, probabilities, rotations, translations
             # could just not backproject until the end
             # rot_indices = utils.get_batch_of_indices_arange(n_rotations, rotation_batch, k)
             # Hmmm this is a bit of a hack. Indexing is not what I wish it was
-            Ft_y, Ft_ctf = sum_up_images_fixed_rots(batch, probabilities[start_idx:end_idx, rot_indices[0]:rot_indices[-1]+1], translations, rotations[rot_indices], experiment_dataset.CTF_params[indices], experiment_dataset.CTF_fun, noise_variance, experiment_dataset.voxel_size, image_shape, experiment_dataset.volume_shape, experiment_dataset.image_stack.process_images,  Ft_y = Ft_y, Ft_ctf = Ft_ctf)
+            Ft_y, Ft_ctf = sum_up_images_fixed_rots_eqx(
+                config, batch,
+                probabilities[start_idx:end_idx, rot_indices[0]:rot_indices[-1]+1],
+                translations, rotations[rot_indices],
+                experiment_dataset.CTF_params[indices], noise_variance,
+                Ft_y=Ft_y, Ft_ctf=Ft_ctf,
+            )
 
         start_idx = end_idx
 

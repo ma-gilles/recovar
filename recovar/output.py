@@ -451,11 +451,11 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
 
             # latent_points = path_subsampled[k][None]
             # log_likelihoods = latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], zs, cov_zs)[...,0]
-            heterogeneity_distances = [ heterogeneity_distances[:cryos[0].n_units], heterogeneity_distances[cryos[0].n_units:] ]
+            heterogeneity_distances = cryos.split_units_array(heterogeneity_distances)
 
             from recovar import noise
 
-            locres_maskrad = cryos[0].grid_size * cryos[0].voxel_size / maskrad_fraction
+            locres_maskrad = cryos.grid_size * cryos.voxel_size / maskrad_fraction
             logger.info(f"Mask radius fraction = {maskrad_fraction}. Setting locres_maskrac = locres_sampling = box_size * voxel_size / {maskrad_fraction} = {locres_maskrad:.1f} Angstroms. Using {n_min_particles} particles for template.")
             heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_folder_this, ndim, n_bins, B_factor, tau = None, n_min_particles = n_min_particles, locres_sampling = locres_maskrad, locres_maskrad = locres_maskrad, locres_edgwidth = 0, upsampling_for_ests = 1, use_mask_ests =False, grid_correct_ests = False, save_all_estimates=save_all_estimates, metric_used= 'locshellmost_likely')
 
@@ -477,15 +477,15 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
                         
                         # Apply global filtering
                         filtered_combined, fsc, global_resol = locres.filter_maps_with_global_fsc(
-                            halfmap1, halfmap2, cryos[0].voxel_size, fsc_mask = fsc_mask
+                            halfmap1, halfmap2, cryos.voxel_size, fsc_mask = fsc_mask
                         )
                         
                         # Save filtered halfmaps with _filtered suffix
                         filtered_half1_path = output_folder_this + "halfmap1_filtered.mrc"
                         filtered_half2_path = output_folder_this + "halfmap2_filtered.mrc"
                         
-                        utils.write_mrc(filtered_half1_path, filtered_combined, voxel_size=cryos[0].voxel_size)
-                        utils.write_mrc(filtered_half2_path, filtered_combined, voxel_size=cryos[0].voxel_size)
+                        utils.write_mrc(filtered_half1_path, filtered_combined, voxel_size=cryos.voxel_size)
+                        utils.write_mrc(filtered_half2_path, filtered_combined, voxel_size=cryos.voxel_size)
                         
                         logger.info(f"Applied global filtering to volume {k}. Resolution: {global_resol:.2f} Angstroms")
                         logger.info(f"Saved filtered halfmaps: {filtered_half1_path}, {filtered_half2_path}")

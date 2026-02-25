@@ -4,7 +4,10 @@ import numpy as np
 import jax, time
 import functools
 import nvtx
+import equinox as eqx
 from recovar import core, covariance_core, regularization, utils, constants, noise, cubic_interpolation
+from recovar.configs import ForwardModelConfig, BatchData, ModelState, CovarianceOpts
+import recovar.core_forward as core_forward
 import recovar.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
@@ -278,7 +281,7 @@ def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_rad
 @nvtx.annotate("compute_regularized_covariance_columns_in_batch", color="purple")
 def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, options, picked_frequencies, use_multi_gpu = False, n_gpus = None):
     
-    frequency_batch = utils.get_column_batch_size(cryos[0].grid_size, gpu_memory)    
+    frequency_batch = utils.get_column_batch_size(cryos.grid_size, gpu_memory)
 
     covariance_cols = []
     fscs = []
@@ -300,16 +303,14 @@ def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, vo
 @nvtx.annotate("compute_regularized_covariance_columns", color="purple")
 def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory,  options, picked_frequencies, use_multi_gpu = False, n_gpus = None):
 
-    cryo = cryos[0]
-    volume_shape = cryos[0].volume_shape
+    volume_shape = cryos.volume_shape
 
     # These options should probably be left as is.
     mask_ls = dilated_volume_mask
     mask_final = volume_mask
-    # substract_shell_mean = False 
+    # substract_shell_mean = False
     # shift_fsc = False
     keep_intermediate = False
-    # image_noise_var = noise.make_radial_noise(cov_noise, cryos[0].image_shape)
 
     utils.report_memory_device(logger = logger)
     
@@ -326,7 +327,7 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask
         logger.info("CUDA Profiler: Stopped profiling covariance computation")
     
     st_time = time.time() 
-    volume_noise_var = np.asarray(noise.make_radial_noise(cryos[0].noise.get_average_radial_noise(), cryos[0].volume_shape))
+    volume_noise_var = np.asarray(noise.make_radial_noise(cryos[0].noise.get_average_radial_noise(), cryos.volume_shape))
 
     covariance_cols = {}
     if options["reg_fn"] == "new":
@@ -343,8 +344,8 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask
 
         del Hs, Bs
 
-        H_comb = np.stack(H_comb).astype(dtype = cryo.dtype)
-        B_comb = np.stack(B_comb).astype(dtype = cryo.dtype)
+        H_comb = np.stack(H_comb).astype(dtype = cryos.dtype)
+        B_comb = np.stack(B_comb).astype(dtype = cryos.dtype)
 
         st_time2 = time.time()
         cols2 = []
@@ -353,13 +354,92 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask
             
 
         logger.info(f"cov update time: {time.time() - st_time2}")
-        covariance_cols["est_mask"] = np.stack(cols2, axis =-1).astype(cryo.dtype)
+        covariance_cols["est_mask"] = np.stack(cols2, axis =-1).astype(cryos.dtype)
         logger.info(f"reg time: {time.time() - st_time}")
         utils.report_memory_device(logger = logger)
     else:
         assert False, "wrong covariance reg fn"
 
     return covariance_cols, picked_frequencies, np.asarray(fscs)
+
+
+# ============================================================================
+# New Equinox-based variance estimation
+# ============================================================================
+
+
+@eqx.filter_jit
+@nvtx.annotate("variance_relion_kernel_trilinear", color="yellow")
+def variance_relion_kernel_trilinear(
+    config: ForwardModelConfig,
+    batch_data: BatchData,
+    mean_estimate: jax.Array,
+    volume_mask: jax.Array,
+    image_mask: jax.Array,
+    soften: int = 5,
+):
+    """Variance estimation via RELION-style trilinear kernel — Equinox API.
+
+    Replaces the 18-param ``variance_relion_style_triangular_kernel_batch_trilinear``.
+    """
+    images = batch_data.images
+    ctf_params = batch_data.ctf_params
+    rotation_matrices = batch_data.rotation_matrices
+    translations = batch_data.translations
+    noise_variances = batch_data.noise_variance
+
+    CTF = config.compute_ctf(ctf_params)
+    images = core.translate_images(images, translations, config.image_shape)
+
+    if config.premultiplied_ctf:
+        images = images - core.slice_volume_by_map(
+            mean_estimate, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
+        ) * CTF ** 2
+        noise_p_variance_ctf = CTF ** 2
+    else:
+        images = images - core.slice_volume_by_map(
+            mean_estimate, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
+        ) * CTF
+        noise_p_variance_ctf = jnp.ones_like(images)
+
+    Ft_im = core.adjoint_slice_volume_by_trilinear(
+        jnp.abs(images) ** 2, rotation_matrices, config.image_shape, config.volume_shape
+    )
+    Ft_one = core.adjoint_slice_volume_by_trilinear(
+        noise_p_variance_ctf, rotation_matrices, config.image_shape, config.volume_shape
+    )
+
+    if volume_mask is not None:
+        image_mask = covariance_core.get_per_image_tight_mask(
+            volume_mask, rotation_matrices, image_mask, config.volume_mask_threshold,
+            config.image_shape, config.volume_shape, config.grid_size, config.padding,
+            'linear_interp', soften=soften,
+        )
+        images = covariance_core.apply_image_masks(images, image_mask, config.image_shape)
+        if config.premultiplied_ctf:
+            noise_variances = noise_variances * CTF ** 2
+        cov_noise = noise.get_masked_noise_variance_from_noise_variance(
+            image_mask, noise_variances, config.image_shape
+        )
+
+    images_squared = jnp.abs(images) ** 2 - cov_noise.reshape(images.shape)
+    CTF_squared = CTF ** 2
+
+    if not config.premultiplied_ctf:
+        images_squared *= CTF_squared
+
+    Ft_y = core.adjoint_slice_volume_by_trilinear(
+        images_squared, rotation_matrices, config.image_shape, config.volume_shape
+    )
+    Ft_ctf = core.adjoint_slice_volume_by_trilinear(
+        CTF_squared ** 2, rotation_matrices, config.image_shape, config.volume_shape
+    )
+    return Ft_y, Ft_ctf, Ft_im, Ft_one
+
+
+# ============================================================================
+# Legacy variance estimation (kept for backward compatibility)
+# ============================================================================
 
 
 # import functools, jax
@@ -423,36 +503,39 @@ def variance_relion_style_triangular_kernel_batch_trilinear(mean_estimate, image
 
 # This computes the lhs and rhs of two things: the estimator for the variance of the signal, and the variance of the var(signal)*CTF**2 + var(noise)**2
 @nvtx.annotate("variance_relion_style_triangular_kernel", color="yellow")
-def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate,  batch_size, image_subset = None, volume_mask = None, disc_type= ''):
+def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, batch_size, image_subset=None, volume_mask=None, disc_type=''):
 
-    # if image_subset is None:
-    #     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
-    # else:
-    data_generator = experiment_dataset.get_image_subset_generator(batch_size=batch_size, subset_indices = image_subset)
+    data_generator = experiment_dataset.get_image_subset_generator(batch_size=batch_size, subset_indices=image_subset)
+
+    # Construct config once (uses upsampled_volume_shape for variance estimation)
+    config = ForwardModelConfig(
+        image_shape=tuple(experiment_dataset.image_shape),
+        volume_shape=tuple(experiment_dataset.upsampled_volume_shape),
+        grid_size=int(experiment_dataset.grid_size),
+        voxel_size=float(experiment_dataset.voxel_size),
+        padding=int(experiment_dataset.padding),
+        disc_type=disc_type,
+        CTF_fun=experiment_dataset.CTF_fun,
+        premultiplied_ctf=bool(experiment_dataset.premultiplied_ctf),
+        volume_mask_threshold=float(experiment_dataset.volume_mask_threshold),
+    )
 
     Ft_y, Ft_ctf, Ft_im, Ft_one = 0, 0, 0, 0
     for batch, particles_ind, indices in data_generator:
-        batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
+        batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask=False)
         noise_variances = experiment_dataset.noise.get(indices)
-        Ft_y_b, Ft_ctf_b, Ft_im_b, Ft_one_b = variance_relion_style_triangular_kernel_batch_trilinear(mean_estimate, 
-                                                                batch,
-                                                                experiment_dataset.CTF_params[indices], 
-                                                                experiment_dataset.rotation_matrices[indices], 
-                                                                experiment_dataset.translations[indices], 
-                                                                experiment_dataset.image_shape, 
-                                                                experiment_dataset.upsampled_volume_shape, 
-                                                                experiment_dataset.voxel_size, 
-                                                                experiment_dataset.CTF_fun, 
-                                                                noise_variances,
-                                                                volume_mask,
-                                                                experiment_dataset.image_stack.mask,
-                                                                experiment_dataset.volume_mask_threshold,
-                                                                experiment_dataset.grid_size,
-                                                                experiment_dataset.padding,
-                                                                soften = 5,
-                                                                disc_type = disc_type,
-                                                                premultiplied_ctf= experiment_dataset.premultiplied_ctf
-                                                                )
+
+        batch_data = BatchData(
+            images=batch,
+            ctf_params=experiment_dataset.CTF_params[indices],
+            rotation_matrices=experiment_dataset.rotation_matrices[indices],
+            translations=experiment_dataset.translations[indices],
+            noise_variance=noise_variances,
+        )
+        Ft_y_b, Ft_ctf_b, Ft_im_b, Ft_one_b = variance_relion_kernel_trilinear(
+            config, batch_data, mean_estimate, volume_mask,
+            experiment_dataset.image_stack.mask, soften=5,
+        )
         Ft_y += Ft_y_b
         Ft_ctf += Ft_ctf_b
         Ft_im += Ft_im_b
@@ -465,7 +548,6 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate,  
 def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset = None, use_regularization = False, disc_type = '', noise_ind_subset = None):
     st_time = time.time()
 
-    cryo = cryos[0]
     from recovar import relion_functions
 
     variance = dict()
@@ -475,7 +557,7 @@ def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset
     noise_p_variance_rhs = 2 * [None]
 
     if disc_type == 'cubic':
-        mean_estimate = cubic_interpolation.compute_spline_coefficients(mean_estimate.reshape(cryos[0].volume_shape))
+        mean_estimate = cubic_interpolation.compute_spline_coefficients(mean_estimate.reshape(cryos.volume_shape))
 
 
     for idx, cryo in enumerate(cryos):
@@ -486,15 +568,15 @@ def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset
 
         lhs_l[idx], rhs_l[idx], noise_p_variance_lhs[idx] , noise_p_variance_rhs[idx] = variance_relion_style_triangular_kernel(cryo, mean_estimate, batch_size, image_subset = image_subset, volume_mask = volume_mask, disc_type = disc_type)
 
-        lhs_l[idx] = relion_functions.adjust_regularization_relion_style(lhs_l[idx], cryos[0].volume_shape, tau = None, padding_factor = 1, max_res_shell = None)
+        lhs_l[idx] = relion_functions.adjust_regularization_relion_style(lhs_l[idx], cryos.volume_shape, tau = None, padding_factor = 1, max_res_shell = None)
         variance["corrected" + str(idx)] = rhs_l[idx] / lhs_l[idx]
 
     lhs = (lhs_l[0] + lhs_l[1])/2
-    variance_prior, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(cryo.volume_shape, variance["corrected0"], variance["corrected1"], lhs, jnp.ones(cryos[0].volume_size, dtype = cryos[0].dtype_real) * np.inf, frequency_shift = jnp.array([0,0,0]), upsampling_factor = 1, substract_shell_mean = True)
+    variance_prior, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(cryos.volume_shape, variance["corrected0"], variance["corrected1"], lhs, jnp.ones(cryos.volume_size, dtype = cryos.dtype_real) * np.inf, frequency_shift = jnp.array([0,0,0]), upsampling_factor = 1, substract_shell_mean = True)
 
     if use_regularization:
         for idx, cryo in enumerate(cryos):
-            lhs_l[idx] = relion_functions.adjust_regularization_relion_style(lhs_l[idx], cryos[0].volume_shape, tau = variance_prior, padding_factor = 1, max_res_shell = None)
+            lhs_l[idx] = relion_functions.adjust_regularization_relion_style(lhs_l[idx], cryos.volume_shape, tau = variance_prior, padding_factor = 1, max_res_shell = None)
             variance["corrected" + str(idx)] = rhs_l[idx] / lhs_l[idx]
 
     variance_prior = np.array(variance_prior)
@@ -945,38 +1027,43 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     change_device= False
 
     for experiment_dataset in experiment_datasets:
-        data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
-        
+        config = ForwardModelConfig.from_dataset(
+            experiment_dataset, disc_type=disc_type,
+            process_fn=experiment_dataset.image_stack.process_images,
+        )
+        model = ModelState(
+            mean_estimate=mean_estimate,
+            volume_mask=volume_mask,
+            basis=basis,
+        )
+        opts = CovarianceOpts(
+            disc_type_u=disc_type_u,
+            do_mask_images=do_mask_images,
+            shared_label=experiment_dataset.tilt_series_flag,
+            parallel_analysis=parallel_analysis,
+        )
+
+        data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
         for batch, _, batch_image_ind in data_generator:
             jax_random_key, subkey = jax.random.split(jax_random_key)
             noise_variances = experiment_dataset.noise.get(batch_image_ind)
 
-            lhs_this, rhs_this = reduce_covariance_est_inner(batch, mean_estimate, volume_mask, 
-                                                                            basis,
-                                                                            experiment_dataset.CTF_params[batch_image_ind],
-                                                                            experiment_dataset.rotation_matrices[batch_image_ind],
-                                                                            experiment_dataset.translations[batch_image_ind],
-                                                                            experiment_dataset.image_stack.mask,
-                                                                            experiment_dataset.volume_mask_threshold,
-                                                                            experiment_dataset.image_shape, 
-                                                                            experiment_dataset.volume_shape, 
-                                                                            experiment_dataset.grid_size, 
-                                                                            experiment_dataset.voxel_size, 
-                                                                            experiment_dataset.padding, 
-                                                                            disc_type, disc_type_u, noise_variances,
-                                                                            experiment_dataset.image_stack.process_images,
-                                                                        experiment_dataset.CTF_fun, parallel_analysis = parallel_analysis,
-                                                                        jax_random_key =subkey, do_mask_images = do_mask_images,
-                                                                        shared_label = experiment_dataset.tilt_series_flag, 
-                                                                        premultiplied_ctf= experiment_dataset.premultiplied_ctf)
-            
+            batch_data = BatchData(
+                images=batch,
+                ctf_params=experiment_dataset.CTF_params[batch_image_ind],
+                rotation_matrices=experiment_dataset.rotation_matrices[batch_image_ind],
+                translations=experiment_dataset.translations[batch_image_ind],
+                noise_variance=noise_variances,
+            )
+            lhs_this, rhs_this = reduce_covariance_inner(
+                config, batch_data, model, opts,
+                experiment_dataset.image_stack.mask,
+                jax_random_key=subkey,
+            )
 
-            # lhs_this = jax.device_put(lhs_this, jax.devices("cpu")[0])
-            # lhs += summed_batch_kron_cpu(lhs_this)
             lhs += lhs_this
             rhs += rhs_this
             del lhs_this, rhs_this
-        # del lhs_this, rhs_this
     del basis
     # Deallocate some memory?
 
@@ -1132,6 +1219,106 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
 
     return lhs, rhs
 
+
+
+# ============================================================================
+# New Equinox-based API for covariance estimation
+# ============================================================================
+
+
+@eqx.filter_jit
+@nvtx.annotate("reduce_covariance_inner", color="green")
+def reduce_covariance_inner(
+    config: ForwardModelConfig,
+    batch_data: BatchData,
+    model: ModelState,
+    opts: CovarianceOpts,
+    image_mask: jax.Array,
+    jax_random_key=None,
+):
+    """Covariance estimation inner loop — Equinox API.
+
+    Replaces the 24-param ``reduce_covariance_est_inner`` with structured inputs.
+    All geometry/CTF/discretization params come from ``config``.
+    Per-batch arrays come from ``batch_data``.
+    Reconstruction state (mean, mask, basis) comes from ``model``.
+    Boolean flags come from ``opts``.
+    """
+    batch = batch_data.images
+    ctf_params = batch_data.ctf_params
+    rotation_matrices = batch_data.rotation_matrices
+    translations = batch_data.translations
+    noise_variance = batch_data.noise_variance
+
+    if (config.disc_type != 'linear_interp') and (config.disc_type != 'cubic'):
+        logger.warning(f"USING NEAREST NEIGHBOR DISCRETIZATION. disc_type={config.disc_type}")
+
+    do_mask_images = opts.do_mask_images
+    if config.premultiplied_ctf and do_mask_images:
+        logger.warning('cannot use premultiplied ctf and mask images at the same time.')
+        do_mask_images = False
+
+    if do_mask_images:
+        image_mask = covariance_core.get_per_image_tight_mask(
+            model.volume_mask, rotation_matrices, image_mask,
+            config.volume_mask_threshold, config.image_shape, config.volume_shape,
+            config.grid_size, config.padding, 'linear_interp',
+        )
+
+    else:
+        image_mask = jnp.ones_like(batch).real
+
+    if config.process_fn is not None:
+        batch = config.process_fn(batch)
+    batch = core.translate_images(batch, translations, config.image_shape)
+
+    projected_mean = core_forward.forward_model(
+        config, model.mean_estimate, ctf_params, rotation_matrices,
+    )
+
+    if do_mask_images:
+        batch = covariance_core.apply_image_masks(batch, image_mask, config.image_shape)
+        projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, config.image_shape)
+
+    # Forward model basis vectors — use disc_type_u for eigenvectors
+    AUs = covariance_core.batch_over_vol_forward_model_from_map(
+        model.basis, ctf_params, rotation_matrices,
+        config.image_shape, config.volume_shape,
+        config.voxel_size, config.CTF_fun,
+        opts.disc_type_u, config.premultiplied_ctf,
+    )
+
+    if do_mask_images:
+        AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, config.image_shape)
+    AUs = AUs.transpose(1, 2, 0)
+
+    if config.premultiplied_ctf:
+        CTF = config.compute_ctf(ctf_params)
+        batch = batch - projected_mean * CTF
+        AU_t_images = batch_x_T_y(AUs, batch)
+        AUs = AUs * CTF[..., None]
+    else:
+        batch = batch - projected_mean
+        AU_t_images = batch_x_T_y(AUs, batch)
+
+    if do_mask_images:
+        assert not config.premultiplied_ctf, "Not implemented yet"
+
+    AU_t_AU = batch_x_T_y(AUs, AUs).real.astype(ctf_params.dtype)
+
+    AUs *= jnp.sqrt(noise_variance)[..., None]
+    UALambdaAUs = jnp.sum(batch_x_T_y(AUs, AUs), axis=0)
+
+    if opts.shared_label:
+        AU_t_images = jnp.sum(AU_t_images, axis=0, keepdims=True)
+        AU_t_AU = jnp.sum(AU_t_AU, axis=0, keepdims=True)
+
+    outer_products = summed_outer_products(AU_t_images)
+    rhs = outer_products - UALambdaAUs
+    rhs = rhs.real.astype(ctf_params.dtype)
+
+    lhs = jnp.sum(batch_kron(AU_t_AU, AU_t_AU), axis=0)
+    return lhs, rhs
 
 
 batch_kron = jax.vmap(jnp.kron, in_axes=(0,0))

@@ -4,6 +4,7 @@ import pytest
 pytest.importorskip("jax")
 
 from recovar import embedding
+from recovar.dataset import CryoEMHalfsets
 
 pytestmark = pytest.mark.unit
 
@@ -90,7 +91,7 @@ def test_get_per_image_embedding_clamps_batch_size_to_at_least_one(monkeypatch):
         u=u,
         s=s,
         basis_size=2,
-        cryos=[cryo0, cryo1],
+        cryos=CryoEMHalfsets(cryo0, cryo1),
         volume_mask=volume_mask,
         gpu_memory=1,
         disc_type="linear_interp",
@@ -153,7 +154,7 @@ def test_get_per_image_embedding_ignore_zero_frequency_overrides_volume_mask(mon
         u=u,
         s=s,
         basis_size=1,
-        cryos=[cryo0, cryo1],
+        cryos=CryoEMHalfsets(cryo0, cryo1),
         volume_mask=volume_mask,
         gpu_memory=1,
         disc_type="linear_interp",
@@ -195,7 +196,7 @@ def test_get_per_image_embedding_supports_single_cryo_list(monkeypatch):
         u=u,
         s=s,
         basis_size=1,
-        cryos=[cryo],
+        cryos=CryoEMHalfsets(cryo, cryo),
         volume_mask=volume_mask,
         gpu_memory=1,
         disc_type="linear_interp",
@@ -205,7 +206,7 @@ def test_get_per_image_embedding_supports_single_cryo_list(monkeypatch):
         compute_bias=True,
     )
 
-    assert zs.shape == (2, 1)
-    assert cov_zs.shape == (2, 1, 1)
-    assert est_contrasts.shape == (2,)
-    assert bias.shape == (2, 1, 1)
+    assert zs.shape == (4, 1)
+    assert cov_zs.shape == (4, 1, 1)
+    assert est_contrasts.shape == (4,)
+    assert bias.shape == (4, 1, 1)

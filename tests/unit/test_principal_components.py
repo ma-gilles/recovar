@@ -6,6 +6,7 @@ pytest.importorskip("jax")
 import recovar.principal_components as pc
 import recovar.core as core
 from recovar import dataset
+from recovar.dataset import CryoEMHalfsets
 from helpers.tiny_synthetic import make_tiny_simulation, make_tiny_cryo_dataset_with_images
 
 pytestmark = pytest.mark.unit
@@ -148,19 +149,18 @@ def test_pca_by_projected_covariance_sorts_and_clamps_eigs(monkeypatch):
 
 
 def test_estimate_principal_components_high_snr_from_var_est_requires_variance():
-    cryos = [
-        type(
-            "Cryo",
-            (),
-            {
-                "volume_shape": (2, 2, 2),
-                "grid_size": 2,
-                "volume_size": 8,
-                "dtype": np.complex64,
-                "image_size": 4,
-            },
-        )()
-    ]
+    mock_cryo = type(
+        "Cryo",
+        (),
+        {
+            "volume_shape": (2, 2, 2),
+            "grid_size": 2,
+            "volume_size": 8,
+            "dtype": np.complex64,
+            "image_size": 4,
+        },
+    )()
+    cryos = CryoEMHalfsets(mock_cryo, mock_cryo)
     means = {
         "lhs": np.ones(8, dtype=np.float32),
         "prior": np.ones(8, dtype=np.float32),
@@ -197,19 +197,18 @@ def test_estimate_principal_components_high_snr_from_var_est_requires_variance()
 
 
 def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
-    cryos = [
-        type(
-            "Cryo",
-            (),
-            {
-                "volume_shape": (2, 2, 2),
-                "grid_size": 2,
-                "volume_size": 8,
-                "dtype": np.complex64,
-                "image_size": 4,
-            },
-        )()
-    ]
+    mock_cryo = type(
+        "Cryo",
+        (),
+        {
+            "volume_shape": (2, 2, 2),
+            "grid_size": 2,
+            "volume_size": 8,
+            "dtype": np.complex64,
+            "image_size": 4,
+        },
+    )()
+    cryos = CryoEMHalfsets(mock_cryo, mock_cryo)
     means = {
         "lhs": np.ones(8, dtype=np.float32),
         "prior": np.ones(8, dtype=np.float32),
@@ -287,7 +286,7 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
         dataset_indices=None,
         grid_size=4,
     )
-    cryos = [cryo]
+    cryos = CryoEMHalfsets(cryo, cryo)
 
     means = {
         "lhs": np.ones(cryo.volume_size, dtype=np.float32),

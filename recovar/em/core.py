@@ -1,7 +1,9 @@
 import functools
 import jax
 import jax.numpy as jnp
+import equinox as eqx
 from recovar import core
+from recovar.configs import ForwardModelConfig
 import numpy as np
 import logging
 from scipy.spatial.transform import Rotation as R
@@ -92,6 +94,35 @@ def compute_dot_products(projections, batch, translations, CTF_params, CTF_fun, 
 
     return result
 
+
+# ============================================================================
+# Equinox-based EM core API
+# ============================================================================
+
+@eqx.filter_jit
+def compute_dot_products_eqx(config: ForwardModelConfig, projections, batch, translations, ctf_params, noise_variance):
+    """Equinox version of compute_dot_products (9 → 6 params)."""
+    batch = config.process_fn(batch, apply_image_mask=False)
+    batch_norm = jnp.linalg.norm(batch / jnp.sqrt(noise_variance), axis=(-1), keepdims=True)**2
+    batch *= config.compute_ctf(ctf_params) / noise_variance
+    shifted_images = core.batch_trans_translate_images(batch, jnp.repeat(translations[None], batch.shape[0], axis=0), config.image_shape)
+    n_shifted_images = np.prod(shifted_images.shape[:-1])
+    result = -2 * (jnp.conj(shifted_images).reshape(n_shifted_images, shifted_images.shape[-1]) @ projections.T).real
+    result = result.reshape(batch.shape[0], translations.shape[0], projections.shape[0]) + batch_norm[:,None]
+    result = result.swapaxes(1,2)
+    return result
+
+
+@eqx.filter_jit
+def compute_CTFed_proj_norms_eqx(config: ForwardModelConfig, projections, ctf_params, noise_variance):
+    """Equinox version of compute_CTFed_proj_norms (6 → 4 params)."""
+    CTFs = config.compute_ctf(ctf_params)**2 / noise_variance
+    return CTFs @ projections.T
+
+
+# ============================================================================
+# Legacy EM core API
+# ============================================================================
 
 @functools.partial(jax.jit, static_argnums=[2,5])
 def compute_CTFed_proj_norms(projections, CTF_params, CTF_fun, noise_variance, voxel_size, image_shape):

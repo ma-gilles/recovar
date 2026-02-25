@@ -1,9 +1,14 @@
+from __future__ import annotations
+
 import logging
 from collections import defaultdict, deque
+from typing import Optional, Callable, Tuple
 
+import jax
 import jax.numpy as jnp
 import numpy as np
-import pickle 
+import pickle
+from numpy.typing import NDArray
 
 from recovar import plot_utils, core, mask
 import recovar.fourier_transform_utils as fourier_transform_utils
@@ -82,82 +87,120 @@ def _deduplicate_preserve_order(values, name):
     return values[np.sort(first_idx)]
     
 
-# A dataset class, that includes images and all other information
 class CryoEMDataset:
+    """Core dataset class for cryo-EM heterogeneity analysis.
 
-    def __init__(self, image_stack, voxel_size, rotation_matrices, translations, CTF_params, CTF_fun = core.evaluate_ctf_wrapper, dtype = np.complex64, rotation_dtype = np.float32, dataset_indices = None, grid_size = None, volume_upsampling_factor = 1, tilt_series_flag = False, premultiplied_ctf = False  ):
-        
+    Wraps particle images with per-image metadata (poses, CTF parameters) and
+    provides geometry helpers for 3-D reconstruction and embedding.
+
+    For half-set reconstructions, two ``CryoEMDataset`` instances are typically
+    managed together via :class:`CryoEMHalfsets`.
+
+    Attributes:
+        grid_size: Side length of the 3-D reconstruction grid.
+        volume_shape: ``(grid_size, grid_size, grid_size)``.
+        voxel_size: Pixel / voxel size in Angstroms.
+        n_images: Number of particle images in this dataset.
+        rotation_matrices: Per-image rotation matrices, shape ``(N, 3, 3)``.
+        translations: Per-image in-plane shifts, shape ``(N, 2)``.
+        CTF_params: Per-image CTF parameters, shape ``(N, K)``.
+        image_stack: Underlying image loader (``None`` for simulation).
+        tilt_series_flag: ``True`` when the dataset represents tilt-series data.
+    """
+
+    __slots__ = (
+        # Grid / volume geometry
+        'voxel_size', 'grid_size', 'volume_upsampling_factor',
+        'upsampled_grid_size', 'volume_shape', 'volume_size',
+        'upsampled_volume_shape', 'upsampled_volume_size',
+        # Image stack and image geometry
+        'image_stack', 'image_shape', 'image_size', 'n_images', 'padding',
+        # Processing flags
+        'tilt_series_flag', 'premultiplied_ctf', 'n_units',
+        'CTF_fun_inp', 'hpad', 'volume_mask_threshold',
+        # Data types
+        'dtype', 'dtype_real', 'CTF_dtype', 'rotation_dtype',
+        # Per-image arrays
+        'rotation_matrices', 'translations', 'CTF_params',
+        # Mutable state
+        'dataset_indices', 'noise',
+    )
+
+    def __init__(
+        self,
+        image_stack,
+        voxel_size: float,
+        rotation_matrices: NDArray[np.floating],
+        translations: NDArray[np.floating],
+        CTF_params: NDArray[np.floating],
+        CTF_fun: Callable = core.evaluate_ctf_wrapper,
+        dtype: type = np.complex64,
+        rotation_dtype: type = np.float32,
+        dataset_indices: Optional[NDArray[np.integer]] = None,
+        grid_size: Optional[int] = None,
+        volume_upsampling_factor: int = 1,
+        tilt_series_flag: bool = False,
+        premultiplied_ctf: bool = False,
+    ) -> None:
+        # --- Grid / volume geometry ---
         if image_stack is not None:
             grid_size = image_stack.D
         elif grid_size is None:
             raise ValueError("Must specify grid_size if image_stack is None")
-        
 
         self.voxel_size = voxel_size
         self.grid_size = grid_size
-
         self.volume_upsampling_factor = volume_upsampling_factor
-        self.upsampled_grid_size = self.grid_size * volume_upsampling_factor
-
-        self.volume_shape = tuple(3*[self.grid_size ])
-        self.volume_size = np.prod(self.volume_shape)
-
-        self.upsampled_volume_shape = tuple(3*[self.grid_size * volume_upsampling_factor ])
+        self.upsampled_grid_size = grid_size * volume_upsampling_factor
+        self.volume_shape = (grid_size, grid_size, grid_size)
+        self.volume_size = grid_size ** 3
+        self.upsampled_volume_shape = tuple(3 * [grid_size * volume_upsampling_factor])
         self.upsampled_volume_size = np.prod(self.upsampled_volume_shape)
 
-        # Allows for passing None as image_stack (for simulation)
+        # --- Image stack and image geometry ---
         if image_stack is None:
             self.image_stack = None
-            self.image_shape = tuple(2*[self.grid_size])
-            self.image_size = np.prod(self.image_shape)
+            self.image_shape = (grid_size, grid_size)
+            self.image_size = grid_size ** 2
             self.n_images = CTF_params.shape[0]
-            self.padding = 0 
+            self.padding = 0
         else:
             self.image_stack = image_stack
             self.image_shape = tuple(image_stack.image_shape)
-            self.image_size = np.prod(image_stack.image_shape)
+            self.image_size = int(np.prod(image_stack.image_shape))
             self.n_images = image_stack.n_images
             self.padding = image_stack.padding
 
-        
-        self.tilt_series_flag = tilt_series_flag # Hopefully can just switch this on and off
+        # --- Processing flags ---
+        self.tilt_series_flag = tilt_series_flag
         self.premultiplied_ctf = premultiplied_ctf
-
-        # For SPA, it is # of images, for ET, it is # of tilt series
-        # For tilt series: A "tilt" is an image. A particle is a full tilt series 
+        # For SPA n_units == n_images; for tilt series n_units == n_particles
         self.n_units = self.image_stack.Np if self.tilt_series_flag else self.n_images
-
         self.CTF_fun_inp = CTF_fun
-        self.hpad = self.padding//2
-        self.volume_mask_threshold = 4 * self.grid_size / 128 # At around 128 resolution, 4 seems good, so scale up accordingly. This probably should have a less heuristic value here. This is assuming the mask is scaled between [0,1]
+        self.hpad = self.padding // 2
+        # Heuristic mask threshold scaled by grid size
+        self.volume_mask_threshold = 4 * self.grid_size / 128
 
+        # --- Data types ---
         self.dtype = dtype
         self.dtype_real = dtype(0).real.dtype
-        self.CTF_dtype = self.dtype_real # this might changed in the future for Ewald sphere
-        # Note that images are stored in float 32 but rotations are stored in float 64.
-        # There seems to be a JAX-bug with float 32 when doing the nearest neighbor approximation...
+        self.CTF_dtype = self.dtype_real
         self.rotation_dtype = rotation_dtype
+
+        # --- Per-image arrays ---
         self.rotation_matrices = np.asarray(rotation_matrices, dtype=rotation_dtype)
         self.translations = np.asarray(translations, dtype=self.dtype_real)
-
-        '''
-            0 - dfu (float or Bx1 tensor): DefocusU (Angstrom)
-            1 - dfv (float or Bx1 tensor): DefocusV (Angstrom)
-            2 - dfang (float or Bx1 tensor): DefocusAngle (degrees)
-            3 - volt (float or Bx1 tensor): accelerating voltage (kV)
-            4 - cs (float or Bx1 tensor): spherical aberration (mm)
-            5 - w (float or Bx1 tensor): amplitude contrast ratio
-            6 - phase_shift (float or Bx1 tensor): degrees 
-            7 - bfactor (float or Bx1 tensor): envelope fcn B-factor (Angstrom^2)
-            8 - per-particle scale
-
-            For tilt series only:
-            9 - tilt number
-        '''
         self.CTF_params = np.asarray(CTF_params, dtype=self.CTF_dtype)
 
+        # --- Mutable state ---
         self.dataset_indices = dataset_indices
         self.noise = None
+
+    def __repr__(self) -> str:
+        return (
+            f"CryoEMDataset(n_images={self.n_images}, grid_size={self.grid_size}, "
+            f"voxel_size={self.voxel_size:.4f}, tilt_series={self.tilt_series_flag})"
+        )
 
     def get_noise_variance(self, indices):
         if self.noise is None:
@@ -354,6 +397,186 @@ class CryoEMDataset:
             n_doses = int(jnp.max(dose_indices)) + 1
             noise_variance_radials = np.tile(noise_variance_radials, (n_doses, 1))
         self.noise = noise.VariableRadialNoiseModel(noise_variance_radials, dose_indices, image_shape = self.image_shape)
+
+
+class CryoEMHalfsets:
+    """Container for two half-set CryoEMDataset instances.
+
+    Provides direct access to shared properties (``grid_size``, ``volume_shape``,
+    ``voxel_size``, ...) that are identical between halves, while still allowing
+    per-half access via indexing or iteration.
+
+    Usage::
+
+        cryos = CryoEMHalfsets(half1, half2)
+
+        # Shared properties (replaces cryos[0].grid_size):
+        cryos.grid_size
+        cryos.volume_shape
+        cryos.voxel_size
+
+        # Per-half access (backward compatible):
+        cryos[0].rotation_matrices
+        cryos[1].n_images
+
+        # Iteration (backward compatible):
+        for cryo in cryos:
+            process(cryo)
+
+        # Aggregate properties:
+        cryos.n_total_images
+    """
+
+    __slots__ = ('_halves',)
+
+    def __init__(self, half1: CryoEMDataset, half2: CryoEMDataset) -> None:
+        self._halves = (half1, half2)
+
+    # --- Backward-compatible container interface ---
+
+    def __getitem__(self, index: int) -> CryoEMDataset:
+        return self._halves[index]
+
+    def __iter__(self):
+        return iter(self._halves)
+
+    def __len__(self) -> int:
+        return 2
+
+    # --- Shared geometry properties (identical for both halves) ---
+
+    @property
+    def grid_size(self) -> int:
+        return self._halves[0].grid_size
+
+    @property
+    def volume_shape(self) -> Tuple[int, int, int]:
+        return self._halves[0].volume_shape
+
+    @property
+    def volume_size(self) -> int:
+        return self._halves[0].volume_size
+
+    @property
+    def voxel_size(self) -> float:
+        return self._halves[0].voxel_size
+
+    @property
+    def image_shape(self) -> Tuple[int, int]:
+        return self._halves[0].image_shape
+
+    @property
+    def image_size(self) -> int:
+        return self._halves[0].image_size
+
+    @property
+    def padding(self) -> int:
+        return self._halves[0].padding
+
+    @property
+    def upsampled_grid_size(self) -> int:
+        return self._halves[0].upsampled_grid_size
+
+    @property
+    def upsampled_volume_shape(self) -> tuple:
+        return self._halves[0].upsampled_volume_shape
+
+    @property
+    def upsampled_volume_size(self) -> int:
+        return self._halves[0].upsampled_volume_size
+
+    @property
+    def volume_mask_threshold(self) -> float:
+        return self._halves[0].volume_mask_threshold
+
+    @property
+    def hpad(self) -> int:
+        return self._halves[0].hpad
+
+    # --- Shared processing properties ---
+
+    @property
+    def dtype(self):
+        return self._halves[0].dtype
+
+    @property
+    def dtype_real(self):
+        return self._halves[0].dtype_real
+
+    @property
+    def tilt_series_flag(self) -> bool:
+        return self._halves[0].tilt_series_flag
+
+    @property
+    def premultiplied_ctf(self) -> bool:
+        return self._halves[0].premultiplied_ctf
+
+    @property
+    def volume_upsampling_factor(self) -> int:
+        return self._halves[0].volume_upsampling_factor
+
+    def CTF_fun(self, *args):
+        return self._halves[0].CTF_fun(*args)
+
+    # --- Aggregate properties ---
+
+    @property
+    def n_total_images(self) -> int:
+        return self._halves[0].n_images + self._halves[1].n_images
+
+    @property
+    def n_total_units(self) -> int:
+        return self._halves[0].n_units + self._halves[1].n_units
+
+    # --- Convenience methods ---
+
+    def split_array(self, arr: NDArray) -> list:
+        """Split a concatenated array back into per-half arrays."""
+        n1 = self._halves[0].n_images
+        return [arr[:n1], arr[n1:]]
+
+    def split_units_array(self, arr: NDArray) -> list:
+        """Split a concatenated array indexed by units (particles)."""
+        n1 = self._halves[0].n_units
+        return [arr[:n1], arr[n1:]]
+
+    # --- Delegated methods (operate on shared geometry) ---
+
+    def get_valid_frequency_indices(self, rad=None):
+        return self._halves[0].get_valid_frequency_indices(rad)
+
+    def get_volume_radial_mask(self, radius=None):
+        return self._halves[0].get_volume_radial_mask(radius)
+
+    def get_upsampled_volume_radial_mask(self, radius=None):
+        return self._halves[0].get_upsampled_volume_radial_mask(radius)
+
+    def get_image_radial_mask(self, radius=None):
+        return self._halves[0].get_image_radial_mask(radius)
+
+    def update_volume_upsampling_factor(self, factor: int) -> None:
+        for h in self._halves:
+            h.update_volume_upsampling_factor(factor)
+
+    def compute_CTF(self, CTF_params):
+        return self._halves[0].compute_CTF(CTF_params)
+
+    def get_proj(self, X, **kwargs):
+        return self._halves[0].get_proj(X, **kwargs)
+
+    def get_slice_real(self, X, **kwargs):
+        return self._halves[0].get_slice_real(X, **kwargs)
+
+    def plot_FSC(self, *args, **kwargs):
+        return self._halves[0].plot_FSC(*args, **kwargs)
+
+    def __repr__(self) -> str:
+        return (
+            f"CryoEMHalfsets(n_images=[{self._halves[0].n_images}, "
+            f"{self._halves[1].n_images}], grid_size={self.grid_size}, "
+            f"voxel_size={self.voxel_size:.4f})"
+        )
+
 
 # Loads dataset that are stored in the cryoDRGN format
 def load_cryodrgn_dataset(
@@ -562,8 +785,8 @@ def get_split_datasets(particles_file, poses_file, ctf_file, datadir,
     cryos = []
     for ind in ind_split:
         cryos.append(load_cryodrgn_dataset(particles_file, poses_file, ctf_file , datadir = datadir, n_images = n_images, ind = ind, lazy = lazy, padding = padding, uninvert_data = uninvert_data, tilt_series = tilt_series, tilt_series_ctf = tilt_series_ctf, angle_per_tilt = angle_per_tilt, dose_per_tilt = dose_per_tilt, premultiplied_ctf = premultiplied_ctf, strip_prefix = strip_prefix))
-    
-    return cryos
+
+    return CryoEMHalfsets(cryos[0], cryos[1])
 
 
 def get_split_indices(particles_file, datadir=None, strip_prefix=None, ind_file=None, split_random_seed=0, validate_split=True):

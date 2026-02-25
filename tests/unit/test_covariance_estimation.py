@@ -6,6 +6,7 @@ pytest.importorskip("jax")
 import jax.numpy as jnp
 
 import recovar.covariance_estimation as cov_est
+from recovar.dataset import CryoEMHalfsets
 from helpers.tiny_synthetic import make_tiny_cryo_dataset, make_tiny_cryo_dataset_with_images
 
 pytestmark = pytest.mark.unit
@@ -71,7 +72,8 @@ def test_set_covariance_options_updates_only_present_keys():
 
 
 def test_compute_regularized_covariance_columns_in_batch_concatenates(monkeypatch):
-    cryos = [type("Cryo", (), {"grid_size": 4})()]
+    mock_cryo = type("Cryo", (), {"grid_size": 4})()
+    cryos = CryoEMHalfsets(mock_cryo, mock_cryo)
     picked_frequencies = np.arange(10)
 
     monkeypatch.setattr(cov_est.utils, "get_column_batch_size", lambda *_: 4)
@@ -156,7 +158,7 @@ def test_compute_regularized_covariance_columns_with_real_tiny_dataset(monkeypat
     options = {"reg_fn": "new"}
     picked_frequencies = np.array([0, 1, 2], dtype=np.int32)
     covariance_cols, picked_out, fscs = cov_est.compute_regularized_covariance_columns(
-        cryos=[cryo],
+        cryos=CryoEMHalfsets(cryo, cryo),
         means={},
         mean_prior=np.ones(cryo.volume_size, dtype=np.float32),
         volume_mask=np.ones(cryo.volume_size, dtype=np.float32),
@@ -306,7 +308,7 @@ def test_compute_variance_orchestration_with_stubbed_kernels(monkeypatch):
         def get_valid_frequency_indices(self, rad=None):
             return np.ones(self.volume_size, dtype=np.float32)
 
-    cryos = [_Cryo(1.0), _Cryo(2.0)]
+    cryos = CryoEMHalfsets(_Cryo(1.0), _Cryo(2.0))
 
     def _fake_var_kernel(cryo, mean_estimate, batch_size, image_subset=None, volume_mask=None, disc_type=""):
         lhs = np.ones(vol_size, dtype=np.float32) * (10.0 * cryo.scale)

@@ -2,6 +2,7 @@ import logging
 import os
 import functools
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import mrcfile
@@ -11,6 +12,7 @@ import recovar.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
 from recovar import core, dataset, noise
 from recovar import load_utils
+from recovar.configs import ForwardModelConfig, BatchData
 
 CONSTANT_CTF=False
 logger = logging.getLogger(__name__)
@@ -834,17 +836,14 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                     raise NotImplementedError("Premultiplied CTF not implemented for Ewald")
                 
             elif disc_type == "linear_interp" or disc_type == "nearest" or disc_type == "cubic":
-                images_batch = simulate_data_batch(volume,
-                                                 experiment_dataset.rotation_matrices[indices], 
-                                                 translations,
-                                                 experiment_dataset.CTF_params[indices], 
-                                                 experiment_dataset.voxel_size, 
-                                                 experiment_dataset.volume_shape, 
-                                                 experiment_dataset.image_shape, 
-                                                 experiment_dataset.grid_size, 
-                                                 disc_type,
-                                                 experiment_dataset.CTF_fun,
-                                                 skip_ctf = pad_before_ctf)
+                _sim_config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
+                images_batch = simulate_batch(
+                    _sim_config, volume,
+                    experiment_dataset.rotation_matrices[indices],
+                    translations,
+                    experiment_dataset.CTF_params[indices],
+                    skip_ctf=pad_before_ctf,
+                )
                 
                 
             else:
@@ -974,17 +973,49 @@ def make_noise_batch(subkey, noise_image, images_batch_shape):
 
 
 
-@functools.partial(jax.jit, static_argnums = [4,5,6,7,8,9,10])    
+# ============================================================================
+# Equinox-based simulation API
+# ============================================================================
+
+
+@eqx.filter_jit
+def simulate_batch(
+    config: ForwardModelConfig,
+    volume: jax.Array,
+    rotation_matrices: jax.Array,
+    translations: jax.Array,
+    ctf_params: jax.Array,
+    skip_ctf: bool = False,
+) -> jax.Array:
+    """Simulate a batch of images from a volume — Equinox API.
+
+    Replaces the 11-param ``simulate_data_batch``.
+    """
+    CTF = config.compute_ctf(ctf_params)
+    slices = core.slice_volume_by_map(
+        volume, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
+    )
+    if not skip_ctf:
+        slices = slices * CTF
+    return core.translate_images(slices, -translations, config.image_shape)
+
+
+# ============================================================================
+# Legacy simulation API (kept for backward compatibility)
+# ============================================================================
+
+
+@functools.partial(jax.jit, static_argnums = [4,5,6,7,8,9,10])
 def simulate_data_batch(volume, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun, skip_ctf = False ):
-    
+
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    corrected_images = core.slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type) 
+    corrected_images = core.slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type)
     if not skip_ctf:
         # Apply CTF
         corrected_images = corrected_images * CTF
     # Translate back.
     translated_images = core.translate_images(corrected_images, -translations, image_shape)
-    
+
     return translated_images
 
 

@@ -3,7 +3,9 @@ import logging
 import numpy as np
 import jax
 import jax.numpy as jnp
+import equinox as eqx
 from recovar import core, covariance_estimation, utils, constants, principal_components, relion_functions, noise
+from recovar.configs import ForwardModelConfig
 from .core import batch_vol_slice_volume_by_map
 from recovar.principal_components import get_cov_svds, pca_by_projected_covariance
 from recovar.covariance_estimation import compute_both_H_B, compute_covariance_regularization_relion_style
@@ -182,6 +184,113 @@ def compute_bLambdainvPU_terms(mean_projections, u_projections, invnoise_CTFed_i
     return b #, Hinvb # I think also need to compute det(H)??? Check
 
 
+# ============================================================================
+# Equinox-based EM heterogeneity API
+# ============================================================================
+
+@eqx.filter_jit
+def compute_bHb_terms_eqx(config: ForwardModelConfig, mean_projections, u_projections, s, batch, translations, ctf_params, noise_variance):
+    """Equinox version of compute_bHb_terms (11 → 8 params)."""
+    H, b = compute_little_H_b(
+        mean_projections, u_projections, s, batch, translations,
+        ctf_params, config.CTF_fun, noise_variance, config.voxel_size,
+        config.image_shape, config.process_fn,
+    )
+    H_chol, low = jax.scipy.linalg.cho_factor(H, lower=True)
+    Hinvb = jax.scipy.linalg.cho_solve((H_chol, low), b, overwrite_b=False, check_finite=True)
+    bHinvb = jnp.sum(jnp.conj(b) * Hinvb, axis=-2)
+    log_det = 2 * jnp.sum(jnp.log(jnp.abs(batch_batch_diag(H_chol))), axis=-1)
+    half_inv_logdet = -0.5 * log_det * 2
+    log_det_H = half_inv_logdet
+    logger.warning(f"Make sure this is correct...")
+    summed = bHinvb + log_det_H[...,None]
+    return summed.transpose(1,0,2)
+
+
+@eqx.filter_jit
+def sum_up_images_fixed_rots_covariance_precompute_eqx(config: ForwardModelConfig, batch, translations, ctf_params):
+    """Equinox version of sum_up_images_fixed_rots_covariance_precompute (7 → 4 params)."""
+    CTF = config.compute_ctf(ctf_params)
+    batch = config.process_fn(batch, apply_image_mask=False) * CTF
+    shifted_CTFed_images = core.batch_trans_translate_images(batch, jnp.repeat(translations[None], batch.shape[0], axis=0), config.image_shape)
+    return shifted_CTFed_images, CTF
+
+
+@eqx.filter_jit
+def sum_up_images_fixed_rots_covariance_with_precompute_eqx(config: ForwardModelConfig, shifted_CTFed_images, mean_projections, CTF, gridpoints, probabilities, rotations, noise_variance, gridpoint_target, H=0, B=0, right_kernel_width=2, right_kernel="triangular"):
+    """Equinox version of sum_up_images_fixed_rots_covariance_with_precompute (14 → 13 params)."""
+    n_rotations = rotations.shape[0]
+    n_translations = shifted_CTFed_images.shape[1]
+    n_images = shifted_CTFed_images.shape[0]
+    n_shifted_images = n_images * n_translations
+    image_size = shifted_CTFed_images.shape[-1]
+
+    from recovar import covariance_core
+    kernel_vals = covariance_core.evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel=right_kernel, kernel_width=right_kernel_width)
+
+    e2_p1 = shifted_CTFed_images @ kernel_vals.T
+    e2_p2 = (CTF**2) @ (kernel_vals * mean_projections).T
+    e2 = e2_p1 - e2_p2[:,None,:]
+    e2 = e2.swapaxes(1,2)
+    e2 = jnp.conj(e2)
+
+    gamma_2 = probabilities * e2
+    gamma_2_summed_over_translations = jnp.sum(gamma_2, axis=-1)
+    summed_CTF_squared_gamma2 = (CTF**2).T @ gamma_2_summed_over_translations
+    summed_CTF_squared_gamma2 = summed_CTF_squared_gamma2.T
+    before_adj_B2 = -summed_CTF_squared_gamma2 * mean_projections
+
+    gamma_2 = gamma_2.swapaxes(1,2).reshape(n_images * n_translations, n_rotations)
+    shifted_CTFed_images = shifted_CTFed_images.reshape(n_images * n_translations, image_size)
+    before_adj_B2 += gamma_2.T @ shifted_CTFed_images
+
+    probabilties_summed_over_translations = jnp.sum(probabilities, axis=-1)
+    CTF_squared_times_noise = (CTF**2 * noise_variance).T @ probabilties_summed_over_translations
+    noise_piece = CTF_squared_times_noise.T * kernel_vals
+    before_adj_B2 -= noise_piece
+
+    B = core.adjoint_slice_volume_by_trilinear(before_adj_B2, rotations, config.image_shape, config.volume_shape, B)
+
+    CTF_squared = CTF**2
+    CTF_squared_kernel_vals = kernel_vals @ CTF_squared.T
+    gamma_3 = probabilties_summed_over_translations.T * CTF_squared_kernel_vals
+    H_before_adj = gamma_3 @ CTF_squared
+    H = core.adjoint_slice_volume_by_trilinear(H_before_adj, rotations, config.image_shape, config.volume_shape, H)
+
+    return H, B
+
+
+@eqx.filter_jit
+def reduce_covariance_est_inner_eqx(config: ForwardModelConfig, mean_projections, u_projections, probabilities, batch, translations, ctf_params, noise_variance):
+    """Equinox version of reduce_covariance_est_inner (11 → 8 params)."""
+    CTF = config.compute_ctf(ctf_params)
+    batch = config.process_fn(batch, apply_image_mask=False)
+    batch *= config.compute_ctf(ctf_params)
+
+    probabilities = probabilities.swapaxes(0,1)
+    b = compute_bLambdainvPU_terms(mean_projections, u_projections, batch, translations, CTF, jnp.ones_like(noise_variance), config.image_shape)
+    b = b.swapaxes(-1,-2)
+    b *= jnp.sqrt(probabilities[...,None])
+    outer_products = covariance_estimation.summed_outer_products(b.reshape(-1, b.shape[-1]))
+
+    probabilities_summed_over_translations = jnp.sum(probabilities, axis=-1)
+    UALambdaAUs = compute_UPLambdainvPU(u_projections, CTF, 1/noise_variance)
+    UALambdaAUs = jnp.sum(probabilities_summed_over_translations[...,None,None] * UALambdaAUs, axis=(0,1))
+
+    rhs = outer_products - UALambdaAUs
+    rhs = rhs.real.astype(ctf_params.dtype)
+
+    H = compute_UPLambdainvPU(u_projections, CTF, jnp.ones_like(noise_variance))
+    H *= jnp.sqrt(probabilities_summed_over_translations[...,None,None])
+    H = H.reshape(-1, H.shape[-2], H.shape[-1])
+    lhs = jnp.sum(covariance_estimation.batch_kron(H, H), axis=(0))
+
+    return lhs, rhs
+
+
+# ============================================================================
+# Legacy EM heterogeneity API
+# ============================================================================
 
 
 def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations, noise_variance,  volume_mask, picked_frequency_indices, image_indices, mean_disc):
@@ -242,11 +351,18 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
     data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = image_indices)
     rotation_batch = max(1, rotations.shape[0] // 10)
 
-    start_idx =0 
+    config = ForwardModelConfig.from_dataset(
+        experiment_dataset, disc_type=mean_disc,
+        process_fn=experiment_dataset.image_stack.process_images,
+    )
+
+    start_idx =0
     for images, _, indices in data_generator:
         end_idx = start_idx + len(indices)
         prob_batch = jnp.array(probabilities[start_idx:end_idx])
-        shifted_CTFed_images, CTF = sum_up_images_fixed_rots_covariance_precompute(images, translations, experiment_dataset.CTF_params[indices], experiment_dataset.CTF_fun, experiment_dataset.voxel_size, experiment_dataset.image_shape, experiment_dataset.image_stack.process_images)
+        shifted_CTFed_images, CTF = sum_up_images_fixed_rots_covariance_precompute_eqx(
+            config, images, translations, experiment_dataset.CTF_params[indices],
+        )
         del images
         for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):# k in range(mult):
 
@@ -256,13 +372,18 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
             # There is a lot of compute to win by skipping rotations for which the right kernel will evaluate to zero.
             for (k, picked_freq_coord) in enumerate(picked_freq_coords):
                 # picked_freq_coord = core.vec_indices_to_vol_indices(picked_freq_idx, volume_shape)
-                H[k], B[k] = sum_up_images_fixed_rots_covariance_with_precompute(shifted_CTFed_images, mean_projections[np.array(rot_indices)], CTF, gridpoints, prob_batch[:,rot_indices], rotations[rot_indices],  noise_variance, image_shape, volume_shape, picked_freq_coord, H = H[k], B = B[k], right_kernel_width = 2, right_kernel = "triangular")
+                H[k], B[k] = sum_up_images_fixed_rots_covariance_with_precompute_eqx(
+                    config, shifted_CTFed_images, mean_projections[np.array(rot_indices)],
+                    CTF, gridpoints, prob_batch[:,rot_indices], rotations[rot_indices],
+                    noise_variance, picked_freq_coord, H=H[k], B=B[k],
+                    right_kernel_width=2, right_kernel="triangular",
+                )
 
         start_idx = end_idx
 
         # del image_mask
         # del images, batch_CTF, batch_grid_pt_vec_ind_of_images
-        
+
     # H = np.stack(H, axis =1)
     # B = np.stack(B, axis =1)
     return H, B
@@ -449,21 +570,27 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
     # change_device= False
     rotation_batch = max(1, rotations.shape[0] // 10)
 
+    config = ForwardModelConfig.from_dataset(
+        experiment_dataset, disc_type=disc_type_mean,
+        process_fn=experiment_dataset.image_stack.process_images,
+    )
+
     # for experiment_dataset in experiment_datasets:
     data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = image_indices)
     start_idx = 0
     for batch, _, batch_image_ind in data_generator:
 
         for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):# k in range(mult):
-            # gridpoints = core.batch_get_gridpoint_coords(
-            #     rotations[rot_indices],
-            #     image_shape, volume_shape )
-
             end_idx = start_idx + len(batch_image_ind)
-            lhs_this, rhs_this = reduce_covariance_est_inner(mean_projections[rot_indices], u_projections[rot_indices], probabilities[start_idx:end_idx][:,np.array(rot_indices)], batch, translations, experiment_dataset.CTF_params[batch_image_ind], experiment_dataset.CTF_fun, noise_variance, experiment_dataset.voxel_size, experiment_dataset.image_shape, experiment_dataset.image_stack.process_images)
+            lhs_this, rhs_this = reduce_covariance_est_inner_eqx(
+                config, mean_projections[rot_indices], u_projections[rot_indices],
+                probabilities[start_idx:end_idx][:,np.array(rot_indices)],
+                batch, translations,
+                experiment_dataset.CTF_params[batch_image_ind], noise_variance,
+            )
             lhs += lhs_this
             rhs += rhs_this
-        
+
         del lhs_this, rhs_this
         start_idx = end_idx
 

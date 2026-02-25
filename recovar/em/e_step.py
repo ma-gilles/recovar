@@ -3,12 +3,16 @@ import logging
 import numpy as np
 import jax
 import jax.numpy as jnp
+import equinox as eqx
 from recovar import core
+from recovar.configs import ForwardModelConfig
 from .core import (
     batch_vol_slice_volume_by_map,
     batch_vol_rot_slice_volume_by_map,
     compute_dot_products,
+    compute_dot_products_eqx,
     compute_CTFed_proj_norms,
+    compute_CTFed_proj_norms_eqx,
     norm_squared_residuals_from_ft,
     NORM_FFT,
 )
@@ -17,7 +21,7 @@ from .heterogeneity import compute_bHb_terms
 logger = logging.getLogger(__name__)
 
 def E_with_precompute(experiment_dataset, volume, rotations, translations, noise_variance, disc_type, image_indices = None, u = None, s = None):
-    # I am not sure this is a reasonable way to be passing things around. 
+    # I am not sure this is a reasonable way to be passing things around.
 
     logger.info(f"starting precomp proj. Num rotations {rotations.shape[0]}, num translations {translations.shape[0]}. Total = {rotations.shape[0] * translations.shape[0]}")
     # Probably should stop storing rotations as matrices at some point.
@@ -35,12 +39,17 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     n_principal_components = u.shape[0] if use_heterogeneous else 0
     from recovar import utils
 
+    config = ForwardModelConfig.from_dataset(
+        experiment_dataset, disc_type=disc_type,
+        process_fn=experiment_dataset.image_stack.process_images,
+    )
+
     gpu_memory = utils.get_gpu_memory_total()
     batch_size = max(1, int(utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) * 5))
     n_batches = utils.get_number_of_index_batch(n_rotations, batch_size)
 
     projections = np.zeros((rotations.shape[0], image_size), dtype = np.complex64)
-    for rot_indices in utils.index_batch_iter(n_rotations, batch_size):    
+    for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
         projections[rot_indices] = core.slice_volume_by_map(volume, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type)
 
     logger.info(f"done with precomp proj, batch size {batch_size}")
@@ -61,25 +70,24 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
 
     start_idx = 0
     for batch, _, indices in data_generator:
-        # running_idx 
+        # running_idx
         # Only place where image mask is used ?
         end_idx = start_idx + len(indices)
-        residuals[start_idx:end_idx] = compute_dot_products(projections, batch,
-                            translations, experiment_dataset.CTF_params[indices], 
-                            experiment_dataset.CTF_fun, noise_variance,
-                            experiment_dataset.image_stack.process_images,
-                            experiment_dataset.voxel_size, image_shape)
+        residuals[start_idx:end_idx] = compute_dot_products_eqx(
+            config, projections, batch, translations,
+            experiment_dataset.CTF_params[indices], noise_variance,
+        )
         start_idx  = end_idx
 
     if use_heterogeneous:
         u_projections = np.empty((rotations.shape[0], n_principal_components, image_size), dtype = np.complex64)
         # Compute all mean and principal component projections
-        for rot_indices in utils.index_batch_iter(n_rotations, batch_size):    
+        for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
             u_projections[rot_indices] = batch_vol_slice_volume_by_map(u, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type)
 
         logger.info(f"done with u_proj {batch_size}")
         data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=dot_product_batch_size, subset_indices = image_indices)
-        
+
         rotation_batch = max(1, rotations.shape[0] // 10)
         start_idx = 0
         for batch, _, indices in data_generator:
@@ -103,10 +111,13 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
         1,
         int(utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory - utils.get_size_in_gb(projections)) * 3),
     )
-    
+
     for array_indices, dataset_indices in utils.subset_and_indices_batch_iter(image_indices, norm_batch_size):
         # indices = utils.get_batch_of_indices_arange(n_images, norm_batch_size, k)
-        res = compute_CTFed_proj_norms(projections, experiment_dataset.CTF_params[dataset_indices], experiment_dataset.CTF_fun, noise_variance, experiment_dataset.voxel_size, image_shape)
+        res = compute_CTFed_proj_norms_eqx(
+            config, projections,
+            experiment_dataset.CTF_params[dataset_indices], noise_variance,
+        )
         if array_indices[-1] == n_images - 1:
             res = res.block_until_ready()
         residuals[array_indices] += np.array(res[...,None])
@@ -141,6 +152,42 @@ compute_probability_from_residual_normal_squared = jax.vmap(compute_probability_
 
 
 ## This is the version of the code to be used when poses are not the same for all images.
+
+# ============================================================================
+# Equinox-based E-step API
+# ============================================================================
+
+@eqx.filter_jit
+def compute_residuals_many_poses_eqx(config: ForwardModelConfig, volumes, images, rotation_matrices, translations, ctf_params, noise_variance, translation_fn="fft"):
+    """Equinox version of compute_residuals_many_poses (12 → 8 params)."""
+    projected_volumes = batch_vol_rot_slice_volume_by_map(volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type)
+    projected_volumes = (projected_volumes * config.compute_ctf(ctf_params)[:,None,None,:])
+
+    images /= jnp.sqrt(noise_variance)
+    projected_volumes /= jnp.sqrt(noise_variance)
+
+    if translation_fn == "fft":
+        proj_volume_norm = jnp.linalg.norm(projected_volumes, axis=(-1), keepdims=True)**2
+        projected_volumes = norm_squared_residuals_from_ft(projected_volumes, images, config.image_shape)
+        image_size = np.prod(config.image_shape)
+        if NORM_FFT != "ortho":
+            projected_volumes = projected_volumes * image_size
+        translations_indices = translations_to_indices(translations, config.image_shape)
+        dots_chosen = batch_take(projected_volumes, translations_indices, axis=-1)
+        norm_res_squared = proj_volume_norm - 2 * dots_chosen.real
+        norm_res_squared += jnp.linalg.norm(images, axis=(-1), keepdims=True)[:,None,None]**2
+    else:
+        projected_volumes = projected_volumes[...,None,:]
+        translated_images = core.batch_trans_translate_images(images, translations, config.image_shape)[:,None, None]
+        norm_res_squared = jnp.linalg.norm((projected_volumes - translated_images), axis=(-1))**2
+
+    return norm_res_squared
+
+
+# ============================================================================
+# Legacy E-step API
+# ============================================================================
+
 @functools.partial(jax.jit, static_argnums=[6,7,8,9,10,11])
 def compute_residuals_many_poses(volumes, images, rotation_matrices, translations, CTF_params, noise_variance, voxel_size, volume_shape, image_shape, disc_type, CTF_fun, translation_fn = "fft" ):
     # Everything should be stored as:?

@@ -4,7 +4,10 @@ import numpy as np
 import jax, time
 import functools
 import nvtx
+import equinox as eqx
 from recovar import core, covariance_core, regularization, utils, constants
+from recovar.configs import ForwardModelConfig, BatchData, ModelState
+import recovar.core_forward as core_forward
 import recovar.fourier_transform_utils as fourier_transform_utils
 import os
 
@@ -671,9 +674,9 @@ def upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size
             utils.report_memory_device(logger=logger)
 
             # def upper_bound_noise_var(noise_var_used, variance_est, noise_p_variance_est):
-            rad_grid = np.array(fourier_transform_utils.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
+            rad_grid = np.array(fourier_transform_utils.get_grid_of_radial_distances(cryos.volume_shape).reshape(-1))
             # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
-            n_shell_to_ub = np.min([32, cryos[0].grid_size//2 -1])
+            n_shell_to_ub = np.min([32, cryos.grid_size//2 -1])
             ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
             variance_est_low_res_5_pc = np.zeros(n_shell_to_ub, dtype = np.float32)
             variance_est_low_res_median = np.zeros(n_shell_to_ub, dtype = np.float32)
@@ -1267,40 +1270,40 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
     # images_estimates = np.empty([experiment_dataset.n_images, *experiment_dataset.image_shape], dtype = experiment_dataset.dtype)
     # basis_size = basis.shape[-1]
     # data_generator = experiment_dataset.get_image_generator(batch_size=batch_size) 
-    basis = jnp.asarray(basis.T)
+    # Construct structured parameters once outside the loop
+    config = ForwardModelConfig.from_dataset(
+        experiment_dataset, disc_type=disc_type,
+        process_fn=experiment_dataset.image_stack.process_images,
+    )
+    model = ModelState(
+        mean_estimate=mean_estimate,
+        volume_mask=volume_mask,
+        basis=jnp.asarray(basis.T),
+    )
+
     top_fraction = 0
-    kernel_sq_sum =0 
+    kernel_sq_sum = 0
 
     for batch, _, batch_image_ind in data_generator:
-        # import pdb; pdb.set_trace()
         if subset_fn is not None:
-            idx = subset_fn(batch_image_ind) 
+            idx = subset_fn(batch_image_ind)
             batch = batch[idx]
             batch_image_ind = batch_image_ind[idx]
 
-
-        top_fraction_this, kernel_sq_sum_this, per_image_est = get_average_residual_square_inner_v2(batch, mean_estimate, volume_mask, 
-                                basis,
-                                experiment_dataset.CTF_params[batch_image_ind],
-                                experiment_dataset.rotation_matrices[batch_image_ind],
-                                experiment_dataset.translations[batch_image_ind],
-                                experiment_dataset.image_stack.mask,
-                                experiment_dataset.volume_mask_threshold,
-                                experiment_dataset.image_shape, 
-                                experiment_dataset.volume_shape, 
-                                experiment_dataset.grid_size, 
-                                experiment_dataset.voxel_size, 
-                                experiment_dataset.padding, 
-                                disc_type, 
-                                experiment_dataset.image_stack.process_images,
-                                experiment_dataset.CTF_fun, 
-                                contrasts[batch_image_ind], basis_coordinates[batch_image_ind])
+        batch_data = BatchData(
+            images=batch,
+            ctf_params=experiment_dataset.CTF_params[batch_image_ind],
+            rotation_matrices=experiment_dataset.rotation_matrices[batch_image_ind],
+            translations=experiment_dataset.translations[batch_image_ind],
+        )
+        top_fraction_this, kernel_sq_sum_this, per_image_est = average_residual_square(
+            config, batch_data, model,
+            experiment_dataset.image_stack.mask,
+            contrasts[batch_image_ind], basis_coordinates[batch_image_ind],
+        )
 
         top_fraction += top_fraction_this
-        kernel_sq_sum+= kernel_sq_sum_this
-        # images_estimates[batch_image_ind] = np.array(per_image_est)
-        # image_PSs[batch_ind] = np.array(image_PS)
-        # masked_image_PSs[batch_ind] = np.array(masked_image_PS)
+        kernel_sq_sum += kernel_sq_sum_this
 
     predicted_pixel_variances= top_fraction / kernel_sq_sum
     predicted_pixel_variances = jnp.fft.ifft2( predicted_pixel_variances).real * experiment_dataset.image_size
@@ -1336,6 +1339,66 @@ def batch_basis_times_coords2(basis, coords):
     summed = summed.reshape(coords.shape[0], *basis_shape_inp[:-1])
     # summed.transpose(-1, *np.arange(summed.ndim-1) )
     return summed#.transpose(-1, *np.arange(summed.ndim-1) )
+
+
+# ============================================================================
+# New Equinox-based noise estimation API
+# ============================================================================
+
+
+@eqx.filter_jit
+def average_residual_square(
+    config: ForwardModelConfig,
+    batch_data: BatchData,
+    model: ModelState,
+    image_mask: jax.Array,
+    contrasts: jax.Array,
+    basis_coordinates: jax.Array,
+):
+    """Compute average residual squared — Equinox API.
+
+    Replaces the 19-param ``get_average_residual_square_inner_v2``.
+    """
+    batch = batch_data.images
+    ctf_params = batch_data.ctf_params
+    rotation_matrices = batch_data.rotation_matrices
+    translations = batch_data.translations
+
+    if model.volume_mask is not None:
+        image_mask = covariance_core.get_per_image_tight_mask(
+            model.volume_mask, rotation_matrices, image_mask,
+            config.volume_mask_threshold, config.image_shape, config.volume_shape,
+            config.grid_size, config.padding, config.disc_type, soften=5,
+        )
+    else:
+        image_mask = jnp.ones_like(batch).real
+
+    if model.basis.shape[-1] == 0:
+        predicted_vols = contrasts.reshape(
+            (contrasts.shape[0], *np.ones(model.mean_estimate.ndim, dtype=int))
+        ) * model.mean_estimate[None]
+    else:
+        predicted_vols = contrasts.reshape(
+            (contrasts.shape[0], *np.ones(model.mean_estimate.ndim, dtype=int))
+        ) * (batch_basis_times_coords2(model.basis, basis_coordinates) + model.mean_estimate[None])
+
+    projected_vols = core.batch_forward_model_from_map(
+        predicted_vols, ctf_params[:, None], rotation_matrices[:, None],
+        config.image_shape, config.volume_shape, config.voxel_size,
+        config.CTF_fun, config.disc_type, False,
+    )[:, 0]
+
+    if config.process_fn is not None:
+        batch = config.process_fn(batch)
+    batch = core.translate_images(batch, translations, config.image_shape)
+    subtracted = batch - projected_vols
+
+    return get_masked_image_noise_fractions(subtracted, image_mask, config.image_shape)
+
+
+# ============================================================================
+# Legacy noise estimation (kept for backward compatibility)
+# ============================================================================
 
 
 @functools.partial(jax.jit, static_argnums = [9,10,11,13,14,15,16])
