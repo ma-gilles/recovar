@@ -3,11 +3,14 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import nvtx
+import equinox as eqx
 
 import recovar.padding as pad
 import functools
 from recovar import core, mask
+from recovar.configs import ForwardModelConfig
 import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core_forward as core_forward
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +131,56 @@ def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shap
 
 
 batch_over_vol_forward_model_from_map = jax.vmap(core.forward_model_from_map, in_axes = (0, None, None, None, None, None, None, None, None))
+
+
+# ============================================================================
+# New Equinox-based API
+# ============================================================================
+
+
+@eqx.filter_jit
+@nvtx.annotate("centered_images", color="yellow", domain=NVTX_DOMAIN_COV_CORE)
+def centered_images(
+    config: ForwardModelConfig,
+    images: jax.Array,
+    mean: jax.Array,
+    ctf_params: jax.Array,
+    rotation_matrices: jax.Array,
+    translations: jax.Array,
+) -> jax.Array:
+    """Compute y_i - A_i mu (centered images) using ForwardModelConfig.
+
+    If ``config.premultiplied_ctf`` is True, computes z_i - CTF_i^2 P_i mu
+    where z_i = y_i CTF_i.
+    """
+    translated = core.translate_images(images, translations, config.image_shape)
+    if config.premultiplied_ctf:
+        projected = core_forward.forward_model(
+            config, mean, ctf_params, rotation_matrices, skip_ctf=True
+        )
+        centered = translated - projected * config.compute_ctf(ctf_params) ** 2
+    else:
+        projected = core_forward.forward_model(
+            config, mean, ctf_params, rotation_matrices, skip_ctf=False
+        )
+        centered = translated - projected
+    return centered
+
+
+@eqx.filter_jit
+@nvtx.annotate("batch_vol_forward", color="blue", domain=NVTX_DOMAIN_COV_CORE)
+def batch_vol_forward(
+    config: ForwardModelConfig,
+    volumes: jax.Array,
+    ctf_params: jax.Array,
+    rotation_matrices: jax.Array,
+) -> jax.Array:
+    """Forward-model a batch of volumes (vmap over volume axis)."""
+    batch_grid_pt_vec_ind = core.batch_get_nearest_gridpoint_indices(
+        rotation_matrices, config.image_shape, config.volume_shape
+    )
+    batch_CTF = config.compute_ctf(ctf_params)
+    return batch_forward_model(volumes, batch_CTF, batch_grid_pt_vec_ind)
 
 
 # # Are there at most 4 or 5 within one dist? or 9?

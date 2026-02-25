@@ -22,26 +22,26 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
     
     covariance_options = covariance_estimation.get_default_covariance_computation_options() if covariance_options is None else covariance_options
 
-    volume_shape = cryos[0].volume_shape
-    vol_batch_size = utils.get_vol_batch_size(cryos[0].grid_size, gpu_memory_to_use)
+    volume_shape = cryos.volume_shape
+    vol_batch_size = utils.get_vol_batch_size(cryos.grid_size, gpu_memory_to_use)
 
-    # Different way of sampling columns: 
+    # Different way of sampling columns:
     # - from low to high frequencies
-    # This is the way it was done in the original code. 
+    # This is the way it was done in the original code.
     # - Highest SNR columns, computed by lhs of mean estimation. May want to not take frequencies that are too similar
     # - Highest variance columns. Also want want to diversify.
     # For the last one, could also batch by doing randomized-Cholesky like choice
 
     if covariance_options['column_sampling_scheme'] == 'low_freqs':
         from recovar import covariance_core
-        volume_shape = cryos[0].volume_shape
-        if cryos[0].grid_size == 16:
-            picked_frequencies = np.arange(cryos[0].volume_size) 
+        volume_shape = cryos.volume_shape
+        if cryos.grid_size == 16:
+            picked_frequencies = np.arange(cryos.volume_size)
         else:
             picked_frequencies = np.array(covariance_core.get_picked_frequencies(volume_shape, radius = covariance_options['column_radius'], use_half = True))
     elif covariance_options['column_sampling_scheme'] == 'high_snr' or covariance_options['column_sampling_scheme'] == 'high_lhs' or covariance_options['column_sampling_scheme'] == 'high_snr_p' or covariance_options['column_sampling_scheme'] =='high_snr_from_var_est':
         from recovar import regularization
-        upsampling_factor = np.round((means['lhs'].size / cryos[0].volume_size)**(1/3)).astype(int)
+        upsampling_factor = np.round((means['lhs'].size / cryos.volume_size)**(1/3)).astype(int)
         upsampled_volume_shape = tuple(upsampling_factor * np.array(volume_shape))
         lhs = regularization.downsample_lhs(means['lhs'].reshape(upsampled_volume_shape), volume_shape, upsampling_factor = upsampling_factor).reshape(-1)
         # At low freqs, signal variance decays as ~1/rad^2
@@ -62,7 +62,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
             picked_frequencies, picked_frequencies_in_frequencies_format = covariance_estimation.greedy_column_choice(lhs, covariance_options['sampling_n_cols'], volume_shape, avoid_in_radius = covariance_options['sampling_avoid_in_radius'])
 
         logger.info(f"Largest frequency computed: {np.max(np.abs(picked_frequencies_in_frequencies_format))}")
-        if np.max(np.abs(picked_frequencies_in_frequencies_format)) > cryos[0].grid_size//2-1:
+        if np.max(np.abs(picked_frequencies_in_frequencies_format)) > cryos.grid_size//2-1:
             logger.warning("Largest frequency computed is larger than grid size//2-1. This may cause big issues in SVD. This probably means variance estimates were wrong")
         # print("chosen cols", picked_frequencies_in_frequencies_format.T)
         # import pdb; pdb.set_trace()
@@ -140,9 +140,9 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
 
     if (options['contrast'] == "contrast_qr" or options['ignore_zero_frequency']):
         c_time = time.time()
-        # Going to keep a copy around for debugging purposes. Probably should delete at some point to reduce memory 
-        u['rescaled_no_contrast'] = u['rescaled'].copy()
-        s['rescaled_no_contrast'] = s['rescaled'].copy()
+        # Keep reference (not copy) for debugging; numpy arrays below are reassigned, not mutated
+        u['rescaled_no_contrast'] = u['rescaled']
+        s['rescaled_no_contrast'] = s['rescaled']
 
         mean_used = means['combined_regularized'] if use_reg_mean_in_contrast else means['combined'] 
         # if options['ignore_zero_frequency']:

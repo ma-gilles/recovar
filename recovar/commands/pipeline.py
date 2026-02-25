@@ -389,23 +389,22 @@ def standard_recovar_pipeline(args):
     options = utils.make_algorithm_options(args)
 
     cryos = dataset.get_split_datasets_from_dict(dataset_loader_dict, ind_split, args.lazy)
-    cryo = cryos[0]
     if args.gpu_memory is not None:
         utils.GPU_MEMORY_LIMIT = args.gpu_memory
     gpu_memory = utils.get_gpu_memory_total()
-    volume_shape = cryo.volume_shape
+    volume_shape = cryos.volume_shape
     disc_type = "linear_interp"
 
-    batch_size = utils.get_image_batch_size(cryo.grid_size, gpu_memory)
+    batch_size = utils.get_image_batch_size(cryos.grid_size, gpu_memory)
     logger.info(f"image batch size: {batch_size}")
-    logger.info(f"volume batch size: {utils.get_vol_batch_size(cryo.grid_size, gpu_memory)}")
-    logger.info(f"column batch size: {utils.get_column_batch_size(cryo.grid_size, gpu_memory)}")
-    logger.info(f"number of images: {cryos[0].n_images + cryos[1].n_images}")
+    logger.info(f"volume batch size: {utils.get_vol_batch_size(cryos.grid_size, gpu_memory)}")
+    logger.info(f"column batch size: {utils.get_column_batch_size(cryos.grid_size, gpu_memory)}")
+    logger.info(f"number of images: {cryos.n_total_images}")
     utils.report_memory_device(logger=logger)
 
     noise_var_from_hf, _ = noise.estimate_noise_variance(cryos[0], batch_size)
 
-    valid_idx = cryo.get_valid_frequency_indices()
+    valid_idx = cryos.get_valid_frequency_indices()
     noise_model = args.noise_model
 
     
@@ -459,10 +458,10 @@ def standard_recovar_pipeline(args):
         utils.report_memory_device(logger=logger)
 
 
-        mean_real = fourier_transform_utils.get_idft3(means['combined'].reshape(cryos[0].volume_shape))
+        mean_real = fourier_transform_utils.get_idft3(means['combined'].reshape(cryos.volume_shape))
 
         ## DECIDE IF WE SHOULD UNINVERT DATA
-        uninvert_check = np.sum((mean_real.real**3 * cryos[0].get_volume_radial_mask(cryos[0].grid_size//3).reshape(cryos[0].volume_shape))) < 0
+        uninvert_check = np.sum((mean_real.real**3 * cryos.get_volume_radial_mask(cryos.grid_size//3).reshape(cryos.volume_shape))) < 0
         if args.uninvert_data == 'automatic':
             # Check if in real space, things towards the middle are mostly positive or negative
             if uninvert_check:
@@ -482,38 +481,38 @@ def standard_recovar_pipeline(args):
         ## END OF THIS - maybe move this block of code somewhere else?
 
 
-        if means['combined'].dtype != cryo.dtype:
+        if means['combined'].dtype != cryos.dtype:
             logger.warning(f"mean estimate is in type: {means['combined'].dtype}")
-            means['combined'] = means['combined'].astype(cryo.dtype)
+            means['combined'] = means['combined'].astype(cryos.dtype)
 
         logger.info(f"mean computed in {time.time() - st_time}")
         utils.report_memory_device(logger=logger)
 
         # Compute mask
-        volume_mask, dilated_volume_mask= mask.masking_options(args.mask, means, volume_shape, cryo.dtype_real, args.mask_dilate_iter, args.keep_input_mask, args.dilated_mask_dilation_iters  )
+        volume_mask, dilated_volume_mask= mask.masking_options(args.mask, means, volume_shape, cryos.dtype_real, args.mask_dilate_iter, args.keep_input_mask, args.dilated_mask_dilation_iters  )
         ## Always dump mean?
         ### Dump mean and mask to file
         output_folder = args.outdir + '/output/' 
         o.mkdir_safe(output_folder)
         o.mkdir_safe(output_folder + 'volumes/')
-        o.save_volume(means['combined'], output_folder + 'volumes/' + 'mean', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
-        o.save_volume(means['corrected0'], output_folder + 'volumes/' + 'mean_half1_unfil', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
-        o.save_volume(means['corrected1'], output_folder + 'volumes/' + 'mean_half2_unfil', volume_shape, from_ft = True,  voxel_size = cryos[0].voxel_size)
-        o.save_volume(volume_mask, output_folder + 'volumes/' + 'mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
+        o.save_volume(means['combined'], output_folder + 'volumes/' + 'mean', volume_shape, from_ft = True,  voxel_size = cryos.voxel_size)
+        o.save_volume(means['corrected0'], output_folder + 'volumes/' + 'mean_half1_unfil', volume_shape, from_ft = True,  voxel_size = cryos.voxel_size)
+        o.save_volume(means['corrected1'], output_folder + 'volumes/' + 'mean_half2_unfil', volume_shape, from_ft = True,  voxel_size = cryos.voxel_size)
+        o.save_volume(volume_mask, output_folder + 'volumes/' + 'mask', volume_shape, from_ft = False,  voxel_size = cryos.voxel_size)
 
         # Filter and save mean
         from recovar import locres
-        half1 = fourier_transform_utils.get_idft3(means['corrected0'].reshape(cryos[0].volume_shape))
-        half2 = fourier_transform_utils.get_idft3(means['corrected1'].reshape(cryos[0].volume_shape))
-        best_filtered_nob, _, _, _, _ = locres.local_resolution(half1, half2, 0, cryos[0].voxel_size, use_filter = True, fsc_threshold = 1/7, use_v2 = True)
-        o.save_volume(best_filtered_nob, output_folder + 'volumes/' + 'mean_filt', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
+        half1 = fourier_transform_utils.get_idft3(means['corrected0'].reshape(cryos.volume_shape))
+        half2 = fourier_transform_utils.get_idft3(means['corrected1'].reshape(cryos.volume_shape))
+        best_filtered_nob, _, _, _, _ = locres.local_resolution(half1, half2, 0, cryos.voxel_size, use_filter = True, fsc_threshold = 1/7, use_v2 = True)
+        o.save_volume(best_filtered_nob, output_folder + 'volumes/' + 'mean_filt', volume_shape, from_ft = False,  voxel_size = cryos.voxel_size)
 
         if args.only_mean:
             return
 
         ### FIGURE OUT MASKS
         if args.focus_mask is not None:
-            focus_mask, _= mask.masking_options(args.focus_mask, means, volume_shape, cryo.dtype_real, args.mask_dilate_iter, args.keep_input_mask)
+            focus_mask, _= mask.masking_options(args.focus_mask, means, volume_shape, cryos.dtype_real, args.mask_dilate_iter, args.keep_input_mask)
         else:
             focus_mask = volume_mask
         
@@ -535,24 +534,24 @@ def standard_recovar_pipeline(args):
         ## First, estimate noise outside the mask
         if args.mask.endswith(".mrc"):
             if use_new_noise_fn:
-                masked_image_PS, image_PS = noise.fit_noise_model_to_images(cryo, dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = True, disc_type = 'linear_interp')
+                masked_image_PS, image_PS = noise.fit_noise_model_to_images(cryos[0], dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = True, disc_type = 'linear_interp')
             else:
-                masked_image_PS, _,_ =  noise.estimate_noise_variance_from_outside_mask_v2(cryo, dilated_volume_mask, batch_size)
-                white_noise_var_outside_mask = noise.estimate_white_noise_variance_from_mask(cryo, dilated_volume_mask, batch_size)
-                _, _, image_PS, _ =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
+                masked_image_PS, _,_ =  noise.estimate_noise_variance_from_outside_mask_v2(cryos[0], dilated_volume_mask, batch_size)
+                white_noise_var_outside_mask = noise.estimate_white_noise_variance_from_mask(cryos[0], dilated_volume_mask, batch_size)
+                _, _, image_PS, _ =  noise.estimate_radial_noise_statistic_from_outside_mask(cryos[0], dilated_volume_mask, batch_size)
             # white_noise_var_outside_mask = white_noise_var_outside_mask.copy()
             std_image_PS = None
             std_masked_image_PS = None
         else:
             if use_new_noise_fn:
                 # radial_noise_var_outside_mask = 
-                masked_image_PS, image_PS = noise.fit_noise_model_to_images(cryo, dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = True, disc_type = 'linear_interp')
+                masked_image_PS, image_PS = noise.fit_noise_model_to_images(cryos[0], dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = True, disc_type = 'linear_interp')
                 print("change discretization to cubic!")
                 std_masked_image_PS = None
                 std_image_PS = None
 
             else:
-                masked_image_PS, std_masked_image_PS, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryo, dilated_volume_mask, batch_size)
+                masked_image_PS, std_masked_image_PS, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryos[0], dilated_volume_mask, batch_size)
 
         radial_noise_var_outside_mask = masked_image_PS
         white_noise_var_outside_mask = np.median(masked_image_PS)
@@ -568,9 +567,9 @@ def standard_recovar_pipeline(args):
         noise_time = time.time()
         if use_new_noise_fn:
             # radial_noise_var_outside_mask = 
-            radial_ub_noise_var, _ =  noise.fit_noise_model_to_images(cryo, dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = False, disc_type = 'linear_interp')
+            radial_ub_noise_var, _ =  noise.fit_noise_model_to_images(cryos[0], dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = False, disc_type = 'linear_interp')
         else:
-            radial_ub_noise_var, _,_ =  noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(cryo, means['combined'], dilated_volume_mask, batch_size)
+            radial_ub_noise_var, _,_ =  noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(cryos[0], means['combined'], dilated_volume_mask, batch_size)
 
         logger.info(f"time to upper bound noise is {time.time() - noise_time}")
 
@@ -648,7 +647,7 @@ def standard_recovar_pipeline(args):
             for test in tests:
                 output_folder = args.outdir + '/output/' 
                 # Compute principal components
-                covariance_options = covariance_estimation.get_default_covariance_computation_options(cryos[0].grid_size)
+                covariance_options = covariance_estimation.get_default_covariance_computation_options(cryos.grid_size)
                 for key in test:
                     covariance_options[key] = test[key]
         
@@ -665,7 +664,7 @@ def standard_recovar_pipeline(args):
 
         utils.report_memory_device(logger=logger)
 
-        covariance_options = covariance_estimation.get_default_covariance_computation_options(cryos[0].grid_size)
+        covariance_options = covariance_estimation.get_default_covariance_computation_options(cryos.grid_size)
         if args.low_memory_option:
             covariance_options['sampling_n_cols'] = 50
             covariance_options['randomized_sketch_size'] = 100
@@ -814,12 +813,12 @@ def standard_recovar_pipeline(args):
 
     output_folder = args.outdir + '/output/' 
     o.mkdir_safe(output_folder)
-    o.save_covar_output_volumes(output_folder, means['combined'], u['rescaled'], s, volume_mask, volume_shape,  voxel_size = cryos[0].voxel_size)
-    o.save_volume(volume_mask, output_folder + 'volumes/' + 'mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
-    o.save_volume(dilated_volume_mask, output_folder + 'volumes/' + 'dilated_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
-    o.save_volume(focus_mask, output_folder + 'volumes/' + 'focus_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
+    o.save_covar_output_volumes(output_folder, means['combined'], u['rescaled'], s, volume_mask, volume_shape,  voxel_size = cryos.voxel_size)
+    o.save_volume(volume_mask, output_folder + 'volumes/' + 'mask', volume_shape, from_ft = False,  voxel_size = cryos.voxel_size)
+    o.save_volume(dilated_volume_mask, output_folder + 'volumes/' + 'dilated_mask', volume_shape, from_ft = False,  voxel_size = cryos.voxel_size)
+    o.save_volume(focus_mask, output_folder + 'volumes/' + 'focus_mask', volume_shape, from_ft = False,  voxel_size = cryos.voxel_size)
     if args.use_complement_mask:
-        o.save_volume(focus_masks[0], output_folder + 'volumes/' + 'complement_mask', volume_shape, from_ft = False,  voxel_size = cryos[0].voxel_size)
+        o.save_volume(focus_masks[0], output_folder + 'volumes/' + 'complement_mask', volume_shape, from_ft = False,  voxel_size = cryos.voxel_size)
 
 
     embedding_dict = { 'zs': zs, 'cov_zs' : cov_zs , 'contrasts': est_contrasts, 'zs_cont' : zs_cont, 'cov_zs_cont' : cov_zs_cont, 'contrasts_cont' : est_contrasts_cont}
@@ -843,7 +842,7 @@ def standard_recovar_pipeline(args):
         
         # Volume metadata
         'volume_shape': volume_shape,
-        'voxel_size': cryos[0].voxel_size,
+        'voxel_size': cryos.voxel_size,
         
         # Noise estimation results
         'noise_var_from_hf': noise_var_from_hf,

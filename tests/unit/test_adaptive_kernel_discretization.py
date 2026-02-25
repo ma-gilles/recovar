@@ -18,6 +18,7 @@ import jax
 import jax.numpy as jnp
 
 import recovar.adaptive_kernel_discretization as akd
+from recovar.dataset import CryoEMHalfsets
 from helpers.tiny_synthetic import make_tiny_cryo_dataset_with_images
 
 pytestmark = pytest.mark.unit
@@ -244,7 +245,7 @@ def test_estimate_multiple_disc_relion_style_returns_finite_volume():
     # estimate_multiple_disc_relion_style returns (first_estimates, opt_halfmaps,
     # disc_choices, residuals_averaged) – unpack all four.
     first_estimates, opt_halfmaps, disc_choices, residuals = akd.estimate_multiple_disc_relion_style(
-        experiment_datasets=[cryo, cryo],  # two half-datasets
+        experiment_datasets=CryoEMHalfsets(cryo, cryo),  # two half-datasets
         noise_variance=noise_variance,
         discretization_params=disc_params,
         heterogeneity_distances=het_dists,

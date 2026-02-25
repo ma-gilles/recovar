@@ -22,7 +22,7 @@ def get_mean_conformation_relion(cryos, batch_size, noise_variance=None, use_reg
     Compute mean conformation using RELION-style reconstruction.
     
     Args:
-        cryos: List of cryo datasets
+        cryos: CryoEMHalfsets or iterable of CryoEMDataset
         batch_size: Batch size for processing
         noise_variance: Noise variance estimate
         use_regularization: Whether to use regularized reconstruction

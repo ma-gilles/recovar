@@ -230,8 +230,8 @@ def test_M_with_precompute_handles_small_rotation_count_without_zero_batch(monke
     )
     monkeypatch.setattr(
         m_step,
-        "sum_up_images_fixed_rots",
-        lambda *_args, Ft_y=0, Ft_ctf=0, **_kwargs: (Ft_y + jnp.ones_like(Ft_y), Ft_ctf + 2.0 * jnp.ones_like(Ft_ctf)),
+        "sum_up_images_fixed_rots_eqx",
+        lambda _config, *_args, Ft_y=0, Ft_ctf=0, **_kwargs: (Ft_y + jnp.ones_like(Ft_y), Ft_ctf + 2.0 * jnp.ones_like(Ft_ctf)),
     )
 
     probs = jnp.array([[[0.6, 0.4]]], dtype=jnp.float32)
