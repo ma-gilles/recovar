@@ -456,7 +456,12 @@ def normalize_scores_for_json(scores_dict):
         elif isinstance(val, (float, int)):
             normalized[key] = float(val)
         else:
-            normalized[key] = val
+            # Handle JAX ArrayImpl and other array-like objects
+            try:
+                arr = np.asarray(val)
+                normalized[key] = float(arr) if arr.ndim == 0 else arr.tolist()
+            except Exception:
+                normalized[key] = val
     return normalized
 
 

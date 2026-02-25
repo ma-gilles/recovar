@@ -347,6 +347,12 @@ class CryoEMDataset:
     def set_variable_radial_noise_model(self, noise_variance_radials):
         from recovar import noise
         _, dose_indices = jnp.unique(self.CTF_params[:,core.CTFParamIndex.DOSE], return_inverse=True)
+        # If noise_variance_radials is 1D (single radial profile), broadcast
+        # to 2D (one row per dose level) so VariableRadialNoiseModel can index
+        # by dose_indices.
+        if noise_variance_radials is not None and np.ndim(noise_variance_radials) == 1:
+            n_doses = int(jnp.max(dose_indices)) + 1
+            noise_variance_radials = np.tile(noise_variance_radials, (n_doses, 1))
         self.noise = noise.VariableRadialNoiseModel(noise_variance_radials, dose_indices, image_shape = self.image_shape)
 
 # Loads dataset that are stored in the cryoDRGN format

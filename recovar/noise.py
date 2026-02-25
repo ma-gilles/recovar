@@ -649,7 +649,9 @@ def upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, cryos, means,
         ub_noise_var_by_var_ests = []
         # Fit noise model separately for each tilt
         for tilt_idx in range(max_noise_index):
-            variance, ub_noise_var_by_var_est = upper_bound_noise_by_signal_p_noise(noise_var_used[tilt_idx], cryos, means, batch_size, dilated_volume_mask, noise_ind_subset = tilt_idx)
+            # noise_var_used may be 2D (per-tilt) or 1D (single radial profile)
+            noise_for_tilt = noise_var_used[tilt_idx] if np.ndim(noise_var_used) >= 2 else noise_var_used
+            variance, ub_noise_var_by_var_est = upper_bound_noise_by_signal_p_noise(noise_for_tilt, cryos, means, batch_size, dilated_volume_mask, noise_ind_subset = tilt_idx)
             ub_noise_var_by_var_ests.append(ub_noise_var_by_var_est)
         return variance, np.stack(ub_noise_var_by_var_ests)
     else:

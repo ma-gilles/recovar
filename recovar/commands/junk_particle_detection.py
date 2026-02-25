@@ -172,14 +172,21 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
             
             logger.info(f"Cluster {cluster_idx}: Using {len(closest_indices)} closest particles for half-map {i} (min distance: {distances[closest_indices[0]]:.3f}, max distance: {distances[closest_indices[-1]]:.3f}). Average distance over all particles: {np.mean(distances):.3f}")
             
-            noise_variance = cryos[i].noise.get(closest_indices)
-            if noise_variance is None:
-                noise_variance = np.ones(len(closest_indices), dtype=np.float32)
+            if cryos[i].tilt_series_flag:
+                # For tilt series, noise must be fetched per-batch because
+                # closest_indices are particle indices but noise.get() needs
+                # image indices. Pass None to let relion_style_triangular_kernel
+                # fetch noise per-batch from the dataset's noise model.
+                noise_variance = None
+            else:
+                noise_variance = cryos[i].noise.get(closest_indices)
+                if noise_variance is None:
+                    noise_variance = np.ones(len(closest_indices), dtype=np.float32)
 
             cryos[i].update_volume_upsampling_factor(2)
             Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(
-                cryos[i], noise_variance, batch_size=None, 
-                disc_type='linear_interp', 
+                cryos[i], noise_variance, batch_size=None,
+                disc_type='linear_interp',
                 data_generator=cryos[i].get_dataset_subset_generator(batch_size, closest_indices, mode = 'images')
             )
             halfmap = relion_functions.post_process_from_filter(

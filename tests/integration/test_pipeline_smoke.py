@@ -193,3 +193,187 @@ def test_pipeline_cryo_et_smoke(tmp_path):
     assert (pipeline_out / f"inliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
     assert (pipeline_out / f"outliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
     assert (pipeline_out / "all_rounds_inliers.pkl").exists()
+
+
+# ---------------------------------------------------------------------------
+# Test 3: cryo-ET with radial_per_tilt noise model
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_pipeline_cryo_et_radial_per_tilt_noise_smoke(tmp_path):
+    """
+    Smoke test for cryo-ET with --noise-model radial_per_tilt.
+
+    This was crashing with IndexError because VariableRadialNoiseModel
+    received a 1D noise array but expected 2D (n_dose_levels, n_radial_bins).
+    """
+    output_dir = _smoke_output_dir(tmp_path, "smoke_et_radial_per_tilt")
+    outlier_vol = _make_outlier_vol(output_dir)
+    dataset_dir = _generate_dataset(output_dir, outlier_vol, tilt_series=True)
+
+    star = dataset_dir / "particles.star"
+    poses = dataset_dir / "poses.pkl"
+    ctf = dataset_dir / "ctf.pkl"
+    pipeline_out = dataset_dir / "pipeline_smoke_et_rpt_output"
+
+    cmd = [
+        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        str(star),
+        "--poses", str(poses),
+        "--ctf", str(ctf),
+        "--tilt-series",
+        "--tilt-series-ctf", "relion5",
+        "--noise-model", "radial_per_tilt",
+        "--correct-contrast",
+        "-o", str(pipeline_out),
+        "--mask", "from_halfmaps",
+        "--lazy",
+        "--zdim", str(_SMOKE_ZDIM),
+        "--k-rounds", str(_SMOKE_K_ROUNDS),
+        "--use-contrast-detection",
+        "--use-junk-detection",
+        "--save-pipeline-indices",
+        "--accept-cpu",
+    ]
+    subprocess.run(cmd, check=True, env=_CPU_ENV)
+
+    assert (pipeline_out / f"inliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
+    assert (pipeline_out / f"outliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
+    assert (pipeline_out / "all_rounds_inliers.pkl").exists()
+
+
+# ---------------------------------------------------------------------------
+# Test 4: cryo-ET with premultiplied CTF
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_pipeline_cryo_et_premultiplied_ctf_smoke(tmp_path):
+    """
+    Smoke test for cryo-ET with --premultiplied-ctf.
+    """
+    output_dir = _smoke_output_dir(tmp_path, "smoke_et_premultiplied_ctf")
+    outlier_vol = _make_outlier_vol(output_dir)
+    dataset_dir = _generate_dataset(output_dir, outlier_vol, tilt_series=True)
+
+    star = dataset_dir / "particles.star"
+    poses = dataset_dir / "poses.pkl"
+    ctf = dataset_dir / "ctf.pkl"
+    pipeline_out = dataset_dir / "pipeline_smoke_et_pctf_output"
+
+    cmd = [
+        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        str(star),
+        "--poses", str(poses),
+        "--ctf", str(ctf),
+        "--tilt-series",
+        "--tilt-series-ctf", "relion5",
+        "--premultiplied-ctf",
+        "--correct-contrast",
+        "-o", str(pipeline_out),
+        "--mask", "from_halfmaps",
+        "--lazy",
+        "--zdim", str(_SMOKE_ZDIM),
+        "--k-rounds", str(_SMOKE_K_ROUNDS),
+        "--use-contrast-detection",
+        "--use-junk-detection",
+        "--save-pipeline-indices",
+        "--accept-cpu",
+    ]
+    subprocess.run(cmd, check=True, env=_CPU_ENV)
+
+    assert (pipeline_out / f"inliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
+    assert (pipeline_out / f"outliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
+    assert (pipeline_out / "all_rounds_inliers.pkl").exists()
+
+
+# ---------------------------------------------------------------------------
+# Test 5: cryo-ET with radial_per_tilt + premultiplied CTF combined
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_pipeline_cryo_et_radial_per_tilt_premultiplied_ctf_smoke(tmp_path):
+    """
+    Smoke test for cryo-ET with both --noise-model radial_per_tilt and
+    --premultiplied-ctf, the most complex configuration.
+    """
+    output_dir = _smoke_output_dir(tmp_path, "smoke_et_rpt_pctf")
+    outlier_vol = _make_outlier_vol(output_dir)
+    dataset_dir = _generate_dataset(output_dir, outlier_vol, tilt_series=True)
+
+    star = dataset_dir / "particles.star"
+    poses = dataset_dir / "poses.pkl"
+    ctf = dataset_dir / "ctf.pkl"
+    pipeline_out = dataset_dir / "pipeline_smoke_et_rpt_pctf_output"
+
+    cmd = [
+        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        str(star),
+        "--poses", str(poses),
+        "--ctf", str(ctf),
+        "--tilt-series",
+        "--tilt-series-ctf", "relion5",
+        "--noise-model", "radial_per_tilt",
+        "--premultiplied-ctf",
+        "--correct-contrast",
+        "-o", str(pipeline_out),
+        "--mask", "from_halfmaps",
+        "--lazy",
+        "--zdim", str(_SMOKE_ZDIM),
+        "--k-rounds", str(_SMOKE_K_ROUNDS),
+        "--use-contrast-detection",
+        "--use-junk-detection",
+        "--save-pipeline-indices",
+        "--accept-cpu",
+    ]
+    subprocess.run(cmd, check=True, env=_CPU_ENV)
+
+    assert (pipeline_out / f"inliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
+    assert (pipeline_out / f"outliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
+    assert (pipeline_out / "all_rounds_inliers.pkl").exists()
+
+
+# ---------------------------------------------------------------------------
+# Test 6: SPA with radial noise (baseline comparison to cryo-ET variants)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_pipeline_spa_radial_noise_smoke(tmp_path):
+    """
+    Smoke test for SPA with explicit --noise-model radial, to ensure
+    the noise model path works end-to-end for SPA too.
+    """
+    output_dir = _smoke_output_dir(tmp_path, "smoke_spa_radial")
+    outlier_vol = _make_outlier_vol(output_dir)
+    dataset_dir = _generate_dataset(output_dir, outlier_vol)
+
+    mrcs = dataset_dir / f"particles.{_SMOKE_GRID}.mrcs"
+    poses = dataset_dir / "poses.pkl"
+    ctf = dataset_dir / "ctf.pkl"
+    pipeline_out = dataset_dir / "pipeline_smoke_spa_radial_output"
+
+    cmd = [
+        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        str(mrcs),
+        "--poses", str(poses),
+        "--ctf", str(ctf),
+        "--noise-model", "radial",
+        "--correct-contrast",
+        "-o", str(pipeline_out),
+        "--mask", "from_halfmaps",
+        "--lazy",
+        "--zdim", str(_SMOKE_ZDIM),
+        "--k-rounds", str(_SMOKE_K_ROUNDS),
+        "--use-contrast-detection",
+        "--use-junk-detection",
+        "--save-pipeline-indices",
+        "--accept-cpu",
+    ]
+    subprocess.run(cmd, check=True, env=_CPU_ENV)
+
+    assert (pipeline_out / f"inliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
+    assert (pipeline_out / f"outliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
+    assert (pipeline_out / "all_rounds_inliers.pkl").exists()

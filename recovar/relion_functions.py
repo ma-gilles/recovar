@@ -69,21 +69,23 @@ def relion_style_triangular_kernel(experiment_dataset , cov_noise,  batch_size =
     else:
         data_generator = data_generator
 
-    Ft_y, Ft_ctf = 0, 0 
+    Ft_y, Ft_ctf = 0, 0
     use_upsampled_ctf = False
     for batch, particles_ind, indices in data_generator:
         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
+        # Use per-batch noise from dataset when cov_noise is None
+        batch_noise = cov_noise if cov_noise is not None else experiment_dataset.noise.get(indices)
         Ft_y_b, Ft_ctf_b = relion_style_triangular_kernel_batch(batch,
-                                                                experiment_dataset.CTF_params[indices], 
-                                                                experiment_dataset.rotation_matrices[indices], 
-                                                                experiment_dataset.translations[indices], 
-                                                                experiment_dataset.image_shape, 
-                                                                experiment_dataset.upsampled_volume_shape, 
-                                                                experiment_dataset.voxel_size, 
-                                                                experiment_dataset.CTF_fun, 
-                                                                disc_type, 
-                                                                cov_noise,
-                                                                experiment_dataset.premultiplied_ctf, 
+                                                                experiment_dataset.CTF_params[indices],
+                                                                experiment_dataset.rotation_matrices[indices],
+                                                                experiment_dataset.translations[indices],
+                                                                experiment_dataset.image_shape,
+                                                                experiment_dataset.upsampled_volume_shape,
+                                                                experiment_dataset.voxel_size,
+                                                                experiment_dataset.CTF_fun,
+                                                                disc_type,
+                                                                batch_noise,
+                                                                experiment_dataset.premultiplied_ctf,
                                                                 use_upsampled_ctf)
         Ft_y += Ft_y_b
         Ft_ctf += Ft_ctf_b
