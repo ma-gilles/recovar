@@ -444,22 +444,32 @@ def compare_metric(current, baseline, direction, tol_frac):
     return True, "ignored"
 
 
+def _sanitize_json_value(val):
+    """Replace NaN/Inf with None so json.dump produces valid JSON."""
+    if isinstance(val, float):
+        return None if (np.isnan(val) or np.isinf(val)) else val
+    if isinstance(val, list):
+        return [_sanitize_json_value(v) for v in val]
+    return val
+
+
 def normalize_scores_for_json(scores_dict):
     normalized = {}
     for key, val in scores_dict.items():
         if isinstance(val, (bool, np.bool_)):
             normalized[key] = bool(val)
         elif isinstance(val, np.ndarray):
-            normalized[key] = np.asarray(val).tolist()
+            normalized[key] = _sanitize_json_value(np.asarray(val).tolist())
         elif isinstance(val, (np.floating, np.integer)):
-            normalized[key] = float(val)
+            normalized[key] = _sanitize_json_value(float(val))
         elif isinstance(val, (float, int)):
-            normalized[key] = float(val)
+            normalized[key] = _sanitize_json_value(float(val))
         else:
             # Handle JAX ArrayImpl and other array-like objects
             try:
                 arr = np.asarray(val)
-                normalized[key] = float(arr) if arr.ndim == 0 else arr.tolist()
+                result = float(arr) if arr.ndim == 0 else arr.tolist()
+                normalized[key] = _sanitize_json_value(result)
             except Exception:
                 normalized[key] = val
     return normalized
@@ -1099,9 +1109,17 @@ def main():
 
 
     scores_file = os.path.join(plots_dir, "all_scores.json")
+    old_scores = None
     if os.path.exists(scores_file):
-        with open(scores_file, "r") as f:
-            old_scores = json.load(f)
+        try:
+            with open(scores_file, "r") as f:
+                old_scores = json.load(f)
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"Could not parse previous scores file {scores_file}: {e}. Skipping comparison.")
+    else:
+        logger.info("No previous scores file found; skipping comparison.")
+
+    if old_scores is not None:
         all_keys = set(old_scores.keys()) | set(all_scores.keys())
         old_vals, new_vals, labels = [], [], []
         for key in sorted(all_keys):
@@ -1127,8 +1145,6 @@ def main():
         plt.savefig(comparison_plot_path)
         plt.close()
         logger.info(f"Score comparison plot saved at: {comparison_plot_path}")
-    else:
-        logger.info("No previous scores file found; skipping comparison.")
 
     all_scores = normalize_scores_for_json(all_scores)
 
