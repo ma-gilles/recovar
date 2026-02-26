@@ -600,8 +600,9 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     main_dataset = dataset.CryoEMDataset( None, voxel_size,
                               rots, trans, ctf_params, CTF_fun = CTF_fun, dataset_indices = None, grid_size = grid_size)
     
-    mult = 1 if 'cubic' in disc_type else 5
-    batch_size = mult * utils.get_image_batch_size(grid_size, utils.get_gpu_memory_total())
+    # cubic interpolation uses ~4x more GPU memory per image than linear
+    mult = 0.5 if 'cubic' in disc_type else 5
+    batch_size = int(mult * utils.get_image_batch_size(grid_size, utils.get_gpu_memory_total()))
 
     main_image_stack = simulate_data(main_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = disc_type, mrc_file = mrc_file, premultiplied_ctf=premultiplied_ctf )
 
