@@ -585,15 +585,21 @@ class JAXDataLoader:
     configurable background-thread prefetching.
     """
 
+    # Default prefetch threads used when callers don't specify num_workers.
+    # 4 threads lets Grain read ahead while the GPU computes, overlapping
+    # disk I/O with computation for lazy-loaded datasets.
+    DEFAULT_NUM_THREADS = 4
+
     def __init__(self, dataset, batch_size: int = 1, shuffle: bool = False,
                  num_workers: int = 0, **kwargs):
         self.dataset = dataset
         self.batch_size = batch_size
         self.shuffle = shuffle
-        self._num_threads = max(num_workers, 1)
+        self._num_threads = max(num_workers, 1) if num_workers > 0 else self.DEFAULT_NUM_THREADS
         self._prefetch_buffer = min(max(2, self._num_threads), 8)
 
-    def __iter__(self):
+    def _iter_batches(self):
+        """Yield collated batches from Grain-backed iteration."""
         ds = grain.MapDataset.source(self.dataset)
         if self.shuffle:
             ds = ds.shuffle(seed=np.random.randint(0, 2**31))
@@ -616,6 +622,11 @@ class JAXDataLoader:
                 batch = []
         if batch:
             yield collate_to_jax(batch)
+
+    def __iter__(self):
+        # Wrap with PrefetchIterator so the next collated batch is prepared
+        # in a background thread while the GPU processes the current one.
+        return iter(PrefetchIterator(self._iter_batches(), buffer_size=2))
 
     def __len__(self) -> int:
         return (len(self.dataset) + self.batch_size - 1) // self.batch_size
