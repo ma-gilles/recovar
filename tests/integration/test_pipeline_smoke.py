@@ -37,7 +37,9 @@ import pytest
 pytestmark = [pytest.mark.integration]
 
 # Force CPU for all subprocesses spawned by smoke tests (no GPU required).
-_CPU_ENV = dict(os.environ, CUDA_VISIBLE_DEVICES="", JAX_PLATFORMS="cpu")
+# Include PYTHONNOUSERSITE=1 to prevent importing the wrong recovar from user-site.
+_CPU_ENV = dict(os.environ, CUDA_VISIBLE_DEVICES="", JAX_PLATFORMS="cpu",
+                PYTHONNOUSERSITE="1")
 
 _SMOKE_N_IMAGES = int(os.environ.get("SMOKE_N_IMAGES", "100"))
 # For cryo-ET, make_test_dataset hard-codes n_tilts=27, so we need more
@@ -83,6 +85,7 @@ def _generate_dataset(
         "--outlier-file-input", str(outlier_vol),
         "--percent-outliers", str(_SMOKE_PCT_OUTLIERS),
         "--image-size", str(_SMOKE_GRID),
+        "--seed", "42",
     ]
     if tilt_series:
         make_cmd += ["--tilt-series"]
@@ -128,6 +131,7 @@ def test_pipeline_spa_smoke(tmp_path):
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
+        "--gpu-gb", "8",
     ]
     subprocess.run(cmd, check=True, env=_CPU_ENV)
 
@@ -186,6 +190,7 @@ def test_pipeline_cryo_et_smoke(tmp_path):
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
+        "--gpu-gb", "8",
     ]
     subprocess.run(cmd, check=True, env=_CPU_ENV)
 
@@ -235,6 +240,7 @@ def test_pipeline_cryo_et_radial_per_tilt_noise_smoke(tmp_path):
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
+        "--gpu-gb", "8",
     ]
     subprocess.run(cmd, check=True, env=_CPU_ENV)
 
@@ -280,6 +286,7 @@ def test_pipeline_cryo_et_premultiplied_ctf_smoke(tmp_path):
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
+        "--gpu-gb", "8",
     ]
     subprocess.run(cmd, check=True, env=_CPU_ENV)
 
@@ -327,6 +334,7 @@ def test_pipeline_cryo_et_radial_per_tilt_premultiplied_ctf_smoke(tmp_path):
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
+        "--gpu-gb", "8",
     ]
     subprocess.run(cmd, check=True, env=_CPU_ENV)
 
@@ -371,6 +379,7 @@ def test_pipeline_spa_radial_noise_smoke(tmp_path):
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
+        "--gpu-gb", "8",
     ]
     subprocess.run(cmd, check=True, env=_CPU_ENV)
 

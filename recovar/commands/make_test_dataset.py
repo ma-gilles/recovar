@@ -7,7 +7,9 @@ import sys
 import argparse
 
 
-def make_test_dataset(output_dir, image_size = 64, noise_level = 0.1, n_images = None, create_nested_structure = False, nested_prefix = "Extract/job193", tilt_series = False, outlier_file_input = None, percent_outliers = 0.0, percent_tilt_series_outliers = 0.0):
+def make_test_dataset(output_dir, image_size = 64, noise_level = 0.1, n_images = None, create_nested_structure = False, nested_prefix = "Extract/job193", tilt_series = False, outlier_file_input = None, percent_outliers = 0.0, percent_tilt_series_outliers = 0.0, seed = None):
+    if seed is not None:
+        np.random.seed(seed)
     grid_size =image_size
     this_dir = os.path.dirname(__file__)
     volume_folder_input =  this_dir+ '/../data/vol'
@@ -72,10 +74,11 @@ def main():
     parser.add_argument("--outlier-file-input", help="Path to outlier volume file")
     parser.add_argument("--percent-outliers", default=0.0, type=float, help="Percentage of outliers in the dataset")
     parser.add_argument("--percent-tilt-series-outliers", type=float, default=0.0, help="Percentage of tilt outliers in tilt series dataset")
-    
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducible dataset generation")
+
     args = parser.parse_args()
-    
-    make_test_dataset(args.output_dir, args.image_size, args.noise_level, args.n_images, args.create_nested_structure, args.nested_prefix, args.tilt_series, args.outlier_file_input, args.percent_outliers, args.percent_tilt_series_outliers)
+
+    make_test_dataset(args.output_dir, args.image_size, args.noise_level, args.n_images, args.create_nested_structure, args.nested_prefix, args.tilt_series, args.outlier_file_input, args.percent_outliers, args.percent_tilt_series_outliers, args.seed)
     print("Done")        
 
 if __name__ == '__main__':

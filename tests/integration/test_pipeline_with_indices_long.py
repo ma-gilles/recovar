@@ -167,6 +167,7 @@ def _make_dataset(
         "--outlier-file-input", str(outlier_vol),
         "--percent-outliers", str(percent_outliers),
         "--image-size", str(grid_size),
+        "--seed", "42",
     ]
     if extra_args:
         make_cmd.extend(shlex.split(extra_args))
@@ -204,6 +205,7 @@ def _make_tilt_dataset(
         "--percent-tilt-series-outliers", str(pct_tilt_outliers),
         "--tilt-series",
         "--image-size", str(grid_size),
+        "--seed", "42",
     ]
     subprocess.run(make_cmd, check=True, env=gpu_subprocess_env())
     return dataset_dir

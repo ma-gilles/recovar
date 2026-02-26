@@ -88,6 +88,18 @@ TINY_PERCENT_OUTLIERS = 0.20
 TINY_K_ROUNDS = 1
 
 # ---------------------------------------------------------------------------
+# Fast smoke test thresholds (high-SNR, easy outliers → tight bounds)
+# ---------------------------------------------------------------------------
+FAST_GRID_SIZE = 32
+FAST_N_IMAGES = 200
+FAST_NOISE_LEVEL = 0.01       # very high SNR
+FAST_PERCENT_OUTLIERS = 0.25
+FAST_K_ROUNDS = 1
+# With high SNR the pipeline should find outliers easily:
+MIN_RECALL_FAST = 0.70
+MIN_PRECISION_FAST = 0.70
+
+# ---------------------------------------------------------------------------
 # Baseline path for tiny self-contained test
 # ---------------------------------------------------------------------------
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -162,6 +174,7 @@ def _run_outliers_pipeline(
         "--outlier-file-input", str(outlier_vol),
         "--percent-outliers", str(percent_outliers),
         "--image-size", str(grid_size),
+        "--seed", "42",
     ]
     if extra_args:
         make_cmd.extend(shlex.split(extra_args))
@@ -389,6 +402,64 @@ def test_outliers_pipeline_tiny_regression(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Test 1b: fast high-SNR smoke test (tiny_metrics, no baseline needed)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tiny_metrics
+def test_outliers_pipeline_fast_smoke(tmp_path):
+    """
+    Fast outlier detection smoke test with high SNR.
+
+    Uses a very small dataset (200 images, grid_size=32) with very low noise
+    (noise_level=0.01) and 25% outliers so detection should be easy and fast.
+    No baseline comparison — just checks that precision and recall exceed
+    reasonable thresholds.
+
+    Run with: pytest --run-tiny-metrics -k test_outliers_pipeline_fast_smoke
+    """
+    output_dir = _resolve_output_dir(tmp_path, "outliers_fast_smoke")
+
+    pipeline_out = _run_outliers_pipeline(
+        output_dir=output_dir,
+        grid_size=FAST_GRID_SIZE,
+        n_images=FAST_N_IMAGES,
+        percent_outliers=FAST_PERCENT_OUTLIERS,
+        k_rounds=FAST_K_ROUNDS,
+        extra_args=f"--noise-level {FAST_NOISE_LEVEL}",
+        accept_cpu=True,
+    )
+
+    sim_info_path = output_dir / "test_dataset" / "simulation_info.pkl"
+    assert sim_info_path.exists(), f"simulation_info.pkl missing at {sim_info_path}"
+
+    with open(sim_info_path, "rb") as f:
+        sim_info = pickle.load(f)
+    n_total = int(np.asarray(sim_info["image_assignment"]).size)
+
+    _check_output_files_exist(pipeline_out, k_rounds=FAST_K_ROUNDS)
+    _check_partition_consistency(pipeline_out, n_total=n_total, k_rounds=FAST_K_ROUNDS)
+
+    metrics = _compute_outlier_metrics(pipeline_out, sim_info_path, k_rounds=FAST_K_ROUNDS)
+
+    recall = metrics.get(f"outlier_recall_round_{FAST_K_ROUNDS}", 0.0)
+    precision = metrics.get(f"outlier_precision_round_{FAST_K_ROUNDS}", 0.0)
+    f1 = metrics.get(f"outlier_f1_round_{FAST_K_ROUNDS}", 0.0)
+
+    print(f"\nFast smoke test metrics: precision={precision:.3f} recall={recall:.3f} f1={f1:.3f}")
+    print(f"Full metrics: {json.dumps(metrics, indent=2)}")
+
+    assert recall >= MIN_RECALL_FAST, (
+        f"recall={recall:.3f} below minimum {MIN_RECALL_FAST}. "
+        f"High-SNR outliers should be easy to detect. metrics={metrics}"
+    )
+    assert precision >= MIN_PRECISION_FAST, (
+        f"precision={precision:.3f} below minimum {MIN_PRECISION_FAST}. "
+        f"High-SNR outliers should be easy to detect. metrics={metrics}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test 2: long regression against user-provided dataset (integration+slow+gpu)
 # ---------------------------------------------------------------------------
 
@@ -515,6 +586,7 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         "--percent-tilt-series-outliers", str(pct_tilt_out),
         "--tilt-series",
         "--image-size", str(grid_size),
+        "--seed", "42",
     ]
     env = gpu_subprocess_env()
     subprocess.run(make_cmd, check=True, env=env)

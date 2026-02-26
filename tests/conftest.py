@@ -26,6 +26,7 @@ def gpu_subprocess_env():
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = str(ROOT) + (os.pathsep + existing if existing else "")
     env["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+    env["PYTHONNOUSERSITE"] = "1"
     return env
 
 
