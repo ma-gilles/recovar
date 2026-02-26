@@ -82,11 +82,11 @@ It is recommanded to test your installation before running on a real dataset, se
 CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html#) are required to run this code. JAX will be installed by the command below, and the cudatoolkit is now included, but you need to have the CUDA drivers installed, see info here about JAX installation [here](https://jax.readthedocs.io/en/latest/installation.html).
 Assuming you already have CUDA drivers (probably already installed on your cluster), installation should take less than 5 minutes.
 
-If you have an internet connection, you can copy paste the commands below. It creates a conda environment to install recovar in, then `pip install`s the GPU version of JAX, the cpu version of pytorch, and recovar.
+If you have an internet connection, you can copy paste the commands below. It creates a conda environment to install recovar in, then `pip install`s the GPU version of JAX and recovar.
 
     conda create --name recovar python=3.11 -y
     conda activate recovar
-    pip install git+https://github.com/scikit-fmm/scikit-fmm.git -f https://download.pytorch.org/whl/torch_stable.html torch==2.3.1+cpu "jax[cuda12]"==0.5.0  recovar
+    pip install git+https://github.com/scikit-fmm/scikit-fmm.git "jax[cuda12]"==0.9.0.1 recovar
 
 You can then use the recovar command after activating the environment. It is recommended to test your installation before running on a real dataset. You can do this by running this on a GPU-capable device:
 
@@ -123,8 +123,7 @@ To install the newest version on github:
 
     # Install key dependencies that don't play well with pip
     python -m pip install git+https://github.com/scikit-fmm/scikit-fmm.git
-    python -m pip install -f https://download.pytorch.org/whl/torch_stable.html torch==2.3.1+cpu
-    python -m pip install "jax[cuda12]"==0.5.0    # or use "jax[cpu]"==0.5.0 if no NVIDIA GPU
+    python -m pip install "jax[cuda12]"==0.9.0.1    # or use "jax[cpu]"==0.9.0.1 if no NVIDIA GPU
 
     # Required by current command/profiling paths
     python -m pip install nvtx
@@ -135,7 +134,7 @@ To install the newest version on github:
 
     # Verify environment consistency
     python -m pip check
-    python -c "import jax, ml_dtypes, matplotlib, nvtx; print('env ok')"
+    python -c "import jax, grain, ml_dtypes, matplotlib, nvtx; print('env ok')"
 
     python -m ipykernel install --user --name=recovar_dev 
 

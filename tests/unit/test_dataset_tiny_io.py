@@ -2,10 +2,8 @@ import numpy as np
 import pytest
 from pathlib import Path
 from types import SimpleNamespace
-import torch
 
 pytest.importorskip("jax")
-pytest.importorskip("torch")
 
 from helpers import tiny_synthetic
 from recovar import dataset, core, utils, starfile, cryo_dataset
@@ -638,7 +636,7 @@ def test_simulator_tiny_tilt_series_to_images_accepts_boolean_image_subset_mask(
 
 def test_simulator_tiny_tilt_series_to_images_rejects_wrong_length_boolean_mask(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
-    with pytest.raises(ValueError, match="must match number of images"):
+    with pytest.raises(ValueError, match="must match total size"):
         tilt_dataset.tilt_series_indices_to_image_indices(
             np.array([0, 1], dtype=np.int32),
             files["particles_star"],
@@ -1819,8 +1817,8 @@ def test_simulator_tiny_tilt_image_count_batch_loader_nested_torch_subsets(sim_t
         tilt_file_option="relion5",
     )
 
-    subset_lvl1 = torch.utils.data.Subset(ds, [3, 1, 0])
-    subset_lvl2 = torch.utils.data.Subset(subset_lvl1, [2, 0, 2])  # maps to base particle ids [0, 3, 0]
+    subset_lvl1 = cryo_dataset._SimpleSubset(ds, [3, 1, 0])
+    subset_lvl2 = cryo_dataset._SimpleSubset(subset_lvl1, [2, 0, 2])  # maps to base particle ids [0, 3, 0]
     loader = cryo_dataset.ImageCountBatchLoader(subset_lvl2, batch_size=3, pad_to_batch=False)
 
     batches = list(loader)

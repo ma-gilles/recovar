@@ -33,10 +33,8 @@ Particle i has images particles_to_tilts[i].
 
 import numpy as np
 import pytest
-import torch
 
 pytest.importorskip("jax")
-pytest.importorskip("torch")
 
 from helpers import tiny_synthetic
 from recovar import dataset as recovar_dataset, tilt_dataset

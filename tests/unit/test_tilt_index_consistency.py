@@ -6,8 +6,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-pytest.importorskip("torch")
-
 from recovar import cryo_dataset, dataset, starfile
 
 pytestmark = pytest.mark.unit

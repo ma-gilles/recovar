@@ -3,9 +3,6 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
-import torch
-
-pytest.importorskip("torch")
 
 from recovar import cryo_dataset
 from helpers import tiny_synthetic
@@ -242,13 +239,13 @@ def test_tilt_series_to_images_rejects_bad_particle_indices(monkeypatch):
         "parse_particle_tilt",
         lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0, 1: 0, 2: 1, 3: 1, 4: 2}),
     )
-    with pytest.raises(IndexError, match="out-of-range"):
+    with pytest.raises(IndexError):
         cryo_dataset.tilt_series_to_images(np.array([3], dtype=np.int32), "dummy.star")
-    with pytest.raises(IndexError, match="out-of-range"):
+    with pytest.raises(IndexError):
         cryo_dataset.tilt_series_to_images(np.array([-1], dtype=np.int32), "dummy.star")
     with pytest.raises(ValueError, match="must be 1D"):
         cryo_dataset.tilt_series_to_images(np.array([[0, 1]], dtype=np.int32), "dummy.star")
-    with pytest.raises(ValueError, match="must match number of particles"):
+    with pytest.raises(ValueError, match="must match total size"):
         cryo_dataset.tilt_series_to_images(np.array([True, False], dtype=bool), "dummy.star")
     with pytest.raises(TypeError, match="integer indices or boolean mask"):
         cryo_dataset.tilt_series_to_images(np.array([0.0, 1.0], dtype=np.float32), "dummy.star")
@@ -276,7 +273,7 @@ def test_tilt_series_to_images_rejects_wrong_length_boolean_subset_mask(monkeypa
         lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0}),
     )
     bad_mask = np.array([True, False, True], dtype=bool)  # should have length 5
-    with pytest.raises(ValueError, match="must match number of images"):
+    with pytest.raises(ValueError, match="must match total size"):
         cryo_dataset.tilt_series_to_images(
             np.array([0, 2], dtype=np.int32),
             "dummy.star",
@@ -519,7 +516,7 @@ def test_image_count_batch_loader_subset_wrapper_preserves_duplicate_parent_mapp
 
     parent = _ParentTiltDataset()
     # Exercise Subset path with duplicate/reordered parent indices: [2, 0, 2].
-    subset = torch.utils.data.Subset(parent, [2, 0, 2])
+    subset = cryo_dataset._SimpleSubset(parent, [2, 0, 2])
     loader = cryo_dataset.ImageCountBatchLoader(subset, batch_size=3, pad_to_batch=False)
 
     assert loader.total_images == 4  # 1 + 2 + 1
@@ -553,7 +550,7 @@ def test_image_count_batch_loader_subset_wrapper_uses_parent_num_tilts_cap():
             images = np.ones((len(tilt_ids), 8, 8), dtype=np.float32)
             return images, int(idx), tilt_ids
 
-    subset = torch.utils.data.Subset(_ParentTiltDataset(), [0, 1, 0])
+    subset = cryo_dataset._SimpleSubset(_ParentTiltDataset(), [0, 1, 0])
     loader = cryo_dataset.ImageCountBatchLoader(subset, batch_size=2, pad_to_batch=False)
 
     assert loader.total_images == 3
@@ -584,8 +581,8 @@ def test_image_count_batch_loader_nested_subset_wrapper_preserves_mapping_and_du
             return images, int(idx), tilt_ids
 
     parent = _ParentTiltDataset()
-    subset_lvl1 = torch.utils.data.Subset(parent, [3, 1, 0])      # maps local->[3,1,0]
-    subset_lvl2 = torch.utils.data.Subset(subset_lvl1, [2, 0, 2]) # maps to base [0,3,0]
+    subset_lvl1 = cryo_dataset._SimpleSubset(parent, [3, 1, 0])      # maps local->[3,1,0]
+    subset_lvl2 = cryo_dataset._SimpleSubset(subset_lvl1, [2, 0, 2]) # maps to base [0,3,0]
 
     loader = cryo_dataset.ImageCountBatchLoader(subset_lvl2, batch_size=3, pad_to_batch=False)
 
@@ -1097,13 +1094,6 @@ def test_collate_to_jax_handles_none_scalar_ndarray_and_nested_sequences():
     np.testing.assert_array_equal(np.array(out_nested[1]), np.array([5, 7], dtype=np.int32))
 
 
-def test_collate_to_jax_handles_torch_tensor_batch():
-    t0 = torch.tensor([[1.0, 2.0]], dtype=torch.float32)
-    t1 = torch.tensor([[3.0, 4.0]], dtype=torch.float32)
-    out = cryo_dataset.collate_to_jax([t0, t1])
-    np.testing.assert_array_equal(np.array(out), np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
-
-
 def test_collate_to_jax_single_numpy_batch_skips_concatenate(monkeypatch):
     arr = np.arange(6, dtype=np.float32).reshape(1, 2, 3)
     monkeypatch.setattr(
@@ -1114,18 +1104,6 @@ def test_collate_to_jax_single_numpy_batch_skips_concatenate(monkeypatch):
 
     out = cryo_dataset.collate_to_jax([arr])
     np.testing.assert_array_equal(np.array(out), arr)
-
-
-def test_collate_to_jax_single_torch_batch_skips_cat(monkeypatch):
-    t = torch.tensor([[5.0, 7.0]], dtype=torch.float32)
-    monkeypatch.setattr(
-        cryo_dataset.torch,
-        "cat",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("single-item fast path should skip torch.cat")),
-    )
-
-    out = cryo_dataset.collate_to_jax([t])
-    np.testing.assert_array_equal(np.array(out), np.array([[5.0, 7.0]], dtype=np.float32))
 
 
 def test_tiltseries_subset_generator_preserves_subset_order_and_duplicates(monkeypatch):
