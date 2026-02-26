@@ -72,6 +72,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pytest
 
+from conftest import gpu_subprocess_env
 from helpers.metrics_regression import compare_metric, metric_direction
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
@@ -164,7 +165,8 @@ def _run_outliers_pipeline(
     ]
     if extra_args:
         make_cmd.extend(shlex.split(extra_args))
-    subprocess.run(make_cmd, check=True)
+    env = gpu_subprocess_env()
+    subprocess.run(make_cmd, check=True, env=env)
 
     # -- run pipeline_with_outliers ------------------------------------------
     pipeline_out = dataset_dir / "pipeline_outliers_output"
@@ -189,7 +191,7 @@ def _run_outliers_pipeline(
     ]
     if accept_cpu:
         pipe_cmd.append("--accept-cpu")
-    subprocess.run(pipe_cmd, check=True)
+    subprocess.run(pipe_cmd, check=True, env=env)
 
     return pipeline_out
 
@@ -514,7 +516,8 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         "--tilt-series",
         "--image-size", str(grid_size),
     ]
-    subprocess.run(make_cmd, check=True)
+    env = gpu_subprocess_env()
+    subprocess.run(make_cmd, check=True, env=env)
 
     # Run pipeline_with_outliers for tilt series
     pipeline_out = dataset_dir / "pipeline_outliers_output"
@@ -539,7 +542,7 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         "--use-junk-detection",
         "--save-pipeline-indices",
     ]
-    subprocess.run(pipe_cmd, check=True)
+    subprocess.run(pipe_cmd, check=True, env=env)
 
     sim_info_path = dataset_dir / "simulation_info.pkl"
     assert sim_info_path.exists()

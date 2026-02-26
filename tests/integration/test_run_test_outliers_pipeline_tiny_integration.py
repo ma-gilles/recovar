@@ -116,7 +116,9 @@ def _run_outliers_pipeline(
             "--n-tilts", str(n_tilts),
             "--percent-tilt-series-outliers", str(pct_tilt_outliers),
         ]
-    subprocess.run(make_cmd, check=True)
+    from conftest import gpu_subprocess_env
+    env = gpu_subprocess_env()
+    subprocess.run(make_cmd, check=True, env=env)
 
     dataset_dir = output_dir / "test_dataset"
     pipeline_out = dataset_dir / "pipeline_outliers_output"
@@ -147,7 +149,7 @@ def _run_outliers_pipeline(
         "--use-junk-detection",
         "--save-pipeline-indices",
     ] + pipe_extra
-    subprocess.run(pipe_cmd, check=True)
+    subprocess.run(pipe_cmd, check=True, env=env)
 
     return pipeline_out
 

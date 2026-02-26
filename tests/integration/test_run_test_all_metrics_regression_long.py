@@ -43,7 +43,8 @@ def _run_metrics(output_dir, run_args, volumes_prefix=None):
         cmd += ["--generate-volumes"]
     if run_args:
         cmd.extend(shlex.split(run_args))
-    subprocess.run(cmd, check=True)
+    from conftest import gpu_subprocess_env
+    subprocess.run(cmd, check=True, env=gpu_subprocess_env())
     score_path = output_dir / "test_dataset" / "metrics_plot" / "all_scores.json"
     assert score_path.exists(), f"missing score file at {score_path}"
     return _load_json(score_path)
