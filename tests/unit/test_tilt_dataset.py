@@ -1,7 +1,5 @@
 import pytest
 
-pytest.importorskip("torch")
-
 import recovar.cryo_dataset as cryo_dataset
 import recovar.tilt_dataset as tilt_dataset
 

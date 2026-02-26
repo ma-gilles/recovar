@@ -18,9 +18,6 @@ classifiers = [
     "Operating System :: POSIX :: Linux"
 ]
 
-# Merged dependencies from the original pyproject.toml and your requirements.txt.
-# Note: To install torch, use the pip flag:
-#       -f https://download.pytorch.org/whl/torch_stable.html
 dependencies = [
     "dataframe_image==0.2.7",
     "finufft==2.3.1",
@@ -28,7 +25,9 @@ dependencies = [
     "ipython==8.12.3",
     "ipywidgets==8.1.5",
     "jax_finufft==0.1.0",
-    "jaxopt==0.8.3",
+    "jax==0.9.0.1",
+    "jaxlib==0.9.0.1",
+    "jaxopt==0.8.5",
     "jaxtyping==0.2.38",
     "kneed==0.8.5",
     "lineax==0.0.7",
@@ -53,8 +52,9 @@ dependencies = [
     "ipykernel",
     "scikit-fmm",
     "umap-learn[plot]",
-    "optax",
-    "equinox>=0.11.0"
+    "optax==0.2.7",
+    "equinox==0.13.4",
+    "grain==0.2.16",
 ]
 
 [project.optional-dependencies]

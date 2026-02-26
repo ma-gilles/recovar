@@ -885,7 +885,10 @@ def test_adjoint_slice_volume_by_half_images_rejects_invalid_shapes():
 
 
 def _first_gpu_or_skip():
-    gpus = jax.devices("gpu")
+    try:
+        gpus = jax.devices("cuda")
+    except RuntimeError:
+        gpus = jax.devices("gpu")
     if not gpus:
         pytest.skip("No GPU device available")
     return gpus[0]
