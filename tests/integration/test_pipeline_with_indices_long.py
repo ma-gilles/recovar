@@ -62,6 +62,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pytest
 
+from conftest import gpu_subprocess_env
 from helpers.metrics_regression import compare_metric, metric_direction
 
 pytestmark = [
@@ -169,7 +170,7 @@ def _make_dataset(
     ]
     if extra_args:
         make_cmd.extend(shlex.split(extra_args))
-    subprocess.run(make_cmd, check=True)
+    subprocess.run(make_cmd, check=True, env=gpu_subprocess_env())
     return dataset_dir
 
 
@@ -204,7 +205,7 @@ def _make_tilt_dataset(
         "--tilt-series",
         "--image-size", str(grid_size),
     ]
-    subprocess.run(make_cmd, check=True)
+    subprocess.run(make_cmd, check=True, env=gpu_subprocess_env())
     return dataset_dir
 
 
@@ -236,7 +237,7 @@ def _run_pipeline_with_ind(
         "--use-junk-detection",
         "--save-pipeline-indices",
     ]
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, env=gpu_subprocess_env())
 
 
 def _run_pipeline_with_particle_ind(
@@ -268,7 +269,7 @@ def _run_pipeline_with_particle_ind(
         "--use-junk-detection",
         "--save-pipeline-indices",
     ]
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, env=gpu_subprocess_env())
 
 
 def _compute_outlier_metrics_for_ind_subset(

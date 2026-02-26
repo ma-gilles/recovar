@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -10,6 +11,22 @@ if str(ROOT) not in sys.path:
 TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
+
+
+def gpu_subprocess_env():
+    """Environment dict for GPU subprocesses spawned by integration tests.
+
+    - Prepends the repo root to PYTHONPATH so the subprocess imports the
+      local ``recovar`` package rather than whatever is ``pip install -e``'d.
+    - Sets ``XLA_PYTHON_CLIENT_PREALLOCATE=false`` so the subprocess does
+      not try to grab 75 % of GPU memory (the main pytest process may
+      already hold a large chunk).
+    """
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(ROOT) + (os.pathsep + existing if existing else "")
+    env["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+    return env
 
 
 def pytest_addoption(parser):

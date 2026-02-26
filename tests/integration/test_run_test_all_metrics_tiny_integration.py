@@ -59,7 +59,8 @@ def test_run_test_all_metrics_tiny_integration(tmp_path):
         "--contrast-std",
         "0.1",
     ]
-    subprocess.run(cmd, check=True)
+    from conftest import gpu_subprocess_env
+    subprocess.run(cmd, check=True, env=gpu_subprocess_env())
 
     scores_json = out_dir / "test_dataset" / "metrics_plot" / "all_scores.json"
     assert scores_json.exists()
