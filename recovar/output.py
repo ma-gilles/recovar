@@ -732,76 +732,83 @@ class PipelineOutput:
             out[i] = np.asarray(fourier_transform_utils.get_dft3(vol), dtype=np.complex64).reshape(-1)
         return out
 
-    def get(self,key):
+    def get(self, key):
 
         if key in ['zs', 'cov_zs', 'contrasts', 'zs_cont', 'cov_zs_cont', 'est_contrasts_cont']:
             if not self.embedding_loaded:
                 self.load_embedding()
             return self.embedding[key]
-    
-        elif key in ['unsorted_embedding']:
-            return utils.pickle_load(self.result_path + 'model/' + 'embeddings' + '.pkl')
 
-        elif key == 'u' or key == 'u_real':
-            if key == 'u_real':
-                return self.get_u_real(50)
-            else:
-                return self.get_u(50)
+        elif key == 'unsorted_embedding':
+            return utils.pickle_load(self.result_path + 'model/embeddings.pkl')
+
+        elif key in ('u', 'u_real'):
+            return self.get_u_real(50) if key == 'u_real' else self.get_u(50)
+
         elif key == 'mean':
-            return fourier_transform_utils.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/' + 'mean' + '.mrc')).reshape(-1)
-        
+            return fourier_transform_utils.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/mean.mrc')).reshape(-1)
+
         elif key == 'mean_halfmaps':
-            half1 = fourier_transform_utils.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/' + 'mean_half1_unfil' + '.mrc')).reshape(-1)
-            half2 = fourier_transform_utils.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/' + 'mean_half2_unfil' + '.mrc')).reshape(-1)
+            half1 = fourier_transform_utils.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/mean_half1_unfil.mrc')).reshape(-1)
+            half2 = fourier_transform_utils.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/mean_half2_unfil.mrc')).reshape(-1)
             return half1, half2
+
         elif key == 'image_snr':
             vol_shape = self.get('volume_shape')
-            PS = regularization.average_over_shells(np.abs((self.get('mean').reshape( self.get('volume_shape'))))**2, self.get('volume_shape'))
-            noise_level = self.get('noise_var_used')
-            snr = utils.make_radial_image(PS/noise_level, tuple(vol_shape[:2]))
-            return snr
+            PS = regularization.average_over_shells(np.abs(self.get('mean').reshape(vol_shape)) ** 2, vol_shape)
+            return utils.make_radial_image(PS / self.get('noise_var_used'), tuple(vol_shape[:2]))
+
         elif key == 'image_snr_radial':
             vol_shape = self.get('volume_shape')
-            PS = regularization.average_over_shells(np.abs((self.get('mean').reshape( self.get('volume_shape'))))**2, self.get('volume_shape'))
-            noise_level = self.get('noise_var_used')
-            return PS/noise_level
+            PS = regularization.average_over_shells(np.abs(self.get('mean').reshape(vol_shape)) ** 2, vol_shape)
+            return PS / self.get('noise_var_used')
 
         elif key == 'variance':
-            return utils.load_mrc(self.result_path + 'output/volumes/' + 'variance10' + '.mrc')
+            return utils.load_mrc(self.result_path + 'output/volumes/variance10.mrc')
         elif key == 'variance20':
-            return utils.load_mrc(self.result_path + 'output/volumes/' + 'variance20' + '.mrc')
+            return utils.load_mrc(self.result_path + 'output/volumes/variance20.mrc')
         elif key == 'focus_mask':
-            return utils.load_mrc(self.result_path + 'output/volumes/' + 'focus_mask' + '.mrc')
+            return utils.load_mrc(self.result_path + 'output/volumes/focus_mask.mrc')
         elif key == 'volume_mask':
-            return utils.load_mrc(self.result_path + 'output/volumes/' + 'mask' + '.mrc')
+            return utils.load_mrc(self.result_path + 'output/volumes/mask.mrc')
         elif key == 'dilated_volume_mask':
-            return utils.load_mrc(self.result_path + 'output/volumes/' + 'dilated_mask' + '.mrc')
+            return utils.load_mrc(self.result_path + 'output/volumes/dilated_mask.mrc')
         elif key == 'covariance_cols':
-            return utils.pickle_load(self.result_path + 'model/' + 'covariance_cols' + '.pkl')
-        elif key == 'dataset' or key == 'lazy_dataset':
-            cryos = dataset.load_dataset_from_args(self.get('input_args'), lazy = 'lazy' in key, ind_split = self.get('halfsets'))
-            add_noise_to_loaded_dataset(cryos , self.get('noise_var_used'))
+            return utils.pickle_load(self.result_path + 'model/covariance_cols.pkl')
+
+        elif key in ('dataset', 'lazy_dataset'):
+            cryos = dataset.load_dataset_from_args(self.get('input_args'), lazy='lazy' in key, ind_split=self.get('halfsets'))
+            add_noise_to_loaded_dataset(cryos, self.get('noise_var_used'))
             return cryos
-        
+
         elif key == 'halfsets':
-            return utils.pickle_load(self.result_path + 'model/' + 'halfsets' + '.pkl')
+            return utils.pickle_load(self.result_path + 'model/halfsets.pkl')
         elif key == 'particles_halfsets':
             if self.version == '0.1':
-                return utils.pickle_load(self.result_path + 'model/' + 'halfsets' + '.pkl')
+                return utils.pickle_load(self.result_path + 'model/halfsets.pkl')
             else:
-                return utils.pickle_load(self.result_path + 'model/' + 'particles_halfsets' + '.pkl')
+                return utils.pickle_load(self.result_path + 'model/particles_halfsets.pkl')
+
         elif key == 'input_args':
-            # Not sure why this is necessary all of the sudden... For backward compatibility
-            # if parse_version(self.version) > parse_version('0.3') or isinstance(self.params['input_args'], np.ndarray):# type(self.params['input_args']) is n:
             try:
                 return self.params['input_args'].item()
-            except:
+            except Exception:
                 return self.params['input_args']
-            
-        elif (key in self.params):
+
+        # Backward compat: fields removed in v0.6 (were always None or redundant)
+        elif key == 's_all':
+            if 's_all' in self.params:
+                return self.params['s_all']
+            return {'rescaled': self.params['s'], 'real': None}
+        elif key in ('density', 'latent_space_bounds', 'pc_metric', 'contrasts_for_second'):
+            return self.params.get(key, None)
+        elif key in ('std_image_PS', 'std_masked_image_PS'):
+            return self.params.get(key, None)
+
+        elif key in self.params:
             return self.params[key]
         else:
-            assert False, "key not found"
+            raise KeyError(f"key '{key}' not found in PipelineOutput")
 
     def keys(self):
         keys = list(self.params.keys())

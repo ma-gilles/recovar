@@ -92,6 +92,7 @@ def test_compute_regularized_covariance_columns_in_batch_concatenates(monkeypatc
         picked_frequencies_batch,
         use_multi_gpu=False,
         n_gpus=None,
+        mean_cubic=None,
     ):
         calls.append(np.array(picked_frequencies_batch))
         n = len(picked_frequencies_batch)

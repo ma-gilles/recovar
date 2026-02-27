@@ -18,7 +18,7 @@ NVTX_DOMAIN_PCA = "principal_components"
 @nvtx.annotate("estimate_principal_components", color="purple", domain=NVTX_DOMAIN_PCA)
 def estimate_principal_components(cryos, options,  means, mean_prior, volume_mask,
                                 dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use,
-                                covariance_options = None, variance_estimate = None, use_reg_mean_in_contrast = False, use_multi_gpu = False, n_gpus = None):
+                                covariance_options = None, variance_estimate = None, use_reg_mean_in_contrast = False, use_multi_gpu = False, n_gpus = None, mean_cubic=None):
     
     covariance_options = covariance_estimation.get_default_covariance_computation_options() if covariance_options is None else covariance_options
 
@@ -69,7 +69,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
     else:
         raise NotImplementedError('unrecognized column sampling scheme')
     
-    covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, covariance_options, picked_frequencies, use_multi_gpu = use_multi_gpu, n_gpus = n_gpus)
+    covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, covariance_options, picked_frequencies, use_multi_gpu = use_multi_gpu, n_gpus = n_gpus, mean_cubic=mean_cubic)
     
     # Check for NaN or Inf values in covariance_cols
     for col in covariance_cols.values():
@@ -116,7 +116,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
     #     cov_noise[0] *=1e16
         
 
-    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'])
+    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'], mean_cubic=mean_cubic)
 
     if not options['keep_intermediate']:
         u['real'] = None
@@ -178,7 +178,7 @@ def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,
 
 
 @nvtx.annotate("pca_by_projected_covariance", color="green", domain=NVTX_DOMAIN_PCA)
-def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = -1):
+def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = -1, mean_cubic=None):
 
     # basis_size = basis.shape[-1]
     basis_size = n_pcs_to_compute
@@ -190,7 +190,7 @@ def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , dis
 
     logger.info('batch size for covariance computation: ' + str(batch_size))
 
-    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, batch_size,  disc_type, disc_type_u, parallel_analysis = parallel_analysis, do_mask_images = use_mask )
+    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, batch_size,  disc_type, disc_type_u, parallel_analysis = parallel_analysis, do_mask_images = use_mask, mean_cubic=mean_cubic)
 
     ss, u = np.linalg.eigh(covariance)
     u =  np.fliplr(u)
