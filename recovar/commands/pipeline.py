@@ -1,9 +1,6 @@
-# If you want to extend and use recovar, you should import this first
 import logging
-# It is important to import cryodrgn before the setting basicConfig which is why it is imported here (but not used)
-# import cryodrgn
 logger = logging.getLogger(__name__)
-import recovar.config 
+import recovar.config
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -12,8 +9,6 @@ from recovar import output as o
 from recovar import dataset, homogeneous, embedding, principal_components, latent_density, mask, utils, constants, noise, output, covariance_estimation
 import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar.utils_core import copy_data_to_temp_folder, save_original_paths_info, cleanup_temp_files
-# logger.setLevel(logger.info)
-logger = logging.getLogger(__name__)
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -36,9 +31,6 @@ def add_args(parser: argparse.ArgumentParser):
 
     parser.add_argument('--zdim', type=list_of_ints, default=[1,2,4,10,20], help="Dimensions of latent variable. Default=1,2,4,10,20")
 
-    # parser.add_argument(
-    #     "--zdim", type=list, help="Dimension of latent variable"
-    # )
     parser.add_argument(
         "--poses", type=os.path.abspath, required=True, help="Image poses (.pkl)"
     )
@@ -46,12 +38,8 @@ def add_args(parser: argparse.ArgumentParser):
         "--ctf", metavar="pkl", type=os.path.abspath, required=True, help="CTF parameters (.pkl)"
     )
 
-    # parser.add_argument(
-    #     "--mask", metavar="mrc", default=None, type=os.path.abspath, help="mask (.mrc)"
-    # )
-
     parser.add_argument(
-        "--mask", metavar="mrc", required=True, help="solvent mask (.mrc).Can solve provide: from_halfmaps, sphere, none" 
+        "--mask", metavar="mrc", required=True, help="solvent mask (.mrc).Can solve provide: from_halfmaps, sphere, none"
     )
 
     parser.add_argument(
@@ -59,7 +47,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--keep-input-mask", action="store_true", dest="keep_input_mask", help="By default, the software thresholds and then softens mask. If this option is on, the input mask is used as is." 
+        "--keep-input-mask", action="store_true", dest="keep_input_mask", help="By default, the software thresholds and then softens mask. If this option is on, the input mask is used as is."
     )
 
     parser.add_argument(
@@ -70,14 +58,9 @@ def add_args(parser: argparse.ArgumentParser):
         "--copy-to-folder", dest="copy_to_folder", default = None, type=os.path.abspath, help="Copy all input data files to this temporary folder before processing. Original paths will be saved in output."
     )
 
-    # parser.add_argument(
-    #     "--mask-option", metavar=str, default="input", help="mask options: from_halfmaps , input (default), sphere, none"
-    # )
-
     parser.add_argument(
         "--mask-dilate-iter", type=int, default=0, dest="mask_dilate_iter", help="mask options how many iters to dilate solvent and focus mask"
     )
-
 
     parser.add_argument(
         "--correct-contrast",
@@ -93,12 +76,6 @@ def add_args(parser: argparse.ArgumentParser):
         action="store_true",
         help="use if you want zero frequency to be ignored. If images have been normalized to 0 mean, this is probably a good idea"
     )
-
-    # parser.add_argument(
-    #     "--no-z-regularization",
-    #     dest = "no_z_regularization",
-    #     action="store_true",
-    # )
 
     group = parser.add_argument_group("Dataset loading")
     group.add_argument(
@@ -116,7 +93,6 @@ def add_args(parser: argparse.ArgumentParser):
         help="Filter particles by these indices (only for tilt-series/cryo-ET)",
     )
 
-
     group.add_argument(
         "--uninvert-data",
         dest="uninvert_data",
@@ -124,25 +100,6 @@ def add_args(parser: argparse.ArgumentParser):
         help="Invert data sign: options: true, false, automatic (default). automatic will swap signs if sum(estimated mean) < 0",
     )
 
-    # group.add_argument(
-    #     "--rerescale",
-    #     dest = "rerescale",
-    #     action="store_true",
-    # )
-
-    # Should probably add these options
-    # group.add_argument(
-    #     "--no-window",
-    #     dest="window",
-    #     action="store_false",
-    #     help="Turn off real space windowing of dataset",
-    # )
-    # group.add_argument(
-    #     "--window-r",
-    #     type=float,
-    #     default=0.85,
-    #     help="Windowing radius (default: %(default)s)",
-    # )
     group.add_argument(
         "--lazy",
         action="store_true",
@@ -154,14 +111,14 @@ def add_args(parser: argparse.ArgumentParser):
         type=os.path.abspath,
         help="Path prefix to particle stack if loading relative paths from a .star or .cs file. If not specified, uses the directory of the star file.",
     )
-    
+
     parser.add_argument(
         "--strip-prefix",
         help="Path prefix to strip from filenames in star file (used in starfile input ONLY). \
         Useful when star file contains longer paths than available on the system. By default, it strips the full path (except the filename). E.g, if you starfile path is Extract/job193/Subtomograms/XXX/XXX.mrcs, \
         and your directory looks like /your/path/to/Subtomograms, then you can use --strip-prefix Extract/job193 --datadir /your/path/to/.",
     )
-    
+
     group.add_argument(
             "--n-images",
             default = -1,
@@ -169,14 +126,14 @@ def add_args(parser: argparse.ArgumentParser):
             type=int,
             help="Number of images to use (should only use for quick run)",
         )
-    
+
     group.add_argument(
             "--padding",
             type=int,
             default = 0,
             help="Real-space padding",
         )
-    
+
     group.add_argument(
             "--halfsets",
             default = None,
@@ -184,7 +141,6 @@ def add_args(parser: argparse.ArgumentParser):
             help="Path to a file with indices of split dataset (.pkl).",
         )
 
-    ### CHANGE THESE TWO BACK!?!?!?!
     group.add_argument(
             "--keep-intermediate",
             dest = "keep_intermediate",
@@ -205,7 +161,7 @@ def add_args(parser: argparse.ArgumentParser):
             default = "triangular",
             help="which mean function to use. Options are triangular (default), old, triangular_reg"
         )
-    
+
     group.add_argument(
         "--accept-cpu",
         dest="accept_cpu",
@@ -227,7 +183,6 @@ def add_args(parser: argparse.ArgumentParser):
             action="store_true",
         )
 
-
     group.add_argument(
             "--very-low-memory-option",
             help = "Use lowest memory options for covariance estimation",
@@ -241,13 +196,6 @@ def add_args(parser: argparse.ArgumentParser):
             action="store_true",
         )
 
-    # group.add_argument(
-    #         "--do-over-with-contrast",
-    #         dest = "do_over_with_contrast",
-    #         default = "True",
-    #         help="Whether to run again once constrast is estimated",
-    #     )
-    
     parser.add_argument(
         "--tilt-series", action="store_true",  dest="tilt_series", help="Whether to use tilt_series."
     )
@@ -264,10 +212,6 @@ def add_args(parser: argparse.ArgumentParser):
         "--angle-per-tilt", default =None,  type = float, dest="angle_per_tilt", help="Default = None, estimated from starfile"
     )
 
-    # parser.add_argument(
-    #     "--per-image-bfac-scale", action="store_true",
-    # )
-
     parser.add_argument(
         "--only-mean", action="store_true", dest = "only_mean", help="Only compute mean"
     )
@@ -277,7 +221,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--gpu-gb", default =None,  type = float, dest="gpu_memory", help="How much GPU memory to use. Default = all" 
+        "--gpu-gb", default =None,  type = float, dest="gpu_memory", help="How much GPU memory to use. Default = all"
     )
 
     parser.add_argument(
@@ -287,7 +231,6 @@ def add_args(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--new-noise-est", dest = 'new_noise_est', action="store_true", help="Whether to use new noise estimation. Default = False"
     )
-
 
     parser.add_argument('--shared_contrast_across_tilts', action=argparse.BooleanOptionalAction, default =False,
                         help="Whether to share contrast (amplitude scale) across tilts in cryoET. Default = False")
@@ -301,28 +244,191 @@ def add_args(parser: argparse.ArgumentParser):
             default = None,
             help="Whether to run again once constrast is estimated. By default == correct_contrast. Can enter --no-do-over-with-contrast to turn off",
         )
-    
 
-    parser.add_argument('--dilated-mask-dilation-iters', 
+    parser.add_argument('--dilated-mask-dilation-iters',
                         type = int,
                         default = None,
                         help = "How many times to dilate the mask. Default = 6 * volume_shape[0] / 128"
                         )
-                    
 
     parser.add_argument("--no-cleanup", action="store_true", help="Do not clean up temporary files after processing (useful for chaining multiple pipeline calls)")
 
     parser.add_argument("--multi-gpu", action="store_true", dest="multi_gpu", help="Enable multi-GPU parallelization for covariance computation")
-    
+
     parser.add_argument("--n-gpus", type=int, default=None, dest="n_gpus", help="Number of GPUs to use (default: use all available GPUs)")
 
     return parser
-    
+
+
+# ---------------------------------------------------------------------------
+# Helper functions — extracted from standard_recovar_pipeline for clarity
+# ---------------------------------------------------------------------------
+
+def _check_uninvert_data(means, cryos, args):
+    """Check if data needs sign inversion based on the mean estimate.
+
+    In cryo-EM, the convention is that protein density is positive in real
+    space. If the estimated mean has negative density in the protein region,
+    the sign of the data (and means) is flipped.
+    """
+    mean_real = fourier_transform_utils.get_idft3(means['combined'].reshape(cryos.volume_shape))
+    radial_mask = cryos.get_volume_radial_mask(cryos.grid_size // 3).reshape(cryos.volume_shape)
+    uninvert_check = np.sum(mean_real.real ** 3 * radial_mask) < 0
+
+    if args.uninvert_data == 'automatic':
+        if uninvert_check:
+            for key in ['combined', 'init0', 'init1', 'corrected0', 'corrected1']:
+                if key in means:
+                    means[key] = -means[key]
+            for cryo in cryos:
+                cryo.image_stack.mult = -1 * cryo.image_stack.mult
+            args.uninvert_data = "true"
+            logger.warning('sum(mean) < 0! Swapping sign of data (uninvert-data = true)')
+        else:
+            logger.info('setting (uninvert-data = false)')
+            args.uninvert_data = "false"
+    elif uninvert_check:
+        logger.warning('sum(mean) < 0! Data probably needs to be inverted! set --uninvert-data=true (or automatic)')
+
+
+def _estimate_noise(cryos, means, dilated_volume_mask, batch_size, args, noise_model):
+    """Estimate radial noise variance from outside-mask and upper-bound methods.
+
+    Returns a dict with all noise-related quantities needed by the pipeline.
+    """
+    use_new_noise_fn = args.new_noise_est or args.premultiplied_ctf
+    logger.info(f"Using new noise estimation function?: {use_new_noise_fn}")
+
+    noise_time = time.time()
+
+    # Estimate noise outside the mask
+    if use_new_noise_fn:
+        masked_image_PS, image_PS = noise.fit_noise_model_to_images(
+            cryos[0], dilated_volume_mask, means['combined'], None,
+            batch_size=batch_size, invert_mask=True, disc_type='linear_interp')
+        logger.info("Using new noise estimation with linear_interp discretization")
+    elif args.mask.endswith(".mrc"):
+        masked_image_PS, _, _ = noise.estimate_noise_variance_from_outside_mask_v2(
+            cryos[0], dilated_volume_mask, batch_size)
+        white_noise_var_outside_mask = noise.estimate_white_noise_variance_from_mask(
+            cryos[0], dilated_volume_mask, batch_size)
+        _, _, image_PS, _ = noise.estimate_radial_noise_statistic_from_outside_mask(
+            cryos[0], dilated_volume_mask, batch_size)
+    else:
+        masked_image_PS, _, image_PS, _ = noise.estimate_radial_noise_statistic_from_outside_mask(
+            cryos[0], dilated_volume_mask, batch_size)
+
+    radial_noise_var_outside_mask = masked_image_PS
+    white_noise_var_outside_mask_val = np.median(masked_image_PS)
+
+    if use_new_noise_fn:
+        assert (noise_model == "radial" or noise_model == "radial_per_tilt"), \
+            f"new noise fn only works with radial noise model. You set {noise_model}"
+
+    logger.info(f"time to estimate noise is {time.time() - noise_time}")
+    utils.report_memory_device(logger=logger)
+
+    # Upper bound on noise variance from inside the mask
+    noise_time = time.time()
+    if use_new_noise_fn:
+        radial_ub_noise_var, _ = noise.fit_noise_model_to_images(
+            cryos[0], dilated_volume_mask, means['combined'], None,
+            batch_size=batch_size, invert_mask=False, disc_type='linear_interp')
+    else:
+        radial_ub_noise_var, _, _ = noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(
+            cryos[0], means['combined'], dilated_volume_mask, batch_size)
+    logger.info(f"time to upper bound noise is {time.time() - noise_time}")
+
+    # Bound the noise variance
+    utils.report_memory_device(logger=logger)
+    radial_noise_var_ubed = np.where(
+        radial_noise_var_outside_mask > radial_ub_noise_var,
+        radial_ub_noise_var, radial_noise_var_outside_mask)
+
+    if noise_model == "white":
+        noise_var_used = np.ones_like(radial_noise_var_ubed) * white_noise_var_outside_mask_val
+    else:
+        noise_var_used = radial_noise_var_ubed
+
+    if (noise_var_used < 0).any():
+        logger.info("Negative noise variance detected. Setting to image power spectrum / 10")
+    noise_var_used = np.where(noise_var_used < 0, image_PS / 10, noise_var_used)
+
+    return {
+        'noise_var_used': noise_var_used,
+        'radial_noise_var_outside_mask': radial_noise_var_outside_mask,
+        'radial_ub_noise_var': radial_ub_noise_var,
+        'white_noise_var_outside_mask': white_noise_var_outside_mask_val,
+        'image_PS': image_PS,
+        'masked_image_PS': masked_image_PS,
+    }
+
+
+def _build_focus_masks(args, means, volume_mask, volume_shape, cryos):
+    """Build focus masks and optional complement mask."""
+    if args.focus_mask is not None:
+        focus_mask, _ = mask.masking_options(
+            args.focus_mask, means, volume_shape, cryos.dtype_real,
+            args.mask_dilate_iter, args.keep_input_mask)
+    else:
+        focus_mask = volume_mask
+
+    if args.use_complement_mask:
+        complement_mask = (volume_mask > 0.90) * 1.0 - (focus_mask > 0.9) * 1.0
+        complement_mask = (complement_mask > 0)
+        from recovar import mask as mask_fn
+        complement_mask = np.array(mask_fn.soften_volume_mask(complement_mask, 3).astype(np.float32))
+        return [complement_mask, focus_mask]
+    else:
+        return [focus_mask]
+
+
+def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
+                        focus_masks, zdim_for_rest, args, mean_cubic=None):
+    """Compute per-image embeddings for all requested zdim values.
+
+    Returns (zs, cov_zs, est_contrasts) dicts keyed by zdim (int or str).
+    """
+    num_foc_masks = len(focus_masks)
+    zs = {}
+    cov_zs = {}
+    est_contrasts = {}
+
+    for zdim in options['zs_dim_to_test']:
+        n_pcs_to_use = (num_foc_masks - 1) * zdim_for_rest + zdim
+        z_time = time.time()
+        zs[zdim], cov_zs[zdim], est_contrasts[zdim], _ = embedding.get_per_image_embedding(
+            means['combined'], u['rescaled'], s['rescaled'], n_pcs_to_use,
+            cryos, volume_mask, gpu_memory, 'linear_interp',
+            contrast_grid=None, contrast_option=options['contrast'],
+            ignore_zero_frequency=options['ignore_zero_frequency'],
+            mean_cubic=mean_cubic)
+        logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
+
+    # Also compute unregularized embeddings (s -> inf means no prior)
+    for zdim in options['zs_dim_to_test']:
+        z_time = time.time()
+        n_pcs_to_use = (num_foc_masks - 1) * zdim_for_rest + zdim
+        key = f"{zdim}_noreg"
+        zs[key], cov_zs[key], est_contrasts[key], _ = embedding.get_per_image_embedding(
+            means['combined'], u['rescaled'], s['rescaled'] * 0 + np.inf, n_pcs_to_use,
+            cryos, volume_mask, gpu_memory, 'linear_interp',
+            contrast_grid=None, contrast_option=options['contrast'],
+            ignore_zero_frequency=options['ignore_zero_frequency'],
+            mean_cubic=mean_cubic)
+        logger.info(f"embedding time for zdim={zdim}_noreg: {time.time() - z_time}")
+
+    return zs, cov_zs, est_contrasts
+
+
+# ---------------------------------------------------------------------------
+# Main pipeline
+# ---------------------------------------------------------------------------
 
 def standard_recovar_pipeline(args):
     st_time = time.time()
 
-    # Copy data to temporary folder if requested
+    # --- Setup ---
     path_mapping = copy_data_to_temp_folder(args)
 
     if args.mask.endswith(".mrc"):
@@ -331,27 +437,19 @@ def standard_recovar_pipeline(args):
     if (not args.accept_cpu) and (not utils.jax_has_gpu()):
         raise ValueError("No GPU found. Set --accept-cpu if you really want to run on CPU (probably not). More likely, you want to check that JAX has been properly installed with GPU support.")
 
-    # Dump input arguments
     o.mkdir_safe(args.outdir)
     with open(f"{args.outdir}/command.txt", "w") as text_file:
-        command = 'python ' + ' '.join((sys.argv))
-        text_file.write(command)
+        text_file.write('python ' + ' '.join(sys.argv))
 
-    # Save original paths if data was copied
     save_original_paths_info(path_mapping, args.outdir)
 
-    # Set CTF function here
-    if args.tilt_series_ctf is None and args.tilt_series is False:
-        args.tilt_series_ctf = 'cryoem'
-        logger.info("Setting tilt_series_ctf to cryoem")
-    elif args.tilt_series_ctf is None and args.tilt_series is True:
-        args.tilt_series_ctf = 'relion5'
-        logger.info("Setting tilt_series_ctf to relion5")
+    # CTF defaults
+    if args.tilt_series_ctf is None:
+        args.tilt_series_ctf = 'relion5' if args.tilt_series else 'cryoem'
+        logger.info(f"Setting tilt_series_ctf to {args.tilt_series_ctf}")
 
     if args.tilt_series and args.dose_per_tilt is not None:
         logger.warning("dose_per_tilt is provided, but tilt_series_ctf is set to using starfile = -B_fac/4 (by default). Thus, dose_per_tilt will not be used.")
-        # logger.warning("angle_per_tilt is provided, but tilt_series_ctf is set to using scale from inputfile (by default). Thus, angle_per_tilt will not be used.")
-        # raise ValueError("dose_per_tilt must be provided for tilt series")
 
     if (args.tilt_series_ctf == 'v2_scale_from_star') and (args.angle_per_tilt is not None):
         logger.warning("angle_per_tilt is provided, but tilt_series_ctf is set to using scale from inputfile (by default). Thus, angle_per_tilt will not be used.")
@@ -359,41 +457,33 @@ def standard_recovar_pipeline(args):
     if args.do_over_with_contrast is None:
         args.do_over_with_contrast = args.correct_contrast
 
-    logging.basicConfig(format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
-                        level=logging.INFO,
-                        force = True, 
-                        handlers=[
-        logging.FileHandler(f"{args.outdir}/run.log"),
-        logging.StreamHandler()])
+    logging.basicConfig(
+        format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
+        level=logging.INFO,
+        force=True,
+        handlers=[
+            logging.FileHandler(f"{args.outdir}/run.log"),
+            logging.StreamHandler(),
+        ])
 
     logger.info(args)
+
+    # --- Load dataset ---
     ind_split = dataset.figure_out_halfsets(args)
     dataset_loader_dict = dataset.make_dataset_loader_dict(args)
-    
-    # Log the paths being used for data loading
-    if path_mapping is not None:
-        logger.info("Using copied data files for loading:")
-        logger.info(f"  Particles file: {dataset_loader_dict['particles_file']}")
-        logger.info(f"  Poses file: {dataset_loader_dict['poses_file']}")
-        logger.info(f"  CTF file: {dataset_loader_dict['ctf_file']}")
-        if dataset_loader_dict['datadir']:
-            logger.info(f"  Datadir: {dataset_loader_dict['datadir']}")
-    else:
-        logger.info("Using original data files for loading:")
-        logger.info(f"  Particles file: {dataset_loader_dict['particles_file']}")
-        logger.info(f"  Poses file: {dataset_loader_dict['poses_file']}")
-        logger.info(f"  CTF file: {dataset_loader_dict['ctf_file']}")
-        if dataset_loader_dict['datadir']:
-            logger.info(f"  Datadir: {dataset_loader_dict['datadir']}")
-    
-    options = utils.make_algorithm_options(args)
+    logger.info(f"Particles file: {dataset_loader_dict['particles_file']}")
+    logger.info(f"Poses file: {dataset_loader_dict['poses_file']}")
+    logger.info(f"CTF file: {dataset_loader_dict['ctf_file']}")
+    if dataset_loader_dict['datadir']:
+        logger.info(f"Datadir: {dataset_loader_dict['datadir']}")
 
+    options = utils.make_algorithm_options(args)
     cryos = dataset.get_split_datasets_from_dict(dataset_loader_dict, ind_split, args.lazy)
+
     if args.gpu_memory is not None:
         utils.GPU_MEMORY_LIMIT = args.gpu_memory
     gpu_memory = utils.get_gpu_memory_total()
     volume_shape = cryos.volume_shape
-    disc_type = "linear_interp"
 
     batch_size = utils.get_image_batch_size(cryos.grid_size, gpu_memory)
     logger.info(f"image batch size: {batch_size}")
@@ -402,84 +492,57 @@ def standard_recovar_pipeline(args):
     logger.info(f"number of images: {cryos.n_total_images}")
     utils.report_memory_device(logger=logger)
 
+    # --- Initial noise estimate from half-maps ---
     noise_var_from_hf, _ = noise.estimate_noise_variance(cryos[0], batch_size)
-
     valid_idx = cryos.get_valid_frequency_indices()
     noise_model = args.noise_model
 
-    
-    if args.do_over_with_contrast:
-        n_repeats = 2
-        if not args.correct_contrast:
-            logger.warning("Do over with contrast, but contrast correction is off. Setting contrast correction to on") 
-            args.correct_contrast = True
-            options["contrast"] = "contrast_qr"
-
-    else:
-        n_repeats = 1
+    # --- Contrast correction repeat logic ---
+    n_repeats = 2 if args.do_over_with_contrast else 1
+    if args.do_over_with_contrast and not args.correct_contrast:
+        logger.warning("Do over with contrast, but contrast correction is off. Setting contrast correction to on")
+        args.correct_contrast = True
+        options["contrast"] = "contrast_qr"
 
     if args.shared_contrast_across_tilts:
         options['contrast'] += '_shared'
         logger.info("Setting contrast to shared")
 
-    ## Initialize noise model
+    # Initialize noise model
     for cryo in cryos:
         if noise_model == "radial":
             cryo.set_radial_noise_model(None)
             logger.info("Setting noise model to radial")
-        elif noise_model == 'radial_per_tilt' or noise_model == 'radial-per-tilt':
+        elif noise_model in ('radial_per_tilt', 'radial-per-tilt'):
             cryo.set_variable_radial_noise_model(None)
             logger.info("Setting noise model to radial_per_tilt")
         else:
             raise ValueError(f"noise model {noise_model} not recognized")
 
+    contrasts_for_second = None
     for repeat in range(n_repeats):
-        
+
         if repeat == 1:
-            if 10 in options['zs_dim_to_test']:
-                ndim = 10
-            else:
-                ndim = np.median(options['zs_dim_to_test'])
+            ndim = 10 if 10 in options['zs_dim_to_test'] else np.median(options['zs_dim_to_test'])
             logger.warning(f"repeating with contrast of zdim={ndim}")
             contrasts_for_second = est_contrasts[ndim]
-            contrasts_for_second /= np.mean(contrasts_for_second) # normalize to have mean 1
+            contrasts_for_second /= np.mean(contrasts_for_second)
             embedding.set_contrasts_in_cryos(cryos, contrasts_for_second)
             options["contrast"] = "contrast"
-        else:
-            contrasts_for_second = None
 
-        # Compute mean
+        # --- Compute mean ---
         if args.mean_fn == 'triangular':
-            means, mean_prior, _  = homogeneous.get_mean_conformation_relion(cryos, 2*batch_size, noise_variance = noise_var_from_hf,  use_regularization = False)
+            means, mean_prior, _ = homogeneous.get_mean_conformation_relion(
+                cryos, 2 * batch_size, noise_variance=noise_var_from_hf, use_regularization=False)
         elif args.mean_fn == 'triangular_reg':
-            means, mean_prior, _  = homogeneous.get_mean_conformation_relion(cryos, 5*batch_size, noise_variance = noise_var_from_hf,  use_regularization = True)
+            means, mean_prior, _ = homogeneous.get_mean_conformation_relion(
+                cryos, 5 * batch_size, noise_variance=noise_var_from_hf, use_regularization=True)
         else:
             raise ValueError(f"mean function {args.mean_fn} not recognized")
         utils.report_memory_device(logger=logger)
 
-
-        mean_real = fourier_transform_utils.get_idft3(means['combined'].reshape(cryos.volume_shape))
-
-        ## DECIDE IF WE SHOULD UNINVERT DATA
-        uninvert_check = np.sum((mean_real.real**3 * cryos.get_volume_radial_mask(cryos.grid_size//3).reshape(cryos.volume_shape))) < 0
-        if args.uninvert_data == 'automatic':
-            # Check if in real space, things towards the middle are mostly positive or negative
-            if uninvert_check:
-            # if np.sum(mean_real.real**3 * cryos[0].get_volume_mask() ) < 0:
-                for key in ['combined', 'init0', 'init1', 'corrected0', 'corrected1']:
-                    if key in means:
-                        means[key] =- means[key]
-                for cryo in cryos:
-                    cryo.image_stack.mult = -1 * cryo.image_stack.mult
-                args.uninvert_data = "true"
-                logger.warning('sum(mean) < 0! swapping sign of data (uninvert-data = true)')
-            else:
-                logger.info('setting (uninvert-data = false)')
-                args.uninvert_data = "false"
-        elif uninvert_check:
-            logger.warning('sum(mean) < 0! Data probably needs to be inverted! set --uninvert-data=true (or automatic)')
-        ## END OF THIS - maybe move this block of code somewhere else?
-
+        # --- Check sign and uninvert if needed ---
+        _check_uninvert_data(means, cryos, args)
 
         if means['combined'].dtype != cryos.dtype:
             logger.warning(f"mean estimate is in type: {means['combined'].dtype}")
@@ -488,182 +551,62 @@ def standard_recovar_pipeline(args):
         logger.info(f"mean computed in {time.time() - st_time}")
         utils.report_memory_device(logger=logger)
 
-        # Compute mask
-        volume_mask, dilated_volume_mask= mask.masking_options(args.mask, means, volume_shape, cryos.dtype_real, args.mask_dilate_iter, args.keep_input_mask, args.dilated_mask_dilation_iters  )
-        ## Always dump mean?
-        ### Dump mean and mask to file
-        output_folder = args.outdir + '/output/' 
+        # --- Pre-compute cubic spline coefficients for mean (once) ---
+        from recovar import cubic_interpolation
+        mean_cubic = cubic_interpolation.compute_spline_coefficients(
+            means['combined'].reshape(volume_shape))
+        logger.info("Pre-computed cubic spline coefficients for mean estimate")
+
+        # --- Compute mask ---
+        volume_mask, dilated_volume_mask = mask.masking_options(
+            args.mask, means, volume_shape, cryos.dtype_real,
+            args.mask_dilate_iter, args.keep_input_mask, args.dilated_mask_dilation_iters)
+
+        # --- Save mean and mask volumes ---
+        output_folder = args.outdir + '/output/'
         o.mkdir_safe(output_folder)
         o.mkdir_safe(output_folder + 'volumes/')
-        o.save_volume(means['combined'], output_folder + 'volumes/' + 'mean', volume_shape, from_ft = True,  voxel_size = cryos.voxel_size)
-        o.save_volume(means['corrected0'], output_folder + 'volumes/' + 'mean_half1_unfil', volume_shape, from_ft = True,  voxel_size = cryos.voxel_size)
-        o.save_volume(means['corrected1'], output_folder + 'volumes/' + 'mean_half2_unfil', volume_shape, from_ft = True,  voxel_size = cryos.voxel_size)
-        o.save_volume(volume_mask, output_folder + 'volumes/' + 'mask', volume_shape, from_ft = False,  voxel_size = cryos.voxel_size)
+        o.save_volume(means['combined'], output_folder + 'volumes/mean', volume_shape,
+                      from_ft=True, voxel_size=cryos.voxel_size)
+        o.save_volume(means['corrected0'], output_folder + 'volumes/mean_half1_unfil', volume_shape,
+                      from_ft=True, voxel_size=cryos.voxel_size)
+        o.save_volume(means['corrected1'], output_folder + 'volumes/mean_half2_unfil', volume_shape,
+                      from_ft=True, voxel_size=cryos.voxel_size)
+        o.save_volume(volume_mask, output_folder + 'volumes/mask', volume_shape,
+                      from_ft=False, voxel_size=cryos.voxel_size)
 
         # Filter and save mean
         from recovar import locres
-        half1 = fourier_transform_utils.get_idft3(means['corrected0'].reshape(cryos.volume_shape))
-        half2 = fourier_transform_utils.get_idft3(means['corrected1'].reshape(cryos.volume_shape))
-        best_filtered_nob, _, _, _, _ = locres.local_resolution(half1, half2, 0, cryos.voxel_size, use_filter = True, fsc_threshold = 1/7, use_v2 = True)
-        o.save_volume(best_filtered_nob, output_folder + 'volumes/' + 'mean_filt', volume_shape, from_ft = False,  voxel_size = cryos.voxel_size)
+        half1 = fourier_transform_utils.get_idft3(means['corrected0'].reshape(volume_shape))
+        half2 = fourier_transform_utils.get_idft3(means['corrected1'].reshape(volume_shape))
+        best_filtered_nob, _, _, _, _ = locres.local_resolution(
+            half1, half2, 0, cryos.voxel_size, use_filter=True, fsc_threshold=1/7, use_v2=True)
+        o.save_volume(best_filtered_nob, output_folder + 'volumes/mean_filt', volume_shape,
+                      from_ft=False, voxel_size=cryos.voxel_size)
 
         if args.only_mean:
             return
 
-        ### FIGURE OUT MASKS
-        if args.focus_mask is not None:
-            focus_mask, _= mask.masking_options(args.focus_mask, means, volume_shape, cryos.dtype_real, args.mask_dilate_iter, args.keep_input_mask)
-        else:
-            focus_mask = volume_mask
-        
-        if args.use_complement_mask:
-            complement_mask = (volume_mask > 0.90)*1.0 - (focus_mask > 0.9)*1.0
-            complement_mask = (complement_mask > 0)
-            from recovar import mask as mask_fn
-            complement_mask = np.array(mask_fn.soften_volume_mask(complement_mask, 3).astype(np.float32))
-            focus_masks = [complement_mask, focus_mask]
-        else:
-            focus_masks = [focus_mask]
+        # --- Build focus masks ---
+        focus_masks = _build_focus_masks(args, means, volume_mask, volume_shape, cryos)
 
-        ## NOW ESTIMATE NOISE A FEW WAYS
-
-        noise_time = time.time()
-        use_new_noise_fn = args.new_noise_est or args.premultiplied_ctf
-        logger.info(f"Using new noise estimation function?: {use_new_noise_fn}")
-
-        ## First, estimate noise outside the mask
-        if args.mask.endswith(".mrc"):
-            if use_new_noise_fn:
-                masked_image_PS, image_PS = noise.fit_noise_model_to_images(cryos[0], dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = True, disc_type = 'linear_interp')
-            else:
-                masked_image_PS, _,_ =  noise.estimate_noise_variance_from_outside_mask_v2(cryos[0], dilated_volume_mask, batch_size)
-                white_noise_var_outside_mask = noise.estimate_white_noise_variance_from_mask(cryos[0], dilated_volume_mask, batch_size)
-                _, _, image_PS, _ =  noise.estimate_radial_noise_statistic_from_outside_mask(cryos[0], dilated_volume_mask, batch_size)
-            # white_noise_var_outside_mask = white_noise_var_outside_mask.copy()
-            std_image_PS = None
-            std_masked_image_PS = None
-        else:
-            if use_new_noise_fn:
-                # radial_noise_var_outside_mask = 
-                masked_image_PS, image_PS = noise.fit_noise_model_to_images(cryos[0], dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = True, disc_type = 'linear_interp')
-                print("change discretization to cubic!")
-                std_masked_image_PS = None
-                std_image_PS = None
-
-            else:
-                masked_image_PS, std_masked_image_PS, image_PS, std_image_PS =  noise.estimate_radial_noise_statistic_from_outside_mask(cryos[0], dilated_volume_mask, batch_size)
-
-        radial_noise_var_outside_mask = masked_image_PS
-        white_noise_var_outside_mask = np.median(masked_image_PS)
-
-        if use_new_noise_fn:
-            assert (noise_model == "radial" or noise_model == "radial_per_tilt"), f"new noise fn only works with radial noise model. You set {noise_model}"
-
-
-        logger.info(f"time to estimate noise is {time.time() - noise_time}")
-        utils.report_memory_device(logger=logger)
-
-        ## Then, estimate the EX [ (y_i - P_i \mu)^2] = noise_variance + signal_variance *CTF^2, where CTF is the CTF of the image, so this is the upper bound on the noise variance.
-        noise_time = time.time()
-        if use_new_noise_fn:
-            # radial_noise_var_outside_mask = 
-            radial_ub_noise_var, _ =  noise.fit_noise_model_to_images(cryos[0], dilated_volume_mask, means['combined'], None, batch_size=batch_size, invert_mask = False, disc_type = 'linear_interp')
-        else:
-            radial_ub_noise_var, _,_ =  noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(cryos[0], means['combined'], dilated_volume_mask, batch_size)
-
-        logger.info(f"time to upper bound noise is {time.time() - noise_time}")
-
-        ## Use this to bound the noise variance.
-        utils.report_memory_device(logger=logger)
-        radial_noise_var_ubed = np.where(radial_noise_var_outside_mask >  radial_ub_noise_var, radial_ub_noise_var, radial_noise_var_outside_mask)
-
-        if noise_model == "white":
-            noise_var_used = np.ones_like(radial_noise_var_ubed) * white_noise_var_outside_mask
-        else:
-            noise_var_used = radial_noise_var_ubed
-        
-        if (noise_var_used <0).any():
-            logger.info("Negative noise variance detected. Setting to image power spectrum / 10")
-
-        noise_var_used = np.where(noise_var_used < 0, image_PS / 10, noise_var_used)
+        # --- Estimate noise ---
+        noise_result = _estimate_noise(cryos, means, dilated_volume_mask, batch_size, args, noise_model)
+        noise_var_used = noise_result['noise_var_used']
         noise.update_noise_variance(noise_var_used, cryos)
 
-        # This works in place?
-        variance_est, ub_noise_var_by_var_est = noise.upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, cryos, means, batch_size, dilated_volume_mask)
-        # variance_fsc = None
-        # if noise_model == "radial_per_tilt":
-        #     # Recompute variance with the new noise variance. If tilt_series noise model this is needed
-        # This computes the variance once more which is unnecessary. TODO: rewrite this
-        variance_est, _, variance_fsc, _, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, use_regularization = True, disc_type = 'cubic')
+        # Upper bound noise using variance estimate
+        variance_est, ub_noise_var_by_var_est = noise.upper_bound_noise_by_signal_p_noise_dispatched(
+            noise_var_used, cryos, means, batch_size, dilated_volume_mask)
 
-
-
-        # # Now, estimate the variance of the signal. If the variance estimate ends up negative, we have overestimated the noise variance.
-        # for noise_repeat in range(2):
-        #     ## TODO Does Tilt series for anything for variance??
-        #     variance_time = time.time()
-        #     variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, use_regularization = True, disc_type = 'cubic')
-        #     # print('using regul in variance est?!?')
-        #     logger.info(f"variance estimation time: {time.time() - variance_time}")
-        #     utils.report_memory_device(logger=logger)
-
-        #     # def upper_bound_noise_var(noise_var_used, variance_est, noise_p_variance_est):
-        #     rad_grid = np.array(fourier_transform_utils.get_grid_of_radial_distances(cryos[0].volume_shape).reshape(-1))
-        #     # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
-        #     n_shell_to_ub = np.min([32, cryos[0].grid_size//2 -1])
-        #     ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
-        #     variance_est_low_res_5_pc = np.zeros(n_shell_to_ub, dtype = np.float32)
-        #     variance_est_low_res_median = np.zeros(n_shell_to_ub, dtype = np.float32)
-
-        #     for k in range(n_shell_to_ub):
-        #         if np.sum(rad_grid==k) >0:
-        #             ub_noise_var_by_var_est[k] = np.percentile(noise_p_variance_est[rad_grid==k], 5)
-        #             ub_noise_var_by_var_est[k] = np.max([0, ub_noise_var_by_var_est[k]])
-        #             variance_est_low_res_5_pc[k] = np.percentile(variance_est['combined'][rad_grid==k], 5)
-        #             variance_est_low_res_median[k] = np.median(variance_est['combined'][rad_grid==k])
-
-        #     if np.any(ub_noise_var_by_var_est >  noise_var_used[:n_shell_to_ub]):
-        #         logger.info("Estimated noise greater than upper bound. Bounding noise using estimated upper bound")
-
-        #     if np.any(variance_est_low_res_5_pc < 0):
-        #         logger.info("Estimated variance resolutino is < 0. This probably means that the noise was incorrectly estimated. Recomputing noise")
-        #         print("5 percentile:", variance_est_low_res_5_pc)
-        #         print("5 percentile/median over low shells:", variance_est_low_res_5_pc/variance_est_low_res_median)
-
-        #     # if not cryos[0].premultiplied_ctf:
-        #         # This is a bit of a hack. We are using the variance estimate to bound the noise variance
-        #         # This is not correct, but it is better than nothing
-        #     noise_var_used[:n_shell_to_ub] = np.where( noise_var_used[:n_shell_to_ub] > ub_noise_var_by_var_est, ub_noise_var_by_var_est, noise_var_used[:n_shell_to_ub])
-
-
-        #     noise_var_used = noise_var_used.astype(cryos[0].dtype_real)
-        # _update_noise_variance(noise_var_used)
-
-
-
-        if args.test_covar_options:
-            tests = [ ]
-            idx = 0
-            for test in tests:
-                output_folder = args.outdir + '/output/' 
-                # Compute principal components
-                covariance_options = covariance_estimation.get_default_covariance_computation_options(cryos.grid_size)
-                for key in test:
-                    covariance_options[key] = test[key]
-        
-                u,s, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory, covariance_options = covariance_options, variance_estimate = variance_est['combined'], use_multi_gpu = args.multi_gpu, n_gpus = args.n_gpus)
-                from recovar import output
-                output.mkdir_safe(output_folder)
-                utils.pickle_dump({
-                    'options':test, 'u' :u['rescaled'][:,:20], 's' :s['rescaled'][:20], 'picked_frequencies':picked_frequencies
-                }, output_folder + f'test_{idx}.pkl')
-                del u, s, covariance_cols, picked_frequencies, column_fscs
-                idx = idx + 1
-                print('done with', idx, test)
-
+        # Compute variance with regularization
+        variance_est, _, variance_fsc, _, noise_p_variance_est = covariance_estimation.compute_variance(
+            cryos, means['combined'], batch_size // 2, dilated_volume_mask,
+            use_regularization=True, disc_type='cubic', mean_cubic=mean_cubic)
 
         utils.report_memory_device(logger=logger)
 
+        # --- Covariance options ---
         covariance_options = covariance_estimation.get_default_covariance_computation_options(cryos.grid_size)
         if args.low_memory_option:
             covariance_options['sampling_n_cols'] = 50
@@ -681,62 +624,53 @@ def standard_recovar_pipeline(args):
             covariance_options['mask_images_in_proj'] = False
             covariance_options['mask_images_in_H_B'] = False
 
-
-        # Compute principal components
-        # Only focus_mask[-1] will do a zdim search, rest will do zdim_for_rest
-
-        # if len(focus_mask) > 1:
+        # --- Compute principal components ---
         num_foc_masks = len(focus_masks)
         u = []
         s = []
-        # This could be sped up by a factor of len(focus_masks)
-        zdim_for_rest = 20 # Maybe should make this an option
-        n_pcs_to_keep = np.max( np.append(options['zs_dim_to_test'], 50))
+        zdim_for_rest = 20
+        n_pcs_to_keep = np.max(np.append(options['zs_dim_to_test'], 50))
 
-        ## FIXME
         ignore_zero_frequency = options['ignore_zero_frequency']
-        # mean_for_contrast_correction = means['combined_regularized'] if args.contrast_use_reg_mean else means['combined']
-
-        # options['ignore_zero_frequency'] = False
         for idx, focus_mask in enumerate(focus_masks):
-            u_this,s_this, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(cryos, options, means, mean_prior, focus_mask, dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use=gpu_memory, covariance_options = covariance_options, variance_estimate = variance_est['combined'], use_reg_mean_in_contrast = args.use_reg_mean_in_contrast, use_multi_gpu = args.multi_gpu, n_gpus = args.n_gpus)
-            if idx == num_foc_masks -1:
+            u_this, s_this, covariance_cols, picked_frequencies, column_fscs = \
+                principal_components.estimate_principal_components(
+                    cryos, options, means, mean_prior, focus_mask, dilated_volume_mask,
+                    valid_idx, batch_size, gpu_memory_to_use=gpu_memory,
+                    covariance_options=covariance_options,
+                    variance_estimate=variance_est['combined'],
+                    use_reg_mean_in_contrast=args.use_reg_mean_in_contrast,
+                    use_multi_gpu=args.multi_gpu, n_gpus=args.n_gpus,
+                    mean_cubic=mean_cubic)
+            if idx == num_foc_masks - 1:
                 s.append(s_this['rescaled'][:n_pcs_to_keep].copy())
-                u.append(u_this['rescaled'][:,:n_pcs_to_keep].copy())
+                u.append(u_this['rescaled'][:, :n_pcs_to_keep].copy())
             else:
                 s.append(s_this['rescaled'][:zdim_for_rest].copy())
-                u.append(u_this['rescaled'][:,:zdim_for_rest].copy())
+                u.append(u_this['rescaled'][:, :zdim_for_rest].copy())
             del u_this, s_this
-        u = { 'rescaled' : np.concatenate(u, axis = 1), 'real' : None}
-        s =  { 'rescaled' : np.concatenate(s, axis = 0), 'real': None}
+
+        u = {'rescaled': np.concatenate(u, axis=1), 'real': None}
+        s = {'rescaled': np.concatenate(s, axis=0), 'real': None}
         options['ignore_zero_frequency'] = ignore_zero_frequency
 
-        # Check if u and s are finite and not NaN
+        # Validate PCA results
         if not np.all(np.isfinite(u['rescaled'])):
             raise ValueError("u contains non-finite values")
         if not np.all(np.isfinite(s['rescaled'])):
             raise ValueError("s contains non-finite values")
-
-        # Check if s is positive
         if not np.all(s['rescaled'] > 0):
             raise ValueError("s contains non-positive values")
-
-        # Check if u and s are of dtype float32/complex64
         if u['rescaled'].dtype not in [np.float32, np.complex64]:
             raise TypeError(f"u is not of dtype float32 or complex64, but {u['rescaled'].dtype}")
         if s['rescaled'].dtype not in [np.float32, np.complex64]:
             raise TypeError(f"s is not of dtype float32 or complex64, but {s['rescaled'].dtype}")
-
-        # Check if mask is of dtype float32
         if volume_mask.dtype != np.float32:
             raise TypeError(f"volume_mask is not of dtype float32, but {volume_mask.dtype}")
 
         if options['ignore_zero_frequency']:
-            # Make the noise in 0th frequency gigantic. Effectively, this ignore this frequency when fitting.
             logger.info('ignoring zero frequency')
-            noise_var_used[0] *=1e16
-
-        # image_cov_noise = np.asarray(noise.make_radial_noise(noise_var_used, cryos[0].image_shape))
+            noise_var_used[0] *= 1e16
 
         if not args.keep_intermediate:
             del u['real']
@@ -744,149 +678,116 @@ def standard_recovar_pipeline(args):
                 del u['rescaled_no_contrast']
             covariance_cols = None
 
-        # Compute embeddings
-        zs = {}; cov_zs = {}; est_contrasts = {}
-        for zdim in options['zs_dim_to_test']:
-            # Now we keep num_foc_masks-1*zdim_rest + zdim
-            n_pcs_to_use = (num_foc_masks-1)*zdim_for_rest + zdim
-            z_time = time.time()
-            zs[zdim], cov_zs[zdim], est_contrasts[zdim], _ = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled'] , n_pcs_to_use,
-                                                                     cryos, volume_mask, gpu_memory, 'linear_interp',
-                                                                    contrast_grid = None, contrast_option = options['contrast'],
-                                                                    ignore_zero_frequency = options['ignore_zero_frequency'] )
-            logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
-
-
-        for zdim in options['zs_dim_to_test']:
-            z_time = time.time()
-            n_pcs_to_use = (num_foc_masks-1)*zdim_for_rest + zdim
-            key = f"{zdim}_noreg"
-            zs[key], cov_zs[key], est_contrasts[key], _ = embedding.get_per_image_embedding(means['combined'], u['rescaled'], s['rescaled']* 0 + np.inf , n_pcs_to_use,
-                                                                     cryos, volume_mask, gpu_memory, 'linear_interp',
-                                                                    contrast_grid = None, contrast_option = options['contrast'],
-                                                                    ignore_zero_frequency = options['ignore_zero_frequency'] )
-            logger.info(f"embedding time for zdim={zdim}_noreg: {time.time() - z_time}")
-
+        # --- Compute embeddings ---
+        zs, cov_zs, est_contrasts = _compute_embeddings(
+            means, u, s, cryos, volume_mask, options, gpu_memory,
+            focus_masks, zdim_for_rest, args, mean_cubic=mean_cubic)
 
         if repeat == 1:
             for key in est_contrasts:
                 est_contrasts[key] = est_contrasts[key] * contrasts_for_second
 
-    zs_cont = {}; cov_zs_cont = {}; est_contrasts_cont = {}        
-    var_metrics = {'filt_var': None}
-
+    # --- Post-embedding: noise residual estimate ---
     zdim = np.max(options['zs_dim_to_test'])
-
     if not args.tilt_series:
-        n_pcs_to_use = (num_foc_masks-1)*zdim_for_rest + zdim
-        noise_var_from_het_residual, _,_ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(cryos[0], dilated_volume_mask, means['combined'], u['rescaled'][:,:n_pcs_to_use], est_contrasts[zdim], zs[zdim], batch_size//10, disc_type = covariance_options['disc_type'] )
+        n_pcs_to_use = (num_foc_masks - 1) * zdim_for_rest + zdim
+        noise_var_from_het_residual, _, _ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(
+            cryos[0], dilated_volume_mask, means['combined'], u['rescaled'][:, :n_pcs_to_use],
+            est_contrasts[zdim], zs[zdim], batch_size // 10,
+            disc_type=covariance_options['disc_type'])
     else:
         noise_var_from_het_residual = None
-    # ### END OF DEL
 
     logger.info(f"embedding time: {time.time() - st_time}")
-
     utils.report_memory_device()
+    logger.info(f"peak gpu memory use {utils.get_peak_gpu_memory_used(device=0)}")
 
-    # Dump results to file
-    output_model_folder = args.outdir + '/model/'
-    o.mkdir_safe(args.outdir)
-    o.mkdir_safe(output_model_folder)
-
-    logger.info(f"peak gpu memory use {utils.get_peak_gpu_memory_used(device =0)}")
-
-    
-    # For now, maybe just dump the rest?
-    
+    # --- Handle complement mask trimming ---
     if args.use_complement_mask:
         import copy
         zs_full = copy.deepcopy(zs)
         for key in zs:
-            zs[key] = zs[key][:,zdim_for_rest:]
+            zs[key] = zs[key][:, zdim_for_rest:]
         for key in cov_zs:
-            cov_zs[key] = cov_zs[key][:,zdim_for_rest:,zdim_for_rest:]
-        u['rescaled'] = u['rescaled'][:,zdim_for_rest:]
+            cov_zs[key] = cov_zs[key][:, zdim_for_rest:, zdim_for_rest:]
+        u['rescaled'] = u['rescaled'][:, zdim_for_rest:]
         s['rescaled'] = s['rescaled'][zdim_for_rest:]
 
-
-    
-
-    output_folder = args.outdir + '/output/' 
+    # --- Save volumes ---
+    output_folder = args.outdir + '/output/'
     o.mkdir_safe(output_folder)
-    o.save_covar_output_volumes(output_folder, means['combined'], u['rescaled'], s, volume_mask, volume_shape,  voxel_size = cryos.voxel_size)
-    o.save_volume(volume_mask, output_folder + 'volumes/' + 'mask', volume_shape, from_ft = False,  voxel_size = cryos.voxel_size)
-    o.save_volume(dilated_volume_mask, output_folder + 'volumes/' + 'dilated_mask', volume_shape, from_ft = False,  voxel_size = cryos.voxel_size)
-    o.save_volume(focus_mask, output_folder + 'volumes/' + 'focus_mask', volume_shape, from_ft = False,  voxel_size = cryos.voxel_size)
+    o.save_covar_output_volumes(output_folder, means['combined'], u['rescaled'], s,
+                                volume_mask, volume_shape, voxel_size=cryos.voxel_size)
+    o.save_volume(volume_mask, output_folder + 'volumes/mask', volume_shape,
+                  from_ft=False, voxel_size=cryos.voxel_size)
+    o.save_volume(dilated_volume_mask, output_folder + 'volumes/dilated_mask', volume_shape,
+                  from_ft=False, voxel_size=cryos.voxel_size)
+
+    focus_mask = focus_masks[-1]
+    o.save_volume(focus_mask, output_folder + 'volumes/focus_mask', volume_shape,
+                  from_ft=False, voxel_size=cryos.voxel_size)
     if args.use_complement_mask:
-        o.save_volume(focus_masks[0], output_folder + 'volumes/' + 'complement_mask', volume_shape, from_ft = False,  voxel_size = cryos.voxel_size)
+        o.save_volume(focus_masks[0], output_folder + 'volumes/complement_mask', volume_shape,
+                      from_ft=False, voxel_size=cryos.voxel_size)
 
-
-    embedding_dict = { 'zs': zs, 'cov_zs' : cov_zs , 'contrasts': est_contrasts, 'zs_cont' : zs_cont, 'cov_zs_cont' : cov_zs_cont, 'contrasts_cont' : est_contrasts_cont}
-
+    # --- Build result dict and save ---
     if args.tilt_series:
-        particles_ind_split = [ cryo.image_stack.dataset_tilt_indices for cryo in cryos]
+        particles_ind_split = [cryo.image_stack.dataset_tilt_indices for cryo in cryos]
     else:
         particles_ind_split = ind_split
 
-    utils.pickle_dump(particles_ind_split, output_model_folder + 'particles_halfsets.pkl')
-    pickle.dump(ind_split, open(output_model_folder + 'halfsets.pkl', 'wb'))
-    args.halfsets = output_model_folder + 'particles_halfsets.pkl'
+    embedding_dict = {
+        'zs': zs, 'cov_zs': cov_zs, 'contrasts': est_contrasts,
+        'zs_cont': {}, 'cov_zs_cont': {}, 'contrasts_cont': {},
+    }
 
-    # Organize results into logical sections
+    # Reorder embeddings from halfset ordering to original particle ordering
+    for entry in embedding_dict:
+        for key in embedding_dict[entry]:
+            if entry == 'contrasts' and args.tilt_series and ('shared' not in options['contrast']):
+                embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(
+                    embedding_dict[entry][key], ind_split)
+            else:
+                embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(
+                    embedding_dict[entry][key], particles_ind_split)
+
     result = {
-        # Core reconstruction results
+        'version': '0.6',
         's': s['rescaled'],
-        's_all': s,
-        'density': None,
-        'version': '0.5',
-        
-        # Volume metadata
         'volume_shape': volume_shape,
         'voxel_size': cryos.voxel_size,
-        
-        # Noise estimation results
-        'noise_var_from_hf': noise_var_from_hf,
-        'noise_var_from_het_residual': np.array(noise_var_from_het_residual),
-        'noise_var_used': np.array(noise_var_used),
-        'radial_noise_var_outside_mask': np.array(radial_noise_var_outside_mask),
-        'radial_ub_noise_var': np.array(radial_ub_noise_var),
-        'white_noise_var_outside_mask': np.array(white_noise_var_outside_mask),
-        'ub_noise_var_by_var_est': np.array(ub_noise_var_by_var_est),
-        
-        # Power spectrum measurements
-        'image_PS': np.array(image_PS),
-        'std_image_PS': np.array(std_image_PS) if std_image_PS is not None else None,
-        'masked_image_PS': np.array(masked_image_PS),
-        'std_masked_image_PS': np.array(std_masked_image_PS) if std_masked_image_PS is not None else None,
-        
-        # Variance and covariance results
+        # Noise estimates
+        'noise_var_from_hf': np.asarray(noise_var_from_hf),
+        'noise_var_from_het_residual': np.asarray(noise_var_from_het_residual) if noise_var_from_het_residual is not None else None,
+        'noise_var_used': np.asarray(noise_var_used),
+        'radial_noise_var_outside_mask': np.asarray(noise_result['radial_noise_var_outside_mask']),
+        'radial_ub_noise_var': np.asarray(noise_result['radial_ub_noise_var']),
+        'white_noise_var_outside_mask': np.asarray(noise_result['white_noise_var_outside_mask']),
+        'ub_noise_var_by_var_est': np.asarray(ub_noise_var_by_var_est),
+        'image_PS': np.asarray(noise_result['image_PS']),
+        'masked_image_PS': np.asarray(noise_result['masked_image_PS']),
+        # Variance and covariance
         'variance_est': variance_est,
         'variance_fsc': variance_fsc,
         'noise_p_variance_est': noise_p_variance_est,
-        'covariance_cols': None,
         'covariance_options': covariance_options,
-        
-        # FSC and frequency analysis
         'column_fscs': column_fscs,
         'picked_frequencies': picked_frequencies,
-        
-        # PCA and metrics
-        'pc_metric': var_metrics['filt_var'],
-        'contrasts_for_second': contrasts_for_second,
-        'latent_space_bounds': None,  # np.array(latent_space_bounds)
-        
-        # Input parameters
-        'input_args': args
+        # Input
+        'input_args': args,
     }
-    
-    # Add original paths information if data was copied
+
+    output_model_folder = args.outdir + '/model/'
+    o.mkdir_safe(args.outdir)
+    o.mkdir_safe(output_model_folder)
+
+    utils.pickle_dump(particles_ind_split, output_model_folder + 'particles_halfsets.pkl')
+    utils.pickle_dump(ind_split, output_model_folder + 'halfsets.pkl')
+    args.halfsets = output_model_folder + 'particles_halfsets.pkl'
+
+    # Restore original paths before saving args
     if path_mapping is not None:
-        result['original_paths'] = path_mapping
-        
-        # Restore original paths in input_args before saving (only for paths that were copied)
         logger.info("Restoring original paths in input_args before saving...")
-        
-        # Only restore paths that were actually copied (have both original and temp entries)
         paths_to_restore = [
             ('original_particles', 'temp_particles', 'particles'),
             ('original_poses', 'temp_poses', 'poses'),
@@ -897,54 +798,30 @@ def standard_recovar_pipeline(args):
             ('original_tilt_ind', 'temp_particle_ind', 'tilt_ind'),
             ('original_halfsets', 'temp_halfsets', 'halfsets'),
         ]
-        
         for orig_key, temp_key, attr_name in paths_to_restore:
             if orig_key in path_mapping and temp_key in path_mapping:
-                # This path was copied, so restore the original
                 setattr(args, attr_name, path_mapping[orig_key])
                 logger.info(f"Restored {attr_name} path: {path_mapping[orig_key]}")
             elif orig_key in path_mapping:
-                # Only original exists, meaning it wasn't copied (e.g., datadir)
                 if attr_name == 'datadir' and path_mapping[orig_key]:
                     setattr(args, attr_name, path_mapping[orig_key])
                     logger.info(f"Restored {attr_name} path: {path_mapping[orig_key]}")
-                else:
-                    logger.debug(f"Skipping {attr_name} - not copied to temp location")
-
-    # Convert all non-None values to numpy arrays where possible
-    for key, value in result.items():
-        if value is not None and not isinstance(value, (dict, str, float, int, bool)):
-            try:
-                result[key] = np.array(value)
-            except (TypeError, ValueError) as e:
-                # Log if conversion fails but continue
-                print(f"Warning: Could not convert {key} to numpy array: {e}")
+        result['original_paths'] = path_mapping
 
     utils.pickle_dump(result, output_model_folder + 'params.pkl')
     utils.pickle_dump(covariance_cols, output_model_folder + 'covariance_cols.pkl')
-
-
-    for entry in embedding_dict:
-        for key in embedding_dict[entry]:
-            if entry == 'contrasts' and args.tilt_series and ('shared' not in options['contrast']):
-                embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(embedding_dict[entry][key], ind_split)
-            else:
-                embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(embedding_dict[entry][key], particles_ind_split)
-
-            # for k in range(num_foc_masks-1):
-            #     embedding_dict[entry][key][k] = embedding_dict[entry][key][k].astype(np.float32)
     utils.pickle_dump(embedding_dict, output_model_folder + 'embeddings.pkl')
     if args.use_complement_mask:
         utils.pickle_dump(zs_full, output_model_folder + 'zs_with_complement.pkl')
 
-    logger.info(f"Dumped results to file:, {output_model_folder}results.pkl")
+    logger.info(f"Dumped results to file: {output_model_folder}")
     logger.info(f"total time: {time.time() - st_time}")
-    
-    # Clean up temp files at the end
+
+    # Clean up temp files
     if path_mapping is not None and not args.no_cleanup:
         cleanup_temp_files(path_mapping)
 
-
+    # Generate standard plots
     from recovar import output
     po = output.PipelineOutput(args.outdir + '/')
     zdims = np.array(args.zdim)
@@ -952,18 +829,13 @@ def standard_recovar_pipeline(args):
     zdim = zdims[zdim_choose]
     output.standard_pipeline_plots(po, zdim, args.outdir + '/output/plots/')
 
-
-    return means, u, s, volume_mask, dilated_volume_mask, noise_var_used 
-
-
+    return means, u, s, volume_mask, dilated_volume_mask, noise_var_used
 
 
 def main():
-    # import jax
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
     standard_recovar_pipeline(args)
-
 
 
 if __name__ == "__main__":

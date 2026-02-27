@@ -61,7 +61,7 @@ def generate_conformation_from_reprojection(xs, mean, u ):
 
 
 @nvtx.annotate("get_per_image_embedding", color="purple", domain=NVTX_DOMAIN_EMBED)
-def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None):
+def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None, mean_cubic=None):
 
     assert u.shape[0] == cryos.volume_size, "input u should be volume_size x basis_size"
     st_time = time.time()    
@@ -95,9 +95,10 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
     if USE_CUBIC:
         disc_type = 'cubic'
         from recovar import cubic_interpolation
-        mean = cubic_interpolation.compute_spline_coefficients(mean.reshape(cryos.volume_shape))
-        # vmap_coeffs = jax.vmap(cubic_interpolation.compute_spline_coefficients, in_axes = 0, out_axes = 0)
-        # basis = vmap_coeffs(basis.reshape(-1, *cryos.volume_shape))#.reshape(basis.shape)
+        if mean_cubic is not None:
+            mean = mean_cubic
+        else:
+            mean = cubic_interpolation.compute_spline_coefficients(mean.reshape(cryos.volume_shape))
         from recovar import covariance_estimation
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, cryos.volume_shape, gpu_memory= None)
 

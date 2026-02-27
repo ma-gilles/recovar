@@ -279,8 +279,8 @@ def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_rad
 
 
 @nvtx.annotate("compute_regularized_covariance_columns_in_batch", color="purple")
-def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, options, picked_frequencies, use_multi_gpu = False, n_gpus = None):
-    
+def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, options, picked_frequencies, use_multi_gpu = False, n_gpus = None, mean_cubic=None):
+
     frequency_batch = utils.get_column_batch_size(cryos.grid_size, gpu_memory)
 
     covariance_cols = []
@@ -289,7 +289,7 @@ def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, vo
         batch_st = int(k * frequency_batch)
         batch_end = int(np.min( [(k+1) * frequency_batch ,picked_frequencies.size  ]))
 
-        covariance_cols_b, _, fscs_b = compute_regularized_covariance_columns(cryos, means, mean_prior,  volume_mask, dilated_volume_mask, valid_idx, gpu_memory,  options, picked_frequencies[batch_st:batch_end], use_multi_gpu = use_multi_gpu, n_gpus = n_gpus)
+        covariance_cols_b, _, fscs_b = compute_regularized_covariance_columns(cryos, means, mean_prior,  volume_mask, dilated_volume_mask, valid_idx, gpu_memory,  options, picked_frequencies[batch_st:batch_end], use_multi_gpu = use_multi_gpu, n_gpus = n_gpus, mean_cubic=mean_cubic)
         logger.info(f'batch of col done: {batch_st}, {batch_end}')
 
         covariance_cols.append(covariance_cols_b['est_mask'])
@@ -301,7 +301,7 @@ def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, vo
 
 
 @nvtx.annotate("compute_regularized_covariance_columns", color="purple")
-def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory,  options, picked_frequencies, use_multi_gpu = False, n_gpus = None):
+def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory,  options, picked_frequencies, use_multi_gpu = False, n_gpus = None, mean_cubic=None):
 
     volume_shape = cryos.volume_shape
 
@@ -319,7 +319,7 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask
         cudaProfilerStart()
         logger.info("CUDA Profiler: Started profiling covariance computation")
     
-    Hs, Bs = compute_both_H_B(cryos, means, mask_ls, picked_frequencies, gpu_memory,  parallel_analysis = False, options = options, use_multi_gpu = use_multi_gpu, n_gpus = n_gpus)
+    Hs, Bs = compute_both_H_B(cryos, means, mask_ls, picked_frequencies, gpu_memory,  parallel_analysis = False, options = options, use_multi_gpu = use_multi_gpu, n_gpus = n_gpus, mean_cubic=mean_cubic)
     
     # Stop CUDA profiler after covariance computation
     if CUDA_PROFILER_AVAILABLE:
@@ -545,7 +545,7 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, b
 
 
 @nvtx.annotate("compute_variance", color="yellow")
-def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset = None, use_regularization = False, disc_type = '', noise_ind_subset = None):
+def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset = None, use_regularization = False, disc_type = '', noise_ind_subset = None, mean_cubic=None):
     st_time = time.time()
 
     from recovar import relion_functions
@@ -557,7 +557,10 @@ def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset
     noise_p_variance_rhs = 2 * [None]
 
     if disc_type == 'cubic':
-        mean_estimate = cubic_interpolation.compute_spline_coefficients(mean_estimate.reshape(cryos.volume_shape))
+        if mean_cubic is not None:
+            mean_estimate = mean_cubic
+        else:
+            mean_estimate = cubic_interpolation.compute_spline_coefficients(mean_estimate.reshape(cryos.volume_shape))
 
 
     for idx, cryo in enumerate(cryos):
@@ -598,14 +601,14 @@ def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset
 
 
 @nvtx.annotate("compute_both_H_B", color="blue")
-def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies, gpu_memory, parallel_analysis, options, use_multi_gpu = False, n_gpus = None ):
+def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies, gpu_memory, parallel_analysis, options, use_multi_gpu = False, n_gpus = None, mean_cubic=None):
     Hs = []
     Bs = []
     st_time = time.time()
 
     for cryo_idx, cryo in enumerate(cryos):
         mean = means["combined"] if options["use_combined_mean"] else means["corrected" + str(cryo_idx)]
-        H, B = compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gpu_memory, parallel_analysis, options = options, use_multi_gpu = use_multi_gpu, n_gpus = n_gpus)
+        H, B = compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gpu_memory, parallel_analysis, options = options, use_multi_gpu = use_multi_gpu, n_gpus = n_gpus, mean_cubic=mean_cubic)
         logger.info(f"Time to cov {time.time() - st_time}")
         # check_memory()
         Hs.append(H)
@@ -616,7 +619,7 @@ def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies, gpu_
 # AT SOME POINT, I CONVINCED MYSELF THAT IT WAS BETTER FOR MEMORY TRANSFER REASONS TO DO THIS IN BATCHES OVER VOLS, THEN OVER IMAGES. I am not sure anymore.
 # Covariance_cols
 @nvtx.annotate("compute_H_B_in_volume_batch", color="blue")
-def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gpu_memory, parallel_analysis = False, options = None, use_multi_gpu = False, n_gpus = None):
+def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gpu_memory, parallel_analysis = False, options = None, use_multi_gpu = False, n_gpus = None, mean_cubic=None):
 
     image_batch_size = utils.get_image_batch_size(cryo.grid_size, gpu_memory) // (2 if options['disc_type'] =='cubic' else 1)
     column_batch_size = utils.get_column_batch_size(cryo.grid_size, gpu_memory)
@@ -655,9 +658,10 @@ def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequenc
                                                 int(batch_size / 1),
                                                 None,
                                                 parallel_analysis=parallel_analysis,
-                                                jax_random_key=jax_random_key, 
+                                                jax_random_key=jax_random_key,
                                                 options=options,
-                                                image_subset=image_subset)
+                                                image_subset=image_subset,
+                                                mean_cubic=mean_cubic)
                 
                 # Tag the array copy operations after compute_H_B returns
                 with nvtx.annotate("copy_H_B_to_output", color="gold", domain=NVTX_DOMAIN_H_B):
@@ -705,9 +709,10 @@ def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequenc
         H_batch, B_batch = compute_H_B(cryo, mean, dilated_volume_mask,
                                                                  picked_frequencies[batch_st:batch_end],
                                                                  int(image_batch_size / 1),
-                                                                 None ,
+                                                                 None,
                                                                  parallel_analysis = parallel_analysis,
-                                                                 jax_random_key = 0, options = options)
+                                                                 jax_random_key = 0, options = options,
+                                                                 mean_cubic=mean_cubic)
         H[:, batch_st:batch_end]  = np.array(H_batch)
         B[:, batch_st:batch_end]  = np.array(B_batch)
         del H_batch, B_batch
@@ -829,19 +834,14 @@ def compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, co
 
 # @functools.partial(jax.jit, static_argnums = [5])    
 @nvtx.annotate("compute_H_B", color="blue", domain=NVTX_DOMAIN_H_B)
-def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency_indices, batch_size, diag_prior, parallel_analysis = False, jax_random_key = 0, batch_over_H_B = False, soften_mask = 3, options = None, image_subset = None ):
-    # Memory in here scales as O (batch_size )
-
-    # utils.report_memory_device()
-
+def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency_indices, batch_size, diag_prior, parallel_analysis = False, jax_random_key = 0, batch_over_H_B = False, soften_mask = 3, options = None, image_subset = None, mean_cubic=None):
     volume_size = mean_estimate.size
     n_picked_indices = picked_frequency_indices.size
-    
+
     # Use lists to accumulate JAX arrays (keeps data on GPU/in JAX)
-    # Pre-size the lists to avoid reallocation
     H = [0] * n_picked_indices
     B = [0] * n_picked_indices
-    
+
     jax_random_key = jax.random.PRNGKey(jax_random_key)
     mean_estimate = jnp.array(mean_estimate)
 
@@ -861,7 +861,10 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
 
     if options['disc_type'] == 'cubic':
         these_disc = 'cubic'
-        mean_estimate = cubic_interpolation.compute_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
+        if mean_cubic is not None:
+            mean_estimate = mean_cubic
+        else:
+            mean_estimate = cubic_interpolation.compute_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
     else:
         these_disc = 'linear_interp'
 
@@ -1002,24 +1005,26 @@ def compute_spline_coeffs_in_batch(basis, volume_shape, gpu_memory= None):
 
 # @functools.partial(jax.jit, static_argnums = [5])    
 @nvtx.annotate("compute_projected_covariance", color="green")
-def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volume_mask, batch_size, disc_type, disc_type_u, parallel_analysis = False, do_mask_images = True ):
-    
+def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volume_mask, batch_size, disc_type, disc_type_u, parallel_analysis = False, do_mask_images = True, mean_cubic=None):
+
     experiment_dataset = experiment_datasets[0]
 
     basis = basis.T.astype(experiment_dataset.dtype)
-    # Make sure variables used in every iteration are on gpu.
     basis = jnp.asarray(basis)
     volume_mask = jnp.array(volume_mask).astype(experiment_dataset.dtype_real)
     mean_estimate = jnp.array(mean_estimate).astype(experiment_dataset.dtype)
     jax_random_key = jax.random.PRNGKey(0)
 
-    lhs =0
-    rhs =0 
+    lhs = 0
+    rhs = 0
     summed_batch_kron_cpu = jax.jit(summed_batch_kron, backend='cpu')
     logger.info(f"batch size in compute_projected_covariance {batch_size}")
 
     if disc_type == 'cubic':
-        mean_estimate = cubic_interpolation.compute_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
+        if mean_cubic is not None:
+            mean_estimate = mean_cubic
+        else:
+            mean_estimate = cubic_interpolation.compute_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
 
     if disc_type_u == 'cubic':
         basis = compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)
