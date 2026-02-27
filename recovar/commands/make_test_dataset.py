@@ -1,9 +1,8 @@
+import sys
 import recovar.config
-from importlib import reload
-from recovar import simulator, output, utils
+from recovar import simulator, output
 import numpy as np
 import os
-import sys
 import argparse
 
 

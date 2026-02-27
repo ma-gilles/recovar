@@ -1,7 +1,6 @@
 import logging
 logger = logging.getLogger(__name__)
 import numpy as np
-import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import matplotlib, pickle, os, json
 import recovar.latent_density as ld
@@ -12,11 +11,8 @@ from recovar import trajectory
 from recovar import utils
 from recovar import dataset
 from recovar import regularization
-from recovar import noise
 import matplotlib.patheffects as pe
-from packaging.version import parse as parse_version
 import time
-import recovar.utils as utils
 
 def get_resampled_distances(gt_vols):
     return trajectory.get_cum_curvelength(gt_vols)

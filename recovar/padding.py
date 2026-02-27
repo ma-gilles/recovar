@@ -1,6 +1,5 @@
 import jax.numpy as jnp
 import jax
-import numpy as np
 import functools
 
 import recovar.fourier_transform_utils as fourier_transform_utils

@@ -7,7 +7,6 @@ import nvtx
 import equinox as eqx
 from recovar import core, covariance_core, regularization, utils, constants
 from recovar.configs import ForwardModelConfig, BatchData, ModelState
-import recovar.core_forward as core_forward
 import recovar.fourier_transform_utils as fourier_transform_utils
 import os
 
@@ -386,7 +385,7 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
         Otherwise: Single noise variance and initial estimate
     """
     # Import optimization libraries
-    from jaxopt import LBFGSB, ScipyBoundedMinimize, OptaxSolver, ArmijoSGD
+    from jaxopt import ScipyBoundedMinimize, OptaxSolver
     import optax
 
     # Map unique CTF parameter values to sequential indices using unique

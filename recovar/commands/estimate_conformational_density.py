@@ -1,13 +1,11 @@
-import recovar.config 
+import recovar.config
 import logging
 import numpy as np
 from recovar import output as o
 from recovar import deconvolve_density, utils, output
-from scipy.spatial import distance_matrix
-import os, argparse
+import argparse
 logger = logging.getLogger(__name__)
 import matplotlib.pyplot as plt
-from recovar import parser_args
 from pathlib import Path
 
 def parse_args():

@@ -35,7 +35,6 @@ import logging
 import time
 import tempfile
 import hashlib
-import json
 
 logger = logging.getLogger(__name__)
 

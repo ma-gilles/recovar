@@ -499,9 +499,7 @@ def downsample_vol_by_fourier_truncation(vol_input, target_grid_size):
     X[0,:,:] = X[0,:,:].real
     X[:,0,:] = X[:,0,:].real
     X[:,:,0] = X[:,:,0].real
-    # X = np.asarray(X)
     return fourier_transform_utils.get_idft3(X)
-    # return vol_ft.reshape(-1)
 
 def basic_config_logger(output_folder):
     logging.basicConfig(

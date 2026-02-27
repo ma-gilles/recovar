@@ -927,26 +927,6 @@ def estimate_multiple_disc_relion_style(experiment_datasets, noise_variance, dis
     # else:
     return first_estimates, np.asarray(opt_halfmaps), np.asarray(disc_choices), np.asarray(residuals_averaged)
 
-
-
-    first_estimates = first_estimates.swapaxes(0,2)[...,None]
-    first_estimates = first_estimates.swapaxes(1,2)
-
-    # first_estimates = first_estimates.transpose(1, 2, 0, 3)
-    # residuals to pick best one
-    zz = experiment_datasets[1].volume_upsampling_factor
-    experiment_datasets[1].update_volume_upsampling_factor(1)
-    residuals, _ = compute_residuals_many_weights_in_weight_batch(experiment_datasets[1], first_estimates[0], max_pol_degree )
-    experiment_datasets[1].update_volume_upsampling_factor(zz)
-
-    index_array_vol, disc_choices, residuals_averaged = pick_best_params(residuals, discretization_params, experiment_datasets[0].volume_shape)
-
-    # xx = 0.5 * (final_estimates[0][...,0] + final_estimates[1][...,0])
-    weights_opt = jnp.take_along_axis(0.5 * (first_estimates[0][...,0] + first_estimates[1][...,0]), np.expand_dims(index_array_vol, axis=-1), axis=-1)
-
-    utils.report_memory_device(logger=logger)
-    return first_estimates, weights_opt, disc_choices, residuals_averaged, summed_residuals
-
 def pick_best_heterogeneity_from_residual(estimates, full_test_dataset, heterogeneity_distances, heterogeneity_bins, discretization_params = None, residual_threshold = None , min_number_of_images_in_bin = 50):
 
     # Probably should separate this stuff?

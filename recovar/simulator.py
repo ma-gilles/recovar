@@ -12,7 +12,7 @@ import recovar.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
 from recovar import core, dataset, noise
 from recovar import load_utils
-from recovar.configs import ForwardModelConfig, BatchData
+from recovar.configs import ForwardModelConfig
 
 CONSTANT_CTF=False
 logger = logging.getLogger(__name__)

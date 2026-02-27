@@ -5,9 +5,7 @@ import recovar.fourier_transform_utils as fourier_transform_utils
 import recovar
 from recovar import utils, simulator
 import logging
-# from tqdm.notebook import tqdm
 import jax
-import matplotlib.pyplot as plt
 logger = logging.getLogger(__name__)
 
 
@@ -90,39 +88,34 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
     map1 = jnp.asarray(map1)
     map2 = jnp.asarray(map2)
 
-    if True:
-        # /2: local resolution holds two maps simultaneously
-        vol_batch_size = recovar.utils.safe_batch_size(
-            recovar.utils.get_vol_batch_size(map1.shape[0], recovar.utils.get_gpu_memory_total()) / 2)
-        n_batch = utils.get_number_of_index_batch(sampling_points.shape[0], vol_batch_size)
+    # /2: local resolution holds two maps simultaneously
+    vol_batch_size = recovar.utils.safe_batch_size(
+        recovar.utils.get_vol_batch_size(map1.shape[0], recovar.utils.get_gpu_memory_total()) / 2)
+    n_batch = utils.get_number_of_index_batch(sampling_points.shape[0], vol_batch_size)
 
-        for k in range(n_batch):
-            batch_st, batch_end = utils.get_batch_of_indices(nr_samplings, vol_batch_size, k)
-            batch = sampling_points[batch_st:batch_end]
+    for k in range(n_batch):
+        batch_st, batch_end = utils.get_batch_of_indices(nr_samplings, vol_batch_size, k)
+        batch = sampling_points[batch_st:batch_end]
 
-            if use_v2:
-                if use_filter:
-                    ift_sum, loc_mask, fsc, local_resol, offset, radius = batch_compute_local_fsc_v2(batch, i_ft_sum_orig, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold, use_filter, filter_edgewidth )
-                    i_fil = add_subarrays_to_array(i_fil, ift_sum * loc_mask, offset, int(radius[0]))
-                else:
-                    fsc, local_resol = batch_compute_local_fsc_v2(batch, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold , use_filter, filter_edgewidth)
-
+        if use_v2:
+            if use_filter:
+                ift_sum, loc_mask, fsc, local_resol, offset, radius = batch_compute_local_fsc_v2(batch, i_ft_sum_orig, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold, use_filter, filter_edgewidth )
+                i_fil = add_subarrays_to_array(i_fil, ift_sum * loc_mask, offset, int(radius[0]))
             else:
-                    
-                if use_filter:
-                    ift_sum, loc_mask, fsc, local_resol = batch_compute_local_fsc(batch, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold,  use_filter, filter_edgewidth)
+                fsc, local_resol = batch_compute_local_fsc_v2(batch, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold , use_filter, filter_edgewidth)
 
-                    i_fil += jnp.sum(ift_sum * loc_mask, axis=0)
-                else:
-                    fsc, local_resol = batch_compute_local_fsc(batch, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold,  use_filter, filter_edgewidth)
+        else:
+            if use_filter:
+                ift_sum, loc_mask, fsc, local_resol = batch_compute_local_fsc(batch, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold,  use_filter, filter_edgewidth)
+                i_fil += jnp.sum(ift_sum * loc_mask, axis=0)
+            else:
+                fsc, local_resol = batch_compute_local_fsc(batch, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold,  use_filter, filter_edgewidth)
 
-            fscs.append(fsc)
-            local_resols.append(local_resol)
-            # if k % 100 == 0:
-            #     logger.info(f"Sampling point batch {k} out of {n_batch} done")
+        fscs.append(fsc)
+        local_resols.append(local_resol)
 
-            if jnp.isnan(i_fil).any() or jnp.isnan(i_loc_res).any():
-                logger.warning("NaNs encountered in local_resolution accumulation.")
+        if jnp.isnan(i_fil).any() or jnp.isnan(i_loc_res).any():
+            logger.warning("NaNs encountered in local_resolution accumulation.")
 
     fscs = np.concatenate(fscs)
     local_resols = np.concatenate(local_resols)

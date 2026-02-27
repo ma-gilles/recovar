@@ -1,4 +1,3 @@
-from importlib import reload
 import recovar.config
 import numpy as np
 from recovar import dataset
@@ -323,7 +322,6 @@ def choice_most_likely_split(estimates0, estimates1, target0, target1, noise_var
 def choice_best_locres( estimates1, target0, voxel_size):
 
     from recovar import locres
-    reload(locres)
 
     n_estimators = estimates1.shape[0]
     locressol = np.zeros_like(estimates1)

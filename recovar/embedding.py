@@ -4,11 +4,9 @@ import numpy as np
 import functools, time, jax
 import nvtx
 import equinox as eqx
-from recovar import core, covariance_core, latent_density, homogeneous, constants, utils, dataset, linalg
+from recovar import core, covariance_core, constants, utils, linalg
 from recovar.configs import ForwardModelConfig, BatchData, ModelState, EmbeddingOpts
 import recovar.core_forward as core_forward
-
-import recovar.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
 
@@ -431,25 +429,3 @@ def set_contrasts_in_cryos(cryos, contrasts):
         for i in range(2): 
             cryos[i].CTF_params[:,core.CTFParamIndex.CONTRAST] *= contrasts[running_idx:running_idx+cryos[i].n_images]
             running_idx += cryos[i].n_images
-
-
-
-# # @functools.partial(jax.jit, static_argnums = [9,10,11,12,13,14,15,16,18, 19, 23, 24])    
-# def compute_residual(batch, mean_estimate,  CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, disc_type,  noise_variance, process_fn, CTF_fun):
-
-#     batch = process_fn(batch)
-#     batch = core.translate_images(batch, translations , image_shape)
-
-#     projected_mean = core.forward_model_from_map(mean_estimate,
-#                                          CTF_params,
-#                                          rotation_matrices, 
-#                                          image_shape, 
-#                                          volume_shape, 
-#                                         voxel_size, 
-#                                         CTF_fun, 
-#                                         disc_type              
-#                                           )
-#     difference = batch - projected_mean
-#     difference /= jnp.sqrt(noise_variance)#[...,None]
-
-#     return jnp.linalg.norm(difference, axis = -1)**2     

@@ -11,7 +11,6 @@ Date: 2025-10-16
 import logging
 import numpy as np
 import jax
-import jax.numpy as jnp
 from typing import List, Tuple, Optional, Callable
 import time
 import nvtx
@@ -98,7 +97,6 @@ def compute_on_gpus_parallel(
         Two lists: (results_H, results_B), one element per GPU
     """
     import concurrent.futures
-    import threading
     
     n_gpus = len(devices)
     results_H = [None] * n_gpus

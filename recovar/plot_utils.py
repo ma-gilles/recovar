@@ -3,10 +3,8 @@ from matplotlib import colors as mcolors
 from matplotlib_scalebar.scalebar import ScaleBar
 import matplotlib
 import matplotlib.patheffects as pe
-import warnings
 import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +14,6 @@ try:
 except ImportError:
     dfi = None  # Functions relying on dfi will check for None and skip saving images
 
-import pandas as pd
 import jax.numpy as jnp
 import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar import regularization, utils, metrics
