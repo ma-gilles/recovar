@@ -11,8 +11,6 @@ logger = logging.getLogger(__name__)
 
 # NVTX domain for principal components operations
 NVTX_DOMAIN_PCA = "principal_components"
-# from guppy import hpy
-# h = hpy()
 
 
 @nvtx.annotate("estimate_principal_components", color="purple", domain=NVTX_DOMAIN_PCA)
@@ -77,15 +75,6 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         if col.dtype != np.complex64:
             raise TypeError("covariance_cols is not of type np.complex64")
 
-    # if options['ignore_zero_frequency']:
-    #     zero_freq_index = np.asarray(core.frequencies_to_vec_indices( np.array([0,0,0]), cryos[0].volume_shape)).astype(int)
-    #     zero_freq_in_picked_freq = np.where(picked_frequencies == zero_freq_index)[0].astype(int)
-
-        # Set covariances with frequency 0 to 0.
-        # I am not this if this is a good idea...
-        # covariance_cols['est_mask'][:,zero_freq_in_picked_freq] *= 0 
-        # covariance_cols['est_mask'][zero_freq_index,:] *= 0 
-
     # First approximation of eigenvalue decomposition
     u,s = get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use, False, covariance_options['randomized_sketch_size'])
     # Check for NaN or Inf values in u and s
@@ -104,17 +93,6 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         for key in covariance_cols.keys():
             covariance_cols[key] = None
 
-    # # Let's see?
-    # if noise_model == "white":
-    #     cov_noise = cov_noise
-    # else:
-    #     # This probably should be moved into embedding
-    # if options['ignore_zero_frequency']:
-    #     # Make the noise in 0th frequency gigantic. Effectively, this ignore this frequency when fitting.
-    #     logger.info('ignoring zero frequency')
-    #     cov_noise[0] *=1e16
-        
-
     u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'], mean_cubic=mean_cubic)
 
     if not options['keep_intermediate']:
@@ -127,15 +105,6 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
     # logger.info(f"u after rescale dtype: {u['rescaled'].dtype}")
     logger.info("memory after rescaling")
     utils.report_memory_device(logger=logger)
-
-    # if options['ignore_zero_frequency']:
-    #     # knockout volume_mask direction stuff?
-    #     norm_volume_mask = volume_mask.reshape(-1) / np.linalg.norm(volume_mask)
-    #     # substract component in direction of mask?
-    #     # Apply matrix (I - mask mask.T / \|mask^2\| ) 
-    #     u['rescaled'] -= np.outer(norm_volume_mask, (norm_volume_mask.T @ u['rescaled']))
-    #     logger.info('ignoring zero frequency')
-
 
     if (options['contrast'] == "contrast_qr" or options['ignore_zero_frequency']):
         c_time = time.time()
@@ -201,7 +170,7 @@ def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , dis
     return u , s
 
 
-# EVERYTHING BELOW HERE IS NOT USED IN CURRENT VERSION OF THE CODE. DELETE?
+# Legacy diagnostic functions below — retained for debugging
 
 def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_size,ignore_zero_frequency, correct_contrast):
     # This assumes s has been kept around

@@ -49,11 +49,6 @@ def pick_minimum_discretization_size(ndim, log_likelihoods, q = 0.5, min_images 
     value = np.max( [ np.sort(log_likelihoods)[min_images], disc_latent_dist] ) # Bump a lil bit
     return value * ( 1 + 1e-8)
 
-# def pick_heterogeneity_bins(ndim, log_likelihoods, q = 0.5, min_images = 50, n_bins = 11):
-#     disc_latent_dist = pick_minimum_discretization_size(ndim, log_likelihoods, q , min_images )
-#     max_latent_dist = np.percentile(log_likelihoods, 0.9)        
-    # return (np.linspace(1, 6 , n_bins ) **2) * disc_latent_dist
-
 def pick_heterogeneity_bins2(ndim, log_likelihoods, q = 0.5, min_images = 50, n_bins = 11):
     disc_latent_dist = pick_minimum_discretization_size(ndim, log_likelihoods, q , min_images )
     max_latent_dist = np.percentile(log_likelihoods, 95)
@@ -404,12 +399,4 @@ def get_inds_for_subvolume(path_to_vol_folder, subvolume_idx):
     return good_indices
 
 
-# def get_inds_for_subvolume_and_save(path_to_vol_folder, subvolume_idx, output_path):
-    
-#     good_indices = get_inds_for_subvolume(path_to_vol_folder, subvolume_idx)
-#     recovar.utils.pickle_dump(good_indices, output_path)
-    
-    # np.save(output_path, good_indices)
-    # return good_indices
-
-## To figure out which point to sample 
+## To figure out which point to sample

@@ -658,23 +658,6 @@ Individual outliers: {n_individual_outliers} ({n_individual_outliers/n_images*10
     return image_outliers, image_inliers, particle_outliers, particle_inliers
 
 
-# def save_outlier_image_indices(classification, original_indices, is_tilt_series, output_dir, name):
-#     outlier_indices = np.where(classification)[0]
-#     inlier_indices = np.where(~classification)[0]
-
-#     outlier_indices_mapped_back_to_original_indices = original_indices[outlier_indices]
-#     inlier_indices_mapped_back_to_original_indices = original_indices[inlier_indices]
-
-#     if is_tilt_series:
-#         logger.info(f"Saving {name} tilt indices outliers and inliers for tilt series to {output_dir}")
-#         pickle.dump(outlier_indices_mapped_back_to_original_indices, open(os.path.join(output_dir, f"{name}_tilt_series_outliers.pkl"), "wb"))
-#         pickle.dump(inlier_indices_mapped_back_to_original_indices, open(os.path.join(output_dir, f"{name}_tilt_series_inliers.pkl"), "wb"))
-#     else:
-#         logger.info(f"Saving {name} image indices outliers and inliers for regular dataset to {output_dir}")
-#         pickle.dump(outlier_indices_mapped_back_to_original_indices, open(os.path.join(output_dir, f"{name}_outliers.pkl"), "wb"))
-#         pickle.dump(inlier_indices_mapped_back_to_original_indices, open(os.path.join(output_dir, f"{name}_inliers.pkl"), "wb"))
-#     return
-
 def create_particle_outlier_visualization(all_particle_outliers, method_names, output_dir, zdim_key, total_particles):
     """
     Create visualization of particle-level outliers from different methods.
