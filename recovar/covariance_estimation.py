@@ -450,7 +450,6 @@ def variance_relion_style_triangular_kernel_batch_trilinear(mean_estimate, image
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
 
     images = core.translate_images(images, translations, image_shape) 
-    # import pdb; pdb.set_trace()
 
     # images = images - core.slice_volume_by_map(mean_estimate, rotation_matrices, image_shape, volume_shape, disc_type) * CTF_squared
 
@@ -621,16 +620,10 @@ def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies, gpu_
 @nvtx.annotate("compute_H_B_in_volume_batch", color="blue")
 def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gpu_memory, parallel_analysis = False, options = None, use_multi_gpu = False, n_gpus = None, mean_cubic=None):
 
-    image_batch_size = utils.get_image_batch_size(cryo.grid_size, gpu_memory) // (2 if options['disc_type'] =='cubic' else 1)
+    # //2 for cubic: spline coefficient arrays use ~2x more memory than linear
+    image_batch_size = utils.safe_batch_size(
+        utils.get_image_batch_size(cryo.grid_size, gpu_memory) // (2 if options['disc_type'] =='cubic' else 1))
     column_batch_size = utils.get_column_batch_size(cryo.grid_size, gpu_memory)
-
-    # if batch_over_image_only:
-    #     return compute_H_B(cryo, mean, dilated_volume_mask,
-    #                                                              picked_frequencies,
-    #                                                              int(image_batch_size ), (cov_noise),
-    #                                                              None , disc_type = disc_type,
-    #                                                              parallel_analysis = parallel_analysis,
-    #                                                              jax_random_key = 0, batch_over_H_B = True)
 
     # Multi-GPU path
     if use_multi_gpu:
@@ -655,7 +648,7 @@ def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequenc
                 
                 H_batch, B_batch = compute_H_B(experiment_dataset, mean_estimate, volume_mask,
                                                 picked_frequency_indices[batch_st:batch_end],
-                                                int(batch_size / 1),
+                                                batch_size,
                                                 None,
                                                 parallel_analysis=parallel_analysis,
                                                 jax_random_key=jax_random_key,
@@ -708,13 +701,13 @@ def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequenc
         # utils.report_memory_device(logger = logger)
         H_batch, B_batch = compute_H_B(cryo, mean, dilated_volume_mask,
                                                                  picked_frequencies[batch_st:batch_end],
-                                                                 int(image_batch_size / 1),
+                                                                 image_batch_size,
                                                                  None,
                                                                  parallel_analysis = parallel_analysis,
                                                                  jax_random_key = 0, options = options,
                                                                  mean_cubic=mean_cubic)
-        H[:, batch_st:batch_end]  = np.array(H_batch)
-        B[:, batch_st:batch_end]  = np.array(B_batch)
+        H[:, batch_st:batch_end]  = H_batch
+        B[:, batch_st:batch_end]  = B_batch
         del H_batch, B_batch
         
     return H,B
@@ -746,7 +739,8 @@ def compute_covariance_regularization_relion_style(Hs, Bs, mean_prior, picked_fr
     fscs = [None] * n_freqs
     combined_cov_cols = [None] * n_freqs
 
-    batch_size = utils.get_column_batch_size(volume_shape[0], gpu_memory) // 4
+    # //4: regularization needs 4 volume-sized arrays simultaneously (H0, H1, B0, B1)
+    batch_size = utils.safe_batch_size(utils.get_column_batch_size(volume_shape[0], gpu_memory) // 4)
 
     for k in range(int(np.ceil(n_freqs/batch_size))-1, -1, -1):
         batch_st = int(k * batch_size)
@@ -804,7 +798,8 @@ def compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, co
     B_combined = [None] * n_freqs
     fscs = [None] * n_freqs
 
-    batch_size = utils.get_column_batch_size(volume_shape[0], gpu_memory) // 4
+    # //4: regularization needs 4 volume-sized arrays simultaneously (H0, H1, B0, B1)
+    batch_size = utils.safe_batch_size(utils.get_column_batch_size(volume_shape[0], gpu_memory) // 4)
 
     for k in range(int(np.ceil(n_freqs/batch_size))-1, -1, -1):
         batch_st = int(k * batch_size)
@@ -1216,7 +1211,6 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
 
     rhs = outer_products - UALambdaAUs
     rhs = rhs.real.astype(CTF_params.dtype)
-    # import pdb; pdb.set_trace()
     # return AU_t_AU, rhs
     # Perhaps this should use: jax.lax.fori_loop. This is a lot of memory.
     # Or maybe jax.lax.reduce ?

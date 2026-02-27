@@ -71,7 +71,6 @@ def get_ewald_sphere_slices(volume, rotation_matrices, image_shape, volume_shape
 # No reason not to do this for forward model, but haven't figured out how to do it for the adjoint 
 # Maps coordinates onto the Ewald sphere
 def map_coordinates_on_ewald_sphere(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam,  order):
-    # import pdb; pdb.set_trace()
     batch_grid_pt_vec_ind_of_images = batch_get_sphere_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam )
     # batch_grid_pt_vec_ind_of_images = core.batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size )
     batch_grid_pt_vec_ind_of_images_og_shape = batch_grid_pt_vec_ind_of_images.shape
@@ -134,7 +133,6 @@ def get_flipped_indices(image_shape):
     grid_size = image_shape[0]
     bad_idx = jnp.any(freqs== -grid_size//2 , axis =-1)
     flipped_indices = jnp.where(bad_idx, -1, flipped_indices)
-    # import pdb; pdb.set_trace()
     # bad_idx = jnp.nonzero(jnp.any(freqs== -grid_size//2 , axis =1),size=image_shape[0]**2)
     # flipped_indices = flipped_indices.at[bad_idx].set(-1)
     return flipped_indices
@@ -210,7 +208,6 @@ def ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_
 
     images_imag = -(vol_real_on_sphere - flipped_vol_real_on_sphere) * jnp.cos(chi) \
                 + (vol_imag_on_sphere - flipped_vol_imag_on_sphere) * jnp.sin(chi) 
-    # import pdb; pdb.set_trace()
     return 0.5 * images_real, 0.5 * images_imag
 
 
@@ -231,7 +228,6 @@ def ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_
 #     # import matplotlib.pyplot as plt
 #     # plt.imshow(sin_chi[0].reshape(image_shape))
 #     # plt.show()
-#     # # import pdb; pdb.set_trace()
 
 #     sin_images_real = images_real * sin_chi
 #     cos_images_real = images_real * cos_chi
@@ -507,7 +503,7 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
     noise_variance = noise_variance
     noise_variance = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape)
     # signal_variance = np.inf
-    print(utils.report_memory_device())
+    logger.debug(utils.report_memory_device())
     rhs_real, rhs_imag = compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance)
     rhs = vec_masked(rhs_real, rhs_imag, experiment_dataset.volume_shape)
     del rhs_imag, rhs_real
@@ -573,8 +569,7 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
         logger.info(f"CG iter {len(ress)}, residual: {ress[-1]}")
         # print()
         # iter_count += 1
-    print(utils.report_memory_device())
-    # import pdb; pdb.set_trace()
+    logger.debug(utils.report_memory_device())
     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, x0 = x0_masked, maxiter=max_iter, tol=tol, M = planar_op, callback=report)
 
     # from recovar import utils

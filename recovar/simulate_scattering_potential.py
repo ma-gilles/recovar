@@ -95,7 +95,6 @@ def get_fourier_transform_of_molecules_at_freq_coords(atom_coords, weights, voxe
             params["weights"] = weights
             params = pickle.dump(params, f)
 
-        import pdb; pdb.set_trace()
 
     return ft
 
@@ -236,7 +235,6 @@ def generate_volume_from_atom_positions_and_types(atom_coords, atom_types, voxel
     for atom_name in atom_indices:
         #import jax.numpy as jnp
         xx = np.array(atom_indices[atom_name])
-        # import pdb; pdb.set_trace()
         atoms_grouped_by_elements[atom_name] = atom_coords[xx]
 
     # Compute density for each kind of element
@@ -254,7 +252,7 @@ def generate_volume_from_atom_positions_and_types(atom_coords, atom_types, voxel
             density = density + xx.astype(out_complex_dtype, copy=False)
         
         if np.isnan(np.sum(density)):
-            import pdb; pdb.set_trace()
+            raise ValueError(f"NaN in density after processing atom '{atom_name}'")
     return density
 
 def one_fn(x):

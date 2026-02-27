@@ -204,7 +204,6 @@ def generate(args):
 
     cov_zs = np.zeros((zs.shape[0], zs.shape[-1], zs.shape[-1]))
     cov_zs += np.eye(zs.shape[-1])
-    # import pdb; pdb.set_trace()
     # noise_variance = np.ones(zs.shape[0])
     noise_variance, _ = noise.estimate_noise_variance(cryos[0], 100)
     noise_variance = np.ones(cryos[0].image_shape[0]//2-1) * noise_variance

@@ -1,7 +1,10 @@
+import logging
 import jax.numpy as jnp
 import numpy as np
 import jax, functools
 import nvtx
+
+logger = logging.getLogger(__name__)
 
 from recovar import core, constants
 import recovar.fourier_transform_utils as fourier_transform_utils
@@ -197,7 +200,7 @@ def compute_fsc_prior_gpu(volume_shape, image0, image1, bottom_of_fraction = Non
     if from_noise_level:        
         # bottom_avg = average_over_shells(bottom_of_fraction.real, volume_shape, frequency_shift)        
         prior_avg = SNR * bottom_of_fraction #jnp.where( bottom_avg > 0 , SNR * bottom_avg, epsilon )
-        print("used outdated prior!!!! Change this!")
+        logger.warning("Using outdated prior (from_noise_level=True)")
     else:
         bottom_avg = average_over_shells(bottom_of_fraction.real, volume_shape, frequency_shift)        
         prior_avg = jnp.where( bottom_avg > 0 , SNR / bottom_avg, constants.EPSILON )

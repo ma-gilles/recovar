@@ -78,14 +78,13 @@ class SGDState():
         step = 1 / np.max(np.abs(Ft_CTF_this))
         self.update = mu * self.update + (1 - mu) * step * grad 
         if np.isnan(self.update).any() or np.isinf(self.update).any():
-            print(np.linalg.norm(self.update))
+            logger.error("|update|: %s", np.linalg.norm(self.update))
 
-        # occasional debug prints
         if iter % 10 == 0:
-            print('|dx| / |x|:', np.linalg.norm(self.update) / np.linalg.norm(mean))
-            print('|prior|/ grad:', np.linalg.norm( 2/ self.mean_variance * mean) / np.linalg.norm(grad))
-            print('|x|:', np.linalg.norm( mean))
-            print('|dx|:', np.linalg.norm( self.update))
+            logger.debug('|dx| / |x|: %s', np.linalg.norm(self.update) / np.linalg.norm(mean))
+            logger.debug('|prior|/ grad: %s', np.linalg.norm( 2/ self.mean_variance * mean) / np.linalg.norm(grad))
+            logger.debug('|x|: %s', np.linalg.norm( mean))
+            logger.debug('|dx|: %s', np.linalg.norm( self.update))
         mean -= self.update * 0.1#0.01 
         mean = self.sgd_projection(mean)
 
@@ -93,13 +92,15 @@ class SGDState():
         mean = np.clip(mean.real, -std_multiplier * np.sqrt(self.mean_variance), std_multiplier * np.sqrt(self.mean_variance)) + 1j * np.clip(mean.imag, -std_multiplier * np.sqrt(self.mean_variance), std_multiplier * np.sqrt(self.mean_variance))
 
         if np.isnan(mean).any() or np.isinf(mean).any() or np.isnan(np.linalg.norm(mean)) or np.isinf(np.linalg.norm(mean)):
-            print('|dx| / |x|:', np.linalg.norm(self.update) / np.linalg.norm(mean))
-            print('|prior|/ grad:', np.linalg.norm( 2/ self.mean_variance * mean) / np.linalg.norm(grad))
-            print('|x|:', np.linalg.norm( mean))
-            print('|dx|:', np.linalg.norm( self.update))
+            logger.error('|dx| / |x|: %s', np.linalg.norm(self.update) / np.linalg.norm(mean))
+            logger.error('|prior|/ grad: %s', np.linalg.norm( 2/ self.mean_variance * mean) / np.linalg.norm(grad))
+            logger.error('|x|: %s', np.linalg.norm( mean))
+            logger.error('|dx|: %s', np.linalg.norm( self.update))
 
-            print(np.linalg.norm(self.update))
-            import pdb; pdb.set_trace()
+            raise ValueError(
+                f"NaN/Inf detected in mean estimate. "
+                f"|update|={np.linalg.norm(self.update)}, |x|={np.linalg.norm(mean)}"
+            )
 
         logger.warning("There is a necessary 0.1 that shouldn't be there")
         self.mean = mean

@@ -199,7 +199,10 @@ def M_with_precompute(experiment_dataset, probabilities, rotations, translations
     )
 
     gpu_memory = utils.get_gpu_memory_total()
-    batch_size = max(1, (utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) // translations.shape[0]) * 20)
+    # *20: backprojection accumulates into a single volume, so per-image memory is low
+    # Divide by translations for per-translation inner loop memory
+    batch_size = utils.safe_batch_size(
+        utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) // translations.shape[0] * 20)
 
     data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = image_indices)
 

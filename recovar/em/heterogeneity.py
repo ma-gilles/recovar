@@ -121,7 +121,6 @@ def compute_bHb_terms(mean_projections, u_projections, s, batch, translations, C
     # Compute bHb
     # Hinvb = jax.scipy.linalg.solve(H, b, assume_a = 'pos')
     # 
-    # import pdb; pdb.set_trace()   
     H_chol, low = jax.scipy.linalg.cho_factor(H, lower = True)
     Hinvb = jax.scipy.linalg.cho_solve((H_chol, low), b, overwrite_b=False, check_finite=True)
 
@@ -135,7 +134,6 @@ def compute_bHb_terms(mean_projections, u_projections, s, batch, translations, C
     log_det_H =  half_inv_logdet #jnp.log((1/jnp.linalg.det(H)))
     logger.warning(f"Make sure this is correct...")
     summed = bHinvb + log_det_H[...,None]
-    # import pdb; pdb.set_trace()
     return summed.transpose(1,0,2) #, Hinvb # I think also need to compute det(H)??? Check
 
 def compute_bLambdainvPU_terms(mean_projections, u_projections, invnoise_CTFed_images, translations, CTF, noise_variance, image_shape):
@@ -330,7 +328,8 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
 
 
     gpu_memory = utils.get_gpu_memory_total()
-    batch_size = max(1, int(utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) * 10))
+    # *10: slicing is cheap per image, use larger batches for mean projection precomputation
+    batch_size = utils.safe_batch_size(utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) * 10)
     n_batches = utils.get_number_of_index_batch(n_rotations, batch_size)
 
     mean_projections = np.zeros((rotations.shape[0], image_size), dtype = np.complex64)
@@ -341,9 +340,10 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
     
     picked_freq_coords = core.vec_indices_to_vol_indices(picked_frequency_indices, volume_shape)
 
-    batch_size = utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory - utils.get_size_in_gb(mean_projections)) / translations.shape[0] * 1
-    batch_size = int(max(1, batch_size))
-    logger.info(f"Starting H_B, batch size {batch_size}. Remaing memory {gpu_memory - utils.get_size_in_gb(mean_projections)}")
+    # Divide by translations to account for per-translation memory in inner loop
+    batch_size = utils.safe_batch_size(
+        utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory - utils.get_size_in_gb(mean_projections)) / translations.shape[0])
+    logger.info(f"Starting H_B, batch size {batch_size}. Remaining memory {gpu_memory - utils.get_size_in_gb(mean_projections)}")
     utils.report_memory_device(logger=logger)
     
     # Allocate this to GPU.
@@ -542,7 +542,7 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
     n_principal_components = basis.shape[0]
     image_size = experiment_dataset.image_size
 
-    batch_size = max(1, int(utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total())))
+    batch_size = utils.safe_batch_size(utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total()))
 
     u_projections = np.empty((rotations.shape[0], n_principal_components, image_size), dtype = np.complex64)
     # Compute all mean and principal component projections
@@ -561,8 +561,9 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
     rotation_batch = max(1, rotations.shape[0] // 10)
 
     memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() -  (2*basis_size**4*8/1e9 + utils.get_size_in_gb(mean_projections[:rotation_batch])* ( 1 + basis_size**2) )
-    batch_size = utils.get_image_batch_size(experiment_dataset.grid_size, memory_left_over_after_kron_allocate) / translations.shape[0] * 1
-    batch_size = int(max(1, batch_size))
+    # Divide by translations to account for per-translation memory in inner loop
+    batch_size = utils.safe_batch_size(
+        utils.get_image_batch_size(experiment_dataset.grid_size, memory_left_over_after_kron_allocate) / translations.shape[0])
 
     # batch_size = utils.get_embedding_batch_size(basis, experiment_dataset.image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate )
     logger.info('batch size for projected covariance computation: ' + str(batch_size))

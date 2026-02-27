@@ -1,8 +1,11 @@
+import logging
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pickle
 from recovar import core, utils, simulator, linalg, mask, constants, locres
+
+logger = logging.getLogger(__name__)
 import recovar.fourier_transform_utils as fourier_transform_utils
 import matplotlib.pyplot as plt
 from recovar import metrics, locres
@@ -55,7 +58,7 @@ def find_angle_between_subspaces(v1,v2, max_rank):
     ss = np.conj(v1[:,:max_rank]).T @ v2[:,:max_rank]
     s,v,d = np.linalg.svd(ss)
     if np.any(v > 1.2):
-        print('v too big!')
+        logger.warning('v too big!')
     v = np.where(v < 1, v, 1)
     return np.sqrt( 1 - v[-1]**2)
 
@@ -121,7 +124,6 @@ def local_fsc_metric(map1, map2, voxel_size, mask, fsc_threshold=1/7, locres_sam
 
     median_auc = np.median(good_aucs)
     ninety_pc_auc = np.percentile(good_aucs, 10)
-    # import pdb; pdb.set_trace()
     return median_locres, ninety_pc_locres, median_auc, ninety_pc_auc
 
 

@@ -239,7 +239,6 @@ DEBUG = False
 #             # plt.imshow(image_masks[0])
 #             # plt.colorbar()
 #             # plt.show()
-#             # import pdb; pdb.set_trace()
 #             # loss_b =  noise_variance_loss(batch, 
 #             #                             noise_variance, 
 #             #                             experiment_dataset.translations[batch_ind],
@@ -397,7 +396,7 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
     # Special handling for tilt series data
     if isinstance(experiment_dataset.noise, VariableRadialNoiseModel) and not tilt_dose_inner:
     # if True:
-        print("Fitting noise model for each tilt")
+        logger.info("Fitting noise model for each tilt")
         # Initialize array to store noise variances for each tilt
         noise_variance_radials = []
         initial_noise_variance_radials = []
@@ -430,7 +429,7 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
             )
             noise_variance_radials.append(noise_variance)
             initial_noise_variance_radials.append(initial_noise_variance_radial)
-            print("Done fitting noise model for tilt", tilt_idx)
+            logger.info("Done fitting noise model for tilt %d", tilt_idx)
         noise_variance_radials = jnp.stack(noise_variance_radials)
         initial_noise_variance_radials = jnp.stack(initial_noise_variance_radials)
         return noise_variance_radials, initial_noise_variance_radials
@@ -545,7 +544,7 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
             # lbfgsb_sol = lbfgsb_solver.run(init_params=optimized_noise_variance[:k], bounds=bounds)
             # optimized_noise_variance = optimized_noise_variance.at[:k].set(lbfgsb_sol.params)
             # print('done')
-            print("Optimizer finished. Final state:", state)
+            logger.info("Optimizer finished. Final state: %s", state)
 
     else:
         def loss_function(noise_variance_to_opt, only_up_to_k= None, noise_variance = None):
@@ -628,7 +627,7 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
 
             lbfgsb_sol = lbfgsb_solver.run(init_params=optimized_noise_variance[:k], bounds=bounds)
             optimized_noise_variance = optimized_noise_variance.at[:k].set(lbfgsb_sol.params)
-            print('done')
+            logger.info("Noise optimization complete")
 
 
     return optimized_noise_variance, initial_noise_variance
@@ -668,7 +667,8 @@ def upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size
             ## TODO Does Tilt series for anything for variance??
             variance_time = time.time()
             from recovar import covariance_estimation
-            variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], batch_size//2, dilated_volume_mask, noise_ind_subset = noise_ind_subset, use_regularization = True, disc_type = 'cubic')
+            # //2: variance computation with cubic disc_type needs ~2x memory per image (spline coefficients)
+            variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], utils.safe_batch_size(batch_size//2), dilated_volume_mask, noise_ind_subset = noise_ind_subset, use_regularization = True, disc_type = 'cubic')
             # print('using regul in variance est?!?')
             logger.info(f"variance estimation time: {time.time() - variance_time}")
             utils.report_memory_device(logger=logger)
@@ -693,8 +693,8 @@ def upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size
 
             if np.any(variance_est_low_res_5_pc < 0):
                 logger.info("Estimated variance resolutino is < 0. This probably means that the noise was incorrectly estimated. Recomputing noise")
-                print("5 percentile:", variance_est_low_res_5_pc)
-                print("5 percentile/median over low shells:", variance_est_low_res_5_pc/variance_est_low_res_median)
+                logger.info("5 percentile: %s", variance_est_low_res_5_pc)
+                logger.info("5 percentile/median over low shells: %s", variance_est_low_res_5_pc/variance_est_low_res_median)
 
             # if not cryos[0].premultiplied_ctf:
                 # This is a bit of a hack. We are using the variance estimate to bound the noise variance
@@ -762,7 +762,7 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
 
 
 
-    print("Finished processing all batches")
+    logger.info("Finished processing all batches")
     estimated_noise = lhs / rhs
     # Replace any inf entries with the last non-inf value. Inf value can happen when the CTF is 0, because of weight dosing.
     non_inf_mask = ~jnp.isinf(estimated_noise)
@@ -1209,7 +1209,6 @@ def get_average_residual_square_inner(batch, mean_estimate, volume_mask, basis, 
 #     # plt.figure()
 #     # plt.imshow(fourier_transform_utils.get_idft2(projected_vols[0].reshape(image_shape)).real)
 #     # plt.show()
-#     # import pdb; pdb.set_trace()
 
 #     if volume_mask is not None:
 #         diff = covariance_core.apply_image_masks(diff, image_mask, image_shape)

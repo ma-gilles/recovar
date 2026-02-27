@@ -203,7 +203,6 @@ class MaskedMaps:
         self.arr1 = self.arr1> 0
         dilate = binary_dilation(self.arr1, iterations=self.iter)
         self.mask = soften_volume_mask(dilate, kern_rad=2)
-        # import pdb; pdb.set_trace()
 
 
     def thereshol_ccmap(self, ccmap):

@@ -37,7 +37,6 @@ def compute_residual(batch, mean_estimate,  CTF_params, rotation_matrices, trans
     # plt.colorbar()
     # plt.show()
 
-    # import pdb; pdb.set_trace()
 
     return jnp.linalg.norm(difference, axis = -1)**2  
 

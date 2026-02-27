@@ -183,45 +183,20 @@ def batch_vol_forward(
     return batch_forward_model(volumes, batch_CTF, batch_grid_pt_vec_ind)
 
 
-# # Are there at most 4 or 5 within one dist? or 9?
-# def find_points_near_grid(gridpoints, gridpoint_target, max_n_points = 5):
-#     max_distances = jnp.max(jnp.abs(gridpoints -  gridpoint_target), axis=-1) #< max_distance
-#     _, indices = jax.lax.top_k(max_distances, max_n_points )
-    
-#     # I think I can just sum them up?
-#     # kernel_weight = gridpoints -  gridpoint_target
-#     return indices
-
-
-# This may use less memory than previous version
-## TODO: compare the two
 def triangular_kernel(gridpoints, gridpoint_target, kernel_width = 1):
     weights = jnp.ones(gridpoints.shape[:-1])
     # Note that this is a very small loop (3) so it should be fine to jit this
     for i in range(gridpoint_target.shape[-1]):
         weights *= jnp.where(jnp.abs(gridpoints[...,i] - gridpoint_target[i]) < kernel_width, 1 - jnp.abs(gridpoints[...,i] - gridpoint_target[i]) / kernel_width, 0) #/ kernel_width
-    # import pdb; pdb.set_trace()
     return weights
 
 
-# This may use less memory than previous version
-## TODO: compare the two
 def square_kernel(gridpoints, gridpoint_target, kernel_width = 1):
     weights = jnp.ones(gridpoints.shape[:-1])
     # Note that this is a very small loop (3) so it should be fine to jit this 
     for i in range(gridpoint_target.shape[-1]):
         weights *= jnp.where(jnp.abs(gridpoints[...,i] - gridpoint_target[i]) < kernel_width/2, 1/ kernel_width, 0) 
     return weights
-
-
-# def sinc_kernel(gridpoints, gridpoint_target, kernel_width = 1):
-#     weights = jnp.ones(gridpoints.shape[:-1])
-#     # Note that this is a very small loop (3) so it should be fine to jit this 
-#     for i in range(gridpoint_target.shape[-1]):
-#         weights *= jnp.where(jnp.abs(gridpoints[...,i] - gridpoint_target[i]) < kernel_width/2, 1/ kernel_width, 0) 
-#     return weights
-
-
 
 
 # Are there at most 4 or 5 within one dist? or 9?
