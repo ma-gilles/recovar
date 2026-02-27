@@ -70,10 +70,8 @@ def get_ewald_sphere_slices(volume, rotation_matrices, image_shape, volume_shape
 # Maps coordinates onto the Ewald sphere
 def map_coordinates_on_ewald_sphere(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam,  order):
     batch_grid_pt_vec_ind_of_images = batch_get_sphere_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam )
-    # batch_grid_pt_vec_ind_of_images = core.batch_get_gridpoint_coords(rotation_matrices, image_shape, volume_shape, grid_size )
     batch_grid_pt_vec_ind_of_images_og_shape = batch_grid_pt_vec_ind_of_images.shape
     batch_grid_pt_vec_ind_of_images = batch_grid_pt_vec_ind_of_images.reshape(-1,3).T
-    # slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
 
     if order ==3:
         from recovar import cubic_interpolation
@@ -114,16 +112,6 @@ def get_nearest_gridpoint_indices_ewald_sphere(rotation_matrix, image_shape, vol
     rotated_indices = core.vol_indices_to_vec_indices(rotated_indices, volume_shape)
     return rotated_indices
 
-# Flips indices
-# def get_flipped_indices(image_shape):
-#     freqs = core.vec_indices_to_frequencies(jnp.arange(np.prod(image_shape)), image_shape)
-#     minus_freqs = -freqs
-#     flipped_indices = core.frequencies_to_vec_indices(minus_freqs, image_shape)
-#     grid_size = image_shape[0]
-#     bad_idx = jnp.nonzero(jnp.any(freqs== -grid_size//2 , axis =1),size=image_shape[0]**2)
-#     flipped_indices = flipped_indices.at[bad_idx].set(0)
-#     return flipped_indices
-
 def get_flipped_indices(image_shape):
     freqs = core.vec_indices_to_frequencies(jnp.arange(np.prod(image_shape)), image_shape)
     minus_freqs = -freqs
@@ -131,8 +119,6 @@ def get_flipped_indices(image_shape):
     grid_size = image_shape[0]
     bad_idx = jnp.any(freqs== -grid_size//2 , axis =-1)
     flipped_indices = jnp.where(bad_idx, -1, flipped_indices)
-    # bad_idx = jnp.nonzero(jnp.any(freqs== -grid_size//2 , axis =1),size=image_shape[0]**2)
-    # flipped_indices = flipped_indices.at[bad_idx].set(-1)
     return flipped_indices
 
 '''
@@ -208,50 +194,6 @@ def ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_
     return 0.5 * images_real, 0.5 * images_imag
 
 
-# # Adjoint of Forward model - explicit version. Not used currently
-# def adjoint_ewald_sphere_forward_model(images_real, images_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, disc_type ):
-
-
-#     chi = compute_chi_wrapper(ctf_params, image_shape, voxel_size)
-#     # lam = 1e-10
-#     # Slice volume on sphere
-#     # vol_real_on_sphere = get_ewald_sphere_slices(volume_real, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  disc_type)
-#     # vol_imag_on_sphere = get_ewald_sphere_slices(volume_imag, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  disc_type)
-    
-#     # Get flipped versions
-#     sin_chi = jnp.sin(chi) * 0.5 
-#     cos_chi = jnp.cos(chi) * 0.5
-
-#     # import matplotlib.pyplot as plt
-#     # plt.imshow(sin_chi[0].reshape(image_shape))
-#     # plt.show()
-
-#     sin_images_real = images_real * sin_chi
-#     cos_images_real = images_real * cos_chi
-#     cos_imag_imag = images_imag * cos_chi
-#     sin_imag_imag = images_imag * sin_chi
-
-#     flipped_idx = get_flipped_indices(image_shape)
-
-#     def flip(x):
-#         return x[...,flipped_idx]
-#     # (I+ F) D1 y_r + (-I + F) D2 y_i
-#     V1 = (sin_images_real + flip(sin_images_real)) + (-cos_imag_imag + flip(cos_imag_imag))
-#     # ( I + F) D2 y_r + (I - F) D1 y_i
-#     V2 = (cos_images_real + flip(cos_images_real)) + (sin_imag_imag - flip(sin_imag_imag))
-
-#     V1_b = adjoint_slice_sphere_nearest(V1, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  0, volume= None)
-#     V2_b = adjoint_slice_sphere_nearest(V2, rotation_matrices, image_shape, volume_shape, volume_shape[0], voxel_size, lam,  0, volume= None)
-    
-#     vol_flipped = get_flipped_indices(volume_shape)
-#     def flip_vol(x):
-#         return x[...,vol_flipped]
-    
-#     return 0.5 * ( V1_b + flip_vol(V1_b)), 0.5*(V2_b - flip_vol(V2_b) )
-
-
-
-
 
 # A JAXed version of the adjoint. This is actually slightly slower but will run with disc_type = 'linear_interp'
 @functools.partial(jax.jit, static_argnums=[4,5,6,7])
@@ -272,54 +214,28 @@ def compute_A_t_Av_ewald_sphere_forward_model(volume_real, volume_imag, rotation
     y_0 = y[0]/noise_variance
     y_1 = y[1]/noise_variance
 
-    # y[0] = y[0]/noise_variance
-    # y[1] = y[1]/noise_variance
-
-    # A^T y 
+    # A^T y
     return u((y_0, y_1))
-
-# ## Full model that does the following: 1) unmasks 2) applys Ax 3) applys A.T to Ax 4) masks
-# def full_At_Av_model(x, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, lam, disc_type):
-#     volume_real, volume_imag = unvec_masked(x, volume_shape)
-#     x_real, x_imag = ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, lam, disc_type)
-#     z_real, z_imag = adjoint_ewald_sphere_forward_model(x_real, x_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, lam, disc_type)
-#     return vec_masked(z_real, z_imag, volume_shape)
 
 '''
 PART 4: MASK/UNMASK FUNCTIONS
 '''
 
 def get_good_idx_mask(volume_shape):
+    """Build real/imag frequency masks. Real part includes DC; imaginary excludes it."""
     zero_freq_idx = core.frequencies_to_vec_indices(jnp.array([0, 0, 0]), volume_shape)
     mask_real = mask.get_radial_mask(volume_shape).reshape(-1)
-    # TO REMOVE IF NEED BE
-    # [MARC] Should this be set to True?
     mask_real = mask_real.at[zero_freq_idx].set(True)
 
-    # TO REMOVE IF NEED BE
     mask_imag = mask_real.copy()
     mask_imag = mask_imag.at[zero_freq_idx].set(False)
-    # mask_size = jnp.sum(mask_real)
 
-    # [MARC] What is this doing?
     mask_real_indices = jnp.where(mask_real)
     mask_imag_indices = jnp.where(mask_imag)
 
     return mask_real_indices, mask_imag_indices
 
-## 
 def vec_masked(vol_real, vol_imag, volume_shape):
-    # Build mask
-    # zero_freq_idx = core.frequencies_to_vec_indices(jnp.array([0,0,0]), volume_shape)
-    # mask_real = mask.get_radial_mask(volume_shape).reshape(-1)
-    # mask_imag = mask_real.copy()
-    # # TO REMOVE IF NEED BE
-    # mask_real = mask_real.at[zero_freq_idx].set(False)
-    # # TO REMOVE IF NEED BE
-    # mask_imag = mask_imag.at[zero_freq_idx].set(False)
-    # mask_real_indices = jnp.where(mask_real)
-    # mask_imag_indices = jnp.where(mask_imag)
-    # # Place back into mask sized vectors
     mask_real_indices, mask_imag_indices = get_good_idx_mask(volume_shape)
     vol_real_masked = vol_real[mask_real_indices]
     vol_imag_masked = vol_imag[mask_imag_indices]
@@ -331,17 +247,6 @@ def unvec_masked(x, volume_shape, mask_size):
     # Build the volumes
     volume_size = volume_shape[0] ** 3
     vol_real, vol_imag = jnp.zeros(volume_size, dtype = x.dtype), jnp.zeros(volume_size, dtype = x.dtype)
-    # # Build the masks
-    # zero_freq_idx = core.frequencies_to_vec_indices(jnp.array([0, 0, 0]), volume_shape)
-    # mask_real = mask.get_radial_mask(volume_shape).reshape(-1)
-    # # TO REMOVE IF NEED BE
-    # mask_real = mask_real.at[zero_freq_idx].set(False)
-    # # TO REMOVE IF NEED BE
-    # mask_imag = mask_real.copy()
-    # mask_imag = mask_imag.at[zero_freq_idx].set(False)
-    # # mask_size = jnp.sum(mask_real)
-    # mask_real_indices = jnp.where(mask_real)
-    # mask_imag_indices = jnp.where(mask_imag)
     mask_real_indices, mask_imag_indices = get_good_idx_mask(volume_shape)
 
     # Now, input into vectors
@@ -354,8 +259,6 @@ BATCH COMPUTATION
 '''
 
 def compute_ewald_LS_matvec_in_batches(experiment_dataset, input_volume_real, input_volume_imag, batch_size, disc_type, signal_variance, noise_variance  ):
-
-#     logger.info(f"batch size in second order: {batch_size}")
 
     vol_real, vol_imag = 0, 0
 
