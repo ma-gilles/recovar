@@ -1,0 +1,83 @@
+site_name: RECOVAR
+site_description: Tools for cryo-EM heterogeneity analysis
+site_author: Marc Aurele Gilles
+site_url: https://ma-gilles.github.io/recovar
+repo_name: ma-gilles/recovar
+repo_url: https://github.com/ma-gilles/recovar
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets
+  - pymdownx.arithmatex:
+      generic: true
+  - tables
+  - toc:
+      permalink: true
+  - attr_list
+  - md_in_html
+
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+    - Test Your Installation: getting-started/testing.md
+  - User Guide:
+    - Input Data: guide/input-data.md
+    - Downsampling: guide/downsampling.md
+    - Masks: guide/masks.md
+    - Running the Pipeline: guide/pipeline.md
+    - Analyzing Results: guide/analysis.md
+    - Extracting Subsets: guide/extracting-subsets.md
+  - Advanced:
+    - Cryo-ET / Tomography: advanced/cryo-et.md
+    - Multi-GPU: advanced/multi-gpu.md
+    - Outlier Detection: advanced/outlier-detection.md
+    - Conformational Density: advanced/conformational-density.md
+    - External Embeddings: advanced/external-embeddings.md
+  - Reference:
+    - CLI Commands: reference/cli.md
+    - File Formats: reference/file-formats.md
+  - Troubleshooting: troubleshooting.md
