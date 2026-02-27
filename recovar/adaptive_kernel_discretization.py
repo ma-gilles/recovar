@@ -339,8 +339,6 @@ def precompute_kernel_one_batch(images, rotation_matrices, translations, CTF_par
 # Should this be set by cross validation?
 def precompute_triangular_kernel(experiment_dataset, noise_variance, pol_degree=0, heterogeneity_distances = None, heterogeneity_bins = None):
     pol_degree = int(pol_degree)  # ensure Python int (numpy scalars are traced by eqx.filter_jit)
-    XWX, F = 0,0
-    # print(utils.report_memory_device())
     n_bins = 1 if heterogeneity_bins is None else heterogeneity_bins.size
 
     half_volume_size = np.prod(volume_shape_to_half_volume_shape(experiment_dataset.upsampled_volume_shape))
@@ -349,10 +347,7 @@ def precompute_triangular_kernel(experiment_dataset, noise_variance, pol_degree=
 
     batch_size = int(utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total() - 3 * ( utils.get_size_in_gb(XWX)  + utils.get_size_in_gb(F))  ) )
 
-    # batch_size = 1
-    # Need to take out RR
     logger.info(f"batch size in precompute kernel: {batch_size}")
-    # batch_size = 1
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
     noise_variance_image = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape).reshape(-1)
 
@@ -519,9 +514,6 @@ def compute_estimate_from_XWX_F_summed(XWX_summed_neighbor, F_summed_neighbor, p
     good_pixels = np.zeros((half_volume_size), dtype = np.bool)
 
     logger.info(f"dtype = {prior_inverse_covariance.dtype}")
-    # if prior_option == "complete":
-    #     # prior_inverse_covariance = jnp.zeros_like(np.random.randn(prior_inverse_covariance.shape), dtype = np.complex64)
-    #     prior_option = "complete"
 
     for k in range(n_batches):
         ind_st, ind_end = utils.get_batch_of_indices(half_volume_size, batch_size, k)
@@ -574,117 +566,12 @@ def cond_from_flat_one(XWX):
 
 cond_from_flat = jax.vmap(cond_from_flat_one, in_axes = (0))
 
-# @jax.jit
-# def solve_for_m(XWX, f, regularization):
-
-#     # regularization_expanded = make_regularization_from_reduced(regularization)
-#     # XWX += jnp.diag(regularization_expanded)
-#     XWX += regularization
-#     # XWX = XWX.at[0,0].add(regularization)
-    
-#     dtype_to_solve = np.float64
-#     vreal = jax.scipy.linalg.solve(XWX.astype(dtype_to_solve), f.real.astype(dtype_to_solve), lower=False, assume_a='pos')
-#     vimag = jax.scipy.linalg.solve(XWX.astype(dtype_to_solve), f.imag.astype(dtype_to_solve), lower=False, assume_a='pos')
-#     # vreal = jnp.linalg.solve(XWX, f.real)#, lower=False, assume_a='pos')
-#     # vimag = jnp.linalg.solve(XWX, f.imag)#, lower=False, assume_a='pos')
-
-#     v = vreal + 1j * vimag
-#     good_v = jnp.linalg.cond(XWX) < 1e4
-
-#     e1 = jnp.zeros_like(v)
-#     e1 = e1.at[0].set(f[0]/XWX[0,0])
-
-#     v = jnp.where(good_v, v, e1)
-#     v = jnp.where(XWX[0,0] > 0, v, jnp.zeros_like(v))
-#     v = v.astype(np.complex64) ## 128!!?!? CHANGE MAYBE??
-#     # v = v.astype(np.complex128) ## 128!!?!? CHANGE MAYBE??
-
-#     # If condition number is bad, do degree 0 approx?
-#     # v = jnp.where(good_v, v, jnp.zeros_like(v))
-#     # res = jnp.linalg.norm(XWX @v - f)**1 / jnp.linalg.norm(f)**1#, axis = -1)
-
-#     bad_indices = jnp.isnan(v).any(axis=-1) + jnp.isinf(v).any(axis=-1)
-#     problem = bad_indices * good_v
-
-#     # problem = (res > 1e-6) * good_v
-#     v = jnp.where(bad_indices, jnp.zeros_like(v), v)
-
-#     return v, good_v, problem
-
-# @jax.jit
-# def solve_for_m_complex(XWX, f, regularization):
-
-#     # regularization_expanded = make_regularization_from_reduced(regularization)
-#     # XWX += jnp.diag(regularization_expanded)
-#     XWX += regularization
-#     # XWX = XWX.at[0,0].add(regularization)
-    
-#     dtype_to_solve = np.complex128
-#     v = jax.scipy.linalg.solve(XWX, f.astype(dtype_to_solve), lower=False, assume_a='pos')
-#     # v = jax.scipy.linalg.solve(XWX.astype(dtype_to_solve), f.astype(dtype_to_solve), lower=False, assume_a='pos')
-#     # vimag = jax.scipy.linalg.solve(XWX.astype(dtype_to_solve), f.imag.astype(dtype_to_solve), lower=False, assume_a='pos')
-#     # v = vreal + 1j * vimag
-
-#     good_v = jnp.linalg.cond(XWX) < 1e4
-
-#     e1 = jnp.zeros_like(v)
-#     e1 = e1.at[0].set(f[0]/XWX[0,0])
-
-#     v = jnp.where(good_v, v, e1)
-#     v = jnp.where(XWX[0,0] > 0, v, jnp.zeros_like(v))
-#     v = v.astype(np.complex64) ## 128!!?!? CHANGE MAYBE??
-#     # v = v.astype(np.complex128) ## 128!!?!? CHANGE MAYBE??
-
-#     # If condition number is bad, do degree 0 approx?
-#     # v = jnp.where(good_v, v, jnp.zeros_like(v))
-#     # res = jnp.linalg.norm(XWX @v - f)**1 / jnp.linalg.norm(f)**1#, axis = -1)
-
-#     bad_indices = jnp.isnan(v).any(axis=-1) + jnp.isinf(v).any(axis=-1)
-#     problem = bad_indices * good_v
-
-#     # problem = (res > 1e-6) * good_v
-#     v = jnp.where(bad_indices, jnp.zeros_like(v), v)
-
-#     return v, good_v, problem
-
-
 @jax.jit
 def solve_for_m_simple(XWX, f, regularization):
-
-    # regularization_expanded = make_regularization_from_reduced(regularization)
-    # XWX += jnp.diag(regularization_expanded)
     XWX += regularization
-    # XWX = XWX.at[0,0].add(regularization)
-    
-    # dtype_to_solve = np.float64
-    # linalg.batch_hermitian_linear_solver(A,b)
-    # vreal = jax.scipy.linalg.solve(XWX.astype(dtype_to_solve), f.real.astype(dtype_to_solve), lower=False, assume_a='pos')
-    # vimag = jax.scipy.linalg.solve(XWX.astype(dtype_to_solve), f.imag.astype(dtype_to_solve), lower=False, assume_a='pos')
-    # vreal = jnp.linalg.solve(XWX, f.real)#, lower=False, assume_a='pos')
-    # vimag = jnp.linalg.solve(XWX, f.imag)#, lower=False, assume_a='pos')
-
-    # v = vreal + 1j * vimag
     v = linalg.batch_hermitian_linear_solver(XWX, f)
     good_v = jnp.linalg.cond(XWX) < 1e4
     problem = ~good_v
-    # e1 = jnp.zeros_like(v)
-    # e1 = e1.at[0].set(f[0]/XWX[0,0])
-
-    # v = jnp.where(good_v, v, e1)
-    # v = jnp.where(XWX[0,0] > 0, v, jnp.zeros_like(v))
-    # v = v.astype(np.complex64) ## 128!!?!? CHANGE MAYBE??
-    # # v = v.astype(np.complex128) ## 128!!?!? CHANGE MAYBE??
-
-    # # If condition number is bad, do degree 0 approx?
-    # # v = jnp.where(good_v, v, jnp.zeros_like(v))
-    # # res = jnp.linalg.norm(XWX @v - f)**1 / jnp.linalg.norm(f)**1#, axis = -1)
-
-    # bad_indices = jnp.isnan(v).any(axis=-1) + jnp.isinf(v).any(axis=-1)
-    # problem = bad_indices * good_v
-
-    # problem = (res > 1e-6) * good_v
-    # v = jnp.where(bad_indices, jnp.zeros_like(v), v)
-
     return v, good_v, problem
 
 
