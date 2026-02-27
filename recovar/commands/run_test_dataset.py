@@ -1,9 +1,9 @@
+import sys
 import subprocess
 import shutil
 import os
 import shlex
 import jax
-import sys
 import argparse
 import pickle
 

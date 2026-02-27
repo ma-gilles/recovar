@@ -1,12 +1,10 @@
 # If you want to extend and use recovar, you should import this first
-import recovar.config 
-import jax.numpy as jnp
+import recovar.config
 import numpy as np
 
 import os, argparse, time, logging
 from recovar import output as o
 from recovar import dataset, utils, noise
-import recovar.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
 

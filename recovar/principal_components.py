@@ -630,7 +630,6 @@ def test_different_embeddings(cryos, volume_mask, mean_estimate, basis, eigenval
     # noise.get_average_residual_square_v2(cryos[0], volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp')
 
     # likelihoods = np.array([cryo.likelihood for cryo in cryos])
-    from recovar import noise, embedding
     residuals = np.zeros(zdims.size)
     cryo = cryos[0]
     contrast_grid = np.ones([1])
@@ -666,7 +665,6 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
     # noise.get_average_residual_square_v2(cryos[0], volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp')
 
     # likelihoods = np.array([cryo.likelihood for cryo in cryos])
-    from recovar import noise, embedding
     from recovar import latent_density
     metrics = {'locerr_median':np.zeros(zdims.size), 'locerr_90':np.zeros(zdims.size), 'locerr_mean':np.zeros(zdims.size)}
 
@@ -765,7 +763,6 @@ def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, z
     # noise.get_average_residual_square_v2(cryos[0], volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp')
 
     # likelihoods = np.array([cryo.likelihood for cryo in cryos])
-    from recovar import noise, embedding
     from recovar import latent_density
     zdims = np.asarray(zdims)
     metrics = {'variance':np.zeros(zdims.size), 'filt_var': np.zeros(zdims.size) , 'var_avg': {}, 'variance_lp': np.zeros(zdims.size) }

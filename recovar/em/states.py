@@ -1,7 +1,6 @@
 import logging
 import numpy as np
 import jax
-import jax.numpy as jnp
 from recovar import utils, relion_functions, mask as mask_fn, constants, principal_components
 from .e_step import E_with_precompute
 from .m_step import M_with_precompute

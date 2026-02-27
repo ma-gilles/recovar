@@ -1,10 +1,9 @@
 import logging
 import jax.numpy as jnp
 import numpy as np
-import jax, time
+import jax
 import functools
-from recovar import core, covariance_core, regularization, utils, constants, noise, homogeneous, linalg, embedding, adaptive_kernel_discretization
-import recovar.fourier_transform_utils as fourier_transform_utils
+from recovar import core, linalg, embedding
 
 logger = logging.getLogger(__name__)
 

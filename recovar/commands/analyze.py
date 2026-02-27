@@ -1,13 +1,12 @@
-import recovar.config 
+import recovar.config
 import logging
 import numpy as np
 from recovar import output as o
-from recovar import dataset, utils, latent_density, embedding, plot_utils
+from recovar import dataset, utils, latent_density, embedding
 from scipy.spatial import distance_matrix
 import pickle
 import os, argparse
-import sys
-from recovar.utils_core import copy_data_to_temp_folder, cleanup_temp_files, copy_data_from_pipeline_output
+from recovar.utils_core import cleanup_temp_files, copy_data_from_pipeline_output
 logger = logging.getLogger(__name__)
 from recovar import parser_args
 
@@ -292,8 +291,6 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         # Clean up temp files at the end (including failures).
         if path_mapping is not None and args is not None and not getattr(args, "no_cleanup", False):
             cleanup_temp_files(path_mapping)
-
-from recovar.output import move_to_one_folder
 
 
 def pick_pairs(centers, n_pairs):

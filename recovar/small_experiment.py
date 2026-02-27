@@ -1,6 +1,5 @@
 import numpy as np
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import jax
 from jax.experimental import sparse
 from recovar import core, simulator, mask, utils, covariance_estimation

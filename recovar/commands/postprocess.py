@@ -7,7 +7,6 @@ import glob
 import numpy as np
 from recovar import utils, locres
 import recovar.fourier_transform_utils as fourier_transform_utils
-import jax.numpy as jnp
 
 logger = logging.getLogger(__name__)
 

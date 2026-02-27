@@ -6,9 +6,7 @@ import argparse
 import pickle
 import shutil
 import logging
-import numpy as np
 import matplotlib
-import matplotlib.pyplot as plt
 from recovar import output
 
 # Import necessary functions from pipeline.py and output module

@@ -359,7 +359,7 @@ def find_local_maxs_of_density(density_deconv, latent_space_bounds, percent_top 
     n_top_points = int(percent_top/100 * np.prod(density_deconv.shape))
     large_dens_indices = (np.array(large_dens_indices_raveled)[:,-n_top_points:]).T
 
-    from sklearn.cluster import KMeans, SpectralClustering, AgglomerativeClustering, HDBSCAN
+    from sklearn.cluster import KMeans, AgglomerativeClustering, HDBSCAN
     import matplotlib.pyplot as plt
     # clustering = KMeans(n_clusters=n_local_maxs,  n_init=10).fit(X)
 

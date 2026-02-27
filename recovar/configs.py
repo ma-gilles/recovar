@@ -17,11 +17,10 @@ Usage::
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Tuple, Union
+from typing import Callable, Optional, Tuple
 
 import equinox as eqx
 import jax
-import jax.numpy as jnp
 import numpy as np
 
 

@@ -1,6 +1,6 @@
 ## Make a p
 import argparse
-from recovar import heterogeneity_volume, utils, locres
+from recovar import utils
 import os
 import numpy as np
 import logging
