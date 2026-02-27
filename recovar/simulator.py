@@ -522,7 +522,6 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         ctf_params[:,core.CTFParamIndex.W] = 0
         ctf_params[:,core.CTFParamIndex.PHASE_SHIFT] = phase_shift
         ctf_params[:,core.volt_ind] = 100
-        # import pdb; pdb.set_trace()
 
     trans *=0 
     per_image_contrast, per_image_noise_scale = generate_contrast_params(n_images, noise_scale_std, contrast_std )
@@ -628,7 +627,6 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         # Move the center by around twice the radius
         trans_2 *= 2 * volume_radius * volume_shape[0] / 2
         # print(np.mean(np.linalg.norm(trans_2, axis =-1)))
-        # import pdb; pdb.set_trace()
         other_particles_dataset = dataset.CryoEMDataset( None, voxel_size,
                                 rots_2, trans_2, ctf_params, CTF_fun = CTF_fun, dataset_indices = None, grid_size = grid_size)
         # No noise in this stack.
@@ -750,7 +748,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
         gt_vols = [gsm.generate_volume_from_atoms(vol, voxel_size = experiment_dataset.voxel_size,  grid_size = experiment_dataset.grid_size,  freq_coords = None, jax_backend = False).reshape(-1) for vol in volumes ]
         B_fac_vols = [Bfactorize_vol(volume, experiment_dataset.voxel_size, Bfactor, experiment_dataset.volume_shape) for volume in gt_vols]
         gt_vols_norm = np.mean(np.linalg.norm(B_fac_vols, axis =(-1)))
-        print(gt_vols_norm)
+        logger.debug("gt_vols_norm: %s", gt_vols_norm)
 
     key = jax.random.PRNGKey(seed)
     # A little bit of a hack to account for the fact that noise is complex but goes to real
@@ -869,7 +867,6 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 # plt.show()
 
 
-                # import pdb; pdb.set_trace()
 
                 images_batch = padding.pad_images_fourier_domain(images_batch,  experiment_dataset.image_shape, experiment_dataset.grid_size * (upsample_factor-1))
                 images_batch = images_batch * upsampled_CTF
@@ -931,11 +928,9 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                     if plotting:
                         plt.imshow(images_batch2[0]); plt.show()
                         plt.show()
-                    # import pdb; pdb.set_trace()
                     images_batch = images_batch2
                 
                 images_batch = fourier_transform_utils.get_idft2(images_batch.reshape([-1, *experiment_dataset.image_shape]))
-                # import pdb; pdb.set_trace()
                 images_batch = images_batch.real
                 key, subkey = jax.random.split(key)
                 noise_batch = make_noise_batch(subkey, noise_image, images_batch.shape)
@@ -949,7 +944,6 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
             # if n_images_done % 1000 == 0:
             logger.info(f"Batch {k}: Generated {n_images_done} images so far")
 
-            # import pdb; pdb.set_trace()
     logger.info("Discretizing with: " + disc_type)
     logger.info("Done generating data")
 
@@ -1068,7 +1062,7 @@ def compute_projections_with_nufft(atom_group, plane_coords, voxel_size):
     X_ims = np.array(gsm.generate_potential_at_freqs_from_atoms(atom_group, voxel_size, plane_coords_vec).astype(np.complex64))
     # print(np.max(np.abs(atom_group.getCoords())))
     if np.isnan(np.sum(X_ims)):
-        import pdb; pdb.set_trace()
+        raise ValueError("NaN in generated scattering potential slices")
     X_ims = X_ims.reshape(plane_coords.shape[:-1])
     return X_ims
 

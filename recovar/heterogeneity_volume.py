@@ -48,7 +48,6 @@ def pick_minimum_discretization_size(ndim, log_likelihoods, q = 0.5, min_images 
         logger.warning(f"Not enough images for minimum discretization size. Using {min_images} images.")
         return disc_latent_dist
     value = np.max( [ np.sort(log_likelihoods)[min_images], disc_latent_dist] ) # Bump a lil bit
-    # import pdb; pdb.set_trace()
     return value * ( 1 + 1e-8)
 
 # def pick_heterogeneity_bins(ndim, log_likelihoods, q = 0.5, min_images = 50, n_bins = 11):
@@ -67,7 +66,7 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
 
     cryos = dataset.load_dataset_from_args(results['input_args'], lazy = False) if cryos is None else cryos
     output_folder = results['input_args'].outdir + "/output/" if output_folder is None else output_folder
-    print("Dumping to ", output_folder)
+    logger.info("Dumping to %s", output_folder)
     recovar.output.mkdir_safe(output_folder)
     noise_variance = results['cov_noise']
     latent_points = latent_point[None]
@@ -78,7 +77,7 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
         a = 1
         # make_volumes_kernel_estimate( heterogeneity_distances, cryos, noise_variance, output_folder, ndim, n_bins) 
     else:
-        print("CHOOSING THREHSOLD ONLY BASED ON NUMBER OF IMAGES! FIX?")
+        logger.warning("Choosing threshold only based on number of images")
         make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder, -1, n_bins, B_factor, tau = None, n_min_particles = n_min_particles, metric_used = metric_used)
     
 
@@ -279,7 +278,6 @@ def smooth_shell_error(shell_error, voxel_size, subarray_size, sum_up_up_to_res 
     ### TODO: WHY AM I THROWING AWAY THE LAST SHELL??
     grids = full_grids[-shell_error.shape[-1]-1:-1]
     # print(grids)
-    # import pdb; pdb.set_trace()
     low_res_indices = grids <= 1/ sum_up_up_to_res
     logger.info(f"Averaging first {jnp.sum(low_res_indices)} shells out of {shell_error.shape[-1]} until resolution {sum_up_up_to_res}. Smoothing shells with kernel size {smooth_mean_filter}")
     shell_choice_new = jnp.where(grids <= 1/ sum_up_up_to_res, jnp.sum(shell_error * low_res_indices ), shell_choice_new)
@@ -406,7 +404,6 @@ def get_inds_for_subvolume(path_to_vol_folder, subvolume_idx):
     good_indices = heterogeneity_distances < upper_bound
     good_indices = np.where(good_indices)[0]
     # Probably should reorder the heterogeneity distances to match the order of the images
-    # import pdb; pdb.set_trace()
     # Get all the indices
     return good_indices
 

@@ -65,7 +65,6 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         if np.max(np.abs(picked_frequencies_in_frequencies_format)) > cryos.grid_size//2-1:
             logger.warning("Largest frequency computed is larger than grid size//2-1. This may cause big issues in SVD. This probably means variance estimates were wrong")
         # print("chosen cols", picked_frequencies_in_frequencies_format.T)
-        # import pdb; pdb.set_trace()
     else:
         raise NotImplementedError('unrecognized column sampling scheme')
     
@@ -645,7 +644,6 @@ def test_different_embeddings(cryos, volume_mask, mean_estimate, basis, eigenval
         contrasts = np.ones(cryo.n_images)
         residuals[zdim_idx] = noise.get_average_residual_square_v3(cryos[0], volume_mask, mean_estimate, basis[:,:zdim].T, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp')
 
-        # import pdb; pdb.set_trace()
         basis_flipped = basis[:,:zdim].copy()
         basis_flipped[:,zdim-1] = basis[:,zdim-1] * (np.random.randint(0,2, size = basis[:,zdim-1].shape)*2 - 1)
 
@@ -725,7 +723,6 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
                 #     plt.show()
                 # # print('n in batch:,', np.sum(inds == 0))
 
-                # import pdb; pdb.set_trace()
                 # Compute two estimators
                 from recovar import adaptive_kernel_discretization
                 estimators[cryo_idx], lhs[cryo_idx], rhs[cryo_idx] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[cryo_idx], noise_variance.astype(np.float32), None, best_likelihood, single_bin, tau= None, grid_correct=False, use_spherical_mask=False, return_lhs_rhs=True)
@@ -826,7 +823,6 @@ def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, z
                 #     plt.show()
                 # # print('n in batch:,', np.sum(inds == 0))
 
-                # import pdb; pdb.set_trace()
                 # Compute two estimators
                 from recovar import adaptive_kernel_discretization, relion_functions, regularization, utils
                 estimators[cryo_idx], lhs[cryo_idx], rhs[cryo_idx] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[cryo_idx], noise_variance.astype(np.float32), None, best_likelihood, single_bin, tau= tau, grid_correct=True, use_spherical_mask=True, return_lhs_rhs=True)
@@ -841,7 +837,6 @@ def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, z
                 #     print(cryos[cryo_idx].dataset_indices[images_used])
                 #     output.save_volume(estimators[cryo_idx], f"estimator_{cryo_idx}", from_ft = True)
                 #     # return cryos[cryo_idx].dataset_indices[images_used]
-                #     import pdb; pdb.set_trace()
                 image_subset = np.argwhere(images_used).reshape(-1)
                 Ft_ctf, Ft_y = relion_functions.residual_relion_style_triangular_kernel(cryos[cryo_idx], estimators[cryo_idx][0], noise_variance.astype(np.float32) * 0 ,  100,  index_subset = image_subset)
                 Ft_y = (Ft_y * cryos[0].get_valid_frequency_indices())#.reshape(cryos[0].volume_shape)
@@ -859,9 +854,7 @@ def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, z
                 # avg_variance = regularization.average_over_shells(Ft_y, cryos[0].volume_shape)
                 # plt.plot(avg_variance)
                 # plt.show()
-                # import pdb; pdb.set_trace()
 
-            # import pdb; pdb.set_trace()
             metrics['var_avg'][zdim_idx] = avg_variance
             metrics['filt_var'][zdim_idx] += np.sum(Ft_y)
             metrics['variance'][zdim_idx] += np.sum(variance_estimate)

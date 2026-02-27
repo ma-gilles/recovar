@@ -101,7 +101,6 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
     kernel_on_grid = jnp.array(kernel_on_grid)
     # from recovar import utils
     # utils.pickle_dump(kernel_on_grid, '/home/mg6942/kernel_on_grid.pkl')
-    # import pdb; pdb.set_trace()
     def forward_model_grid(fun_on_grid):
         convolve_fun = convolve_with_pad_nd(fun_on_grid, kernel_on_grid)
         return convolve_fun
@@ -152,7 +151,6 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
         lbfgsb_sol_p = lbfgsb.run(init_params=w_init,bounds=bounds, alpha = alpha )#, bounds=bounds)
         # lbfgsb_sol_p = lbfgsb.run(w_init, alpha = alpha, bounds=bounds )
         # print(alpha_idx, alpha, lbfgsb_sol_p.state)
-        # import pdb; pdb.set_trace()
 
         lbfgsb_sol = lbfgsb_sol_p.params
         cost[alpha_idx] = ridge_reg_objective_grid(lbfgsb_sol, alpha = 0) / ridge_reg_objective_grid(lbfgsb_sol * 0, alpha = 0) 

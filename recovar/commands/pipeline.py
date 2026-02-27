@@ -600,8 +600,9 @@ def standard_recovar_pipeline(args):
             noise_var_used, cryos, means, batch_size, dilated_volume_mask)
 
         # Compute variance with regularization
+        # //2: variance computation with cubic disc_type needs ~2x memory per image (spline coefficients)
         variance_est, _, variance_fsc, _, noise_p_variance_est = covariance_estimation.compute_variance(
-            cryos, means['combined'], batch_size // 2, dilated_volume_mask,
+            cryos, means['combined'], utils.safe_batch_size(batch_size // 2), dilated_volume_mask,
             use_regularization=True, disc_type='cubic', mean_cubic=mean_cubic)
 
         utils.report_memory_device(logger=logger)
@@ -693,7 +694,8 @@ def standard_recovar_pipeline(args):
         n_pcs_to_use = (num_foc_masks - 1) * zdim_for_rest + zdim
         noise_var_from_het_residual, _, _ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(
             cryos[0], dilated_volume_mask, means['combined'], u['rescaled'][:, :n_pcs_to_use],
-            est_contrasts[zdim], zs[zdim], batch_size // 10,
+            # //10: heterogeneity residual estimation is memory-intensive (holds full embedding + projections)
+            est_contrasts[zdim], zs[zdim], utils.safe_batch_size(batch_size // 10),
             disc_type=covariance_options['disc_type'])
     else:
         noise_var_from_het_residual = None

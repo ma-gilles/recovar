@@ -147,7 +147,11 @@ def guess_grid_size_from_vol_size(vol_size):
 def guess_vol_shape_from_vol_size(vol_size):
     return tuple(3*[guess_grid_size_from_vol_size(vol_size)])
 
-# These should probably be set more intelligently
+def safe_batch_size(raw_size):
+    """Clamp a raw batch size to at least 1 and convert to int."""
+    return max(1, int(raw_size))
+
+
 # Sometimes, memory can grow like O(vol_batch_size * image_batch_size)
 def get_image_batch_size(grid_size, gpu_memory):
     """Calculate batch size for image processing.
@@ -169,7 +173,8 @@ def get_image_batch_size(grid_size, gpu_memory):
     grid_size_f = float(grid_size)
     gpu_memory_f = float(gpu_memory)
     
-    # Calculate batch size using floating point
+    # Each image is grid_size^2 complex64 values (8 bytes each).
+    # 2^18 / grid_size^2 targets ~2 GB per batch at gpu_memory=1.
     batch_size = (2.0**18.0) / (grid_size_f * grid_size_f) * gpu_memory_f
     
     # Add reasonable bounds
@@ -192,7 +197,8 @@ def get_vol_batch_size(grid_size, gpu_memory):
     grid_size_f = float(grid_size)
     gpu_memory_f = float(gpu_memory)
     
-    # Calculate using floating point
+    # Empirical formula: 25 volumes at 256^3 fit in ~38 GB.
+    # Scales cubically with grid_size and linearly with gpu_memory.
     batch_size = 25.0 * (256.0 / grid_size_f)**3.0 * gpu_memory_f / 38.0
     
     # Add reasonable bounds
@@ -213,7 +219,8 @@ def get_column_batch_size(grid_size, gpu_memory):
     grid_size_f = float(grid_size)
     gpu_memory_f = float(gpu_memory)
     
-    # Calculate using floating point
+    # Empirical formula: 50 columns at 256^3 fit in ~38 GB.
+    # Column processing uses ~half the memory per element as full volumes.
     batch_size = 50.0 * (256.0/grid_size_f)**3.0 * gpu_memory_f / 38.0
     
     # Add reasonable bounds
@@ -231,6 +238,8 @@ def get_embedding_batch_size(basis, image_size, contrast_grid, zdim, gpu_memory)
     left_over_memory = ( gpu_memory - get_size_in_gb(basis))
     # assert left_over_memory > 0, "GPU memory too small?"
 
+    # Per-image memory: image_size * max(zdim, 4) for projections + contrast_grid * zdim^2 for residuals,
+    # each 8 bytes (complex64). The /20 safety factor accounts for JIT intermediates.
     batch_size = int(left_over_memory/ ( (image_size  * np.max([zdim, 4]) + contrast_grid.size * zdim**2 ) *8/1e9 )/ 20)
 
     if batch_size < 1:
@@ -472,7 +481,6 @@ def write_starfile_from_cryodrgn_format(ctf_path, pose_path, particles_file_path
     rots = poses[0]
     trans = poses[1]
     # particles = load_mrc(particles_file_path)
-    # import pdb; pdb.set_trace()
     write_starfile(ctf[:,2:], rots, trans, ctf[0,1], ctf[0,0], particles_file_path, output_filename, halfset_indices = None)
 
 def downsample_vol_by_fourier_truncation(vol_input, target_grid_size):

@@ -211,7 +211,6 @@ batch01_compute_residuals = jax.vmap(batch0_compute_residuals, in_axes = (None, 
 
 @jax.jit
 def compute_sum_exp_residuals(test_pts, xs, cov_xs, scale_xs):
-    #import pdb; pdb.set_trace()
     return jnp.sum( scale_xs[...,None] *  jnp.exp(- batch01_compute_residuals(test_pts, xs, cov_xs) ), axis = 0)
 
 @jax.jit
@@ -260,7 +259,6 @@ def compute_latent_log_likelihood(test_pts, zs, cov_zs):
     for k in range(0, utils.get_number_of_index_batch(n_images, batch_size_x)):
         batch_st, batch_end = utils.get_batch_of_indices(n_images, batch_size_x, k)
         quads[batch_st:batch_end,:] = 0.5 * (compute_latent_quadratic_forms( test_pts.real, zs[batch_st:batch_end].real, cov_zs[batch_st:batch_end]) - det_cov_zs[batch_st:batch_end][...,None])
-    # import pdb; pdb.set_trace()
 
     return quads
 

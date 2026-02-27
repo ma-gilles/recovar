@@ -28,6 +28,21 @@ import matplotlib.pyplot as plt
 import logging
 from sklearn.cluster import KMeans
 from recovar import output, relion_functions, plot_utils, utils
+
+
+def _safe_savefig(filepath, **kwargs):
+    """Save the current figure, handling tight_layout overflow gracefully.
+
+    When tight_layout fails to fit all decorations (common with degenerate data),
+    bbox_inches='tight' can compute an absurdly large bounding box. This helper
+    catches the resulting error and retries without bbox_inches='tight'.
+    (ValueError for oversized pixel dimensions, TypeError for int overflow in RendererAgg.)
+    """
+    try:
+        plt.savefig(filepath, **kwargs)
+    except (ValueError, TypeError):
+        kwargs.pop('bbox_inches', None)
+        plt.savefig(filepath, **kwargs)
 import recovar.fourier_transform_utils as fourier_transform_utils
 import jax.numpy as jnp
 import seaborn as sns
@@ -456,7 +471,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     cbar.set_label('Half-map FSC Score', fontweight='bold')
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_folder, f'all_halfmap_fsc_curves_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+    _safe_savefig(os.path.join(output_folder, f'all_halfmap_fsc_curves_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # --- Plot all vs-mean FSC curves with improved styling ---
@@ -502,7 +517,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     cbar.set_label('vs-Mean FSC Score', fontweight='bold')
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_folder, f'all_vs_mean_fsc_curves_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+    _safe_savefig(os.path.join(output_folder, f'all_vs_mean_fsc_curves_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # --- Individual cluster FSC plots (top 10 and bottom 10) with better layout ---
@@ -532,7 +547,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
         ax.set_facecolor('#FAFAFA')
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_folder, f'top_10_clusters_fsc_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+    _safe_savefig(os.path.join(output_folder, f'top_10_clusters_fsc_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # Plot bottom 10 clusters with improved layout
@@ -557,7 +572,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
         ax.set_facecolor('#FAFAFA')
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_folder, f'bottom_10_clusters_fsc_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+    _safe_savefig(os.path.join(output_folder, f'bottom_10_clusters_fsc_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # Pad to at least 2 columns for 2D scatter/hexbin plots
@@ -635,7 +650,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     ax.set_facecolor('#FAFAFA')
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    plt.savefig(os.path.join(output_folder, f'junk_detection_results_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+    _safe_savefig(os.path.join(output_folder, f'junk_detection_results_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
     # --- Particle Usage Visualization (simplified and cleaner) ---
@@ -769,7 +784,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
         ax.set_facecolor('#FAFAFA')
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-        plt.savefig(os.path.join(output_folder, f'particle_usage_visualization_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+        _safe_savefig(os.path.join(output_folder, f'particle_usage_visualization_{zdim_key}.png'), dpi=300, bbox_inches='tight')
         plt.close()
     
     # --- Create comprehensive analysis plots with improved styling ---
@@ -879,7 +894,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     ax.set_facecolor('#FAFAFA')
     
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    plt.savefig(os.path.join(output_folder, f'fsc_analysis_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+    _safe_savefig(os.path.join(output_folder, f'fsc_analysis_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # Calculate cluster sizes
@@ -1158,7 +1173,7 @@ def plot_umap_visualization(zs, cluster_centers, cluster_indices, fsc_scores, fs
     ax.grid(True, alpha=0.3)
     
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    plt.savefig(os.path.join(output_folder, f'umap_visualization_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+    _safe_savefig(os.path.join(output_folder, f'umap_visualization_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # Create a second figure focused on AUC scores and comparisons
@@ -1246,7 +1261,7 @@ def plot_umap_visualization(zs, cluster_centers, cluster_indices, fsc_scores, fs
     ax.grid(True, alpha=0.3)
     
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    plt.savefig(os.path.join(output_folder, f'auc_analysis_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+    _safe_savefig(os.path.join(output_folder, f'auc_analysis_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # Save UMAP coordinates for potential future use
@@ -1729,7 +1744,7 @@ Score Separation:
                      edgecolor='black', linewidth=1))
     
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    plt.savefig(os.path.join(output_folder, f'junk_detection_summary_{zdim_key}.png'), 
+    _safe_savefig(os.path.join(output_folder, f'junk_detection_summary_{zdim_key}.png'), 
                 dpi=300, bbox_inches='tight', facecolor='white')
     plt.close()
     
@@ -1832,7 +1847,7 @@ Score Separation:
                     f'{value:.3f}', ha='center', va='bottom', fontweight='bold', fontsize=10)
     
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    plt.savefig(os.path.join(output_folder, f'junk_detection_methods_{zdim_key}.png'), 
+    _safe_savefig(os.path.join(output_folder, f'junk_detection_methods_{zdim_key}.png'), 
                 dpi=300, bbox_inches='tight', facecolor='white')
     plt.close()
     
@@ -2371,7 +2386,7 @@ Classification Quality:
             bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
     
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    plt.savefig(os.path.join(output_folder, f'particle_classification_{zdim_key}.png'), 
+    _safe_savefig(os.path.join(output_folder, f'particle_classification_{zdim_key}.png'), 
                 dpi=300, bbox_inches='tight')
     plt.close()
     
@@ -2485,7 +2500,7 @@ Classification Quality:
     ax.grid(True, alpha=0.3)
     
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    plt.savefig(os.path.join(output_folder, f'particle_analysis_detailed_{zdim_key}.png'), 
+    _safe_savefig(os.path.join(output_folder, f'particle_analysis_detailed_{zdim_key}.png'), 
                 dpi=300, bbox_inches='tight')
     plt.close()
     

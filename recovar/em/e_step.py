@@ -45,7 +45,8 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     )
 
     gpu_memory = utils.get_gpu_memory_total()
-    batch_size = max(1, int(utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) * 5))
+    # *5: slicing is cheap per image, use larger batches for projection precomputation
+    batch_size = utils.safe_batch_size(utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) * 5)
     n_batches = utils.get_number_of_index_batch(n_rotations, batch_size)
 
     projections = np.zeros((rotations.shape[0], image_size), dtype = np.complex64)
@@ -59,10 +60,10 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     # Compute \sum_i A_i^T y_i / sigma_i^2
     residuals = np.empty((n_images,  projections.shape[0], n_translations))
 
-    dot_product_batch_size = utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory - utils.get_size_in_gb(projections)) / translations.shape[0] * 40
-    dot_product_batch_size/= 4
-    dot_product_batch_size = int(max(1, dot_product_batch_size))
-    logger.info(f"Starting IP. Dot product batch size {dot_product_batch_size}. Remaing memory {gpu_memory - utils.get_size_in_gb(projections)}")
+    # *10: dot products use less memory than full forward model; divide by translations for inner loop
+    dot_product_batch_size = utils.safe_batch_size(
+        utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory - utils.get_size_in_gb(projections)) / translations.shape[0] * 10)
+    logger.info(f"Starting IP. Dot product batch size {dot_product_batch_size}. Remaining memory {gpu_memory - utils.get_size_in_gb(projections)}")
     utils.report_memory_device(logger=logger)
     # dot_product_batch_size = batch_size // translations.shape[0]
     data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=dot_product_batch_size, subset_indices = image_indices)
@@ -107,10 +108,9 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     utils.report_memory_device(logger=logger)
     # For the \|C_i Proj_j\|^2 term
 
-    norm_batch_size = max(
-        1,
-        int(utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory - utils.get_size_in_gb(projections)) * 3),
-    )
+    # *3: norm computation is lighter than full forward model
+    norm_batch_size = utils.safe_batch_size(
+        utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory - utils.get_size_in_gb(projections)) * 3)
 
     for array_indices, dataset_indices in utils.subset_and_indices_batch_iter(image_indices, norm_batch_size):
         # indices = utils.get_batch_of_indices_arange(n_images, norm_batch_size, k)
@@ -125,7 +125,8 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     del projections
     logger.info(f"done with norms. Batch size {norm_batch_size}")
 
-    prob_batch_size = max(1, batch_size // 10)
+    # //10: probability computation is memory-intensive (softmax over rotations)
+    prob_batch_size = utils.safe_batch_size(batch_size // 10)
     n_batches = utils.get_number_of_index_batch(n_images, prob_batch_size)
     for array_indices, _ in utils.subset_and_indices_batch_iter(image_indices, prob_batch_size):
         residuals[array_indices] = compute_probability_from_residual_normal_squared_one_image(residuals[array_indices])

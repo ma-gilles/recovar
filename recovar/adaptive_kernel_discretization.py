@@ -504,8 +504,7 @@ def compute_estimate_from_XWX_F_summed(XWX_summed_neighbor, F_summed_neighbor, p
     memory_per_pixel =  800 * utils.get_size_in_gb(XWX_summed_neighbor[0]) * 10
     volume_size = np.prod(volume_shape)
     half_volume_size = np.prod(volume_shape_to_half_volume_shape(volume_shape))
-    # import pdb; pdb.set_trace()
-    print("mem before anything", utils.get_gpu_memory_used())
+    logger.debug("mem before anything: %s", utils.get_gpu_memory_used())
     batch_size = int((utils.get_gpu_memory_total() -  utils.get_size_in_gb(XWX_summed_neighbor) - utils.get_size_in_gb(F_summed_neighbor)  )/ (memory_per_pixel )  ) 
     # batch_size = 1000000
     # memory_per_pixel = (2*1 +1)**3 * big_gram_matrix_size(pol_degree) * 2 * 8 * 4
@@ -529,7 +528,7 @@ def compute_estimate_from_XWX_F_summed(XWX_summed_neighbor, F_summed_neighbor, p
         ind_st, ind_end = utils.get_batch_of_indices(half_volume_size, batch_size, k)
 
         reconstruction[ind_st:ind_end], good_pixels[ind_st:ind_end], problems = compute_estimate_from_XWX_F_summed_one(XWX_summed_neighbor[ind_st:ind_end], F_summed_neighbor[ind_st:ind_end], frequencies_vol_indices[ind_st:ind_end], prior_inverse_covariance, prior_option, volume_shape, XWX_in_flat = True)
-        print(str(k) + "...", end =" ")
+        logger.debug("batch %d...", k)
 
     utils.report_memory_device(logger=logger)
     logger.info(f"Done with compute_estimate_from_XWX_F_summed with prior option={prior_option}")
@@ -881,7 +880,6 @@ def estimate_multiple_disc_relion_style(experiment_datasets, noise_variance, dis
 
 
     # n_dataset (2) x volume_size (N^3) x n_disc_test x n_bins x feature_size  
-    # import pdb; pdb.set_trace()
     first_estimates = first_estimates[...,None]
     first_estimates = first_estimates.transpose(2, 3, 0, 1, 4)
     first_estimates = first_estimates.reshape([*first_estimates.shape[:2], -1, first_estimates.shape[-1]])
@@ -966,7 +964,6 @@ def pick_best_heterogeneity_from_residual(estimates, full_test_dataset, heteroge
         bin_chosen = np.argmax(good_bins)
         residual_threshold = heterogeneity_bins[bin_chosen]
 
-        # import pdb; pdb.set_trace()
 
     # residuals to pick best one
     from recovar import dataset
@@ -993,7 +990,6 @@ def pick_best_heterogeneity_from_residual(estimates, full_test_dataset, heteroge
     index_array_vol, disc_choices, residuals_averaged = pick_best_params(residuals, all_params, test_dataset.volume_shape)
 
     summed_residuals = jnp.sum(residuals, axis = 0)
-    # import pdb; pdb.set_trace()
     # print(summed_residuals.shape)
     return index_array_vol, disc_choices, residuals_averaged, summed_residuals
     
@@ -1046,7 +1042,6 @@ def estimate_optimal_covariance_and_volume(init_variance, init_prior_covariance_
     pol_init_prior_inverse_covariance = 1/estimate_signal_variance_from_correlation(first_estimates[0], first_estimates[1], lhs, half_volume_to_full_volume(init_prior_inverse_covariance, volume_shape), volume_shape)
     if (pol_init_prior_inverse_covariance < 0).any():
         a =1
-        # import pdb; pdb.set_trace()
 
     # Now do a p = input, h = input discretization with diagonal variance
     pol_init_prior_inverse_covariance = np.repeat(pol_init_prior_inverse_covariance[...,None] , discretization_params[0]+1, axis=-1)
@@ -1095,13 +1090,15 @@ def estimate_optimal_covariance_and_volume(init_variance, init_prior_covariance_
 
         # If any are bad, revert to previous one?
         bad_prior_inverse_covariance = jnp.isnan(prior_inverse_covariance).any(axis=(-1, -2))  +  np.isinf(prior_inverse_covariance).any(axis=(-1, -2)) + bad_covars
-        print("bad ones:", bad_prior_inverse_covariance.sum())
+        logger.debug("bad ones: %s", bad_prior_inverse_covariance.sum())
         # Now do a p = input, h = input discretization with covariance
         pol_current_prior_inverse_covariance = jnp.where(bad_prior_inverse_covariance[...,None,None], init_prior_inverse_covariance_avg, prior_inverse_covariance)
         if jnp.isnan(pol_current_prior_inverse_covariance).any():
             bad_prior_inverse_covariance2 = jnp.isnan(pol_current_prior_inverse_covariance).any(axis=(-1, -2)) #* np.isinf(pol_current_prior_inverse_covariance).any(axis=(-1, -2))
-            jnp.isnan(init_prior_inverse_covariance_avg).any(axis=(-1, -2))
-            import pdb; pdb.set_trace()
+            raise RuntimeError(
+                f"NaN in prior_inverse_covariance after fallback. "
+                f"bad_count={bad_prior_inverse_covariance2.sum()}"
+            )
 
         pol_current_tmp.append(np.array(pol_current_prior_inverse_covariance))
         current_prior_covariance_option = "complete"
@@ -1173,7 +1170,6 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, noise_varia
 
 
     # n_dataset (2) x volume_size (N^3) x n_disc_test x n_bins x feature_size  
-    # import pdb; pdb.set_trace()
     first_estimates = first_estimates.transpose(2, 3, 0, 1, 4)
     first_estimates = first_estimates.reshape([*first_estimates.shape[:2], -1, first_estimates.shape[-1]])
 
@@ -1313,7 +1309,6 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
             # Only place where image mask is used ?
             batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
             noise_variances = experiment_dataset.noise.get(indices) 
-            # import pdb; pdb.set_trace()
             Ft_y_b, Ft_ctf_b = relion_functions.relion_style_triangular_kernel_batch(batch,
                                                                     experiment_dataset.CTF_params[indices], 
                                                                     experiment_dataset.rotation_matrices[indices], 
@@ -1398,7 +1393,6 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
         # print(np.linalg.norm(lhs_all - lhs_all_presum2) / np.linalg.norm(lhs_all) )
         # print(np.linalg.norm(rhs_all - rhs_all_presum2) / np.linalg.norm(rhs_all) )
 
-        # import pdb; pdb.set_trace()
         # weight_matrix = np_to_use.zeros((n_bins, n_bins))
         # for idx in range(0, n_bins):
         #     weights = Epanechnikov(np_to_use.sqrt(distances/h_grid[idx]))
@@ -1524,8 +1518,7 @@ def pick_best_params(residuals, discretization_params, volume_shape):
         # index_array = np.maximum.accumulate(index_array)
         index_array = index_array
     else:
-        print("PROBLEM HERE")
-        print(pol_degrees)
+        logger.warning("Non-uniform pol_degrees: %s", pol_degrees)
 
     disc_choices = np.array(discretization_params)[index_array]
     hs_choices = disc_choices[:,1].astype(int)
@@ -1533,7 +1526,6 @@ def pick_best_params(residuals, discretization_params, volume_shape):
     disc_choices[:,1] = hs_choices
 
     index_array_vol = utils.make_radial_image(index_array, volume_shape)
-    # import pdb; pdb.set_trace()
     return index_array_vol, disc_choices, residuals_averaged
 
 
@@ -1910,7 +1902,7 @@ def compute_weights_from_precompute(volume_shape, XWX, F, prior_inverse_covarian
 
         if k < 3:
             utils.report_memory_device(logger=logger)
-            print(k)
+            logger.debug("batch %d", k)
 
         if jnp.isnan(reconstruction[ind_st:ind_end]).any():
             logger.warning(f"IsNAN {jnp.isnan(reconstruction[ind_st:ind_end]).sum() / reconstruction[ind_st:ind_end].size} pixels, pol_degree={pol_degree}, h={h}, reg={prior_option}")
@@ -1998,7 +1990,9 @@ def compute_residuals_batch_many_weights(images, weights, rotation_matrices, tra
 def compute_residuals_many_weights(experiment_dataset, weights , pol_degree, use_linear_interp ):
     pol_degree = int(pol_degree)  # ensure Python int (numpy scalars are traced by eqx.filter_jit)
     use_linear_interp = bool(use_linear_interp)
-    batch_size =int(utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total() - utils.get_size_in_gb(weights) ) * 5 / np.prod(weights.shape[1:]))
+    # *5: slicing is cheap; /weights_per_image: each weight adds a volume-sized projection
+    batch_size = utils.safe_batch_size(
+        utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total() - utils.get_size_in_gb(weights)) * 5 / np.prod(weights.shape[1:]))
 
     config = ForwardModelConfig(
         image_shape=tuple(experiment_dataset.image_shape),

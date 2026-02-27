@@ -47,7 +47,6 @@ def resample_at_uniform_pts2(gt_vols, n_vols_along_path = 6):
             gt_vols_x[:,k] = lower_val
         else:
             gt_vols_x[:,k] = lower_val + (x[k] - lower_x) * (upper_val - lower_val) / (upper_x - lower_x)
-        # import pdb; pdb.set_trace()
         # gt_vols_x[:,k] = np.interp(x, distances_between_volumes, gt_vols[:,k], left=None, right=None, period=None)
      
     return gt_vols_x
@@ -156,7 +155,6 @@ def gradient_descent_nd(travel_time, x_st, x_end, dx, step_size = 0.25, n_theta 
             plt.scatter(cur_path[:,0], cur_path[:,1])
             plt.show()
             logger.info(f"Failed to find path. Increasing minimum density")
-            # import pdb; pdb.set_trace()
             return None
             
     path.append(x_st)
@@ -202,7 +200,6 @@ def compute_fixed_dimensional_path(z_st, z_end, density_low_dim, latent_space_bo
     ## This is not used.
     g_st_in_bound = check_in_bound(g_st, num_points)
     g_end_in_bound = check_in_bound(g_end, num_points)
-    # import pdb; pdb.set_trace()
 
     current_path_grid = find_trajectory_in_grid(density_low_dim,
                                             g_st_in_bound,

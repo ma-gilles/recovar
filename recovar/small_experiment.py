@@ -26,7 +26,6 @@ def subsample_coo_columns(sparse_mat, right_indices):
     # Find positions of new_indices inside right_indices
     for new_col, old_col in enumerate(right_indices):
         new_indices = new_indices.at[new_indices == old_col].set(new_col)
-        # import pdb; pdb.set_trace()
     # Update column indices
     # new_indices = sparse_mat.indices[good_indices].at[:,1].set(mapped_indices)
     new_indices_all = sparse_mat.indices[good_indices]
@@ -37,7 +36,6 @@ def subsample_coo_columns(sparse_mat, right_indices):
 
 def covar_estimate_sparse(y, P, noise_variance, right_indices, covar_regularization = None):
 
-    # import pdb; pdb.set_trace() 
     y_sliced = subsample_coo_columns(y, right_indices).todense()
 
     P_sliced = subsample_coo_columns(P, right_indices).todense()
@@ -141,7 +139,6 @@ def make_random_sampling_scheme(grid_size, m, seed = 0):
         #     sampled_indices_flat = shuffled_indices[:total_samples]
         sampled_indices = sampled_indices_flat.reshape(m, num_points)
         sampled_indices_list.append(sampled_indices)
-        # import pdb; pdb.set_trace()
 
     indices = jnp.concatenate(sampled_indices_list, axis=1)
 
@@ -332,8 +329,7 @@ def high_d_PCA_by_low_rank_completion(y, indices, n, mu = .8, U = None):
     z = np.zeros(mat_size)
     y2 = Rop.matvec(U)
     y_diff = y - y2
-    print(np.linalg.norm(y_diff))
-    import pdb; pdb.set_trace()
+    logger.debug("y_diff norm: %s", np.linalg.norm(y_diff))
 
     f = pyproximal.L2(Rop, y.T.flatten())
     g = pyproximal.Nuclear(mat_shape, mu)

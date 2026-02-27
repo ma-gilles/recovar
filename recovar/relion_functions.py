@@ -190,7 +190,6 @@ def residual_relion_style_triangular_kernel_batch_trilinear(mean_estimate, image
 
     proj_mean = core.slice_volume_by_trilinear(mean_estimate, rotation_matrices, image_shape, volume_shape)
     images = core.translate_images(images, translations, image_shape) 
-    # import pdb; pdb.set_trace()
 
     images = images - core.slice_volume_by_trilinear(mean_estimate, rotation_matrices, image_shape, volume_shape) * CTF_squared
 
@@ -350,7 +349,6 @@ def adjust_regularization_relion_style(filter, volume_shape, tau = None, padding
         # print("WARNING CHECK THIS IS CORRECT OVERSAMPLING SOMEHOW?")
         # tau2 = regularization.average_over_shells(tau, og_volume_shape)
         # tau3 = regularization.average_over_shells(tau_new, volume_shape)
-        # import pdb; pdb.set_trace()
         # filter_avg = regularization.average_over_shells(filter, volume_shape)
         # tau_avg = regularization.average_over_shells(inv_tau, volume_shape)
         # print(filter_avg/tau_avg)

@@ -305,7 +305,8 @@ def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us
     save_volume(mean, output_folder + 'volumes/' + 'mean', volume_shape = volume_shape,   voxel_size = voxel_size)
     
     grid_size = int(volume_shape[0])
-    vol_batch_size = max(1, int((2**24)/ (grid_size**3) ))
+    # 2^24 / grid_size^3: ~1 volume at 256^3, scales up for smaller grids
+    vol_batch_size = utils.safe_batch_size((2**24) / (grid_size**3))
     n_svals = int(np.asarray(s['rescaled']).shape[0])
     for n_eigs in us_to_var:
         n_eigs_eff = min(int(n_eigs), n_available, n_svals)
@@ -678,7 +679,6 @@ class PipelineOutput:
             for entry in self.embedding:
                 for key in self.embedding[entry]:
                     # Handling the case where the contrasts are not shared across tilts...
-                    # import pdb; pdb.set_trace()
                     if entry == 'contrasts' and self._use_image_halfsets_for_unshared_tilt_contrast():
                         self.embedding[entry][key] = self.embedding[entry][key][image_halfsets]
                     else:
@@ -1067,9 +1067,9 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
             logger.warning("Invalid latent coordinates data. Skipping PC analysis.")
             return
             
-        print(f"Latent space shape: {z.shape}")
-        print(f"Number of particles: {z.shape[0]}")
-        print(f"Latent dimensions: {z.shape[1]}")
+        logger.info("Latent space shape: %s", z.shape)
+        logger.info("Number of particles: %d", z.shape[0])
+        logger.info("Latent dimensions: %d", z.shape[1])
         
         # Validate data quality
         if z.shape[0] < 10:

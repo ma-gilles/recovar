@@ -45,7 +45,6 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
     edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
     # logger.info(f"Step size: {step_size}, maskrad_pix: {maskrad_pix}, edgewidth_pix: {edgewidth_pix}")
     # myrad = map1.shape[0]//2 - 1*maskrad_pix
-    # print('CHANGE THIS BACK!!')
     # myrad = 40
     # myradf = myrad / step_size
     # sampling_points = []
@@ -92,13 +91,10 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
     map2 = jnp.asarray(map2)
 
     if True:
-        # a =1
-        vol_batch_size = recovar.utils.get_vol_batch_size(map1.shape[0], recovar.utils.get_gpu_memory_total())/2
-        if use_v2:
-            vol_batch_size *=1
-        # print(vol_batch_size)
+        # /2: local resolution holds two maps simultaneously
+        vol_batch_size = recovar.utils.safe_batch_size(
+            recovar.utils.get_vol_batch_size(map1.shape[0], recovar.utils.get_gpu_memory_total()) / 2)
         n_batch = utils.get_number_of_index_batch(sampling_points.shape[0], vol_batch_size)
-        # print(n_batch)
 
         for k in range(n_batch):
             batch_st, batch_end = utils.get_batch_of_indices(nr_samplings, vol_batch_size, k)
@@ -167,7 +163,6 @@ def make_local_resol_map(sampling_points, inv_local_resol, full_mask):
     mask_conv = convolve_mask_at_sampling_points(sampling_points, jnp.ones_like(inv_local_resol), full_mask)
 
     i_loc_res = jnp.where( mask_conv > 1e-4,  mask_conv/ local_resol_conv, 0)
-    # import pdb; pdb.set_trace()
     return i_loc_res
 
 
@@ -267,7 +262,6 @@ def compute_local_fsc_v2(offset, ift_sum_orig, map1, map2, maskrad_pix, edgewidt
     multiplier = 3
     # smaller_size = multiplier*radius#
     map1_sub = subsample_array(map1, offset, multiplier*radius)
-    # print(map1_sub.shape)
     map2_sub = subsample_array(map2, offset, multiplier*radius)
     ift_sum_sub = subsample_array(ift_sum_orig, offset, multiplier*radius)
     mask = mask_fn.raised_cosine_mask(map1_sub.shape, maskrad_pix, radius, 0)
@@ -289,7 +283,6 @@ def compute_local_fsc_v2(offset, ift_sum_orig, map1, map2, maskrad_pix, edgewidt
         ft_sum_sub = fourier_transform_utils.get_dft3(ift_sum_sub)
         ift_sum = filter_with_local_fsc(ft_sum_sub, fsc, local_resol, voxel_size, filter_edgewidth)
         # if jnp.isnan(ift_sum).any():
-        #     import pdb; pdb.set_trace()
         return ift_sum, mask, fsc, local_resol, offset, multiplier*radius
 
     return fsc, local_resol
@@ -322,7 +315,6 @@ def compute_local_fsc(offset, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, lo
     if use_filter:
         ift_sum = filter_with_local_fsc(ft_sum, fsc, local_resol, voxel_size, filter_edgewidth)
         # if jnp.isnan(ift_sum).any():
-        #     import pdb; pdb.set_trace()
         return ift_sum, mask, fsc, local_resol
 
     return fsc, local_resol
@@ -375,7 +367,6 @@ def filter_with_local_fsc(ft_sum, fsc, local_resol, voxel_size, filter_edgewidth
     ft_sum  = apply_fsc_weighting(ft_sum, fsc) # 
     ft_sum = low_pass_filter_map(ft_sum, ft_sum.shape[0], local_resol, voxel_size, filter_edgewidth)#.astype(ft_sum.dtype)
     ift_sum = fourier_transform_utils.get_idft3(ft_sum).real
-    # import pdb; pdb.set_trace()
     return  ift_sum
 
 
@@ -582,21 +573,24 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
             # i_loc_res += loc_mask * diff
             # i_sum_w += loc_mask
             if k % 1000 ==0:
-                print(k, end = '  ')
+                logger.debug("%d", k)
 
-            # print(np.linalg.norm(diff - diff2))
-            # import pdb; pdb.set_trace()
 
 
     else:
         # Doesn't seem to be faster.
         if use_v2:
-            vol_batch_size = recovar.utils.get_vol_batch_size(noise_variance_small.shape[0], recovar.utils.get_gpu_memory_total()) * 1
+            vol_batch_size = recovar.utils.safe_batch_size(
+                recovar.utils.get_vol_batch_size(noise_variance_small.shape[0], recovar.utils.get_gpu_memory_total()))
         else:
-            vol_batch_size = recovar.utils.get_vol_batch_size(noise_variance.shape[0], recovar.utils.get_gpu_memory_total()) / 4
+            # /4: noise estimation holds 4 volume-sized arrays (two maps + two noise arrays)
+            vol_batch_size = recovar.utils.safe_batch_size(
+                recovar.utils.get_vol_batch_size(noise_variance.shape[0], recovar.utils.get_gpu_memory_total()) / 4)
 
         if use_v3:
-            vol_batch_size = int(recovar.utils.get_vol_batch_size(noise_variance_small.shape[0], recovar.utils.get_gpu_memory_total()) / (noise_variance_small.shape[0]//2))
+            # Divide by half the volume size to fit many small subvolumes in memory
+            vol_batch_size = recovar.utils.safe_batch_size(
+                recovar.utils.get_vol_batch_size(noise_variance_small.shape[0], recovar.utils.get_gpu_memory_total()) / (noise_variance_small.shape[0]//2))
 
         n_batch = utils.get_number_of_index_batch(sampling_points.shape[0], vol_batch_size)
 
@@ -611,7 +605,6 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
                     # By noting that diagonal blocks of MCM are toeplitz, we can compute this fast
                     diff = batch_masked_noisy_error_split_over_shells_v2(diff_map, noise_variance_small, batch, maskrad_pix, edgewidth_pix )
                     # diff2 = batch_masked_noisy_error_split_over_shells(diff_map, noise_variance_small, batch, maskrad_pix, edgewidth_pix )
-                    # import pdb; pdb.set_trace()
                 else:
                     diff = batch_masked_noisy_error_split_over_shells(diff_map, noise_variance_small, batch, maskrad_pix, edgewidth_pix )
             else:
@@ -625,7 +618,6 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
 
             diffs.append(diff)
             # if k % 10 ==0:
-                # print(k, end = '  ')
 
 
     diffs = np.concatenate(diffs)
@@ -662,16 +654,13 @@ def masked_noisy_error_3(diff, noise_variance_small, offset, maskrad_pix, edgewi
 
     multiplier = 3
     offset += diff.shape[0]//2
-    # import pdb; pdb.set_trace()
 
     diff = subsample_array(diff, offset, multiplier*maskrad_pix)
     mask = mask_fn.raised_cosine_mask(diff.shape, maskrad_pix, edgewidth_pix, 0)
     diff_masked = diff * mask
-    # import pdb; pdb.set_trace()
 
     diff_masked = fourier_transform_utils.get_dft3(diff_masked) * jnp.sqrt(noise_variance_small)
 
-    # import pdb; pdb.set_trace()
     # mask = mask_fn.raised_cosine_mask(diff.shape, maskrad_pix, maskrad_pix + edgewidth_pix, offset)
     # diff = fourier_transform_utils.get_dft3((diff) * mask) * jnp.sqrt(noise_variance)
     return jnp.linalg.norm(diff_masked)**2
@@ -806,7 +795,6 @@ def recombine_estimates(estimators, choice, voxel_size, locres_sampling = 25, lo
 
     edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
     logger.info(f"Step size: {step_size}, maskrad_pix: {maskrad_pix}, edgewidth_pix: {edgewidth_pix}")
-    # print('CHANGE THIS BACK!!')
     # myrad = 40
     # myradf = myrad / step_size
 

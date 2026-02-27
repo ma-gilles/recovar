@@ -1,3 +1,4 @@
+import logging
 from matplotlib import colors as mcolors
 from matplotlib_scalebar.scalebar import ScaleBar
 import matplotlib
@@ -6,6 +7,8 @@ import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
+
+logger = logging.getLogger(__name__)
 
 # Optional dependency: dataframe_image
 try:
@@ -574,7 +577,7 @@ def plot_fsc(cryo, vol1, vol2, mask = None, threshold = 1/7, ax = None, voxel_si
     volume_shape = cryo.volume_shape if volume_shape is None else volume_shape
 
     ax, score = plot_fsc_new(vol1, vol2, volume_shape, voxel_size,  curve = None, ax = ax, threshold = threshold, filename = filename, name = name, volume_mask = mask, fmat = fmat)
-    print(f"{name} FSC score: {score}")
+    logger.info("%s FSC score: %s", name, score)
     # print(fsc_score)
     return ax
     
@@ -641,7 +644,6 @@ def plot_fsc_new(image1, image2, volume_shape = None, voxel_size=1,  curve = Non
     if curve is None:
         curve = FSC(np.array(image1).reshape(volume_shape), np.array(image2).reshape(volume_shape))
     
-    # import pdb; pdb.set_trace()
     # Huuuh why is there a 1/2 here??
     freq = fourier_transform_utils.get_1d_frequency_grid(grid_size, voxel_size = voxel_size, scaled = True)
     freq = freq[freq >= 0 ]
@@ -740,7 +742,6 @@ def fsc_score(fsc_curve, grid_size, voxel_size, threshold = 0.5 ):
 
 
     idx = int(np.max([np.argmin(above_threshold), 0])) 
-    # import pdb; pdb.set_trace()
     if idx >= grid_size//2 -1:
         return freq[-1]
     if idx == 0:
