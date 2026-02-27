@@ -429,8 +429,7 @@ def local_error_with_cov(map1, map2, voxel_size, locres_sampling = 25, locres_ma
     edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
 
 
-    # TODO FIX this +/- 1 business somewhere once and for all...
-    # mask = mask_fn.create_hard_edged_kernel_pxl(locres_maskrad, map1.shape)
+    # Raised cosine mask for local resolution computation
     mask = mask_fn.raised_cosine_mask(map1.shape, locres_maskrad, locres_maskrad + edgewidth_pix, -1)
 
 
@@ -788,21 +787,8 @@ def recombine_estimates(estimators, choice, voxel_size, locres_sampling = 25, lo
 
     edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
     logger.info(f"Step size: {step_size}, maskrad_pix: {maskrad_pix}, edgewidth_pix: {edgewidth_pix}")
-    # myrad = 40
-    # myradf = myrad / step_size
-
     logger.info(f"Starting...")
     sampling_points = get_sampling_points(estimators.shape[1], locres_sampling, locres_maskrad, voxel_size)
-    # sampling_points = []
-    # # TODO: REally need to put this in a function
-    # grid = np.array(fourier_transform_utils.get_1d_frequency_grid(estimators.shape[1], 1, scaled = False)[::step_size])
-    # for kk in grid:
-    #     for ii in grid:
-    #         for jj in grid:
-    #             rad = np.sqrt(kk * kk + ii * ii + jj * jj)
-    #             if rad < myrad:
-    #                 sampling_points.append((kk, ii, jj))
-    # sampling_points = jnp.array(sampling_points).astype(int)
 
     nr_samplings = sampling_points.shape[0]
     logger.info(f"Recombining estimates at {nr_samplings} sampling points ...")

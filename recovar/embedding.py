@@ -194,7 +194,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
 
 def slice_ar(indx, arr):
     return arr[indx]
-# Surely there is a less stupid way to do this, but I couldn't find one
+# Vectorized index selection via vmap
 batch_slice_ar = jax.jit(jax.vmap(slice_ar, in_axes =(0, 0)))
 batch_x_T_y = jax.vmap(  lambda x,y : jnp.conj(x).T @ y, in_axes = (0,0))
 
@@ -394,7 +394,6 @@ def compute_contrast_residual_fast_2(xs, AU_t_images, image_norms_sq, AU_t_Amean
 batch_compute_contrast_residual_fast_2 = jax.vmap(compute_contrast_residual_fast_2, in_axes = (0,0,0,0,0,0,0,None, None))
 
 
-### TODO MAKE SURE THERE IS NO BUG HERE
 @jax.jit
 def solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, contrast):
     A = (contrast **2) * AU_t_AU  +  jnp.diag(1 / eigenvalues )

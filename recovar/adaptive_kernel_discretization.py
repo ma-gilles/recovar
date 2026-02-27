@@ -447,9 +447,8 @@ def compute_summed_XWX_F(XWX, F, max_grid_dist, grid_distances, frequencies, vol
     distances = jnp.max(jnp.abs(differences), axis = -1)
     near_frequencies_vec_indices = core.vol_indices_to_vec_indices(near_frequencies, volume_shape)
 
-    ## TODO SHOULD I PUT THIS BACK?
+    # Include distance threshold in addition to bounds check
     valid_points = (distances <= (grid_distances[...,None] + 0.5) )* core.check_vol_indices_in_bound(near_frequencies,volume_shape[0])
-    # valid_points = core.check_vol_indices_in_bound(near_frequencies,volume_shape[0])
 
     near_frequencies_vec_indices, negative_frequencies = vec_index_to_half_vec_index(near_frequencies_vec_indices, volume_shape, flip_positive = True)
 
@@ -1049,9 +1048,6 @@ def estimate_optimal_covariance_and_volume(init_variance, init_prior_covariance_
         local_covar_tmp.append(np.array(local_covariances))
         ##
          
-        ## This is getting very messy...
-        ## TODO think about what you are doing with your life
-
         # Project onto Hermitian positive definite matrices
         local_covariances = 0.5*(local_covariances + jnp.conj(local_covariances.swapaxes(1,2))).real # Assume things are real
         eigs , U = jnp.linalg.eigh(local_covariances)
@@ -1092,12 +1088,6 @@ def estimate_optimal_covariance_and_volume(init_variance, init_prior_covariance_
 
     return final_estimates, first_estimates, [local_covar_tmp, pol_current_tmp, estimate_tmp, init_prior_inverse_covariance_avg, combined,
     batch_half_volume_to_full_volume(XWX_summed_neighbors[0].T, volume_shape).T, batch_half_volume_to_full_volume(F_summed_neighbors[0].T,volume_shape).T]
-
-
-def homogeneous_multiple_relion_style(experiment_datasets, noise_variance, signal_variance, discretization_params, return_all, heterogeneity_distances, heterogeneity_bins, residual_threshold = None, residual_num_images = None ):
-
-
-    return
 
 
 def heterogeneous_reconstruction_fixed_variance(experiment_datasets, noise_variance, signal_variance, discretization_params, return_all, heterogeneity_distances, heterogeneity_bins, residual_threshold = None, residual_num_images = None ):
@@ -1321,13 +1311,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
 
         rhs_all[bin_idx] = rhs
         lhs_all[bin_idx] = lhs
-    
-    # Create directory if it doesn't exist
-    os.makedirs('/tmp/temp_dump/', exist_ok=True)
-    
-    with open('/tmp/temp_dump/data.pkl', 'wb') as f:
-        pickle.dump((rhs_all, lhs_all), f)
-    
+
     # A slight improvement is an almost triangular kernel/ pyramid kernel
     #    _
     #  _| |_
@@ -1657,8 +1641,8 @@ def estimate_local_covariances(XWX_0, XWX_1, estimate_0, estimate_1, prior_inver
     estimate_0 = estimate_0.astype(np.complex64)
     estimate_1 = estimate_1.astype(np.complex64)
     utils.report_memory_device(logger=logger)
-    ## TODO change this?
-    batch_size = int((utils.get_gpu_memory_total()  )/ ( 1 * 4 * num_params**4 * 4 / 1e9 )  ) 
+    # Batch size based on GPU memory and per-pixel Kronecker product size
+    batch_size = int((utils.get_gpu_memory_total()  )/ ( 1 * 4 * num_params**4 * 4 / 1e9 )  )
     n_batches = np.ceil(half_volume_size / batch_size).astype(int)
     krons, estimate_covariance_averaged = 0,0
     for k in range(n_batches):
@@ -1846,7 +1830,7 @@ def compute_weights_from_precompute(volume_shape, XWX, F, prior_inverse_covarian
     ## There seems to be a strange bug with JAX. If it just barely runs out of memory, it won't throw an error but the memory will get corrupted and the answer is nonsense. This is an incredibly difficult thing to debug. 
     if h_max == 0:
         memory_per_pixel = (2*1 +1)**3 * big_gram_matrix_size(pol_degree) * 2 * 8 * 4
-    ## TODO TAKE THIS OUT?
+    # Safety factor: JAX can silently corrupt memory near OOM without raising errors
     memory_per_pixel *= 10
 
     XWX = jnp.asarray(XWX)

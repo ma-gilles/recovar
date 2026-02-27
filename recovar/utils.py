@@ -95,10 +95,10 @@ def get_peak_gpu_memory_used(device =0):
 
 def report_memory_device(device=0, logger=None):
     output_str = f"GPU mem in use:{get_gpu_memory_used(device)}; peak:{get_peak_gpu_memory_used(device)}; total available:{get_gpu_memory_total(device)}, process mem in use:{get_process_memory_used()}"
-    if logger is None:
-        print(output_str)
-    else:
+    if logger is not None:
         logger.info(output_str)
+    else:
+        print(output_str)
 
 def get_size_in_gb(x):
     return x.size * x.itemsize / 1e9

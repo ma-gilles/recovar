@@ -303,7 +303,7 @@ def generate_contrast_params(n_images,noise_scale_std, contrast_std ):
 
 
 def generate_volumes_from_mrcs(mrc_names, grid_size_i = None, padding= 0 ):
-    ## TODO rewrite this function.
+    # Load multiple MRC volumes and optionally resize them
     Xs_vec = []
     first_vol = True
     idx = 0 
@@ -404,13 +404,6 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
     dataset_param_generator = get_pose_ctf_generator(dataset_params_option)
     noise_variance = get_noise_model(noise_model, grid_size) / 50000 * noise_level
 
-    ## TODO
-    # Scale noise and volumes so that images have approximately std =1?
-    # noise_image = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape).reshape(experiment_dataset.image_shape)
-    # key, subkey = jax.random.split(key)
-    # noise_batch = make_noise_batch(subkey, noise_image, images_batch.shape)
-
-    # mrcf = mrcfile.new(output_folder + '/particles.'+str(grid_size)+'.mrcs',overwrite=True)
     mrc_file = None# mrcfile.new_mmap( output_folder + '/particles.'+str(grid_size)+'.mrcs', shape=(n_images, grid_size, grid_size), mrc_mode=2, overwrite = True)
 
     # print( 'CHANGE THIS BACK')

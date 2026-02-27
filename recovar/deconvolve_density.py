@@ -324,7 +324,7 @@ def _centered(arr, newshape):
     startind = [(s1 - s2) // 2 for s1, s2 in zip(arr.shape, newshape)]
     return jax.lax.dynamic_slice(arr, startind, newshape)
 
-# TODO: I think this was fixed in newer versions of JAX? 
+# Custom ifftn to handle >3D arrays (jnp.fft.ifftn limited to 3 axes)
 def ifftn(arr, s= None, axes = None):
     axes = np.arange(arr.ndim)
     s = arr.shape if s is None else s

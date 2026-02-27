@@ -2114,7 +2114,7 @@ def main():
         batch_size = args.batch_size if args.batch_size is not None else auto_batch_size
         n_particles_per_cluster = args.n_particles_per_cluster if args.n_particles_per_cluster is not None else auto_n_particles_per_cluster
         
-        print(f"Auto-calculated: batch_size={batch_size}, n_particles_per_cluster={n_particles_per_cluster}")
+        logger.info(f"Auto-calculated: batch_size={batch_size}, n_particles_per_cluster={n_particles_per_cluster}")
     else:
         batch_size = args.batch_size
         n_particles_per_cluster = args.n_particles_per_cluster

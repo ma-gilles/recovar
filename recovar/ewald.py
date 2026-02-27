@@ -15,8 +15,6 @@ import recovar.fourier_transform_utils as fourier_transform_utils
 from jax import vjp
 import functools
 from recovar import mask
-# reload(simulator)
-# from ewald_core import *
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +146,6 @@ def get_chi(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfactor):
 
     # Lambda:
     lam = 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
-#     lam = 1e10
 
     # x = xi_1, y = xi_2, theta^2 = x^2 + y^2:
     x = freqs[...,0]
@@ -444,20 +441,15 @@ def sphere_sign_hard_assignment(experiment_dataset, volume, batch_size, disc_typ
 
 
 def volt_to_wavelength(volt):
-    logger.warning("IS THIS RIGHT?!")
+    """Convert accelerating voltage (kV) to electron wavelength (Angstroms)."""
     volt = volt * 1000
     lam = 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
-    return lam #12.2639 / (volt + 0.97845e-6 * volt**2)**.5
+    return lam
 
 
 
 
 def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance):
-    
-    # volt = experiment_dataset.CTF_params[0,3]
-    # lam = volt_to_wavelength(experiment_dataset.CTF_params[0,3])# 
-#     lam = 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
-
     logger.info(f"batch size in Ewald LHS: {batch_size}")
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
 
@@ -485,9 +477,7 @@ def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, n
 
 def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_variance, noise_variance, x0 = None, max_iter = 100, tol = 1e-10):
     from recovar import noise
-    from importlib import reload
     from recovar import homogeneous
-    reload(homogeneous)
 
     if not np.isclose(experiment_dataset.CTF_params[:,core.CTFParamIndex.W],0).all():
         ctf_params = experiment_dataset.CTF_params
@@ -500,16 +490,13 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
         experiment_dataset.CTF_params = ctf_params
 
 
-    noise_variance = noise_variance
     noise_variance = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape)
-    # signal_variance = np.inf
     logger.debug(utils.report_memory_device())
     rhs_real, rhs_imag = compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance)
     rhs = vec_masked(rhs_real, rhs_imag, experiment_dataset.volume_shape)
     del rhs_imag, rhs_real
 
     rhs = np.array(rhs)
-    # del rhs
 
     mask_real = mask.get_radial_mask(experiment_dataset.volume_shape).reshape(-1)
     mask_size = int(jnp.sum(mask_real))
