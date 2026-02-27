@@ -442,8 +442,7 @@ def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_
     all_frequency_indices = np.concatenate([picked_frequency_indices, minus_frequency_indices[good_idx]])
     all_frequencies = core.vec_indices_to_frequencies(all_frequency_indices, volume_shape)
     
-    ## TODO: CHECK THAT THIS MAKES SENSE
-    # Size of smaller grid.
+    # Compute smallest grid that contains all picked frequencies
     smaller_size = int(2 * (np.max(np.abs(all_frequencies)) + 1))
     smaller_vol_shape = tuple(3*[smaller_size])
     smaller_vol_size = np.prod(smaller_vol_shape)
@@ -502,8 +501,7 @@ def left_matvec_with_spatial_Sigma_v2(Q, columns, picked_frequency_indices, volu
         logger.info(f"after make symmetric columns")
         utils.report_memory_device(logger=logger)
 
-    ## TODO: CHECK THAT THIS MAKES SENSE
-    # Size of smaller grid.
+    # Compute smallest grid that contains all picked frequencies
     smaller_size = int(2 * (np.max(np.abs(all_frequencies)) + 1))
     smaller_vol_shape = tuple(3*[smaller_size])
     smaller_vol_size = np.prod(smaller_vol_shape)
@@ -621,11 +619,10 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     return np.array(Q), np.array(S_fd), np.array(V)
 
 
-### THESE ARE FUNCTIONS THAT ARE NOT USED IN THE CURRENT VERSION OF THE CODE. DELETE?
+### Legacy diagnostic functions — not used in the current pipeline
 
 
 def test_different_embeddings(cryos, volume_mask, mean_estimate, basis, eigenvalues, noise_variance, batch_size, disc_type = 'linear_interp', use_contrast = False, zdims= None):
-    ## TODO
     
     # noise.get_average_residual_square_v2(cryos[0], volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp')
 
@@ -660,7 +657,6 @@ def test_different_embeddings(cryos, volume_mask, mean_estimate, basis, eigenval
 
 
 def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zdims= None, n_images = 1000, volume_mask= None):
-    ## TODO
     
     # noise.get_average_residual_square_v2(cryos[0], volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp')
 
@@ -758,7 +754,6 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
 
 
 def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, zdims= None, n_images = 1000, tau = None):
-    ## TODO
     
     # noise.get_average_residual_square_v2(cryos[0], volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp')
 

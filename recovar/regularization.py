@@ -280,7 +280,7 @@ def prior_iteration(H0, H1, B0, B1, frequency_shift, init_regularization, substr
     H_comb = (H0 +  H1)/2
     prior = init_regularization
 
-    # Harcoded iterations because I couldn't figure out to make jit the loop properly...
+    # Unrolled iterations (see prior_iteration_relion_style for fori_loop variant)
 
     cov_col0 =  covariance_update_col(H0,B0, prior)
     cov_col1 =  covariance_update_col(H1,B1, prior)
@@ -311,7 +311,7 @@ def prior_iteration_relion_style(H0, H1, B0, B1, frequency_shift, init_regulariz
         prior, fsc, _ = compute_fsc_prior_gpu_v2(volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift = frequency_shift, substract_shell_mean = substract_shell_mean)
         return prior, fsc
     
-    ## TODO: Surely there is a better way to do this...
+    # Run body_fun without FSC for prior_iterations-1, then one final step with FSC
     def body_fun_no_fsc(i, prior):
         prior, _ = body_fun(prior, None)
         return prior

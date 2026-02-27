@@ -1488,7 +1488,7 @@ def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coord
 
     ctfed_images  *= jnp.conj(images_prod)[...,None]
     # - noise term
-    ## TODO: I'm still a little iffy about this in cryo-ET
+    # Noise subtraction term (may need revisiting for cryo-ET)
     ctfed_images -= compute_noise_term(plane_coords_on_grid_stacked, picked_freq_coord, CTF_val_on_grid_stacked, image_shape, image_mask, noise_variances, kernel = right_kernel, kernel_width = kernel_width, premultiplied_ctf= premultiplied_ctf)
     
     rhs_summed_up = adjoint_kernel_slice(ctfed_images, rotation_matrices, image_shape, volume_shape, left_kernel)

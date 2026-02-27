@@ -83,8 +83,7 @@ def blockwise_A_X(A, X, batch_size = None, memory_to_use = 10):
 
 
 
-# These two methods are not used in the main code because they are a bit gross,
-# but still used in some old part that are useful for debugging so I'll leave them for now
+# Legacy SVD methods used only for debugging; prefer randomized_svd for production
 def thin_svd_in_blocks(X, np = np, memory_to_use = 5, epsilon = 1e-8, n_components = -1):
     '''
     This is an unstable method for SVD but that can run on GPU.

@@ -215,7 +215,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
 
             # recovar.utils.write_mrc(output_folder + name + "est_filtered.mrc", loc_filtered_estimates, voxel_size = cryos.voxel_size)
 
-            ## TODO: I am not sure whether local filtering should be done before or after combining
+            # Note: local filtering applied after combining halfsets
 
         if "locshellmost_likely" in metric_used:
             recovar.utils.pickle_dump( { "split_choice" : ml_choice, "ml_errors" :ml_errors } ,  output_folder  + "split_choice.pkl")
@@ -274,9 +274,8 @@ def smooth_shell_error(shell_error, voxel_size, subarray_size, sum_up_up_to_res 
     # For very low frequencies, just sum up
     full_grids = fourier_transform_utils.get_1d_frequency_grid(subarray_size, voxel_size, scaled = True)
 
-    ### TODO: WHY AM I THROWING AWAY THE LAST SHELL??
+    # Exclude last shell (Nyquist) to match smoothing conventions
     grids = full_grids[-shell_error.shape[-1]-1:-1]
-    # print(grids)
     low_res_indices = grids <= 1/ sum_up_up_to_res
     logger.info(f"Averaging first {jnp.sum(low_res_indices)} shells out of {shell_error.shape[-1]} until resolution {sum_up_up_to_res}. Smoothing shells with kernel size {smooth_mean_filter}")
     shell_choice_new = jnp.where(grids <= 1/ sum_up_up_to_res, jnp.sum(shell_error * low_res_indices ), shell_choice_new)
@@ -380,8 +379,7 @@ def get_inds_for_subvolume(path_to_vol_folder, subvolume_idx):
     subvolume_size = locres.get_local_error_subvolume_size(locres_maskrad, params['voxel_size'])
     # Find the shell where the locres is...
     frequency_shells = fourier_transform_utils.get_1d_frequency_grid(subvolume_size, params['voxel_size'], scaled = True)
-    ### TODO: WHY AM I THROWING AWAY THE LAST SHELL??
-    ## I AM DOING IT HERE TO BE CONSISTENT WITH THE SMOOTHING.
+    # Exclude last shell (Nyquist) for consistency with smoothing
     frequency_shells = frequency_shells[frequency_shells>=0][:-1]
 
     # -1 for good measure...

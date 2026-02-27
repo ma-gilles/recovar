@@ -698,9 +698,7 @@ def load_cryodrgn_dataset(
             logger.info('CTF from star')
 
         elif (tilt_series_ctf == "scale_from_star") or (tilt_series_ctf == "from_dose"):
-            # Sort of a hacky way to do this.
-
-            # + 1 because voxel_size in included.... gross
+            # CTF params array includes voxel_size at index 0, so column offsets are +1
             if "scale_from_star" in tilt_series_ctf:
                 ctf_params[:,core.CTFParamIndex.CONTRAST+1] = tilt_dataset_this.ctfscalefactor
 
@@ -714,15 +712,14 @@ def load_cryodrgn_dataset(
             # dose_per_tilt = 2.9
             CTF_fun = core.get_cryo_ET_CTF_fun(dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt)
             logger.info('CTF from dose weighting')
-        elif "v2" in tilt_series_ctf:# == "tilt_ctf_v2": 
-            # Sort of a hacky way to do this.
+        elif "v2" in tilt_series_ctf:
             tilt_numbers = tilt_dataset_this.tilt_numbers
             dose = - (tilt_dataset_this.ctfBfactor / 4) # WARP uses a ctfBfactor == -4 * dose
 
             # The angles are used to compute a scale factor cos(angles). If scale from star, then the scale factor is already in the star file
             angles = jnp.ceil(tilt_numbers/2) * angle_per_tilt 
             if 'scale_from_star' in tilt_series_ctf:
-                # + 1 because voxel_size in included.... gross
+                # +1 offset: CTF params array includes voxel_size at index 0
                 ctf_params[:,core.CTFParamIndex.CONTRAST+1] = tilt_dataset_this.ctfscalefactor
                 # angles *=0 
                 logger.warning("Using scale from star")

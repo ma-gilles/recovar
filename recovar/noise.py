@@ -663,16 +663,14 @@ def upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, cryos, means,
 def upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size, dilated_volume_mask, noise_ind_subset = None):
         # Now, estimate the variance of the signal. If the variance estimate ends up negative, we have overestimated the noise variance.
         for noise_repeat in range(2):
-            ## TODO Does Tilt series for anything for variance??
+            # Compute variance estimate (tilt series uses same path currently)
             variance_time = time.time()
             from recovar import covariance_estimation
             # //2: variance computation with cubic disc_type needs ~2x memory per image (spline coefficients)
             variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], utils.safe_batch_size(batch_size//2), dilated_volume_mask, noise_ind_subset = noise_ind_subset, use_regularization = True, disc_type = 'cubic')
-            # print('using regul in variance est?!?')
             logger.info(f"variance estimation time: {time.time() - variance_time}")
             utils.report_memory_device(logger=logger)
 
-            # def upper_bound_noise_var(noise_var_used, variance_est, noise_p_variance_est):
             rad_grid = np.array(fourier_transform_utils.get_grid_of_radial_distances(cryos.volume_shape).reshape(-1))
             # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
             n_shell_to_ub = np.min([32, cryos.grid_size//2 -1])
