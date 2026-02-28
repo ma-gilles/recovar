@@ -220,3 +220,51 @@ def test_choice_most_likely_split_with_smoothing_runs():
     assert np.isfinite(errors).all()
     assert np.all(choice >= 0)
     assert np.all(choice < n_estimators)
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.gpu
+def test_batch_smooth_shell_error_gpu(gpu_device):
+    n_estimators = 3
+    n_shells = 8
+    shell_error = jnp.ones((2, n_estimators, n_shells), dtype=jnp.float32)
+    voxel_size = 1.5
+    subarray_size = (n_shells + 1) * 2
+
+    cpu_result = np.asarray(hv.batch_smooth_shell_error(shell_error, voxel_size, subarray_size, 50, 3))
+
+    with jax.default_device(gpu_device):
+        shell_error_g = jax.device_put(jnp.array(np.asarray(shell_error)), gpu_device)
+        gpu_result = np.asarray(hv.batch_smooth_shell_error(shell_error_g, voxel_size, subarray_size, 50, 3))
+
+    np.testing.assert_allclose(cpu_result, gpu_result, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_smoothed_best_choice_gpu(gpu_device):
+    vol_shape = (4, 4, 4)
+    n_est = 3
+    vol_size = int(np.prod(vol_shape))
+    rng = np.random.default_rng(7)
+
+    estimates = (rng.standard_normal((n_est, vol_size)).astype(np.float32)
+                 + 1j * rng.standard_normal((n_est, vol_size)).astype(np.float32))
+    choice = rng.integers(0, n_est, size=(vol_size,), dtype=np.int32)
+
+    cpu_est, cpu_choice = hv.smoothed_best_choice(jnp.array(estimates), jnp.array(choice), kernel_rad=1)
+    cpu_est = np.asarray(cpu_est)
+    cpu_choice = np.asarray(cpu_choice)
+
+    with jax.default_device(gpu_device):
+        estimates_g = jax.device_put(jnp.array(estimates), gpu_device)
+        choice_g = jax.device_put(jnp.array(choice), gpu_device)
+        gpu_est, gpu_choice = hv.smoothed_best_choice(estimates_g, choice_g, kernel_rad=1)
+        gpu_est = np.asarray(gpu_est)
+        gpu_choice = np.asarray(gpu_choice)
+
+    np.testing.assert_allclose(cpu_est, gpu_est, atol=1e-4, rtol=1e-4)
+    np.testing.assert_array_equal(cpu_choice, gpu_choice)

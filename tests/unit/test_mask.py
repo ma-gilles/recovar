@@ -85,3 +85,25 @@ def test_smooth_circular_mask_symmetric():
     """The mask must be centrosymmetric (same value at (i,j) and (j,i))."""
     m = mask.smooth_circular_mask(image_size=12, radius=3, thickness=2)
     np.testing.assert_allclose(m, m.T, atol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+import jax
+import jax.numpy as jnp
+
+
+@pytest.mark.gpu
+def test_soften_volume_mask_new_gpu(gpu_device):
+    binary = np.zeros((8, 8, 8), dtype=np.float32)
+    binary[2:6, 2:6, 2:6] = 1.0
+
+    cpu_out = np.asarray(mask.soften_volume_mask_new(binary, kernel_size=2))
+
+    with jax.default_device(gpu_device):
+        binary_g = jax.device_put(jnp.array(binary), gpu_device)
+        gpu_out = np.asarray(mask.soften_volume_mask_new(binary_g, kernel_size=2))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)

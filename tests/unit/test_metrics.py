@@ -93,3 +93,30 @@ def test_compute_volume_error_metrics_from_gt_aggregates(monkeypatch):
     assert out["partial_ninety_pc_error"] == 6.0
     assert out["mask"] is mask
     assert out["partial_mask"] is partial_mask
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+import jax
+import jax.numpy as jnp
+
+
+@pytest.mark.gpu
+def test_fro_norm_diff_low_rank_gpu(gpu_device):
+    u = np.eye(2, dtype=np.float32)
+    v = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float32)
+    s = np.array([3.0, 1.0], dtype=np.float32)
+    d = np.array([2.0, 0.5], dtype=np.float32)
+
+    cpu_out = float(metrics.fro_norm_diff_low_rank(u, s, v, d))
+
+    with jax.default_device(gpu_device):
+        u_g = jax.device_put(jnp.array(u), gpu_device)
+        v_g = jax.device_put(jnp.array(v), gpu_device)
+        s_g = jax.device_put(jnp.array(s), gpu_device)
+        d_g = jax.device_put(jnp.array(d), gpu_device)
+        gpu_out = float(metrics.fro_norm_diff_low_rank(u_g, s_g, v_g, d_g))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)

@@ -77,3 +77,66 @@ def test_compute_det_cov_xs_normalized_max_is_one():
     assert d.shape == (2,)
     assert np.isclose(np.max(d), 1.0)
     assert np.all(d > 0)
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+import jax
+import jax.numpy as jnp
+
+
+@pytest.mark.gpu
+def test_grid_mapping_roundtrip_gpu(gpu_device):
+    bounds = np.array([[-2.0, 2.0], [0.0, 10.0]], dtype=np.float32)
+    num_points = 11
+    x = np.array([0.4, 6.0], dtype=np.float32)
+
+    cpu_g = np.asarray(ld.pca_coord_to_grid(x, bounds, num_points, to_int=False))
+    cpu_rt = np.asarray(ld.grid_to_pca_coord(cpu_g, bounds, num_points))
+
+    with jax.default_device(gpu_device):
+        x_g = jax.device_put(jnp.array(x), gpu_device)
+        bounds_g = jax.device_put(jnp.array(bounds), gpu_device)
+        gpu_g = np.asarray(ld.pca_coord_to_grid(x_g, bounds_g, num_points, to_int=False))
+        gpu_rt = np.asarray(ld.grid_to_pca_coord(gpu_g, bounds_g, num_points))
+
+    np.testing.assert_allclose(cpu_g, gpu_g, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(cpu_rt, gpu_rt, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_compute_weights_of_conformation_gpu(gpu_device):
+    latent_points = np.array([[0.0, 0.0]], dtype=np.float32)
+    zs = np.array([[0.0, 0.0], [3.0, 0.0]], dtype=np.float32)
+    cov = np.stack([np.eye(2, dtype=np.float32), np.eye(2, dtype=np.float32)], axis=0)
+
+    cpu_w = np.asarray(ld.compute_weights_of_conformation_2(latent_points, zs, cov, likelihood_threshold=4.0))
+
+    with jax.default_device(gpu_device):
+        lp_g = jax.device_put(jnp.array(latent_points), gpu_device)
+        zs_g = jax.device_put(jnp.array(zs), gpu_device)
+        cov_g = jax.device_put(jnp.array(cov), gpu_device)
+        gpu_w = np.asarray(ld.compute_weights_of_conformation_2(lp_g, zs_g, cov_g, likelihood_threshold=4.0))
+
+    np.testing.assert_allclose(cpu_w, gpu_w, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_compute_det_cov_xs_gpu(gpu_device):
+    cov = np.stack(
+        [
+            np.eye(2, dtype=np.float32),
+            np.array([[2.0, 0.0], [0.0, 2.0]], dtype=np.float32),
+        ],
+        axis=0,
+    )
+
+    cpu_d = np.asarray(ld.compute_det_cov_xs(cov))
+
+    with jax.default_device(gpu_device):
+        cov_g = jax.device_put(jnp.array(cov), gpu_device)
+        gpu_d = np.asarray(ld.compute_det_cov_xs(cov_g))
+
+    np.testing.assert_allclose(cpu_d, gpu_d, atol=1e-5, rtol=1e-5)

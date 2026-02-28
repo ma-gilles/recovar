@@ -121,3 +121,59 @@ def test_norm_squared_residuals_from_ft_result_is_finite():
     ones = _ft_images(n_images, seed=5)
     result = em_core.norm_squared_residuals_from_ft(many, ones, IMAGE_SHAPE)
     assert np.all(np.isfinite(np.asarray(result)))
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+import jax
+
+
+@pytest.mark.gpu
+def test_crosscorr_from_ft_gpu(gpu_device):
+    n = 3
+    many = _ft_images(n)
+    one = _ft_images(1)[0]
+
+    cpu_result = np.asarray(em_core.crosscorr_from_ft(many, one, IMAGE_SHAPE))
+
+    with jax.default_device(gpu_device):
+        many_g = jax.device_put(jnp.array(np.asarray(many)), gpu_device)
+        one_g = jax.device_put(jnp.array(np.asarray(one)), gpu_device)
+        gpu_result = np.asarray(em_core.crosscorr_from_ft(many_g, one_g, IMAGE_SHAPE))
+
+    np.testing.assert_allclose(cpu_result, gpu_result, atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.gpu
+def test_norm_squared_residuals_from_ft_one_image_gpu(gpu_device):
+    n_poses = 5
+    many = _ft_images(n_poses)
+    one = _ft_images(1)[0]
+
+    cpu_result = np.asarray(em_core.norm_squared_residuals_from_ft_one_image(many, one, IMAGE_SHAPE))
+
+    with jax.default_device(gpu_device):
+        many_g = jax.device_put(jnp.array(np.asarray(many)), gpu_device)
+        one_g = jax.device_put(jnp.array(np.asarray(one)), gpu_device)
+        gpu_result = np.asarray(em_core.norm_squared_residuals_from_ft_one_image(many_g, one_g, IMAGE_SHAPE))
+
+    np.testing.assert_allclose(cpu_result, gpu_result, atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.gpu
+def test_norm_squared_residuals_from_ft_gpu(gpu_device):
+    n_images = 4
+    n_poses = 3
+    many = jnp.stack([_ft_images(n_poses, seed=i) for i in range(n_images)])
+    ones = _ft_images(n_images, seed=99)
+
+    cpu_result = np.asarray(em_core.norm_squared_residuals_from_ft(many, ones, IMAGE_SHAPE))
+
+    with jax.default_device(gpu_device):
+        many_g = jax.device_put(jnp.array(np.asarray(many)), gpu_device)
+        ones_g = jax.device_put(jnp.array(np.asarray(ones)), gpu_device)
+        gpu_result = np.asarray(em_core.norm_squared_residuals_from_ft(many_g, ones_g, IMAGE_SHAPE))
+
+    np.testing.assert_allclose(cpu_result, gpu_result, atol=1e-4, rtol=1e-4)
