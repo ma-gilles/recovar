@@ -493,7 +493,7 @@ def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset
         if mean_cubic is not None:
             mean_estimate = mean_cubic
         else:
-            mean_estimate = cubic_interpolation.compute_spline_coefficients(mean_estimate.reshape(cryos.volume_shape))
+            mean_estimate = cubic_interpolation.calculate_spline_coefficients(mean_estimate.reshape(cryos.volume_shape))
 
 
     for idx, cryo in enumerate(cryos):
@@ -775,7 +775,7 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
         if mean_cubic is not None:
             mean_estimate = mean_cubic
         else:
-            mean_estimate = cubic_interpolation.compute_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
+            mean_estimate = cubic_interpolation.calculate_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
     else:
         these_disc = 'linear_interp'
 
@@ -890,7 +890,7 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
 
 
 from recovar import cubic_interpolation
-vmap_compute_spline_coefficients = jax.vmap(cubic_interpolation.compute_spline_coefficients, in_axes = 0, out_axes = 0)
+vmap_calculate_spline_coefficients = jax.vmap(cubic_interpolation.calculate_spline_coefficients, in_axes = 0, out_axes = 0)
 
 @nvtx.annotate("compute_spline_coeffs_in_batch", color="magenta")
 def compute_spline_coeffs_in_batch(basis, volume_shape, gpu_memory= None):
@@ -900,7 +900,7 @@ def compute_spline_coeffs_in_batch(basis, volume_shape, gpu_memory= None):
     utils.report_memory_device(logger=logger)
     coeffs = []
     for k in range(0, basis.shape[0], vol_batch_size):
-        coeffs.append(np.array(vmap_compute_spline_coefficients(basis[k:k+vol_batch_size].reshape(-1, *volume_shape))))
+        coeffs.append(np.array(vmap_calculate_spline_coefficients(basis[k:k+vol_batch_size].reshape(-1, *volume_shape))))
     coeffs = np.concatenate(coeffs, axis = 0)
     return coeffs
 
@@ -926,7 +926,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
         if mean_cubic is not None:
             mean_estimate = mean_cubic
         else:
-            mean_estimate = cubic_interpolation.compute_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
+            mean_estimate = cubic_interpolation.calculate_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
 
     if disc_type_u == 'cubic':
         basis = compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)

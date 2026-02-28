@@ -262,7 +262,3 @@ def map_coordinates_with_cubic_spline(
     Compatible with cryojax API.
     """
     return interpolate_with_spline(coefficients, coordinates, mode, cval)
-
-
-# Alias for external compatibility
-compute_spline_coefficients = calculate_spline_coefficients

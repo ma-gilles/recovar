@@ -751,7 +751,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
             vol_real = fourier_transform_utils.get_idft3(volumes[vol_idx].reshape(experiment_dataset.volume_shape))
         elif 'cubic' in disc_type:
             from recovar import cubic_interpolation
-            volume = cubic_interpolation.compute_spline_coefficients(volumes[vol_idx].reshape(experiment_dataset.volume_shape))
+            volume = cubic_interpolation.calculate_spline_coefficients(volumes[vol_idx].reshape(experiment_dataset.volume_shape))
         else:
             volume = volumes[vol_idx]
 

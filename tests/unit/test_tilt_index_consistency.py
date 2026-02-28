@@ -64,7 +64,7 @@ def test_particle_tilt_mapping_matches_golden_reference(tmp_path):
     particles_to_tilts = [arr.tolist() for arr in particles_to_tilts]
     tilts_to_particles = {str(k): int(v) for k, v in sorted(tilts_to_particles.items())}
 
-    assert cryo_dataset.get_canonical_group_names(starfile.Starfile.load(str(star_path)).df) == golden["canonical_groups"]
+    assert cryo_dataset.get_canonical_group_names(starfile.StarFile.load(str(star_path)).df) == golden["canonical_groups"]
     assert particles_to_tilts == golden["particles_to_tilts"]
     assert tilts_to_particles == golden["tilts_to_particles"]
 

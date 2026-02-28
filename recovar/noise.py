@@ -892,7 +892,7 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
     if disc_type == 'cubic':
         st_time = time.time()
         from recovar import cubic_interpolation, covariance_estimation
-        mean_estimate = cubic_interpolation.compute_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
+        mean_estimate = cubic_interpolation.calculate_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)
         logger.info("Time to compute spline coefficients: %f", time.time() - st_time)
 

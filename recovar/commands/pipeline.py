@@ -604,7 +604,7 @@ def standard_recovar_pipeline(args):
 
         # --- Pre-compute cubic spline coefficients for mean (once) ---
         from recovar import cubic_interpolation
-        mean_cubic = cubic_interpolation.compute_spline_coefficients(
+        mean_cubic = cubic_interpolation.calculate_spline_coefficients(
             means['combined'].reshape(volume_shape))
         logger.info("Pre-computed cubic spline coefficients for mean estimate")
 

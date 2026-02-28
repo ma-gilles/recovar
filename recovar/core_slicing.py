@@ -49,7 +49,7 @@ def adjoint_slice_volume_by_map(slices, rotation_matrices, image_shape, volume_s
         from recovar import cubic_interpolation
 
         def f(volume_flat):
-            coeffs = cubic_interpolation.compute_spline_coefficients(volume_flat.reshape(volume_shape))
+            coeffs = cubic_interpolation.calculate_spline_coefficients(volume_flat.reshape(volume_shape))
             return map_coordinates_on_slices(coeffs, rotation_matrices, image_shape, volume_shape, 3)
     else:
         f = lambda volume: slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type)

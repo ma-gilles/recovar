@@ -721,7 +721,7 @@ def test_half_backprojection_equivalence_for_diverse_rotations(image_shape, volu
 
 def test_slice_volume_by_map_cubic_with_precomputed_spline_coefficients():
     """Regression test: slice_volume_by_map with cubic must accept pre-computed spline
-    coefficients (shape N+2 per dim, not N), as produced by compute_spline_coefficients.
+    coefficients (shape N+2 per dim, not N), as produced by calculate_spline_coefficients.
 
     The rfft refactoring commits broke this by adding volume.reshape(volume_shape) inside
     map_coordinates_on_slices for order=3, which crashed when the volume was already the
@@ -742,12 +742,12 @@ def test_slice_volume_by_map_cubic_with_precomputed_spline_coefficients():
     # (covariance_estimation.py, embedding.py, noise.py, simulator.py all do this).
     # The result has shape (N+2, N+2, N+2), NOT (N, N, N).
     coeffs = np.asarray(
-        cubic_interpolation.compute_spline_coefficients(vol_flat.reshape(volume_shape))
+        cubic_interpolation.calculate_spline_coefficients(vol_flat.reshape(volume_shape))
     )
     coeff_shape = tuple(coeffs.shape)
     expected_coeff_shape = tuple(s + 2 for s in volume_shape)
     assert coeff_shape == expected_coeff_shape, (
-        f"compute_spline_coefficients returned shape {coeff_shape}, expected {expected_coeff_shape}"
+        f"calculate_spline_coefficients returned shape {coeff_shape}, expected {expected_coeff_shape}"
     )
 
     # This call must NOT crash with a reshape error.
@@ -780,7 +780,7 @@ def test_slice_volume_by_map_cubic_flat_and_precomputed_agree():
 
     # Pre-compute coefficients as the production callers do
     coeffs = np.asarray(
-        cubic_interpolation.compute_spline_coefficients(
+        cubic_interpolation.calculate_spline_coefficients(
             np.asarray(vol_ft).reshape(volume_shape)
         )
     )
@@ -833,7 +833,7 @@ def test_adjoint_slice_volume_by_map_cubic_adjointness():
     real_vol = rng.standard_normal(volume_shape).astype(np.float32)
     vol_flat = np.asarray(fourier_transform_utils.get_dft3(real_vol)).reshape(-1)
     coeffs = np.asarray(
-        cubic_interpolation.compute_spline_coefficients(
+        cubic_interpolation.calculate_spline_coefficients(
             np.asarray(vol_flat).reshape(volume_shape)
         )
     )
