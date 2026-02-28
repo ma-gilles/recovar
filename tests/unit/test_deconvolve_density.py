@@ -4,7 +4,7 @@ import pytest
 pytest.importorskip("jax")
 pytest.importorskip("jaxopt")
 
-from recovar import deconvolve_density as dd
+from recovar.heterogeneity import deconvolve_density as dd
 
 pytestmark = pytest.mark.unit
 

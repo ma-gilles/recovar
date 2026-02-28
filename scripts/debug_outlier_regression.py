@@ -14,7 +14,8 @@ import jax.numpy as jnp
 # Use the local repo
 sys.path.insert(0, '/scratch/gpfs/GILLES/mg6942/heterogeneity_dev-1')
 
-from recovar import core, covariance_core, embedding, noise
+from recovar import core, noise
+from recovar.heterogeneity import covariance_core, embedding
 from recovar.configs import ForwardModelConfig, BatchData, ModelState, EmbeddingOpts
 import recovar.core.forward as core_forward
 
@@ -177,7 +178,7 @@ else:
 print("\n=== Testing variance estimation ===")
 
 # Old variance
-from recovar.covariance_estimation import (
+from recovar.heterogeneity.covariance_estimation import (
     variance_relion_kernel_trilinear,
     variance_relion_style_triangular_kernel_batch_trilinear,
 )

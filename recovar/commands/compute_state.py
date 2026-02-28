@@ -3,7 +3,7 @@ import logging
 import numpy as np
 import warnings
 from recovar import output as o
-from recovar import embedding
+from recovar.heterogeneity import embedding
 import pickle
 import os, argparse
 logger = logging.getLogger(__name__)

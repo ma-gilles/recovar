@@ -18,7 +18,7 @@ import nvtx
 logger = logging.getLogger(__name__)
 
 # Import NVTX domain for compute_H_B profiling
-from recovar.covariance_estimation import NVTX_DOMAIN_H_B
+from recovar.heterogeneity.covariance_estimation import NVTX_DOMAIN_H_B
 
 
 def get_available_gpus() -> List:

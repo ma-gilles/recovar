@@ -2,7 +2,8 @@ import logging
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar import utils, linalg, mask, locres
+from recovar import utils, linalg, mask
+from recovar.heterogeneity import locres
 
 logger = logging.getLogger(__name__)
 import matplotlib.pyplot as plt

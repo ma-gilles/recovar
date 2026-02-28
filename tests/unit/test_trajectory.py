@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("skfmm")
 
-from recovar import trajectory
+from recovar.heterogeneity import trajectory
 
 pytestmark = pytest.mark.unit
 

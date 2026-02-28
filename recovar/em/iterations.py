@@ -49,7 +49,8 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
         state_objs[i].finish_up_M_step(experiment_dataset, disc_type)
 
     ## Update prior and estimate resolution
-    from recovar import regularization, locres
+    from recovar import regularization
+    from recovar.heterogeneity import locres
     # sgd_updates priors
     cryo = experiment_datasets[0]
 

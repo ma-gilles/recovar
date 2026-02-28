@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar import covariance_core as cc
+from recovar.heterogeneity import covariance_core as cc
 from recovar import core
 
 pytestmark = pytest.mark.unit

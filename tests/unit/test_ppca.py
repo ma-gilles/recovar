@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar import ppca
+from recovar.heterogeneity import ppca
 
 pytestmark = pytest.mark.unit
 

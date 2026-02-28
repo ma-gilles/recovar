@@ -248,7 +248,8 @@ def test_split_E_M_v2_updates_state_means_noise_and_pose_assignments(monkeypatch
         ),
     )
 
-    from recovar import regularization, locres, noise
+    from recovar import regularization, noise
+    from recovar.heterogeneity import locres
 
     monkeypatch.setattr(regularization, "get_fsc_gpu", lambda *_args, **_kwargs: np.array([0.9, 0.7], dtype=np.float32))
     monkeypatch.setattr(regularization, "average_over_shells", lambda *_args, **_kwargs: np.array([1.0, 1.0], dtype=np.float32))
@@ -350,7 +351,8 @@ def test_split_E_M_v2_heterogeneous_branch_updates_covariance_prior_and_masks_u(
         ),
     )
 
-    from recovar import regularization, relion_functions, locres, noise
+    from recovar import regularization, relion_functions, noise
+    from recovar.heterogeneity import locres
 
     monkeypatch.setattr(
         relion_functions,

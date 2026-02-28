@@ -1,7 +1,8 @@
 import logging
 import numpy as np
 import jax
-from recovar import utils, relion_functions, mask as mask_fn, jax_config, principal_components
+from recovar import utils, relion_functions, mask as mask_fn, jax_config
+from recovar.heterogeneity import principal_components
 from .e_step import E_with_precompute
 from .m_step import M_with_precompute
 from .heterogeneity import compute_H_B, compute_projected_covariance_rhs_lhs, solve_covariance

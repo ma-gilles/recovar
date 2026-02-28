@@ -19,7 +19,7 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
-import recovar.heterogeneity_volume as hv
+import recovar.heterogeneity.heterogeneity_volume as hv
 from recovar.dataset import CryoEMHalfsets
 from helpers.tiny_synthetic import make_tiny_cryo_dataset_with_images
 

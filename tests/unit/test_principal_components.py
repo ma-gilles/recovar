@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-import recovar.principal_components as pc
+import recovar.heterogeneity.principal_components as pc
 import recovar.core as core
 from recovar import dataset
 from recovar.dataset import CryoEMHalfsets
