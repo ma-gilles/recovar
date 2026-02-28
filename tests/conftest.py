@@ -106,3 +106,22 @@ def _set_deterministic_seed():
     import numpy as np
 
     np.random.seed(0)
+
+
+def _first_gpu_or_skip():
+    """Return the first available GPU device or skip the test."""
+    jax = pytest.importorskip("jax")
+    for backend in ("cuda", "gpu"):
+        try:
+            gpus = jax.devices(backend)
+            if gpus:
+                return gpus[0]
+        except RuntimeError:
+            continue
+    pytest.skip("No GPU device available")
+
+
+@pytest.fixture
+def gpu_device():
+    """Pytest fixture that provides a GPU device or skips the test."""
+    return _first_gpu_or_skip()

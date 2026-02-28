@@ -151,3 +151,129 @@ def test_core_exports_include_expected_symbols():
     assert "forward_model_from_map" in core.__all__
     assert "evaluate_ctf_wrapper" in core.__all__
     assert "vol_indices_to_vec_indices" in core.__all__
+
+
+# ---------------------------------------------------------------------------
+# GPU tests — exercise the facade module's re-exported symbols on GPU
+# ---------------------------------------------------------------------------
+import jax
+
+
+@pytest.mark.gpu
+def test_vol_vec_index_roundtrip_on_gpu(gpu_device):
+    vol_shape = (4, 5, 6)
+    vol_indices = np.array(
+        [[[0, 0, 0], [1, 2, 3]], [[3, 4, 5], [2, 1, 0]]], dtype=np.int32,
+    )
+    with jax.default_device(gpu_device):
+        vec = core.vol_indices_to_vec_indices(jax.device_put(vol_indices), vol_shape)
+        back = np.asarray(core.vec_indices_to_vol_indices(vec, vol_shape))
+    np.testing.assert_array_equal(back, vol_indices)
+
+
+@pytest.mark.gpu
+def test_frequency_conversions_roundtrip_on_gpu(gpu_device):
+    vol_shape = (5, 5, 5)
+    vol_indices = np.array([[0, 0, 0], [2, 2, 2], [4, 4, 4]], dtype=np.int32)
+    with jax.default_device(gpu_device):
+        freqs = core.vol_indices_to_frequencies(jax.device_put(vol_indices), vol_shape)
+        back = np.asarray(core.frequencies_to_vol_indices(freqs, vol_shape))
+    np.testing.assert_array_equal(back, vol_indices)
+
+
+@pytest.mark.gpu
+def test_bound_checks_on_gpu(gpu_device):
+    freqs = np.array([[-2, 0, 1], [2, 0, 0], [-2.1, 0, 0]], dtype=np.float32)
+    vol_idx = np.array([[0, 1, 2], [3, 3, 3], [4, 0, 0], [-1, 0, 0]], dtype=np.int32)
+    vec_idx = np.array([0, 63, 64, -1], dtype=np.int32)
+
+    with jax.default_device(gpu_device):
+        freq_ok = np.asarray(core.check_frequencies_in_bound(jax.device_put(freqs), 4))
+        vol_ok = np.asarray(core.check_vol_indices_in_bound(jax.device_put(vol_idx), 4))
+        vec_ok = np.asarray(core.check_vec_indices_in_bound(jax.device_put(vec_idx), 4))
+
+    np.testing.assert_array_equal(freq_ok, [True, False, False])
+    np.testing.assert_array_equal(vol_ok, [True, True, False, False])
+    np.testing.assert_array_equal(vec_ok, [True, True, False, False])
+
+
+@pytest.mark.gpu
+def test_round_to_int_on_gpu(gpu_device):
+    arr = np.array([1.2, -1.8, 0.0], dtype=np.float32)
+    cpu_out = np.asarray(core.round_to_int(arr))
+    with jax.default_device(gpu_device):
+        gpu_out = np.asarray(core.round_to_int(jax.device_put(arr)))
+    np.testing.assert_array_equal(gpu_out, cpu_out)
+
+
+@pytest.mark.gpu
+def test_gridpoint_coords_identity_rotation_on_gpu(gpu_device):
+    rot = np.eye(3, dtype=np.float32)
+    image_shape = (2, 2)
+    volume_shape = (4, 4, 4)
+    cpu_coords = np.asarray(core.get_gridpoint_coords(rot, image_shape, volume_shape))
+    with jax.default_device(gpu_device):
+        gpu_coords = np.asarray(core.get_gridpoint_coords(jax.device_put(rot), image_shape, volume_shape))
+    np.testing.assert_allclose(gpu_coords, cpu_coords, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_translate_images_on_gpu(gpu_device):
+    image_shape = (2, 2)
+    image = np.array([[1 + 0j, 2 + 1j, 3 - 1j, 4 + 0j]], dtype=np.complex64)
+    translations = np.array([[0.0, 0.0]], dtype=np.float32)
+    with jax.default_device(gpu_device):
+        gpu_out = np.asarray(
+            core.translate_images(jax.device_put(image), jax.device_put(translations), image_shape)
+        )
+    np.testing.assert_allclose(gpu_out, image, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_find_frequencies_within_grid_dist_on_gpu(gpu_device):
+    coords = np.array([1, 2, 3], dtype=np.int32)
+    cpu_out = np.asarray(core.find_frequencies_within_grid_dist(coords, 1))
+    with jax.default_device(gpu_device):
+        gpu_out = np.asarray(core.find_frequencies_within_grid_dist(jax.device_put(coords), 1))
+    np.testing.assert_array_equal(gpu_out, cpu_out)
+
+
+@pytest.mark.gpu
+def test_evaluate_ctf_on_gpu(gpu_device):
+    freqs = np.array([[0.0, 0.0], [0.1, -0.2]], dtype=np.float32)
+    cpu_out = np.asarray(
+        core.evaluate_ctf(freqs, dfu=15000.0, dfv=15000.0, dfang=0.0, volt=300.0, cs=2.7, w=0.1, phase_shift=0.0, bfactor=0.0)
+    )
+    with jax.default_device(gpu_device):
+        gpu_out = np.asarray(
+            core.evaluate_ctf(
+                jax.device_put(freqs), dfu=15000.0, dfv=15000.0, dfang=0.0,
+                volt=300.0, cs=2.7, w=0.1, phase_shift=0.0, bfactor=0.0,
+            )
+        )
+    np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_forward_model_from_map_on_gpu(gpu_device):
+    volume_shape = (4, 4, 4)
+    image_shape = (2, 2)
+    rng = np.random.default_rng(99)
+    volume = rng.standard_normal(np.prod(volume_shape)).astype(np.float32)
+    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
+    ctf_params = np.zeros((1, 9), dtype=np.float32)
+    ctf_fun = lambda p, s, v: np.ones((p.shape[0], s[0] * s[1]), dtype=np.float32)
+
+    cpu_out = np.asarray(
+        core.forward_model_from_map(
+            volume, ctf_params, rotation_matrices, image_shape, volume_shape, 1.0, ctf_fun, "nearest", True,
+        )
+    )
+    with jax.default_device(gpu_device):
+        gpu_out = np.asarray(
+            core.forward_model_from_map(
+                jax.device_put(volume), jax.device_put(ctf_params), jax.device_put(rotation_matrices),
+                image_shape, volume_shape, 1.0, ctf_fun, "nearest", True,
+            )
+        )
+    np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
