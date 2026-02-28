@@ -447,3 +447,70 @@ def test_left_matvec_with_spatial_sigma_v2_matches_v1_small_problem(monkeypatch)
     )
 
     np.testing.assert_allclose(np.asarray(out_v1), np.asarray(out_v2), atol=2e-5, rtol=2e-5)
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+import jax
+import jax.numpy as jnp
+
+
+@pytest.mark.gpu
+def test_flip_vec_gpu(gpu_device):
+    volume_shape = (4, 4, 4)
+    vol_size = int(np.prod(volume_shape))
+    col = np.arange(vol_size, dtype=np.float32).astype(np.complex64)
+
+    cpu_flipped = np.asarray(pc.flip_vec(col, volume_shape))
+
+    with jax.default_device(gpu_device):
+        col_g = jax.device_put(jnp.array(col), gpu_device)
+        gpu_flipped = np.asarray(pc.flip_vec(col_g, volume_shape))
+
+    np.testing.assert_allclose(cpu_flipped, gpu_flipped, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_batch_flip_vec2_gpu(gpu_device):
+    volume_shape = (4, 4, 4)
+    vol_size = int(np.prod(volume_shape))
+    col = np.arange(vol_size, dtype=np.float32).astype(np.complex64)
+    cols = np.stack([col, col * 2], axis=1).astype(np.complex64)
+
+    cpu_out = np.asarray(pc.batch_flip_vec2(cols, volume_shape))
+
+    with jax.default_device(gpu_device):
+        cols_g = jax.device_put(jnp.array(cols), gpu_device)
+        gpu_out = np.asarray(pc.batch_flip_vec2(cols_g, volume_shape))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_make_symmetric_columns_gpu(gpu_device):
+    volume_shape = (4, 4, 4)
+    vol_size = int(np.prod(volume_shape))
+    n_cols = 5
+    rng = np.random.default_rng(0)
+
+    columns = (rng.normal(size=(vol_size, n_cols)) + 1j * rng.normal(size=(vol_size, n_cols))).astype(np.complex64)
+    picked = rng.choice(vol_size, size=n_cols, replace=False)
+
+    cpu_cols, cpu_minus, cpu_good = pc.make_symmetric_columns(columns, picked, volume_shape)
+    cpu_cols = np.asarray(cpu_cols)
+    cpu_minus = np.asarray(cpu_minus)
+    cpu_good = np.asarray(cpu_good)
+
+    with jax.default_device(gpu_device):
+        columns_g = jax.device_put(jnp.array(columns), gpu_device)
+        picked_g = jax.device_put(jnp.array(picked), gpu_device)
+        gpu_cols, gpu_minus, gpu_good = pc.make_symmetric_columns(columns_g, picked_g, volume_shape)
+        gpu_cols = np.asarray(gpu_cols)
+        gpu_minus = np.asarray(gpu_minus)
+        gpu_good = np.asarray(gpu_good)
+
+    np.testing.assert_allclose(cpu_cols, gpu_cols, atol=1e-5, rtol=1e-5)
+    np.testing.assert_array_equal(cpu_minus, gpu_minus)
+    np.testing.assert_array_equal(cpu_good, gpu_good)

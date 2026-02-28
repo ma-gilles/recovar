@@ -287,3 +287,49 @@ def test_basic_config_logger_and_duplicate_filter(tmp_path):
     r2 = SimpleNamespace(msg="same")
     assert f.filter(r1) is True
     assert f.filter(r2) is False
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.gpu
+def test_make_radial_image_gpu(gpu_device):
+    average = jnp.array([10.0, 20.0], dtype=jnp.float32)
+
+    cpu_out = np.asarray(utils.make_radial_image(average, (3, 3), extend_last_frequency=False))
+
+    with jax.default_device(gpu_device):
+        average_g = jax.device_put(jnp.array(np.asarray(average)), gpu_device)
+        gpu_out = np.asarray(utils.make_radial_image(average_g, (3, 3), extend_last_frequency=False))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_estimate_variance_gpu(gpu_device):
+    u = np.array([[1 + 1j, 2], [3, 4 - 1j]], dtype=np.complex64)
+    s = np.array([2.0, 3.0], dtype=np.float32)
+
+    cpu_out = np.asarray(utils.estimate_variance(u, s))
+
+    with jax.default_device(gpu_device):
+        u_g = jax.device_put(jnp.array(u), gpu_device)
+        s_g = jax.device_put(jnp.array(s), gpu_device)
+        gpu_out = np.asarray(utils.estimate_variance(u_g, s_g))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_symmetrize_ft_volume_gpu(gpu_device):
+    vol = jnp.ones((8,), dtype=jnp.complex64)
+
+    cpu_out = np.asarray(utils.symmetrize_ft_volume(vol, (2, 2, 2)))
+
+    with jax.default_device(gpu_device):
+        vol_g = jax.device_put(jnp.array(np.asarray(vol)), gpu_device)
+        gpu_out = np.asarray(utils.symmetrize_ft_volume(vol_g, (2, 2, 2)))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
