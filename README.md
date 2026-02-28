@@ -67,7 +67,7 @@ If you'd like to use RECOVAR functions directly in Python (e.g., for custom anal
 
 If you use RECOVAR in your research, please cite:
 
-> Gilles, M.A. and Singer, A. (2024). Heterogeneity analysis of cryo-EM datasets using 3D covariance estimation and kernel regression. *Proceedings of the National Academy of Sciences*, 122(3), e2419140122.
+> Gilles, M.A. and Singer, A. (2025). Cryo-EM heterogeneity analysis using regularized covariance estimation and kernel regression. *Proceedings of the National Academy of Sciences*, 122(9), e2419140122. [doi:10.1073/pnas.2419140122](https://doi.org/10.1073/pnas.2419140122)
 
 ## Contact
 
