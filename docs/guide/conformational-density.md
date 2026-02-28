@@ -9,8 +9,7 @@ RECOVAR can estimate the probability density of conformations in the latent spac
 ## Estimating density
 
 ```bash
-recovar estimate_conformational_density output --zdim=10 \
-    -o density_output
+recovar estimate_conformational_density output -o density_output
 ```
 
 This produces density estimates in the latent space.
@@ -18,11 +17,11 @@ This produces density estimates in the latent space.
 ## Estimating stable states
 
 ```bash
-recovar estimate_stable_states output --zdim=10 \
-    -o stable_states --density density_output/deconv_density_knee.pkl
+recovar estimate_stable_states density_output/deconv_density_knee.pkl \
+    -o stable_states
 ```
 
-Identifies local minima in the free energy landscape.
+Identifies local minima in the free energy landscape. The first argument is the density `.pkl` file produced by `estimate_conformational_density`.
 
 ## Using density for trajectories
 

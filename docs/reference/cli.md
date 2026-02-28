@@ -91,16 +91,22 @@ recovar analyze result_dir --zdim=10 [options]
 |------|---------|-------------|
 | `--zdim` | Required | Latent dimension (single integer) |
 | `-o` | Auto | Output directory |
-| `--n-clusters` | 40 | Number of k-means clusters |
+| `--n-clusters` | 20 | Number of k-means clusters |
 | `--n-trajectories` | 0 | Trajectories between cluster pairs |
 | `--n-vols-along-path` | 6 | Volumes per trajectory |
+| `--density` | None | Density `.pkl` file for trajectory guidance |
 | `--Bfactor` | 0 | B-factor sharpening |
 | `--n-bins` | 50 | Bins for kernel regression |
-| `--skip-umap` | False | Skip UMAP |
+| `--maskrad-fraction` | 20 | Kernel radius = `grid_size / value` |
+| `--skip-umap` | False | Skip UMAP (recommended for >200k particles) |
 | `--skip-centers` | False | Skip cluster center volumes |
 | `--normalize-kmeans` | False | Normalize z before k-means |
 | `--no-z-regularization` | False | Use unregularized z |
 | `--lazy` | False | Lazy loading |
+| `--particles` | Same | Higher-resolution particle stack (overrides pipeline stack) |
+| `--datadir` | Same | Path prefix for particle paths |
+| `--strip-prefix` | None | Strip prefix from paths in star file |
+| `--apply-global-filtering` | False | Apply global FSC filtering to half-maps |
 
 ---
 
@@ -119,6 +125,7 @@ recovar downsample particles.star -D 128 -o downsampled/ [options]
 | `--datadir` | None | Base directory for image paths |
 | `--strip-prefix` | None | Strip prefix from paths |
 | `--batch-size` | 1000 | Images per batch |
+| `--chunk-size` | None | Split output into chunks of this many images |
 
 See [Downsampling](../guide/downsampling.md) for details.
 
@@ -188,10 +195,10 @@ recovar estimate_conformational_density result_dir [options]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--pca_dim` | 4 | PCA dimensions for density estimation |
-| `--z_dim_used` | 4 | Latent dimension to use |
+| `--z_dim_used` | Auto | Latent dimension to use (smallest zdim >= pca_dim) |
 | `--output_dir` | Auto | Output directory |
 | `--percentile_reject` | 10 | Reject % of data with large covariance |
-| `--num_disc_points` | 50 | Grid points per dimension |
+| `--num_disc_points` | Auto | Grid points per dimension (50 for dim>3, 100 for dim=3, 200 for dim=2) |
 | `--alphas` | Auto | Regularization values (space-separated) |
 
 !!! note
@@ -204,7 +211,7 @@ recovar estimate_conformational_density result_dir [options]
 Extract particles that produced a specific volume feature.
 
 ```bash
-recovar extract_image_subset --input-dir vol_dir --output indices.pkl [selection]
+recovar extract_image_subset vol_dir --output indices.pkl [selection]
 ```
 
 Selection (one required):

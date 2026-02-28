@@ -49,9 +49,11 @@ recovar pipeline particles.128.mrcs -o output \
 | `--datadir` | None | Path prefix for resolving relative image paths |
 | `--strip-prefix` | None | Strip prefix from image paths |
 | `--ind` | None | Filter to specific image indices (`.pkl`) |
+| `--particle-ind` | None | Filter particles by indices (cryo-ET only, `.pkl`) |
 | `--n-images` | All | Number of images to use |
 | `--halfsets` | None | Pre-computed half-set split (`.pkl`) |
 | `--padding` | 0 | Real-space padding |
+| `--uninvert-data` | automatic | Data sign inversion: `true`, `false`, or `automatic` |
 
 ## Advanced options
 
@@ -66,6 +68,9 @@ recovar pipeline particles.128.mrcs -o output \
 | `--ignore-zero-frequency` | False | Useful if images are normalized to zero mean |
 | `--low-memory-option` | False | Lower memory for covariance estimation |
 | `--very-low-memory-option` | False | Lowest memory for covariance estimation |
+| `--no-cleanup` | False | Keep temporary files (useful for chaining pipeline calls) |
+| `--premultiplied-ctf` | False | Input images have pre-multiplied CTF |
+| `--copy-to-folder` | None | Copy input data to temporary folder before processing |
 
 ## Multi-GPU (experimental)
 
