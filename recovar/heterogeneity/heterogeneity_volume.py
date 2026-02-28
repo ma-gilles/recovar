@@ -3,9 +3,10 @@ import numpy as np
 from recovar import dataset
 import jax.numpy as jnp
 import jax.scipy
-from recovar import locres, utils
-from recovar import adaptive_kernel_discretization
-import recovar.latent_density
+from recovar import utils
+from recovar.heterogeneity import locres
+from recovar.heterogeneity import adaptive_kernel_discretization
+import recovar.heterogeneity.latent_density
 import logging
 import recovar.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
@@ -40,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 def pick_minimum_discretization_size(ndim, log_likelihoods, q = 0.5, min_images = 50  ):
     if ndim >0:
-        disc_latent_dist = recovar.latent_density.get_log_likelihood_threshold(k = ndim, q=0.5)
+        disc_latent_dist = recovar.heterogeneity.latent_density.get_log_likelihood_threshold(k = ndim, q=0.5)
     else:
         disc_latent_dist = -1
     if log_likelihoods.size < min_images:
@@ -65,7 +66,7 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
     noise_variance = results['cov_noise']
     latent_points = latent_point[None]
 
-    log_likelihoods = recovar.latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], results['zs'][ndim], results['cov_zs'][ndim])[...,0]
+    log_likelihoods = recovar.heterogeneity.latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], results['zs'][ndim], results['cov_zs'][ndim])[...,0]
     heterogeneity_distances = cryos.split_array(log_likelihoods)
     if metric_used == "global":
         pass
@@ -303,7 +304,7 @@ def choice_most_likely_split(estimates0, estimates1, target0, target1, noise_var
 # def choice_best_locres(estimates0, estimates1, target_idx, voxel_size):
 def choice_best_locres( estimates1, target0, voxel_size):
 
-    from recovar import locres
+    from recovar.heterogeneity import locres
 
     n_estimators = estimates1.shape[0]
     locressol = np.zeros_like(estimates1)
