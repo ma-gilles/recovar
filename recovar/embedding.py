@@ -63,7 +63,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
         if mean_cubic is not None:
             mean = mean_cubic
         else:
-            mean = cubic_interpolation.compute_spline_coefficients(mean.reshape(cryos.volume_shape))
+            mean = cubic_interpolation.calculate_spline_coefficients(mean.reshape(cryos.volume_shape))
         from recovar import covariance_estimation
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, cryos.volume_shape, gpu_memory= None)
 

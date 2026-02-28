@@ -273,7 +273,7 @@ class TiltSeriesDataset(ParticleImageDataset):
         super().__init__(starfile_path, lazy=lazy, ind=ind, **kwargs)
         logger.info("Base dataset loaded in %.2fs", time.time() - start_time)
 
-        star = starfile.Starfile.load(starfile_path)
+        star = starfile.StarFile.load(starfile_path)
         logger.info("STAR file parsed in %.2fs", time.time() - start_time)
 
         canonical_groups = self._get_canonical_groups(star.df)
@@ -379,7 +379,7 @@ class TiltSeriesDataset(ParticleImageDataset):
     @classmethod
     def parse_particle_tilt(cls, starfile_path: str,
                             indices: Optional[np.ndarray] = None):
-        star = starfile.Starfile.load(starfile_path)
+        star = starfile.StarFile.load(starfile_path)
         df = star.df
 
         if '_rlnGroupName' not in df.columns:
@@ -402,7 +402,7 @@ class TiltSeriesDataset(ParticleImageDataset):
 
     @classmethod
     def parse_micrograph_tilt_mapping(cls, starfile_path: str):
-        star = starfile.Starfile.load(starfile_path)
+        star = starfile.StarFile.load(starfile_path)
         df = star.df
 
         tilt_col = None

@@ -27,7 +27,7 @@ def test_map_coordinates_rejects_non_cubic_order():
 
 def test_map_coordinates_with_cubic_spline_returns_expected_shape():
     arr = np.arange(25, dtype=np.float32).reshape(5, 5)
-    coeff = ci.compute_spline_coefficients(arr)
+    coeff = ci.calculate_spline_coefficients(arr)
     xs = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     ys = np.array([0.5, 1.5, 2.5], dtype=np.float32)
     out = ci.map_coordinates_with_cubic_spline(coeff, (xs, ys), mode="fill", cval=0.0)

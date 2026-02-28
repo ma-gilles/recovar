@@ -265,7 +265,7 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_rejects_out_of_range_star_image_
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
 
-    sf = starfile.Starfile.load(files["particles_star"])
+    sf = starfile.StarFile.load(files["particles_star"])
     image_name = str(sf.df["_rlnImageName"].iloc[0])
     _, rel_path = image_name.split("@", 1)
     sf.df.loc[sf.df.index[0], "_rlnImageName"] = f"999@{rel_path}"
@@ -1248,7 +1248,7 @@ def test_tiny_tilt_loading_with_strip_prefix_resolves_prefixed_star_paths(tmp_pa
     bad_prefix = "/definitely/not/a/real/path"
     mrcs_name = Path(files["particles_mrcs"]).name
 
-    star = starfile.Starfile.load(files["particles_star"])
+    star = starfile.StarFile.load(files["particles_star"])
     star.df["_rlnImageName"] = [f"{i+1}@{bad_prefix}/{mrcs_name}" for i in range(files["n_images"])]
     prefixed_star = tmp_path / "particles_prefixed.star"
     starfile.write_star(str(prefixed_star), data=star.df)
@@ -1696,7 +1696,7 @@ def test_tiny_relion5_ctf_channels_preserve_requested_order_with_duplicates(tmp_
     n = files["n_images"]
     requested = np.array([7, 1, 7, 3], dtype=np.int32)
 
-    star = starfile.Starfile.load(files["particles_star"])
+    star = starfile.StarFile.load(files["particles_star"])
     exposure = np.array([9.0, 1.0, 7.0, 3.0, 8.0, 2.0, 6.0, 4.0], dtype=np.float32)
     scale = np.array([0.9, 0.1, 0.7, 0.3, 0.8, 0.2, 0.6, 0.4], dtype=np.float32)
     star.df["_rlnMicrographPreExposure"] = exposure

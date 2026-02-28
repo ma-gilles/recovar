@@ -400,7 +400,7 @@ def test_tilt_series_dataset_strip_prefix_with_tiny_real_files(tmp_path):
     bad_prefix = "/unmounted/prefix"
     mrcs_name = (tmp_path / "tiny" / "particles.mrcs").name
 
-    sf = starfile.Starfile.load(files["particles_star"])
+    sf = starfile.StarFile.load(files["particles_star"])
     sf.df["_rlnImageName"] = [f"{i+1}@{bad_prefix}/{mrcs_name}" for i in range(files["n_images"])]
     prefixed_star = tmp_path / "prefixed.star"
     starfile.write_star(str(prefixed_star), data=sf.df)

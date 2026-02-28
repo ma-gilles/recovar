@@ -571,9 +571,9 @@ class StarLoader(MultiMRCLoader):
     def __init__(self, filepath: str, indices: Optional[np.ndarray] = None,
                  datadir: str = "", lazy: bool = True, max_threads: int = 1,
                  strip_prefix: Optional[str] = None):
-        from recovar.starfile import Starfile
+        from recovar.starfile import StarFile
 
-        star = Starfile.load(filepath)
+        star = StarFile.load(filepath)
         df = star.df.copy()
 
         if '_rlnImageName' not in df.columns:

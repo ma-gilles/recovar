@@ -341,7 +341,3 @@ class StarFile:
     def to_relion30(self) -> pd.DataFrame:
         """Alias for flatten_to_relion30 (compatibility)."""
         return self.flatten_to_relion30()
-
-
-# Compatibility alias (to be removed after all consumers migrate to StarFile)
-Starfile = StarFile
