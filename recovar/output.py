@@ -548,19 +548,6 @@ def kmeans_analysis(output_folder, zs, n_clusters = 20):
     return centers, labels
 
 
-def move_to_one_folder(path_folder, n_vols, string_name = 'filtered.mrc', new_stringname = 'vol' ):
-    """Deprecated: volumes are now written flat. Kept for backward compatibility."""
-    mkdir_safe(path_folder + '/all_volumes/')
-    output_folder = path_folder + '/all_volumes/'
-    import shutil
-    for k in range(n_vols):
-        input_file = path_folder + "/vol" + format(k, '04d') + '/' + string_name
-        output_file = output_folder + "/" + new_stringname + format(k, '04d') + ".mrc"
-        shutil.copyfile(input_file, output_file)
-    return
-
-
-
 
 def plot_umap(output_folder, zs, centers):
     def plot_axes(axes = [0,1]):

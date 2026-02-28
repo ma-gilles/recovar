@@ -343,6 +343,5 @@ class StarFile:
         return self.flatten_to_relion30()
 
 
-# Compatibility aliases
-parse_star = read_star
+# Compatibility alias (to be removed after all consumers migrate to StarFile)
 Starfile = StarFile
