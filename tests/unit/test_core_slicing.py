@@ -9,7 +9,7 @@ import textwrap
 pytest.importorskip("jax")
 import jax
 import recovar.core as core
-import recovar.core_slicing as core_slicing
+import recovar.core.slicing as core_slicing
 import recovar.fourier_transform_utils as fourier_transform_utils
 
 pytestmark = pytest.mark.unit
@@ -49,7 +49,7 @@ def _run_half_perf_case(case_name):
 
         os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
-        import recovar.core_slicing as core_slicing
+        import recovar.core.slicing as core_slicing
         import recovar.fourier_transform_utils as fourier_transform_utils
 
         case_name = os.environ["RECOVAR_HALF_PERF_CASE"]
@@ -766,7 +766,7 @@ def test_slice_volume_by_map_cubic_flat_and_precomputed_agree():
     The slice values should be finite and non-trivially zero for a non-zero volume.
     """
     import recovar.cubic_interpolation as cubic_interpolation
-    from recovar.core_geometry import rotations_to_grid_point_coords
+    from recovar.core.geometry import rotations_to_grid_point_coords
 
     rng = np.random.default_rng(43)
     image_shape = (4, 8)

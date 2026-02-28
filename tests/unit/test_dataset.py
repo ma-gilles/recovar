@@ -847,7 +847,7 @@ def test_cryoemdataset_predicted_image_and_generators(monkeypatch):
     assert ds.get_image_subset_generator(2, np.array([1]))[0] == "image_subset"
 
     called = {}
-    import recovar.core_forward as core_forward_mod
+    import recovar.core.forward as core_forward_mod
 
     def _fake_fwd(config, volume, ctf, rots, skip_ctf=False):
         called["disc_type"] = config.disc_type

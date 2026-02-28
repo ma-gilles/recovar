@@ -368,7 +368,7 @@ class CryoEMDataset:
             Predicted images in real space if spatial=True, otherwise in Fourier space
         """
         from recovar.configs import ForwardModelConfig
-        import recovar.core_forward as core_forward
+        import recovar.core.forward as core_forward
         config = ForwardModelConfig.from_dataset(self, disc_type='linear_interp')
         predicted_images = core_forward.forward_model(
             config, volume, self.CTF_params[indices],

@@ -2,7 +2,7 @@ import numpy as np
 from recovar import core, noise
 from recovar import regularization, jax_config, utils, padding, mask
 from recovar.configs import ForwardModelConfig
-import recovar.core_forward as core_forward
+import recovar.core.forward as core_forward
 import recovar.fourier_transform_utils as fourier_transform_utils
 import jax.numpy as jnp
 import logging, functools, jax

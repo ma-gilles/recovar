@@ -6,12 +6,12 @@ import numpy as np
 from jax import vjp
 
 import recovar.fourier_transform_utils as fourier_transform_utils
-from recovar.core_geometry import (
+from recovar.core.geometry import (
     get_stencil,
     get_unrotated_plane_grid_points,
     rotations_to_grid_point_coords,
 )
-from recovar.core_indexing import vol_indices_to_vec_indices
+from recovar.core.indexing import vol_indices_to_vec_indices
 
 
 @jax.jit

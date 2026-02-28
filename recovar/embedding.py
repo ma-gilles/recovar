@@ -6,7 +6,7 @@ import nvtx
 import equinox as eqx
 from recovar import core, covariance_core, jax_config, utils, linalg
 from recovar.configs import ForwardModelConfig, BatchData, ModelState, EmbeddingOpts
-import recovar.core_forward as core_forward
+import recovar.core.forward as core_forward
 
 logger = logging.getLogger(__name__)
 

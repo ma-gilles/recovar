@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("jax")
 import recovar.core as core
-import recovar.core_indexing as core_indexing
+import recovar.core.indexing as core_indexing
 
 pytestmark = pytest.mark.unit
 

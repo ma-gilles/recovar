@@ -63,7 +63,7 @@ def test_single_batch_equivalence():
 
     from recovar import core, simulator, utils
     from recovar.configs import ForwardModelConfig
-    from recovar import core_ctf
+    from recovar.core import ctf as core_ctf
 
     for grid_size in [32, 64, 128]:
         for disc_type in ["linear_interp", "cubic"]:
