@@ -5,7 +5,7 @@ import jax, time
 import functools
 import nvtx
 import equinox as eqx
-from recovar import core, covariance_core, regularization, utils, constants, noise, cubic_interpolation
+from recovar import core, covariance_core, regularization, utils, jax_config, noise, cubic_interpolation
 from recovar.configs import ForwardModelConfig, BatchData, ModelState, CovarianceOpts
 import recovar.core_forward as core_forward
 import recovar.fourier_transform_utils as fourier_transform_utils
@@ -331,14 +331,14 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask
     if options["reg_fn"] == "new":
         logger.info("using new covariance reg fn")
         utils.report_memory_device(logger = logger)
-        covariance_cols["est_mask"], prior, fscs = compute_covariance_regularization_relion_style(Hs, Bs, mean_prior, picked_frequencies, volume_noise_var, mask_final, volume_shape,  gpu_memory, reg_init_multiplier = constants.REG_INIT_MULTIPLIER, options = options)
+        covariance_cols["est_mask"], prior, fscs = compute_covariance_regularization_relion_style(Hs, Bs, mean_prior, picked_frequencies, volume_noise_var, mask_final, volume_shape,  gpu_memory, reg_init_multiplier = jax_config.REG_INIT_MULTIPLIER, options = options)
         covariance_cols["est_mask"] = covariance_cols["est_mask"].T
         del Hs, Bs
         logger.info("after reg fn")
         utils.report_memory_device(logger = logger)
     elif options["reg_fn"] == "old":
         logger.info("using old covariance reg fn")
-        H_comb, B_comb, prior, fscs = compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, volume_noise_var, mask_final, volume_shape,  gpu_memory, prior_iterations = 3, keep_intermediate = keep_intermediate, reg_init_multiplier = constants.REG_INIT_MULTIPLIER, substract_shell_mean = options["substract_shell_mean"], shift_fsc = options["shift_fsc"])
+        H_comb, B_comb, prior, fscs = compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, volume_noise_var, mask_final, volume_shape,  gpu_memory, prior_iterations = 3, keep_intermediate = keep_intermediate, reg_init_multiplier = jax_config.REG_INIT_MULTIPLIER, substract_shell_mean = options["substract_shell_mean"], shift_fsc = options["shift_fsc"])
 
         del Hs, Bs
 

@@ -3,7 +3,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar import core, utils, simulator, linalg, mask, constants
+from recovar import core, utils, simulator, linalg, mask, jax_config
 
 # Maybe should take out these dependencies?
 
@@ -129,7 +129,7 @@ class HeterogeneousVolumeDistribution():
         zero_freq = core.frequencies_to_vec_indices( jnp.array([[0,0,0]] ), self.volume_shape)
         # u[zero_freq] == np.sum(Fu)== < Fu, 1 > 
         # ip = u[zero_freq,:] / np.abs(u[zero_freq,:])
-        ip = np.where(np.abs(u[zero_freq,:])  > constants.ROOT_EPSILON, u[zero_freq,:] / np.abs(u[zero_freq,:]), 1 )
+        ip = np.where(np.abs(u[zero_freq,:])  > jax_config.ROOT_EPSILON, u[zero_freq,:] / np.abs(u[zero_freq,:]), 1 )
         u /= ip
         return u, s**2
     

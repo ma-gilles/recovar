@@ -1,7 +1,7 @@
 import logging
 import numpy as np
 import jax
-from recovar import utils, relion_functions, mask as mask_fn, constants, principal_components
+from recovar import utils, relion_functions, mask as mask_fn, jax_config, principal_components
 from .e_step import E_with_precompute
 from .m_step import M_with_precompute
 from .heterogeneity import compute_H_B, compute_projected_covariance_rhs_lhs, solve_covariance
@@ -188,7 +188,7 @@ class HeterogeneousEMState():
             u_small =  np.fliplr(u_small)
             s = np.flip(s)
             self.u = (self.subspace @ u_small).T
-            self.s = np.where(s >0 , s, np.ones_like(s)*constants.EPSILON)
+            self.s = np.where(s >0 , s, np.ones_like(s)*jax_config.EPSILON)
 
         post_process_vmap = jax.vmap(relion_functions.post_process_from_filter_v2, in_axes = (0, 0, None, None, 0, None,None, None, None, None, None))
         

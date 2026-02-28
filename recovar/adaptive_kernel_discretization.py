@@ -14,7 +14,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar import core, constants, dataset, linalg, noise, regularization, relion_functions, utils
+from recovar import core, dataset, jax_config, linalg, noise, regularization, relion_functions, utils
 from recovar.configs import BatchData, ForwardModelConfig
 import recovar.fourier_transform_utils as fourier_transform_utils
 
@@ -738,7 +738,7 @@ def estimate_optimal_covariance_and_volume(init_variance, init_prior_covariance_
     first_estimates = [None,None]
     
     for k in range(2):
-        first_estimates[k] = np.array( np.where(np.abs(XWX_summed_neighbors[k][...,0]) < constants.ROOT_EPSILON, 0, F_summed_neighbors[k][...,0] / (XWX_summed_neighbors[k][...,0] + init_prior_inverse_covariance ) ))
+        first_estimates[k] = np.array( np.where(np.abs(XWX_summed_neighbors[k][...,0]) < jax_config.ROOT_EPSILON, 0, F_summed_neighbors[k][...,0] / (XWX_summed_neighbors[k][...,0] + init_prior_inverse_covariance ) ))
         first_estimates[k] = half_volume_to_full_volume(first_estimates[k], volume_shape)
 
 
@@ -1230,11 +1230,11 @@ def estimate_local_covariances(XWX_0, XWX_1, estimate_0, estimate_1, prior_inver
 def estimate_signal_variance_from_correlation(vol1, vol2, lhs, prior, volume_shape):
     correlation = jnp.conj(vol1) * vol2
     correlation_avg = regularization.average_over_shells(correlation.real, volume_shape, frequency_shift = np.array([0,0,0]))
-    correlation_avg = jnp.where( correlation_avg > constants.ROOT_EPSILON , correlation_avg , constants.ROOT_EPSILON )
+    correlation_avg = jnp.where( correlation_avg > jax_config.ROOT_EPSILON , correlation_avg , jax_config.ROOT_EPSILON )
 
     top = lhs**2 / (lhs + 1/prior)**2
     sum_top = regularization.average_over_shells(top,  volume_shape, frequency_shift = np.array([0,0,0]))
-    prior_avg = jnp.where( sum_top > 0 , correlation_avg / sum_top , constants.ROOT_EPSILON )
+    prior_avg = jnp.where( sum_top > 0 , correlation_avg / sum_top , jax_config.ROOT_EPSILON )
 
     # Put back in array
     radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = np.array([0,0,0])).astype(int).reshape(-1)

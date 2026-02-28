@@ -1,6 +1,6 @@
 import numpy as np
 from recovar import core, noise
-from recovar import regularization, constants, utils, padding, mask
+from recovar import regularization, jax_config, utils, padding, mask
 from recovar.configs import ForwardModelConfig
 import recovar.core_forward as core_forward
 import recovar.fourier_transform_utils as fourier_transform_utils
@@ -374,7 +374,7 @@ def adjust_regularization_relion_style(filter, volume_shape, tau = None, padding
     avged_reg_volume_shape = utils.make_radial_image(avged_reg, volume_shape).reshape(regularized_filter.shape)
 
     regularized_filter = jnp.maximum(regularized_filter, avged_reg_volume_shape)
-    regularized_filter = jnp.maximum(regularized_filter, constants.EPSILON)
+    regularized_filter = jnp.maximum(regularized_filter, jax_config.EPSILON)
 
     return regularized_filter
 
