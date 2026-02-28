@@ -311,20 +311,3 @@ def test_scatter_annotate_with_explicit_centers():
     plt.close(fig)
 
 
-def test_move_to_one_folder_copies_expected_files(tmp_path):
-    root = tmp_path / "state_out"
-    n_vols = 3
-    for i in range(n_vols):
-        vol_dir = root / f"vol{i:04d}"
-        vol_dir.mkdir(parents=True, exist_ok=True)
-        src = vol_dir / "locres_filtered.mrc"
-        src.write_bytes(f"vol-{i}".encode("utf-8"))
-
-    output.move_to_one_folder(str(root), n_vols, string_name="locres_filtered.mrc", new_stringname="vol")
-
-    all_dir = root / "all_volumes"
-    assert all_dir.exists()
-    for i in range(n_vols):
-        dst = all_dir / f"vol{i:04d}.mrc"
-        assert dst.exists()
-        assert dst.read_bytes() == f"vol-{i}".encode("utf-8")

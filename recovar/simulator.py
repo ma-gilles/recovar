@@ -961,7 +961,7 @@ def simulate_batch(
 ) -> jax.Array:
     """Simulate a batch of images from a volume — Equinox API.
 
-    Replaces the 11-param ``simulate_data_batch``.
+    Simulate a batch of cryo-EM images from a volume using the Equinox API.
     """
     CTF = config.compute_ctf(ctf_params)
     slices = core.slice_volume_by_map(
@@ -970,25 +970,6 @@ def simulate_batch(
     if not skip_ctf:
         slices = slices * CTF
     return core.translate_images(slices, -translations, config.image_shape)
-
-
-# ============================================================================
-# Legacy simulation API (kept for backward compatibility)
-# ============================================================================
-
-
-@functools.partial(jax.jit, static_argnums = [4,5,6,7,8,9,10])
-def simulate_data_batch(volume, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun, skip_ctf = False ):
-
-    CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    corrected_images = core.slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type)
-    if not skip_ctf:
-        # Apply CTF
-        corrected_images = corrected_images * CTF
-    # Translate back.
-    translated_images = core.translate_images(corrected_images, -translations, image_shape)
-
-    return translated_images
 
 
 def simulate_nufft_data_batch(volume, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun, skip_ctf = False ):

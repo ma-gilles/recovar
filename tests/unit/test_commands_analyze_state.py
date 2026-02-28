@@ -345,7 +345,7 @@ def test_compute_state_accepts_pathlike_latent_points(monkeypatch, tmp_path):
         "compute_and_save_reweighted",
         lambda _cryos, target_zs, *_args, **_kwargs: captured.setdefault("target_zs", target_zs.copy()),
     )
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -398,7 +398,7 @@ def test_compute_state_accepts_pathlike_result_and_out_dirs(monkeypatch, tmp_pat
             "output_folder", output_folder
         ),
     )
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
 
     args = SimpleNamespace(
         result_dir=tmp_path / "pipeline_out",  # Path object
@@ -451,7 +451,7 @@ def test_compute_state_reads_pkl_latent_points(monkeypatch, tmp_path):
         "compute_and_save_reweighted",
         lambda _cryos, target_zs, *_args, **_kwargs: captured.setdefault("target_zs", target_zs.copy()),
     )
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -504,7 +504,7 @@ def test_compute_state_uses_noreg_key_when_requested(monkeypatch, tmp_path):
             "vals", (zs.copy(), cov_zs.copy())
         ),
     )
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -567,7 +567,7 @@ def test_compute_state_uses_embedding_component_api_when_available(monkeypatch, 
 
     monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _PO)
     monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
 
     captured = {}
     monkeypatch.setattr(
@@ -642,7 +642,7 @@ def test_compute_state_casts_embedding_arrays_to_float32(monkeypatch, tmp_path):
 
     monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _PO)
     monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
 
     captured = {}
     monkeypatch.setattr(
@@ -942,7 +942,7 @@ def test_compute_state_missing_input_args_ignores_overrides(monkeypatch, tmp_pat
     monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "compute_and_save_reweighted", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -994,7 +994,7 @@ def test_compute_state_params_none_ignores_overrides(monkeypatch, tmp_path):
     monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "compute_and_save_reweighted", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -1046,7 +1046,7 @@ def test_compute_state_allows_missing_override_attrs_on_args(monkeypatch, tmp_pa
     monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "compute_and_save_reweighted", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
 
     # Intentionally omit particles/datadir/strip_prefix attrs.
     args = SimpleNamespace(
@@ -1103,7 +1103,7 @@ def test_compute_state_uses_defaults_when_optional_attrs_missing(monkeypatch, tm
         "compute_and_save_reweighted",
         lambda _cryos, _target_zs, _zs, _cov_zs, _out, _bf, **kwargs: captured.setdefault("kwargs", kwargs),
     )
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
 
     # Intentionally omit many optional attributes; code should use parser defaults.
     args = SimpleNamespace(
@@ -1153,7 +1153,7 @@ def test_compute_state_apply_global_filtering_without_volume_mask(monkeypatch, t
         "compute_and_save_reweighted",
         lambda *_args, **kwargs: captured.setdefault("kwargs", kwargs),
     )
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -1228,7 +1228,7 @@ def test_compute_state_updates_input_args_from_cli_overrides(monkeypatch, tmp_pa
     monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "compute_and_save_reweighted", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -1284,7 +1284,7 @@ def test_compute_state_copy_to_folder_triggers_cleanup_unless_no_cleanup(monkeyp
     monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "compute_and_save_reweighted", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
     monkeypatch.setattr(compute_state_cmd, "copy_data_from_pipeline_output", lambda *_args, **_kwargs: {"temp_folder": "/tmp/fake"})
     cleaned = {"count": 0}
     monkeypatch.setattr(compute_state_cmd, "cleanup_temp_files", lambda _m: cleaned.__setitem__("count", cleaned["count"] + 1))
@@ -1351,7 +1351,7 @@ def test_compute_state_copy_to_folder_cleans_up_on_failure(monkeypatch, tmp_path
         "compute_and_save_reweighted",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
     monkeypatch.setattr(
         compute_state_cmd,
         "copy_data_from_pipeline_output",
@@ -1608,7 +1608,7 @@ def test_compute_state_missing_no_cleanup_attr_defaults_to_cleanup(monkeypatch, 
     monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "compute_and_save_reweighted", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
     monkeypatch.setattr(
         compute_state_cmd,
         "copy_data_from_pipeline_output",
@@ -1670,7 +1670,7 @@ def test_compute_state_zdim1_handles_scalar_txt_latent_point(monkeypatch, tmp_pa
         "compute_and_save_reweighted",
         lambda cryos, target_zs, *_args, **_kwargs: captured.setdefault("shape", target_zs.shape),
     )
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -1990,7 +1990,7 @@ def test_compute_state_1d_latent_warns_and_reshapes_to_single_point(monkeypatch,
         "compute_and_save_reweighted",
         lambda _cryos, target_zs, *_args, **_kwargs: captured.setdefault("target_zs", target_zs.copy()),
     )
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -2053,7 +2053,7 @@ def test_compute_state_uses_lazy_dataset_when_requested(monkeypatch, tmp_path):
         "compute_and_save_reweighted",
         lambda cryos, *_args, **_kwargs: captured.setdefault("cryos", cryos),
     )
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -2115,7 +2115,7 @@ def test_compute_state_uses_nonlazy_dataset_when_lazy_false(monkeypatch, tmp_pat
         "compute_and_save_reweighted",
         lambda cryos, *_args, **_kwargs: captured.setdefault("cryos", cryos),
     )
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda *_args, **_kwargs: None)
+
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),

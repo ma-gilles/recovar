@@ -435,67 +435,6 @@ def variance_relion_kernel_trilinear(
     return Ft_y, Ft_ctf, Ft_im, Ft_one
 
 
-# ============================================================================
-# Legacy variance estimation (kept for backward compatibility)
-# ============================================================================
-
-
-@functools.partial(jax.jit, static_argnums=[5,6,8, 12,13,14,15, 16, 17])
-@nvtx.annotate("variance_relion_style_triangular_kernel_batch_trilinear", color="yellow")
-def variance_relion_style_triangular_kernel_batch_trilinear(mean_estimate, images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, noise_variances, volume_mask, image_mask, volume_mask_threshold, grid_size, padding, soften = 5, disc_type= '', premultiplied_ctf = False):
-
-    CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-
-    images = core.translate_images(images, translations, image_shape) 
-
-
-    if premultiplied_ctf:
-        images = images - core.slice_volume_by_map(mean_estimate, rotation_matrices, image_shape, volume_shape, disc_type) * CTF**2
-        # This is going to be (y_i CTF_i - CTF_i P_i mean_i). y_i = P_i mean_i + noise, in expectation
-        # So the noise variance is going to be: E[(y_i - P_i mean_i)^2 CTF_i^2] = E[noise_i CTF_i] = E[noise_i] * CTF_i
-        noise_p_variance_ctf = CTF**2
-    else:
-        images = images - core.slice_volume_by_map(mean_estimate, rotation_matrices, image_shape, volume_shape, disc_type) * CTF
-        noise_p_variance_ctf = jnp.ones_like(images)
-
-    # This doesn't estimate the signal variance, but signal_variance + noise variance, which can be used to upper bound the signal variance, I guess
-    # Before masking?
-    Ft_im = core.adjoint_slice_volume_by_trilinear(jnp.abs(images)**2, rotation_matrices, image_shape, volume_shape)
-    Ft_one = core.adjoint_slice_volume_by_trilinear(noise_p_variance_ctf, rotation_matrices, image_shape, volume_shape)
-
-    if volume_mask is not None:
-
-        image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
-                                              rotation_matrices,
-                                              image_mask, 
-                                              volume_mask_threshold,
-                                              image_shape, 
-                                              volume_shape, grid_size, 
-                                              padding, 
-                                              'linear_interp', soften = soften )
-        
-        images = covariance_core.apply_image_masks(images, image_mask, image_shape)
-        # If premultiplied_ctf, the noise distribution looks like: mask @ ctf @ noise_variance @ ctf @ mask
-        if premultiplied_ctf:
-            noise_variances = noise_variances * CTF**2
-        cov_noise = noise.get_masked_noise_variance_from_noise_variance(image_mask, noise_variances, image_shape)
-
-    # Maybe apply mask
-    images_squared = jnp.abs(images)**2  - cov_noise.reshape(images.shape) #* np.sum(mask) # May need to do something with mask
-
-    CTF_squared = CTF**2
-
-    if not premultiplied_ctf:
-        images_squared *= CTF_squared
-
-    Ft_y = core.adjoint_slice_volume_by_trilinear(images_squared, rotation_matrices, image_shape, volume_shape)
-
-    Ft_ctf = core.adjoint_slice_volume_by_trilinear(CTF_squared**2, rotation_matrices, image_shape, volume_shape)
-
-    return Ft_y, Ft_ctf, Ft_im, Ft_one
-
-
-# This computes the lhs and rhs of two things: the estimator for the variance of the signal, and the variance of the var(signal)*CTF**2 + var(noise)**2
 @nvtx.annotate("variance_relion_style_triangular_kernel", color="yellow")
 def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, batch_size, image_subset=None, volume_mask=None, disc_type=''):
 
