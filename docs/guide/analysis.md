@@ -22,7 +22,7 @@ Results are saved to `output/output/analysis_10/`.
 |------|---------|-------------|
 | `--zdim` | Required | Latent dimension (single integer) |
 | `-o` | Auto | Output directory (default: `result_dir/output/analysis_{zdim}/`) |
-| `--n-clusters` | 40 | Number of k-means clusters |
+| `--n-clusters` | 20 | Number of k-means clusters |
 | `--n-trajectories` | 0 | Number of trajectories between cluster pairs |
 | `--n-vols-along-path` | 6 | Volumes per trajectory |
 | `--Bfactor` | 0 | B-factor sharpening |

@@ -9,34 +9,40 @@ You can use RECOVAR's volume generation (kernel regression) with latent spaces p
 ## Usage
 
 ```bash
-recovar reconstruct_from_external_embedding output \
+recovar reconstruct_from_external_embedding particles.star \
+    --poses poses.pkl --ctf ctf.pkl \
     -o external_output \
-    --external-embedding external_z.txt \
-    --latent-points coords.txt
+    --embedding z.pkl \
+    --target coords.txt
 ```
 
 ### Arguments
 
-| Flag | Description |
-|------|-------------|
-| `--external-embedding` | Path to external latent coordinates (`.txt`, shape N x zdim) |
-| `--latent-points` | Points at which to generate volumes |
-| `--Bfactor` | B-factor sharpening |
-| `--n-bins` | Bins for kernel regression |
-| `--maskrad-fraction` | Kernel radius parameter |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `particles` | Required | Input particles (`.mrcs`, `.star`, `.cs`, or `.txt`) |
+| `--poses` | Required | Poses file (`.pkl`) |
+| `--ctf` | Required | CTF parameters (`.pkl`) |
+| `-o`, `--outdir` | Required | Output directory |
+| `--embedding` | Required | External latent coordinates (`.pkl`, shape N x zdim) |
+| `--target` | Required | Points at which to generate volumes (`.txt`) |
+| `--Bfactor` | 0 | B-factor sharpening |
+| `--n-bins` | 50 | Bins for kernel regression |
+| `--zdim1` | False | Enable for 1D latent space |
+| `--tilt-series` | False | Use tilt-series data |
 
 ## Example: using cryoDRGN embeddings
 
 1. Run cryoDRGN to get latent coordinates (`z.pkl`)
-2. Convert to text: `np.savetxt("z.txt", z)`
-3. Run RECOVAR pipeline to get the covariance model
-4. Generate volumes using cryoDRGN's latent space:
+2. Pick target points (e.g., k-means centers): `np.savetxt("coords.txt", centers)`
+3. Generate volumes using cryoDRGN's latent space with RECOVAR's kernel regression:
 
 ```bash
-recovar reconstruct_from_external_embedding pipeline_output \
+recovar reconstruct_from_external_embedding particles.mrcs \
+    --poses poses.pkl --ctf ctf.pkl \
     -o cryodrgn_recovar \
-    --external-embedding z.txt \
-    --latent-points coords.txt --Bfactor=50
+    --embedding z.24.pkl \
+    --target coords.txt --Bfactor=50
 ```
 
 The resulting volumes use RECOVAR's transparent kernel regression for volume generation but follow cryoDRGN's latent space structure.
