@@ -67,21 +67,6 @@ def compute_latent_space_density(zs, cov_zs, pca_dim_max = 4, num_points = 50, d
         
     latent_space_bounds = compute_latent_space_bounds(zs, percentile = percentile)
     grids_flat = make_latent_space_grid_from_bounds(latent_space_bounds, num_points)
-    # # DISCRETIZE LATENT SPACE
-    # latent_space_bounds = compute_latent_space_bounds(zs, percentile = 1)
-    # coord_pca_1D = []
-    # # FIND BOUNDS ON SPACE TO DISCRETIZE
-    # for pca_dim in range(pca_dim_max):
-    #     coord_pca = np.linspace(latent_space_bounds[pca_dim][0], latent_space_bounds[pca_dim][1], num_points)
-    #     coord_pca_1D.append(coord_pca)
-
-    # # Numpy's meshgrid seems to be randomly incredibly slow. Not sure why. See https://stackoverflow.com/questions/76058225/numpys-meshgrid-is-discontinuously-slow
-    # # grids = np.meshgrid(*coord_pca_1D, indexing="ij")
-    # # grids_flat = np.transpose(np.vstack([np.reshape(g, -1) for g in grids])).astype(np.float32) 
-
-    # grids = jnp.meshgrid(*coord_pca_1D, indexing="ij")
-    # grids_flat = jnp.transpose(jnp.vstack([jnp.reshape(g, -1) for g in grids])).astype(np.float32) 
-    # grids_inv_pca = grids_flat
     
     st_time = time.time()    
     summed_probs = compute_probs_in_batch(grids_flat, zs, cov_zs)
@@ -90,7 +75,6 @@ def compute_latent_space_density(zs, cov_zs, pca_dim_max = 4, num_points = 50, d
     logger.info(f"latent space computation:, {end_time - st_time}")
     
     return summed_probs_sq, latent_space_bounds
-
 
 
 def compute_latent_space_density_on_2_axes(zs, cov_zs, axes = [0,1], num_points = 50):
@@ -103,7 +87,6 @@ def compute_latent_space_density_at_pts(test_pts, zs, cov_zs):
 def compute_probs_in_batch(test_pts, zs, cov_zs):
 
     
-
     scale_zs = np.array(compute_det_cov_xs(cov_zs))
     summed_probs = jnp.zeros_like(test_pts[:,0])
     
@@ -195,8 +178,6 @@ def gauss_kde_log_pdf_in_batch(gauss_kde, points):
         log_pdfs[batch_st:batch_end] = gauss_kde.logpdf(points[batch_st:batch_end].T)
     return log_pdfs
 
-# def compute_latent_space_density_at_zs(zs, cov_zs):   
-#     return compute_probs_in_batch(zs, zs, cov_zs)
 
 # DENSITY HELPER FUNCTIONS
 @jax.jit
@@ -279,7 +260,6 @@ def compute_det_cov_xs(cov_xs):
     return jnp.exp(vs_subs_min)
 
 
-
 def compute_latent_space_density_kde(zs, pca_dim_max = 4, num_points = 50, gauss_kde = None, percentile=1):
     
     if zs.shape[1] != pca_dim_max:
@@ -303,21 +283,13 @@ def compute_latent_space_density_kde(zs, pca_dim_max = 4, num_points = 50, gauss
 
     batch_size = utils.get_latent_density_batch_size(grids_flat, zs.shape[-1], utils.get_gpu_memory_total() ) 
     logger.info(f"batch size in latent computation: {batch_size}")
-    # logger.warning("SHOULD THIS BE SCALED?")
     n_pts = grids_flat.shape[0]
     probs = np.zeros(grids_flat.shape[0])
-    option = 'new'
-    if option == 'old':
-        for k in range(0, int(np.ceil(n_pts/batch_size ))):
-            batch_st, batch_end = utils.get_batch_of_indices(n_pts, batch_size , k)
-            probs[batch_st:batch_end] = gauss_kde.evaluate(grids_flat[batch_st:batch_end].T)        
-    else:
-        for k in range(0, int(np.ceil(n_pts/batch_size ))):
-            batch_st, batch_end = utils.get_batch_of_indices(n_pts, batch_size , k)
-            # logpdfs = gauss_kde.logpdf(points.T)
-            probs[batch_st:batch_end] = gauss_kde.logpdf(grids_flat[batch_st:batch_end].T)        
-        probs = probs - jnp.max(probs)
-        probs = jnp.exp(probs)
+    for k in range(0, int(np.ceil(n_pts/batch_size ))):
+        batch_st, batch_end = utils.get_batch_of_indices(n_pts, batch_size , k)
+        probs[batch_st:batch_end] = gauss_kde.logpdf(grids_flat[batch_st:batch_end].T)
+    probs = probs - jnp.max(probs)
+    probs = jnp.exp(probs)
 
     summed_probs_sq = probs.reshape(grids[0].shape)
     end_time = time.time()

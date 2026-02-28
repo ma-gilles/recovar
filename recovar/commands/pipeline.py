@@ -1,6 +1,6 @@
 import logging
 logger = logging.getLogger(__name__)
-import recovar.config
+import recovar.jax_config
 import jax
 import numpy as np
 import os, argparse, time, sys

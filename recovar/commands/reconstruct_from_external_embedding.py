@@ -1,5 +1,5 @@
 # If you want to extend and use recovar, you should import this first
-import recovar.config
+import recovar.jax_config
 import numpy as np
 
 import os, argparse, time, logging

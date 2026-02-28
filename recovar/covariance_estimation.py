@@ -308,8 +308,6 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask
     # These options should probably be left as is.
     mask_ls = dilated_volume_mask
     mask_final = volume_mask
-    # substract_shell_mean = False
-    # shift_fsc = False
     keep_intermediate = False
 
     utils.report_memory_device(logger = logger)
@@ -442,7 +440,6 @@ def variance_relion_kernel_trilinear(
 # ============================================================================
 
 
-# import functools, jax
 @functools.partial(jax.jit, static_argnums=[5,6,8, 12,13,14,15, 16, 17])
 @nvtx.annotate("variance_relion_style_triangular_kernel_batch_trilinear", color="yellow")
 def variance_relion_style_triangular_kernel_batch_trilinear(mean_estimate, images, CTF_params, rotation_matrices, translations, image_shape, volume_shape, voxel_size, CTF_fun, noise_variances, volume_mask, image_mask, volume_mask_threshold, grid_size, padding, soften = 5, disc_type= '', premultiplied_ctf = False):
@@ -451,7 +448,6 @@ def variance_relion_style_triangular_kernel_batch_trilinear(mean_estimate, image
 
     images = core.translate_images(images, translations, image_shape) 
 
-    # images = images - core.slice_volume_by_map(mean_estimate, rotation_matrices, image_shape, volume_shape, disc_type) * CTF_squared
 
     if premultiplied_ctf:
         images = images - core.slice_volume_by_map(mean_estimate, rotation_matrices, image_shape, volume_shape, disc_type) * CTF**2
@@ -486,7 +482,6 @@ def variance_relion_style_triangular_kernel_batch_trilinear(mean_estimate, image
 
     # Maybe apply mask
     images_squared = jnp.abs(images)**2  - cov_noise.reshape(images.shape) #* np.sum(mask) # May need to do something with mask
-    # summed_images_squared =  jnp.abs(images)**2
 
     CTF_squared = CTF**2
 
@@ -598,7 +593,6 @@ def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset
     return variance, variance_prior.real, fsc.real, lhs.real, noise_p_variance_est.real
 
 
-
 @nvtx.annotate("compute_both_H_B", color="blue")
 def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies, gpu_memory, parallel_analysis, options, use_multi_gpu = False, n_gpus = None, mean_cubic=None):
     Hs = []
@@ -697,8 +691,6 @@ def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequenc
     for k in range(0, int(np.ceil(picked_frequencies.size/frequency_batch))):
         batch_st = int(k * frequency_batch)
         batch_end = int(np.min( [(k+1) * frequency_batch ,picked_frequencies.size  ]))
-        # logger.info(f'outside H_B : {batch_st}, {batch_end}')
-        # utils.report_memory_device(logger = logger)
         H_batch, B_batch = compute_H_B(cryo, mean, dilated_volume_mask,
                                                                  picked_frequencies[batch_st:batch_end],
                                                                  image_batch_size,
@@ -713,12 +705,9 @@ def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequenc
     return H,B
 
 
-    
 @nvtx.annotate("compute_covariance_regularization_relion_style", color="cyan")
 def compute_covariance_regularization_relion_style(Hs, Bs, mean_prior, picked_frequencies, cov_noise, volume_mask, volume_shape, gpu_memory, reg_init_multiplier, options):
 
-    # assert substract_shell_mean == False
-    # assert shift_fsc == False
     volume_mask = volume_mask if options["use_mask_in_fsc"] else None
 
     # 
@@ -726,10 +715,6 @@ def compute_covariance_regularization_relion_style(Hs, Bs, mean_prior, picked_fr
     def init_regularization_of_column_k(k):
         return regularization_init[None] * regularization_init[picked_frequencies[np.array(k)], None] 
 
-    # This should probably be rewritten.
-    # for cryo_idx in range(len(Hs)):
-    #     Hs[cryo_idx] = Hs[cryo_idx].T
-    #     Bs[cryo_idx] = Bs[cryo_idx].T
     
     # Column-wise regularize 
     shifts = core.vec_indices_to_frequencies(picked_frequencies, volume_shape) * (options["shift_fsc"])
@@ -772,8 +757,6 @@ def compute_covariance_regularization_relion_style(Hs, Bs, mean_prior, picked_fr
 
     combined_cov_cols = np.stack(combined_cov_cols, axis =0)
 
-    # Symmetricize prior    
-    # fsc_priors[:,picked_frequencies] = 0.5 * ( fsc_priors[:,picked_frequencies] + fsc_priors[:,picked_frequencies].T ) 
     return combined_cov_cols, fsc_priors, fscs
 
 @nvtx.annotate("compute_covariance_regularization", color="cyan")
@@ -825,9 +808,6 @@ def compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, co
     return H_combined, B_combined, fsc_priors, fscs
 
     
-
-
-# @functools.partial(jax.jit, static_argnums = [5])    
 @nvtx.annotate("compute_H_B", color="blue", domain=NVTX_DOMAIN_H_B)
 def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency_indices, batch_size, diag_prior, parallel_analysis = False, jax_random_key = 0, batch_over_H_B = False, soften_mask = 3, options = None, image_subset = None, mean_cubic=None):
     volume_size = mean_estimate.size
@@ -842,12 +822,9 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
 
 
     H_B_fn = options["covariance_fn"]
-    # if H_B_fn =="noisemask":
-    #     f_jit = jax.jit(compute_H_B_inner_mask, static_argnums = [7,8])
     with nvtx.annotate("create_jit_function", color="pink", domain=NVTX_DOMAIN_H_B):
         if "kernel" in H_B_fn:
             f_jit = jax.jit(compute_H_B_triangular, static_argnums = [7,8,9,10,11,12, 13])
-            # f_jit = compute_H_B_triangular#jax.jit(compute_H_B_triangular, static_argnums = [7,8,9,10,11,12])
         else:
             assert False, "Not recognized covariance_fn"
 
@@ -869,8 +846,6 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
     else:
         data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size, mode='images') 
     for images, particles_ind, batch_image_ind in data_generator:
-        # these_disc = 'linear_interp'
-        # Probably should swap this to linear interp
         noise_variances = experiment_dataset.noise.get(particles_ind)
         
         with nvtx.annotate("get_per_image_tight_mask", color="green", domain=NVTX_DOMAIN_H_B):
@@ -910,9 +885,6 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
                 experiment_dataset.image_shape, experiment_dataset.volume_shape )
         
 
-        # all_one_volume = jnp.ones(experiment_dataset.volume_size, dtype = experiment_dataset.dtype)
-        # ones_mapped = core.forward_model(all_one_volume, batch_CTF, batch_grid_pt_vec_ind_of_images)
-        
         if "kernel" in H_B_fn:
             with nvtx.annotate("get_gridpoint_coords", color="magenta", domain=NVTX_DOMAIN_H_B):
                 batch_grid_pt_vec_ind_of_images = core.batch_get_gridpoint_coords(
@@ -925,9 +897,6 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
         with nvtx.annotate("frequency_loop", color="red", domain=NVTX_DOMAIN_H_B):
             for (k, picked_freq_idx) in enumerate(picked_frequency_indices):
                 
-                # if (k % 50 == 49) and (k > 0):
-                #     # print( k, " cols comp.")
-                #     f_jit._clear_cache() # Maybe this?
 
                 with nvtx.annotate(f"jit_compute_H_B_triangular_freq_{k}", color="orange", domain=NVTX_DOMAIN_H_B):
                     H_k, B_k = f_jit(images, batch_CTF, batch_grid_pt_vec_ind_of_images, experiment_dataset.rotation_matrices[batch_image_ind],  noise_variances, picked_freq_idx, image_mask, experiment_dataset.image_shape, volume_size, right_kernel = options["right_kernel"], left_kernel = options["left_kernel"], kernel_width = options["right_kernel_width"], shared_label = experiment_dataset.tilt_series_flag, premultiplied_ctf = experiment_dataset.premultiplied_ctf, tilt_labels = particles_ind)
@@ -998,7 +967,6 @@ def compute_spline_coeffs_in_batch(basis, volume_shape, gpu_memory= None):
 
 ## REDUCED COVARIANCE COMPUTATION
 
-# @functools.partial(jax.jit, static_argnums = [5])    
 @nvtx.annotate("compute_projected_covariance", color="green")
 def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volume_mask, batch_size, disc_type, disc_type_u, parallel_analysis = False, do_mask_images = True, mean_cubic=None):
 
@@ -1083,10 +1051,8 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     if change_device:
         rhs = jax.device_put(rhs, jax.devices("gpu")[0])
         lhs = jax.device_put(lhs, jax.devices("gpu")[0])
-    # lhs_this = jax.device_put(lhs_this, jax.devices("gpu")[0])
 
     covar = jax.scipy.linalg.solve( lhs ,rhs, assume_a='pos')
-    # covar = linalg.batch_linear_solver(lhs, rhs)
     covar = unvec(covar)
     logger.info("end of solve")
 
@@ -1101,7 +1067,6 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
                                 disc_type_u, noise_variance, process_fn, CTF_fun, parallel_analysis = False,
                                 jax_random_key = None, do_mask_images = True, shared_label = False, premultiplied_ctf = False):
     
-
 
     if (disc_type != 'linear_interp') and (disc_type != 'cubic'):
         logger.warning(f"USING NEAREST NEIGHBOR DISCRETIZATION IN reduce_covariance_est_inner. disc_type={disc_type}, disc_type_u={disc_type_u}")
@@ -1149,9 +1114,6 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
         projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, image_shape)
 
     
-
-    # premultiplied_ctf = False
-    # Skip CTF if premultiplied here, do it later
     AUs = covariance_core.batch_over_vol_forward_model_from_map(basis,
                                          CTF_params, 
                                          rotation_matrices,
@@ -1174,9 +1136,6 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
         CTF = CTF_fun(CTF_params, image_shape, voxel_size) 
         batch = batch - projected_mean * CTF
         AU_t_images = batch_x_T_y(AUs, batch)
-        #     # This is done here because it is not done earlier, so that we can compute AU * (CTF * image), instead of (AU * CTF) * (image)
-        #     # As images are "CTF premultiplied"
-        #     # Howeve,r for the rest, we do want AU * CTF
 
         AUs = AUs * CTF[...,None] # Then CTF multiply
 
@@ -1185,13 +1144,6 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
         batch = batch - projected_mean
         AU_t_images = batch_x_T_y(AUs, batch)
     # This gets inner product of AU with images
-    # AU_t_images = batch_x_T_y(AUs, batch)
-
-    # if premultiplied_ctf:
-    #     # This is done here because it is not done earlier, so that we can compute AU * (CTF * image), instead of (AU * CTF) * (image)
-    #     # As images are "CTF premultiplied"
-    #     # Howeve,r for the rest, we do want AU * CTF
-    #     AUs = AUs * CTF[...,None]
 
     # This is not correct if we are using the mask and the CTF is premultiplied
     if do_mask_images:
@@ -1211,13 +1163,9 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
 
     rhs = outer_products - UALambdaAUs
     rhs = rhs.real.astype(CTF_params.dtype)
-    # return AU_t_AU, rhs
-    # Perhaps this should use: jax.lax.fori_loop. This is a lot of memory.
-    # Or maybe jax.lax.reduce ?
     lhs = jnp.sum(batch_kron(AU_t_AU, AU_t_AU), axis=0)
 
     return lhs, rhs
-
 
 
 # ============================================================================
@@ -1345,7 +1293,6 @@ def summed_outer_products(AU_t_images):
 batched_summed_outer_products  = jax.vmap(summed_outer_products)
 
 
-
 @functools.partial(jax.jit, static_argnums=[2])
 @nvtx.annotate("group_sum_by_labels", color="brown")
 def group_sum_by_labels(array, tilt_labels, max_groups):
@@ -1376,7 +1323,6 @@ def group_sum_by_labels(array, tilt_labels, max_groups):
 #  Eq. 12-13 in arxiv version?
 @nvtx.annotate("compute_H_B_triangular", color="blue", domain=NVTX_DOMAIN_H_B)
 def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coords_on_grid_stacked, rotation_matrices,  noise_variances, picked_freq_index, image_mask, image_shape, volume_size, right_kernel = "triangular", left_kernel = "triangular", kernel_width = 2, shared_label = False, premultiplied_ctf = False, tilt_labels = None):
-    # print("Using kernel", right_kernel, left_kernel, kernel_width)
 
     volume_shape = utils.guess_vol_shape_from_vol_size(volume_size)
     picked_freq_coord = core.vec_indices_to_vol_indices(picked_freq_index, volume_shape)
@@ -1465,7 +1411,6 @@ def compute_noise_term(plane_coords, target_coord, CTF_on_grid, image_shape, ima
 
     # If ctf is premultiplied. the noise distribution is mask@ctf@noise_variance@ctf@mask
     # If not premultiplied, the noise distribution is ctf@mask@noise_variance@mask@ctf
-
 
 
     k_xi_x1 = covariance_core.evaluate_kernel_on_grid(plane_coords, target_coord, kernel = kernel, kernel_width = kernel_width) 

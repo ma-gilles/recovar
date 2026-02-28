@@ -1,4 +1,4 @@
-import recovar.config
+import recovar.jax_config
 import numpy as np
 from recovar import dataset
 import jax.numpy as jnp
@@ -68,8 +68,7 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
     log_likelihoods = recovar.latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], results['zs'][ndim], results['cov_zs'][ndim])[...,0]
     heterogeneity_distances = cryos.split_array(log_likelihoods)
     if metric_used == "global":
-        a = 1
-        # make_volumes_kernel_estimate( heterogeneity_distances, cryos, noise_variance, output_folder, ndim, n_bins) 
+        pass
     else:
         logger.warning("Choosing threshold only based on number of images")
         make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder, -1, n_bins, B_factor, tau = None, n_min_particles = n_min_particles, metric_used = metric_used)
@@ -131,7 +130,6 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         cryos[k].update_volume_upsampling_factor(2)
         estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k],  None, heterogeneity_distances[k], heterogeneity_bins, tau= None, grid_correct=True, use_spherical_mask=True,heterogeneity_kernel= heterogeneity_kernel)
         estimates[k] = fourier_transform_utils.get_idft3(estimates[k].reshape(-1, *cryos.volume_shape)).real.astype(np.float32)
-
 
 
     def use_choice_and_filter(choice, name):
@@ -223,7 +221,6 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         recovar.utils.pickle_dump(output_dict ,  output_folder + name + "params.pkl")
 
 
-
     distances_reordered = dataset.reorder_to_original_indexing(heterogeneity_distances, cryos, cryos[0].tilt_series_flag)
     np.savetxt(output_folder + "heterogeneity_distances.txt", distances_reordered)
     use_choice_and_filter(ml_choice, "")
@@ -242,8 +239,6 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         recovar.utils.write_mrc(output_folder + "CV_estimates_half2_unfil.mrc", cross_validation_estimators[1], voxel_size = cryos.voxel_size)
 
     return 
-
-
 
 
 def choice_most_likely(estimates0, estimates1, target0, target1, noise_variances_target0, noise_variances_target1, voxel_size, locres_sampling, locres_maskrad, locres_edgwidth):
@@ -308,8 +303,6 @@ def choice_most_likely_split(estimates0, estimates1, target0, target1, noise_var
 
     choice = np.argmin(errors, axis=0 ) 
     return choice, errors
-
-
 
 
 # def choice_best_locres(estimates0, estimates1, target_idx, voxel_size):
