@@ -287,8 +287,6 @@ def test_compute_state_reads_txt_and_reweights(monkeypatch, tmp_path):
             "call", (cryos, target_zs, zs, cov_zs, output_folder, kwargs)
         ),
     )
-    monkeypatch.setattr(compute_state_cmd.o, "move_to_one_folder", lambda out, n: captured.setdefault("move", (out, n)))
-
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
         particles=None,
@@ -321,7 +319,6 @@ def test_compute_state_reads_txt_and_reweights(monkeypatch, tmp_path):
     assert output_folder.endswith("/state_out/")
     assert kwargs["apply_global_filtering"] is True
     assert kwargs["fsc_mask"] is not None
-    assert captured["move"][1] == 2
 
 
 def test_compute_state_accepts_pathlike_latent_points(monkeypatch, tmp_path):

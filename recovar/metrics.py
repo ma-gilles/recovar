@@ -230,11 +230,11 @@ def evaluate_this_choice(target_real, output_folder, voxel_size, mask = None, pa
     gt_unfilt_metrics = metrics.compute_volume_error_metrics_from_gt(target_real, unfiltered_map, voxel_size, mask= mask, partial_mask = partial_mask )
     add_dict_with_prefix(error_metrics, gt_unfilt_metrics, "gt_unfilt_")
 
-    filtered_map = recovar.utils.load_mrc(output_folder + "ml_optimized_locres_filtered.mrc")
+    filtered_map = recovar.utils.load_mrc(output_folder + "ml_optimized_filtered.mrc")
     gt_filt_metrics = metrics.compute_volume_error_metrics_from_gt(target_real, filtered_map, voxel_size, mask= mask, partial_mask = partial_mask )
     add_dict_with_prefix(error_metrics, gt_filt_metrics, "gt_filt_")
 
-    filtered_map = recovar.utils.load_mrc(output_folder + "ml_optimized_locres_filtered_before.mrc")
+    filtered_map = recovar.utils.load_mrc(output_folder + "ml_optimized_filtered_before.mrc")
     gt_filt_metrics = metrics.compute_volume_error_metrics_from_gt(target_real, filtered_map, voxel_size, mask= mask, partial_mask = partial_mask )
     add_dict_with_prefix(error_metrics, gt_filt_metrics, "gt_filt_before")
 

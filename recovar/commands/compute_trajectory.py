@@ -197,8 +197,6 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
         if path_mapping is not None and args is not None and not getattr(args, "no_cleanup", False):
             cleanup_temp_files(path_mapping)
 
-from recovar.output import move_to_one_folder
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()

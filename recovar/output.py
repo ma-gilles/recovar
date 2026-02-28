@@ -548,7 +548,8 @@ def kmeans_analysis(output_folder, zs, n_clusters = 20):
     return centers, labels
 
 
-def move_to_one_folder(path_folder, n_vols, string_name = 'locres_filtered.mrc', new_stringname = 'vol' ):
+def move_to_one_folder(path_folder, n_vols, string_name = 'filtered.mrc', new_stringname = 'vol' ):
+    """Deprecated: volumes are now written flat. Kept for backward compatibility."""
     mkdir_safe(path_folder + '/all_volumes/')
     output_folder = path_folder + '/all_volumes/'
     import shutil
@@ -598,19 +599,47 @@ def plot_umap(output_folder, zs, centers):
 
 
 
-def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None):
+def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state"):
+    """Compute reweighted volume estimates and save with RELION-style organization.
+
+    Output structure (flat primary volumes + diagnostics subdirectory)::
+
+        output_folder/
+            {vol_prefix}001.mrc              # primary filtered volume
+            {vol_prefix}001_half1_unfil.mrc   # half-map 1
+            {vol_prefix}001_half2_unfil.mrc   # half-map 2
+            {vol_prefix}002.mrc
+            ...
+            diagnostics/
+                {vol_prefix}001/              # per-volume diagnostics
+                    local_resolution.mrc
+                    filtered_noB.mrc
+                    unfil.mrc
+                    params.pkl
+                    latent_coords.txt
+                    ...
+            latent_coords.txt                 # all latent coordinates
+    """
+    from recovar.output_paths import AnalysisPaths
 
     if n_min_particles is None:
         n_min_particles = 100
 
     mkdir_safe(output_folder)
     from recovar import heterogeneity_volume, latent_density
-    for k in range(path_subsampled.shape[0]):
-        output_folder_this = output_folder + "/vol" + format(k, '04d') + "/"
-        mkdir_safe(output_folder_this)
+    n_vols = path_subsampled.shape[0]
+
+    for k in range(n_vols):
+        vol_idx = k  # 0-indexed
+        vol_stem = AnalysisPaths.vol_stem(vol_prefix, vol_idx)
+
+        # Diagnostics go into a per-volume subdirectory
+        diag_dir = os.path.join(output_folder, AnalysisPaths.diagnostics_subdir(vol_prefix, vol_idx)) + "/"
+        mkdir_safe(diag_dir)
+
         ndim = zs.shape[-1]
         latent_points = path_subsampled[k][None]
-        np.savetxt(output_folder_this + 'latent_coords.txt', latent_points)
+        np.savetxt(os.path.join(diag_dir, 'latent_coords.txt'), latent_points)
 
         if embedding_option == 'llh':
             log_likelihoods = latent_density.compute_latent_log_likelihood(latent_points, zs, cov_zs)[...,0]
@@ -625,46 +654,19 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
 
         heterogeneity_distances = cryos.split_units_array(heterogeneity_distances)
 
-        from recovar import noise
-
         locres_maskrad = cryos.grid_size * cryos.voxel_size / maskrad_fraction
-        logger.info(f"Mask radius fraction = {maskrad_fraction}. Setting locres_maskrac = locres_sampling = box_size * voxel_size / {maskrad_fraction} = {locres_maskrad:.1f} Angstroms. Using {n_min_particles} particles for template.")
-        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, output_folder_this, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely')
+        logger.info(f"Mask radius fraction = {maskrad_fraction}. Setting locres_maskrad = locres_sampling = box_size * voxel_size / {maskrad_fraction} = {locres_maskrad:.1f} Angstroms. Using {n_min_particles} particles for template.")
+        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, diag_dir, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely')
 
-        if apply_global_filtering:
-            from recovar import locres
-            import glob
+        # Move primary files from diagnostics to flat output
+        primary_stem = os.path.join(output_folder, vol_stem)
+        os.rename(os.path.join(diag_dir, "filtered.mrc"), primary_stem + ".mrc")
+        os.rename(os.path.join(diag_dir, "half1_unfil.mrc"), primary_stem + "_half1_unfil.mrc")
+        os.rename(os.path.join(diag_dir, "half2_unfil.mrc"), primary_stem + "_half2_unfil.mrc")
 
-            halfmap_files = glob.glob(output_folder_this + "half*_unfil.mrc")
-            if len(halfmap_files) >= 2:
-                halfmap1_path = output_folder_this + "halfmap1.mrc"
-                halfmap2_path = output_folder_this + "halfmap2.mrc"
+        logger.info(f"Done with volume {vol_idx}: {primary_stem}.mrc")
 
-                if os.path.exists(halfmap1_path) and os.path.exists(halfmap2_path):
-                    halfmap1 = utils.load_mrc(halfmap1_path)
-                    halfmap2 = utils.load_mrc(halfmap2_path)
-
-                    filtered_combined, fsc, global_resol = locres.filter_maps_with_global_fsc(
-                        halfmap1, halfmap2, cryos.voxel_size, fsc_mask=fsc_mask
-                    )
-
-                    filtered_half1_path = output_folder_this + "halfmap1_filtered.mrc"
-                    filtered_half2_path = output_folder_this + "halfmap2_filtered.mrc"
-
-                    utils.write_mrc(filtered_half1_path, filtered_combined, voxel_size=cryos.voxel_size)
-                    utils.write_mrc(filtered_half2_path, filtered_combined, voxel_size=cryos.voxel_size)
-
-                    logger.info(f"Applied global filtering to volume {k}. Resolution: {global_resol:.2f} Angstroms")
-                    logger.info(f"Saved filtered halfmaps: {filtered_half1_path}, {filtered_half2_path}")
-                else:
-                    logger.warning(f"Halfmap files not found for volume {k}, skipping global filtering")
-            else:
-                logger.warning(f"Not enough halfmap files found for volume {k}, skipping global filtering")
-
-        logger.info(f"Done with volume generation {k} stored in {output_folder_this}")
-    move_to_one_folder(output_folder, path_subsampled.shape[0], string_name='locres_filtered.mrc', new_stringname='vol')
-    move_to_one_folder(output_folder, path_subsampled.shape[0], string_name='locres.mrc', new_stringname='locres')
-    np.savetxt(output_folder + 'latent_coords.txt', path_subsampled)
+    np.savetxt(os.path.join(output_folder, 'latent_coords.txt'), path_subsampled)
 
 
 def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path, likelihood_threshold = 1e-5 ):

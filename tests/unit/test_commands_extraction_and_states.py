@@ -46,7 +46,7 @@ def test_extract_image_subset_uses_coordinate_to_pick_subvolume(monkeypatch, tmp
         return {"locres_sampling": 3, "locres_maskrad": 1.0, "voxel_size": 1.5}
 
     def fake_load_mrc(path):
-        if path.endswith("locres.mrc"):
+        if path.endswith("local_resolution.mrc"):
             return np.zeros((16, 16, 16), dtype=np.float32)
         raise AssertionError("unexpected path")
 

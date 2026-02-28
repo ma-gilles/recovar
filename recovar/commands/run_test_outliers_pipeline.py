@@ -243,13 +243,13 @@ def main():
         )
 
         run_command(
-            f'{BASE_CMD} compute_trajectory {test_dataset_dir}/test_dataset/pipeline_trajectory_chain/round_1 --outdir {test_dataset_dir}/test_dataset/trajectory_chain_output --zdim 4 --endpts {test_dataset_dir}/test_dataset/analyze_chain_output/kmeans_center_coords.txt --copy-to-folder {copy_to_folder_path} --no-cleanup {cpu_string}',
+            f'{BASE_CMD} compute_trajectory {test_dataset_dir}/test_dataset/pipeline_trajectory_chain/round_1 --outdir {test_dataset_dir}/test_dataset/trajectory_chain_output --zdim 4 --endpts {test_dataset_dir}/test_dataset/analyze_chain_output/kmeans/centers.txt --copy-to-folder {copy_to_folder_path} --no-cleanup {cpu_string}',
             'Run compute_trajectory command in chain (with --no-cleanup)',
             'compute_trajectory_chain'
         )
         
         run_command(
-            f'{BASE_CMD} compute_trajectory {test_dataset_dir}/test_dataset/pipeline_trajectory_chain/round_1 --outdir {test_dataset_dir}/test_dataset/trajectory_chain_output2 --zdim 4 --endpts {test_dataset_dir}/test_dataset/analyze_chain_output/kmeans_center_coords.txt --copy-to-folder {copy_to_folder_path} {cpu_string}',
+            f'{BASE_CMD} compute_trajectory {test_dataset_dir}/test_dataset/pipeline_trajectory_chain/round_1 --outdir {test_dataset_dir}/test_dataset/trajectory_chain_output2 --zdim 4 --endpts {test_dataset_dir}/test_dataset/analyze_chain_output/kmeans/centers.txt --copy-to-folder {copy_to_folder_path} {cpu_string}',
             'Run second compute_trajectory command in chain (final call, cleanup happens)',
             'compute_trajectory_chain_final'
         )
