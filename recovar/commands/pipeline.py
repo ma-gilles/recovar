@@ -767,7 +767,7 @@ def standard_recovar_pipeline(args):
 
     # --- Save volumes ---
     paths.ensure_volumes_dir()
-    o.save_covar_output_volumes(paths.output_dir + '/', means['combined'], u['rescaled'], s,
+    o.save_covar_output_volumes(paths.output_dir, means['combined'], u['rescaled'], s,
                                 volume_mask, volume_shape, voxel_size=cryos.voxel_size)
     o.save_volume(volume_mask, os.path.splitext(paths.mask_volume)[0], volume_shape,
                   from_ft=False, voxel_size=cryos.voxel_size)
@@ -862,11 +862,11 @@ def standard_recovar_pipeline(args):
 
     # Generate standard plots
     from recovar import output
-    po = output.PipelineOutput(args.outdir + '/')
+    po = output.PipelineOutput(args.outdir)
     zdims = np.array(args.zdim)
     zdim_choose = np.argmin(np.abs(zdims - 10))
     zdim = zdims[zdim_choose]
-    output.standard_pipeline_plots(po, zdim, paths.plots_dir + '/')
+    output.standard_pipeline_plots(po, zdim, paths.plots_dir)
 
     return means, u, s, volume_mask, dilated_volume_mask, noise_var_used
 

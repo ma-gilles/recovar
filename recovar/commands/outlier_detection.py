@@ -33,9 +33,6 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
     # Ensure the folder exists
     os.makedirs(folder_name, exist_ok=True)
 
-    # Identify valid entries (rows without NaNs)
-    zs = zs
-
     n_features = zs.shape[1]
     total_samples = zs.shape[0]
 
@@ -87,11 +84,8 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
         percentage_outliers = (num_outliers / total_samples)
         outlier_percentages.append(percentage_outliers)
 
-        # Save indices of inliers and outliers in original indexing
         inliers_indices = np.where(y_pred == 1)[0]
         outliers_indices = np.where(y_pred == -1)[0]
-        # inliers_indices = valid_indices[inliers_indices_valid]
-        # outliers_indices = valid_indices[outliers_indices_valid]
 
         # Sanitize algorithm name for filename
         safe_name = name.replace(" ", "_").lower()
@@ -352,9 +346,7 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
 
 
 
-
-from recovar import tilt_dataset    
-def outlier_detection_from_contrast(pipeline_output, zdim_key=4, 
+def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
                                    low_contrast_threshold=0.1, 
                                    high_contrast_threshold=3.5,
                                    max_contrast=4.0,
@@ -485,9 +477,6 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
             particle_median_contrasts[particle] = np.median(contrast_values)
             bad_fraction = np.mean(individual_outliers[particle_indices])
             
-            # # Get the actual tilt indices for this particle
-            particle_tilt_indices = np.where(particle_indices)[0]
-            
             if bad_fraction >= particle_bad_fraction_threshold:
                 particle_outliers.append(particle)
                 outliers_image_identified_by_particle[particle_indices] = True
@@ -537,11 +526,9 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
             micrograph_tilt_indices = np.where(micrograph_indices)[0]
             
             if bad_fraction >= micrograph_bad_fraction_threshold:
-                # print(f"  Micrograph {micrograph}: {len(micrograph_tilt_indices)} images, {bad_fraction*100:.1f}% bad -> REJECTING ENTIRE MICROGRAPH")
                 micrograph_outliers.append(micrograph)
                 outliers_image_identified_by_micrograph[micrograph_indices] = True
             else:
-                # print(f"  Micrograph {micrograph}: {len(micrograph_tilt_indices)} images, {bad_fraction*100:.1f}% bad -> KEEPING")
                 micrograph_inliers.append(micrograph)
 
         logger.info(f"  Total micrograph-based outliers: {len(micrograph_outliers)} ({len(micrograph_outliers)/(len(micrograph_outliers) + len(micrograph_inliers))*100:.1f}%) of micrographs")
@@ -866,8 +853,7 @@ def create_overlap_matrix_visualization(all_outliers, method_names, output_dir, 
     
     logger.info(f"Method overlap matrix saved to: {os.path.join(output_dir, 'outlier_method_overlap_matrix.png')}")
 
-    
-import logging
+
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Outlier Detection from Pipeline Results")
@@ -1157,9 +1143,6 @@ def main():
         image_method_names.append("Junk Detection")
 
 
-    # Don't redefine original_image_indices here - it's already defined above
-    # original_image_indices = (np.concatenate(pipeline_output.get('halfsets')))
-
     # Always save combined results, even if some methods don't produce outliers
     if len(all_image_outliers) > 0:
         # Combine results: images are considered outliers if they are outliers in ANY method
@@ -1258,11 +1241,6 @@ def main():
 
 def map_particle_original_indexing_to_images_original_indexing(particle_indices_in_original_ordering, image_subset, starfile):
     return tilt_dataset.tilt_series_indices_to_image_indices(particle_indices_in_original_ordering, starfile, image_subset)
-    # particle_to_tilts, tilts_to_particle = tilt_dataset.TiltSeriesData.parse_particle_tilt(starfile)
-
-    # image_indices = np.concatenate([ particle_to_tilts[particle_index] for particle_index in particle_indices_in_original_ordering ])
-    # # Ignore images which are not in the image_subset
-    # return np.intersect1d(image_indices, image_subset)
 
 
 def add_args(parser):

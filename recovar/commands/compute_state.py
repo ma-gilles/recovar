@@ -43,7 +43,7 @@ def compute_state(args):
 
     result_dir = os.fspath(args.result_dir)
     outdir = os.fspath(args.outdir)
-    po = o.PipelineOutput(os.path.join(result_dir, ""))
+    po = o.PipelineOutput(result_dir)
     
     params = getattr(po, "params", None)
     input_args = params.get('input_args') if hasattr(params, "get") else None
@@ -91,7 +91,7 @@ def compute_state(args):
         if not np.all(np.isfinite(target_zs)):
             raise ValueError("Target zs contains non-finite values (NaN/Inf).")
 
-        output_folder = os.path.join(outdir, "")
+        output_folder = outdir
 
         if zdim1:
             if target_zs.ndim > 1 and target_zs.shape[-1] != 1:

@@ -62,7 +62,7 @@ def add_args(parser: argparse.ArgumentParser):
 
 def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40, n_paths = 0, skip_umap = False, q = None, n_std = None, B_factor=0, n_bins=30, n_vols_along_path = 6, skip_centers = False, normalize_kmeans = False, density_path = None, no_z_reg = False, lazy = False, n_min_particles = 0, maskrad_fraction = 0.5, apply_global_filtering = False, fsc_mask_radius = None, fsc_mask_edgewidth = None, args = None):
 
-    po = o.PipelineOutput(recovar_result_dir + '/')
+    po = o.PipelineOutput(recovar_result_dir)
 
     # Copy data to temp folder if requested
     path_mapping = None

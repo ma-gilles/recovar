@@ -1,19 +1,25 @@
+"""Adaptive kernel discretization for heterogeneous cryo-EM reconstruction.
+
+Implements the kernel-based volume estimation with cross-validated bandwidth
+selection described in the RECOVAR method. Provides both polynomial (nearest-
+neighbor) and triangular (linear-interpolation) kernel precomputation, along
+with residual-based model selection across discretization parameters.
+"""
+
 import logging
+import functools
+
+import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
-import jax, functools, time
-import pickle
-import os
-import equinox as eqx
 
-from recovar import core, regularization, constants, noise, linalg, relion_functions, dataset
-from recovar.configs import ForwardModelConfig, BatchData
+from recovar import core, constants, dataset, linalg, noise, regularization, relion_functions, utils
+from recovar.configs import BatchData, ForwardModelConfig
 import recovar.fourier_transform_utils as fourier_transform_utils
-from recovar import utils
 
 logger = logging.getLogger(__name__)
 
-## Low level functions
 def make_X_mat(rotation_matrices, volume_shape, image_shape, pol_degree = 0, dtype = np.float32):
 
     grid_point_vec_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape )
@@ -35,8 +41,6 @@ def make_X_mat(rotation_matrices, volume_shape, image_shape, pol_degree = 0, dty
     X_mat = jnp.concatenate([jnp.ones_like(differences[...,0:1]), differences, differences_squared], axis = -1)
 
     return X_mat, grid_point_vec_indices
-
-## Handling triangular to full matrix representation
 
 def keep_upper_triangular(XWX):
     iu1 = np.triu_indices(XWX.shape[-1])
@@ -62,8 +66,8 @@ def find_smaller_pol_indices(max_pol_degree, target_pol_degree):
     target_num_pol_params = get_feature_size(target_pol_degree)
     target_triu_indices = np.triu_indices(target_num_pol_params)
 
-    target_triu_indices = np.array(target_triu_indices).T
-    max_triu_indices = np.array(max_triu_indices).T
+    target_triu_indices = np.asarray(target_triu_indices).T
+    max_triu_indices = np.asarray(max_triu_indices).T
 
     indices = np.zeros(target_triu_indices.shape[0], dtype = int)
     for k , searchval in enumerate(target_triu_indices):
@@ -73,7 +77,7 @@ def find_smaller_pol_indices(max_pol_degree, target_pol_degree):
 def find_diagonal_pol_indices(max_pol_degree):
     max_num_pol_params = get_feature_size(max_pol_degree)
     max_triu_indices = np.triu_indices(max_num_pol_params)
-    max_triu_indices = np.array(max_triu_indices).T
+    max_triu_indices = np.asarray(max_triu_indices).T
     diagonal_indices = np.concatenate([np.arange(max_num_pol_params)[...,None],np.arange(max_num_pol_params)[...,None]], axis=-1)
     indices = np.zeros(diagonal_indices.shape[0], dtype = int)
     for k, searchval in enumerate(diagonal_indices):
@@ -90,7 +94,6 @@ def half_volume_shape_to_volume_shape(volume_shape):
     volume_shape[0] = volume_shape[0] * 2
     return ((volume_shape[0]-1)*2, *volume_shape[1:])
 
-## NOTE There is something weird and jitting this. Compilation takes a very long time. Check it out.
 @functools.partial(jax.jit, static_argnums = [1,2])
 def vec_index_to_half_vec_index(indices, volume_shape, flip_positive = False):
     vol_indices_full = core.vec_indices_to_vol_indices(indices, volume_shape)
@@ -137,8 +140,6 @@ def half_vec_index_to_vec_index(indices_half, volume_shape):
     indices = indices.at[bad_indices].set(-1)
     return indices
 
-## Precompute functions
-
 # ============================================================================
 # Equinox-based adaptive kernel API
 # ============================================================================
@@ -153,10 +154,7 @@ def precompute_kernel_batch(
     XWX=None, F=None,
     heterogeneity_distances=None, heterogeneity_bins=None,
 ):
-    """Precompute kernel for one batch — Equinox API.
-
-    Replaces the 14-param ``precompute_kernel_one_batch``.
-    """
+    """Precompute kernel for one batch — Equinox API."""
     CTF = config.compute_ctf(batch_data.ctf_params)
     ctf_over_noise_variance = CTF ** 2 / noise_variance
 
@@ -177,7 +175,7 @@ def precompute_kernel_batch(
         heterogeneity_bins_this = (heterogeneity_distances[..., None] <= heterogeneity_bins)
         n_bins = heterogeneity_bins.size
     else:
-        heterogeneity_bins_this = jnp.ones((batch_data.images.shape[0], 1), dtype=np.bool)
+        heterogeneity_bins_this = jnp.ones((batch_data.images.shape[0], 1), dtype=np.bool_)
         n_bins = 1
 
     XWX_b = XWX_b[..., None] * heterogeneity_bins_this[..., None, None, :]
@@ -207,10 +205,7 @@ def precompute_triangular_kernel_batch(
     XWX=None, F=None,
     heterogeneity_distances=None, heterogeneity_bins=None,
 ):
-    """Precompute triangular kernel for one batch — Equinox API.
-
-    Replaces the 14-param ``precompute_triangular_kernel_one_batch``.
-    """
+    """Precompute triangular kernel for one batch — Equinox API."""
     if pol_degree > 0:
         raise NotImplementedError
 
@@ -218,7 +213,7 @@ def precompute_triangular_kernel_batch(
         heterogeneity_bins_this = (heterogeneity_distances[..., None] <= heterogeneity_bins)
         n_bins = heterogeneity_bins.size
     else:
-        heterogeneity_bins_this = jnp.ones((batch_data.images.shape[0], 1), dtype=np.bool)
+        heterogeneity_bins_this = jnp.ones((batch_data.images.shape[0], 1), dtype=np.bool_)
         n_bins = 1
 
     images = core.translate_images(batch_data.images, batch_data.translations, config.image_shape) / noise_variance
@@ -253,10 +248,7 @@ def compute_residuals_batch(
     pol_degree: int = 0,
     use_linear_interp: bool = False,
 ):
-    """Compute residuals for many weights — Equinox API.
-
-    Replaces the 11-param ``compute_residuals_batch_many_weights``.
-    """
+    """Compute residuals for many weights — Equinox API."""
     if use_linear_interp:
         X_mat, gridpoint_indices = make_X_mat(
             batch_data.rotation_matrices, config.volume_shape, config.image_shape, pol_degree=pol_degree
@@ -284,58 +276,6 @@ def compute_residuals_batch(
     return summed_residuals, summed_n
 
 
-# ============================================================================
-# Legacy adaptive kernel API (kept for backward compatibility)
-# ============================================================================
-
-
-@functools.partial(jax.jit, static_argnums = [5,6,7,9])
-def precompute_kernel_one_batch(images, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, CTF_fun, noise_variance, pol_degree =0, XWX = None, F = None, heterogeneity_distances = None, heterogeneity_bins = None ):
-
-    # Precomp piece
-    CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    ctf_over_noise_variance = CTF**2 / noise_variance
-
-    X, grid_point_indices = make_X_mat(rotation_matrices, volume_shape, image_shape, pol_degree = pol_degree)
-    grid_point_indices, good_idx = vec_index_to_half_vec_index(grid_point_indices, volume_shape, flip_positive = True)
-    X = X * good_idx[...,None]
-
-    half_volume_size = np.prod(volume_shape_to_half_volume_shape(volume_shape))
-
-    # XWX
-    XWX_b = linalg.broadcast_outer(X * ctf_over_noise_variance[...,None] , X)
-    XWX_b = keep_upper_triangular(XWX_b)
-
-    if heterogeneity_bins is not None:
-        # This could be made more efficient, but will skip for now.
-        heterogeneity_bins_this = (heterogeneity_distances[...,None] <= heterogeneity_bins) 
-        n_bins = heterogeneity_bins.size
-    else:
-        heterogeneity_bins_this = jnp.ones((images.shape[0], 1), dtype = np.bool)
-        n_bins = 1
-
-    XWX_b_one_shape = XWX_b.shape
-    XWX_b = XWX_b[...,None] * heterogeneity_bins_this[...,None,None,:]
-    XWX_b = XWX_b.reshape(XWX_b.shape[:-2] + (-1,))
-
-    XWX = core.batch_over_vol_summed_adjoint_slice_by_nearest(
-        half_volume_size, XWX_b,
-        grid_point_indices.reshape(-1), XWX)
-    
-    # F
-    images = core.translate_images(images, translations, image_shape)
-    # In my formalism, images === images / CTF soo I guess this is right
-    F_b = X * (images * CTF / noise_variance)[...,None] 
-
-    # XWX_b_one_shape = XWX_b.shape
-    F_b = F_b[...,None] * heterogeneity_bins_this[...,None,None,:]
-    F_b = F_b.reshape(F_b.shape[:-2] + (-1,))
-
-    F = core.batch_over_vol_summed_adjoint_slice_by_nearest(half_volume_size, F_b, grid_point_indices.reshape(-1),F)
-    return XWX, F #.reshape(-1, XWX_b_one_shape[-1], n_bins  ), F.reshape(-1, XWX_b_one_shape[-1], n_bins  )
-
-
-# Should this be set by cross validation?
 def precompute_triangular_kernel(experiment_dataset, noise_variance, pol_degree=0, heterogeneity_distances = None, heterogeneity_bins = None):
     pol_degree = int(pol_degree)  # ensure Python int (numpy scalars are traced by eqx.filter_jit)
     n_bins = 1 if heterogeneity_bins is None else heterogeneity_bins.size
@@ -383,32 +323,6 @@ def precompute_triangular_kernel(experiment_dataset, noise_variance, pol_degree=
     return np.asarray(XWX), np.asarray(F)
 
 
-@functools.partial(jax.jit, static_argnums = [5,6,7,9])    
-def precompute_triangular_kernel_one_batch(images, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, CTF_fun, noise_variance, pol_degree =0, XWX = None, F = None, heterogeneity_distances = None, heterogeneity_bins = None ):
-
-    if pol_degree > 0:
-        raise NotImplementedError
-    
-    if heterogeneity_bins is not None:
-        # This could be made more efficient, but will skip for now.
-        heterogeneity_bins_this = (heterogeneity_distances[...,None] <= heterogeneity_bins) 
-        n_bins = heterogeneity_bins.size
-    else:
-        heterogeneity_bins_this = jnp.ones((images.shape[0], 1), dtype = np.bool)
-        n_bins = 1
-
-    images = core.translate_images(images, translations, image_shape) / noise_variance
-    images = images[...,None] * heterogeneity_bins_this[...,None,:]
-
-    Ft_y = batch_im_adjoint_forward_model_from_map(images, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, 'linear_interp') 
-
-    CTF = CTF_fun( CTF_params, image_shape, voxel_size) / noise_variance
-    CTF = CTF[...,None] * heterogeneity_bins_this[...,None,:]
-
-    Ft_ctf = batch_im_adjoint_forward_model_from_map(CTF, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, 'linear_interp') 
-    # A pretty naive way to do this
-    return XWX + batch_full_volume_to_half_volume(Ft_ctf, volume_shape).T, F + batch_full_volume_to_half_volume(Ft_y, volume_shape).T
-
 batch_im_adjoint_forward_model_from_map = jax.vmap(core.adjoint_forward_model_from_map, in_axes = (-1,None, None, None, None,None, None, None))
 
 
@@ -422,7 +336,7 @@ def get_differences_zero(pol_degree, differences):
         differences_squared = keep_upper_triangular(differences_squared)
         differences_zero = jnp.concatenate([jnp.zeros_like(differences[...,0:1]), differences, differences_squared], axis = -1)
     else:
-        assert(NotImplementedError)
+        raise NotImplementedError
     return differences_zero
 
 @functools.partial(jax.jit, static_argnums = [2,5,6])
@@ -502,7 +416,7 @@ def compute_estimate_from_XWX_F_summed(XWX_summed_neighbor, F_summed_neighbor, p
     prior_inverse_covariance = jnp.asarray(prior_inverse_covariance).real.astype(np.float32)
 
     reconstruction = np.zeros((half_volume_size, F_summed_neighbor.shape[-1]), dtype = np.complex64)
-    good_pixels = np.zeros((half_volume_size), dtype = np.bool)
+    good_pixels = np.zeros((half_volume_size), dtype=np.bool_)
 
     logger.info(f"dtype = {prior_inverse_covariance.dtype}")
 
@@ -571,8 +485,6 @@ batch_solve_for_m = jax.vmap(solve_for_m_simple, in_axes = (0,0,0))
 # Should this be set by cross validation?
 def precompute_kernel(experiment_dataset, noise_variance, pol_degree=0, heterogeneity_distances = None, heterogeneity_bins = None):
     pol_degree = int(pol_degree)  # ensure Python int (numpy scalars are traced by eqx.filter_jit)
-    XWX, F = 0,0
-    # print(utils.report_memory_device())
     n_bins = 1 if heterogeneity_bins is None else heterogeneity_bins.size
 
     half_volume_size = np.prod(volume_shape_to_half_volume_shape(experiment_dataset.upsampled_volume_shape))
@@ -581,9 +493,7 @@ def precompute_kernel(experiment_dataset, noise_variance, pol_degree=0, heteroge
 
     batch_size = int(utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total() - 2* utils.get_size_in_gb(XWX) - 2*utils.get_size_in_gb(F)  ) )
 
-    # Need to take out RR
     logger.info(f"batch size in precompute kernel: {batch_size}")
-    # batch_size = 1
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
     noise_variance_image = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape).reshape(-1)
 
@@ -653,7 +563,6 @@ def get_feature_size(pol_degree):
 def estimate_volume_from_covariance_and_precompute(init_variance, discretization_params, XWXs, Fs, volume_shape):
 
     logger.info(f"Starting adaptive disc with params = {discretization_params}")
-    # prior_option = discretization_params[0][2]
     h = discretization_params[1]
     max_pol_degree = discretization_params[0]
     volume_size = np.prod(volume_shape)
@@ -669,7 +578,6 @@ def estimate_volume_from_covariance_and_precompute(init_variance, discretization
     first_estimates = [None,None]
 
     for k in range(2):
-        # Probably should rewrite this part
         first_estimates[k], _, XWX_summed_neighbors[k], F_summed_neighbors[k] = compute_weights_from_precompute(volume_shape, XWXs[k], Fs[k], pol_init_prior_inverse_covariance, max_pol_degree, max_pol_degree, h = h, return_XWX_F = True, prior_option = "by_degree")
 
     combined, _ = compute_estimate_from_XWX_F_summed(XWX_summed_neighbors[0] + XWX_summed_neighbors[1], F_summed_neighbors[0] + F_summed_neighbors[1], pol_init_prior_inverse_covariance, "by_degree", volume_shape)
@@ -681,7 +589,6 @@ def estimate_from_relion_style(cryos, discretization_params, XWXs, Fs, volume_sh
 
 
     logger.info(f"Starting adaptive disc with params = {discretization_params}")
-    # prior_option = discretization_params[0][2]
     h = discretization_params[1]
     pol_degree = discretization_params[0]
     assert pol_degree == 0, "Only p = 0 supported for now"
@@ -791,7 +698,6 @@ def pick_best_heterogeneity_from_residual(estimates, full_test_dataset, heteroge
     test_dataset.update_volume_upsampling_factor(1)
     residuals, _ = compute_residuals_many_weights_in_weight_batch(test_dataset, estimates, max_pol_degree, use_linear_interp = True)
 
-    # Meshgrid but idk to do it cleanly
     all_params = []
     for param in discretization_params:
         for bin in range(heterogeneity_bins.size):
@@ -825,7 +731,6 @@ def estimate_optimal_covariance_and_volume(init_variance, init_prior_covariance_
     pol_init_prior_inverse_covariance = np.repeat(init_prior_inverse_covariance[...,None] , max_pol_degree+1, axis=-1)
 
     for k in range(2):
-        # Probably should rewrite this part
         _, _, XWX_summed_neighbors[k], F_summed_neighbors[k] = compute_weights_from_precompute(volume_shape, XWXs[k], Fs[k], pol_init_prior_inverse_covariance, max_pol_degree, max_pol_degree, h = h, return_XWX_F = True, prior_option = "by_degree")
 
 
@@ -841,9 +746,6 @@ def estimate_optimal_covariance_and_volume(init_variance, init_prior_covariance_
     lhs = (XWX_summed_neighbors[0][...,0] + XWX_summed_neighbors[1][...,0]) /2
     lhs = half_volume_to_full_volume(lhs, volume_shape)
     pol_init_prior_inverse_covariance = 1/estimate_signal_variance_from_correlation(first_estimates[0], first_estimates[1], lhs, half_volume_to_full_volume(init_prior_inverse_covariance, volume_shape), volume_shape)
-    if (pol_init_prior_inverse_covariance < 0).any():
-        a =1
-
     # Now do a p = input, h = input discretization with diagonal variance
     pol_init_prior_inverse_covariance = np.repeat(pol_init_prior_inverse_covariance[...,None] , discretization_params[0]+1, axis=-1)
     init_prior_inverse_covariance_avg = regularization.batch_average_over_shells(pol_init_prior_inverse_covariance.T, volume_shape,0).T
@@ -947,9 +849,6 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, noise_varia
     final_estimates = np.zeros((n_disc_test, n_bins, volume_size, get_feature_size(max_pol_degree)), dtype = np.complex64)
     first_estimates = np.zeros((n_disc_test, n_bins,  2, volume_size, get_feature_size(max_pol_degree)), dtype = np.complex64)
 
-    # estimate_volume_from_covariance_and_precompute
-
-    # estimate_volume_from_covariance_and_precompute(init_variance, discretization_params, XWXs, Fs, volume_shape)
     for idx, disc_params_this in enumerate(discretization_params):
         for b in range(n_bins):
             final_estimates[idx,b], first_estimates[idx,b] = estimate_volume_from_covariance_and_precompute(signal_variance, disc_params_this, [XWXs[0][...,b], XWXs[1][...,b] ], [Fs[0][...,b], Fs[1][...,b] ], experiment_datasets[0].upsampled_volume_shape)
@@ -964,10 +863,7 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, noise_varia
     first_estimates = first_estimates.reshape([*first_estimates.shape[:2], -1, first_estimates.shape[-1]])
 
 
-    # residuals to pick best one
-    # I guess one way to do this without changed the function is to make CTF 0 for all bad images?
     from recovar import dataset
-    # Choose indices to test
     if residual_threshold is not None:
         good_indices = heterogeneity_distances[1] < residual_threshold
         test_dataset = dataset.subsample_cryoem_dataset(experiment_datasets[1], good_indices)
@@ -977,7 +873,6 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, noise_varia
 
     logger.info("Number of images used for residual computation: " + str(test_dataset.n_images))
     residuals, _ = compute_residuals_many_weights_in_weight_batch(test_dataset, first_estimates[0], max_pol_degree )
-    # Meshgrid but idk to do it cleanly
     all_params = []
     for param in discretization_params:
         for bin in heterogeneity_bins:
@@ -998,9 +893,7 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, noise_varia
 def naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp'):
     import gc
 
-    # residuals to pick best one
-    # I guess one way to do this without changed the function is to make CTF 0 for all bad images?
-    estimates = []#heterogeneity_bins.size * [None]
+    estimates = []
     lhs, rhs = [], []
     og_contrast = experiment_dataset.CTF_params[:,8]
     idx =0 
@@ -1043,9 +936,7 @@ def naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, 
 
 def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp'):
 
-    # residuals to pick best one
-    # I guess one way to do this without changed the function is to make CTF 0 for all bad images?
-    estimates = []#heterogeneity_bins.size * [None]
+    estimates = []
     experiment_dataset.update_volume_upsampling_factor(2)
     XWX, F = precompute_triangular_kernel(experiment_dataset, noise_variance.astype(np.float32), pol_degree=0, heterogeneity_distances= heterogeneity_distances, heterogeneity_bins = heterogeneity_bins)
 
@@ -1064,7 +955,7 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
 
 def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola", use_upsampled_ctf = True):
 
-    estimates = []#heterogeneity_bins.size * [None]
+    estimates = []
 
     bins = heterogeneity_bins
     inds = np.digitize(heterogeneity_distances, bins, right = True)
@@ -1162,8 +1053,6 @@ def compute_lhs_rhs(cryo,noise_variance, heterogeneity_distances, residual_thres
     test_dataset = dataset.subsample_cryoem_dataset(cryo, good_indices)
     test_dataset.update_volume_upsampling_factor(1)
     Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(test_dataset , noise_variance.astype(np.float32),  batch_size,  disc_type = disc_type, return_lhs_rhs = False )
-    # cryo.update_volume_upsampling_factor(og_upsampling)
-
     return Ft_ctf, F_ty
 
 
@@ -1364,7 +1253,6 @@ def get_degree_of_each_term(max_pol_degree):
         return np.array([0,1,1,1,2,2,2,2,2,2])
     assert(NotImplementedError)
 
-# May want to do delte this
 def test_multiple_disc2(experiment_dataset, noise_variance, discretization_params, prior_inverse_covariance):
 
     discretization_params = get_default_discretization_params(experiment_dataset.grid_size) if discretization_params is None else discretization_params
@@ -1386,7 +1274,6 @@ def test_multiple_disc2(experiment_dataset, noise_variance, discretization_param
     F_s = dict()
     for idx, (pol_degree, h, reg) in enumerate(discretization_params):
         logger.info(f"computing discretization with params: degree={pol_degree}, h={h}, reg={reg}")
-        # reg_used = prior_inverse_covariance if reg else None
         weights_this, valid_weights_this, XWX_s[idx],F_s[idx] = compute_weights_from_precompute(experiment_dataset.upsampled_volume_shape, XWX, F, prior_inverse_covariance, pol_degree, max_pol_degree, h, prior_option = reg)
         weights[idx,:,:weights_this.shape[-1]] = weights_this
         valid_weights[idx] = valid_weights_this
@@ -1412,7 +1299,6 @@ def test_multiple_disc(experiment_dataset, cross_validation_dataset, noise_varia
     F = np.asarray(F)
     for idx, (pol_degree, h, reg) in enumerate(discretization_params):
         logger.info(f"computing discretization with params: degree={pol_degree}, h={h}, reg={reg}")
-        # reg_used = prior_inverse_covariance if reg else None
         weights_this, valid_weights_this, _,_ = compute_weights_from_precompute(experiment_dataset.upsampled_volume_shape, XWX, F, prior_inverse_covariance, pol_degree, max_pol_degree, h, prior_option = reg)
         weights[idx,:,:weights_this.shape[-1]] = weights_this
         valid_weights[idx] = valid_weights_this
@@ -1461,7 +1347,6 @@ def make_regularization_from_reduced(regularization_reduced):
                                 axis = -1)
 
 def compute_weights_from_precompute(volume_shape, XWX, F, prior_inverse_covariance, pol_degree, max_pol_degree, h, return_XWX_F = False, prior_option = "by_degree"):
-    # use_regularization = prior_inverse_covariance is not None
     volume_size = np.prod(volume_shape)
 
     # NOTE the 1.0x is a weird hack to make sure that JAX doesn't compile store some arrays when compiling. I don't know why it does that.
@@ -1490,7 +1375,6 @@ def compute_weights_from_precompute(volume_shape, XWX, F, prior_inverse_covarian
     else:
         prior_inverse_covariance = None
 
-    # n_pol_param = small_gram_matrix_size(pol_degree) + 2 * get_feature_size(pol_degree) + 1
     memory_per_pixel = (2*h_max +1)**3 * big_gram_matrix_size(pol_degree) * 2 * 8 * 4
     ## TODO this should be fixed now. 
     ## There seems to be a strange bug with JAX. If it just barely runs out of memory, it won't throw an error but the memory will get corrupted and the answer is nonsense. This is an incredibly difficult thing to debug. 
@@ -1520,8 +1404,6 @@ def compute_weights_from_precompute(volume_shape, XWX, F, prior_inverse_covarian
 
     for k in range(n_batches):
         ind_st, ind_end = utils.get_batch_of_indices(volume_size, batch_size, k)
-        # signal_variance_this = prior_inverse_covariance[ind_st:ind_end, :pol_degree+1] if use_regularization else None
-
         reconstruction[ind_st:ind_end], good_pixels[ind_st:ind_end], problems, XWX_b, F_b = compute_estimate_from_precompute_one(XWX, F, h_max, h_ar[ind_st:ind_end], threed_frequencies[ind_st:ind_end], volume_shape, pol_degree =pol_degree, prior_inverse_covariance=prior_inverse_covariance, prior_option = prior_option, return_XWX_F = return_XWX_F)
 
         if return_XWX_F and (ind_st < XWX_s.shape[0]):
@@ -1548,7 +1430,6 @@ def compute_weights_from_precompute(volume_shape, XWX, F, prior_inverse_covarian
 
 
 def compute_summed_XWX_F_only(volume_shape, XWX, F, pol_degree, h):
-    # use_regularization = prior_inverse_covariance is not None
     volume_size = np.prod(volume_shape)
 
     # NOTE the 1.0x is a weird hack to make sure that JAX doesn't compile store some arrays when compiling. I don't know why it does that.
@@ -1575,8 +1456,6 @@ def compute_summed_XWX_F_only(volume_shape, XWX, F, pol_degree, h):
 
     for k in range(n_batches):
         ind_st, ind_end = utils.get_batch_of_indices(volume_size, batch_size, k)
-        # signal_variance_this = prior_inverse_covariance[ind_st:ind_end, :pol_degree+1] if use_regularization else None
-
         # probably should rewrite this to not have extra indices
         if (ind_st < XWX_s.shape[0]):
             ind_end_t = np.min([ind_end, XWX_s.shape[0]])
@@ -1585,30 +1464,6 @@ def compute_summed_XWX_F_only(volume_shape, XWX, F, pol_degree, h):
 
     logger.info(f"Done with kernel estimate")
     return XWX_s[...,0], F_s[...]
-
-
-@functools.partial(jax.jit, static_argnums = [5,6,7,8,9, 10])    
-def compute_residuals_batch_many_weights(images, weights, rotation_matrices, translations, CTF_params, volume_shape, image_shape, CTF_fun, voxel_size, pol_degree, use_linear_interp = False ):
-
-    if use_linear_interp:
-        X_mat, gridpoint_indices = make_X_mat(rotation_matrices, volume_shape, image_shape, pol_degree = pol_degree)
-        weights_on_grid = weights[gridpoint_indices]
-        X_mat = jnp.repeat(X_mat[...,None,:], axis = -2, repeats = weights_on_grid.shape[-2])
-        predicted_phi = linalg.broadcast_dot(X_mat, weights_on_grid)
-    else:
-        predicted_phi = core.slice_volume_by_map(weights_on_grid[...,0], rotation_matrices, image_shape, volume_shape, 'linear_interp')
-
-
-    CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    translated_images = core.translate_images(images, translations, image_shape)
-    residuals = jnp.abs(translated_images[...,None] - predicted_phi * CTF[...,None])**2
-    
-    volume_size = np.prod(volume_shape)
-    summed_residuals = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_size, residuals, gridpoint_indices.reshape(-1), None)
-
-    summed_n = core.summed_adjoint_slice_by_nearest(volume_size, jnp.ones_like(residuals[...,0]), gridpoint_indices.reshape(-1))
-
-    return summed_residuals, summed_n
 
 
 def compute_residuals_many_weights(experiment_dataset, weights , pol_degree, use_linear_interp ):
@@ -1671,37 +1526,6 @@ def compute_residuals_many_weights_in_weight_batch(experiment_dataset, weights, 
 
     return np.concatenate(residuals, axis = -1), 0
 
-
-# ### PICK H BASED ON ASYMPTOTICS
-
-# ## High level functions
-# # Integral of u^2 K(u) du over R^3
-# mu_2_kernel_statistics = { 'cube' : 1/27, 'Epanechnikov' : 3/5 } 
-
-# # Integral of K(u)^2 du over R^3 . K(u) is normalized such that integral K(u) du = 1 
-# R_kernel_statistics = { 'cube': 1/8,  'ball' : 4/3 * np.pi , 'Epanechnikov' : 1/5 } 
-
-# # mu_2_kernel_statistics = { 'uniform' : 1/2, 'Epanechnikov' : 3/5 } 
-# def Epanechnikov_kernel(dist_squared, h=1):
-#     return 3/4 * jnp.where( dist_squared < h,  1- dist_squared/h, jnp.zeros_like(dist_squared) )
-
-# def uniform_kernel(dist_squared, h=1):
-#     return jnp.where( dist_squared < h,  jnp.ones_like(dist_squared), jnp.zeros_like(dist_squared) )
-
-# def predict_optimal_h_value(noise_variance_over_density, hessian_norm, kernel = 'cube' ):
-#     R = R_kernel_statistics[kernel]
-#     mu_2 = mu_2_kernel_statistics[kernel]
-#     # h = (R * noise_variance_over_density / mu_2 / hessian_norm_squared)**(1/5)
-#     # Theorem 6.1 https://bookdown.org/egarpor/PM-UC3M/npreg-kre.html
-#     B_p_squared =  ( mu_2 *  hessian_norm /2)**2
-#     d = 3
-#     h = (d * R * noise_variance_over_density / ( 4 * B_p_squared))**(1/(4 + d))
-#     # B_p^2 * h^4  + noise_variance_over_density * R / h^d 
-#     # Deriv is :
-#     # B_p^2 * 4 h^3  + noise_variance_over_density * R * (-d) * h^(-d-1) = 0 
-#     # Solving for h:
-#     # h = (d * R * density_over_variance / (B_p^2 * 4) )**(1/(4 + d)) 
-#     return h
 
 def compute_gradient(x):
     gradients = jnp.gradient(x)

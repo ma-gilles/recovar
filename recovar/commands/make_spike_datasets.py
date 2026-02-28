@@ -57,18 +57,10 @@ def main(
 
     disc_type_sim = "nufft"
     disc_type_infer = "cubic"
-    # disc_type_sim = 'linear_interp'
-    # disc_type_infer = 'linear_interp'
-
 
     volume_folder = os.path.join(output_folder, "true_volumes")
     output.mkdir_safe(volume_folder)
     output.save_volumes(Bfaced_vols, volume_folder, from_ft=True)
-
-    # plt.imshow(fourier_transform_utils.get_idft3(Bfaced_vols[0].reshape(volume_shape)).sum(axis=0).real)
-    # plt.figure()
-    # plt.imshow(fourier_transform_utils.get_idft3(Bfaced_vols[1].reshape(volume_shape)).sum(axis=0).real)
-    
 
     error_observed = np.zeros(noise_level_tests.size)
     error_predicted= np.zeros(noise_level_tests.size)

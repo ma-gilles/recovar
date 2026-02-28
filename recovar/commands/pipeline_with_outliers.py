@@ -141,8 +141,8 @@ def run_pipeline_with_outlier_removal():
             pass
         
         # Add plot
-        po = output.PipelineOutput(args.outdir + '/')
-        output.standard_pipeline_plots(po, zdim, args.outdir + '/output/plots/')
+        po = output.PipelineOutput(args.outdir)
+        output.standard_pipeline_plots(po, zdim, os.path.join(args.outdir, 'output', 'plots'))
         del po
 
         # Load the embeddings from the pipeline output
@@ -292,7 +292,7 @@ def run_pipeline_with_outlier_removal():
                         if os.path.isdir(item_path):
                             shutil.rmtree(item_path)
                         elif os.path.isfile(item_path):
-                            if not item.endswith('.pkl') or not item.startswith('inliers_round_') and not item.startswith('outliers_round_'):
+                            if not item.endswith('.pkl') or (not item.startswith('inliers_round_') and not item.startswith('outliers_round_')):
                                 os.remove(item_path)
                     # Optionally, remove the round directory itself
                     shutil.rmtree(dir_path)

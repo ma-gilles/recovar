@@ -316,7 +316,7 @@ def test_compute_state_reads_txt_and_reweights(monkeypatch, tmp_path):
     assert target_zs.shape == (2, 2)
     assert zs.shape == (5, 2)
     assert cov_zs.shape == (5, 2, 2)
-    assert output_folder.endswith("/state_out/")
+    assert output_folder.rstrip("/").endswith("/state_out")
     assert kwargs["apply_global_filtering"] is True
     assert kwargs["fsc_mask"] is not None
 
@@ -422,7 +422,7 @@ def test_compute_state_accepts_pathlike_result_and_out_dirs(monkeypatch, tmp_pat
         fsc_mask_edgewidth=None,
     )
     compute_state_cmd.compute_state(args)
-    assert captured["output_folder"].endswith("state_out/")
+    assert captured["output_folder"].rstrip("/").endswith("state_out")
 
 
 def test_compute_state_reads_pkl_latent_points(monkeypatch, tmp_path):

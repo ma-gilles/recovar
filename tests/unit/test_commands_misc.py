@@ -1,5 +1,6 @@
 import argparse
 import pickle
+import sys
 from types import SimpleNamespace
 
 import numpy as np
@@ -24,7 +25,7 @@ def test_make_test_dataset_non_tilt_passes_expected_generate_kwargs(monkeypatch,
     make_test_dataset.make_test_dataset(str(outdir), image_size=32, noise_level=0.25, n_images=123)
 
     assert "args" in calls
-    assert calls["args"][0].endswith("/test_dataset/")
+    assert calls["args"][0].rstrip("/").endswith("/test_dataset")
     assert calls["args"][3] == 123
     assert calls["kwargs"]["grid_size"] == 32
     assert calls["kwargs"]["noise_level"] == 0.25
@@ -64,7 +65,7 @@ def test_make_test_dataset_main_parses_and_forwards(monkeypatch, tmp_path):
 
     monkeypatch.setattr(make_test_dataset, "make_test_dataset", fake_make_test_dataset)
     monkeypatch.setattr(
-        make_test_dataset.sys,
+        sys,
         "argv",
         [
             "make_test_dataset",
