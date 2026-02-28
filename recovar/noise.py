@@ -5,7 +5,7 @@ import jax, time
 import functools
 import nvtx
 import equinox as eqx
-from recovar import core, covariance_core, regularization, utils, constants
+from recovar import core, covariance_core, regularization, utils, jax_config
 from recovar.configs import ForwardModelConfig, BatchData, ModelState
 import recovar.fourier_transform_utils as fourier_transform_utils
 import os
@@ -701,7 +701,7 @@ def get_masked_image_noise_fractions(images, image_masks, image_shape):
     top_fraction= jnp.sum(masked_variance_ft * jnp.conj(kernels), axis=0) 
 
     # get a per image one
-    kernels_bad = jnp.abs(kernels)  < constants.EPSILON
+    kernels_bad = jnp.abs(kernels)  < jax_config.EPSILON
     kernels = jnp.where(kernels_bad, jnp.ones_like(kernels_bad) , kernels )
     per_image_estimate = jnp.where( kernels_bad, jnp.zeros_like(masked_variance_ft),  masked_variance_ft / kernels )
 

@@ -6,7 +6,7 @@ import nvtx
 
 logger = logging.getLogger(__name__)
 
-from recovar import core, constants
+from recovar import core, jax_config
 import recovar.fourier_transform_utils as fourier_transform_utils
 
 # NVTX domain for regularization operations
@@ -86,7 +86,7 @@ def get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean = False, frequenc
     bot2 = average_over_shells(jnp.abs(vol2)**2, volume_shape, frequency_shift = frequency_shift)    
     bot = jnp.sqrt(bot1 * bot2)
     fsc = top_avg / bot
-    # fsc = jnp.where(bot  > constants.EPSILON , top_avg / bot, constants.EPSILON)
+    # fsc = jnp.where(bot  > jax_config.EPSILON , top_avg / bot, jax_config.EPSILON)
     fsc = jnp.where(jnp.isnan(fsc) + jnp.isinf(fsc), 0, fsc)
     fsc = fsc.at[0].set(fsc[1]) # Always set this 1st shell?
     return fsc
@@ -175,7 +175,7 @@ def jax_scipy_nd_image_sum(input, labels=None, index=None):
 
 
 def compute_fsc_prior_gpu(volume_shape, image0, image1, bottom_of_fraction = None, estimate_merged_SNR = False, substract_shell_mean = False, frequency_shift = 0, from_noise_level = False):
-    epsilon = constants.FSC_ZERO_THRESHOLD
+    epsilon = jax_config.FSC_ZERO_THRESHOLD
     # FSC top:
     fsc = get_fsc_gpu(image0, image1, volume_shape, substract_shell_mean, frequency_shift)
 
@@ -198,7 +198,7 @@ def compute_fsc_prior_gpu(volume_shape, image0, image1, bottom_of_fraction = Non
         logger.warning("Using outdated prior (from_noise_level=True)")
     else:
         bottom_avg = average_over_shells(bottom_of_fraction.real, volume_shape, frequency_shift)        
-        prior_avg = jnp.where( bottom_avg > 0 , SNR / bottom_avg, constants.EPSILON )
+        prior_avg = jnp.where( bottom_avg > 0 , SNR / bottom_avg, jax_config.EPSILON )
     
     # Put back in array
     radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1)
@@ -222,7 +222,7 @@ def downsample_lhs(lhs, volume_shape, upsampling_factor = 1):
 @functools.partial(jax.jit, static_argnums = [0,6, 7])    
 @nvtx.annotate("compute_fsc_prior_gpu_v2", color="cyan", domain=NVTX_DOMAIN_REG)
 def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequency_shift , substract_shell_mean = False, upsampling_factor = 1 ):
-    epsilon = constants.FSC_ZERO_THRESHOLD
+    epsilon = jax_config.FSC_ZERO_THRESHOLD
     # FSC top:
     fsc_raw = get_fsc_gpu(image0, image1, volume_shape, substract_shell_mean, frequency_shift)
 
@@ -247,7 +247,7 @@ def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequenc
     sum_top = average_over_shells(top,  volume_shape, frequency_shift)
     sum_bot = average_over_shells(bot,  volume_shape, frequency_shift)
     
-    prior_avg = jnp.where( sum_top > 0 , SNR * sum_bot / sum_top , constants.EPSILON ).real
+    prior_avg = jnp.where( sum_top > 0 , SNR * sum_bot / sum_top , jax_config.EPSILON ).real
     
     # Put back in array
     radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1)
@@ -257,12 +257,12 @@ def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequenc
 
 
 @nvtx.annotate("covariance_update_col", color="yellow", domain=NVTX_DOMAIN_REG)
-def covariance_update_col(H, B, prior, epsilon = constants.EPSILON):
+def covariance_update_col(H, B, prior, epsilon = jax_config.EPSILON):
     # H is not divided by sigma.
     cov = jnp.where( jnp.abs(H) < epsilon , 0,  B / ( H + (1 / prior) ) )
     return cov
 
-def covariance_update_col_with_mask(H, B, prior, volume_mask, valid_idx, volume_shape, epsilon = constants.EPSILON):
+def covariance_update_col_with_mask(H, B, prior, volume_mask, valid_idx, volume_shape, epsilon = jax_config.EPSILON):
     # H is not divided by sigma.
     cov = (jnp.where( jnp.abs(H) < epsilon , 0,  B / ( H + (1 / prior) ) ) * valid_idx).reshape(volume_shape)
     cov = fourier_transform_utils.get_dft3( fourier_transform_utils.get_idft3(cov ) * volume_mask ).reshape(-1)

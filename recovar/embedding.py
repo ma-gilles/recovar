@@ -4,7 +4,7 @@ import numpy as np
 import functools, time, jax
 import nvtx
 import equinox as eqx
-from recovar import core, covariance_core, constants, utils, linalg
+from recovar import core, covariance_core, jax_config, utils, linalg
 from recovar.configs import ForwardModelConfig, BatchData, ModelState, EmbeddingOpts
 import recovar.core_forward as core_forward
 
@@ -33,7 +33,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
     assert u.shape[0] == cryos.volume_size, "input u should be volume_size x basis_size"
     st_time = time.time()    
     basis = np.asarray(u[:, :basis_size]).T
-    eigenvalues = (s + constants.ROOT_EPSILON)
+    eigenvalues = (s + jax_config.ROOT_EPSILON)
     use_contrast = "contrast" in contrast_option
     contrast_shared_across_tilt_series = ("shared" in contrast_option) #and not use_contrast
     logger.info(f"using contrast? {use_contrast}")

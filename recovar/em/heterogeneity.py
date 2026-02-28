@@ -4,12 +4,11 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import equinox as eqx
-from recovar import core, covariance_estimation, utils, constants, principal_components, relion_functions, noise
+from recovar import core, covariance_estimation, utils, jax_config, principal_components, relion_functions, noise
 from recovar.configs import ForwardModelConfig
 from .core import batch_vol_slice_volume_by_map
 from recovar.principal_components import get_cov_svds, pca_by_projected_covariance
 from recovar.covariance_estimation import compute_both_H_B, compute_covariance_regularization_relion_style
-from recovar import constants, principal_components
 
 import time
 logger = logging.getLogger(__name__)
@@ -705,7 +704,7 @@ def estimate_principal_components_simple(experiment_dataset, mean, mean_signal_v
     u =  np.fliplr(u)
     s = np.flip(ss)
     u = basis @ u 
-    s = np.where(s >0 , s, np.ones_like(s)*constants.EPSILON)
+    s = np.where(s >0 , s, np.ones_like(s)*jax_config.EPSILON)
     return u, s
 
 
@@ -721,7 +720,7 @@ def estimate_principal_components_halfset(cryos, means, mean_signal_variance, co
     
     volume_noise_var = None
     volume_mask = None
-    _, covariance_prior, covariance_fscs = principal_components.compute_covariance_regularization_relion_style(Hs, Bs, mean_signal_variance, picked_frequency_indices, volume_noise_var, volume_mask, cryos[0].volume_shape,  gpu_memory, reg_init_multiplier = constants.REG_INIT_MULTIPLIER, options = covariance_options)
+    _, covariance_prior, covariance_fscs = principal_components.compute_covariance_regularization_relion_style(Hs, Bs, mean_signal_variance, picked_frequency_indices, volume_noise_var, volume_mask, cryos[0].volume_shape,  gpu_memory, reg_init_multiplier = jax_config.REG_INIT_MULTIPLIER, options = covariance_options)
 
     from recovar import relion_functions
 
@@ -750,7 +749,7 @@ def estimate_principal_components_halfset(cryos, means, mean_signal_variance, co
         u =  np.fliplr(u)
         s = np.flip(ss)
         us[cryo_idx] = orthog_cov_cols @ u 
-        ss[cryo_idx] = np.where(s >0 , s, np.ones_like(s)*constants.EPSILON)
+        ss[cryo_idx] = np.where(s >0 , s, np.ones_like(s)*jax_config.EPSILON)
 
 
     return us, ss
@@ -814,7 +813,7 @@ def compute_regularized_covariance_columns(cryos, means, mean_signal_variance, c
     logger.info("using new covariance reg fn")
     utils.report_memory_device(logger = logger)
 
-    covariance_cols["est_mask"], prior, fscs = compute_covariance_regularization_relion_style(Hs, Bs, 1/mean_signal_variance, picked_frequencies, volume_noise_var, mask_final, volume_shape,  gpu_memory, reg_init_multiplier = constants.REG_INIT_MULTIPLIER, options = options)
+    covariance_cols["est_mask"], prior, fscs = compute_covariance_regularization_relion_style(Hs, Bs, 1/mean_signal_variance, picked_frequencies, volume_noise_var, mask_final, volume_shape,  gpu_memory, reg_init_multiplier = jax_config.REG_INIT_MULTIPLIER, options = options)
     covariance_cols["est_mask"] = covariance_cols["est_mask"].T
     del Hs, Bs
     logger.info("after reg fn")

@@ -4,7 +4,7 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar import constants
+from recovar import jax_config
 from recovar import core
 from recovar import relion_functions as rf
 
@@ -40,7 +40,7 @@ def test_adjust_regularization_relion_style_lower_bounded():
     reg = rf.adjust_regularization_relion_style(filt, volume_shape=(4, 4, 4))
     reg_np = np.asarray(reg)
     assert reg_np.shape == (4, 4, 4)
-    assert (reg_np >= constants.EPSILON).all()
+    assert (reg_np >= jax_config.EPSILON).all()
 
 
 def test_relion_style_kernel_batch_normalizes_noise_variance_shapes(monkeypatch):

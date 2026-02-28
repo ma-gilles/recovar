@@ -145,7 +145,7 @@ def test_pca_by_projected_covariance_sorts_and_clamps_eigs(monkeypatch):
     assert u.shape == (3, 3)
     assert s.shape == (3,)
     assert s[0] >= s[1] >= s[2]
-    assert s[2] == pytest.approx(pc.constants.EPSILON)
+    assert s[2] == pytest.approx(pc.jax_config.EPSILON)
 
 
 def test_estimate_principal_components_high_snr_from_var_est_requires_variance():
@@ -372,7 +372,7 @@ def test_pca_by_projected_covariance_real_tiny_dataset_runs():
     assert u.shape == (cryo.volume_size, 2)
     assert s.shape == (2,)
     assert np.isfinite(s).all()
-    assert np.all(s >= pc.constants.EPSILON)
+    assert np.all(s >= pc.jax_config.EPSILON)
     assert np.all(s[:-1] >= s[1:])
     u_np = np.asarray(u)
     if np.isfinite(u_np).all():

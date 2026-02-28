@@ -4,7 +4,7 @@ import numpy as np
 import jax, time
 import nvtx
 
-from recovar import core, covariance_estimation, embedding, plot_utils, linalg, constants, utils, noise
+from recovar import core, covariance_estimation, embedding, plot_utils, linalg, jax_config, utils, noise
 import recovar.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
@@ -152,7 +152,7 @@ def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , dis
     s = np.flip(ss)
     u = basis @ u 
 
-    s = np.where(s >0 , s, np.ones_like(s)*constants.EPSILON)
+    s = np.where(s >0 , s, np.ones_like(s)*jax_config.EPSILON)
  
     return u , s
 
@@ -206,7 +206,7 @@ def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_s
 
     # Align to positive. Not really necessary, but 
     ip = ones_vol.T @ new_u
-    ip = np.where(np.abs(ip) > constants.ROOT_EPSILON, ip / np.abs(ip) , np.ones_like(ip))
+    ip = np.where(np.abs(ip) > jax_config.ROOT_EPSILON, ip / np.abs(ip) , np.ones_like(ip))
     new_u *= ip
 
     # back to Fourier domain
