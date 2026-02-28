@@ -17,9 +17,6 @@ def add_args(parser: argparse.ArgumentParser):
         "--zdim", type=int, help="Dimension of latent variable (a single int, not a list)"
     )
 
-    # parser.add_argument(
-    #     "--no_z_reg", type=int, help="Dimension of latent variable (a single int, not a list)"
-    # )
     parser.add_argument(
         "--override_z_regularization", action="store_true", help= "Whether to override z regularization. It probably does not make sense to use this option, because the deconvolved density uses the UNREGULARIZED z's (see paper for why)."
     )
@@ -71,7 +68,7 @@ def add_args(parser: argparse.ArgumentParser):
 
 
 def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_factor=0, n_bins=30, n_vols_along_path = 6, density_path = None, no_z_reg = False, z_st = None, z_end = None, args = None):
-    po = o.PipelineOutput(recovar_result_dir + '/')
+    po = o.PipelineOutput(recovar_result_dir)
 
     # Copy data to temp folder if requested
     path_mapping = None
@@ -165,12 +162,11 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
             maskrad_fraction = 20
             n_min_particles = 100
 
-        output_folder_kmeans = output_folder + '/'
-        o.mkdir_safe(output_folder_kmeans)
+        o.mkdir_safe(output_folder)
         logger.info(args)
 
         if zdim > 1:
-            path_folder = output_folder_kmeans
+            path_folder = output_folder
             o.mkdir_safe(path_folder)
             full_path, subsampled_path = o.make_trajectory_plots_from_results(
                 po, zdim_key, path_folder, cryos=cryos, z_st=z_st, z_end=z_end, gt_volumes=None,
@@ -180,7 +176,7 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
             logger.info("path done")
 
         else:
-            path_folder = output_folder_kmeans + 'path' + str(0) + '/'
+            path_folder = os.path.join(output_folder, 'path0')
             o.mkdir_safe(path_folder)
             q = 0.03
             zs_1d = np.asarray(zs).reshape(-1)

@@ -57,7 +57,7 @@ def test_estimate_conformational_density_forwards_percentile_and_defaults(monkey
         bounds = {"x": [-1, 1], "y": [-1, 1]}
         return sols, alphas_out, cost, reg_cost, density, total_covar, grids, bounds
 
-    monkeypatch.setattr(estimate_conformational_density.o, "PipelineOutput", lambda _p: FakePipelineOutput())
+    monkeypatch.setattr(estimate_conformational_density.output, "PipelineOutput", lambda _p: FakePipelineOutput())
     monkeypatch.setattr(
         estimate_conformational_density.deconvolve_density,
         "get_deconvolved_density",

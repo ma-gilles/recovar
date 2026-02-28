@@ -773,8 +773,8 @@ def local_filter_halfmaps(halfmap1_path, halfmap2_path, voxel_size, output_path,
     
     # Apply mask to halfmaps if provided
     if apply_mask is not None:
-        halfmap1 = np.array(halfmap1) * np.array(apply_mask)
-        halfmap2 = np.array(halfmap2) * np.array(apply_mask)
+        halfmap1 = np.asarray(halfmap1) * np.asarray(apply_mask)
+        halfmap2 = np.asarray(halfmap2) * np.asarray(apply_mask)
         logger.info("Applied mask to halfmaps for local filtering")
     
     # Apply local resolution filtering

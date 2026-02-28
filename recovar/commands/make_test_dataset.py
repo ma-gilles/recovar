@@ -1,4 +1,3 @@
-import sys
 import recovar.jax_config
 from recovar import simulator, output
 import numpy as np
@@ -9,12 +8,12 @@ import argparse
 def make_test_dataset(output_dir, image_size = 64, noise_level = 0.1, n_images = None, create_nested_structure = False, nested_prefix = "Extract/job193", tilt_series = False, outlier_file_input = None, percent_outliers = 0.0, percent_tilt_series_outliers = 0.0, seed = None):
     if seed is not None:
         np.random.seed(seed)
-    grid_size =image_size
+    grid_size = image_size
     this_dir = os.path.dirname(__file__)
-    volume_folder_input =  this_dir+ '/../data/vol'
+    volume_folder_input = os.path.join(this_dir, '..', 'data', 'vol')
     print(volume_folder_input)
-    
-    output_folder = output_dir + '/test_dataset/'
+
+    output_folder = os.path.join(output_dir, 'test_dataset')
     output.mkdir_safe(output_folder)
     n_images = 1000 if n_images is None else int(n_images)
     voxel_size = 4.25 * 128 / grid_size 

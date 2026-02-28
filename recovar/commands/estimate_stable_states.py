@@ -1,18 +1,20 @@
+import os
+
 from recovar import deconvolve_density, output, utils
 import numpy as np
 import argparse
 
 def estimate_stable_states(density, latent_space_bounds, percent_top = 1, n_local_maxs = 3, file_path = None):
-    file_path = file_path + '/' if file_path[-1] != '/' else file_path
+    file_path = os.path.normpath(file_path)
     output.mkdir_safe(file_path)
-    output.mkdir_safe(file_path + '/density/')
-    # output.mkdir_safe(file_path + '/local_max_comp_viz/')
+    density_dir = os.path.join(file_path, 'density')
+    output.mkdir_safe(density_dir)
 
-    latent_pts_z, latent_pts_grid = deconvolve_density.find_local_maxs_of_density(density, latent_space_bounds, percent_top = percent_top, n_local_maxs = n_local_maxs, plot_folder = file_path )
-    output.plot_over_density(density, points = latent_pts_grid,  annotate=True, plot_folder = file_path + '/density/', cmap = 'inferno')
-    np.savetxt(file_path + 'stable_state_all_coords.txt', latent_pts_z)
+    latent_pts_z, latent_pts_grid = deconvolve_density.find_local_maxs_of_density(density, latent_space_bounds, percent_top=percent_top, n_local_maxs=n_local_maxs, plot_folder=file_path)
+    output.plot_over_density(density, points=latent_pts_grid, annotate=True, plot_folder=density_dir, cmap='inferno')
+    np.savetxt(os.path.join(file_path, 'stable_state_all_coords.txt'), latent_pts_z)
     for i in range(len(latent_pts_z)):
-        np.savetxt(file_path + f'stable_state_{i}_coords.txt', latent_pts_z[i])
+        np.savetxt(os.path.join(file_path, f'stable_state_{i}_coords.txt'), latent_pts_z[i])
 
 
 def parse_args():
