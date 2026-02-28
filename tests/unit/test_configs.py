@@ -15,7 +15,7 @@ from recovar.configs import (
     ForwardModelConfig,
     ModelState,
 )
-import recovar.core_forward as core_forward
+import recovar.core.forward as core_forward
 
 pytestmark = pytest.mark.unit
 

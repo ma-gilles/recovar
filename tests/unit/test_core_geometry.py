@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("jax")
 import recovar.core as core
-import recovar.core_geometry as core_geometry
+import recovar.core.geometry as core_geometry
 
 pytestmark = pytest.mark.unit
 

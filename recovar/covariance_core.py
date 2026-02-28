@@ -10,7 +10,7 @@ import functools
 from recovar import core, mask
 from recovar.configs import ForwardModelConfig
 import recovar.fourier_transform_utils as fourier_transform_utils
-import recovar.core_forward as core_forward
+import recovar.core.forward as core_forward
 
 logger = logging.getLogger(__name__)
 

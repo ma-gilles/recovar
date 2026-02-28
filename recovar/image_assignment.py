@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import numpy as np
 from recovar import core
 from recovar.configs import ForwardModelConfig
-import recovar.core_forward as core_forward
+import recovar.core.forward as core_forward
 
 
 def compute_residual(batch, mean_estimate, CTF_params, rotation_matrices, translations,

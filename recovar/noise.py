@@ -6,7 +6,7 @@ import functools
 import nvtx
 import equinox as eqx
 from recovar import core, covariance_core, regularization, utils, jax_config
-import recovar.core_forward as core_forward
+import recovar.core.forward as core_forward
 from recovar.configs import ForwardModelConfig, BatchData, ModelState
 import recovar.fourier_transform_utils as fourier_transform_utils
 import os

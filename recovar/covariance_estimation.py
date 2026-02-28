@@ -7,7 +7,7 @@ import nvtx
 import equinox as eqx
 from recovar import core, covariance_core, regularization, utils, jax_config, noise, cubic_interpolation
 from recovar.configs import ForwardModelConfig, BatchData, ModelState, CovarianceOpts
-import recovar.core_forward as core_forward
+import recovar.core.forward as core_forward
 import recovar.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)

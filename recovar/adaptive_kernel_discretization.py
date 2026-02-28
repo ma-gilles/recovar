@@ -16,7 +16,7 @@ import numpy as np
 
 from recovar import core, dataset, jax_config, linalg, noise, regularization, relion_functions, utils
 from recovar.configs import BatchData, ForwardModelConfig
-import recovar.core_forward as core_forward
+import recovar.core.forward as core_forward
 import recovar.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)

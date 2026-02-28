@@ -1,15 +1,10 @@
-"""Compatibility facade that re-exports recovar core primitives.
+"""Core cryo-EM primitives: indexing, geometry, CTF, slicing, and forward model.
 
-This module preserves the historical `recovar.core.*` import surface while
-the implementation lives in focused submodules:
-- `core_indexing`
-- `core_geometry`
-- `core_slicing`
-- `core_ctf`
-- `core_forward`
+Re-exports public symbols from submodules so that ``from recovar import core``
+and ``core.translate_images(...)`` etc. continue to work unchanged.
 """
 
-from recovar.core_geometry import (
+from recovar.core.geometry import (
     batch_batch_find_frequencies_within_grid_dist,
     batch_find_frequencies_within_grid_dist,
     batch_get_gridpoint_coords,
@@ -27,7 +22,7 @@ from recovar.core_geometry import (
     translate_images,
     translate_single_image,
 )
-from recovar.core_indexing import (
+from recovar.core.indexing import (
     check_frequencies_in_bound,
     check_vec_indices_in_bound,
     check_vol_indices_in_bound,
@@ -39,7 +34,7 @@ from recovar.core_indexing import (
     vol_indices_to_frequencies,
     vol_indices_to_vec_indices,
 )
-from recovar.core_ctf import (
+from recovar.core.ctf import (
     CTFParamIndex,
     CTFParams,
     batch_evaluate_ctf,
@@ -59,10 +54,10 @@ from recovar.core_ctf import (
     get_dose_filters_from_tilt_number,
     cryodrgn_CTF_half,
 )
-from recovar.core_forward import (
+from recovar.core.forward import (
     batch_translate_images,
 )
-from recovar.core_slicing import (
+from recovar.core.slicing import (
     adjoint_slice_volume_by_map,
     adjoint_slice_volume_by_map_from_half_images_to_half_volume,
     adjoint_slice_volume_by_trilinear,
@@ -109,6 +104,7 @@ __all__ = [
     "check_vol_indices_in_bound",
     "critical_exposure",
     "cryodrgn_CTF",
+    "cryodrgn_CTF_half",
     "decide_order",
     "distance_to_max_grid_dist",
     "evaluate_ctf",
@@ -146,7 +142,6 @@ __all__ = [
     "sum_adj_forward_model_from_half",
     "sum_adj_forward_model_from_half_to_half",
     "summed_adjoint_slice_by_nearest",
-    "cryodrgn_CTF_half",
     "translate_images",
     "translate_single_image",
     "vec_indices_to_frequencies",
