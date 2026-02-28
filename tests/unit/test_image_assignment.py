@@ -16,21 +16,18 @@ def test_compute_residual_uses_forward_model_translation_and_noise_scaling(monke
     projected = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
 
     monkeypatch.setattr(ia.core, "translate_images", lambda x, *_args, **_kwargs: x)
-    monkeypatch.setattr(ia.core, "forward_model_from_map", lambda *_args, **_kwargs: projected)
+    monkeypatch.setattr(ia.core_forward, "forward_model", lambda *_args, **_kwargs: projected)
 
+    config = SimpleNamespace(image_shape=(1, 2))
     out = ia.compute_residual(
         batch=batch,
         mean_estimate=np.array([0.0], dtype=np.float32),
         CTF_params=None,
         rotation_matrices=None,
         translations=None,
-        image_shape=(1, 2),
-        volume_shape=(1, 1, 1),
-        voxel_size=1.0,
-        disc_type="nearest",
+        config=config,
         noise_variance=np.array([4.0, 4.0], dtype=np.float32),
         process_fn=lambda x: x,
-        CTF_fun=lambda *_args, **_kwargs: None,
     )
     expected = np.linalg.norm((batch - projected) / np.sqrt(4.0), axis=-1) ** 2
     assert np.allclose(np.asarray(out), expected)
@@ -43,7 +40,11 @@ def test_compute_image_assignment_fills_residual_matrix(monkeypatch):
         n_units = 4
         volume_shape = (1, 1, 1)
         image_shape = (1, 2)
+        grid_size = 1
         voxel_size = 1.0
+        padding = 0
+        premultiplied_ctf = False
+        volume_mask_threshold = 0.25
         CTF_params = np.zeros((4, 1), dtype=np.float32)
         rotation_matrices = np.zeros((4, 3, 3), dtype=np.float32)
         translations = np.zeros((4, 2), dtype=np.float32)
@@ -79,7 +80,11 @@ def test_estimate_false_positive_rate_from_mocked_residual(monkeypatch):
         n_units = 2
         volume_shape = (1, 1, 1)
         image_shape = (1, 2)
+        grid_size = 1
         voxel_size = 1.0
+        padding = 0
+        premultiplied_ctf = False
+        volume_mask_threshold = 0.25
         CTF_params = np.zeros((2, 1), dtype=np.float32)
         rotation_matrices = np.zeros((2, 3, 3), dtype=np.float32)
         translations = np.zeros((2, 2), dtype=np.float32)

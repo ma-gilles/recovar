@@ -11,6 +11,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from recovar import core, utils
+from recovar.configs import ForwardModelConfig
+import recovar.core_forward as core_forward
 import recovar.fourier_transform_utils as fourier_transform_utils
 from jax import vjp
 import functools
@@ -289,13 +291,16 @@ def compute_diag_mean(experiment_dataset, batch_size, disc_type, noise_variance 
     # in batches
     n_batches = utils.get_number_of_index_batch(experiment_dataset.n_images, batch_size)
     
+    config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
+
     for k in range(n_batches):
         volume = jnp.ones(experiment_dataset.volume_size, dtype = jnp.float32)
         indices = utils.get_batch_of_indices_arange(experiment_dataset.n_images, batch_size, k)
-        ATA_one = core.compute_A_t_Av_forward_model_from_map(volume, experiment_dataset.CTF_params[indices],
-                                                   experiment_dataset.rotation_matrices[indices],
-                                                   experiment_dataset.image_shape, experiment_dataset.volume_shape, experiment_dataset.voxel_size,
-                                                   experiment_dataset.CTF_fun, disc_type, noise_variance=noise_variance)
+        ATA_one = core_forward.compute_AtAv(
+            config, volume, experiment_dataset.CTF_params[indices],
+            experiment_dataset.rotation_matrices[indices],
+            noise_variance=noise_variance,
+        )
         diagonal += ATA_one[0]
                                                     
     return diagonal

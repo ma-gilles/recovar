@@ -367,16 +367,12 @@ class CryoEMDataset:
         Returns:
             Predicted images in real space if spatial=True, otherwise in Fourier space
         """
-        predicted_images = core.forward_model_from_map(
-            volume,
-            self.CTF_params[indices],
-            self.rotation_matrices[indices],
-            self.image_shape,
-            self.volume_shape,
-            self.voxel_size,
-            self.CTF_fun,
-            'linear_interp',  # Using linear interpolation for better quality
-            skip_ctf = skip_ctf
+        from recovar.configs import ForwardModelConfig
+        import recovar.core_forward as core_forward
+        config = ForwardModelConfig.from_dataset(self, disc_type='linear_interp')
+        predicted_images = core_forward.forward_model(
+            config, volume, self.CTF_params[indices],
+            self.rotation_matrices[indices], skip_ctf=skip_ctf,
         )
         if spatial:
             predicted_images = fourier_transform_utils.get_idft2(predicted_images.reshape(-1, *self.image_shape)).real

@@ -45,11 +45,12 @@ def test_adjust_regularization_relion_style_lower_bounded():
 
 def test_relion_style_kernel_batch_normalizes_noise_variance_shapes(monkeypatch):
     # Keep this test focused on noise-shape normalization behavior.
+    import recovar.core_forward as core_forward_mod
     monkeypatch.setattr(core, "translate_images", lambda images, translations, image_shape: images)
     monkeypatch.setattr(
-        core,
-        "adjoint_forward_model_from_map",
-        lambda images, *args, **kwargs: jnp.ones((64,), dtype=jnp.complex64) * jnp.sum(images),
+        core_forward_mod,
+        "adjoint_forward_model",
+        lambda config, images, *args, **kwargs: jnp.ones((64,), dtype=jnp.complex64) * jnp.sum(images),
     )
 
     def ctf_fun(params, image_shape, voxel_size):

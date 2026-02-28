@@ -100,19 +100,6 @@ def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape):
     return proj_eigen
 
 
-# Compute y_i - P_i mu terms. If premultiplied_ctf is true, this computes z_i - CTF_i P_i mu where z_i = y_i CTF_i is the premultiplied image.
-@functools.partial(jax.jit, static_argnums = [5,6,7,8,9,10, 11], static_argnames = ('premultiplied_ctf'))    
-@nvtx.annotate("get_centered_images", color="yellow", domain=NVTX_DOMAIN_COV_CORE)
-def get_centered_images(images, mean, CTF_params, rotation_matrices, translations, image_shape, volume_shape, grid_size, voxel_size, CTF_fun, disc_type, premultiplied_ctf = False  ):    
-
-    translated_images = core.translate_images(images, translations, image_shape)
-    if premultiplied_ctf:
-        centered_images = translated_images - core.forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf = True) * CTF_fun(CTF_params, image_shape, voxel_size)**2
-    else:
-        centered_images = translated_images - core.forward_model_from_map(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type, skip_ctf = False)
-    
-    return centered_images
-
 def check_mask(mask):
     no_mask = np.all(np.isclose(mask,1))
     if no_mask:
@@ -121,7 +108,7 @@ def check_mask(mask):
 
 batch_forward_model = jax.vmap(core.forward_model, in_axes = (0, None, None))
 
-@functools.partial(jax.jit, static_argnums = [3,4,5,6,7])    
+@functools.partial(jax.jit, static_argnums = [3,4,5,6,7])
 @nvtx.annotate("batch_over_vol_forward_model", color="blue", domain=NVTX_DOMAIN_COV_CORE)
 def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):
     batch_grid_pt_vec_ind_of_images = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape )
@@ -130,11 +117,21 @@ def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shap
     return projected_mean
 
 
-batch_over_vol_forward_model_from_map = jax.vmap(core.forward_model_from_map, in_axes = (0, None, None, None, None, None, None, None, None))
+def batch_vol_forward_from_map(
+    config: ForwardModelConfig,
+    volumes: jax.Array,
+    ctf_params: jax.Array,
+    rotation_matrices: jax.Array,
+    skip_ctf: bool = False,
+) -> jax.Array:
+    """Forward-model a batch of volumes via slice_volume_by_map (vmap over volume axis)."""
+    return jax.vmap(
+        lambda vol: core_forward.forward_model(config, vol, ctf_params, rotation_matrices, skip_ctf=skip_ctf),
+    )(volumes)
 
 
 # ============================================================================
-# New Equinox-based API
+# Equinox-based API
 # ============================================================================
 
 

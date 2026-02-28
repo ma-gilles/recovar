@@ -3,8 +3,9 @@ import numpy as np
 import pytest
 
 pytest.importorskip("jax")
-import recovar.core as core
+import jax
 import recovar.core_forward as core_forward
+from recovar.configs import ForwardModelConfig
 
 pytestmark = pytest.mark.unit
 
@@ -17,150 +18,9 @@ def _twos_ctf(ctf_params, image_shape, voxel_size):
     return 2.0 * np.ones((ctf_params.shape[0], image_shape[0] * image_shape[1]), dtype=np.float32)
 
 
-def test_core_reexports_forward_api():
-    assert core.forward_model_from_map is core_forward.forward_model_from_map
-    assert core.compute_A_t_Av_forward_model_from_map is core_forward.compute_A_t_Av_forward_model_from_map
-    assert core.batch_translate_images is core_forward.batch_translate_images
-
-
-def test_forward_model_from_map_skip_ctf():
-    volume_shape = (4, 4, 4)
-    image_shape = (2, 2)
-    volume = np.zeros(np.prod(volume_shape), dtype=np.float32)
-    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
-    ctf_params = np.zeros((1, 9), dtype=np.float32)
-
-    out = np.asarray(
-        core_forward.forward_model_from_map(
-            volume,
-            ctf_params,
-            rotation_matrices,
-            image_shape,
-            volume_shape,
-            1.0,
-            _ones_ctf,
-            "nearest",
-            True,
-        )
-    )
-    assert out.shape == (1, image_shape[0] * image_shape[1])
-
-
-def test_adjoint_forward_model_from_map_shape():
-    volume_shape = (4, 4, 4)
-    image_shape = (2, 2)
-    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
-    ctf_params = np.zeros((1, 9), dtype=np.float32)
-    slices = np.zeros((1, image_shape[0] * image_shape[1]), dtype=np.float32)
-
-    out = np.asarray(
-        core_forward.adjoint_forward_model_from_map(
-            slices,
-            ctf_params,
-            rotation_matrices,
-            image_shape,
-            volume_shape,
-            1.0,
-            _ones_ctf,
-            "nearest",
-            True,
-        )
-    )
-    assert out.shape == (np.prod(volume_shape),)
-
-
-def test_forward_model_from_map_applies_ctf_when_enabled():
-    volume_shape = (4, 4, 4)
-    image_shape = (2, 2)
-    volume = np.ones(np.prod(volume_shape), dtype=np.float32)
-    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
-    ctf_params = np.zeros((1, 9), dtype=np.float32)
-
-    out_skip = np.asarray(
-        core_forward.forward_model_from_map(
-            volume,
-            ctf_params,
-            rotation_matrices,
-            image_shape,
-            volume_shape,
-            1.0,
-            _twos_ctf,
-            "nearest",
-            True,
-        )
-    )
-    out_ctf = np.asarray(
-        core_forward.forward_model_from_map(
-            volume,
-            ctf_params,
-            rotation_matrices,
-            image_shape,
-            volume_shape,
-            1.0,
-            _twos_ctf,
-            "nearest",
-            False,
-        )
-    )
-    np.testing.assert_allclose(out_ctf, 2.0 * out_skip)
-
-
-def test_forward_model_from_map_and_return_adjoint_contracts():
-    volume_shape = (4, 4, 4)
-    image_shape = (2, 2)
-    volume = np.zeros(np.prod(volume_shape), dtype=np.float32)
-    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
-    ctf_params = np.zeros((1, 9), dtype=np.float32)
-
-    slices, adj = core_forward.forward_model_from_map_and_return_adjoint(
-        volume,
-        ctf_params,
-        rotation_matrices,
-        image_shape,
-        volume_shape,
-        1.0,
-        _ones_ctf,
-        "nearest",
-        True,
-    )
-    assert np.asarray(slices).shape == (1, image_shape[0] * image_shape[1])
-    pulled = adj(np.ones_like(np.asarray(slices)))[0]
-    assert np.asarray(pulled).shape == (np.prod(volume_shape),)
-
-
-def test_compute_A_t_Av_forward_model_from_map_returns_singleton_tuple():
-    volume_shape = (4, 4, 4)
-    image_shape = (2, 2)
-    volume = np.ones(np.prod(volume_shape), dtype=np.float32)
-    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
-    ctf_params = np.zeros((1, 9), dtype=np.float32)
-
-    out = core_forward.compute_A_t_Av_forward_model_from_map(
-        volume,
-        ctf_params,
-        rotation_matrices,
-        image_shape,
-        volume_shape,
-        1.0,
-        _ones_ctf,
-        "nearest",
-        noise_variance=1.0,
-        skip_ctf=True,
-    )
-    assert isinstance(out, tuple)
-    assert len(out) == 1
-    assert np.asarray(out[0]).shape == (np.prod(volume_shape),)
-
-
-# ---------------------------------------------------------------------------
-# GPU tests
-# ---------------------------------------------------------------------------
-import jax
-from recovar.configs import ForwardModelConfig
-import recovar.core_ctf as core_ctf
-
-
-def _make_config(image_shape=(2, 2), volume_shape=(4, 4, 4), disc_type="nearest"):
+def _make_config(image_shape=(2, 2), volume_shape=(4, 4, 4), disc_type="nearest", ctf_fun=None):
+    if ctf_fun is None:
+        ctf_fun = _ones_ctf
     return ForwardModelConfig(
         image_shape=image_shape,
         volume_shape=volume_shape,
@@ -168,55 +28,126 @@ def _make_config(image_shape=(2, 2), volume_shape=(4, 4, 4), disc_type="nearest"
         voxel_size=1.0,
         padding=0,
         disc_type=disc_type,
-        CTF_fun=_ones_ctf,
+        CTF_fun=ctf_fun,
         premultiplied_ctf=False,
         volume_mask_threshold=0.0,
     )
 
 
+def test_batch_translate_images_reexported():
+    assert hasattr(core_forward, "batch_translate_images")
+
+
+def test_forward_model_skip_ctf():
+    config = _make_config()
+    volume = np.zeros(np.prod(config.volume_shape), dtype=np.float32)
+    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
+    ctf_params = np.zeros((1, 9), dtype=np.float32)
+
+    out = np.asarray(
+        core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True)
+    )
+    assert out.shape == (1, config.image_size)
+
+
+def test_adjoint_forward_model_shape():
+    config = _make_config()
+    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
+    ctf_params = np.zeros((1, 9), dtype=np.float32)
+    slices = np.zeros((1, config.image_size), dtype=np.float32)
+
+    out = np.asarray(
+        core_forward.adjoint_forward_model(config, slices, ctf_params, rotation_matrices, skip_ctf=True)
+    )
+    assert out.shape == (config.volume_size,)
+
+
+def test_forward_model_applies_ctf_when_enabled():
+    config = _make_config(ctf_fun=_twos_ctf)
+    volume = np.ones(config.volume_size, dtype=np.float32)
+    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
+    ctf_params = np.zeros((1, 9), dtype=np.float32)
+
+    out_skip = np.asarray(
+        core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True)
+    )
+    out_ctf = np.asarray(
+        core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=False)
+    )
+    np.testing.assert_allclose(out_ctf, 2.0 * out_skip)
+
+
+def test_forward_model_and_adjoint_contracts():
+    config = _make_config()
+    volume = np.zeros(config.volume_size, dtype=np.float32)
+    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
+    ctf_params = np.zeros((1, 9), dtype=np.float32)
+
+    slices, adj = core_forward.forward_model_and_adjoint(
+        config, volume, ctf_params, rotation_matrices, skip_ctf=True,
+    )
+    assert np.asarray(slices).shape == (1, config.image_size)
+    pulled = adj(np.ones_like(np.asarray(slices)))[0]
+    assert np.asarray(pulled).shape == (config.volume_size,)
+
+
+def test_compute_AtAv_returns_singleton_tuple():
+    config = _make_config()
+    volume = np.ones(config.volume_size, dtype=np.float32)
+    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
+    ctf_params = np.zeros((1, 9), dtype=np.float32)
+
+    out = core_forward.compute_AtAv(
+        config, volume, ctf_params, rotation_matrices,
+        noise_variance=1.0, skip_ctf=True,
+    )
+    assert isinstance(out, tuple)
+    assert len(out) == 1
+    assert np.asarray(out[0]).shape == (config.volume_size,)
+
+
+# ---------------------------------------------------------------------------
+# GPU tests
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.gpu
-def test_forward_model_from_map_on_gpu(gpu_device):
-    volume_shape = (4, 4, 4)
-    image_shape = (2, 2)
+def test_forward_model_on_gpu(gpu_device):
+    config = _make_config()
     rng = np.random.default_rng(42)
-    volume = rng.standard_normal(np.prod(volume_shape)).astype(np.float32)
+    volume = rng.standard_normal(config.volume_size).astype(np.float32)
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
     cpu_out = np.asarray(
-        core_forward.forward_model_from_map(
-            volume, ctf_params, rotation_matrices, image_shape, volume_shape, 1.0, _ones_ctf, "nearest", True,
-        )
+        core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True)
     )
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
-            core_forward.forward_model_from_map(
-                jax.device_put(volume), jax.device_put(ctf_params), jax.device_put(rotation_matrices),
-                image_shape, volume_shape, 1.0, _ones_ctf, "nearest", True,
+            core_forward.forward_model(
+                config, jax.device_put(volume), jax.device_put(ctf_params),
+                jax.device_put(rotation_matrices), skip_ctf=True,
             )
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.gpu
-def test_adjoint_forward_model_from_map_on_gpu(gpu_device):
-    volume_shape = (4, 4, 4)
-    image_shape = (2, 2)
+def test_adjoint_forward_model_on_gpu(gpu_device):
+    config = _make_config()
     rng = np.random.default_rng(43)
-    slices = rng.standard_normal((1, np.prod(image_shape))).astype(np.float32)
+    slices = rng.standard_normal((1, config.image_size)).astype(np.float32)
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
     cpu_out = np.asarray(
-        core_forward.adjoint_forward_model_from_map(
-            slices, ctf_params, rotation_matrices, image_shape, volume_shape, 1.0, _ones_ctf, "nearest", True,
-        )
+        core_forward.adjoint_forward_model(config, slices, ctf_params, rotation_matrices, skip_ctf=True)
     )
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
-            core_forward.adjoint_forward_model_from_map(
-                jax.device_put(slices), jax.device_put(ctf_params), jax.device_put(rotation_matrices),
-                image_shape, volume_shape, 1.0, _ones_ctf, "nearest", True,
+            core_forward.adjoint_forward_model(
+                config, jax.device_put(slices), jax.device_put(ctf_params),
+                jax.device_put(rotation_matrices), skip_ctf=True,
             )
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
@@ -224,48 +155,42 @@ def test_adjoint_forward_model_from_map_on_gpu(gpu_device):
 
 @pytest.mark.gpu
 def test_forward_model_applies_ctf_on_gpu(gpu_device):
-    volume_shape = (4, 4, 4)
-    image_shape = (2, 2)
-    volume = np.ones(np.prod(volume_shape), dtype=np.float32)
+    config = _make_config(ctf_fun=_twos_ctf)
+    volume = np.ones(config.volume_size, dtype=np.float32)
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
     with jax.default_device(gpu_device):
         out_skip = np.asarray(
-            core_forward.forward_model_from_map(
-                jax.device_put(volume), jax.device_put(ctf_params), jax.device_put(rotation_matrices),
-                image_shape, volume_shape, 1.0, _twos_ctf, "nearest", True,
+            core_forward.forward_model(
+                config, jax.device_put(volume), jax.device_put(ctf_params),
+                jax.device_put(rotation_matrices), skip_ctf=True,
             )
         )
         out_ctf = np.asarray(
-            core_forward.forward_model_from_map(
-                jax.device_put(volume), jax.device_put(ctf_params), jax.device_put(rotation_matrices),
-                image_shape, volume_shape, 1.0, _twos_ctf, "nearest", False,
+            core_forward.forward_model(
+                config, jax.device_put(volume), jax.device_put(ctf_params),
+                jax.device_put(rotation_matrices), skip_ctf=False,
             )
         )
     np.testing.assert_allclose(out_ctf, 2.0 * out_skip, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.gpu
-def test_compute_A_t_Av_on_gpu(gpu_device):
-    volume_shape = (4, 4, 4)
-    image_shape = (2, 2)
-    volume = np.ones(np.prod(volume_shape), dtype=np.float32)
+def test_compute_AtAv_on_gpu(gpu_device):
+    config = _make_config()
+    volume = np.ones(config.volume_size, dtype=np.float32)
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
     cpu_out = np.asarray(
-        core_forward.compute_A_t_Av_forward_model_from_map(
-            volume, ctf_params, rotation_matrices, image_shape, volume_shape, 1.0, _ones_ctf, "nearest",
-            noise_variance=1.0, skip_ctf=True,
-        )[0]
+        core_forward.compute_AtAv(config, volume, ctf_params, rotation_matrices, noise_variance=1.0, skip_ctf=True)[0]
     )
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
-            core_forward.compute_A_t_Av_forward_model_from_map(
-                jax.device_put(volume), jax.device_put(ctf_params), jax.device_put(rotation_matrices),
-                image_shape, volume_shape, 1.0, _ones_ctf, "nearest",
-                noise_variance=1.0, skip_ctf=True,
+            core_forward.compute_AtAv(
+                config, jax.device_put(volume), jax.device_put(ctf_params),
+                jax.device_put(rotation_matrices), noise_variance=1.0, skip_ctf=True,
             )[0]
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
@@ -273,11 +198,9 @@ def test_compute_A_t_Av_on_gpu(gpu_device):
 
 @pytest.mark.gpu
 def test_new_api_forward_model_on_gpu(gpu_device):
-    volume_shape = (4, 4, 4)
-    image_shape = (2, 2)
-    config = _make_config(image_shape, volume_shape)
+    config = _make_config()
     rng = np.random.default_rng(44)
-    volume = rng.standard_normal(np.prod(volume_shape)).astype(np.float32)
+    volume = rng.standard_normal(config.volume_size).astype(np.float32)
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
@@ -296,11 +219,9 @@ def test_new_api_forward_model_on_gpu(gpu_device):
 
 @pytest.mark.gpu
 def test_new_api_adjoint_forward_model_on_gpu(gpu_device):
-    volume_shape = (4, 4, 4)
-    image_shape = (2, 2)
-    config = _make_config(image_shape, volume_shape)
+    config = _make_config()
     rng = np.random.default_rng(45)
-    slices = rng.standard_normal((1, np.prod(image_shape))).astype(np.float32)
+    slices = rng.standard_normal((1, config.image_size)).astype(np.float32)
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
@@ -319,10 +240,8 @@ def test_new_api_adjoint_forward_model_on_gpu(gpu_device):
 
 @pytest.mark.gpu
 def test_new_api_compute_AtAv_on_gpu(gpu_device):
-    volume_shape = (4, 4, 4)
-    image_shape = (2, 2)
-    config = _make_config(image_shape, volume_shape)
-    volume = np.ones(np.prod(volume_shape), dtype=np.float32)
+    config = _make_config()
+    volume = np.ones(config.volume_size, dtype=np.float32)
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
@@ -341,11 +260,9 @@ def test_new_api_compute_AtAv_on_gpu(gpu_device):
 
 @pytest.mark.gpu
 def test_forward_model_and_adjoint_roundtrip_on_gpu(gpu_device):
-    volume_shape = (4, 4, 4)
-    image_shape = (2, 2)
-    config = _make_config(image_shape, volume_shape)
+    config = _make_config()
     rng = np.random.default_rng(46)
-    volume = rng.standard_normal(np.prod(volume_shape)).astype(np.float32)
+    volume = rng.standard_normal(config.volume_size).astype(np.float32)
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
@@ -354,7 +271,7 @@ def test_forward_model_and_adjoint_roundtrip_on_gpu(gpu_device):
             config, jax.device_put(volume), jax.device_put(ctf_params),
             jax.device_put(rotation_matrices), skip_ctf=True,
         )
-        assert np.asarray(slices).shape == (1, np.prod(image_shape))
+        assert np.asarray(slices).shape == (1, config.image_size)
         pulled = f_adj(jax.device_put(np.ones_like(np.asarray(slices))))[0]
-        assert np.asarray(pulled).shape == (np.prod(volume_shape),)
+        assert np.asarray(pulled).shape == (config.volume_size,)
         assert np.isfinite(np.asarray(pulled)).all()

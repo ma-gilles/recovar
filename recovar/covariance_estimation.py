@@ -779,11 +779,13 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
     else:
         these_disc = 'linear_interp'
 
+    config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=these_disc)
+
     # Use subset generator if image_subset is provided, otherwise use full dataset
     if image_subset is not None:
         data_generator = experiment_dataset.get_image_subset_generator(batch_size=batch_size, subset_indices=image_subset)
     else:
-        data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size, mode='images') 
+        data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size, mode='images')
     for images, particles_ind, batch_image_ind in data_generator:
         noise_variances = experiment_dataset.noise.get(particles_ind)
         
@@ -800,16 +802,10 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
 
         with nvtx.annotate("process_and_center_images", color="cyan", domain=NVTX_DOMAIN_H_B):
             images = experiment_dataset.image_stack.process_images(images)
-            images = covariance_core.get_centered_images(images, mean_estimate,
+            images = covariance_core.centered_images(config, images, mean_estimate,
                                          experiment_dataset.CTF_params[batch_image_ind],
                                          experiment_dataset.rotation_matrices[batch_image_ind],
-                                         experiment_dataset.translations[batch_image_ind],
-                                         experiment_dataset.image_shape, 
-                                         experiment_dataset.volume_shape,
-                                         experiment_dataset.grid_size, 
-                                         experiment_dataset.voxel_size,
-                                         experiment_dataset.CTF_fun,
-                                         these_disc, premultiplied_ctf = experiment_dataset.premultiplied_ctf )
+                                         experiment_dataset.translations[batch_image_ind])
                     
             images = covariance_core.apply_image_masks(images, image_mask, experiment_dataset.image_shape)  
 
@@ -1034,34 +1030,28 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
     batch = process_fn(batch)
     batch = core.translate_images(batch, translations , image_shape)
 
-    # Always computes CTF here
-    # P_i mean
-    projected_mean = core.forward_model_from_map(mean_estimate,
-                                         CTF_params,
-                                         rotation_matrices, 
-                                         image_shape, 
-                                         volume_shape, 
-                                        voxel_size, 
-                                        CTF_fun, 
-                                        disc_type                                           
-                                          )
+    config = ForwardModelConfig(
+        image_shape=image_shape, volume_shape=volume_shape,
+        grid_size=volume_shape[0], voxel_size=voxel_size,
+        padding=padding, disc_type=disc_type, CTF_fun=CTF_fun,
+        premultiplied_ctf=premultiplied_ctf, volume_mask_threshold=volume_mask_threshold,
+    )
 
+    # P_i mean
+    projected_mean = core_forward.forward_model(
+        config, mean_estimate, CTF_params, rotation_matrices,
+    )
 
     ## DO MASK BUSINESS HERE.
     if do_mask_images:
         batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
         projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, image_shape)
 
-    
-    AUs = covariance_core.batch_over_vol_forward_model_from_map(basis,
-                                         CTF_params, 
-                                         rotation_matrices,
-                                         image_shape, 
-                                         volume_shape, 
-                                        voxel_size, 
-                                        CTF_fun, 
-                                        disc_type_u, 
-                                        premultiplied_ctf) # skip_ctf = premultiplied_ctf)
+    config_u = config.replace(disc_type=disc_type_u)
+    AUs = covariance_core.batch_vol_forward_from_map(
+        config_u, basis, CTF_params, rotation_matrices,
+        skip_ctf=premultiplied_ctf,
+    )
     
     # Apply mask on operator
     if do_mask_images:
@@ -1167,11 +1157,10 @@ def reduce_covariance_inner(
         projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, config.image_shape)
 
     # Forward model basis vectors — use disc_type_u for eigenvectors
-    AUs = covariance_core.batch_over_vol_forward_model_from_map(
-        model.basis, ctf_params, rotation_matrices,
-        config.image_shape, config.volume_shape,
-        config.voxel_size, config.CTF_fun,
-        opts.disc_type_u, config.premultiplied_ctf,
+    config_u = config.replace(disc_type=opts.disc_type_u)
+    AUs = covariance_core.batch_vol_forward_from_map(
+        config_u, model.basis, ctf_params, rotation_matrices,
+        skip_ctf=config.premultiplied_ctf,
     )
 
     if do_mask_images:

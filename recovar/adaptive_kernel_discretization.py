@@ -16,6 +16,7 @@ import numpy as np
 
 from recovar import core, dataset, jax_config, linalg, noise, regularization, relion_functions, utils
 from recovar.configs import BatchData, ForwardModelConfig
+import recovar.core_forward as core_forward
 import recovar.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
@@ -219,19 +220,16 @@ def precompute_triangular_kernel_batch(
     images = core.translate_images(batch_data.images, batch_data.translations, config.image_shape) / noise_variance
     images = images[..., None] * heterogeneity_bins_this[..., None, :]
 
-    Ft_y = batch_im_adjoint_forward_model_from_map(
-        images, batch_data.ctf_params, batch_data.rotation_matrices,
-        config.image_shape, config.volume_shape, config.voxel_size,
-        config.CTF_fun, 'linear_interp',
+    config_li = config.replace(disc_type='linear_interp')
+    Ft_y = batch_im_adjoint_forward(
+        config_li, images, batch_data.ctf_params, batch_data.rotation_matrices,
     )
 
     CTF = config.compute_ctf(batch_data.ctf_params) / noise_variance
     CTF = CTF[..., None] * heterogeneity_bins_this[..., None, :]
 
-    Ft_ctf = batch_im_adjoint_forward_model_from_map(
-        CTF, batch_data.ctf_params, batch_data.rotation_matrices,
-        config.image_shape, config.volume_shape, config.voxel_size,
-        config.CTF_fun, 'linear_interp',
+    Ft_ctf = batch_im_adjoint_forward(
+        config_li, CTF, batch_data.ctf_params, batch_data.rotation_matrices,
     )
 
     return (
@@ -323,7 +321,15 @@ def precompute_triangular_kernel(experiment_dataset, noise_variance, pol_degree=
     return np.asarray(XWX), np.asarray(F)
 
 
-batch_im_adjoint_forward_model_from_map = jax.vmap(core.adjoint_forward_model_from_map, in_axes = (-1,None, None, None, None,None, None, None))
+def batch_im_adjoint_forward(config, slices, ctf_params, rotation_matrices):
+    """Adjoint forward model vmapped over last axis of slices.
+
+    Returns shape (n_bins, volume_size) — batch axis first.
+    """
+    return jax.vmap(
+        lambda s: core_forward.adjoint_forward_model(config, s, ctf_params, rotation_matrices),
+        in_axes=-1,
+    )(slices)
 
 
 def get_differences_zero(pol_degree, differences):

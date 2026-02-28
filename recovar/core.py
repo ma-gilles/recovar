@@ -60,13 +60,7 @@ from recovar.core_ctf import (
     cryodrgn_CTF_half,
 )
 from recovar.core_forward import (
-    adjoint_forward_model_from_map,
-    adjoint_forward_model_from_trilinear,
-    batch_forward_model_from_map,
     batch_translate_images,
-    compute_A_t_Av_forward_model_from_map,
-    forward_model_from_map,
-    forward_model_from_map_and_return_adjoint,
 )
 from recovar.core_slicing import (
     adjoint_slice_volume_by_map,
@@ -95,8 +89,6 @@ from recovar.core_slicing import (
 __all__ = [
     "CTFParamIndex",
     "CTFParams",
-    "adjoint_forward_model_from_map",
-    "adjoint_forward_model_from_trilinear",
     "adjoint_slice_volume_by_map",
     "adjoint_slice_volume_by_map_from_half_images_to_half_volume",
     "adjoint_slice_volume_by_trilinear",
@@ -105,7 +97,6 @@ __all__ = [
     "batch_batch_find_frequencies_within_grid_dist",
     "batch_evaluate_ctf",
     "batch_find_frequencies_within_grid_dist",
-    "batch_forward_model_from_map",
     "batch_get_gridpoint_coords",
     "batch_get_nearest_gridpoint_indices",
     "batch_over_vol_summed_adjoint_slice_by_nearest",
@@ -116,7 +107,6 @@ __all__ = [
     "check_frequencies_in_bound",
     "check_vec_indices_in_bound",
     "check_vol_indices_in_bound",
-    "compute_A_t_Av_forward_model_from_map",
     "critical_exposure",
     "cryodrgn_CTF",
     "decide_order",
@@ -132,8 +122,6 @@ __all__ = [
     "find_frequencies_within_grid_dist",
     "forward_model",
     "forward_model_from_half_ctf",
-    "forward_model_from_map",
-    "forward_model_from_map_and_return_adjoint",
     "frequencies_to_vec_indices",
     "frequencies_to_vol_indices",
     "get_cryo_ET_CTF_fun",
