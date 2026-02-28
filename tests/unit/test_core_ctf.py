@@ -262,3 +262,164 @@ def test_get_cryo_et_ctf_fun_matches_wrapper_call():
         )
     )
     np.testing.assert_allclose(out_fun, out_ref, atol=1e-6, rtol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# GPU tests
+# ---------------------------------------------------------------------------
+import jax
+
+
+@pytest.mark.gpu
+def test_evaluate_ctf_on_gpu(gpu_device):
+    freqs = np.array([[0.0, 0.0], [0.1, -0.2], [0.05, 0.15]], dtype=np.float32)
+    cpu_out = np.asarray(
+        core_ctf.evaluate_ctf(freqs, dfu=15000.0, dfv=15000.0, dfang=0.0, volt=300.0, cs=2.7, w=0.1, phase_shift=0.0, bfactor=0.0)
+    )
+    with jax.default_device(gpu_device):
+        gpu_out = np.asarray(
+            core_ctf.evaluate_ctf(
+                jax.device_put(freqs), dfu=15000.0, dfv=15000.0, dfang=0.0,
+                volt=300.0, cs=2.7, w=0.1, phase_shift=0.0, bfactor=0.0,
+            )
+        )
+    np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_batch_evaluate_ctf_on_gpu(gpu_device):
+    ctf_params = _make_standard_ctf_params(4)[:, :9]
+    psi = np.array([[0.0, 0.0], [0.1, -0.2], [0.05, 0.15]], dtype=np.float32)
+    cpu_out = np.asarray(core_ctf.batch_evaluate_ctf(psi, ctf_params))
+    with jax.default_device(gpu_device):
+        gpu_out = np.asarray(
+            core_ctf.batch_evaluate_ctf(jax.device_put(psi), jax.device_put(ctf_params))
+        )
+    np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_cryodrgn_CTF_on_gpu(gpu_device):
+    ctf_params = _make_standard_ctf_params(3)[:, :9].astype(np.float32)
+    image_shape = (4, 8)
+    cpu_out = np.asarray(core_ctf.cryodrgn_CTF(ctf_params, image_shape=image_shape, voxel_size=1.0))
+    with jax.default_device(gpu_device):
+        gpu_out = np.asarray(
+            core_ctf.cryodrgn_CTF(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0)
+        )
+    np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_cryodrgn_CTF_half_matches_full_on_gpu(gpu_device):
+    ctf_params = _make_standard_ctf_params(3)[:, :9].astype(np.float32)
+    image_shape = (4, 8)
+    with jax.default_device(gpu_device):
+        full = np.asarray(core_ctf.cryodrgn_CTF(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
+        half = np.asarray(core_ctf.cryodrgn_CTF_half(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
+    expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
+    np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("antialiasing", [False, True])
+def test_evaluate_ctf_wrapper_on_gpu(gpu_device, antialiasing):
+    ctf_params = _make_standard_ctf_params(2)[:, :9].astype(np.float32)
+    image_shape = (4, 8)
+    cpu_out = np.asarray(
+        core_ctf.evaluate_ctf_wrapper(ctf_params, image_shape=image_shape, voxel_size=1.0, antialiasing=antialiasing)
+    )
+    with jax.default_device(gpu_device):
+        gpu_out = np.asarray(
+            core_ctf.evaluate_ctf_wrapper(
+                jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, antialiasing=antialiasing,
+            )
+        )
+    np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_evaluate_ctf_wrapper_half_matches_full_on_gpu(gpu_device):
+    ctf_params = _make_standard_ctf_params(2)[:, :9].astype(np.float32)
+    image_shape = (4, 8)
+    with jax.default_device(gpu_device):
+        full = np.asarray(
+            core_ctf.evaluate_ctf_wrapper(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0)
+        )
+        half = np.asarray(
+            core_ctf.evaluate_ctf_wrapper_half(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0)
+        )
+    expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
+    np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_tilt_series_ctf_on_gpu(gpu_device):
+    ctf_params = _make_standard_ctf_params(4).astype(np.float32)
+    image_shape = (4, 8)
+    cpu_out = np.asarray(
+        core_ctf.evaluate_ctf_wrapper_tilt_series_v2(ctf_params, image_shape=image_shape, voxel_size=1.0)
+    )
+    with jax.default_device(gpu_device):
+        gpu_out = np.asarray(
+            core_ctf.evaluate_ctf_wrapper_tilt_series_v2(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0)
+        )
+    np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_tilt_series_half_matches_full_on_gpu(gpu_device):
+    ctf_params = _make_standard_ctf_params(4).astype(np.float32)
+    image_shape = (4, 8)
+    with jax.default_device(gpu_device):
+        full = np.asarray(
+            core_ctf.evaluate_ctf_wrapper_tilt_series(
+                jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0,
+                dose_per_tilt=2.9, angle_per_tilt=3.0,
+            )
+        )
+        half = np.asarray(
+            core_ctf.evaluate_ctf_wrapper_tilt_series_half(
+                jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0,
+                dose_per_tilt=2.9, angle_per_tilt=3.0,
+            )
+        )
+    expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
+    np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_tilt_series_v2_half_matches_full_on_gpu(gpu_device):
+    ctf_params = _make_standard_ctf_params(4).astype(np.float32)
+    image_shape = (4, 8)
+    with jax.default_device(gpu_device):
+        full = np.asarray(
+            core_ctf.evaluate_ctf_wrapper_tilt_series_v2(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0)
+        )
+        half = np.asarray(
+            core_ctf.evaluate_ctf_wrapper_tilt_series_v2_half(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0)
+        )
+    expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
+    np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_get_dose_filters_on_gpu(gpu_device):
+    cpu_out = np.asarray(
+        core_ctf.get_dose_filters(
+            Apix=1.0, image_shape=(4, 8),
+            cumulative_dose=np.array([0.0, 1.0, 3.0], dtype=np.float32),
+            tilt_angles=np.array([0.0, 15.0, 30.0], dtype=np.float32),
+            voltage=300.0,
+        )
+    )
+    with jax.default_device(gpu_device):
+        gpu_out = np.asarray(
+            core_ctf.get_dose_filters(
+                Apix=1.0, image_shape=(4, 8),
+                cumulative_dose=jax.device_put(np.array([0.0, 1.0, 3.0], dtype=np.float32)),
+                tilt_angles=jax.device_put(np.array([0.0, 15.0, 30.0], dtype=np.float32)),
+                voltage=300.0,
+            )
+        )
+    np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)

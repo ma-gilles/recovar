@@ -884,20 +884,9 @@ def test_adjoint_slice_volume_by_half_images_rejects_invalid_shapes():
         )
 
 
-def _first_gpu_or_skip():
-    for backend in ("cuda", "gpu"):
-        try:
-            gpus = jax.devices(backend)
-            if gpus:
-                return gpus[0]
-        except RuntimeError:
-            continue
-    pytest.skip("No GPU device available")
-
-
 @pytest.mark.gpu
-def test_half_trilinear_backprojection_matches_full_on_gpu():
-    device = _first_gpu_or_skip()
+def test_half_trilinear_backprojection_matches_full_on_gpu(gpu_device):
+    device = gpu_device
     rng = np.random.default_rng(801)
     image_shape = (4, 8)
     volume_shape = (8, 8, 8)
@@ -931,8 +920,8 @@ def test_half_trilinear_backprojection_matches_full_on_gpu():
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("disc_type", ["nearest", "linear_interp"])
-def test_half_map_backprojection_matches_full_on_gpu(disc_type):
-    device = _first_gpu_or_skip()
+def test_half_map_backprojection_matches_full_on_gpu(gpu_device, disc_type):
+    device = gpu_device
     rng = np.random.default_rng(802)
     image_shape = (4, 8)
     volume_shape = (8, 8, 8)
