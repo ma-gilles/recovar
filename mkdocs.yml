@@ -64,19 +64,17 @@ nav:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md
     - Test Your Installation: getting-started/testing.md
-  - User Guide:
+  - Guide:
     - Input Data: guide/input-data.md
-    - Downsampling: guide/downsampling.md
     - Masks: guide/masks.md
+    - Downsampling: guide/downsampling.md
     - Running the Pipeline: guide/pipeline.md
     - Analyzing Results: guide/analysis.md
+    - Conformational Density: guide/conformational-density.md
     - Extracting Subsets: guide/extracting-subsets.md
-  - Advanced:
-    - Cryo-ET / Tomography: advanced/cryo-et.md
-    - Multi-GPU: advanced/multi-gpu.md
-    - Outlier Detection: advanced/outlier-detection.md
-    - Conformational Density: advanced/conformational-density.md
-    - External Embeddings: advanced/external-embeddings.md
+    - Outlier Detection: guide/outlier-detection.md
+    - Cryo-ET: guide/cryo-et.md
+    - External Embeddings: guide/external-embeddings.md
   - Reference:
     - CLI Commands: reference/cli.md
     - File Formats: reference/file-formats.md

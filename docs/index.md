@@ -36,7 +36,7 @@ RECOVAR is a software tool for analyzing conformational heterogeneity in cryo-EM
 
     Tilt-series data with focus masks
 
-    [:octicons-arrow-right-24: Cryo-ET](advanced/cryo-et.md)
+    [:octicons-arrow-right-24: Cryo-ET](guide/cryo-et.md)
 
 </div>
 

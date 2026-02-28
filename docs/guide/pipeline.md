@@ -40,7 +40,7 @@ recovar pipeline particles.128.mrcs -o output \
 | `--only-mean` | False | Only compute the mean (fast, for verifying setup) |
 | `--correct-contrast` | False | Estimate and correct amplitude scaling |
 | `--lazy` | False | Lazy loading for large datasets |
-| `--multi-gpu` | False | Enable multi-GPU parallelization |
+| `--multi-gpu` | False | Multi-GPU parallelization (experimental) |
 
 ## Dataset loading options
 
@@ -67,6 +67,34 @@ recovar pipeline particles.128.mrcs -o output \
 | `--low-memory-option` | False | Lower memory for covariance estimation |
 | `--very-low-memory-option` | False | Lowest memory for covariance estimation |
 
+## Multi-GPU (experimental)
+
+Multi-GPU support parallelizes the covariance estimation step across GPUs. This is the most expensive step of the pipeline, so multi-GPU can significantly reduce total runtime for large datasets.
+
+```bash
+# Use all available GPUs
+recovar pipeline particles.star -o output --mask mask.mrc --multi-gpu
+
+# Use specific number of GPUs
+recovar pipeline particles.star -o output --mask mask.mrc --multi-gpu --n-gpus 4
+```
+
+!!! warning "Work in progress"
+    Multi-GPU is experimental. It parallelizes covariance estimation only — the mean reconstruction and embedding steps still run on a single GPU. If you run into issues, drop `--multi-gpu` and the pipeline will run normally on one GPU.
+
+### GPU memory and device selection
+
+```bash
+# Limit memory per GPU (useful on shared machines)
+recovar pipeline particles.star -o output --mask mask.mrc --gpu-gb 8
+
+# Select specific GPUs by ID
+CUDA_VISIBLE_DEVICES=0,2 recovar pipeline particles.star -o output --mask mask.mrc --multi-gpu
+
+# Disable JAX memory preallocation (useful on shared machines)
+XLA_PYTHON_CLIENT_PREALLOCATE=false recovar pipeline ...
+```
+
 ## Cryo-ET options
 
 | Flag | Default | Description |
@@ -77,7 +105,7 @@ recovar pipeline particles.128.mrcs -o output \
 | `--angle-per-tilt` | From file | Angle per tilt |
 | `--ntilts` | All | Number of tilts per series |
 
-See [Cryo-ET](../advanced/cryo-et.md) for details.
+See [Cryo-ET](cryo-et.md) for details.
 
 ## Output structure
 
