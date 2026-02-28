@@ -10,6 +10,7 @@ All RECOVAR commands follow the pattern `recovar <command> [arguments]`.
 | `analyze` | Post-pipeline analysis (k-means, volumes, UMAP) |
 | `quickstart` | Interactive wizard for pipeline setup |
 | `downsample` | Pre-downsample images to disk |
+| `parse_relion5_tomo` | Convert RELION5 tilt-series data to 2D tilt format |
 
 ## Volume generation
 
@@ -230,3 +231,26 @@ recovar extract_image_subset_from_kmeans centers.pkl output.pkl indices [-i]
 | `output.pkl` | Output indices file |
 | `indices` | Comma-separated cluster indices |
 | `-i` | Invert selection |
+
+---
+
+## `parse_relion5_tomo`
+
+Convert RELION5 tilt-series data to RECOVAR's 2D tilt format.
+
+```bash
+recovar parse_relion5_tomo \
+    -t Polish/job249/tomograms.star \
+    -p Extract/job260/particles.star \
+    -o particles_2d.star
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-t`, `--tomograms` | Required | RELION5 `tomograms.star` (from Polish or Tomograms job) |
+| `-p`, `--particles` | Required | RELION5 `particles.star` (from Extract or Refine job) |
+| `-o`, `--output` | `particles_2d.star` | Output 2D STAR file |
+| `--tilt-dim` | Auto | Tilt image dimensions in pixels (auto-detected from MRC headers) |
+| `-v`, `--verbose` | False | Enable verbose logging |
+
+See [Cryo-ET](../guide/cryo-et.md#importing-from-relion5) for usage details.

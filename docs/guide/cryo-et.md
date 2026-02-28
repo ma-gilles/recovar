@@ -5,14 +5,37 @@ RECOVAR supports tilt-series data for cryo-ET heterogeneity analysis. One practi
 !!! warning "Experimental"
     Cryo-ET support is newer than SPA support and may be less stable. No paper has been published on this feature yet.
 
+## Importing from RELION5
+
+If your data was processed in RELION5 (tilt-series alignment + particle extraction), use `parse_relion5_tomo` to convert to RECOVAR's 2D tilt format:
+
+```bash
+recovar parse_relion5_tomo \
+    -t Polish/job249/tomograms.star \
+    -p Extract/job260/particles.star \
+    -o particles_2d.star
+```
+
+This reads the RELION5 3D tomography metadata and produces a 2D STAR file where each row is one tilt of one particle, with per-tilt defocus, orientation, and dose information. The output is directly compatible with `recovar pipeline --tilt-series`.
+
+**Requirements:**
+
+- `tomograms.star` from a Polish or Tomograms job (contains tilt-series geometry)
+- `particles.star` from an Extract or Refine job (contains 3D particle positions and orientations)
+
+Tilt image dimensions are auto-detected from the MRC headers. Use `--tilt-dim W H` to override if needed.
+
+!!! note "Credits"
+    Projection geometry adapted from [relion2cryodrgn](https://github.com/zhonge/cryodrgn) by Ryan Feathers (Princeton/Zhong lab), based on code by Bogdan Toader (MRC-LMB/RELION team).
+
 ## Usage
 
 ```bash
-recovar pipeline particles.star -o output \
+recovar pipeline particles_2d.star -o output \
     --mask mask.mrc --tilt-series
 ```
 
-The input format is the same as cryoDRGN-ET: a STAR file with tilt-series metadata.
+The input is a 2D STAR file with tilt-series metadata (one row per particle per tilt, grouped by `_rlnGroupName`).
 
 ## Options
 
