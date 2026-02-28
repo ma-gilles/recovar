@@ -1096,7 +1096,7 @@ def test_get_split_datasets_calls_loader_once_per_halfset(monkeypatch):
         calls.append(kwargs)
         return kwargs["ind"]
 
-    monkeypatch.setattr(dataset, "load_cryodrgn_dataset", _fake_load)
+    monkeypatch.setattr(dataset, "load_dataset", _fake_load)
     ind_split = [np.array([2, 0], dtype=np.int32), np.array([5], dtype=np.int32)]
     out = dataset.get_split_datasets(
         particles_file="particles.mrcs",

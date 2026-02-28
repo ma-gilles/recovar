@@ -678,8 +678,8 @@ def test_load_images_dispatches_to_expected_loader(monkeypatch):
         calls["star"] = (filepath, indices, datadir, lazy, max_threads, strip_prefix)
         return sentinels["star"]
 
-    def _fake_cs(filepath, indices, datadir, lazy, max_threads):
-        calls["cs"] = (filepath, indices, datadir, lazy, max_threads)
+    def _fake_cs(filepath, indices, datadir, lazy, max_threads, strip_prefix=None):
+        calls["cs"] = (filepath, indices, datadir, lazy, max_threads, strip_prefix)
         return sentinels["cs"]
 
     class _FakeMulti:
@@ -713,7 +713,7 @@ def test_load_images_dispatches_to_expected_loader(monkeypatch):
     np.testing.assert_array_equal(calls["cs"][1], idx)
     assert calls["star"][2:] == ("/tmp/data", True, 8, "old/")
     assert calls["txt"][2:] == (True, 4)
-    assert calls["cs"][2:] == ("/tmp/cs", False, 2)
+    assert calls["cs"][2:] == ("/tmp/cs", False, 2, None)
 
 
 def test_cryosparc_loader_rejects_negative_blob_indices(tmp_path):

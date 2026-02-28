@@ -149,7 +149,7 @@ class ParticleImageDataset:
     def __init__(self, image_file: str, lazy: bool = True, ind: Optional[np.ndarray] = None,
                  invert_data: bool = False, datadir: str = "", padding: int = 0,
                  max_threads: int = 16, strip_prefix: Optional[str] = None,
-                 device=None, **kwargs):
+                 downsample_D: Optional[int] = None, device=None, **kwargs):
         if padding != 0:
             raise NotImplementedError("Padding not yet supported")
 
@@ -157,6 +157,10 @@ class ParticleImageDataset:
             image_file, lazy=lazy, datadir=datadir or "",
             indices=ind, max_threads=max_threads, strip_prefix=strip_prefix
         )
+
+        if downsample_D is not None:
+            from recovar.image_loader import DownsamplingImageLoader
+            self.source = DownsamplingImageLoader(self.source, downsample_D)
 
         self.image_size = self.source.D
         self.num_images = self.source.n
