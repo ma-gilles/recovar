@@ -3,7 +3,8 @@ import jax.numpy as jnp
 import numpy as np
 import jax
 import functools
-from recovar import core, linalg, embedding
+from recovar import core, linalg
+from recovar.heterogeneity import embedding
 
 logger = logging.getLogger(__name__)
 

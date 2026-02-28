@@ -4,7 +4,8 @@ import numpy as np
 import jax, time
 import nvtx
 
-from recovar import core, covariance_estimation, embedding, plot_utils, linalg, jax_config, utils, noise
+from recovar import core, plot_utils, linalg, jax_config, utils, noise
+from recovar.heterogeneity import covariance_estimation, embedding
 import recovar.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
     # For the last one, could also batch by doing randomized-Cholesky like choice
 
     if covariance_options['column_sampling_scheme'] == 'low_freqs':
-        from recovar import covariance_core
+        from recovar.heterogeneity import covariance_core
         volume_shape = cryos.volume_shape
         if cryos.grid_size == 16:
             picked_frequencies = np.arange(cryos.volume_size)
@@ -597,7 +598,7 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
     # noise.get_average_residual_square_v2(cryos[0], volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp')
 
     # likelihoods = np.array([cryo.likelihood for cryo in cryos])
-    from recovar import latent_density
+    from recovar.heterogeneity import latent_density
     metrics = {'locerr_median':np.zeros(zdims.size), 'locerr_90':np.zeros(zdims.size), 'locerr_mean':np.zeros(zdims.size)}
 
     global_likely_choice1 = np.zeros(zdims.size)
@@ -645,7 +646,7 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
                 images_used = inds == 0 
 
                 # Compute two estimators
-                from recovar import adaptive_kernel_discretization
+                from recovar.heterogeneity import adaptive_kernel_discretization
                 estimators[cryo_idx], lhs[cryo_idx], rhs[cryo_idx] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[cryo_idx], noise_variance.astype(np.float32), None, best_likelihood, single_bin, tau= None, grid_correct=False, use_spherical_mask=False, return_lhs_rhs=True)
                 lhs[cryo_idx] = adaptive_kernel_discretization.half_volume_to_full_volume(lhs[cryo_idx][0], cryos[cryo_idx].volume_shape)
                 lhs[cryo_idx] = (lhs[cryo_idx] * cryos[0].get_valid_frequency_indices())#.reshape(cryos[0].volume_shape)
@@ -656,7 +657,7 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
 
             weighting1 = 1/(1/lhs[0] + 1/lhs[1])
             global_likely_choice1[zdim_idx] += jnp.linalg.norm(np.sqrt(weighting1) * (estimators[0] - estimators[1]) )**2
-            from recovar import locres
+            from recovar.heterogeneity import locres
             weighting1 = weighting1.reshape(cryos[0].volume_shape)
             loc_error = locres.expensive_local_error_with_cov(real_estimators[0], real_estimators[1], cryos[0].voxel_size, weighting1.reshape(real_estimators[0].shape), locres_sampling = 25, locres_maskrad= 25, locres_edgwidth= 0)
             volume_mask = volume_mask > 1e-3
@@ -672,7 +673,7 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
 
 def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, zdims= None, n_images = 1000, tau = None):
     
-    from recovar import latent_density
+    from recovar.heterogeneity import latent_density
     zdims = np.asarray(zdims)
     metrics = {'variance':np.zeros(zdims.size), 'filt_var': np.zeros(zdims.size) , 'var_avg': {}, 'variance_lp': np.zeros(zdims.size) }
     for k in range(zdims.size):
@@ -708,7 +709,8 @@ def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, z
                 import matplotlib.pyplot as plt
 
                 # Compute two estimators
-                from recovar import adaptive_kernel_discretization, relion_functions, regularization, utils
+                from recovar import relion_functions, regularization, utils
+                from recovar.heterogeneity import adaptive_kernel_discretization
                 estimators[cryo_idx], lhs[cryo_idx], rhs[cryo_idx] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[cryo_idx], noise_variance.astype(np.float32), None, best_likelihood, single_bin, tau= tau, grid_correct=True, use_spherical_mask=True, return_lhs_rhs=True)
 
                 image_subset = np.argwhere(images_used).reshape(-1)

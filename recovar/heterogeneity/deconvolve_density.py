@@ -1,4 +1,4 @@
-from recovar import latent_density
+from recovar.heterogeneity import latent_density
 import numpy as np
 import jax, jaxopt
 from jaxopt import ScipyBoundedMinimize

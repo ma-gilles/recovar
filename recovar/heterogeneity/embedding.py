@@ -4,7 +4,8 @@ import numpy as np
 import functools, time, jax
 import nvtx
 import equinox as eqx
-from recovar import core, covariance_core, jax_config, utils, linalg
+from recovar import core, jax_config, utils, linalg
+from recovar.heterogeneity import covariance_core
 from recovar.configs import ForwardModelConfig, BatchData, ModelState, EmbeddingOpts
 import recovar.core.forward as core_forward
 
@@ -64,7 +65,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
             mean = mean_cubic
         else:
             mean = cubic_interpolation.calculate_spline_coefficients(mean.reshape(cryos.volume_shape))
-        from recovar import covariance_estimation
+        from recovar.heterogeneity import covariance_estimation
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, cryos.volume_shape, gpu_memory= None)
 
 

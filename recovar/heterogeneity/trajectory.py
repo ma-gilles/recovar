@@ -5,7 +5,7 @@ import skfmm
 import scipy.ndimage
 import matplotlib.pyplot as plt
 
-from recovar import latent_density
+from recovar.heterogeneity import latent_density
 logger = logging.getLogger(__name__)
 
 
