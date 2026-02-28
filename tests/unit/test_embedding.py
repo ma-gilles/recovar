@@ -42,6 +42,31 @@ def test_generate_conformation_from_reprojection_linear_combination():
     assert np.allclose(out, expected)
 
 
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+import jax
+import jax.numpy as jnp
+
+
+@pytest.mark.gpu
+def test_generate_conformation_from_reprojection_gpu(gpu_device):
+    mean = np.array([[10.0, 20.0]], dtype=np.float32)
+    u = np.array([[1.0, 0.0], [0.0, 2.0]], dtype=np.float32)
+    xs = np.array([[1.0, 2.0], [-1.0, 0.5]], dtype=np.float32)
+
+    cpu_out = np.asarray(embedding.generate_conformation_from_reprojection(xs, mean, u))
+
+    with jax.default_device(gpu_device):
+        xs_g = jax.device_put(jnp.array(xs), gpu_device)
+        mean_g = jax.device_put(jnp.array(mean), gpu_device)
+        u_g = jax.device_put(jnp.array(u), gpu_device)
+        gpu_out = np.asarray(embedding.generate_conformation_from_reprojection(xs_g, mean_g, u_g))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
 class _DummyCryo:
     def __init__(self, volume_size=4, image_size=16, n_images=3, dtype=np.complex64):
         self.volume_size = volume_size

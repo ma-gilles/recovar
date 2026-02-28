@@ -537,3 +537,111 @@ def test_idft3_real_rejects_bad_volume_shape_rank():
     half = fourier_transform_utils.get_dft3_real(x)
     with pytest.raises(ValueError, match="must have 3 dims"):
         fourier_transform_utils.get_idft3_real(half, volume_shape=(4, 5))
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+import jax
+import jax.numpy as jnp
+
+
+@pytest.mark.gpu
+def test_dft_idft_roundtrip_gpu(gpu_device):
+    rng = np.random.default_rng(0)
+    x2 = (rng.standard_normal((4, 5)) + 1j * rng.standard_normal((4, 5))).astype(np.complex64)
+
+    cpu_out = np.asarray(fourier_transform_utils.get_idft2(fourier_transform_utils.get_dft2(x2)))
+
+    with jax.default_device(gpu_device):
+        x2_g = jax.device_put(jnp.array(x2), gpu_device)
+        gpu_out = np.asarray(fourier_transform_utils.get_idft2(fourier_transform_utils.get_dft2(x2_g)))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_dft3_roundtrip_gpu(gpu_device):
+    rng = np.random.default_rng(7)
+    x3 = (rng.standard_normal((4, 4, 4)) + 1j * rng.standard_normal((4, 4, 4))).astype(np.complex64)
+
+    cpu_out = np.asarray(fourier_transform_utils.get_idft3(fourier_transform_utils.get_dft3(x3)))
+
+    with jax.default_device(gpu_device):
+        x3_g = jax.device_put(jnp.array(x3), gpu_device)
+        gpu_out = np.asarray(fourier_transform_utils.get_idft3(fourier_transform_utils.get_dft3(x3_g)))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_dft2_real_idft2_real_roundtrip_gpu(gpu_device):
+    rng = np.random.default_rng(11)
+    x = rng.standard_normal((6, 10)).astype(np.float32)
+
+    cpu_half = np.asarray(fourier_transform_utils.get_dft2_real(x))
+    cpu_back = np.asarray(fourier_transform_utils.get_idft2_real(
+        fourier_transform_utils.get_dft2_real(x), image_shape=x.shape
+    ))
+
+    with jax.default_device(gpu_device):
+        x_g = jax.device_put(jnp.array(x), gpu_device)
+        gpu_half = np.asarray(fourier_transform_utils.get_dft2_real(x_g))
+        gpu_back = np.asarray(fourier_transform_utils.get_idft2_real(
+            fourier_transform_utils.get_dft2_real(x_g), image_shape=x.shape
+        ))
+
+    np.testing.assert_allclose(cpu_half, gpu_half, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(cpu_back, gpu_back, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_dft3_real_idft3_real_roundtrip_gpu(gpu_device):
+    rng = np.random.default_rng(13)
+    x = rng.standard_normal((6, 6, 10)).astype(np.float32)
+
+    cpu_back = np.asarray(fourier_transform_utils.get_idft3_real(
+        fourier_transform_utils.get_dft3_real(x), volume_shape=x.shape
+    ))
+
+    with jax.default_device(gpu_device):
+        x_g = jax.device_put(jnp.array(x), gpu_device)
+        gpu_back = np.asarray(fourier_transform_utils.get_idft3_real(
+            fourier_transform_utils.get_dft3_real(x_g), volume_shape=x.shape
+        ))
+
+    np.testing.assert_allclose(cpu_back, gpu_back, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_half_full_volume_roundtrip_gpu(gpu_device):
+    rng = np.random.default_rng(61)
+    volume_shape = (6, 5, 8)
+    x = rng.standard_normal(volume_shape).astype(np.float32)
+    half = fourier_transform_utils.get_dft3_real(x)
+
+    cpu_full = np.asarray(fourier_transform_utils.half_volume_to_full_volume(half, volume_shape))
+    cpu_half_back = np.asarray(fourier_transform_utils.full_volume_to_half_volume(
+        fourier_transform_utils.half_volume_to_full_volume(half, volume_shape), volume_shape
+    ))
+
+    with jax.default_device(gpu_device):
+        half_g = jax.device_put(jnp.array(np.asarray(half)), gpu_device)
+        gpu_full = np.asarray(fourier_transform_utils.half_volume_to_full_volume(half_g, volume_shape))
+        gpu_half_back = np.asarray(fourier_transform_utils.full_volume_to_half_volume(
+            fourier_transform_utils.half_volume_to_full_volume(half_g, volume_shape), volume_shape
+        ))
+
+    np.testing.assert_allclose(cpu_full, gpu_full, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(cpu_half_back, gpu_half_back, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_get_k_coordinate_of_each_pixel_gpu(gpu_device):
+    cpu_coords = np.asarray(fourier_transform_utils.get_k_coordinate_of_each_pixel((4, 6), voxel_size=1.5, scaled=True))
+
+    with jax.default_device(gpu_device):
+        gpu_coords = np.asarray(fourier_transform_utils.get_k_coordinate_of_each_pixel((4, 6), voxel_size=1.5, scaled=True))
+
+    np.testing.assert_allclose(cpu_coords, gpu_coords, atol=1e-5, rtol=1e-5)

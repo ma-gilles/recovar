@@ -254,3 +254,106 @@ def test_estimate_multiple_disc_relion_style_returns_finite_volume():
 
     assert first_estimates is not None
     assert opt_halfmaps is not None
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+@pytest.mark.gpu
+def test_full_volume_to_half_volume_roundtrip_gpu(gpu_device):
+    vol_shape = (4, 4, 4)
+    vol_size = int(np.prod(vol_shape))
+    vol = jnp.array(
+        np.random.randn(vol_size).astype(np.float32) + 1j * np.random.randn(vol_size).astype(np.float32),
+        dtype=jnp.complex64,
+    )
+
+    cpu_half = np.asarray(akd.full_volume_to_half_volume(vol, vol_shape))
+    cpu_full = np.asarray(akd.half_volume_to_full_volume(jnp.array(cpu_half), vol_shape))
+
+    with jax.default_device(gpu_device):
+        vol_g = jax.device_put(vol, gpu_device)
+        gpu_half = np.asarray(akd.full_volume_to_half_volume(vol_g, vol_shape))
+        gpu_full = np.asarray(akd.half_volume_to_full_volume(jax.device_put(jnp.array(cpu_half), gpu_device), vol_shape))
+
+    np.testing.assert_allclose(cpu_half, gpu_half, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(cpu_full, gpu_full, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_vec_index_to_half_vec_index_gpu(gpu_device):
+    vol_shape = (4, 4, 4)
+    vol_size = int(np.prod(vol_shape))
+    indices = jnp.arange(vol_size, dtype=jnp.int32)
+
+    cpu_half, cpu_neg = akd.vec_index_to_half_vec_index(indices, vol_shape, flip_positive=False)
+    cpu_half, cpu_neg = np.asarray(cpu_half), np.asarray(cpu_neg)
+
+    with jax.default_device(gpu_device):
+        indices_g = jax.device_put(indices, gpu_device)
+        gpu_half, gpu_neg = akd.vec_index_to_half_vec_index(indices_g, vol_shape, flip_positive=False)
+        gpu_half, gpu_neg = np.asarray(gpu_half), np.asarray(gpu_neg)
+
+    np.testing.assert_array_equal(cpu_half, gpu_half)
+    np.testing.assert_array_equal(cpu_neg, gpu_neg)
+
+
+@pytest.mark.gpu
+def test_solve_for_m_simple_gpu(gpu_device):
+    n = 4
+    A = jnp.eye(n, dtype=jnp.float32) * 5.0
+    b = jnp.array([1.0 + 0j, 2.0 + 0j, 3.0 + 0j, 4.0 + 0j], dtype=jnp.complex64)
+    reg = jnp.eye(n, dtype=jnp.float32) * 1e-6
+
+    cpu_v, cpu_good, cpu_prob = akd.solve_for_m_simple(A, b, reg)
+    cpu_v = np.asarray(cpu_v)
+
+    with jax.default_device(gpu_device):
+        A_g = jax.device_put(A, gpu_device)
+        b_g = jax.device_put(b, gpu_device)
+        reg_g = jax.device_put(reg, gpu_device)
+        gpu_v, gpu_good, gpu_prob = akd.solve_for_m_simple(A_g, b_g, reg_g)
+        gpu_v = np.asarray(gpu_v)
+
+    np.testing.assert_allclose(cpu_v, gpu_v, atol=1e-4, rtol=1e-4)
+    assert bool(cpu_good) == bool(gpu_good)
+
+
+@pytest.mark.gpu
+def test_make_X_mat_gpu(gpu_device):
+    n_images = 4
+    grid_size = 4
+    vol_shape = (grid_size, grid_size, grid_size)
+    img_shape = (grid_size, grid_size)
+    rots = np.tile(np.eye(3, dtype=np.float32), (n_images, 1, 1))
+
+    cpu_X, cpu_idx = akd.make_X_mat(rots, vol_shape, img_shape, pol_degree=1)
+    cpu_X, cpu_idx = np.asarray(cpu_X), np.asarray(cpu_idx)
+
+    with jax.default_device(gpu_device):
+        rots_g = jax.device_put(jnp.array(rots), gpu_device)
+        gpu_X, gpu_idx = akd.make_X_mat(rots_g, vol_shape, img_shape, pol_degree=1)
+        gpu_X, gpu_idx = np.asarray(gpu_X), np.asarray(gpu_idx)
+
+    np.testing.assert_allclose(cpu_X, gpu_X, atol=1e-5, rtol=1e-5)
+    np.testing.assert_array_equal(cpu_idx, gpu_idx)
+
+
+@pytest.mark.gpu
+def test_keep_upper_triangular_roundtrip_gpu(gpu_device):
+    n = 3
+    mat = np.arange(n * n, dtype=np.float32).reshape(n, n)
+    mat = mat + mat.T
+    mat_j = jnp.array(mat[np.newaxis])
+
+    cpu_flat = np.asarray(akd.keep_upper_triangular(mat_j))
+    cpu_recovered = np.asarray(akd.undo_keep_upper_triangular(jnp.array(cpu_flat)))
+
+    with jax.default_device(gpu_device):
+        mat_g = jax.device_put(mat_j, gpu_device)
+        gpu_flat = np.asarray(akd.keep_upper_triangular(mat_g))
+        gpu_recovered = np.asarray(akd.undo_keep_upper_triangular(jax.device_put(jnp.array(cpu_flat), gpu_device)))
+
+    np.testing.assert_allclose(cpu_flat, gpu_flat, atol=1e-6)
+    np.testing.assert_allclose(cpu_recovered, gpu_recovered, atol=1e-6)

@@ -307,3 +307,42 @@ def test_M_with_precompute_rejects_empty_rotations_or_translations():
             noise_variance=jnp.ones((4,), dtype=jnp.float32),
             disc_type="linear_interp",
         )
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+import jax
+
+
+@pytest.mark.gpu
+def test_compute_probability_one_image_gpu(gpu_device):
+    residual = jnp.array([[0.0, 1.0, 2.0], [2.0, 2.0, 2.0]], dtype=jnp.float32)
+
+    cpu_out = np.asarray(e_step.compute_probability_from_residual_normal_squared_one_image(residual))
+
+    with jax.default_device(gpu_device):
+        residual_g = jax.device_put(residual, gpu_device)
+        gpu_out = np.asarray(e_step.compute_probability_from_residual_normal_squared_one_image(residual_g))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_compute_probability_vmap_gpu(gpu_device):
+    residual = jnp.array(
+        [
+            [[0.0, 1.0], [1.0, 0.0]],
+            [[3.0, 3.0], [0.0, 2.0]],
+        ],
+        dtype=jnp.float32,
+    )
+
+    cpu_out = np.asarray(e_step.compute_probability_from_residual_normal_squared(residual))
+
+    with jax.default_device(gpu_device):
+        residual_g = jax.device_put(residual, gpu_device)
+        gpu_out = np.asarray(e_step.compute_probability_from_residual_normal_squared(residual_g))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
