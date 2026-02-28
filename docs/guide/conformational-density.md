@@ -36,13 +36,3 @@ recovar compute_trajectory output -o trajectory --zdim=10 \
 
 Without `--density`, trajectories follow straight lines in latent space. With density, they curve to follow high-density (low free-energy) regions.
 
-## Interpretation
-
-The conformational density represents how many particles occupy each region of the latent space. Under equilibrium assumptions:
-
-$$\Delta G = -k_B T \ln\left(\frac{\rho}{\rho_0}\right)$$
-
-where $\rho$ is the conformational density and $\rho_0$ is a reference density.
-
-!!! note
-    The relationship between conformational density and free energy assumes the dataset represents an equilibrium ensemble. This may not always be the case (e.g., with preferential orientation or during active processes).
