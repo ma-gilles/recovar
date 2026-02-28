@@ -62,7 +62,6 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         logger.info(f"Largest frequency computed: {np.max(np.abs(picked_frequencies_in_frequencies_format))}")
         if np.max(np.abs(picked_frequencies_in_frequencies_format)) > cryos.grid_size//2-1:
             logger.warning("Largest frequency computed is larger than grid size//2-1. This may cause big issues in SVD. This probably means variance estimates were wrong")
-        # print("chosen cols", picked_frequencies_in_frequencies_format.T)
     else:
         raise NotImplementedError('unrecognized column sampling scheme')
     
@@ -102,7 +101,6 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
     if options['ignore_zero_frequency']:
         logger.warning("FIX THIS OPTION!! NOT SURE IT WILL STILL WORK")
 
-    # logger.info(f"u after rescale dtype: {u['rescaled'].dtype}")
     logger.info("memory after rescaling")
     utils.report_memory_device(logger=logger)
 
@@ -113,8 +111,6 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         s['rescaled_no_contrast'] = s['rescaled']
 
         mean_used = means['combined_regularized'] if use_reg_mean_in_contrast else means['combined'] 
-        # if options['ignore_zero_frequency']:
-        #     mean_used[...,zero_freq_index] = 0
         u['rescaled'],s['rescaled'] = knock_out_mean_component_2(u['rescaled'], s['rescaled'],mean_used, volume_mask, volume_shape, vol_batch_size, options['ignore_zero_frequency'], options['contrast'] == "contrast_qr" )
 
         if not options['keep_intermediate']:
@@ -134,21 +130,12 @@ def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,
     
     u['real'], s['real'],_ = randomized_real_svd_of_columns(covariance_cols["est_mask"], picked_frequencies, volume_mask, volume_shape, vol_batch_size, test_size=randomized_sketch_size, gpu_memory_to_use=gpu_memory_to_use, ignore_zero_frequency=ignore_zero_frequency)
 
-    # u['real'], s['real'] = randomized_real_svd_of_columns_with_s_guess(covariance_cols["est_mask"],  picked_frequencies, volume_mask, volume_shape, vol_batch_size, test_size = constants.RANDOMIZED_SKETCH_SIZE, gpu_memory_to_use = gpu_memory_to_use, ignore_zero_frequency = ignore_zero_frequency )
-
-    # n_components = covariance_cols["est_mask"].shape[-1]
-    # u['real'], s['real'] = real_svd3(covariance_cols["est_mask"],  picked_frequencies, volume_shape, vol_batch_size, n_components = n_components)
-    # Will cause out of memory problems.
-    # if volume_shape[0] <= 128:
-    #     u['real4'], s['real4'] = real_svd4(covariance_cols["est_mask"],  picked_frequencies, volume_shape, vol_batch_size, n_components = n_components)
-    # plot_utils.plot_cov_results(u,s)
     return u, s
 
 
 @nvtx.annotate("pca_by_projected_covariance", color="green", domain=NVTX_DOMAIN_PCA)
 def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = -1, mean_cubic=None):
 
-    # basis_size = basis.shape[-1]
     basis_size = n_pcs_to_compute
     basis = basis[:,:basis_size]
 
@@ -229,7 +216,6 @@ def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_s
     return np.array(new_u.astype(u.dtype)), np.array(new_s.astype(s.dtype)**2)
 
 
-
 # A lot of implementation of the same things, having to do with taking the real SVD of
 # the columns of Sigma_col
 # - Third does a randomized SVD in the spatial domain.
@@ -259,7 +245,6 @@ def make_symmetric_columns(columns, picked_frequencies, volume_shape):
     freqs = core.vec_indices_to_frequencies(picked_frequencies, volume_shape)
     
     good_idx = freqs[:,0] > 0
-    # freqs = freqs.at[good_idx].get()
     minus_freqs = -freqs
     minus_indices = core.frequencies_to_vec_indices(minus_freqs, volume_shape)
     columns_flipped = batch_flip_vec(columns, volume_shape)
@@ -268,12 +253,10 @@ def make_symmetric_columns(columns, picked_frequencies, volume_shape):
 
 make_symmetric_columns_cpu = jax.jit(make_symmetric_columns, backend = 'cpu', static_argnums = (2))
 
-# to check if there is. abug... delete?
 def make_symmetric_columns_np(columns, picked_frequencies, volume_shape):
     freqs = np.array(core.vec_indices_to_frequencies(picked_frequencies, volume_shape))
     
     good_idx = freqs[:,0] > 0
-    # freqs = freqs.at[good_idx].get()
     minus_freqs = -freqs
     minus_indices = np.array(core.frequencies_to_vec_indices(minus_freqs, volume_shape))
     columns_flipped = batch_flip_vec2(columns, volume_shape)
@@ -399,7 +382,6 @@ def right_matvec_with_spatial_Sigma_v2(test_mat, columns, picked_frequency_indic
     return C_F_t
 
 
-
 @nvtx.annotate("left_matvec_with_spatial_Sigma", color="yellow", domain=NVTX_DOMAIN_PCA)
 def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40):
     st_time =time.time()
@@ -422,7 +404,6 @@ def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_
     
     # Q should be real I think?
     F_star_Q_star = linalg.batch_dft3( np.conj(Q), volume_shape, vol_batch_size) / np.prod(volume_shape)
-    # Q_F = np.conj(F_star_Q_star)
     Q_F = F_star_Q_star
     logger.info(f"DFT: {time.time() - st_time}")
 
@@ -438,7 +419,6 @@ def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_
     flipped_frequencies = core.vec_indices_to_frequencies(minus_frequency_indices[good_idx], volume_shape)
     flipped_frequencies_indices_in_smaller = core.frequencies_to_vec_indices(flipped_frequencies, smaller_vol_shape)
     flipped_frequencies_indices_in_smaller = np.array(flipped_frequencies_indices_in_smaller)
-    # Q_F_C[:,flipped_frequencies_indices_in_smaller] = linalg.blockwise_A_X(columns_flipped[:,good_idx].T, Q_F.T, memory_to_use = 20).T
 
     Q_F_C[:,flipped_frequencies_indices_in_smaller] = linalg.blockwise_Y_T_X(Q_F, columns_flipped, memory_to_use = memory_to_use)
     logger.info(f"Y^T @ X: {time.time() - st_time}")
@@ -482,8 +462,6 @@ def left_matvec_with_spatial_Sigma_v2(Q, columns, picked_frequency_indices, volu
     # Q should be real I think?
     # 2x memory of Q
     Q = linalg.batch_dft3( np.conj(Q), volume_shape, vol_batch_size) / np.prod(volume_shape)
-    # Q_F = np.conj(F_star_Q_star)
-    # Q_F = F_star_Q_star
     logger.info(f"DFT: {time.time() - st_time}")
     utils.report_memory_device(logger=logger)
 
@@ -501,7 +479,6 @@ def left_matvec_with_spatial_Sigma_v2(Q, columns, picked_frequency_indices, volu
     flipped_frequencies = core.vec_indices_to_frequencies(minus_frequency_indices[good_idx], volume_shape)
     flipped_frequencies_indices_in_smaller = core.frequencies_to_vec_indices(flipped_frequencies, smaller_vol_shape)
     flipped_frequencies_indices_in_smaller = np.array(flipped_frequencies_indices_in_smaller)
-    # Q_F_C[:,flipped_frequencies_indices_in_smaller] = linalg.blockwise_A_X(columns_flipped[:,good_idx].T, Q_F.T, memory_to_use = 20).T
 
 
     Q_F_C[:,flipped_frequencies_indices_in_smaller] = linalg.blockwise_Y_T_X(Q, columns_flipped, memory_to_use = memory_to_use)
@@ -541,15 +518,7 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     del test_mat
     
     ## Do masking here ?
-    # Q *= volume_mask.reshape(-1,1)
 
-    # if ignore_zero_frequency:
-    #     # knockout volume_mask direction stuff?
-    #     norm_volume_mask = volume_mask.reshape(-1) / np.linalg.norm(volume_mask)
-    #     # substract component in direction of mask?
-    #     # Apply matrix (I - mask mask.T / \|mask^2\| ) 
-    #     Q -= np.outer(norm_volume_mask, (norm_volume_mask.T @ Q))
-    #     logger.info('ignoring zero frequency')
 
     logger.info(f"right matvec {time.time() - st_time}")
     utils.report_memory_device(logger=logger)
@@ -560,8 +529,6 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
 
     # In principle, should apply (I - mask mask.T / \|mask\|^2 )  again, but should already be orthogonal
     # 
-    # Q_mask = Q*volume_mask.reshape(-1,1)
-    # Q_mask = Q
     utils.report_memory_device(logger=logger)
     if use_v2_fn:
         C_F_t_2 = left_matvec_with_spatial_Sigma_v2(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
@@ -655,7 +622,6 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
     # print(most_likelihood_idx)
 
 
-
     for zdim_idx, zdim in enumerate(zdims):
         zs_this = zs[zdim]#[:cryo.n_images]
         covs_this = cov_zs[zdim]#[:cryo.n_images]
@@ -677,14 +643,6 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
                 single_bin = np.array(np.sort(best_likelihood)[n_images-1])[None]
                 inds = np.digitize(best_likelihood, single_bin, right = True)
                 images_used = inds == 0 
-                # if zdim >1:
-                #     import matplotlib.pyplot as plt
-                #     plt.figure()
-                #     plt.scatter(zs_split[cryo_idx][:,0], zs_split[cryo_idx][:,1])
-                #     plt.scatter(zs_split[cryo_idx][images_used,0], zs_split[cryo_idx][images_used,1])
-                #     plt.scatter(best_zs[0], best_zs[1])
-                #     plt.show()
-                # # print('n in batch:,', np.sum(inds == 0))
 
                 # Compute two estimators
                 from recovar import adaptive_kernel_discretization
@@ -697,10 +655,6 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
 
 
             weighting1 = 1/(1/lhs[0] + 1/lhs[1])
-            # weighting1 = lhs[0]
-            #weighted0 = estimators[0] * np.sqrt(lhs[1])
-
-            # global_likely_choice1[zdim_idx] += jnp.linalg.norm( (estimators[0] - estimators[1]) )**2
             global_likely_choice1[zdim_idx] += jnp.linalg.norm(np.sqrt(weighting1) * (estimators[0] - estimators[1]) )**2
             from recovar import locres
             weighting1 = weighting1.reshape(cryos[0].volume_shape)
@@ -712,21 +666,12 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
             metrics['locerr_mean'][zdim_idx] += np.mean(good_errors)
 
 
-
-            # global_likely_choice1[zdim_idx] = locres.expensive_local_error_with_cov(estimators[0], estimators[1], cryos[0].voxel_size, weighting1.reshape(target0.shape), locres_sampling = 25, locres_maskrad= 25, locres_edgwidth= 0)
-
-
         logger.info(f"zdim {zdim}")#, end="")
     return global_likely_choice1, metrics, all_estimators, all_lhs
 
 
-
-
 def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, zdims= None, n_images = 1000, tau = None):
     
-    # noise.get_average_residual_square_v2(cryos[0], volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp')
-
-    # likelihoods = np.array([cryo.likelihood for cryo in cryos])
     from recovar import latent_density
     zdims = np.asarray(zdims)
     metrics = {'variance':np.zeros(zdims.size), 'filt_var': np.zeros(zdims.size) , 'var_avg': {}, 'variance_lp': np.zeros(zdims.size) }
@@ -735,21 +680,6 @@ def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, z
 
     all_estimators = {}
     all_lhs = {}
-
-    # # First pick some points?
-    # zdim_target = 4
-    # zs_this = zs[zdim_target]#[:cryo.n_images]
-    # covs_this = cov_zs[zdim_target]#[:cryo.n_images]
-
-    # image_likelihoods = latent_density.compute_latent_space_density_at_pts(zs_this,zs_this,  covs_this)
-    # most_likelihood_idx = np.argmax(image_likelihoods)
-
-    # percentages = np.array([ 0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8 ])
-    
-
-    # index = np.round(percentages * zs_this.shape[0] ).astype(int)
-    # likelihoods_sorted = np.flip(np.argsort(image_likelihoods))
-    # images_chosen_index = likelihoods_sorted[index]
 
 
     images_chosen_index = np.random.randint(0, zs[zdims[0]].shape[0], 30)
@@ -776,28 +706,11 @@ def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, z
                 inds = np.digitize(best_likelihood, single_bin, right = True)
                 images_used = inds == 0 
                 import matplotlib.pyplot as plt
-                # if zdim >1:
-                #     plt.figure()
-                #     plt.scatter(zs_split[cryo_idx][:,0], zs_split[cryo_idx][:,1])
-                #     plt.scatter(zs_split[cryo_idx][images_used,0], zs_split[cryo_idx][images_used,1])
-                #     plt.scatter(best_zs[0], best_zs[1])
-                #     plt.show()
-                # # print('n in batch:,', np.sum(inds == 0))
 
                 # Compute two estimators
                 from recovar import adaptive_kernel_discretization, relion_functions, regularization, utils
                 estimators[cryo_idx], lhs[cryo_idx], rhs[cryo_idx] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[cryo_idx], noise_variance.astype(np.float32), None, best_likelihood, single_bin, tau= tau, grid_correct=True, use_spherical_mask=True, return_lhs_rhs=True)
 
-                # if zdim == 4:
-                #     from recovar import output
-                #     plt.figure()
-                #     plt.scatter(zs_split[cryo_idx][:,0], zs_split[cryo_idx][:,1])
-                #     plt.scatter(zs_split[cryo_idx][images_used,0], zs_split[cryo_idx][images_used,1])
-                #     plt.scatter(best_zs[0], best_zs[1])
-                #     plt.show()
-                #     print(cryos[cryo_idx].dataset_indices[images_used])
-                #     output.save_volume(estimators[cryo_idx], f"estimator_{cryo_idx}", from_ft = True)
-                #     # return cryos[cryo_idx].dataset_indices[images_used]
                 image_subset = np.argwhere(images_used).reshape(-1)
                 Ft_ctf, Ft_y = relion_functions.residual_relion_style_triangular_kernel(cryos[cryo_idx], estimators[cryo_idx][0], noise_variance.astype(np.float32) * 0 ,  100,  index_subset = image_subset)
                 Ft_y = (Ft_y * cryos[0].get_valid_frequency_indices())#.reshape(cryos[0].volume_shape)
@@ -810,18 +723,12 @@ def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, z
                 variance_estimate = Ft_y / (Ft_ctf + Ft_avg_radial)
                 avg_variance = regularization.average_over_shells(variance_estimate, cryos[0].volume_shape)
                 plt.plot(avg_variance)
-                # plt.show()
 
-                # avg_variance = regularization.average_over_shells(Ft_y, cryos[0].volume_shape)
-                # plt.plot(avg_variance)
-                # plt.show()
 
             metrics['var_avg'][zdim_idx] = avg_variance
             metrics['filt_var'][zdim_idx] += np.sum(Ft_y)
             metrics['variance'][zdim_idx] += np.sum(variance_estimate)
             metrics['variance_lp'][zdim_idx] += np.sum(variance_estimate * cryos[0].get_valid_frequency_indices(rad = 20))
-
-            # global_likely_choice1[zdim_idx] = locres.expensive_local_error_with_cov(estimators[0], estimators[1], cryos[0].voxel_size, weighting1.reshape(target0.shape), locres_sampling = 25, locres_maskrad= 25, locres_edgwidth= 0)
 
 
         logger.info(f"zdim {zdim}")#, end="")

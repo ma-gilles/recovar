@@ -1,5 +1,5 @@
 import sys
-import recovar.config
+import recovar.jax_config
 from recovar import simulator, output
 import numpy as np
 import os

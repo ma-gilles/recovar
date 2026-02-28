@@ -1,5 +1,5 @@
 try:
-    import recovar.config  # noqa: F401
+    import recovar.jax_config  # noqa: F401
 except ModuleNotFoundError:
     # Allow importing lightweight modules (e.g., utils and FFT helpers)
     # in environments where optional heavy dependencies are absent.

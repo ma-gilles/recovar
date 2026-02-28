@@ -39,7 +39,6 @@ def get_unrotated_ewald_sphere_coords(image_shape, voxel_size, lam, scaled=True,
     return sphere_freqs * scalar
 
 ## Get coordinates for the ewald sphere that have the volume represented
-# @functools.partial(jax.jit, static_argnums=[1,2,3])
 def get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam):
     unrotated_plane_indices = get_unrotated_ewald_sphere_coords(image_shape, voxel_size, lam, scaled = False)
 
@@ -83,7 +82,6 @@ def map_coordinates_on_ewald_sphere(volume, rotation_matrices, image_shape, volu
     return slices
 
 
-
 def adjoint_slice_sphere_nearest(images, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam,  order, volume= None):
     grid_vec_indices = batch_get_nearest_gridpoint_indices_ewald_sphere(rotation_matrices, image_shape, volume_shape, grid_size, voxel_size, lam )
 
@@ -92,7 +90,6 @@ def adjoint_slice_sphere_nearest(images, rotation_matrices, image_shape, volume_
 
     volume = volume.at[grid_vec_indices.reshape(-1)].add(images.reshape(-1))
     return volume
-
 
 
 # Nearest neighbor
@@ -194,7 +191,6 @@ def ewald_sphere_forward_model(volume_real, volume_imag, rotation_matrices, ctf_
     return 0.5 * images_real, 0.5 * images_imag
 
 
-
 # A JAXed version of the adjoint. This is actually slightly slower but will run with disc_type = 'linear_interp'
 @functools.partial(jax.jit, static_argnums=[4,5,6,7])
 def adjoint_ewald_sphere_forward_model(images_real, images_imag, rotation_matrices, ctf_params, image_shape, volume_shape, voxel_size, disc_type):  
@@ -242,7 +238,6 @@ def vec_masked(vol_real, vol_imag, volume_shape):
     return jnp.concatenate((vol_real_masked, vol_imag_masked ), dtype = vol_real.dtype)
 
 
-
 def unvec_masked(x, volume_shape, mask_size):
     # Build the volumes
     volume_size = volume_shape[0] ** 3
@@ -284,7 +279,6 @@ def compute_ewald_LS_matvec_in_batches(experiment_dataset, input_volume_real, in
     return vol_real, vol_imag
 
 
-
 def compute_diag_mean(experiment_dataset, batch_size, disc_type, noise_variance  ):
 
 #     logger.info(f"batch size in second order: {batch_size}")
@@ -305,8 +299,6 @@ def compute_diag_mean(experiment_dataset, batch_size, disc_type, noise_variance 
         diagonal += ATA_one[0]
                                                     
     return diagonal
-
-
 
 
 def sphere_sign_hard_assignment(experiment_dataset, volume, batch_size, disc_type, noise_variance):
@@ -340,16 +332,11 @@ def sphere_sign_hard_assignment(experiment_dataset, volume, batch_size, disc_typ
     return vol_real, vol_imag
 
 
-
-
-
 def volt_to_wavelength(volt):
     """Convert accelerating voltage (kV) to electron wavelength (Angstroms)."""
     volt = volt * 1000
     lam = 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
     return lam
-
-
 
 
 def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance):
@@ -375,7 +362,6 @@ def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, n
         vol_imag += A_t_vol_imag
     logger.info(f"LHS done.")
     return vol_real, vol_imag
-
 
 
 def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_variance, noise_variance, x0 = None, max_iter = 100, tol = 1e-10):
@@ -430,7 +416,6 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
         x0_masked = np.array(x0_masked)
     else:
         x0_masked = None
-
 
 
     def planar_model(x):

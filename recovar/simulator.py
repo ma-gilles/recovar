@@ -54,11 +54,8 @@ def set_constant_ctf(ctf_params_data):
     # Set constant CTF
     ctf_params_data[:,0] = 0
     ctf_params_data[:,1] = 0
-    # ctf_params_data[:,2] = 0.0
-    # ctf_params_data[:,3] = 0.0
     ctf_params_data[:,4] = 0.0
     ctf_params_data[:,5] = -1
-    # ctf_params_data[:,4] = 0.0
     return ctf_params_data
 
 def generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  ):
@@ -137,9 +134,6 @@ def noctf_random_sampling_scheme(n_images, grid_size, seed =0, uniform = True ):
         rotations = nonuniform_rotation_sampling(n_images, grid_size, seed = seed )
     translations = np.zeros([n_images,2])
     return ctf_params, rotations, translations
-
-
-
 
 
 def uniform_rotation_sampling(n_images, grid_size, seed = 0 ):
@@ -294,12 +288,10 @@ def cryo_rotation_batch(U, theta):
     return R[0] if single else R
 
 
-
 def generate_contrast_params(n_images,noise_scale_std, contrast_std ):
     contrast = 1 + np.random.randn(n_images) * contrast_std
     noise_scale = 1 + np.random.randn(n_images) * noise_scale_std
     return contrast, noise_scale
-
 
 
 def generate_volumes_from_mrcs(mrc_names, grid_size_i = None, padding= 0 ):
@@ -606,8 +598,6 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     main_image_stack += per_image_offset[:,None,None]
 
 
-
-
     if put_extra_particles:
         # Make other particles with same ctf but different rots
         _, rots_2, trans_2 = dataset_param_generator(n_images, grid_size)
@@ -716,7 +706,6 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     return main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups
 
 
-
 def save_ctf_params(outdir, D: int, ctf_params, voxel_size):
 
     assert D % 2 == 0
@@ -801,8 +790,6 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                                                   skip_ctf = pad_before_ctf) / gt_vols_norm
                 
 
-
-
             elif "ewald" in disc_type:
                 # disc_type_e = disc_type.split("_")[1]
                 disc_type_e = disc_type[6:]
@@ -842,7 +829,6 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 raise ValueError("Invalid disc_type")
 
 
-            
             if pad_before_ctf:
                 from recovar import padding
                 # IF this is on, we did not apply CTF above.
@@ -858,7 +844,6 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 # import matplotlib.pyplot as plt
                 # plt.imshow(upsampled_CTF2.reshape(experiment_dataset.image_shape))
                 # plt.show()
-
 
 
                 images_batch = padding.pad_images_fourier_domain(images_batch,  experiment_dataset.image_shape, experiment_dataset.grid_size * (upsample_factor-1))
@@ -958,7 +943,6 @@ def make_noise_batch(subkey, noise_image, images_batch_shape):
     noise_batch_ft *= jnp.sqrt(noise_image)
     noise_batch = fourier_transform_utils.get_idft2(noise_batch_ft.reshape(images_batch_shape)).real
     return noise_batch
-
 
 
 # ============================================================================

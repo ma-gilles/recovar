@@ -40,7 +40,6 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
 
     if use_contrast:
         contrast_grid = np.linspace(0, 2, 51)[1:] if contrast_grid is None else contrast_grid
-        # contrast_grid[0] = 0.01
     else:
         contrast_grid = np.ones([1])
     
@@ -55,10 +54,8 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
     # It is not so clear whether this step should ever use the mask. But when using the options['ignore_zero_frequency'] option, there is a good reason not to do it
     if ignore_zero_frequency:
         volume_mask = np.ones_like(volume_mask)
-    # volume_mask = np.ones_like(volume_mask) 
 
     logger.info(f"ignore_zero_frequency? {ignore_zero_frequency}")
-    # logger.info(f"z batch size old {batch_size_old}")
 
     if USE_CUBIC:
         disc_type = 'cubic'
@@ -103,8 +100,6 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
     
     return zs, cov_zs, est_contrasts, bias
     
-
-
 
 @nvtx.annotate("get_coords_in_basis_and_contrast", color="blue", domain=NVTX_DOMAIN_EMBED)
 def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None, force_not_shared_label = False, contrast_shared_across_tilt_series = False):
@@ -189,7 +184,6 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
             image_latent_bias[np.array(particles_ind)] = bias
 
     return xs, image_latent_covariances, estimated_contrasts, image_latent_bias
-
 
 
 def slice_ar(indx, arr):
@@ -367,7 +361,6 @@ def compute_contrast_residual_naive(image, AU, projected_mean, xs, eigenvalues, 
     prior_residual = batch_x_T_y( xs, xs / eigenvalues) #jnp.conj(xs).T @ ( xs /  eigenvalues )
     return fit_residual,  prior_residual.real
 batch_compute_contrast_residual_naive = jax.vmap(compute_contrast_residual_naive, in_axes = (0,0,0,0, None, None, None) )
-
 
 
 @jax.jit

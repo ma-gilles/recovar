@@ -14,16 +14,12 @@ NVTX_DOMAIN_REG = "regularization"
 
 ## Mean prior computation
 
-#@functools.partial(jax.jit, static_argnums = [7,8,9,10, 11, 12,13])    
 def compute_batch_prior_quantities(rotation_matrices, translations, CTF_params, noise_variance, voxel_size, dtype, volume_shape, image_shape, grid_size, CTF_fun , for_whitening = False):
     volume_size = np.prod(np.array(volume_shape))
     grid_point_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape )
     CTF = CTF_fun( CTF_params, image_shape, voxel_size)
     all_one_volume = jnp.ones(volume_size, dtype = dtype)    
     
-    # if for_whitening:
-    #     ones_CTF_mapped = jnp.sqrt(core.forward_model(all_one_volume, CTF, grid_point_indices) * CTF )
-    # else:
     ones_CTF_mapped = core.forward_model(all_one_volume, CTF, grid_point_indices) * CTF / noise_variance[None] 
     diag_mean = core.sum_adj_forward_model(volume_size, ones_CTF_mapped, jnp.ones_like(CTF), grid_point_indices)
     
@@ -178,7 +174,6 @@ def jax_scipy_nd_image_sum(input, labels=None, index=None):
     return sums
 
 
-    
 def compute_fsc_prior_gpu(volume_shape, image0, image1, bottom_of_fraction = None, estimate_merged_SNR = False, substract_shell_mean = False, frequency_shift = 0, from_noise_level = False):
     epsilon = constants.FSC_ZERO_THRESHOLD
     # FSC top:
@@ -259,7 +254,6 @@ def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequenc
     prior = prior_avg[radial_distances]
 
     return prior, fsc_raw, prior_avg
-
 
 
 @nvtx.annotate("covariance_update_col", color="yellow", domain=NVTX_DOMAIN_REG)

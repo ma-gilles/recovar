@@ -1,5 +1,2 @@
-# In an attempt to keep track of the various constants in the code
-EPSILON = 1e-16
-ROOT_EPSILON = 1e-8
-REG_INIT_MULTIPLIER = 1e-2
-FSC_ZERO_THRESHOLD = 0.001 # THINGS BELOW THIS ARE CONSIDERED ZERO
+"""Backward-compatibility shim. Constants now live in ``recovar.jax_config``."""
+from recovar.jax_config import EPSILON, ROOT_EPSILON, REG_INIT_MULTIPLIER, FSC_ZERO_THRESHOLD  # noqa: F401

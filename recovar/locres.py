@@ -20,19 +20,12 @@ def integral_fsc(fsc, fourier_pixel_size = 1):
 integral_fscs = jax.vmap(integral_fsc, in_axes = [0, None])
 
 
-
-
-
 def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = True, filter_edgewidth=2, filter_map1 = False):
 
-    # if use_filter:
-    #     use_v2 = False
 
     locres_maskrad= 0.5 *locres_sampling if locres_maskrad is None else locres_maskrad
     locres_edgwidth = locres_sampling if locres_edgwidth is None else locres_edgwidth
     
-
-
 
     step_size = np.round(locres_sampling / voxel_size).astype(int)
     maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
@@ -173,7 +166,6 @@ def make_i_fil_map(sampling_points, i_fil, full_mask):
     return i_fil_divided
 
 
-
 def get_subsample_indices(array_shape, offset, radius):
     # This is so complicated because the simple way doesn't JIT...
 
@@ -239,7 +231,6 @@ def add_subarray_to_array(array, subarray, offset, radius):
     return jax.lax.dynamic_update_slice(array, subarray + subsample_array(array, offset, radius), l_bounds)
 
 
-
 # def get_
 
 import functools
@@ -281,8 +272,6 @@ def compute_local_fsc_v2(offset, ift_sum_orig, map1, map2, maskrad_pix, edgewidt
     return fsc, local_resol
 
 # def filter_by_fsc():
-
-
 
 
 import functools
@@ -481,7 +470,6 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
     locres_edgwidth = locres_sampling if locres_edgwidth is None else locres_edgwidth
 
 
-
     maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
     edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
 
@@ -568,7 +556,6 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
                 logger.debug("%d", k)
 
 
-
     else:
         # Doesn't seem to be faster.
         if use_v2:
@@ -605,7 +592,6 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
                     diff = batch_masked_noisy_error_3(diff_map, noise_variance_small, batch, maskrad_pix, edgewidth_pix )
                 else:
                     diff = batch_masked_noisy_error(diff_map, noise_variance, batch, maskrad_pix, edgewidth_pix )
-
 
 
             diffs.append(diff)
@@ -658,7 +644,6 @@ def masked_noisy_error_3(diff, noise_variance_small, offset, maskrad_pix, edgewi
     return jnp.linalg.norm(diff_masked)**2
 
 
-
 def split_by_shells(input_vec, volume_shape ):
     radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = 0).astype(int).reshape(-1) 
     
@@ -681,7 +666,6 @@ def split_by_shells(input_vec, volume_shape ):
 
 
 from recovar import regularization
-
 
 
 @functools.partial(jax.jit, static_argnums = [3,4,5])    
@@ -740,9 +724,6 @@ def split_by_shells(input_vec, volume_shape ):
     return split_by_shell
 
 
-
-
-
 batch_subsample_array_at_same_offset = jax.vmap(subsample_array, in_axes = (0, None, None) )
 
 @functools.partial(jax.jit, static_argnums = [3,4,5])    
@@ -762,7 +743,6 @@ def recombine_with_choice(estimators, choice, offset, maskrad_pix, edgewidth_pix
     combined_est = fourier_transform_utils.get_idft3(combined_est).real
 
     return combined_est
-
 
 
 batch_masked_noisy_error = jax.vmap(masked_noisy_error, in_axes = (None,None,0, None, None) )

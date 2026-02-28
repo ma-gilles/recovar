@@ -1,4 +1,4 @@
-import recovar.config 
+import recovar.jax_config 
 import logging
 import numpy as np
 import warnings
