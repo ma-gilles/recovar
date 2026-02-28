@@ -86,3 +86,68 @@ def test_relion_style_kernel_batch_normalizes_noise_variance_shapes(monkeypatch)
         assert np.asarray(ft_y).shape == (64,)
         assert np.asarray(ft_ctf).shape == (64,)
         assert np.isfinite(np.asarray(ft_y)).all()
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+import jax
+
+
+@pytest.mark.gpu
+def test_gridding_correct_gpu(gpu_device):
+    vol = np.ones((6, 6, 6), dtype=np.float32)
+
+    cpu_out0, cpu_s0 = rf.griddingCorrect(vol, ori_size=6, padding_factor=2, order=0)
+    cpu_out0, cpu_s0 = np.asarray(cpu_out0), np.asarray(cpu_s0)
+
+    with jax.default_device(gpu_device):
+        vol_g = jax.device_put(jnp.array(vol), gpu_device)
+        gpu_out0, gpu_s0 = rf.griddingCorrect(vol_g, ori_size=6, padding_factor=2, order=0)
+        gpu_out0, gpu_s0 = np.asarray(gpu_out0), np.asarray(gpu_s0)
+
+    np.testing.assert_allclose(cpu_out0, gpu_out0, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(cpu_s0, gpu_s0, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_gridding_correct_square_gpu(gpu_device):
+    vol = np.ones((6, 6, 6), dtype=np.float32)
+
+    cpu_out1, cpu_s1 = rf.griddingCorrect_square(vol, ori_size=6, padding_factor=2, order=1)
+    cpu_out1, cpu_s1 = np.asarray(cpu_out1), np.asarray(cpu_s1)
+
+    with jax.default_device(gpu_device):
+        vol_g = jax.device_put(jnp.array(vol), gpu_device)
+        gpu_out1, gpu_s1 = rf.griddingCorrect_square(vol_g, ori_size=6, padding_factor=2, order=1)
+        gpu_out1, gpu_s1 = np.asarray(gpu_out1), np.asarray(gpu_s1)
+
+    np.testing.assert_allclose(cpu_out1, gpu_out1, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(cpu_s1, gpu_s1, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_upscale_tau_gpu(gpu_device):
+    tau_1d = np.linspace(1.0, 2.0, 16, dtype=np.float32)
+
+    cpu_out = np.asarray(rf.upscale_tau(tau_1d, padding_factor=2, volume_shape=(4, 4, 4), tau_is_1d=True))
+
+    with jax.default_device(gpu_device):
+        tau_g = jax.device_put(jnp.array(tau_1d), gpu_device)
+        gpu_out = np.asarray(rf.upscale_tau(tau_g, padding_factor=2, volume_shape=(4, 4, 4), tau_is_1d=True))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_adjust_regularization_relion_style_gpu(gpu_device):
+    filt = np.zeros((4, 4, 4), dtype=np.float32)
+
+    cpu_out = np.asarray(rf.adjust_regularization_relion_style(filt, volume_shape=(4, 4, 4)))
+
+    with jax.default_device(gpu_device):
+        filt_g = jax.device_put(jnp.array(filt), gpu_device)
+        gpu_out = np.asarray(rf.adjust_regularization_relion_style(filt_g, volume_shape=(4, 4, 4)))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)

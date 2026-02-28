@@ -135,3 +135,76 @@ def test_prior_iteration_relion_style_and_downsample_from_fsc():
     out = np.asarray(out)
     assert out.shape == (n,)
     assert np.any(out == 0.0)
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+import jax
+import jax.numpy as jnp
+
+
+@pytest.mark.gpu
+def test_jax_scipy_nd_image_mean_inner_gpu(gpu_device):
+    inp = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    labels = np.array([0, 0, 2], dtype=np.int32)
+    index = np.array([0, 1, 2, 3], dtype=np.int32)
+
+    cpu_out = np.asarray(regularization.jax_scipy_nd_image_mean_inner(inp, labels=labels, index=index))
+
+    with jax.default_device(gpu_device):
+        inp_g = jax.device_put(jnp.array(inp), gpu_device)
+        labels_g = jax.device_put(jnp.array(labels), gpu_device)
+        index_g = jax.device_put(jnp.array(index), gpu_device)
+        gpu_out = np.asarray(regularization.jax_scipy_nd_image_mean_inner(inp_g, labels=labels_g, index=index_g))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_get_fsc_gpu_on_gpu(gpu_device):
+    shape = (4, 4, 4)
+    rng = np.random.default_rng(0)
+    v1 = (rng.normal(size=np.prod(shape)) + 1j * rng.normal(size=np.prod(shape))).astype(np.complex64)
+    v2 = (rng.normal(size=np.prod(shape)) + 1j * rng.normal(size=np.prod(shape))).astype(np.complex64)
+
+    cpu_fsc = np.asarray(regularization.get_fsc_gpu(v1, v2, shape, substract_shell_mean=False, frequency_shift=0))
+
+    with jax.default_device(gpu_device):
+        v1_g = jax.device_put(jnp.array(v1), gpu_device)
+        v2_g = jax.device_put(jnp.array(v2), gpu_device)
+        gpu_fsc = np.asarray(regularization.get_fsc_gpu(v1_g, v2_g, shape, substract_shell_mean=False, frequency_shift=0))
+
+    np.testing.assert_allclose(cpu_fsc, gpu_fsc, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_compute_fsc_prior_gpu_v2_on_gpu(gpu_device):
+    shape = (4, 4, 4)
+    n = int(np.prod(shape))
+    rng = np.random.default_rng(0)
+
+    image0 = (rng.normal(size=n) + 1j * rng.normal(size=n)).astype(np.complex64)
+    image1 = (rng.normal(size=n) + 1j * rng.normal(size=n)).astype(np.complex64)
+    lhs = np.abs(rng.normal(size=n)).astype(np.float32) + 0.5
+    prior0 = np.ones(n, dtype=np.float32)
+
+    cpu_prior, cpu_fsc, cpu_avg = regularization.compute_fsc_prior_gpu_v2(
+        shape, image0, image1, lhs, prior0, frequency_shift=0, substract_shell_mean=False, upsampling_factor=1
+    )
+    cpu_prior, cpu_fsc, cpu_avg = np.asarray(cpu_prior), np.asarray(cpu_fsc), np.asarray(cpu_avg)
+
+    with jax.default_device(gpu_device):
+        i0_g = jax.device_put(jnp.array(image0), gpu_device)
+        i1_g = jax.device_put(jnp.array(image1), gpu_device)
+        lhs_g = jax.device_put(jnp.array(lhs), gpu_device)
+        p0_g = jax.device_put(jnp.array(prior0), gpu_device)
+        gpu_prior, gpu_fsc, gpu_avg = regularization.compute_fsc_prior_gpu_v2(
+            shape, i0_g, i1_g, lhs_g, p0_g, frequency_shift=0, substract_shell_mean=False, upsampling_factor=1
+        )
+        gpu_prior, gpu_fsc, gpu_avg = np.asarray(gpu_prior), np.asarray(gpu_fsc), np.asarray(gpu_avg)
+
+    np.testing.assert_allclose(cpu_prior, gpu_prior, atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(cpu_fsc, gpu_fsc, atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(cpu_avg, gpu_avg, atol=1e-4, rtol=1e-4)

@@ -244,3 +244,90 @@ def test_compute_projected_covariance_rhs_lhs_small_rotation_count_avoids_zero_b
 
     np.testing.assert_allclose(np.asarray(lhs), np.eye(2, dtype=np.float32))
     np.testing.assert_allclose(np.asarray(rhs), np.ones((2, 2), dtype=np.float32))
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify guard functions still reject on GPU-placed arrays
+# ---------------------------------------------------------------------------
+
+import jax
+
+
+@pytest.mark.gpu
+def test_compute_H_B_rejects_empty_rotations_gpu(gpu_device):
+    """Guard validation works identically with GPU-placed arrays."""
+    ds = _TinyDataset()
+    mean = np.zeros((8,), dtype=np.complex64)
+    probs = np.zeros((1, 1, 1), dtype=np.float32)
+    picked = np.array([0], dtype=np.int32)
+    noise_arr = np.ones((4,), dtype=np.float32)
+
+    with jax.default_device(gpu_device):
+        with pytest.raises(ValueError, match="at least one rotation"):
+            hetero.compute_H_B(
+                ds,
+                mean,
+                probs,
+                rotations=jax.device_put(jnp.zeros((0, 3, 3), dtype=jnp.float32), gpu_device),
+                translations=jnp.zeros((1, 2), dtype=jnp.float32),
+                noise_variance=noise_arr,
+                volume_mask=None,
+                picked_frequency_indices=picked,
+                image_indices=np.array([0], dtype=np.int32),
+                mean_disc="linear_interp",
+            )
+
+        with pytest.raises(ValueError, match="at least one translation"):
+            hetero.compute_H_B(
+                ds,
+                mean,
+                probs,
+                rotations=jnp.zeros((1, 3, 3), dtype=jnp.float32),
+                translations=jax.device_put(jnp.zeros((0, 2), dtype=jnp.float32), gpu_device),
+                noise_variance=noise_arr,
+                volume_mask=None,
+                picked_frequency_indices=picked,
+                image_indices=np.array([0], dtype=np.int32),
+                mean_disc="linear_interp",
+            )
+
+
+@pytest.mark.gpu
+def test_compute_projected_covariance_rhs_lhs_rejects_empty_gpu(gpu_device):
+    """Guard validation works identically with GPU-placed arrays."""
+    ds = _TinyDataset()
+    mean = np.zeros((8,), dtype=np.complex64)
+    basis = np.zeros((8, 2), dtype=np.complex64)
+    probs = np.zeros((1, 1, 1), dtype=np.float32)
+    noise_arr = np.ones((4,), dtype=np.float32)
+
+    with jax.default_device(gpu_device):
+        with pytest.raises(ValueError, match="at least one rotation"):
+            hetero.compute_projected_covariance_rhs_lhs(
+                ds,
+                mean,
+                basis,
+                rotations=jax.device_put(jnp.zeros((0, 3, 3), dtype=jnp.float32), gpu_device),
+                translations=jnp.zeros((1, 2), dtype=jnp.float32),
+                probabilities=probs,
+                volume_mask=None,
+                noise_variance=noise_arr,
+                disc_type_mean="linear_interp",
+                disc_type_u="linear_interp",
+                image_indices=np.array([0], dtype=np.int32),
+            )
+
+        with pytest.raises(ValueError, match="at least one translation"):
+            hetero.compute_projected_covariance_rhs_lhs(
+                ds,
+                mean,
+                basis,
+                rotations=jnp.zeros((1, 3, 3), dtype=jnp.float32),
+                translations=jax.device_put(jnp.zeros((0, 2), dtype=jnp.float32), gpu_device),
+                probabilities=probs,
+                volume_mask=None,
+                noise_variance=noise_arr,
+                disc_type_mean="linear_interp",
+                disc_type_u="linear_interp",
+                image_indices=np.array([0], dtype=np.int32),
+            )

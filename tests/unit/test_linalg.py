@@ -177,3 +177,93 @@ def test_multiply_along_axis_and_l2_distance():
     d = np.asarray(linalg.l2_distance(x, y))
     ref = np.array([[1.0, 2.0], [2.0, 1.0]], dtype=np.float32)
     np.testing.assert_allclose(d, ref, atol=1e-6, rtol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+import jax
+import jax.numpy as jnp
+
+
+@pytest.mark.gpu
+def test_blockwise_xtx_gpu(gpu_device):
+    rng = np.random.default_rng(0)
+    x = (rng.normal(size=(12, 5)) + 1j * rng.normal(size=(12, 5))).astype(np.complex64)
+
+    cpu_out = np.asarray(linalg.blockwise_X_T_X(x, batch_size=4))
+
+    with jax.default_device(gpu_device):
+        x_g = jax.device_put(jnp.array(x), gpu_device)
+        gpu_out = np.asarray(linalg.blockwise_X_T_X(x_g, batch_size=4))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=5e-3, rtol=5e-3)
+
+
+@pytest.mark.gpu
+def test_broadcast_dot_and_outer_gpu(gpu_device):
+    x = np.array([[1 + 1j, 2 + 0j], [0 + 1j, 3 + 2j]], dtype=np.complex64)
+    y = np.array([[2 + 0j, 1 + 1j], [1 - 1j, 0 + 2j]], dtype=np.complex64)
+
+    cpu_dot = np.asarray(linalg.broadcast_dot(x, y))
+    cpu_outer = np.asarray(linalg.broadcast_outer(x, y))
+
+    with jax.default_device(gpu_device):
+        x_g = jax.device_put(jnp.array(x), gpu_device)
+        y_g = jax.device_put(jnp.array(y), gpu_device)
+        gpu_dot = np.asarray(linalg.broadcast_dot(x_g, y_g))
+        gpu_outer = np.asarray(linalg.broadcast_outer(x_g, y_g))
+
+    np.testing.assert_allclose(cpu_dot, gpu_dot, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(cpu_outer, gpu_outer, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_inner_product_gpu(gpu_device):
+    rng = np.random.default_rng(17)
+    x = (rng.normal(size=(4, 6)) + 1j * rng.normal(size=(4, 6))).astype(np.complex64)
+    y = (rng.normal(size=(4, 6)) + 1j * rng.normal(size=(4, 6))).astype(np.complex64)
+
+    cpu_batch = np.asarray(linalg.batch_inner_product(x, y))
+
+    with jax.default_device(gpu_device):
+        x_g = jax.device_put(jnp.array(x), gpu_device)
+        y_g = jax.device_put(jnp.array(y), gpu_device)
+        gpu_batch = np.asarray(linalg.batch_inner_product(x_g, y_g))
+
+    np.testing.assert_allclose(cpu_batch, gpu_batch, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_half_spectrum_inner_product_gpu(gpu_device):
+    rng = np.random.default_rng(29)
+    shape = (6, 8)
+    x = rng.normal(size=shape).astype(np.float32)
+    y = rng.normal(size=shape).astype(np.float32)
+    sfx = np.asarray(fourier_transform_utils.get_dft2_real(x))
+    sfy = np.asarray(fourier_transform_utils.get_dft2_real(y))
+
+    cpu_out = np.asarray(linalg.half_spectrum_inner_product(sfx, sfy, shape))
+
+    with jax.default_device(gpu_device):
+        sfx_g = jax.device_put(jnp.array(sfx), gpu_device)
+        sfy_g = jax.device_put(jnp.array(sfy), gpu_device)
+        gpu_out = np.asarray(linalg.half_spectrum_inner_product(sfx_g, sfy_g, shape))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_l2_distance_gpu(gpu_device):
+    x = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+    y = np.array([[0.0, 1.0], [1.0, 1.0]], dtype=np.float32)
+
+    cpu_out = np.asarray(linalg.l2_distance(x, y))
+
+    with jax.default_device(gpu_device):
+        x_g = jax.device_put(jnp.array(x), gpu_device)
+        y_g = jax.device_put(jnp.array(y), gpu_device)
+        gpu_out = np.asarray(linalg.l2_distance(x_g, y_g))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)

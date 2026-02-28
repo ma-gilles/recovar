@@ -72,3 +72,63 @@ def test_expensive_local_error_with_cov_accepts_none_defaults():
     out = np.asarray(out)
     assert out.shape == map1.shape
     assert np.isfinite(out).all()
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+import jax
+import jax.numpy as jnp
+
+
+@pytest.mark.gpu
+def test_integral_fsc_gpu(gpu_device):
+    fsc = np.array([0.9, 0.5, -0.1, 0.4], dtype=np.float32)
+
+    cpu_out = float(np.asarray(locres.integral_fsc(fsc, fourier_pixel_size=2.0)))
+
+    with jax.default_device(gpu_device):
+        fsc_g = jax.device_put(jnp.array(fsc), gpu_device)
+        gpu_out = float(np.asarray(locres.integral_fsc(fsc_g, fourier_pixel_size=2.0)))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_find_first_zero_in_bool_gpu(gpu_device):
+    arr = np.array([True, True, False, False])
+
+    cpu_out = int(np.asarray(locres.find_first_zero_in_bool(arr)))
+
+    with jax.default_device(gpu_device):
+        arr_g = jax.device_put(jnp.array(arr), gpu_device)
+        gpu_out = int(np.asarray(locres.find_first_zero_in_bool(arr_g)))
+
+    assert cpu_out == gpu_out
+
+
+@pytest.mark.gpu
+def test_expensive_local_error_with_cov_gpu(gpu_device):
+    rng = np.random.default_rng(0)
+    map1 = rng.normal(size=(8, 8, 8)).astype(np.float32)
+    map2 = rng.normal(size=(8, 8, 8)).astype(np.float32)
+    noise_variance = np.ones((8, 8, 8), dtype=np.float32)
+
+    cpu_out = np.asarray(locres.expensive_local_error_with_cov(
+        map1=map1, map2=map2, voxel_size=1.5, noise_variance=noise_variance,
+        locres_sampling=2, locres_maskrad=None, locres_edgwidth=None,
+        use_v2=True, split_shell=False,
+    ))
+
+    with jax.default_device(gpu_device):
+        map1_g = jax.device_put(jnp.array(map1), gpu_device)
+        map2_g = jax.device_put(jnp.array(map2), gpu_device)
+        noise_g = jax.device_put(jnp.array(noise_variance), gpu_device)
+        gpu_out = np.asarray(locres.expensive_local_error_with_cov(
+            map1=map1_g, map2=map2_g, voxel_size=1.5, noise_variance=noise_g,
+            locres_sampling=2, locres_maskrad=None, locres_edgwidth=None,
+            use_v2=True, split_shell=False,
+        ))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-4, rtol=1e-4)

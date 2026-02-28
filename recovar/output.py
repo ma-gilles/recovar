@@ -286,14 +286,14 @@ def plot_kmeans_over_density(density, centers, plot_folder = None, cmap = 'infer
 
 
 def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us_to_save = 50, us_to_var = [4,10,20], voxel_size = None):
-     
-    mkdir_safe(output_folder + 'volumes/')
+
+    vol_dir = os.path.join(output_folder, 'volumes')
+    mkdir_safe(vol_dir)
     n_available = int(u.shape[-1])
     n_to_save = max(0, min(int(us_to_save), n_available))
-    save_volumes([u[..., k] for k in range(n_to_save)], output_folder + 'volumes/' + 'eigen_pos', volume_shape=volume_shape, voxel_size=voxel_size)
-    # save_volumes([ -u[...,k] for k in range (us_to_save)], output_folder + 'volumes/' +  'eigen_neg', volume_shape = volume_shape,   voxel_size = voxel_size)
-    save_volume(mean, output_folder + 'volumes/' + 'mean', volume_shape = volume_shape,   voxel_size = voxel_size)
-    
+    save_volumes([u[..., k] for k in range(n_to_save)], os.path.join(vol_dir, 'eigen_pos'), volume_shape=volume_shape, voxel_size=voxel_size)
+    save_volume(mean, os.path.join(vol_dir, 'mean'), volume_shape = volume_shape,   voxel_size = voxel_size)
+
     grid_size = int(volume_shape[0])
     # 2^24 / grid_size^3: ~1 volume at 256^3, scales up for smaller grids
     vol_batch_size = utils.safe_batch_size((2**24) / (grid_size**3))
@@ -304,7 +304,7 @@ def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us
             continue
         u_real = linalg.batch_idft3(u[..., :n_eigs_eff], volume_shape, vol_batch_size )
         variance_real = utils.estimate_variance(u_real.T, s['rescaled'][:n_eigs_eff])
-        save_volume(variance_real, output_folder + 'volumes/' + 'variance' + str(n_eigs), volume_shape, from_ft = False,   voxel_size = voxel_size)
+        save_volume(variance_real, os.path.join(vol_dir, 'variance' + str(n_eigs)), volume_shape, from_ft = False,   voxel_size = voxel_size)
 
 
 # ---------------------------------------------------------------------------
@@ -1109,14 +1109,14 @@ def umap_latent_space(zs):
 def standard_pipeline_plots(po, zdim_key, output_folder):
     from recovar import plot_utils
     mkdir_safe(output_folder)
-    plot_utils.plot_summary_t(po, n_eigs = 10, filename = output_folder + "mean_variance_eigenvolume_plots.png")
+    plot_utils.plot_summary_t(po, n_eigs = 10, filename = os.path.join(output_folder, "mean_variance_eigenvolume_plots.png"))
 
     import matplotlib.pyplot as plt
     plt.figure(figsize = (10,10))
     plt.hist(po.get('contrasts')[zdim_key],bins =50)
     plt.xlabel('Contrast')
     plt.ylabel('Number of particles')
-    plt.savefig(output_folder + 'contrast_histogram.png')
+    plt.savefig(os.path.join(output_folder, 'contrast_histogram.png'))
     plt.title(f'contrast histogram using zdim={zdim_key}')
     plt.close()
 
@@ -1125,13 +1125,13 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
     plt.semilogy(po.get('s')[:40], '-o')
     plt.xlabel('eigenvalue index')
     plt.ylabel('eigenvalue')
-    plt.savefig(output_folder + 'eigenvalues.png')
+    plt.savefig(os.path.join(output_folder, 'eigenvalues.png'))
     plt.close()
 
 
     plt.figure(figsize = (8,8))
     ax = plot_utils.plot_mean_fsc(po,None)
-    plt.savefig(output_folder + 'mean_fsc.png')
+    plt.savefig(os.path.join(output_folder, 'mean_fsc.png'))
 
 
 

@@ -173,3 +173,89 @@ def test_to_batched_pixel_noise_normalizes_common_shapes():
     n1 = np.arange(16, dtype=np.float32)
     out1 = np.asarray(noise.to_batched_pixel_noise(n1, image_shape))
     assert out1.shape == (1, 16)
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+import jax
+import jax.numpy as jnp
+
+
+@pytest.mark.gpu
+def test_make_radial_noise_gpu(gpu_device):
+    vec = np.array([1.0, 2.0], dtype=np.float32)
+    image_shape = (6, 6)
+
+    cpu_out = np.asarray(noise.make_radial_noise(vec, image_shape))
+
+    with jax.default_device(gpu_device):
+        vec_g = jax.device_put(jnp.array(vec), gpu_device)
+        gpu_out = np.asarray(noise.make_radial_noise(vec_g, image_shape))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_to_batched_pixel_noise_gpu(gpu_device):
+    image_shape = (4, 4)
+    n2 = np.arange(16, dtype=np.float32).reshape(4, 4)
+
+    cpu_out = np.asarray(noise.to_batched_pixel_noise(n2, image_shape, batch_size=3))
+
+    with jax.default_device(gpu_device):
+        n2_g = jax.device_put(jnp.array(n2), gpu_device)
+        gpu_out = np.asarray(noise.to_batched_pixel_noise(n2_g, image_shape, batch_size=3))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_radial_noise_model_get_gpu(gpu_device):
+    radial = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    model = noise.RadialNoiseModel(radial, image_shape=(8, 8))
+
+    cpu_out = np.asarray(model.get())
+
+    with jax.default_device(gpu_device):
+        model_g = noise.RadialNoiseModel(jax.device_put(jnp.array(radial), gpu_device), image_shape=(8, 8))
+        gpu_out = np.asarray(model_g.get())
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_variable_radial_noise_model_get_gpu(gpu_device):
+    radials = np.array([[1.0, 2.0, 3.0], [2.0, 4.0, 6.0]], dtype=np.float32)
+    dose_idx = np.array([0, 1, 1, 0], dtype=np.int32)
+    model = noise.VariableRadialNoiseModel(radials, dose_idx, image_shape=(8, 8))
+    query = np.array([0, 2, 3], dtype=np.int32)
+
+    cpu_out = np.asarray(model.get(query))
+
+    with jax.default_device(gpu_device):
+        model_g = noise.VariableRadialNoiseModel(
+            jax.device_put(jnp.array(radials), gpu_device),
+            jax.device_put(jnp.array(dose_idx), gpu_device),
+            image_shape=(8, 8),
+        )
+        gpu_out = np.asarray(model_g.get(jax.device_put(jnp.array(query), gpu_device)))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_get_masked_noise_variance_gpu(gpu_device):
+    image_shape = (4, 4)
+    image_masks = np.ones((2, *image_shape), dtype=np.float32)
+    unmasked_noise = np.arange(np.prod(image_shape), dtype=np.float32)
+
+    cpu_out = np.asarray(noise.get_masked_noise_variance_from_noise_variance(image_masks, unmasked_noise, image_shape))
+
+    with jax.default_device(gpu_device):
+        masks_g = jax.device_put(jnp.array(image_masks), gpu_device)
+        noise_g = jax.device_put(jnp.array(unmasked_noise), gpu_device)
+        gpu_out = np.asarray(noise.get_masked_noise_variance_from_noise_variance(masks_g, noise_g, image_shape))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)

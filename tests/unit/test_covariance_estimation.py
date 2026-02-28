@@ -411,3 +411,77 @@ def test_compute_projected_covariance_runs_on_tiny_image_dataset():
     else:
         # Tiny synthetic grids can produce NaNs in this projected path; ensure it's explicit.
         assert np.isnan(covar_np).any()
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+import jax
+
+
+@pytest.mark.gpu
+def test_summed_batch_kron_gpu(gpu_device):
+    x = jnp.array([[1.0, 2.0], [3.0, 4.0]], dtype=jnp.float32)
+
+    cpu_out = np.asarray(cov_est.summed_batch_kron(x))
+
+    with jax.default_device(gpu_device):
+        x_g = jax.device_put(x, gpu_device)
+        gpu_out = np.asarray(cov_est.summed_batch_kron(x_g))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_summed_batch_kron_scan_gpu(gpu_device):
+    x = jnp.array([[1.0, 2.0], [3.0, 4.0]], dtype=jnp.float32)
+
+    cpu_out = np.asarray(cov_est.summed_batch_kron_scan(x))
+
+    with jax.default_device(gpu_device):
+        x_g = jax.device_put(x, gpu_device)
+        gpu_out = np.asarray(cov_est.summed_batch_kron_scan(x_g))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_summed_outer_products_gpu(gpu_device):
+    a = jnp.array([[1 + 1j, 2 + 0j], [3 + 0j, 4 - 1j]], dtype=jnp.complex64)
+
+    cpu_out = np.asarray(cov_est.summed_outer_products(a))
+
+    with jax.default_device(gpu_device):
+        a_g = jax.device_put(a, gpu_device)
+        gpu_out = np.asarray(cov_est.summed_outer_products(a_g))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_group_sum_by_labels_gpu(gpu_device):
+    arr = jnp.array([[1.0], [2.0], [3.0], [4.0]], dtype=jnp.float32)
+    labels = jnp.array([0, 1, 0, 1], dtype=jnp.int32)
+
+    cpu_out = np.asarray(cov_est.group_sum_by_labels(arr, labels, max_groups=4))
+
+    with jax.default_device(gpu_device):
+        arr_g = jax.device_put(arr, gpu_device)
+        labels_g = jax.device_put(labels, gpu_device)
+        gpu_out = np.asarray(cov_est.group_sum_by_labels(arr_g, labels_g, max_groups=4))
+
+    np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_preprocess_tilt_labels_for_batch_gpu(gpu_device):
+    labels = jnp.array([10, 20, 10, 30], dtype=jnp.int32)
+
+    cpu_out = np.asarray(cov_est.preprocess_tilt_labels_for_batch(labels))
+
+    with jax.default_device(gpu_device):
+        labels_g = jax.device_put(labels, gpu_device)
+        gpu_out = np.asarray(cov_est.preprocess_tilt_labels_for_batch(labels_g))
+
+    np.testing.assert_array_equal(cpu_out, gpu_out)

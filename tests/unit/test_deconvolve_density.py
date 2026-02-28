@@ -52,3 +52,35 @@ def test_compute_deconvolved_density_rejects_unknown_kernel_option():
             kernel_option="bad_option",
             alphas=np.array([1.0], dtype=np.float32),
         )
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
+
+import jax
+import jax.numpy as jnp
+
+
+@pytest.mark.gpu
+def test_estimate_kernel_by_sampling_gpu(gpu_device):
+    grid = np.zeros((5, 5, 2), dtype=np.float32)
+    cov_zs = np.stack(
+        [
+            np.array([[1.2, 0.1], [0.1, 1.0]], dtype=np.float32),
+            np.array([[0.9, 0.0], [0.0, 1.1]], dtype=np.float32),
+            np.array([[1.1, -0.05], [-0.05, 0.95]], dtype=np.float32),
+        ],
+        axis=0,
+    )
+    gauss_cov = np.array([[0.2, 0.0], [0.0, 0.25]], dtype=np.float32)
+
+    cpu_kernel = np.asarray(dd.estimate_kernel_by_sampling(grid, cov_zs, gauss_cov, num_samples=40))
+
+    with jax.default_device(gpu_device):
+        grid_g = jax.device_put(jnp.array(grid), gpu_device)
+        cov_g = jax.device_put(jnp.array(cov_zs), gpu_device)
+        gauss_g = jax.device_put(jnp.array(gauss_cov), gpu_device)
+        gpu_kernel = np.asarray(dd.estimate_kernel_by_sampling(grid_g, cov_g, gauss_g, num_samples=40))
+
+    np.testing.assert_allclose(cpu_kernel, gpu_kernel, atol=1e-4, rtol=1e-4)
