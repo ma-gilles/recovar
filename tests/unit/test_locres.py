@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-import recovar.locres as locres
+import recovar.heterogeneity.locres as locres
 
 pytestmark = pytest.mark.unit
 

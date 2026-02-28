@@ -23,7 +23,7 @@ def compute_residual(batch, mean_estimate, CTF_params, rotation_matrices, transl
 def compute_image_assignment(experiment_dataset, volumes, noise_variance, batch_size, disc_type='cubic'):
 
     if disc_type == 'cubic':
-        from recovar import covariance_estimation
+        from recovar.heterogeneity import covariance_estimation
         volumes = covariance_estimation.compute_spline_coeffs_in_batch(volumes, experiment_dataset.volume_shape, gpu_memory=None)
 
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
@@ -48,7 +48,7 @@ def compute_image_assignment(experiment_dataset, volumes, noise_variance, batch_
 def estimate_false_positive_rate(experiment_dataset, volumes, noise_variance, batch_size, disc_type='cubic'):
 
     if disc_type == 'cubic':
-        from recovar import covariance_estimation
+        from recovar.heterogeneity import covariance_estimation
         volumes = covariance_estimation.compute_spline_coeffs_in_batch(volumes, experiment_dataset.volume_shape, gpu_memory=None)
 
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)

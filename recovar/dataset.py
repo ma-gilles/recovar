@@ -346,7 +346,7 @@ class CryoEMDataset:
     
     def get_image_mask(self, indices, mask, binary = True, soften = 5):
         indices = np.asarray(indices).astype(int)
-        from recovar import covariance_core # Not sure I want this depency to exist... Could make some circular imports
+        from recovar.heterogeneity import covariance_core # Not sure I want this depency to exist... Could make some circular imports
         mask = covariance_core.get_per_image_tight_mask(mask, self.rotation_matrices[indices], self.image_stack.mask, self.volume_mask_threshold, self.image_shape, self.volume_shape, self.grid_size, self.padding, disc_type = 'linear_interp',  binary = binary, soften = soften)
         mask_ft = fourier_transform_utils.get_dft2(mask).reshape(mask.shape[0], -1)
         # Usually images are translated, here we translate back.

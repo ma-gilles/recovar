@@ -334,7 +334,7 @@ def prior_iteration_relion_style(H0, H1, B0, B1, frequency_shift, init_regulariz
     return cov_col0.reshape(-1), prior, fsc
 
 def downsample_from_fsc(array, fsc, volume_shape):
-    from recovar import locres
+    from recovar.heterogeneity import locres
     # Accept both NumPy and JAX arrays.
     fsc = jnp.asarray(fsc)
     array = jnp.asarray(array)

@@ -3,11 +3,11 @@ logger = logging.getLogger(__name__)
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib, pickle, os, json
-import recovar.latent_density as ld
+import recovar.heterogeneity.latent_density as ld
 import recovar.fourier_transform_utils as fourier_transform_utils
-from recovar import embedding
+from recovar.heterogeneity import embedding
 from recovar import linalg
-from recovar import trajectory
+from recovar.heterogeneity import trajectory
 from recovar import utils
 from recovar import dataset
 from recovar import regularization
@@ -613,7 +613,7 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
         n_min_particles = 100
 
     mkdir_safe(output_folder)
-    from recovar import heterogeneity_volume, latent_density
+    from recovar.heterogeneity import heterogeneity_volume, latent_density
     n_vols = path_subsampled.shape[0]
 
     for k in range(n_vols):

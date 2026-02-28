@@ -5,7 +5,8 @@ import jax, time
 import functools
 import nvtx
 import equinox as eqx
-from recovar import core, covariance_core, regularization, utils, jax_config
+from recovar import core, regularization, utils, jax_config
+from recovar.heterogeneity import covariance_core
 import recovar.core.forward as core_forward
 from recovar.configs import ForwardModelConfig, BatchData, ModelState
 import recovar.fourier_transform_utils as fourier_transform_utils
@@ -461,7 +462,7 @@ def upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size
         for noise_repeat in range(2):
             # Compute variance estimate (tilt series uses same path currently)
             variance_time = time.time()
-            from recovar import covariance_estimation
+            from recovar.heterogeneity import covariance_estimation
             # //2: variance computation with cubic disc_type needs ~2x memory per image (spline coefficients)
             variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], utils.safe_batch_size(batch_size//2), dilated_volume_mask, noise_ind_subset = noise_ind_subset, use_regularization = True, disc_type = 'cubic')
             logger.info(f"variance estimation time: {time.time() - variance_time}")
@@ -886,7 +887,8 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
 
     if disc_type == 'cubic':
         st_time = time.time()
-        from recovar import cubic_interpolation, covariance_estimation
+        from recovar import cubic_interpolation
+        from recovar.heterogeneity import covariance_estimation
         mean_estimate = cubic_interpolation.calculate_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)
         logger.info("Time to compute spline coefficients: %f", time.time() - st_time)

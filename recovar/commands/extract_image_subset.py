@@ -4,7 +4,8 @@ import logging
 
 import numpy as np
 
-from recovar import heterogeneity_volume, utils, locres
+from recovar import utils
+from recovar.heterogeneity import heterogeneity_volume, locres
 
 logger = logging.getLogger(__name__)
 

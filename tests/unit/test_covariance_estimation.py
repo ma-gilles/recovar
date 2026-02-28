@@ -5,7 +5,7 @@ pytest.importorskip("jax")
 
 import jax.numpy as jnp
 
-import recovar.covariance_estimation as cov_est
+import recovar.heterogeneity.covariance_estimation as cov_est
 from recovar.dataset import CryoEMHalfsets
 from helpers.tiny_synthetic import make_tiny_cryo_dataset, make_tiny_cryo_dataset_with_images
 

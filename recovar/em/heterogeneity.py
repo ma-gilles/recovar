@@ -4,11 +4,12 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import equinox as eqx
-from recovar import core, covariance_estimation, utils, jax_config, principal_components, relion_functions, noise
+from recovar import core, utils, jax_config, relion_functions, noise
+from recovar.heterogeneity import covariance_estimation, principal_components
 from recovar.configs import ForwardModelConfig
 from .core import batch_vol_slice_volume_by_map
-from recovar.principal_components import get_cov_svds, pca_by_projected_covariance
-from recovar.covariance_estimation import compute_both_H_B, compute_covariance_regularization_relion_style
+from recovar.heterogeneity.principal_components import get_cov_svds, pca_by_projected_covariance
+from recovar.heterogeneity.covariance_estimation import compute_both_H_B, compute_covariance_regularization_relion_style
 
 import time
 logger = logging.getLogger(__name__)
@@ -222,7 +223,7 @@ def sum_up_images_fixed_rots_covariance_with_precompute_eqx(config: ForwardModel
     n_shifted_images = n_images * n_translations
     image_size = shifted_CTFed_images.shape[-1]
 
-    from recovar import covariance_core
+    from recovar.heterogeneity import covariance_core
     kernel_vals = covariance_core.evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel=right_kernel, kernel_width=right_kernel_width)
 
     e2_p1 = shifted_CTFed_images @ kernel_vals.T
@@ -439,7 +440,7 @@ def sum_up_images_fixed_rots_covariance_with_precompute(shifted_CTFed_images, me
     # Compute e_2
     # gridpoints = None## Compute this.
 
-    from recovar import covariance_core
+    from recovar.heterogeneity import covariance_core
     # One kernel per rotation
     kernel_vals = covariance_core.evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel = right_kernel, kernel_width = right_kernel_width)
     
@@ -503,7 +504,7 @@ def sum_up_images_fixed_rots_covariance_with_precompute(shifted_CTFed_images, me
 
 
 
-from recovar import covariance_estimation
+from recovar.heterogeneity import covariance_estimation
 def compute_projected_covariance(experiment_datasets, mean, basis, rotations, translations, probabilities, volume_mask, noise_variance, batch_size, disc_type_mean, disc_type_u, image_indices = None):
     
     lhs, rhs = compute_projected_covariance_rhs_lhs(experiment_datasets, mean, basis, rotations, translations, probabilities, volume_mask, noise_variance, disc_type_mean, disc_type_u, image_indices = None)

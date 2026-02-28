@@ -5,7 +5,8 @@ import jax
 import numpy as np
 import os, argparse, time, sys
 from recovar import output as o
-from recovar import dataset, homogeneous, embedding, principal_components, mask, utils, noise, output, covariance_estimation
+from recovar import dataset, homogeneous, mask, utils, noise, output
+from recovar.heterogeneity import embedding, principal_components, covariance_estimation
 from recovar.output_paths import ResultPaths
 import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar.utils_core import copy_data_to_temp_folder, save_original_paths_info, cleanup_temp_files
@@ -626,7 +627,7 @@ def standard_recovar_pipeline(args):
                       from_ft=False, voxel_size=cryos.voxel_size)
 
         # Filter and save mean
-        from recovar import locres
+        from recovar.heterogeneity import locres
         half1 = fourier_transform_utils.get_idft3(means['corrected0'].reshape(volume_shape))
         half2 = fourier_transform_utils.get_idft3(means['corrected1'].reshape(volume_shape))
         best_filtered_nob, _, _, _, _ = locres.local_resolution(

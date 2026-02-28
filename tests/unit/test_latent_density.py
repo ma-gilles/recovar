@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar import latent_density as ld
+from recovar.heterogeneity import latent_density as ld
 
 pytestmark = pytest.mark.unit
 
