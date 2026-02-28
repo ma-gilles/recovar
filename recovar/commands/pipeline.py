@@ -32,10 +32,16 @@ def add_args(parser: argparse.ArgumentParser):
     parser.add_argument('--zdim', type=list_of_ints, default=[1,2,4,10,20], help="Dimensions of latent variable. Default=1,2,4,10,20")
 
     parser.add_argument(
-        "--poses", type=os.path.abspath, required=True, help="Image poses (.pkl)"
+        "--poses", type=os.path.abspath, required=False, default=None,
+        help="Image poses (.pkl). If not provided, auto-extracted from particles file (.star or .cs)"
     )
     parser.add_argument(
-        "--ctf", metavar="pkl", type=os.path.abspath, required=True, help="CTF parameters (.pkl)"
+        "--ctf", metavar="pkl", type=os.path.abspath, required=False, default=None,
+        help="CTF parameters (.pkl). If not provided, auto-extracted from particles file (.star or .cs)"
+    )
+    parser.add_argument(
+        "--downsample", type=int, default=None,
+        help="Downsample images to this box size via Fourier cropping (must be even, <= original size)"
     )
 
     parser.add_argument(
@@ -428,6 +434,19 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
 def standard_recovar_pipeline(args):
     st_time = time.time()
 
+    # --- Validate poses/ctf availability ---
+    if args.poses is None or args.ctf is None:
+        ext = args.particles.rsplit('.', 1)[-1].lower()
+        if ext not in ('star', 'cs'):
+            raise ValueError(
+                "--poses and --ctf are required when particles file is not .star or .cs. "
+                "Provide --poses and --ctf, or use a .star/.cs particles file."
+            )
+        if args.poses is None:
+            logger.info("No --poses provided; will auto-extract from %s", args.particles)
+        if args.ctf is None:
+            logger.info("No --ctf provided; will auto-extract from %s", args.particles)
+
     # --- Setup ---
     path_mapping = copy_data_to_temp_folder(args)
 
@@ -469,14 +488,45 @@ def standard_recovar_pipeline(args):
 
     logger.info(args)
 
+    # --- Auto pre-downsample to disk if requested ---
+    if getattr(args, 'downsample', None) is not None:
+        from recovar.commands.downsample import downsample_to_disk
+
+        ds_dir = os.path.join(args.outdir, "downsampled")
+        ds_mrcs = os.path.join(ds_dir, f"particles.{args.downsample}.mrcs")
+
+        if os.path.exists(ds_mrcs):
+            logger.info("Using cached downsampled images: %s", ds_mrcs)
+        else:
+            logger.info("Pre-downsampling images to D=%d ...", args.downsample)
+            downsample_to_disk(
+                particles_file=args.particles,
+                target_D=args.downsample,
+                outdir=ds_dir,
+                datadir=getattr(args, 'datadir', None) or "",
+                strip_prefix=getattr(args, 'strip_prefix', None),
+            )
+
+        ds_star = os.path.join(ds_dir, f"particles.{args.downsample}.star")
+
+        # Swap to downsampled data (STAR has full metadata for both CS and STAR input)
+        args.particles = ds_star
+        args.downsample = None
+        args.datadir = None
+        if hasattr(args, 'strip_prefix'):
+            args.strip_prefix = None
+
     # --- Load dataset ---
     ind_split = dataset.figure_out_halfsets(args)
     dataset_loader_dict = dataset.make_dataset_loader_dict(args)
-    logger.info(f"Particles file: {dataset_loader_dict['particles_file']}")
-    logger.info(f"Poses file: {dataset_loader_dict['poses_file']}")
-    logger.info(f"CTF file: {dataset_loader_dict['ctf_file']}")
-    if dataset_loader_dict['datadir']:
-        logger.info(f"Datadir: {dataset_loader_dict['datadir']}")
+    logger.info("Data loading configuration:")
+    logger.info(f"  Particles file: {dataset_loader_dict['particles_file']}")
+    logger.info(f"  Poses file: {dataset_loader_dict.get('poses_file', '(auto-extract from particles)')}")
+    logger.info(f"  CTF file: {dataset_loader_dict.get('ctf_file', '(auto-extract from particles)')}")
+    if dataset_loader_dict.get('downsample_D'):
+        logger.info(f"  Downsample to: {dataset_loader_dict['downsample_D']}")
+    if dataset_loader_dict.get('datadir'):
+        logger.info(f"  Datadir: {dataset_loader_dict['datadir']}")
 
     options = utils.make_algorithm_options(args)
     cryos = dataset.get_split_datasets_from_dict(dataset_loader_dict, ind_split, args.lazy)

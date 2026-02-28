@@ -20,12 +20,12 @@ logger = logging.getLogger(__name__)
 from recovar.image_loader import ImageSource
 
 
-def MRCDataMod(particles_file, ind =None , datadir = None, padding = 0, uninvert_data = False, strip_prefix = None):
-    return tilt_dataset.ImageDataset(particles_file, ind = ind, datadir = datadir, padding = padding, invert_data = uninvert_data, lazy =False, strip_prefix=strip_prefix)
+def MRCDataMod(particles_file, ind=None, datadir=None, padding=0, uninvert_data=False, strip_prefix=None, downsample_D=None):
+    return tilt_dataset.ImageDataset(particles_file, ind=ind, datadir=datadir, padding=padding, invert_data=uninvert_data, lazy=False, strip_prefix=strip_prefix, downsample_D=downsample_D)
 
 
-def LazyMRCDataMod(particles_file, ind =None , datadir = None, padding = 0, uninvert_data = False, strip_prefix = None):
-    return tilt_dataset.ImageDataset(particles_file, ind = ind, datadir = datadir, padding = padding, invert_data = uninvert_data, lazy =True, strip_prefix=strip_prefix)
+def LazyMRCDataMod(particles_file, ind=None, datadir=None, padding=0, uninvert_data=False, strip_prefix=None, downsample_D=None):
+    return tilt_dataset.ImageDataset(particles_file, ind=ind, datadir=datadir, padding=padding, invert_data=uninvert_data, lazy=True, strip_prefix=strip_prefix, downsample_D=downsample_D)
     
     
 def get_num_images_in_dataset(mrc_path, datadir = None, strip_prefix = None):
@@ -578,11 +578,10 @@ class CryoEMHalfsets:
         )
 
 
-# Loads dataset that are stored in the cryoDRGN format
-def load_cryodrgn_dataset(
+def load_dataset(
     particles_file,
-    poses_file,
-    ctf_file,
+    poses_file=None,
+    ctf_file=None,
     datadir=None,
     n_images=None,
     ind=None,
@@ -596,7 +595,14 @@ def load_cryodrgn_dataset(
     premultiplied_ctf=False,
     strip_prefix=None,
     sort_with_Bfac=False,
+    downsample_D=None,
 ):
+    """Load a cryo-EM / cryo-ET dataset.
+
+    Poses and CTF can come from:
+    - Pickle files (legacy cryoDRGN format) via *poses_file* / *ctf_file*
+    - Auto-extracted from the particles STAR or CS file when those are None
+    """
     def _normalize_dataset_indices(ind_value, n_total):
         if ind_value is None:
             return None
@@ -624,8 +630,18 @@ def load_cryodrgn_dataset(
             if np.any(arr >= int(n_total)):
                 raise IndexError(f"ind contains values >= number of images ({int(n_total)})")
         return arr.astype(np.int32, copy=False)
-    
-    # For backward compatibility... Delete at some point?
+
+    # ---- Determine if we can auto-extract metadata ----
+    _auto_extract = (poses_file is None or ctf_file is None)
+    if _auto_extract:
+        from recovar import metadata_parsing
+        if not metadata_parsing.can_extract_poses(particles_file):
+            raise ValueError(
+                f"Cannot auto-extract poses/CTF from '{particles_file}'. "
+                "Provide --poses and --ctf, or use a .star or .cs particles file."
+            )
+
+    # ---- CTF mode defaults ----
     if tilt_series_ctf is None and tilt_series is False:
         tilt_series_ctf = 'cryoem'
     elif tilt_series_ctf is None and tilt_series is True:
@@ -641,26 +657,42 @@ def load_cryodrgn_dataset(
 
     else:
         if lazy:
-            dataset = LazyMRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data, strip_prefix=strip_prefix)
+            dataset = LazyMRCDataMod(particles_file, ind=ind, datadir=datadir, padding=padding, uninvert_data=uninvert_data, strip_prefix=strip_prefix, downsample_D=downsample_D)
         else:
-            dataset = MRCDataMod(particles_file, ind = ind, datadir = datadir, padding = padding, uninvert_data = uninvert_data, strip_prefix=strip_prefix)
+            dataset = MRCDataMod(particles_file, ind=ind, datadir=datadir, padding=padding, uninvert_data=uninvert_data, strip_prefix=strip_prefix, downsample_D=downsample_D)
 
-
+    # ---- Load CTF parameters ----
     from recovar import load_utils
-    ctf_params_all = np.array(load_utils.load_ctf_params(dataset.D, ctf_file))
-    dataset_indices = _normalize_dataset_indices(ind, n_total=ctf_params_all.shape[0])
-    if dataset_indices is None and ctf_params_all.shape[0] != dataset.n_images:
-        raise ValueError(
-            f"CTF parameter count ({ctf_params_all.shape[0]}) must match loaded image count ({dataset.n_images}) "
-            "when ind is not provided"
-        )
-    ctf_params = ctf_params_all if dataset_indices is None else ctf_params_all[dataset_indices]
-    
+    if ctf_file is not None and ctf_file.endswith('.pkl'):
+        # Legacy pickle path
+        ctf_params_all = np.array(load_utils.load_ctf_params(dataset.D, ctf_file))
+        dataset_indices = _normalize_dataset_indices(ind, n_total=ctf_params_all.shape[0])
+        if dataset_indices is None and ctf_params_all.shape[0] != dataset.n_images:
+            raise ValueError(
+                f"CTF parameter count ({ctf_params_all.shape[0]}) must match loaded image count ({dataset.n_images}) "
+                "when ind is not provided"
+            )
+        ctf_params = ctf_params_all if dataset_indices is None else ctf_params_all[dataset_indices]
+    else:
+        # Auto-extract from STAR/CS
+        from recovar import metadata_parsing
+        source_file = ctf_file if ctf_file is not None else particles_file
+        ctf_params = metadata_parsing.auto_parse_ctf(source_file, dataset.D)
+        dataset_indices = _normalize_dataset_indices(ind, n_total=ctf_params.shape[0])
+        if dataset_indices is not None:
+            ctf_params = ctf_params[dataset_indices]
+        elif ctf_params.shape[0] != dataset.n_images:
+            raise ValueError(
+                f"CTF parameter count ({ctf_params.shape[0]}) must match loaded image count ({dataset.n_images}) "
+                "when ind is not provided"
+            )
+        logger.info("Auto-extracted CTF parameters from %s", source_file)
+
     # Initialize bfactor == 0
-    ctf_params = np.concatenate( [ctf_params, np.zeros_like(ctf_params[:,0][...,None])], axis =-1)
-    
-    # Initialize constrast == 1
-    ctf_params = np.concatenate( [ctf_params, np.ones_like(ctf_params[:,0][...,None])], axis =-1)
+    ctf_params = np.concatenate([ctf_params, np.zeros_like(ctf_params[:, 0][..., None])], axis=-1)
+
+    # Initialize contrast == 1
+    ctf_params = np.concatenate([ctf_params, np.ones_like(ctf_params[:, 0][..., None])], axis=-1)
     
     CTF_fun = core.evaluate_ctf_wrapper
 
@@ -735,10 +767,29 @@ def load_cryodrgn_dataset(
             logger.info('CTF from dose weighting - V2')
             
 
-    rots, trans, _ = load_utils.load_poses(poses_file, dataset.n_images, dataset.unpadded_D, ind=dataset_indices)
+    # ---- Load poses ----
+    if poses_file is not None and poses_file.endswith('.pkl'):
+        # Legacy pickle path
+        rots, trans, _ = load_utils.load_poses(poses_file, dataset.n_images, dataset.unpadded_D, ind=dataset_indices)
+    else:
+        # Auto-extract from STAR/CS
+        from recovar import metadata_parsing
+        source_file = poses_file if poses_file is not None else particles_file
+        rots_raw, trans_frac = metadata_parsing.auto_parse_poses(source_file, dataset.unpadded_D)
+        if dataset_indices is not None:
+            rots_raw = rots_raw[dataset_indices]
+            trans_frac = trans_frac[dataset_indices]
+        elif rots_raw.shape[0] != dataset.n_images:
+            raise ValueError(
+                f"Pose count ({rots_raw.shape[0]}) must match loaded image count ({dataset.n_images}) "
+                "when ind is not provided"
+            )
+        # Convert fractional -> pixel (same as load_poses does)
+        rots = rots_raw
+        trans = trans_frac * dataset.unpadded_D
+        logger.info("Auto-extracted poses from %s", source_file)
 
-
-    voxel_sizes = ctf_params[:,0]
+    voxel_sizes = ctf_params[:, 0]
     assert np.all(np.isclose(voxel_sizes - voxel_sizes[0], 0))
     voxel_size = np.float32(voxel_sizes[0])
 
@@ -759,29 +810,32 @@ def load_cryodrgn_dataset(
                 f"Translation array must have shape {expected_t_shape}, got {translations.shape}"
             )
 
-    return CryoEMDataset( dataset, voxel_size,
-                              rots, translations, ctf_params[:,1:], 
-                              CTF_fun = CTF_fun, 
-                              dataset_indices = dataset_indices, 
-                              tilt_series_flag = tilt_series, 
-                              premultiplied_ctf = premultiplied_ctf)
+    return CryoEMDataset(dataset, voxel_size,
+                         rots, translations, ctf_params[:, 1:],
+                         CTF_fun=CTF_fun,
+                         dataset_indices=dataset_indices,
+                         tilt_series_flag=tilt_series,
+                         premultiplied_ctf=premultiplied_ctf)
 
 
+# Backward compatibility alias
+load_cryodrgn_dataset = load_dataset
 
 
 def get_split_datasets_from_dict(dataset_loader_dict, ind_split, lazy = False):
     return get_split_datasets(**dataset_loader_dict, ind_split=ind_split, lazy =lazy)
 
-def get_split_datasets(particles_file, poses_file, ctf_file, datadir,
-                                  uninvert_data = False, ind_file = None,
-                                  padding = 0, n_images = None, tilt_series = False,
-                                 tilt_series_ctf = None,
-                                    angle_per_tilt = 3, dose_per_tilt = 2.9,
-                                   ind_split = None, lazy = False, premultiplied_ctf = False, strip_prefix = None):
-    
+def get_split_datasets(particles_file, poses_file=None, ctf_file=None, datadir=None,
+                       uninvert_data=False, ind_file=None,
+                       padding=0, n_images=None, tilt_series=False,
+                       tilt_series_ctf=None,
+                       angle_per_tilt=3, dose_per_tilt=2.9,
+                       ind_split=None, lazy=False, premultiplied_ctf=False,
+                       strip_prefix=None, downsample_D=None):
+
     cryos = []
     for ind in ind_split:
-        cryos.append(load_cryodrgn_dataset(particles_file, poses_file, ctf_file , datadir = datadir, n_images = n_images, ind = ind, lazy = lazy, padding = padding, uninvert_data = uninvert_data, tilt_series = tilt_series, tilt_series_ctf = tilt_series_ctf, angle_per_tilt = angle_per_tilt, dose_per_tilt = dose_per_tilt, premultiplied_ctf = premultiplied_ctf, strip_prefix = strip_prefix))
+        cryos.append(load_dataset(particles_file, poses_file, ctf_file, datadir=datadir, n_images=n_images, ind=ind, lazy=lazy, padding=padding, uninvert_data=uninvert_data, tilt_series=tilt_series, tilt_series_ctf=tilt_series_ctf, angle_per_tilt=angle_per_tilt, dose_per_tilt=dose_per_tilt, premultiplied_ctf=premultiplied_ctf, strip_prefix=strip_prefix, downsample_D=downsample_D))
 
     return CryoEMHalfsets(cryos[0], cryos[1])
 
@@ -1030,23 +1084,24 @@ def split_index_list(all_valid_image_indices, split_random_seed=0):
         
 
 def make_dataset_loader_dict(args):
-    dataset_loader_dict = { 'particles_file' : args.particles,
-                            'ctf_file': args.ctf ,
-                            'poses_file' : args.poses,
-                            'datadir': args.datadir,
-                            'n_images' : args.n_images,
-                            'ind_file': args.ind,
-                            'padding' : args.padding,
-                            'tilt_series' : False,
-                            'tilt_series_ctf' : 'cryoem',
-                            'angle_per_tilt' : None,
-                            'dose_per_tilt' : None,
-                            'premultiplied_ctf' : False,
-                            'strip_prefix': getattr(args, 'strip_prefix', None),
-                            }
-    
-    # For backward compatibility... Delete at some point?
-    if hasattr(args,'tilt_series'):
+    dataset_loader_dict = {
+        'particles_file': args.particles,
+        'ctf_file': getattr(args, 'ctf', None),
+        'poses_file': getattr(args, 'poses', None),
+        'datadir': args.datadir,
+        'n_images': args.n_images,
+        'ind_file': args.ind,
+        'padding': args.padding,
+        'tilt_series': False,
+        'tilt_series_ctf': 'cryoem',
+        'angle_per_tilt': None,
+        'dose_per_tilt': None,
+        'premultiplied_ctf': False,
+        'strip_prefix': getattr(args, 'strip_prefix', None),
+        'downsample_D': getattr(args, 'downsample', None),
+    }
+
+    if hasattr(args, 'tilt_series'):
         dataset_loader_dict['tilt_series'] = args.tilt_series
         dataset_loader_dict['tilt_series_ctf'] = args.tilt_series_ctf
         dataset_loader_dict['angle_per_tilt'] = args.angle_per_tilt

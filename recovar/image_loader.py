@@ -108,7 +108,7 @@ def load_images(filepath: str, indices: Optional[np.ndarray] = None,
         'mrc': lambda: MRCLoader(filepath, indices, lazy),
         'star': lambda: StarLoader(filepath, indices, datadir, lazy, max_threads, strip_prefix),
         'txt': lambda: MultiMRCLoader.from_txt(filepath, indices, lazy, max_threads),
-        'cs': lambda: CryoSparcLoader(filepath, indices, datadir, lazy, max_threads),
+        'cs': lambda: CryoSparcLoader(filepath, indices, datadir, lazy, max_threads, strip_prefix),
     }
 
     if ext not in loaders:
@@ -435,18 +435,39 @@ class MultiMRCLoader(ImageLoader):
             raise ValueError("mrc_index values must be integers")
         self._file_map["mrc_index"] = mrc_index_values.astype(np.int64, copy=False)
 
-        first_file = str(self._file_map['mrc_file'].iloc[0])
-        first_loader = MRCLoader(first_file, lazy=True)
-        img_size = first_loader.image_size
-        dtype = first_loader._file_dtype
-
         self._loaders: dict[str, MRCLoader] = {}
+        missing_files = []
         for filepath in self._file_map['mrc_file'].unique():
             try:
                 self._loaders[filepath] = MRCLoader(filepath, lazy=True)
             except FileNotFoundError:
-                logger.error("Cannot find MRC file: %s", filepath)
-                raise
+                missing_files.append(filepath)
+
+        if missing_files:
+            n_missing = len(missing_files)
+            sample = missing_files[0]
+            basename = os.path.basename(sample)
+            hint = ""
+            parent_parts = sample.rsplit('/', 2)
+            if len(parent_parts) >= 2:
+                hint = (
+                    f"\n\nTo fix broken paths, try:\n"
+                    f"  --datadir /path/to/directory/containing/{basename}\n"
+                )
+                if '/' in sample:
+                    prefix = sample.rsplit('/', 1)[0]
+                    hint += f"  --strip-prefix {prefix}\n"
+            raise FileNotFoundError(
+                f"Cannot find {n_missing} MRC file(s) referenced in the metadata.\n"
+                f"  First missing: {sample}\n"
+                f"  File basename: {basename}"
+                f"{hint}"
+            )
+
+        # Get image size and dtype from the first successfully loaded file.
+        first_loader = next(iter(self._loaders.values()))
+        img_size = first_loader.image_size
+        dtype = first_loader._file_dtype
 
         # Validate per-file indices eagerly.
         if (self._file_map["mrc_index"] < 0).any():
@@ -595,7 +616,8 @@ class CryoSparcLoader(MultiMRCLoader):
     """Load images from cryoSPARC CS file."""
 
     def __init__(self, filepath: str, indices: Optional[np.ndarray] = None,
-                 datadir: str = "", lazy: bool = True, max_threads: int = 1):
+                 datadir: str = "", lazy: bool = True, max_threads: int = 1,
+                 strip_prefix: Optional[str] = None):
         cs_data = np.load(filepath)
 
         if 'blob/idx' not in cs_data.dtype.names or 'blob/path' not in cs_data.dtype.names:
@@ -614,6 +636,16 @@ class CryoSparcLoader(MultiMRCLoader):
                 p = str(p)
             clean_paths.append(p.lstrip('>'))
 
+        # Strip prefix if provided (same as StarLoader)
+        if strip_prefix:
+            stripped = []
+            for p in clean_paths:
+                if p.startswith(strip_prefix):
+                    stripped.append(p[len(strip_prefix):].lstrip('/'))
+                else:
+                    stripped.append(p)
+            clean_paths = stripped
+
         if not datadir:
             datadir = os.path.dirname(filepath)
         elif not os.path.isabs(datadir):
@@ -624,6 +656,33 @@ class CryoSparcLoader(MultiMRCLoader):
         df = pd.DataFrame({'mrc_file': full_paths, 'mrc_index': blob_idx})
 
         super().__init__(df, indices, lazy, max_threads)
+
+
+# ---------------------------------------------------------------------------
+# Downsampling wrapper
+# ---------------------------------------------------------------------------
+
+class DownsamplingImageLoader(ImageLoader):
+    """Wrapper that Fourier-crops images on the fly during loading."""
+
+    def __init__(self, base_loader: ImageLoader, target_D: int):
+        if target_D > base_loader.D:
+            raise ValueError(
+                f"target_D ({target_D}) must be <= source image size ({base_loader.D})"
+            )
+        if target_D % 2 != 0:
+            raise ValueError(f"target_D must be even, got {target_D}")
+
+        self._base = base_loader
+        self._target_D = target_D
+        super().__init__(base_loader.num_images, target_D, base_loader._dtype)
+
+    def _load(self, indices: np.ndarray) -> np.ndarray:
+        images = self._base._load(indices)
+        if self._target_D == self._base.D:
+            return images
+        from recovar.downsample import downsample_images
+        return downsample_images(images, self._target_D)
 
 
 # ---------------------------------------------------------------------------
