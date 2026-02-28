@@ -6,6 +6,7 @@ import functools
 import nvtx
 import equinox as eqx
 from recovar import core, covariance_core, regularization, utils, jax_config
+import recovar.core_forward as core_forward
 from recovar.configs import ForwardModelConfig, BatchData, ModelState
 import recovar.fourier_transform_utils as fourier_transform_utils
 import os
@@ -510,6 +511,8 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
     
     # Print debug info about input parameters
     
+    config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
+
     data_generator = experiment_dataset.get_image_subset_generator(
         batch_size=batch_size,
         subset_indices=image_subset
@@ -521,17 +524,13 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
         batch = experiment_dataset.image_stack.process_images(batch)
         batch = core.translate_images(batch, experiment_dataset.translations[batch_ind], experiment_dataset.image_shape)
         CTF = experiment_dataset.CTF_fun(experiment_dataset.CTF_params[batch_ind], experiment_dataset.image_shape, experiment_dataset.voxel_size)
-        
+
         if mean_estimate is not None:
-            projected_mean = core.forward_model_from_map(mean_estimate,
-                                                experiment_dataset.CTF_params[batch_ind],
-                                                experiment_dataset.rotation_matrices[batch_ind],
-                                                experiment_dataset.image_shape,
-                                                experiment_dataset.volume_shape,
-                                                experiment_dataset.voxel_size,
-                                                experiment_dataset.CTF_fun,
-                                                disc_type
-                                                )
+            projected_mean = core_forward.forward_model(
+                config, mean_estimate,
+                experiment_dataset.CTF_params[batch_ind],
+                experiment_dataset.rotation_matrices[batch_ind],
+            )
             if experiment_dataset.premultiplied_ctf:
                 batch = batch - projected_mean * CTF
             else:
@@ -830,28 +829,24 @@ def get_average_residual_square_inner(batch, mean_estimate, volume_mask, basis, 
     batch = core.translate_images(batch, translations , image_shape)
     batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
 
-    projected_mean = core.forward_model_from_map(mean_estimate,
-                                         CTF_params,
-                                         rotation_matrices, 
-                                         image_shape, 
-                                         volume_shape, 
-                                        voxel_size, 
-                                        CTF_fun, 
-                                        disc_type                                           
-                                          )
+    config = ForwardModelConfig(
+        image_shape=image_shape, volume_shape=volume_shape,
+        grid_size=grid_size, voxel_size=voxel_size,
+        padding=padding, disc_type=disc_type, CTF_fun=CTF_fun,
+        premultiplied_ctf=False, volume_mask_threshold=volume_mask_threshold,
+    )
+
+    projected_mean = core_forward.forward_model(
+        config, mean_estimate, CTF_params, rotation_matrices,
+    )
 
     projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, image_shape)
 
     ## DO MASK BUSINESS HERE.
     batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
-    AUs = covariance_core.batch_over_vol_forward_model_from_map(basis,
-                                         CTF_params, 
-                                         rotation_matrices,
-                                         image_shape, 
-                                         volume_shape, 
-                                        voxel_size, 
-                                        CTF_fun, 
-                                        disc_type ) 
+    AUs = covariance_core.batch_vol_forward_from_map(
+        config, basis, CTF_params, rotation_matrices,
+    ) 
     # Apply mask on operator
     AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, image_shape )
     AUs = AUs.transpose(1,2,0)
@@ -1014,11 +1009,12 @@ def average_residual_square(
             (contrasts.shape[0], *np.ones(model.mean_estimate.ndim, dtype=int))
         ) * (batch_basis_times_coords2(model.basis, basis_coordinates) + model.mean_estimate[None])
 
-    projected_vols = core.batch_forward_model_from_map(
-        predicted_vols, ctf_params[:, None], rotation_matrices[:, None],
-        config.image_shape, config.volume_shape, config.voxel_size,
-        config.CTF_fun, config.disc_type, False,
-    )[:, 0]
+    # Per-image forward model: project volume[i] with CTF[i] and rotation[i]
+    projected_vols = jax.vmap(
+        lambda vol, ctf, rot: core_forward.forward_model(
+            config, vol, ctf[None], rot[None]
+        )[0],
+    )(predicted_vols, ctf_params, rotation_matrices)
 
     if config.process_fn is not None:
         batch = config.process_fn(batch)

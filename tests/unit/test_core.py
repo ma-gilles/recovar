@@ -148,9 +148,9 @@ def test_ctf_param_index_values_are_stable():
 
 
 def test_core_exports_include_expected_symbols():
-    assert "forward_model_from_map" in core.__all__
     assert "evaluate_ctf_wrapper" in core.__all__
     assert "vol_indices_to_vec_indices" in core.__all__
+    assert "batch_translate_images" in core.__all__
 
 
 # ---------------------------------------------------------------------------
@@ -255,25 +255,21 @@ def test_evaluate_ctf_on_gpu(gpu_device):
 
 
 @pytest.mark.gpu
-def test_forward_model_from_map_on_gpu(gpu_device):
+def test_slice_volume_by_map_on_gpu(gpu_device):
     volume_shape = (4, 4, 4)
     image_shape = (2, 2)
     rng = np.random.default_rng(99)
     volume = rng.standard_normal(np.prod(volume_shape)).astype(np.float32)
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
-    ctf_params = np.zeros((1, 9), dtype=np.float32)
-    ctf_fun = lambda p, s, v: np.ones((p.shape[0], s[0] * s[1]), dtype=np.float32)
 
     cpu_out = np.asarray(
-        core.forward_model_from_map(
-            volume, ctf_params, rotation_matrices, image_shape, volume_shape, 1.0, ctf_fun, "nearest", True,
-        )
+        core.slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, "nearest")
     )
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
-            core.forward_model_from_map(
-                jax.device_put(volume), jax.device_put(ctf_params), jax.device_put(rotation_matrices),
-                image_shape, volume_shape, 1.0, ctf_fun, "nearest", True,
+            core.slice_volume_by_map(
+                jax.device_put(volume), jax.device_put(rotation_matrices),
+                image_shape, volume_shape, "nearest",
             )
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)

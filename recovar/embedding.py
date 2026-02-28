@@ -222,10 +222,9 @@ def _compute_batch_coords_p1(
         skip_ctf=config.premultiplied_ctf,
     )
 
-    AUs = covariance_core.batch_over_vol_forward_model_from_map(
-        model.basis, ctf_params, rotation_matrices,
-        config.image_shape, config.volume_shape, config.voxel_size,
-        config.CTF_fun, config.disc_type, config.premultiplied_ctf,
+    AUs = covariance_core.batch_vol_forward_from_map(
+        config, model.basis, ctf_params, rotation_matrices,
+        skip_ctf=config.premultiplied_ctf,
     )
     AUs = AUs.transpose(1, 2, 0)
 

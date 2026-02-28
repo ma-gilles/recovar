@@ -847,13 +847,14 @@ def test_cryoemdataset_predicted_image_and_generators(monkeypatch):
     assert ds.get_image_subset_generator(2, np.array([1]))[0] == "image_subset"
 
     called = {}
+    import recovar.core_forward as core_forward_mod
 
-    def _fake_fwd(volume, ctf, rots, image_shape, volume_shape, voxel_size, ctf_fun, disc_type, skip_ctf):
-        called["disc_type"] = disc_type
+    def _fake_fwd(config, volume, ctf, rots, skip_ctf=False):
+        called["disc_type"] = config.disc_type
         called["skip_ctf"] = skip_ctf
-        return np.ones((len(ctf), image_shape[0] * image_shape[1]), dtype=np.complex64) * (2 + 3j)
+        return np.ones((len(ctf), config.image_shape[0] * config.image_shape[1]), dtype=np.complex64) * (2 + 3j)
 
-    monkeypatch.setattr(core, "forward_model_from_map", _fake_fwd)
+    monkeypatch.setattr(core_forward_mod, "forward_model", _fake_fwd)
     monkeypatch.setattr(dataset.fourier_transform_utils, "get_idft2", lambda x: x)
     pred = ds.get_predicted_image(np.array([0, 2]), volume=np.zeros(ds.volume_size), skip_ctf=True, spatial=True)
     assert pred.shape == (2, 4, 4)
