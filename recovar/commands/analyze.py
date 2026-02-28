@@ -4,7 +4,6 @@ import numpy as np
 from recovar import output as o
 from recovar import dataset, utils, latent_density, embedding
 from scipy.spatial import distance_matrix
-import pickle
 import os, argparse
 from recovar.utils_core import cleanup_temp_files, copy_data_from_pipeline_output
 logger = logging.getLogger(__name__)
@@ -120,8 +119,6 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         cov_zs = np.asarray(cov_zs).astype(np.float32, copy=False)
         contrasts = np.asarray(contrasts).astype(np.float32, copy=False)
 
-        # if pipeline_output.get('unsorted_embedding') is not None:
-        #     zs_unsort
         if lazy:
             cryos = po.get('lazy_dataset')
         else:
@@ -170,17 +167,6 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         plt.close()
 
 
-    # logging.basicConfig(
-    #     format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
-    #                     level=logging.INFO,
-    #                     force = True, 
-    #                     handlers=[
-    #     logging.FileHandler(f"{output_folder}/run.log"),
-    #     logging.StreamHandler()])
-
-
-    
-        # zs_unsort = po.get('unsorted_embedding')['zs'][zdim_key]
         zs_unsort = zs
         if normalize_kmeans:
             # zs_unsort = po.get('unsorted_embedding')['zs'][zdim_key]
@@ -193,7 +179,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         output_folder_kmeans_centers = output_folder_kmeans + '/kmeans_center_volumes/'
         o.mkdir_safe(output_folder_kmeans_centers)
         kmeans_result = {'centers': centers, 'labels': reorder(labels)}
-        pickle.dump(kmeans_result, open(output_folder_kmeans + 'kmeans_result.pkl', 'wb'))
+        utils.pickle_dump(kmeans_result, output_folder_kmeans + 'kmeans_result.pkl')
         np.savetxt(output_folder_kmeans + 'kmeans_center_coords.txt', centers)
     
         if density_path is not None:
@@ -273,20 +259,8 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
                 fsc_mask_edgewidth=fsc_mask_edgewidth
             )
 
-    # for pair_idx in range(len(pairs)):
-    #     pair = pairs[pair_idx]
-    #     z_st = centers[pair[0],:]
-    #     z_end = centers[pair[1],:]
-
-    #     path_folder = output_folder_kmeans + 'path' + str(pair_idx) + '/'        
-    #     o.mkdir_safe(path_folder)
-    #     print("HERE")
-    #     full_path, subsampled_path = o.make_trajectory_plots_from_results(po, zdim, path_folder, cryos = cryos, z_st = z_st, z_end = z_end, gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = False, compute_reproj = compute_reproj, likelihood_threshold = likelihood_threshold)        
-    #     logger.info(f"path {pair_idx} done")
-    #     o.compute_and_save_reweighted(cryos, subsampled_path, zs, cov_zs, noise_variance, path_folder, B_factor, n_bins)
-
         kmeans_res = {'centers': centers.tolist(), 'pairs': pairs}
-        pickle.dump(kmeans_res, open(output_folder_kmeans + 'trajectory_endpoints.pkl', 'wb'))
+        utils.pickle_dump(kmeans_res, output_folder_kmeans + 'trajectory_endpoints.pkl')
     finally:
         # Clean up temp files at the end (including failures).
         if path_mapping is not None and args is not None and not getattr(args, "no_cleanup", False):

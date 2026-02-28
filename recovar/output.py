@@ -11,6 +11,7 @@ from recovar import trajectory
 from recovar import utils
 from recovar import dataset
 from recovar import regularization
+from recovar.output_paths import ResultPaths
 import matplotlib.patheffects as pe
 import time
 
@@ -122,18 +123,11 @@ def slice_at_point(density, axes, point, *args, **kwargs):
     return density
 
 
-# def plot_trajectories_over_density_from_result(results, trajectories, subsampled, zdim ):
-#     latent_space_bounds = ld.compute_latent_space_bounds(results['zs'][zdim])
-#     plot_over_density(results['density'], trajectories, latent_space_bounds,  subsampled = subsampled, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = results['zs'][zdim], cov_zs = results['cov_zs'][zdim] )
-#     return
-
 def plot_over_density(density, trajectories = None, latent_space_bounds = None,  subsampled = None, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = None, cov_zs = None, points = None, projection_function = None, annotate = False, slice_point = None):
 
     colors = ['k', 'cornflowerblue', 'g' , 'r', 'b', 'w', 'c'] if colors is None else colors
     path_exists = trajectories is not None
-        
 
-    # assert projection_function is None or slice_point is None, "Can't have both projection function and slice point"
     assert projection_function in ['slice', 'slice_point', 'sum', None], "Unknown projection function"
     projection_function = half_slice_other if projection_function == 'slice' else projection_function
     projection_function = slice_at_point if projection_function == 'slice_point' else projection_function
@@ -312,30 +306,222 @@ def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us
         variance_real = utils.estimate_variance(u_real.T, s['rescaled'][:n_eigs_eff])
         save_volume(variance_real, output_folder + 'volumes/' + 'variance' + str(n_eigs), volume_shape, from_ft = False,   voxel_size = voxel_size)
 
-# def kmeans_analysis_from_dict(output_folder, pipeline_output, cryos, likelihood_threshold,  n_clusters = 20, generate_volumes = True, zdim =-1, compute_reproj = False):
-#     from recovar import dataset
 
-#     if cryos is None:
+# ---------------------------------------------------------------------------
+# Pipeline result building and saving
+# ---------------------------------------------------------------------------
 
-#         cryos = pipeline_output.get('dataset')#(results['input_args']) if cryos is None else cryos
-#         embedding.set_contrasts_in_cryos(cryos, pipeline_output.get('contrasts')[zdim])
+def build_params_dict(
+    *,
+    volume_shape,
+    voxel_size,
+    s_rescaled,
+    noise_var_from_hf,
+    noise_var_from_het_residual,
+    noise_var_used,
+    noise_result,
+    ub_noise_var_by_var_est,
+    variance_est,
+    variance_fsc,
+    noise_p_variance_est,
+    covariance_options,
+    column_fscs,
+    picked_frequencies,
+    input_args,
+):
+    """Build the params dict saved as ``model/params.pkl``.
 
-#     return kmeans_analysis(output_folder, cryos, pipeline_output.get('mean'), results['u']['rescaled'], results['zs'][zdim], results['cov_zs'][zdim], results['cov_noise'], likelihood_threshold,  n_clusters = n_clusters, generate_volumes = generate_volumes, compute_reproj = compute_reproj)
+    This is the authoritative schema for the params dict (v0.7).
+
+    Schema
+    ------
+    version : str
+        Format version (currently ``'0.7'``).
+    volume_shape : tuple of int
+        3-D grid dimensions, e.g. ``(128, 128, 128)``.
+    voxel_size : float
+        Angstroms per voxel.
+    s : ndarray, shape (n_pcs,)
+        Rescaled eigenvalues from PCA of the covariance.
+    noise_var_from_hf : ndarray
+        Noise variance estimated from half-map differences.
+    noise_var_from_het_residual : ndarray or None
+        Noise variance estimated from heterogeneity residuals (None for tilt series).
+    noise_var_used : ndarray
+        The noise variance actually used during estimation.
+    radial_noise_var_outside_mask : ndarray
+        Radial noise profile estimated from outside the solvent mask.
+    radial_ub_noise_var : ndarray
+        Upper-bound radial noise variance from inside the mask.
+    white_noise_var_outside_mask : float
+        Scalar white noise variance (median of radial profile).
+    ub_noise_var_by_var_est : ndarray
+        Upper-bound noise variance from signal+noise variance estimation.
+    image_PS : ndarray
+        Radial image power spectrum.
+    masked_image_PS : ndarray
+        Radial power spectrum of masked images.
+    variance_est : dict
+        Per-halfset variance estimates.
+    variance_fsc : ndarray
+        FSC of variance half-maps.
+    noise_p_variance_est : ndarray
+        Noise-plus-variance estimate.
+    covariance_options : dict
+        Options used for covariance estimation.
+    column_fscs : ndarray
+        Per-column FSC values.
+    picked_frequencies : ndarray
+        Frequency indices selected for covariance columns.
+    input_args : Namespace
+        The full command-line arguments used to run the pipeline.
+    """
+    return {
+        'version': '0.7',
+        'volume_shape': volume_shape,
+        'voxel_size': voxel_size,
+        's': s_rescaled,
+        # Noise estimates
+        'noise_var_from_hf': np.asarray(noise_var_from_hf),
+        'noise_var_from_het_residual': (
+            np.asarray(noise_var_from_het_residual)
+            if noise_var_from_het_residual is not None else None
+        ),
+        'noise_var_used': np.asarray(noise_var_used),
+        'radial_noise_var_outside_mask': np.asarray(noise_result['radial_noise_var_outside_mask']),
+        'radial_ub_noise_var': np.asarray(noise_result['radial_ub_noise_var']),
+        'white_noise_var_outside_mask': np.asarray(noise_result['white_noise_var_outside_mask']),
+        'ub_noise_var_by_var_est': np.asarray(ub_noise_var_by_var_est),
+        'image_PS': np.asarray(noise_result['image_PS']),
+        'masked_image_PS': np.asarray(noise_result['masked_image_PS']),
+        # Variance and covariance
+        'variance_est': variance_est,
+        'variance_fsc': variance_fsc,
+        'noise_p_variance_est': noise_p_variance_est,
+        'covariance_options': covariance_options,
+        'column_fscs': column_fscs,
+        'picked_frequencies': picked_frequencies,
+        # Input
+        'input_args': input_args,
+    }
+
+
+def build_embedding_dict(zs, cov_zs, est_contrasts):
+    """Build the embedding dict saved as ``model/embeddings.pkl``.
+
+    Schema
+    ------
+    zs : dict[int | str, ndarray]
+        Latent coordinates keyed by zdim (e.g. ``{4: array(...), '4_noreg': ...}``).
+    cov_zs : dict[int | str, ndarray]
+        Posterior covariance of latent coordinates, same keys as *zs*.
+    contrasts : dict[int | str, ndarray]
+        Per-image contrast estimates, same keys as *zs*.
+    zs_cont, cov_zs_cont, contrasts_cont : dict
+        Reserved for continuous embeddings (currently empty).
+    """
+    return {
+        'zs': zs,
+        'cov_zs': cov_zs,
+        'contrasts': est_contrasts,
+        'zs_cont': {},
+        'cov_zs_cont': {},
+        'contrasts_cont': {},
+    }
+
+
+def save_pipeline_results(
+    paths,
+    result,
+    embedding_dict,
+    covariance_cols,
+    particles_ind_split,
+    ind_split,
+    zs_full=None,
+):
+    """Save all pipeline results to disk.
+
+    Parameters
+    ----------
+    paths : ResultPaths
+        Centralized output paths.
+    result : dict
+        The params dict built by :func:`build_params_dict`.
+    embedding_dict : dict
+        The embedding dict built by :func:`build_embedding_dict`.
+    covariance_cols : ndarray or None
+        Covariance columns (None if ``--keep-intermediate`` is off).
+    particles_ind_split : list of ndarray
+        Per-particle halfset indices.
+    ind_split : list of ndarray
+        Per-image halfset indices.
+    zs_full : dict or None
+        Full latent coordinates before complement-mask trimming (if applicable).
+    """
+    paths.ensure_dirs()
+
+    utils.pickle_dump(particles_ind_split, paths.particles_halfsets)
+    utils.pickle_dump(ind_split, paths.halfsets)
+    utils.pickle_dump(result, paths.params)
+    utils.pickle_dump(covariance_cols, paths.covariance_cols)
+    utils.pickle_dump(embedding_dict, paths.embeddings)
+
+    if zs_full is not None:
+        utils.pickle_dump(zs_full, paths.zs_with_complement)
+
+    write_metadata_json(paths, result)
+
+    logger.info(f"Saved pipeline results to {paths.model_dir}")
+
+
+def write_metadata_json(paths, result):
+    """Write a human-readable JSON manifest alongside the pickle files.
+
+    This file is not loaded by the pipeline -- it exists for users to quickly
+    inspect run parameters without unpickling.
+    """
+    import datetime
+    try:
+        from recovar import __version__
+    except ImportError:
+        __version__ = "unknown"
+
+    zdims = []
+    input_args = result.get('input_args')
+    if input_args is not None:
+        zdims_raw = getattr(input_args, 'zdim', None)
+        if zdims_raw is not None:
+            zdims = [int(z) for z in zdims_raw]
+
+    metadata = {
+        'recovar_version': str(__version__),
+        'params_version': result.get('version', 'unknown'),
+        'saved_at': datetime.datetime.now().isoformat(),
+        'volume_shape': list(result.get('volume_shape', [])),
+        'voxel_size': float(result.get('voxel_size', 0)),
+        'zdims_computed': zdims,
+        'files': {
+            'params': 'model/params.pkl',
+            'embeddings': 'model/embeddings.pkl',
+            'covariance_cols': 'model/covariance_cols.pkl',
+            'halfsets': 'model/halfsets.pkl',
+            'particles_halfsets': 'model/particles_halfsets.pkl',
+            'mean_volume': 'output/volumes/mean.mrc',
+            'mask': 'output/volumes/mask.mrc',
+        },
+    }
+
+    try:
+        with open(paths.metadata, 'w') as f:
+            json.dump(metadata, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Could not write metadata.json: {e}")
 
 
 def kmeans_analysis(output_folder, zs, n_clusters = 20):
-
-    #key = 'zs12'
-    #zs = results[key]
-    #cov_zs = results['cov_' + key]
     reorder = zs.shape[1] != 1
     labels, centers = cluster_kmeans(zs, n_clusters, reorder = reorder)
-    
-    import os
-    try:
-        os.mkdir(output_folder)
-    except:
-        pass
+    mkdir_safe(output_folder)
 
     def plot_axes(axes = [0,1]):
         fig,ax = scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=True, labels=None, alpha=0.1, s=1)
@@ -376,8 +562,6 @@ def move_to_one_folder(path_folder, n_vols, string_name = 'locres_filtered.mrc',
 
 
 def plot_umap(output_folder, zs, centers):
-    # import cryodrgn.analysis as cryodrgn_analysis
-
     def plot_axes(axes = [0,1]):
         fig,ax = scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=True, labels=None, alpha=0.1, s=1)
         fig.set_figheight(6)
@@ -416,110 +600,73 @@ def plot_umap(output_folder, zs, centers):
 
 def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None):
 
-    #batch_size = 
-
     if n_min_particles is None:
-        n_min_particles =100
+        n_min_particles = 100
 
     mkdir_safe(output_folder)
-    new_volume_generation = True
-    if new_volume_generation:
-        from recovar import heterogeneity_volume, latent_density
-        for k in range(path_subsampled.shape[0]):
-            output_folder_this = output_folder + "/vol" + format(k, '04d') + "/"
-            mkdir_safe(output_folder_this)
-            ndim = zs.shape[-1]
-            # n_bins = 30
-            latent_points = path_subsampled[k][None]
-            np.savetxt(output_folder_this + 'latent_coords.txt', latent_points)
+    from recovar import heterogeneity_volume, latent_density
+    for k in range(path_subsampled.shape[0]):
+        output_folder_this = output_folder + "/vol" + format(k, '04d') + "/"
+        mkdir_safe(output_folder_this)
+        ndim = zs.shape[-1]
+        latent_points = path_subsampled[k][None]
+        np.savetxt(output_folder_this + 'latent_coords.txt', latent_points)
 
-            if embedding_option == 'llh':
-                log_likelihoods = latent_density.compute_latent_log_likelihood(latent_points, zs, cov_zs)[...,0]
-                heterogeneity_distances = log_likelihoods - np.min(log_likelihoods)
-            elif embedding_option == 'cov_dist':
-                cov_zs = cov_zs#*0 + np.eye(dim)
-                heterogeneity_distances = latent_density.compute_latent_quadratic_forms_in_batch(latent_points, zs, cov_zs)[...,0]
-            elif embedding_option == 'dist':
-                cov_zs = cov_zs*0 + np.eye(ndim)
-                heterogeneity_distances = latent_density.compute_latent_log_likelihood(latent_points, zs, cov_zs)[...,0]
-            else:
-                raise ValueError("Unknown embed option")
+        if embedding_option == 'llh':
+            log_likelihoods = latent_density.compute_latent_log_likelihood(latent_points, zs, cov_zs)[...,0]
+            heterogeneity_distances = log_likelihoods - np.min(log_likelihoods)
+        elif embedding_option == 'cov_dist':
+            heterogeneity_distances = latent_density.compute_latent_quadratic_forms_in_batch(latent_points, zs, cov_zs)[...,0]
+        elif embedding_option == 'dist':
+            cov_zs = cov_zs*0 + np.eye(ndim)
+            heterogeneity_distances = latent_density.compute_latent_log_likelihood(latent_points, zs, cov_zs)[...,0]
+        else:
+            raise ValueError("Unknown embed option")
 
+        heterogeneity_distances = cryos.split_units_array(heterogeneity_distances)
 
-            # latent_points = path_subsampled[k][None]
-            # log_likelihoods = latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], zs, cov_zs)[...,0]
-            heterogeneity_distances = cryos.split_units_array(heterogeneity_distances)
+        from recovar import noise
 
-            from recovar import noise
+        locres_maskrad = cryos.grid_size * cryos.voxel_size / maskrad_fraction
+        logger.info(f"Mask radius fraction = {maskrad_fraction}. Setting locres_maskrac = locres_sampling = box_size * voxel_size / {maskrad_fraction} = {locres_maskrad:.1f} Angstroms. Using {n_min_particles} particles for template.")
+        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, output_folder_this, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely')
 
-            locres_maskrad = cryos.grid_size * cryos.voxel_size / maskrad_fraction
-            logger.info(f"Mask radius fraction = {maskrad_fraction}. Setting locres_maskrac = locres_sampling = box_size * voxel_size / {maskrad_fraction} = {locres_maskrad:.1f} Angstroms. Using {n_min_particles} particles for template.")
-            heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_folder_this, ndim, n_bins, B_factor, tau = None, n_min_particles = n_min_particles, locres_sampling = locres_maskrad, locres_maskrad = locres_maskrad, locres_edgwidth = 0, upsampling_for_ests = 1, use_mask_ests =False, grid_correct_ests = False, save_all_estimates=save_all_estimates, metric_used= 'locshellmost_likely')
+        if apply_global_filtering:
+            from recovar import locres
+            import glob
 
-            # Apply global filtering to the generated halfmaps if requested
-            if apply_global_filtering:
-                from recovar import locres
-                import glob
-                
-                # Find the halfmap files that were just generated
-                halfmap_files = glob.glob(output_folder_this + "half*_unfil.mrc")
-                if len(halfmap_files) >= 2:
-                    # Load the halfmaps
-                    halfmap1_path = output_folder_this + "halfmap1.mrc"
-                    halfmap2_path = output_folder_this + "halfmap2.mrc"
-                    
-                    if os.path.exists(halfmap1_path) and os.path.exists(halfmap2_path):
-                        halfmap1 = utils.load_mrc(halfmap1_path)
-                        halfmap2 = utils.load_mrc(halfmap2_path)
-                        
-                        # Apply global filtering
-                        filtered_combined, fsc, global_resol = locres.filter_maps_with_global_fsc(
-                            halfmap1, halfmap2, cryos.voxel_size, fsc_mask = fsc_mask
-                        )
-                        
-                        # Save filtered halfmaps with _filtered suffix
-                        filtered_half1_path = output_folder_this + "halfmap1_filtered.mrc"
-                        filtered_half2_path = output_folder_this + "halfmap2_filtered.mrc"
-                        
-                        utils.write_mrc(filtered_half1_path, filtered_combined, voxel_size=cryos.voxel_size)
-                        utils.write_mrc(filtered_half2_path, filtered_combined, voxel_size=cryos.voxel_size)
-                        
-                        logger.info(f"Applied global filtering to volume {k}. Resolution: {global_resol:.2f} Angstroms")
-                        logger.info(f"Saved filtered halfmaps: {filtered_half1_path}, {filtered_half2_path}")
-                    else:
-                        logger.warning(f"Halfmap files not found for volume {k}, skipping global filtering")
+            halfmap_files = glob.glob(output_folder_this + "half*_unfil.mrc")
+            if len(halfmap_files) >= 2:
+                halfmap1_path = output_folder_this + "halfmap1.mrc"
+                halfmap2_path = output_folder_this + "halfmap2.mrc"
+
+                if os.path.exists(halfmap1_path) and os.path.exists(halfmap2_path):
+                    halfmap1 = utils.load_mrc(halfmap1_path)
+                    halfmap2 = utils.load_mrc(halfmap2_path)
+
+                    filtered_combined, fsc, global_resol = locres.filter_maps_with_global_fsc(
+                        halfmap1, halfmap2, cryos.voxel_size, fsc_mask=fsc_mask
+                    )
+
+                    filtered_half1_path = output_folder_this + "halfmap1_filtered.mrc"
+                    filtered_half2_path = output_folder_this + "halfmap2_filtered.mrc"
+
+                    utils.write_mrc(filtered_half1_path, filtered_combined, voxel_size=cryos.voxel_size)
+                    utils.write_mrc(filtered_half2_path, filtered_combined, voxel_size=cryos.voxel_size)
+
+                    logger.info(f"Applied global filtering to volume {k}. Resolution: {global_resol:.2f} Angstroms")
+                    logger.info(f"Saved filtered halfmaps: {filtered_half1_path}, {filtered_half2_path}")
                 else:
-                    logger.warning(f"Not enough halfmap files found for volume {k}, skipping global filtering")
+                    logger.warning(f"Halfmap files not found for volume {k}, skipping global filtering")
+            else:
+                logger.warning(f"Not enough halfmap files found for volume {k}, skipping global filtering")
 
-            # filter the volumes with the global FSC
-            logger.info(f"Done with volume generation {k} stored in {output_folder_this}")
-        move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'locres_filtered.mrc', new_stringname = 'vol' )
-        move_to_one_folder(output_folder, path_subsampled.shape[0], string_name = 'locres.mrc', new_stringname = 'locres' )
-        np.savetxt(output_folder + 'latent_coords.txt', path_subsampled)
-
-    # memory_to_use = utils.get_gpu_memory_total() - path_subsampled.shape[0] * cryos[0].volume_size * 8 / 1e9 * 8
-    # assert memory_to_use > 0, "reduce number of volumes computed at once"
-    # batch_size = 2 * utils.get_image_batch_size(cryos[0].grid_size, memory_to_use)
-    # logger.info(f"batch size in reweighting: {batch_size}")
-
-    # else:
-    #     trajectory_prior, halfmaps = embedding.generate_conformation_from_reweighting(cryos, means, noise_variance, zs, cov_zs, path_subsampled, batch_size = batch_size, disc_type = 'linear_interp', likelihood_threshold = likelihood_threshold, recompute_prior = recompute_prior, volume_mask = volume_mask, adaptive=adaptive)
-    #     save_volumes(trajectory_prior, output_folder +  'reweight_')
-    #     save_volumes(halfmaps[0], output_folder +  'halfmap0_reweight_')
-    #     save_volumes(halfmaps[1], output_folder +  'halfmap1_reweight_')
-
-    
-# def compute_and_save_volumes_from_z(dataset_loader, path_subsampled, zs, cov_zs, noise_variance, output_folder, adaptive = False ):
-#     mkdir_safe(output_folder)
-#     compute_and_save_reweighted(dataset_loader, path_subsampled, zs, cov_zs, noise_variance, output_folder, adaptive = adaptive)
-    
-    # if compute_reproj:
-    #     n_eigs = zs.shape[1]
-    #     trajectory_reproj = embedding.generate_conformation_from_reprojection(path_subsampled, means['combined'], u[:,:n_eigs] )
-    #     save_volumes(trajectory_reproj, output_folder +  'reproj_')
+        logger.info(f"Done with volume generation {k} stored in {output_folder_this}")
+    move_to_one_folder(output_folder, path_subsampled.shape[0], string_name='locres_filtered.mrc', new_stringname='vol')
+    move_to_one_folder(output_folder, path_subsampled.shape[0], string_name='locres.mrc', new_stringname='locres')
+    np.savetxt(output_folder + 'latent_coords.txt', path_subsampled)
 
 
-    
 def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path, likelihood_threshold = 1e-5 ):
     scale_zs = ld.compute_det_cov_xs(cov_zs)
     likelihoods = ld.compute_likelihood_of_latent_given_image(path_subsampled, zs, cov_zs, scale_zs)
@@ -527,7 +674,6 @@ def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path, like
     likelihoods = ld.compute_latent_quadratic_forms(path_subsampled, zs, cov_zs)
     vmax = np.max(likelihoods)
     vmin = np.max([np.min(likelihoods),  1e-8 *np.max(likelihoods)])
-    # print(vmax, vmin)
     plt.ioff()
     for k in range(likelihoods.shape[1]):
         fig, ax = plt.subplots(figsize = (8,8))
@@ -566,41 +712,29 @@ def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path, like
             plt.close(fig)
 
 
-def load_results(datadir, option_str = 'from_halfmap'):
-    model_folder = datadir +'model' + option_str + '/'
-    output_folder = datadir +'output' + option_str + '/'
-    with open(model_folder + 'results.pkl', 'rb') as f:
-        results = pickle.load( f)
-    results['dataset_loader_dict']['compute_ground_truth'] = False
-    # dataset_loader = dataset.get_dataset_loader_from_dict(results['dataset_loader_dict'])
-    grid_to_z, z_to_grid = ld.get_grid_z_mappings(results['latent_space_bounds'], results['density'].shape[0])
-    return results, results['dataset_loader_dict'], grid_to_z, z_to_grid, output_folder #['mean'], results['u'], results['s'], results['volume_mask'], results['dilated_volume_mask'], 
-
-
 def load_results_new(datadir):
     model_folder = datadir +'model'  + '/'
     output_folder = datadir +'output'  + '/'
     with open(model_folder + 'results.pkl', 'rb') as f:
-        results = pickle.load( f)
-    # results['dataset_loader_dict']['compute_ground_truth'] = False
-    # dataset_loader = dataset.get_dataset_loader_from_dict(results['dataset_loader_dict'])
-    # grid_to_z, z_to_grid = ld.get_grid_z_mappings(results['latent_space_bounds'], results['density'].shape[0])
-    return results#, results['dataset_loader_dict'], grid_to_z, z_to_grid
+        results = pickle.load(f)
+    return results
 
 
 class PipelineOutput:
     def __init__(self, result_path):
-        self.params = utils.pickle_load(result_path + '/model/params.pkl')
+        # Normalize trailing slash for backward compat
+        self.result_path = result_path.rstrip('/') + '/'
+        self.paths = ResultPaths(self.result_path.rstrip('/'))
+        self.params = utils.pickle_load(self.paths.params)
         self.embedding = None
         self.embedding_loaded = False
         self._embedding_key_cache = {}
         self._embedding_halfsets_cache = None
-        self.result_path = result_path + '/'
         self.version = str(self.params['version']) if 'version' in self.params else '0'
 
     def _ensure_embedding_raw_loaded(self):
         if self.embedding is None:
-            self.embedding = utils.pickle_load(self.result_path + 'model/' + 'embeddings' + '.pkl')
+            self.embedding = utils.pickle_load(self.paths.embeddings)
 
     def _get_input_args_compat(self):
         if not hasattr(self.params, "get") or "input_args" not in self.params:
@@ -686,7 +820,7 @@ class PipelineOutput:
         return 
 
     def _list_saved_eigenvector_indices(self):
-        vols_dir = self.result_path + 'output/volumes/'
+        vols_dir = self.paths.volumes_dir
         if not os.path.isdir(vols_dir):
             return []
         prefix = 'eigen_pos'
@@ -716,7 +850,7 @@ class PipelineOutput:
         selected_indices = self._select_saved_eigenvector_indices(n_pcs)
         out = np.empty([len(selected_indices), *(self.params['volume_shape'])], dtype=np.float32)
         for i, eig_idx in enumerate(selected_indices):
-            out[i] = utils.load_mrc(self.result_path + 'output/volumes/' + 'eigen_pos' + format(eig_idx, '04d') + '.mrc')
+            out[i] = utils.load_mrc(self.paths.eigenvector(eig_idx))
         return out
 
     def get_u(self, n_pcs=50):
@@ -724,7 +858,7 @@ class PipelineOutput:
         vol_size = int(np.prod(self.params['volume_shape']))
         out = np.empty((len(selected_indices), vol_size), dtype=np.complex64)
         for i, eig_idx in enumerate(selected_indices):
-            vol = utils.load_mrc(self.result_path + 'output/volumes/' + 'eigen_pos' + format(eig_idx, '04d') + '.mrc')
+            vol = utils.load_mrc(self.paths.eigenvector(eig_idx))
             out[i] = np.asarray(fourier_transform_utils.get_dft3(vol), dtype=np.complex64).reshape(-1)
         return out
 
@@ -736,17 +870,17 @@ class PipelineOutput:
             return self.embedding[key]
 
         elif key == 'unsorted_embedding':
-            return utils.pickle_load(self.result_path + 'model/embeddings.pkl')
+            return utils.pickle_load(self.paths.embeddings)
 
         elif key in ('u', 'u_real'):
             return self.get_u_real(50) if key == 'u_real' else self.get_u(50)
 
         elif key == 'mean':
-            return fourier_transform_utils.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/mean.mrc')).reshape(-1)
+            return fourier_transform_utils.get_dft3(utils.load_mrc(self.paths.mean_volume)).reshape(-1)
 
         elif key == 'mean_halfmaps':
-            half1 = fourier_transform_utils.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/mean_half1_unfil.mrc')).reshape(-1)
-            half2 = fourier_transform_utils.get_dft3(utils.load_mrc(self.result_path + 'output/volumes/mean_half2_unfil.mrc')).reshape(-1)
+            half1 = fourier_transform_utils.get_dft3(utils.load_mrc(self.paths.mean_half1_unfil)).reshape(-1)
+            half2 = fourier_transform_utils.get_dft3(utils.load_mrc(self.paths.mean_half2_unfil)).reshape(-1)
             return half1, half2
 
         elif key == 'image_snr':
@@ -760,17 +894,17 @@ class PipelineOutput:
             return PS / self.get('noise_var_used')
 
         elif key == 'variance':
-            return utils.load_mrc(self.result_path + 'output/volumes/variance10.mrc')
+            return utils.load_mrc(self.paths.variance(10))
         elif key == 'variance20':
-            return utils.load_mrc(self.result_path + 'output/volumes/variance20.mrc')
+            return utils.load_mrc(self.paths.variance(20))
         elif key == 'focus_mask':
-            return utils.load_mrc(self.result_path + 'output/volumes/focus_mask.mrc')
+            return utils.load_mrc(self.paths.focus_mask_volume)
         elif key == 'volume_mask':
-            return utils.load_mrc(self.result_path + 'output/volumes/mask.mrc')
+            return utils.load_mrc(self.paths.mask_volume)
         elif key == 'dilated_volume_mask':
-            return utils.load_mrc(self.result_path + 'output/volumes/dilated_mask.mrc')
+            return utils.load_mrc(self.paths.dilated_mask_volume)
         elif key == 'covariance_cols':
-            return utils.pickle_load(self.result_path + 'model/covariance_cols.pkl')
+            return utils.pickle_load(self.paths.covariance_cols)
 
         elif key in ('dataset', 'lazy_dataset'):
             cryos = dataset.load_dataset_from_args(self.get('input_args'), lazy='lazy' in key, ind_split=self.get('halfsets'))
@@ -778,12 +912,12 @@ class PipelineOutput:
             return cryos
 
         elif key == 'halfsets':
-            return utils.pickle_load(self.result_path + 'model/halfsets.pkl')
+            return utils.pickle_load(self.paths.halfsets)
         elif key == 'particles_halfsets':
             if self.version == '0.1':
-                return utils.pickle_load(self.result_path + 'model/halfsets.pkl')
+                return utils.pickle_load(self.paths.halfsets)
             else:
-                return utils.pickle_load(self.result_path + 'model/particles_halfsets.pkl')
+                return utils.pickle_load(self.paths.particles_halfsets)
 
         elif key == 'input_args':
             try:
@@ -846,11 +980,8 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
 
     latent_space_bounds = ld.compute_latent_space_bounds(zs) if latent_space_bounds is None else latent_space_bounds
 
-    # latent_space_bounds = ld.compute_latent_space_bounds(zs) if latent_space_bounds is None else latent_space_bounds
-
-
     st_time = time.time()
-    gt_volumes = None    
+    gt_volumes = None
     basis_size = zs.shape[1]
     if use_input_density and (density.ndim < zs.shape[-1]):
         logger.warning("density dimension is less than zs dimension, truncate zs dimension")
@@ -882,26 +1013,12 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
     else:
         path_z = np.linspace(z_st, z_end, n_vols_along_path)[...,0]
         path_subsampled = path_z
-        path_subsampled = path_subsampled
 
     st_time = time.time()
-    # compute_and_save_reweighted(dataset_loader, path_subsampled, zs, cov_zs, noise_variance, output_folder, B_factor, n_bins = 30)
-    # logger.info(f"vol time {time.time() - st_time}")
-    
+
     if use_input_density:
-        # grid_to_z, z_to_grid = ld.get_grid_z_mappings(latent_space_bounds, num_points = density.shape[0])
-
-        # path_grid = z_to_grid(path_z)
-        # path_grid_subs = z_to_grid(path_subsampled)
-
-        # import jax.scipy
-        density_on_path = density_on_grid(path_z, density, latent_space_bounds) 
-        density_on_path_subs = density_on_grid(path_subsampled, density, latent_space_bounds) 
-
-        #jax.scipy.ndimage.map_coordinates(density, path_grid.T, order=1)
-        # density_on_path_subs = jax.scipy.ndimage.map_coordinates(density, path_grid_subs.T, order=1)
-
-        # density_on_path = ld.compute_latent_space_density_at_pts(path_z, zs, cov_zs)
+        density_on_path = density_on_grid(path_z, density, latent_space_bounds)
+        density_on_path_subs = density_on_grid(path_subsampled, density, latent_space_bounds)
     else:
         logger.warning("density on path not computed")
         density_on_path = ld.compute_latent_space_density_at_pts(path_z, zs, cov_zs) + np.nan
@@ -985,7 +1102,6 @@ def plot_trajectories_over_scatter(trajectories,  subsampled = None, colors = No
             plt.savefig(save_filepath, bbox_inches='tight', dpi=300)
             
     traj_dim = trajectories[0].shape[1] if trajectories is not None else 4
-    # print(traj_dim)
     for k1 in range(np.min([traj_dim,3])):
         for k2 in range(k1+1, traj_dim):
             plot_traj_along_axes([k1, k2])
@@ -996,7 +1112,6 @@ def umap_latent_space(zs):
     st_time = time.time()
     n_components = np.min([zs.shape[1], 2])
     mapper = umap.UMAP(n_components = n_components).fit(zs)
-    # umap.plot.points(mapper) 
     logger.info(f"time to umap: {time.time() - st_time}")
     return mapper
 
