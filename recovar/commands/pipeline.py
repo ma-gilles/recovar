@@ -6,6 +6,7 @@ import numpy as np
 import os, argparse, time, sys
 from recovar import output as o
 from recovar import dataset, homogeneous, embedding, principal_components, mask, utils, noise, output, covariance_estimation
+from recovar.output_paths import ResultPaths
 import recovar.fourier_transform_utils as fourier_transform_utils
 from recovar.utils_core import copy_data_to_temp_folder, save_original_paths_info, cleanup_temp_files
 
@@ -436,8 +437,9 @@ def standard_recovar_pipeline(args):
     if (not args.accept_cpu) and (not utils.jax_has_gpu()):
         raise ValueError("No GPU found. Set --accept-cpu if you really want to run on CPU (probably not). More likely, you want to check that JAX has been properly installed with GPU support.")
 
-    o.mkdir_safe(args.outdir)
-    with open(f"{args.outdir}/command.txt", "w") as text_file:
+    paths = ResultPaths(args.outdir)
+    paths.ensure_dirs()
+    with open(paths.command_txt, "w") as text_file:
         text_file.write('python ' + ' '.join(sys.argv))
 
     save_original_paths_info(path_mapping, args.outdir)
@@ -461,7 +463,7 @@ def standard_recovar_pipeline(args):
         level=logging.INFO,
         force=True,
         handlers=[
-            logging.FileHandler(f"{args.outdir}/run.log"),
+            logging.FileHandler(paths.run_log),
             logging.StreamHandler(),
         ])
 
@@ -562,16 +564,15 @@ def standard_recovar_pipeline(args):
             args.mask_dilate_iter, args.keep_input_mask, args.dilated_mask_dilation_iters)
 
         # --- Save mean and mask volumes ---
-        output_folder = args.outdir + '/output/'
-        o.mkdir_safe(output_folder)
-        o.mkdir_safe(output_folder + 'volumes/')
-        o.save_volume(means['combined'], output_folder + 'volumes/mean', volume_shape,
+        paths.ensure_volumes_dir()
+        # save_volume appends .mrc, so strip the extension from the path
+        o.save_volume(means['combined'], os.path.splitext(paths.mean_volume)[0], volume_shape,
                       from_ft=True, voxel_size=cryos.voxel_size)
-        o.save_volume(means['corrected0'], output_folder + 'volumes/mean_half1_unfil', volume_shape,
+        o.save_volume(means['corrected0'], os.path.splitext(paths.mean_half1_unfil)[0], volume_shape,
                       from_ft=True, voxel_size=cryos.voxel_size)
-        o.save_volume(means['corrected1'], output_folder + 'volumes/mean_half2_unfil', volume_shape,
+        o.save_volume(means['corrected1'], os.path.splitext(paths.mean_half2_unfil)[0], volume_shape,
                       from_ft=True, voxel_size=cryos.voxel_size)
-        o.save_volume(volume_mask, output_folder + 'volumes/mask', volume_shape,
+        o.save_volume(volume_mask, os.path.splitext(paths.mask_volume)[0], volume_shape,
                       from_ft=False, voxel_size=cryos.voxel_size)
 
         # Filter and save mean
@@ -580,7 +581,7 @@ def standard_recovar_pipeline(args):
         half2 = fourier_transform_utils.get_idft3(means['corrected1'].reshape(volume_shape))
         best_filtered_nob, _, _, _, _ = locres.local_resolution(
             half1, half2, 0, cryos.voxel_size, use_filter=True, fsc_threshold=1/7, use_v2=True)
-        o.save_volume(best_filtered_nob, output_folder + 'volumes/mean_filt', volume_shape,
+        o.save_volume(best_filtered_nob, os.path.splitext(paths.mean_filtered)[0], volume_shape,
                       from_ft=False, voxel_size=cryos.voxel_size)
 
         if args.only_mean:
@@ -715,20 +716,19 @@ def standard_recovar_pipeline(args):
         s['rescaled'] = s['rescaled'][zdim_for_rest:]
 
     # --- Save volumes ---
-    output_folder = args.outdir + '/output/'
-    o.mkdir_safe(output_folder)
-    o.save_covar_output_volumes(output_folder, means['combined'], u['rescaled'], s,
+    paths.ensure_volumes_dir()
+    o.save_covar_output_volumes(paths.output_dir + '/', means['combined'], u['rescaled'], s,
                                 volume_mask, volume_shape, voxel_size=cryos.voxel_size)
-    o.save_volume(volume_mask, output_folder + 'volumes/mask', volume_shape,
+    o.save_volume(volume_mask, os.path.splitext(paths.mask_volume)[0], volume_shape,
                   from_ft=False, voxel_size=cryos.voxel_size)
-    o.save_volume(dilated_volume_mask, output_folder + 'volumes/dilated_mask', volume_shape,
+    o.save_volume(dilated_volume_mask, os.path.splitext(paths.dilated_mask_volume)[0], volume_shape,
                   from_ft=False, voxel_size=cryos.voxel_size)
 
     focus_mask = focus_masks[-1]
-    o.save_volume(focus_mask, output_folder + 'volumes/focus_mask', volume_shape,
+    o.save_volume(focus_mask, os.path.splitext(paths.focus_mask_volume)[0], volume_shape,
                   from_ft=False, voxel_size=cryos.voxel_size)
     if args.use_complement_mask:
-        o.save_volume(focus_masks[0], output_folder + 'volumes/complement_mask', volume_shape,
+        o.save_volume(focus_masks[0], os.path.splitext(paths.complement_mask_volume)[0], volume_shape,
                       from_ft=False, voxel_size=cryos.voxel_size)
 
     # --- Build result dict and save ---
@@ -737,10 +737,7 @@ def standard_recovar_pipeline(args):
     else:
         particles_ind_split = ind_split
 
-    embedding_dict = {
-        'zs': zs, 'cov_zs': cov_zs, 'contrasts': est_contrasts,
-        'zs_cont': {}, 'cov_zs_cont': {}, 'contrasts_cont': {},
-    }
+    embedding_dict = o.build_embedding_dict(zs, cov_zs, est_contrasts)
 
     # Reorder embeddings from halfset ordering to original particle ordering
     for entry in embedding_dict:
@@ -752,39 +749,7 @@ def standard_recovar_pipeline(args):
                 embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(
                     embedding_dict[entry][key], particles_ind_split)
 
-    result = {
-        'version': '0.6',
-        's': s['rescaled'],
-        'volume_shape': volume_shape,
-        'voxel_size': cryos.voxel_size,
-        # Noise estimates
-        'noise_var_from_hf': np.asarray(noise_var_from_hf),
-        'noise_var_from_het_residual': np.asarray(noise_var_from_het_residual) if noise_var_from_het_residual is not None else None,
-        'noise_var_used': np.asarray(noise_var_used),
-        'radial_noise_var_outside_mask': np.asarray(noise_result['radial_noise_var_outside_mask']),
-        'radial_ub_noise_var': np.asarray(noise_result['radial_ub_noise_var']),
-        'white_noise_var_outside_mask': np.asarray(noise_result['white_noise_var_outside_mask']),
-        'ub_noise_var_by_var_est': np.asarray(ub_noise_var_by_var_est),
-        'image_PS': np.asarray(noise_result['image_PS']),
-        'masked_image_PS': np.asarray(noise_result['masked_image_PS']),
-        # Variance and covariance
-        'variance_est': variance_est,
-        'variance_fsc': variance_fsc,
-        'noise_p_variance_est': noise_p_variance_est,
-        'covariance_options': covariance_options,
-        'column_fscs': column_fscs,
-        'picked_frequencies': picked_frequencies,
-        # Input
-        'input_args': args,
-    }
-
-    output_model_folder = args.outdir + '/model/'
-    o.mkdir_safe(args.outdir)
-    o.mkdir_safe(output_model_folder)
-
-    utils.pickle_dump(particles_ind_split, output_model_folder + 'particles_halfsets.pkl')
-    utils.pickle_dump(ind_split, output_model_folder + 'halfsets.pkl')
-    args.halfsets = output_model_folder + 'particles_halfsets.pkl'
+    args.halfsets = paths.particles_halfsets
 
     # Restore original paths before saving args
     if path_mapping is not None:
@@ -807,15 +772,38 @@ def standard_recovar_pipeline(args):
                 if attr_name == 'datadir' and path_mapping[orig_key]:
                     setattr(args, attr_name, path_mapping[orig_key])
                     logger.info(f"Restored {attr_name} path: {path_mapping[orig_key]}")
+
+    result = o.build_params_dict(
+        volume_shape=volume_shape,
+        voxel_size=cryos.voxel_size,
+        s_rescaled=s['rescaled'],
+        noise_var_from_hf=noise_var_from_hf,
+        noise_var_from_het_residual=noise_var_from_het_residual,
+        noise_var_used=noise_var_used,
+        noise_result=noise_result,
+        ub_noise_var_by_var_est=ub_noise_var_by_var_est,
+        variance_est=variance_est,
+        variance_fsc=variance_fsc,
+        noise_p_variance_est=noise_p_variance_est,
+        covariance_options=covariance_options,
+        column_fscs=column_fscs,
+        picked_frequencies=picked_frequencies,
+        input_args=args,
+    )
+
+    if path_mapping is not None:
         result['original_paths'] = path_mapping
 
-    utils.pickle_dump(result, output_model_folder + 'params.pkl')
-    utils.pickle_dump(covariance_cols, output_model_folder + 'covariance_cols.pkl')
-    utils.pickle_dump(embedding_dict, output_model_folder + 'embeddings.pkl')
-    if args.use_complement_mask:
-        utils.pickle_dump(zs_full, output_model_folder + 'zs_with_complement.pkl')
+    o.save_pipeline_results(
+        paths,
+        result,
+        embedding_dict,
+        covariance_cols,
+        particles_ind_split,
+        ind_split,
+        zs_full=zs_full if args.use_complement_mask else None,
+    )
 
-    logger.info(f"Dumped results to file: {output_model_folder}")
     logger.info(f"total time: {time.time() - st_time}")
 
     # Clean up temp files
@@ -828,7 +816,7 @@ def standard_recovar_pipeline(args):
     zdims = np.array(args.zdim)
     zdim_choose = np.argmin(np.abs(zdims - 10))
     zdim = zdims[zdim_choose]
-    output.standard_pipeline_plots(po, zdim, args.outdir + '/output/plots/')
+    output.standard_pipeline_plots(po, zdim, paths.plots_dir + '/')
 
     return means, u, s, volume_mask, dilated_volume_mask, noise_var_used
 
