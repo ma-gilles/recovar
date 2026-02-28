@@ -173,14 +173,14 @@ def main():
 
             # Compute trajectory - option 1
             run_command(
-                f'{BASE_CMD} compute_trajectory {_pq("test_dataset", "pipeline_output")} -o {_pq("test_dataset", "pipeline_output", "trajectory1")} --endpts {_pq("test_dataset", "pipeline_output", "analysis_2_noreg", "kmeans_center_coords.txt")} --ind=0,1 --density {_pq("test_dataset", "pipeline_output", "density", "deconv_density_knee.pkl")} --zdim=2 --n-vols-along-path=3',
+                f'{BASE_CMD} compute_trajectory {_pq("test_dataset", "pipeline_output")} -o {_pq("test_dataset", "pipeline_output", "trajectory1")} --endpts {_pq("test_dataset", "pipeline_output", "analysis_2_noreg", "kmeans", "centers.txt")} --ind=0,1 --density {_pq("test_dataset", "pipeline_output", "density", "deconv_density_knee.pkl")} --zdim=2 --n-vols-along-path=3',
                 'Compute trajectory (option 1)',
                 'compute_trajectory (option 1)'
             )
 
             # Compute trajectory - option 2
             run_command(
-                f'{BASE_CMD} compute_trajectory {_pq("test_dataset", "pipeline_output")} -o {_pq("test_dataset", "pipeline_output", "trajectory2")} --z_st {_pq("test_dataset", "pipeline_output", "analysis_2_noreg", "kmeans_center_volumes", "vol0000", "latent_coords.txt")} --z_end {_pq("test_dataset", "pipeline_output", "analysis_2_noreg", "kmeans_center_volumes", "vol0002", "latent_coords.txt")} --density {_pq("test_dataset", "pipeline_output", "density", "deconv_density_knee.pkl")} --zdim=2 --n-vols-along-path=0',
+                f'{BASE_CMD} compute_trajectory {_pq("test_dataset", "pipeline_output")} -o {_pq("test_dataset", "pipeline_output", "trajectory2")} --z_st {_pq("test_dataset", "pipeline_output", "analysis_2_noreg", "kmeans", "diagnostics", "center000", "latent_coords.txt")} --z_end {_pq("test_dataset", "pipeline_output", "analysis_2_noreg", "kmeans", "diagnostics", "center002", "latent_coords.txt")} --density {_pq("test_dataset", "pipeline_output", "density", "deconv_density_knee.pkl")} --zdim=2 --n-vols-along-path=0',
                 'Compute trajectory (option 2)',
                 'compute_trajectory (option 2)'
             )

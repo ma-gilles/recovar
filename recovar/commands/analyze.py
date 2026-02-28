@@ -154,8 +154,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         def reorder(array):
             return dataset.reorder_to_original_indexing_from_halfsets(array, po.get('particles_halfsets'))
 
-        output_folder_kmeans = output_folder + '/'
-        o.mkdir_safe(output_folder_kmeans)
+        o.mkdir_safe(output_folder)
         utils.basic_config_logger(output_folder)
 
         import matplotlib.pyplot as plt
@@ -163,56 +162,53 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         plt.hist(contrasts, bins=50)
         plt.xlabel('Contrast')
         plt.ylabel('Number of particles')
-        plt.savefig(output_folder_kmeans + 'contrast_histogram.png')
+        plt.savefig(os.path.join(output_folder, 'contrast_histogram.png'))
         plt.close()
-
 
         zs_unsort = zs
         if normalize_kmeans:
-            # zs_unsort = po.get('unsorted_embedding')['zs'][zdim_key]
             std = np.std(zs_unsort, axis=0)
-            centers, labels = o.kmeans_analysis(output_folder_kmeans + '/PCA/', zs_unsort / std, n_clusters=n_clusters)
+            centers, labels = o.kmeans_analysis(os.path.join(output_folder, 'PCA/'), zs_unsort / std, n_clusters=n_clusters)
             centers = centers * std
         else:
-            centers, labels = o.kmeans_analysis(output_folder_kmeans + '/PCA/', zs_unsort, n_clusters=n_clusters)
+            centers, labels = o.kmeans_analysis(os.path.join(output_folder, 'PCA/'), zs_unsort, n_clusters=n_clusters)
 
-        output_folder_kmeans_centers = output_folder_kmeans + '/kmeans_center_volumes/'
-        o.mkdir_safe(output_folder_kmeans_centers)
+        # Kmeans volumes go into kmeans/ subdirectory
+        kmeans_dir = os.path.join(output_folder, 'kmeans/')
+        o.mkdir_safe(kmeans_dir)
         kmeans_result = {'centers': centers, 'labels': reorder(labels)}
-        utils.pickle_dump(kmeans_result, output_folder_kmeans + 'kmeans_result.pkl')
-        np.savetxt(output_folder_kmeans + 'kmeans_center_coords.txt', centers)
-    
+        utils.pickle_dump(kmeans_result, os.path.join(output_folder, 'kmeans_result.pkl'))
+        np.savetxt(os.path.join(kmeans_dir, 'centers.txt'), centers)
+
         if density_path is not None:
             _, z_to_grid = latent_density.get_grid_z_mappings(latent_space_bounds, input_density.shape[0])
             centers_grid = z_to_grid(centers)
 
-            o.mkdir_safe(output_folder_kmeans + 'density_plots/')
-            o.plot_over_density(input_density, points=centers_grid, annotate=True, plot_folder=output_folder_kmeans + 'density_plots/')
+            o.mkdir_safe(os.path.join(output_folder, 'density_plots/'))
+            o.plot_over_density(input_density, points=centers_grid, annotate=True, plot_folder=os.path.join(output_folder, 'density_plots/'))
 
-            o.mkdir_safe(output_folder_kmeans + 'density_plots_sliced/')
-            o.plot_over_density(input_density, points=centers_grid, annotate=True, plot_folder=output_folder_kmeans + 'density_plots_sliced/', projection_function='slice')
-
-        # move_to_one_folder(output_folder_kmeans_centers, n_clusters )
+            o.mkdir_safe(os.path.join(output_folder, 'density_plots_sliced/'))
+            o.plot_over_density(input_density, points=centers_grid, annotate=True, plot_folder=os.path.join(output_folder, 'density_plots_sliced/'), projection_function='slice')
 
         if (not skip_umap) and (zdim > 1):
             mapper = o.umap_latent_space(zs_unsort)
-            o.mkdir_safe(output_folder + '/umap/')
-            utils.pickle_dump(reorder(mapper.embedding_), output_folder + '/umap/umap_embedding.pkl')
+            o.mkdir_safe(os.path.join(output_folder, 'umap/'))
+            utils.pickle_dump(reorder(mapper.embedding_), os.path.join(output_folder, 'umap/umap_embedding.pkl'))
             from recovar import output
             _, kmeans_ind = output.get_nearest_point(zs_unsort, centers)
 
-            o.plot_umap(output_folder + '/umap/', mapper.embedding_, mapper.embedding_[kmeans_ind])
+            o.plot_umap(os.path.join(output_folder, 'umap/'), mapper.embedding_, mapper.embedding_[kmeans_ind])
 
         if not skip_centers:
             o.compute_and_save_reweighted(
-                cryos, centers, zs, cov_zs, output_folder_kmeans_centers, B_factor, n_bins,
+                cryos, centers, zs, cov_zs, kmeans_dir, B_factor, n_bins,
                 n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
                 apply_global_filtering=apply_global_filtering,
                 fsc_mask=fsc_mask,
                 fsc_mask_radius=fsc_mask_radius,
-                fsc_mask_edgewidth=fsc_mask_edgewidth
+                fsc_mask_edgewidth=fsc_mask_edgewidth,
+                vol_prefix="center"
             )
-
 
         del zs_unsort
 
@@ -223,27 +219,28 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
                 z_st = centers[pair[0], :]
                 z_end = centers[pair[1], :]
 
-                path_folder = output_folder_kmeans + 'traj' + str(pair_idx) + '/'
-                o.mkdir_safe(path_folder)
+                traj_folder = os.path.join(output_folder, f'traj{pair_idx:03d}/')
+                o.mkdir_safe(traj_folder)
                 full_path, subsampled_path = o.make_trajectory_plots_from_results(
-                    po, zdim_key, path_folder, cryos=cryos, z_st=z_st, z_end=z_end, gt_volumes=None,
+                    po, zdim_key, traj_folder, cryos=cryos, z_st=z_st, z_end=z_end, gt_volumes=None,
                     n_vols_along_path=n_vols_along_path, plot_llh=False, input_density=input_density,
                     latent_space_bounds=latent_space_bounds
                 )
 
-                logger.info(f"path {pair_idx} done")
+                logger.info(f"trajectory {pair_idx} done")
                 o.compute_and_save_reweighted(
-                    cryos, subsampled_path, zs, cov_zs, path_folder, B_factor, n_bins,
+                    cryos, subsampled_path, zs, cov_zs, traj_folder, B_factor, n_bins,
                     n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
                     apply_global_filtering=apply_global_filtering,
                     fsc_mask=fsc_mask,
                     fsc_mask_radius=fsc_mask_radius,
-                    fsc_mask_edgewidth=fsc_mask_edgewidth
+                    fsc_mask_edgewidth=fsc_mask_edgewidth,
+                    vol_prefix="state"
                 )
 
         else:
-            path_folder = output_folder_kmeans + 'traj' + str(0) + '/'
-            o.mkdir_safe(path_folder)
+            traj_folder = os.path.join(output_folder, 'traj000/')
+            o.mkdir_safe(traj_folder)
             q = 0.03
             zs_1d = np.asarray(zs).reshape(-1)
             pairs = np.percentile(zs_1d, [q, 100 - q])
@@ -251,16 +248,17 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
             z_end = pairs[1]
             subsampled_path = np.linspace(z_st, z_end, n_vols_along_path)[:, None]
             o.compute_and_save_reweighted(
-                cryos, subsampled_path, zs, cov_zs, path_folder, B_factor, n_bins,
+                cryos, subsampled_path, zs, cov_zs, traj_folder, B_factor, n_bins,
                 save_all_estimates=False, n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
                 apply_global_filtering=apply_global_filtering,
                 fsc_mask=fsc_mask,
                 fsc_mask_radius=fsc_mask_radius,
-                fsc_mask_edgewidth=fsc_mask_edgewidth
+                fsc_mask_edgewidth=fsc_mask_edgewidth,
+                vol_prefix="state"
             )
 
         kmeans_res = {'centers': centers.tolist(), 'pairs': pairs}
-        utils.pickle_dump(kmeans_res, output_folder_kmeans + 'trajectory_endpoints.pkl')
+        utils.pickle_dump(kmeans_res, os.path.join(output_folder, 'trajectory_endpoints.pkl'))
     finally:
         # Clean up temp files at the end (including failures).
         if path_mapping is not None and args is not None and not getattr(args, "no_cleanup", False):

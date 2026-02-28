@@ -169,7 +169,6 @@ def compute_state(args):
             fsc_mask_radius=fsc_mask_radius,
             fsc_mask_edgewidth=fsc_mask_edgewidth
         )
-        o.move_to_one_folder(output_folder, target_zs.shape[0])
     finally:
         # Clean up temp files at the end (including failures).
         if path_mapping is not None and not getattr(args, "no_cleanup", False):

@@ -991,7 +991,7 @@ def main():
     for l_idx, l in enumerate(labels_to_plot):
         gt_map = fourier_transform_utils.get_idft3(synt.volumes[l].reshape(cryos[0].volume_shape)).real
         estimate_map = utils.load_mrc(
-            Path(output_state_dir, 'all_volumes', f'vol{l_idx:04d}.mrc')
+            Path(output_state_dir, f'state{l_idx:03d}.mrc')
         )
         errors_metrics = metrics.compute_volume_error_metrics_from_gt(
             gt_map, estimate_map, cryos[0].voxel_size, None, partial_mask=None,
@@ -1003,7 +1003,9 @@ def main():
         # write mask to file
         mask = errors_metrics.get('mask')
         if mask is not None:
-            mask_path = os.path.join(output_state_dir, 'all_volumes', f'mask_{l_idx:04d}.mrc')
+            diag_dir = os.path.join(output_state_dir, 'diagnostics', f'state{l_idx:03d}')
+            os.makedirs(diag_dir, exist_ok=True)
+            mask_path = os.path.join(diag_dir, 'mask.mrc')
             utils.write_mrc(mask_path, mask.astype(np.float32), voxel_size=cryos[0].voxel_size)
             logger.info(f"Mask written to: {mask_path}")
 

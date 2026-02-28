@@ -57,7 +57,7 @@ def extract_image_subset(input_dir, output_path, subvolume_idx, mask, coordinate
     if coordinate is not None:
         params = utils.pickle_load(input_dir + '/params.pkl')
         # load locres?
-        grid_size = utils.load_mrc(input_dir + "/locres.mrc").shape[0]
+        grid_size = utils.load_mrc(input_dir + "/local_resolution.mrc").shape[0]
         sampling_points = locres.get_sampling_points(grid_size, params['locres_sampling'], params['locres_maskrad'], params['voxel_size']) + grid_size//2
         subvolume_idx = nearest_point_index(coordinate, sampling_points)
         logger.info(f"Extract images for feature at coordinate = {coordinate} (pixels), Nearest point to the coordinate is {subvolume_idx}")

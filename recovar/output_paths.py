@@ -189,3 +189,53 @@ class ResultPaths:
     def ensure_volumes_dir(self):
         """Create the volumes directory only."""
         os.makedirs(self.volumes_dir, exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Analysis output naming (downstream: kmeans, trajectories)
+# ---------------------------------------------------------------------------
+
+class AnalysisPaths:
+    """Path helpers for downstream analysis outputs (kmeans, trajectories).
+
+    Follows RELION-inspired conventions:
+    - 1-indexed, zero-padded volume names (center001.mrc, state001.mrc)
+    - Primary volumes flat in the output directory
+    - Half-maps alongside: center001_half1_unfil.mrc
+    - Diagnostics in subdirectories: diagnostics/center001/
+    """
+
+    def __init__(self, analysis_dir):
+        self.root = analysis_dir
+
+    @property
+    def kmeans_dir(self):
+        return os.path.join(self.root, "kmeans")
+
+    @property
+    def plots_dir(self):
+        return os.path.join(self.root, "plots")
+
+    def traj_dir(self, index):
+        """Return trajectory directory (1-indexed, zero-padded)."""
+        return os.path.join(self.root, f"traj{index:03d}")
+
+    @staticmethod
+    def vol_stem(prefix, index):
+        """Volume stem without extension, e.g. 'center000'."""
+        return f"{prefix}{index:03d}"
+
+    @staticmethod
+    def vol_filename(prefix, index):
+        """Primary volume filename, e.g. 'center000.mrc'."""
+        return f"{prefix}{index:03d}.mrc"
+
+    @staticmethod
+    def halfmap_filename(prefix, index, half):
+        """Half-map filename, e.g. 'center000_half1_unfil.mrc'."""
+        return f"{prefix}{index:03d}_half{half}_unfil.mrc"
+
+    @staticmethod
+    def diagnostics_subdir(prefix, index):
+        """Diagnostics subdirectory, e.g. 'diagnostics/center000'."""
+        return os.path.join("diagnostics", f"{prefix}{index:03d}")

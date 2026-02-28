@@ -137,7 +137,6 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         # Take best then filter 
 
         opt_halfmaps = [None, None]
-        # opt_halfmaps2 = [None, None]
 
         for k in range(2):
             if metric_used == "locmost_likely":
@@ -148,23 +147,20 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
 
         best_filtered, best_filtered_res, best_auc, fscs, _ = locres.local_resolution(opt_halfmaps[0], opt_halfmaps[1], B_factor, cryos.voxel_size, locres_sampling = locres_sampling, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = False)
 
-        # best_filtered, best_filtered_res, best_auc, fscs, _ = locres.local_resolution(opt_halfmaps2[0], opt_halfmaps2[1], B_factor, cryos.voxel_size, locres_sampling = locres_sampling, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = False)
-        # recovar.utils.write_mrc(output_folder + name + "optimized_locres_filtered_split.mrc", best_filtered, voxel_size = cryos.voxel_size)
-
         best_filtered_nob, _, _, _, _ = locres.local_resolution(opt_halfmaps[0], opt_halfmaps[1], 0, cryos.voxel_size, locres_sampling = locres_sampling, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = True)
         prefix = ''
 
-        recovar.utils.write_mrc(output_folder + name + prefix+ "locres_filtered_nob.mrc", best_filtered_nob, voxel_size = cryos.voxel_size)
+        recovar.utils.write_mrc(output_folder + name + prefix + "filtered_noB.mrc", best_filtered_nob, voxel_size = cryos.voxel_size)
 
-        # Best filtered
-        recovar.utils.write_mrc(output_folder + name + prefix+  "locres_filtered.mrc", best_filtered, voxel_size = cryos.voxel_size)
-        recovar.utils.write_mrc(output_folder + name + prefix+ "locres.mrc", best_filtered_res, voxel_size = cryos.voxel_size)
-        # recovar.utils.write_mrc(output_folder + name + "optimized_auc.mrc", best_auc, voxel_size = cryos.voxel_size)
+        # Best filtered volume
+        recovar.utils.write_mrc(output_folder + name + prefix + "filtered.mrc", best_filtered, voxel_size = cryos.voxel_size)
+        # Local resolution map
+        recovar.utils.write_mrc(output_folder + name + prefix + "local_resolution.mrc", best_filtered_res, voxel_size = cryos.voxel_size)
 
-        # Also store halfmaps. This naming is important to also import into relion
-        recovar.utils.write_mrc(output_folder + name + prefix+ "half1_unfil.mrc", opt_halfmaps[0], voxel_size = cryos.voxel_size)
-        recovar.utils.write_mrc(output_folder + name + prefix+ "half2_unfil.mrc", opt_halfmaps[1] , voxel_size = cryos.voxel_size)
-        recovar.utils.write_mrc(output_folder + name +  prefix+ "unfil.mrc", (opt_halfmaps[0] + opt_halfmaps[1])/2, voxel_size = cryos.voxel_size)
+        # Half-maps (RELION-compatible naming)
+        recovar.utils.write_mrc(output_folder + name + prefix + "half1_unfil.mrc", opt_halfmaps[0], voxel_size = cryos.voxel_size)
+        recovar.utils.write_mrc(output_folder + name + prefix + "half2_unfil.mrc", opt_halfmaps[1], voxel_size = cryos.voxel_size)
+        recovar.utils.write_mrc(output_folder + name + prefix + "unfil.mrc", (opt_halfmaps[0] + opt_halfmaps[1])/2, voxel_size = cryos.voxel_size)
 
 
         volume_sampling = locres.make_sampling_volume(cryos[0].grid_size, locres_sampling, cryos.voxel_size, locres_maskrad)
@@ -180,9 +176,8 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
 
                 best_filtered, best_filtered_res, best_auc, fscs, _ = locres.local_resolution(opt_halfmaps[0], opt_halfmaps[1], B_factor, cryos.voxel_size, locres_sampling = locres_sampling, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = False)
 
-                recovar.utils.write_mrc(output_folder + name + prefix + "locres_filtered_smooth.mrc", best_filtered, voxel_size = cryos.voxel_size)
-                recovar.utils.write_mrc(output_folder + name + prefix +"locres_smooth.mrc", best_filtered_res, voxel_size = cryos.voxel_size)
-                # recovar.utils.write_mrc(output_folder + name + "optimized_auc_smooth.mrc", best_auc, voxel_size = cryos.voxel_size)
+                recovar.utils.write_mrc(output_folder + name + prefix + "filtered_smooth.mrc", best_filtered, voxel_size = cryos.voxel_size)
+                recovar.utils.write_mrc(output_folder + name + prefix + "local_resolution_smooth.mrc", best_filtered_res, voxel_size = cryos.voxel_size)
 
 
             # Filter then take best
@@ -198,11 +193,11 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
 
             # opt_filtered_before = jnp.take_along_axis(loc_filtered_estimates , choice[None], axis=0)[0]
             
-            recovar.utils.write_mrc(output_folder + name + prefix+ "locres_filtered_before.mrc", opt_filtered_before, voxel_size = cryos.voxel_size)
+            recovar.utils.write_mrc(output_folder + name + prefix + "filtered_before.mrc", opt_filtered_before, voxel_size = cryos.voxel_size)
 
             if metric_used == "locmost_likely":
                 opt_filtered_before, smoothed_choice = smoothed_best_choice(loc_filtered_estimates , choice, kernel_rad=kernel_rad)
-                recovar.utils.write_mrc(output_folder + name + prefix +"locres_filtered_before_smooth.mrc", opt_filtered_before, voxel_size = cryos.voxel_size)
+                recovar.utils.write_mrc(output_folder + name + prefix + "filtered_before_smooth.mrc", opt_filtered_before, voxel_size = cryos.voxel_size)
 
             recovar.output.save_volumes(loc_filtered_estimates, output_folder + "estimates_filt", cryos.volume_shape, voxel_size = cryos.voxel_size, from_ft = from_ft)
 
@@ -351,8 +346,7 @@ def get_inds_for_subvolume(path_to_vol_folder, subvolume_idx):
 
     params = recovar.utils.pickle_load(path_to_vol_folder + '/params.pkl')
 
-    # load locres?
-    locres_ar = recovar.utils.load_mrc(path_to_vol_folder + "/locres.mrc")
+    locres_ar = recovar.utils.load_mrc(path_to_vol_folder + "/local_resolution.mrc")
     grid_size = locres_ar.shape[0]
     # maskrad_pix = np.round(params['locres_maskrad'] / params['voxel_size']).astype(int)
     sampling_points = locres.get_sampling_points(grid_size, params['locres_sampling'], params['locres_maskrad'], params['voxel_size'])
