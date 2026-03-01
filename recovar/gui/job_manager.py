@@ -404,6 +404,7 @@ class JobManager:
 #SBATCH --account={slurm_account}{extra_sbatch}
 
 set -euo pipefail
+export PYTHONUNBUFFERED=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
 echo "Node: $(hostname)"
@@ -1043,8 +1044,13 @@ echo "Completed at: $(date)"
 #SBATCH --account={opts.get('account', 'amits')}
 
 set -euo pipefail
+export PYTHONUNBUFFERED=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
-{f'export PYTHONPATH="{repo_root}:$PYTHONPATH"' if repo_root else ''}
+{f'export PYTHONPATH="{repo_root}:${{PYTHONPATH:-}}"' if repo_root else ''}
+
+echo "PYTHONPATH=$PYTHONPATH"
+echo "which python: {python_path}"
+{python_path} -c "import recovar; print('recovar from:', recovar.__file__); from recovar.cuda_backproject import cuda_available; print('CUDA available:', cuda_available())" || echo "Pre-check failed"
 
 {' '.join(cmd)}
 """)
