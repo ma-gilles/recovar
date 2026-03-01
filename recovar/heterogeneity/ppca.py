@@ -69,15 +69,6 @@ def M_step(experiment_dataset, latent_means, latent_covariances, noise_variance,
     return W
 
 
-def batch_vec(x):
-    return x.swapaxes(-1,-2).reshape(-1, x.shape[-1]**2)
-
-def batch_unvec(x):
-    n = np.sqrt(x.shape[-1]).astype(int)
-    return x.reshape(-1,n,n).swapaxes(-1,-2)
-
-
-
 def EM(experiment_dataset, mean_estimate, noise_variance, EM_iter = 20, basis_size = 10):
 
     # Initialize

@@ -278,10 +278,7 @@ def pickle_load( file):
 
     
 def get_variances(covariance_cols, picked_frequencies = None):
-    # picked_frequencies = np.array(covariance_core.get_picked_frequencies(volume_shape, radius = constants.COLUMN_RADIUS, use_half = True))
-
     volume_shape = guess_vol_shape_from_vol_size(covariance_cols.shape[-1])
-    # freqs = core.vec_indices_to_frequencies(picked_frequencies, volume_shape)
 
     # Probably a better way to do this...
     variances = np.zeros(picked_frequencies.size, covariance_cols.dtype)
@@ -364,7 +361,6 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
                 'rlnAnglePsi', 
                 'rlnOriginXAngst', 
                 'rlnOriginYAngst',] 
-        # import cryodrgn.utils as cryodrgn_utils
         rots = R_to_relion(rotation_matrices)
         values += [ rots[:,0], rots[:,1], rots[:,2], translations[:,0], translations[:,1] ]
     
