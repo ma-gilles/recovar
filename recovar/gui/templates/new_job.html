@@ -292,7 +292,7 @@ function jobForm() {
       try {
         const resp = await fetch('/api/browse?path=' + encodeURIComponent(path));
         const data = await resp.json();
-        if (data.error) { alert(data.error); return; }
+        if (data.error) { showToast(data.error, 'error'); return; }
         this.browserPath = data.path;
         this.browserParent = data.parent;
         this.browserEntries = data.entries;
