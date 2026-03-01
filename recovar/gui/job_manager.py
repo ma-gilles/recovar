@@ -16,6 +16,17 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _is_output_volume(filename: str) -> bool:
+    """Return True if *filename* is a primary output MRC (not half/unfil/mask)."""
+    return (
+        filename.endswith(".mrc")
+        and "_half" not in filename
+        and "_unfil" not in filename
+        and "_mask" not in filename
+    )
+
+
 # ---------------------------------------------------------------------------
 # Job model
 # ---------------------------------------------------------------------------
@@ -368,7 +379,7 @@ class JobManager:
                     continue
                 # Check if it produced output
                 has_output = any(
-                    f.endswith(".mrc") and "_half" not in f and "_unfil" not in f and "_mask" not in f
+                    _is_output_volume(f)
                     for f in os.listdir(tdir)
                     if os.path.isfile(os.path.join(tdir, f))
                 )
@@ -832,7 +843,7 @@ echo "Completed at: $(date)"
                     kmeans_dir = os.path.join(analysis_dir, kmeans_name)
                     if os.path.isdir(kmeans_dir):
                         for f in sorted(os.listdir(kmeans_dir)):
-                            if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f and "_mask" not in f:
+                            if _is_output_volume(f):
                                 analysis["kmeans_volumes"].append({
                                     "path": os.path.join(kmeans_dir, f),
                                     "name": f,
@@ -852,7 +863,7 @@ echo "Completed at: $(date)"
                         if not os.path.isdir(traj_subdir):
                             continue
                         for f in sorted(os.listdir(traj_subdir)):
-                            if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f and "_mask" not in f:
+                            if _is_output_volume(f):
                                 traj_vols.append({
                                     "path": os.path.join(traj_subdir, f),
                                     "name": f,
@@ -901,7 +912,7 @@ echo "Completed at: $(date)"
                 if not os.path.isdir(task_dir):
                     continue
                 for f in sorted(os.listdir(task_dir)):
-                    if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f and "_mask" not in f:
+                    if _is_output_volume(f):
                         info["computed"].append({
                             "path": os.path.join(task_dir, f),
                             "name": f"{tdir}/{f}",
@@ -1159,7 +1170,7 @@ export PYTHONUNBUFFERED=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 {f'export PYTHONPATH="{repo_root}:${{PYTHONPATH:-}}"' if repo_root else ''}
 
-echo "PYTHONPATH=$PYTHONPATH"
+echo "PYTHONPATH=${PYTHONPATH:-}"
 echo "which python: {python_path}"
 {python_path} -c "import recovar; print('recovar from:', recovar.__file__); from recovar.cuda_backproject import cuda_available; print('CUDA available:', cuda_available())" || echo "Pre-check failed"
 
@@ -1214,7 +1225,7 @@ echo "which python: {python_path}"
         # Re-check failed tasks: if output appeared since recovery, promote to completed
         if task.status == STATUS_FAILED:
             has_output = any(
-                f.endswith(".mrc") and "_half" not in f and "_unfil" not in f and "_mask" not in f
+                _is_output_volume(f)
                 for f in os.listdir(task.output_dir)
                 if os.path.isfile(os.path.join(task.output_dir, f))
             )
@@ -1248,7 +1259,7 @@ echo "which python: {python_path}"
                 except OSError:
                     # Process exited - check for output
                     has_output = any(
-                        f.endswith(".mrc") and "_half" not in f and "_unfil" not in f and "_mask" not in f
+                        _is_output_volume(f)
                         for f in os.listdir(task.output_dir)
                         if os.path.isfile(os.path.join(task.output_dir, f))
                     )
@@ -1267,7 +1278,7 @@ echo "which python: {python_path}"
 
         if task.status == STATUS_COMPLETED:
             for f in sorted(os.listdir(task.output_dir)):
-                if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f and "_mask" not in f:
+                if _is_output_volume(f):
                     result["volumes"].append({
                         "path": os.path.join(task.output_dir, f),
                         "name": f,
