@@ -129,7 +129,7 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
 
     if path_exists:
         assert latent_space_bounds is not None, "Need latent space bounds to plot trajectories"
-        grid_to_z, z_to_grid = ld.get_grid_z_mappings(latent_space_bounds, num_points)
+        _, z_to_grid = ld.get_grid_z_mappings(latent_space_bounds, num_points)
     
     def plot_traj_along_axes(axes, points = None ):
         axes = tuple(axes)
@@ -146,13 +146,9 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
         if axis_x > axis_y:
             density_pl = density_pl.T
             
-        ax.imshow((density_pl.T), origin='lower', cmap = cmap, interpolation = 'bilinear')#[...,25,25])
-        # plt.colorbar()
+        ax.imshow((density_pl.T), origin='lower', cmap = cmap, interpolation = 'bilinear')
         if points is not None:
             points = points.copy()
-            # project points in bound:
-            # out_of_bounds_points = ((points < 0) * (points > np.array(density.shape)[None])).any(axis=-1)
-            # points = np.where(points < 0, 0, points)
             out_of_bounds_points = np.zeros(points.shape[0], dtype = bool)
             for k in range(points.shape[1]):
                 out_of_bounds_points = out_of_bounds_points | (points[:,k] > density.shape[k])
@@ -161,8 +157,6 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
                 points[:,k] = np.where(points[:,k] > density.shape[k], density.shape[k], points[:,k])
                 points[:,k] = np.where(points[:,k] < 0, 0, points[:,k])
 
-            #     in_bound_points[k] = z_to_grid(in_bound_points[k])
-            # in_bound_points = np.where(points > (points > np.array(density.shape)[None]), 0, points)
             ax.scatter(points[out_of_bounds_points,axis_x], points[out_of_bounds_points,axis_y], 
                       color = 'red', s = 100, edgecolors= 'black', linewidth=1, alpha=0.8)
             ax.scatter(points[~out_of_bounds_points,axis_x], points[~out_of_bounds_points,axis_y], 
@@ -179,7 +173,6 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
                 plt.plot(traj[:,axis_x], traj[:,axis_y], '-', c='w', linewidth=6)
                 plt.plot(traj[:,axis_x], traj[:,axis_y], '--', c=colors[traj_idx], dashes=[3], linewidth=6)
                 if subsampled is not None:
-                    # subs = subsampled[traj_idx]
                     subs = z_to_grid(subsampled[traj_idx].copy())
                     ax.scatter(subs[:,axis_x], subs[:,axis_y], marker = 'o', c=colors[traj_idx], 
                              edgecolors = 'w', s = 500, zorder=2, linewidth=1)
@@ -210,8 +203,6 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
 
 
 def plot_kmeans_over_density(density, centers, plot_folder = None, cmap = 'inferno' ):
-    # colors = ['k', 'cornflowerblue'] if colors is None else colors
-    
     compute_density = False
         
     
@@ -220,11 +211,7 @@ def plot_kmeans_over_density(density, centers, plot_folder = None, cmap = 'infer
     else:
         num_points= density.shape[0]
     
-    # path_grid = z_to_grid(path_z[:,:low_dim])
-    # g_st = z_to_grid(z_st[:low_dim])
-    # g_end = z_to_grid(z_end[:low_dim])
-
-    def plot_traj_along_axes(axes, save_to_file= False ):
+    def plot_traj_along_axes(axes):
         axes = tuple(axes)
         fig, ax = plt.subplots(figsize = (8,8))
         ax.set_frame_on(True)
@@ -239,9 +226,7 @@ def plot_kmeans_over_density(density, centers, plot_folder = None, cmap = 'infer
         if axis_x > axis_y:
             density_pl = density_pl.T
             
-        ax.imshow((density_pl.T), origin='lower', cmap = cmap, interpolation = 'bilinear')#[...,25,25])
-        # plt.colorbar()
-        
+        ax.imshow((density_pl.T), origin='lower', cmap = cmap, interpolation = 'bilinear')
         ax.scatter(centers[:,axis_x], centers[:,axis_y], c='red', edgecolor='black', s=100, zorder=3, linewidth=1)
         for i in range(centers.shape[0]):
             ax.annotate(str(i), centers[i, axes] + np.array([0.1, 0.1]), c = 'white', 
@@ -681,10 +666,7 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
     np.savetxt(os.path.join(output_folder, 'latent_coords.txt'), path_subsampled)
 
 
-def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path, likelihood_threshold = 1e-5 ):
-    scale_zs = ld.compute_det_cov_xs(cov_zs)
-    likelihoods = ld.compute_likelihood_of_latent_given_image(path_subsampled, zs, cov_zs, scale_zs)
-    
+def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path):
     likelihoods = ld.compute_latent_quadratic_forms(path_subsampled, zs, cov_zs)
     vmax = np.max(likelihoods)
     vmin = np.max([np.min(likelihoods),  1e-8 *np.max(likelihoods)])
@@ -717,13 +699,9 @@ def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path, like
 
         ax.set_xticks([])
         ax.set_yticks([])
-        save_filepath = save_path +  format(k, '04d') + '.png' # output_folder + 'plots/' + 'vol_weights' +str(k) + '.png'
+        save_filepath = save_path +  format(k, '04d') + '.png'
         plt.savefig(save_filepath, bbox_inches='tight', dpi=300)
-        if k > 0:
-            plt.close(fig)
-        else:
-            plt.show()
-            plt.close(fig)
+        plt.close(fig)
 
 
 def load_results_new(datadir):
@@ -1049,7 +1027,6 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
     latent_space_bounds = ld.compute_latent_space_bounds(zs) if latent_space_bounds is None else latent_space_bounds
 
     st_time = time.time()
-    gt_volumes = None
     basis_size = zs.shape[1]
     if use_input_density and (density.ndim < zs.shape[-1]):
         logger.warning("density dimension is less than zs dimension, truncate zs dimension")
@@ -1070,14 +1047,8 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
         path_subsampled = trajectory.subsample_path(path_z, n_pts = n_vols_along_path)    
 
         logger.info("after path %.1fs", time.time() - st_time)
-        #trajectory.subsample_path(path_z, n_pts = n_vols_along_path)
-        # plot_over_density(density, None,latent_space_bounds,  colors = None, plot_folder = output_folder + 'density_nopath/', cmap = 'inferno')
         inp_dens = density if use_input_density else None
-
-        if gt_volumes is not None:
-            plot_over_density(inp_dens, [gt_volumes_z, path_z], latent_space_bounds, subsampled = [gt_volumes_z[gt_subs_idx][1:-1], path_subsampled[1:-1] ] , colors = ['k', 'cornflowerblue'], plot_folder = output_folder, cmap = 'inferno', zs = zs, cov_zs = cov_zs) 
-        else:
-            plot_over_density(inp_dens, [path_z],latent_space_bounds,  subsampled = [path_subsampled[1:-1] ] , colors = ['cornflowerblue'], plot_folder = output_folder + 'density/', cmap = 'inferno', same_st_end = False, zs = zs, cov_zs = cov_zs)
+        plot_over_density(inp_dens, [path_z],latent_space_bounds,  subsampled = [path_subsampled[1:-1] ] , colors = ['cornflowerblue'], plot_folder = output_folder + 'density/', cmap = 'inferno', same_st_end = False, zs = zs, cov_zs = cov_zs)
     else:
         path_z = np.linspace(z_st, z_end, n_vols_along_path)[...,0]
         path_subsampled = path_z
@@ -1097,7 +1068,7 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
         json.dump(densities, f)
 
     if plot_llh:
-        plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path = output_folder, likelihood_threshold = None  )
+        plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path = output_folder)
 
     logger.info("after all plots %.1fs", time.time() - st_time)
     return path_z, path_subsampled
@@ -1120,14 +1091,14 @@ def plot_trajectories_over_scatter(trajectories,  subsampled = None, colors = No
     colors = ['k', 'cornflowerblue'] if colors is None else colors
     path_exists = trajectories is not None
         
-    def plot_traj_along_axes(axes, save_to_file= False ):
+    def plot_traj_along_axes(axes):
         axes = tuple(axes)
         fig, ax = plt.subplots(figsize = (8,8))
         ax.set_frame_on(True)
 
         axis_x = axes[0]
         axis_y = axes[1]
-        
+
         # Create hexbin density plot for background
         try:
             ax.hexbin(zs[:,axis_x], zs[:,axis_y], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
