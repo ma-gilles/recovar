@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
 
-pytest.importorskip("jax")
+jax = pytest.importorskip("jax")
+import jax.numpy as jnp
 
 from recovar.heterogeneity import embedding
 from recovar.data_io.dataset import CryoEMHalfsets
@@ -235,3 +236,90 @@ def test_get_per_image_embedding_supports_single_cryo_list(monkeypatch):
     assert cov_zs.shape == (4, 1, 1)
     assert est_contrasts.shape == (4,)
     assert bias.shape == (4, 1, 1)
+
+
+# ---------------------------------------------------------------------------
+# Tests for solve_contrast_linear_system
+# ---------------------------------------------------------------------------
+
+
+def test_solve_contrast_linear_system_identity_case():
+    """With identity AU_t_AU and unit eigenvalues, solution should be simple."""
+    zdim = 2
+    AU_t_images = jnp.array([1.0, 2.0], dtype=jnp.float32)
+    AU_t_Amean = jnp.zeros(zdim, dtype=jnp.float32)
+    AU_t_AU = jnp.eye(zdim, dtype=jnp.float32)
+    eigenvalues = jnp.ones(zdim, dtype=jnp.float32)
+    contrast = 1.0
+
+    sol = np.asarray(embedding.solve_contrast_linear_system(
+        AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, contrast
+    ))
+    # A = I + I = 2I, b = AU_t_images => sol = AU_t_images / 2
+    np.testing.assert_allclose(sol, np.array([0.5, 1.0]), atol=1e-5)
+
+
+def test_solve_contrast_linear_system_zero_contrast():
+    """With zero contrast, A = diag(1/eigenvalues), b = 0, so solution should be 0."""
+    zdim = 3
+    AU_t_images = jnp.ones(zdim, dtype=jnp.float32)
+    AU_t_Amean = jnp.zeros(zdim, dtype=jnp.float32)
+    AU_t_AU = jnp.eye(zdim, dtype=jnp.float32)
+    eigenvalues = jnp.ones(zdim, dtype=jnp.float32)
+    contrast = 0.0
+
+    sol = np.asarray(embedding.solve_contrast_linear_system(
+        AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, contrast
+    ))
+    np.testing.assert_allclose(sol, np.zeros(zdim), atol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# Tests for compute_contrast_residual_fast_2
+# ---------------------------------------------------------------------------
+
+
+def test_compute_contrast_residual_fast_2_at_zero_xs():
+    """With zero xs, fit residual should be image_norms_sq (per contrast)."""
+    zdim = 2
+    n_contrast = 1
+    # xs has shape (n_contrast, zdim)
+    xs = jnp.zeros((n_contrast, zdim), dtype=jnp.float32)
+    AU_t_images = jnp.array([1.0, 2.0], dtype=jnp.float32)
+    image_norms_sq = jnp.array(5.0, dtype=jnp.float32)
+    AU_t_Amean = jnp.zeros(zdim, dtype=jnp.float32)
+    Amean_norms_sq = jnp.array(0.0, dtype=jnp.float32)
+    image_T_A_mean = jnp.array(0.0, dtype=jnp.float32)
+    AU_t_AU = jnp.eye(zdim, dtype=jnp.float32)
+    eigenvalues = jnp.ones(zdim, dtype=jnp.float32)
+    contrast = jnp.array([1.0], dtype=jnp.float32)
+
+    fit_res, prior_res = embedding.compute_contrast_residual_fast_2(
+        xs, AU_t_images, image_norms_sq, AU_t_Amean, Amean_norms_sq,
+        image_T_A_mean, AU_t_AU, eigenvalues, contrast
+    )
+    # With xs=0: p1=0, p2=0, p3=image_norms_sq, p4=0, p5=0, p6=0
+    np.testing.assert_allclose(float(fit_res[0]), 5.0, atol=1e-5)
+    np.testing.assert_allclose(float(prior_res[0]), 0.0, atol=1e-5)
+
+
+def test_compute_contrast_residual_fast_2_prior_scales_with_eigenvalues():
+    """Prior residual = xs^T (xs / eigenvalues), should scale inversely with eigenvalues."""
+    zdim = 2
+    n_contrast = 1
+    xs = jnp.ones((n_contrast, zdim), dtype=jnp.float32)
+    AU_t_images = jnp.zeros(zdim, dtype=jnp.float32)
+    image_norms_sq = jnp.array(0.0, dtype=jnp.float32)
+    AU_t_Amean = jnp.zeros(zdim, dtype=jnp.float32)
+    Amean_norms_sq = jnp.array(0.0, dtype=jnp.float32)
+    image_T_A_mean = jnp.array(0.0, dtype=jnp.float32)
+    AU_t_AU = jnp.eye(zdim, dtype=jnp.float32)
+    eigenvalues = jnp.array([2.0, 4.0], dtype=jnp.float32)
+    contrast = jnp.array([1.0], dtype=jnp.float32)
+
+    _, prior_res = embedding.compute_contrast_residual_fast_2(
+        xs, AU_t_images, image_norms_sq, AU_t_Amean, Amean_norms_sq,
+        image_T_A_mean, AU_t_AU, eigenvalues, contrast
+    )
+    # prior = xs^T diag(1/eigenvalues) xs = 1/2 + 1/4 = 0.75
+    np.testing.assert_allclose(float(prior_res[0]), 0.75, atol=1e-5)

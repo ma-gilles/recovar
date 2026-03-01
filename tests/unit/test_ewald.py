@@ -45,6 +45,60 @@ def test_vec_unvec_masked_roundtrip_on_masked_entries():
     np.testing.assert_allclose(vi2[np.asarray(mask_imag_idx[0])], vi[np.asarray(mask_imag_idx[0])])
 
 
+def test_get_unrotated_ewald_sphere_coords_shape_and_z_component():
+    """Ewald sphere coords should have 3D output with non-negative z."""
+    import jax.numpy as jnp
+    image_shape = (4, 4)
+    voxel_size = 1.0
+    lam = ewald.volt_to_wavelength(np.array(300.0, dtype=np.float32))
+    coords = np.asarray(ewald.get_unrotated_ewald_sphere_coords(image_shape, voxel_size, float(lam), scaled=True))
+    assert coords.shape == (16, 3)
+    # z component (Ewald sphere curvature) should be non-negative for sphere_sign=1
+    assert np.all(coords[:, 2] >= -1e-7)
+    assert np.all(np.isfinite(coords))
+
+
+def test_get_unrotated_ewald_sphere_coords_plane_mode():
+    """With very large wavelength (flat Ewald sphere), z should be ~0."""
+    import jax.numpy as jnp
+    image_shape = (4, 4)
+    voxel_size = 1.0
+    lam = 1e6  # Very large wavelength => flat sphere
+    coords = np.asarray(ewald.get_unrotated_ewald_sphere_coords(image_shape, voxel_size, lam, scaled=True))
+    # All z values should be essentially zero
+    np.testing.assert_allclose(coords[:, 2], 0.0, atol=1e-5)
+
+
+def test_get_ewald_sphere_gridpoint_coords_identity_rotation():
+    """With identity rotation, rotated coords should equal unrotated + grid center."""
+    import jax.numpy as jnp
+    image_shape = (4, 4)
+    volume_shape = (4, 4, 4)
+    grid_size = 4
+    voxel_size = 1.0
+    lam = float(ewald.volt_to_wavelength(np.array(300.0, dtype=np.float32)))
+    rot = np.eye(3, dtype=np.float32)
+    coords = np.asarray(ewald.get_ewald_sphere_gridpoint_coords(rot, image_shape, volume_shape, grid_size, voxel_size, lam))
+    assert coords.shape == (16, 3)
+    assert np.all(np.isfinite(coords))
+
+
+def test_get_good_idx_mask_shapes_and_nonempty():
+    """Real and imaginary masks should be non-empty and have valid indices."""
+    shape = (4, 4, 4)
+    mask_real, mask_imag = ewald.get_good_idx_mask(shape)
+    mask_real_idx = np.asarray(mask_real[0])
+    mask_imag_idx = np.asarray(mask_imag[0])
+    vol_size = np.prod(shape)
+    assert len(mask_real_idx) > 0
+    assert len(mask_imag_idx) > 0
+    # All indices should be within volume bounds
+    assert np.all(mask_real_idx < vol_size)
+    assert np.all(mask_imag_idx < vol_size)
+    assert np.all(mask_real_idx >= 0)
+    assert np.all(mask_imag_idx >= 0)
+
+
 # ---------------------------------------------------------------------------
 # GPU tests – verify CPU/GPU numerical equivalence
 # ---------------------------------------------------------------------------

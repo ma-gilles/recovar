@@ -246,7 +246,8 @@ def compute_latent_log_likelihood(test_pts, zs, cov_zs):
 
 @jax.jit
 def compute_log_det_cov(cov_xs):
-    vs = jnp.sum(jnp.log(jax.numpy.linalg.eigvalsh(cov_xs)), axis =-1)
+    eigs = jax.numpy.linalg.eigvalsh(cov_xs)
+    vs = jnp.sum(jnp.log(jnp.maximum(eigs, jnp.finfo(eigs.dtype).tiny)), axis =-1)
     # Determinants are exp(vs) now..., but only care about the ratio so:
     # we exp(vs_i) / exp(vs_j) = exp(vs_i - vs_j)
     return vs

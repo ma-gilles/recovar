@@ -271,10 +271,11 @@ def _compute_batch_coords_p1(
     )
     AUs = AUs.transpose(1, 2, 0)
 
-    # Noise normalization
-    batch /= jnp.sqrt(noise_variance)
-    projected_mean /= jnp.sqrt(noise_variance)
-    AUs /= jnp.sqrt(noise_variance)[..., None]
+    # Noise normalization (clamp to avoid division by zero)
+    safe_noise_std = jnp.sqrt(jnp.maximum(noise_variance, jnp.finfo(noise_variance.dtype).tiny))
+    batch /= safe_noise_std
+    projected_mean /= safe_noise_std
+    AUs /= safe_noise_std[..., None]
 
     if config.premultiplied_ctf:
         AU_t_images = batch_x_T_y(AUs, batch)

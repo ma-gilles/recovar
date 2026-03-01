@@ -36,7 +36,7 @@ def get_unrotated_ewald_sphere_coords(image_shape, voxel_size, lam, scaled=True,
     ## Pass scaled = true
     freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, voxel_size=voxel_size, scaled=True)
     r = 1/lam
-    z = r - jnp.sqrt(r**2 - jnp.linalg.norm(freqs, axis =-1)**2)
+    z = r - jnp.sqrt(jnp.maximum(r**2 - jnp.linalg.norm(freqs, axis =-1)**2, 0))
     z = z.reshape(-1,1) * sphere_sign
     sphere_freqs = jnp.concatenate([freqs, z], axis=-1)
     scalar = 1 if scaled else image_shape[0] * voxel_size
