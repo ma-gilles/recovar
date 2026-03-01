@@ -1,8 +1,9 @@
 import recovar.jax_config
 import logging
 import numpy as np
-from recovar import output as o
-from recovar import dataset, utils
+from recovar.output import output as o
+from recovar import utils
+from recovar.data_io import dataset
 from recovar.heterogeneity import latent_density, embedding
 from scipy.spatial import distance_matrix
 import os, argparse
@@ -195,7 +196,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
             mapper = o.umap_latent_space(zs_unsort)
             o.mkdir_safe(os.path.join(output_folder, 'umap/'))
             utils.pickle_dump(reorder(mapper.embedding_), os.path.join(output_folder, 'umap/umap_embedding.pkl'))
-            from recovar import output
+            from recovar.output import output
             _, kmeans_ind = output.get_nearest_point(zs_unsort, centers)
 
             o.plot_umap(os.path.join(output_folder, 'umap/'), mapper.embedding_, mapper.embedding_[kmeans_ind])

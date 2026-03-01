@@ -35,8 +35,8 @@ FINUFFT_EPS = 1e-8
 # These are the atomic scattering potential coefficients tabulated in:
 # Peng, L-M., et al. "Robust parameterization of elastic and absorptive electron atomic scattering factors." 
 # Acta Crystallographica Section A: Foundations of Crystallography 52.2 (1996): 257-276.
-atom_coeff_path = 'data/atom_coeffs_extended.json'
-with open(os.path.join(os.path.dirname(__file__), atom_coeff_path), 'r') as f:
+atom_coeff_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'atom_coeffs_extended.json')
+with open(atom_coeff_path, 'r') as f:
     atom_coeffs = json.load(f)
 
 atom_coeffs2 = {}

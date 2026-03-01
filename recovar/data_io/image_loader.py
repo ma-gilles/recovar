@@ -571,7 +571,7 @@ class StarLoader(MultiMRCLoader):
     def __init__(self, filepath: str, indices: Optional[np.ndarray] = None,
                  datadir: str = "", lazy: bool = True, max_threads: int = 1,
                  strip_prefix: Optional[str] = None):
-        from recovar.starfile import StarFile
+        from recovar.data_io.starfile import StarFile
 
         star = StarFile.load(filepath)
         df = star.df.copy()
@@ -681,7 +681,7 @@ class DownsamplingImageLoader(ImageLoader):
         images = self._base._load(indices)
         if self._target_D == self._base.D:
             return images
-        from recovar.downsample import downsample_images
+        from recovar.data_io.downsample import downsample_images
         return downsample_images(images, self._target_D)
 
 

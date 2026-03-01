@@ -9,7 +9,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import jax
 
-from recovar import output, metrics, plot_utils, synthetic_dataset, utils, simulator, recovar
+from recovar import utils
+from recovar.simulation import simulator, synthetic_dataset
+from recovar.output import output, metrics, plot_utils
+import recovar
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.commands import pipeline, compute_state
 
@@ -916,7 +919,7 @@ def main():
         if key == 'gt':
             continue
         max_rank = int(min(20, u_gt.shape[1], u[key].shape[1]))
-        angles[key] = recovar.metrics.subspace_angles(u_gt, u[key], max_rank=max_rank)
+        angles[key] = metrics.subspace_angles(u_gt, u[key], max_rank=max_rank)
 
     b = 20
     def plot_dict(data_dict, title, max_size=b, log_scale=False, filename=None):

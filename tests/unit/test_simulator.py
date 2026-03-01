@@ -4,7 +4,7 @@ import pytest
 pytest.importorskip("jax")
 pytest.importorskip("scipy")
 
-import recovar.simulator as simulator
+import recovar.simulation.simulator as simulator
 from recovar import core
 
 pytestmark = pytest.mark.unit

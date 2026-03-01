@@ -2,11 +2,14 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
-from recovar import noise
+from recovar.reconstruction import noise
 from recovar.heterogeneity import image_assignment
 from sklearn.metrics import confusion_matrix
-from recovar import simulate_scattering_potential as ssp
-from recovar import simulator, utils, output, dataset
+from recovar.simulation import simulate_scattering_potential as ssp
+from recovar import utils
+from recovar.simulation import simulator
+from recovar.output import output
+from recovar.data_io import dataset
 import prody
 
 def main(

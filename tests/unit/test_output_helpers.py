@@ -3,7 +3,8 @@ import pytest
 from types import SimpleNamespace
 
 pytest.importorskip("jax")
-from recovar import output, utils
+from recovar import utils
+from recovar.output import output
 
 pytestmark = pytest.mark.unit
 

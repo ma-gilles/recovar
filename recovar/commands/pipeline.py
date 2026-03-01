@@ -4,11 +4,14 @@ import recovar.jax_config
 import jax
 import numpy as np
 import os, argparse, time, sys
-from recovar import output as o
-from recovar import dataset, homogeneous, utils, noise, output
+from recovar.output import output as o
+from recovar import utils
+from recovar.reconstruction import homogeneous, noise
+from recovar.output import output
+from recovar.data_io import dataset
 from recovar.core import mask
 from recovar.heterogeneity import embedding, principal_components, covariance_estimation
-from recovar.output_paths import ResultPaths
+from recovar.output.output_paths import ResultPaths
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.utils import copy_data_to_temp_folder, save_original_paths_info, cleanup_temp_files
 
@@ -863,7 +866,7 @@ def standard_recovar_pipeline(args):
         cleanup_temp_files(path_mapping)
 
     # Generate standard plots
-    from recovar import output
+    from recovar.output import output
     po = output.PipelineOutput(args.outdir)
     zdims = np.array(args.zdim)
     zdim_choose = np.argmin(np.abs(zdims - 10))

@@ -4,7 +4,8 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import equinox as eqx
-from recovar import core, utils, jax_config, relion_functions, noise
+from recovar import core, utils, jax_config
+from recovar.reconstruction import relion_functions, noise
 from recovar.heterogeneity import covariance_estimation, principal_components
 from recovar.core.configs import ForwardModelConfig
 from .core import batch_vol_slice_volume_by_map
@@ -723,7 +724,7 @@ def estimate_principal_components_halfset(cryos, means, mean_signal_variance, co
     volume_mask = None
     _, covariance_prior, covariance_fscs = principal_components.compute_covariance_regularization_relion_style(Hs, Bs, mean_signal_variance, picked_frequency_indices, volume_noise_var, volume_mask, cryos[0].volume_shape,  gpu_memory, reg_init_multiplier = jax_config.REG_INIT_MULTIPLIER, options = covariance_options)
 
-    from recovar import relion_functions
+    from recovar.reconstruction import relion_functions
 
     cov_cols = 2 * [None]
     us = 2 * [None]; ss = 2 * [None]

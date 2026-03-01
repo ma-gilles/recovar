@@ -61,7 +61,8 @@ def test_single_batch_equivalence():
     print("TEST 1: Single batch equivalence (old jax.jit vs new eqx.filter_jit)")
     print("=" * 70)
 
-    from recovar import core, simulator, utils
+    from recovar import core, utils
+    from recovar.simulation import simulator
     from recovar.core.configs import ForwardModelConfig
     from recovar.core import ctf as core_ctf
 
@@ -171,7 +172,9 @@ def test_full_dataset_generation():
     print("=" * 70)
 
     import tempfile
-    from recovar import simulator, output, utils
+    from recovar import utils
+    from recovar.simulation import simulator
+    from recovar.output import output
     from recovar.commands.run_test_all_metrics import make_big_test_dataset
 
     grid_size = 32
@@ -219,7 +222,9 @@ def test_oom_scenario():
     print("TEST 3: OOM reproduction (grid=128, cubic, batch=1280)")
     print("=" * 70)
 
-    from recovar import core, simulator, utils, core_ctf
+    from recovar import core, utils
+    from recovar.simulation import simulator
+    from recovar.core import ctf as core_ctf
     from recovar.core.configs import ForwardModelConfig
     from recovar.core import cubic_interpolation
 
@@ -324,7 +329,10 @@ def test_pipeline_functions():
     print("TEST 4: Pipeline function comparison (forward model, covariance, embedding)")
     print("=" * 70)
 
-    from recovar import core, core_forward, simulator, core_ctf
+    from recovar import core
+    from recovar.simulation import simulator
+    import recovar.core.forward as core_forward
+    from recovar.core import ctf as core_ctf
     from recovar.core.configs import ForwardModelConfig
 
     grid_size = 32

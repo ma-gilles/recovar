@@ -14,7 +14,8 @@ import jax.numpy as jnp
 # Use the local repo
 sys.path.insert(0, '/scratch/gpfs/GILLES/mg6942/heterogeneity_dev-1')
 
-from recovar import core, noise
+from recovar import core
+from recovar.reconstruction import noise
 from recovar.heterogeneity import covariance_core, embedding
 from recovar.core.configs import ForwardModelConfig, BatchData, ModelState, EmbeddingOpts
 import recovar.core.forward as core_forward

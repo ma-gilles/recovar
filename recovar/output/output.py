@@ -9,9 +9,9 @@ from recovar.heterogeneity import embedding
 from recovar.core import linalg
 from recovar.heterogeneity import trajectory
 from recovar import utils
-from recovar import dataset
-from recovar import regularization
-from recovar.output_paths import ResultPaths
+from recovar.data_io import dataset
+from recovar.reconstruction import regularization
+from recovar.output.output_paths import ResultPaths
 import matplotlib.patheffects as pe
 import time
 
@@ -607,7 +607,7 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
                     ...
             latent_coords.txt                 # all latent coordinates
     """
-    from recovar.output_paths import AnalysisPaths
+    from recovar.output.output_paths import AnalysisPaths
 
     if n_min_particles is None:
         n_min_particles = 100
@@ -1107,7 +1107,7 @@ def umap_latent_space(zs):
 
 
 def standard_pipeline_plots(po, zdim_key, output_folder):
-    from recovar import plot_utils
+    from recovar.output import plot_utils
     mkdir_safe(output_folder)
     plot_utils.plot_summary_t(po, n_eigs = 10, filename = os.path.join(output_folder, "mean_variance_eigenvolume_plots.png"))
 

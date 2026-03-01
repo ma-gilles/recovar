@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar import load_utils
+from recovar.data_io import load_utils
 from helpers import tiny_synthetic
 from recovar import utils
 

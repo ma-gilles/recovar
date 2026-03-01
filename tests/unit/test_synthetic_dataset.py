@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar import synthetic_dataset
+from recovar.simulation import synthetic_dataset
 
 pytestmark = pytest.mark.unit
 

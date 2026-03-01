@@ -6,7 +6,7 @@ pytest.importorskip("jax")
 import jax.numpy as jnp
 
 import recovar.heterogeneity.covariance_estimation as cov_est
-from recovar.dataset import CryoEMHalfsets
+from recovar.data_io.dataset import CryoEMHalfsets
 from helpers.tiny_synthetic import make_tiny_cryo_dataset, make_tiny_cryo_dataset_with_images
 
 pytestmark = pytest.mark.unit
@@ -319,7 +319,7 @@ def test_compute_variance_orchestration_with_stubbed_kernels(monkeypatch):
         return lhs, rhs, noise_lhs, noise_rhs
 
     monkeypatch.setattr(cov_est, "variance_relion_style_triangular_kernel", _fake_var_kernel)
-    import recovar.relion_functions as relion_functions
+    import recovar.reconstruction.relion_functions as relion_functions
     monkeypatch.setattr(relion_functions, "adjust_regularization_relion_style", lambda lhs, *args, **kwargs: lhs)
     monkeypatch.setattr(
         cov_est.regularization,

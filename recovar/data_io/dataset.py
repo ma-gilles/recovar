@@ -10,15 +10,16 @@ import numpy as np
 import pickle
 from numpy.typing import NDArray
 
-from recovar import plot_utils, core
+from recovar import core
+from recovar.output import plot_utils
 from recovar.core import mask
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar import tilt_dataset
+from recovar.data_io import tilt_dataset
 
 logger = logging.getLogger(__name__)
 
 # Maybe should take out these dependencies?
-from recovar.image_loader import ImageSource
+from recovar.data_io.image_loader import ImageSource
 
 
 def MRCDataMod(particles_file, ind=None, datadir=None, padding=0, uninvert_data=False, strip_prefix=None, downsample_D=None):
@@ -381,11 +382,11 @@ class CryoEMDataset:
 
 
     def set_radial_noise_model(self, noise_variance):
-        from recovar import noise
+        from recovar.reconstruction import noise
         self.noise = noise.RadialNoiseModel(noise_variance, image_shape = self.image_shape)
 
     def set_variable_radial_noise_model(self, noise_variance_radials):
-        from recovar import noise
+        from recovar.reconstruction import noise
         _, dose_indices = jnp.unique(self.CTF_params[:,core.CTFParamIndex.DOSE], return_inverse=True)
         # If noise_variance_radials is 1D (single radial profile), broadcast
         # to 2D (one row per dose level) so VariableRadialNoiseModel can index
@@ -631,7 +632,7 @@ def load_dataset(
     # ---- Determine if we can auto-extract metadata ----
     _auto_extract = (poses_file is None or ctf_file is None)
     if _auto_extract:
-        from recovar import metadata_parsing
+        from recovar.data_io import metadata_parsing
         if not metadata_parsing.can_extract_poses(particles_file):
             raise ValueError(
                 f"Cannot auto-extract poses/CTF from '{particles_file}'. "
@@ -648,7 +649,7 @@ def load_dataset(
 
         
     if tilt_series:
-            from recovar import tilt_dataset
+            from recovar.data_io import tilt_dataset
             tilt_file_option = 'relion5' if tilt_series_ctf == 'relion5' else 'warp'
             dataset = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, tilt_file_option=tilt_file_option, strip_prefix=strip_prefix)
 
@@ -659,7 +660,7 @@ def load_dataset(
             dataset = MRCDataMod(particles_file, ind=ind, datadir=datadir, padding=padding, uninvert_data=uninvert_data, strip_prefix=strip_prefix, downsample_D=downsample_D)
 
     # ---- Load CTF parameters ----
-    from recovar import load_utils
+    from recovar.data_io import load_utils
     if ctf_file is not None and ctf_file.endswith('.pkl'):
         # Legacy pickle path
         ctf_params_all = np.array(load_utils.load_ctf_params(dataset.D, ctf_file))
@@ -672,7 +673,7 @@ def load_dataset(
         ctf_params = ctf_params_all if dataset_indices is None else ctf_params_all[dataset_indices]
     else:
         # Auto-extract from STAR/CS
-        from recovar import metadata_parsing
+        from recovar.data_io import metadata_parsing
         source_file = ctf_file if ctf_file is not None else particles_file
         ctf_params = metadata_parsing.auto_parse_ctf(source_file, dataset.D)
         dataset_indices = _normalize_dataset_indices(ind, n_total=ctf_params.shape[0])
@@ -696,7 +697,7 @@ def load_dataset(
     # This is an option used to treat a cryo-ET dataset as a cryo-EM dataset, but still use the right CTF.
     # It means, that it will use the cryo-EM pipeline but the cryoET CTF.
     if (tilt_series is False) and (tilt_series_ctf != 'cryoem'):
-        from recovar import tilt_dataset
+        from recovar.data_io import tilt_dataset
         tilt_dataset_this = tilt_dataset.TiltSeriesData(
             particles_file,
             ind=ind,
@@ -770,7 +771,7 @@ def load_dataset(
         rots, trans, _ = load_utils.load_poses(poses_file, dataset.n_images, dataset.unpadded_D, ind=dataset_indices)
     else:
         # Auto-extract from STAR/CS
-        from recovar import metadata_parsing
+        from recovar.data_io import metadata_parsing
         source_file = poses_file if poses_file is not None else particles_file
         rots_raw, trans_frac = metadata_parsing.auto_parse_poses(source_file, dataset.unpadded_D)
         if dataset_indices is not None:
@@ -890,7 +891,7 @@ def get_split_tilt_indices(
     """
     Split a tilt-series dataset into two halfsets (image indices), supporting optional filtering by image/particle indices and precomputed splits.
     """
-    from recovar import tilt_dataset
+    from recovar.data_io import tilt_dataset
     import pickle
     import numpy as np
 

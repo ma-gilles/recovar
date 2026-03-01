@@ -2,7 +2,7 @@ import recovar.jax_config
 import logging
 import numpy as np
 import warnings
-from recovar import output as o
+from recovar.output import output as o
 from recovar.heterogeneity import embedding
 import pickle
 import os, argparse

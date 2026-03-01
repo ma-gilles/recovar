@@ -3,9 +3,9 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar import homogeneous
-from recovar import regularization
-from recovar import relion_functions
+from recovar.reconstruction import homogeneous
+from recovar.reconstruction import regularization
+from recovar.reconstruction import relion_functions
 
 pytestmark = pytest.mark.unit
 

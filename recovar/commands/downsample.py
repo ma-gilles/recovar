@@ -64,8 +64,8 @@ def downsample_to_disk(
     (mrcs_path, star_path) : tuple of str
         Paths to the output ``.mrcs`` stack and ``.star`` metadata file.
     """
-    from recovar.downsample import downsample_images
-    from recovar.image_loader import load_images
+    from recovar.data_io.downsample import downsample_images
+    from recovar.data_io.image_loader import load_images
 
     if target_D % 2 != 0:
         raise ValueError(f"Target box size must be even, got {target_D}")
@@ -212,7 +212,7 @@ def _get_pixel_size(filepath: str):
 
     if ext == 'star':
         try:
-            from recovar.starfile import StarFile
+            from recovar.data_io.starfile import StarFile
             sf = StarFile.load(filepath)
             apix = sf.apix
             if apix is not None and len(apix) > 0:

@@ -6,8 +6,9 @@ import pickle
 
 pytest.importorskip("jax")
 
-import recovar.dataset as dataset
-from recovar import core, load_utils
+import recovar.data_io.dataset as dataset
+from recovar import core
+from recovar.data_io import load_utils
 
 pytestmark = pytest.mark.unit
 

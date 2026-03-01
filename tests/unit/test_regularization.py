@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar import regularization
+from recovar.reconstruction import regularization
 
 pytestmark = pytest.mark.unit
 

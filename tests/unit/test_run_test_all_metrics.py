@@ -75,7 +75,7 @@ def _install_main_runtime_stubs(monkeypatch, tmp_path, *, mean_fsc=0.5, variance
         lambda *_args, **_kwargs: {"ninety_pc_locres": 1.0, "median_locres": 1.0, "mask": None},
     )
     monkeypatch.setattr(
-        rtam.recovar.metrics,
+        rtam.metrics,
         "subspace_angles",
         lambda *_args, **_kwargs: np.linspace(0.0, 1.0, 20, dtype=np.float32),
     )

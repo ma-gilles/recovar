@@ -3,8 +3,10 @@ import recovar.jax_config
 import numpy as np
 
 import os, argparse, time, logging
-from recovar import output as o
-from recovar import dataset, utils, noise
+from recovar.output import output as o
+from recovar import utils
+from recovar.reconstruction import noise
+from recovar.data_io import dataset
 
 logger = logging.getLogger(__name__)
 

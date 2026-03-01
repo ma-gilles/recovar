@@ -161,7 +161,7 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
 
 def plot_density(lbfgsb_sols, density, alphas, function = None, cmap = 'inferno'):
     # plt.axis('square');
-    from recovar.output import sum_over_other
+    from recovar.output.output import sum_over_other
 
     def half_slice_other(density, axes):
         axes = [i for i in range(density.ndim) if i not in axes]
@@ -242,7 +242,7 @@ def plot_density(lbfgsb_sols, density, alphas, function = None, cmap = 'inferno'
 
 def plot_density_centers(density, centers):
     # plt.axis('square');
-    from recovar.output import sum_over_other
+    from recovar.output.output import sum_over_other
 
     plt.rcParams.update({
         # "text.usetex": True,

@@ -15,7 +15,7 @@ from typing import Optional, Tuple
 import numpy as np
 from scipy.spatial.transform import Rotation as SciPyRot
 
-from recovar.starfile import StarFile
+from recovar.data_io.starfile import StarFile
 from recovar.utils import R_from_relion
 
 logger = logging.getLogger(__name__)

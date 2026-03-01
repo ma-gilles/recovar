@@ -16,7 +16,9 @@ except ImportError:
 
 import jax.numpy as jnp
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar import regularization, utils, metrics
+from recovar import utils
+from recovar.reconstruction import regularization
+from recovar.output import metrics
 colors = dict(mcolors.BASE_COLORS, **mcolors.CSS4_COLORS)
 
 # I copy pasted this from an older project. Most of this is probably useless
@@ -715,7 +717,7 @@ def compute_and_plot_fsc(image1, image2, volume_shape = None, voxel_size =1):
     
 ### PLOTTING STUFF
 def FSC(image1, image2, r_dict = None):
-    from recovar import regularization
+    from recovar.reconstruction import regularization
     fsc = regularization.get_fsc_gpu(image1, image2, image1.shape, False, frequency_shift = 0 )
     return fsc
 

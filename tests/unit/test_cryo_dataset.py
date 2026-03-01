@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from recovar import cryo_dataset
+from recovar.data_io import cryo_dataset
 from helpers import tiny_synthetic
 
 pytestmark = pytest.mark.unit

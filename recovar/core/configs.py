@@ -104,7 +104,7 @@ class ForwardModelConfig(eqx.Module):
         """
         # CryoEMHalfsets.CTF_fun is a method; we need the underlying callable
         # that takes (ctf_params, image_shape, voxel_size) directly.
-        from recovar.dataset import CryoEMDataset, CryoEMHalfsets
+        from recovar.data_io.dataset import CryoEMDataset, CryoEMHalfsets
 
         if isinstance(cryo, CryoEMHalfsets):
             ctf_fun = cryo[0].CTF_fun

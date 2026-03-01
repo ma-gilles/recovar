@@ -7,8 +7,9 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-from recovar import metadata_parsing, utils
-from recovar.starfile import StarFile, write_star
+from recovar import utils
+from recovar.data_io import metadata_parsing
+from recovar.data_io.starfile import StarFile, write_star
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -4,7 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from recovar import starfile, utils
+from recovar import utils
+from recovar.data_io import starfile
 from recovar.utils import data_copy
 
 pytestmark = pytest.mark.unit
@@ -385,7 +386,7 @@ def test_copy_data_from_pipeline_output_from_path_delegates(monkeypatch, tmp_pat
             assert key == "input_args"
             return input_args
 
-    import recovar.output as output_mod
+    import recovar.output.output as output_mod
     monkeypatch.setattr(output_mod, "PipelineOutput", lambda _path: _PO())
     mapping = data_copy.copy_data_from_pipeline_output(str(tmp_path / "pipeline_out"), str(tmp_path / "copy_tmp"))
     assert mapping is not None

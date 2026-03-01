@@ -1,6 +1,7 @@
 import os
 
-from recovar import output, utils
+from recovar import utils
+from recovar.output import output
 from recovar.heterogeneity import deconvolve_density
 import numpy as np
 import argparse

@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-import recovar.noise as noise
+import recovar.reconstruction.noise as noise
 
 pytestmark = pytest.mark.unit
 

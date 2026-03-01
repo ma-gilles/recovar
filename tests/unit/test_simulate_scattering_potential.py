@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("finufft")
 
-from recovar import simulate_scattering_potential as ssp
+from recovar.simulation import simulate_scattering_potential as ssp
 
 pytestmark = pytest.mark.unit
 

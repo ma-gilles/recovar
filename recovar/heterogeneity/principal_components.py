@@ -4,7 +4,9 @@ import numpy as np
 import jax, time
 import nvtx
 
-from recovar import core, plot_utils, jax_config, utils, noise
+from recovar import core, jax_config, utils
+from recovar.reconstruction import noise
+from recovar.output import plot_utils
 from recovar.core import linalg
 from recovar.heterogeneity import covariance_estimation, embedding
 import recovar.core.fourier_transform_utils as fourier_transform_utils
@@ -40,7 +42,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         else:
             picked_frequencies = np.array(covariance_core.get_picked_frequencies(volume_shape, radius = covariance_options['column_radius'], use_half = True))
     elif covariance_options['column_sampling_scheme'] == 'high_snr' or covariance_options['column_sampling_scheme'] == 'high_lhs' or covariance_options['column_sampling_scheme'] == 'high_snr_p' or covariance_options['column_sampling_scheme'] =='high_snr_from_var_est':
-        from recovar import regularization
+        from recovar.reconstruction import regularization
         upsampling_factor = np.round((means['lhs'].size / cryos.volume_size)**(1/3)).astype(int)
         upsampled_volume_shape = tuple(upsampling_factor * np.array(volume_shape))
         lhs = regularization.downsample_lhs(means['lhs'].reshape(upsampled_volume_shape), volume_shape, upsampling_factor = upsampling_factor).reshape(-1)
@@ -710,7 +712,8 @@ def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, z
                 import matplotlib.pyplot as plt
 
                 # Compute two estimators
-                from recovar import relion_functions, regularization, utils
+                from recovar import utils
+                from recovar.reconstruction import relion_functions, regularization
                 from recovar.heterogeneity import adaptive_kernel_discretization
                 estimators[cryo_idx], lhs[cryo_idx], rhs[cryo_idx] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[cryo_idx], noise_variance.astype(np.float32), None, best_likelihood, single_bin, tau= tau, grid_correct=True, use_spherical_mask=True, return_lhs_rhs=True)
 

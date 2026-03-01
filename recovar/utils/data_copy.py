@@ -240,7 +240,7 @@ def copy_data_from_pipeline_output(pipeline_output, copy_to_folder_path):
     Returns:
         dict: Path mapping dictionary, or None if no copying needed
     """
-    from recovar import output as o
+    from recovar.output import output as o
     
     # Load pipeline output if path is provided
     if isinstance(pipeline_output, str):

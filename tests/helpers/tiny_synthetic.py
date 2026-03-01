@@ -2,12 +2,13 @@ import numpy as np
 from pathlib import Path
 import pandas as pd
 
-import recovar.simulator as simulator
-import recovar.synthetic_dataset as synthetic_dataset
-from recovar import dataset
+import recovar.simulation.simulator as simulator
+import recovar.simulation.synthetic_dataset as synthetic_dataset
+from recovar.data_io import dataset
 from recovar import core
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar import utils, starfile
+from recovar import utils
+from recovar.data_io import starfile
 
 
 def tiny_ctf_pose_generator(n_images, grid_size):

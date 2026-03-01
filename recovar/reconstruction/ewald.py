@@ -370,8 +370,8 @@ def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, n
 
 
 def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_variance, noise_variance, x0 = None, max_iter = 100, tol = 1e-10):
-    from recovar import noise
-    from recovar import homogeneous
+    from recovar.reconstruction import noise
+    from recovar.reconstruction import homogeneous
 
     if not np.isclose(experiment_dataset.CTF_params[:,core.CTFParamIndex.W],0).all():
         ctf_params = experiment_dataset.CTF_params
@@ -463,7 +463,7 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
 
 
 def matvec_experiments(y, experiment_dataset, batch_size, disc_type, signal_variance, noise_variance):
-    from recovar import noise
+    from recovar.reconstruction import noise
 
     noise_variance = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape)
     mask_real = mask.get_radial_mask(experiment_dataset.volume_shape).reshape(-1)

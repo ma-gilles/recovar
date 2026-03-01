@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from recovar import cryo_dataset, dataset, starfile
+from recovar.data_io import cryo_dataset, dataset, starfile
 
 pytestmark = pytest.mark.unit
 

@@ -6,8 +6,9 @@ import time
 
 import numpy as np
 
-from recovar import output as o
-from recovar import dataset, utils
+from recovar.output import output as o
+from recovar import utils
+from recovar.data_io import dataset
 from recovar.heterogeneity import embedding
 
 logger = logging.getLogger(__name__)

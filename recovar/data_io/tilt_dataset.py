@@ -6,7 +6,7 @@ has been moved to cryo_dataset.py with a clean implementation.
 """
 
 # Re-export everything from cryo_dataset
-from recovar.cryo_dataset import *
+from recovar.data_io.cryo_dataset import *
 
 # Explicitly list what we're exporting for clarity
 __all__ = [

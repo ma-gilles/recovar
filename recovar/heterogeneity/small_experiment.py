@@ -2,7 +2,8 @@ import numpy as np
 import jax.numpy as jnp
 import jax
 from jax.experimental import sparse
-from recovar import core, simulator, utils
+from recovar import core, utils
+from recovar.simulation import simulator
 from recovar.core import mask
 from recovar.heterogeneity import covariance_estimation
 import recovar.core.fourier_transform_utils as fourier_transform_utils
@@ -163,7 +164,7 @@ def generate_cryo_like_experiment(grid_size, m, b, snr, eig_decay = 0.75, random
     radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape).reshape(-1)
     signal_decay_power = 2
     U = np.random.randn(volume_size,b) * ((1.0 /(1+radial_distances[:,None]) ) ** signal_decay_power)
-    from recovar import simulator
+    from recovar.simulation import simulator
     B_fac = simulator.get_B_factor_scaling(volume_shape, voxel_size, B_factor = Bfactor)
     U *= B_fac[...,None]
 

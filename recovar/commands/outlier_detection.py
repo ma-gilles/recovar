@@ -6,11 +6,11 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 import logging
-from recovar import output
+from recovar.output import output
 from sklearn.covariance import EllipticEnvelope
 from sklearn.ensemble import IsolationForest
 from sklearn.neighbors import LocalOutlierFactor
-from recovar import tilt_dataset
+from recovar.data_io import tilt_dataset
 import seaborn as sns
 
 matplotlib.rcParams["contour.negative_linestyle"] = "solid"

@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar import csparc_bind
+from recovar.data_io import csparc_bind
 from recovar import utils
 
 
