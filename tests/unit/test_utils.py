@@ -62,7 +62,9 @@ def test_estimate_variance():
 def test_get_gpu_memory_helpers_without_gpu(monkeypatch):
     monkeypatch.setattr(_utils_helpers, "GPU_MEMORY_LIMIT", None)
     monkeypatch.setattr(_utils_helpers, "jax_has_gpu", lambda: False)
-    assert utils.get_gpu_memory_total() == 80
+    # Without GPU, returns half of available system RAM (capped at >= 1)
+    result = utils.get_gpu_memory_total()
+    assert result >= 1
     assert utils.get_gpu_memory_used() == 0
     assert utils.get_peak_gpu_memory_used() == 0
 

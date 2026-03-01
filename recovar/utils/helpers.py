@@ -56,6 +56,12 @@ def get_process_memory_used():
     return int(mem_info.rss / 1e9)
 
 GPU_MEMORY_LIMIT = None
+
+def set_gpu_memory_limit(gb):
+    """Set the GPU memory limit (in GB) used for batch-size calculations."""
+    global GPU_MEMORY_LIMIT
+    GPU_MEMORY_LIMIT = gb
+
 def get_gpu_memory_total(device =0):
     if GPU_MEMORY_LIMIT is not None:
         return GPU_MEMORY_LIMIT
@@ -67,8 +73,11 @@ def get_gpu_memory_total(device =0):
             logger.warning("get_gpu_memory_total: Could not read GPU memory_stats bytes_limit via JAX (memory_stats() returned None/empty). Falling back to 80GB.")
             return int(80)
     else:
-        logger.warning("GPU not found. Using default value of 80GB for batching computation on CPU.")
-        return int(80)
+        available_gb = int(psutil.virtual_memory().available / 1e9)
+        # Use half of available RAM as a safety margin for CPU-only mode
+        cpu_limit = max(1, available_gb // 2)
+        logger.info("GPU not found. Using %d GB (half of %d GB available RAM) for batching on CPU.", cpu_limit, available_gb)
+        return cpu_limit
 
 def get_gpu_memory_used(device =0):
     if jax_has_gpu():
@@ -79,9 +88,8 @@ def get_gpu_memory_used(device =0):
             logger.warning("get_gpu_memory_used: Could not read GPU memory_stats bytes_in_use via JAX (memory_stats() returned None/empty). Returning 0.")
             return int(0)
     else:
-        logger.warning("GPU not found. Using default value of 80GB for batching computation on CPU.")
         return int(0)
-    
+
 def get_peak_gpu_memory_used(device =0):
     if jax_has_gpu():
         mem_stats = jax.local_devices()[device].memory_stats()
@@ -91,7 +99,6 @@ def get_peak_gpu_memory_used(device =0):
             logger.warning("get_peak_gpu_memory_used: Could not read GPU memory_stats peak_bytes_in_use via JAX (memory_stats() returned None/empty). Returning 0.")
             return int(0)
     else:
-        logger.warning("GPU not found. Peak =0")
         return int(0)
     
 

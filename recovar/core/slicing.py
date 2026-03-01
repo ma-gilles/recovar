@@ -1,6 +1,7 @@
 """Fourier slice extraction and adjoint (backprojection) operations."""
 
 import functools
+import logging
 
 import jax
 import jax.numpy as jnp
@@ -14,6 +15,30 @@ from recovar.core.geometry import (
     rotations_to_grid_point_coords,
 )
 from recovar.core.indexing import vol_indices_to_vec_indices
+
+logger = logging.getLogger(__name__)
+
+# ── CUDA acceleration (optional) ──────────────────────────────────────
+_cuda_available = None  # tri-state: None = not checked, True/False = result
+
+
+def _check_cuda():
+    global _cuda_available
+    if _cuda_available is not None:
+        return _cuda_available
+    try:
+        # Only use CUDA if we actually have a GPU backend
+        if not any(d.platform == "gpu" for d in jax.devices()):
+            _cuda_available = False
+            return False
+        from recovar.cuda_backproject import _ensure_ffi  # noqa: F401
+        _ensure_ffi()
+        _cuda_available = True
+        logger.info("CUDA backproject/project kernels enabled")
+    except Exception as e:
+        _cuda_available = False
+        logger.debug("CUDA backproject not available: %s", e)
+    return _cuda_available
 
 
 @jax.jit
@@ -35,13 +60,62 @@ def decide_order(disc_type):
 
 
 @functools.partial(jax.jit, static_argnums=[2, 3, 4])
-def slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type):
+def _slice_volume_by_map_jax(volume, rotation_matrices, image_shape, volume_shape, disc_type):
     order = decide_order(disc_type)
     return map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_shape, order)
 
 
-@functools.partial(jax.jit, static_argnums=[2, 3, 4])
+def _is_complex(arr):
+    """Check if array has complex dtype (works with tracers too)."""
+    return jnp.issubdtype(arr.dtype, jnp.complexfloating)
+
+
+# ── CUDA projection with custom VJP (so VJP-based callers work) ─────
+@functools.partial(jax.custom_vjp, nondiff_argnums=(2, 3, 4))
+def _slice_volume_by_map_cuda(volume, rotation_matrices, image_shape, volume_shape, order):
+    from recovar.cuda_backproject import project as cuda_project
+    return cuda_project(volume, rotation_matrices, image_shape, volume_shape, order=order)
+
+
+def _slice_cuda_fwd(volume, rotation_matrices, image_shape, volume_shape, order):
+    from recovar.cuda_backproject import project as cuda_project
+    result = cuda_project(volume, rotation_matrices, image_shape, volume_shape, order=order)
+    return result, (rotation_matrices,)
+
+
+def _slice_cuda_bwd(image_shape, volume_shape, order, res, g):
+    from recovar.cuda_backproject import backproject as cuda_backproject
+    (rotation_matrices,) = res
+    vol_size = 1
+    for s in volume_shape:
+        vol_size *= s
+    volume = jnp.zeros(vol_size, dtype=g.dtype)
+    adj = cuda_backproject(volume, g, rotation_matrices, image_shape, volume_shape, order=order)
+    return (adj, jnp.zeros_like(rotation_matrices))
+
+
+_slice_volume_by_map_cuda.defvjp(_slice_cuda_fwd, _slice_cuda_bwd)
+
+
+
+def slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type):
+    order = decide_order(disc_type)
+    if order <= 1 and _check_cuda() and _is_complex(volume):
+        return _slice_volume_by_map_cuda(volume, rotation_matrices, image_shape, volume_shape, order)
+    return _slice_volume_by_map_jax(volume, rotation_matrices, image_shape, volume_shape, disc_type)
+
+
 def adjoint_slice_volume_by_map(slices, rotation_matrices, image_shape, volume_shape, disc_type):
+    order = decide_order(disc_type)
+    if order <= 1 and _check_cuda() and _is_complex(slices):
+        from recovar.cuda_backproject import backproject as cuda_backproject
+        volume = jnp.zeros(np.prod(volume_shape), dtype=slices.dtype)
+        return cuda_backproject(volume, slices, rotation_matrices, image_shape, volume_shape, order=order)
+    return _adjoint_slice_volume_by_map_jax(slices, rotation_matrices, image_shape, volume_shape, disc_type)
+
+
+@functools.partial(jax.jit, static_argnums=[2, 3, 4])
+def _adjoint_slice_volume_by_map_jax(slices, rotation_matrices, image_shape, volume_shape, disc_type):
     volume_size = np.prod(volume_shape)
     order = decide_order(disc_type)
     if order == 3:
@@ -54,7 +128,7 @@ def adjoint_slice_volume_by_map(slices, rotation_matrices, image_shape, volume_s
             coeffs = cubic_interpolation.calculate_spline_coefficients(volume_flat.reshape(volume_shape))
             return map_coordinates_on_slices(coeffs, rotation_matrices, image_shape, volume_shape, 3)
     else:
-        f = lambda volume: slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type)
+        f = lambda volume: _slice_volume_by_map_jax(volume, rotation_matrices, image_shape, volume_shape, disc_type)
     _, u = vjp(f, jnp.zeros(volume_size, dtype=slices.dtype))
     return u(slices)[0]
 
@@ -582,6 +656,31 @@ def get_trilinear_weights_and_vol_indices(grid_coords, volume_shape):
 
 
 def slice_volume_by_trilinear(volume, rotation_matrices, image_shape, volume_shape):
+    if _check_cuda() and _is_complex(volume):
+        from recovar.cuda_backproject import project as cuda_project
+        return cuda_project(volume, rotation_matrices, image_shape, volume_shape, order=1)
+    return _slice_volume_by_trilinear_jax(volume, rotation_matrices, image_shape, volume_shape)
+
+
+def slice_volume_by_trilinear_from_half_volume(half_volume, rotation_matrices, image_shape, volume_shape):
+    """Project from a packed half volume (Hermitian last-axis) to full images.
+
+    Expands to full volume then projects via CUDA or JAX.
+    """
+    full_volume = fourier_transform_utils.half_volume_to_full_volume(half_volume, volume_shape)
+    return slice_volume_by_trilinear(full_volume, rotation_matrices, image_shape, volume_shape)
+
+
+def slice_volume_by_map_from_half_volume(half_volume, rotation_matrices, image_shape, volume_shape, disc_type):
+    """Project from a packed half volume to full images via map_coordinates.
+
+    Expands to full volume then projects via CUDA or JAX.
+    """
+    full_volume = fourier_transform_utils.half_volume_to_full_volume(half_volume, volume_shape)
+    return slice_volume_by_map(full_volume, rotation_matrices, image_shape, volume_shape, disc_type)
+
+
+def _slice_volume_by_trilinear_jax(volume, rotation_matrices, image_shape, volume_shape):
     grid_coords, grid_coords_og_shape = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
     grid_points, weights = get_trilinear_weights_and_vol_indices(grid_coords.T, volume_shape)
     grid_vec_indices = vol_indices_to_vec_indices(grid_points, volume_shape)
@@ -590,6 +689,32 @@ def slice_volume_by_trilinear(volume, rotation_matrices, image_shape, volume_sha
 
 
 def adjoint_slice_volume_by_trilinear(images, rotation_matrices, image_shape, volume_shape, volume=None):
+    if _check_cuda() and _is_complex(images):
+        from recovar.cuda_backproject import backproject as cuda_backproject
+        if volume is None:
+            volume = jnp.zeros(np.prod(volume_shape), dtype=images.dtype)
+        # Ensure images are 2D (n_images, n_pixels) for the CUDA kernel
+        imgs_2d = images.reshape(-1, np.prod(image_shape))
+        return cuda_backproject(volume, imgs_2d, rotation_matrices, image_shape, volume_shape, order=1)
+    return _adjoint_slice_volume_by_trilinear_jax(images, rotation_matrices, image_shape, volume_shape, volume)
+
+
+def adjoint_slice_volume_by_trilinear_to_half_volume(images, rotation_matrices, image_shape, volume_shape, volume=None):
+    """Backproject full images directly into a packed half volume.
+
+    Note: CUDA half_volume=True cannot be used with full images because both a pixel
+    and its Hermitian conjugate scatter to the same half-volume voxel (2x counting).
+    We backproject to full volume via CUDA, then extract the half.
+    """
+    volume_shape, full_volume_size, half_volume_shape, half_volume_size = _volume_shapes_and_sizes(volume_shape)
+    full_seed = _normalize_full_volume_seed_from_any(volume, volume_shape, full_volume_size, half_volume_size)
+    full_volume = adjoint_slice_volume_by_trilinear(
+        images, rotation_matrices, image_shape, volume_shape, volume=full_seed
+    )
+    return fourier_transform_utils.full_volume_to_half_volume(full_volume, volume_shape)
+
+
+def _adjoint_slice_volume_by_trilinear_jax(images, rotation_matrices, image_shape, volume_shape, volume=None):
     grid_coords, _ = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
     grid_points, weights = get_trilinear_weights_and_vol_indices(grid_coords.T, volume_shape)
     grid_vec_indices = vol_indices_to_vec_indices(grid_points, volume_shape)
@@ -607,6 +732,14 @@ def adjoint_slice_volume_by_trilinear_from_half_images(
 ):
     """Adjoint trilinear slicing from packed real-FFT image spectra."""
     half_images_flat, _ = _coerce_half_image_to_flat(half_images, image_shape, name="half_images")
+    if _check_cuda():
+        # Expand half → full images (JAX layout), then use CUDA full-image backproject.
+        # The CUDA half_image mode uses a different pixel layout (column-major) than
+        # JAX's packed half format (row-major), so we expand to full for compatibility.
+        full_images = fourier_transform_utils.half_image_to_full_image(half_images_flat, image_shape)
+        return adjoint_slice_volume_by_trilinear(
+            full_images, rotation_matrices, image_shape, volume_shape, volume=volume
+        )
     if not _supports_direct_half_symmetry(image_shape):
         full_images_flat = fourier_transform_utils.half_image_to_full_image(half_images_flat, image_shape)
         return adjoint_slice_volume_by_trilinear(
@@ -642,7 +775,17 @@ def adjoint_slice_volume_by_trilinear_from_half_images_to_half_volume(
     half_images, rotation_matrices, image_shape, volume_shape, volume=None
 ):
     """Adjoint trilinear slicing from packed half images to packed half volumes."""
-    volume_shape, full_volume_size, _, half_volume_size = _volume_shapes_and_sizes(volume_shape)
+    volume_shape, full_volume_size, half_volume_shape, half_volume_size = _volume_shapes_and_sizes(volume_shape)
+    if _check_cuda():
+        # Expand half → full images, backproject via CUDA to full volume, then extract half.
+        # Cannot use CUDA half_volume=True with full images (Hermitian pair double-counting).
+        half_images_flat, _ = _coerce_half_image_to_flat(half_images, image_shape, name="half_images")
+        full_images = fourier_transform_utils.half_image_to_full_image(half_images_flat, image_shape)
+        full_seed = _normalize_full_volume_seed_from_any(volume, volume_shape, full_volume_size, half_volume_size)
+        full_volume = adjoint_slice_volume_by_trilinear(
+            full_images, rotation_matrices, image_shape, volume_shape, volume=full_seed
+        )
+        return fourier_transform_utils.full_volume_to_half_volume(full_volume, volume_shape)
     if not _supports_direct_half_symmetry(image_shape):
         full_seed = _normalize_full_volume_seed_from_any(volume, volume_shape, full_volume_size, half_volume_size)
         full_volume = adjoint_slice_volume_by_trilinear_from_half_images(
@@ -687,6 +830,13 @@ def adjoint_slice_volume_by_map_from_half_images(
 
     Uses the same geometry and interpolation order as `adjoint_slice_volume_by_map`.
     """
+    order = decide_order(disc_type)
+    if order <= 1 and _check_cuda():
+        # Expand half → full, then use CUDA full-image backproject
+        half_images_flat, _ = _coerce_half_image_to_flat(half_images, image_shape, name="half_images")
+        return _adjoint_map_from_half_via_full(
+            half_images_flat, rotation_matrices, image_shape, volume_shape, disc_type, volume=volume
+        )
     half_images_flat, _ = _coerce_half_image_to_flat(half_images, image_shape, name="half_images")
     volume_shape, full_volume_size, _, _ = _volume_shapes_and_sizes(volume_shape)
     volume = _normalize_full_volume_seed(volume, full_volume_size)
@@ -721,7 +871,20 @@ def adjoint_slice_volume_by_map_from_half_images_to_half_volume(
     half_images, rotation_matrices, image_shape, volume_shape, disc_type, volume=None
 ):
     """Adjoint map-based slicing from packed half images to packed half volumes."""
-    volume_shape, full_volume_size, _, half_volume_size = _volume_shapes_and_sizes(volume_shape)
+    order = decide_order(disc_type)
+    volume_shape, full_volume_size, half_volume_shape, half_volume_size = _volume_shapes_and_sizes(volume_shape)
+    if order <= 1 and _check_cuda():
+        # Expand half → full images, backproject via CUDA to full volume, then extract half.
+        # Cannot use CUDA half_volume=True with full images (Hermitian pair double-counting).
+        half_images_flat, _ = _coerce_half_image_to_flat(half_images, image_shape, name="half_images")
+        full_images = fourier_transform_utils.half_image_to_full_image(half_images_flat, image_shape)
+        full_seed = _normalize_full_volume_seed_from_any(volume, volume_shape, full_volume_size, half_volume_size)
+        full_volume = adjoint_slice_volume_by_map(
+            full_images, rotation_matrices, image_shape, volume_shape, disc_type
+        )
+        if full_seed is not None:
+            full_volume = full_volume + full_seed
+        return fourier_transform_utils.full_volume_to_half_volume(full_volume, volume_shape)
     if not _supports_direct_half_symmetry(image_shape):
         full_seed = _normalize_full_volume_seed_from_any(volume, volume_shape, full_volume_size, half_volume_size)
         full_volume = adjoint_slice_volume_by_map_from_half_images(
@@ -758,6 +921,56 @@ def adjoint_slice_volume_by_map_from_half_images_to_half_volume(
         half_images, rotation_matrices, image_shape, volume_shape, disc_type, volume=full_seed
     )
     return fourier_transform_utils.full_volume_to_half_volume(full_volume, volume_shape)
+
+
+def batch_slice_volume_by_trilinear(volumes, rotation_matrices, image_shape, volume_shape):
+    """Project a batch of volumes to images with shared rotations.
+
+    Uses a single CUDA kernel launch that loops over the batch dimension
+    internally, reusing rotation coordinates across volumes.
+
+    Parameters
+    ----------
+    volumes : complex, shape ``(batch, vol_flat_size)``
+    rotation_matrices : shape ``(n_images, 3, 3)``
+
+    Returns
+    -------
+    complex, shape ``(batch, n_images, n_pixels)``
+    """
+    if _check_cuda() and _is_complex(volumes):
+        from recovar.cuda_backproject import batch_project as cuda_batch_project
+        return cuda_batch_project(volumes, rotation_matrices, image_shape, volume_shape, order=1)
+    return jax.vmap(
+        lambda v: slice_volume_by_trilinear(v, rotation_matrices, image_shape, volume_shape)
+    )(volumes)
+
+
+def batch_adjoint_slice_volume_by_trilinear(images, rotation_matrices, image_shape, volume_shape, volumes=None):
+    """Backproject per-volume images into a batch of volumes with shared rotations.
+
+    Uses a single CUDA kernel launch that loops over the batch dimension
+    internally, reusing rotation coordinates across volumes.
+
+    Parameters
+    ----------
+    images : complex, shape ``(batch, n_images, n_pixels)``
+    rotation_matrices : shape ``(n_images, 3, 3)``
+    volumes : optional, shape ``(batch, vol_flat_size)``
+
+    Returns
+    -------
+    complex, shape ``(batch, vol_flat_size)``
+    """
+    batch = images.shape[0]
+    if volumes is None:
+        volumes = jnp.zeros((batch, int(np.prod(volume_shape))), dtype=images.dtype)
+    if _check_cuda() and _is_complex(images):
+        from recovar.cuda_backproject import batch_backproject as cuda_batch_backproject
+        return cuda_batch_backproject(volumes, images, rotation_matrices, image_shape, volume_shape, order=1)
+    return jax.vmap(
+        lambda v, im: adjoint_slice_volume_by_trilinear(im, rotation_matrices, image_shape, volume_shape, volume=v)
+    )(volumes, images)
 
 
 def adjoint_slice_volume_by_trilinear_from_weights(images, grid_vec_indices, weights, volume_shape, volume=None):
@@ -798,6 +1011,7 @@ __all__ = [
     "batch_slice_volume_by_nearest",
     "decide_order",
     "slice_volume_by_map",
+    "slice_volume_by_map_from_half_volume",
     "adjoint_slice_volume_by_map",
     "summed_adjoint_slice_by_nearest",
     "batch_over_vol_summed_adjoint_slice_by_nearest",
@@ -810,11 +1024,15 @@ __all__ = [
     "sum_adj_forward_model_from_half_to_half",
     "get_trilinear_weights_and_vol_indices",
     "slice_volume_by_trilinear",
+    "slice_volume_by_trilinear_from_half_volume",
     "adjoint_slice_volume_by_trilinear",
+    "adjoint_slice_volume_by_trilinear_to_half_volume",
     "adjoint_slice_volume_by_trilinear_from_half_images",
     "adjoint_slice_volume_by_trilinear_from_half_images_to_half_volume",
     "adjoint_slice_volume_by_map_from_half_images",
     "adjoint_slice_volume_by_map_from_half_images_to_half_volume",
     "adjoint_slice_volume_by_trilinear_from_weights",
+    "batch_slice_volume_by_trilinear",
+    "batch_adjoint_slice_volume_by_trilinear",
     "map_coordinates_on_slices",
 ]
