@@ -253,10 +253,13 @@ def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequenc
 
     if prior is None:
         top = jnp.ones_like(lhs)
-        bot = 1 / lhs
+        # Safe division: avoid inf when lhs==0 (no-coverage voxels)
+        bot = jnp.where(lhs > epsilon, 1 / lhs, 0)
     else:
-        top = lhs**2 / (lhs + 1/prior)**2
-        bot = lhs / (lhs + 1/prior)**2
+        denom = (lhs + 1/prior)**2
+        safe_denom = jnp.where(denom > 0, denom, jnp.float32(1.0))
+        top = lhs**2 / safe_denom
+        bot = lhs / safe_denom
 
     sum_top = average_over_shells(top,  volume_shape, frequency_shift)
     sum_bot = average_over_shells(bot,  volume_shape, frequency_shift)
