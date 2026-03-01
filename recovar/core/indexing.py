@@ -39,11 +39,11 @@ def frequencies_to_vec_indices(frequencies, vol_shape):
 
 
 def check_frequencies_in_bound(frequencies, grid_size):
-    return jnp.prod((frequencies >= -grid_size / 2) * (frequencies < grid_size / 2), axis=-1).astype(bool)
+    return jnp.all((frequencies >= -grid_size / 2) & (frequencies < grid_size / 2), axis=-1)
 
 
 def check_vol_indices_in_bound(vol_indices, grid_size):
-    return jnp.prod((vol_indices >= 0) * (vol_indices < grid_size), axis=-1).astype(bool)
+    return jnp.all((vol_indices >= 0) & (vol_indices < grid_size), axis=-1)
 
 
 def check_vec_indices_in_bound(vec_indices, grid_size):

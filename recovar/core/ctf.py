@@ -6,7 +6,6 @@ import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar.core.geometry import get_unrotated_plane_coords
 
 
 class CTFParamIndex(IntEnum):
@@ -41,8 +40,7 @@ def evaluate_ctf(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfactor):
     df = 0.5 * (dfu + dfv + (dfu - dfv) * jnp.cos(2 * (ang - dfang)))
     gamma = 2 * jnp.pi * (-0.5 * df * lam * s2 + 0.25 * cs * lam**3 * s2**2) - phase_shift
     ctf = (1 - w**2) ** 0.5 * jnp.sin(gamma) - w * jnp.cos(gamma)
-    if bfactor is not None:
-        ctf *= jnp.exp(-bfactor / 4 * s2)
+    ctf = ctf * jnp.exp(-bfactor / 4 * s2)
     return ctf
 
 
@@ -70,30 +68,22 @@ def get_dose_filters_from_tilt_number(Apix, image_shape, dose_per_tilt, angle_pe
 
 
 def get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage):
-    n_pixels = int(np.prod(image_shape))
-    n = len(cumulative_dose)
     freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, Apix, scaled=True)
 
     s2 = freqs[..., 0] ** 2 + freqs[..., 1] ** 2
     s = jnp.sqrt(s2)
 
-    # Keep broadcasted arrays lightweight; avoid explicit ones/repeat materialization.
-    cd_tile = cumulative_dose[:, None]
-    ce = critical_exposure(s, voltage)
-    ce_tile = jnp.broadcast_to(ce[None], (n, n_pixels))
+    cd = cumulative_dose[:, None]                        # (n, 1)
+    ce = critical_exposure(s, voltage)[None, :]          # (1, n_pixels)
+    oe_mask = cd < ce * 2.51284                          # implicit broadcast → (n, n_pixels)
+    freq_correction = jnp.exp(-0.5 * cd / ce) * oe_mask
 
-    oe_tile = ce_tile * 2.51284
-    oe_mask = cd_tile < oe_tile
-    freq_correction = jnp.exp(-0.5 * cd_tile / ce_tile)
-    freq_correction = jnp.multiply(freq_correction, oe_mask)
-
-    angle_correction = jnp.cos(tilt_angles * np.pi / 180)
-    ac_tile = angle_correction[:, None]
-    return freq_correction * ac_tile
+    angle_correction = jnp.cos(tilt_angles * jnp.pi / 180)
+    return freq_correction * angle_correction[:, None]
 
 
 def cryodrgn_CTF(CTF_params, image_shape, voxel_size):
-    psi = get_unrotated_plane_coords(image_shape, voxel_size, scaled=True)[..., :2]
+    psi = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=True)
     return batch_evaluate_ctf(psi, CTF_params)
 
 
@@ -170,7 +160,7 @@ def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, antialiasing=False
         return cryodrgn_CTF(CTF_params, image_shape, voxel_size)
 
     upsample_factor = 2
-    upsampled_shape = tuple(np.array(image_shape) * upsample_factor)
+    upsampled_shape = tuple(s * upsample_factor for s in image_shape)
     upsampled_CTF_squared = cryodrgn_CTF(CTF_params, upsampled_shape, voxel_size)
 
     batch_size = upsampled_CTF_squared.shape[0]
