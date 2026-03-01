@@ -1,3 +1,5 @@
+"""RECOVAR: heterogeneity analysis for cryo-EM and cryo-ET."""
+
 try:
     import recovar.jax_config  # noqa: F401
 except ModuleNotFoundError:

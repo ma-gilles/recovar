@@ -1,3 +1,5 @@
+"""Real-space and Fourier-space mask generation and manipulation."""
+
 import logging
 import jax.numpy as jnp
 import numpy as np

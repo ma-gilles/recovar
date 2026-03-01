@@ -1,3 +1,5 @@
+"""Visualization helpers: FSC plots, volume slices, embedding scatter."""
+
 import logging
 from matplotlib import colors as mcolors
 from matplotlib_scalebar.scalebar import ScaleBar

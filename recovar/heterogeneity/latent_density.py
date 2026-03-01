@@ -1,3 +1,5 @@
+"""Kernel density estimation and stable-state detection in latent space."""
+
 import logging
 import jax.numpy as jnp
 import numpy as np

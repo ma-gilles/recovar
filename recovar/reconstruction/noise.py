@@ -1,3 +1,5 @@
+"""Noise variance estimation from cryo-EM image residuals."""
+
 import logging
 import jax.numpy as jnp
 import numpy as np
@@ -566,6 +568,21 @@ mean_fn = np.mean
 
 @nvtx.annotate("estimate_noise_variance", color="yellow", domain=NVTX_DOMAIN_NOISE)
 def estimate_noise_variance(experiment_dataset, batch_size, max_images = 10000):
+    """Estimate per-image noise variance from corner pixels.
+
+    Computes the noise power spectrum from image regions outside the
+    particle mask, subsampling to at most *max_images* for efficiency.
+
+    Args:
+        experiment_dataset: A ``CryoEMDataset`` instance.
+        batch_size: Number of images to process per GPU batch.
+        max_images: Maximum number of images to use for estimation.
+
+    Returns:
+        Tuple ``(cov_noise, radial_noise_profile)`` where *cov_noise*
+        is a scalar noise variance and *radial_noise_profile* is the
+        averaged radial power spectrum of the noise.
+    """
     sum_sq = 0
 
     # Subsample at most 10000 images

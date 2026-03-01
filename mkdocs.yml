@@ -36,6 +36,17 @@ theme:
 
 plugins:
   - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_source: false
+            show_root_heading: true
+            members_order: source
+            merge_init_into_class: true
+            show_if_no_docstring: false
 
 markdown_extensions:
   - admonition
@@ -78,4 +89,13 @@ nav:
   - Reference:
     - CLI Commands: reference/cli.md
     - File Formats: reference/file-formats.md
+    - Python API:
+      - recovar.core: reference/api/core.md
+      - recovar.data_io: reference/api/data_io.md
+      - recovar.heterogeneity: reference/api/heterogeneity.md
+      - recovar.reconstruction: reference/api/reconstruction.md
+      - recovar.simulation: reference/api/simulation.md
+      - recovar.output: reference/api/output.md
+      - recovar.em: reference/api/em.md
+      - recovar.utils: reference/api/utils.md
   - Troubleshooting: troubleshooting.md

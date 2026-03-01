@@ -1,3 +1,5 @@
+"""Regularized covariance matrix estimation from half-set cryo-EM data."""
+
 import logging
 import jax.numpy as jnp
 import numpy as np
@@ -79,6 +81,21 @@ NVTX_DOMAIN_H_B = "compute_H_B"
 
 @nvtx.annotate("get_default_covariance_computation_options", color="red")
 def get_default_covariance_computation_options(grid_size=None):
+    """Return default options dict for covariance computation.
+
+    Automatically sizes the number of principal components and column
+    sampling parameters based on available GPU memory and the
+    reconstruction grid size.
+
+    Args:
+        grid_size: Side length of the 3-D reconstruction grid.  When
+            provided, the number of PCs is scaled to fit in GPU memory.
+
+    Returns:
+        Dictionary with keys ``covariance_fn``, ``reg_fn``,
+        ``left_kernel``, ``right_kernel``, ``column_sampling_scheme``,
+        ``n_pcs_to_compute``, among others.
+    """
 
     gpu_memory = utils.get_gpu_memory_total()
     
@@ -283,6 +300,30 @@ def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_rad
 
 @nvtx.annotate("compute_regularized_covariance_columns_in_batch", color="purple")
 def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, options, picked_frequencies, use_multi_gpu = False, n_gpus = None, mean_cubic=None):
+    """Compute regularized covariance matrix columns in GPU-sized batches.
+
+    Iterates over *picked_frequencies* in batches that fit in GPU memory
+    and concatenates the results.
+
+    Args:
+        cryos: Half-set datasets (``CryoEMHalfsets``).
+        means: Dict with keys ``'combined'``, ``'prior'``, ``'lhs'``.
+        mean_prior: Prior mean volume (Fourier coefficients).
+        volume_mask: Binary mask selecting valid voxels.
+        dilated_volume_mask: Dilated version of *volume_mask*.
+        valid_idx: Indices of valid Fourier frequencies.
+        gpu_memory: Available GPU memory in GB.
+        options: Pipeline options namespace.
+        picked_frequencies: 1-D array of frequency indices to compute.
+        use_multi_gpu: Distribute across multiple GPUs.
+        n_gpus: Number of GPUs (``None`` = auto-detect).
+        mean_cubic: Pre-computed cubic-interpolation coefficients for the mean.
+
+    Returns:
+        Tuple ``(covariance_cols, picked_frequencies, fscs)`` where
+        *covariance_cols* is a dict with key ``'est_mask'`` and *fscs*
+        contains per-column FSC curves.
+    """
 
     frequency_batch = utils.get_column_batch_size(cryos.grid_size, gpu_memory)
 

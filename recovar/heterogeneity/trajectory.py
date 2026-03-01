@@ -1,3 +1,5 @@
+"""Minimum-energy path finding between states in latent space."""
+
 import logging
 
 import numpy as np

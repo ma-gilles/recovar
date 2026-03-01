@@ -57,11 +57,13 @@ Full documentation is available at **[ma-gilles.github.io/recovar](https://ma-gi
 
 If you'd like to use RECOVAR functions directly in Python (e.g., for custom analysis or integration with other tools), the key modules are:
 
-- `recovar.dataset` — dataset loading (`load_dataset`, `CryoEMDataset`)
-- `recovar.metadata_parsing` — extract poses/CTF from `.star`/`.cs` files
-- `recovar.heterogeneity_volume` — volume generation via kernel regression
-- `recovar.embedding` — latent space embedding
-- `recovar.covariance_estimation` — covariance estimation
+- `recovar.data_io.dataset` — dataset loading (`load_dataset`, `CryoEMDataset`, `CryoEMHalfsets`)
+- `recovar.data_io.metadata_parsing` — extract poses/CTF from `.star`/`.cs` files
+- `recovar.heterogeneity.heterogeneity_volume` — volume generation via kernel regression
+- `recovar.heterogeneity.embedding` — latent space embedding
+- `recovar.heterogeneity.covariance_estimation` — covariance estimation
+
+See the [Python API reference](https://ma-gilles.github.io/recovar/reference/api/heterogeneity/) for function-by-function documentation.
 
 ## Citation
 

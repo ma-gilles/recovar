@@ -1,3 +1,5 @@
+"""Main recovar pipeline command: mean reconstruction, covariance, PCA, embedding."""
+
 import logging
 logger = logging.getLogger(__name__)
 import recovar.jax_config

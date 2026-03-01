@@ -1,3 +1,5 @@
+"""Fourier slice extraction and adjoint (backprojection) operations."""
+
 import functools
 
 import jax

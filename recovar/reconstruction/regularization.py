@@ -1,3 +1,5 @@
+"""Fourier-shell regularization priors and FSC computation."""
+
 import logging
 import jax.numpy as jnp
 import numpy as np
@@ -54,7 +56,22 @@ def compute_prior_quantites(experiment_datasets, cov_noise, batch_size, for_whit
     
 
 def compute_relion_prior(experiment_datasets, cov_noise, image0, image1, batch_size, estimate_merged_SNR = False, noise_level = None):
-    
+    """Compute a RELION-style spectral prior from two half-set reconstructions.
+
+    Args:
+        experiment_datasets: ``CryoEMHalfsets`` instance.
+        cov_noise: Scalar noise variance.
+        image0: First half-map (Fourier coefficients).
+        image1: Second half-map (Fourier coefficients).
+        batch_size: GPU batch size for noise estimation.
+        estimate_merged_SNR: Estimate SNR from merged map.
+        noise_level: Pre-computed noise level (skips estimation if given).
+
+    Returns:
+        Tuple ``(prior, fsc, prior_avg)`` — the spectral prior, FSC
+        curve, and averaged prior.
+    """
+
     if noise_level is not None:
         bottom_of_fraction = noise_level
         from_noise_level = True
@@ -66,6 +83,18 @@ def compute_relion_prior(experiment_datasets, cov_noise, image0, image1, batch_s
 
 
 def get_fsc(vol1, vol2, volume_shape, substract_shell_mean = False, frequency_shift = 0):
+    """Compute the Fourier Shell Correlation between two volumes.
+
+    Args:
+        vol1: First volume (flattened Fourier coefficients).
+        vol2: Second volume (flattened Fourier coefficients).
+        volume_shape: Tuple ``(N, N, N)`` giving the 3-D grid dimensions.
+        substract_shell_mean: Subtract per-shell mean before correlating.
+        frequency_shift: Shift applied to frequency indices.
+
+    Returns:
+        1-D array of FSC values, one per radial shell.
+    """
     return get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean, frequency_shift)
 
 # @functools.partial(jax.jit, static_argnums = [7,8,9,10, 11, 12,13])    

@@ -1,3 +1,5 @@
+"""Forward-model cryo-EM image simulation from atomic volumes."""
+
 import logging
 import os
 import functools

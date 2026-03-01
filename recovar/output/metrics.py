@@ -1,3 +1,5 @@
+"""Reconstruction quality metrics: FSC, subspace angles, per-voxel error."""
+
 import logging
 import jax
 import jax.numpy as jnp

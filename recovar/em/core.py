@@ -1,3 +1,5 @@
+"""Core EM iteration logic: cross-correlation, residual computation."""
+
 import functools
 import jax
 import jax.numpy as jnp

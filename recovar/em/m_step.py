@@ -1,3 +1,5 @@
+"""M-step: volume update via weighted backprojection."""
+
 import functools
 import logging
 import numpy as np

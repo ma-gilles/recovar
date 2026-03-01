@@ -1,3 +1,5 @@
+"""High-level EM loop orchestration and convergence tracking."""
+
 from recovar import utils
 from recovar.em.core import hard_assignment_idx_to_pose
 import numpy as np

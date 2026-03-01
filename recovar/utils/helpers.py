@@ -1,3 +1,5 @@
+"""General-purpose utilities: I/O, array manipulation, timing."""
+
 import functools
 import logging
 import os
