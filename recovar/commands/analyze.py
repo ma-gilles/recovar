@@ -1,17 +1,21 @@
 """Post-pipeline analysis: k-means, trajectories, UMAP, volume generation."""
 
 import recovar.jax_config
+import argparse
 import logging
+import os
+
 import numpy as np
-from recovar.output import output as o
+from scipy.spatial import distance_matrix
+
 from recovar import utils
 from recovar.data_io import dataset
 from recovar.heterogeneity import latent_density, embedding
-from scipy.spatial import distance_matrix
-import os, argparse
+from recovar.output import output as o
 from recovar.utils import cleanup_temp_files, copy_data_from_pipeline_output
-logger = logging.getLogger(__name__)
 from recovar.utils import parser_args
+
+logger = logging.getLogger(__name__)
 
 def add_args(parser: argparse.ArgumentParser):
 
@@ -90,7 +94,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
         elif zdim is None:
             zdim = zs_keys[0]
-            logger.info(f"using zdim={zdim}")
+            logger.info("using zdim=%d", zdim)
 
         noreg_suffix = '_noreg' if no_z_reg else ''
         if output_folder is None:
@@ -133,7 +137,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
             dens_pkl = utils.pickle_load(density_path)
             input_density = dens_pkl['density']
             latent_space_bounds = dens_pkl['latent_space_bounds']
-            logger.warning(f"density dimension is less than zs dimension, truncate zs dimension to match density dimension = {input_density.ndim}")
+            logger.warning("density dimension is less than zs dimension, truncate zs dimension to match density dimension = %d", input_density.ndim)
             zdim = input_density.ndim
             zs = zs[:, :zdim]
             cov_zs = cov_zs[:, :zdim, :zdim]
@@ -203,14 +207,11 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
                 vol_prefix="center"
             )
 
-        del zs_unsort
-
         if zdim > 1:
             pairs = pick_pairs(centers, n_paths)
-            for pair_idx in range(len(pairs)):
-                pair = pairs[pair_idx]
-                z_st = centers[pair[0], :]
-                z_end = centers[pair[1], :]
+            for pair_idx, pair in enumerate(pairs):
+                z_st = centers[pair[0]]
+                z_end = centers[pair[1]]
 
                 traj_folder = os.path.join(output_folder, f'traj{pair_idx:03d}/')
                 o.mkdir_safe(traj_folder)
@@ -220,7 +221,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
                     latent_space_bounds=latent_space_bounds
                 )
 
-                logger.info(f"trajectory {pair_idx} done")
+                logger.info("trajectory %d done", pair_idx)
                 o.compute_and_save_reweighted(
                     cryos, subsampled_path, zs, cov_zs, traj_folder, B_factor, n_bins,
                     n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
@@ -264,7 +265,7 @@ def pick_pairs(centers, n_pairs):
     #     
     # Pick some pairs that are far away from each other.
     pairs = []
-    X = distance_matrix(centers[:,:], centers[:,:])
+    X = distance_matrix(centers, centers)
 
     for _ in range(n_pairs//2):
         i_idx,j_idx = np.unravel_index(np.argmax(X), X.shape)

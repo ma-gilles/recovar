@@ -59,33 +59,40 @@ def estimate_conformational_density(recovar_result_dir, output_dir=None, pca_dim
     lbfgsb_sols, alphas, cost, reg_cost, density, total_covar, grids, bounds = deconvolve_density.get_deconvolved_density(
         pipeline_output, zdim=z_dim_used, noreg=True, pca_dim_max=pca_dim, percentile_reject=percentile_reject, kernel_option='sampling', num_points=num_disc_points, alphas=alphas, percentile_bound=percentile_bound, save_to_file=None
     )
-    logger.info(f"Deconvolution done, size = {density.shape}")
+    logger.info("Deconvolution done, size = %s", density.shape)
     deconvolve_density.plot_density(lbfgsb_sols, density, alphas)
     plt.savefig(str(output_dir / 'all_densities.png'))
+    plt.close()
 
     from kneed import KneeLocator
     kn = KneeLocator(np.log10(1/alphas), np.log(cost), curve='convex', direction='decreasing')
-    logger.info(f"Knee point: {kn.knee}")
     knee_idx = np.argmin(np.abs(np.log10(1/alphas) - kn.knee))
-    logger.info(f"Knee point: alpha = {10**(1/kn.knee)} at idx = {knee_idx}")
+    logger.info("Knee point: alpha = %.2e at idx = %d", alphas[knee_idx], knee_idx)
 
     all_densities_dir = output_dir / 'all_densities'
     output.mkdir_safe(str(all_densities_dir))
-    for idx in range(len(lbfgsb_sols)):
-        utils.pickle_dump({'density': lbfgsb_sols[idx], 'latent_space_bounds': bounds, 'alpha': alphas[idx]}, str(all_densities_dir / f'deconv_density_{idx}.pkl'))
+    for idx, sol in enumerate(lbfgsb_sols):
+        utils.pickle_dump(
+            {'density': sol, 'latent_space_bounds': bounds, 'alpha': alphas[idx]},
+            str(all_densities_dir / f'deconv_density_{idx}.pkl'),
+        )
 
-    idx = knee_idx
-    utils.pickle_dump({'density': lbfgsb_sols[idx], 'latent_space_bounds': bounds, 'alpha': alphas[idx]}, str(output_dir / 'deconv_density_knee.pkl'))
+    utils.pickle_dump(
+        {'density': lbfgsb_sols[knee_idx], 'latent_space_bounds': bounds, 'alpha': alphas[knee_idx]},
+        str(output_dir / 'deconv_density_knee.pkl'),
+    )
     plt.figure(figsize=(12, 10))
     for i, (alpha, c) in enumerate(zip(alphas, cost)):
         plt.text(alpha, c, str(i), fontsize=18)
     plt.loglog(alphas, cost, '-o')
-    plt.loglog(np.ones(2)*alphas[idx], [min(cost), max(cost)], '--', color='black')
-    plt.text(alphas[idx], min(cost), f'knee point: {alphas[idx]:.2e}, idx ={idx}', rotation=90, verticalalignment='bottom')
+    plt.loglog(np.ones(2) * alphas[knee_idx], [min(cost), max(cost)], '--', color='black')
+    plt.text(alphas[knee_idx], min(cost), f'knee point: {alphas[knee_idx]:.2e}, idx={knee_idx}',
+             rotation=90, verticalalignment='bottom')
     plt.ylabel('Cost')
     plt.xlabel('Lambda (regularization parameter)')
     plt.gca().invert_xaxis()
     plt.savefig(str(output_dir / 'Lcurve.png'), transparent=True)
+    plt.close()
 
 
 def main():
