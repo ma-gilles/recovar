@@ -843,7 +843,7 @@ def standard_recovar_pipeline(args):
     else:
         particles_ind_split = ind_split
 
-    embedding_dict = o.build_embedding_dict(
+    embedding_dict = output.build_embedding_dict(
         latent_coords, latent_coords_noreg,
         latent_precision, latent_precision_noreg,
         est_contrasts, est_contrasts_noreg)
@@ -882,7 +882,7 @@ def standard_recovar_pipeline(args):
                     setattr(args, attr_name, path_mapping[orig_key])
                     logger.info("Restored %s path: %s", attr_name, path_mapping[orig_key])
 
-    result = o.build_params_dict(
+    result = output.build_params_dict(
         volume_shape=volume_shape,
         voxel_size=cryos.voxel_size,
         s_rescaled=s['rescaled'],
@@ -930,7 +930,6 @@ def standard_recovar_pipeline(args):
         cleanup_temp_files(path_mapping)
 
     # Generate standard plots
-    from recovar.output import output
     po = output.PipelineOutput(args.outdir)
     zdims = np.array(args.zdim)
     zdim_choose = np.argmin(np.abs(zdims - 10))

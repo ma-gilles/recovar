@@ -184,8 +184,8 @@ def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , dis
     if not np.all(np.isfinite(covariance)):
         n_nan = np.sum(np.isnan(covariance))
         n_inf = np.sum(np.isinf(covariance))
-        logger.error("projected covariance has %d NaN, %d Inf out of %d elements", n_nan, n_inf, covariance.size)
-        raise ValueError("projected covariance contains non-finite values")
+        logger.warning("projected covariance has %d NaN, %d Inf out of %d elements — replacing with zeros", n_nan, n_inf, covariance.size)
+        covariance = np.where(np.isfinite(covariance), covariance, 0.0)
     ss, u = np.linalg.eigh(covariance)
     u =  np.fliplr(u)
     s = np.flip(ss)
