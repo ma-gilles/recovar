@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}RECOVAR — Dashboard{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="fade-in space-y-6">
+
+  <!-- Header row -->
+  <div class="flex items-center justify-between">
+    <div>
+      <h2 class="text-2xl font-bold text-white">Jobs</h2>
+      <p class="text-sm text-slate-400 mt-1">
+        {{ jobs|length }} job{{ 's' if jobs|length != 1 }} total
+      </p>
+    </div>
+    <a href="{{ url_for('new_job') }}"
+       class="inline-flex items-center gap-2 px-4 py-2.5 bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium rounded-lg transition-colors shadow-lg shadow-sky-600/25">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+      </svg>
+      New Pipeline Job
+    </a>
+  </div>
+
+  {% if not jobs %}
+  <!-- Empty state -->
+  <div class="flex flex-col items-center justify-center py-20 px-6">
+    <div class="w-20 h-20 rounded-2xl bg-slate-800/50 flex items-center justify-center mb-6">
+      <svg class="w-10 h-10 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+              d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+      </svg>
+    </div>
+    <h3 class="text-xl font-semibold text-white mb-2">Welcome to RECOVAR</h3>
+    <p class="text-slate-400 text-center max-w-md mb-8">
+      No pipeline jobs found yet. Create a new job to start analyzing your cryo-EM data,
+      or scan a directory to import existing results.
+    </p>
+    <a href="{{ url_for('new_job') }}"
+       class="inline-flex items-center gap-2 px-6 py-3 bg-sky-600 hover:bg-sky-500 text-white font-medium rounded-lg transition-colors shadow-lg shadow-sky-600/25">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+      </svg>
+      Create Your First Job
+    </a>
+  </div>
+  {% else %}
+
+  <!-- Status filter pills -->
+  <div class="flex gap-2" x-data="{ filter: 'all' }">
+    <button @click="filter = 'all'"
+            :class="filter === 'all' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'"
+            class="px-3 py-1.5 text-xs font-medium rounded-full transition-colors">
+      All ({{ jobs|length }})
+    </button>
+    {% set running = jobs|selectattr('status', 'equalto', 'running')|list %}
+    {% set completed = jobs|selectattr('status', 'equalto', 'completed')|list %}
+    {% set failed = jobs|selectattr('status', 'equalto', 'failed')|list %}
+    {% if running %}
+    <button @click="filter = 'running'"
+            :class="filter === 'running' ? 'bg-sky-600/20 text-sky-400' : 'text-slate-400 hover:text-white'"
+            class="px-3 py-1.5 text-xs font-medium rounded-full transition-colors">
+      Running ({{ running|length }})
+    </button>
+    {% endif %}
+    {% if completed %}
+    <button @click="filter = 'completed'"
+            :class="filter === 'completed' ? 'bg-emerald-600/20 text-emerald-400' : 'text-slate-400 hover:text-white'"
+            class="px-3 py-1.5 text-xs font-medium rounded-full transition-colors">
+      Completed ({{ completed|length }})
+    </button>
+    {% endif %}
+    {% if failed %}
+    <button @click="filter = 'failed'"
+            :class="filter === 'failed' ? 'bg-red-600/20 text-red-400' : 'text-slate-400 hover:text-white'"
+            class="px-3 py-1.5 text-xs font-medium rounded-full transition-colors">
+      Failed ({{ failed|length }})
+    </button>
+    {% endif %}
+  </div>
+
+  <!-- Job cards grid -->
+  <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+    {% for job in jobs %}
+    <a href="{{ url_for('job_detail', job_id=job.id) }}"
+       class="group block bg-slate-900 border border-slate-800 rounded-xl p-5 hover:border-slate-700 hover:bg-slate-800/50 transition-all duration-200"
+       x-show="filter === 'all' || filter === '{{ job.status }}'">
+
+      <!-- Header -->
+      <div class="flex items-start justify-between mb-3">
+        <div class="flex items-center gap-2.5">
+          <span class="w-2.5 h-2.5 rounded-full flex-shrink-0
+            {% if job.status == 'completed' %}bg-emerald-400
+            {% elif job.status == 'running' %}bg-sky-400 animate-pulse
+            {% elif job.status == 'queued' %}bg-amber-400 animate-pulse
+            {% else %}bg-red-400{% endif %}"></span>
+          <h3 class="font-semibold text-white group-hover:text-sky-400 transition-colors truncate max-w-[200px]">
+            {{ job.name }}
+          </h3>
+        </div>
+        <span class="text-[11px] font-medium uppercase tracking-wide
+          {% if job.status == 'completed' %}text-emerald-400
+          {% elif job.status == 'running' %}text-sky-400
+          {% elif job.status == 'queued' %}text-amber-400
+          {% else %}text-red-400{% endif %}">
+          {{ job.status }}
+        </span>
+      </div>
+
+      <!-- Details -->
+      <div class="space-y-1.5 text-xs text-slate-400">
+        {% if job.particles %}
+        <div class="flex items-center gap-2">
+          <svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+          </svg>
+          <span class="truncate">{{ job.particles.split('/')[-1] }}</span>
+        </div>
+        {% endif %}
+        {% if job.grid_size %}
+        <div class="flex items-center gap-2">
+          <svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6z"/>
+          </svg>
+          <span>Box {{ job.grid_size }}{% if job.downsample %} → {{ job.downsample }}{% endif %}</span>
+        </div>
+        {% endif %}
+        {% if job.n_images %}
+        <div class="flex items-center gap-2">
+          <svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+          </svg>
+          <span>{{ "{:,}".format(job.n_images) }} images</span>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Footer -->
+      <div class="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between">
+        <span class="text-[11px] text-slate-500">{{ job.created_str }}</span>
+        {% if job.has_results %}
+        <span class="text-[11px] text-emerald-400 font-medium">Results ready</span>
+        {% elif job.error %}
+        <span class="text-[11px] text-red-400 truncate max-w-[150px]">{{ job.error }}</span>
+        {% endif %}
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,309 @@
+{% extends "base.html" %}
+{% block title %}RECOVAR — New Job{% endblock %}
+{% block page_title %}New Pipeline Job{% endblock %}
+
+{% block content %}
+<div class="fade-in max-w-4xl" x-data="jobForm()">
+  <form method="POST" action="{{ url_for('create_job') }}" class="space-y-6">
+
+    <!-- Job name + output -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
+      <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">Job Settings</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-1.5">Job Name</label>
+          <input name="name" type="text" value="pipeline_run"
+                 class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-1.5">Output Directory *</label>
+          <div class="flex gap-2">
+            <input name="output_dir" type="text" required x-model="outputDir"
+                   class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition"
+                   placeholder="/path/to/output">
+            <button type="button" @click="browsePath('outputDir')"
+                    class="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-300 transition-colors">Browse</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dataset -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
+      <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">
+        <svg class="w-4 h-4 inline mr-1 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+        </svg>
+        Dataset
+      </h3>
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-1.5">Particles File *</label>
+          <div class="flex gap-2">
+            <input name="particles" type="text" required x-model="particles"
+                   class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition"
+                   placeholder="/path/to/particles.star or .cs">
+            <button type="button" @click="browsePath('particles')"
+                    class="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-300 transition-colors">Browse</button>
+          </div>
+          <p class="text-xs text-slate-500 mt-1">STAR, CS, MRCS, or TXT file</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-1.5">Mask *</label>
+          <div class="flex gap-2">
+            <input name="mask" type="text" required x-model="mask" value="from_halfmaps"
+                   class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition"
+                   placeholder="from_halfmaps, sphere, none, or /path/to/mask.mrc">
+            <button type="button" @click="browsePath('mask')"
+                    class="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-300 transition-colors">Browse</button>
+          </div>
+          <p class="text-xs text-slate-500 mt-1">MRC file, or: from_halfmaps, sphere, none</p>
+        </div>
+        <div class="flex items-center gap-4">
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input name="lazy" type="checkbox" class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+            <span class="text-sm text-slate-300">Lazy loading</span>
+          </label>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input name="tilt_series" type="checkbox" class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+            <span class="text-sm text-slate-300">Tilt series (cryo-ET)</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Downsampling & Algorithm -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <!-- Downsampling -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
+        <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">Downsampling</h3>
+        <div class="space-y-3">
+          <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1.5">Box Size</label>
+            <input name="downsample" type="number" value="256" :disabled="noDownsample"
+                   class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition disabled:opacity-40">
+          </div>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input name="no_downsample" type="checkbox" x-model="noDownsample"
+                   class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+            <span class="text-sm text-slate-300">No downsampling (full resolution)</span>
+          </label>
+          <p class="text-xs text-slate-500">Skipped automatically if images are already near this size</p>
+        </div>
+      </div>
+
+      <!-- Algorithm -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
+        <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">Algorithm</h3>
+        <div class="space-y-3">
+          <div>
+            <label class="block text-sm font-medium text-slate-300 mb-1.5">Z Dimensions</label>
+            <input name="zdim" type="text" value="1,2,4,10,20"
+                   class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition">
+            <p class="text-xs text-slate-500 mt-1">Comma-separated list of dimensions</p>
+          </div>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input name="correct_contrast" type="checkbox"
+                   class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+            <span class="text-sm text-slate-300">Correct contrast</span>
+          </label>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input name="only_mean" type="checkbox"
+                   class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+            <span class="text-sm text-slate-300">Only compute mean (skip PCA/embedding)</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Execution -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
+      <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">
+        <svg class="w-4 h-4 inline mr-1 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/>
+        </svg>
+        Execution
+      </h3>
+
+      <div class="flex gap-4 mb-5">
+        {% if has_slurm %}
+        <label class="flex-1 cursor-pointer">
+          <input type="radio" name="execution" value="slurm" x-model="execution" class="peer sr-only" checked>
+          <div class="flex items-center justify-center gap-2 px-4 py-3 bg-slate-800 border border-slate-700 rounded-lg text-sm font-medium text-slate-400 transition-all
+                      peer-checked:border-sky-500 peer-checked:text-sky-400 peer-checked:bg-sky-500/10 hover:border-slate-600">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+            </svg>
+            SLURM Cluster
+          </div>
+        </label>
+        {% endif %}
+        <label class="flex-1 cursor-pointer">
+          <input type="radio" name="execution" value="local" x-model="execution" class="peer sr-only" {% if not has_slurm %}checked{% endif %}>
+          <div class="flex items-center justify-center gap-2 px-4 py-3 bg-slate-800 border border-slate-700 rounded-lg text-sm font-medium text-slate-400 transition-all
+                      peer-checked:border-sky-500 peer-checked:text-sky-400 peer-checked:bg-sky-500/10 hover:border-slate-600">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+            </svg>
+            Local
+          </div>
+        </label>
+      </div>
+
+      <!-- SLURM Options (shown when SLURM selected) -->
+      <div x-show="execution === 'slurm'" x-cloak class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Partition</label>
+          <input name="slurm_partition" type="text" value="cryoem"
+                 class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Account</label>
+          <input name="slurm_account" type="text" value="amits"
+                 class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">GPUs</label>
+          <input name="slurm_gpus" type="number" value="1" min="1" max="8"
+                 class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Time Limit</label>
+          <input name="slurm_time" type="text" value="4:00:00"
+                 class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Memory</label>
+          <input name="slurm_mem" type="text" value="64G"
+                 class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">GPU Memory (GB)</label>
+          <input name="gpu_memory" type="text" value=""
+                 class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
+                 placeholder="Auto">
+        </div>
+      </div>
+
+      <div x-show="execution === 'local'" x-cloak class="text-sm text-slate-400 flex items-center gap-2">
+        <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+        </svg>
+        Local mode runs in the current shell. Make sure you have a GPU available.
+        <label class="flex items-center gap-2 cursor-pointer ml-auto">
+          <input name="accept_cpu" type="checkbox" class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+          <span>Accept CPU</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Submit -->
+    <div class="flex items-center justify-end gap-4">
+      <a href="{{ url_for('dashboard') }}" class="px-5 py-2.5 text-sm font-medium text-slate-400 hover:text-white transition-colors">Cancel</a>
+      <button type="submit"
+              class="inline-flex items-center gap-2 px-6 py-2.5 bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium rounded-lg transition-colors shadow-lg shadow-sky-600/25">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        Launch Job
+      </button>
+    </div>
+  </form>
+
+  <!-- File Browser Modal -->
+  <div x-show="browserOpen" x-cloak
+       class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+       @keydown.escape.window="browserOpen = false">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-[700px] max-h-[80vh] flex flex-col"
+         @click.away="browserOpen = false">
+      <!-- Header -->
+      <div class="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+        <h3 class="text-sm font-semibold text-white">Browse Files</h3>
+        <button @click="browserOpen = false" class="text-slate-400 hover:text-white">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <!-- Path bar -->
+      <div class="px-5 py-3 border-b border-slate-800 flex items-center gap-2">
+        <input type="text" x-model="browserPath" @keydown.enter="loadDir(browserPath)"
+               class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
+        <button @click="loadDir(browserPath)" class="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-300">Go</button>
+      </div>
+      <!-- Entries -->
+      <div class="flex-1 overflow-y-auto px-2 py-2 scrollbar-thin">
+        <template x-if="browserParent">
+          <button @click="loadDir(browserParent)"
+                  class="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-slate-400 hover:bg-slate-800 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 17l-5-5m0 0l5-5m-5 5h12"/>
+            </svg>
+            ..
+          </button>
+        </template>
+        <template x-for="entry in browserEntries" :key="entry.path">
+          <button @click="entry.is_dir ? loadDir(entry.path) : selectFile(entry.path)"
+                  class="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-slate-800"
+                  :class="entry.is_dir ? 'text-sky-400' : 'text-slate-300'">
+            <template x-if="entry.is_dir">
+              <svg class="w-4 h-4 text-sky-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+              </svg>
+            </template>
+            <template x-if="!entry.is_dir">
+              <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+              </svg>
+            </template>
+            <span class="truncate flex-1 text-left" x-text="entry.name"></span>
+            <span class="text-xs text-slate-500" x-text="entry.size"></span>
+          </button>
+        </template>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function jobForm() {
+  return {
+    outputDir: '',
+    particles: '',
+    mask: 'from_halfmaps',
+    noDownsample: false,
+    execution: '{{ "slurm" if has_slurm else "local" }}',
+    browserOpen: false,
+    browserPath: '',
+    browserParent: null,
+    browserEntries: [],
+    browserTarget: '',
+
+    browsePath(target) {
+      this.browserTarget = target;
+      const startPath = this[target] || '';
+      this.browserPath = startPath ? startPath.substring(0, startPath.lastIndexOf('/')) || '/' : '/';
+      this.loadDir(this.browserPath);
+      this.browserOpen = true;
+    },
+
+    async loadDir(path) {
+      try {
+        const resp = await fetch('/api/browse?path=' + encodeURIComponent(path));
+        const data = await resp.json();
+        if (data.error) { alert(data.error); return; }
+        this.browserPath = data.path;
+        this.browserParent = data.parent;
+        this.browserEntries = data.entries;
+      } catch(e) { console.error(e); }
+    },
+
+    selectFile(path) {
+      this[this.browserTarget] = path;
+      this.browserOpen = false;
+    }
+  }
+}
+</script>
+{% endblock %}
