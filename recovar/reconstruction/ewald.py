@@ -6,17 +6,19 @@ PART 2: CTF Explicit Functions
 PART 3: FORWARD/BACKWARD IMPLICIT MODELS
 PART 4: ADAPTATIONS FOR CG INPUT (i.e/mask/unmask)
 '''
+import functools
 import logging
-import jax 
+
+import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar import core, utils
-from recovar.core.configs import ForwardModelConfig
+from jax import vjp
+
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from jax import vjp
-import functools
+from recovar import core, utils
 from recovar.core import mask
+from recovar.core.configs import ForwardModelConfig
 
 logger = logging.getLogger(__name__)
 
@@ -283,7 +285,7 @@ def compute_ewald_LS_matvec_in_batches(experiment_dataset, input_volume_real, in
 
 def compute_diag_mean(experiment_dataset, batch_size, disc_type, noise_variance  ):
 
-#     logger.info(f"batch size in second order: {batch_size}")
+#     logger.info("batch size in second order: %s", batch_size)
 
     diagonal = 0 
 
@@ -312,7 +314,7 @@ def sphere_sign_hard_assignment(experiment_dataset, volume, batch_size, disc_typ
     # lam = volt_to_wavelength(experiment_dataset.CTF_params[0,3])# 
     #lam = 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
 
-    logger.info(f"batch size in Ewald LHS: {batch_size}")
+    logger.info("batch size in Ewald LHS: %s", batch_size)
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
 
     # vol_real, vol_imag = 0, 0
@@ -333,7 +335,7 @@ def sphere_sign_hard_assignment(experiment_dataset, volume, batch_size, disc_typ
         # vol_real += A_t_vol_real
         # vol_imag += A_t_vol_imag
 
-    logger.info(f"LHS done.")
+    logger.info("LHS done.")
     return vol_real, vol_imag
 
 
@@ -345,7 +347,7 @@ def volt_to_wavelength(volt):
 
 
 def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance):
-    logger.info(f"batch size in Ewald LHS: {batch_size}")
+    logger.info("batch size in Ewald LHS: %s", batch_size)
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
 
     vol_real, vol_imag = 0, 0
@@ -365,7 +367,7 @@ def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, n
 
         vol_real += A_t_vol_real
         vol_imag += A_t_vol_imag
-    logger.info(f"LHS done.")
+    logger.info("LHS done.")
     return vol_real, vol_imag
 
 
@@ -443,7 +445,7 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
     def report(xk):
         frame = inspect.currentframe().f_back
         ress.append(frame.f_locals['resid'] / np.linalg.norm(rhs))
-        logger.info(f"CG iter {len(ress)}, residual: {ress[-1]}")
+        logger.info("CG iter %s, residual: %s", len(ress), ress[-1])
         # iter_count += 1
     logger.debug(utils.report_memory_device())
     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, x0 = x0_masked, maxiter=max_iter, tol=tol, M = planar_op, callback=report)

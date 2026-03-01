@@ -1,19 +1,22 @@
 """Noise variance estimation from cryo-EM image residuals."""
 
+import functools
 import logging
+import os
+import time
+
+import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
-import jax, time
-import functools
 import nvtx
-import equinox as eqx
-from recovar import core, utils, jax_config
-from recovar.reconstruction import regularization
-from recovar.heterogeneity import covariance_core
+
 import recovar.core.forward as core_forward
-from recovar.core.configs import ForwardModelConfig, BatchData, ModelState
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-import os
+from recovar import core, utils, jax_config
+from recovar.core.configs import ForwardModelConfig, BatchData, ModelState
+from recovar.heterogeneity import covariance_core
+from recovar.reconstruction import regularization
 
 logger = logging.getLogger(__name__)
 
@@ -464,7 +467,7 @@ def upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size
             from recovar.heterogeneity import covariance_estimation
             # //2: variance computation with cubic disc_type needs ~2x memory per image (spline coefficients)
             variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means['combined'], utils.safe_batch_size(batch_size//2), dilated_volume_mask, noise_ind_subset = noise_ind_subset, use_regularization = True, disc_type = 'cubic')
-            logger.info(f"variance estimation time: {time.time() - variance_time}")
+            logger.info("variance estimation time: %s", time.time() - variance_time)
             utils.report_memory_device(logger=logger)
 
             rad_grid = np.array(fourier_transform_utils.get_grid_of_radial_distances(cryos.volume_shape).reshape(-1))

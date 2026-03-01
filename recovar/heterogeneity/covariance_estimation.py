@@ -1,19 +1,22 @@
 """Regularized covariance matrix estimation from half-set cryo-EM data."""
 
+import functools
 import logging
+import time
+
+import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
-import jax, time
-import functools
 import nvtx
-import equinox as eqx
-from recovar import core, utils, jax_config
-from recovar.reconstruction import regularization, noise
-from recovar.core import cubic_interpolation
-from recovar.heterogeneity import covariance_core
-from recovar.core.configs import ForwardModelConfig, BatchData, ModelState, CovarianceOpts
+
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar import core, utils, jax_config
+from recovar.core import cubic_interpolation
+from recovar.core.configs import ForwardModelConfig, BatchData, ModelState, CovarianceOpts
+from recovar.heterogeneity import covariance_core
+from recovar.reconstruction import regularization, noise
 
 logger = logging.getLogger(__name__)
 
@@ -27,17 +30,17 @@ try:
     def cudaProfilerStart():
         ret = _cudart.cudaProfilerStart()
         if ret != 0:
-            logger.warning(f"cudaProfilerStart returned error code: {ret}")
+            logger.warning("cudaProfilerStart returned error code: %s", ret)
     
     def cudaProfilerStop():
         ret = _cudart.cudaProfilerStop()
         if ret != 0:
-            logger.warning(f"cudaProfilerStop returned error code: {ret}")
+            logger.warning("cudaProfilerStop returned error code: %s", ret)
     
     CUDA_PROFILER_AVAILABLE = True
 except Exception as e:
     CUDA_PROFILER_AVAILABLE = False
-    logger.warning(f"CUDA profiler not available - profiling disabled: {e}")
+    logger.warning("CUDA profiler not available - profiling disabled: %s", e)
 
 # ============================================================================
 # NVTX Domain Configuration for Selective Profiling
@@ -137,15 +140,15 @@ def get_default_covariance_computation_options(grid_size=None):
         else:
             n_pcs = 50  # Fallback to minimum
             
-        logger.info(f"Using {n_pcs} PCs for covariance computation (GPU memory: {gpu_memory} GB, grid_size: {grid_size}, original estimate: {n_pcs_original}, base+basis memory: {base_memory + basis_memory:.2f} GB)")
+        logger.info("Using %s PCs for covariance computation (GPU memory: %s GB, grid_size: %s, original estimate: %s, base+basis memory: %.2f GB)", n_pcs, gpu_memory, grid_size, n_pcs_original, base_memory + basis_memory)
     else:
         # Fallback to original calculation if grid_size not provided
         if gpu_memory < 70:
             n_pcs = np.ceil((gpu_memory / (75 / 200**4))**(1/4)).astype(int)
-            logger.info(f"Using {n_pcs} PCs for covariance computation (GPU memory: {gpu_memory} GB)")
+            logger.info("Using %s PCs for covariance computation (GPU memory: %s GB)", n_pcs, gpu_memory)
         else:
             n_pcs = 200
-            logger.info(f"Using {n_pcs} PCs for covariance computation (GPU memory: {gpu_memory} GB)")
+            logger.info("Using %s PCs for covariance computation (GPU memory: %s GB)", n_pcs, gpu_memory)
 
     options = {
         "covariance_fn": "kernel",
@@ -334,7 +337,7 @@ def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, vo
         batch_end = int(np.min( [(k+1) * frequency_batch ,picked_frequencies.size  ]))
 
         covariance_cols_b, _, fscs_b = compute_regularized_covariance_columns(cryos, means, mean_prior,  volume_mask, dilated_volume_mask, valid_idx, gpu_memory,  options, picked_frequencies[batch_st:batch_end], use_multi_gpu = use_multi_gpu, n_gpus = n_gpus, mean_cubic=mean_cubic)
-        logger.info(f'batch of col done: {batch_st}, {batch_end}')
+        logger.info('batch of col done: %s, %s', batch_st, batch_end)
 
         covariance_cols.append(covariance_cols_b['est_mask'])
         fscs.append(fscs_b)
@@ -395,9 +398,9 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask
             cols2.append(np.array(regularization.covariance_update_col(H_comb[col_idx], B_comb[col_idx], prior[col_idx]) * valid_idx ))
             
 
-        logger.info(f"cov update time: {time.time() - st_time2}")
+        logger.info("cov update time: %s", time.time() - st_time2)
         covariance_cols["est_mask"] = np.stack(cols2, axis =-1).astype(cryos.dtype)
-        logger.info(f"reg time: {time.time() - st_time}")
+        logger.info("reg time: %s", time.time() - st_time)
         utils.report_memory_device(logger = logger)
     else:
         assert False, "wrong covariance reg fn"
@@ -571,7 +574,7 @@ def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset
     noise_p_variance_est = ( noise_p_variance_rhs[0] + noise_p_variance_rhs[1]) / (noise_p_variance_lhs[0] + noise_p_variance_lhs[1])
 
     end_time = time.time()
-    logger.info(f"time to compute variance: {end_time- st_time}")
+    logger.info("time to compute variance: %s", end_time- st_time)
 
     return variance, variance_prior.real, fsc.real, lhs.real, noise_p_variance_est.real
 
@@ -585,7 +588,7 @@ def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies, gpu_
     for cryo_idx, cryo in enumerate(cryos):
         mean = means["combined"] if options["use_combined_mean"] else means["corrected" + str(cryo_idx)]
         H, B = compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gpu_memory, parallel_analysis, options = options, use_multi_gpu = use_multi_gpu, n_gpus = n_gpus, mean_cubic=mean_cubic)
-        logger.info(f"Time to cov {time.time() - st_time}")
+        logger.info("Time to cov %s", time.time() - st_time)
         # check_memory()
         Hs.append(H)
         Bs.append(B)
@@ -943,7 +946,7 @@ vmap_calculate_spline_coefficients = jax.vmap(cubic_interpolation.calculate_spli
 def compute_spline_coeffs_in_batch(basis, volume_shape, gpu_memory= None):
     gpu_memory = utils.get_gpu_memory_total() if gpu_memory is None else gpu_memory
     vol_batch_size = utils.get_vol_batch_size(volume_shape[0], gpu_memory=gpu_memory)
-    logger.info(f"memory used = {gpu_memory}, vol_batch_size in compute_spline_coeffs_in_batch {vol_batch_size}")
+    logger.info("memory used = %s, vol_batch_size in compute_spline_coeffs_in_batch %s", gpu_memory, vol_batch_size)
     utils.report_memory_device(logger=logger)
     coeffs = []
     for k in range(0, basis.shape[0], vol_batch_size):
@@ -967,7 +970,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     lhs = 0
     rhs = 0
     summed_batch_kron_cpu = jax.jit(summed_batch_kron, backend='cpu')
-    logger.info(f"batch size in compute_projected_covariance {batch_size}")
+    logger.info("batch size in compute_projected_covariance %s", batch_size)
 
     if disc_type == 'cubic':
         if mean_cubic is not None:
@@ -1055,7 +1058,7 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
     
 
     if (disc_type != 'linear_interp') and (disc_type != 'cubic'):
-        logger.warning(f"USING NEAREST NEIGHBOR DISCRETIZATION IN reduce_covariance_est_inner. disc_type={disc_type}, disc_type_u={disc_type_u}")
+        logger.warning("USING NEAREST NEIGHBOR DISCRETIZATION IN reduce_covariance_est_inner. disc_type=%s, disc_type_u=%s", disc_type, disc_type_u)
 
     if premultiplied_ctf and do_mask_images:
         logger.warning('cannot use premultiplied ctf and mask images at the same time. Using premultiplied ctf!!!! CHECK IF THIS MATTERS')
@@ -1178,7 +1181,7 @@ def reduce_covariance_inner(
     noise_variance = batch_data.noise_variance
 
     if (config.disc_type != 'linear_interp') and (config.disc_type != 'cubic'):
-        logger.warning(f"USING NEAREST NEIGHBOR DISCRETIZATION. disc_type={config.disc_type}")
+        logger.warning("USING NEAREST NEIGHBOR DISCRETIZATION. disc_type=%s", config.disc_type)
 
     do_mask_images = opts.do_mask_images
     if config.premultiplied_ctf and do_mask_images:

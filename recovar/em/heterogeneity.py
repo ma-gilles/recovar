@@ -133,7 +133,7 @@ def compute_bHb_terms(mean_projections, u_projections, s, batch, translations, C
 
     # This could be done more efficiently by solving Chol of H.
     log_det_H =  half_inv_logdet #jnp.log((1/jnp.linalg.det(H)))
-    logger.warning(f"Make sure this is correct...")
+    logger.warning("Make sure this is correct...")
     summed = bHinvb + log_det_H[...,None]
     return summed.transpose(1,0,2) #, Hinvb # I think also need to compute det(H)??? Check
 
@@ -201,7 +201,7 @@ def compute_bHb_terms_eqx(config: ForwardModelConfig, mean_projections, u_projec
     log_det = 2 * jnp.sum(jnp.log(jnp.abs(batch_batch_diag(H_chol))), axis=-1)
     half_inv_logdet = -0.5 * log_det * 2
     log_det_H = half_inv_logdet
-    logger.warning(f"Make sure this is correct...")
+    logger.warning("Make sure this is correct...")
     summed = bHinvb + log_det_H[...,None]
     return summed.transpose(1,0,2)
 
@@ -346,7 +346,7 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
     # Divide by translations to account for per-translation memory in inner loop
     batch_size = utils.safe_batch_size(
         utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory - utils.get_size_in_gb(mean_projections)) / translations.shape[0])
-    logger.info(f"Starting H_B, batch size {batch_size}. Remaining memory {gpu_memory - utils.get_size_in_gb(mean_projections)}")
+    logger.info("Starting H_B, batch size %s. Remaining memory %s", batch_size, gpu_memory - utils.get_size_in_gb(mean_projections))
     utils.report_memory_device(logger=logger)
     
     # Allocate this to GPU.
@@ -530,7 +530,7 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
     lhs =0
     rhs =0 
     # summed_batch_kron_cpu = jax.jit(summed_batch_kron, backend='cpu')
-    # logger.info(f"batch size in compute_projected_covariance {batch_size}")
+    # logger.info("batch size in compute_projected_covariance %s", batch_size)
 
     if disc_type_mean == 'cubic':
         from recovar.core import cubic_interpolation
@@ -559,7 +559,7 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
     
     del basis, mean
 
-    logger.info(f"done with u_proj {batch_size}")
+    logger.info("done with u_proj %s", batch_size)
     basis_size = u_projections.shape[1]
 
     # batch_size = 100
@@ -739,9 +739,9 @@ def estimate_principal_components_halfset(cryos, means, mean_signal_variance, co
         # volume_shape, options['left_kernel'], 
         # options['use_spherical_mask'],  options['grid_correct'],  volume_mask, options["prior_n_iterations"], options["downsample_from_fsc"])
 
-        # logger.info(f"image batch size: {batch_size}")
-        # logger.info(f"volume batch size: {utils.get_vol_batch_size(cryo.grid_size, gpu_memory)}")
-        # logger.info(f"column batch size: {utils.get_column_batch_size(cryo.grid_size, gpu_memory)}")
+        # logger.info("image batch size: %s", batch_size)
+        # logger.info("volume batch size: %s", utils.get_vol_batch_size(cryo.grid_size, gpu_memory))
+        # logger.info("column batch size: %s", utils.get_column_batch_size(cryo.grid_size, gpu_memory))
         vol_batch_size = utils.get_vol_batch_size(cryo.grid_size, gpu_memory)
         orthog_cov_cols,_ = principal_components.get_cov_svds(cov_cols[cryo_idx], picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, gpu_memory, False, covariance_options['randomized_sketch_size'])
 

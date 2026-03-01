@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 try:
     devices = jax.devices()
-    logger.info(f"Devices found: {','.join([d.device_kind for d in devices])}")
+    logger.info("Devices found: %s", ','.join([d.device_kind for d in devices]))
 except RuntimeError as e:
     logger.warning("---------------------------------------------------")
     logger.warning("---------------------------------------------------")

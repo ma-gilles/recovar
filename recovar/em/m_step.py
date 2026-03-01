@@ -184,7 +184,7 @@ def sum_up_images_fixed_rots(batch, probabilities, translations, rotations, CTF_
 
 def M_with_precompute(experiment_dataset, probabilities, rotations, translations, noise_variance, disc_type, image_indices = None):
 
-    logger.info(f"starting precomp proj. Num rotations {rotations.shape[0]}, num translations {translations.shape[0]}. Total = {rotations.shape[0] * translations.shape[0]}")
+    logger.info("starting precomp proj. Num rotations %s, num translations %s. Total = %s", rotations.shape[0], translations.shape[0], rotations.shape[0] * translations.shape[0])
     # Probably should stop storing rotations as matrices at some point.
     projections = np.zeros((rotations.shape[0], experiment_dataset.image_size), dtype = np.complex64)
 
@@ -217,7 +217,7 @@ def M_with_precompute(experiment_dataset, probabilities, rotations, translations
     # n_rotation_batch = rotations.shape[0]//10
     mult = 5
     rotation_batch = max(1, rotations.shape[0] // mult)
-    logger.info(f"Starting sum up images. Batch size {batch_size}, rotation batch {rotation_batch}")
+    logger.info("Starting sum up images. Batch size %s, rotation batch %s", batch_size, rotation_batch)
     start_idx = 0
     for batch, _, indices in data_generator:
         batch = jnp.asarray(batch)

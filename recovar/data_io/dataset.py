@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 import logging
+import pickle
 from collections import defaultdict, deque
-from typing import Optional, Callable, Tuple
+from typing import Callable, Optional, Tuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pickle
 from numpy.typing import NDArray
 
-from recovar import core
-from recovar.output import plot_utils
-from recovar.core import mask
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar import core
+from recovar.core import mask
 from recovar.data_io import tilt_dataset
+from recovar.output import plot_utils
 
 logger = logging.getLogger(__name__)
 
@@ -928,14 +928,14 @@ def get_split_indices(particles_file, datadir=None, strip_prefix=None, ind_file=
         n1, n2 = len(split_indices[0]), len(split_indices[1])
         total = n1 + n2
         if abs(n1 - n2) > max(1, total * 0.01):  # Allow 1% imbalance
-            logger.warning(f"Split is imbalanced: {n1} vs {n2} images ({abs(n1-n2)/total*100:.1f}% difference)")
+            logger.warning("Split is imbalanced: %s vs %s images (%.1f% difference)", n1, n2, abs(n1-n2)/total*100)
         
         # Check for overlap
         overlap = np.intersect1d(split_indices[0], split_indices[1])
         if len(overlap) > 0:
             raise ValueError(f"Split contains {len(overlap)} overlapping indices")
     
-    logger.info(f"Split dataset into halfsets: {len(split_indices[0])} and {len(split_indices[1])} images")
+    logger.info("Split dataset into halfsets: %s and %s images", len(split_indices[0]), len(split_indices[1]))
     return split_indices
 
 
@@ -1183,7 +1183,7 @@ def figure_out_halfsets(args):
             if halfsets is not None:
                 if args.n_images > 0:
                     halfsets = [halfset[:args.n_images // 2] for halfset in halfsets]
-                    logger.info(f"using only {args.n_images} particles")
+                    logger.info("using only %s particles", args.n_images)
                 return halfsets
 
         logger.info("Randomly splitting dataset into halfsets")
@@ -1230,7 +1230,7 @@ def figure_out_halfsets(args):
 
     if args.n_images > 0:
         halfsets = [ halfset[:args.n_images//2] for halfset in halfsets]
-        logger.info(f"using only {args.n_images} particles")
+        logger.info("using only %s particles", args.n_images)
     return halfsets
 
 

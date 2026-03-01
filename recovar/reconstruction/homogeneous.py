@@ -1,8 +1,9 @@
 """Homogeneous (mean) 3-D reconstruction via direct Fourier inversion."""
 
 import logging
-import numpy as np
 import time
+
+import numpy as np
 import nvtx
 
 from recovar.reconstruction import regularization
@@ -96,7 +97,7 @@ def get_mean_conformation_relion(cryos, batch_size, noise_variance=None, use_reg
         means[key] = np.array(means[key])
 
     end_time = time.time()
-    logger.info(f" mean computation completed in {end_time - st_time:.2f}s")
+    logger.info(" mean computation completed in %.2fs", end_time - st_time)
 
     return means, mean_prior, fsc
 

@@ -81,7 +81,7 @@ def compute_embedding(recovar_result_dir):
             results['means']['combined'], results['u']['rescaled'], results['s']['rescaled'], zdim,
             results['cov_noise'], cryos, results['volume_mask'], gpu_memory, 'linear_interp',
             contrast_grid=None, contrast_option=options['contrast'])
-        logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
+        logger.info("embedding time for zdim=%s: %s", zdim, time.time() - z_time)
 
     return latent_coords, latent_precision, est_contrasts
 

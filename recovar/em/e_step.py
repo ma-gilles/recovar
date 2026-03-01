@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 def E_with_precompute(experiment_dataset, volume, rotations, translations, noise_variance, disc_type, image_indices = None, u = None, s = None):
     # I am not sure this is a reasonable way to be passing things around.
 
-    logger.info(f"starting precomp proj. Num rotations {rotations.shape[0]}, num translations {translations.shape[0]}. Total = {rotations.shape[0] * translations.shape[0]}")
+    logger.info("starting precomp proj. Num rotations %s, num translations %s. Total = %s", rotations.shape[0], translations.shape[0], rotations.shape[0] * translations.shape[0])
     # Probably should stop storing rotations as matrices at some point.
     # batch_size = utils.get_num
     image_shape = experiment_dataset.image_shape
@@ -55,9 +55,9 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
         projections[rot_indices] = core.slice_volume_by_map(volume, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type)
 
-    logger.info(f"done with precomp proj, batch size {batch_size}")
+    logger.info("done with precomp proj, batch size %s", batch_size)
     projections = jnp.asarray(projections)
-    logger.info(f"Allocating proj")
+    logger.info("Allocating proj")
 
     # Compute \sum_i A_i^T y_i / sigma_i^2
     residuals = np.empty((n_images,  projections.shape[0], n_translations))
@@ -65,7 +65,7 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     # *10: dot products use less memory than full forward model; divide by translations for inner loop
     dot_product_batch_size = utils.safe_batch_size(
         utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory - utils.get_size_in_gb(projections)) / translations.shape[0] * 10)
-    logger.info(f"Starting IP. Dot product batch size {dot_product_batch_size}. Remaining memory {gpu_memory - utils.get_size_in_gb(projections)}")
+    logger.info("Starting IP. Dot product batch size %s. Remaining memory %s", dot_product_batch_size, gpu_memory - utils.get_size_in_gb(projections))
     utils.report_memory_device(logger=logger)
     # dot_product_batch_size = batch_size // translations.shape[0]
     data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=dot_product_batch_size, subset_indices = image_indices)
@@ -88,7 +88,7 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
         for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
             u_projections[rot_indices] = batch_vol_slice_volume_by_map(u, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type)
 
-        logger.info(f"done with u_proj {batch_size}")
+        logger.info("done with u_proj %s", batch_size)
         data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=dot_product_batch_size, subset_indices = image_indices)
 
         rotation_batch = max(1, rotations.shape[0] // 10)
@@ -106,7 +106,7 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
 
     projections = (jnp.abs(projections)**2).block_until_ready()
 
-    logger.info(f"done with IP")
+    logger.info("done with IP")
     utils.report_memory_device(logger=logger)
     # For the \|C_i Proj_j\|^2 term
 
@@ -125,7 +125,7 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
         residuals[array_indices] += np.array(res[...,None])
 
     del projections
-    logger.info(f"done with norms. Batch size {norm_batch_size}")
+    logger.info("done with norms. Batch size %s", norm_batch_size)
 
     # //10: probability computation is memory-intensive (softmax over rotations)
     prob_batch_size = utils.safe_batch_size(batch_size // 10)
@@ -133,7 +133,7 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     for array_indices, _ in utils.subset_and_indices_batch_iter(image_indices, prob_batch_size):
         residuals[array_indices] = compute_probability_from_residual_normal_squared_one_image(residuals[array_indices])
 
-    logger.info(f"done probs. Batch size {batch_size}")
+    logger.info("done probs. Batch size %s", batch_size)
 
     return residuals
 

@@ -1,8 +1,8 @@
 """Forward-model cryo-EM image simulation from atomic volumes."""
 
+import functools
 import logging
 import os
-import functools
 
 import equinox as eqx
 import jax
@@ -13,10 +13,9 @@ import numpy as np
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
 from recovar import core
-from recovar.reconstruction import noise
-from recovar.data_io import dataset
-from recovar.data_io import load_utils
 from recovar.core.configs import ForwardModelConfig
+from recovar.data_io import dataset, load_utils
+from recovar.reconstruction import noise
 
 CONSTANT_CTF=False
 logger = logging.getLogger(__name__)
@@ -97,7 +96,7 @@ def random_sampling_scheme(n_images, grid_size, seed =0, uniform = True ):
         dataset_params_fn = load_first_dataset_params
         ctf_params, _, _ = generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  )
     except Exception as e:
-        logger.warning(f"Falling back to synthetic CTF params (could not load dataset params): {e}")
+        logger.warning("Falling back to synthetic CTF params (could not load dataset params): %s", e)
         ctf_params = np.zeros([n_images, int(core.CTFParamIndex.TILT_ANGLE) + 1], dtype=np.float32)
         ctf_params[:, core.CTFParamIndex.DFU] = 15000.0
         ctf_params[:, core.CTFParamIndex.DFV] = 15000.0
@@ -125,7 +124,7 @@ def noctf_random_sampling_scheme(n_images, grid_size, seed =0, uniform = True ):
         dataset_params_fn = load_first_dataset_params
         ctf_params, _, _ = generate_simulated_params_from_real(n_images, dataset_params_fn, grid_size  )
     except Exception as e:
-        logger.warning(f"Falling back to synthetic CTF params (could not load dataset params): {e}")
+        logger.warning("Falling back to synthetic CTF params (could not load dataset params): %s", e)
         ctf_params = np.zeros([n_images, int(core.CTFParamIndex.TILT_ANGLE) + 1], dtype=np.float32)
 
     ctf_params = ctf_params * 0
@@ -305,7 +304,7 @@ def generate_volumes_from_mrcs(mrc_names, grid_size_i = None, padding= 0 ):
     idx = 0 
     for mrc_name in mrc_names:
         if idx % 100 == 0:
-            logger.info(f"Loading volume {idx}")
+            logger.info("Loading volume %s", idx)
         idx+=1
         data, voxel_size = utils.load_mrc(mrc_name, return_voxel_size = True)
         voxel_size = voxel_size.x
@@ -370,7 +369,7 @@ def get_noise_model(option, grid_size):
         noise_file = os.path.join(data_path, 'noise_10076.pkl')
         if os.path.exists(noise_file):
             return utils.pickle_load(noise_file)
-        logger.warning(f"Noise model file not found ({noise_file}); falling back to white noise model.")
+        logger.warning("Noise model file not found (%s); falling back to white noise model.", noise_file)
         return np.ones(grid_size//2-1)
 
 
@@ -592,7 +591,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     image_means = np.mean(main_image_stack, axis = (-1,-2))
     # image_means_mean = np.mean(main_image_stack, axis = (-1,-2))
     image_mean_std = np.std(image_means)
-    logger.info(f"Image mean mean {np.mean(image_means)}, image mean std: {image_mean_std}")
+    logger.info("Image mean mean %s, image mean std: %s", np.mean(image_means), image_mean_std)
     per_image_offset = np.random.randn(n_images) * image_mean_std * image_offset_n_std
     main_image_stack += per_image_offset[:,None,None]
 
@@ -916,7 +915,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 
             n_images_done += indices.size
             # if n_images_done % 1000 == 0:
-            logger.info(f"Batch {k}: Generated {n_images_done} images so far")
+            logger.info("Batch %s: Generated %s images so far", k, n_images_done)
 
     logger.info("Discretizing with: " + disc_type)
     logger.info("Done generating data")

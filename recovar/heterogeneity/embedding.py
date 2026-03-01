@@ -1,16 +1,19 @@
 """Per-image latent coordinate estimation via linear projection."""
 
 import logging
+import time
+
+import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
-import time, jax
 import nvtx
-import equinox as eqx
+
+import recovar.core.forward as core_forward
 from recovar import core, jax_config, utils
 from recovar.core import linalg
-from recovar.heterogeneity import covariance_core
 from recovar.core.configs import ForwardModelConfig, BatchData, ModelState, EmbeddingOpts
-import recovar.core.forward as core_forward
+from recovar.heterogeneity import covariance_core
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +79,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
     eigenvalues = (s + jax_config.ROOT_EPSILON)
     use_contrast = "contrast" in contrast_option
     contrast_shared_across_tilt_series = ("shared" in contrast_option) #and not use_contrast
-    logger.info(f"using contrast? {use_contrast}")
+    logger.info("using contrast? %s", use_contrast)
 
     if use_contrast:
         contrast_grid = np.linspace(0, 2, 51)[1:] if contrast_grid is None else contrast_grid
@@ -89,13 +92,13 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
     # JIT trace uses ~10x more peak memory than the raw array estimate
     _EMBEDDING_BATCH_SAFETY_FACTOR = 10
     batch_size = utils.safe_batch_size(batch_size // _EMBEDDING_BATCH_SAFETY_FACTOR)
-    logger.info(f"embedding batch size: {batch_size}")
+    logger.info("embedding batch size: %s", batch_size)
 
     # It is not so clear whether this step should ever use the mask. But when using the options['ignore_zero_frequency'] option, there is a good reason not to do it
     if ignore_zero_frequency:
         volume_mask = np.ones_like(volume_mask)
 
-    logger.info(f"ignore_zero_frequency? {ignore_zero_frequency}")
+    logger.info("ignore_zero_frequency? %s", ignore_zero_frequency)
 
     if USE_CUBIC:
         disc_type = 'cubic'
@@ -123,7 +126,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
     zs = np.concatenate(zs, axis = 0)
     est_contrasts = np.concatenate(est_contrasts)
     end_time = time.time()
-    logger.info(f"time to compute xs {end_time - st_time}")
+    logger.info("time to compute xs %s", end_time - st_time)
     
     if compute_covariances:
         cov_zs = np.concatenate(cov_zs, axis = 0)

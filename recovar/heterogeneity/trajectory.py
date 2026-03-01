@@ -47,7 +47,7 @@ def find_trajectory_in_grid(density, g_st, g_end, latent_space_bounds, eps = 1e-
     
     max_steps = np.linalg.norm(density.shape) * 50
     dx = get_grid_spacing(latent_space_bounds, density)
-    # logger.info(f"dx {dx}")
+    # logger.info("dx %s", dx)
     path = gradient_descent_nd(travel_time, g_st, g_end, dx,  step_size = 0.25, n_theta = 10, max_steps = max_steps )
     debug = False
     if debug:
@@ -60,7 +60,7 @@ def find_trajectory_in_grid(density, g_st, g_end, latent_space_bounds, eps = 1e-
     
     while path is None:
         if eps > 0.1:
-            logger.warning(f"Failed to find path, and eps>0.1. Probably a bug. Exiting.")
+            logger.warning("Failed to find path, and eps>0.1. Probably a bug. Exiting.")
             break
         
         eps *= 10
@@ -127,7 +127,7 @@ def gradient_descent_nd(travel_time, x_st, x_end, dx, step_size = 0.25, n_theta 
             cur_path = np.flip(np.stack(path), axis =0)
             plt.scatter(cur_path[:,0], cur_path[:,1])
             plt.show()
-            logger.info(f"Failed to find path. Increasing minimum density")
+            logger.info("Failed to find path. Increasing minimum density")
             return None
             
     path.append(x_st)
@@ -194,7 +194,7 @@ def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, dens
     low_dim = density_low_dim.ndim
     if low_dim > max_dim: # Hmmm, this is a bit of a hack.
         density_low_dim, _  = latent_density.compute_latent_space_density(zs, cov_zs, pca_dim_max = max_dim, num_points = 100, density_option = density_option)
-        logger.info(f"Recomputed density on {max_dim} dimensions")
+        logger.info("Recomputed density on %s dimensions", max_dim)
         low_dim = max_dim
 
     num_points = density_low_dim.shape[0]

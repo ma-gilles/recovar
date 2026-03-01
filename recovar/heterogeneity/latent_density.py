@@ -1,10 +1,13 @@
 """Kernel density estimation and stable-state detection in latent space."""
 
 import logging
+import time
+
+import jax
 import jax.numpy as jnp
 import numpy as np
-import jax, time
 from scipy.stats import chi2
+
 from recovar import utils
 
 logger = logging.getLogger(__name__)
@@ -69,7 +72,7 @@ def compute_latent_space_density(zs, cov_zs, pca_dim_max = 4, num_points = 50, d
     summed_probs = compute_probs_in_batch(grids_flat, zs, cov_zs)
     summed_probs_sq = summed_probs.reshape(grids[0].shape)
     end_time = time.time()
-    logger.info(f"latent space computation:, {end_time - st_time}")
+    logger.info("latent space computation:, %s", end_time - st_time)
     
     return summed_probs_sq, latent_space_bounds
 
@@ -90,7 +93,7 @@ def compute_probs_in_batch(test_pts, zs, cov_zs):
     n_images = zs.shape[0]
     batch_size_x = np.max([int(15 / (utils.get_size_in_gb(test_pts) * cov_zs.shape[1]**2)), 1])
     
-    logger.info(f"batch size in latent computation: {batch_size_x}")
+    logger.info("batch size in latent computation: %s", batch_size_x)
 
     for k in range(0, int(np.ceil(n_images/batch_size_x))):
         batch_st, batch_end = utils.get_batch_of_indices(n_images, batch_size_x, k)
@@ -214,7 +217,7 @@ def compute_latent_quadratic_forms_in_batch(test_pts, zs, cov_zs):
     quads = np.zeros([zs.shape[0], test_pts.shape[0]] )
     n_images = zs.shape[0]
     batch_size_x = utils.get_latent_density_batch_size(test_pts, zs.shape[-1], utils.get_gpu_memory_total() ) 
-    logger.info(f"batch size in latent computation: {batch_size_x}")
+    logger.info("batch size in latent computation: %s", batch_size_x)
     for k in range(0, utils.get_number_of_index_batch(n_images, batch_size_x)):
         batch_st, batch_end = utils.get_batch_of_indices(n_images, batch_size_x, k)
         quads[batch_st:batch_end,:] = compute_latent_quadratic_forms( test_pts.real, zs[batch_st:batch_end].real, cov_zs[batch_st:batch_end])
@@ -232,7 +235,7 @@ def compute_latent_log_likelihood(test_pts, zs, cov_zs):
     n_images = zs.shape[0]
     
     batch_size_x = utils.get_latent_density_batch_size(test_pts, zs.shape[-1], utils.get_gpu_memory_total() ) 
-    logger.info(f"batch size in latent computation: {batch_size_x}")
+    logger.info("batch size in latent computation: %s", batch_size_x)
     logger.warning("SHOULD THIS BE SCALED?")
     for k in range(0, utils.get_number_of_index_batch(n_images, batch_size_x)):
         batch_st, batch_end = utils.get_batch_of_indices(n_images, batch_size_x, k)
@@ -279,7 +282,7 @@ def compute_latent_space_density_kde(zs, pca_dim_max = 4, num_points = 50, gauss
     
 
     batch_size = utils.get_latent_density_batch_size(grids_flat, zs.shape[-1], utils.get_gpu_memory_total() ) 
-    logger.info(f"batch size in latent computation: {batch_size}")
+    logger.info("batch size in latent computation: %s", batch_size)
     n_pts = grids_flat.shape[0]
     probs = np.zeros(grids_flat.shape[0])
     for k in range(0, int(np.ceil(n_pts/batch_size ))):
@@ -290,7 +293,7 @@ def compute_latent_space_density_kde(zs, pca_dim_max = 4, num_points = 50, gauss
 
     summed_probs_sq = probs.reshape(grids[0].shape)
     end_time = time.time()
-    logger.info(f"latent space computation:, {end_time - st_time}")
+    logger.info("latent space computation:, %s", end_time - st_time)
     return summed_probs_sq, latent_space_bounds#, grids_flat.reshape(*grids[0].shape, pca_dim_max )
 
 

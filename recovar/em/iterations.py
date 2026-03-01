@@ -15,14 +15,14 @@ def E_M_batches_2(experiment_dataset, state_obj, rotations, translations, disc_t
     if translations.shape[0] <= 0:
         raise ValueError("E_M_batches_2 requires at least one translation")
     total_hidden = rotations.shape[0] * translations.shape[0]
-    logger.info(f"starting precomp proj. Num rotations {rotations.shape[0]}, num translations {translations.shape[0]}. Total = {total_hidden}")
+    logger.info("starting precomp proj. Num rotations %s, num translations %s. Total = %s", rotations.shape[0], translations.shape[0], total_hidden)
     n_images_batch = int(memory_to_use * 1e9 / ( total_hidden * 8  ))
     # If we count the allocated memor
 
     if n_images_batch < 1:
         n_images_batch = 1
-        logger.warning(f"Memory to use is too small. Setting n_images_batch to {n_images_batch}. May run out of memory")
-    logger.info(f"n_images_batch {n_images_batch}. Number of batches {int(np.ceil(experiment_dataset.n_units / n_images_batch))}")   
+        logger.warning("Memory to use is too small. Setting n_images_batch to %s. May run out of memory", n_images_batch)
+    logger.info("n_images_batch %s. Number of batches %s", n_images_batch, int(np.ceil(experiment_dataset.n_units / n_images_batch)))   
     
     if state_obj.name =='SGD':
         sgd_batch = int(state_obj.sgd_batchsize)
@@ -37,7 +37,7 @@ def E_M_batches_2(experiment_dataset, state_obj, rotations, translations, disc_t
         probabilities = state_obj.E_step(experiment_dataset, rotations, translations, disc_type, big_image_batch)
         hard_assignment[big_image_batch] = np.argmax(probabilities.reshape(probabilities.shape[0], -1), axis=-1)
         if np.isnan(probabilities).any():
-            logger.warning(f"NaNs detected in probabilities; mean norm={np.linalg.norm(state_obj.mean)}")
+            logger.warning("NaNs detected in probabilities; mean norm=%s", np.linalg.norm(state_obj.mean))
         state_obj.M_step(experiment_dataset, probabilities, rotations, translations, disc_type, big_image_batch)
     
     return state_obj, hard_assignment
@@ -100,7 +100,7 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
     current_pixel_res = locres.find_fsc_resol(fsc, threshold = 1/7)
     current_res = current_pixel_res / cryo.voxel_size
     # logger.info("Current resolution is", current_res, "pixel resolution: ", current_pixel_res)
-    logger.info(f"Current resolution is {current_res}, pixel resolution: {current_pixel_res}")
+    logger.info("Current resolution is %s, pixel resolution: %s", current_res, current_pixel_res)
 
     # [ state_obj.noise_variance for state_obj in state_objs]
     if state_objs[0].name == 'HeterogeneousEM':
@@ -124,7 +124,7 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
 
     if average_up_to_angstrom is not None:
         low_res_mask = cryo.get_valid_frequency_indices(average_up_to_angstrom)
-        logger.info(f"Averaging halfmaps up to {average_up_to_angstrom} pixels")
+        logger.info("Averaging halfmaps up to %s pixels", average_up_to_angstrom)
         means = [np.array(mean) for mean in means ]
         # old_means = means[0].copy()
         means[0][low_res_mask] = (means[0][low_res_mask] + means[1][low_res_mask])/2

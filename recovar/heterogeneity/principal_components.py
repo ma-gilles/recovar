@@ -1,16 +1,18 @@
 """Principal component analysis of the estimated covariance operator."""
 
 import logging
+import time
+
+import jax
 import jax.numpy as jnp
 import numpy as np
-import jax, time
 import nvtx
 
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, jax_config, utils
-from recovar.reconstruction import noise
 from recovar.core import linalg
 from recovar.heterogeneity import covariance_estimation, embedding
-import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar.reconstruction import noise
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +93,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         else:
             picked_frequencies, picked_frequencies_in_frequencies_format = covariance_estimation.greedy_column_choice(lhs, covariance_options['sampling_n_cols'], volume_shape, avoid_in_radius = covariance_options['sampling_avoid_in_radius'])
 
-        logger.info(f"Largest frequency computed: {np.max(np.abs(picked_frequencies_in_frequencies_format))}")
+        logger.info("Largest frequency computed: %s", np.max(np.abs(picked_frequencies_in_frequencies_format)))
         if np.max(np.abs(picked_frequencies_in_frequencies_format)) > cryos.grid_size//2-1:
             logger.warning("Largest frequency computed is larger than grid size//2-1. This may cause big issues in SVD. This probably means variance estimates were wrong")
     else:
@@ -148,9 +150,9 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         if not options['keep_intermediate']:
             u['rescaled_no_contrast'] = None
 
-        logger.info(f"knock out time: {time.time() - c_time}")
+        logger.info("knock out time: %s", time.time() - c_time)
         if u['rescaled'].dtype != cryos[0].dtype:
-            logger.warning(f"u['rescaled'].dtype: {u['rescaled'].dtype}")
+            logger.warning("u['rescaled'].dtype: %s", u['rescaled'].dtype)
 
             
     return u, s, covariance_cols, picked_frequencies, column_fscs
@@ -328,7 +330,7 @@ def right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices,
     st_time = time.time()
     # Some precompute
     columns_flipped, minus_frequency_indices, good_idx = make_symmetric_columns_np(columns, picked_frequency_indices, volume_shape)
-    logger.info(f"make big mat 1 {time.time() - st_time}")
+    logger.info("make big mat 1 %s", time.time() - st_time)
     # columns_flipped = np.array(columns_flipped)
     utils.report_memory_device(logger=logger)
 
@@ -343,7 +345,7 @@ def right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices,
     
     # F_2r^* test_mat
     F_t = linalg.batch_dft3(test_mat, smaller_vol_shape, vol_batch_size) / smaller_vol_size
-    logger.info(f"DFT time 1 {time.time() - st_time}")
+    logger.info("DFT time 1 %s", time.time() - st_time)
 
     
     original_frequencies = core.vec_indices_to_frequencies(picked_frequency_indices, volume_shape)
@@ -351,7 +353,7 @@ def right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices,
     utils.report_memory_device(logger=logger)
 
     C_F_t = linalg.blockwise_A_X(columns, F_t[original_frequencies_indices_in_smaller,:], memory_to_use = memory_to_use)
-    logger.info(f"AX 1: {time.time() - st_time}")
+    logger.info("AX 1: %s", time.time() - st_time)
 
     flipped_frequencies = core.vec_indices_to_frequencies(minus_frequency_indices[good_idx], volume_shape)
     flipped_frequencies_indices_in_smaller = np.array(core.frequencies_to_vec_indices(flipped_frequencies, smaller_vol_shape))
@@ -360,11 +362,11 @@ def right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices,
     F_t2 = F_t[flipped_frequencies_indices_in_smaller,:].copy()
     C_F_t_2 = linalg.blockwise_A_X(columns_flipped , F_t2, memory_to_use = memory_to_use) 
     C_F_t += C_F_t_2 
-    logger.info(f"AX 2: {time.time() - st_time}")
+    logger.info("AX 2: %s", time.time() - st_time)
 
 
     F_C_F_t = linalg.batch_idft3(C_F_t, volume_shape, vol_batch_size)
-    logger.info(f"IDFT: {time.time() - st_time}")
+    logger.info("IDFT: %s", time.time() - st_time)
 
     return F_C_F_t
 
@@ -375,7 +377,7 @@ def right_matvec_with_spatial_Sigma_v2(test_mat, columns, picked_frequency_indic
     columns_flipped, minus_frequency_indices, good_idx = make_symmetric_columns_np(columns, picked_frequency_indices, volume_shape)
     columns_flipped = columns_flipped[:,good_idx]
 
-    logger.info(f"make big mat 1 {time.time() - st_time}")
+    logger.info("make big mat 1 %s", time.time() - st_time)
     # columns_flipped = np.array(columns_flipped)
     utils.report_memory_device(logger=logger)
 
@@ -390,7 +392,7 @@ def right_matvec_with_spatial_Sigma_v2(test_mat, columns, picked_frequency_indic
     
     # F_2r^* test_mat
     F_t = linalg.batch_dft3(test_mat, smaller_vol_shape, vol_batch_size) / smaller_vol_size
-    logger.info(f"DFT time 1 {time.time() - st_time}")
+    logger.info("DFT time 1 %s", time.time() - st_time)
 
     
     original_frequencies = core.vec_indices_to_frequencies(picked_frequency_indices, volume_shape)
@@ -398,18 +400,18 @@ def right_matvec_with_spatial_Sigma_v2(test_mat, columns, picked_frequency_indic
     utils.report_memory_device(logger=logger)
 
     C_F_t = linalg.blockwise_A_X(columns, F_t[original_frequencies_indices_in_smaller,:], memory_to_use = memory_to_use)
-    logger.info(f"AX 1: {time.time() - st_time}")
+    logger.info("AX 1: %s", time.time() - st_time)
 
     flipped_frequencies = core.vec_indices_to_frequencies(minus_frequency_indices[good_idx], volume_shape)
     flipped_frequencies_indices_in_smaller = np.array(core.frequencies_to_vec_indices(flipped_frequencies, smaller_vol_shape))
-    logger.info(f"C_F_t shape: {C_F_t.shape}")
+    logger.info("C_F_t shape: %s", C_F_t.shape)
     C_F_t += linalg.blockwise_A_X(columns_flipped , F_t[flipped_frequencies_indices_in_smaller,:], memory_to_use = memory_to_use) 
     # C_F_t += C_F_t_2 
-    logger.info(f"AX 2: {time.time() - st_time}")
+    logger.info("AX 2: %s", time.time() - st_time)
 
     # Store FT in same array
     C_F_t = linalg.batch_idft3(C_F_t, volume_shape, vol_batch_size)
-    logger.info(f"IDFT 1: {time.time() - st_time}")
+    logger.info("IDFT 1: %s", time.time() - st_time)
 
     return C_F_t
 
@@ -437,7 +439,7 @@ def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_
     # Q should be real I think?
     F_star_Q_star = linalg.batch_dft3( np.conj(Q), volume_shape, vol_batch_size) / np.prod(volume_shape)
     Q_F = F_star_Q_star
-    logger.info(f"DFT: {time.time() - st_time}")
+    logger.info("DFT: %s", time.time() - st_time)
 
     # Frequencies in new grid
     original_frequencies = core.vec_indices_to_frequencies(picked_frequency_indices, volume_shape)
@@ -445,7 +447,7 @@ def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_
         
     Q_F_C = np.zeros((Q.shape[-1], smaller_vol_size), dtype = columns.dtype)
     Q_F_C[:,original_frequencies_indices_in_smaller] = linalg.blockwise_Y_T_X(Q_F, columns, memory_to_use = memory_to_use)
-    logger.info(f"Y^T @ X: {time.time() - st_time}")
+    logger.info("Y^T @ X: %s", time.time() - st_time)
 
     # Flipped Frequencies in new grid
     flipped_frequencies = core.vec_indices_to_frequencies(minus_frequency_indices[good_idx], volume_shape)
@@ -453,12 +455,12 @@ def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_
     flipped_frequencies_indices_in_smaller = np.array(flipped_frequencies_indices_in_smaller)
 
     Q_F_C[:,flipped_frequencies_indices_in_smaller] = linalg.blockwise_Y_T_X(Q_F, columns_flipped, memory_to_use = memory_to_use)
-    logger.info(f"Y^T @ X: {time.time() - st_time}")
+    logger.info("Y^T @ X: %s", time.time() - st_time)
     
     # DFT back
     # X F^* = (F X^*)^*
     Q_F_C_F = np.conj(linalg.batch_idft3(np.conj(Q_F_C).T, smaller_vol_shape, vol_batch_size)).T
-    logger.info(f"DFT2: {time.time() - st_time}")
+    logger.info("DFT2: %s", time.time() - st_time)
 
     return Q_F_C_F
 
@@ -479,7 +481,7 @@ def left_matvec_with_spatial_Sigma_v2(Q, columns, picked_frequency_indices, volu
     all_frequency_indices = np.concatenate([picked_frequency_indices, minus_frequency_indices[good_idx]])
     all_frequencies = core.vec_indices_to_frequencies(all_frequency_indices, volume_shape)
     if report_memory:
-        logger.info(f"after make symmetric columns")
+        logger.info("after make symmetric columns")
         utils.report_memory_device(logger=logger)
 
     # Compute smallest grid that contains all picked frequencies
@@ -494,7 +496,7 @@ def left_matvec_with_spatial_Sigma_v2(Q, columns, picked_frequency_indices, volu
     # Q should be real I think?
     # 2x memory of Q
     Q = linalg.batch_dft3( np.conj(Q), volume_shape, vol_batch_size) / np.prod(volume_shape)
-    logger.info(f"DFT: {time.time() - st_time}")
+    logger.info("DFT: %s", time.time() - st_time)
     utils.report_memory_device(logger=logger)
 
 
@@ -504,7 +506,7 @@ def left_matvec_with_spatial_Sigma_v2(Q, columns, picked_frequency_indices, volu
         
     Q_F_C = np.zeros((Q_shape_inp[-1], smaller_vol_size), dtype = columns.dtype)
     Q_F_C[:,original_frequencies_indices_in_smaller] = linalg.blockwise_Y_T_X(Q, columns, memory_to_use = memory_to_use)
-    logger.info(f"Y^T @ X: {time.time() - st_time}")
+    logger.info("Y^T @ X: %s", time.time() - st_time)
     utils.report_memory_device(logger=logger)
 
     # Flipped Frequencies in new grid
@@ -514,7 +516,7 @@ def left_matvec_with_spatial_Sigma_v2(Q, columns, picked_frequency_indices, volu
 
 
     Q_F_C[:,flipped_frequencies_indices_in_smaller] = linalg.blockwise_Y_T_X(Q, columns_flipped, memory_to_use = memory_to_use)
-    logger.info(f"Y^T @ X: {time.time() - st_time}")
+    logger.info("Y^T @ X: %s", time.time() - st_time)
     utils.report_memory_device(logger=logger)
 
     del columns_flipped
@@ -522,7 +524,7 @@ def left_matvec_with_spatial_Sigma_v2(Q, columns, picked_frequency_indices, volu
     # DFT back
     # X F^* = (F X^*)^*
     Q_F_C_F = np.conj(linalg.batch_idft3(np.conj(Q_F_C).T, smaller_vol_shape, vol_batch_size)).T
-    logger.info(f"DFT2: {time.time() - st_time}")
+    logger.info("DFT2: %s", time.time() - st_time)
     utils.report_memory_device(logger=logger)
 
     return Q_F_C_F
@@ -552,12 +554,12 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     ## Do masking here ?
 
 
-    logger.info(f"right matvec {time.time() - st_time}")
+    logger.info("right matvec %s", time.time() - st_time)
     utils.report_memory_device(logger=logger)
     Q = jax.device_put(Q, device=jax.devices("cpu")[0])
     Q,_ = jnp.linalg.qr(Q)
     Q = np.array(Q) # I don't know why but not doing this causes massive slowdowns sometimes?
-    logger.info(f"QR time: {time.time() - st_time}")
+    logger.info("QR time: %s", time.time() - st_time)
 
     # In principle, should apply (I - mask mask.T / \|mask\|^2 )  again, but should already be orthogonal
     # 
@@ -567,18 +569,18 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     else:
         C_F_t_2 = left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
     utils.report_memory_device(logger=logger)
-    logger.info(f"left matvec {time.time() - st_time}")
+    logger.info("left matvec %s", time.time() - st_time)
 
 
     U,S,V = np.linalg.svd(C_F_t_2, full_matrices = False)
-    logger.info(f"big SVD {time.time() - st_time}")
+    logger.info("big SVD %s", time.time() - st_time)
     utils.report_memory_device(logger=logger)
 
     vol_size = np.prod(volume_shape)
     # To save some memory... Q = FQ
     Q = linalg.batch_dft3(Q, volume_shape, vol_batch_size)
     Q = linalg.blockwise_A_X(Q, U, memory_to_use = gpu_memory_to_use) / np.float32(np.sqrt(vol_size))
-    logger.info(f"FQU matvec {time.time() - st_time}")
+    logger.info("FQU matvec %s", time.time() - st_time)
     utils.report_memory_device(logger=logger)
 
     volume_size = np.prod(volume_shape)
@@ -620,7 +622,7 @@ def test_different_embeddings(cryos, volume_mask, mean_estimate, basis, eigenval
         residuals_flipped[zdim_idx] = noise.get_average_residual_square_v3(cryos[0], volume_mask, mean_estimate, basis_flipped.T, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp')
 
 
-        logger.info(f"zdim {zdim}")#, end="")
+        logger.info("zdim %s", zdim)#, end="")
     return residuals, residuals_flipped
 
 
@@ -697,7 +699,7 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
             metrics['locerr_mean'][zdim_idx] += np.mean(good_errors)
 
 
-        logger.info(f"zdim {zdim}")#, end="")
+        logger.info("zdim %s", zdim)#, end="")
     return global_likely_choice1, metrics, all_estimators, all_lhs
 
 
@@ -764,6 +766,6 @@ def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, z
             metrics['variance_lp'][zdim_idx] += np.sum(variance_estimate * cryos[0].get_valid_frequency_indices(rad = 20))
 
 
-        logger.info(f"zdim {zdim}")#, end="")
+        logger.info("zdim %s", zdim)#, end="")
     return metrics, all_estimators, all_lhs
 

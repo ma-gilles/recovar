@@ -1,15 +1,16 @@
 """Reconstruction quality metrics: FSC, subspace angles, per-voxel error."""
 
 import logging
-import jax
+import os.path
+
 import jax.numpy as jnp
 import numpy as np
+
 from recovar import utils
 from recovar.core import linalg, mask
 from recovar.heterogeneity import locres
 
 logger = logging.getLogger(__name__)
-import os.path
 
 def captured_variance(test_v, U, s):
     """Compute cumulative captured variance of test vectors in a subspace.
@@ -110,8 +111,6 @@ def local_fsc_metric(map1, map2, voxel_size, mask, fsc_threshold=1/7, locres_sam
     i_loc_res = np.array(i_loc_res)
     i_loc_res[~mask] = None
 
-    # plt.imshow(i_loc_res[128]); plt.show()
-
     median_locres = np.median(good_resols)
     ninety_pc_locres = np.percentile(good_resols, 90)
 
@@ -145,7 +144,6 @@ def masked_l2_difference(gt_map, target_map, voxel_size, mask= None ):
 
     l2_error = np.mean(np.abs((gt_map-target_map)[mask])**2)
     bias = np.mean((gt_map-target_map)[mask])
-    # variance =  np.var((map1-target)[mask])
     return l2_error, bias
 
 def gt_mask_fn(gt_map):

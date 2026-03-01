@@ -1,17 +1,18 @@
 """Kernel-regression volume reconstruction from latent embeddings."""
 
-import recovar.jax_config
-import numpy as np
-from recovar.data_io import dataset
+import logging
+
 import jax.numpy as jnp
 import jax.scipy
-from recovar import utils
-from recovar.output import output as output_mod
-from recovar.heterogeneity import locres
-from recovar.heterogeneity import adaptive_kernel_discretization
-import recovar.heterogeneity.latent_density
-import logging
+import numpy as np
+
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+import recovar.heterogeneity.latent_density
+import recovar.jax_config
+from recovar import utils
+from recovar.data_io import dataset
+from recovar.heterogeneity import adaptive_kernel_discretization, locres
+from recovar.output import output as output_mod
 try:
     import nvtx
 except ImportError:
@@ -45,7 +46,7 @@ def pick_minimum_discretization_size(ndim, log_likelihoods, q = 0.5, min_images 
     else:
         disc_latent_dist = -1
     if log_likelihoods.size < min_images:
-        logger.warning(f"Not enough images for minimum discretization size. Using {min_images} images.")
+        logger.warning("Not enough images for minimum discretization size. Using %s images.", min_images)
         return disc_latent_dist
     value = np.max( [ np.sort(log_likelihoods)[min_images], disc_latent_dist] ) # Bump a lil bit
     return value * ( 1 + 1e-8)
@@ -126,14 +127,14 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
     """
 
     if type(bins) == int:
-        logger.warning(f"Picking bins based on number of particles only. n_min_particles = {n_min_particles}") 
+        logger.warning("Picking bins based on number of particles only. n_min_particles = %s", n_min_particles) 
         heterogeneity_bins = pick_heterogeneity_bins2(-1, heterogeneity_distances[1], 0.5, n_min_particles, n_bins = bins)
     else:
         heterogeneity_bins = bins
 
-    logger.info(f"bins {heterogeneity_bins}")
+    logger.info("bins %s", heterogeneity_bins)
     n_images_per_bin = [ int(np.sum(heterogeneity_distances[0] < b) + np.sum(heterogeneity_distances[1] < b)) for b in heterogeneity_bins ]
-    logger.info(f"Particles per bin: {n_images_per_bin}")
+    logger.info("Particles per bin: %s", n_images_per_bin)
 
     estimates = [None, None]
     lhs, rhs = [None, None], [None, None]
@@ -143,7 +144,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
 
         estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], None, heterogeneity_distances[k], heterogeneity_bins, tau= tau, grid_correct=grid_correct_ests, use_spherical_mask=use_mask_ests, heterogeneity_kernel= heterogeneity_kernel)
         estimates[k] = fourier_transform_utils.get_idft3(estimates[k].reshape(-1, *cryos.volume_shape)).real.astype(np.float32)
-        logger.info(f"Computing estimates done")
+        logger.info("Computing estimates done")
 
         cryos[k].update_volume_upsampling_factor(1)
 
@@ -156,7 +157,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         cryos[k].update_volume_upsampling_factor(upsampling_for_ests)
 
 
-    logger.info(f"Computing estimates done")
+    logger.info("Computing estimates done")
 
     from_ft = False
 
@@ -174,7 +175,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
     estimates = [None, None]
 
     for k in range(2):
-        logger.info(f"Computing estimates start")
+        logger.info("Computing estimates start")
         cryos[k].update_volume_upsampling_factor(2)
         estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k],  None, heterogeneity_distances[k], heterogeneity_bins, tau= None, grid_correct=True, use_spherical_mask=True,heterogeneity_kernel= heterogeneity_kernel)
         estimates[k] = fourier_transform_utils.get_idft3(estimates[k].reshape(-1, *cryos.volume_shape)).real.astype(np.float32)
@@ -310,7 +311,7 @@ def smooth_shell_error(shell_error, voxel_size, subarray_size, sum_up_up_to_res 
     # Exclude last shell (Nyquist) to match smoothing conventions
     grids = full_grids[-shell_error.shape[-1]-1:-1]
     low_res_indices = grids <= 1/ sum_up_up_to_res
-    logger.info(f"Averaging first {jnp.sum(low_res_indices)} shells out of {shell_error.shape[-1]} until resolution {sum_up_up_to_res}. Smoothing shells with kernel size {smooth_mean_filter}")
+    logger.info("Averaging first %s shells out of %s until resolution %s. Smoothing shells with kernel size %s", jnp.sum(low_res_indices), shell_error.shape[-1], sum_up_up_to_res, smooth_mean_filter)
     shell_choice_new = jnp.where(grids <= 1/ sum_up_up_to_res, jnp.sum(shell_error * low_res_indices ), shell_choice_new)
     # shell_choice_new = shell_choice_new.at[low_res_indices].set(jnp.sum(shell_error * low_res_indices ))
     return shell_choice_new
@@ -335,10 +336,10 @@ def choice_most_likely_split(estimates0, estimates1, target0, target1, noise_var
     errors = np.asarray(errors)
     if smooth_error:
         subarray_size = int((errors.shape[-1]+1) * 2)
-        logger.info(f"Smoothing shell error with subarray size {subarray_size}")
+        logger.info("Smoothing shell error with subarray size %s", subarray_size)
         sum_up_up_to_res = 40
         smooth_mean_filter = 3
-        logger.info(f"Grouping first {sum_up_up_to_res} shells together, and smoothing with kernel size {smooth_mean_filter}")
+        logger.info("Grouping first %s shells together, and smoothing with kernel size %s", sum_up_up_to_res, smooth_mean_filter)
         errors = batch_smooth_shell_error(errors, voxel_size, subarray_size, sum_up_up_to_res, smooth_mean_filter)
 
     logger.removeFilter(dup_filter)
