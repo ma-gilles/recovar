@@ -6,7 +6,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import equinox as eqx
-from recovar import core
+from recovar import core, utils
 from recovar.core.configs import ForwardModelConfig
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from .sampling import translations_to_indices
@@ -149,7 +149,6 @@ def M_with_precompute(experiment_dataset, probabilities, rotations, translations
     if n_translations <= 0:
         raise ValueError("M_with_precompute requires at least one translation")
     n_images = experiment_dataset.n_images if image_indices is None else len(image_indices)
-    from recovar import utils
 
     config = ForwardModelConfig.from_dataset(
         experiment_dataset, disc_type=disc_type,

@@ -294,7 +294,7 @@ def find_first_zero_in_bool(array):
     ires_max = jnp.argmin(array)
     # There is a corner case. If iresmax is 0 because everything is 1.
     # If ires_max is 0, there are two options: either the array is all 0 or all 1.
-    all_ones_flag = (ires_max ==0 ) * (array[ires_max] == True)
+    all_ones_flag = (ires_max == 0) * array[ires_max]
     ires_max = jnp.where(all_ones_flag, array.size-1, ires_max)
 
     return ires_max#, all_ones_flag

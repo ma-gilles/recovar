@@ -101,7 +101,7 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
         assert output_folder is not None
 
         if zdim not in zs_keys:
-            logger.error("z-dim not found in results. Options are:" + ','.join(str(e) for e in zs_keys))
+            logger.error("z-dim not found in results. Options are: %s", ','.join(str(e) for e in zs_keys))
             raise ValueError("Requested zdim was not found in embedding outputs.")
 
         if hasattr(po, "get_embedding_component"):

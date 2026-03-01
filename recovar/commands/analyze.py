@@ -101,7 +101,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
             output_folder = recovar_result_dir + f'/analysis_{zdim}{noreg_suffix}/'
 
         if zdim not in zs_keys:
-            logger.error("z-dim not found in results. Options are:" + ','.join(str(e) for e in zs_keys))
+            logger.error("z-dim not found in results. Options are: %s", ','.join(str(e) for e in zs_keys))
             raise ValueError("Requested zdim was not found in embedding outputs.")
 
         if hasattr(po, "get_embedding_component"):

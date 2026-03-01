@@ -6,7 +6,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import equinox as eqx
-from recovar import core
+from recovar import core, utils
 from recovar.core.configs import ForwardModelConfig
 from .core import (
     batch_vol_slice_volume_by_map,
@@ -35,8 +35,6 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     n_images = experiment_dataset.n_images if image_indices is None else len(image_indices)
     use_heterogeneous = u is not None
     n_principal_components = u.shape[0] if use_heterogeneous else 0
-    from recovar import utils
-
     config = ForwardModelConfig.from_dataset(
         experiment_dataset, disc_type=disc_type,
         process_fn=experiment_dataset.image_stack.process_images,
