@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}RECOVAR{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.14.3/dist/cdn.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+        }
+      }
+    }
+  </script>
+  <style>
+    [x-cloak] { display: none !important; }
+    .scrollbar-thin::-webkit-scrollbar { width: 6px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+    .fade-in { animation: fadeIn 0.3s ease-in; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body class="h-full bg-slate-950 text-slate-100 font-sans antialiased">
+  <div class="flex h-full" x-data="{ sidebarOpen: true }">
+
+    <!-- Sidebar -->
+    <aside class="w-64 flex-shrink-0 bg-slate-900 border-r border-slate-800 flex flex-col"
+           :class="sidebarOpen ? '' : 'hidden'" >
+      <!-- Logo -->
+      <div class="h-16 flex items-center px-5 border-b border-slate-800">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center">
+            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                    d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+            </svg>
+          </div>
+          <div>
+            <span class="text-lg font-bold text-white tracking-tight">RECOVAR</span>
+            <span class="text-[10px] text-sky-400 font-medium ml-1">BETA</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Nav -->
+      <nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto scrollbar-thin">
+        <a href="{{ url_for('dashboard') }}"
+           class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors
+                  {% if request.path == '/' %}bg-slate-800 text-white{% else %}text-slate-400 hover:text-white hover:bg-slate-800/50{% endif %}">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                  d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
+          </svg>
+          Dashboard
+        </a>
+        <a href="{{ url_for('new_job') }}"
+           class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors
+                  {% if request.path == '/jobs/new' %}bg-slate-800 text-white{% else %}text-slate-400 hover:text-white hover:bg-slate-800/50{% endif %}">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4v16m8-8H4"/>
+          </svg>
+          New Job
+        </a>
+
+        <div class="pt-4 pb-2 px-3">
+          <p class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Recent Jobs</p>
+        </div>
+        {% for job in recent_jobs|default([]) %}
+        <a href="{{ url_for('job_detail', job_id=job.id) }}"
+           class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors text-slate-400 hover:text-white hover:bg-slate-800/50
+                  {% if request.path == '/jobs/' + job.id %}bg-slate-800 !text-white{% endif %}">
+          <span class="w-2 h-2 rounded-full flex-shrink-0
+            {% if job.status == 'completed' %}bg-emerald-400
+            {% elif job.status == 'running' %}bg-sky-400 animate-pulse
+            {% elif job.status == 'queued' %}bg-amber-400
+            {% else %}bg-red-400{% endif %}"></span>
+          <span class="truncate">{{ job.name }}</span>
+        </a>
+        {% endfor %}
+      </nav>
+
+      <!-- Footer -->
+      <div class="px-4 py-3 border-t border-slate-800">
+        <div class="text-[11px] text-slate-500">
+          RECOVAR v1.0.0-beta
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <div class="flex-1 flex flex-col min-w-0">
+      <!-- Header -->
+      <header class="h-16 flex items-center justify-between px-6 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm flex-shrink-0">
+        <div class="flex items-center gap-4">
+          <button @click="sidebarOpen = !sidebarOpen" class="text-slate-400 hover:text-white transition-colors">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+            </svg>
+          </button>
+          <h1 class="text-lg font-semibold text-white">{% block page_title %}Dashboard{% endblock %}</h1>
+        </div>
+        <div class="flex items-center gap-3">
+          <div id="system-info" class="text-xs text-slate-500"
+               hx-get="/api/system" hx-trigger="load" hx-swap="innerHTML"
+               hx-target="#system-info-content">
+            <span id="system-info-content"></span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Content -->
+      <main class="flex-1 overflow-y-auto p-6 scrollbar-thin">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+
+  <script>
+    // htmx system info handler
+    document.body.addEventListener('htmx:afterRequest', function(evt) {
+      if (evt.detail.pathInfo && evt.detail.pathInfo.requestPath === '/api/system') {
+        try {
+          const data = JSON.parse(evt.detail.xhr.responseText);
+          const el = document.getElementById('system-info-content');
+          if (el) {
+            let parts = [data.hostname];
+            if (data.gpus && data.gpus.length > 0) parts.push(data.gpus.length + ' GPU' + (data.gpus.length > 1 ? 's' : ''));
+            if (data.disk_free_gb) parts.push(data.disk_free_gb + ' GB free');
+            el.textContent = parts.join(' · ');
+          }
+        } catch(e) {}
+      }
+    });
+  </script>
+</body>
+</html>
