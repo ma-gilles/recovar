@@ -157,6 +157,21 @@ def test_find_trajectory_in_grid_with_log_density():
     assert np.all(np.isfinite(path))
 
 
+def test_find_trajectory_in_grid_raises_on_failure(monkeypatch):
+    """find_trajectory_in_grid should raise RuntimeError (not return None)
+    when gradient descent fails to converge."""
+    density = np.ones((8, 8), dtype=np.float32)
+    g_st = np.array([0, 0])
+    g_end = np.array([7, 7], dtype=np.float32)
+    bounds = [(-1.0, 1.0), (-1.0, 1.0)]
+
+    # Force gradient_descent_nd to always return None (simulates convergence failure)
+    monkeypatch.setattr(trajectory, "gradient_descent_nd", lambda *a, **kw: None)
+
+    with pytest.raises(RuntimeError, match="Trajectory computation failed"):
+        trajectory.find_trajectory_in_grid(density, g_st, g_end, bounds)
+
+
 def test_evaluate_function_off_grid_interpolates():
     density = np.array([[0.0, 1.0], [2.0, 3.0]], dtype=np.float64)
     # Center of 2x2 grid should be average of all 4 corners

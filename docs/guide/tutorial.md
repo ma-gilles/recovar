@@ -35,7 +35,7 @@ A typical RECOVAR workflow:
 ```bash
 recovar pipeline particles.256.mrcs \
     --poses poses.pkl --ctf ctf.pkl \
-    --mask mask_from_filtered_variance_mean_0802.mrc \
+    --mask recovar_masks/mask_10076.mrc \
     -o output
 ```
 
@@ -102,7 +102,7 @@ recovar extract_image_subset_from_kmeans \
 ```bash
 recovar pipeline particles.256.mrcs \
     --poses poses.pkl --ctf ctf.pkl \
-    --mask mask_from_filtered_variance_mean_0802.mrc \
+    --mask recovar_masks/mask_10076.mrc \
     --ind subset_ind.pkl \
     -o output_subset
 ```
