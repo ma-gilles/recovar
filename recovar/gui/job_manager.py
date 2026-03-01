@@ -361,6 +361,11 @@ class JobManager:
                     task_type = "trajectory"
                 else:
                     continue
+                # Must have a compute.sbatch or task_meta.json to be a real task
+                # (e.g., "trajectory_*density" dirs are output subdirs, not tasks)
+                if not (os.path.isfile(os.path.join(tdir, "compute.sbatch")) or
+                        os.path.isfile(os.path.join(tdir, "task_meta.json"))):
+                    continue
                 # Check if it produced output
                 has_output = any(
                     f.endswith(".mrc") and "_half" not in f and "_unfil" not in f and "_mask" not in f
