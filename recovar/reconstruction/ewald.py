@@ -308,36 +308,6 @@ def compute_diag_mean(experiment_dataset, batch_size, disc_type, noise_variance 
     return diagonal
 
 
-def sphere_sign_hard_assignment(experiment_dataset, volume, batch_size, disc_type, noise_variance):
-    
-    # volt = experiment_dataset.CTF_params[0,3]
-    # lam = volt_to_wavelength(experiment_dataset.CTF_params[0,3])# 
-    #lam = 12.2639 / (volt + 0.97845e-6 * volt**2)**.5
-
-    logger.info("batch size in Ewald LHS: %s", batch_size)
-    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
-
-    # vol_real, vol_imag = 0, 0
-
-    # Compute \sum_i A_i^T y_i / sigma_i^2
-    for batch, _, indices in data_generator:
-        # Only place where image mask is used ?
-        batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
-        batch = core.translate_images(batch, experiment_dataset.translations[indices], experiment_dataset.image_shape)
-
-        # batch /= noise_variance
-        residuals = ewald_sphere_forward_model(batch.real, batch.imag,
-                                        experiment_dataset.rotation_matrices[indices],
-                                        experiment_dataset.CTF_params[indices], 
-                                        experiment_dataset.image_shape, experiment_dataset.volume_shape, 
-                                        experiment_dataset.voxel_size, disc_type)
-
-        # vol_real += A_t_vol_real
-        # vol_imag += A_t_vol_imag
-
-    logger.info("LHS done.")
-    return vol_real, vol_imag
-
 
 def volt_to_wavelength(volt):
     """Convert accelerating voltage (kV) to electron wavelength (Angstroms)."""
@@ -460,28 +430,5 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
     return vol, ress
 
 
-def matvec_experiments(y, experiment_dataset, batch_size, disc_type, signal_variance, noise_variance):
-    from recovar.reconstruction import noise
 
-    noise_variance = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape)
-    mask_real = mask.get_radial_mask(experiment_dataset.volume_shape).reshape(-1)
-    mask_size = int(jnp.sum(mask_real))
-
-    volume_real, volume_imag = unvec_masked(y, experiment_dataset.volume_shape, mask_size)
-    z_real, z_imag = compute_ewald_LS_matvec_in_batches(experiment_dataset, volume_real, volume_imag, batch_size, disc_type, signal_variance, noise_variance  )
-    z = vec_masked(z_real, z_imag, experiment_dataset.volume_shape)
-    
-#     def jp(y):
-#         e = jnp.ones_like(y)
-#         d = mat_vec_wrapped_up(e)
-#         return d
-    
-#     d = jp(y)
-
-    
-    return z
-
-
-'''
-PRECONDITIONED VERSION
-'''
+# PRECONDITIONED VERSION

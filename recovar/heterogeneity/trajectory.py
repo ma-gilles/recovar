@@ -54,10 +54,6 @@ def find_trajectory_in_grid(density, g_st, g_end, latent_space_bounds, eps = 1e-
         plt.imshow(density, aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
         plt.imshow(np.log(travel_time), aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
 
-    # if density.ndim == 2:
-    #     plt.imshow(density, aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
-    #     plt.imshow(np.log(travel_time), aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
-    
     while path is None:
         if eps > 0.1:
             logger.warning("Failed to find path, and eps>0.1. Probably a bug. Exiting.")
@@ -72,15 +68,8 @@ def find_trajectory_in_grid(density, g_st, g_end, latent_space_bounds, eps = 1e-
 
 def find_trajectory_in_latent_space(density, z_st, z_end, z_to_grid, grid_to_z, latent_space_bounds, density_eps = 1e-5):
     
-    def check_in_bound(g):
-        for k in range(g.size):
-            g[k] = np.max([0, g[k]])
-            g[k] = np.min([g[k], density.shape[k]-1])
-        return g
-        
-    
     g_st = z_to_grid(z_st, to_int = True) # Start needs to be on a grid point
-    g_st = check_in_bound(g_st)
+    g_st = np.clip(g_st, 0, np.array(density.shape) - 1)
     g_end = z_to_grid(z_end)
     g_end = check_in_bound(g_end)
     
@@ -165,14 +154,8 @@ def compute_fixed_dimensional_path(z_st, z_end, density_low_dim, latent_space_bo
     g_st = z_to_grid(z_st, to_int = True) 
     g_end = z_to_grid(z_end)
 
-    def check_in_bound(g, num_points):
-        for k in range(g.size):
-            g[k] = np.max([0, g[k]])
-            g[k] = np.min([g[k], num_points-1])
-        return g
-    ## This is not used.
-    g_st_in_bound = check_in_bound(g_st, num_points)
-    g_end_in_bound = check_in_bound(g_end, num_points)
+    g_st_in_bound = np.clip(g_st, 0, num_points - 1)
+    g_end_in_bound = np.clip(g_end, 0, num_points - 1)
 
     current_path_grid = find_trajectory_in_grid(density_low_dim,
                                             g_st_in_bound,
@@ -231,14 +214,8 @@ def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, dens
         g_st = z_to_grid(z_st, to_int = True) 
         g_end = z_to_grid(z_end)
 
-        # Is this necessary? computed 
-        def check_in_bound(g, num_points):
-            for k in range(g.size):
-                g[k] = np.max([0, g[k]])
-                g[k] = np.min([g[k], num_points-1])
-            return g
-        g_st_in_bound = check_in_bound(g_st, num_points)
-        g_end_in_bound = check_in_bound(g_end, num_points)
+        g_st_in_bound = np.clip(g_st, 0, num_points - 1)
+        g_end_in_bound = np.clip(g_end, 0, num_points - 1)
 
         # Compute density
         density = latent_density.compute_latent_space_density_on_curve(zs[:,:dim+1], 

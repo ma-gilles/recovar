@@ -41,8 +41,7 @@ def get_angle_resolution(nside_level):
     return hp.nside2resol(nside, arcmin=True) / 60
 
 def get_translation_grid(max_pixel, pixel_offset):
-    gridded_max_pixel = (max_pixel // pixel_offset ) * pixel_offset 
-    # xrange_one_sided = np.arange(0, max_pixel//2 + 1, pixel_offset)
+    gridded_max_pixel = (max_pixel // pixel_offset ) * pixel_offset
     xrange = np.arange(-gridded_max_pixel, gridded_max_pixel + 1, pixel_offset)
     x, y = np.meshgrid(xrange, xrange)
     grid = np.stack([x.flatten(), y.flatten()], axis = 1)
@@ -56,8 +55,6 @@ def get_translation_grid(max_pixel, pixel_offset):
 @functools.partial(jax.jit, static_argnums=[1])
 def translations_to_indices(translations, image_shape):
     # Assumes that translations are integers
-    # Does this not work?
     indices = translations + image_shape[0]//2
     vec_indices = indices[...,1] * image_shape[1] + indices[...,0]
-    # logger.warning("not sure that this is working as intended")
     return vec_indices

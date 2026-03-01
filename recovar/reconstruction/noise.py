@@ -165,9 +165,6 @@ def noise_variance_loss(images, noise_variance, translations, CTF_params, voxel_
     masked_images = covariance_core.apply_image_masks(images, image_masks, image_shape).reshape(-1, *image_shape)
     predicted_noise_variance = predict_noise_variance(noise_variance, CTF_params, voxel_size, CTF_fun, image_masks, image_shape, radial, premultiplied_ctf)
 
-    # plt.imshow(predicted_noise_variance[0].real)
-    # predicted_noise_variance2 = predict_noise_variance(noise_variance, CTF_params, voxel_size, CTF_fun, image_masks*0 + 1, image_shape, radial, premultiplied_ctf)
-    # plt.figure()
     loss = jnp.sum( jnp.abs( jnp.abs(masked_images)**2 - predicted_noise_variance )**2  ) / np.prod(image_shape)
 
     return loss
