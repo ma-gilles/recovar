@@ -9,13 +9,21 @@ FileNotFoundError: Cannot find 15 MRC file(s) referenced in the metadata.
   First missing: /old/path/to/Micrographs/image.mrcs
 ```
 
-File paths in your `.star`/`.cs` file are broken. Fix with:
+RECOVAR automatically tries extension swaps (`.mrc` ↔ `.mrcs`) and flat-directory fallbacks before failing. If it still can't find files:
 
-```bash
-recovar pipeline particles.star -o output --mask mask.mrc \
-    --datadir /correct/path/to/data \
-    --strip-prefix old/path/prefix
-```
+1. **Diagnose** with `recovar check_paths` to see exactly what paths are tried:
+
+    ```bash
+    recovar check_paths particles.cs --datadir /your/data
+    ```
+
+2. **Fix** with `--datadir` and/or `--strip-prefix`:
+
+    ```bash
+    recovar pipeline particles.star -o output --mask mask.mrc \
+        --datadir /correct/path/to/data \
+        --strip-prefix old/path/prefix
+    ```
 
 See [Fixing broken paths](guide/input-data.md#fixing-broken-file-paths).
 
