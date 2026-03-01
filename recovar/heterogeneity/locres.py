@@ -628,28 +628,7 @@ def masked_noisy_error_3(diff, noise_variance_small, offset, maskrad_pix, edgewi
     return jnp.linalg.norm(diff_masked)**2
 
 
-def split_by_shells(input_vec, volume_shape ):
-    radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = 0).astype(int).reshape(-1) 
-    
-    split_by_shell = jnp.zeros((input_vec.size, volume_shape[0]//2 ), dtype = input_vec.dtype)
-    split_by_shell = split_by_shell.at[(jnp.arange(input_vec.size), radial_distances)].set(input_vec)
-    full_shape = split_by_shell.shape
-    indices = jnp.stack([jnp.arange(input_vec.size), radial_distances], axis=0)
-    
-    good_indices = radial_distances < volume_shape[0]//2 
-    sampling_idx = jax.numpy.ravel_multi_index(indices, split_by_shell.shape,mode='clip') #, fill_value=-1)
-    
-    # Some serious JAX hacking going on here to ignore bad indices. Probably should change this.
-    sampling_idx = jnp.where(good_indices, sampling_idx, split_by_shell.size+1) 
-    
-    # This seems silly but not sure how else to do it.
-    split_by_shell = split_by_shell.reshape(-1)
-    split_by_shell = split_by_shell.at[sampling_idx].set(input_vec,mode='drop')
-    split_by_shell = split_by_shell.reshape(full_shape)
-    return split_by_shell
-
-
-@functools.partial(jax.jit, static_argnums = [3,4,5])    
+@functools.partial(jax.jit, static_argnums = [3,4,5])
 def masked_noisy_error_split_over_shells(diff, noise_variance_small, offset, maskrad_pix, edgewidth_pix,multiplier =3 ):
     # NOT IMPLEMENTED
     offset += diff.shape[0]//2

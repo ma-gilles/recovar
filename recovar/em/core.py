@@ -49,10 +49,7 @@ def compute_dot_products(projections, batch, translations, CTF_params, CTF_fun, 
     Computes -2 * y_i.T @ (S_s C_i * Proj_j) for i,j,s
     where C_i is CTF, S_s are shifts, and Proj_j are projections, y_i are batch (unprocessed)
     '''
-    # proj_norm = jnp.linalg.norm(projections, axis=-1, keepdims=True)**2
-    # Technically don't need do to this step. Maybe should delete at some point.
-
-    batch = process_images(batch, apply_image_mask = False) 
+    batch = process_images(batch, apply_image_mask = False)
     batch_norm = jnp.linalg.norm(batch / jnp.sqrt(noise_variance), axis = (-1), keepdims = True)**2
 
     batch *= CTF_fun( CTF_params, image_shape, voxel_size) / noise_variance
@@ -63,36 +60,11 @@ def compute_dot_products(projections, batch, translations, CTF_params, CTF_fun, 
     # It's not very clear whether it's better to do. Compute all shifted images, then compute IP, or compute IP for each shift.
     # The latter is probably better for memory, but the former is probably better for speed. We probably want to do the latter.
 
-    ## IMPLEMENATION 1
-    ## I thought this would avoid allocating all the shifted images at once, but it doesn't seem to be the case.
-    imp = 3
-    if imp == 1:
-        for i in range(translations.shape[0]):
-            # Probably should put a better fn here for shfiting but oh well.
-            shifted_batch = core.translate_images(batch, jnp.repeat(translations[i:i+1], batch.shape[0], axis=0), image_shape)
-
-            result = result.at[:,:,i].set(-2 * (jnp.conj(shifted_batch) @ projections.T).real + batch_norm)
-    
-    ## IMPLEMENATION 2
-    ## This doesn't work. I'm not sure if it should be any different than the typical for loop
-
-    # def body_fun(i, result):
-    #     shifted_batch = core.translate_images(batch, jnp.repeat(translations[i:i+1], batch.shape[0], axis=0), image_shape)
-
-    #     result = result.at[:,:,i].set(-2 * (jnp.conj(shifted_batch) @ projections.T).real + batch_norm)
-
-    # result = jax.lax.fori_loop(0, translations.shape[0], body_fun, result)
-
-    # IMPLEMENTATION 3. Just one big matvec.
-    # This is probably allocating far more memory than needed.
-    elif imp == 3:
-        shifted_images = core.batch_trans_translate_images(batch, jnp.repeat(translations[None], batch.shape[0], axis=0), image_shape)
-        n_shifted_images = np.prod(shifted_images.shape[:-1])
-        result = -2 * (jnp.conj(shifted_images).reshape(n_shifted_images, shifted_images.shape[-1] ) @ projections.T).real 
-        result = result.reshape(batch.shape[0], translations.shape[0], projections.shape[0]) + batch_norm[:,None]
-        result = result.swapaxes(1,2)
-        # May want to swap axes
-    
+    shifted_images = core.batch_trans_translate_images(batch, jnp.repeat(translations[None], batch.shape[0], axis=0), image_shape)
+    n_shifted_images = np.prod(shifted_images.shape[:-1])
+    result = -2 * (jnp.conj(shifted_images).reshape(n_shifted_images, shifted_images.shape[-1] ) @ projections.T).real
+    result = result.reshape(batch.shape[0], translations.shape[0], projections.shape[0]) + batch_norm[:,None]
+    result = result.swapaxes(1,2)
 
     return result
 
@@ -163,7 +135,6 @@ def hard_assignment_idx_to_pose(indices, rotation_grid, translation_grid):
 
 def estimate_error_from_hard_assignment(hard_assignment, gt_pose, gt_trans, rotation_grid, translation_grid):
     predicted_pose, predicted_trans = hard_assignment_idx_to_pose(hard_assignment, rotation_grid, translation_grid)
-    # gt_pose = rotation_grid[true_rot_indices]
     predicted_pose = R.from_matrix(predicted_pose)
     gt_pose = R.from_matrix(gt_pose)
     error = (predicted_pose * gt_pose.inv()).magnitude() / np.pi * 180

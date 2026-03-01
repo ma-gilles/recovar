@@ -60,16 +60,12 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
     means = [state_obj.mean for state_obj in state_objs]
     if use_fsc_prior:
         from recovar.reconstruction import relion_functions
-        # relion_functions.post_process_from_filter(experiment_dataset, self.Ft_CTF, self.Ft_y, tau = self.mean_variance, disc_type = disc_type).reshape(-1)
         unreg_means = [relion_functions.post_process_from_filter(experiment_dataset, state_obj.Ft_CTF, state_obj.Ft_y, tau = None, disc_type = disc_type) for state_obj in state_objs]
         mean_signal_variance, fsc, _ = regularization.compute_relion_prior(
             experiment_datasets, state_objs[0].noise_variance, unreg_means[0], unreg_means[1], 100
         )
         
-        #mean_signal_variance, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(cryo.volume_shape, means[0], means[1], (state_objs[0].Ft_CTF + state_objs[i].Ft_CTF[1])/2, state_objs[0].mean_variance, frequency_shift = jnp.array([0,0,0]), upsampling_factor = 1)
     else:
-        
-
         fsc = regularization.get_fsc_gpu(means[0], means[1], cryo.volume_shape, substract_shell_mean = False, frequency_shift = 0 )
         mean_avg = (means[0] + means[1])/2
         PS = regularization.average_over_shells(jnp.abs(mean_avg)**2, cryo.volume_shape)
@@ -78,15 +74,8 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
         mean_signal_variance = T * 1/2 * utils.make_radial_image(PS, cryo.volume_shape, extend_last_frequency = True)
         
         mean_signal_variance += np.max(mean_signal_variance) * 1e-6
-        # mean_signal_variance  = 1 /signal_variance
 
-    from recovar.output import plot_utils
-    # plot_utils.plot_fsc(cryo, means[0], means[1])
-    
-    ##  Estimate noise level
     from recovar.reconstruction import noise
-    # if heterogeneous:
-    # This doesn't really make sense...
 
     for k in range(2):
         best_rotations, best_translations = hard_assignment_idx_to_pose(hard_assignments[k], rotations, translations)
@@ -94,15 +83,12 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
         experiment_datasets[k].translations = best_translations
 
     noise_from_res = noise.estimate_noise_level_no_masks(experiment_datasets[0], np.arange(np.min([1000, cryo.n_units])), means[0], 100, disc_type='linear_interp')
-    # noise_from_res, _, _ = noise.get_average_residual_square_just_mean(cryo, None, means[0], 100, disc_type = 'linear_interp', subset_indices = np.arange(np.min([1000, cryo.n_units])), subset_fn = None)
-    noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)#, cryo.voxel_size)
-    # In pixel units?
+    noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)
     current_pixel_res = locres.find_fsc_resol(fsc, threshold = 1/7)
     current_res = current_pixel_res / cryo.voxel_size
     # logger.info("Current resolution is", current_res, "pixel resolution: ", current_pixel_res)
     logger.info("Current resolution is %s, pixel resolution: %s", current_res, current_pixel_res)
 
-    # [ state_obj.noise_variance for state_obj in state_objs]
     if state_objs[0].name == 'HeterogeneousEM':
         # Downsample to mean resolution
         valid_freqs = np.array(cryo.get_valid_frequency_indices(current_pixel_res))
@@ -126,7 +112,6 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
         low_res_mask = cryo.get_valid_frequency_indices(average_up_to_angstrom)
         logger.info("Averaging halfmaps up to %s pixels", average_up_to_angstrom)
         means = [np.array(mean) for mean in means ]
-        # old_means = means[0].copy()
         means[0][low_res_mask] = (means[0][low_res_mask] + means[1][low_res_mask])/2
         means[1][low_res_mask] = means[0][low_res_mask]
         
