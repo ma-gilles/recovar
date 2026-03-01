@@ -28,7 +28,7 @@ def compute_image_assignment(experiment_dataset, volumes, noise_variance, batch_
 
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
 
-    volumes = jnp.array(volumes).astype(experiment_dataset.dtype)
+    volumes = jnp.asarray(volumes, dtype=experiment_dataset.dtype)
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
     residuals = np.zeros((volumes.shape[0], experiment_dataset.n_units), dtype=experiment_dataset.dtype_real)
     for batch, particles_ind, batch_image_ind in data_generator:
@@ -53,7 +53,7 @@ def estimate_false_positive_rate(experiment_dataset, volumes, noise_variance, ba
 
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
 
-    volumes = jnp.array(volumes).astype(experiment_dataset.dtype)
+    volumes = jnp.asarray(volumes, dtype=experiment_dataset.dtype)
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
     alphas = np.zeros((experiment_dataset.n_units,), dtype=experiment_dataset.dtype_real)
     assert volumes.shape[0] == 2, 'Only two volumes are supported'

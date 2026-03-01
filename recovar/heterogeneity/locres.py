@@ -789,7 +789,7 @@ def get_sampling_points(grid_size, locres_sampling, locres_maskrad, voxel_size):
                 rad = np.sqrt(kk * kk + ii * ii + jj * jj)
                 if rad < myrad:
                     sampling_points.append((kk, ii, jj))
-    sampling_points = jnp.array(sampling_points).astype(int)
+    sampling_points = jnp.asarray(sampling_points, dtype=int)
     return sampling_points
 
 

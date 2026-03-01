@@ -525,7 +525,7 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
     # Make sure variables used in every iteration are on gpu.
     basis = jnp.asarray(basis)
     # volume_mask = jnp.array(volume_mask).astype(experiment_dataset.dtype_real)
-    mean = jnp.array(mean).astype(experiment_dataset.dtype)
+    mean = jnp.asarray(mean, dtype=experiment_dataset.dtype)
 
     lhs =0
     rhs =0 

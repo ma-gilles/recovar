@@ -208,8 +208,8 @@ def kent_sampling_scheme(n_images, grid_size, seed =0, arguments = None ):
     if arguments is not None:
         alpha = float(arguments[0])
         beta = float(arguments[1])
-        mu = np.array(arguments[2]).astype(float)
-        mu0 = np.array(arguments[3]).astype(float)
+        mu = np.asarray(arguments[2], dtype=float)
+        mu0 = np.asarray(arguments[3], dtype=float)
     else:
         alpha = 10
         beta = 5

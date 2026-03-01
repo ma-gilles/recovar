@@ -152,9 +152,9 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
 
     # Transfer arrays to GPU once before the batch loop
     basis = jnp.asarray(basis.astype(experiment_dataset.dtype))
-    volume_mask = jnp.array(volume_mask).astype(experiment_dataset.dtype_real)
-    mean_estimate = jnp.array(mean_estimate).astype(experiment_dataset.dtype)
-    eigenvalues = jnp.array(eigenvalues).astype(experiment_dataset.dtype)
+    volume_mask = jnp.asarray(volume_mask, dtype=experiment_dataset.dtype_real)
+    mean_estimate = jnp.asarray(mean_estimate, dtype=experiment_dataset.dtype)
+    eigenvalues = jnp.asarray(eigenvalues, dtype=experiment_dataset.dtype)
     contrast_grid = contrast_grid.astype(experiment_dataset.dtype_real)
 
     # Construct structured parameters once outside the loop

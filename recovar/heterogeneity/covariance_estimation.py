@@ -255,7 +255,7 @@ def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_rad
     n_picked =0 
     sorted_frequencies = core.vec_indices_to_frequencies(sorted_idx, volume_shape)
     sorted_frequencies_norm = np.linalg.norm(sorted_frequencies, axis=-1)
-    running_vec = sampling_vec.copy().astype(np.float64)
+    running_vec = sampling_vec.astype(np.float64)
 
     probs = running_vec/np.sum(running_vec)
     draw_size = min(running_vec.size, n_samples * 100)
@@ -963,8 +963,8 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
 
     basis = basis.T.astype(experiment_dataset.dtype)
     basis = jnp.asarray(basis)
-    volume_mask = jnp.array(volume_mask).astype(experiment_dataset.dtype_real)
-    mean_estimate = jnp.array(mean_estimate).astype(experiment_dataset.dtype)
+    volume_mask = jnp.asarray(volume_mask, dtype=experiment_dataset.dtype_real)
+    mean_estimate = jnp.asarray(mean_estimate, dtype=experiment_dataset.dtype)
     jax_random_key = jax.random.PRNGKey(0)
 
     lhs = 0
