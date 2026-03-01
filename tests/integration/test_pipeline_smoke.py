@@ -41,6 +41,19 @@ pytestmark = [pytest.mark.integration]
 _CPU_ENV = dict(os.environ, CUDA_VISIBLE_DEVICES="", JAX_PLATFORMS="cpu",
                 PYTHONNOUSERSITE="1")
 
+
+def _run(cmd, **kwargs):
+    """Run a subprocess and include stderr in the failure message on crash."""
+    kwargs.setdefault("env", _CPU_ENV)
+    result = subprocess.run(cmd, capture_output=True, text=True, **kwargs)
+    if result.returncode != 0:
+        # Show the last 80 lines of stderr for quick diagnosis
+        tail = "\n".join(result.stderr.splitlines()[-80:])
+        pytest.fail(
+            f"Command failed (rc={result.returncode}):\n  {' '.join(cmd[:6])}...\n"
+            f"--- stderr (last 80 lines) ---\n{tail}"
+        )
+
 _SMOKE_N_IMAGES = int(os.environ.get("SMOKE_N_IMAGES", "100"))
 # For cryo-ET, make_test_dataset hard-codes n_tilts=27, so we need more
 # images to get a useful number of particles (300 // 27 ≈ 11 particles).
@@ -89,7 +102,7 @@ def _generate_dataset(
     ]
     if tilt_series:
         make_cmd += ["--tilt-series"]
-    subprocess.run(make_cmd, check=True, env=_CPU_ENV)
+    _run(make_cmd)
     return dataset_dir
 
 
@@ -133,7 +146,7 @@ def test_pipeline_spa_smoke(tmp_path):
         "--accept-cpu",
         "--gpu-gb", "8",
     ]
-    subprocess.run(cmd, check=True, env=_CPU_ENV)
+    _run(cmd)
 
     # Verify expected output files exist
     assert (pipeline_out / f"inliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
@@ -192,7 +205,7 @@ def test_pipeline_cryo_et_smoke(tmp_path):
         "--accept-cpu",
         "--gpu-gb", "8",
     ]
-    subprocess.run(cmd, check=True, env=_CPU_ENV)
+    _run(cmd)
 
     # Verify image-level output files
     assert (pipeline_out / f"inliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
@@ -242,7 +255,7 @@ def test_pipeline_cryo_et_radial_per_tilt_noise_smoke(tmp_path):
         "--accept-cpu",
         "--gpu-gb", "8",
     ]
-    subprocess.run(cmd, check=True, env=_CPU_ENV)
+    _run(cmd)
 
     assert (pipeline_out / f"inliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
     assert (pipeline_out / f"outliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
@@ -288,7 +301,7 @@ def test_pipeline_cryo_et_premultiplied_ctf_smoke(tmp_path):
         "--accept-cpu",
         "--gpu-gb", "8",
     ]
-    subprocess.run(cmd, check=True, env=_CPU_ENV)
+    _run(cmd)
 
     assert (pipeline_out / f"inliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
     assert (pipeline_out / f"outliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
@@ -336,7 +349,7 @@ def test_pipeline_cryo_et_radial_per_tilt_premultiplied_ctf_smoke(tmp_path):
         "--accept-cpu",
         "--gpu-gb", "8",
     ]
-    subprocess.run(cmd, check=True, env=_CPU_ENV)
+    _run(cmd)
 
     assert (pipeline_out / f"inliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
     assert (pipeline_out / f"outliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
@@ -381,7 +394,7 @@ def test_pipeline_spa_radial_noise_smoke(tmp_path):
         "--accept-cpu",
         "--gpu-gb", "8",
     ]
-    subprocess.run(cmd, check=True, env=_CPU_ENV)
+    _run(cmd)
 
     assert (pipeline_out / f"inliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
     assert (pipeline_out / f"outliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()

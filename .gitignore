@@ -146,8 +146,9 @@ scripts/profiling/
 .recovar_batch_*.sh
 scripts/recovar_batch_*.sh
 
-# SLURM output files  
+# SLURM output files
 slurm-*.out
+pytest_*.out
 
 # NVTX profiling files
 *.nsys-rep
