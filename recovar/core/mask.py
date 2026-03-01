@@ -5,11 +5,9 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
 import skimage
 from scipy.ndimage import binary_dilation, distance_transform_edt
-# from scipy.ndimage import distance_transform_edt
 logger = logging.getLogger(__name__)
 
 def masking_options(volume_mask_option, means, volume_shape, dtype_real = np.float32, mask_dilation_iter = 0, keep_input_mask = False, dilated_mask_dilations_iter = None):
-    # dilation_iterations = np.ceil(6 * volume_shape[0] / 128).astype(int)
     dilated_mask_dilations_iter = np.ceil(6 * volume_shape[0] / 128).astype(int) if dilated_mask_dilations_iter is None else dilated_mask_dilations_iter
     input_mask = volume_mask_option
 

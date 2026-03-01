@@ -21,8 +21,6 @@ from recovar.reconstruction import regularization
 from recovar.output import metrics
 colors = dict(mcolors.BASE_COLORS, **mcolors.CSS4_COLORS)
 
-# I copy pasted this from an older project. Most of this is probably useless
-
 names_to_show = { "diagonal": "diagonal", "wilson": "Wilson", "diagonal masked": "diagonal masked", "wilson masked": "Wilson masked" }
 colors_name = { "diagonal": "cornflowerblue", "wilson": "lightsalmon", "diagonal masked": "blue", "wilson masked": "orangered"  }
 use_tex = False
@@ -577,7 +575,6 @@ def plot_fsc(cryo, vol1, vol2, mask = None, threshold = 1/7, ax = None, voxel_si
 
     ax, score = plot_fsc_new(vol1, vol2, volume_shape, voxel_size,  curve = None, ax = ax, threshold = threshold, filename = filename, name = name, volume_mask = mask, fmat = fmat)
     logger.info("%s FSC score: %s", name, score)
-    # print(fsc_score)
     return ax
     
     

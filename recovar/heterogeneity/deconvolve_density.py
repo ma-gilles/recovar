@@ -72,7 +72,6 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
         grid_size = jnp.max(grids_inp, axis = np.arange(grids_inp.ndim-1))  - jnp.min(grids_inp, axis = np.arange(grids_inp.ndim-1)) 
         coord_pca_1D = []
         num_points = grids_inp.shape[0]
-        # print(grids.shape)
         # FIND BOUNDS ON SPACE TO DISCRETIZE
         
         pca_dim_max = grids_inp.shape[-1]
@@ -150,7 +149,6 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
 
         lbfgsb_sol_p = lbfgsb.run(init_params=w_init,bounds=bounds, alpha = alpha )#, bounds=bounds)
         # lbfgsb_sol_p = lbfgsb.run(w_init, alpha = alpha, bounds=bounds )
-        # print(alpha_idx, alpha, lbfgsb_sol_p.state)
 
         lbfgsb_sol = lbfgsb_sol_p.params
         cost[alpha_idx] = ridge_reg_objective_grid(lbfgsb_sol, alpha = 0) / ridge_reg_objective_grid(lbfgsb_sol * 0, alpha = 0) 

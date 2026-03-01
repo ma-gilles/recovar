@@ -1,13 +1,16 @@
-import numpy as np
+import functools
+import logging
+
+import jax
 import jax.numpy as jnp
+import jax.scipy
+import numpy as np
+
+from recovar import utils
 from recovar.core import mask as mask_fn
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-import recovar
-from recovar import utils
-from recovar.simulation import simulator
 from recovar.reconstruction import regularization
-import logging
-import jax
+from recovar.simulation import simulator
 logger = logging.getLogger(__name__)
 
 
@@ -84,8 +87,8 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
     map2 = jnp.asarray(map2)
 
     # /2: local resolution holds two maps simultaneously
-    vol_batch_size = recovar.utils.safe_batch_size(
-        recovar.utils.get_vol_batch_size(map1.shape[0], recovar.utils.get_gpu_memory_total()) / 2)
+    vol_batch_size = utils.safe_batch_size(
+        utils.get_vol_batch_size(map1.shape[0], utils.get_gpu_memory_total()) / 2)
     n_batch = utils.get_number_of_index_batch(sampling_points.shape[0], vol_batch_size)
 
     for k in range(n_batch):
@@ -129,7 +132,6 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
 
     return i_fil, i_loc_res, i_loc_auc, fscs, local_resols#, sampling_points
 
-import jax.scipy
 def convolve_mask_at_sampling_points(sampling_pts, local_resols, full_mask):
     # full_array = jnp.zeros(full_mask.shape)
     # full_array = full_array.at[sampling_points].set(local_resol)
@@ -194,15 +196,6 @@ def subsample_array(array, offset, radius):
     vec_indices, good_idx = get_subsample_indices(array.shape, offset, radius)
     return (array.ravel()[vec_indices] * good_idx).reshape(size, size, size)
 
-# def subsample_array(array, offset, radius):
-#     l_bounds = offset - radius
-#     # u_bounds = offset + radius
-#     size = (2 * radius, 2 * radius, 2 * radius)
-#     subarray  = jax.lax.dynamic_slice(array, l_bounds, size)
-#     return subarray
-
-
-import functools
 @functools.partial(jax.jit, static_argnums = [3])
 def add_subarray_to_array_2(array, subarray, offset, radius):
     array_shape = array.shape
@@ -212,7 +205,6 @@ def add_subarray_to_array_2(array, subarray, offset, radius):
     return array.reshape(array_shape)
 
 
-import functools
 @functools.partial(jax.jit, static_argnums = [3])
 def add_subarrays_to_array(array, subarrays, offset, radius):
     array_shape = array.shape
@@ -225,17 +217,9 @@ def add_subarrays_to_array(array, subarrays, offset, radius):
 @functools.partial(jax.jit, static_argnums = [3])
 def add_subarray_to_array(array, subarray, offset, radius):
     l_bounds = offset - radius
-    u_bounds = offset + radius
-    # subarray jax.lax.dynamic_slice(array, l_bounds, [2 * radius, 2 * radius, 2 * radius])
-    # array = array.at[l_bounds[0]:u_bounds[0], l_bounds[1]:u_bounds[1], l_bounds[2]:u_bounds[2]].set(subarray)
-    # jax.lax.dynamic_slice(array, subarray, l_bounds)
-
     return jax.lax.dynamic_update_slice(array, subarray + subsample_array(array, offset, radius), l_bounds)
 
 
-# def get_
-
-import functools
 @functools.partial(jax.jit, static_argnums = [4,5,9,10])    
 def compute_local_fsc_v2(offset, ift_sum_orig, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_treshold, use_filter, filter_edgewidth):
 
@@ -273,12 +257,8 @@ def compute_local_fsc_v2(offset, ift_sum_orig, map1, map2, maskrad_pix, edgewidt
 
     return fsc, local_resol
 
-# def filter_by_fsc():
 
-
-import functools
-# def compute_local_fsc(offset, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_treshold = 1/7, use_filter = True):
-@functools.partial(jax.jit, static_argnums = [9,10])    
+@functools.partial(jax.jit, static_argnums = [9,10])
 def compute_local_fsc(offset, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_treshold, use_filter, filter_edgewidth):
 
     # Compute masked fsc
@@ -561,17 +541,17 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
     else:
         # Doesn't seem to be faster.
         if use_v2:
-            vol_batch_size = recovar.utils.safe_batch_size(
-                recovar.utils.get_vol_batch_size(noise_variance_small.shape[0], recovar.utils.get_gpu_memory_total()))
+            vol_batch_size = utils.safe_batch_size(
+                utils.get_vol_batch_size(noise_variance_small.shape[0], utils.get_gpu_memory_total()))
         else:
             # /4: noise estimation holds 4 volume-sized arrays (two maps + two noise arrays)
-            vol_batch_size = recovar.utils.safe_batch_size(
-                recovar.utils.get_vol_batch_size(noise_variance.shape[0], recovar.utils.get_gpu_memory_total()) / 4)
+            vol_batch_size = utils.safe_batch_size(
+                utils.get_vol_batch_size(noise_variance.shape[0], utils.get_gpu_memory_total()) / 4)
 
         if use_v3:
             # Divide by half the volume size to fit many small subvolumes in memory
-            vol_batch_size = recovar.utils.safe_batch_size(
-                recovar.utils.get_vol_batch_size(noise_variance_small.shape[0], recovar.utils.get_gpu_memory_total()) / (noise_variance_small.shape[0]//2))
+            vol_batch_size = utils.safe_batch_size(
+                utils.get_vol_batch_size(noise_variance_small.shape[0], utils.get_gpu_memory_total()) / (noise_variance_small.shape[0]//2))
 
         n_batch = utils.get_number_of_index_batch(sampling_points.shape[0], vol_batch_size)
 
@@ -665,9 +645,6 @@ def split_by_shells(input_vec, volume_shape ):
     split_by_shell = split_by_shell.at[sampling_idx].set(input_vec,mode='drop')
     split_by_shell = split_by_shell.reshape(full_shape)
     return split_by_shell
-
-
-from recovar.reconstruction import regularization
 
 
 @functools.partial(jax.jit, static_argnums = [3,4,5])    

@@ -12,7 +12,6 @@ import jax
 from recovar import utils
 from recovar.simulation import simulator, synthetic_dataset
 from recovar.output import output, metrics, plot_utils
-import recovar
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.commands import pipeline, compute_state
 

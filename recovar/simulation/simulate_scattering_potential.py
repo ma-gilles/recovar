@@ -85,7 +85,6 @@ def get_fourier_transform_of_molecules_at_freq_coords(atom_coords, weights, voxe
 
     # ft = finufft.nufft3d3(normalized_atom_coords[:,0], normalized_atom_coords[:,1], normalized_atom_coords[:,2], weights, normalized_freqs[:,0], normalized_freqs[:,1], normalized_freqs[:,2] , out = None, isign=-1, eps = eps)
     
-    # print(np.sum(ft))
     if np.isnan(np.sum(ft)):
         with open("nufft_nans", "wb") as f:
             import pickle

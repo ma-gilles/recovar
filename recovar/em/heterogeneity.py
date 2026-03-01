@@ -76,7 +76,6 @@ def compute_little_H_b(mean_projections, u_projections, s, batch, translations, 
     
     H += jnp.diag(1/s)
     
-    # print(1/s)
 
     # Form b    
     batch = process_images(batch, apply_image_mask = False) 

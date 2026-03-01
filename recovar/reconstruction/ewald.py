@@ -435,7 +435,6 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
     import inspect
 
     N = (mask_size) * 2 -1
-    # print(N)
     ATA_shape = (N, N)
     ATA_op = scipy.sparse.linalg.LinearOperator(ATA_shape, mat_vec_wrapped_up)
     planar_op = scipy.sparse.linalg.LinearOperator(ATA_shape, planar_model)
@@ -447,7 +446,6 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
         frame = inspect.currentframe().f_back
         ress.append(frame.f_locals['resid'] / np.linalg.norm(rhs))
         logger.info(f"CG iter {len(ress)}, residual: {ress[-1]}")
-        # print()
         # iter_count += 1
     logger.debug(utils.report_memory_device())
     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, x0 = x0_masked, maxiter=max_iter, tol=tol, M = planar_op, callback=report)

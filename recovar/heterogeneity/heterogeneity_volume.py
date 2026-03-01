@@ -10,7 +10,6 @@ from recovar.heterogeneity import adaptive_kernel_discretization
 import recovar.heterogeneity.latent_density
 import logging
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-import recovar.utils as utils
 try:
     import nvtx
 except ImportError:
@@ -290,7 +289,6 @@ def choice_most_likely_split(estimates0, estimates1, target0, target1, noise_var
     if smooth_error:
         subarray_size = int((errors.shape[-1]+1) * 2)
         logger.info(f"Smoothing shell error with subarray size {subarray_size}")
-        # print("Subarray size", subarray_size)
         sum_up_up_to_res = 40
         smooth_mean_filter = 3
         logger.info(f"Grouping first {sum_up_up_to_res} shells together, and smoothing with kernel size {smooth_mean_filter}")
