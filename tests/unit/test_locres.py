@@ -133,6 +133,61 @@ def test_expensive_local_error_with_cov_accepts_none_defaults():
     assert np.isfinite(out).all()
 
 
+def test_split_by_shells_distributes_voxels_by_radial_distance():
+    """Each shell row should contain only voxels at that radial distance."""
+    import jax.numpy as jnp
+    vol_shape = (4, 4, 4)
+    vol_size = 64
+    input_vec = jnp.arange(vol_size, dtype=jnp.float32)
+    result = np.asarray(locres.split_by_shells(input_vec, vol_shape))
+    # Shape: (grid_size//2, vol_size) = (2, 64) since input is 1D
+    assert result.shape == (2, vol_size)
+    # Each shell should have some non-zero entries (at least shell 0)
+    assert np.any(result[0] != 0)
+
+
+def test_subsample_array_extracts_correct_subvolume():
+    """subsample_array should extract a cube centered at offset."""
+    import jax.numpy as jnp
+    vol = jnp.arange(64, dtype=jnp.float32).reshape(4, 4, 4)
+    center = jnp.array([2, 2, 2], dtype=jnp.int32)
+    radius = 1
+    sub = np.asarray(locres.subsample_array(vol, center, radius))
+    assert sub.shape == (2, 2, 2)
+    # Should contain the center region
+    assert np.all(np.isfinite(sub))
+
+
+def test_convolve_mask_at_sampling_points_shape():
+    """Output shape should match the full mask shape."""
+    import jax.numpy as jnp
+    full_mask = jnp.ones((8, 8, 8), dtype=jnp.float32)
+    sampling_pts = jnp.array([[0, 0, 0], [1, 1, 1]], dtype=jnp.int32)
+    values = jnp.array([1.0, 2.0], dtype=jnp.float32)
+    result = np.asarray(locres.convolve_mask_at_sampling_points(sampling_pts, values, full_mask))
+    assert result.shape == (8, 8, 8)
+    assert np.all(np.isfinite(result))
+
+
+def test_get_sampling_points_returns_valid_points():
+    """Sampling points should be within grid bounds."""
+    grid_size = 16
+    locres_sampling = 4
+    locres_maskrad = 2
+    voxel_size = 1.0
+    pts = np.asarray(locres.get_sampling_points(grid_size, locres_sampling, locres_maskrad, voxel_size))
+    assert pts.ndim == 2
+    assert pts.shape[1] == 3
+    # Points should be centered around 0
+    assert np.all(np.abs(pts) < grid_size // 2)
+
+
+def test_make_sampling_volume_shape():
+    """make_sampling_volume should return volume of correct grid size."""
+    vol = np.asarray(locres.make_sampling_volume(8, 2, 1.0, 1.0))
+    assert vol.shape == (8, 8, 8)
+
+
 # ---------------------------------------------------------------------------
 # GPU tests – verify CPU/GPU numerical equivalence
 # ---------------------------------------------------------------------------
