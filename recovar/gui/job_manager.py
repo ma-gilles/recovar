@@ -90,14 +90,13 @@ class Job:
         for fname in sorted(os.listdir(output_dir)):
             if fname.endswith((".png", ".jpg", ".svg")):
                 images.append(os.path.join(output_dir, fname))
-        # Check analysis_* subdirectories (inside output/)
+        # Check subdirectories (plots/, analysis_*/) inside output/
         for entry in sorted(os.listdir(output_dir)):
-            if entry.startswith("analysis_"):
-                analysis_dir = os.path.join(output_dir, entry)
-                if os.path.isdir(analysis_dir):
-                    for fname in sorted(os.listdir(analysis_dir)):
-                        if fname.endswith((".png", ".jpg", ".svg")):
-                            images.append(os.path.join(analysis_dir, fname))
+            sub = os.path.join(output_dir, entry)
+            if os.path.isdir(sub) and (entry.startswith("analysis_") or entry == "plots"):
+                for fname in sorted(os.listdir(sub)):
+                    if fname.endswith((".png", ".jpg", ".svg")):
+                        images.append(os.path.join(sub, fname))
         return images
 
     @property

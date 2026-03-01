@@ -1386,7 +1386,7 @@ function jobExplorer() {
     _isEigenvector(path) {
       // Detect if a volume is an eigenvector (PC) by its filename
       const basename = path.split('/').pop() || '';
-      return /^eigen_pos\d+\.mrc$/i.test(basename);
+      return /^eigen_(pos|neg)\d+\.mrc$/i.test(basename);
     },
 
     async loadVolume(path, name, add = false) {
