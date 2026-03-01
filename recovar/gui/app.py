@@ -47,7 +47,16 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         if scan_dirs:
             manager.discover_jobs(scan_dirs)
         jobs = manager.list_jobs()
-        return render_template("dashboard.html", jobs=jobs, has_slurm=_has_slurm())
+        sort = request.args.get("sort", "newest")
+        if sort == "oldest":
+            jobs = list(reversed(jobs))
+        elif sort == "name":
+            jobs = sorted(jobs, key=lambda j: j.name.lower())
+        elif sort == "status":
+            status_order = {"running": 0, "queued": 1, "completed": 2, "failed": 3}
+            jobs = sorted(jobs, key=lambda j: (status_order.get(j.status, 9), -j.created_at))
+        return render_template("dashboard.html", jobs=jobs, has_slurm=_has_slurm(),
+                               current_sort=sort)
 
     # ── New Job ────────────────────────────────────────────────────────
     @app.route("/jobs/new")
@@ -250,8 +259,23 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
     # ── API: Logs (htmx partial) ───────────────────────────────────────
     @app.route("/api/jobs/<job_id>/logs")
     def api_job_logs(job_id):
+        import re
         content = manager.get_log_content(job_id, n_lines=300)
-        return f'<pre class="text-xs text-slate-300 font-mono whitespace-pre-wrap">{_escape(content)}</pre>'
+        # Strip ANSI escape codes
+        content = re.sub(r'\x1b\[[0-9;]*m', '', content)
+        # Highlight log lines by severity
+        lines = content.split('\n')
+        highlighted = []
+        for line in lines:
+            escaped = _escape(line)
+            if any(kw in line for kw in ('ERROR', 'Traceback', 'Exception', 'FAILED')):
+                highlighted.append(f'<span class="log-error">{escaped}</span>')
+            elif any(kw in line for kw in ('WARNING', 'WARN', 'UserWarning')):
+                highlighted.append(f'<span class="log-warning">{escaped}</span>')
+            else:
+                highlighted.append(escaped)
+        html_content = '\n'.join(highlighted)
+        return f'<pre class="text-xs text-slate-300 font-mono whitespace-pre-wrap">{html_content}</pre>'
 
     @app.route("/api/jobs/<job_id>/status")
     def api_job_status(job_id):
@@ -281,7 +305,8 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
     # ── API: File Browser ──────────────────────────────────────────────
     @app.route("/api/browse")
     def api_browse():
-        path = request.args.get("path", os.path.expanduser("~"))
+        raw_path = request.args.get("path", os.path.expanduser("~"))
+        path = _safe_path(raw_path) or os.path.expanduser("~")
         result = browse_directory(path)
         return jsonify(result)
 
@@ -289,7 +314,7 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
     @app.route("/api/validate-star")
     def api_validate_star():
         """Quick validation of a STAR/CS file: check for poses, CTF, particle count."""
-        path = request.args.get("path", "")
+        path = _safe_path(request.args.get("path", ""))
         if not path or not os.path.isfile(path):
             return jsonify({"valid": False, "error": "File not found"})
         result = _validate_particles_file(path)
@@ -299,12 +324,20 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
     @app.route("/api/volume/slice")
     def api_volume_slice():
         """Return a PNG slice of an MRC volume."""
-        path = request.args.get("path", "")
-        axis = int(request.args.get("axis", 2))
-        idx = request.args.get("idx")
+        path = _safe_path(request.args.get("path", ""))
+        if not path or not os.path.isfile(path) or not path.endswith(".mrc"):
+            return jsonify({"error": "Volume not found"}), 404
 
-        if not os.path.isfile(path) or not path.endswith(".mrc"):
-            return "Not found", 404
+        axis = int(request.args.get("axis", 2))
+        axis = max(0, min(axis, 2))
+        idx = request.args.get("idx")
+        if idx is not None:
+            idx = int(idx)
+
+        # Check cache first
+        cached = _get_cached_slice(path, axis, idx)
+        if cached is not None:
+            return send_file(io.BytesIO(cached), mimetype="image/png")
 
         try:
             import mrcfile
@@ -312,8 +345,6 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
                 data = mrc.data
                 if idx is None:
                     idx = data.shape[axis] // 2
-                else:
-                    idx = int(idx)
                 idx = max(0, min(idx, data.shape[axis] - 1))
                 slc = np.take(data, idx, axis=axis)
 
@@ -329,25 +360,28 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
             fig.savefig(buf, format="png", bbox_inches="tight", facecolor="#1e293b")
             plt.close(fig)
             buf.seek(0)
-            return send_file(buf, mimetype="image/png")
+            buf_bytes = buf.read()
+            _set_cached_slice(path, axis, idx, buf_bytes)
+            return send_file(io.BytesIO(buf_bytes), mimetype="image/png")
         except Exception as e:
-            return str(e), 500
+            logger.error("Volume slice error: %s", e)
+            return jsonify({"error": "Failed to render slice"}), 500
 
     @app.route("/api/volume/raw")
     def api_volume_raw():
         """Serve an MRC file directly for NGL viewer."""
-        path = request.args.get("path", "")
-        if not os.path.isfile(path) or not path.endswith(".mrc"):
-            return "Not found", 404
+        path = _safe_path(request.args.get("path", ""))
+        if not path or not os.path.isfile(path) or not path.endswith(".mrc"):
+            return jsonify({"error": "Volume not found"}), 404
         return send_file(path, mimetype="application/octet-stream",
                          download_name=os.path.basename(path))
 
     @app.route("/api/volume/info")
     def api_volume_info():
         """Return metadata about an MRC volume."""
-        path = request.args.get("path", "")
-        if not os.path.isfile(path) or not path.endswith(".mrc"):
-            return jsonify({"error": "Not found"})
+        path = _safe_path(request.args.get("path", ""))
+        if not path or not os.path.isfile(path) or not path.endswith(".mrc"):
+            return jsonify({"error": "Volume not found"}), 404
         try:
             import mrcfile
             with mrcfile.open(path, mode="r") as mrc:
@@ -366,9 +400,9 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
     # ── Serve result images ────────────────────────────────────────────
     @app.route("/api/image")
     def api_image():
-        path = request.args.get("path", "")
-        if not os.path.isfile(path):
-            return "Not found", 404
+        path = _safe_path(request.args.get("path", ""))
+        if not path or not os.path.isfile(path):
+            return jsonify({"error": "Image not found"}), 404
         ext = path.rsplit(".", 1)[-1].lower()
         mimetypes = {"png": "image/png", "jpg": "image/jpeg",
                      "jpeg": "image/jpeg", "svg": "image/svg+xml"}
@@ -428,10 +462,10 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         if not data:
             return jsonify({"error": "JSON body required"}), 400
 
-        path = data.get("path", "")
+        path = _safe_path(data.get("path", ""))
         threshold_sigma = float(data.get("threshold_sigma", 3.0))
 
-        if not os.path.isfile(path) or not path.endswith(".mrc"):
+        if not path or not os.path.isfile(path) or not path.endswith(".mrc"):
             return jsonify({"error": "Volume not found"}), 404
 
         try:
@@ -565,6 +599,40 @@ def _escape(text):
             .replace("<", "&lt;")
             .replace(">", "&gt;")
             .replace('"', "&quot;"))
+
+
+def _safe_path(path: str):
+    """Validate and resolve a path, preventing directory traversal."""
+    if not path:
+        return None
+    resolved = os.path.realpath(path)
+    if '..' in os.path.normpath(path).split(os.sep):
+        return None
+    return resolved
+
+
+# Simple in-memory cache for volume slices
+_slice_cache = {}
+_SLICE_CACHE_MAX = 200
+
+
+def _get_cached_slice(path, axis, idx):
+    try:
+        key = (path, axis, idx, os.path.getmtime(path))
+        return _slice_cache.get(key)
+    except OSError:
+        return None
+
+
+def _set_cached_slice(path, axis, idx, buf_bytes):
+    try:
+        key = (path, axis, idx, os.path.getmtime(path))
+        if len(_slice_cache) >= _SLICE_CACHE_MAX:
+            oldest_key = next(iter(_slice_cache))
+            del _slice_cache[oldest_key]
+        _slice_cache[key] = buf_bytes
+    except OSError:
+        pass
 
 
 def _validate_particles_file(path: str) -> dict:
