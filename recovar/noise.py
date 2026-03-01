@@ -24,10 +24,6 @@ NVTX_DOMAIN_NOISE = "noise"
 
 # 
 
-class AbstractNoiseModel():
-    def __init__(sel,):
-        pass    
-
 class RadialNoiseModel():
     def __init__(self, noise_variance_radial, image_shape = None):
         self.noise_variance_radial = noise_variance_radial

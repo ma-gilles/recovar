@@ -983,18 +983,15 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
             # Only place where image mask is used ?
             batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
             noise_variances = experiment_dataset.noise.get(indices) 
-            Ft_y_b, Ft_ctf_b = relion_functions.relion_style_triangular_kernel_batch(batch,
-                                                                    experiment_dataset.CTF_params[indices], 
-                                                                    experiment_dataset.rotation_matrices[indices], 
-                                                                    experiment_dataset.translations[indices], 
-                                                                    experiment_dataset.image_shape, 
-                                                                    experiment_dataset.upsampled_volume_shape, 
-                                                                    experiment_dataset.voxel_size, 
-                                                                    experiment_dataset.CTF_fun, 
-                                                                    disc_type, 
-                                                                    noise_variances,
-                                                                    experiment_dataset.premultiplied_ctf,
-                                                                    use_upsampled_ctf=use_upsampled_ctf)
+            config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, use_upsampled=True)
+            Ft_y_b, Ft_ctf_b = relion_functions.relion_kernel_batch(
+                config, batch,
+                experiment_dataset.CTF_params[indices],
+                experiment_dataset.rotation_matrices[indices],
+                experiment_dataset.translations[indices],
+                noise_variances,
+                use_upsampled_ctf=use_upsampled_ctf,
+            )
 
 
             rhs += full_volume_to_half_volume(Ft_y_b, experiment_dataset.upsampled_volume_shape)
