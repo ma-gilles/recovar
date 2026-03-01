@@ -138,6 +138,132 @@ def test_prior_iteration_relion_style_and_downsample_from_fsc():
 
 
 # ---------------------------------------------------------------------------
+# covariance_update_col tests
+# ---------------------------------------------------------------------------
+
+
+def test_covariance_update_col_basic_formula():
+    """Verify Wiener filter: cov = B / (H + 1/prior)."""
+    import jax.numpy as jnp
+    H = np.array([2.0, 4.0], dtype=np.float32)
+    B = np.array([6.0, 8.0], dtype=np.float32)
+    prior = np.array([1.0, 2.0], dtype=np.float32)
+    out = np.asarray(regularization.covariance_update_col(
+        jnp.array(H), jnp.array(B), jnp.array(prior)))
+    expected = B / (H + 1.0 / prior)
+    np.testing.assert_allclose(out, expected, rtol=1e-5)
+
+
+def test_covariance_update_col_zeros_below_epsilon():
+    """Voxels with H ~ 0 must produce zero output."""
+    import jax.numpy as jnp
+    H = np.array([0.0, 3.0], dtype=np.float32)
+    B = np.array([99.0, 6.0], dtype=np.float32)
+    prior = np.array([1.0, 1.0], dtype=np.float32)
+    out = np.asarray(regularization.covariance_update_col(
+        jnp.array(H), jnp.array(B), jnp.array(prior)))
+    assert float(out[0]) == 0.0, "Uncovered voxel should produce zero"
+    assert np.isfinite(out[1])
+
+
+def test_covariance_update_col_complex_b():
+    """Works with complex B (common case)."""
+    import jax.numpy as jnp
+    H = np.array([2.0], dtype=np.float32)
+    B = np.array([2.0 + 4.0j], dtype=np.complex64)
+    prior = np.array([1.0], dtype=np.float32)
+    out = np.asarray(regularization.covariance_update_col(
+        jnp.array(H), jnp.array(B), jnp.array(prior)))
+    expected = B / (H + 1.0 / prior)
+    np.testing.assert_allclose(out, expected, rtol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# average_over_shells / sum_over_shells tests
+# ---------------------------------------------------------------------------
+
+
+def test_average_over_shells_uniform_input():
+    """Uniform input -> every populated shell average is the uniform value."""
+    shape = (8, 8, 8)
+    n = int(np.prod(shape))
+    ones = np.ones(n, dtype=np.float32)
+    out = np.asarray(regularization.average_over_shells(ones, shape))
+    assert out.shape == (shape[0] // 2 - 1,)
+    populated = out > 0
+    np.testing.assert_allclose(out[populated], 1.0, rtol=1e-5)
+
+
+def test_average_over_shells_output_shape():
+    shape = (6, 6, 6)
+    n = int(np.prod(shape))
+    x = np.random.default_rng(0).random(n).astype(np.float32)
+    out = np.asarray(regularization.average_over_shells(x, shape))
+    assert out.shape == (shape[0] // 2 - 1,)
+
+
+def test_sum_over_shells_output_shape():
+    shape = (8, 8, 8)
+    n = int(np.prod(shape))
+    x = np.ones(n, dtype=np.float32)
+    out = np.asarray(regularization.sum_over_shells(x, shape))
+    assert out.shape == (shape[0] // 2 - 1,)
+
+
+def test_sum_vs_average_uniform():
+    """For uniform input, sum >= average for every populated shell."""
+    shape = (8, 8, 8)
+    n = int(np.prod(shape))
+    x = np.ones(n, dtype=np.float32)
+    sums = np.asarray(regularization.sum_over_shells(x, shape))
+    avgs = np.asarray(regularization.average_over_shells(x, shape))
+    populated = avgs > 0
+    assert np.all(sums[populated] >= avgs[populated] - 1e-5)
+
+
+def test_sum_over_shells_nonneg_input():
+    """Non-negative input produces non-negative sums."""
+    shape = (8, 8, 8)
+    n = int(np.prod(shape))
+    x = np.abs(np.random.default_rng(42).random(n)).astype(np.float32)
+    out = np.asarray(regularization.sum_over_shells(x, shape))
+    assert np.all(out >= -1e-7)
+
+
+# ---------------------------------------------------------------------------
+# downsample_lhs tests
+# ---------------------------------------------------------------------------
+
+
+def test_downsample_lhs_shape_factor1():
+    """Factor=1 preserves shape."""
+    import jax.numpy as jnp
+    shape = (4, 4, 4)
+    lhs = jnp.ones(shape, dtype=jnp.float32)
+    out = regularization.downsample_lhs(lhs, shape, upsampling_factor=1)
+    assert out.shape == shape
+
+
+def test_downsample_lhs_shape_factor2():
+    """Factor=2 halves each dimension."""
+    import jax.numpy as jnp
+    shape = (8, 8, 8)
+    lhs = jnp.ones(shape, dtype=jnp.float32)
+    out = regularization.downsample_lhs(lhs, shape, upsampling_factor=2)
+    assert out.shape == (4, 4, 4)
+
+
+def test_downsample_lhs_nonnegative():
+    """Output is clipped to >= 0."""
+    import jax.numpy as jnp
+    shape = (4, 4, 4)
+    rng = np.random.default_rng(7)
+    lhs = jnp.array(rng.normal(size=shape).astype(np.float32))
+    out = np.asarray(regularization.downsample_lhs(lhs, shape, upsampling_factor=1))
+    assert np.all(out >= -1e-7)
+
+
+# ---------------------------------------------------------------------------
 # GPU tests – verify CPU/GPU numerical equivalence
 # ---------------------------------------------------------------------------
 

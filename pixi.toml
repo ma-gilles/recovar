@@ -72,6 +72,7 @@ starfile = "==0.5.11"
 tensorflow_cpu = "*"
 umap-learn = { extras = ["plot"] }
 optax = "*"
+grain = "==0.2.16"
 
 [feature.cuda.dependencies]
 # CUDA dependencies for GPU acceleration
