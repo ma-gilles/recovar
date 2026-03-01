@@ -46,8 +46,12 @@ def add_args(parser: argparse.ArgumentParser):
         help="CTF parameters (.pkl). If not provided, auto-extracted from particles file (.star or .cs)"
     )
     parser.add_argument(
-        "--downsample", type=int, default=None,
-        help="Downsample images to this box size via Fourier cropping (must be even, <= original size)"
+        "--downsample", type=int, default=256,
+        help="Downsample images to this box size (default 256). Automatically skipped if images are already near this size. Use --no-downsample to disable."
+    )
+    parser.add_argument(
+        "--no-downsample", action="store_true", dest="no_downsample", default=False,
+        help="Disable automatic downsampling (process images at original resolution)"
     )
 
     parser.add_argument(
@@ -276,6 +280,55 @@ def add_args(parser: argparse.ArgumentParser):
 # Helper functions — extracted from standard_recovar_pipeline for clarity
 # ---------------------------------------------------------------------------
 
+def _resolve_downsample(args):
+    """Decide whether downsampling is actually needed.
+
+    Skips downsampling if --no-downsample was passed, if the original image
+    size is already <= the target, or if it is within 12.5% of the target
+    (not worth the overhead).  Sets ``args.downsample`` to ``None`` when
+    skipping.
+    """
+    if getattr(args, 'no_downsample', False):
+        logger.info("Downsampling disabled by --no-downsample")
+        args.downsample = None
+        return
+
+    if args.downsample is None:
+        return
+
+    from recovar.data_io.image_loader import load_images
+
+    loader = load_images(
+        args.particles,
+        lazy=True,
+        datadir=getattr(args, 'datadir', None) or "",
+        strip_prefix=getattr(args, 'strip_prefix', None),
+    )
+    orig_D = loader.image_size
+    target_D = args.downsample
+
+    if orig_D <= target_D:
+        logger.info(
+            "Image size %d <= downsample target %d, skipping downsampling",
+            orig_D, target_D,
+        )
+        args.downsample = None
+        return
+
+    # Skip if within 12.5% — not worth the overhead
+    threshold = int(target_D * 1.125)
+    if orig_D <= threshold:
+        logger.info(
+            "Image size %d is close to target %d (threshold %d), "
+            "skipping downsampling",
+            orig_D, target_D, threshold,
+        )
+        args.downsample = None
+        return
+
+    logger.info("Will downsample images from %d to %d", orig_D, target_D)
+
+
 def _check_uninvert_data(means, cryos, args):
     """Check if data needs sign inversion based on the mean estimate.
 
@@ -494,9 +547,16 @@ def standard_recovar_pipeline(args):
 
     logger.info(args)
 
+    # --- Resolve downsample target ---
+    _resolve_downsample(args)
+
     # --- Auto pre-downsample to disk if requested ---
     if getattr(args, 'downsample', None) is not None:
         from recovar.commands.downsample import downsample_to_disk
+
+        # Save original values for metadata before swapping
+        args._original_particles = args.particles
+        args._downsample_applied = args.downsample
 
         ds_dir = os.path.join(args.outdir, "downsampled")
         ds_mrcs = os.path.join(ds_dir, f"particles.{args.downsample}.mrcs")
@@ -861,6 +921,16 @@ def standard_recovar_pipeline(args):
     )
 
     logger.info(f"total time: {time.time() - st_time}")
+
+    if hasattr(args, '_downsample_applied') and args._downsample_applied:
+        logger.info(
+            "Pipeline ran at D=%d (downsampled from original). "
+            "Downstream commands (analyze, density, etc.) will "
+            "automatically use the downsampled data.",
+            args._downsample_applied,
+        )
+    else:
+        logger.info("Pipeline ran at original image resolution (D=%d).", cryos.grid_size)
 
     # Clean up temp files
     if path_mapping is not None and not args.no_cleanup:

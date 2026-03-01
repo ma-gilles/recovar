@@ -464,6 +464,13 @@ def write_metadata_json(paths, result):
         if zdims_raw is not None:
             zdims = [int(z) for z in zdims_raw]
 
+    # Downsample info (set by pipeline.py before swapping to downsampled stack)
+    downsample_applied = None
+    original_particles = None
+    if input_args is not None:
+        downsample_applied = getattr(input_args, '_downsample_applied', None)
+        original_particles = getattr(input_args, '_original_particles', None)
+
     metadata = {
         'recovar_version': str(__version__),
         'params_version': result.get('version', 'unknown'),
@@ -471,6 +478,8 @@ def write_metadata_json(paths, result):
         'volume_shape': list(result.get('volume_shape', [])),
         'voxel_size': float(result.get('voxel_size', 0)),
         'zdims_computed': zdims,
+        'downsample_applied': downsample_applied,
+        'original_particles_file': original_particles,
         'files': {
             'params': 'model/params.pkl',
             'embeddings': 'model/embeddings.pkl',
