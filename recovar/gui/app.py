@@ -4,6 +4,8 @@ import io
 import json
 import logging
 import os
+import re
+import shlex
 
 import numpy as np
 from flask import (
@@ -62,7 +64,8 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
     @app.route("/jobs/new")
     def new_job():
         return render_template("new_job.html", has_slurm=_has_slurm(),
-                               python_path=python_path, clone_from=None)
+                               python_path=python_path, clone_from=None,
+                               clone_params=None)
 
     @app.route("/jobs", methods=["POST"])
     def create_job():
@@ -228,8 +231,23 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         job = manager.get_job(job_id)
         if not job:
             return redirect(url_for("new_job"))
+        # Parse command to extract all form params
+        clone_params = _parse_command_params(job.command)
+        # Override with stored fields (more reliable than parsed)
+        if job.particles:
+            clone_params['particles'] = job.particles
+        if job.mask:
+            clone_params['mask'] = job.mask
+        if job.output_dir:
+            clone_params['output_dir'] = job.output_dir
+        # Smart name generation
+        clone_params['name'] = _next_clone_name(job.name)
+        # Read SLURM settings from sbatch script if available
+        slurm_params = _parse_sbatch_params(manager.state_dir, job_id)
+        clone_params.update(slurm_params)
         return render_template("new_job.html", has_slurm=_has_slurm(),
-                               python_path=python_path, clone_from=job)
+                               python_path=python_path, clone_from=job,
+                               clone_params=clone_params)
 
     # ── Job Detail ─────────────────────────────────────────────────────
     @app.route("/jobs/<job_id>")
@@ -633,6 +651,156 @@ def _set_cached_slice(path, axis, idx, buf_bytes):
         _slice_cache[key] = buf_bytes
     except OSError:
         pass
+
+
+def _next_clone_name(name: str) -> str:
+    """Generate a smart incremented name for cloning/retrying a job.
+
+    'my_run'        -> 'my_run_v2'
+    'my_run_v2'     -> 'my_run_v3'
+    'my_run_v12'    -> 'my_run_v13'
+    'my_run_retry'  -> 'my_run_v2'
+    'run_retry_retry' -> 'run_v2'
+    """
+    # Strip trailing _retry suffixes
+    stripped = re.sub(r'(_retry)+$', '', name)
+    # Check for existing _vN suffix
+    m = re.match(r'^(.+)_v(\d+)$', stripped)
+    if m:
+        return f"{m.group(1)}_v{int(m.group(2)) + 1}"
+    return f"{stripped}_v2"
+
+
+def _parse_command_params(command: str) -> dict:
+    """Parse a recovar CLI command string into a dict of form parameters."""
+    params = {}
+    if not command:
+        return params
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        parts = command.split()
+
+    if not parts:
+        return params
+
+    # Detect job type from module name
+    module = parts[0]
+    if 'pipeline' in module:
+        params['job_type'] = 'pipeline'
+    elif 'analyze' in module:
+        params['job_type'] = 'analyze'
+    elif 'compute_state' in module:
+        params['job_type'] = 'compute_state'
+    elif 'compute_trajectory' in module:
+        params['job_type'] = 'compute_trajectory'
+
+    # Map CLI flags to form field names
+    value_flags = {
+        '--mask': 'mask',
+        '--zdim': 'zdim',
+        '--downsample': 'downsample',
+        '--gpu-gb': 'gpu_memory',
+        '--focus-mask': 'focus_mask',
+        '--mask-dilate-iter': 'mask_dilate_iter',
+        '--ind': 'ind',
+        '--halfsets': 'halfsets',
+        '--datadir': 'datadir',
+        '--n-images': 'n_images',
+        '--dose-per-tilt': 'dose_per_tilt',
+        '--angle-per-tilt': 'angle_per_tilt',
+        '--ntilts': 'ntilts',
+        '--tilt-series-ctf': 'tilt_series_ctf',
+        '-o': 'output_dir',
+        '--result-dir': 'result_dir',
+        '--outdir': 'output_dir',
+        '--n-clusters': 'n_clusters',
+        '--n-traj-vols': 'n_traj_vols',
+    }
+    boolean_flags = {
+        '--no-downsample': 'no_downsample',
+        '--correct-contrast': 'correct_contrast',
+        '--tilt-series': 'tilt_series',
+        '--lazy': 'lazy',
+        '--only-mean': 'only_mean',
+        '--accept-cpu': 'accept_cpu',
+        '--multi-gpu': 'multi_gpu',
+        '--low-memory': 'low_memory',
+        '--keep-intermediate': 'keep_intermediate',
+        '--ignore-zero-freq': 'ignore_zero_freq',
+        '--keep-input-mask': 'keep_input_mask',
+        '--use-complement-mask': 'use_complement_mask',
+    }
+
+    i = 1  # skip module name
+    # First positional arg after module is particles (for pipeline)
+    if i < len(parts) and not parts[i].startswith('-'):
+        if params.get('job_type') == 'pipeline':
+            params['particles'] = parts[i]
+        i += 1
+
+    while i < len(parts):
+        arg = parts[i]
+        if arg in value_flags and i + 1 < len(parts):
+            params[value_flags[arg]] = parts[i + 1]
+            i += 2
+        elif arg in boolean_flags:
+            params[boolean_flags[arg]] = True
+            i += 1
+        else:
+            i += 1
+
+    return params
+
+
+def _parse_sbatch_params(state_dir: str, job_id: str) -> dict:
+    """Parse SLURM parameters from a job's sbatch script."""
+    params = {}
+    script = os.path.join(state_dir, f"{job_id}.sbatch")
+    if not os.path.isfile(script):
+        return params
+    try:
+        with open(script) as f:
+            content = f.read()
+        sbatch_map = {
+            '--partition=': 'slurm_partition',
+            '--account=': 'slurm_account',
+            '--mem=': 'slurm_mem',
+            '--time=': 'slurm_time',
+            '--cpus-per-task=': 'slurm_cpus',
+        }
+        for line in content.split('\n'):
+            line = line.strip()
+            if not line.startswith('#SBATCH'):
+                continue
+            directive = line[len('#SBATCH'):].strip()
+            for prefix, key in sbatch_map.items():
+                if directive.startswith(prefix):
+                    params[key] = directive[len(prefix):]
+            if directive.startswith('--gres=gpu:'):
+                try:
+                    params['slurm_gpus'] = directive.split(':')[-1]
+                except (IndexError, ValueError):
+                    pass
+        # Collect extra sbatch flags we don't explicitly handle
+        known_prefixes = list(sbatch_map.keys()) + [
+            '--gres=', '--job-name=', '--output=', '--error=',
+            '--nodes=', '--ntasks=',
+        ]
+        extra = []
+        for line in content.split('\n'):
+            line = line.strip()
+            if not line.startswith('#SBATCH'):
+                continue
+            directive = line[len('#SBATCH'):].strip()
+            if not any(directive.startswith(p) for p in known_prefixes):
+                extra.append(directive)
+        if extra:
+            params['slurm_extra'] = ' '.join(extra)
+        params['execution'] = 'slurm'
+    except Exception:
+        pass
+    return params
 
 
 def _validate_particles_file(path: str) -> dict:
