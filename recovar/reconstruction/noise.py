@@ -617,7 +617,7 @@ def estimate_noise_variance(experiment_dataset, batch_size, max_images = 10000):
 
     average_image_PS = regularization.average_over_shells(mean_PS, experiment_dataset.image_shape)
 
-    return np.asarray(cov_noise_mask.astype(experiment_dataset.dtype_real)), np.asarray(np.array(average_image_PS).astype(experiment_dataset.dtype_real))
+    return np.asarray(cov_noise_mask, dtype=experiment_dataset.dtype_real), np.asarray(average_image_PS, dtype=experiment_dataset.dtype_real)
     
 
 def estimate_white_noise_variance_from_mask(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp'):

@@ -185,19 +185,15 @@ def batch_vol_forward(
 
 
 def triangular_kernel(gridpoints, gridpoint_target, kernel_width = 1):
-    weights = jnp.ones(gridpoints.shape[:-1])
-    # Note that this is a very small loop (3) so it should be fine to jit this
-    for i in range(gridpoint_target.shape[-1]):
-        weights *= jnp.where(jnp.abs(gridpoints[...,i] - gridpoint_target[i]) < kernel_width, 1 - jnp.abs(gridpoints[...,i] - gridpoint_target[i]) / kernel_width, 0) #/ kernel_width
-    return weights
+    diff = jnp.abs(gridpoints - gridpoint_target)
+    per_dim = jnp.where(diff < kernel_width, 1 - diff / kernel_width, 0)
+    return jnp.prod(per_dim, axis=-1)
 
 
 def square_kernel(gridpoints, gridpoint_target, kernel_width = 1):
-    weights = jnp.ones(gridpoints.shape[:-1])
-    # Note that this is a very small loop (3) so it should be fine to jit this 
-    for i in range(gridpoint_target.shape[-1]):
-        weights *= jnp.where(jnp.abs(gridpoints[...,i] - gridpoint_target[i]) < kernel_width/2, 1/ kernel_width, 0) 
-    return weights
+    diff = jnp.abs(gridpoints - gridpoint_target)
+    per_dim = jnp.where(diff < kernel_width / 2, 1 / kernel_width, 0)
+    return jnp.prod(per_dim, axis=-1)
 
 
 # Are there at most 4 or 5 within one dist? or 9?
