@@ -849,3 +849,116 @@ def test_load_images_star_rejects_wrong_length_boolean_constructor_mask(tmp_path
             datadir=datadir,
             lazy=True,
         )
+
+
+def test_multi_mrc_loader_mrc_to_mrcs_extension_fallback(tmp_path):
+    """When file_map references .mrc but the file on disk is .mrcs, the loader should find it."""
+    data = np.arange(3 * 4 * 4, dtype=np.float32).reshape(3, 4, 4)
+    mrcs_path = tmp_path / "stack.mrcs"
+    utils.write_mrc(str(mrcs_path), data)
+
+    # file_map references .mrc (without the 's'), but the actual file is .mrcs
+    mrc_ref = str(tmp_path / "stack.mrc")
+    df = pd.DataFrame({
+        'mrc_file': [mrc_ref, mrc_ref, mrc_ref],
+        'mrc_index': [0, 1, 2],
+    })
+
+    loader = image_loader.MultiMRCLoader(df, lazy=True)
+    out = loader.get(np.array([0, 2], dtype=np.int32))
+    assert out.shape == (2, 4, 4)
+    np.testing.assert_allclose(out[0], data[0])
+    np.testing.assert_allclose(out[1], data[2])
+
+
+def test_multi_mrc_loader_mrcs_to_mrc_extension_fallback(tmp_path):
+    """When file_map references .mrcs but the file on disk is .mrc, the loader should find it."""
+    data = np.arange(3 * 4 * 4, dtype=np.float32).reshape(3, 4, 4)
+    mrc_path = tmp_path / "stack.mrc"
+    utils.write_mrc(str(mrc_path), data)
+
+    # file_map references .mrcs, but the actual file is .mrc
+    mrcs_ref = str(tmp_path / "stack.mrcs")
+    df = pd.DataFrame({
+        'mrc_file': [mrcs_ref, mrcs_ref, mrcs_ref],
+        'mrc_index': [0, 1, 2],
+    })
+
+    loader = image_loader.MultiMRCLoader(df, lazy=True)
+    out = loader.get(np.array([1], dtype=np.int32))
+    assert out.shape == (1, 4, 4)
+    np.testing.assert_allclose(out[0], data[1])
+
+
+def test_cryosparc_loader_mrc_mrcs_extension_fallback(tmp_path):
+    """CryoSparcLoader should find .mrcs files when CS references .mrc."""
+    data = np.arange(3 * 4 * 4, dtype=np.float32).reshape(3, 4, 4)
+    mrcs_path = tmp_path / "stack.mrcs"
+    utils.write_mrc(str(mrcs_path), data)
+
+    # CS file references stack.mrc (no 's'), but file on disk is stack.mrcs
+    cs_dtype = np.dtype([("blob/idx", np.int32), ("blob/path", "U64")])
+    cs = np.zeros(3, dtype=cs_dtype)
+    cs["blob/idx"] = np.array([0, 1, 2], dtype=np.int32)
+    cs["blob/path"] = np.array([">stack.mrc", ">stack.mrc", ">stack.mrc"])
+    cs_path = tmp_path / "particles.cs"
+    with open(cs_path, "wb") as f:
+        np.save(f, cs)
+
+    loader = image_loader.CryoSparcLoader(str(cs_path), datadir=str(tmp_path), lazy=True)
+    out = loader.get(np.array([0, 2], dtype=np.int32))
+    assert out.shape == (2, 4, 4)
+    np.testing.assert_allclose(out[0], data[0])
+    np.testing.assert_allclose(out[1], data[2])
+
+
+def test_cryosparc_loader_strip_prefix_with_extension_fallback(tmp_path):
+    """CryoSparcLoader with strip-prefix + .mrc->.mrcs fallback."""
+    data = np.arange(3 * 4 * 4, dtype=np.float32).reshape(3, 4, 4)
+    mrcs_path = tmp_path / "stack.mrcs"
+    utils.write_mrc(str(mrcs_path), data)
+
+    # CS file has paths like J3/imported/stack.mrc
+    cs_dtype = np.dtype([("blob/idx", np.int32), ("blob/path", "U64")])
+    cs = np.zeros(3, dtype=cs_dtype)
+    cs["blob/idx"] = np.array([0, 1, 2], dtype=np.int32)
+    cs["blob/path"] = np.array([
+        ">J3/imported/stack.mrc",
+        ">J3/imported/stack.mrc",
+        ">J3/imported/stack.mrc",
+    ])
+    cs_path = tmp_path / "particles.cs"
+    with open(cs_path, "wb") as f:
+        np.save(f, cs)
+
+    loader = image_loader.CryoSparcLoader(
+        str(cs_path),
+        datadir=str(tmp_path),
+        strip_prefix="J3/imported",
+        lazy=True,
+    )
+    out = loader.get(np.array([0, 1, 2], dtype=np.int32))
+    assert out.shape == (3, 4, 4)
+    np.testing.assert_allclose(out, data)
+
+
+def test_error_hint_shows_raw_metadata_path(tmp_path):
+    """Error hint for missing files should suggest strip-prefix based on raw metadata path."""
+    cs_dtype = np.dtype([("blob/idx", np.int32), ("blob/path", "U64")])
+    cs = np.zeros(1, dtype=cs_dtype)
+    cs["blob/idx"] = np.array([0], dtype=np.int32)
+    cs["blob/path"] = np.array([">J3/imported/nonexistent.mrc"])
+    cs_path = tmp_path / "particles.cs"
+    with open(cs_path, "wb") as f:
+        np.save(f, cs)
+
+    with pytest.raises(FileNotFoundError, match="--strip-prefix J3/imported"):
+        image_loader.CryoSparcLoader(str(cs_path), datadir=str(tmp_path), lazy=True)
+
+
+def test_swap_mrc_ext_helper():
+    """Test the _swap_mrc_ext helper function."""
+    assert image_loader._swap_mrc_ext("/path/to/file.mrc") == "/path/to/file.mrcs"
+    assert image_loader._swap_mrc_ext("/path/to/file.mrcs") == "/path/to/file.mrc"
+    assert image_loader._swap_mrc_ext("/path/to/file.txt") is None
+    assert image_loader._swap_mrc_ext("/path/to/file.star") is None
