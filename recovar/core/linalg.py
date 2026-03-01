@@ -57,15 +57,11 @@ def blockwise_X_T_X(X, batch_size = None, memory_to_use = 10):
     return np.array(XX)        
             
 
-# Sometimes this takes hours for no apparent reason...
 def blockwise_A_X(A, X, batch_size = None, memory_to_use = 10):
-    # Blockwise multiply where # A is very tall, and X is square-ish
-
     if batch_size is None:
         size_of_X = utils.get_size_in_gb(X)
-        usable_memory = memory_to_use - size_of_X 
-        # max_item_size = A.itemsize if A.itemsize > X.itemsize else X.itemsize
-        max_item_size = (A[0,0] * X[0,0]).itemsize # item size of product
+        usable_memory = memory_to_use - size_of_X
+        max_item_size = (A[0,0] * X[0,0]).itemsize
 
         size_of_A = A.shape[0]* ( np.max([A.shape[1], X.shape[1]])) * max_item_size / 1e9
         n_blocks = np.ceil( 4 * size_of_A / usable_memory).astype(int)
@@ -147,26 +143,19 @@ def randomized_svd(A, n_pcs = 200):
 #### batching IDFT
 
 # Assumes input are of size (vol_size, n_vol)
-# This seems like a crazy amount of reshaping/transposing
-@functools.partial(jax.jit, static_argnums = [1])    
+@functools.partial(jax.jit, static_argnums = [1])
 def idft3(x, vec_shape ):
-    x = x.reshape([*vec_shape, x.shape[-1]]) 
-    # x = x.T
+    x = x.reshape([*vec_shape, x.shape[-1]])
     x = fourier_transform_utils.get_idft3(x, axes =(0,1,2))
-    # x = x.T
     x = x.reshape([-1, x.shape[-1]])
     return x
 
 @functools.partial(jax.jit, static_argnums = [1])
 def dft3(x, vec_shape):
     x = x.reshape([*vec_shape, x.shape[-1]])
-    # x = x.T
     x = fourier_transform_utils.get_dft3(x, axes =(0,1,2))
-    # x = x.T
     x = x.reshape([-1, x.shape[-1]])
     return x
-
-# Could cut down by a factor of 2 here?
 def batch_idft3(x, vec_shape, batch_size):
     x_out = np.zeros_like(x) 
     n_tot = x.shape[-1]
