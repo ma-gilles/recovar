@@ -74,6 +74,7 @@ nav:
   - Getting Started:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md
+    - Docker & Containers: getting-started/docker.md
     - Test Your Installation: getting-started/testing.md
   - Guide:
     - Input Data: guide/input-data.md
