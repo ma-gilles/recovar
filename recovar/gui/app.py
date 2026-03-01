@@ -240,7 +240,74 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
                      "jpeg": "image/jpeg", "svg": "image/svg+xml"}
         return send_file(path, mimetype=mimetypes.get(ext, "image/png"))
 
-    # ── System info ────────────────────────────────────────────────────
+    # ── API: Analysis Info ─────────────────────────────────────────────
+    @app.route("/api/jobs/<job_id>/analysis")
+    def api_analysis_info(job_id):
+        """Return structured info about available analyses, volumes, zdims."""
+        info = manager.get_analysis_info(job_id)
+        return jsonify(info)
+
+    # ── API: Embedding Data ───────────────────────────────────────────
+    @app.route("/api/jobs/<job_id>/embeddings")
+    def api_embeddings(job_id):
+        """Return latent coordinates for scatter plot visualization."""
+        zdim = request.args.get("zdim", type=int)
+        max_points = request.args.get("max_points", 15000, type=int)
+        if zdim is None:
+            return jsonify({"error": "zdim parameter required"}), 400
+        data = manager.get_embedding_data(job_id, zdim, max_points)
+        if data is None:
+            return jsonify({"error": "Embeddings not available"}), 404
+        return jsonify(data)
+
+    # ── API: Compute (volume / trajectory) ────────────────────────────
+    @app.route("/api/jobs/<job_id>/compute", methods=["POST"])
+    def api_compute(job_id):
+        """Launch an async volume or trajectory computation."""
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "JSON body required"}), 400
+
+        task_type = data.get("type")
+        if task_type not in ("volume", "trajectory"):
+            return jsonify({"error": "type must be 'volume' or 'trajectory'"}), 400
+
+        use_slurm = data.get("use_slurm", _has_slurm())
+        slurm_opts = data.get("slurm_opts")
+
+        task = manager.submit_compute_task(
+            job_id=job_id,
+            task_type=task_type,
+            params=data,
+            python_path=python_path,
+            use_slurm=use_slurm,
+            slurm_opts=slurm_opts,
+        )
+        if task is None:
+            return jsonify({"error": "Failed to create task"}), 500
+
+        return jsonify({
+            "task_id": task.id,
+            "status": task.status,
+            "error": task.error,
+        })
+
+    # ── API: Task Status ──────────────────────────────────────────────
+    @app.route("/api/jobs/<job_id>/tasks/<task_id>")
+    def api_task_status(job_id, task_id):
+        """Check status of an async compute task."""
+        result = manager.get_compute_task(task_id)
+        if result is None:
+            return jsonify({"error": "Task not found"}), 404
+        return jsonify(result)
+
+    @app.route("/api/jobs/<job_id>/tasks")
+    def api_list_tasks(job_id):
+        """List all compute tasks for a job."""
+        tasks = manager.list_compute_tasks(job_id)
+        return jsonify({"tasks": tasks})
+
+    # ── System info ───────────────────────────────────────────────────
     @app.route("/api/system")
     def api_system_info():
         import shutil

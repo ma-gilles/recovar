@@ -76,7 +76,9 @@ class Job:
 
     @property
     def has_results(self):
-        return os.path.isfile(os.path.join(self.output_dir, "output", "mean.mrc"))
+        return (os.path.isfile(os.path.join(self.output_dir, "output", "mean.mrc")) or
+                os.path.isfile(os.path.join(self.output_dir, "output", "volumes", "mean.mrc")) or
+                os.path.isfile(os.path.join(self.output_dir, "model", "params.pkl")))
 
     @property
     def result_images(self):
@@ -99,15 +101,98 @@ class Job:
 
     @property
     def result_volumes(self):
-        """List available MRC volume files."""
+        """List available MRC volume files from output directories."""
         vols = []
-        output_dir = os.path.join(self.output_dir, "output")
-        if not os.path.isdir(output_dir):
-            return vols
-        for fname in sorted(os.listdir(output_dir)):
-            if fname.endswith(".mrc"):
-                vols.append(os.path.join(output_dir, fname))
+        seen = set()
+        for subdir in ["output/volumes", "output"]:
+            vol_dir = os.path.join(self.output_dir, subdir)
+            if not os.path.isdir(vol_dir):
+                continue
+            for fname in sorted(os.listdir(vol_dir)):
+                if fname.endswith(".mrc") and fname not in seen:
+                    seen.add(fname)
+                    vols.append(os.path.join(vol_dir, fname))
         return vols
+
+
+# ---------------------------------------------------------------------------
+# Compute task model (async volume/trajectory computations from GUI)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ComputeTask:
+    """Tracks an async volume or trajectory computation launched from the GUI."""
+    id: str
+    job_id: str
+    task_type: str  # "volume" or "trajectory"
+    status: str = STATUS_RUNNING
+    output_dir: str = ""
+    pid: Optional[int] = None
+    slurm_job_id: Optional[str] = None
+    created_at: float = 0.0
+    error: Optional[str] = None
+    label: str = ""
+
+    def to_dict(self):
+        return asdict(self)
+
+
+# ---------------------------------------------------------------------------
+# Volume categorization
+# ---------------------------------------------------------------------------
+
+def _categorize_volume(filename):
+    """Categorize a volume file by its filename pattern."""
+    name = filename.lower()
+    if name in ("mean.mrc", "mean_filt.mrc"):
+        return "reconstruction"
+    if "half" in name and "unfil" in name:
+        return "halfmaps"
+    if name.startswith("eigen_"):
+        return "eigenvectors"
+    if name.startswith("variance"):
+        return "variance"
+    if name in ("mask.mrc", "dilated_mask.mrc", "focus_mask.mrc", "complement_mask.mrc"):
+        return "masks"
+    if name.startswith("center"):
+        return "kmeans"
+    if name.startswith("state"):
+        return "trajectory"
+    return "other"
+
+
+def _vol_display_name(filename):
+    """Return a user-friendly display name for a volume file."""
+    name = filename.replace(".mrc", "")
+    names = {
+        "mean": "Mean Volume",
+        "mean_filt": "Filtered Mean",
+        "mean_half1_unfil": "Half-map 1",
+        "mean_half2_unfil": "Half-map 2",
+        "mask": "Solvent Mask",
+        "dilated_mask": "Dilated Mask",
+        "focus_mask": "Focus Mask",
+        "complement_mask": "Complement Mask",
+    }
+    if name in names:
+        return names[name]
+    if name.startswith("eigen_pos"):
+        idx = name.replace("eigen_pos", "")
+        return f"PC {int(idx)}"
+    if name.startswith("variance"):
+        n = name.replace("variance", "")
+        return f"Variance (top {n} PCs)"
+    if name.startswith("center"):
+        idx = name.split("_")[0].replace("center", "")
+        if "half" in name:
+            return name
+        return f"K-means Center {int(idx)}"
+    if name.startswith("state"):
+        idx = name.split("_")[0].replace("state", "")
+        if "half" in name:
+            return name
+        return f"State {int(idx)}"
+    return name
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +258,7 @@ class JobManager:
         os.makedirs(state_dir, exist_ok=True)
         self.jobs_file = os.path.join(state_dir, "jobs.json")
         self._jobs: dict[str, Job] = {}
+        self._compute_tasks: dict[str, ComputeTask] = {}
         self._load()
 
     def _load(self):
@@ -419,6 +505,345 @@ echo "Completed at: $(date)"
                     job.status = STATUS_FAILED
                     if not job.error:
                         job.error = "Process exited"
+
+
+    # ── Analysis discovery ──────────────────────────────────────────
+
+    def get_analysis_info(self, job_id: str) -> dict:
+        """Discover available analysis results, volumes, and embeddings for a job."""
+        job = self._jobs.get(job_id)
+        if not job:
+            return {"error": "Job not found"}
+
+        info = {
+            "has_model": False,
+            "has_embeddings": False,
+            "available_zdims": [],
+            "volumes": [],
+            "analyses": {},
+            "computed": [],
+        }
+
+        model_dir = os.path.join(job.output_dir, "model")
+        if os.path.isfile(os.path.join(model_dir, "params.pkl")):
+            info["has_model"] = True
+
+        # Check for embeddings and available zdims
+        embeddings_path = os.path.join(model_dir, "embeddings.pkl")
+        if os.path.isfile(embeddings_path):
+            info["has_embeddings"] = True
+            try:
+                import pickle
+                with open(embeddings_path, "rb") as f:
+                    emb = pickle.load(f)
+                for key in ["latent_coords", "zs"]:
+                    if key in emb and isinstance(emb[key], dict):
+                        info["available_zdims"] = sorted(int(k) for k in emb[key].keys())
+                        break
+            except Exception as e:
+                logger.warning("Failed to read embeddings: %s", e)
+
+        # Scan main volumes directory
+        for subdir in ["output/volumes", "output"]:
+            vol_dir = os.path.join(job.output_dir, subdir)
+            if not os.path.isdir(vol_dir):
+                continue
+            seen_names = {v["name"] for v in info["volumes"]}
+            for fname in sorted(os.listdir(vol_dir)):
+                if fname.endswith(".mrc") and fname not in seen_names:
+                    info["volumes"].append({
+                        "path": os.path.join(vol_dir, fname),
+                        "name": fname,
+                        "display_name": _vol_display_name(fname),
+                        "category": _categorize_volume(fname),
+                    })
+
+        # Scan analysis directories
+        if os.path.isdir(job.output_dir):
+            for entry in sorted(os.listdir(job.output_dir)):
+                if not entry.startswith("analysis_"):
+                    continue
+                zdim_str = entry.split("_", 1)[1]
+                try:
+                    zdim = int(zdim_str)
+                except ValueError:
+                    continue
+                analysis_dir = os.path.join(job.output_dir, entry)
+                if not os.path.isdir(analysis_dir):
+                    continue
+
+                analysis = {"plots": [], "kmeans_volumes": [], "trajectories": []}
+
+                # K-means volumes
+                kmeans_dir = os.path.join(analysis_dir, "kmeans")
+                if os.path.isdir(kmeans_dir):
+                    for f in sorted(os.listdir(kmeans_dir)):
+                        if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f:
+                            analysis["kmeans_volumes"].append({
+                                "path": os.path.join(kmeans_dir, f),
+                                "name": f,
+                                "display_name": _vol_display_name(f),
+                            })
+
+                # Trajectories
+                for tentry in sorted(os.listdir(analysis_dir)):
+                    if not tentry.startswith("traj"):
+                        continue
+                    traj_dir = os.path.join(analysis_dir, tentry)
+                    if not os.path.isdir(traj_dir):
+                        continue
+                    traj_vols = []
+                    for f in sorted(os.listdir(traj_dir)):
+                        if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f:
+                            traj_vols.append({
+                                "path": os.path.join(traj_dir, f),
+                                "name": f,
+                                "display_name": _vol_display_name(f),
+                            })
+                    if traj_vols:
+                        analysis["trajectories"].append({
+                            "name": tentry,
+                            "volumes": traj_vols,
+                        })
+
+                # Plots and images
+                for root, _, files in os.walk(analysis_dir):
+                    for f in sorted(files):
+                        if f.endswith((".png", ".jpg", ".svg")):
+                            analysis["plots"].append(os.path.join(root, f))
+
+                info["analyses"][str(zdim)] = analysis
+
+        # Scan GUI-computed volumes
+        computed_dir = os.path.join(job.output_dir, "gui_computed")
+        if os.path.isdir(computed_dir):
+            for tdir in sorted(os.listdir(computed_dir), reverse=True):
+                task_dir = os.path.join(computed_dir, tdir)
+                if not os.path.isdir(task_dir):
+                    continue
+                for f in sorted(os.listdir(task_dir)):
+                    if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f:
+                        info["computed"].append({
+                            "path": os.path.join(task_dir, f),
+                            "name": f"{tdir}/{f}",
+                            "display_name": _vol_display_name(f),
+                        })
+
+        return info
+
+    def get_embedding_data(self, job_id: str, zdim: int,
+                           max_points: int = 15000) -> Optional[dict]:
+        """Load embedding coordinates for scatter plot visualization."""
+        import numpy as np
+        job = self._jobs.get(job_id)
+        if not job:
+            return None
+
+        embeddings_path = os.path.join(job.output_dir, "model", "embeddings.pkl")
+        if not os.path.isfile(embeddings_path):
+            return None
+
+        try:
+            import pickle
+            with open(embeddings_path, "rb") as f:
+                emb = pickle.load(f)
+
+            # Support both old and new embedding formats
+            coords_dict = None
+            for key in ["latent_coords", "zs"]:
+                if key in emb and isinstance(emb[key], dict):
+                    coords_dict = emb[key]
+                    break
+            if coords_dict is None:
+                return None
+
+            if zdim not in coords_dict:
+                return None
+
+            zs = np.asarray(coords_dict[zdim], dtype=np.float32)
+            n_total = zs.shape[0]
+            actual_zdim = zs.shape[1] if zs.ndim > 1 else 1
+
+            # Subsample for performance
+            if n_total > max_points:
+                rng = np.random.RandomState(42)
+                indices = rng.choice(n_total, max_points, replace=False)
+                indices.sort()
+                zs = zs[indices]
+
+            result = {
+                "n_total": n_total,
+                "n_displayed": len(zs),
+                "zdim": actual_zdim,
+            }
+
+            # Return each dimension as a list
+            if zs.ndim == 1:
+                result["dim0"] = zs.tolist()
+            else:
+                for i in range(min(actual_zdim, 10)):
+                    result[f"dim{i}"] = zs[:, i].tolist()
+
+            return result
+        except Exception as e:
+            logger.error("Failed to load embeddings: %s", e)
+            return None
+
+    # ── Compute task management ──────────────────────────────────
+
+    def submit_compute_task(self, job_id: str, task_type: str,
+                            params: dict, python_path: str,
+                            use_slurm: bool = False,
+                            slurm_opts: Optional[dict] = None) -> Optional[ComputeTask]:
+        """Submit an async compute task (volume or trajectory)."""
+        import numpy as np
+        job = self._jobs.get(job_id)
+        if not job:
+            return None
+
+        task_id = f"{task_type}_{int(time.time())}"
+        output_dir = os.path.join(job.output_dir, "gui_computed", task_id)
+        os.makedirs(output_dir, exist_ok=True)
+
+        if task_type == "volume":
+            coords = np.array(params["coords"], dtype=np.float32)
+            if coords.ndim == 1:
+                coords = coords.reshape(1, -1)
+            np.savetxt(os.path.join(output_dir, "latent_points.txt"), coords)
+
+            cmd = [
+                python_path, "-m", "recovar.commands.compute_state",
+                "--result-dir", job.output_dir,
+                "--latent-points", os.path.join(output_dir, "latent_points.txt"),
+                "--outdir", output_dir,
+                "--lazy",
+            ]
+        elif task_type == "trajectory":
+            z_st = np.array(params["z_start"], dtype=np.float32)
+            z_end = np.array(params["z_end"], dtype=np.float32)
+            endpts = np.vstack([z_st, z_end])
+            np.savetxt(os.path.join(output_dir, "endpoints.txt"), endpts)
+
+            zdim = params.get("zdim", len(z_st))
+            n_vols = params.get("n_vols", 6)
+            cmd = [
+                python_path, "-m", "recovar.commands.compute_trajectory",
+                "--result-dir", job.output_dir,
+                "--outdir", output_dir,
+                "--zdim", str(zdim),
+                "--n-vols-along-path", str(n_vols),
+                "--endpts", os.path.join(output_dir, "endpoints.txt"),
+                "--lazy",
+            ]
+        else:
+            return None
+
+        task = ComputeTask(
+            id=task_id, job_id=job_id, task_type=task_type,
+            output_dir=output_dir, created_at=time.time(),
+            label=params.get("label", task_type),
+        )
+
+        env = {**os.environ, "PYTHONNOUSERSITE": "1",
+               "XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
+
+        if use_slurm and _has_slurm():
+            opts = slurm_opts or {}
+            script_path = os.path.join(output_dir, "compute.sbatch")
+            with open(script_path, "w") as f:
+                f.write(f"""#!/bin/bash
+#SBATCH --job-name=recovar-compute
+#SBATCH --output={output_dir}/compute.log
+#SBATCH --error={output_dir}/compute.log
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem={opts.get('mem', '32G')}
+#SBATCH --time={opts.get('time', '1:00:00')}
+#SBATCH --partition={opts.get('partition', 'cryoem')}
+#SBATCH --gres=gpu:1
+#SBATCH --account={opts.get('account', 'amits')}
+
+set -euo pipefail
+export PYTHONNOUSERSITE=1
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+
+{' '.join(cmd)}
+""")
+            slurm_id = _slurm_submit(script_path)
+            if slurm_id:
+                task.slurm_job_id = slurm_id
+            else:
+                task.status = STATUS_FAILED
+                task.error = "Failed to submit SLURM job"
+        else:
+            try:
+                log_file = os.path.join(output_dir, "compute.log")
+                with open(log_file, "w") as lf:
+                    proc = subprocess.Popen(
+                        cmd, stdout=lf, stderr=subprocess.STDOUT, env=env,
+                    )
+                task.pid = proc.pid
+            except Exception as e:
+                task.status = STATUS_FAILED
+                task.error = str(e)
+
+        self._compute_tasks[task_id] = task
+        return task
+
+    def get_compute_task(self, task_id: str) -> Optional[dict]:
+        """Get status of a compute task, including output volumes if done."""
+        task = self._compute_tasks.get(task_id)
+        if not task:
+            return None
+
+        # Refresh status
+        if task.status == STATUS_RUNNING:
+            if task.slurm_job_id:
+                new_status = _slurm_job_status(task.slurm_job_id)
+                if new_status:
+                    task.status = new_status
+            elif task.pid:
+                try:
+                    os.kill(task.pid, 0)
+                except OSError:
+                    # Process exited - check for output
+                    has_output = any(
+                        f.endswith(".mrc") and "_half" not in f and "_unfil" not in f
+                        for f in os.listdir(task.output_dir)
+                        if os.path.isfile(os.path.join(task.output_dir, f))
+                    )
+                    task.status = STATUS_COMPLETED if has_output else STATUS_FAILED
+                    if not has_output:
+                        task.error = "No output volumes generated"
+
+        result = {
+            "id": task.id,
+            "type": task.task_type,
+            "status": task.status,
+            "error": task.error,
+            "label": task.label,
+            "volumes": [],
+        }
+
+        if task.status == STATUS_COMPLETED:
+            for f in sorted(os.listdir(task.output_dir)):
+                if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f:
+                    result["volumes"].append({
+                        "path": os.path.join(task.output_dir, f),
+                        "name": f,
+                        "display_name": _vol_display_name(f),
+                    })
+
+        return result
+
+    def list_compute_tasks(self, job_id: str) -> list[dict]:
+        """List all compute tasks for a job."""
+        tasks = []
+        for task in self._compute_tasks.values():
+            if task.job_id == job_id:
+                tasks.append(self.get_compute_task(task.id))
+        return [t for t in tasks if t is not None]
 
 
 # ---------------------------------------------------------------------------
