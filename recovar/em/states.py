@@ -75,7 +75,7 @@ class SGDState():
         mu = 0.9
         grad = 2 * ((Ft_CTF_this) * mean - Ft_y_this) *  experiment_dataset.n_images / n_images_batch + 2/ self.mean_variance * mean
 
-        step = 1 / np.max(np.abs(Ft_CTF_this))
+        step = 1 / max(np.max(np.abs(Ft_CTF_this)), np.finfo(np.float32).tiny)
         self.update = mu * self.update + (1 - mu) * step * grad 
         if np.isnan(self.update).any() or np.isinf(self.update).any():
             logger.error("|update|: %s", np.linalg.norm(self.update))
