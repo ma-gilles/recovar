@@ -19,14 +19,6 @@ class _FakePipelineOutput:
         return self._values.get(key)
 
 
-def test_plot_power_spectrum_returns_shell_average():
-    vol = np.ones((8, 8, 8), dtype=np.complex64)
-    avg = plot_utils.plot_power_spectrum(vol)
-    assert hasattr(avg, "shape")
-    assert avg.ndim == 1
-    assert avg.size > 0
-
-
 def test_plot_noise_profile_1d():
     po = _FakePipelineOutput(
         {

@@ -50,57 +50,6 @@ def save_volumes(volumes,  save_path , volume_shape = None, from_ft = True, inde
         save_volume(vol, save_path + format(index_offset + v_idx, '04d') , volume_shape, from_ft = from_ft, voxel_size = voxel_size)
 
 
-def plot_on_same_scale(cs, xs, labels,plot_folder, ):
-    plt.figure(figsize = (7,5))
-    k = 0 
-
-    for curve in cs:
-        plt.plot(np.linspace(0,1, curve.size), curve / np.max(curve), label = labels[k], lw = 4)
-        k+=1
-    plt.legend()
-    save_filepath = plot_folder + 'path_density.png'
-    #if save_to_file:
-    plt.savefig(save_filepath, bbox_inches='tight')
-
-
-def plot_two_twings_with_diff_scale(cs, xs, labels,plot_folder= None): 
-    matplotlib.rc('xtick', labelsize=20) 
-    matplotlib.rc('ytick', labelsize=20) 
-
-    
-    # Create some mock data
-    t = np.arange(0.01, 10.0, 0.01)
-    data1 = np.exp(t)
-    data2 = np.sin(2 * np.pi * t)
-
-    fig, ax1 = plt.subplots()
-
-    color = 'tab:red'
-    ax1.set_ylabel(labels[0], color=color, fontsize = 20)
-    x = np.linspace(0,1, cs[0].size) if xs[0] is None else xs[0]/ np.max(xs[0])
-    ax1.plot(x, cs[0], color=color)
-    ax1.tick_params(axis='y', labelcolor=color)
-    ax1.set_ylim(0, np.max(cs[0]))
-
-    ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
-
-    color = 'tab:blue'
-    ax2.set_ylabel(labels[1], color=color, fontsize = 20)  # we already handled the x-label with ax1
-    x = np.linspace(0,1, cs[1].size) if xs[1] is None else xs[1] / np.max(xs[1])
-    ax2.plot(x, cs[1], color=color)
-    ax2.set_ylim(0, np.max(cs[1]))
-
-    ax2.tick_params(axis='y', labelcolor=color)
-
-    fig.tight_layout()  # otherwise the right y-label is slightly clipped
-    if plot_folder is not None:
-        save_filepath = plot_folder + 'path_density_t.png'
-        #if save_to_file:
-        plt.savefig(save_filepath, bbox_inches='tight')
-    plt.show()
-
-    
-        
 def sum_over_other(x, use_axis = [0,1], *args, **kwargs):
     other_axes = []
     for k in range(x.ndim):
@@ -126,7 +75,27 @@ def slice_at_point(density, axes, point, *args, **kwargs):
 
 
 def plot_over_density(density, trajectories = None, latent_space_bounds = None,  subsampled = None, colors = None, plot_folder = None, cmap = 'inferno', same_st_end = True, zs = None, cov_zs = None, points = None, projection_function = None, annotate = False, slice_point = None):
+    """Plot 2-D density projections with optional trajectories and cluster centers.
 
+    For each pair of latent dimensions, creates a density heatmap and overlays
+    trajectory paths, subsampled volume positions, and/or cluster center markers.
+
+    Args:
+        density: N-D density array on a regular grid (or None to compute on the fly).
+        trajectories: List of trajectory arrays, each of shape (n_pts, n_dims).
+        latent_space_bounds: Array of shape (n_dims, 2) giving [min, max] per axis.
+        subsampled: List of subsampled trajectory arrays for volume markers.
+        colors: Color list for trajectories.
+        plot_folder: Directory to save PNG files. If None, plots are not saved.
+        cmap: Matplotlib colormap name for the density.
+        same_st_end: If True, only draw start/end markers for the first trajectory.
+        zs: Latent coordinates, shape (n_particles, n_dims).
+        cov_zs: Per-particle covariance matrices for on-the-fly density computation.
+        points: Extra points (e.g. cluster centers) to scatter on top.
+        projection_function: Callable to project the density onto 2 axes.
+        annotate: Whether to annotate *points* with integer labels.
+        slice_point: Slice coordinate for the projection function.
+    """
     colors = ['k', 'cornflowerblue', 'g' , 'r', 'b', 'w', 'c'] if colors is None else colors
     path_exists = trajectories is not None
 
@@ -521,6 +490,19 @@ def write_metadata_json(paths, result):
 
 
 def kmeans_analysis(output_folder, zs, n_clusters = 20):
+    """Run k-means clustering on latent coordinates and save scatter plots.
+
+    Generates annotated and unannotated scatter plots for all pairwise
+    combinations of the first few latent dimensions.
+
+    Args:
+        output_folder: Directory to save PCA scatter PNGs and center data.
+        zs: Latent coordinates, shape (n_particles, n_dims).
+        n_clusters: Number of k-means clusters.
+
+    Returns:
+        Tuple of (labels, centers) from k-means clustering.
+    """
     reorder = zs.shape[1] != 1
     labels, centers = cluster_kmeans(zs, n_clusters, reorder = reorder)
     mkdir_safe(output_folder)
@@ -552,6 +534,16 @@ def kmeans_analysis(output_folder, zs, n_clusters = 20):
 
 
 def plot_umap(output_folder, zs, centers):
+    """Generate UMAP embedding plots with cluster center overlay.
+
+    Creates scatter and hexbin UMAP projections saved as PNGs in
+    ``output_folder/umap/``.
+
+    Args:
+        output_folder: Parent directory; a ``umap/`` subdirectory is created.
+        zs: Latent coordinates, shape (n_particles, n_dims).
+        centers: Cluster centers, shape (n_clusters, n_dims).
+    """
     def plot_axes(axes = [0,1]):
         fig,ax = scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=True, labels=None, alpha=0.1, s=1)
         fig.set_figheight(6)
@@ -946,7 +938,25 @@ def add_noise_to_loaded_dataset(cryos, noise_variance):
 
 
 def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False,  input_density = None, latent_space_bounds = None):
+    """Compute minimum-energy trajectories and generate volume/density plots.
 
+    Finds optimal paths between start and end latent coordinates (or between
+    ground-truth volume endpoints), generates volumes along the path, and
+    saves density overlay plots.
+
+    Args:
+        pipeline_output: Pipeline output object with embeddings and covariance.
+        basis_size: Number of PCA dimensions for trajectory computation.
+        output_folder: Directory to write trajectory volumes and plots.
+        cryos: CryoEMHalfsets (unused, kept for compatibility).
+        z_st: Start point in latent space, shape (n_dims,).
+        z_end: End point in latent space, shape (n_dims,).
+        gt_volumes: Ground-truth volumes for automatic endpoint selection.
+        n_vols_along_path: Number of volumes to generate along the trajectory.
+        plot_llh: Whether to generate per-volume likelihood scatter plots.
+        input_density: Pre-computed density array (or None to compute).
+        latent_space_bounds: Bounds for the latent space grid.
+    """
     assert (((z_st is not None) and (z_end is not None)) or (gt_volumes is not None)), 'either z_st and z_end should be passed, or gt_volumes'
 
     if input_density is not None:
@@ -1109,31 +1119,38 @@ def umap_latent_space(zs):
 
 
 def standard_pipeline_plots(po, zdim_key, output_folder):
+    """Generate standard pipeline output plots.
+
+    Produces individual plots (eigenvolumes, contrast histogram, eigenvalues,
+    FSC, PC scatter) plus a consolidated ``pipeline_summary.png``.
+
+    Args:
+        po: Pipeline output object.
+        zdim_key: Latent dimension key for embeddings/contrasts.
+        output_folder: Directory to save plots into.
+    """
     from recovar.output import plot_utils
     mkdir_safe(output_folder)
     plot_utils.plot_summary_t(po, n_eigs = 10, filename = os.path.join(output_folder, "mean_variance_eigenvolume_plots.png"))
 
     import matplotlib.pyplot as plt
-    plt.figure(figsize = (10,10))
-    plt.hist(po.get('contrasts')[zdim_key],bins =50)
-    plt.xlabel('Contrast')
-    plt.ylabel('Number of particles')
-    plt.savefig(os.path.join(output_folder, 'contrast_histogram.png'))
-    plt.title(f'contrast histogram using zdim={zdim_key}')
+
+    # Contrast histogram
+    fig, ax = plt.subplots(figsize=(8, 6))
+    plot_utils.plot_contrast_histogram(po.get('contrasts')[zdim_key], ax=ax, zdim_key=zdim_key)
+    plt.savefig(os.path.join(output_folder, 'contrast_histogram.png'), bbox_inches='tight')
     plt.close()
 
-
-    plt.figure(figsize = (8,8))
-    plt.semilogy(po.get('s')[:40], '-o')
-    plt.xlabel('eigenvalue index')
-    plt.ylabel('eigenvalue')
-    plt.savefig(os.path.join(output_folder, 'eigenvalues.png'))
+    # Eigenvalue spectrum
+    fig, ax = plt.subplots(figsize=(8, 6))
+    plot_utils.plot_eigenvalues(po.get('s'), ax=ax)
+    plt.savefig(os.path.join(output_folder, 'eigenvalues.png'), bbox_inches='tight')
     plt.close()
 
-
+    # Mean FSC
     plt.figure(figsize = (8,8))
     ax = plot_utils.plot_mean_fsc(po,None)
-    plt.savefig(os.path.join(output_folder, 'mean_fsc.png'))
+    plt.savefig(os.path.join(output_folder, 'mean_fsc.png'), bbox_inches='tight')
 
 
 
@@ -1283,6 +1300,12 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
     finally:
         plt.close()
 
+    # Consolidated summary plot
+    try:
+        plot_utils.plot_pipeline_summary(po, zdim_key, output_folder)
+        logger.info("Pipeline summary plot saved to %s", os.path.join(output_folder, 'pipeline_summary.png'))
+    except Exception as e:
+        logger.warning(f"Could not generate pipeline summary plot: {e}")
 
     return
 

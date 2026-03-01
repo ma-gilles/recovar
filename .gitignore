@@ -151,3 +151,6 @@ slurm-*.out
 
 # NVTX profiling files
 *.nsys-rep
+
+# SLURM log output directory
+logs/

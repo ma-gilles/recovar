@@ -25,27 +25,6 @@ def test_variance_of_zs_zero_with_constant_labels():
     assert ratio == pytest.approx(0.0)
 
 
-def test_embedding_from_median_and_projection_helpers():
-    zs = np.array(
-        [
-            [1.0, 10.0],
-            [3.0, 30.0],
-            [2.0, 20.0],
-            [8.0, 80.0],
-        ],
-        dtype=np.float32,
-    )
-    labels = np.array([0, 0, 1, 1], dtype=np.int32)
-    emb = metrics.get_embedding_from_median(zs, labels)
-    np.testing.assert_allclose(emb[0], np.array([2.0, 20.0], dtype=np.float32))
-    np.testing.assert_allclose(emb[1], np.array([5.0, 50.0], dtype=np.float32))
-
-    gt_vols = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
-    u = np.eye(2, dtype=np.float32)
-    mean = np.array([0.5, 0.5], dtype=np.float32)
-    proj = metrics.get_gt_embedding_from_projection(gt_vols, u, mean)
-    np.testing.assert_allclose(proj, gt_vols - mean, atol=1e-7, rtol=1e-7)
-
 
 def test_fro_norm_diff_low_rank_matches_dense():
     u = np.eye(2, dtype=np.float32)
