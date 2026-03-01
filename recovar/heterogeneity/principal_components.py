@@ -181,6 +181,11 @@ def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , dis
 
     covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, batch_size,  disc_type, disc_type_u, parallel_analysis = parallel_analysis, do_mask_images = use_mask, mean_cubic=mean_cubic)
 
+    if not np.all(np.isfinite(covariance)):
+        n_nan = np.sum(np.isnan(covariance))
+        n_inf = np.sum(np.isinf(covariance))
+        logger.error("projected covariance has %d NaN, %d Inf out of %d elements", n_nan, n_inf, covariance.size)
+        raise ValueError("projected covariance contains non-finite values")
     ss, u = np.linalg.eigh(covariance)
     u =  np.fliplr(u)
     s = np.flip(ss)
@@ -201,7 +206,9 @@ def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_s
     
     volume_size = np.prod(volume_shape)
     u_real = linalg.batch_idft3(u, volume_shape, vol_batch_size).real
-    u_real /= np.linalg.norm(u_real, axis =0)
+    u_real_norms = np.linalg.norm(u_real, axis=0)
+    u_real_norms = np.where(u_real_norms > 0, u_real_norms, 1.0)
+    u_real /= u_real_norms
     # u2_norm = np.linalg.norm(u_real, axis =0)
 
     # Mask mean
@@ -245,7 +252,9 @@ def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_s
 
     # back to Fourier domain
     new_u = linalg.batch_dft3(new_u, volume_shape, vol_batch_size)
-    new_u /= np.linalg.norm(new_u, axis =0)
+    norms = np.linalg.norm(new_u, axis=0)
+    norms = np.where(norms > 0, norms, 1.0)
+    new_u /= norms
     
     return np.array(new_u.astype(u.dtype)), np.array(new_s.astype(s.dtype)**2)
 
