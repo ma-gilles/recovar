@@ -52,6 +52,65 @@ def test_sampling_helpers_accept_none_maskrad_defaults():
     assert np.isfinite(vol).all()
 
 
+def test_find_fsc_resol_basic():
+    """find_fsc_resol interpolates FSC to find threshold crossing."""
+    import jax.numpy as jnp
+    # FSC curve that drops linearly from 1 to 0
+    fsc = jnp.array([1.0, 0.8, 0.5, 0.2, 0.0], dtype=jnp.float32)
+    # With threshold 1/7 ≈ 0.143, should cross between index 3 (0.2) and 4 (0.0)
+    resol = float(np.asarray(locres.find_fsc_resol(fsc, threshold=0.5)))
+    # threshold 0.5 should cross at index 2 (where fsc == 0.5)
+    assert 1.5 <= resol <= 2.5
+
+    resol_low = float(np.asarray(locres.find_fsc_resol(fsc, threshold=0.1)))
+    # threshold 0.1 is between 0.2 (idx 3) and 0.0 (idx 4)
+    assert 3.0 <= resol_low <= 4.0
+
+
+def test_find_fsc_resol_all_above_threshold():
+    """If entire FSC is above threshold, return last index."""
+    import jax.numpy as jnp
+    fsc = jnp.ones(5, dtype=jnp.float32) * 0.9
+    resol = float(np.asarray(locres.find_fsc_resol(fsc, threshold=0.5)))
+    assert resol == pytest.approx(4.0, abs=0.1)
+
+
+def test_apply_fsc_weighting_shape_and_finiteness():
+    """apply_fsc_weighting should preserve shape and produce finite values."""
+    import jax.numpy as jnp
+    rng = np.random.default_rng(0)
+    vol = jnp.array(rng.normal(size=(8, 8, 8)).astype(np.float32))
+    fsc = jnp.array([1.0, 0.9, 0.7, 0.3], dtype=jnp.float32)
+    out = np.asarray(locres.apply_fsc_weighting(vol, fsc))
+    assert out.shape == (8, 8, 8)
+    assert np.all(np.isfinite(out))
+
+
+def test_low_pass_filter_attenuates_high_freq():
+    """low_pass_filter_map should reduce total energy by removing high frequencies."""
+    import jax.numpy as jnp
+    import recovar.core.fourier_transform_utils as ftu
+    rng = np.random.default_rng(1)
+    size = 16
+    vol = jnp.array(rng.normal(size=(size, size, size)).astype(np.float32))
+    FT = ftu.get_dft3(vol)
+    # Apply low-pass filter
+    filtered = np.asarray(locres.low_pass_filter_map(FT, size, 8.0, 1.0, 2))
+    assert filtered.shape == FT.shape
+    # Energy should be reduced (some frequencies zeroed)
+    assert np.sum(np.abs(filtered)**2) < np.sum(np.abs(np.asarray(FT))**2)
+    # The output should still be finite
+    assert np.all(np.isfinite(filtered))
+
+
+def test_get_local_error_subvolume_rad():
+    """get_local_error_subvolume_rad should return radius in pixels."""
+    rad = locres.get_local_error_subvolume_rad(locres_maskrad=6.0, voxel_size=1.0, multiplier=3)
+    assert rad == 18
+    rad2 = locres.get_local_error_subvolume_rad(locres_maskrad=6.0, voxel_size=2.0, multiplier=2)
+    assert rad2 == 6  # round(6/2)*2 = 3*2
+
+
 def test_expensive_local_error_with_cov_accepts_none_defaults():
     rng = np.random.default_rng(0)
     map1 = rng.normal(size=(8, 8, 8)).astype(np.float32)

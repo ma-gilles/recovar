@@ -159,6 +159,41 @@ def test_upper_bound_noise_dispatched_1d_noise():
         np.testing.assert_array_equal(noise_for_tilt, noise_1d)
 
 
+def test_batch_make_radial_noise_matches_vmap():
+    """batch_make_radial_noise should produce the same result as manual vmap."""
+    radials = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    image_shape = (6, 6)
+    batch_out = np.asarray(noise.batch_make_radial_noise(radials, image_shape))
+    assert batch_out.shape == (2, 36)
+    # Compare with individual calls
+    for i in range(2):
+        single = np.asarray(noise.make_radial_noise(radials[i], image_shape))
+        np.testing.assert_allclose(batch_out[i], single, atol=1e-6)
+
+
+def test_basis_times_coords_contraction():
+    """basis_times_coords contracts along the last axis."""
+    import jax.numpy as jnp
+    basis = jnp.array([[1.0, 2.0], [3.0, 4.0]], dtype=jnp.float32)
+    coords = jnp.array([[1.0, 0.5], [2.0, 1.0]], dtype=jnp.float32)
+    out = np.asarray(noise.basis_times_coords(basis, coords))
+    expected = np.array([1*1 + 2*0.5, 3*2 + 4*1], dtype=np.float32)
+    np.testing.assert_allclose(out, expected, atol=1e-6)
+
+
+def test_batch_basis_times_coords2_matches_matmul():
+    """batch_basis_times_coords2 should match direct basis @ coords.T."""
+    import jax.numpy as jnp
+    rng = np.random.default_rng(42)
+    # basis: (pixels, n_basis), coords: (n_images, n_basis)
+    basis = jnp.array(rng.normal(size=(10, 3)).astype(np.float32))
+    coords = jnp.array(rng.normal(size=(5, 3)).astype(np.float32))
+    out = np.asarray(noise.batch_basis_times_coords2(basis, coords))
+    expected = np.asarray(basis @ coords.T).T  # (n_images, pixels)
+    assert out.shape == (5, 10)
+    np.testing.assert_allclose(out, expected, atol=1e-5)
+
+
 def test_to_batched_pixel_noise_normalizes_common_shapes():
     image_shape = (4, 4)
 

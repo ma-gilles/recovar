@@ -708,6 +708,7 @@ def compute_covariance_regularization_relion_style(Hs, Bs, mean_prior, picked_fr
 
     # //4: regularization needs 4 volume-sized arrays simultaneously (H0, H1, B0, B1)
     batch_size = utils.safe_batch_size(utils.get_column_batch_size(volume_shape[0], gpu_memory) // 4)
+    cpu_device = jax.devices("cpu")[0]
 
     for k in range(int(np.ceil(n_freqs/batch_size))-1, -1, -1):
         batch_st = int(k * batch_size)
@@ -716,22 +717,21 @@ def compute_covariance_regularization_relion_style(Hs, Bs, mean_prior, picked_fr
         H0_batch = Hs[0][:,batch_st:batch_end].T
         H1_batch = Hs[1][:,batch_st:batch_end].T
         B0_batch = Bs[0][:,batch_st:batch_end].T
-        B1_batch = Bs[1][:,batch_st:batch_end].T 
+        B1_batch = Bs[1][:,batch_st:batch_end].T
 
         combined_cov_col, priors, fscs_this = regularization.prior_iteration_relion_style_batch(H0_batch, H1_batch, B0_batch, B1_batch,
         shifts[indices],
-        init_regularization_of_column_k(np.array(indices)), 
-        options['substract_shell_mean'], 
-        volume_shape, options['left_kernel'], 
+        init_regularization_of_column_k(np.array(indices)),
+        options['substract_shell_mean'],
+        volume_shape, options['left_kernel'],
         options['use_spherical_mask'],  options['grid_correct'],  volume_mask, options["prior_n_iterations"], options["downsample_from_fsc"])
 
-        cpus = jax.devices("cpu")
-        priors = jax.device_put(priors, cpus[0])
-        for k,ind in enumerate(indices):
+        priors = jax.device_put(priors, cpu_device)
+        for j, ind in enumerate(indices):
             if options["prior_n_iterations"] >= 0:
-                fsc_priors[ind] = np.asarray(priors[k].real)
-            fscs[ind] = np.asarray(fscs_this[k])
-            combined_cov_cols[ind] = np.asarray(combined_cov_col[k])
+                fsc_priors[ind] = np.asarray(priors[j].real)
+            fscs[ind] = np.asarray(fscs_this[j])
+            combined_cov_cols[ind] = np.asarray(combined_cov_col[j])
         del combined_cov_col, priors
 
     if options["prior_n_iterations"] >= 0:
@@ -764,6 +764,7 @@ def compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, co
 
     # //4: regularization needs 4 volume-sized arrays simultaneously (H0, H1, B0, B1)
     batch_size = utils.safe_batch_size(utils.get_column_batch_size(volume_shape[0], gpu_memory) // 4)
+    cpu_device = jax.devices("cpu")[0]
 
     for k in range(int(np.ceil(n_freqs/batch_size))-1, -1, -1):
         batch_st = int(k * batch_size)
@@ -772,16 +773,15 @@ def compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, co
         H0_batch = Hs[0][batch_st:batch_end]
         H1_batch = Hs[1][batch_st:batch_end]
         B0_batch = Bs[0][batch_st:batch_end]
-        B1_batch = Bs[1][batch_st:batch_end]   
+        B1_batch = Bs[1][batch_st:batch_end]
 
         priors, fscs_this = regularization.prior_iteration_batch(H0_batch, H1_batch, B0_batch, B1_batch, shifts[indices], init_regularization_of_column_k(np.array(indices)), substract_shell_mean, volume_shape, prior_iterations )
-        cpus = jax.devices("cpu")
-        priors = jax.device_put(priors, cpus[0])
-        for k,ind in enumerate(indices):
-            fsc_priors[ind] = priors[k].real
-            H_combined[ind] = H0_batch[k] + H1_batch[k]
-            B_combined[ind] = B0_batch[k] + B1_batch[k]
-            fscs[ind] = fscs_this[k]
+        priors = jax.device_put(priors, cpu_device)
+        for j, ind in enumerate(indices):
+            fsc_priors[ind] = priors[j].real
+            H_combined[ind] = H0_batch[j] + H1_batch[j]
+            B_combined[ind] = B0_batch[j] + B1_batch[j]
+            fscs[ind] = fscs_this[j]
 
     fsc_priors = np.stack(fsc_priors, axis =0).real
     # Symmetricize prior    
@@ -871,14 +871,12 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
             all_one_volume = jnp.ones(experiment_dataset.volume_size, dtype = experiment_dataset.dtype)
             ones_mapped = core.forward_model(all_one_volume, batch_CTF, batch_grid_pt_vec_ind_of_images)
 
+        _cpu = jax.devices("cpu")[0]
         with nvtx.annotate("frequency_loop", color="red", domain=NVTX_DOMAIN_H_B):
             for (k, picked_freq_idx) in enumerate(picked_frequency_indices):
-                
 
                 with nvtx.annotate(f"jit_compute_H_B_triangular_freq_{k}", color="orange", domain=NVTX_DOMAIN_H_B):
                     H_k, B_k = f_jit(images, batch_CTF, batch_grid_pt_vec_ind_of_images, experiment_dataset.rotation_matrices[batch_image_ind],  noise_variances, picked_freq_idx, image_mask, experiment_dataset.image_shape, volume_size, right_kernel = options["right_kernel"], left_kernel = options["left_kernel"], kernel_width = options["right_kernel_width"], shared_label = experiment_dataset.tilt_series_flag, premultiplied_ctf = experiment_dataset.premultiplied_ctf, tilt_labels = particles_ind)
-
-                _cpu = jax.devices("cpu")[0]
 
                 with nvtx.annotate("accumulate_H_B", color="purple", domain=NVTX_DOMAIN_H_B):
                     if batch_over_H_B:
@@ -1013,7 +1011,9 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
                 jax_random_key=subkey,
             )
             if not jnp.all(jnp.isfinite(lhs_this)) or not jnp.all(jnp.isfinite(rhs_this)):
-                logger.error("NaN/Inf in covariance batch (images %s)", batch_image_ind[:5])
+                logger.error("NaN/Inf in covariance batch (images %s); zeroing batch contribution", batch_image_ind[:5])
+                lhs_this = jnp.where(jnp.isfinite(lhs_this), lhs_this, 0.0)
+                rhs_this = jnp.where(jnp.isfinite(rhs_this), rhs_this, 0.0)
 
             lhs += lhs_this
             rhs += rhs_this
@@ -1040,7 +1040,10 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
 
     # Tikhonov regularization: prevents NaN from near-singular LHS
     # (can happen when n_images is small relative to basis_size)
-    reg = jnp.float32(1e-6) * jnp.trace(lhs) / lhs.shape[0]
+    trace_val = jnp.trace(lhs)
+    # Guard against zero/NaN trace (e.g., all batches produced NaN)
+    trace_val = jnp.where(jnp.isfinite(trace_val) & (trace_val > 0), trace_val, jnp.float32(1.0))
+    reg = jnp.float32(1e-6) * trace_val / lhs.shape[0]
     diag_idx = jnp.arange(lhs.shape[0])
     lhs = lhs.at[diag_idx, diag_idx].add(reg)
 
