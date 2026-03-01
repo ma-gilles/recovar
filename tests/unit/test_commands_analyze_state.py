@@ -45,8 +45,8 @@ def test_analyze_runs_centers_and_trajectories_with_density(monkeypatch, tmp_pat
     zs3 = np.arange(n_images * 3, dtype=np.float32).reshape(n_images, 3)
     cov3 = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], n_images, axis=0)
     payload = {
-        "zs": {3: zs3},
-        "cov_zs": {3: cov3},
+        "latent_coords": {3: zs3},
+        "latent_precision": {3: cov3},
         "dataset": ["cryo0"],
         "lazy_dataset": ["lazy_cryo0"],
         "contrasts": {3: np.ones(n_images, dtype=np.float32)},
@@ -138,16 +138,16 @@ def test_analyze_uses_embedding_component_api_when_available(monkeypatch, tmp_pa
         def get_embedding_component(self, entry, key):
             assert key == 2
             component_calls.append(entry)
-            if entry == "zs":
+            if entry == "latent_coords":
                 return np.zeros((6, 2), dtype=np.float64)
-            if entry == "cov_zs":
+            if entry == "latent_precision":
                 return np.repeat(np.eye(2, dtype=np.float64)[None, :, :], 6, axis=0)
             if entry == "contrasts":
                 return np.ones(6, dtype=np.float64)
             raise KeyError(entry)
 
         def get(self, key):
-            if key in {"zs", "cov_zs", "contrasts"}:
+            if key in {"latent_coords", "latent_precision", "contrasts"}:
                 raise AssertionError(f"analyze should not call get('{key}') when component API exists")
             if key == "dataset":
                 return ["d0"]
@@ -194,8 +194,8 @@ def test_analyze_uses_embedding_component_api_when_available(monkeypatch, tmp_pa
         args=SimpleNamespace(copy_to_folder=None, no_cleanup=False),
     )
 
-    assert component_calls.count("zs") == 1
-    assert component_calls.count("cov_zs") == 1
+    assert component_calls.count("latent_coords") == 1
+    assert component_calls.count("latent_precision") == 1
     assert component_calls.count("contrasts") == 1
     assert captured["contrast_dtype"] == np.float32
     assert captured["reweighted_calls"] == 1
@@ -212,9 +212,9 @@ def test_analyze_copy_to_folder_cleans_up_on_failure(monkeypatch, tmp_path):
             return [2]
 
         def get_embedding_component(self, entry, _key):
-            if entry == "zs":
+            if entry == "latent_coords":
                 return np.zeros((4, 2), dtype=np.float32)
-            if entry == "cov_zs":
+            if entry == "latent_precision":
                 return np.repeat(np.eye(2, dtype=np.float32)[None, :, :], 4, axis=0)
             if entry == "contrasts":
                 return np.ones(4, dtype=np.float32)
@@ -267,8 +267,8 @@ def test_compute_state_reads_txt_and_reweights(monkeypatch, tmp_path):
     np.savetxt(latent_path, latent_points)
 
     payload = {
-        "zs": {2: np.zeros((5, 2), dtype=np.float32)},
-        "cov_zs": {2: np.zeros((5, 2, 2), dtype=np.float32)},
+        "latent_coords": {2: np.zeros((5, 2), dtype=np.float32)},
+        "latent_precision": {2: np.zeros((5, 2, 2), dtype=np.float32)},
         "contrasts": {2: np.ones(5, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -327,8 +327,8 @@ def test_compute_state_accepts_pathlike_latent_points(monkeypatch, tmp_path):
     np.savetxt(latent_path, latent_points)
 
     payload = {
-        "zs": {2: np.zeros((5, 2), dtype=np.float32)},
-        "cov_zs": {2: np.zeros((5, 2, 2), dtype=np.float32)},
+        "latent_coords": {2: np.zeros((5, 2), dtype=np.float32)},
+        "latent_precision": {2: np.zeros((5, 2, 2), dtype=np.float32)},
         "contrasts": {2: np.ones(5, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -378,8 +378,8 @@ def test_compute_state_accepts_pathlike_result_and_out_dirs(monkeypatch, tmp_pat
     np.savetxt(latent_path, latent_points)
 
     payload = {
-        "zs": {2: np.zeros((5, 2), dtype=np.float32)},
-        "cov_zs": {2: np.zeros((5, 2, 2), dtype=np.float32)},
+        "latent_coords": {2: np.zeros((5, 2), dtype=np.float32)},
+        "latent_precision": {2: np.zeros((5, 2, 2), dtype=np.float32)},
         "contrasts": {2: np.ones(5, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -433,8 +433,8 @@ def test_compute_state_reads_pkl_latent_points(monkeypatch, tmp_path):
         pickle.dump(latent_points, f)
 
     payload = {
-        "zs": {2: np.zeros((5, 2), dtype=np.float32)},
-        "cov_zs": {2: np.zeros((5, 2, 2), dtype=np.float32)},
+        "latent_coords": {2: np.zeros((5, 2), dtype=np.float32)},
+        "latent_precision": {2: np.zeros((5, 2, 2), dtype=np.float32)},
         "contrasts": {2: np.ones(5, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -484,9 +484,12 @@ def test_compute_state_uses_noreg_key_when_requested(monkeypatch, tmp_path):
     np.savetxt(latent_path, latent_points)
 
     payload = {
-        "zs": {2: np.zeros((5, 2), dtype=np.float32), "2_noreg": np.ones((5, 2), dtype=np.float32)},
-        "cov_zs": {2: np.zeros((5, 2, 2), dtype=np.float32), "2_noreg": np.ones((5, 2, 2), dtype=np.float32)},
-        "contrasts": {2: np.ones(5, dtype=np.float32), "2_noreg": np.full(5, 2.0, dtype=np.float32)},
+        "latent_coords": {2: np.zeros((5, 2), dtype=np.float32)},
+        "latent_coords_noreg": {2: np.ones((5, 2), dtype=np.float32)},
+        "latent_precision": {2: np.zeros((5, 2, 2), dtype=np.float32)},
+        "latent_precision_noreg": {2: np.ones((5, 2, 2), dtype=np.float32)},
+        "contrasts": {2: np.ones(5, dtype=np.float32)},
+        "contrasts_noreg": {2: np.full(5, 2.0, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
         "noise_var_used": np.ones(4, dtype=np.float32),
@@ -529,8 +532,8 @@ def test_compute_state_uses_noreg_key_when_requested(monkeypatch, tmp_path):
     )
     compute_state_cmd.compute_state(args)
     zs_used, cov_used = captured["vals"]
-    np.testing.assert_array_equal(zs_used, payload["zs"]["2_noreg"])
-    np.testing.assert_array_equal(cov_used, payload["cov_zs"]["2_noreg"])
+    np.testing.assert_array_equal(zs_used, payload["latent_coords_noreg"][2])
+    np.testing.assert_array_equal(cov_used, payload["latent_precision_noreg"][2])
 
 
 def test_compute_state_uses_embedding_component_api_when_available(monkeypatch, tmp_path):
@@ -541,7 +544,7 @@ def test_compute_state_uses_embedding_component_api_when_available(monkeypatch, 
     class _PO:
         def __init__(self, _path):
             self.params = {}
-            self._forbidden_gets = {"zs", "cov_zs", "contrasts"}
+            self._forbidden_gets = {"latent_coords", "latent_precision", "contrasts"}
             self._payload = {
                 "dataset": ["d0"],
                 "lazy_dataset": ["ld0"],
@@ -549,8 +552,8 @@ def test_compute_state_uses_embedding_component_api_when_available(monkeypatch, 
                 "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
             }
             self._emb = {
-                "zs": {2: np.full((5, 2), 7.0, dtype=np.float32)},
-                "cov_zs": {2: np.full((5, 2, 2), 3.0, dtype=np.float32)},
+                "latent_coords": {2: np.full((5, 2), 7.0, dtype=np.float32)},
+                "latent_precision": {2: np.full((5, 2, 2), 3.0, dtype=np.float32)},
                 "contrasts": {2: np.full(5, 2.0, dtype=np.float32)},
             }
 
@@ -626,8 +629,8 @@ def test_compute_state_casts_embedding_arrays_to_float32(monkeypatch, tmp_path):
                 "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
             }
             self._emb = {
-                "zs": {2: np.full((5, 2), 7.0, dtype=np.float64)},
-                "cov_zs": {2: np.full((5, 2, 2), 3.0, dtype=np.float64)},
+                "latent_coords": {2: np.full((5, 2), 7.0, dtype=np.float64)},
+                "latent_precision": {2: np.full((5, 2, 2), 3.0, dtype=np.float64)},
                 "contrasts": {2: np.full(5, 2.0, dtype=np.float64)},
             }
 
@@ -686,8 +689,8 @@ def test_compute_state_casts_embedding_arrays_to_float32(monkeypatch, tmp_path):
 
 def test_compute_state_rejects_unknown_latent_extension(monkeypatch, tmp_path):
     payload = {
-        "zs": {1: np.zeros((4, 1), dtype=np.float32)},
-        "cov_zs": {1: np.zeros((4, 1, 1), dtype=np.float32)},
+        "latent_coords": {1: np.zeros((4, 1), dtype=np.float32)},
+        "latent_precision": {1: np.zeros((4, 1, 1), dtype=np.float32)},
         "contrasts": {1: np.ones(4, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -726,8 +729,8 @@ def test_compute_state_rejects_empty_latent_points_file(monkeypatch, tmp_path):
     latent_path.write_text("")
 
     payload = {
-        "zs": {1: np.zeros((4, 1), dtype=np.float32)},
-        "cov_zs": {1: np.zeros((4, 1, 1), dtype=np.float32)},
+        "latent_coords": {1: np.zeros((4, 1), dtype=np.float32)},
+        "latent_precision": {1: np.zeros((4, 1, 1), dtype=np.float32)},
         "contrasts": {1: np.ones(4, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -765,8 +768,8 @@ def test_compute_state_rejects_nonfinite_latent_points(monkeypatch, tmp_path):
     np.savetxt(latent_path, np.array([[0.0, np.nan]], dtype=np.float32))
 
     payload = {
-        "zs": {2: np.zeros((4, 2), dtype=np.float32)},
-        "cov_zs": {2: np.zeros((4, 2, 2), dtype=np.float32)},
+        "latent_coords": {2: np.zeros((4, 2), dtype=np.float32)},
+        "latent_precision": {2: np.zeros((4, 2, 2), dtype=np.float32)},
         "contrasts": {2: np.ones(4, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -806,8 +809,8 @@ def test_compute_state_rejects_nonnumeric_latent_points(monkeypatch, tmp_path):
         pickle.dump([["a", "b"]], f)
 
     payload = {
-        "zs": {2: np.zeros((4, 2), dtype=np.float32)},
-        "cov_zs": {2: np.zeros((4, 2, 2), dtype=np.float32)},
+        "latent_coords": {2: np.zeros((4, 2), dtype=np.float32)},
+        "latent_precision": {2: np.zeros((4, 2, 2), dtype=np.float32)},
         "contrasts": {2: np.ones(4, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -842,8 +845,8 @@ def test_compute_state_rejects_nonnumeric_latent_points(monkeypatch, tmp_path):
 
 def test_compute_state_rejects_missing_latent_points_file(monkeypatch, tmp_path):
     payload = {
-        "zs": {1: np.zeros((4, 1), dtype=np.float32)},
-        "cov_zs": {1: np.zeros((4, 1, 1), dtype=np.float32)},
+        "latent_coords": {1: np.zeros((4, 1), dtype=np.float32)},
+        "latent_precision": {1: np.zeros((4, 1, 1), dtype=np.float32)},
         "contrasts": {1: np.ones(4, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -882,8 +885,8 @@ def test_compute_state_rejects_missing_zdim_with_clear_error(monkeypatch, tmp_pa
     np.savetxt(latent_path, latent_points)
 
     payload = {
-        "zs": {1: np.zeros((4, 1), dtype=np.float32)},
-        "cov_zs": {1: np.zeros((4, 1, 1), dtype=np.float32)},
+        "latent_coords": {1: np.zeros((4, 1), dtype=np.float32)},
+        "latent_precision": {1: np.zeros((4, 1, 1), dtype=np.float32)},
         "contrasts": {1: np.ones(4, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -926,8 +929,8 @@ def test_compute_state_missing_input_args_ignores_overrides(monkeypatch, tmp_pat
         def __init__(self, _path):
             self.params = {}  # missing input_args
             self._payload = {
-                "zs": {1: np.zeros((3, 1), dtype=np.float32)},
-                "cov_zs": {1: np.zeros((3, 1, 1), dtype=np.float32)},
+                "latent_coords": {1: np.zeros((3, 1), dtype=np.float32)},
+                "latent_precision": {1: np.zeros((3, 1, 1), dtype=np.float32)},
                 "contrasts": {1: np.ones(3, dtype=np.float32)},
                 "dataset": ["d0"],
                 "lazy_dataset": ["ld0"],
@@ -978,8 +981,8 @@ def test_compute_state_params_none_ignores_overrides(monkeypatch, tmp_path):
         def __init__(self, _path):
             self.params = None
             self._payload = {
-                "zs": {1: np.zeros((3, 1), dtype=np.float32)},
-                "cov_zs": {1: np.zeros((3, 1, 1), dtype=np.float32)},
+                "latent_coords": {1: np.zeros((3, 1), dtype=np.float32)},
+                "latent_precision": {1: np.zeros((3, 1, 1), dtype=np.float32)},
                 "contrasts": {1: np.ones(3, dtype=np.float32)},
                 "dataset": ["d0"],
                 "lazy_dataset": ["ld0"],
@@ -1030,8 +1033,8 @@ def test_compute_state_allows_missing_override_attrs_on_args(monkeypatch, tmp_pa
         def __init__(self, _path):
             self.params = None
             self._payload = {
-                "zs": {1: np.zeros((3, 1), dtype=np.float32)},
-                "cov_zs": {1: np.zeros((3, 1, 1), dtype=np.float32)},
+                "latent_coords": {1: np.zeros((3, 1), dtype=np.float32)},
+                "latent_precision": {1: np.zeros((3, 1, 1), dtype=np.float32)},
                 "contrasts": {1: np.ones(3, dtype=np.float32)},
                 "dataset": ["d0"],
                 "lazy_dataset": ["ld0"],
@@ -1076,8 +1079,8 @@ def test_compute_state_uses_defaults_when_optional_attrs_missing(monkeypatch, tm
     np.savetxt(latent_path, latent_points)
 
     payload = {
-        "zs": {2: np.zeros((3, 2), dtype=np.float32)},
-        "cov_zs": {2: np.zeros((3, 2, 2), dtype=np.float32)},
+        "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
+        "latent_precision": {2: np.zeros((3, 2, 2), dtype=np.float32)},
         "contrasts": {2: np.ones(3, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -1131,8 +1134,8 @@ def test_compute_state_apply_global_filtering_without_volume_mask(monkeypatch, t
         def __init__(self, _path):
             self.params = {}
             self._payload = {
-                "zs": {2: np.zeros((3, 2), dtype=np.float32)},
-                "cov_zs": {2: np.zeros((3, 2, 2), dtype=np.float32)},
+                "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
+                "latent_precision": {2: np.zeros((3, 2, 2), dtype=np.float32)},
                 "contrasts": {2: np.ones(3, dtype=np.float32)},
                 "dataset": ["d0"],
                 "lazy_dataset": ["ld0"],
@@ -1208,8 +1211,8 @@ def test_compute_state_updates_input_args_from_cli_overrides(monkeypatch, tmp_pa
         strip_prefix="old_prefix",
     )
     payload = {
-        "zs": {2: np.zeros((4, 2), dtype=np.float32)},
-        "cov_zs": {2: np.zeros((4, 2, 2), dtype=np.float32)},
+        "latent_coords": {2: np.zeros((4, 2), dtype=np.float32)},
+        "latent_precision": {2: np.zeros((4, 2, 2), dtype=np.float32)},
         "contrasts": {2: np.ones(4, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -1264,8 +1267,8 @@ def test_compute_state_copy_to_folder_triggers_cleanup_unless_no_cleanup(monkeyp
     np.savetxt(latent_path, latent_points)
 
     payload = {
-        "zs": {2: np.zeros((3, 2), dtype=np.float32)},
-        "cov_zs": {2: np.zeros((3, 2, 2), dtype=np.float32)},
+        "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
+        "latent_precision": {2: np.zeros((3, 2, 2), dtype=np.float32)},
         "contrasts": {2: np.ones(3, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -1324,8 +1327,8 @@ def test_compute_state_copy_to_folder_cleans_up_on_failure(monkeypatch, tmp_path
     np.savetxt(latent_path, latent_points)
 
     payload = {
-        "zs": {2: np.zeros((3, 2), dtype=np.float32)},
-        "cov_zs": {2: np.zeros((3, 2, 2), dtype=np.float32)},
+        "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
+        "latent_precision": {2: np.zeros((3, 2, 2), dtype=np.float32)},
         "contrasts": {2: np.ones(3, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -1397,8 +1400,8 @@ def test_compute_state_copy_to_folder_cleans_up_on_early_validation_failure(monk
     latent_path.write_text("0.1 0.2\n")
 
     payload = {
-        "zs": {2: np.zeros((3, 2), dtype=np.float32)},
-        "cov_zs": {2: np.zeros((3, 2, 2), dtype=np.float32)},
+        "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
+        "latent_precision": {2: np.zeros((3, 2, 2), dtype=np.float32)},
         "contrasts": {2: np.ones(3, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -1461,8 +1464,8 @@ def test_compute_state_copy_to_folder_no_cleanup_true_skips_cleanup_on_failure(m
     latent_path.write_text("0.1 0.2\n")
 
     payload = {
-        "zs": {2: np.zeros((3, 2), dtype=np.float32)},
-        "cov_zs": {2: np.zeros((3, 2, 2), dtype=np.float32)},
+        "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
+        "latent_precision": {2: np.zeros((3, 2, 2), dtype=np.float32)},
         "contrasts": {2: np.ones(3, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -1525,8 +1528,8 @@ def test_compute_state_without_copy_to_folder_never_calls_cleanup(monkeypatch, t
     latent_path.write_text("0.1 0.2\n")
 
     payload = {
-        "zs": {2: np.zeros((3, 2), dtype=np.float32)},
-        "cov_zs": {2: np.zeros((3, 2, 2), dtype=np.float32)},
+        "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
+        "latent_precision": {2: np.zeros((3, 2, 2), dtype=np.float32)},
         "contrasts": {2: np.ones(3, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -1585,8 +1588,8 @@ def test_compute_state_missing_no_cleanup_attr_defaults_to_cleanup(monkeypatch, 
     np.savetxt(latent_path, latent_points)
 
     payload = {
-        "zs": {2: np.zeros((3, 2), dtype=np.float32)},
-        "cov_zs": {2: np.zeros((3, 2, 2), dtype=np.float32)},
+        "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
+        "latent_precision": {2: np.zeros((3, 2, 2), dtype=np.float32)},
         "contrasts": {2: np.ones(3, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -1652,8 +1655,8 @@ def test_compute_state_zdim1_handles_scalar_txt_latent_point(monkeypatch, tmp_pa
     latent_path.write_text("0.75\n")
 
     payload = {
-        "zs": {1: np.zeros((3, 1), dtype=np.float32)},
-        "cov_zs": {1: np.zeros((3, 1, 1), dtype=np.float32)},
+        "latent_coords": {1: np.zeros((3, 1), dtype=np.float32)},
+        "latent_precision": {1: np.zeros((3, 1, 1), dtype=np.float32)},
         "contrasts": {1: np.ones(3, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -1703,9 +1706,9 @@ def test_compute_state_rejects_missing_contrasts_or_cov_zs_key(monkeypatch, tmp_
     np.savetxt(latent_path, latent_points)
 
     payload = {
-        "zs": {2: np.zeros((3, 2), dtype=np.float32)},
-        "cov_zs": {2: np.zeros((3, 2, 2), dtype=np.float32)},
-        # Missing 2_noreg key on purpose.
+        "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
+        "latent_coords_noreg": {},  # Empty: zdim=2 not present in noreg.
+        "latent_precision": {2: np.zeros((3, 2, 2), dtype=np.float32)},
         "contrasts": {2: np.ones(3, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -1724,7 +1727,7 @@ def test_compute_state_rejects_missing_contrasts_or_cov_zs_key(monkeypatch, tmp_
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
-        no_z_regularization=True,  # requests 2_noreg
+        no_z_regularization=True,  # requests noreg entry
         lazy=False,
         n_bins=20,
         Bfactor=0.0,
@@ -1735,7 +1738,7 @@ def test_compute_state_rejects_missing_contrasts_or_cov_zs_key(monkeypatch, tmp_
         fsc_mask_radius=None,
         fsc_mask_edgewidth=None,
     )
-    with pytest.raises(ValueError, match="Requested embedding key 2_noreg is missing"):
+    with pytest.raises(ValueError, match="zdim 2 from provided latent points is not found"):
         compute_state_cmd.compute_state(args)
 
 
@@ -1745,9 +1748,9 @@ def test_compute_state_rejects_missing_cov_zs_key(monkeypatch, tmp_path):
     np.savetxt(latent_path, latent_points)
 
     payload = {
-        "zs": {2: np.zeros((3, 2), dtype=np.float32)},
+        "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
         # Missing cov_zs[2] key.
-        "cov_zs": {},
+        "latent_precision": {},
         "contrasts": {2: np.ones(3, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -1777,7 +1780,7 @@ def test_compute_state_rejects_missing_cov_zs_key(monkeypatch, tmp_path):
         fsc_mask_radius=None,
         fsc_mask_edgewidth=None,
     )
-    with pytest.raises(ValueError, match="Requested embedding key 2 is missing"):
+    with pytest.raises(KeyError):
         compute_state_cmd.compute_state(args)
 
 
@@ -1787,16 +1790,13 @@ def test_compute_state_rejects_missing_zs_key(monkeypatch, tmp_path):
     np.savetxt(latent_path, latent_points)
 
     payload = {
-        # Missing zs["2_noreg"] key while zdim=2 base embedding exists.
-        "zs": {2: np.zeros((3, 2), dtype=np.float32)},
-        "cov_zs": {
-            2: np.zeros((3, 2, 2), dtype=np.float32),
-            "2_noreg": np.zeros((3, 2, 2), dtype=np.float32),
-        },
-        "contrasts": {
-            2: np.ones(3, dtype=np.float32),
-            "2_noreg": np.ones(3, dtype=np.float32),
-        },
+        # Missing latent_coords_noreg[2] while base embedding exists.
+        "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
+        "latent_coords_noreg": {},  # Empty: zdim=2 not present.
+        "latent_precision": {2: np.zeros((3, 2, 2), dtype=np.float32)},
+        "latent_precision_noreg": {2: np.zeros((3, 2, 2), dtype=np.float32)},
+        "contrasts": {2: np.ones(3, dtype=np.float32)},
+        "contrasts_noreg": {2: np.ones(3, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
         "noise_var_used": np.ones(4, dtype=np.float32),
@@ -1825,7 +1825,7 @@ def test_compute_state_rejects_missing_zs_key(monkeypatch, tmp_path):
         fsc_mask_radius=None,
         fsc_mask_edgewidth=None,
     )
-    with pytest.raises(ValueError, match="Requested embedding key 2_noreg is missing"):
+    with pytest.raises(ValueError, match="zdim 2 from provided latent points is not found"):
         compute_state_cmd.compute_state(args)
 
 
@@ -1834,8 +1834,8 @@ def test_compute_state_rejects_scalar_without_zdim1(monkeypatch, tmp_path):
     latent_path.write_text("0.75\n")
 
     payload = {
-        "zs": {1: np.zeros((3, 1), dtype=np.float32)},
-        "cov_zs": {1: np.zeros((3, 1, 1), dtype=np.float32)},
+        "latent_coords": {1: np.zeros((3, 1), dtype=np.float32)},
+        "latent_precision": {1: np.zeros((3, 1, 1), dtype=np.float32)},
         "contrasts": {1: np.ones(3, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -1875,8 +1875,8 @@ def test_compute_state_rejects_bad_shape_when_zdim1_true(monkeypatch, tmp_path):
     np.savetxt(latent_path, latent_points)
 
     payload = {
-        "zs": {1: np.zeros((3, 1), dtype=np.float32)},
-        "cov_zs": {1: np.zeros((3, 1, 1), dtype=np.float32)},
+        "latent_coords": {1: np.zeros((3, 1), dtype=np.float32)},
+        "latent_precision": {1: np.zeros((3, 1, 1), dtype=np.float32)},
         "contrasts": {1: np.ones(3, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -1972,8 +1972,8 @@ def test_compute_state_1d_latent_warns_and_reshapes_to_single_point(monkeypatch,
     np.savetxt(latent_path, latent_points)
 
     payload = {
-        "zs": {3: np.zeros((5, 3), dtype=np.float32)},
-        "cov_zs": {3: np.zeros((5, 3, 3), dtype=np.float32)},
+        "latent_coords": {3: np.zeros((5, 3), dtype=np.float32)},
+        "latent_precision": {3: np.zeros((5, 3, 3), dtype=np.float32)},
         "contrasts": {3: np.ones(5, dtype=np.float32)},
         "dataset": ["d0"],
         "lazy_dataset": ["ld0"],
@@ -2030,8 +2030,8 @@ def test_compute_state_uses_lazy_dataset_when_requested(monkeypatch, tmp_path):
                 "input_args": SimpleNamespace(particles="p", datadir=None, strip_prefix=None),
             }
             self._payload = {
-                "zs": {2: np.zeros((4, 2), dtype=np.float32)},
-                "cov_zs": {2: np.zeros((4, 2, 2), dtype=np.float32)},
+                "latent_coords": {2: np.zeros((4, 2), dtype=np.float32)},
+                "latent_precision": {2: np.zeros((4, 2, 2), dtype=np.float32)},
                 "contrasts": {2: np.ones(4, dtype=np.float32)},
                 "dataset": ["dataset_obj"],
                 "lazy_dataset": ["lazy_dataset_obj"],
@@ -2092,8 +2092,8 @@ def test_compute_state_uses_nonlazy_dataset_when_lazy_false(monkeypatch, tmp_pat
                 "input_args": SimpleNamespace(particles="p", datadir=None, strip_prefix=None),
             }
             self._payload = {
-                "zs": {2: np.zeros((4, 2), dtype=np.float32)},
-                "cov_zs": {2: np.zeros((4, 2, 2), dtype=np.float32)},
+                "latent_coords": {2: np.zeros((4, 2), dtype=np.float32)},
+                "latent_precision": {2: np.zeros((4, 2, 2), dtype=np.float32)},
                 "contrasts": {2: np.ones(4, dtype=np.float32)},
                 "dataset": ["dataset_obj"],
                 "lazy_dataset": ["lazy_dataset_obj"],

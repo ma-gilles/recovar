@@ -185,16 +185,16 @@ def test_compute_trajectory_uses_embedding_component_api_when_available(monkeypa
         def get_embedding_component(self, entry, key):
             assert key == 2
             component_calls.append(entry)
-            if entry == "zs":
+            if entry == "latent_coords":
                 return np.zeros((5, 2), dtype=np.float64)
-            if entry == "cov_zs":
+            if entry == "latent_precision":
                 return np.repeat(np.eye(2, dtype=np.float64)[None, :, :], 5, axis=0)
             if entry == "contrasts":
                 return np.ones(5, dtype=np.float64)
             raise KeyError(entry)
 
         def get(self, key):
-            if key in {"zs", "cov_zs", "contrasts"}:
+            if key in {"latent_coords", "latent_precision", "contrasts"}:
                 raise AssertionError(f"compute_trajectory should not call get('{key}') when component API exists")
             if key == "dataset":
                 return ["d0"]
@@ -250,8 +250,8 @@ def test_compute_trajectory_uses_embedding_component_api_when_available(monkeypa
         args=args,
     )
 
-    assert component_calls.count("zs") == 1
-    assert component_calls.count("cov_zs") == 1
+    assert component_calls.count("latent_coords") == 1
+    assert component_calls.count("latent_precision") == 1
     assert component_calls.count("contrasts") == 1
     assert captured["contrast_dtype"] == np.float32
     cryos, path_shape, zs_shape, cov_shape, kwargs = captured["call"]
@@ -274,9 +274,9 @@ def test_compute_trajectory_copy_to_folder_cleans_up_on_failure(monkeypatch, tmp
             return [2]
 
         def get_embedding_component(self, entry, _key):
-            if entry == "zs":
+            if entry == "latent_coords":
                 return np.zeros((4, 2), dtype=np.float32)
-            if entry == "cov_zs":
+            if entry == "latent_precision":
                 return np.repeat(np.eye(2, dtype=np.float32)[None, :, :], 4, axis=0)
             if entry == "contrasts":
                 return np.ones(4, dtype=np.float32)
@@ -338,9 +338,9 @@ def test_compute_trajectory_uses_lazy_dataset_when_requested(monkeypatch, tmp_pa
             return [2]
 
         def get_embedding_component(self, entry, _key):
-            if entry == "zs":
+            if entry == "latent_coords":
                 return np.zeros((4, 2), dtype=np.float32)
-            if entry == "cov_zs":
+            if entry == "latent_precision":
                 return np.repeat(np.eye(2, dtype=np.float32)[None, :, :], 4, axis=0)
             if entry == "contrasts":
                 return np.ones(4, dtype=np.float32)

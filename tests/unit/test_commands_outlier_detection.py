@@ -94,7 +94,7 @@ def test_outlier_detection_main_combines_anomaly_and_contrast_for_spa(monkeypatc
     monkeypatch.setattr(outlier_cmd, "add_args", lambda _parser: _Parser())
 
     payload = {
-        "zs": {4: np.zeros((4, 2), dtype=np.float32)},
+        "latent_coords": {4: np.zeros((4, 2), dtype=np.float32)},
         "input_args": SimpleNamespace(tilt_series=False, particles="particles.mrcs", shared_contrast=False),
         "particles_halfsets": [np.array([10, 11], dtype=np.int32), np.array([12, 13], dtype=np.int32)],
         "halfsets": [np.array([10, 11], dtype=np.int32), np.array([12, 13], dtype=np.int32)],
@@ -165,7 +165,7 @@ def test_outlier_detection_main_tilt_maps_particle_outliers_to_images(monkeypatc
     monkeypatch.setattr(outlier_cmd, "add_args", lambda _parser: _Parser())
 
     payload = {
-        "zs": {4: np.zeros((3, 2), dtype=np.float32)},
+        "latent_coords": {4: np.zeros((3, 2), dtype=np.float32)},
         "input_args": SimpleNamespace(tilt_series=True, particles="particles.star", shared_contrast=False),
         "particles_halfsets": [np.array([100, 101], dtype=np.int32), np.array([102], dtype=np.int32)],
         "halfsets": [np.array([0, 1, 2], dtype=np.int32), np.array([3, 4, 5], dtype=np.int32)],

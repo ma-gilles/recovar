@@ -64,29 +64,30 @@ def compute_embedding(recovar_result_dir):
     options = utils.make_algorithm_options(results['input_args'])
 
     gpu_memory = utils.get_gpu_memory_total()
-    zs = {}
-    cov_zs = {}
+    latent_coords = {}
+    latent_precision = {}
     est_contrasts = {}
-    zdims = sorted(results.get('zs', {}).keys())
+    coords = results.get('latent_coords', results.get('zs', {}))
+    zdims = sorted(coords.keys())
     if not zdims:
         input_zdim = getattr(results.get('input_args', None), 'zdim', None)
         if input_zdim is None:
-            raise ValueError("Could not determine latent dimensions to embed (missing results['zs'] and input_args.zdim)")
+            raise ValueError("Could not determine latent dimensions to embed (missing results['latent_coords'] and input_args.zdim)")
         zdims = list(input_zdim) if isinstance(input_zdim, (list, tuple, np.ndarray)) else [int(input_zdim)]
 
     for zdim in zdims:
         z_time = time.time()
-        zs[zdim], cov_zs[zdim], est_contrasts[zdim] = embedding.get_per_image_embedding(
+        latent_coords[zdim], latent_precision[zdim], est_contrasts[zdim] = embedding.get_per_image_embedding(
             results['means']['combined'], results['u']['rescaled'], results['s']['rescaled'], zdim,
             results['cov_noise'], cryos, results['volume_mask'], gpu_memory, 'linear_interp',
             contrast_grid=None, contrast_option=options['contrast'])
         logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
 
-    return zs, cov_zs, est_contrasts
+    return latent_coords, latent_precision, est_contrasts
 
 
 def compute_embedding_and_save(recovar_result_dir):
-    zs, cov_zs, est_contrasts = compute_embedding(recovar_result_dir)
+    latent_coords, latent_precision, est_contrasts = compute_embedding(recovar_result_dir)
 
 
 def main():

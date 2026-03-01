@@ -93,15 +93,17 @@ def _install_main_runtime_stubs(monkeypatch, tmp_path, *, mean_fsc=0.5, variance
     class _PipelineOutput:
         def __init__(self, _path):
             self._embedding = {
-                "zs": {
+                "latent_coords": {
                     4: np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32),
                     10: np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32),
                 },
                 "contrasts": {
                     4: np.array([0.25, 0.75], dtype=np.float32),
                     10: np.array([0.30, 0.70], dtype=np.float32),
-                    "4_noreg": np.array([0.20, 0.80], dtype=np.float32),
-                    "10_noreg": np.array([0.35, 0.65], dtype=np.float32),
+                },
+                "contrasts_noreg": {
+                    4: np.array([0.20, 0.80], dtype=np.float32),
+                    10: np.array([0.35, 0.65], dtype=np.float32),
                 },
             }
             self._u_real = np.ones((20, 2, 2, 2), dtype=np.float32)
@@ -742,12 +744,12 @@ def test_load_unsorted_embedding_component_prefers_selective_api_and_caches_by_c
     po = _PO()
     cache = {}
 
-    first = rtam.load_unsorted_embedding_component(po, "zs", 10, cache)
-    second = rtam.load_unsorted_embedding_component(po, "zs", 10, cache)
-    third = rtam.load_unsorted_embedding_component(po, "zs", 4, cache)
+    first = rtam.load_unsorted_embedding_component(po, "latent_coords", 10, cache)
+    second = rtam.load_unsorted_embedding_component(po, "latent_coords", 10, cache)
+    third = rtam.load_unsorted_embedding_component(po, "latent_coords", 4, cache)
 
     # Same component is loaded once; different key triggers another load.
-    assert po.calls == [("zs", 10), ("zs", 4)]
+    assert po.calls == [("latent_coords", 10), ("latent_coords", 4)]
     np.testing.assert_array_equal(first, second)
     assert not np.array_equal(first, third)
 
@@ -757,7 +759,7 @@ def test_load_unsorted_embedding_component_legacy_fallback_caches_root_and_compo
         def __init__(self):
             self.get_calls = 0
             self.root = {
-                "zs": {
+                "latent_coords": {
                     4: np.array([[1.0, 2.0]], dtype=np.float32),
                 },
                 "contrasts": {
@@ -772,8 +774,8 @@ def test_load_unsorted_embedding_component_legacy_fallback_caches_root_and_compo
 
     po = _PO()
     cache = {}
-    z_first = rtam.load_unsorted_embedding_component(po, "zs", 4, cache)
-    z_second = rtam.load_unsorted_embedding_component(po, "zs", 4, cache)
+    z_first = rtam.load_unsorted_embedding_component(po, "latent_coords", 4, cache)
+    z_second = rtam.load_unsorted_embedding_component(po, "latent_coords", 4, cache)
     c_first = rtam.load_unsorted_embedding_component(po, "contrasts", 4, cache)
     c_second = rtam.load_unsorted_embedding_component(po, "contrasts", 4, cache)
 
