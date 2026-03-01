@@ -8,11 +8,14 @@ import pickle
 import jax
 import jax.numpy as jnp
 import mrcfile
+import more_itertools
 import numpy as np
+import pandas as pd
 import psutil
+import starfile
+
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
-import more_itertools
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +135,6 @@ def load_mrc(filepath, return_voxel_size = False):
     if data.ndim == 3 and np.isclose(data.shape, data.shape[0]).all():
         data = np.transpose(data, (2,1,0))
 
-    # in order not to break rest of code...    
     if return_voxel_size:
         return data, voxel_size 
     
@@ -280,7 +282,6 @@ def pickle_load( file):
 def get_variances(covariance_cols, picked_frequencies = None):
     volume_shape = guess_vol_shape_from_vol_size(covariance_cols.shape[-1])
 
-    # Probably a better way to do this...
     variances = np.zeros(picked_frequencies.size, covariance_cols.dtype)
     for k in range(picked_frequencies.size):
         variances[k] = covariance_cols[picked_frequencies[k], k]
@@ -316,8 +317,6 @@ def dtype_to_real(rvs_dtype):
     return rvs_dtype.type(0).real.dtype
 
 
-import starfile
-import pandas as pd
 def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid_size, particles_file, output_filename, halfset_indices = None, tilt_groups = None):
 
     # Stored like this in CTF_params
@@ -352,10 +351,9 @@ def write_starfile(CTF_params, rotation_matrices, translations, voxel_size, grid
     tilt_names = [f'tilt_{k+1}' for k in range(n_images)]
     values = [ image_names, micrograph_names, CTF_params[:,0].astype(dtype), CTF_params[:,1].astype(dtype), CTF_params[:,2].astype(dtype), CTF_params[:, 6].astype(dtype), optics_group, tilt_names ]
 
-    rotation_matrices = rotation_matrices.astype(np.float32)
-    translations = translations.astype(np.float32)
-
     if rotation_matrices is not None:
+        rotation_matrices = rotation_matrices.astype(np.float32)
+        translations = translations.astype(np.float32)
         keys += [ 'rlnAngleRot',
                 'rlnAngleTilt', 
                 'rlnAnglePsi', 
@@ -485,7 +483,6 @@ def write_starfile_from_cryodrgn_format(ctf_path, pose_path, particles_file_path
     poses = pickle_load(pose_path)
     rots = poses[0]
     trans = poses[1]
-    # particles = load_mrc(particles_file_path)
     write_starfile(ctf[:,2:], rots, trans, ctf[0,1], ctf[0,0], particles_file_path, output_filename, halfset_indices = None)
 
 def downsample_vol_by_fourier_truncation(vol_input, target_grid_size):
@@ -542,7 +539,7 @@ def basic_config_logger(output_folder):
 
 
 
-class DuplicateFilter(object):
+class DuplicateFilter:
     def __init__(self):
         self.msgs = set()
 

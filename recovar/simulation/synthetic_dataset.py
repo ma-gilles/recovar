@@ -51,8 +51,6 @@ class HeterogeneousVolumeDistribution():
         self.u = None
         self.s = None
 
-        # self.get_u 
-
         self.mean = None
         self.covariance_cols = None
 
@@ -70,7 +68,6 @@ class HeterogeneousVolumeDistribution():
         self.u, self.s = self.get_covariance_eigendecomposition(contrasted = contrasted)
 
     def get_probs_of_state(self):
-        # if self.probs_of_state is None:
         self.compute_probs_of_state()
         return self.probs_of_state
 
@@ -124,8 +121,6 @@ class HeterogeneousVolumeDistribution():
     def get_covariance_eigendecomposition(self, contrasted = False):
         u,s,_ = self.get_vol_svd(contrasted)
         zero_freq = core.frequencies_to_vec_indices( jnp.array([[0,0,0]] ), self.volume_shape)
-        # u[zero_freq] == np.sum(Fu)== < Fu, 1 > 
-        # ip = u[zero_freq,:] / np.abs(u[zero_freq,:])
         ip = np.where(np.abs(u[zero_freq,:])  > jax_config.ROOT_EPSILON, u[zero_freq,:] / np.abs(u[zero_freq,:]), 1 )
         u /= ip
         return u, s**2
@@ -149,13 +144,7 @@ get_col_covariance_for_one_X_many_index = jax.vmap(get_col_covariance_for_one_X_
 get_col_covariance_for_many_X_one_index = jax.vmap(get_col_covariance_for_one_X_one_index, in_axes = (0, None, None ) )
 
 def get_col_covariance(Xs, X_mean, vec_indices, prob_of_X):
-    # Batching over both dimensions
-
     cov = np.zeros_like(Xs, shape = [X_mean.size, vec_indices.size])
-    # for k in range(Xs.shape[0]):
-    #     for v_idx,v in enumerate(vec_indices):
-    #         cov[:,v_idx] += prob_of_X[k] * get_col_covariance_for_one_X_one_index(Xs[k], X_mean, v, np = np ).T
-    
     Xs_j = jnp.array(Xs)
     for v_idx,v in enumerate(vec_indices):
         cov[:,v_idx] = jnp.sum(prob_of_X[...,None] * get_col_covariance_for_many_X_one_index(Xs_j, X_mean, v ), axis =0)
