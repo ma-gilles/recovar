@@ -499,8 +499,6 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
     # from skimage.transform import downscale_local_mean
     
     if use_v2:
-        # multiplier = 3
-        # rad = maskrad_pix * multiplier
         rad = get_local_error_subvolume_rad(locres_maskrad, voxel_size)
         downsampled_noise_variance_ift = fourier_transform_utils.get_idft3(noise_variance)
 
@@ -508,8 +506,6 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
         noise_variance_small = fourier_transform_utils.get_dft3(downsampled_noise_variance_ift_subs ) * noise_variance.size / downsampled_noise_variance_ift_subs.size
 
 
-    # map1_sub = subsample_array(diff, offset, multiplier*radius)
-    # use_v2 = True
     diff_map = jnp.array(map1- map2)
     noise_variance = jnp.array(noise_variance)
 
@@ -680,8 +676,6 @@ batch_subsample_array_at_same_offset = jax.vmap(subsample_array, in_axes = (0, N
 
 @functools.partial(jax.jit, static_argnums = [3,4,5])    
 def recombine_with_choice(estimators, choice, offset, maskrad_pix, edgewidth_pix, multiplier =3):
-    # NOT IMPLEMENTED
-    # multiplier = 3
     offset += estimators.shape[1]//2
     estimators_subsampled = batch_subsample_array_at_same_offset(estimators, offset, multiplier*maskrad_pix)
 
