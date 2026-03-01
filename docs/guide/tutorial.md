@@ -251,7 +251,7 @@ output/
 ### Analyze output
 
 ```
-output/analysis_10/
+output/analysis_<zdim>/
 ├── PCA/                           # PC scatter plots with k-means centers
 ├── umap/                          # UMAP embeddings
 ├── kmeans/                        # Cluster center volumes (.mrc) and assignments
