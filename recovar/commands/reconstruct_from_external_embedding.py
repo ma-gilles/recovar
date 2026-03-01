@@ -92,7 +92,7 @@ def add_args(parser: argparse.ArgumentParser):
             "--halfsets",
             default = None,
             type=os.path.abspath,
-            help="Path to a file with indices of split dataset (.pkl).",
+            help="Halfset indices (.pkl). If omitted, reads _rlnRandomSubset from star file, or splits randomly",
         )
 
 

@@ -840,6 +840,58 @@ def get_split_datasets(particles_file, poses_file=None, ctf_file=None, datadir=N
     return CryoEMHalfsets(cryos[0], cryos[1])
 
 
+def _read_relion_halfsets_from_star(particles_file, ind_file=None, datadir=None, strip_prefix=None):
+    """Try to read halfset assignments from _rlnRandomSubset in a STAR file.
+
+    Returns a list of two index arrays if the column is present and valid,
+    or ``None`` if the file is not a STAR file or lacks the column.
+    """
+    if not str(particles_file).endswith('.star'):
+        return None
+
+    try:
+        from recovar.data_io.starfile import read_star
+        df, _ = read_star(particles_file)
+    except Exception:
+        return None
+
+    if '_rlnRandomSubset' not in df.columns:
+        return None
+
+    subsets = df['_rlnRandomSubset'].values.astype(int)
+    unique_vals = np.unique(subsets)
+    if not (set(unique_vals) <= {1, 2}):
+        logger.warning(
+            "_rlnRandomSubset contains values other than 1/2 (%s); ignoring",
+            unique_vals,
+        )
+        return None
+
+    all_indices = np.arange(len(subsets), dtype=np.int32)
+    halfsets = [
+        all_indices[subsets == 1],
+        all_indices[subsets == 2],
+    ]
+
+    # Apply index filter if provided
+    if ind_file is not None:
+        raw_indices = _load_index_like(ind_file)
+        n_images_total = len(subsets)
+        ind = _normalize_image_indices(raw_indices, n_images_total=n_images_total, name="ind_file")
+        ind_set = set(ind.tolist())
+        halfsets = [h[np.isin(h, ind)] for h in halfsets]
+
+    if len(halfsets[0]) == 0 or len(halfsets[1]) == 0:
+        logger.warning("RELION halfsets are empty after filtering; falling back to random split")
+        return None
+
+    logger.info(
+        "Using RELION halfsets from _rlnRandomSubset: %d and %d images",
+        len(halfsets[0]), len(halfsets[1]),
+    )
+    return halfsets
+
+
 def get_split_indices(particles_file, datadir=None, strip_prefix=None, ind_file=None, split_random_seed=0, validate_split=True):
     """
     Get indices for splitting dataset into halfsets.
@@ -1122,6 +1174,18 @@ def make_dataset_loader_dict(args):
 def figure_out_halfsets(args):
 
     if args.halfsets is None:
+        # Try to read RELION-style halfsets from star file first
+        if not (args.tilt_series or args.tilt_series_ctf != 'cryoem'):
+            halfsets = _read_relion_halfsets_from_star(
+                args.particles, ind_file=args.ind,
+                datadir=args.datadir, strip_prefix=args.strip_prefix,
+            )
+            if halfsets is not None:
+                if args.n_images > 0:
+                    halfsets = [halfset[:args.n_images // 2] for halfset in halfsets]
+                    logger.info(f"using only {args.n_images} particles")
+                return halfsets
+
         logger.info("Randomly splitting dataset into halfsets")
         if args.tilt_series or args.tilt_series_ctf != 'cryoem':
             halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, tilt_ind_file = args.tilt_ind, ntilts = args.ntilts, datadir = args.datadir)
