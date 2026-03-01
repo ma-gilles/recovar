@@ -25,6 +25,8 @@ Verify: `recovar run_test_dataset`
 
 See the [installation guide](https://ma-gilles.github.io/recovar/getting-started/installation/) for development setup and alternative methods.
 
+**Docker/HPC:** For containerized GPU environments, see the [Docker & Containers guide](https://ma-gilles.github.io/recovar/getting-started/docker/).
+
 ## Quick start
 
 ```bash

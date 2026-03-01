@@ -81,3 +81,10 @@ cd recovar
 pixi install
 pixi run test
 ```
+
+## Docker & HPC containers
+
+For reproducible GPU environments, especially on HPC clusters, RECOVAR provides
+Docker and Apptainer/Singularity container definitions. See the
+[Docker & Containers guide](docker.md) for building images, running containers,
+and submitting jobs with Slurm.

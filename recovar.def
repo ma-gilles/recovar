@@ -9,6 +9,14 @@ From: nvcr.io/nvidia/cuda:12.6.0-devel-ubuntu22.04
     # Install pixi
     curl -fsSL https://pixi.sh/install.sh | PIXI_HOME=/usr/local bash
     export PATH="/usr/local/bin:$PATH"
+    # Install Nsight Systems for profiling (matches Dockerfile)
+    NSYS_URL=https://developer.nvidia.com/downloads/assets/tools/secure/nsight-systems/2025_5/
+    NSYS_PKG=nsight-systems-2025.5.1_2025.5.1.121-1_amd64.deb
+    cd /tmp && \
+        wget ${NSYS_URL}${NSYS_PKG} && \
+        apt-get update && \
+        dpkg -i ./${NSYS_PKG} || apt-get install -y -f && \
+        rm -rf /tmp/*
 
 %environment
     export PATH="/usr/local/bin:$PATH"

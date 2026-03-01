@@ -7,10 +7,22 @@ set -e
 
 # Configuration (paths)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Store job scripts and Slurm output on scratch/tigress, not home (set RECOVAR_WORK_BASE to override)
+# Store job scripts and Slurm output on scratch, not home (set RECOVAR_WORK_BASE to override).
+# Auto-detect: look for an existing writable scratch directory for the current user.
 RECOVAR_WORK_BASE="${RECOVAR_WORK_BASE:-}"
-if [ -z "$RECOVAR_WORK_BASE" ] && [ -d /scratch/gpfs/AMITS/mg6942 ]; then
-  RECOVAR_WORK_BASE="/scratch/gpfs/AMITS/mg6942/recovar_profiling"
+if [ -z "$RECOVAR_WORK_BASE" ]; then
+  _user_scratch=""
+  # Try common HPC scratch layouts: /scratch/gpfs/<group>/<user>, /scratch/gpfs/<user>, /scratch/<user>
+  for _candidate in /scratch/gpfs/*/"$USER" /scratch/gpfs/"$USER" /scratch/"$USER"; do
+    if [ -d "$_candidate" ] && [ -w "$_candidate" ]; then
+      _user_scratch="$_candidate"
+      break
+    fi
+  done
+  if [ -n "$_user_scratch" ]; then
+    RECOVAR_WORK_BASE="$_user_scratch/recovar_profiling"
+  fi
+  unset _user_scratch _candidate
 fi
 if [ -n "$RECOVAR_WORK_BASE" ]; then
   JOB_SCRIPTS_DIR="$RECOVAR_WORK_BASE/job_scripts"
@@ -52,7 +64,10 @@ WORKDIR_IN_CONTAINER="${WORKDIR_IN_CONTAINER:-/workspace}"
 SKIP_IMAGE_BUILD="${SKIP_IMAGE_BUILD:-0}"
 SKIP_PIXI_ENV_INSTALL="${SKIP_PIXI_ENV_INSTALL:-0}"
 SKIP_RECOVAR_INSTALL="${SKIP_RECOVAR_INSTALL:-0}"
-DATA_BASE="${DATA_BASE:-/scratch/gpfs/AMITS/mg6942/recovar_profiling/data}"
+DATA_BASE="${DATA_BASE:-}"
+if [ -z "$DATA_BASE" ] && [ -n "$RECOVAR_WORK_BASE" ]; then
+  DATA_BASE="$RECOVAR_WORK_BASE/data"
+fi
 
 # Pixi storage: use scratch so nothing is written to home (set via batch script when /scratch exists).
 PIXI_HOME="${PIXI_HOME:-}"
@@ -154,19 +169,20 @@ RATTLER_CACHE_DIR="${RATTLER_CACHE_DIR:-__RATTLER_CACHE_DIR__}"
 PIXI_DETACHED_ENVIRONMENTS="${PIXI_DETACHED_ENVIRONMENTS:-__PIXI_DETACHED_ENVIRONMENTS__}"
 DATA_BASE="${DATA_BASE:-__DATA_BASE__}"
 CONTAINER_SIF="${CONTAINER_SIF:-__CONTAINER_SIF__}"
+RECOVAR_WORK_BASE="${RECOVAR_WORK_BASE:-__RECOVAR_WORK_BASE__}"
 TASK_CMD="TASK_CMD_PLACEHOLDER"
 
 cd "$SCRIPT_DIR"
 
 # Ensure pixi/rattler use writable dirs (container inherits these; avoids read-only /usr/local)
-if [ -d /scratch ]; then
-  export PIXI_HOME="${PIXI_HOME:-/scratch/gpfs/AMITS/mg6942/recovar_profiling/pixi}"
+if [ -d /scratch ] && [ -n "$RECOVAR_WORK_BASE" ]; then
+  export PIXI_HOME="${PIXI_HOME:-$RECOVAR_WORK_BASE/pixi}"
   export RATTLER_CACHE_DIR="${RATTLER_CACHE_DIR:-$PIXI_HOME/rattler-cache}"
-  export TMPDIR="${TMPDIR:-/scratch/gpfs/AMITS/mg6942/recovar_profiling/tmp}"
-  export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/scratch/gpfs/AMITS/mg6942/recovar_profiling/xdg-cache}"
-  export XDG_STATE_HOME="${XDG_STATE_HOME:-/scratch/gpfs/AMITS/mg6942/recovar_profiling/xdg-state}"
-  export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-/scratch/gpfs/AMITS/mg6942/recovar_profiling/xdg-config}"
-  export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-/scratch/gpfs/AMITS/mg6942/recovar_profiling/apptainer-cache}"
+  export TMPDIR="${TMPDIR:-$RECOVAR_WORK_BASE/tmp}"
+  export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$RECOVAR_WORK_BASE/xdg-cache}"
+  export XDG_STATE_HOME="${XDG_STATE_HOME:-$RECOVAR_WORK_BASE/xdg-state}"
+  export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$RECOVAR_WORK_BASE/xdg-config}"
+  export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-$RECOVAR_WORK_BASE/apptainer-cache}"
   export SINGULARITY_CACHEDIR="${SINGULARITY_CACHEDIR:-$APPTAINER_CACHEDIR}"
   mkdir -p "$PIXI_HOME" "$RATTLER_CACHE_DIR"
   mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_CONFIG_HOME" "$APPTAINER_CACHEDIR"
@@ -339,8 +355,8 @@ run_in_container() {
       resolved="$SCRIPT_DIR/recovar.sif"
     elif [ -f "$SCRIPT_DIR/scripts/recovar.sif" ]; then
       resolved="$SCRIPT_DIR/scripts/recovar.sif"
-    elif [ -f "/scratch/gpfs/AMITS/mg6942/recovar_profiling/recovar.sif" ]; then
-      resolved="/scratch/gpfs/AMITS/mg6942/recovar_profiling/recovar.sif"
+    elif [ -n "$RECOVAR_WORK_BASE" ] && [ -f "$RECOVAR_WORK_BASE/recovar.sif" ]; then
+      resolved="$RECOVAR_WORK_BASE/recovar.sif"
     fi
     if [ -n "$resolved" ]; then
       echo "Using .sif image (compute nodes cannot pull from Docker): $resolved"
@@ -349,7 +365,7 @@ run_in_container() {
       echo "Error: CONTAINER_IMAGE='$CONTAINER_IMAGE' but compute nodes cannot pull from Docker (no network)." >&2
       echo "Build a .sif on a node with Docker: apptainer build recovar.sif docker-daemon://recovar:latest" >&2
       echo "Then set CONTAINER_IMAGE=/path/to/recovar.sif or CONTAINER_SIF=/path/to/recovar.sif" >&2
-      echo "Or put recovar.sif in: $SCRIPT_DIR or $SCRIPT_DIR/scripts or /scratch/gpfs/AMITS/mg6942/recovar_profiling/" >&2
+      echo "Or put recovar.sif in: $SCRIPT_DIR or $SCRIPT_DIR/scripts or \$RECOVAR_WORK_BASE/" >&2
       exit 1
     fi
   fi
@@ -483,10 +499,11 @@ EOF
     escaped_pixi_home="$(escape_sed_replacement "$PIXI_HOME")"
     escaped_rattler_cache="$(escape_sed_replacement "$RATTLER_CACHE_DIR")"
     escaped_detached_envs="$(escape_sed_replacement "$PIXI_DETACHED_ENVIRONMENTS")"
-    local escaped_nsys_bin escaped_data_base escaped_container_sif
+    local escaped_nsys_bin escaped_data_base escaped_container_sif escaped_recovar_work_base
     escaped_nsys_bin="$(escape_sed_replacement "$NSYS_BIN")"
     escaped_data_base="$(escape_sed_replacement "$DATA_BASE")"
     escaped_container_sif="$(escape_sed_replacement "${CONTAINER_SIF:-}")"
+    escaped_recovar_work_base="$(escape_sed_replacement "${RECOVAR_WORK_BASE:-}")"
 
     sed -i "s|__SCRIPT_DIR__|$escaped_script_dir|g" "$batch_script"
     sed -i "s|__OUTPUT_DIR__|$escaped_output_dir|g" "$batch_script"
@@ -502,6 +519,7 @@ EOF
     sed -i "s|__PIXI_DETACHED_ENVIRONMENTS__|$escaped_detached_envs|g" "$batch_script"
     sed -i "s|__DATA_BASE__|$escaped_data_base|g" "$batch_script"
     sed -i "s|__CONTAINER_SIF__|$escaped_container_sif|g" "$batch_script"
+    sed -i "s|__RECOVAR_WORK_BASE__|$escaped_recovar_work_base|g" "$batch_script"
 
     # Make the script executable
     chmod +x "$batch_script"
@@ -559,7 +577,7 @@ if [ -z "$ACTION" ]; then
     echo "Usage: $0 <action>"
     echo ""
     echo "Environment overrides:"
-    echo "  RECOVAR_WORK_BASE=<path>               (job_scripts + Slurm output; default: /scratch/.../recovar_profiling, not home)"
+    echo "  RECOVAR_WORK_BASE=<path>               (job_scripts + Slurm output; auto-detected from /scratch)"
     echo "  SCHEDULER=slurm|local|auto            (default: auto)"
     echo "  CONTAINER_TOOL=docker|apptainer|auto  (default: auto)"
     echo "  CONTAINER_IMAGE=<image>               (docker tag or apptainer .sif/URI; default: recovar:latest)"

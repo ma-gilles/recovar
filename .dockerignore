@@ -1,0 +1,54 @@
+# Version control
+.git/
+.gitignore
+
+# Pixi environment (large, rebuilt inside container)
+.pixi/
+
+# Container images
+*.sif
+
+# Data directories (large datasets, not needed for image build)
+data-*/
+data/
+
+# Profiling output
+*.nsys-rep
+*.sqlite
+
+# Cluster batch scripts and output
+scripts/job_scripts/
+scripts/output/
+scripts/profiling/
+
+# Slurm logs
+slurm-*.out
+slurm-*.err
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation build output
+site/
+
+# Pixi lock (large, not needed in image since pixi install happens at runtime)
+pixi.lock
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Pipeline output
+pipeline_output*/
+
+# Claude Code
+.claude/
