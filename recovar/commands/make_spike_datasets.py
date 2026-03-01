@@ -10,7 +10,6 @@ from recovar import utils
 from recovar.simulation import simulator
 from recovar.output import output
 from recovar.data_io import dataset
-import prody
 
 def main(
     output_folder="/home/mg6942/mytigress/hard_assignment_exp/",
@@ -38,7 +37,7 @@ def main(
     volume_shape = tuple(3 * [grid_size])
 
     # Center atoms (but shift by same amount)
-    pdb_atoms = [prody.parsePDB(os.path.join(pdb_folder, pdb_i)) for pdb_i in pdbs]
+    pdb_atoms = [ssp._parsePDB(os.path.join(pdb_folder, pdb_i)) for pdb_i in pdbs]
     atoms = pdb_atoms[0]
     coords = atoms.getCoords()
     offset = ssp.get_center_coord_offset(coords)
