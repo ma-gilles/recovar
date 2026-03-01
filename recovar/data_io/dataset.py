@@ -1197,7 +1197,8 @@ def figure_out_halfsets(args):
         if args.tilt_series or args.tilt_series_ctf!= 'cryoem':
             halfsets = get_split_tilt_indices(args.particles, ind_file = args.ind, tilt_ind_file = args.tilt_ind, ntilts = args.ntilts, datadir = args.datadir, particle_halfset_indices_file = args.halfsets)
         else:
-            halfsets = pickle.load(open(args.halfsets, 'rb'))
+            with open(args.halfsets, 'rb') as f:
+                halfsets = pickle.load(f)
             logger.info("Loaded halfsets from file")
             if len(halfsets) != 2:
                 raise ValueError("halfsets file must contain exactly two halfsets")

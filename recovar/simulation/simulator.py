@@ -739,17 +739,17 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
         output_array = mrc_file.data
 
     n_images_done =0 
-    for vol_idx in range(len(volumes)):
+    for vol_idx, vol in enumerate(volumes):
         img_indices = np.nonzero(image_assignments == vol_idx)[0]
         n_images = img_indices.size
         
         if disc_type == "nufft":
-            vol_real = fourier_transform_utils.get_idft3(volumes[vol_idx].reshape(experiment_dataset.volume_shape))
+            vol_real = fourier_transform_utils.get_idft3(vol.reshape(experiment_dataset.volume_shape))
         elif 'cubic' in disc_type:
             from recovar.core import cubic_interpolation
-            volume = cubic_interpolation.calculate_spline_coefficients(volumes[vol_idx].reshape(experiment_dataset.volume_shape))
+            volume = cubic_interpolation.calculate_spline_coefficients(vol.reshape(experiment_dataset.volume_shape))
         else:
-            volume = volumes[vol_idx]
+            volume = vol
 
         pad_before_ctf = True
 

@@ -2,7 +2,6 @@
 
 import logging
 
-import jax.numpy as jnp
 import matplotlib
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
@@ -297,6 +296,7 @@ def plot_summary_t(pipeline_output, n_eigs=3, filename=None):
     plt.subplots_adjust(wspace=0, hspace=0)
     if filename is not None:
         plt.savefig(filename)
+        plt.close()
 
     return
 
@@ -345,6 +345,7 @@ def plot_cov_results(u, s, max_eig=40, savefile=None):
     plt.legend()
     if savefile is not None:
         plt.savefig(savefile + 's.png')
+        plt.close()
 
     gt_key = "gt"
     angles ={}
@@ -365,6 +366,7 @@ def plot_cov_results(u, s, max_eig=40, savefile=None):
         plt.legend()
         if savefile is not None:
             plt.savefig(savefile + 'u.png')
+            plt.close()
 
     return angles
 

@@ -192,9 +192,9 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
                             
         ax.axis("off")
         if plot_folder is not None:
-            save_filepath = plot_folder  + 'density_' + str(axes[0]) + str(axes[1]) + '.png'    
+            save_filepath = plot_folder  + 'density_' + str(axes[0]) + str(axes[1]) + '.png'
             plt.savefig(save_filepath, bbox_inches='tight')
-            
+            plt.close()
 
     if density is not None:
         traj_dim = density.ndim
@@ -250,9 +250,10 @@ def plot_kmeans_over_density(density, centers, plot_folder = None, cmap = 'infer
         ax.axis("off")
             
         if plot_folder is not None:
-            save_filepath = plot_folder  + 'density_' + str(axes[0]) + str(axes[1]) + '.png'    
+            save_filepath = plot_folder  + 'density_' + str(axes[0]) + str(axes[1]) + '.png'
             plt.savefig(save_filepath, bbox_inches='tight')
-            
+            plt.close()
+
     traj_dim = centers.shape[-1]
     for k1 in range(np.min([traj_dim,3])):
         for k2 in range(k1+1, traj_dim):
@@ -537,7 +538,8 @@ def kmeans_analysis(output_folder, zs, n_clusters = 20):
         ax.set_yticks([], [])
         if output_folder is not None:
             plt.savefig(output_folder + 'PC_'+str(axes[0]) + str(axes[1])+'.png' )
-        
+            plt.close()
+
         fig,ax = scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=False, labels=None, alpha=0.1, s=2)
         fig.set_figheight(6)
         fig.set_figwidth(6)
@@ -545,6 +547,7 @@ def kmeans_analysis(output_folder, zs, n_clusters = 20):
         ax.set_yticks([], [])
         if output_folder is not None:
             plt.savefig(output_folder + 'PC_'+str(axes[0]) + str(axes[1])+'no_annotate.png' )
+            plt.close()
 
     for k in range(1,zs.shape[-1]):
         plot_axes(axes = [0,k])
@@ -574,7 +577,8 @@ def plot_umap(output_folder, zs, centers):
         ax.set_yticks([], [])
         if output_folder is not None:
             plt.savefig(output_folder + 'kmeans_centers.png' )
-        
+            plt.close()
+
         fig,ax = scatter_annotate(zs[:,axes[0]], zs[:,axes[1]], centers=centers[:,axes], centers_ind=None, annotate=False, labels=None, alpha=0.1, s=2)
         fig.set_figheight(6)
         fig.set_figwidth(6)
@@ -582,20 +586,21 @@ def plot_umap(output_folder, zs, centers):
         ax.set_yticks([], [])
         if output_folder is not None:
             plt.savefig(output_folder + 'kmeans_centers_no_annotate.png' )
+            plt.close()
 
         import seaborn as sns
 
         g = sns.jointplot(x=zs[:,0], y=zs[:,1], alpha=.1, s=1)
         g.set_axis_labels('UMAP1', 'UMAP2')
         if output_folder is not None:
-
             plt.savefig(output_folder + 'sns.png' )
-
+            plt.close()
 
         g = sns.jointplot(x=zs[:,0], y=zs[:,1], kind='hex')
         g.set_axis_labels('UMAP1', 'UMAP2')
         if output_folder is not None:
             plt.savefig(output_folder + 'sns_hex.png' )
+            plt.close()
 
     plot_axes(axes = [0,1])
 
@@ -1084,7 +1089,8 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
         density_on_path_subs = ld.compute_latent_space_density_at_pts(path_subsampled, zs, cov_zs) + np.nan
 
     densities = { 'density' :  density_on_path.tolist(), 'path' : path_z.tolist(), 'density_subsampled': density_on_path_subs.tolist(), 'path_subsampled' : path_subsampled.tolist(), } 
-    json.dump(densities, open(output_folder + '/path.json', 'w'))
+    with open(output_folder + '/path.json', 'w') as f:
+        json.dump(densities, f)
 
     if plot_llh:
         plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path = output_folder, likelihood_threshold = None  )
@@ -1157,9 +1163,10 @@ def plot_trajectories_over_scatter(trajectories,  subsampled = None, colors = No
         ax.set_title(f'PC{axis_x+1} vs PC{axis_y+1}', fontweight='bold')
             
         if plot_folder is not None:
-            save_filepath = plot_folder  + 'density_' + str(axes[0]) + str(axes[1]) + '.png'    
+            save_filepath = plot_folder  + 'density_' + str(axes[0]) + str(axes[1]) + '.png'
             plt.savefig(save_filepath, bbox_inches='tight', dpi=300)
-            
+            plt.close()
+
     traj_dim = trajectories[0].shape[1] if trajectories is not None else 4
     for k1 in range(np.min([traj_dim,3])):
         for k2 in range(k1+1, traj_dim):
@@ -1209,6 +1216,7 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
     plt.figure(figsize = (8,8))
     ax = plot_utils.plot_mean_fsc(po,None)
     plt.savefig(os.path.join(output_folder, 'mean_fsc.png'), bbox_inches='tight')
+    plt.close()
 
 
 
