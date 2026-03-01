@@ -207,11 +207,11 @@ def get_shifted_conjugate_partner_indices(n):
         raise ValueError(f"n must be positive, got {n}")
     half = n // 2
     # Work in unshifted indexing where Hermitian partner is simply (-u) mod n.
-    i = np.arange(n, dtype=np.int64)
+    i = jnp.arange(n, dtype=jnp.int32)
     u = (i + half) % n
     u_partner = (-u) % n
     i_partner = (u_partner - half) % n
-    return jnp.asarray(i_partner, dtype=jnp.int32)
+    return i_partner
 
 
 def _normalize_volume_shape_3d(volume_shape):
