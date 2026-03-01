@@ -98,10 +98,11 @@ def compute_fsc_auc(fsc_curve, grid_size, voxel_size, threshold=1/7):
     return auc
 
 
-def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices, 
-                              zdim_key, batch_size=100, n_particles_per_cluster=10, 
-                              save_reconstructions=False, output_folder=None, 
-                              filter_resolution=None, filter_fourier_shells=10):
+def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices,
+                              zdim_key, batch_size=100, n_particles_per_cluster=10,
+                              save_reconstructions=False, output_folder=None,
+                              filter_resolution=None, filter_fourier_shells=10,
+                              noreg=False):
     """
     Compute FSC scores for each cluster by generating halfmaps and comparing them.
     
@@ -132,7 +133,8 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
     - If filter_resolution is provided, combined reconstructions are low-pass filtered
     """
     cryos = pipeline_output.get('dataset')  # This returns [cryo1, cryo2] for the two halfsets
-    zs = pipeline_output.get('zs')[zdim_key]
+    coords_entry = 'latent_coords_noreg' if noreg else 'latent_coords'
+    zs = pipeline_output.get(coords_entry)[zdim_key]
     volume_shape = pipeline_output.get('volume_shape')
     voxel_size = pipeline_output.get('voxel_size')
     
@@ -1923,20 +1925,21 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
     # Load pipeline output
     pipeline_output = output.PipelineOutput(recovar_result_dir)
     
-    # Determine zdim key
-    zdim_key = f"{zdim}_noreg" if no_z_regularization else zdim
-    
+    # Select reg vs noreg entry
+    coords_entry = 'latent_coords_noreg' if no_z_regularization else 'latent_coords'
+    zdim_key = zdim
+
     # Get zs data and ensure it's a dictionary
-    zs_data = pipeline_output.get('zs')
+    zs_data = pipeline_output.get(coords_entry)
     if not isinstance(zs_data, dict):
-        logger.error(f"Expected 'zs' to be a dictionary, got {type(zs_data)}")
-        raise ValueError(f"Invalid 'zs' data type: {type(zs_data)}")
-    
+        logger.error(f"Expected '{coords_entry}' to be a dictionary, got {type(zs_data)}")
+        raise ValueError(f"Invalid '{coords_entry}' data type: {type(zs_data)}")
+
     if zdim_key not in zs_data:
         available_dims = list(zs_data.keys())
         logger.error(f"zdim {zdim_key} not found. Available dimensions: {available_dims}")
         raise ValueError(f"zdim {zdim_key} not found")
-    
+
     # Load embeddings
     zs = zs_data[zdim_key]
     logger.info(f"Loaded embeddings with shape: {zs.shape}")
@@ -1953,8 +1956,9 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
     # Compute FSC scores for each cluster
     logger.info("Computing FSC scores for each cluster...")
     result = compute_cluster_fsc_scores(
-        pipeline_output, cluster_centers, cluster_indices, zdim_key, 
-        batch_size, n_particles_per_cluster, save_reconstructions, output_folder, filter_resolution, filter_fourier_shells
+        pipeline_output, cluster_centers, cluster_indices, zdim_key,
+        batch_size, n_particles_per_cluster, save_reconstructions, output_folder, filter_resolution, filter_fourier_shells,
+        noreg=no_z_regularization,
     )
     
     # Handle the return values based on save_reconstructions flag
@@ -2108,8 +2112,8 @@ def main():
         auto_batch_size = utils.get_image_batch_size(grid_size, gpu_memory)
         
         # Calculate n_particles_per_cluster as min(100, max(10, n_particles/n_clusters))
-        zdim_key = f"{args.zdim}_noreg" if args.no_z_regularization else args.zdim
-        n_particles = len(pipeline_output.get('zs')[zdim_key])
+        auto_coords_entry = 'latent_coords_noreg' if args.no_z_regularization else 'latent_coords'
+        n_particles = len(pipeline_output.get(auto_coords_entry)[args.zdim])
         auto_n_particles_per_cluster = min(100, max(10, n_particles // args.n_clusters))
         
         # Use provided values or auto-calculated values

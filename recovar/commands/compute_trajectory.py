@@ -79,18 +79,15 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
 
     try:
         lazy = bool(getattr(args, "lazy", False))
+        # Select reg vs noreg entry names
+        coords_entry = 'latent_coords_noreg' if no_z_reg else 'latent_coords'
+        precision_entry = 'latent_precision_noreg' if no_z_reg else 'latent_precision'
+        contrast_entry = 'contrasts_noreg' if no_z_reg else 'contrasts'
+
         if hasattr(po, "get_embedding_keys"):
-            zs_keys = list(po.get_embedding_keys("zs"))
-            cov_keys = list(po.get_embedding_keys("cov_zs"))
-            contrast_keys = list(po.get_embedding_keys("contrasts"))
-            zs_all = cov_zs_all = contrasts_all = None
+            zs_keys = list(po.get_embedding_keys(coords_entry))
         else:
-            zs_all = po.get('zs')
-            cov_zs_all = po.get('cov_zs')
-            contrasts_all = po.get('contrasts')
-            zs_keys = list(zs_all.keys())
-            cov_keys = list(cov_zs_all.keys())
-            contrast_keys = list(contrasts_all.keys())
+            zs_keys = list(po.get(coords_entry).keys())
 
         if zdim is None and len(zs_keys) > 1:
             logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --zdim=4")
@@ -99,27 +96,22 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
         elif zdim is None:
             zdim = zs_keys[0]
             logger.info(f"using zdim={zdim}")
-        zdim_key = f"{zdim}_noreg" if no_z_reg else zdim
-        logger.info(f"using zdim_key={zdim_key}")
+        noreg_suffix = '_noreg' if no_z_reg else ''
+        logger.info(f"using zdim={zdim}{noreg_suffix}")
         assert output_folder is not None
 
         if zdim not in zs_keys:
             logger.error("z-dim not found in results. Options are:" + ','.join(str(e) for e in zs_keys))
             raise ValueError("Requested zdim was not found in embedding outputs.")
 
-        if zdim_key not in zs_keys or zdim_key not in cov_keys or zdim_key not in contrast_keys:
-            raise ValueError(
-                f"Requested embedding key {zdim_key} is missing in pipeline output zs/contrasts/cov_zs."
-            )
-
         if hasattr(po, "get_embedding_component"):
-            zs = po.get_embedding_component('zs', zdim_key)
-            cov_zs = po.get_embedding_component('cov_zs', zdim_key)
-            contrasts = po.get_embedding_component('contrasts', zdim_key)
+            zs = po.get_embedding_component(coords_entry, zdim)
+            cov_zs = po.get_embedding_component(precision_entry, zdim)
+            contrasts = po.get_embedding_component(contrast_entry, zdim)
         else:
-            zs = zs_all[zdim_key]
-            cov_zs = cov_zs_all[zdim_key]
-            contrasts = contrasts_all[zdim_key]
+            zs = po.get(coords_entry)[zdim]
+            cov_zs = po.get(precision_entry)[zdim]
+            contrasts = po.get(contrast_entry)[zdim]
 
         # Keep memory footprint low for downstream JAX kernels.
         zs = np.asarray(zs).astype(np.float32, copy=False)
@@ -135,7 +127,6 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
             latent_space_bounds = dens_pkl['latent_space_bounds']
             logger.warning(f"density dimension is less than zs dimension, truncate zs dimension to match density dimension = {input_density.ndim}")
             zdim = input_density.ndim
-            zdim_key = f"{zdim}_noreg" if no_z_reg else zdim
             zs = zs[:, :zdim]
             cov_zs = cov_zs[:, :zdim, :zdim]
         else:
@@ -171,7 +162,7 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
             path_folder = output_folder
             o.mkdir_safe(path_folder)
             full_path, subsampled_path = o.make_trajectory_plots_from_results(
-                po, zdim_key, path_folder, cryos=cryos, z_st=z_st, z_end=z_end, gt_volumes=None,
+                po, zdim, path_folder, cryos=cryos, z_st=z_st, z_end=z_end, gt_volumes=None,
                 n_vols_along_path=n_vols_along_path, plot_llh=False, input_density=input_density,
                 latent_space_bounds=latent_space_bounds
             )

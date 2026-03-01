@@ -377,27 +377,35 @@ def build_params_dict(
     }
 
 
-def build_embedding_dict(zs, cov_zs, est_contrasts):
+def build_embedding_dict(latent_coords, latent_coords_noreg,
+                         latent_precision, latent_precision_noreg,
+                         contrasts, contrasts_noreg):
     """Build the embedding dict saved as ``model/embeddings.pkl``.
+
+    All six sub-dicts are keyed by zdim (int).
 
     Schema
     ------
-    zs : dict[int | str, ndarray]
-        Latent coordinates keyed by zdim (e.g. ``{4: array(...), '4_noreg': ...}``).
-    cov_zs : dict[int | str, ndarray]
-        Posterior covariance of latent coordinates, same keys as *zs*.
-    contrasts : dict[int | str, ndarray]
-        Per-image contrast estimates, same keys as *zs*.
-    zs_cont, cov_zs_cont, contrasts_cont : dict
-        Reserved for continuous embeddings (currently empty).
+    latent_coords : dict[int, ndarray]
+        Regularized latent coordinates.
+    latent_coords_noreg : dict[int, ndarray]
+        Unregularized latent coordinates.
+    latent_precision : dict[int, ndarray]
+        Posterior covariance of regularized latent coordinates.
+    latent_precision_noreg : dict[int, ndarray]
+        Posterior covariance of unregularized latent coordinates.
+    contrasts : dict[int, ndarray]
+        Per-image contrast estimates (regularized).
+    contrasts_noreg : dict[int, ndarray]
+        Per-image contrast estimates (unregularized).
     """
     return {
-        'zs': zs,
-        'cov_zs': cov_zs,
-        'contrasts': est_contrasts,
-        'zs_cont': {},
-        'cov_zs_cont': {},
-        'contrasts_cont': {},
+        'latent_coords': latent_coords,
+        'latent_coords_noreg': latent_coords_noreg,
+        'latent_precision': latent_precision,
+        'latent_precision_noreg': latent_precision_noreg,
+        'contrasts': contrasts,
+        'contrasts_noreg': contrasts_noreg,
     }
 
 
@@ -727,6 +735,29 @@ class PipelineOutput:
     def _ensure_embedding_raw_loaded(self):
         if self.embedding is None:
             self.embedding = utils.pickle_load(self.paths.embeddings)
+            self._migrate_legacy_embedding()
+
+    def _migrate_legacy_embedding(self):
+        """Convert old-format embedding dict (zs/cov_zs with mixed keys) to new schema."""
+        if 'zs' in self.embedding and 'latent_coords' not in self.embedding:
+            old_to_new = [
+                ('zs', 'latent_coords'),
+                ('cov_zs', 'latent_precision'),
+                ('contrasts', 'contrasts'),
+            ]
+            new_emb = {}
+            for old_name, new_name in old_to_new:
+                if old_name not in self.embedding:
+                    continue
+                reg, noreg = {}, {}
+                for k, v in self.embedding[old_name].items():
+                    if isinstance(k, str) and k.endswith('_noreg'):
+                        noreg[int(k.replace('_noreg', ''))] = v
+                    else:
+                        reg[k] = v
+                new_emb[new_name] = reg
+                new_emb[f'{new_name}_noreg'] = noreg
+            self.embedding = new_emb
 
     def _get_input_args_compat(self):
         if not hasattr(self.params, "get") or "input_args" not in self.params:
@@ -765,26 +796,28 @@ class PipelineOutput:
 
     def get_embedding_keys(self, entry):
         self._ensure_embedding_raw_loaded()
-        return list(self.embedding[entry].keys())
+        resolved = self._EMBEDDING_ALIASES.get(entry, entry)
+        return list(self.embedding[resolved].keys())
 
     def has_embedding_key(self, entry, key):
         return key in self.get_embedding_keys(entry)
 
     def get_embedding_component(self, entry, key):
+        resolved = self._EMBEDDING_ALIASES.get(entry, entry)
         if self.embedding_loaded:
-            return self.embedding[entry][key]
-        cache_key = (entry, key)
+            return self.embedding[resolved][key]
+        cache_key = (resolved, key)
         if cache_key in self._embedding_key_cache:
             return self._embedding_key_cache[cache_key]
 
         self._ensure_embedding_raw_loaded()
-        if key not in self.embedding[entry]:
-            raise KeyError(f"Embedding key {key} not found in {entry}.")
+        if key not in self.embedding[resolved]:
+            raise KeyError(f"Embedding key {key} not found in {resolved}.")
 
-        values = self.embedding[entry][key]
+        values = self.embedding[resolved][key]
         if self.version != '0':
             particle_halfsets, image_halfsets = self._get_embedding_halfsets()
-            if entry == 'contrasts' and self._use_image_halfsets_for_unshared_tilt_contrast():
+            if resolved.startswith('contrasts') and self._use_image_halfsets_for_unshared_tilt_contrast():
                 values = values[image_halfsets]
             else:
                 values = values[particle_halfsets]
@@ -797,11 +830,9 @@ class PipelineOutput:
         if self.version != '0':
             halfsets, image_halfsets = self._get_embedding_halfsets()
 
-            # embedding_dict = self.embedding
             for entry in self.embedding:
                 for key in self.embedding[entry]:
-                    # Handling the case where the contrasts are not shared across tilts...
-                    if entry == 'contrasts' and self._use_image_halfsets_for_unshared_tilt_contrast():
+                    if entry.startswith('contrasts') and self._use_image_halfsets_for_unshared_tilt_contrast():
                         self.embedding[entry][key] = self.embedding[entry][key][image_halfsets]
                     else:
                         self.embedding[entry][key] = self.embedding[entry][key][halfsets]
@@ -854,12 +885,26 @@ class PipelineOutput:
             out[i] = np.asarray(fourier_transform_utils.get_dft3(vol), dtype=np.complex64).reshape(-1)
         return out
 
-    def get(self, key):
+    # Backward-compat aliases: old name -> new name
+    _EMBEDDING_ALIASES = {
+        'zs': 'latent_coords',
+        'cov_zs': 'latent_precision',
+    }
 
-        if key in ['zs', 'cov_zs', 'contrasts', 'zs_cont', 'cov_zs_cont', 'est_contrasts_cont']:
+    _EMBEDDING_ENTRIES = (
+        'latent_coords', 'latent_coords_noreg',
+        'latent_precision', 'latent_precision_noreg',
+        'contrasts', 'contrasts_noreg',
+    )
+
+    def get(self, key):
+        # Resolve old embedding names
+        resolved = self._EMBEDDING_ALIASES.get(key, key)
+
+        if resolved in self._EMBEDDING_ENTRIES:
             if not self.embedding_loaded:
                 self.load_embedding()
-            return self.embedding[key]
+            return self.embedding[resolved]
 
         elif key == 'unsorted_embedding':
             return utils.pickle_load(self.paths.embeddings)
@@ -934,7 +979,8 @@ class PipelineOutput:
 
     def keys(self):
         keys = list(self.params.keys())
-        keys += ['zs', 'cov_zs', 'contrasts', 'u', 'u_real', 'mean', 'volume_mask', 'dilated_volume_mask', 'covariance_cols', 'dataset', 'lazy_dataset', 'variance', 'variance20', 'focus_mask', 'image_snr', 'mean_halfmaps', 'halfsets', 'input_args', 'unsorted_embedding']
+        keys += list(self._EMBEDDING_ENTRIES)
+        keys += ['u', 'u_real', 'mean', 'volume_mask', 'dilated_volume_mask', 'covariance_cols', 'dataset', 'lazy_dataset', 'variance', 'variance20', 'focus_mask', 'image_snr', 'mean_halfmaps', 'halfsets', 'input_args', 'unsorted_embedding']
         return keys
 
 
@@ -971,7 +1017,7 @@ def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folde
     if input_density is not None:
         assert latent_space_bounds is not None, 'need latent_space_bounds if providing density'
 
-    latent_space_bounds = ld.compute_latent_space_bounds(pipeline_output.get('zs')[basis_size]) if latent_space_bounds is None else latent_space_bounds
+    latent_space_bounds = ld.compute_latent_space_bounds(pipeline_output.get('latent_coords')[basis_size]) if latent_space_bounds is None else latent_space_bounds
 
     if cryos is None:
         cryos = pipeline_output.get('dataset') if cryos is None else cryos
@@ -980,9 +1026,9 @@ def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folde
     density = input_density if input_density is not None else pipeline_output.get('density')
 
     return make_trajectory_plots(
-        density, 
-        pipeline_output.get('zs')[basis_size], pipeline_output.get('cov_zs')[basis_size], 
-        z_st, z_end, latent_space_bounds, output_folder, 
+        density,
+        pipeline_output.get('latent_coords')[basis_size], pipeline_output.get('latent_precision')[basis_size],
+        z_st, z_end, latent_space_bounds, output_folder,
         gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = plot_llh, use_input_density = input_density is not None)
 
 
@@ -1165,7 +1211,7 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
 
     # Load latent coordinates with robust error handling
     try:
-        zs_data = po.get('zs')
+        zs_data = po.get('latent_coords')
         if zs_data is None:
             logger.warning("No latent coordinates found in pipeline output. Skipping PC analysis.")
             return

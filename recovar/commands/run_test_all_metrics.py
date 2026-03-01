@@ -818,7 +818,7 @@ def main():
     max_classes = int(np.max(sim_info['image_assignment'])) + 1
     requested_labels = [0, max_classes // 2]
     unsorted_zs = load_unsorted_embedding_component(
-        pipeline_output, 'zs', 10, legacy_cache=legacy_embedding_cache
+        pipeline_output, 'latent_coords', 10, legacy_cache=legacy_embedding_cache
     )
     zs_assignment, labels_to_plot = select_state_target_latent_points(
         unsorted_zs=unsorted_zs,
@@ -947,48 +947,51 @@ def main():
 
     # Embedding variance errors
     unsorted_zs = load_unsorted_embedding_component(
-        pipeline_output, 'zs', 4, legacy_cache=legacy_embedding_cache
+        pipeline_output, 'latent_coords', 4, legacy_cache=legacy_embedding_cache
     )
     _, averaged_variance = metrics.variance_of_zs(unsorted_zs, particle_assignment)
     all_scores['embedding_squared_error_4'] = averaged_variance
 
     unsorted_zs = load_unsorted_embedding_component(
-        pipeline_output, 'zs', 10, legacy_cache=legacy_embedding_cache
+        pipeline_output, 'latent_coords', 10, legacy_cache=legacy_embedding_cache
     )
     _, averaged_variance = metrics.variance_of_zs(unsorted_zs, particle_assignment)
     all_scores['embedding_squared_error_10'] = averaged_variance
 
     gt_contrasts = synt.contrasts
-    for idx in [4, 10, '4_noreg', '10_noreg']:
-        unsorted_contrast = load_unsorted_embedding_component(
-            pipeline_output, 'contrasts', idx, legacy_cache=legacy_embedding_cache
-        )
-        contrast_abs_error = np.mean(np.abs(gt_contrasts - unsorted_contrast))
-        all_scores[f'contrasts_{idx}'] = contrast_abs_error
-        # Backward-compatible key for existing comparison scripts.
-        all_scores[f'constrasts_{idx}'] = contrast_abs_error
+    for zdim_val in [4, 10]:
+        for noreg in [False, True]:
+            entry = 'contrasts_noreg' if noreg else 'contrasts'
+            label = f'{zdim_val}_noreg' if noreg else str(zdim_val)
+            unsorted_contrast = load_unsorted_embedding_component(
+                pipeline_output, entry, zdim_val, legacy_cache=legacy_embedding_cache
+            )
+            contrast_abs_error = np.mean(np.abs(gt_contrasts - unsorted_contrast))
+            all_scores[f'contrasts_{label}'] = contrast_abs_error
+            # Backward-compatible key for existing comparison scripts.
+            all_scores[f'constrasts_{label}'] = contrast_abs_error
+
+            # Create contrast comparison plot
+            plt.figure(figsize=(10, 6))
+            plt.scatter(gt_contrasts, unsorted_contrast, alpha=0.5, label='Particle contrasts')
+            plt.plot([0, 1], [0, 1], 'r--', label='Perfect correlation')
+            plt.xlabel('Ground Truth Contrast')
+            plt.ylabel('Estimated Contrast')
+            plt.title(f'Contrast Comparison (zdim={label})')
+            plt.legend()
+            plt.savefig(os.path.join(plots_dir, f'contrast_comparison_{label}.png'))
+            plt.close()
         
-        # Create contrast comparison plot
-        plt.figure(figsize=(10, 6))
-        plt.scatter(gt_contrasts, unsorted_contrast, alpha=0.5, label='Particle contrasts')
-        plt.plot([0, 1], [0, 1], 'r--', label='Perfect correlation')
-        plt.xlabel('Ground Truth Contrast')
-        plt.ylabel('Estimated Contrast')
-        plt.title(f'Contrast Comparison (zdim={idx})')
-        plt.legend()
-        plt.savefig(os.path.join(plots_dir, f'contrast_comparison_{idx}.png'))
-        plt.close()
-        
-        # Create contrast distribution plot
-        plt.figure(figsize=(10, 6))
-        plt.hist(gt_contrasts, bins=50, alpha=0.5, label='Ground Truth')
-        plt.hist(unsorted_contrast, bins=50, alpha=0.5, label='Estimated')
-        plt.xlabel('Contrast')
-        plt.ylabel('Number of particles')
-        plt.title(f'Contrast Distribution (zdim={idx})')
-        plt.legend()
-        plt.savefig(os.path.join(plots_dir, f'contrast_distribution_{idx}.png'))
-        plt.close()
+            # Create contrast distribution plot
+            plt.figure(figsize=(10, 6))
+            plt.hist(gt_contrasts, bins=50, alpha=0.5, label='Ground Truth')
+            plt.hist(unsorted_contrast, bins=50, alpha=0.5, label='Estimated')
+            plt.xlabel('Contrast')
+            plt.ylabel('Number of particles')
+            plt.title(f'Contrast Distribution (zdim={label})')
+            plt.legend()
+            plt.savefig(os.path.join(plots_dir, f'contrast_distribution_{label}.png'))
+            plt.close()
 
     for l_idx, l in enumerate(labels_to_plot):
         gt_map = fourier_transform_utils.get_idft3(synt.volumes[l].reshape(cryos[0].volume_shape)).real

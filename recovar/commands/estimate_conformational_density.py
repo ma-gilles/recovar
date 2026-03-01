@@ -56,9 +56,8 @@ def estimate_conformational_density(recovar_result_dir, output_dir=None, pca_dim
 
     alphas = np.flip(np.logspace(-9, 1, 11)) if alphas is None else np.asarray(alphas)
 
-    zdim = f"{z_dim_used}_noreg"
     lbfgsb_sols, alphas, cost, reg_cost, density, total_covar, grids, bounds = deconvolve_density.get_deconvolved_density(
-        pipeline_output, zdim=zdim, pca_dim_max=pca_dim, percentile_reject=percentile_reject, kernel_option='sampling', num_points=num_disc_points, alphas=alphas, percentile_bound=percentile_bound, save_to_file=None
+        pipeline_output, zdim=z_dim_used, noreg=True, pca_dim_max=pca_dim, percentile_reject=percentile_reject, kernel_option='sampling', num_points=num_disc_points, alphas=alphas, percentile_bound=percentile_bound, save_to_file=None
     )
     logger.info(f"Deconvolution done, size = {density.shape}")
     deconvolve_density.plot_density(lbfgsb_sols, density, alphas)
