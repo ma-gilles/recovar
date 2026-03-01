@@ -987,7 +987,7 @@ echo "Completed at: $(date)"
 
             cmd = [
                 python_path, "-m", "recovar.commands.compute_state",
-                "--result-dir", job.output_dir,
+                job.output_dir,
                 "--latent-points", os.path.join(output_dir, "latent_points.txt"),
                 "--outdir", output_dir,
                 "--lazy",
@@ -1002,7 +1002,7 @@ echo "Completed at: $(date)"
             n_vols = params.get("n_vols", 6)
             cmd = [
                 python_path, "-m", "recovar.commands.compute_trajectory",
-                "--result-dir", job.output_dir,
+                job.output_dir,
                 "--outdir", output_dir,
                 "--zdim", str(zdim),
                 "--n-vols-along-path", str(n_vols),
