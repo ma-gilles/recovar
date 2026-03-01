@@ -164,11 +164,13 @@ def residual_relion_kernel_trilinear(
     images_squared = jnp.abs(images) ** 2 - cov_noise
     CTF_squared = CTF_squared ** 2
 
-    Ft_y = core.adjoint_slice_volume_by_trilinear(
-        images_squared, rotation_matrices, config.image_shape, config.volume_shape,
+    images_squared_half = fourier_transform_utils.full_image_to_half_image(images_squared, config.image_shape)
+    Ft_y = core.adjoint_slice_volume_by_trilinear_from_half_images(
+        images_squared_half, rotation_matrices, config.image_shape, config.volume_shape,
     )
-    Ft_ctf = core.adjoint_slice_volume_by_trilinear(
-        CTF_squared ** 2, rotation_matrices, config.image_shape, config.volume_shape,
+    CTF_sq_half = fourier_transform_utils.full_image_to_half_image(CTF_squared ** 2, config.image_shape)
+    Ft_ctf = core.adjoint_slice_volume_by_trilinear_from_half_images(
+        CTF_sq_half, rotation_matrices, config.image_shape, config.volume_shape,
     )
     return Ft_y, Ft_ctf
 

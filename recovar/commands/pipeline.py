@@ -580,7 +580,7 @@ def standard_recovar_pipeline(args):
     cryos = dataset.get_split_datasets_from_dict(dataset_loader_dict, ind_split, args.lazy)
 
     if args.gpu_memory is not None:
-        utils.GPU_MEMORY_LIMIT = args.gpu_memory
+        utils.set_gpu_memory_limit(args.gpu_memory)
     gpu_memory = utils.get_gpu_memory_total()
     volume_shape = cryos.volume_shape
 
