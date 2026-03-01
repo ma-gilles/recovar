@@ -1,17 +1,19 @@
-import os
-import sys
 import argparse
-import pickle  # For saving indices
-import numpy as np
+import logging
+import os
+import pickle
+import sys
+
 import matplotlib
 import matplotlib.pyplot as plt
-import logging
-from recovar.output import output
+import numpy as np
+import seaborn as sns
 from sklearn.covariance import EllipticEnvelope
 from sklearn.ensemble import IsolationForest
 from sklearn.neighbors import LocalOutlierFactor
+
 from recovar.data_io import tilt_dataset
-import seaborn as sns
+from recovar.output import output
 
 matplotlib.rcParams["contour.negative_linestyle"] = "solid"
 
@@ -400,23 +402,21 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
     original_particle_indices = np.concatenate(pipeline_output.get('particles_halfsets'))
     n_images = len(original_image_indices)
 
-
-    logger.info(f"Final contrast array shape: {contrast_array.shape}")
-    logger.info(f"Number of images: {n_images}")
-    
-    logger.info(f"Contrast-based outlier detection for {n_images} images")
+    logger.info("Final contrast array shape: %s", contrast_array.shape)
+    logger.info("Contrast-based outlier detection for %d images", n_images)
     logger.info(f"Low contrast threshold: {low_contrast_threshold}")
     logger.info(f"High contrast threshold: {high_contrast_threshold}")
     logger.info(f"Particle bad fraction threshold: {particle_bad_fraction_threshold}")
     logger.info(f"Micrograph bad fraction threshold: {micrograph_bad_fraction_threshold}")
 
 
-    logger.info(f"\nIndividual image outlier detection:")
-    logger.info(f"  Low contrast outliers (< {low_contrast_threshold}): {n_low_contrast} ({n_low_contrast/n_images*100:.1f}%)")
-    logger.info(f"  High contrast outliers (> {high_contrast_threshold}): {n_high_contrast} ({n_high_contrast/n_images*100:.1f}%)")
-    logger.info(f"  Total individual outliers: {n_individual_outliers} ({n_individual_outliers/n_images*100:.1f}%)")
-    
-
+    logger.info("Individual image outlier detection:")
+    logger.info("  Low contrast outliers (< %s): %d (%.1f%%)",
+                low_contrast_threshold, n_low_contrast, n_low_contrast / n_images * 100)
+    logger.info("  High contrast outliers (> %s): %d (%.1f%%)",
+                high_contrast_threshold, n_high_contrast, n_high_contrast / n_images * 100)
+    logger.info("  Total individual outliers: %d (%.1f%%)",
+                n_individual_outliers, n_individual_outliers / n_images * 100)
 
     outliers_ind = np.where(individual_outliers)[0]
     inliers_ind = np.where(~individual_outliers)[0]
@@ -1390,7 +1390,7 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
                 gridsize = min(50, max(20, int(np.sqrt(len(umap_coords) / 100))))
                 hb = ax.hexbin(umap_coords[:, 0], umap_coords[:, 1], gridsize=gridsize, 
                               cmap='Blues', alpha=0.4, mincnt=1, reduce_C_function=np.mean)
-            except:
+            except Exception:
                 pass
             
             # Downsample points for scatter plot to avoid overcrowding
@@ -1479,9 +1479,6 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
             outlier_image_indices = get_contrast_indices_for_particles(outlier_indices)
             inlier_image_indices = get_contrast_indices_for_particles(inlier_indices)
 
-            # logger.info(f"Number of images in outlier indices: {len(outlier_image_indices)}")
-            # logger.info(f"Number of images in inlier indices: {len(inlier_image_indices)}")
-            # logger.info()
             if outlier_image_indices.size + inlier_image_indices.size != original_image_indices.size:
                 logger.info(f"Number of images in outlier indices: {len(outlier_image_indices)}")
                 logger.info(f"Number of images in inlier indices: {len(inlier_image_indices)}")

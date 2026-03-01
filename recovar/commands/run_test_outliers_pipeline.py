@@ -1,16 +1,21 @@
 #!/usr/bin/env python
 
-import subprocess
-import shutil
-import os
-import jax
-import sys
 import argparse
-import numpy as np
-import pickle
 import glob
+import logging
+import os
+import pickle
+import shutil
+import subprocess
+import sys
+
+import jax
+import numpy as np
+
+logger = logging.getLogger(__name__)
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     parser = argparse.ArgumentParser(description="Run tests for recovar outliers pipeline")
     parser.add_argument('--output-dir', '-o', default='/tmp/recovar_test/')
     parser.add_argument('--no-delete', action='store_true', help='Do not delete the test dataset directory after successful tests')
@@ -57,43 +62,38 @@ def main():
     failed_functions = []
 
     def error_message():
-        print("--------------------------------------------")
-        print("--------------------------------------------")
-        print("No GPU devices found by JAX. Please ensure that JAX is properly configured with CUDA and a compatible GPU. Some info from the JAX website (https://jax.readthedocs.io/en/latest/installation.html):\n"
-              "You must first install the NVIDIA driver. It is recommended to install the newest driver available from NVIDIA, but the driver version must be >= 525.60.13 for CUDA 12 on Linux. Then reinstall jax as follows:\n"
-              "pip uninstall jax jaxlib; \n pip install -U \"jax[cuda12]\"==0.5.0")
-        print("If you truly want to run on CPU, please run the script with the --cpu flag. Note that while this test will run, a real dataset will be extremely slow on CPU.")
-        print("--------------------------------------------")
-        print("--------------------------------------------")
-        exit(1)
+        logger.error("No GPU devices found by JAX. Please ensure that JAX is properly configured "
+                     "with CUDA and a compatible GPU. See https://jax.readthedocs.io/en/latest/installation.html")
+        logger.error("If you truly want to run on CPU, please run the script with the --cpu flag.")
+        sys.exit(1)
 
     def check_gpu():
         try:
             gpu_devices = jax.devices('gpu')
             if gpu_devices:
-                print("GPU devices found:", gpu_devices)
+                logger.info("GPU devices found: %s", gpu_devices)
             else:
                 error_message()
         except Exception as e:
-            print("Error occurred while checking for GPU devices:", e)
+            logger.error("Error occurred while checking for GPU devices: %s", e)
             error_message()
 
     if not run_on_cpu:
         check_gpu()
 
     def run_command(command, description, function_name, should_fail=False):
-        print(f"Running: {description}")
-        print(f"Command: {command}\n")
+        logger.info("Running: %s", description)
+        logger.info("Command: %s", command)
         result = subprocess.run(command, shell=True)
         if result.returncode == 0:
-            print(f"Success: {description}\n")
+            logger.info("Success: %s", description)
             passed_functions.append(function_name)
         else:
-            print(f"Failed: {description}\n")
+            logger.error("Failed: %s", description)
             if not should_fail:
                 failed_functions.append(function_name)
             else:
-                print(f"But it was expected to fail!")
+                logger.info("(Expected failure)")
 
     cpu_string = " --accept-cpu" if run_on_cpu else ""
 
@@ -106,14 +106,14 @@ def main():
     
     # Generate test dataset
     if args.tilt_series:
-        print("Generating tilt series test dataset...")
+        logger.info("Generating tilt series test dataset...")
         run_command(
             f'{BASE_CMD} make_test_dataset {test_dataset_dir} --n-images {n_images} --tilt-series --outlier-file-input {outlier_volume_path} --percent-outliers {percent_outliers} --percent-tilt-series-outliers {percent_tilt_series_outliers}',
             'Generate a test dataset with tilt series for outlier testing',
             'make_test_dataset_tilt_outliers'
         )
     else:
-        print("Generating regular test dataset...")
+        logger.info("Generating regular test dataset...")
         run_command(
             f'{BASE_CMD} make_test_dataset {test_dataset_dir} --n-images {n_images} --outlier-file-input {outlier_volume_path} --percent-outliers {percent_outliers}',
             'Generate a test dataset for outlier testing',
@@ -163,7 +163,7 @@ def main():
                     'pipeline_with_outliers_copy_test_tilt_missing_file'
                 )
             except Exception as e:
-                print('Expected failure for missing file in star file:', e)
+                logger.info("Expected failure for missing file in star file: %s", e)
                 passed_functions.append('pipeline_with_outliers_copy_test_tilt_missing_file')
         else:
             run_command(
@@ -289,15 +289,15 @@ def main():
     verify_temp_cleanup(test_dataset_dir, args.tilt_series)
 
     if failed_functions:
-        print("The following functions failed:")
+        logger.error("The following functions failed:")
         for func in failed_functions:
-            print(f"- {func}")
-        print("\nPlease check the output above for details.")
+            logger.error("- %s", func)
+        logger.error("Please check the output above for details.")
         return 1
     else:
-        print("All outlier pipeline tests passed!")
+        logger.info("All outlier pipeline tests passed!")
         if delete_everything:
-            print(f"Cleaning up test directory: {test_dataset_dir}")
+            logger.info("Cleaning up test directory: %s", test_dataset_dir)
             shutil.rmtree(test_dataset_dir, ignore_errors=True)
         return 0
 
@@ -347,11 +347,11 @@ def create_outlier_volume(output_path, grid_size=64):
         mrc.set_data(volume)
         mrc.voxel_size = 4.25 * 128 / grid_size
     
-    print(f"Created random anisotropic outlier volume: {output_path}")
+    logger.info("Created random anisotropic outlier volume: %s", output_path)
 
 def verify_outlier_results(test_dir, is_tilt_series, k_rounds):
     """Verify that outlier detection results were properly saved."""
-    print("\nVerifying outlier detection results...")
+    logger.info("Verifying outlier detection results...")
     
     # Check both possible output dirs
     base_output_dirs = [f"{test_dir}/test_dataset/pipeline_outliers_output"]
@@ -364,43 +364,44 @@ def verify_outlier_results(test_dir, is_tilt_series, k_rounds):
     found = False
     for base_output_dir in base_output_dirs:
         if os.path.exists(base_output_dir):
-            print(f"Found output directory: {base_output_dir}")
+            logger.info("Found output directory: %s", base_output_dir)
             found = True
             break
     if not found:
-        print(f"ERROR: None of the main output directories found: {base_output_dirs}")
+        logger.error("None of the main output directories found: %s", base_output_dirs)
         return False
-    
+
     # Check that inliers/outliers files were saved for each round
     for round_num in range(1, k_rounds + 1):
         inliers_file = f"{base_output_dir}/inliers_round_{round_num}.pkl"
         outliers_file = f"{base_output_dir}/outliers_round_{round_num}.pkl"
-        
+
         if not os.path.exists(inliers_file):
-            print(f"ERROR: Inliers file not found for round {round_num}: {inliers_file}")
+            logger.error("Inliers file not found for round %d: %s", round_num, inliers_file)
             return False
-        
+
         if not os.path.exists(outliers_file):
-            print(f"ERROR: Outliers file not found for round {round_num}: {outliers_file}")
+            logger.error("Outliers file not found for round %d: %s", round_num, outliers_file)
             return False
-        
+
         # Check that the files contain valid data
         try:
             with open(inliers_file, 'rb') as f:
                 inliers = pickle.load(f)
             with open(outliers_file, 'rb') as f:
                 outliers = pickle.load(f)
-            
-            print(f"Round {round_num}: {len(inliers)} image inliers, {len(outliers)} image outliers")
-            
+
+            logger.info("Round %d: %d image inliers, %d image outliers",
+                       round_num, len(inliers), len(outliers))
+
         except Exception as e:
-            print(f"ERROR: Failed to load image indices for round {round_num}: {e}")
+            logger.error("Failed to load image indices for round %d: %s", round_num, e)
             return False
-    
+
     # Check that all rounds inliers file exists
     all_inliers_file = f"{base_output_dir}/all_rounds_inliers.pkl"
     if not os.path.exists(all_inliers_file):
-        print(f"ERROR: All rounds inliers file not found: {all_inliers_file}")
+        logger.error("All rounds inliers file not found: %s", all_inliers_file)
         return False
     
     # For tilt series, check that particle indices were also saved
@@ -415,23 +416,24 @@ def verify_outlier_results(test_dir, is_tilt_series, k_rounds):
                         particle_inliers = pickle.load(f)
                     with open(particle_outliers_file, 'rb') as f:
                         particle_outliers = pickle.load(f)
-                    print(f"Round {round_num}: {len(particle_inliers)} particle inliers, {len(particle_outliers)} particle outliers")
+                    logger.info("Round %d: %d particle inliers, %d particle outliers",
+                               round_num, len(particle_inliers), len(particle_outliers))
                 except Exception as e:
-                    print(f"Round {round_num}: Particle indices saved but failed to load: {e}")
+                    logger.warning("Round %d: Particle indices saved but failed to load: %s", round_num, e)
             else:
-                print(f"WARNING: Particle indices not found for round {round_num}")
-    
-    print("Outlier detection results verification completed successfully!")
+                logger.warning("Particle indices not found for round %d", round_num)
+
+    logger.info("Outlier detection results verification completed successfully!")
     return True
 
 def analyze_outlier_detection_accuracy(test_dir, is_tilt_series, k_rounds):
     """Analyze and report statistics about outlier detection accuracy."""
-    print("\nAnalyzing outlier detection accuracy...")
-    
+    logger.info("Analyzing outlier detection accuracy...")
+
     # Load simulation info to get ground truth
     sim_info_path = f"{test_dir}/test_dataset/simulation_info.pkl"
     if not os.path.exists(sim_info_path):
-        print(f"ERROR: Simulation info not found: {sim_info_path}")
+        logger.error("Simulation info not found: %s", sim_info_path)
         return False
     
     with open(sim_info_path, 'rb') as f:
@@ -446,11 +448,10 @@ def analyze_outlier_detection_accuracy(test_dir, is_tilt_series, k_rounds):
     tilt_outlier_indices = np.where(image_assignments == -2)[0]      # Tilt outliers
     all_outlier_indices = np.concatenate([particle_outlier_indices, tilt_outlier_indices])
     
-    print(f"Ground truth statistics:")
-    print(f"  Total images: {n_images}")
-    # print(f"  Particle outliers: {len(particle_outlier_indices)} ({len(particle_outlier_indices)/n_images*100:.1f}%)")
-    # print(f"  Tilt outliers: {len(tilt_outlier_indices)} ({len(tilt_outlier_indices)/n_images*100:.1f}%)")
-    print(f"  Total outliers: {len(all_outlier_indices)} ({len(all_outlier_indices)/n_images*100:.1f}%)")
+    logger.info("Ground truth statistics:")
+    logger.info("  Total images: %d", n_images)
+    logger.info("  Total outliers: %d (%.1f%%)", len(all_outlier_indices),
+                len(all_outlier_indices) / n_images * 100)
     
     # For tilt series, also analyze particle-level ground truth
     if is_tilt_series:
@@ -461,8 +462,9 @@ def analyze_outlier_detection_accuracy(test_dir, is_tilt_series, k_rounds):
         # Identify particles with tilt outliers (entire particle is outlier)
         particle_outlier_particles = np.where(tilt_series_assignment == -1)[0]  # Particles with tilt outliers
         
-        print(f"  Total particles: {n_particles}")
-        print(f"  Particles with tilt outliers: {len(particle_outlier_particles)} ({len(particle_outlier_particles)/n_particles*100:.1f}%)")
+        logger.info("  Total particles: %d", n_particles)
+        logger.info("  Particles with tilt outliers: %d (%.1f%%)",
+                    len(particle_outlier_particles), len(particle_outlier_particles) / n_particles * 100)
         
         # Map particle outliers to image indices for comparison
         particle_outlier_images = []
@@ -471,18 +473,19 @@ def analyze_outlier_detection_accuracy(test_dir, is_tilt_series, k_rounds):
             particle_outlier_images.extend(particle_images)
         particle_outlier_images = np.array(particle_outlier_images)
         
-        print(f"  Images from particles with tilt outliers: {len(particle_outlier_images)} ({len(particle_outlier_images)/n_images*100:.1f}%)")
+        logger.info("  Images from particles with tilt outliers: %d (%.1f%%)",
+                    len(particle_outlier_images), len(particle_outlier_images) / n_images * 100)
     
     # Analyze each round
     base_output_dir = f"{test_dir}/test_dataset/pipeline_outliers_output"
     
     for round_num in range(1, k_rounds + 1):
-        print(f"\nRound {round_num} analysis:")
-        
+        logger.info("Round %d analysis:", round_num)
+
         # Load detected image inliers
         inliers_file = f"{base_output_dir}/inliers_round_{round_num}.pkl"
         if not os.path.exists(inliers_file):
-            print(f"  ERROR: Image inliers file not found: {inliers_file}")
+            logger.error("  Image inliers file not found: %s", inliers_file)
             continue
         with open(inliers_file, 'rb') as f:
             detected_image_inliers = pickle.load(f)
@@ -494,7 +497,7 @@ def analyze_outlier_detection_accuracy(test_dir, is_tilt_series, k_rounds):
         if round_num > 1:
             total_detected = len(detected_image_inliers) + len(detected_image_outliers)
             if total_detected != n_images:
-                print(f"  WARNING: Inliers + outliers ({total_detected}) != total images ({n_images})")
+                logger.warning("  Inliers + outliers (%d) != total images (%d)", total_detected, n_images)
         
         # Load detected particle outliers (for tilt series)
         detected_particle_outliers = None
@@ -507,30 +510,30 @@ def analyze_outlier_detection_accuracy(test_dir, is_tilt_series, k_rounds):
                 # Compute detected particle outliers as the complement of inliers
                 detected_particle_outliers = np.setdiff1d(np.arange(n_particles), detected_particle_inliers)
             else:
-                print(f"  WARNING: Particle inliers file not found: {particle_inliers_file}")
+                logger.warning("  Particle inliers file not found: %s", particle_inliers_file)
         
         # Report image-level statistics
-        print(f"  Image-level statistics:")
+        logger.info("  Image-level statistics:")
         n_detected_images = len(detected_image_outliers)
         n_correct_images = len(np.intersect1d(detected_image_outliers, all_outlier_indices))
         n_false_positives_images = n_detected_images - n_correct_images
         n_false_negatives_images = len(all_outlier_indices) - n_correct_images
         n_true_negatives_images = n_images - (n_correct_images + n_false_positives_images + n_false_negatives_images)
 
-        # 2x2 confusion matrix for images (pretty print)
-        print("    Confusion matrix (images):")
-        print("    ┌─────────────┬───────────────┬───────────────┬─────────┐")
-        print("    │             │ Pred Outlier  │ Pred Inlier   │  Total  │")
-        print("    ├─────────────┼───────────────┼───────────────┼─────────┤")
-        print(f"    │ GT Outlier  │ {n_correct_images:13d} │ {n_false_negatives_images:13d} │ {len(all_outlier_indices):7d} │")
-        print(f"    │ GT Inlier   │ {n_false_positives_images:13d} │ {n_true_negatives_images:13d} │ {n_images - len(all_outlier_indices):7d} │")
-        print("    ├─────────────┼───────────────┼───────────────┼─────────┤")
-        print(f"    │   Total     │ {n_detected_images:13d} │ {len(detected_image_inliers):13d} │ {n_images:7d} │")
-        print("    └─────────────┴───────────────┴───────────────┴─────────┘\n")
+        # 2x2 confusion matrix for images
+        logger.info("    Confusion matrix (images):")
+        logger.info("    ┌─────────────┬───────────────┬───────────────┬─────────┐")
+        logger.info("    │             │ Pred Outlier  │ Pred Inlier   │  Total  │")
+        logger.info("    ├─────────────┼───────────────┼───────────────┼─────────┤")
+        logger.info("    │ GT Outlier  │ %13d │ %13d │ %7d │", n_correct_images, n_false_negatives_images, len(all_outlier_indices))
+        logger.info("    │ GT Inlier   │ %13d │ %13d │ %7d │", n_false_positives_images, n_true_negatives_images, n_images - len(all_outlier_indices))
+        logger.info("    ├─────────────┼───────────────┼───────────────┼─────────┤")
+        logger.info("    │   Total     │ %13d │ %13d │ %7d │", n_detected_images, len(detected_image_inliers), n_images)
+        logger.info("    └─────────────┴───────────────┴───────────────┴─────────┘")
 
         # Report particle-level statistics (for tilt series)
         if is_tilt_series and detected_particle_outliers is not None and detected_particle_inliers is not None:
-            print(f"  Particle-level statistics:")
+            logger.info("  Particle-level statistics:")
             n_detected_particles = len(detected_particle_outliers)
             n_detected_particle_inliers = len(detected_particle_inliers)
             n_correct_particles = len(np.intersect1d(detected_particle_outliers, particle_outlier_particles))
@@ -538,52 +541,25 @@ def analyze_outlier_detection_accuracy(test_dir, is_tilt_series, k_rounds):
             n_false_negatives_particles = len(particle_outlier_particles) - n_correct_particles
             n_true_negatives_particles = n_particles - (n_correct_particles + n_false_positives_particles + n_false_negatives_particles)
 
-            # 2x2 confusion matrix for particles (pretty print)
-            print("    Confusion matrix (particles):")
-            print("    ┌─────────────┬───────────────┬───────────────┬─────────┐")
-            print("    │             │ Pred Outlier  │ Pred Inlier   │  Total  │")
-            print("    ├─────────────┼───────────────┼───────────────┼─────────┤")
-            print(f"    │ GT Outlier  │ {n_correct_particles:13d} │ {n_false_negatives_particles:13d} │ {len(particle_outlier_particles):7d} │")
-            print(f"    │ GT Inlier   │ {n_false_positives_particles:13d} │ {n_true_negatives_particles:13d} │ {n_particles - len(particle_outlier_particles):7d} │")
-            print("    ├─────────────┼───────────────┼───────────────┼─────────┤")
-            print(f"    │   Total     │ {n_detected_particles:13d} │ {n_detected_particle_inliers:13d} │ {n_particles:7d} │")
-            print("    └─────────────┴───────────────┴───────────────┴─────────┘\n")
+            # 2x2 confusion matrix for particles
+            logger.info("    Confusion matrix (particles):")
+            logger.info("    ┌─────────────┬───────────────┬───────────────┬─────────┐")
+            logger.info("    │             │ Pred Outlier  │ Pred Inlier   │  Total  │")
+            logger.info("    ├─────────────┼───────────────┼───────────────┼─────────┤")
+            logger.info("    │ GT Outlier  │ %13d │ %13d │ %7d │", n_correct_particles, n_false_negatives_particles, len(particle_outlier_particles))
+            logger.info("    │ GT Inlier   │ %13d │ %13d │ %7d │", n_false_positives_particles, n_true_negatives_particles, n_particles - len(particle_outlier_particles))
+            logger.info("    ├─────────────┼───────────────┼───────────────┼─────────┤")
+            logger.info("    │   Total     │ %13d │ %13d │ %7d │", n_detected_particles, n_detected_particle_inliers, n_particles)
+            logger.info("    └─────────────┴───────────────┴───────────────┴─────────┘")
 
-            # # Analyze by outlier type
-            # print(f"  Outlier type analysis:")
-            
-            # # Particle outliers (individual images with wrong structure)
-            # if len(particle_outlier_indices) > 0:
-            #     particle_outlier_correct = len(np.intersect1d(detected_image_outliers, particle_outlier_indices))
-            #     particle_outlier_recall = particle_outlier_correct / len(particle_outlier_indices)
-            #     print(f"    Particle outlier recall: {particle_outlier_recall:.3f} ({particle_outlier_correct}/{len(particle_outlier_indices)})")
-            
-            # # Tilt outliers (entire particles with wrong structure)
-            # if len(tilt_outlier_indices) > 0:
-            #     tilt_outlier_correct = len(np.intersect1d(detected_image_outliers, tilt_outlier_indices))
-            #     tilt_outlier_recall = tilt_outlier_correct / len(tilt_outlier_indices)
-            #     print(f"    Tilt outlier recall: {tilt_outlier_recall:.3f} ({tilt_outlier_correct}/{len(tilt_outlier_indices)})")
-                
-            #     # Also check particle-level detection of tilt outliers
-            #     if len(particle_outlier_particles) > 0:
-            #         tilt_particle_correct = len(np.intersect1d(detected_particle_outliers, particle_outlier_particles))
-            #         tilt_particle_recall = tilt_particle_correct / len(particle_outlier_particles)
-            #         print(f"    Tilt outlier particle recall: {tilt_particle_recall:.3f} ({tilt_particle_correct}/{len(particle_outlier_particles)})")
         elif is_tilt_series:
-            print(f"  Particle-level statistics: Not available (particle outliers file not found)")
+            logger.info("  Particle-level statistics: Not available (particle outliers file not found)")
 
-    # from recovar.tilt_dataset import tilt_series_indices_to_image_indices
-    # from recovar import tilt_dataset
-    # starfile = f"{test_dir}/test_dataset/particles.star"
-    # particle_to_tilts, tilts_to_particle = tilt_dataset.TiltSeriesData.parse_particle_tilt(starfile)
-    # bad_images = tilt_series_indices_to_image_indices(particle_outlier_particles, starfile)
-    # bad_tilts = [tilts_to_particle[i] for i in all_outlier_indices]
-    # print(np.unique(bad_tilts))
     return True
 
 def verify_temp_cleanup(test_dir, is_tilt_series):
     """Verify that temp directories were cleaned up."""
-    print("\nVerifying temp directories cleanup...")
+    logger.info("Verifying temp directories cleanup...")
     
     # Check both possible output dirs
     base_output_dirs = [f"{test_dir}/test_dataset/pipeline_outliers_output"]
@@ -596,31 +572,29 @@ def verify_temp_cleanup(test_dir, is_tilt_series):
     found = False
     for base_output_dir in base_output_dirs:
         if os.path.exists(base_output_dir):
-            print(f"Found output directory: {base_output_dir}")
+            logger.info("Found output directory: %s", base_output_dir)
             found = True
             break
     if not found:
-        print(f"ERROR: None of the main output directories found: {base_output_dirs}")
+        logger.error("None of the main output directories found: %s", base_output_dirs)
         return False
-    
+
     # Check for any remaining temp directories that might not have been cleaned up
-    # Look for directories in /tmp that might be from our pipeline
     temp_dirs = glob.glob("/tmp/recovar_*")
     if temp_dirs:
-        print(f"Found {len(temp_dirs)} potential temp directories:")
+        logger.info("Found %d potential temp directories:", len(temp_dirs))
         for temp_dir in temp_dirs:
-            print(f"  {temp_dir}")
-        
-        # Check if any of these are from our no-cleanup test
+            logger.info("  %s", temp_dir)
+
         no_cleanup_dirs = [d for d in temp_dirs if "no_cleanup" in d or "test" in d]
         if no_cleanup_dirs:
-            print("  These appear to be from no-cleanup tests (expected to remain)")
+            logger.info("  These appear to be from no-cleanup tests (expected to remain)")
         else:
-            print("  WARNING: These temp directories should have been cleaned up")
+            logger.warning("  These temp directories should have been cleaned up")
     else:
-        print("No remaining temp directories found - cleanup appears successful")
-    
-    print("Temp directories cleanup verification completed successfully!")
+        logger.info("No remaining temp directories found - cleanup appears successful")
+
+    logger.info("Temp directories cleanup verification completed successfully!")
     return True
 
 
