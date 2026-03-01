@@ -151,12 +151,12 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
     if save_reconstructions and output_folder is not None:
         reconstructions_dir = os.path.join(output_folder, 'reconstructions')
         os.makedirs(reconstructions_dir, exist_ok=True)
-        logger.info(f"Saving reconstructions to {reconstructions_dir}")
+        logger.info("Saving reconstructions to %s", reconstructions_dir)
         
         # Create single folder for all individual .mrc files
         individual_mrc_dir = os.path.join(output_folder, 'individual_mrc_files')
         os.makedirs(individual_mrc_dir, exist_ok=True)
-        logger.info(f"Saving individual .mrc files to {individual_mrc_dir}")
+        logger.info("Saving individual .mrc files to %s", individual_mrc_dir)
         
         # Initialize list to collect all combined reconstructions for stacking
         all_combined_reconstructions = []
@@ -165,7 +165,7 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
         individual_mrc_files = []
     
     for cluster_idx in range(len(cluster_centers)):
-        logger.info(f"Processing cluster {cluster_idx + 1}/{len(cluster_centers)}")
+        logger.info("Processing cluster %s/%s", cluster_idx + 1, len(cluster_centers))
         
         cluster_center = cluster_centers[cluster_idx]
         
@@ -189,7 +189,7 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
                 global_indices = closest_indices + cryos[0].n_units
             used_particles[i] = global_indices
             
-            logger.info(f"Cluster {cluster_idx}: Using {len(closest_indices)} closest particles for half-map {i} (min distance: {distances[closest_indices[0]]:.3f}, max distance: {distances[closest_indices[-1]]:.3f}). Average distance over all particles: {np.mean(distances):.3f}")
+            logger.info("Cluster %s: Using %s closest particles for half-map %s (min distance: %.3f, max distance: %.3f). Average distance over all particles: %.3f", cluster_idx, len(closest_indices), i, distances[closest_indices[0]], distances[closest_indices[-1]], np.mean(distances))
             
             if cryos[i].tilt_series_flag:
                 # For tilt series, noise must be fetched per-batch because
@@ -246,7 +246,7 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
             combined_recon_filtered = combined_recon * low_pass_filter.reshape(-1)
             combined_real_filtered = fourier_transform_utils.get_idft3(combined_recon_filtered.reshape(volume_shape))
             
-            logger.info(f"Cluster {cluster_idx}: Applied low-pass filter at {filter_resolution:.1f} Angstroms ({filter_fourier_shells} Fourier shells)")
+            logger.info("Cluster %s: Applied low-pass filter at %.1f Angstroms (%s Fourier shells)", cluster_idx, filter_resolution, filter_fourier_shells)
             
             # Use filtered version for saving
             combined_real = combined_real_filtered
@@ -314,8 +314,8 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
             # Collect combined reconstruction for stacking
             all_combined_reconstructions.append(combined_real.astype(np.float32))
             
-            logger.info(f"Saved reconstructions for cluster {cluster_idx} to {cluster_reconstructions_dir}")
-            logger.info(f"Saved individual .mrc files: vol{vol_idx:04d}.mrc (combined)")
+            logger.info("Saved reconstructions for cluster %s to %s", cluster_idx, cluster_reconstructions_dir)
+            logger.info("Saved individual .mrc files: vol%04d.mrc (combined)", vol_idx)
         
         # Compute FSC between halfmaps
         fsc_curve = plot_utils.FSC(halfmaps[0], halfmaps[1])
@@ -345,7 +345,7 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
             'all_particles': np.concatenate([used_particles[0], used_particles[1]])
         }
         
-        logger.info(f"Cluster {cluster_idx}: FSC={fsc_score:.3f}, AUC={fsc_auc:.3f}, vs-mean_FSC={fsc_vs_mean_score:.3f}")
+        logger.info("Cluster %s: FSC=%.3f, AUC=%.3f, vs-mean_FSC=%.3f", cluster_idx, fsc_score, fsc_auc, fsc_vs_mean_score)
             
         # Clean up temporary directory
         import shutil
@@ -363,8 +363,8 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
             mrc.set_data(stacked_reconstructions)
             mrc.voxel_size = voxel_size
         
-        logger.info(f"Saved all {len(all_combined_reconstructions)} combined reconstructions to {stacked_path}")
-        logger.info(f"Stacked volume shape: {stacked_reconstructions.shape}")
+        logger.info("Saved all %s combined reconstructions to %s", len(all_combined_reconstructions), stacked_path)
+        logger.info("Stacked volume shape: %s", stacked_reconstructions.shape)
         
         # Add stacked file info to reconstructions
         reconstructions['stacked_file'] = {
@@ -382,8 +382,8 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
             'files_per_cluster': 1  # combined only
         }
         
-        logger.info(f"Saved {len(individual_mrc_files)} individual .mrc files to {individual_mrc_dir}")
-        logger.info(f"File naming: vol0000.mrc (cluster 0 combined), vol0001.mrc (cluster 1 combined), etc.")
+        logger.info("Saved %s individual .mrc files to %s", len(individual_mrc_files), individual_mrc_dir)
+        logger.info("File naming: vol0000.mrc (cluster 0 combined), vol0001.mrc (cluster 1 combined), etc.")
     
     if save_reconstructions:
         return fsc_scores, fsc_auc_scores, particle_usage, reconstructions
@@ -993,21 +993,21 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
         pickle.dump(junk_info, f)
     
     # Print summary statistics
-    logger.info(f"=== Junk Detection Summary ===")
-    logger.info(f"Total clusters: {len(cluster_centers)}")
-    logger.info(f"Total particles: {len(zs)}")
-    logger.info(f"")
-    logger.info(f"Half-map FSC based detection:")
-    logger.info(f"  - Junk clusters: {len(halfmap_junk_clusters)} ({len(halfmap_junk_clusters)/len(cluster_centers)*100:.1f}%)")
-    logger.info(f"  - Junk particles: {len(halfmap_junk_particle_indices)} ({len(halfmap_junk_particle_indices)/len(zs)*100:.1f}%)")
-    logger.info(f"")
-    logger.info(f"vs-Mean FSC based detection:")
-    logger.info(f"  - Junk clusters: {len(vs_mean_junk_clusters)} ({len(vs_mean_junk_clusters)/len(cluster_centers)*100:.1f}%)")
-    logger.info(f"  - Junk particles: {len(vs_mean_junk_particle_indices)} ({len(vs_mean_junk_particle_indices)/len(zs)*100:.1f}%)")
-    logger.info(f"")
-    logger.info(f"Combined detection:")
-    logger.info(f"  - Junk clusters: {len(combined_junk_clusters)} ({len(combined_junk_clusters)/len(cluster_centers)*100:.1f}%)")
-    logger.info(f"  - Junk particles: {len(combined_junk_particle_indices)} ({len(combined_junk_particle_indices)/len(zs)*100:.1f}%)")
+    logger.info("=== Junk Detection Summary ===")
+    logger.info("Total clusters: %s", len(cluster_centers))
+    logger.info("Total particles: %s", len(zs))
+    logger.info("")
+    logger.info("Half-map FSC based detection:")
+    logger.info("  - Junk clusters: %s (%.1f%)", len(halfmap_junk_clusters), len(halfmap_junk_clusters)/len(cluster_centers)*100)
+    logger.info("  - Junk particles: %s (%.1f%)", len(halfmap_junk_particle_indices), len(halfmap_junk_particle_indices)/len(zs)*100)
+    logger.info("")
+    logger.info("vs-Mean FSC based detection:")
+    logger.info("  - Junk clusters: %s (%.1f%)", len(vs_mean_junk_clusters), len(vs_mean_junk_clusters)/len(cluster_centers)*100)
+    logger.info("  - Junk particles: %s (%.1f%)", len(vs_mean_junk_particle_indices), len(vs_mean_junk_particle_indices)/len(zs)*100)
+    logger.info("")
+    logger.info("Combined detection:")
+    logger.info("  - Junk clusters: %s (%.1f%)", len(combined_junk_clusters), len(combined_junk_clusters)/len(cluster_centers)*100)
+    logger.info("  - Junk particles: %s (%.1f%)", len(combined_junk_particle_indices), len(combined_junk_particle_indices)/len(zs)*100)
     
     return junk_info
 
@@ -1497,8 +1497,8 @@ def detect_junk_clusters(fsc_scores, fsc_auc_scores, output_folder, zdim_key,
         }
     }
     
-    logger.info(f"Junk detection complete. Found {len(junk_clusters)} junk clusters "
-                f"({len(junk_clusters)/len(combined_fsc)*100:.1f}%) using method '{method}'")
+    logger.info("Junk detection complete. Found %d junk clusters (%.1f%%) using method '%s'",
+                len(junk_clusters), len(junk_clusters)/len(combined_fsc)*100, method)
     
     return junk_clusters, junk_info
 
@@ -1608,19 +1608,19 @@ def create_junk_detection_visualizations(halfmap_fscs, vs_mean_fscs, halfmap_auc
     try:
         # Debug: check data bounds
         if np.any(np.isnan(combined_fsc)) or np.any(np.isnan(combined_auc)):
-            logger.warning(f"NaN values found: FSC NaN count: {np.sum(np.isnan(combined_fsc))}, AUC NaN count: {np.sum(np.isnan(combined_auc))}")
+            logger.warning("NaN values found: FSC NaN count: %s, AUC NaN count: %s", np.sum(np.isnan(combined_fsc)), np.sum(np.isnan(combined_auc)))
             hb = None
         elif np.any(np.isinf(combined_fsc)) or np.any(np.isinf(combined_auc)):
-            logger.warning(f"Infinite values found: FSC inf count: {np.sum(np.isinf(combined_fsc))}, AUC inf count: {np.sum(np.isinf(combined_auc))}")
+            logger.warning("Infinite values found: FSC inf count: %s, AUC inf count: %s", np.sum(np.isinf(combined_fsc)), np.sum(np.isinf(combined_auc)))
             hb = None
         elif combined_fsc.max() - combined_fsc.min() < 1e-10 or combined_auc.max() - combined_auc.min() < 1e-10:
-            logger.warning(f"No range in data: FSC range: {combined_fsc.max() - combined_fsc.min()}, AUC range: {combined_auc.max() - combined_auc.min()}")
+            logger.warning("No range in data: FSC range: %s, AUC range: %s", combined_fsc.max() - combined_fsc.min(), combined_auc.max() - combined_auc.min())
             hb = None
         else:
             hb = ax.hexbin(combined_fsc, combined_auc, gridsize=20, cmap='Blues', alpha=0.6, 
                            mincnt=1, reduce_C_function=np.mean)
     except Exception as e:
-        logger.warning(f"Hexbin failed: {e}")
+        logger.warning("Hexbin failed: %s", e)
         hb = None
     
     # Plot good and junk clusters separately with better styling
@@ -1915,13 +1915,13 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
         ]
     )
     
-    logger.info(f"Starting junk particle detection with zdim={zdim}, n_clusters={n_clusters}")
+    logger.info("Starting junk particle detection with zdim=%s, n_clusters=%s", zdim, n_clusters)
     if save_reconstructions:
         logger.info("Reconstructions will be saved to file")
     if filter_resolution is not None:
-        logger.info(f"Combined reconstructions will be filtered to {filter_resolution:.1f} Angstroms with {filter_fourier_shells} Fourier shells")
+        logger.info("Combined reconstructions will be filtered to %.1f Angstroms with %s Fourier shells", filter_resolution, filter_fourier_shells)
     if save_pipeline_indices:
-        logger.info(f"Will save pipeline-compatible indices in format: {output_format}")
+        logger.info("Will save pipeline-compatible indices in format: %s", output_format)
     
     # Load pipeline output
     pipeline_output = output.PipelineOutput(recovar_result_dir)
@@ -1933,26 +1933,26 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
     # Get zs data and ensure it's a dictionary
     zs_data = pipeline_output.get(coords_entry)
     if not isinstance(zs_data, dict):
-        logger.error(f"Expected '{coords_entry}' to be a dictionary, got {type(zs_data)}")
+        logger.error("Expected '%s' to be a dictionary, got %s", coords_entry, type(zs_data))
         raise ValueError(f"Invalid '{coords_entry}' data type: {type(zs_data)}")
 
     if zdim_key not in zs_data:
         available_dims = list(zs_data.keys())
-        logger.error(f"zdim {zdim_key} not found. Available dimensions: {available_dims}")
+        logger.error("zdim %s not found. Available dimensions: %s", zdim_key, available_dims)
         raise ValueError(f"zdim {zdim_key} not found")
 
     # Load embeddings
     zs = zs_data[zdim_key]
-    logger.info(f"Loaded embeddings with shape: {zs.shape}")
+    logger.info("Loaded embeddings with shape: %s", zs.shape)
     
     # Perform k-means clustering (cap clusters at sample count)
     n_clusters = min(n_clusters, len(zs))
-    logger.info(f"Performing k-means clustering with {n_clusters} clusters...")
+    logger.info("Performing k-means clustering with %s clusters...", n_clusters)
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     cluster_indices = kmeans.fit_predict(zs)
     cluster_centers = kmeans.cluster_centers_
     
-    logger.info(f"Clustering complete. Cluster sizes: {np.bincount(cluster_indices)}")
+    logger.info("Clustering complete. Cluster sizes: %s", np.bincount(cluster_indices))
     
     # Compute FSC scores for each cluster
     logger.info("Computing FSC scores for each cluster...")
@@ -1997,7 +1997,7 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
     junk_info['junk_detection'] = junk_detection_info
     junk_info['junk_clusters'] = junk_clusters.tolist()
     junk_info['good_clusters'] = junk_detection_info['good_clusters']
-    logger.info(f"Junk detection completed. Found {len(junk_clusters)} junk clusters.")
+    logger.info("Junk detection completed. Found %s junk clusters.", len(junk_clusters))
     
     # Map clusters to particles and save particle classifications
     logger.info("Mapping clusters to particles...")
@@ -2023,12 +2023,12 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
             junk_pipeline_file = os.path.join(output_folder, f'junk_pipeline_indices_{zdim_key}.pkl')
             with open(junk_pipeline_file, 'wb') as f:
                 pickle.dump(junk_particles, f)
-            logger.info(f"Saved junk indices for pipeline: {junk_pipeline_file}")
+            logger.info("Saved junk indices for pipeline: %s", junk_pipeline_file)
         if output_format in ["both", "good_only"]:
             good_pipeline_file = os.path.join(output_folder, f'good_pipeline_indices_{zdim_key}.pkl')
             with open(good_pipeline_file, 'wb') as f:
                 pickle.dump(good_particles, f)
-            logger.info(f"Saved good indices for pipeline: {good_pipeline_file}")
+            logger.info("Saved good indices for pipeline: %s", good_pipeline_file)
         # Create a summary file with usage instructions
         summary_file = os.path.join(output_folder, f'pipeline_usage_summary_{zdim_key}.txt')
         with open(summary_file, 'w') as f:
@@ -2052,16 +2052,16 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
             f.write("  # Run pipeline with only good particles:\n")
             if output_format in ["both", "good_only"]:
                 f.write(f"  python -m recovar.commands.pipeline particles.star --poses poses.pkl --ctf ctf.pkl --ind {os.path.basename(good_pipeline_file)} -o output_dir\n")
-        logger.info(f"Pipeline usage summary saved to: {summary_file}")
+        logger.info("Pipeline usage summary saved to: %s", summary_file)
     # Save reconstruction info if reconstructions were saved
     if save_reconstructions and reconstructions is not None:
         reconstructions_info_path = os.path.join(output_folder, f'reconstructions_info_{zdim_key}.pkl')
         with open(reconstructions_info_path, 'wb') as f:
             pickle.dump(reconstructions, f)
-        logger.info(f"Saved reconstruction info to {reconstructions_info_path}")
-    logger.info(f"Particle mapping completed. Found {len(junk_particles)} junk particles and {len(good_particles)} good particles.")
+        logger.info("Saved reconstruction info to %s", reconstructions_info_path)
+    logger.info("Particle mapping completed. Found %s junk particles and %s good particles.", len(junk_particles), len(good_particles))
     
-    logger.info(f"Junk particle detection complete. Results saved to {output_folder}")
+    logger.info("Junk particle detection complete. Results saved to %s", output_folder)
     return junk_info
 
 
@@ -2121,7 +2121,7 @@ def main():
         batch_size = args.batch_size if args.batch_size is not None else auto_batch_size
         n_particles_per_cluster = args.n_particles_per_cluster if args.n_particles_per_cluster is not None else auto_n_particles_per_cluster
         
-        logger.info(f"Auto-calculated: batch_size={batch_size}, n_particles_per_cluster={n_particles_per_cluster}")
+        logger.info("Auto-calculated: batch_size=%s, n_particles_per_cluster=%s", batch_size, n_particles_per_cluster)
     else:
         batch_size = args.batch_size
         n_particles_per_cluster = args.n_particles_per_cluster
@@ -2206,10 +2206,10 @@ def map_clusters_to_particles(junk_clusters, cluster_indices, output_folder, zdi
         'method': method
     }
     
-    logger.info(f"Particle mapping complete:")
-    logger.info(f"  Total particles: {total_particles}")
-    logger.info(f"  Junk particles: {n_junk_particles} ({junk_fraction*100:.1f}%)")
-    logger.info(f"  Good particles: {n_good_particles} ({(1-junk_fraction)*100:.1f}%)")
+    logger.info("Particle mapping complete:")
+    logger.info("  Total particles: %s", total_particles)
+    logger.info("  Junk particles: %s (%.1f%)", n_junk_particles, junk_fraction*100)
+    logger.info("  Good particles: %s (%.1f%)", n_good_particles, (1-junk_fraction)*100)
     
     return junk_particles, good_particles, particle_stats
 
@@ -2572,10 +2572,10 @@ def save_particle_classifications(junk_particles, good_particles, particle_stats
     with open(good_indices_file, 'wb') as f:
         pickle.dump(good_particles, f)
     
-    logger.info(f"Particle classifications saved:")
-    logger.info(f"  Main results: {results_file}")
-    logger.info(f"  Junk indices (pipeline format): {junk_indices_file}")
-    logger.info(f"  Good indices (pipeline format): {good_indices_file}")
+    logger.info("Particle classifications saved:")
+    logger.info("  Main results: %s", results_file)
+    logger.info("  Junk indices (pipeline format): %s", junk_indices_file)
+    logger.info("  Good indices (pipeline format): %s", good_indices_file)
     
     return results
 

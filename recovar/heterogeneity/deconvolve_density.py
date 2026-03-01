@@ -1,9 +1,11 @@
-from recovar.heterogeneity import latent_density
-import numpy as np
-import jax, jaxopt
-from jaxopt import ScipyBoundedMinimize
+import jax
 import jax.numpy as jnp
+import jaxopt
 import matplotlib.pyplot as plt
+import numpy as np
+from jaxopt import ScipyBoundedMinimize
+
+from recovar.heterogeneity import latent_density
 
 def get_raw_density(pipeline_output, zdim=10, noreg=False, pca_dim_max=5, percentile_reject=10, num_points=50, percentile_bound=0.1):
     coords_entry = 'latent_coords_noreg' if noreg else 'latent_coords'

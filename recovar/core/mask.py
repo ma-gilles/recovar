@@ -1,12 +1,15 @@
 """Real-space and Fourier-space mask generation and manipulation."""
 
 import logging
+
 import jax.numpy as jnp
 import numpy as np
-import recovar.core.fourier_transform_utils as fourier_transform_utils
-import recovar.utils as utils
 import skimage
 from scipy.ndimage import binary_dilation, distance_transform_edt
+
+import recovar.core.fourier_transform_utils as fourier_transform_utils
+import recovar.utils as utils
+
 logger = logging.getLogger(__name__)
 
 def masking_options(volume_mask_option, means, volume_shape, dtype_real = np.float32, mask_dilation_iter = 0, keep_input_mask = False, dilated_mask_dilations_iter = None):
@@ -15,7 +18,6 @@ def masking_options(volume_mask_option, means, volume_shape, dtype_real = np.flo
 
     if isinstance(volume_mask_option, str):
         if volume_mask_option.endswith(".mrc"):
-            # assert input_mask is not None, 'set volume_mask_option = input, but no mask passed'
             input_mask = utils.load_mrc(input_mask).astype(np.float32)
             if keep_input_mask:
                 volume_mask = input_mask
@@ -55,17 +57,13 @@ def masking_options(volume_mask_option, means, volume_shape, dtype_real = np.flo
             dilated_volume_mask = volume_mask
             logger.info('using no mask')
         else:
-            assert False, 'mask option not recognized. Options are: a path ending in .mrc, from_halfmaps, sphere, none'
+            raise ValueError('mask option not recognized. Options are: a path ending in .mrc, from_halfmaps, sphere, none')
     else:
-        assert False, 'mask option not recognized'
+        raise ValueError('mask option not recognized')
 
     return np.array(volume_mask.astype(dtype_real)), np.array(dilated_volume_mask.astype(dtype_real))
 
 def make_mask_from_half_maps_from_means_dict(means, smax = 3 ):
-    # from emda.ext.maskmap_class import MaskedMaps
-    # ftu = fourier_transform_utils(np)
-    # x = MaskedMaps()
-    # x.smax = smax
     vol_shape = utils.guess_vol_shape_from_vol_size(means['corrected0'].size)
     halfmap1 = fourier_transform_utils.get_idft3(means['corrected0reg'].reshape(vol_shape)).real
     halfmap2 = fourier_transform_utils.get_idft3(means['corrected1reg'].reshape(vol_shape)).real
@@ -73,8 +71,6 @@ def make_mask_from_half_maps_from_means_dict(means, smax = 3 ):
 
 
 def make_mask_from_half_maps(halfmap1, halfmap2, smax = 3 ):
-    # from emda.ext.maskmap_class import MaskedMaps
-    # ftu = fourier_transform_utils(np)
     x = MaskedMaps()
     x.smax = smax
     x.arr1 = halfmap1
@@ -85,18 +81,15 @@ def make_mask_from_half_maps(halfmap1, halfmap2, smax = 3 ):
 
 
 def make_mask_from_gt(gt_map_ft, smax = 3, iter = 10, from_ft = True ):
-    # from emda.ext.maskmap_class import MaskedMaps
     x = MaskedMaps()
     x.smax = smax
     if iter is not None:
         x.iter = iter
-    # x.iter = x.iter +5
     vol_shape = utils.guess_vol_shape_from_vol_size(gt_map_ft.size)
     if from_ft:
         x.arr1 = fourier_transform_utils.get_idft3(gt_map_ft.reshape(vol_shape)).real
     else:
         x.arr1 = gt_map_ft.reshape(vol_shape)
-    # x.arr2 = fourier_transform_utils.get_idft3(means['corrected1'].reshape(vol_shape)).real
     x.generate_mask_from_gt()
     return x.mask
 
@@ -117,7 +110,6 @@ def create_soft_edged_kernel_pxl(r1, shape):
     r0 = r1 - 2
     
     kern_sphere_soft = jnp.where((distances < r0), jnp.ones_like(distances), jnp.zeros_like(distances))
-    # 1
     kern_sphere_soft = jnp.where((distances <= r1) * (distances >= r0),
                                  (1 + jnp.cos(jnp.pi * (distances - r0) / (r1 - r0))) / 2.0,
                                  kern_sphere_soft )
@@ -137,11 +129,8 @@ def create_hard_edged_kernel_pxl(r1, shape):
 def soften_volume_mask_new(binary_volume_mask, kernel_size):
 
     distance_to_mask = distance_transform_edt(binary_volume_mask < 0.9)
-    # adapted from relion
-    # mask = distance_to_mask.copy()
     mask = np.zeros_like(binary_volume_mask)
-    # mask = jnp.where(distance_to_mask ==0 , 1, 0)
-    mask = np.where((distance_to_mask >= 0) * (distance_to_mask < kernel_size ), 
+    mask = np.where((distance_to_mask >= 0) * (distance_to_mask < kernel_size ),
                     0.5 + 0.5 * np.cos(np.pi * (distance_to_mask) / kernel_size ),
                      mask)
 
@@ -192,11 +181,8 @@ class MaskedMaps:
         # radial mask stuff
         halfcc3d *= get_radial_mask(self.arr1.shape)
 
-        #self.mask = self.histogram2(halfcc3d, prob=self.prob)
         self.mask = self.thereshol_ccmap(ccmap=halfcc3d)
 
-
-    ## Mine not EMDA. Could be bad.
     def generate_mask_from_gt(self):
         kern = create_soft_edged_kernel_pxl(self.smax, self.arr1.shape)
         self.arr1 = threshold_map(arr=self.arr1, prob=self.prob, dthresh=self.dthresh)
@@ -206,8 +192,6 @@ class MaskedMaps:
 
 
     def thereshol_ccmap(self, ccmap):
-        from scipy.ndimage.morphology import binary_dilation
-
         ccmap_binary = (ccmap >= 1e-3).astype(int)
         dilate = binary_dilation(ccmap_binary, iterations=self.iter)
         mask = soften_volume_mask(dilate, kern_rad=2)
@@ -217,7 +201,7 @@ class MaskedMaps:
 def threshold_map(arr, prob = 0.99, dthresh=None):
     if dthresh is None:
         X2 = np.sort(arr.flatten())
-        F2 = np.array(range(len(X2))) / float(len(X2) - 1)
+        F2 = np.arange(len(X2)) / float(len(X2) - 1)
         loc = np.where(F2 >= prob)
         thresh = X2[loc[0][0]]
     else:
@@ -244,12 +228,10 @@ def smooth_circular_mask(image_size, radius, thickness):
 
 
 def raised_cosine_mask( volume_shape, radius, radius_p, offset):
-    # adapted from relion
     grid = fourier_transform_utils.get_k_coordinate_of_each_pixel_3d(volume_shape, voxel_size = 1, scaled = False)
     grid -= offset
 
     distances =  jnp.linalg.norm(grid, axis =-1)
-    # mask = jnp.zeros(volume_shape)
     mask = jnp.where(distances < radius, 1, 0)
     mask = jnp.where((distances >= radius) * (distances < radius_p ), 
                     0.5 - 0.5 * jnp.cos(np.pi * (radius_p - distances) / (radius_p - radius)),
@@ -258,12 +240,8 @@ def raised_cosine_mask( volume_shape, radius, radius_p, offset):
     return mask.reshape(volume_shape)
 
 
-import numpy as np
-# This is the RELION function translated by chatgpt
-# https://github.com/3dem/relion/blob/e5c4835894ea7db4ad4f5b0f4861b33269dbcc77/src/mask.cpp
 def soft_mask_outside_map(vol, radius=-1, cosine_width=3, Mnoise=None):
-    # vol = np.roll(vol, -np.array(vol.shape) // 2)  # Assuming vol.setXmippOrigin() adjusts the origin
-
+    """Soft mask outside map, adapted from RELION."""
     vol = jnp.asarray(vol)
     if radius < 0:
         radius = np.max(np.array(vol.shape) // 2)
@@ -271,21 +249,15 @@ def soft_mask_outside_map(vol, radius=-1, cosine_width=3, Mnoise=None):
     radius_p = radius + cosine_width
     shape = vol.shape
 
-    # Not very clear whether this should be 0 or 1
-    volume_coords =  fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size = 1, scaled = False).reshape(list(shape) + [len(list(shape))]) + 0
-
-    # r, i, j = np.ogrid[:vol.shape[0], :vol.shape[1], :vol.shape[2]]
+    volume_coords =  fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size = 1, scaled = False).reshape(list(shape) + [len(list(shape))])
     r = jnp.linalg.norm(volume_coords, axis =-1)
     mask1 = r <= radius
     mask2 = (r > radius) * (r <= radius_p)
     mask3 = r > radius_p
     raised_cos = 0.5 + 0.5 * jnp.cos(jnp.pi * (radius_p - r) / cosine_width)
     mask = jnp.zeros_like(vol).real
-    # mask = mask.at[mask1].set(1)
     mask = jnp.where(mask1, 1, mask)
-    # mask = mask.at[mask2].set(1 - raised_cos[mask2])
     mask = jnp.where(mask2, 1 - raised_cos, mask)
-
 
     if Mnoise is None:
         sum_bg = jnp.sum((vol * mask) * (mask3 + mask2))
@@ -295,32 +267,23 @@ def soft_mask_outside_map(vol, radius=-1, cosine_width=3, Mnoise=None):
         avg_bg = None
 
     if Mnoise is None:
-        # vol = vol.at[mask3].set(avg_bg)
         vol = jnp.where(mask3, avg_bg, vol)
     else:
-        # vol = vol.at[mask3].set(Mnoise[mask3])
         vol = jnp.where(mask3, Mnoise, vol)
 
     add = Mnoise if Mnoise is not None else avg_bg
     vol = mask * vol + (1 - mask) * add
-    # vol[mask2] = (1 - raised_cos[mask2]) * vol[mask2] + raised_cos[mask2] * add
-
     return vol, mask
 
 
 def soften_volume_mask(dilated_mask, kern_rad=3):
     return soften_volume_mask_new(dilated_mask, kern_rad)
-    # # convoluting with gaussian sphere
-    # import scipy.signal
-    # kern_sphere = create_soft_edged_kernel_pxl(kern_rad, dilated_mask.shape)
-    # return scipy.signal.fftconvolve(dilated_mask, kern_sphere, "same")
 
 
 
-## from realsp_local.py in EMDA
 def get_3d_realspcorrelation(half1, half2, kern, mask=None):
+    """3D real-space local correlation, adapted from EMDA realsp_local.py."""
     import scipy.signal
-    from scipy.stats import mode
 
     loc3_A = scipy.signal.fftconvolve(half1, kern, "same")
     loc3_A2 = scipy.signal.fftconvolve(half1 * half1, kern, "same")
@@ -330,9 +293,6 @@ def get_3d_realspcorrelation(half1, half2, kern, mask=None):
     cov3_AB = loc3_AB - loc3_A * loc3_B
     var3_A = loc3_A2 - loc3_A ** 2
     var3_B = loc3_B2 - loc3_B ** 2
-    # regularization
-    #reg_a = mode(var3_A)[0][0][0][0] / 100
-    #reg_b = mode(var3_B)[0][0][0][0] / 100
     reg_a = np.max(var3_A) / 1000
     reg_b = np.max(var3_B) / 1000
     var3_A = np.where(var3_A < reg_a, reg_a, var3_A)

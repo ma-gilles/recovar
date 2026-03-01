@@ -5,9 +5,10 @@ Created on Thu Sep 30 16:04:24 2021
 
 @author: marcaurele
 """
-import json, os, finufft
+import json
+import os
 
-from recovar.simulation.pdb_utils import AtomGroup as _AtomGroup, parse_pdb as _parse_pdb, write_pdb as _write_pdb
+import finufft
 
 # Try prody first; fall back to built-in pdb_utils
 try:
@@ -15,6 +16,8 @@ try:
     _HAS_PRODY = True
 except ImportError:
     _HAS_PRODY = False
+
+from recovar.simulation.pdb_utils import AtomGroup as _AtomGroup, parse_pdb as _parse_pdb, write_pdb as _write_pdb
 
 
 def _parsePDB(path_or_id):

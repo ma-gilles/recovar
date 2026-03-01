@@ -1,21 +1,26 @@
 """Volume I/O, result saving, and MRC file writing utilities."""
 
+import json
 import logging
-logger = logging.getLogger(__name__)
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib, pickle, os, json
-import recovar.heterogeneity.latent_density as ld
-import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar.heterogeneity import embedding
-from recovar.core import linalg
-from recovar.heterogeneity import trajectory
-from recovar import utils
-from recovar.data_io import dataset
-from recovar.reconstruction import regularization
-from recovar.output.output_paths import ResultPaths
-import matplotlib.patheffects as pe
+import os
+import pickle
 import time
+
+import matplotlib
+import matplotlib.patheffects as pe
+import matplotlib.pyplot as plt
+import numpy as np
+
+import recovar.core.fourier_transform_utils as fourier_transform_utils
+import recovar.heterogeneity.latent_density as ld
+from recovar import utils
+from recovar.core import linalg
+from recovar.data_io import dataset
+from recovar.heterogeneity import embedding, trajectory
+from recovar.output.output_paths import ResultPaths
+from recovar.reconstruction import regularization
+
+logger = logging.getLogger(__name__)
 
 def get_resampled_distances(gt_vols):
     return trajectory.get_cum_curvelength(gt_vols)
@@ -450,7 +455,7 @@ def save_pipeline_results(
 
     write_metadata_json(paths, result)
 
-    logger.info(f"Saved pipeline results to {paths.model_dir}")
+    logger.info("Saved pipeline results to %s", paths.model_dir)
 
 
 def write_metadata_json(paths, result):
@@ -503,7 +508,7 @@ def write_metadata_json(paths, result):
         with open(paths.metadata, 'w') as f:
             json.dump(metadata, f, indent=2)
     except Exception as e:
-        logger.warning(f"Could not write metadata.json: {e}")
+        logger.warning("Could not write metadata.json: %s", e)
 
 
 def kmeans_analysis(output_folder, zs, n_clusters = 20):
@@ -653,7 +658,7 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
         heterogeneity_distances = cryos.split_units_array(heterogeneity_distances)
 
         locres_maskrad = cryos.grid_size * cryos.voxel_size / maskrad_fraction
-        logger.info(f"Mask radius fraction = {maskrad_fraction}. Setting locres_maskrad = locres_sampling = box_size * voxel_size / {maskrad_fraction} = {locres_maskrad:.1f} Angstroms. Using {n_min_particles} particles for template.")
+        logger.info("Mask radius fraction = %s. Setting locres_maskrad = locres_sampling = box_size * voxel_size / %s = %.1f Angstroms. Using %d particles for template.", maskrad_fraction, maskrad_fraction, locres_maskrad, n_min_particles)
         heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, diag_dir, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely')
 
         # Move primary files from diagnostics to flat output
@@ -662,7 +667,7 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
         os.rename(os.path.join(diag_dir, "half1_unfil.mrc"), primary_stem + "_half1_unfil.mrc")
         os.rename(os.path.join(diag_dir, "half2_unfil.mrc"), primary_stem + "_half2_unfil.mrc")
 
-        logger.info(f"Done with volume {vol_idx}: {primary_stem}.mrc")
+        logger.info("Done with volume %d: %s.mrc", vol_idx, primary_stem)
 
     np.savetxt(os.path.join(output_folder, 'latent_coords.txt'), path_subsampled)
 
@@ -681,7 +686,7 @@ def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path, like
         # Create hexbin density plot for background
         try:
             ax.hexbin(zs[:,0], zs[:,1], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
-        except:
+        except Exception:
             pass
         
         greater_x = likelihoods[:,k] > vmin
@@ -836,8 +841,6 @@ class PipelineOutput:
                         self.embedding[entry][key] = self.embedding[entry][key][image_halfsets]
                     else:
                         self.embedding[entry][key] = self.embedding[entry][key][halfsets]
-                # for key in self.embedding[entry]:
-                #     self.embedding[entry][key] = self.embedding[entry][key][halfsets]
         self.embedding_loaded = True
         self._embedding_key_cache = {}
         return 
@@ -1057,7 +1060,7 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
 
         path_subsampled = trajectory.subsample_path(path_z, n_pts = n_vols_along_path)    
 
-        logger.info(f"after path {time.time() - st_time}")
+        logger.info("after path %.1fs", time.time() - st_time)
         #trajectory.subsample_path(path_z, n_pts = n_vols_along_path)
         # plot_over_density(density, None,latent_space_bounds,  colors = None, plot_folder = output_folder + 'density_nopath/', cmap = 'inferno')
         inp_dens = density if use_input_density else None
@@ -1086,7 +1089,7 @@ def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds,
     if plot_llh:
         plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path = output_folder, likelihood_threshold = None  )
 
-    logger.info(f"after all plots {time.time() - st_time}")
+    logger.info("after all plots %.1fs", time.time() - st_time)
     return path_z, path_subsampled
 
 
@@ -1118,7 +1121,7 @@ def plot_trajectories_over_scatter(trajectories,  subsampled = None, colors = No
         # Create hexbin density plot for background
         try:
             ax.hexbin(zs[:,axis_x], zs[:,axis_y], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
-        except:
+        except Exception:
             pass
         
         # Main scatter plot with improved styling
@@ -1168,7 +1171,7 @@ def umap_latent_space(zs):
     st_time = time.time()
     n_components = np.min([zs.shape[1], 2])
     mapper = umap.UMAP(n_components = n_components).fit(zs)
-    logger.info(f"time to umap: {time.time() - st_time}")
+    logger.info("time to umap: %.1fs", time.time() - st_time)
     return mapper
 
 
@@ -1224,7 +1227,7 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
                 # Use the first available key
                 first_key = list(zs_data.keys())[0]
                 z = zs_data[first_key]
-                logger.info(f"Using latent space with key {first_key} instead of 4")
+                logger.info("Using latent space with key %s instead of 4", first_key)
             else:
                 logger.warning("No valid latent coordinates found. Skipping PC analysis.")
                 return
@@ -1247,11 +1250,11 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
         
         # Validate data quality
         if z.shape[0] < 10:
-            logger.warning(f"Too few particles ({z.shape[0]}) for meaningful PC analysis. Skipping.")
+            logger.warning("Too few particles (%d) for meaningful PC analysis. Skipping.", z.shape[0])
             return
             
         if z.shape[1] < 2:
-            logger.warning(f"Too few dimensions ({z.shape[1]}) for PC analysis. Skipping.")
+            logger.warning("Too few dimensions (%d) for PC analysis. Skipping.", z.shape[1])
             return
             
         # Check for NaN or infinite values
@@ -1263,13 +1266,13 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
                 return
                 
     except Exception as e:
-        logger.error(f"Error loading latent coordinates: {e}")
+        logger.error("Error loading latent coordinates: %s", e)
         return
 
     # Determine number of PCs to plot based on available dimensions
     max_pcs = min(4, z.shape[1])
     if max_pcs < 2:
-        logger.warning(f"Only {max_pcs} dimensions available, cannot create pairwise plots.")
+        logger.warning("Only %d dimensions available, cannot create pairwise plots.", max_pcs)
         return
         
     # Calculate number of subplots needed
@@ -1293,7 +1296,7 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
         else:
             axes = axes.flatten()
     except Exception as e:
-        logger.error(f"Error creating subplots: {e}")
+        logger.error("Error creating subplots: %s", e)
         return
 
     # Generate pairwise combinations
@@ -1310,11 +1313,11 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
             y_data = z[:, j]
             
             if np.any(np.isnan(x_data)) or np.any(np.isnan(y_data)):
-                logger.warning(f"Skipping PC{i+1} vs PC{j+1} due to NaN values")
+                logger.warning("Skipping PC%d vs PC%d due to NaN values", i+1, j+1)
                 continue
                 
             if np.any(np.isinf(x_data)) or np.any(np.isinf(y_data)):
-                logger.warning(f"Skipping PC{i+1} vs PC{j+1} due to infinite values")
+                logger.warning("Skipping PC%d vs PC%d due to infinite values", i+1, j+1)
                 continue
             
             # Scatter plot
@@ -1330,10 +1333,10 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
                     axes[idx].hexbin(x_data, y_data, gridsize=min(30, len(x_data)//10), 
                                    alpha=0.3, cmap='Blues', mincnt=1)
             except Exception as e:
-                logger.debug(f"Could not add density contours for PC{i+1} vs PC{j+1}: {e}")
+                logger.debug("Could not add density contours for PC%d vs PC%d: %s", i+1, j+1, e)
                 
         except Exception as e:
-            logger.error(f"Error plotting PC{i+1} vs PC{j+1}: {e}")
+            logger.error("Error plotting PC%d vs PC%d: %s", i+1, j+1, e)
             # Hide the problematic subplot
             axes[idx].set_visible(False)
 
@@ -1348,10 +1351,10 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
         # Save with error handling
         output_path = os.path.join(output_folder, 'principal_component_space_analysis.png')
         plt.savefig(output_path, bbox_inches='tight', dpi=300)
-        logger.info(f"PC analysis plot saved to {output_path}")
+        logger.info("PC analysis plot saved to %s", output_path)
         
     except Exception as e:
-        logger.error(f"Error saving PC analysis plot: {e}")
+        logger.error("Error saving PC analysis plot: %s", e)
     finally:
         plt.close()
 
@@ -1360,7 +1363,7 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
         plot_utils.plot_pipeline_summary(po, zdim_key, output_folder)
         logger.info("Pipeline summary plot saved to %s", os.path.join(output_folder, 'pipeline_summary.png'))
     except Exception as e:
-        logger.warning(f"Could not generate pipeline summary plot: {e}")
+        logger.warning("Could not generate pipeline summary plot: %s", e)
 
     return
 

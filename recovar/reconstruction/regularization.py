@@ -1,15 +1,17 @@
 """Fourier-shell regularization priors and FSC computation."""
 
+import functools
 import logging
+
+import jax
 import jax.numpy as jnp
 import numpy as np
-import jax, functools
 import nvtx
 
-logger = logging.getLogger(__name__)
-
-from recovar import core, jax_config
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar import core, jax_config
+
+logger = logging.getLogger(__name__)
 
 # NVTX domain for regularization operations
 NVTX_DOMAIN_REG = "regularization"

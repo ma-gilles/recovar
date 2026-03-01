@@ -3,10 +3,12 @@ Utilities for loading CTF parameters and pose information from pickle files.
 Equivalent to cryodrgn/load
 """
 
-from recovar import utils
 import logging
+from typing import List, Optional, Tuple, Union
+
 import numpy as np
-from typing import Optional, Tuple, Union, List
+
+from recovar import utils
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +63,7 @@ def print_ctf_params(params: np.ndarray) -> None:
     ]
     
     for name, value in param_names:
-        logger.info(f"{name:18s}: {value}")
+        logger.info("%18s: %s", name, value)
 
 
 def load_ctf_params(D: int, ctf_params_pkl: str) -> np.ndarray:

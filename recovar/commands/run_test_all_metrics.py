@@ -248,8 +248,8 @@ def compute_noise_variance_metrics(
         logger.warning("No estimated noise variance found in pipeline output")
         return scores
 
-    logger.info(f"Ground truth noise shape: {gt_noise_base.shape}")
-    logger.info(f"Estimated noise shape: {est_noise.shape if isinstance(est_noise, np.ndarray) else 'not array'}")
+    logger.info("Ground truth noise shape: %s", gt_noise_base.shape)
+    logger.info("Estimated noise shape: %s", est_noise.shape if isinstance(est_noise, np.ndarray) else 'not array')
 
     if isinstance(est_noise, np.ndarray) and est_noise.ndim > 1:
         logger.info("Processing variable noise per tilt...")
@@ -364,7 +364,7 @@ def compute_noise_variance_metrics(
         noise_plot_path = os.path.join(plots_dir, "noise_variance_comparison_per_tilt.png")
         plt.savefig(noise_plot_path)
         plt.close()
-        logger.info(f"Noise variance comparison plot (per tilt) saved to: {noise_plot_path}")
+        logger.info("Noise variance comparison plot (per tilt) saved to: %s", noise_plot_path)
 
         if len(tilt_mean_errors) == 0:
             logger.warning("No valid per-tilt noise rows were processed; skipping aggregate metrics.")
@@ -418,7 +418,7 @@ def compute_noise_variance_metrics(
     noise_plot_path = os.path.join(plots_dir, "noise_variance_comparison.png")
     plt.savefig(noise_plot_path)
     plt.close()
-    logger.info(f"Noise variance comparison plot saved to: {noise_plot_path}")
+    logger.info("Noise variance comparison plot saved to: %s", noise_plot_path)
     return scores
 
 
@@ -717,7 +717,7 @@ def main():
             prefix_name=Path(gen_prefix).name,
             output_prefix=gen_prefix,
         )
-        logger.info(f"Using generated volume input prefix: {args.volume_input}")
+        logger.info("Using generated volume input prefix: %s", args.volume_input)
 
     # Dump parser arguments to a JSON file.
     dump_json_path = os.path.join(args.output_dir, "parser_args.json")
@@ -738,7 +738,7 @@ def main():
         try:
             gpu_devices = jax.devices('gpu')
             if gpu_devices:
-                logger.info(f"GPU devices found: {gpu_devices}")
+                logger.info("GPU devices found: %s", gpu_devices)
             else:
                 error_message("No GPU devices found. Please ensure JAX is properly configured with CUDA.")
         except Exception as e:
@@ -761,7 +761,7 @@ def main():
         unique_doses, dose_counts = np.unique(sim_info['dose_indices'], return_counts=True)
         logger.info("\nDose index distribution:")
         for dose, count in zip(unique_doses, dose_counts):
-            logger.info(f"Dose index {dose}: {count} images ({count/len(sim_info['dose_indices'])*100:.1f}%)")
+            logger.info("Dose index %s: %s images (%.1f%)", dose, count, count/len(sim_info['dose_indices'])*100)
         
         # Save dose distribution to a file
         dose_dist_path = os.path.join(dataset_dir, 'dose_distribution.txt')
@@ -769,7 +769,7 @@ def main():
             f.write("Dose index distribution:\n")
             for dose, count in zip(unique_doses, dose_counts):
                 f.write(f"Dose index {dose}: {count} images ({count/len(sim_info['dose_indices'])*100:.1f}%)\n")
-        logger.info(f"\nDose distribution saved to {dose_dist_path}")
+        logger.info("\nDose distribution saved to %s", dose_dist_path)
     else:
         logger.info("No dose indices found in simulation info - skipping dose distribution analysis")
 
@@ -1013,7 +1013,7 @@ def main():
             os.makedirs(diag_dir, exist_ok=True)
             mask_path = os.path.join(diag_dir, 'mask.mrc')
             utils.write_mrc(mask_path, mask.astype(np.float32), voxel_size=cryos[0].voxel_size)
-            logger.info(f"Mask written to: {mask_path}")
+            logger.info("Mask written to: %s", mask_path)
 
     logger.info("Computing noise variance estimation metrics...")
     all_scores.update(
@@ -1123,7 +1123,7 @@ def main():
             with open(scores_file, "r") as f:
                 old_scores = json.load(f)
         except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Could not parse previous scores file {scores_file}: {e}. Skipping comparison.")
+            logger.warning("Could not parse previous scores file %s: %s. Skipping comparison.", scores_file, e)
     else:
         logger.info("No previous scores file found; skipping comparison.")
 
@@ -1152,13 +1152,13 @@ def main():
         comparison_plot_path = os.path.join(plots_dir, "scores_comparison.png")
         plt.savefig(comparison_plot_path)
         plt.close()
-        logger.info(f"Score comparison plot saved at: {comparison_plot_path}")
+        logger.info("Score comparison plot saved at: %s", comparison_plot_path)
 
     all_scores = normalize_scores_for_json(all_scores)
 
     with open(scores_file, "w") as f:
         json.dump(all_scores, f, indent=2)
-    logger.info(f"All scores saved to: {scores_file}")
+    logger.info("All scores saved to: %s", scores_file)
 
     baseline_path = resolve_metrics_baseline_path(args)
     if baseline_path is None:
@@ -1171,7 +1171,7 @@ def main():
     if write_baseline:
         with open(baseline_path, "w") as f:
             json.dump(all_scores, f, indent=2)
-        logger.info(f"Metrics baseline written to: {baseline_path}")
+        logger.info("Metrics baseline written to: %s", baseline_path)
         with open(regression_report_path, "w") as f:
             json.dump(
                 {
@@ -1213,14 +1213,14 @@ def main():
     if failures:
         logger.error("Metric regressions detected against baseline:")
         for failure in failures:
-            logger.error(f"  {failure}")
+            logger.error("  %s", failure)
         if not args.skip_metrics_regression_check:
             error_message(
                 f"{len(failures)} metric regressions detected. See {regression_report_path} "
                 "or pass --skip-metrics-regression-check to continue."
             )
     else:
-        logger.info(f"Metrics regression check passed for {checked} metrics (tol={args.metrics_regression_tol_frac}).")
+        logger.info("Metrics regression check passed for %s metrics (tol=%s).", checked, args.metrics_regression_tol_frac)
 
 
 if __name__ == "__main__":

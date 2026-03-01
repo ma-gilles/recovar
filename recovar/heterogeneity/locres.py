@@ -38,16 +38,16 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
     maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
 
     if maskrad_pix < 5:
-        logger.warning(f"radius of local resolution mask is only {maskrad_pix} pixels. Result will probably be nonsense. Should either increase locres_maskrad or do global resolution estimate")
+        logger.warning("radius of local resolution mask is only %s pixels. Result will probably be nonsense. Should either increase locres_maskrad or do global resolution estimate", maskrad_pix)
 
     edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
-    # logger.info(f"Step size: {step_size}, maskrad_pix: {maskrad_pix}, edgewidth_pix: {edgewidth_pix}")
+    # logger.info("Step size: %s, maskrad_pix: %s, edgewidth_pix: %s", step_size, maskrad_pix, edgewidth_pix)
     # myrad = map1.shape[0]//2 - 1*maskrad_pix
     # myrad = 40
     # myradf = myrad / step_size
     # sampling_points = []
 
-    # logger.info(f"Starting...")
+    # logger.info("Starting...")
 
     # grid = np.array(fourier_transform_utils.get_1d_frequency_grid(map1.shape[0], 1, scaled = False)[::step_size])
     # for kk in grid:
@@ -67,7 +67,7 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
 
     nr_samplings = sampling_points.shape[0]
 
-    # logger.info(f"Calculating local resolution in {nr_samplings} sampling points ...")
+    # logger.info("Calculating local resolution in %s sampling points ...", nr_samplings)
     if filter_map1:
         ft_sum = fourier_transform_utils.get_dft3(map1)
     else:
@@ -130,7 +130,7 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
 
     # i_fil3 = jnp.where( i_sum_w > 0,  i_fil / i_sum_w, 0)
     i_fil = make_i_fil_map(sampling_points, i_fil, full_mask)
-    # logger.info(f"Done")
+    # logger.info("Done")
 
     return i_fil, i_loc_res, i_loc_auc, fscs, local_resols#, sampling_points
 
@@ -458,15 +458,15 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
     edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
 
     step_size = np.round(locres_sampling / voxel_size).astype(int)
-    # logger.info(f"Step size: {step_size}, maskrad_pix: {maskrad_pix}, edgewidth_pix: {edgewidth_pix}")
-    # logger.info(f"Compute CV metric with sampling = {locres_sampling} and radius = {locres_maskrad} and edgewidth = {locres_edgwidth}")
+    # logger.info("Step size: %s, maskrad_pix: %s, edgewidth_pix: %s", step_size, maskrad_pix, edgewidth_pix)
+    # logger.info("Compute CV metric with sampling = %s and radius = %s and edgewidth = %s", locres_sampling, locres_maskrad, locres_edgwidth)
 
 
     # myrad = 40
     # myradf = myrad / step_size
     # sampling_points = []
 
-    # # logger.info(f"Starting...")
+    # # logger.info("Starting...")
 
     # grid = np.array(fourier_transform_utils.get_1d_frequency_grid(map1.shape[0], 1, scaled = False)[::step_size])
     # for kk in grid:
@@ -484,7 +484,7 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
 
     nr_samplings = sampling_points.shape[0]
 
-    # logger.info(f"Calculating local error in {nr_samplings} sampling points ...")
+    # logger.info("Calculating local error in %s sampling points ...", nr_samplings)
     
 
     # for now will do batch of 1.
@@ -738,21 +738,21 @@ def recombine_estimates(estimators, choice, voxel_size, locres_sampling = 25, lo
     # Default edge width kept at 0 for recombination path.
     locres_edgwidth = 0 if locres_edgwidth is None else locres_edgwidth
     
-    logger.info(f"Recombining estimate with sampling = {locres_sampling} and radius = {locres_maskrad} and edgewidth = {locres_edgwidth}")
+    logger.info("Recombining estimate with sampling = %s and radius = %s and edgewidth = %s", locres_sampling, locres_maskrad, locres_edgwidth)
 
     step_size = np.round(locres_sampling / voxel_size).astype(int)
     maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
 
     if maskrad_pix < 5:
-        logger.warning(f"radius of local resolution mask is only {maskrad_pix} pixels. Result will probably be nonsense. Should either increase locres_maskrad or do global resolution estimate")
+        logger.warning("radius of local resolution mask is only %s pixels. Result will probably be nonsense. Should either increase locres_maskrad or do global resolution estimate", maskrad_pix)
 
     edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
-    logger.info(f"Step size: {step_size}, maskrad_pix: {maskrad_pix}, edgewidth_pix: {edgewidth_pix}")
-    logger.info(f"Starting...")
+    logger.info("Step size: %s, maskrad_pix: %s, edgewidth_pix: %s", step_size, maskrad_pix, edgewidth_pix)
+    logger.info("Starting...")
     sampling_points = get_sampling_points(estimators.shape[1], locres_sampling, locres_maskrad, voxel_size)
 
     nr_samplings = sampling_points.shape[0]
-    logger.info(f"Recombining estimates at {nr_samplings} sampling points ...")
+    logger.info("Recombining estimates at %s sampling points ...", nr_samplings)
 
     # for now will do batch of 1.
     # Put stuff on GPU

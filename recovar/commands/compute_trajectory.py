@@ -95,9 +95,9 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
 
         elif zdim is None:
             zdim = zs_keys[0]
-            logger.info(f"using zdim={zdim}")
+            logger.info("using zdim=%s", zdim)
         noreg_suffix = '_noreg' if no_z_reg else ''
-        logger.info(f"using zdim={zdim}{noreg_suffix}")
+        logger.info("using zdim=%s%s", zdim, noreg_suffix)
         assert output_folder is not None
 
         if zdim not in zs_keys:
@@ -125,7 +125,7 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
             dens_pkl = utils.pickle_load(density_path)
             input_density = dens_pkl['density']
             latent_space_bounds = dens_pkl['latent_space_bounds']
-            logger.warning(f"density dimension is less than zs dimension, truncate zs dimension to match density dimension = {input_density.ndim}")
+            logger.warning("density dimension is less than zs dimension, truncate zs dimension to match density dimension = %s", input_density.ndim)
             zdim = input_density.ndim
             zs = zs[:, :zdim]
             cov_zs = cov_zs[:, :zdim, :zdim]
@@ -140,11 +140,11 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
         if zs.shape[1] > z_st.shape[0]:
             z_st = np.concatenate([z_st, np.zeros(zs.shape[1] - z_st.shape[0])])
             z_end = np.concatenate([z_end, np.zeros(zs.shape[1] - z_end.shape[0])])
-            logger.warning(f"endpoints are padded with 0 to match zs dimension = {zs.shape[1]}")
+            logger.warning("endpoints are padded with 0 to match zs dimension = %s", zs.shape[1])
         elif zs.shape[1] < z_st.shape[0]:
             z_st = z_st[:zs.shape[1]]
             z_end = z_end[:zs.shape[1]]
-            logger.warning(f"endpoints are truncated to match zs dimension = {zs.shape[1]}")
+            logger.warning("endpoints are truncated to match zs dimension = %s", zs.shape[1])
 
         if args is not None:
             B_factor = args.Bfactor

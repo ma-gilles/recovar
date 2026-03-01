@@ -1,19 +1,20 @@
 """Visualization helpers: FSC plots, volume slices, embedding scatter."""
 
 import logging
-from matplotlib import colors as mcolors
+
+import jax.numpy as jnp
 import matplotlib
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib import colors as mcolors
 
-logger = logging.getLogger(__name__)
-
-import jax.numpy as jnp
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import utils
-from recovar.reconstruction import regularization
 from recovar.output import metrics
+from recovar.reconstruction import regularization
+
+logger = logging.getLogger(__name__)
 colors = dict(mcolors.BASE_COLORS, **mcolors.CSS4_COLORS)
 
 names_to_show = { "diagonal": "diagonal", "wilson": "Wilson", "diagonal masked": "diagonal masked", "wilson masked": "Wilson masked" }
@@ -761,7 +762,7 @@ def plot_pipeline_summary(po, zdim_key, output_folder):
         plot_noise_profile(po, ax=ax_noise)
         ax_noise.set_title('Noise Profile', fontsize=12, fontweight='bold')
     except Exception as e:
-        logger.debug(f"Could not plot noise profile in summary: {e}")
+        logger.debug("Could not plot noise profile in summary: %s", e)
         ax_noise.text(0.5, 0.5, 'Noise profile\nnot available', ha='center', va='center', transform=ax_noise.transAxes)
 
     # (2,1) PC2 vs PC3
@@ -780,7 +781,7 @@ def plot_pipeline_summary(po, zdim_key, output_folder):
         contrasts = po.get('contrasts')[zdim_key]
         plot_contrast_histogram(contrasts, ax=ax_contrast, zdim_key=zdim_key)
     except Exception as e:
-        logger.debug(f"Could not plot contrast histogram in summary: {e}")
+        logger.debug("Could not plot contrast histogram in summary: %s", e)
         ax_contrast.text(0.5, 0.5, 'Contrast histogram\nnot available', ha='center', va='center', transform=ax_contrast.transAxes)
 
     fig.suptitle('RECOVAR Pipeline Summary', fontsize=16, fontweight='bold', y=1.01)

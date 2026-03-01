@@ -41,10 +41,10 @@ def extract_image_subset(input_dir, output_path, subvolume_idx, mask, coordinate
         grid_size = utils.load_mrc(os.path.join(input_dir, "local_resolution.mrc")).shape[0]
         sampling_points = locres.get_sampling_points(grid_size, params['locres_sampling'], params['locres_maskrad'], params['voxel_size']) + grid_size // 2
         subvolume_idx = nearest_point_index(coordinate, sampling_points)
-        logger.info(f"Extract images for feature at coordinate = {coordinate} (pixels), Nearest point to the coordinate is {subvolume_idx}")
+        logger.info("Extract images for feature at coordinate = %s (pixels), Nearest point to the coordinate is %s", coordinate, subvolume_idx)
 
     good_indices = heterogeneity_volume.get_inds_for_subvolume(input_dir, subvolume_idx)
-    logger.info(f"Found {good_indices.size} images. Saving indices of subset of images")
+    logger.info("Found %s images. Saving indices of subset of images", good_indices.size)
     utils.pickle_dump(good_indices, output_path)
 
 

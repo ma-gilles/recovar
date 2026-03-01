@@ -93,7 +93,7 @@ def copy_data_to_temp_folder(args):
     else:
         temp_folder = args.copy_to_folder
         os.makedirs(temp_folder, exist_ok=True)
-    logger.info(f"Copying data to temporary folder: {temp_folder}")
+    logger.info("Copying data to temporary folder: %s", temp_folder)
     
     # Store original and temporary paths
     path_mapping = {
@@ -108,11 +108,11 @@ def copy_data_to_temp_folder(args):
     if args.particles and os.path.exists(args.particles):
         temp_particles = os.path.join(temp_folder, os.path.basename(args.particles))
         if _is_file_cached(args.particles, temp_folder):
-            logger.info(f"Particles file already cached, skipping copy: {temp_particles}")
+            logger.info("Particles file already cached, skipping copy: %s", temp_particles)
         else:
             shutil.copy2(args.particles, temp_particles)
             _update_file_cache(args.particles, temp_folder, temp_particles)
-            logger.info(f"Copied particles file to: {temp_particles}")
+            logger.info("Copied particles file to: %s", temp_particles)
         args.particles = temp_particles
         path_mapping['temp_particles'] = temp_particles
 
@@ -146,11 +146,11 @@ def copy_data_to_temp_folder(args):
     if args.poses and os.path.exists(args.poses):
         temp_poses = os.path.join(temp_folder, os.path.basename(args.poses))
         if _is_file_cached(args.poses, temp_folder):
-            logger.info(f"Poses file already cached, skipping copy: {temp_poses}")
+            logger.info("Poses file already cached, skipping copy: %s", temp_poses)
         else:
             shutil.copy2(args.poses, temp_poses)
             _update_file_cache(args.poses, temp_folder, temp_poses)
-            logger.info(f"Copied poses file to: {temp_poses}")
+            logger.info("Copied poses file to: %s", temp_poses)
         args.poses = temp_poses
         path_mapping['temp_poses'] = temp_poses
     
@@ -158,11 +158,11 @@ def copy_data_to_temp_folder(args):
     if args.ctf and os.path.exists(args.ctf):
         temp_ctf = os.path.join(temp_folder, os.path.basename(args.ctf))
         if _is_file_cached(args.ctf, temp_folder):
-            logger.info(f"CTF file already cached, skipping copy: {temp_ctf}")
+            logger.info("CTF file already cached, skipping copy: %s", temp_ctf)
         else:
             shutil.copy2(args.ctf, temp_ctf)
             _update_file_cache(args.ctf, temp_folder, temp_ctf)
-            logger.info(f"Copied CTF file to: {temp_ctf}")
+            logger.info("Copied CTF file to: %s", temp_ctf)
         args.ctf = temp_ctf
         path_mapping['temp_ctf'] = temp_ctf
     
@@ -172,7 +172,7 @@ def copy_data_to_temp_folder(args):
         shutil.copytree(args.datadir, temp_datadir, dirs_exist_ok=True)
         args.datadir = temp_datadir
         path_mapping['temp_datadir'] = temp_datadir
-        logger.info(f"Copied datadir to: {temp_datadir}")
+        logger.info("Copied datadir to: %s", temp_datadir)
     
     # Copy mask file if it exists
     if hasattr(args, 'mask') and args.mask and os.path.exists(args.mask):
@@ -182,7 +182,7 @@ def copy_data_to_temp_folder(args):
         args.mask = temp_mask
         path_mapping['original_mask'] = original_mask
         path_mapping['temp_mask'] = temp_mask
-        logger.info(f"Copied mask file to: {temp_mask}")
+        logger.info("Copied mask file to: %s", temp_mask)
     
     # Copy focus mask file if it exists
     if hasattr(args, 'focus_mask') and args.focus_mask and os.path.exists(args.focus_mask):
@@ -192,7 +192,7 @@ def copy_data_to_temp_folder(args):
         args.focus_mask = temp_focus_mask
         path_mapping['original_focus_mask'] = original_focus_mask
         path_mapping['temp_focus_mask'] = temp_focus_mask
-        logger.info(f"Copied focus mask file to: {temp_focus_mask}")
+        logger.info("Copied focus mask file to: %s", temp_focus_mask)
     
     # Copy index files if they exist
     if hasattr(args, 'ind') and args.ind and os.path.exists(args.ind):
@@ -202,7 +202,7 @@ def copy_data_to_temp_folder(args):
         args.ind = temp_ind
         path_mapping['original_ind'] = original_ind
         path_mapping['temp_ind'] = temp_ind
-        logger.info(f"Copied index file to: {temp_ind}")
+        logger.info("Copied index file to: %s", temp_ind)
     
     if hasattr(args, 'tilt_ind') and args.tilt_ind and os.path.exists(args.tilt_ind):
         original_tilt_ind = args.tilt_ind  # Store original path before changing it
@@ -211,7 +211,7 @@ def copy_data_to_temp_folder(args):
         args.tilt_ind = temp_particle_ind
         path_mapping['original_tilt_ind'] = original_tilt_ind
         path_mapping['temp_particle_ind'] = temp_particle_ind
-        logger.info(f"Copied particle index file to: {temp_particle_ind}")
+        logger.info("Copied particle index file to: %s", temp_particle_ind)
     
     if hasattr(args, 'halfsets') and args.halfsets and os.path.exists(args.halfsets):
         original_halfsets = args.halfsets  # Store original path before changing it
@@ -220,7 +220,7 @@ def copy_data_to_temp_folder(args):
         args.halfsets = temp_halfsets
         path_mapping['original_halfsets'] = original_halfsets
         path_mapping['temp_halfsets'] = temp_halfsets
-        logger.info(f"Copied halfsets file to: {temp_halfsets}")
+        logger.info("Copied halfsets file to: %s", temp_halfsets)
     
     logger.info("Data copying completed")
     return path_mapping
@@ -284,7 +284,7 @@ def save_original_paths_info(path_mapping, output_dir):
             if key.startswith('temp_'):
                 text_file.write(f"{key}: {value}\n")
     
-    logger.info(f"Original paths saved to: {paths_file}")
+    logger.info("Original paths saved to: %s", paths_file)
 
 
 def copy_specific_files_to_temp(file_paths, temp_folder, file_types=None):
@@ -315,14 +315,14 @@ def copy_specific_files_to_temp(file_paths, temp_folder, file_types=None):
                 shutil.copytree(file_path, temp_path, dirs_exist_ok=True)
                 path_mapping[f'original_{file_type}'] = file_path
                 path_mapping[f'temp_{file_type}'] = temp_path
-                logger.info(f"Copied directory {file_type} to: {temp_path}")
+                logger.info("Copied directory %s to: %s", file_type, temp_path)
             else:
                 # Copy file
                 temp_path = os.path.join(temp_folder, os.path.basename(file_path))
                 shutil.copy2(file_path, temp_path)
                 path_mapping[f'original_{file_type}'] = file_path
                 path_mapping[f'temp_{file_type}'] = temp_path
-                logger.info(f"Copied file {file_type} to: {temp_path}")
+                logger.info("Copied file %s to: %s", file_type, temp_path)
     
     return path_mapping
 
@@ -354,26 +354,26 @@ def cleanup_temp_files(path_mapping):
     if temp_folder and os.path.exists(temp_folder):
         try:
             shutil.rmtree(temp_folder)
-            logger.info(f"Cleaned up temporary folder: {temp_folder}")
+            logger.info("Cleaned up temporary folder: %s", temp_folder)
         except Exception as e:
-            logger.warning(f"Failed to clean up temporary folder {temp_folder}: {e}")
+            logger.warning("Failed to clean up temporary folder %s: %s", temp_folder, e)
             # Try to remove individual files if rmtree fails
             try:
                 for root, dirs, files in os.walk(temp_folder, topdown=False):
                     for name in files:
                         try:
                             os.remove(os.path.join(root, name))
-                        except:
+                        except Exception:
                             pass
                     for name in dirs:
                         try:
                             os.rmdir(os.path.join(root, name))
-                        except:
+                        except Exception:
                             pass
                 os.rmdir(temp_folder)
-                logger.info(f"Cleaned up temporary folder using fallback method: {temp_folder}")
+                logger.info("Cleaned up temporary folder using fallback method: %s", temp_folder)
             except Exception as e2:
-                logger.error(f"Failed to clean up temporary folder {temp_folder} even with fallback: {e2}")
+                logger.error("Failed to clean up temporary folder %s even with fallback: %s", temp_folder, e2)
     
     # Clear cache entries for this temp folder
     global _file_copy_cache
@@ -386,4 +386,4 @@ def cleanup_temp_files(path_mapping):
         del _file_copy_cache[filepath]
     
     if files_to_remove:
-        logger.info(f"Cleared {len(files_to_remove)} cache entries for temp folder: {temp_folder}") 
+        logger.info("Cleared %s cache entries for temp folder: %s", len(files_to_remove), temp_folder) 

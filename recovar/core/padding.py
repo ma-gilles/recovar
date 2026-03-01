@@ -1,8 +1,9 @@
 """Real-space zero-padding and unpadding for Fourier oversampling."""
 
-import jax.numpy as jnp
-import jax
 import functools
+
+import jax
+import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 

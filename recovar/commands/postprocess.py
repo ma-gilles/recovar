@@ -286,9 +286,9 @@ def estimate_bfactor_from_halfmaps(halfmap1, voxel_size, plot_path=None):
         
         # Debug: Let's also calculate what the actual frequency range should be
         nyquist_freq = 1.0 / (2 * voxel_size)
-        logger.debug(f"Nyquist frequency: {nyquist_freq:.4f} 1/Å")
-        logger.debug(f"Frequency step: {freq_step:.6f} 1/Å")
-        logger.debug(f"Max frequency in shells: {freq_shells[-1]:.4f} 1/Å")
+        logger.debug("Nyquist frequency: %.4f 1/Å", nyquist_freq)
+        logger.debug("Frequency step: %.6f 1/Å", freq_step)
+        logger.debug("Max frequency in shells: %.4f 1/Å", freq_shells[-1])
         
         for i in range(nbins):
             mask = (r_flat >= i) & (r_flat < i + 1)
@@ -353,11 +353,11 @@ def estimate_bfactor_from_halfmaps(halfmap1, voxel_size, plot_path=None):
         resolutions = 1.0 / freq_shells[valid_freq]  # Convert frequency to resolution in Angstrom
         x = 1.0 / (resolutions ** 2)  # This is 1/resolution² (RELION's onepoint.x)
         y = log_power[valid_freq]  # This is log(amplitude) (RELION's onepoint.y)
-        logger.info(f"B-factor estimation: using {np.sum(valid_freq)} shells from {len(freq_shells)} total")
-        logger.info(f"Frequency range: {freq_shells[valid_freq].min():.4f} to {freq_shells[valid_freq].max():.4f} 1/Å")
-        logger.info(f"Resolution range: {1/freq_shells[valid_freq].max():.1f} to {1/freq_shells[valid_freq].min():.1f} Å")
-        logger.info(f"Log power range: {y.min():.3f} to {y.max():.3f}")
-        logger.info(f"1/Resolution² range: {x.min():.6f} to {x.max():.6f} 1/Å²")
+        logger.info("B-factor estimation: using %s shells from %s total", np.sum(valid_freq), len(freq_shells))
+        logger.info("Frequency range: %.4f to %.4f 1/Å", freq_shells[valid_freq].min(), freq_shells[valid_freq].max())
+        logger.info("Resolution range: %.1f to %.1f Å", 1/freq_shells[valid_freq].max(), 1/freq_shells[valid_freq].min())
+        logger.info("Log power range: %.3f to %.3f", y.min(), y.max())
+        logger.info("1/Resolution² range: %.6f to %.6f 1/Å²", x.min(), x.max())
         
         # Step 6: Simple and robust linear fitting
         bfactor = 0.0
@@ -389,24 +389,24 @@ def estimate_bfactor_from_halfmaps(halfmap1, voxel_size, plot_path=None):
             r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
             
             # Debug: Show the actual fitting data
-            logger.info(f"Fitting data points: {len(x)}")
-            logger.info(f"X range: {x.min():.6f} to {x.max():.6f} 1/Å²")
-            logger.info(f"Y range: {y.min():.3f} to {y.max():.3f}")
-            logger.info(f"First 5 X values: {x[:5]}")
-            logger.info(f"First 5 Y values: {y[:5]}")
+            logger.info("Fitting data points: %s", len(x))
+            logger.info("X range: %.6f to %.6f 1/Å²", x.min(), x.max())
+            logger.info("Y range: %.3f to %.3f", y.min(), y.max())
+            logger.info("First 5 X values: %s", x[:5])
+            logger.info("First 5 Y values: %s", y[:5])
             
             # Check for reasonable B-factor range (RELION typically uses -500 to 500)
             if -500 < bfactor < 500:
                 fit_method = "linear_regression"
                 log_p0 = intercept
-                logger.info(f"Linear regression fit: B={bfactor:.1f} Å², R²={r_squared:.3f}")
-                logger.info(f"Slope: {slope:.6f}, Intercept: {intercept:.3f}")
+                logger.info("Linear regression fit: B=%.1f Å², R²=%.3f", bfactor, r_squared)
+                logger.info("Slope: %.6f, Intercept: %.3f", slope, intercept)
             else:
-                logger.warning(f"B-factor out of reasonable range: {bfactor:.1f} Å²")
+                logger.warning("B-factor out of reasonable range: %.1f Å²", bfactor)
                 fit_method = "none"
                 
         except Exception as e:
-            logger.warning(f"Linear regression failed: {e}")
+            logger.warning("Linear regression failed: %s", e)
             fit_method = "none"
         
         # Fallback to zero if fitting failed
@@ -416,7 +416,7 @@ def estimate_bfactor_from_halfmaps(halfmap1, voxel_size, plot_path=None):
             log_p0 = np.max(y)
             fit_method = "fallback"
         
-        logger.info(f"Final B-factor estimation: {bfactor:.1f} Angstrom^2 (method: {fit_method}, R²={r_squared:.3f})")
+        logger.info("Final B-factor estimation: %.1f Angstrom^2 (method: %s, R²=%.3f)", bfactor, fit_method, r_squared)
         
         # Step 7: Generate diagnostic plot
         if plot_path is not None:
@@ -425,14 +425,14 @@ def estimate_bfactor_from_halfmaps(halfmap1, voxel_size, plot_path=None):
                     freq_shells, log_power, valid_freq, x, y, 
                     bfactor, log_p0, fit_method, r_squared, plot_path
                 )
-                logger.info(f"Diagnostic plot saved: {plot_path}")
+                logger.info("Diagnostic plot saved: %s", plot_path)
             except Exception as e:
-                logger.warning(f"Failed to create diagnostic plot: {e}")
+                logger.warning("Failed to create diagnostic plot: %s", e)
         
         return bfactor
         
     except Exception as e:
-        logger.error(f"B-factor estimation failed: {e}")
+        logger.error("B-factor estimation failed: %s", e)
         raise RuntimeError(f"B-factor estimation failed: {e}")
 
 
@@ -673,7 +673,7 @@ def estimate_bfactor_from_fsc_weighted_halfmaps(halfmap1, halfmap2, voxel_size, 
                 log_p0 = intercept
                 fit_range = (x.min(), x.max())
         except Exception as e:
-            logger.warning(f"Linear regression failed: {e}")
+            logger.warning("Linear regression failed: %s", e)
             bfactor = 0.0
             fit_method = "fallback"
         bfactor_results.append((label, bfactor, r_squared, fit_range))
@@ -720,9 +720,9 @@ def local_filter_halfmaps(halfmap1_path, halfmap2_path, voxel_size, output_path,
     """Apply local FSC filtering to a pair of halfmaps."""
     
     # Load halfmaps
-    logger.info(f"Loading halfmaps:")
-    logger.info(f"  Halfmap1: {halfmap1_path}")
-    logger.info(f"  Halfmap2: {halfmap2_path}")
+    logger.info("Loading halfmaps:")
+    logger.info("  Halfmap1: %s", halfmap1_path)
+    logger.info("  Halfmap2: %s", halfmap2_path)
     
     halfmap1 = utils.load_mrc(halfmap1_path)
     halfmap2 = utils.load_mrc(halfmap2_path)
@@ -731,18 +731,18 @@ def local_filter_halfmaps(halfmap1_path, halfmap2_path, voxel_size, output_path,
     fsc_mask = None
     if fsc_mask_path is not None:
         fsc_mask = utils.load_mrc(fsc_mask_path)
-        logger.info(f"Loaded FSC mask: {fsc_mask_path}")
+        logger.info("Loaded FSC mask: %s", fsc_mask_path)
     
     # Load apply mask if provided
     apply_mask = None
     if apply_mask_path is not None:
         apply_mask = utils.load_mrc(apply_mask_path)
-        logger.info(f"Loaded apply mask: {apply_mask_path}")
+        logger.info("Loaded apply mask: %s", apply_mask_path)
     
     # If voxel_size is None, get from MRC file
     if voxel_size is None:
         voxel_size = get_voxel_size_from_mrc(halfmap1_path)
-        logger.info(f"Read voxel size {voxel_size} from {halfmap1_path}")
+        logger.info("Read voxel size %s from %s", voxel_size, halfmap1_path)
     
     # Estimate B-factor if requested
     estimated_bfactor = None
@@ -754,22 +754,22 @@ def local_filter_halfmaps(halfmap1_path, halfmap2_path, voxel_size, output_path,
             bfactor_plot_prefix = output_path
         estimated_bfactor = estimate_bfactor_from_fsc_weighted_halfmaps(
             halfmap1, halfmap2, voxel_size, plot_prefix=bfactor_plot_prefix, fsc_mask=fsc_mask)
-        logger.info(f"Estimated B-factor (RELION-style, FSC-weighted): {estimated_bfactor:.2f} Angstrom^2")
-        logger.info(f"Saved B-factor diagnostic plots with prefix: {bfactor_plot_prefix}")
+        logger.info("Estimated B-factor (RELION-style, FSC-weighted): %.2f Angstrom^2", estimated_bfactor)
+        logger.info("Saved B-factor diagnostic plots with prefix: %s", bfactor_plot_prefix)
         if B_factor is None:
             B_factor = estimated_bfactor
         else:
-            logger.warning(f"Using user-supplied B-factor {B_factor}, ignoring estimated value {estimated_bfactor:.2f}")
+            logger.warning("Using user-supplied B-factor %s, ignoring estimated value %.2f", B_factor, estimated_bfactor)
     
     # Apply local filtering
     logger.info("Applying local FSC filtering...")
-    logger.info(f"Local resolution parameters:")
-    logger.info(f"  Sampling: {locres_sampling} Angstroms")
-    logger.info(f"  Mask radius: {locres_maskrad} Angstroms")
-    logger.info(f"  Edge width: {locres_edgwidth} Angstroms")
-    logger.info(f"  Min resolution: {locres_minres} Angstroms")
-    logger.info(f"  FSC threshold: {fsc_threshold}")
-    logger.info(f"  Filter edge width: {filter_edgewidth} pixels")
+    logger.info("Local resolution parameters:")
+    logger.info("  Sampling: %s Angstroms", locres_sampling)
+    logger.info("  Mask radius: %s Angstroms", locres_maskrad)
+    logger.info("  Edge width: %s Angstroms", locres_edgwidth)
+    logger.info("  Min resolution: %s Angstroms", locres_minres)
+    logger.info("  FSC threshold: %s", fsc_threshold)
+    logger.info("  Filter edge width: %s pixels", filter_edgewidth)
     
     # Apply mask to halfmaps if provided
     if apply_mask is not None:
@@ -811,18 +811,18 @@ def local_filter_halfmaps(halfmap1_path, halfmap2_path, voxel_size, output_path,
         min_resol = np.min(local_resol_map[valid_mask])
         max_resol = np.max(local_resol_map[valid_mask])
         
-        logger.info(f"Local resolution statistics (valid voxels only):")
-        logger.info(f"  Median: {median_resol:.2f} Angstroms")
-        logger.info(f"  Mean: {mean_resol:.2f} Angstroms")
-        logger.info(f"  Min: {min_resol:.2f} Angstroms")
-        logger.info(f"  Max: {max_resol:.2f} Angstroms")
+        logger.info("Local resolution statistics (valid voxels only):")
+        logger.info("  Median: %.2f Angstroms", median_resol)
+        logger.info("  Mean: %.2f Angstroms", mean_resol)
+        logger.info("  Min: %.2f Angstroms", min_resol)
+        logger.info("  Max: %.2f Angstroms", max_resol)
     else:
         logger.warning("No valid local resolution values found")
         median_resol = np.nan
     
-    logger.info(f"Filtered map saved: {output_path}")
-    logger.info(f"Local resolution map saved: {local_resol_path}")
-    logger.info(f"Local AUC map saved: {local_auc_path}")
+    logger.info("Filtered map saved: %s", output_path)
+    logger.info("Local resolution map saved: %s", local_resol_path)
+    logger.info("Local AUC map saved: %s", local_auc_path)
     
     # Save info file
     if output_path.endswith('.mrc'):
@@ -859,7 +859,7 @@ def local_filter_halfmaps(halfmap1_path, halfmap2_path, voxel_size, output_path,
         f.write(f"  Local resolution map: {local_resol_path}\n")
         f.write(f"  Local AUC map: {local_auc_path}\n")
     
-    logger.info(f"Info saved: {info_path}")
+    logger.info("Info saved: %s", info_path)
     
     return median_resol
 
@@ -869,9 +869,9 @@ def postprocess_halfmaps(halfmap1_path, halfmap2_path, voxel_size, output_path,
     """Apply global FSC filtering to a pair of halfmaps."""
     
     # Load halfmaps
-    logger.info(f"Loading halfmaps:")
-    logger.info(f"  Halfmap1: {halfmap1_path}")
-    logger.info(f"  Halfmap2: {halfmap2_path}")
+    logger.info("Loading halfmaps:")
+    logger.info("  Halfmap1: %s", halfmap1_path)
+    logger.info("  Halfmap2: %s", halfmap2_path)
     
     halfmap1 = utils.load_mrc(halfmap1_path)
     halfmap2 = utils.load_mrc(halfmap2_path)
@@ -880,18 +880,18 @@ def postprocess_halfmaps(halfmap1_path, halfmap2_path, voxel_size, output_path,
     fsc_mask = None
     if fsc_mask_path is not None:
         fsc_mask = utils.load_mrc(fsc_mask_path)
-        logger.info(f"Loaded FSC mask: {fsc_mask_path}")
+        logger.info("Loaded FSC mask: %s", fsc_mask_path)
     
     # Load apply mask if provided
     apply_mask = None
     if apply_mask_path is not None:
         apply_mask = utils.load_mrc(apply_mask_path)
-        logger.info(f"Loaded apply mask: {apply_mask_path}")
+        logger.info("Loaded apply mask: %s", apply_mask_path)
     
     # If voxel_size is None, get from MRC file
     if voxel_size is None:
         voxel_size = get_voxel_size_from_mrc(halfmap1_path)
-        logger.info(f"Read voxel size {voxel_size} from {halfmap1_path}")
+        logger.info("Read voxel size %s from %s", voxel_size, halfmap1_path)
     
     # Estimate B-factor if requested
     estimated_bfactor = None
@@ -903,12 +903,12 @@ def postprocess_halfmaps(halfmap1_path, halfmap2_path, voxel_size, output_path,
             bfactor_plot_prefix = output_path
         estimated_bfactor = estimate_bfactor_from_fsc_weighted_halfmaps(
             halfmap1, halfmap2, voxel_size, plot_prefix=bfactor_plot_prefix, fsc_mask=fsc_mask)
-        logger.info(f"Estimated B-factor (RELION-style, FSC-weighted): {estimated_bfactor:.2f} Angstrom^2")
-        logger.info(f"Saved B-factor diagnostic plots with prefix: {bfactor_plot_prefix}")
+        logger.info("Estimated B-factor (RELION-style, FSC-weighted): %.2f Angstrom^2", estimated_bfactor)
+        logger.info("Saved B-factor diagnostic plots with prefix: %s", bfactor_plot_prefix)
         if B_factor is None:
             B_factor = estimated_bfactor
         else:
-            logger.warning(f"Using user-supplied B-factor {B_factor}, ignoring estimated value {estimated_bfactor:.2f}")
+            logger.warning("Using user-supplied B-factor %s, ignoring estimated value %.2f", B_factor, estimated_bfactor)
     
     # Apply global filtering
     logger.info("Applying global FSC filtering...")
@@ -923,8 +923,8 @@ def postprocess_halfmaps(halfmap1_path, halfmap2_path, voxel_size, output_path,
     # Save filtered map
     utils.write_mrc(output_path, filtered_combined, voxel_size=voxel_size)
     
-    logger.info(f"Filtered map saved: {output_path}")
-    logger.info(f"Global resolution: {global_resol:.2f} Angstroms")
+    logger.info("Filtered map saved: %s", output_path)
+    logger.info("Global resolution: %.2f Angstroms", global_resol)
     
     # Save info file
     if output_path.endswith('.mrc'):
@@ -947,7 +947,7 @@ def postprocess_halfmaps(halfmap1_path, halfmap2_path, voxel_size, output_path,
         if apply_mask_path is not None:
             f.write(f"Apply mask: {apply_mask_path}\n")
     
-    logger.info(f"Info saved: {info_path}")
+    logger.info("Info saved: %s", info_path)
     
     return global_resol
 
@@ -957,14 +957,14 @@ def batch_process_volumes_local(volumes_dir, output_dir, voxel_size, B_factor=No
                                fsc_threshold=1/7, filter_edgewidth=2):
     """Process all volumes in a directory using local filtering."""
     
-    logger.info(f"Batch processing volumes with local filtering in: {volumes_dir}")
+    logger.info("Batch processing volumes with local filtering in: %s", volumes_dir)
     
     # Find volume directories
     vol_dirs = find_volume_directories(volumes_dir)
     if not vol_dirs:
         raise ValueError(f"No volume directories found in {volumes_dir}")
     
-    logger.info(f"Found {len(vol_dirs)} volume directories to process")
+    logger.info("Found %s volume directories to process", len(vol_dirs))
     
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
@@ -973,7 +973,7 @@ def batch_process_volumes_local(volumes_dir, output_dir, voxel_size, B_factor=No
     
     for vol_dir in vol_dirs:
         vol_name = os.path.basename(vol_dir)
-        logger.info(f"Processing {vol_name}")
+        logger.info("Processing %s", vol_name)
         
         # Find halfmaps in this volume directory
         halfmap1_patterns = ['half1_unfil.mrc', 'halfmap1.mrc', 'half1.mrc']
@@ -986,13 +986,13 @@ def batch_process_volumes_local(volumes_dir, output_dir, voxel_size, B_factor=No
                 break
         
         if halfmap1_path is None:
-            logger.warning(f"No halfmap1 found in {vol_dir}, skipping")
+            logger.warning("No halfmap1 found in %s, skipping", vol_dir)
             continue
         
         # Find corresponding halfmap2
         halfmap2_path = find_halfmap2(halfmap1_path)
         if halfmap2_path is None:
-            logger.warning(f"No halfmap2 found for {halfmap1_path}, skipping")
+            logger.warning("No halfmap2 found for %s, skipping", halfmap1_path)
             continue
         
         # Create output path
@@ -1002,7 +1002,7 @@ def batch_process_volumes_local(volumes_dir, output_dir, voxel_size, B_factor=No
         vsize = voxel_size
         if vsize is None:
             vsize = get_voxel_size_from_mrc(halfmap1_path)
-            logger.info(f"Read voxel size {vsize} from {halfmap1_path}")
+            logger.info("Read voxel size %s from %s", vsize, halfmap1_path)
         
         try:
             median_resol = local_filter_halfmaps(
@@ -1023,7 +1023,7 @@ def batch_process_volumes_local(volumes_dir, output_dir, voxel_size, B_factor=No
             }
             
         except Exception as e:
-            logger.error(f"Error processing {vol_name}: {str(e)}")
+            logger.error("Error processing %s: %s", vol_name, str(e))
             results[vol_name] = {
                 'error': str(e),
                 'success': False
@@ -1031,7 +1031,7 @@ def batch_process_volumes_local(volumes_dir, output_dir, voxel_size, B_factor=No
             continue
     
     successful = len([r for r in results.values() if r['success']])
-    logger.info(f"Batch processing completed. Processed {successful}/{len(vol_dirs)} volumes successfully")
+    logger.info("Batch processing completed. Processed %s/%s volumes successfully", successful, len(vol_dirs))
     
     return results
 
@@ -1039,14 +1039,14 @@ def batch_process_volumes_local(volumes_dir, output_dir, voxel_size, B_factor=No
 def batch_process_volumes(volumes_dir, output_dir, voxel_size, B_factor=None, mask_radius=None, fsc_mask_path=None, estimate_B_factor=False, apply_mask_path=None):
     """Process all volumes in a directory."""
     
-    logger.info(f"Batch processing volumes in: {volumes_dir}")
+    logger.info("Batch processing volumes in: %s", volumes_dir)
     
     # Find volume directories
     vol_dirs = find_volume_directories(volumes_dir)
     if not vol_dirs:
         raise ValueError(f"No volume directories found in {volumes_dir}")
     
-    logger.info(f"Found {len(vol_dirs)} volume directories to process")
+    logger.info("Found %s volume directories to process", len(vol_dirs))
     
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
@@ -1055,7 +1055,7 @@ def batch_process_volumes(volumes_dir, output_dir, voxel_size, B_factor=None, ma
     
     for vol_dir in vol_dirs:
         vol_name = os.path.basename(vol_dir)
-        logger.info(f"Processing {vol_name}")
+        logger.info("Processing %s", vol_name)
         
         # Find halfmaps in this volume directory
         halfmap1_patterns = ['half1_unfil.mrc', 'halfmap1.mrc', 'half1.mrc']
@@ -1068,13 +1068,13 @@ def batch_process_volumes(volumes_dir, output_dir, voxel_size, B_factor=None, ma
                 break
         
         if halfmap1_path is None:
-            logger.warning(f"No halfmap1 found in {vol_dir}, skipping")
+            logger.warning("No halfmap1 found in %s, skipping", vol_dir)
             continue
         
         # Find corresponding halfmap2
         halfmap2_path = find_halfmap2(halfmap1_path)
         if halfmap2_path is None:
-            logger.warning(f"No halfmap2 found for {halfmap1_path}, skipping")
+            logger.warning("No halfmap2 found for %s, skipping", halfmap1_path)
             continue
         
         # Create output path
@@ -1084,7 +1084,7 @@ def batch_process_volumes(volumes_dir, output_dir, voxel_size, B_factor=None, ma
         vsize = voxel_size
         if vsize is None:
             vsize = get_voxel_size_from_mrc(halfmap1_path)
-            logger.info(f"Read voxel size {vsize} from {halfmap1_path}")
+            logger.info("Read voxel size %s from %s", vsize, halfmap1_path)
         
         try:
             global_resol = postprocess_halfmaps(
@@ -1099,7 +1099,7 @@ def batch_process_volumes(volumes_dir, output_dir, voxel_size, B_factor=None, ma
             }
             
         except Exception as e:
-            logger.error(f"Error processing {vol_name}: {str(e)}")
+            logger.error("Error processing %s: %s", vol_name, str(e))
             results[vol_name] = {
                 'error': str(e),
                 'success': False
@@ -1107,7 +1107,7 @@ def batch_process_volumes(volumes_dir, output_dir, voxel_size, B_factor=None, ma
             continue
     
     successful = len([r for r in results.values() if r['success']])
-    logger.info(f"Batch processing completed. Processed {successful}/{len(vol_dirs)} volumes successfully")
+    logger.info("Batch processing completed. Processed %s/%s volumes successfully", successful, len(vol_dirs))
     
     return results
 

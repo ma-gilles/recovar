@@ -30,10 +30,10 @@ def get_available_gpus() -> List:
     """
     try:
         devices = jax.devices("gpu")
-        logger.info(f"Found {len(devices)} GPU(s): {[str(d) for d in devices]}")
+        logger.info("Found %s GPU(s): %s", len(devices), [str(d) for d in devices])
         return devices
     except RuntimeError as e:
-        logger.warning(f"No GPUs found: {e}")
+        logger.warning("No GPUs found: %s", e)
         return []
 
 
@@ -65,8 +65,7 @@ def split_indices_for_gpus(n_items: int, n_gpus: int) -> List[np.ndarray]:
         
         splits.append(np.arange(start_idx, end_idx))
     
-    logger.info(f"Split {n_items} items across {n_gpus} GPUs: " + 
-                f"sizes = {[len(s) for s in splits]}")
+    logger.info("Split %d items across %d GPUs: sizes = %s", n_items, n_gpus, [len(s) for s in splits])
     
     return splits
 
@@ -104,7 +103,7 @@ def compute_on_gpus_parallel(
     
     def compute_on_device(gpu_id, device, image_indices):
         """Worker function for a single GPU"""
-        logger.info(f"GPU {gpu_id}: Starting computation on {len(image_indices)} images")
+        logger.info("GPU %s: Starting computation on %s images", gpu_id, len(image_indices))
         start_time = time.time()
         
         with jax.default_device(device):
@@ -125,7 +124,7 @@ def compute_on_gpus_parallel(
                 B_cpu = np.array(B)
         
         elapsed = time.time() - start_time
-        logger.info(f"GPU {gpu_id}: Completed in {elapsed:.2f}s")
+        logger.info("GPU %s: Completed in %.2fs", gpu_id, elapsed)
         
         results_H[gpu_id] = H_cpu
         results_B[gpu_id] = B_cpu
@@ -161,7 +160,7 @@ def reduce_results(results_H: List[np.ndarray],
     Returns:
         Tuple of (H_total, B_total)
     """
-    logger.info(f"Reducing results from {len(results_H)} GPUs...")
+    logger.info("Reducing results from %s GPUs...", len(results_H))
     start_time = time.time()
     
     # Sum across GPUs
@@ -170,7 +169,7 @@ def reduce_results(results_H: List[np.ndarray],
         B_total = np.sum(results_B, axis=0)
     
     elapsed = time.time() - start_time
-    logger.info(f"Reduction completed in {elapsed:.2f}s")
+    logger.info("Reduction completed in %.2fs", elapsed)
     
     return H_total, B_total
 
@@ -223,7 +222,7 @@ def compute_H_B_multi_gpu(
         n_gpus = min(n_gpus, len(devices))
     
     devices = devices[:n_gpus]
-    logger.info(f"Using {n_gpus} GPU(s) for computation")
+    logger.info("Using %s GPU(s) for computation", n_gpus)
     
     # Check if single GPU (no parallelization needed)
     if n_gpus == 1:
@@ -249,7 +248,7 @@ def compute_H_B_multi_gpu(
     H_total, B_total = reduce_results(results_H, results_B)
     
     total_time = time.time() - start_time
-    logger.info(f"Multi-GPU computation completed in {total_time:.2f}s")
+    logger.info("Multi-GPU computation completed in %.2fs", total_time)
     
     return H_total, B_total
 

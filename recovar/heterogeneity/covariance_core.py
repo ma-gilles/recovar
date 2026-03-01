@@ -1,19 +1,20 @@
 """Low-level covariance column computation kernels (JAX)."""
 
+import functools
 import logging
+
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
 import nvtx
-import equinox as eqx
 
+import recovar.core.forward as core_forward
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.core.padding as pad
-import functools
 from recovar import core
 from recovar.core import mask
 from recovar.core.configs import ForwardModelConfig
-import recovar.core.fourier_transform_utils as fourier_transform_utils
-import recovar.core.forward as core_forward
 
 logger = logging.getLogger(__name__)
 

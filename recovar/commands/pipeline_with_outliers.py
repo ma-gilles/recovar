@@ -109,7 +109,7 @@ def run_pipeline_with_outlier_removal():
 
     for k in range(args.k_rounds):
         round_number = k + 1
-        logger.info(f"Starting round {round_number}/{args.k_rounds}")
+        logger.info("Starting round %s/%s", round_number, args.k_rounds)
 
         # Update output directory to avoid overwriting
         args.outdir = os.path.join(original_outdir, f"round_{round_number}")
@@ -125,7 +125,7 @@ def run_pipeline_with_outlier_removal():
             # Update args to use the indices file - always use image indices after first round
             args.ind = indices_filename
             args.tilt_ind = None  # Clear particle indices since we're using image indices
-            logger.info(f"Using image inliers ({len(current_indices)} images) from round {k} for round {round_number}")
+            logger.info("Using image inliers (%s images) from round %s for round %s", len(current_indices), k, round_number)
         else:
             # First round - store the original index arguments for future rounds
             if args.tilt_series:
@@ -151,7 +151,7 @@ def run_pipeline_with_outlier_removal():
         pipeline_output_dir = os.path.join(args.outdir, 'model')
         embeddings_file = os.path.join(pipeline_output_dir, 'embeddings.pkl')
         if not os.path.exists(embeddings_file):
-            logger.error(f"Embeddings file not found: {embeddings_file}")
+            logger.error("Embeddings file not found: %s", embeddings_file)
             sys.exit(1)
         with open(embeddings_file, 'rb') as f:
             embeddings = pickle.load(f)
@@ -172,7 +172,7 @@ def run_pipeline_with_outlier_removal():
             sys.exit(1)
         zdim_key = zdim
         if zdim_key not in coords_dict:
-            logger.error(f"zdim {zdim_key} not found in embeddings")
+            logger.error("zdim %s not found in embeddings", zdim_key)
             sys.exit(1)
 
         # Run comprehensive outlier detection
@@ -234,7 +234,7 @@ def run_pipeline_with_outlier_removal():
         outlier_output_dir = os.path.join(args.outdir, 'outlier_detection')
         combined_inliers_file = os.path.join(outlier_output_dir, 'combined_results', f'combined_image_inliers_{zdim_key}.pkl')
         if not os.path.exists(combined_inliers_file):
-            logger.error(f"Combined inliers file not found: {combined_inliers_file}")
+            logger.error("Combined inliers file not found: %s", combined_inliers_file)
             sys.exit(1)
         with open(combined_inliers_file, 'rb') as f:
             current_indices = pickle.load(f)
@@ -246,9 +246,9 @@ def run_pipeline_with_outlier_removal():
             if os.path.exists(combined_particle_inliers_file):
                 with open(combined_particle_inliers_file, 'rb') as f:
                     current_particle_indices = pickle.load(f)
-                logger.info(f"Loaded particle inliers: {len(current_particle_indices)} particles")
+                logger.info("Loaded particle inliers: %s particles", len(current_particle_indices))
             else:
-                logger.warning(f"Particle inliers file not found: {combined_particle_inliers_file}")
+                logger.warning("Particle inliers file not found: %s", combined_particle_inliers_file)
         
         # Save the inliers and outliers for this round in the original output directory
         inliers_save_path = os.path.join(original_outdir, f"inliers_round_{round_number}.pkl")
@@ -270,27 +270,27 @@ def run_pipeline_with_outlier_removal():
             if os.path.exists(combined_particle_outliers_file):
                 shutil.copy(combined_particle_outliers_file, particle_outliers_save_path)
             
-            logger.info(f"Saved particle inliers of round {round_number} to {particle_inliers_save_path}")
-            logger.info(f"Saved particle outliers of round {round_number} to {particle_outliers_save_path}")
+            logger.info("Saved particle inliers of round %s to %s", round_number, particle_inliers_save_path)
+            logger.info("Saved particle outliers of round %s to %s", round_number, particle_outliers_save_path)
         
-        logger.info(f"Saved inliers of round {round_number} to {inliers_save_path}")
-        logger.info(f"Saved outliers of round {round_number} to {outliers_save_path}")
+        logger.info("Saved inliers of round %s to %s", round_number, inliers_save_path)
+        logger.info("Saved outliers of round %s to %s", round_number, outliers_save_path)
         
         # Keep track of inliers for all rounds
         all_rounds_inliers[round_number] = current_indices
 
         # Check if there are enough inliers to continue
         if len(current_indices) == 0:
-            logger.warning(f"No inliers left after round {round_number}. Stopping iterations.")
+            logger.warning("No inliers left after round %s. Stopping iterations.", round_number)
             break
 
-        logger.info(f"Round {round_number} completed. Number of inliers: {len(current_indices)}")
+        logger.info("Round %s completed. Number of inliers: %s", round_number, len(current_indices))
 
     # Save all rounds inliers to a file
     all_inliers_file = os.path.join(original_outdir, "all_rounds_inliers.pkl")
     with open(all_inliers_file, 'wb') as f:
         pickle.dump(all_rounds_inliers, f)
-    logger.info(f"Saved inliers from all rounds to {all_inliers_file}")
+    logger.info("Saved inliers from all rounds to %s", all_inliers_file)
 
     # Cleanup: delete the results of all rounds except the inliers/outliers if --delete-rounds is specified
     if args.delete_rounds:
@@ -308,9 +308,9 @@ def run_pipeline_with_outlier_removal():
                                 os.remove(item_path)
                     # Optionally, remove the round directory itself
                     shutil.rmtree(dir_path)
-                    logger.info(f"Deleted directory {dir_path}")
+                    logger.info("Deleted directory %s", dir_path)
                 except Exception as e:
-                    logger.error(f"Error deleting directory {dir_path}: {e}")
+                    logger.error("Error deleting directory %s: %s", dir_path, e)
     else:
         logger.info("Delete rounds not enabled. Intermediate round results are kept.")
 

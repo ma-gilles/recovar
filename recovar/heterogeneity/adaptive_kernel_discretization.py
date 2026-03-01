@@ -287,7 +287,7 @@ def precompute_triangular_kernel(experiment_dataset, noise_variance, pol_degree=
 
     batch_size = int(utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total() - 3 * ( utils.get_size_in_gb(XWX)  + utils.get_size_in_gb(F))  ) )
 
-    logger.info(f"batch size in precompute kernel: {batch_size}")
+    logger.info("batch size in precompute kernel: %s", batch_size)
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
     noise_variance_image = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape).reshape(-1)
 
@@ -320,7 +320,7 @@ def precompute_triangular_kernel(experiment_dataset, noise_variance, pol_degree=
 
     XWX = XWX.reshape(-1, small_gram_matrix_size(pol_degree), n_bins)
     F = F.reshape(-1, get_feature_size(pol_degree), n_bins)
-    logger.info(f"Done with precompute of kernel")
+    logger.info("Done with precompute of kernel")
     return np.asarray(XWX), np.asarray(F)
 
 
@@ -420,14 +420,14 @@ def compute_estimate_from_XWX_F_summed(XWX_summed_neighbor, F_summed_neighbor, p
 
     frequencies_vol_indices = core.vec_indices_to_vol_indices(np.arange(volume_size), volume_shape ) * 1.0
 
-    logger.info(f"compute_estimate_from_XWX_F_summed with prior option={prior_option} batch size: {batch_size}")
+    logger.info("compute_estimate_from_XWX_F_summed with prior option=%s batch size: %s", prior_option, batch_size)
 
     prior_inverse_covariance = jnp.asarray(prior_inverse_covariance).real.astype(np.float32)
 
     reconstruction = np.zeros((half_volume_size, F_summed_neighbor.shape[-1]), dtype = np.complex64)
     good_pixels = np.zeros((half_volume_size), dtype=np.bool_)
 
-    logger.info(f"dtype = {prior_inverse_covariance.dtype}")
+    logger.info("dtype = %s", prior_inverse_covariance.dtype)
 
     for k in range(n_batches):
         ind_st, ind_end = utils.get_batch_of_indices(half_volume_size, batch_size, k)
@@ -436,7 +436,7 @@ def compute_estimate_from_XWX_F_summed(XWX_summed_neighbor, F_summed_neighbor, p
         logger.debug("batch %d...", k)
 
     utils.report_memory_device(logger=logger)
-    logger.info(f"Done with compute_estimate_from_XWX_F_summed with prior option={prior_option}")
+    logger.info("Done with compute_estimate_from_XWX_F_summed with prior option=%s", prior_option)
 
     reconstruction = batch_half_volume_to_full_volume(reconstruction.T, volume_shape).T
     good_pixels = half_volume_to_full_volume(good_pixels, volume_shape)
@@ -502,7 +502,7 @@ def precompute_kernel(experiment_dataset, noise_variance, pol_degree=0, heteroge
 
     batch_size = int(utils.get_image_batch_size(experiment_dataset.grid_size, utils.get_gpu_memory_total() - 2* utils.get_size_in_gb(XWX) - 2*utils.get_size_in_gb(F)  ) )
 
-    logger.info(f"batch size in precompute kernel: {batch_size}")
+    logger.info("batch size in precompute kernel: %s", batch_size)
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
     noise_variance_image = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape).reshape(-1)
 
@@ -535,7 +535,7 @@ def precompute_kernel(experiment_dataset, noise_variance, pol_degree=0, heteroge
 
     XWX = XWX.reshape(-1, small_gram_matrix_size(pol_degree), n_bins)
     F = F.reshape(-1, get_feature_size(pol_degree), n_bins)
-    logger.info(f"Done with precompute of kernel")
+    logger.info("Done with precompute of kernel")
     return np.asarray(XWX), np.asarray(F)
 
 # Should pass a list of triplets (pol_degree : int, h : float, regularization : bool)
@@ -571,7 +571,7 @@ def get_feature_size(pol_degree):
 
 def estimate_volume_from_covariance_and_precompute(init_variance, discretization_params, XWXs, Fs, volume_shape):
 
-    logger.info(f"Starting adaptive disc with params = {discretization_params}")
+    logger.info("Starting adaptive disc with params = %s", discretization_params)
     h = discretization_params[1]
     max_pol_degree = discretization_params[0]
     volume_size = np.prod(volume_shape)
@@ -597,7 +597,7 @@ def estimate_volume_from_covariance_and_precompute(init_variance, discretization
 def estimate_from_relion_style(cryos, discretization_params, XWXs, Fs, volume_shape, tau = None, use_spherical_mask = True, grid_correct = True, gridding_correct = "square" ):
 
 
-    logger.info(f"Starting adaptive disc with params = {discretization_params}")
+    logger.info("Starting adaptive disc with params = %s", discretization_params)
     h = discretization_params[1]
     pol_degree = discretization_params[0]
     assert pol_degree == 0, "Only p = 0 supported for now"
@@ -721,7 +721,7 @@ def pick_best_heterogeneity_from_residual(estimates, full_test_dataset, heteroge
 
 def estimate_optimal_covariance_and_volume(init_variance, init_prior_covariance_option, discretization_params, XWXs, Fs, volume_shape, reg_iters = 1):
 
-    logger.info(f"Starting adaptive disc with params = {discretization_params}")
+    logger.info("Starting adaptive disc with params = %s", discretization_params)
     h = discretization_params[1]
     max_pol_degree = discretization_params[0]
     volume_size = np.prod(volume_shape)
@@ -932,7 +932,7 @@ def naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, 
         del test_dataset
         gc.collect()
 
-        logger.info(f"Number of images used in estimator {idx}: " + str(np.sum(good_indices)))
+        logger.info("Number of images used in estimator %d: %s", idx, np.sum(good_indices))
         idx+=1
         estimates.append(np.array(estimate.reshape(-1)))
 
@@ -1280,7 +1280,7 @@ def test_multiple_disc2(experiment_dataset, noise_variance, discretization_param
     XWX_s = dict()
     F_s = dict()
     for idx, (pol_degree, h, reg) in enumerate(discretization_params):
-        logger.info(f"computing discretization with params: degree={pol_degree}, h={h}, reg={reg}")
+        logger.info("computing discretization with params: degree=%s, h=%s, reg=%s", pol_degree, h, reg)
         weights_this, valid_weights_this, XWX_s[idx],F_s[idx] = compute_weights_from_precompute(experiment_dataset.upsampled_volume_shape, XWX, F, prior_inverse_covariance, pol_degree, max_pol_degree, h, prior_option = reg)
         weights[idx,:,:weights_this.shape[-1]] = weights_this
         valid_weights[idx] = valid_weights_this
@@ -1305,13 +1305,13 @@ def test_multiple_disc(experiment_dataset, cross_validation_dataset, noise_varia
     XWX = np.asarray(XWX)
     F = np.asarray(F)
     for idx, (pol_degree, h, reg) in enumerate(discretization_params):
-        logger.info(f"computing discretization with params: degree={pol_degree}, h={h}, reg={reg}")
+        logger.info("computing discretization with params: degree=%s, h=%s, reg=%s", pol_degree, h, reg)
         weights_this, valid_weights_this, _,_ = compute_weights_from_precompute(experiment_dataset.upsampled_volume_shape, XWX, F, prior_inverse_covariance, pol_degree, max_pol_degree, h, prior_option = reg)
         weights[idx,:,:weights_this.shape[-1]] = weights_this
         valid_weights[idx] = valid_weights_this
 
 
-    logger.info(f"Done computing params")
+    logger.info("Done computing params")
     weights = weights.swapaxes(0,1)
     utils.report_memory_device(logger=logger)
     del XWX, F
@@ -1407,7 +1407,7 @@ def compute_weights_from_precompute(volume_shape, XWX, F, prior_inverse_covarian
 
     batch_size = int((utils.get_gpu_memory_total() -  utils.get_size_in_gb(XWX) - utils.get_size_in_gb(F)  )/ (memory_per_pixel   /1e9  )  ) 
     n_batches = np.ceil(volume_size / batch_size).astype(int)
-    logger.info(f"KE batch size: {batch_size}")
+    logger.info("KE batch size: %s", batch_size)
 
     for k in range(n_batches):
         ind_st, ind_end = utils.get_batch_of_indices(volume_size, batch_size, k)
@@ -1424,15 +1424,15 @@ def compute_weights_from_precompute(volume_shape, XWX, F, prior_inverse_covarian
             logger.debug("batch %d", k)
 
         if jnp.isnan(reconstruction[ind_st:ind_end]).any():
-            logger.warning(f"IsNAN {jnp.isnan(reconstruction[ind_st:ind_end]).sum() / reconstruction[ind_st:ind_end].size} pixels, pol_degree={pol_degree}, h={h}, reg={prior_option}")
+            logger.warning("IsNAN %s pixels, pol_degree=%s, h=%s, reg=%s", jnp.isnan(reconstruction[ind_st:ind_end]).sum() / reconstruction[ind_st:ind_end].size, pol_degree, h, prior_option)
 
         if problems.any():
             if msgs < 10: 
-                logger.warning(f"Issues in linalg solve? Problems for {problems.sum() / problems.size} pixels, pol_degree={pol_degree}, h={h}, reg={prior_option}")
+                logger.warning("Issues in linalg solve? Problems for %s pixels, pol_degree=%s, h=%s, reg=%s", problems.sum() / problems.size, pol_degree, h, prior_option)
                 msgs +=1
-                logger.warning(f"isinf {jnp.isinf(reconstruction[ind_st:ind_end]).sum() / reconstruction[ind_st:ind_end].size} pixels, pol_degree={pol_degree}, h={h}, reg={prior_option}")
+                logger.warning("isinf %s pixels, pol_degree=%s, h=%s, reg=%s", jnp.isinf(reconstruction[ind_st:ind_end]).sum() / reconstruction[ind_st:ind_end].size, pol_degree, h, prior_option)
 
-    logger.info(f"Done with kernel estimate")
+    logger.info("Done with kernel estimate")
     return reconstruction, good_pixels, XWX_s, F_s
 
 
@@ -1458,7 +1458,7 @@ def compute_summed_XWX_F_only(volume_shape, XWX, F, pol_degree, h):
 
     batch_size = int((utils.get_gpu_memory_total() -  utils.get_size_in_gb(XWX) - utils.get_size_in_gb(F)  )/ (memory_per_pixel   /1e9  )  ) 
     n_batches = np.ceil(volume_size / batch_size).astype(int)
-    logger.info(f"KE batch size: {batch_size}")
+    logger.info("KE batch size: %s", batch_size)
     threed_frequencies = core.vec_indices_to_vol_indices(np.arange(volume_size), volume_shape ) * 1.0
 
     for k in range(n_batches):
@@ -1469,7 +1469,7 @@ def compute_summed_XWX_F_only(volume_shape, XWX, F, pol_degree, h):
 
             XWX_s[ind_st:ind_end_t], F_s[ind_st:ind_end_t] = compute_summed_XWX_F(XWX, F, h, h, threed_frequencies[ind_st:ind_end_t], volume_shape, pol_degree)
 
-    logger.info(f"Done with kernel estimate")
+    logger.info("Done with kernel estimate")
     return XWX_s[...,0], F_s[...]
 
 
@@ -1493,7 +1493,7 @@ def compute_residuals_many_weights(experiment_dataset, weights , pol_degree, use
     )
 
     residuals, summed_n = 0, 0
-    logger.info(f"batch size in residual computation: {batch_size}")
+    logger.info("batch size in residual computation: %s", batch_size)
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
     weights = jnp.asarray(weights)
     for batch, p_indices, indices in data_generator:
@@ -1522,7 +1522,7 @@ def compute_residuals_many_weights_in_weight_batch(experiment_dataset, weights, 
     weight_batch_size = np.floor(weights.shape[-2] / n_batches).astype(int)
     n_batches = np.ceil(weights.shape[-2] / weight_batch_size).astype(int)
 
-    logger.info(f"number of batches in residual computation: {n_batches}, batch size: {weight_batch_size}")
+    logger.info("number of batches in residual computation: %s, batch size: %s", n_batches, weight_batch_size)
     residuals = []
     for k in range(n_batches):
         ind_st, ind_end = utils.get_batch_of_indices(weights.shape[-2], weight_batch_size, k)

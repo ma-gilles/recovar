@@ -333,7 +333,7 @@ def _estimate_noise(cryos, means, dilated_volume_mask, batch_size, args, noise_m
     Returns a dict with all noise-related quantities needed by the pipeline.
     """
     use_new_noise_fn = args.new_noise_est or args.premultiplied_ctf
-    logger.info(f"Using new noise estimation function?: {use_new_noise_fn}")
+    logger.info("Using new noise estimation function?: %s", use_new_noise_fn)
 
     noise_time = time.time()
 
@@ -361,7 +361,7 @@ def _estimate_noise(cryos, means, dilated_volume_mask, batch_size, args, noise_m
         assert (noise_model == "radial" or noise_model == "radial_per_tilt"), \
             f"new noise fn only works with radial noise model. You set {noise_model}"
 
-    logger.info(f"time to estimate noise is {time.time() - noise_time}")
+    logger.info("time to estimate noise is %s", time.time() - noise_time)
     utils.report_memory_device(logger=logger)
 
     # Upper bound on noise variance from inside the mask
@@ -373,7 +373,7 @@ def _estimate_noise(cryos, means, dilated_volume_mask, batch_size, args, noise_m
     else:
         radial_ub_noise_var, _, _ = noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(
             cryos[0], means['combined'], dilated_volume_mask, batch_size)
-    logger.info(f"time to upper bound noise is {time.time() - noise_time}")
+    logger.info("time to upper bound noise is %s", time.time() - noise_time)
 
     # Bound the noise variance
     utils.report_memory_device(logger=logger)
@@ -446,7 +446,7 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
             contrast_grid=None, contrast_option=options['contrast'],
             ignore_zero_frequency=options['ignore_zero_frequency'],
             mean_cubic=mean_cubic)
-        logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
+        logger.info("embedding time for zdim=%s: %s", zdim, time.time() - z_time)
 
     # Unregularized embeddings (s -> inf means no prior)
     for zdim in options['zs_dim_to_test']:
@@ -458,7 +458,7 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
             contrast_grid=None, contrast_option=options['contrast'],
             ignore_zero_frequency=options['ignore_zero_frequency'],
             mean_cubic=mean_cubic)
-        logger.info(f"embedding time for zdim={zdim}_noreg: {time.time() - z_time}")
+        logger.info("embedding time for zdim=%s_noreg: %s", zdim, time.time() - z_time)
 
     return (latent_coords, latent_coords_noreg,
             latent_precision, latent_precision_noreg,
@@ -504,7 +504,7 @@ def standard_recovar_pipeline(args):
     # CTF defaults
     if args.tilt_series_ctf is None:
         args.tilt_series_ctf = 'relion5' if args.tilt_series else 'cryoem'
-        logger.info(f"Setting tilt_series_ctf to {args.tilt_series_ctf}")
+        logger.info("Setting tilt_series_ctf to %s", args.tilt_series_ctf)
 
     if args.tilt_series and args.dose_per_tilt is not None:
         logger.warning("dose_per_tilt is provided, but tilt_series_ctf is set to using starfile = -B_fac/4 (by default). Thus, dose_per_tilt will not be used.")
@@ -568,13 +568,13 @@ def standard_recovar_pipeline(args):
     ind_split = dataset.figure_out_halfsets(args)
     dataset_loader_dict = dataset.make_dataset_loader_dict(args)
     logger.info("Data loading configuration:")
-    logger.info(f"  Particles file: {dataset_loader_dict['particles_file']}")
-    logger.info(f"  Poses file: {dataset_loader_dict.get('poses_file', '(auto-extract from particles)')}")
-    logger.info(f"  CTF file: {dataset_loader_dict.get('ctf_file', '(auto-extract from particles)')}")
+    logger.info("  Particles file: %s", dataset_loader_dict['particles_file'])
+    logger.info("  Poses file: %s", dataset_loader_dict.get('poses_file', '(auto-extract from particles)'))
+    logger.info("  CTF file: %s", dataset_loader_dict.get('ctf_file', '(auto-extract from particles)'))
     if dataset_loader_dict.get('downsample_D'):
-        logger.info(f"  Downsample to: {dataset_loader_dict['downsample_D']}")
+        logger.info("  Downsample to: %s", dataset_loader_dict['downsample_D'])
     if dataset_loader_dict.get('datadir'):
-        logger.info(f"  Datadir: {dataset_loader_dict['datadir']}")
+        logger.info("  Datadir: %s", dataset_loader_dict['datadir'])
 
     options = utils.make_algorithm_options(args)
     cryos = dataset.get_split_datasets_from_dict(dataset_loader_dict, ind_split, args.lazy)
@@ -585,11 +585,11 @@ def standard_recovar_pipeline(args):
     volume_shape = cryos.volume_shape
 
     batch_size = utils.get_image_batch_size(cryos.grid_size, gpu_memory)
-    logger.info(f"image batch size: {batch_size}")
-    logger.info(f"volume batch size: {utils.get_vol_batch_size(cryos.grid_size, gpu_memory)}")
-    logger.info(f"column batch size: {utils.get_column_batch_size(cryos.grid_size, gpu_memory)}")
-    logger.info(f"number of images: {cryos.n_total_images}")
-    logger.info(f"image size: {cryos.grid_size}x{cryos.grid_size}")
+    logger.info("image batch size: %s", batch_size)
+    logger.info("volume batch size: %s", utils.get_vol_batch_size(cryos.grid_size, gpu_memory))
+    logger.info("column batch size: %s", utils.get_column_batch_size(cryos.grid_size, gpu_memory))
+    logger.info("number of images: %s", cryos.n_total_images)
+    logger.info("image size: %sx%s", cryos.grid_size, cryos.grid_size)
     utils.report_memory_device(logger=logger)
 
     # --- Initial noise estimate from half-maps ---
@@ -624,7 +624,7 @@ def standard_recovar_pipeline(args):
 
         if repeat == 1:
             ndim = 10 if 10 in options['zs_dim_to_test'] else np.median(options['zs_dim_to_test'])
-            logger.warning(f"repeating with contrast of zdim={ndim}")
+            logger.warning("repeating with contrast of zdim=%s", ndim)
             contrasts_for_second = est_contrasts[ndim]
             contrasts_for_second /= np.mean(contrasts_for_second)
             embedding.set_contrasts_in_cryos(cryos, contrasts_for_second)
@@ -645,10 +645,10 @@ def standard_recovar_pipeline(args):
         _check_uninvert_data(means, cryos, args)
 
         if means['combined'].dtype != cryos.dtype:
-            logger.warning(f"mean estimate is in type: {means['combined'].dtype}")
+            logger.warning("mean estimate is in type: %s", means['combined'].dtype)
             means['combined'] = means['combined'].astype(cryos.dtype)
 
-        logger.info(f"mean computed in {time.time() - st_time}")
+        logger.info("mean computed in %s", time.time() - st_time)
         utils.report_memory_device(logger=logger)
 
         # --- Pre-compute cubic spline coefficients for mean (once) ---
@@ -803,9 +803,9 @@ def standard_recovar_pipeline(args):
     else:
         noise_var_from_het_residual = None
 
-    logger.info(f"embedding time: {time.time() - st_time}")
+    logger.info("embedding time: %s", time.time() - st_time)
     utils.report_memory_device()
-    logger.info(f"peak gpu memory use {utils.get_peak_gpu_memory_used(device=0)}")
+    logger.info("peak gpu memory use %s", utils.get_peak_gpu_memory_used(device=0))
 
     # --- Handle complement mask trimming ---
     if args.use_complement_mask:
@@ -877,11 +877,11 @@ def standard_recovar_pipeline(args):
         for orig_key, temp_key, attr_name in paths_to_restore:
             if orig_key in path_mapping and temp_key in path_mapping:
                 setattr(args, attr_name, path_mapping[orig_key])
-                logger.info(f"Restored {attr_name} path: {path_mapping[orig_key]}")
+                logger.info("Restored %s path: %s", attr_name, path_mapping[orig_key])
             elif orig_key in path_mapping:
                 if attr_name == 'datadir' and path_mapping[orig_key]:
                     setattr(args, attr_name, path_mapping[orig_key])
-                    logger.info(f"Restored {attr_name} path: {path_mapping[orig_key]}")
+                    logger.info("Restored %s path: %s", attr_name, path_mapping[orig_key])
 
     result = o.build_params_dict(
         volume_shape=volume_shape,
@@ -914,7 +914,7 @@ def standard_recovar_pipeline(args):
         zs_full=zs_full if args.use_complement_mask else None,
     )
 
-    logger.info(f"total time: {time.time() - st_time}")
+    logger.info("total time: %s", time.time() - st_time)
 
     if hasattr(args, '_downsample_applied') and args._downsample_applied:
         logger.info(

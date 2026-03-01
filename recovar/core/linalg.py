@@ -1,14 +1,16 @@
 """Linear algebra helpers: batch SVD, QR, eigendecomposition on CPU/GPU."""
 
+import functools
 import logging
+
 import jax
 import jax.numpy as jnp
 import numpy as np
-import functools
+
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import utils
 
-# Some functions that do linear algera on batch in GPU. I find it strange that there is not already a decent library to do this, but I couldn't find one.
+# Batch linear algebra on GPU.
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +30,10 @@ def blockwise_Y_T_X(Y,X, batch_size = None, memory_to_use = 10):
     n_rows = X.shape[0]
     YX = jnp.zeros_like(X, shape =[Y.shape[-1], X.shape[-1]])
     square_jit = jax.jit( lambda y, x: jnp.conj(y).T @ x)
-    logger.info(f"Y^T @ X {int(np.ceil(n_rows/batch_size))} blocks") 
+    logger.info("Y^T @ X %d blocks", int(np.ceil(n_rows/batch_size)))
     for k in range(0, int(np.ceil(n_rows/batch_size))):
         batch_st, batch_end = batch_st_end(k, batch_size, n_rows)
-        YX += square_jit(Y[batch_st:batch_end], X[batch_st:batch_end]) #jnp.conj(Z).T @ Z
-        # utils.report_memory_device(logger =logger)
+        YX += square_jit(Y[batch_st:batch_end], X[batch_st:batch_end])
     return np.array(YX)
 
 
@@ -46,12 +47,12 @@ def blockwise_X_T_X(X, batch_size = None, memory_to_use = 10):
     n_rows = X.shape[0]
     XX = jnp.zeros_like(X, shape =[X.shape[-1], X.shape[-1]])
     square_jit = jax.jit( lambda x: jnp.conj(x).T @ x)
-    logger.info(f"X^T @ X in {int(np.ceil(n_rows / batch_size))} blocks")
-    
+    logger.info("X^T @ X in %d blocks", int(np.ceil(n_rows / batch_size)))
+
     for k in range(0, int(np.ceil(n_rows/batch_size))):
         batch_st, batch_end = batch_st_end(k, batch_size, n_rows)
         Z = jnp.array(X[batch_st:batch_end])
-        XX += square_jit(Z) #jnp.conj(Z).T @ Z
+        XX += square_jit(Z)
 
     return np.array(XX)        
             
@@ -77,7 +78,7 @@ def blockwise_A_X(A, X, batch_size = None, memory_to_use = 10):
     X = jnp.array(X)
     
     mat_mat_jit = jax.jit( lambda x, y: x @ y)
-    logger.info(f"A@X in {int(np.ceil(n_rows/batch_size))} blocks") 
+    logger.info("A@X in %d blocks", int(np.ceil(n_rows/batch_size)))
     for k in range(0, int(np.ceil(n_rows/batch_size))):
         batch_st, batch_end = batch_st_end(k, batch_size, n_rows)
         Z[batch_st:batch_end] = np.array(mat_mat_jit( A[batch_st:batch_end],  X))
@@ -169,7 +170,7 @@ def dft3(x, vec_shape):
 def batch_idft3(x, vec_shape, batch_size):
     x_out = np.zeros_like(x) 
     n_tot = x.shape[-1]
-    logger.info(f"batch_idft3 in {int(np.ceil(n_tot/batch_size))} blocks") 
+    logger.info("batch_idft3 in %d blocks", int(np.ceil(n_tot/batch_size)))
     for k in range(0, int(np.ceil(n_tot/batch_size))):
         batch_st, batch_end = batch_st_end(k, batch_size, n_tot)
         x_out[:,batch_st:batch_end] = np.array(idft3(x[:,batch_st:batch_end], vec_shape = vec_shape))
@@ -179,7 +180,7 @@ def batch_idft3(x, vec_shape, batch_size):
 def batch_dft3(x, vec_shape, batch_size):
     x_out = np.zeros_like(x, dtype = 'complex64')
     n_tot = x.shape[-1]
-    logger.info(f"batch_dft3 in {int(np.ceil(n_tot/batch_size))} blocks")
+    logger.info("batch_dft3 in %d blocks", int(np.ceil(n_tot/batch_size)))
     for k in range(0, int(np.ceil(n_tot/batch_size))):
         batch_st, batch_end = batch_st_end(k, batch_size, n_tot)
         x_out[:,batch_st:batch_end] = np.array(dft3(x[:,batch_st:batch_end], vec_shape = vec_shape))
@@ -189,7 +190,7 @@ def batch_dft3(x, vec_shape, batch_size):
 def batch_dft3_2(x, vec_shape, batch_size):
     x_out = jnp.empty(x.shape, dtype = np.complex64, device =jax.devices("cpu")[0])
     n_tot = x.shape[-1]
-    logger.info(f"batch_dft3 in {int(np.ceil(n_tot/batch_size))} blocks")
+    logger.info("batch_dft3 in %d blocks", int(np.ceil(n_tot/batch_size)))
     for k in range(0, int(np.ceil(n_tot/batch_size))):
         batch_st, batch_end = batch_st_end(k, batch_size, n_tot)
         x_out[:,batch_st:batch_end] = (dft3(x[:,batch_st:batch_end], vec_shape = vec_shape))
