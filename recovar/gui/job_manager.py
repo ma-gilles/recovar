@@ -1048,6 +1048,7 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
             slurm_id = _slurm_submit(script_path)
             if slurm_id:
                 task.slurm_job_id = slurm_id
+                task.status = STATUS_QUEUED
             else:
                 task.status = STATUS_FAILED
                 task.error = "Failed to submit SLURM job"
@@ -1073,7 +1074,7 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
             return None
 
         # Refresh status
-        if task.status == STATUS_RUNNING:
+        if task.status in (STATUS_QUEUED, STATUS_RUNNING):
             if task.slurm_job_id:
                 new_status = _slurm_job_status(task.slurm_job_id)
                 if new_status:

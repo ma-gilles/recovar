@@ -747,7 +747,7 @@
     <!-- Image lightbox -->
     <div x-show="expandedImage" style="display:none" @click="expandedImage = null" @keydown.escape.window="expandedImage = null"
          class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-8 cursor-pointer">
-      <img :src="'/api/image?path=' + encodeURIComponent(expandedImage)" class="max-w-full max-h-full object-contain">
+      <img x-bind:src="expandedImage ? '/api/image?path=' + encodeURIComponent(expandedImage) : ''" class="max-w-full max-h-full object-contain">
     </div>
   </div>
 
@@ -833,9 +833,9 @@
 <!-- ════════════════════════════════════════════════════════════════ -->
 <!-- External Libraries                                              -->
 <!-- ════════════════════════════════════════════════════════════════ -->
-<script async src="{{ url_for('static', filename='vendor/plotly.min.js') }}" charset="utf-8"></script>
+<script src="{{ url_for('static', filename='vendor/plotly.min.js') }}" charset="utf-8"></script>
 <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='vendor/molstar.css') }}">
-<script async src="{{ url_for('static', filename='vendor/molstar.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/molstar.js') }}"></script>
 
 <script>
 function jobExplorer() {
