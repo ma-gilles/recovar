@@ -30,13 +30,13 @@ def get_1d_frequency_grid_rfft(n, voxel_size=1, scaled=False):
 def get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=True):
     one_d_grids = [get_1d_frequency_grid(sh, voxel_size, scaled) for sh in image_shape]
     grids = jnp.meshgrid(*one_d_grids, indexing="xy")
-    return jnp.transpose(jnp.vstack([jnp.reshape(g, -1) for g in grids])).astype(one_d_grids[0].dtype)
+    return jnp.stack([g.ravel() for g in grids], axis=-1)
 
 
 def get_k_coordinate_of_each_pixel_3d(image_shape, voxel_size, scaled=True):
     one_d_grids = [get_1d_frequency_grid(sh, voxel_size, scaled) for sh in image_shape]
     grids = jnp.meshgrid(*one_d_grids, indexing="ij")
-    return jnp.transpose(jnp.vstack([jnp.reshape(g, -1) for g in grids])).astype(one_d_grids[0].dtype)
+    return jnp.stack([g.ravel() for g in grids], axis=-1)
 
 
 def get_k_coordinate_of_each_pixel_real(image_shape, voxel_size, scaled=True):
@@ -52,7 +52,7 @@ def get_k_coordinate_of_each_pixel_real(image_shape, voxel_size, scaled=True):
         get_1d_frequency_grid_rfft(image_shape[1], voxel_size, scaled),
     ]
     grids = jnp.meshgrid(*one_d_grids, indexing="xy")
-    return jnp.transpose(jnp.vstack([jnp.reshape(g, -1) for g in grids])).astype(one_d_grids[0].dtype)
+    return jnp.stack([g.ravel() for g in grids], axis=-1)
 
 
 def get_k_coordinate_of_each_pixel_3d_real(image_shape, voxel_size, scaled=True):
@@ -70,7 +70,7 @@ def get_k_coordinate_of_each_pixel_3d_real(image_shape, voxel_size, scaled=True)
         get_1d_frequency_grid_rfft(image_shape[2], voxel_size, scaled),
     ]
     grids = jnp.meshgrid(*one_d_grids, indexing="ij")
-    return jnp.transpose(jnp.vstack([jnp.reshape(g, -1) for g in grids])).astype(one_d_grids[0].dtype)
+    return jnp.stack([g.ravel() for g in grids], axis=-1)
 
 
 def get_grid_of_radial_distances(image_shape, voxel_size=1, scaled=False, frequency_shift=0, rounded=True):

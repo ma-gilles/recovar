@@ -82,14 +82,18 @@ def rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
     return batch_grid_pt_vec_ind_of_images, batch_grid_pt_vec_ind_of_images_og_shape
 
 
+_STENCIL_2D = jnp.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=jnp.int32)
+_STENCIL_3D = jnp.array(
+    [[0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 1, 1], [1, 0, 0], [1, 0, 1], [1, 1, 0], [1, 1, 1]],
+    dtype=jnp.int32,
+)
+
+
 def get_stencil(dim):
     if dim == 2:
-        return jnp.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=int)
+        return _STENCIL_2D
     if dim == 3:
-        return jnp.array(
-            [[0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 1, 1], [1, 0, 0], [1, 0, 1], [1, 1, 0], [1, 1, 1]],
-            dtype=int,
-        )
+        return _STENCIL_3D
     raise ValueError(f"Unsupported stencil dimension: {dim}")
 
 
