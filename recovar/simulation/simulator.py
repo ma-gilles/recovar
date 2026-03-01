@@ -223,10 +223,6 @@ def kent_sampling_scheme(n_images, grid_size, seed =0, arguments = None ):
     theta = np.random.rand(n_images) * 2 * np.pi
     rotations = cryo_rotation_batch(unit_vectors, theta)
     
-    # Set contrast to 1
-    # ctf_params[:,core.CTFParamIndex.CONTRAST] = 1
-    # ctf_params[:,core.volt_ind] = 300
-    # ctf_params[:,core.CTFParamIndex.W] = -1
     translations = np.zeros([n_images,2])
 
     return ctf_params, rotations, translations
@@ -308,9 +304,6 @@ def generate_volumes_from_mrcs(mrc_names, grid_size_i = None, padding= 0 ):
         idx+=1
         data, voxel_size = utils.load_mrc(mrc_name, return_voxel_size = True)
         voxel_size = voxel_size.x
-        # data, header =  mrc.parse_mrc(mrc_name)
-        # data = np.transpose(data, (2,1,0))
-        # voxel_size = header.fields['xlen'] / header.fields['nx']
         mrc_grid_size = data.shape[0]
         
         if grid_size_i is None:
@@ -326,8 +319,6 @@ def generate_volumes_from_mrcs(mrc_names, grid_size_i = None, padding= 0 ):
         
 
         if mrc_grid_size == grid_size:
-            # if return_ft:
-            #     X_padded = fourier_transform_utils.get_dft3(data)
             X_padded = fourier_transform_utils.get_dft3(data)
         else:
             # Zero out grid_sizes outside radius
@@ -388,10 +379,6 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
     volumes *= scale_vol
 
     vol_shape = utils.guess_vol_shape_from_vol_size(volumes.shape[-1])
-    # import matplotlib.pyplot as plt
-    # plt.imshow(fourier_transform_utils.get_idft3(volumes[0].reshape(vol_shape)).real.sum(axis=0))
-    # Maybe normalize volumes?
-    # volumes /= np.linalg.norm(volumes, axis =(-1))
     volume_distribution = np.ones(volumes.shape[0]) / volumes.shape[0] if volume_distribution is None else volume_distribution
 
     outlier_volume = fourier_transform_utils.get_dft3(utils.load_mrc(outlier_file_input)).reshape(-1) if outlier_file_input is not None else None
@@ -412,11 +399,6 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
         volumes = volumes / np.sqrt(norm_image)
         scale_vol =  scale_vol / np.sqrt(norm_image)
 
-        # main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size = generate_simulated_dataset(volumes, voxel_size, volume_distribution, 10, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers, dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file )
-        # norm_image = np.mean(np.linalg.norm(main_image_stack, axis = (-1,-2)))
-        # Scale noise and volumes so that images have approximately std =1?
-
-    # First make some dataset to figure out a good scaling?
     main_image_stack, ctf_params, rots, trans, simulation_info, voxel_size, tilt_groups = generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers = percent_outliers, dataset_param_generator = dataset_param_generator, volume_radius = volume_radius, outlier_volume = outlier_volume, disc_type = disc_type, mrc_file = mrc_file, n_tilts = n_tilts, 
     dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt, image_offset_n_std= image_offset_n_std , per_particle_contrast=per_particle_contrast, premultiplied_ctf = premultiplied_ctf, noise_increase_per_tilt = noise_increase_per_tilt, percent_tilt_series_outliers = percent_tilt_series_outliers)
 
@@ -494,7 +476,6 @@ def load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_
 
 def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_images, noise_variance, noise_scale_std, contrast_std, put_extra_particles, percent_outliers = 0.0, dataset_param_generator = None, volume_radius = 0.95, outlier_volume = None, disc_type = 'linear_interp', mrc_file = None, n_tilts = -1, dose_per_tilt = None, angle_per_tilt = None, voltage = 100, image_offset_n_std = 0.0, per_particle_contrast= True, premultiplied_ctf = False, noise_increase_per_tilt = None, percent_tilt_series_outliers = 0.0):
     
-    # voxel_size = 
     volume_shape = utils.guess_vol_shape_from_vol_size(volumes[0].size)
     grid_size = volume_shape[0]
 
@@ -589,7 +570,6 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     main_image_stack = simulate_data(main_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = disc_type, mrc_file = mrc_file, premultiplied_ctf=premultiplied_ctf )
 
     image_means = np.mean(main_image_stack, axis = (-1,-2))
-    # image_means_mean = np.mean(main_image_stack, axis = (-1,-2))
     image_mean_std = np.std(image_means)
     logger.info("Image mean mean %s, image mean std: %s", np.mean(image_means), image_mean_std)
     per_image_offset = np.random.randn(n_images) * image_mean_std * image_offset_n_std
@@ -705,14 +685,11 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
 def save_ctf_params(outdir, D: int, ctf_params, voxel_size):
 
     assert D % 2 == 0
-    # assert ctf_params.shape[1] == 9
     ctf_params_all = np.zeros([ctf_params.shape[0], ctf_params.shape[1] + 2])
     ctf_params_all[:,2:] = ctf_params
     ctf_params_all[:,0] = D
     ctf_params_all[:,1] = voxel_size
-    # Throw away B factor and contrast, because that's what cryodrgn loader wants. Probably should change this.
     utils.pickle_dump(ctf_params_all[:,:9].astype(np.float32), outdir + '/ctf.pkl')
-    return 
 
 
 roll_batch = jax.vmap(lambda x,y,z: jax.numpy.roll(x,y,axis = z), in_axes = (0, 0, None))
@@ -831,15 +808,6 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 upsample_factor=2
                 upsampled_shape = tuple(np.array(experiment_dataset.image_shape) * upsample_factor)
                 upsampled_CTF = experiment_dataset.CTF_fun(experiment_dataset.CTF_params[indices],  upsampled_shape, experiment_dataset.voxel_size)
-                # upsampled_CTF2 = experiment_dataset.CTF_fun(experiment_dataset.CTF_params[indices],  experiment_dataset.image_shape, experiment_dataset.voxel_size)
-                # import matplotlib.pyplot as plt
-                # plt.imshow(upsampled_CTF.reshape(upsampled_shape))
-                # plt.show()
-
-                # import matplotlib.pyplot as plt
-                # plt.imshow(upsampled_CTF2.reshape(experiment_dataset.image_shape))
-                # plt.show()
-
 
                 images_batch = padding.pad_images_fourier_domain(images_batch,  experiment_dataset.image_shape, experiment_dataset.grid_size * (upsample_factor-1))
                 images_batch = images_batch * upsampled_CTF
