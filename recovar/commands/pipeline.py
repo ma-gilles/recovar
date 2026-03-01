@@ -22,260 +22,227 @@ from recovar.utils.helpers import RobustStreamHandler as _RobustStreamHandler
 
 
 def add_args(parser: argparse.ArgumentParser):
+
+    def list_of_ints(arg):
+        return list(map(int, arg.split(',')))
+
+    # ── Required / positional ──────────────────────────────────────────────
     parser.add_argument(
         "particles",
         type=os.path.abspath,
         help="Input particles (.mrcs, .star, .cs, or .txt)",
     )
-
     parser.add_argument(
-        "-o",
-        "--outdir",
-        type=os.path.abspath,
-        required=True,
+        "-o", "--outdir",
+        type=os.path.abspath, required=True,
         help="Output directory to save model",
     )
-
-    def list_of_ints(arg):
-        return list(map(int, arg.split(',')))
-
-    parser.add_argument('--zdim', type=list_of_ints, default=[1,2,4,10,20], help="Dimensions of latent variable. Default=1,2,4,10,20")
-
     parser.add_argument(
-        "--poses", type=os.path.abspath, required=False, default=None,
-        help="Image poses (.pkl). If not provided, auto-extracted from particles file (.star or .cs)"
-    )
-    parser.add_argument(
-        "--ctf", metavar="pkl", type=os.path.abspath, required=False, default=None,
-        help="CTF parameters (.pkl). If not provided, auto-extracted from particles file (.star or .cs)"
-    )
-    parser.add_argument(
-        "--downsample", type=int, default=256,
-        help="Downsample images to this box size (default 256). Automatically skipped if images are already near this size. Use --no-downsample to disable."
-    )
-    parser.add_argument(
-        "--no-downsample", action="store_true", dest="no_downsample", default=False,
-        help="Disable automatic downsampling (process images at original resolution)"
+        "--mask", metavar="mrc", required=True,
+        help="Solvent mask (.mrc). Special values: from_halfmaps, sphere, none",
     )
 
-    parser.add_argument(
-        "--mask", metavar="mrc", required=True, help="solvent mask (.mrc).Can solve provide: from_halfmaps, sphere, none"
+    # ── Dataset loading ────────────────────────────────────────────────────
+    data = parser.add_argument_group("Dataset loading")
+    data.add_argument(
+        "--poses", type=os.path.abspath, default=None,
+        help="Image poses (.pkl). Auto-extracted from .star/.cs if omitted",
     )
-
-    parser.add_argument(
-        "--focus-mask", metavar="mrc", dest = "focus_mask", default=None, type=os.path.abspath, help="focus mask (.mrc)"
+    data.add_argument(
+        "--ctf", metavar="pkl", type=os.path.abspath, default=None,
+        help="CTF parameters (.pkl). Auto-extracted from .star/.cs if omitted",
     )
-
-    parser.add_argument(
-        "--keep-input-mask", action="store_true", dest="keep_input_mask", help="By default, the software thresholds and then softens mask. If this option is on, the input mask is used as is."
-    )
-
-    parser.add_argument(
-        "--use-complement-mask", action="store_true", dest = "use_complement_mask", help="Use complement of focus mask"
-    )
-
-    parser.add_argument(
-        "--copy-to-folder", dest="copy_to_folder", default = None, type=os.path.abspath, help="Copy all input data files to this temporary folder before processing. Original paths will be saved in output."
-    )
-
-    parser.add_argument(
-        "--mask-dilate-iter", type=int, default=0, dest="mask_dilate_iter", help="mask options how many iters to dilate solvent and focus mask"
-    )
-
-    parser.add_argument(
-        "--correct-contrast",
-        dest = "correct_contrast",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="estimate and correct for amplitude scaling (contrast) variation across images. Default = false "
-    )
-
-    parser.add_argument(
-        "--ignore-zero-frequency",
-        dest = "ignore_zero_frequency",
-        action="store_true",
-        help="use if you want zero frequency to be ignored. If images have been normalized to 0 mean, this is probably a good idea"
-    )
-
-    group = parser.add_argument_group("Dataset loading")
-    group.add_argument(
-        "--ind",
-        type=os.path.abspath,
-        metavar="PKL",
+    data.add_argument(
+        "--ind", type=os.path.abspath, metavar="PKL",
         help="Filter images by these indices",
     )
-
-    group.add_argument(
-        "--particle-ind",
-        dest="tilt_ind",
-        type=os.path.abspath,
-        metavar="PKL",
-        help="Filter particles by these indices (only for tilt-series/cryo-ET)",
+    data.add_argument(
+        "--particle-ind", dest="tilt_ind", type=os.path.abspath, metavar="PKL",
+        help="Filter particles by these indices (tilt-series only)",
     )
-
-    group.add_argument(
-        "--uninvert-data",
-        dest="uninvert_data",
-        default = "automatic",
-        help="Invert data sign: options: true, false, automatic (default). automatic will swap signs if sum(estimated mean) < 0",
+    data.add_argument(
+        "--halfsets", default=None, type=os.path.abspath,
+        help="Halfset indices (.pkl). If omitted, reads _rlnRandomSubset from star file, or splits randomly",
     )
-
-    group.add_argument(
-        "--lazy",
-        action="store_true",
+    data.add_argument(
+        "--datadir", type=os.path.abspath,
+        help="Path prefix to particle stack for relative paths in .star/.cs files",
+    )
+    data.add_argument(
+        "--strip-prefix",
+        help="Path prefix to strip from filenames in star file. "
+             "E.g. --strip-prefix Extract/job193 --datadir /your/path/to/",
+    )
+    data.add_argument(
+        "--n-images", default=-1, dest="n_images", type=int,
+        help="Number of images to use (for quick runs)",
+    )
+    data.add_argument(
+        "--lazy", action="store_true",
         help="Lazy loading if full dataset is too large to fit in memory",
     )
-
-    group.add_argument(
-        "--datadir",
-        type=os.path.abspath,
-        help="Path prefix to particle stack if loading relative paths from a .star or .cs file. If not specified, uses the directory of the star file.",
+    data.add_argument(
+        "--uninvert-data", dest="uninvert_data", default="automatic",
+        help="Invert data sign: true, false, automatic (default)",
+    )
+    data.add_argument(
+        "--copy-to-folder", dest="copy_to_folder", default=None, type=os.path.abspath,
+        help="Copy input data to this temporary folder before processing",
     )
 
-    parser.add_argument(
-        "--strip-prefix",
-        help="Path prefix to strip from filenames in star file (used in starfile input ONLY). \
-        Useful when star file contains longer paths than available on the system. By default, it strips the full path (except the filename). E.g, if you starfile path is Extract/job193/Subtomograms/XXX/XXX.mrcs, \
-        and your directory looks like /your/path/to/Subtomograms, then you can use --strip-prefix Extract/job193 --datadir /your/path/to/.",
+    # ── Downsampling ───────────────────────────────────────────────────────
+    ds = parser.add_argument_group("Downsampling")
+    ds.add_argument(
+        "--downsample", type=int, default=256,
+        help="Downsample images to this box size (default 256). Skipped if images are already near this size. Use --no-downsample to disable",
+    )
+    ds.add_argument(
+        "--no-downsample", action="store_true", dest="no_downsample", default=False,
+        help="Disable automatic downsampling (process at original resolution)",
     )
 
-    group.add_argument(
-            "--n-images",
-            default = -1,
-            dest="n_images",
-            type=int,
-            help="Number of images to use (should only use for quick run)",
-        )
+    # ── Masking ────────────────────────────────────────────────────────────
+    mk = parser.add_argument_group("Masking")
+    mk.add_argument(
+        "--focus-mask", metavar="mrc", dest="focus_mask", default=None, type=os.path.abspath,
+        help="Focus mask (.mrc)",
+    )
+    mk.add_argument(
+        "--keep-input-mask", action="store_true", dest="keep_input_mask",
+        help="Use input mask as-is (skip thresholding/softening)",
+    )
+    mk.add_argument(
+        "--use-complement-mask", action="store_true", dest="use_complement_mask",
+        help="Use complement of focus mask",
+    )
+    mk.add_argument(
+        "--mask-dilate-iter", type=int, default=0, dest="mask_dilate_iter",
+        help="Iterations to dilate solvent and focus mask",
+    )
+    mk.add_argument(
+        "--dilated-mask-dilation-iters", type=int, default=None,
+        help="How many times to dilate the mask. Default = 6 * volume_shape / 128",
+    )
+    mk.add_argument(
+        "--dont-use-image-mask", dest="dont_use_image_mask", action="store_true",
+    )
 
-    group.add_argument(
-            "--padding",
-            type=int,
-            default = 0,
-            help="Real-space padding",
-        )
+    # ── Algorithm options ──────────────────────────────────────────────────
+    algo = parser.add_argument_group("Algorithm")
+    algo.add_argument(
+        '--zdim', type=list_of_ints, default=[1, 2, 4, 10, 20],
+        help="Dimensions of latent variable (comma-separated). Default=1,2,4,10,20",
+    )
+    algo.add_argument(
+        "--noise-model", dest="noise_model", default="radial",
+        help="Noise model: radial (default) or white",
+    )
+    algo.add_argument(
+        "--mean-fn", dest="mean_fn", default="triangular",
+        help="Mean function: triangular (default), old, triangular_reg",
+    )
+    algo.add_argument(
+        "--correct-contrast", dest="correct_contrast",
+        action=argparse.BooleanOptionalAction, default=False,
+        help="Estimate and correct for amplitude scaling variation across images",
+    )
+    algo.add_argument(
+        "--do-over-with-contrast", dest="do_over_with_contrast",
+        action=argparse.BooleanOptionalAction, default=None,
+        help="Re-run once contrast is estimated. Default = same as --correct-contrast",
+    )
+    algo.add_argument(
+        "--ignore-zero-frequency", dest="ignore_zero_frequency", action="store_true",
+        help="Ignore zero frequency (useful when images are normalized to 0 mean)",
+    )
+    algo.add_argument(
+        "--padding", type=int, default=0,
+        help="Real-space padding",
+    )
+    algo.add_argument(
+        "--premultiplied-ctf", dest='premultiplied_ctf', action="store_true",
+        help="Use premultiplied CTF",
+    )
+    algo.add_argument(
+        "--new-noise-est", dest='new_noise_est', action="store_true",
+        help="Use new noise estimation",
+    )
+    algo.add_argument(
+        '--use_reg_mean_in_contrast', action=argparse.BooleanOptionalAction, default=True,
+    )
+    algo.add_argument(
+        "--only-mean", action="store_true", dest="only_mean",
+        help="Only compute mean (skip covariance/PCA/embedding)",
+    )
 
-    group.add_argument(
-            "--halfsets",
-            default = None,
-            type=os.path.abspath,
-            help="Path to a file with indices of split dataset (.pkl).",
-        )
+    # ── Tilt series (cryo-ET) ──────────────────────────────────────────────
+    tilt = parser.add_argument_group("Tilt series (cryo-ET)")
+    tilt.add_argument(
+        "--tilt-series", action="store_true", dest="tilt_series",
+        help="Enable tilt-series mode",
+    )
+    tilt.add_argument(
+        "--tilt-series-ctf", default=None, dest="tilt_series_ctf",
+        help="CTF model for tilt series: cryoem, relion5, warp. Default = cryoem (SPA) or relion5 (tilt series)",
+    )
+    tilt.add_argument(
+        "--dose-per-tilt", default=None, type=float, dest="dose_per_tilt",
+        help="Dose per tilt (default: read from starfile)",
+    )
+    tilt.add_argument(
+        "--angle-per-tilt", default=None, type=float, dest="angle_per_tilt",
+        help="Angle per tilt (default: estimated from starfile)",
+    )
+    tilt.add_argument(
+        "--ntilts", default=None, type=int,
+        help="Number of tilts per tilt series. Default = all",
+    )
+    tilt.add_argument(
+        '--shared_contrast_across_tilts', action=argparse.BooleanOptionalAction, default=False,
+        help="Share contrast across tilts in cryo-ET",
+    )
 
-    group.add_argument(
-            "--keep-intermediate",
-            dest = "keep_intermediate",
-            action="store_true",
-            help="saves some intermediate result. Probably only useful for debugging"
-        )
-
-    group.add_argument(
-            "--noise-model",
-            dest = "noise_model",
-            default = "radial",
-            help="what noise model to use. Options are radial (default) computed from outside the masks, and white computed by power spectrum at high frequencies"
-        )
-
-    group.add_argument(
-            "--mean-fn",
-            dest = "mean_fn",
-            default = "triangular",
-            help="which mean function to use. Options are triangular (default), old, triangular_reg"
-        )
-
-    group.add_argument(
-        "--accept-cpu",
-        dest="accept_cpu",
-        action="store_true",
+    # ── Performance / GPU ──────────────────────────────────────────────────
+    perf = parser.add_argument_group("Performance")
+    perf.add_argument(
+        "--gpu-gb", default=None, type=float, dest="gpu_memory",
+        help="GPU memory to use in GB (default: all)",
+    )
+    perf.add_argument(
+        "--multi-gpu", action="store_true", dest="multi_gpu",
+        help="Enable multi-GPU parallelization for covariance computation",
+    )
+    perf.add_argument(
+        "--n-gpus", type=int, default=None, dest="n_gpus",
+        help="Number of GPUs to use (default: all available)",
+    )
+    perf.add_argument(
+        "--accept-cpu", dest="accept_cpu", action="store_true",
         help="Accept running on CPU if no GPU is found",
     )
-
-    group.add_argument(
-            "--test-covar-options",
-            dest = "test_covar_options",
-            action="store_true",
-            help="Only for development. Test different covariance estimation options"
-        )
-
-    group.add_argument(
-            "--low-memory-option",
-            help = "Use lower memory options for covariance estimation",
-            dest = "low_memory_option",
-            action="store_true",
-        )
-
-    group.add_argument(
-            "--very-low-memory-option",
-            help = "Use lowest memory options for covariance estimation",
-            dest = "very_low_memory_option",
-            action="store_true",
-        )
-
-    group.add_argument(
-            "--dont-use-image-mask",
-            dest = "dont_use_image_mask",
-            action="store_true",
-        )
-
-    parser.add_argument(
-        "--tilt-series", action="store_true",  dest="tilt_series", help="Whether to use tilt_series."
+    perf.add_argument(
+        "--low-memory-option", dest="low_memory_option", action="store_true",
+        help="Use lower memory options for covariance estimation",
+    )
+    perf.add_argument(
+        "--very-low-memory-option", dest="very_low_memory_option", action="store_true",
+        help="Use lowest memory options for covariance estimation",
     )
 
-    parser.add_argument(
-        "--tilt-series-ctf", default = None,  dest="tilt_series_ctf", help="What CTF to use for tilt series. Options : cryoem, relion5, warp (windows). Warptools is not yet supported. Default = cryoem if tilt series is False, relion5 if tilt series is True"
+    # ── Debugging / advanced ───────────────────────────────────────────────
+    adv = parser.add_argument_group("Advanced")
+    adv.add_argument(
+        "--keep-intermediate", dest="keep_intermediate", action="store_true",
+        help="Save intermediate results (for debugging)",
     )
-
-    parser.add_argument(
-        "--dose-per-tilt", default =None, type = float, dest="dose_per_tilt", help="Default = None, read from starfile"
+    adv.add_argument(
+        "--test-covar-options", dest="test_covar_options", action="store_true",
+        help="Test different covariance estimation options (development only)",
     )
-
-    parser.add_argument(
-        "--angle-per-tilt", default =None,  type = float, dest="angle_per_tilt", help="Default = None, estimated from starfile"
+    adv.add_argument(
+        "--no-cleanup", action="store_true",
+        help="Do not clean up temporary files after processing",
     )
-
-    parser.add_argument(
-        "--only-mean", action="store_true", dest = "only_mean", help="Only compute mean"
-    )
-
-    parser.add_argument(
-        "--ntilts", default = None, type=int, help="Number of tilts to use per tilt series. None = all (default)"
-    )
-
-    parser.add_argument(
-        "--gpu-gb", default =None,  type = float, dest="gpu_memory", help="How much GPU memory to use. Default = all"
-    )
-
-    parser.add_argument(
-        "--premultiplied-ctf", dest = 'premultiplied_ctf', action="store_true", help="Whether to use premultiplied CTF. Default = False"
-    )
-
-    parser.add_argument(
-        "--new-noise-est", dest = 'new_noise_est', action="store_true", help="Whether to use new noise estimation. Default = False"
-    )
-
-    parser.add_argument('--shared_contrast_across_tilts', action=argparse.BooleanOptionalAction, default =False,
-                        help="Whether to share contrast (amplitude scale) across tilts in cryoET. Default = False")
-
-    parser.add_argument('--use_reg_mean_in_contrast', action=argparse.BooleanOptionalAction, default =True)
-
-    parser.add_argument(
-            "--do-over-with-contrast",
-            dest = "do_over_with_contrast",
-            action=argparse.BooleanOptionalAction,
-            default = None,
-            help="Whether to run again once constrast is estimated. By default == correct_contrast. Can enter --no-do-over-with-contrast to turn off",
-        )
-
-    parser.add_argument('--dilated-mask-dilation-iters',
-                        type = int,
-                        default = None,
-                        help = "How many times to dilate the mask. Default = 6 * volume_shape[0] / 128"
-                        )
-
-    parser.add_argument("--no-cleanup", action="store_true", help="Do not clean up temporary files after processing (useful for chaining multiple pipeline calls)")
-
-    parser.add_argument("--multi-gpu", action="store_true", dest="multi_gpu", help="Enable multi-GPU parallelization for covariance computation")
-
-    parser.add_argument("--n-gpus", type=int, default=None, dest="n_gpus", help="Number of GPUs to use (default: use all available GPUs)")
 
     return parser
 
