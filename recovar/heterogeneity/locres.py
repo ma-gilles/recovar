@@ -362,26 +362,23 @@ def local_error(map1, map2, voxel_size, locres_sampling = 25, locres_maskrad= No
     # Compute error with convolution
     
     if low_pass_filter_res is not None:
+        map1_ft = fourier_transform_utils.get_dft3(map1)
         map1_ft = low_pass_filter_map(map1_ft, map1_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
         map1 = fourier_transform_utils.get_idft3(map1_ft).real
 
-        map2_ft = low_pass_filter_map(map2_ft, map1_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
+        map2_ft = fourier_transform_utils.get_dft3(map2)
+        map2_ft = low_pass_filter_map(map2_ft, map2_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
         map2 = fourier_transform_utils.get_idft3(map2_ft).real
 
     mask_ft = fourier_transform_utils.get_dft3(mask)
     map1_square_ft = fourier_transform_utils.get_dft3(map1*map1)
     map2_square_ft = fourier_transform_utils.get_dft3(map2*map2)
     map1map2_ft = fourier_transform_utils.get_dft3(map1*map2)
-    # map2_ft = fourier_transform_utils.get_dft3(map2)
 
     local_errors = (fourier_transform_utils.get_idft3(map1_square_ft * mask_ft).real ) \
     - 2 * fourier_transform_utils.get_idft3(map1map2_ft * mask_ft) \
     + (fourier_transform_utils.get_idft3(map2_square_ft * mask_ft) )
-    
-    # local_errors = (fourier_transform_utils.get_idft3(map1_ft * mask_ft).real )**2 \
-    # - 2 * fourier_transform_utils.get_idft3(map1_ft * map2_ft * mask_ft) \
-    # + (fourier_transform_utils.get_idft3(map2_ft * mask_ft) )**2
-    
+
     local_errors = local_errors.real
 
     return local_errors
@@ -401,10 +398,12 @@ def local_error_with_cov(map1, map2, voxel_size, locres_sampling = 25, locres_ma
 
     # Compute error with convolution
     if low_pass_filter_res is not None:
+        map1_ft = fourier_transform_utils.get_dft3(map1)
         map1_ft = low_pass_filter_map(map1_ft, map1_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
         map1 = fourier_transform_utils.get_idft3(map1_ft).real
 
-        map2_ft = low_pass_filter_map(map2_ft, map1_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
+        map2_ft = fourier_transform_utils.get_dft3(map2)
+        map2_ft = low_pass_filter_map(map2_ft, map2_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
         map2 = fourier_transform_utils.get_idft3(map2_ft).real
 
     ## Whiten maps
