@@ -75,6 +75,6 @@ If you use RECOVAR in your research, please cite:
 
 ## Contact
 
-Marc Aurele Gilles — [mg6942@princeton.edu](mailto:mg6942@princeton.edu)
+Marc Aurèle Gilles — [gilles@princeton.edu](mailto:gilles@princeton.edu)
 
 Issues and feature requests: [GitHub Issues](https://github.com/ma-gilles/recovar/issues)
