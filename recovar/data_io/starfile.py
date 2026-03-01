@@ -314,18 +314,17 @@ class StarFile:
     def apix(self) -> Optional[np.ndarray]:
         """Pixel size (Angstroms/pixel) for each particle.
 
-        Tries ``_rlnImagePixelSize`` first (RELION 3.1 optics table).
-        Falls back to ``_rlnDetectorPixelSize * 10000 / _rlnMagnification``
-        for RELION 3.0 format files.
+        Tries _rlnImagePixelSize first (RELION 3.1+), then falls back to
+        _rlnDetectorPixelSize * 1e4 / _rlnMagnification (older RELION).
         """
-        vals = self.get_optics_values('_rlnImagePixelSize', dtype=np.float32)
-        if vals is not None:
-            return vals
-        # RELION 3.0 fallback: Apix = DetectorPixelSize * 10000 / Magnification
+        values = self.get_optics_values('_rlnImagePixelSize', dtype=np.float32)
+        if values is not None:
+            return values
+        # Old-format STAR: pixel_size = detector_pixel_size (um) * 1e4 / magnification
         det = self.get_optics_values('_rlnDetectorPixelSize', dtype=np.float64)
         mag = self.get_optics_values('_rlnMagnification', dtype=np.float64)
         if det is not None and mag is not None:
-            return (det * 10000.0 / mag).astype(np.float32)
+            return (det * 1e4 / mag).astype(np.float32)
         return None
 
     @property

@@ -18,17 +18,38 @@
         <p class="text-xs text-slate-500 font-mono truncate max-w-lg">{{ job.output_dir }}</p>
       </div>
     </div>
-    <div id="status-badge"
-         hx-get="{{ url_for('api_job_status', job_id=job.id) }}"
-         hx-trigger="load{% if job.status in ('running', 'queued') %}, every 5s{% endif %}"
-         hx-swap="innerHTML">
-      <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium
-        {% if job.status == 'completed' %}text-emerald-400 bg-emerald-400/10
-        {% elif job.status == 'running' %}text-sky-400 bg-sky-400/10
-        {% elif job.status == 'queued' %}text-amber-400 bg-amber-400/10
-        {% else %}text-red-400 bg-red-400/10{% endif %}">
-        <span class="w-2 h-2 rounded-full bg-current"></span>{{ job.status|upper }}
-      </span>
+    <div class="flex items-center gap-3">
+      <div id="status-badge"
+           hx-get="{{ url_for('api_job_status', job_id=job.id) }}"
+           hx-trigger="load{% if job.status in ('running', 'queued') %}, every 5s{% endif %}"
+           hx-swap="innerHTML">
+        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium
+          {% if job.status == 'completed' %}text-emerald-400 bg-emerald-400/10
+          {% elif job.status == 'running' %}text-sky-400 bg-sky-400/10
+          {% elif job.status == 'queued' %}text-amber-400 bg-amber-400/10
+          {% else %}text-red-400 bg-red-400/10{% endif %}">
+          <span class="w-2 h-2 rounded-full bg-current"></span>{{ job.status|upper }}
+        </span>
+      </div>
+      {% if job.status == 'failed' %}
+      <a href="{{ url_for('clone_job', job_id=job.id) }}"
+         class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 border border-amber-500/20 transition-colors">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+        </svg>
+        Re-run
+      </a>
+      {% endif %}
+      {% if not job.id.startswith('discovered_') %}
+      <a href="{{ url_for('clone_job', job_id=job.id) }}"
+         class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+         title="Clone this job with modified parameters">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+        </svg>
+        Clone
+      </a>
+      {% endif %}
     </div>
   </div>
 
@@ -63,7 +84,6 @@
           {{ job.status|upper }}
         </div>
         {% if job.slurm_job_id %}<div class="text-xs text-slate-500 mt-1">SLURM: {{ job.slurm_job_id }}</div>{% endif %}
-        {% if job.error %}<div class="text-xs text-red-400 mt-1">{{ job.error }}</div>{% endif %}
       </div>
 
       <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
@@ -84,6 +104,33 @@
         <div class="text-sm text-white">{{ job.created_str or 'N/A' }}</div>
       </div>
     </div>
+
+    {% if job.status == 'failed' and job.error %}
+    <!-- Error banner for failed jobs -->
+    <div class="bg-red-950/50 border border-red-500/20 rounded-xl p-5">
+      <div class="flex items-start gap-3">
+        <svg class="w-5 h-5 text-red-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <div class="flex-1 min-w-0">
+          <h3 class="text-sm font-semibold text-red-400 mb-1">Job Failed</h3>
+          <pre class="text-xs text-red-300 font-mono whitespace-pre-wrap break-all">{{ job.error }}</pre>
+          <div class="mt-3 flex gap-2">
+            <a href="{{ url_for('clone_job', job_id=job.id) }}"
+               class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 border border-amber-500/20 transition-colors">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+              </svg>
+              Re-run with changes
+            </a>
+            <button @click="tab = 'logs'" class="px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-white transition-colors">
+              View full logs
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
 
     <!-- What's available -->
     <div class="bg-slate-900 border border-slate-800 rounded-xl p-5" x-show="analysisInfo">
@@ -153,23 +200,20 @@
   <div x-show="tab === 'explore'" x-cloak class="space-y-4">
 
     <!-- No embeddings message -->
-    <template x-if="!analysisInfo || !analysisInfo.has_embeddings">
-      <div class="text-center py-16">
-        <div class="w-16 h-16 rounded-2xl bg-slate-800/50 flex items-center justify-center mx-auto mb-4">
-          <svg class="w-8 h-8 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-          </svg>
-        </div>
-        <h3 class="text-lg font-semibold text-white mb-2">No Embeddings Available</h3>
-        <p class="text-slate-400 text-sm max-w-md mx-auto">
-          Embeddings will appear here once the pipeline completes.
-          Run <code class="text-sky-400 bg-sky-400/10 px-1.5 py-0.5 rounded">recovar pipeline</code> to compute them.
-        </p>
+    <div x-show="!analysisInfo || !analysisInfo.has_embeddings" class="text-center py-16">
+      <div class="w-16 h-16 rounded-2xl bg-slate-800/50 flex items-center justify-center mx-auto mb-4">
+        <svg class="w-8 h-8 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+        </svg>
       </div>
-    </template>
+      <h3 class="text-lg font-semibold text-white mb-2">No Embeddings Available</h3>
+      <p class="text-slate-400 text-sm max-w-md mx-auto">
+        Embeddings will appear here once the pipeline completes.
+        Run <code class="text-sky-400 bg-sky-400/10 px-1.5 py-0.5 rounded">recovar pipeline</code> to compute them.
+      </p>
+    </div>
 
-    <template x-if="analysisInfo && analysisInfo.has_embeddings">
-      <div class="space-y-4">
+    <div x-show="analysisInfo && analysisInfo.has_embeddings" x-cloak class="space-y-4">
         <!-- zdim selector + axis selector -->
         <div class="flex items-center justify-between flex-wrap gap-3">
           <div class="flex items-center gap-2">
@@ -207,6 +251,33 @@
               / <span x-text="embeddingData?.n_total?.toLocaleString() || ''"></span>
             </span>
             particles
+          </div>
+        </div>
+
+        <!-- Representation + coloring controls -->
+        <div class="flex items-center gap-4 flex-wrap" x-show="embeddingData">
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-slate-500 font-medium">View:</span>
+            <div class="flex gap-1">
+              <button @click="switchRepresentation('pcs')"
+                      :class="representation === 'pcs' ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'"
+                      class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors">PCs</button>
+              <button @click="switchRepresentation('umap')" x-show="hasUmap"
+                      :class="representation === 'umap' ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'"
+                      class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors">UMAP</button>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-slate-500 font-medium">Color:</span>
+            <select @change="setColorBy($event.target.value)"
+                    class="bg-slate-800 text-white text-xs rounded px-2 py-1.5 border border-slate-700">
+              <option value="none" :selected="colorBy === 'none'">Uniform</option>
+              <option value="kmeans" :selected="colorBy === 'kmeans'">K-means</option>
+            </select>
+          </div>
+          <div x-show="representation === 'umap'" class="text-[10px] text-amber-400/70 flex items-center gap-1">
+            <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 6a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 6zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/></svg>
+            Point selection disabled in UMAP view
           </div>
         </div>
 
@@ -294,7 +365,7 @@
                   <template x-if="task.status === 'completed' && task.volumes">
                     <div class="flex gap-1 ml-auto">
                       <template x-for="vol in task.volumes" :key="vol.path">
-                        <button @click="loadVolume(vol.path, vol.display_name || vol.name)"
+                        <button @click="loadVolume(vol.path, vol.display_name || vol.name, $event.ctrlKey || $event.metaKey)"
                                 class="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 transition-colors"
                                 x-text="vol.display_name || vol.name"></button>
                       </template>
@@ -305,23 +376,68 @@
             </div>
           </div>
 
-          <!-- Right: Mol* volume viewer -->
+          <!-- Right: Volume viewer -->
           <div class="space-y-3">
             <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
               <div class="flex items-center justify-between px-4 py-2.5 border-b border-slate-800">
                 <span class="text-xs font-medium text-slate-400" x-text="currentVolumeName || 'No volume loaded'"></span>
                 <div class="flex items-center gap-3" x-show="currentVolumeName">
-                  <label class="flex items-center gap-1.5 text-[11px] text-slate-400">
+                  <div class="flex gap-1">
+                    <button @click="viewMode = '3d'"
+                            :class="viewMode === '3d' ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-400'"
+                            class="px-2 py-1 text-[10px] font-medium rounded transition-colors">3D</button>
+                    <button @click="viewMode = 'slices'"
+                            :class="viewMode === 'slices' ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-400'"
+                            class="px-2 py-1 text-[10px] font-medium rounded transition-colors">Slices</button>
+                  </div>
+                  <label x-show="viewMode === '3d'" class="flex items-center gap-1.5 text-[11px] text-slate-400">
                     Iso
-                    <input type="range" min="0" max="100" step="1" x-model="isoPercent"
-                           class="w-24 h-1 bg-slate-700 rounded-full appearance-none cursor-pointer accent-sky-500">
-                    <span x-text="isoPercent + '%'" class="w-8 text-right"></span>
+                    <input type="range" min="0.5" max="10" step="0.1" x-model.number="isoLevel"
+                           @input="updateIso()"
+                           class="w-20 h-1 bg-slate-700 rounded-full appearance-none cursor-pointer accent-sky-500">
+                    <span x-text="isoLevel.toFixed(1) + 'σ'" class="w-10 text-right"></span>
+                  </label>
+                  <label x-show="viewMode === '3d'" class="flex items-center gap-1.5 text-[11px] text-slate-400">
+                    Opacity
+                    <input type="range" min="0.1" max="1" step="0.05" x-model.number="isoAlpha"
+                           @input="updateIso()"
+                           class="w-16 h-1 bg-slate-700 rounded-full appearance-none cursor-pointer accent-sky-500">
+                    <span x-text="Math.round(isoAlpha * 100) + '%'" class="w-8 text-right"></span>
                   </label>
                 </div>
               </div>
-              <div id="molstar-viewport" style="height: 480px; position: relative;">
+              <!-- NGL 3D viewport -->
+              <div x-show="viewMode === '3d'" id="ngl-viewport-explore" style="height: 480px; position: relative;">
                 <div x-show="!currentVolumeName" class="absolute inset-0 flex items-center justify-center">
                   <p class="text-sm text-slate-600">Select a volume to visualize</p>
+                </div>
+                <div x-show="volumeLoading" class="absolute inset-0 flex items-center justify-center bg-slate-900/80 z-10">
+                  <div class="flex items-center gap-3 text-slate-400">
+                    <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    Loading volume...
+                  </div>
+                </div>
+              </div>
+              <!-- Slice viewer -->
+              <div x-show="viewMode === 'slices'" class="p-4" style="min-height: 480px;">
+                <div x-show="!currentVolumeName" class="flex items-center justify-center" style="height: 440px;">
+                  <p class="text-sm text-slate-600">Select a volume to view slices</p>
+                </div>
+                <div x-show="currentVolumeName" class="space-y-3">
+                  <div class="flex items-center gap-3">
+                    <span class="text-xs text-slate-500 w-8">Axis:</span>
+                    <div class="flex gap-1">
+                      <button @click="sliceAxis = 0; updateSlice()" :class="sliceAxis === 0 ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-400'" class="px-2.5 py-1 text-[10px] font-medium rounded transition-colors">X (sagittal)</button>
+                      <button @click="sliceAxis = 1; updateSlice()" :class="sliceAxis === 1 ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-400'" class="px-2.5 py-1 text-[10px] font-medium rounded transition-colors">Y (coronal)</button>
+                      <button @click="sliceAxis = 2; updateSlice()" :class="sliceAxis === 2 ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-400'" class="px-2.5 py-1 text-[10px] font-medium rounded transition-colors">Z (axial)</button>
+                    </div>
+                    <span class="text-xs text-slate-500 ml-auto" x-text="'Slice ' + sliceIdx + ' / ' + (sliceMax || '?')"></span>
+                  </div>
+                  <input type="range" min="0" :max="sliceMax" step="1" x-model.number="sliceIdx" @input="updateSlice()"
+                         class="w-full h-2 bg-slate-700 rounded-full appearance-none cursor-pointer accent-sky-500">
+                  <div class="flex justify-center">
+                    <img :src="sliceUrl" class="max-h-[400px] rounded-lg" alt="Volume slice" @error="$el.src=''">
+                  </div>
                 </div>
               </div>
             </div>
@@ -335,7 +451,7 @@
                 </div>
                 <div>
                   <span class="text-slate-500">Voxel Size</span>
-                  <div class="text-white mt-0.5" x-text="(volumeInfo?.voxel_size?.toFixed(2) || '') + ' A/px'"></div>
+                  <div class="text-white mt-0.5" x-text="(volumeInfo?.voxel_size?.toFixed(2) || '') + ' \u00C5/px'"></div>
                 </div>
                 <div>
                   <span class="text-slate-500">Range</span>
@@ -347,10 +463,38 @@
                 </div>
               </div>
             </div>
+
+            <!-- Loaded volumes panel -->
+            <div x-show="loadedVolumes.length > 0" class="bg-slate-900 border border-slate-800 rounded-xl p-3 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Loaded Volumes</span>
+                <button @click="clearAllVolumes()" class="text-[10px] text-slate-500 hover:text-red-400 transition-colors">Clear All</button>
+              </div>
+              <div class="text-[10px] text-slate-600 -mt-1">Ctrl+click a volume to overlay multiple</div>
+              <template x-for="(vol, idx) in loadedVolumes" :key="idx">
+                <div class="flex items-center gap-2 py-1">
+                  <span class="w-2.5 h-2.5 rounded-full flex-shrink-0" :style="'background-color: ' + vol.color"></span>
+                  <span class="text-xs text-slate-300 truncate flex-1" x-text="vol.name"></span>
+                  <button @click="removeVolume(idx)" class="text-slate-600 hover:text-red-400 transition-colors p-0.5">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                  </button>
+                </div>
+              </template>
+            </div>
+
+            <!-- Export Mask -->
+            <div x-show="currentVolumePath" class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+              <button @click="exportMask()"
+                      :disabled="maskExporting"
+                      class="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium rounded-lg bg-violet-600 hover:bg-violet-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                <span x-text="maskExporting ? 'Exporting...' : 'Export Mask at ' + isoLevel.toFixed(1) + 'σ'"></span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
-    </template>
+    </div>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -388,7 +532,7 @@
             </div>
             <div class="divide-y divide-slate-800/50 max-h-[600px] overflow-y-auto scrollbar-thin">
               <template x-for="vol in filteredVolumes" :key="vol.path">
-                <button @click="loadVolume(vol.path, vol.display_name)"
+                <button @click="loadVolume(vol.path, vol.display_name, $event.ctrlKey || $event.metaKey)"
                         class="w-full text-left px-3 py-2 flex items-center gap-2.5 hover:bg-slate-800 transition-colors group/vol"
                         :class="currentVolumePath === vol.path ? 'bg-slate-800 border-l-2 border-sky-500' : ''">
                   <img :src="'/api/volume/slice?path=' + encodeURIComponent(vol.path) + '&axis=2'"
@@ -418,7 +562,7 @@
                 </div>
                 <div class="divide-y divide-slate-800/50 max-h-[300px] overflow-y-auto scrollbar-thin">
                   <template x-for="vol in info.kmeans_volumes" :key="vol.path">
-                    <button @click="loadVolume(vol.path, vol.display_name)"
+                    <button @click="loadVolume(vol.path, vol.display_name, $event.ctrlKey || $event.metaKey)"
                             class="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-slate-800 transition-colors"
                             :class="currentVolumePath === vol.path ? 'bg-slate-800 border-l-2 border-sky-500' : ''">
                       <span class="text-xs truncate" :class="currentVolumePath === vol.path ? 'text-sky-400' : 'text-slate-300'"
@@ -439,7 +583,7 @@
                   </div>
                   <div class="divide-y divide-slate-800/50">
                     <template x-for="vol in traj.volumes" :key="vol.path">
-                      <button @click="loadVolume(vol.path, vol.display_name)"
+                      <button @click="loadVolume(vol.path, vol.display_name, $event.ctrlKey || $event.metaKey)"
                               class="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-slate-800 transition-colors"
                               :class="currentVolumePath === vol.path ? 'bg-slate-800 border-l-2 border-sky-500' : ''">
                         <span class="text-xs" :class="currentVolumePath === vol.path ? 'text-sky-400' : 'text-slate-300'"
@@ -467,7 +611,7 @@
               </div>
               <div class="divide-y divide-slate-800/50 max-h-[200px] overflow-y-auto scrollbar-thin">
                 <template x-for="vol in analysisInfo.computed" :key="vol.path">
-                  <button @click="loadVolume(vol.path, vol.display_name || vol.name)"
+                  <button @click="loadVolume(vol.path, vol.display_name || vol.name, $event.ctrlKey || $event.metaKey)"
                           class="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-slate-800 transition-colors"
                           :class="currentVolumePath === vol.path ? 'bg-slate-800 border-l-2 border-sky-500' : ''">
                     <span class="text-xs truncate" :class="currentVolumePath === vol.path ? 'text-sky-400' : 'text-slate-300'"
@@ -479,23 +623,61 @@
           </template>
         </div>
 
-        <!-- Right: Volume viewer (shared with explore tab via ID) -->
+        <!-- Right: Volume viewer -->
         <div class="lg:col-span-2 space-y-3">
           <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
             <div class="flex items-center justify-between px-4 py-2.5 border-b border-slate-800">
               <span class="text-xs font-medium text-slate-400" x-text="currentVolumeName || 'Select a volume'"></span>
               <div class="flex items-center gap-3" x-show="currentVolumeName">
-                <label class="flex items-center gap-1.5 text-[11px] text-slate-400">
+                <div class="flex gap-1">
+                  <button @click="viewMode = '3d'"
+                          :class="viewMode === '3d' ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-400'"
+                          class="px-2 py-1 text-[10px] font-medium rounded transition-colors">3D</button>
+                  <button @click="viewMode = 'slices'"
+                          :class="viewMode === 'slices' ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-400'"
+                          class="px-2 py-1 text-[10px] font-medium rounded transition-colors">Slices</button>
+                </div>
+                <label x-show="viewMode === '3d'" class="flex items-center gap-1.5 text-[11px] text-slate-400">
                   Iso
-                  <input type="range" min="0" max="100" step="1" x-model="isoPercent"
-                         class="w-24 h-1 bg-slate-700 rounded-full appearance-none cursor-pointer accent-sky-500">
-                  <span x-text="isoPercent + '%'" class="w-8 text-right"></span>
+                  <input type="range" min="0.5" max="10" step="0.1" x-model.number="isoLevel"
+                         @input="updateIso()"
+                         class="w-20 h-1 bg-slate-700 rounded-full appearance-none cursor-pointer accent-sky-500">
+                  <span x-text="isoLevel.toFixed(1) + '\u03C3'" class="w-10 text-right"></span>
                 </label>
               </div>
             </div>
-            <div id="molstar-viewport-volumes" style="height: 520px; position: relative;">
+            <!-- 3D viewport -->
+            <div x-show="viewMode === '3d'" id="molstar-viewport-volumes" style="height: 520px; position: relative;">
               <div x-show="!currentVolumeName" class="absolute inset-0 flex items-center justify-center">
                 <p class="text-sm text-slate-600">Click a volume from the list to view it</p>
+              </div>
+              <div x-show="volumeLoading" class="absolute inset-0 flex items-center justify-center bg-slate-900/80 z-10">
+                <div class="flex items-center gap-3 text-slate-400">
+                  <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                  Loading volume...
+                </div>
+              </div>
+            </div>
+            <!-- Slice viewer -->
+            <div x-show="viewMode === 'slices'" class="p-4" style="min-height: 520px;">
+              <div x-show="!currentVolumeName" class="flex items-center justify-center" style="height: 480px;">
+                <p class="text-sm text-slate-600">Select a volume to view slices</p>
+              </div>
+              <div x-show="currentVolumeName" class="space-y-3">
+                <div class="flex items-center gap-3">
+                  <span class="text-xs text-slate-500 w-8">Axis:</span>
+                  <div class="flex gap-1">
+                    <button @click="sliceAxis = 0; updateSlice()" :class="sliceAxis === 0 ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-400'" class="px-2.5 py-1 text-[10px] font-medium rounded transition-colors">X</button>
+                    <button @click="sliceAxis = 1; updateSlice()" :class="sliceAxis === 1 ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-400'" class="px-2.5 py-1 text-[10px] font-medium rounded transition-colors">Y</button>
+                    <button @click="sliceAxis = 2; updateSlice()" :class="sliceAxis === 2 ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-400'" class="px-2.5 py-1 text-[10px] font-medium rounded transition-colors">Z</button>
+                  </div>
+                  <span class="text-xs text-slate-500 ml-auto" x-text="'Slice ' + sliceIdx + ' / ' + (sliceMax || '?')"></span>
+                </div>
+                <input type="range" min="0" :max="sliceMax" step="1" x-model.number="sliceIdx" @input="updateSlice()"
+                       class="w-full h-2 bg-slate-700 rounded-full appearance-none cursor-pointer accent-sky-500">
+                <div class="flex justify-center">
+                  <img :src="sliceUrl" class="max-h-[440px] rounded-lg" alt="Volume slice" @error="$el.src=''">
+                </div>
               </div>
             </div>
           </div>
@@ -503,7 +685,7 @@
           <div x-show="volumeInfo" class="bg-slate-900 border border-slate-800 rounded-xl p-3">
             <div class="grid grid-cols-4 gap-3 text-xs">
               <div><span class="text-slate-500">Shape</span><div class="text-white mt-0.5" x-text="volumeInfo?.shape?.join(' x ') || ''"></div></div>
-              <div><span class="text-slate-500">Voxel Size</span><div class="text-white mt-0.5" x-text="(volumeInfo?.voxel_size?.toFixed(2) || '') + ' A/px'"></div></div>
+              <div><span class="text-slate-500">Voxel Size</span><div class="text-white mt-0.5" x-text="(volumeInfo?.voxel_size?.toFixed(2) || '') + ' \u00C5/px'"></div></div>
               <div><span class="text-slate-500">Range</span><div class="text-white mt-0.5" x-text="(volumeInfo?.min?.toFixed(3) || '') + ' / ' + (volumeInfo?.max?.toFixed(3) || '')"></div></div>
               <div><span class="text-slate-500">Mean</span><div class="text-white mt-0.5" x-text="volumeInfo?.mean?.toFixed(4) || ''"></div></div>
             </div>
@@ -628,8 +810,8 @@
 <!-- External Libraries                                              -->
 <!-- ════════════════════════════════════════════════════════════════ -->
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
-<link rel="stylesheet" type="text/css" href="https://www.ebi.ac.uk/pdbe/pdb-component-library/css/pdbe-molstar-3.1.3.css">
-<script type="text/javascript" src="https://www.ebi.ac.uk/pdbe/pdb-component-library/js/pdbe-molstar-plugin-3.1.3.js"></script>
+<link rel="stylesheet" type="text/css" href="https://molstar.org/viewer/molstar.css">
+<script type="text/javascript" src="https://molstar.org/viewer/molstar.js"></script>
 
 <script>
 function jobExplorer() {
@@ -655,6 +837,12 @@ function jobExplorer() {
     axisX: 0,
     axisY: 1,
 
+    // Representation & coloring
+    representation: 'pcs',  // 'pcs' or 'umap'
+    umapData: null,
+    kmeansData: null,
+    colorBy: 'none',  // 'none', 'kmeans', 'density'
+
     // Selection
     selectedPoint: null,
     selectedPoint2: null,
@@ -670,7 +858,27 @@ function jobExplorer() {
     currentVolumeName: '',
     currentVolumePath: '',
     volumeInfo: null,
-    isoPercent: 50,
+    volumeLoading: false,
+    isoLevel: 3.0,  // sigma
+    isoAlpha: 0.85,
+    viewMode: '3d',  // '3d' or 'slices'
+
+    // Multi-volume
+    loadedVolumes: [],
+    nextVolumeColor: 0,
+    volumeColorPalette: [
+      0x38bdf8, 0xf43f5e, 0x22c55e, 0xa78bfa,
+      0xf59e0b, 0x06b6d4, 0xec4899, 0x84cc16,
+    ],
+
+    // Slice viewer state
+    sliceAxis: 2,
+    sliceIdx: 0,
+    sliceMax: 255,
+    sliceUrl: '',
+
+    // Mask export
+    maskExporting: false,
 
     // Volume browser
     volFilter: 'all',
@@ -695,6 +903,18 @@ function jobExplorer() {
       return vols.filter(v => v.category === this.volFilter);
     },
 
+    get hasUmap() {
+      if (!this.analysisInfo || !this.selectedZdim) return false;
+      const key = String(this.selectedZdim);
+      return this.analysisInfo.analyses?.[key]?.has_umap || false;
+    },
+
+    get hasKmeans() {
+      if (!this.analysisInfo || !this.selectedZdim) return false;
+      const key = String(this.selectedZdim);
+      return this.analysisInfo.analyses?.[key]?.has_kmeans || false;
+    },
+
     // ── Lifecycle ─────────────────────────────────────────────────
     async init() {
       try {
@@ -707,6 +927,10 @@ function jobExplorer() {
         }
         // Update tab badges
         this.tabs[2].badge = this.analysisInfo.volumes?.length || null;
+        // If already on explore tab when analysis loads, trigger embedding
+        if (this.tab === 'explore' && this.analysisInfo?.has_embeddings && this.selectedZdim) {
+          this.loadEmbedding();
+        }
       } catch (e) {
         console.error('Failed to load analysis info:', e);
       }
@@ -717,6 +941,13 @@ function jobExplorer() {
           this.loadEmbedding();
         }
       });
+
+      // Watch view mode changes to load 3D viewer when switching
+      this.$watch('viewMode', (mode) => {
+        if (mode === '3d' && this.currentVolumePath && !this.viewer) {
+          this._load3DVolume(this.currentVolumePath);
+        }
+      });
     },
 
     // ── Embedding ─────────────────────────────────────────────────
@@ -725,6 +956,9 @@ function jobExplorer() {
       this.selectedPoint = null;
       this.selectedPoint2 = null;
       this.selectingSecond = false;
+      this.umapData = null;
+      this.kmeansData = null;
+      this.representation = 'pcs';
       await this.loadEmbedding();
     },
 
@@ -736,6 +970,7 @@ function jobExplorer() {
         const data = await resp.json();
         if (data.error) {
           console.error('Embedding error:', data.error);
+          showToast('Failed to load embedding: ' + data.error, 'error');
           this.embeddingData = null;
           return;
         }
@@ -752,16 +987,22 @@ function jobExplorer() {
     },
 
     renderPlot() {
-      const data = this.embeddingData;
-      if (!data) return;
+      if (this.representation === 'umap' && this.umapData) {
+        this._renderScatter(this.umapData.umap0, this.umapData.umap1, 'UMAP 1', 'UMAP 2', false);
+      } else {
+        const data = this.embeddingData;
+        if (!data) return;
+        const xKey = `dim${this.axisX}`;
+        const yKey = `dim${this.axisY}`;
+        if (!data[xKey] || !data[yKey]) return;
+        this._renderScatter(data[xKey], data[yKey], `PC ${this.axisX + 1}`, `PC ${this.axisY + 1}`, true);
+      }
+    },
 
-      const xKey = `dim${this.axisX}`;
-      const yKey = `dim${this.axisY}`;
-      if (!data[xKey] || !data[yKey]) return;
-
+    _renderScatter(xData, yData, xLabel, yLabel, enableSelection) {
       const trace = {
-        x: data[xKey],
-        y: data[yKey],
+        x: xData,
+        y: yData,
         mode: 'markers',
         type: 'scattergl',
         marker: {
@@ -770,25 +1011,32 @@ function jobExplorer() {
           line: { width: 0 },
         },
         hoverinfo: 'text',
-        text: data[xKey].map((x, i) =>
-          `PC${this.axisX+1}: ${x.toFixed(3)}<br>PC${this.axisY+1}: ${data[yKey][i].toFixed(3)}`
-        ),
+        text: xData.map((x, i) => `${xLabel}: ${x.toFixed(3)}<br>${yLabel}: ${yData[i].toFixed(3)}`),
       };
+
+      // Apply k-means coloring
+      if (this.colorBy === 'kmeans' && this.kmeansData) {
+        const labels = this.kmeansData.labels;
+        const n = Math.min(xData.length, labels.length);
+        const colors = [];
+        const nClusters = this.kmeansData.n_clusters;
+        for (let i = 0; i < n; i++) {
+          const hue = (labels[i] * 360 / nClusters) % 360;
+          colors.push(`hsla(${hue}, 70%, 55%, 0.4)`);
+        }
+        trace.marker.color = colors;
+      } else if (this.colorBy === 'density') {
+        // Approximate density coloring via point index (lighter = more dense area)
+        trace.marker.color = 'rgba(56, 189, 248, 0.25)';
+        trace.marker.colorscale = 'Hot';
+      }
 
       const layout = {
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: '#1e293b',
         font: { color: '#94a3b8', family: 'Inter, system-ui', size: 11 },
-        xaxis: {
-          title: { text: `PC ${this.axisX + 1}`, standoff: 10 },
-          gridcolor: '#334155',
-          zerolinecolor: '#475569',
-        },
-        yaxis: {
-          title: { text: `PC ${this.axisY + 1}`, standoff: 10 },
-          gridcolor: '#334155',
-          zerolinecolor: '#475569',
-        },
+        xaxis: { title: { text: xLabel, standoff: 10 }, gridcolor: '#334155', zerolinecolor: '#475569' },
+        yaxis: { title: { text: yLabel, standoff: 10 }, gridcolor: '#334155', zerolinecolor: '#475569' },
         margin: { l: 55, r: 15, t: 15, b: 50 },
         dragmode: 'pan',
         hovermode: 'closest',
@@ -798,44 +1046,79 @@ function jobExplorer() {
       if (!plotEl) return;
 
       Plotly.newPlot(plotEl, [trace], layout, {
-        responsive: true,
-        scrollZoom: true,
-        displayModeBar: true,
-        modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
-        displaylogo: false,
+        responsive: true, scrollZoom: true, displayModeBar: true,
+        modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'], displaylogo: false,
       });
 
-      // Click handler
+      // Click handler — only for PCs mode (UMAP coords can't be used for volume computation)
       plotEl.removeAllListeners('plotly_click');
-      plotEl.on('plotly_click', (evtData) => {
-        if (!evtData.points || !evtData.points.length) return;
-        const pt = evtData.points[0];
-        const idx = pt.pointIndex;
-
-        // Build full coordinate vector from all dims
-        const coords = [];
-        for (let i = 0; i < this.embeddingData.zdim; i++) {
-          const key = `dim${i}`;
-          if (this.embeddingData[key]) {
-            coords.push(this.embeddingData[key][idx]);
+      if (enableSelection) {
+        plotEl.on('plotly_click', (evtData) => {
+          if (!evtData.points || !evtData.points.length) return;
+          const idx = evtData.points[0].pointIndex;
+          const coords = [];
+          for (let i = 0; i < this.embeddingData.zdim; i++) {
+            const key = `dim${i}`;
+            if (this.embeddingData[key]) coords.push(this.embeddingData[key][idx]);
           }
-        }
+          if (this.selectingSecond) {
+            this.selectedPoint2 = coords;
+            this.selectingSecond = false;
+          } else {
+            this.selectedPoint = coords;
+            this.selectedPoint2 = null;
+          }
+          this.updateMarkers();
+        });
+      }
 
-        if (this.selectingSecond) {
-          this.selectedPoint2 = coords;
-          this.selectingSecond = false;
-        } else {
-          this.selectedPoint = coords;
-          this.selectedPoint2 = null;
-        }
-
-        this.updateMarkers();
-      });
-
-      // Restore markers if points already selected
-      if (this.selectedPoint) {
+      if (this.selectedPoint && enableSelection) {
         this.$nextTick(() => this.updateMarkers());
       }
+    },
+
+    // ── Representation switching ──────────────────────────────────
+    async switchRepresentation(rep) {
+      this.representation = rep;
+      if (rep === 'umap' && !this.umapData) {
+        await this.loadUmap();
+      }
+      this.renderPlot();
+    },
+
+    async loadUmap() {
+      if (!this.selectedZdim) return;
+      try {
+        const resp = await fetch(`/api/jobs/{{ job.id }}/embeddings/umap?zdim=${this.selectedZdim}`);
+        const data = await resp.json();
+        if (data.error) {
+          showToast('UMAP not available: ' + data.error, 'error');
+          return;
+        }
+        this.umapData = data;
+      } catch (e) {
+        showToast('Failed to load UMAP', 'error');
+      }
+    },
+
+    async loadKmeansColors() {
+      if (this.kmeansData || !this.selectedZdim) return;
+      try {
+        const resp = await fetch(`/api/jobs/{{ job.id }}/embeddings/kmeans?zdim=${this.selectedZdim}`);
+        const data = await resp.json();
+        if (data.error) return;
+        this.kmeansData = data;
+      } catch (e) {
+        console.error('K-means load failed:', e);
+      }
+    },
+
+    async setColorBy(mode) {
+      this.colorBy = mode;
+      if (mode === 'kmeans' && !this.kmeansData) {
+        await this.loadKmeansColors();
+      }
+      this.renderPlot();
     },
 
     updateMarkers() {
@@ -1022,58 +1305,157 @@ function jobExplorer() {
     },
 
     // ── Volume Viewer ─────────────────────────────────────────────
-    async loadVolume(path, name) {
+    async loadVolume(path, name, add = false) {
       this.currentVolumeName = name;
       this.currentVolumePath = path;
+      this.volumeLoading = true;
 
       // Load volume info
       try {
         const resp = await fetch('/api/volume/info?path=' + encodeURIComponent(path));
         this.volumeInfo = await resp.json();
+        if (this.volumeInfo.shape) {
+          this.sliceMax = this.volumeInfo.shape[this.sliceAxis] - 1;
+          this.sliceIdx = Math.floor(this.sliceMax / 2);
+        }
       } catch (e) {
         console.error('Volume info error:', e);
         this.volumeInfo = null;
       }
 
-      // Determine which viewport to use based on current tab
-      const viewportId = this.tab === 'volumes' ? 'molstar-viewport-volumes' : 'molstar-viewport';
-      const el = document.getElementById(viewportId);
-      if (!el) return;
+      // Update slice view immediately
+      this.updateSlice();
 
-      // Clean up previous viewer
-      if (this.viewer) {
-        try { this.viewer.clear(); } catch(e) {}
+      // Load 3D view if in 3D mode
+      if (this.viewMode === '3d') {
+        await this._load3DVolume(path, { replace: !add });
+      }
+      this.volumeLoading = false;
+    },
+
+    async _load3DVolume(path, options = {}) {
+      // Determine which viewport to use
+      const viewportId = this.tab === 'volumes' ? 'molstar-viewport-volumes' : 'ngl-viewport-explore';
+
+      // Ensure DOM is ready (x-show may not have rendered yet)
+      await this.$nextTick();
+      const el = document.getElementById(viewportId);
+      if (!el) {
+        console.warn('Viewport element not found:', viewportId);
+        return;
       }
 
-      // Create new Mol* viewer
-      try {
-        this.viewer = new PDBeMolstarPlugin();
-        this.viewerTarget = viewportId;
+      const replaceAll = options.replace !== false;
+      const color = options.color || this.volumeColorPalette[this.nextVolumeColor % this.volumeColorPalette.length];
 
-        await this.viewer.render(el, {
-          customData: {
-            url: '/api/volume/raw?path=' + encodeURIComponent(path),
-            format: 'ccp4',
-            binary: true,
-          },
-          hideControls: false,
-          hideCanvasControls: ['selection', 'animation', 'controlToggle'],
-          bgColor: { r: 15, g: 23, b: 42 },
-          landscape: true,
-          reactive: true,
+      // Destroy previous viewer if replacing or switching viewports
+      if (replaceAll || !this.viewer || this.viewerTarget !== viewportId) {
+        if (this.viewer) {
+          try { this.viewer.plugin.dispose(); } catch (e) {}
+          this.viewer = null;
+        }
+        el.innerHTML = '';
+        this.loadedVolumes = [];
+      }
+
+      const url = '/api/volume/raw?path=' + encodeURIComponent(path);
+
+      try {
+        if (typeof molstar === 'undefined') {
+          throw new Error('Mol* library not loaded');
+        }
+
+        // Create viewer if needed
+        if (!this.viewer) {
+          const viewer = await molstar.Viewer.create(el, {
+            layoutIsExpanded: false,
+            layoutShowControls: true,
+            layoutShowRemoteState: false,
+            layoutShowSequence: false,
+            layoutShowLog: false,
+            layoutShowLeftPanel: false,
+            collapseRightPanel: true,
+            viewportShowExpand: false,
+            viewportShowSelectionMode: false,
+            viewportShowAnimation: false,
+            viewportShowTrajectoryControls: false,
+          });
+
+          viewer.plugin.canvas3d?.setProps({
+            renderer: { backgroundColor: 0x0f172a },
+          });
+
+          this.viewer = viewer;
+          this.viewerTarget = viewportId;
+        }
+
+        // Load the volume — try 'mrc' format first, fall back to 'ccp4'
+        try {
+          await this.viewer.loadVolumeFromUrl(
+            { url, format: 'mrc', isBinary: true },
+            [{
+              type: 'relative',
+              value: this.isoLevel,
+              color: color,
+              alpha: this.isoAlpha,
+            }],
+            { entryId: this.currentVolumeName }
+          );
+        } catch (mrcErr) {
+          console.warn('MRC format failed, trying CCP4:', mrcErr.message);
+          await this.viewer.loadVolumeFromUrl(
+            { url, format: 'ccp4', isBinary: true },
+            [{
+              type: 'relative',
+              value: this.isoLevel,
+              color: color,
+              alpha: this.isoAlpha,
+            }],
+            { entryId: this.currentVolumeName }
+          );
+        }
+
+        // Track loaded volume
+        this.loadedVolumes.push({
+          path: path,
+          name: this.currentVolumeName,
+          color: '#' + color.toString(16).padStart(6, '0'),
+          visible: true,
         });
+        this.nextVolumeColor++;
+
+        console.log('Mol* volume loaded:', this.currentVolumeName);
       } catch (e) {
-        console.error('Mol* error:', e);
-        // Fallback: show slice image
+        console.error('Mol* 3D load error:', e);
         el.innerHTML = `
-          <div class="flex items-center justify-center h-full text-slate-400">
-            <div class="text-center">
-              <p class="text-sm mb-2">3D viewer unavailable</p>
-              <img src="/api/volume/slice?path=${encodeURIComponent(path)}&axis=2"
-                   class="max-h-80 mx-auto rounded-lg" alt="Central slice">
-            </div>
+          <div class="flex flex-col items-center justify-center h-full text-slate-400 gap-4">
+            <p class="text-xs">3D viewer error: ${e.message || 'unknown'}</p>
+            <img src="/api/volume/slice?path=${encodeURIComponent(path)}&axis=2"
+                 class="max-h-80 rounded-lg" alt="Central slice">
+            <button onclick="this.closest('[x-data]').__x.$data.viewMode='slices'"
+                    class="text-xs text-sky-400 hover:text-sky-300">Switch to slice view</button>
           </div>`;
       }
+    },
+
+    _isoDebounce: null,
+    updateIso() {
+      clearTimeout(this._isoDebounce);
+      this._isoDebounce = setTimeout(() => {
+        if (this.currentVolumePath && this.viewer) {
+          this._load3DVolume(this.currentVolumePath);
+        }
+      }, 300);
+    },
+
+    updateSlice() {
+      if (!this.currentVolumePath) return;
+      if (this.volumeInfo?.shape) {
+        this.sliceMax = this.volumeInfo.shape[this.sliceAxis] - 1;
+        if (this.sliceIdx > this.sliceMax) this.sliceIdx = Math.floor(this.sliceMax / 2);
+      }
+      this.sliceUrl = '/api/volume/slice?path=' + encodeURIComponent(this.currentVolumePath) +
+                       '&axis=' + this.sliceAxis + '&idx=' + this.sliceIdx;
     },
 
     // ── Trajectory playback ───────────────────────────────────────
@@ -1085,6 +1467,62 @@ function jobExplorer() {
           await new Promise(resolve => setTimeout(resolve, 1500));
         }
       }
+    },
+
+    // ── Multi-volume management ──────────────────────────────────
+    async removeVolume(idx) {
+      const remaining = this.loadedVolumes.filter((_, i) => i !== idx);
+      this.clearAllVolumes();
+
+      for (let i = 0; i < remaining.length; i++) {
+        const vol = remaining[i];
+        this.currentVolumeName = vol.name;
+        this.currentVolumePath = vol.path;
+        const volColor = parseInt(vol.color.replace('#', ''), 16);
+        await this._load3DVolume(vol.path, { replace: i === 0, color: volColor });
+      }
+
+      if (remaining.length === 0) {
+        this.currentVolumeName = '';
+        this.currentVolumePath = '';
+        this.volumeInfo = null;
+      }
+    },
+
+    clearAllVolumes() {
+      if (this.viewer) {
+        try { this.viewer.plugin.dispose(); } catch (e) {}
+        this.viewer = null;
+      }
+      this.loadedVolumes = [];
+      this.nextVolumeColor = 0;
+      const el = document.getElementById(this.viewerTarget || 'ngl-viewport-explore');
+      if (el) el.innerHTML = '';
+    },
+
+    // ── Mask Export ───────────────────────────────────────────────
+    async exportMask() {
+      if (!this.currentVolumePath || this.maskExporting) return;
+      this.maskExporting = true;
+      try {
+        const resp = await fetch('/api/volume/mask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            path: this.currentVolumePath,
+            threshold_sigma: this.isoLevel,
+          }),
+        });
+        const result = await resp.json();
+        if (result.error) {
+          showToast('Mask export error: ' + result.error, 'error');
+        } else {
+          showToast(`Mask saved: ${result.path} (${(result.volume_fraction * 100).toFixed(1)}% volume)`, 'success', 6000);
+        }
+      } catch (e) {
+        showToast('Failed to export mask: ' + e.message, 'error');
+      }
+      this.maskExporting = false;
     },
 
     // ── Helpers ───────────────────────────────────────────────────

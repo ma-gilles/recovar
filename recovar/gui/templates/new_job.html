@@ -1,18 +1,50 @@
 {% extends "base.html" %}
 {% block title %}RECOVAR — New Job{% endblock %}
-{% block page_title %}New Pipeline Job{% endblock %}
+{% block page_title %}New Job{% endblock %}
 
 {% block content %}
 <div class="fade-in max-w-4xl" x-data="jobForm()">
+  {% if clone_from %}
+  <div class="mb-4 bg-amber-950/30 border border-amber-500/20 rounded-xl px-5 py-3 flex items-center gap-3">
+    <svg class="w-5 h-5 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+    </svg>
+    <div>
+      <span class="text-sm text-amber-300 font-medium">Re-running from: {{ clone_from.name }}</span>
+      {% if clone_from.error %}
+      <span class="text-xs text-slate-400 ml-2">Previous error: {{ clone_from.error[:100] }}</span>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
   <form method="POST" action="{{ url_for('create_job') }}" class="space-y-6">
 
-    <!-- Job name + output -->
+    <!-- Job type selector -->
+    <div class="flex gap-2 flex-wrap">
+      <template x-for="jt in jobTypes" :key="jt.id">
+        <button type="button" @click="jobType = jt.id"
+                :class="jobType === jt.id ? 'bg-sky-600 text-white border-sky-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-white'"
+                class="px-4 py-2.5 text-sm font-medium rounded-lg border transition-colors">
+          <span x-text="jt.label"></span>
+        </button>
+      </template>
+    </div>
+    <input type="hidden" name="job_type" :value="jobType">
+
+    <!-- Description of selected job type -->
+    <div class="text-xs text-slate-500 bg-slate-900/50 border border-slate-800/50 rounded-lg px-4 py-2.5">
+      <span x-text="jobTypes.find(j => j.id === jobType)?.desc || ''"></span>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- Common: Name + Output                                       -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
     <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
-      <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">Job Settings</h3>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
         <div>
           <label class="block text-sm font-medium text-slate-300 mb-1.5">Job Name</label>
-          <input name="name" type="text" value="pipeline_run"
+          <input name="name" type="text" value="{{ clone_from.name + '_retry' if clone_from else '' }}" :placeholder="jobType + '_run'"
                  class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition">
         </div>
         <div>
@@ -22,108 +54,356 @@
                    class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition"
                    placeholder="/path/to/output">
             <button type="button" @click="browsePath('outputDir')"
-                    class="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-300 transition-colors">Browse</button>
+                    class="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-300 transition-colors flex-shrink-0">Browse</button>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Dataset -->
-    <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
-      <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">
-        <svg class="w-4 h-4 inline mr-1 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-        </svg>
-        Dataset
-      </h3>
-      <div class="space-y-4">
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- Pipeline-specific options                                   -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <template x-if="jobType === 'pipeline'">
+      <div class="space-y-6">
+
+        <!-- Dataset -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
+          <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">Dataset</h3>
+          <div class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-300 mb-1.5">Particles File *</label>
+              <div class="flex gap-2">
+                <input name="particles" type="text" required x-model="particles"
+                       @change="validateParticles()"
+                       class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition"
+                       :class="starValidation.error ? 'border-red-500/50' : (starValidation.valid ? 'border-emerald-500/50' : '')"
+                       placeholder="/path/to/particles.star or .cs">
+                <button type="button" @click="browsePath('particles')"
+                        class="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-300 transition-colors flex-shrink-0">Browse</button>
+              </div>
+              <!-- Validation feedback -->
+              <template x-if="starValidation.checking">
+                <p class="text-xs text-sky-400 mt-1.5 flex items-center gap-1">
+                  <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                  Validating...
+                </p>
+              </template>
+              <template x-if="starValidation.valid && !starValidation.checking">
+                <div class="mt-1.5 space-y-1">
+                  <p class="text-xs text-emerald-400 flex items-center gap-1">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                    <span x-text="(starValidation.info.n_particles || '?').toLocaleString() + ' particles'"></span>
+                    <template x-if="starValidation.info.pixel_size">
+                      <span x-text="' · ' + starValidation.info.pixel_size.toFixed(2) + ' A/px'"></span>
+                    </template>
+                    <template x-if="starValidation.info.image_size">
+                      <span x-text="' · box ' + starValidation.info.image_size"></span>
+                    </template>
+                  </p>
+                  <template x-for="w in starValidation.warnings" :key="w">
+                    <p class="text-xs text-amber-400 flex items-start gap-1">
+                      <svg class="w-3 h-3 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                      <span x-text="w"></span>
+                    </p>
+                  </template>
+                </div>
+              </template>
+              <template x-if="starValidation.error && !starValidation.checking">
+                <p class="text-xs text-red-400 mt-1.5 flex items-start gap-1">
+                  <svg class="w-3 h-3 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                  <span x-text="starValidation.error"></span>
+                </p>
+              </template>
+              <template x-if="!starValidation.checking && !starValidation.valid && !starValidation.error">
+                <p class="text-xs text-slate-500 mt-1">STAR, CS, MRCS, or TXT file</p>
+              </template>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-300 mb-1.5">Mask</label>
+              <div class="flex gap-2">
+                <input name="mask" type="text" x-model="mask"
+                       class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition"
+                       placeholder="from_halfmaps, sphere, none, or /path/to/mask.mrc">
+                <button type="button" @click="browsePath('mask')"
+                        class="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-300 transition-colors flex-shrink-0">Browse</button>
+              </div>
+              <p class="text-xs text-slate-500 mt-1">MRC file, or: from_halfmaps (default), sphere, none</p>
+            </div>
+            <div class="flex flex-wrap gap-x-6 gap-y-2">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input name="lazy" type="checkbox" class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+                <span class="text-sm text-slate-300">Lazy loading</span>
+              </label>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input name="tilt_series" type="checkbox" x-model="tiltSeries" class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+                <span class="text-sm text-slate-300">Tilt series (cryo-ET)</span>
+              </label>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input name="correct_contrast" type="checkbox" class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+                <span class="text-sm text-slate-300">Correct contrast</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Core settings (always visible) -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
+            <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">Downsampling</h3>
+            <div class="space-y-3">
+              <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1.5">Box Size</label>
+                <input name="downsample" type="number" value="256" :disabled="noDownsample"
+                       class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition disabled:opacity-40">
+              </div>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input name="no_downsample" type="checkbox" x-model="noDownsample"
+                       class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+                <span class="text-sm text-slate-300">No downsampling</span>
+              </label>
+              <p class="text-xs text-slate-500">Auto-skipped if images are already near target</p>
+            </div>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
+            <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">Algorithm</h3>
+            <div class="space-y-3">
+              <div>
+                <label class="block text-sm font-medium text-slate-300 mb-1.5">Z Dimensions</label>
+                <input name="zdim" type="text" value="1,2,4,10,20"
+                       class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition">
+                <p class="text-xs text-slate-500 mt-1">Comma-separated (e.g. 1,2,4,10,20)</p>
+              </div>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input name="only_mean" type="checkbox"
+                       class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+                <span class="text-sm text-slate-300">Only compute mean</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Advanced options (collapsible) -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden" x-data="{ open: false }">
+          <button type="button" @click="open = !open"
+                  class="w-full flex items-center justify-between px-6 py-4 text-sm font-semibold text-slate-400 uppercase tracking-wider hover:text-slate-300 transition-colors">
+            <span>Advanced Options</span>
+            <svg :class="open ? 'rotate-180' : ''" class="w-4 h-4 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+          </button>
+          <div x-show="open" x-cloak class="px-6 pb-6 space-y-5 border-t border-slate-800 pt-5">
+
+            <!-- Masking options -->
+            <div>
+              <h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Masking</h4>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-xs font-medium text-slate-400 mb-1">Focus Mask</label>
+                  <div class="flex gap-2">
+                    <input name="focus_mask" type="text"
+                           class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
+                           placeholder="Optional focus mask (.mrc)">
+                    <button type="button" @click="browsePath('_focusMask')"
+                            class="px-2 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-[10px] text-slate-300 transition-colors flex-shrink-0">...</button>
+                  </div>
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-400 mb-1">Mask Dilation Iters</label>
+                  <input name="mask_dilate_iter" type="number" value=""
+                         class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
+                         placeholder="Default">
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-x-5 gap-y-2 mt-3">
+                <label class="flex items-center gap-2 cursor-pointer text-sm text-slate-300">
+                  <input name="keep_input_mask" type="checkbox" class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+                  Keep input mask as-is
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer text-sm text-slate-300">
+                  <input name="use_complement_mask" type="checkbox" class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+                  Use complement mask
+                </label>
+              </div>
+            </div>
+
+            <!-- Dataset options -->
+            <div>
+              <h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Dataset</h4>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-xs font-medium text-slate-400 mb-1">Index Filter (.pkl)</label>
+                  <div class="flex gap-2">
+                    <input name="ind" type="text"
+                           class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
+                           placeholder="Filter by indices">
+                    <button type="button" @click="browsePath('_ind')"
+                            class="px-2 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-[10px] text-slate-300 transition-colors flex-shrink-0">...</button>
+                  </div>
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-400 mb-1">Halfsets (.pkl)</label>
+                  <div class="flex gap-2">
+                    <input name="halfsets" type="text"
+                           class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
+                           placeholder="Custom halfset assignment">
+                    <button type="button" @click="browsePath('_halfsets')"
+                            class="px-2 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-[10px] text-slate-300 transition-colors flex-shrink-0">...</button>
+                  </div>
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-400 mb-1">Datadir Prefix</label>
+                  <input name="datadir" type="text"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
+                         placeholder="Path prefix for relative paths in star/cs">
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-400 mb-1">N Images (subset)</label>
+                  <input name="n_images" type="number"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
+                         placeholder="All">
+                </div>
+              </div>
+            </div>
+
+            <!-- Tilt series options -->
+            <div x-show="tiltSeries">
+              <h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Tilt Series</h4>
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                  <label class="block text-xs font-medium text-slate-400 mb-1">CTF Model</label>
+                  <select name="tilt_series_ctf" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
+                    <option value="">Default</option>
+                    <option value="cryoem">cryoem (SPA)</option>
+                    <option value="relion5">relion5</option>
+                    <option value="warp">warp</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-400 mb-1">Dose/tilt</label>
+                  <input name="dose_per_tilt" type="text"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none" placeholder="Auto">
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-400 mb-1">Angle/tilt</label>
+                  <input name="angle_per_tilt" type="text"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none" placeholder="Auto">
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-400 mb-1">N tilts</label>
+                  <input name="ntilts" type="number"
+                         class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none" placeholder="All">
+                </div>
+              </div>
+            </div>
+
+            <!-- Performance -->
+            <div>
+              <h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Performance</h4>
+              <div class="flex flex-wrap gap-x-5 gap-y-2">
+                <label class="flex items-center gap-2 cursor-pointer text-sm text-slate-300">
+                  <input name="multi_gpu" type="checkbox" class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+                  Multi-GPU
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer text-sm text-slate-300">
+                  <input name="low_memory" type="checkbox" class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+                  Low memory mode
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer text-sm text-slate-300">
+                  <input name="keep_intermediate" type="checkbox" class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+                  Keep intermediate files
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer text-sm text-slate-300">
+                  <input name="ignore_zero_freq" type="checkbox" class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
+                  Ignore zero frequency
+                </label>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+    </template>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- Analyze-specific options                                    -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <template x-if="jobType === 'analyze'">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4">
+        <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2">Analyze Settings</h3>
         <div>
-          <label class="block text-sm font-medium text-slate-300 mb-1.5">Particles File *</label>
+          <label class="block text-sm font-medium text-slate-300 mb-1.5">Result Directory *</label>
           <div class="flex gap-2">
-            <input name="particles" type="text" required x-model="particles"
+            <input name="result_dir" type="text" required x-model="resultDir"
                    class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition"
-                   placeholder="/path/to/particles.star or .cs">
-            <button type="button" @click="browsePath('particles')"
-                    class="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-300 transition-colors">Browse</button>
+                   placeholder="/path/to/pipeline/output">
+            <button type="button" @click="browsePath('resultDir')"
+                    class="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-300 transition-colors flex-shrink-0">Browse</button>
           </div>
-          <p class="text-xs text-slate-500 mt-1">STAR, CS, MRCS, or TXT file</p>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1">Z Dimension</label>
+            <input name="analyze_zdim" type="number" value="20"
+                   class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1">K-means Centers</label>
+            <input name="n_clusters" type="number" value="20"
+                   class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1">Trajectory Points</label>
+            <input name="n_traj_vols" type="number" value="6"
+                   class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- Compute state/trajectory options                            -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <template x-if="jobType === 'compute_state' || jobType === 'compute_trajectory'">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4">
+        <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2"
+            x-text="jobType === 'compute_state' ? 'Compute Volume at Latent Point' : 'Compute Trajectory'"></h3>
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-1.5">Result Directory *</label>
+          <div class="flex gap-2">
+            <input name="result_dir" type="text" required x-model="resultDir"
+                   class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition"
+                   placeholder="/path/to/pipeline/output">
+            <button type="button" @click="browsePath('resultDir')"
+                    class="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-300 transition-colors flex-shrink-0">Browse</button>
+          </div>
         </div>
         <div>
-          <label class="block text-sm font-medium text-slate-300 mb-1.5">Mask *</label>
-          <div class="flex gap-2">
-            <input name="mask" type="text" required x-model="mask" value="from_halfmaps"
-                   class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition"
-                   placeholder="from_halfmaps, sphere, none, or /path/to/mask.mrc">
-            <button type="button" @click="browsePath('mask')"
-                    class="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-300 transition-colors">Browse</button>
-          </div>
-          <p class="text-xs text-slate-500 mt-1">MRC file, or: from_halfmaps, sphere, none</p>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Z Dimension</label>
+          <input name="compute_zdim" type="number" value="4"
+                 class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
         </div>
-        <div class="flex items-center gap-4">
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input name="lazy" type="checkbox" class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
-            <span class="text-sm text-slate-300">Lazy loading</span>
-          </label>
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input name="tilt_series" type="checkbox" class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
-            <span class="text-sm text-slate-300">Tilt series (cryo-ET)</span>
-          </label>
-        </div>
+        <p class="text-xs text-slate-500">Tip: use the Explore tab on a completed job to compute volumes/trajectories interactively.</p>
       </div>
-    </div>
+    </template>
 
-    <!-- Downsampling & Algorithm -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <!-- Downsampling -->
-      <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
-        <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">Downsampling</h3>
-        <div class="space-y-3">
-          <div>
-            <label class="block text-sm font-medium text-slate-300 mb-1.5">Box Size</label>
-            <input name="downsample" type="number" value="256" :disabled="noDownsample"
-                   class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition disabled:opacity-40">
-          </div>
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input name="no_downsample" type="checkbox" x-model="noDownsample"
-                   class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
-            <span class="text-sm text-slate-300">No downsampling (full resolution)</span>
-          </label>
-          <p class="text-xs text-slate-500">Skipped automatically if images are already near this size</p>
-        </div>
-      </div>
-
-      <!-- Algorithm -->
-      <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
-        <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">Algorithm</h3>
-        <div class="space-y-3">
-          <div>
-            <label class="block text-sm font-medium text-slate-300 mb-1.5">Z Dimensions</label>
-            <input name="zdim" type="text" value="1,2,4,10,20"
-                   class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition">
-            <p class="text-xs text-slate-500 mt-1">Comma-separated list of dimensions</p>
-          </div>
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input name="correct_contrast" type="checkbox"
-                   class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
-            <span class="text-sm text-slate-300">Correct contrast</span>
-          </label>
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input name="only_mean" type="checkbox"
-                   class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
-            <span class="text-sm text-slate-300">Only compute mean (skip PCA/embedding)</span>
-          </label>
-        </div>
-      </div>
-    </div>
-
-    <!-- Execution -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- Extra CLI arguments (shared by all job types)                -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
     <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
-      <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">
-        <svg class="w-4 h-4 inline mr-1 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/>
-        </svg>
-        Execution
-      </h3>
+      <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2">Extra Arguments</h3>
+      <p class="text-xs text-slate-500 mb-3">Any additional command-line flags not covered above (appended as-is to the command).</p>
+      <input name="extra_args" type="text"
+             class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white font-mono placeholder-slate-600 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition"
+             placeholder="e.g. --some-flag value --another-flag">
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- Execution (shared by all job types)                         -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
+      <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">Execution</h3>
 
       <div class="flex gap-4 mb-5">
         {% if has_slurm %}
@@ -150,7 +430,7 @@
         </label>
       </div>
 
-      <!-- SLURM Options (shown when SLURM selected) -->
+      <!-- SLURM Options -->
       <div x-show="execution === 'slurm'" x-cloak class="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div>
           <label class="block text-xs font-medium text-slate-400 mb-1">Partition</label>
@@ -164,32 +444,43 @@
         </div>
         <div>
           <label class="block text-xs font-medium text-slate-400 mb-1">GPUs</label>
-          <input name="slurm_gpus" type="number" value="1" min="1" max="8"
+          <input name="slurm_gpus" type="number" value="1" min="0" max="8"
                  class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
         </div>
         <div>
           <label class="block text-xs font-medium text-slate-400 mb-1">Time Limit</label>
-          <input name="slurm_time" type="text" value="4:00:00"
+          <input name="slurm_time" type="text" value="12:00:00"
                  class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
         </div>
         <div>
           <label class="block text-xs font-medium text-slate-400 mb-1">Memory</label>
-          <input name="slurm_mem" type="text" value="64G"
+          <input name="slurm_mem" type="text" value="400G"
+                 class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">CPUs/task</label>
+          <input name="slurm_cpus" type="number" value="8" min="1" max="64"
                  class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
         </div>
         <div>
           <label class="block text-xs font-medium text-slate-400 mb-1">GPU Memory (GB)</label>
-          <input name="gpu_memory" type="text" value=""
+          <input name="gpu_memory" type="text"
                  class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
                  placeholder="Auto">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Extra SBATCH</label>
+          <input name="slurm_extra" type="text"
+                 class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
+                 placeholder="e.g. --constraint=h20">
         </div>
       </div>
 
       <div x-show="execution === 'local'" x-cloak class="text-sm text-slate-400 flex items-center gap-2">
-        <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
         </svg>
-        Local mode runs in the current shell. Make sure you have a GPU available.
+        Runs in current shell. Make sure you have a GPU available.
         <label class="flex items-center gap-2 cursor-pointer ml-auto">
           <input name="accept_cpu" type="checkbox" class="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sky-500 focus:ring-sky-500">
           <span>Accept CPU</span>
@@ -217,7 +508,6 @@
        @keydown.escape.window="browserOpen = false">
     <div class="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-[700px] max-h-[80vh] flex flex-col"
          @click.away="browserOpen = false">
-      <!-- Header -->
       <div class="flex items-center justify-between px-5 py-4 border-b border-slate-800">
         <h3 class="text-sm font-semibold text-white">Browse Files</h3>
         <button @click="browserOpen = false" class="text-slate-400 hover:text-white">
@@ -226,13 +516,11 @@
           </svg>
         </button>
       </div>
-      <!-- Path bar -->
       <div class="px-5 py-3 border-b border-slate-800 flex items-center gap-2">
         <input type="text" x-model="browserPath" @keydown.enter="loadDir(browserPath)"
                class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
         <button @click="loadDir(browserPath)" class="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs text-slate-300">Go</button>
       </div>
-      <!-- Entries -->
       <div class="flex-1 overflow-y-auto px-2 py-2 scrollbar-thin">
         <template x-if="browserParent">
           <button @click="loadDir(browserParent)"
@@ -262,6 +550,14 @@
           </button>
         </template>
       </div>
+      <!-- Select current dir button (useful for output_dir) -->
+      <div class="px-5 py-3 border-t border-slate-800 flex justify-between items-center">
+        <span class="text-xs text-slate-500 truncate" x-text="browserPath"></span>
+        <button type="button" @click="selectFile(browserPath); browserOpen = false"
+                class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-lg transition-colors">
+          Select This Directory
+        </button>
+      </div>
     </div>
   </div>
 </div>
@@ -269,11 +565,26 @@
 <script>
 function jobForm() {
   return {
-    outputDir: '',
-    particles: '',
-    mask: 'from_halfmaps',
+    jobType: 'pipeline',
+    jobTypes: [
+      { id: 'pipeline', label: 'Pipeline', desc: 'Full RECOVAR pipeline: mean reconstruction, covariance estimation, PCA, and latent space embedding.' },
+      { id: 'analyze', label: 'Analyze', desc: 'Run analysis on existing pipeline output: k-means clustering, trajectory computation, and UMAP embedding.' },
+      { id: 'compute_state', label: 'Compute Volume', desc: 'Compute a volume at a specific latent coordinate from an existing pipeline output.' },
+      { id: 'compute_trajectory', label: 'Compute Trajectory', desc: 'Compute a trajectory (series of volumes) between two latent points.' },
+    ],
+
+    outputDir: '{{ clone_from.output_dir if clone_from else "" }}',
+    particles: '{{ clone_from.particles if clone_from else "" }}',
+    mask: '{{ clone_from.mask if clone_from and clone_from.mask else "from_halfmaps" }}',
+    resultDir: '',
     noDownsample: false,
+    tiltSeries: false,
     execution: '{{ "slurm" if has_slurm else "local" }}',
+
+    // STAR file validation
+    starValidation: { valid: false, checking: false, error: null, warnings: [], info: {} },
+
+    // File browser state
     browserOpen: false,
     browserPath: '',
     browserParent: null,
@@ -282,8 +593,9 @@ function jobForm() {
 
     browsePath(target) {
       this.browserTarget = target;
-      const startPath = this[target] || '';
-      this.browserPath = startPath ? startPath.substring(0, startPath.lastIndexOf('/')) || '/' : '/';
+      // For internal targets (prefixed with _), use outputDir as starting point
+      const val = target.startsWith('_') ? '' : (this[target] || '');
+      this.browserPath = val ? val.substring(0, val.lastIndexOf('/')) || '/' : '/';
       this.loadDir(this.browserPath);
       this.browserOpen = true;
     },
@@ -300,8 +612,49 @@ function jobForm() {
     },
 
     selectFile(path) {
-      this[this.browserTarget] = path;
+      if (this.browserTarget.startsWith('_')) {
+        // For internal targets, find the input by name and set its value
+        const inputName = this.browserTarget.slice(1);
+        // Convert camelCase to snake_case for form input names
+        const name = inputName.replace(/([A-Z])/g, '_$1').toLowerCase();
+        const el = document.querySelector(`input[name="${name}"]`);
+        if (el) el.value = path;
+      } else {
+        this[this.browserTarget] = path;
+      }
       this.browserOpen = false;
+      // Auto-validate if particles file was selected
+      if (this.browserTarget === 'particles') {
+        this.validateParticles();
+      }
+      // Auto-suggest output dir from particles path
+      if (this.browserTarget === 'particles' && !this.outputDir && path) {
+        const dir = path.substring(0, path.lastIndexOf('/'));
+        const name = this.jobType + '_output';
+        this.outputDir = dir + '/' + name;
+      }
+    },
+
+    async validateParticles() {
+      const path = this.particles.trim();
+      if (!path) {
+        this.starValidation = { valid: false, checking: false, error: null, warnings: [], info: {} };
+        return;
+      }
+      this.starValidation = { valid: false, checking: true, error: null, warnings: [], info: {} };
+      try {
+        const resp = await fetch('/api/validate-star?path=' + encodeURIComponent(path));
+        const data = await resp.json();
+        this.starValidation = {
+          valid: data.valid,
+          checking: false,
+          error: data.error || null,
+          warnings: data.warnings || [],
+          info: data.info || {},
+        };
+      } catch(e) {
+        this.starValidation = { valid: false, checking: false, error: 'Validation failed', warnings: [], info: {} };
+      }
     }
   }
 }
