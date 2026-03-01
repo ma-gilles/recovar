@@ -484,8 +484,8 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
             else:
                 particle_inliers.append(particle)
 
-        logger.info("  Total particle-based outliers: %s (%.1f% of particles)", len(particle_outliers), len(particle_outliers)/(len(particle_outliers) + len(particle_inliers))*100)
-        logger.info("  Corresponding to: %s (%.1f% of images)", np.sum(outliers_image_identified_by_particle), np.sum(outliers_image_identified_by_particle)/n_images*100)
+        logger.info("  Total particle-based outliers: %s (%.1f%% of particles)", len(particle_outliers), len(particle_outliers)/(len(particle_outliers) + len(particle_inliers))*100)
+        logger.info("  Corresponding to: %s (%.1f%% of images)", np.sum(outliers_image_identified_by_particle), np.sum(outliers_image_identified_by_particle)/n_images*100)
 
 
     outliers_image_identified_by_micrograph = np.zeros(n_images, dtype=bool)
@@ -532,8 +532,8 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
             else:
                 micrograph_inliers.append(micrograph)
 
-        logger.info("  Total micrograph-based outliers: %s (%.1f%) of micrographs", len(micrograph_outliers), len(micrograph_outliers)/(len(micrograph_outliers) + len(micrograph_inliers))*100)
-        logger.info("  Corresponding to: %s (%.1f% of images)", np.sum(outliers_image_identified_by_micrograph), np.sum(outliers_image_identified_by_micrograph)/n_images*100)
+        logger.info("  Total micrograph-based outliers: %s (%.1f%%) of micrographs", len(micrograph_outliers), len(micrograph_outliers)/(len(micrograph_outliers) + len(micrograph_inliers))*100)
+        logger.info("  Corresponding to: %s (%.1f%% of images)", np.sum(outliers_image_identified_by_micrograph), np.sum(outliers_image_identified_by_micrograph)/n_images*100)
     # Print overlap statistics between methods
     if (particle_to_tilts is not None) or (micrographtilt_to_tilts is not None):
         logger.info("\nOutlier detection method overlap:")
@@ -541,20 +541,20 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
         particle_count = np.sum(outliers_image_identified_by_particle)
         micrograph_count = np.sum(outliers_image_identified_by_micrograph)
         
-        logger.info("  Individual outliers: %s (%.1f%)", individual_count, individual_count/n_images*100)
-        logger.info("  Particle outliers: %s (%.1f%)", particle_count, particle_count/n_images*100)
-        logger.info("  Micrograph outliers: %s (%.1f%)", micrograph_count, micrograph_count/n_images*100)
+        logger.info("  Individual outliers: %s (%.1f%%)", individual_count, individual_count/n_images*100)
+        logger.info("  Particle outliers: %s (%.1f%%)", particle_count, particle_count/n_images*100)
+        logger.info("  Micrograph outliers: %s (%.1f%%)", micrograph_count, micrograph_count/n_images*100)
         
         # Calculate overlaps
         if individual_count > 0 and particle_count > 0:
             overlap = np.sum(individual_outliers & outliers_image_identified_by_particle)
-            logger.info("  Individual-Particle overlap: %s (%.1f% of individual)", overlap, overlap/individual_count*100)
+            logger.info("  Individual-Particle overlap: %s (%.1f%% of individual)", overlap, overlap/individual_count*100)
         if individual_count > 0 and micrograph_count > 0:
             overlap = np.sum(individual_outliers & outliers_image_identified_by_micrograph)
-            logger.info("  Individual-Micrograph overlap: %s (%.1f% of individual)", overlap, overlap/individual_count*100)
+            logger.info("  Individual-Micrograph overlap: %s (%.1f%% of individual)", overlap, overlap/individual_count*100)
         if particle_count > 0 and micrograph_count > 0:
             overlap = np.sum(outliers_image_identified_by_particle & outliers_image_identified_by_micrograph)
-            logger.info("  Particle-Micrograph overlap: %s (%.1f% of micrographs)", overlap, overlap/np.sum(outliers_image_identified_by_micrograph)*100)
+            logger.info("  Particle-Micrograph overlap: %s (%.1f%% of micrographs)", overlap, overlap/np.sum(outliers_image_identified_by_micrograph)*100)
     
     # Create plots if output directory is provided
     if output_dir is not None:
@@ -1214,8 +1214,8 @@ def main():
                                     noreg=args.no_z_regularization)
     
     logger.info("Combined results saved to: %s", combined_output_dir)
-    logger.info("Combined image outliers: %s (%.1f%)", len(combined_image_outliers), len(combined_image_outliers)/original_image_indices.size*100)
-    logger.info("Combined particle outliers: %s (%.1f%)", len(combined_particle_outliers), len(combined_particle_outliers)/original_particle_indices.size*100)
+    logger.info("Combined image outliers: %s (%.1f%%)", len(combined_image_outliers), len(combined_image_outliers)/original_image_indices.size*100)
+    logger.info("Combined particle outliers: %s (%.1f%%)", len(combined_particle_outliers), len(combined_particle_outliers)/original_particle_indices.size*100)
     
     # Debug information about the confusion
     logger.info("Debug: Total images in dataset: %s", original_image_indices.size)

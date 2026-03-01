@@ -1,4 +1,4 @@
-PYTHON     ?= /home/mg6942/.conda/envs/recovar_dev_2/bin/python
+PYTHON     ?= python
 NVCC       ?= /usr/local/cuda/bin/nvcc
 XLA_INC    := $(shell $(PYTHON) -c "import jax.ffi; print(jax.ffi.include_dir())")
 
