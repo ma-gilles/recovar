@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 # ── CUDA acceleration (optional) ──────────────────────────────────────
 
+@functools.lru_cache(maxsize=1)
 def _check_cuda():
     """Return True if CUDA project/backproject kernels are available."""
     try:
@@ -225,7 +226,6 @@ def _half_image_geometry_maps(image_shape):
     )
 
 
-@functools.lru_cache(maxsize=None)
 @functools.lru_cache(maxsize=None)
 def _full_volume_to_half_index_map(volume_shape):
     volume_shape = tuple(int(s) for s in volume_shape)

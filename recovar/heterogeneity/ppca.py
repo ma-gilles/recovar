@@ -18,17 +18,19 @@ def M_step_batch(images, lhs_summed, rhs_summed, mean_batch, covariance_batch, C
     grid_point_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape)
     volume_size = np.prod(volume_shape)
 
-    second_moments = covariance_batch + linalg.broadcast_outer(mean_batch, mean_batch) * ctf_over_noise_variance
-    second_moments = second_moments.reshape(second_moments.shape[0], -1)
-    #Summed seconds moments
-    lhs_summed = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_size, second_moments, grid_point_indices.reshape(-1),  lhs_summed)
+    # Second moments: per-image (basis, basis) weighted per-pixel by CTF^2/noise.
+    # batch_over_vol_summed_adjoint_slice_by_nearest expects (n_images, pixels, channels).
+    second_moments = covariance_batch + linalg.broadcast_outer(mean_batch, mean_batch)  # (n_images, basis, basis)
+    second_moments = second_moments.reshape(second_moments.shape[0], 1, -1)  # (n_images, 1, basis*basis)
+    second_moments = second_moments * ctf_over_noise_variance[:, :, None]   # (n_images, pixels, basis*basis)
 
+    lhs_summed = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_size, second_moments, grid_point_indices.reshape(-1), lhs_summed)
 
     images = core.translate_images(images, translations, image_shape)
     images = images * CTF / noise_variance
-    images_means_h = linalg.broadcast_outer(images, mean_batch) 
+    images_means_h = linalg.broadcast_outer(images, mean_batch)  # (n_images, pixels, basis)
 
-    rhs_summed = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_size, images_means_h.reshape(images_means_h.shape[0], -1), grid_point_indices.reshape(-1), rhs_summed)
+    rhs_summed = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_size, images_means_h, grid_point_indices.reshape(-1), rhs_summed)
 
     return lhs_summed, rhs_summed
 

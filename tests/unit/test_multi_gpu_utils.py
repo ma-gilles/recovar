@@ -13,9 +13,16 @@ pytestmark = pytest.mark.unit
 def test_split_indices_for_gpus_even_and_remainder():
     splits = mgu.split_indices_for_gpus(10, 3)
     assert len(splits) == 3
-    assert [len(s) for s in splits] == [3, 3, 4]
+    # np.array_split distributes extra items across first chunks: [4, 3, 3]
+    assert [len(s) for s in splits] == [4, 3, 3]
     merged = np.concatenate(splits)
     assert np.all(merged == np.arange(10))
+
+    # Even split
+    splits_even = mgu.split_indices_for_gpus(12, 3)
+    assert [len(s) for s in splits_even] == [4, 4, 4]
+    merged_even = np.concatenate(splits_even)
+    assert np.all(merged_even == np.arange(12))
 
 
 def test_reduce_results_sums_across_devices():

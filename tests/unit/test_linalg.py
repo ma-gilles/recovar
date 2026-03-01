@@ -179,6 +179,86 @@ def test_multiply_along_axis_and_l2_distance():
     np.testing.assert_allclose(d, ref, atol=1e-6, rtol=1e-6)
 
 
+def test_batch_hermitian_linear_solver():
+    rng = np.random.default_rng(42)
+    # Create a batch of 3x3 symmetric positive definite matrices
+    raw = rng.normal(size=(5, 3, 3)).astype(np.float32)
+    A = np.array([m @ m.T + 3 * np.eye(3) for m in raw], dtype=np.float32)
+    b = rng.normal(size=(5, 3)).astype(np.float32)
+    x = np.asarray(linalg.batch_hermitian_linear_solver(A, b))
+    # Check Ax ≈ b
+    for i in range(5):
+        np.testing.assert_allclose(A[i] @ x[i], b[i], atol=1e-4, rtol=1e-4)
+
+
+def test_batch_linear_solver():
+    rng = np.random.default_rng(43)
+    A = rng.normal(size=(4, 3, 3)).astype(np.float32) + 3 * np.eye(3, dtype=np.float32)
+    b = rng.normal(size=(4, 3, 1)).astype(np.float32)
+    x = np.asarray(linalg.batch_linear_solver(A, b))
+    for i in range(4):
+        np.testing.assert_allclose(A[i] @ x[i], b[i], atol=1e-4, rtol=1e-4)
+
+
+def test_solve_by_SVD():
+    rng = np.random.default_rng(44)
+    # Batch of well-conditioned systems
+    raw = rng.normal(size=(3, 4, 4)).astype(np.float32)
+    A = np.array([m @ m.T + 5 * np.eye(4) for m in raw], dtype=np.float32)
+    b = rng.normal(size=(3, 4)).astype(np.float32)
+    x = np.asarray(linalg.solve_by_SVD(A, b))
+    for i in range(3):
+        np.testing.assert_allclose(A[i] @ x[i], b[i], atol=1e-3, rtol=1e-3)
+
+
+def test_thin_svd_matches_numpy():
+    rng = np.random.default_rng(45)
+    X = (rng.normal(size=(10, 5)) + 1j * rng.normal(size=(10, 5))).astype(np.complex64)
+    # thin_svd returns (U, sigma, V) where V are right singular vectors (not Vh)
+    U, S, V = linalg.thin_svd(X, np=np)
+    # Singular values should be non-negative and sorted descending
+    assert np.all(S >= 0)
+    assert np.all(S[:-1] >= S[1:])
+    # Reconstruction: U @ diag(S) @ V^H ≈ X
+    reconstructed = (U * S[None, :]) @ np.conj(V).T
+    np.testing.assert_allclose(reconstructed, X, atol=1e-2, rtol=1e-2)
+
+
+def test_blockwise_ytx_matches_direct():
+    rng = np.random.default_rng(46)
+    Y = (rng.normal(size=(12, 4)) + 1j * rng.normal(size=(12, 4))).astype(np.complex64)
+    X = (rng.normal(size=(12, 3)) + 1j * rng.normal(size=(12, 3))).astype(np.complex64)
+    out = linalg.blockwise_Y_T_X(Y, X, batch_size=4)
+    ref = np.conj(Y).T @ X
+    np.testing.assert_allclose(out, ref, atol=5e-3, rtol=5e-3)
+
+
+def test_blockwise_ax_matches_direct():
+    rng = np.random.default_rng(47)
+    A = rng.normal(size=(8, 6)).astype(np.float32)
+    X = rng.normal(size=(6, 3)).astype(np.float32)
+    out = linalg.blockwise_A_X(A, X, batch_size=3)
+    ref = A @ X
+    np.testing.assert_allclose(out, ref, atol=1e-4, rtol=1e-4)
+
+
+def test_batch_dft3_and_idft3_roundtrip():
+    rng = np.random.default_rng(48)
+    vol_shape = (4, 4, 4)
+    vol_size = np.prod(vol_shape)
+    n_vols = 3
+    x = rng.normal(size=(vol_size, n_vols)).astype(np.float32)
+    x_ft = linalg.batch_dft3(x, vol_shape, batch_size=2)
+    x_back = linalg.batch_idft3(x_ft, vol_shape, batch_size=2)
+    np.testing.assert_allclose(x_back.real, x, atol=1e-4, rtol=1e-4)
+
+
+def test_batch_st_end():
+    assert linalg.batch_st_end(0, 10, 100) == (0, 10)
+    assert linalg.batch_st_end(2, 10, 25) == (20, 25)
+    assert linalg.batch_st_end(9, 10, 100) == (90, 100)
+
+
 # ---------------------------------------------------------------------------
 # GPU tests – verify CPU/GPU numerical equivalence
 # ---------------------------------------------------------------------------

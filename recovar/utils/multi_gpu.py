@@ -52,20 +52,9 @@ def split_indices_for_gpus(n_items: int, n_gpus: int) -> List[np.ndarray]:
         >>> split_indices_for_gpus(100, 3)
         [array([0, 1, ..., 32]), array([33, 34, ..., 65]), array([66, 67, ..., 99])]
     """
-    indices_per_gpu = n_items // n_gpus
-    splits = []
-    
-    for gpu_id in range(n_gpus):
-        start_idx = gpu_id * indices_per_gpu
-        if gpu_id == n_gpus - 1:
-            # Last GPU gets remainder
-            end_idx = n_items
-        else:
-            end_idx = start_idx + indices_per_gpu
-        
-        splits.append(np.arange(start_idx, end_idx))
-    
-    logger.info("Split %d items across %d GPUs: sizes = %s", n_items, n_gpus, [len(s) for s in splits])
+    splits = [chunk for chunk in np.array_split(np.arange(n_items), n_gpus) if len(chunk) > 0]
+
+    logger.info("Split %d items across %d GPUs: sizes = %s", n_items, len(splits), [len(s) for s in splits])
     
     return splits
 
@@ -163,10 +152,15 @@ def reduce_results(results_H: List[np.ndarray],
     logger.info("Reducing results from %s GPUs...", len(results_H))
     start_time = time.time()
     
-    # Sum across GPUs
+    # Incremental sum to avoid allocating N_gpus * array_size at once
     with nvtx.annotate("reduce_results_sum", color="cyan", domain=NVTX_DOMAIN_H_B):
-        H_total = np.sum(results_H, axis=0)
-        B_total = np.sum(results_B, axis=0)
+        H_total = results_H[0]
+        B_total = results_B[0]
+        for i in range(1, len(results_H)):
+            H_total = H_total + results_H[i]
+            B_total = B_total + results_B[i]
+            results_H[i] = None  # free memory eagerly
+            results_B[i] = None
     
     elapsed = time.time() - start_time
     logger.info("Reduction completed in %.2fs", elapsed)

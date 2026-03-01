@@ -1,9 +1,12 @@
 import numpy as np
 import pytest
 
-pytest.importorskip("jax")
+jax = pytest.importorskip("jax")
+import jax.numpy as jnp
 
 from recovar.heterogeneity import adaptive_kernel_discretization as akd
+from recovar.heterogeneity import ppca
+from recovar.core import linalg
 
 pytestmark = pytest.mark.unit
 
@@ -30,11 +33,63 @@ def test_batch_vec_and_unvec_roundtrip_complex():
 
 
 # ---------------------------------------------------------------------------
-# GPU tests – verify CPU/GPU numerical equivalence
+# ppca module tests — M_step_batch, M_step (EM requires full dataset)
 # ---------------------------------------------------------------------------
 
-import jax
-import jax.numpy as jnp
+
+def test_M_step_batch_runs_and_accumulates():
+    """Verify M_step_batch runs without shape errors and accumulates non-trivially."""
+    from recovar import core
+
+    rng = np.random.default_rng(10)
+    grid_size = 4
+    image_shape = (grid_size, grid_size)
+    volume_shape = (grid_size, grid_size, grid_size)
+    volume_size = int(np.prod(volume_shape))
+    n_images = 3
+    basis_size = 2
+    voxel_size = 1.0
+
+    n_pixels = int(np.prod(image_shape))
+    images = (rng.normal(size=(n_images, n_pixels)) + 1j * rng.normal(size=(n_images, n_pixels))).astype(np.complex64)
+    # Realistic CTF params: DFU, DFV, DFANG, VOLT, CS, W, PHASE_SHIFT, BFACTOR, CONTRAST
+    CTF_params = np.zeros((n_images, 9), dtype=np.float32)
+    CTF_params[:, 0] = 15000.0   # DFU (Angstrom)
+    CTF_params[:, 1] = 15000.0   # DFV (Angstrom)
+    CTF_params[:, 3] = 300.0     # VOLT (kV)
+    CTF_params[:, 4] = 2.7       # CS (mm)
+    CTF_params[:, 5] = 0.1       # W (amplitude contrast)
+    CTF_params[:, 8] = 1.0       # CONTRAST
+    rotation_matrices = np.tile(np.eye(3, dtype=np.float32), (n_images, 1, 1))
+    translations = np.zeros((n_images, 2), dtype=np.float32)
+    noise_variance = np.ones((n_images, n_pixels), dtype=np.float32)
+
+    latent_means = rng.normal(size=(n_images, basis_size)).astype(np.float32)
+    latent_covs = np.tile(np.eye(basis_size, dtype=np.float32), (n_images, 1, 1)) * 0.1
+
+    lhs = jnp.zeros((volume_size, basis_size * basis_size), dtype=np.complex64)
+    rhs = jnp.zeros((volume_size, basis_size), dtype=np.complex64)
+
+    lhs_out, rhs_out = ppca.M_step_batch(
+        images, lhs, rhs,
+        latent_means, latent_covs,
+        CTF_params, rotation_matrices, translations,
+        image_shape, volume_shape, grid_size, voxel_size,
+        noise_variance, core.evaluate_ctf_wrapper,
+    )
+
+    assert lhs_out.shape == (volume_size, basis_size * basis_size)
+    assert rhs_out.shape == (volume_size, basis_size)
+    assert np.all(np.isfinite(np.asarray(lhs_out)))
+    assert np.all(np.isfinite(np.asarray(rhs_out)))
+    # At least some voxels should have non-zero accumulations
+    assert np.any(np.asarray(lhs_out) != 0)
+    assert np.any(np.asarray(rhs_out) != 0)
+
+
+# ---------------------------------------------------------------------------
+# GPU tests – verify CPU/GPU numerical equivalence
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.gpu
