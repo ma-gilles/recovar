@@ -54,6 +54,7 @@ output/output/analysis_10/centers/all_volumes/vol0001.mrc
 
 ## What's next
 
+- [Tutorial](../guide/tutorial.md) — full worked example with plots on EMPIAR-10076
 - [Input Data](../guide/input-data.md) — understand supported formats and data preparation
 - [Downsampling](../guide/downsampling.md) — when and how to downsample
 - [Running the Pipeline](../guide/pipeline.md) — all pipeline options explained

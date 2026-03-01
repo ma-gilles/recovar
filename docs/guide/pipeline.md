@@ -130,6 +130,10 @@ output/
     analysis_*/            # Results per zdim (after running analyze)
 ```
 
+## Example output
+
+See the [Tutorial](tutorial.md) for a full worked example with real pipeline output and plots on EMPIAR-10076 (50S ribosome, 131k particles).
+
 ## Tips
 
 !!! tip "Quick setup check"
