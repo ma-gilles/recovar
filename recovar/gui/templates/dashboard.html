@@ -18,7 +18,7 @@
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
       </svg>
-      New Pipeline Job
+      New Job
     </a>
   </div>
 
@@ -46,44 +46,56 @@
   </div>
   {% else %}
 
-  <!-- Status filter pills -->
-  <div class="flex gap-2" x-data="{ filter: 'all' }">
-    <button @click="filter = 'all'"
-            :class="filter === 'all' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'"
-            class="px-3 py-1.5 text-xs font-medium rounded-full transition-colors">
-      All ({{ jobs|length }})
-    </button>
-    {% set running = jobs|selectattr('status', 'equalto', 'running')|list %}
-    {% set completed = jobs|selectattr('status', 'equalto', 'completed')|list %}
-    {% set failed = jobs|selectattr('status', 'equalto', 'failed')|list %}
-    {% if running %}
-    <button @click="filter = 'running'"
-            :class="filter === 'running' ? 'bg-sky-600/20 text-sky-400' : 'text-slate-400 hover:text-white'"
-            class="px-3 py-1.5 text-xs font-medium rounded-full transition-colors">
-      Running ({{ running|length }})
-    </button>
-    {% endif %}
-    {% if completed %}
-    <button @click="filter = 'completed'"
-            :class="filter === 'completed' ? 'bg-emerald-600/20 text-emerald-400' : 'text-slate-400 hover:text-white'"
-            class="px-3 py-1.5 text-xs font-medium rounded-full transition-colors">
-      Completed ({{ completed|length }})
-    </button>
-    {% endif %}
-    {% if failed %}
-    <button @click="filter = 'failed'"
-            :class="filter === 'failed' ? 'bg-red-600/20 text-red-400' : 'text-slate-400 hover:text-white'"
-            class="px-3 py-1.5 text-xs font-medium rounded-full transition-colors">
-      Failed ({{ failed|length }})
-    </button>
-    {% endif %}
+  <!-- Status filter pills + Sort -->
+  <div class="flex items-center justify-between flex-wrap gap-3" x-data="{ filter: 'all' }">
+    <div class="flex gap-2">
+      <button @click="filter = 'all'"
+              :class="filter === 'all' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'"
+              class="px-3 py-1.5 text-xs font-medium rounded-full transition-colors">
+        All ({{ jobs|length }})
+      </button>
+      {% set running = jobs|selectattr('status', 'equalto', 'running')|list %}
+      {% set completed = jobs|selectattr('status', 'equalto', 'completed')|list %}
+      {% set failed = jobs|selectattr('status', 'equalto', 'failed')|list %}
+      {% if running %}
+      <button @click="filter = 'running'"
+              :class="filter === 'running' ? 'bg-sky-600/20 text-sky-400' : 'text-slate-400 hover:text-white'"
+              class="px-3 py-1.5 text-xs font-medium rounded-full transition-colors">
+        Running ({{ running|length }})
+      </button>
+      {% endif %}
+      {% if completed %}
+      <button @click="filter = 'completed'"
+              :class="filter === 'completed' ? 'bg-emerald-600/20 text-emerald-400' : 'text-slate-400 hover:text-white'"
+              class="px-3 py-1.5 text-xs font-medium rounded-full transition-colors">
+        Completed ({{ completed|length }})
+      </button>
+      {% endif %}
+      {% if failed %}
+      <button @click="filter = 'failed'"
+              :class="filter === 'failed' ? 'bg-red-600/20 text-red-400' : 'text-slate-400 hover:text-white'"
+              class="px-3 py-1.5 text-xs font-medium rounded-full transition-colors">
+        Failed ({{ failed|length }})
+      </button>
+      {% endif %}
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="text-[11px] text-slate-500">Sort:</span>
+      <select onchange="window.location.href='/?sort='+this.value"
+              class="bg-slate-800 text-slate-300 text-xs rounded-lg px-2 py-1.5 border border-slate-700 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
+        <option value="newest" {{ 'selected' if current_sort == 'newest' }}>Newest</option>
+        <option value="oldest" {{ 'selected' if current_sort == 'oldest' }}>Oldest</option>
+        <option value="name" {{ 'selected' if current_sort == 'name' }}>Name</option>
+        <option value="status" {{ 'selected' if current_sort == 'status' }}>Status</option>
+      </select>
+    </div>
   </div>
 
   <!-- Job cards grid -->
   <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
     {% for job in jobs %}
     <a href="{{ url_for('job_detail', job_id=job.id) }}"
-       class="group block bg-slate-900 border border-slate-800 rounded-xl p-5 hover:border-slate-700 hover:bg-slate-800/50 transition-all duration-200"
+       class="group block bg-slate-900 border border-slate-800 rounded-xl p-5 hover:border-slate-700/80 hover:bg-slate-800/50 card-hover"
        x-show="filter === 'all' || filter === '{{ job.status }}'">
 
       <!-- Header -->
