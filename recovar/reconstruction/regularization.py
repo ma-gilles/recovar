@@ -354,7 +354,7 @@ def downsample_from_fsc(array, fsc, volume_shape):
     array = jnp.asarray(array)
     fsc_above_threshold = fsc >= 0.0001
     # Sometimes the FSC dips at low resolution. We want to avoid that case.
-    fsc_above_threshold = fsc_above_threshold.at[:16].set(1)
+    fsc_above_threshold = fsc_above_threshold.at[:16].set(True)
     ires_max = locres.find_first_zero_in_bool(fsc_above_threshold)
 
     downsample_ar = jnp.where( jnp.arange(fsc.size) < ires_max, fsc, 0)

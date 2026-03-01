@@ -56,6 +56,62 @@ def test_compute_latent_space_bounds_percentile():
 
 
 
+def test_compute_log_det_cov_identity():
+    """log det of identity matrix should be 0."""
+    cov = np.eye(3, dtype=np.float32)[None]
+    result = np.asarray(ld.compute_log_det_cov(cov))
+    assert result.shape == (1,)
+    np.testing.assert_allclose(result, 0.0, atol=1e-5)
+
+
+def test_compute_log_det_cov_scaled_identity():
+    """log det of 2*I should be dim*log(2)."""
+    cov = 2.0 * np.eye(3, dtype=np.float32)[None]
+    result = np.asarray(ld.compute_log_det_cov(cov))
+    expected = 3 * np.log(2.0)
+    np.testing.assert_allclose(result, expected, atol=1e-5)
+
+
+def test_compute_log_det_cov_singular_safe():
+    """Singular matrix should not produce -inf due to our safeguard."""
+    cov = np.zeros((1, 2, 2), dtype=np.float32)
+    result = np.asarray(ld.compute_log_det_cov(cov))
+    assert np.all(np.isfinite(result))
+
+
+def test_compute_latent_quadratic_forms_at_mean_is_zero():
+    """Quadratic form at the mean should be zero."""
+    xs = np.array([[1.0, 2.0]], dtype=np.float32)  # 1 image, 2D
+    cov = np.eye(2, dtype=np.float32)[None]  # identity covariance
+    test_pts = xs.copy()  # test at the mean
+    result = np.asarray(ld.compute_latent_quadratic_forms(test_pts, xs, cov))
+    assert result.shape == (1, 1)
+    np.testing.assert_allclose(result, 0.0, atol=1e-5)
+
+
+def test_compute_latent_quadratic_forms_away_from_mean():
+    """Quadratic form should increase with distance from mean."""
+    xs = np.array([[0.0, 0.0]], dtype=np.float32)
+    cov = np.eye(2, dtype=np.float32)[None]
+    test_pts = np.array([[1.0, 0.0], [2.0, 0.0]], dtype=np.float32)
+    result = np.asarray(ld.compute_latent_quadratic_forms(test_pts, xs, cov))
+    assert result.shape == (1, 2)
+    # Distance 2 should give 4x the quadratic form of distance 1
+    np.testing.assert_allclose(result[0, 1] / result[0, 0], 4.0, atol=1e-4)
+
+
+def test_compute_residuals_single_matches_manual():
+    """Verify compute_residuals_single = 0.5 * (x-mu)^T Sigma (x-mu)."""
+    import jax.numpy as jnp
+    mu = np.array([1.0, 2.0], dtype=np.float32)
+    cov = np.array([[2.0, 0.5], [0.5, 3.0]], dtype=np.float32)
+    test_pt = np.array([3.0, 1.0], dtype=np.float32)
+    diff = test_pt - mu
+    expected = 0.5 * diff @ cov @ diff
+    result = float(ld.compute_residuals_single(jnp.array(test_pt), jnp.array(mu), jnp.array(cov)))
+    np.testing.assert_allclose(result, expected, atol=1e-5)
+
+
 def test_compute_det_cov_xs_normalized_max_is_one():
     cov = np.stack(
         [

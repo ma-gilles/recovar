@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 
 import numpy as np
@@ -277,6 +278,48 @@ def test_downsample_vol_by_fourier_truncation_validates_target():
         utils.downsample_vol_by_fourier_truncation(vol, target_grid_size=0)
     with pytest.raises(ValueError):
         utils.downsample_vol_by_fourier_truncation(vol, target_grid_size=9)
+
+
+def test_set_gpu_memory_limit(monkeypatch):
+    monkeypatch.setattr(_utils_helpers, "GPU_MEMORY_LIMIT", None)
+    assert _utils_helpers.GPU_MEMORY_LIMIT is None
+    utils.set_gpu_memory_limit(24)
+    assert _utils_helpers.GPU_MEMORY_LIMIT == 24
+    assert utils.get_gpu_memory_total() == 24
+    # Reset
+    _utils_helpers.GPU_MEMORY_LIMIT = None
+
+
+def test_safe_batch_size_edge_cases():
+    assert utils.safe_batch_size(0) == 1
+    assert utils.safe_batch_size(-5) == 1
+    assert utils.safe_batch_size(0.7) == 1
+    assert utils.safe_batch_size(3.9) == 3
+    assert utils.safe_batch_size(100) == 100
+
+
+def test_robust_stream_handler_handles_oserror(tmp_path, monkeypatch):
+    handler = _utils_helpers.RobustStreamHandler()
+    record = logging.LogRecord("test", logging.INFO, "", 0, "msg", (), None)
+    # Monkey-patch emit to raise OSError
+    original_emit = logging.StreamHandler.emit
+    def bad_emit(self, record):
+        raise OSError("stale handle")
+    monkeypatch.setattr(logging.StreamHandler, "emit", bad_emit)
+    # Should not raise
+    handler.emit(record)
+    monkeypatch.setattr(logging.StreamHandler, "emit", original_emit)
+
+
+def test_robust_file_handler_handles_oserror(tmp_path):
+    log_file = tmp_path / "test.log"
+    handler = _utils_helpers.RobustFileHandler(str(log_file))
+    record = logging.LogRecord("test", logging.INFO, "", 0, "hello", (), None)
+    handler.emit(record)
+    assert log_file.exists()
+    content = log_file.read_text()
+    assert "hello" in content
+    handler.close()
 
 
 def test_basic_config_logger_and_duplicate_filter(tmp_path):

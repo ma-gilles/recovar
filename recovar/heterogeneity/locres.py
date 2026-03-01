@@ -144,7 +144,7 @@ def convolve_mask_at_sampling_points(sampling_pts, local_resols, full_mask):
     sampling_idx = jax.numpy.ravel_multi_index(sampling_points.T, full_mask.shape)
 
     full_array = full_array.reshape(-1)
-    full_array = full_array.at[sampling_idx].set(local_resols)
+    full_array = full_array.at[sampling_idx].set(jnp.asarray(local_resols, dtype=full_array.dtype))
     full_array = full_array.reshape(full_mask.shape)
 
     return jax.scipy.signal.fftconvolve(full_mask, full_array, mode = 'same')
@@ -317,7 +317,7 @@ def apply_fsc_weighting(FT, fsc):
 
     fsc = jnp.where( jnp.arange(fsc.size) < ires_max, fsc, 0)
     # fsc = fsc.at[ires_max:].set(0)
-    fsc = jnp.sqrt((2 * fsc) / (1 + fsc))
+    fsc = jnp.sqrt(jnp.maximum((2 * fsc) / (1 + fsc), 0))
     fsc_mask = fsc[distances]
     FT = FT * fsc_mask
     return FT
