@@ -169,7 +169,8 @@ def generate(args):
     st_time = time.time()
 
     o.mkdir_safe(args.outdir)
-    logger.addHandler(logging.FileHandler(f"{args.outdir}/run.log"))
+    from recovar.utils.helpers import RobustFileHandler
+    logger.addHandler(RobustFileHandler(f"{args.outdir}/run.log"))
     logger.info(args)
 
     if args.tilt_series_ctf is None and args.tilt_series is False:

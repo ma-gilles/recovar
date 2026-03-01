@@ -7,6 +7,7 @@ Launched via ``recovar quickstart``.
 import argparse
 import glob
 import os
+import shutil
 import subprocess
 import sys
 
@@ -23,7 +24,7 @@ _RESET = "\033[0m"
 
 
 def _heading(text):
-    w = min(os.get_terminal_size((80, 24)).columns, 80)
+    w = min(shutil.get_terminal_size((80, 24)).columns, 80)
     print()
     print(f"{_BOLD}{_CYAN}{'─' * w}{_RESET}")
     print(f"{_BOLD}{_CYAN}  {text}{_RESET}")
@@ -182,6 +183,25 @@ def main():
     outdir = _prompt("Output directory", default="recovar_output")
     cmd_parts.extend(["-o", outdir])
 
+    # ── Step 2b: Data directory & strip-prefix (for .star / .cs) ────────
+    if is_star_or_cs:
+        _heading("Step 2b: Data directory (optional)")
+        _info("If your MRC files are in a different location than recorded")
+        _info("in the .star/.cs file, specify the base directory here.")
+        _info("RECOVAR auto-resolves .mrc/.mrcs extensions and flat directories.")
+        _info("Run 'recovar check_paths <particles> --datadir <dir>' to diagnose.")
+        datadir = _prompt("Data directory (Enter to auto-detect from particles file)",
+                          required=False)
+        if datadir:
+            cmd_parts.extend(["--datadir", datadir])
+
+        _info("")
+        _info("If paths in your metadata contain a prefix that doesn't exist")
+        _info("on this system (e.g. 'J3/imported'), strip it here.")
+        strip_prefix = _prompt("Strip prefix (Enter to skip)", required=False)
+        if strip_prefix:
+            cmd_parts.extend(["--strip-prefix", strip_prefix])
+
     # ── Step 3: Mask ─────────────────────────────────────────────────────
     _heading("Step 3: Solvent mask")
     _info("A mask improves SNR. You can provide a .mrc file, or use")
@@ -268,6 +288,15 @@ def main():
         ], default="relion5")
         cmd_parts.extend(["--tilt-series-ctf", tilt_ctf])
 
+    # GPU memory limit
+    gpu_gb = _prompt("GPU memory limit in GB (Enter for all available)", required=False)
+    if gpu_gb:
+        try:
+            int(gpu_gb)
+            cmd_parts.extend(["--gpu-gb", gpu_gb])
+        except ValueError:
+            _warn(f"Invalid number '{gpu_gb}', using all available GPU memory.")
+
     # zdim
     zdim_custom = _prompt(
         "Latent dimensions (comma-separated, or Enter for default 1,2,4,10,20)",
@@ -278,7 +307,21 @@ def main():
 
     # ── Summary ──────────────────────────────────────────────────────────
     _heading("Command summary")
-    cmd_str = " \\\n    ".join(cmd_parts)
+
+    # Group flag-value pairs so they stay on the same line
+    display_parts = []
+    i = 0
+    while i < len(cmd_parts):
+        part = cmd_parts[i]
+        # If this is a flag followed by a value, keep them together
+        if part.startswith("-") and i + 1 < len(cmd_parts) and not cmd_parts[i + 1].startswith("-"):
+            display_parts.append(f"{part} {cmd_parts[i + 1]}")
+            i += 2
+        else:
+            display_parts.append(part)
+            i += 1
+
+    cmd_str = " \\\n    ".join(display_parts)
     print()
     print(f"  {_GREEN}$ {cmd_str}{_RESET}")
     print()
@@ -291,12 +334,10 @@ def main():
         print()
         _info("Launching RECOVAR pipeline...")
         print()
-        # Execute via subprocess so the main pipeline gets its own process
         result = subprocess.run(cmd_parts)
         sys.exit(result.returncode)
     else:
         _info("Command printed above — copy and run when ready.")
-        # Also print single-line version for easy copying
         print()
         print(f"  {_DIM}{' '.join(cmd_parts)}{_RESET}")
         print()

@@ -867,12 +867,13 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     
     # Set up logging
+    from recovar.utils.helpers import RobustFileHandler, RobustStreamHandler
     logging.basicConfig(
         format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
         level=logging.INFO,
         handlers=[
-            logging.FileHandler(os.path.join(args.output_dir, 'outlier_detection.log')),
-            logging.StreamHandler()
+            RobustFileHandler(os.path.join(args.output_dir, 'outlier_detection.log')),
+            RobustStreamHandler()
         ]
     )
     

@@ -176,12 +176,13 @@ def main():
     # Set up logging for CLI usage
     log_path = os.path.join(args.outdir, "downsample.log")
     os.makedirs(args.outdir, exist_ok=True)
+    from recovar.utils.helpers import RobustFileHandler, RobustStreamHandler
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
         handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler(log_path),
+            RobustStreamHandler(),
+            RobustFileHandler(log_path),
         ],
     )
 

@@ -61,10 +61,6 @@ def _swap_mrc_ext(filepath: str) -> Optional[str]:
     return None
 
 
-# Alias so all callers use the same function
-_swap_mrc_extension = _swap_mrc_ext
-
-
 # ---------------------------------------------------------------------------
 # Index helpers
 # ---------------------------------------------------------------------------
@@ -113,7 +109,7 @@ def _resolve_mrc_path(candidate: str) -> str:
         return candidate
 
     # Extension fallback
-    alt_ext = _swap_mrc_extension(candidate)
+    alt_ext = _swap_mrc_ext(candidate)
     if alt_ext and os.path.isfile(alt_ext):
         logger.info("Path fallback: %s -> %s (extension swap)", candidate, alt_ext)
         return alt_ext
@@ -131,7 +127,7 @@ def _resolve_mrc_path(candidate: str) -> str:
             return flat
 
         # Basename + extension swap
-        alt_flat = _swap_mrc_extension(flat)
+        alt_flat = _swap_mrc_ext(flat)
         if alt_flat and os.path.isfile(alt_flat):
             logger.info("Path fallback: %s -> %s (basename + extension swap)", candidate, alt_flat)
             return alt_flat
@@ -140,19 +136,21 @@ def _resolve_mrc_path(candidate: str) -> str:
 
 
 def _search_for_basename(missing_path: str):
-    """Search up to 3 levels above and below the missing path for its basename.
+    """Search up to 3 levels above the missing path's parent for its basename.
 
-    Returns the directory containing the file, or None.
+    Walks up to 3 directories above the deepest existing ancestor, then
+    walks down up to 3 levels looking for the file.  Returns the directory
+    containing the file, or None.
     """
     basename = os.path.basename(missing_path)
     alt_basename = None
-    swapped = _swap_mrc_extension(basename)
+    swapped = _swap_mrc_ext(basename)
     if swapped:
         alt_basename = os.path.basename(swapped)
 
-    # Find deepest existing ancestor
+    # Find deepest existing ancestor, going up to 3 levels
     search_root = os.path.dirname(missing_path)
-    for _ in range(4):
+    for _ in range(3):
         parent = os.path.dirname(search_root)
         if parent == search_root:
             break
@@ -771,18 +769,17 @@ class CryoSparcLoader(MultiMRCLoader):
 
         # Strip prefix if provided (same as StarLoader)
         if strip_prefix:
-            stripped = []
-            for p in clean_paths:
-                if p.startswith(strip_prefix):
-                    stripped.append(p[len(strip_prefix):].lstrip('/'))
-                else:
-                    stripped.append(p)
-            clean_paths = stripped
+            if not any(p.startswith(strip_prefix) for p in clean_paths):
+                raise ValueError(f"No paths match strip_prefix: {strip_prefix}")
+            clean_paths = [
+                p[len(strip_prefix):].lstrip('/') if p.startswith(strip_prefix) else p
+                for p in clean_paths
+            ]
 
         if not datadir:
-            datadir = os.path.dirname(filepath)
-        elif not os.path.isabs(datadir):
-            datadir = os.path.join(os.path.dirname(filepath), datadir)
+            datadir = os.path.abspath(os.path.dirname(filepath))
+        else:
+            datadir = os.path.abspath(datadir)
 
         # Save raw paths (after strip but before datadir join) for error hints
         raw_paths = list(dict.fromkeys(clean_paths))  # unique, order-preserving

@@ -123,41 +123,43 @@ def _check_paths(fmt, filepath, raw_paths, datadir, strip_prefix, n_show):
             print(f"  Example: {unique_raw[0]} -> {stripped[0]}")
         unique_raw = stripped
 
-    # Resolve datadir
+    # Resolve datadir (consistent with both StarLoader and CryoSparcLoader)
     if not datadir:
-        if fmt == "STAR":
-            datadir = os.path.abspath(os.path.dirname(filepath))
-        else:
-            datadir = os.path.dirname(filepath)
+        datadir = os.path.abspath(os.path.dirname(filepath))
         print(f"\nNo --datadir specified, using metadata file directory:")
         print(f"  {datadir}")
     else:
         datadir = os.path.abspath(datadir)
         print(f"\nUsing --datadir: {datadir}")
+        if not os.path.isdir(datadir):
+            print(f"  WARNING: directory does not exist!")
 
     # Resolve all unique paths
+    # Resolve all paths once and cache results
+    resolved_cache = {}
+    for raw_p in unique_raw:
+        candidate = os.path.join(datadir, raw_p)
+        resolved_cache[raw_p] = (candidate, _resolve_mrc_path(candidate))
+
     print(f"\nPath resolution:")
     total_found = 0
     total_fallback = 0
     missing_paths = []
 
     for raw_p in unique_raw:
-        candidate = os.path.join(datadir, raw_p)
-        resolved = _resolve_mrc_path(candidate)
+        candidate, resolved = resolved_cache[raw_p]
         exists = os.path.isfile(resolved)
 
         if exists:
             total_found += 1
             if resolved != candidate:
                 total_fallback += 1
-
         else:
             missing_paths.append((raw_p, candidate))
 
     # Show details for a subset
     for raw_p in unique_raw[:n_show]:
-        candidate = os.path.join(datadir, raw_p)
-        resolved = _resolve_mrc_path(candidate)
+        candidate, resolved = resolved_cache[raw_p]
         exists = os.path.isfile(resolved)
 
         if exists and resolved == candidate:

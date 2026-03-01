@@ -17,6 +17,10 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.utils import copy_data_to_temp_folder, save_original_paths_info, cleanup_temp_files
 
 
+from recovar.utils.helpers import RobustFileHandler as _RobustFileHandler
+from recovar.utils.helpers import RobustStreamHandler as _RobustStreamHandler
+
+
 def add_args(parser: argparse.ArgumentParser):
     parser.add_argument(
         "particles",
@@ -544,13 +548,16 @@ def standard_recovar_pipeline(args):
     if args.do_over_with_contrast is None:
         args.do_over_with_contrast = args.correct_contrast
 
+    # Use RobustFileHandler to tolerate stale NFS/GPFS file handles
+    # (common on HPC clusters where SLURM output files go stale).
+    log_fmt = '%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s'
     logging.basicConfig(
-        format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
+        format=log_fmt,
         level=logging.INFO,
         force=True,
         handlers=[
-            logging.FileHandler(paths.run_log),
-            logging.StreamHandler(),
+            _RobustFileHandler(paths.run_log),
+            _RobustStreamHandler(),
         ])
 
     logger.info(args)

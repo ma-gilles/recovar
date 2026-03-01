@@ -36,13 +36,14 @@ HIGHER_IS_BETTER_TOKENS = (
 
 # Set up logging configuration
 def setup_logging(output_dir):
+    from recovar.utils.helpers import RobustFileHandler, RobustStreamHandler
     log_file = os.path.join(output_dir, 'run_test.log')
     logging.basicConfig(
         format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
         level=logging.INFO,
         handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
+            RobustFileHandler(log_file),
+            RobustStreamHandler()
         ]
     )
     return logging.getLogger(__name__)

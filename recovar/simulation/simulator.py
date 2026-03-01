@@ -21,7 +21,7 @@ from recovar.core.configs import ForwardModelConfig
 CONSTANT_CTF=False
 logger = logging.getLogger(__name__)
 
-data_path = os.path.join(os.path.dirname(__file__), '..', 'data', '')
+data_path = os.path.join(os.path.dirname(__file__), '..', 'assets', '')
 
 # Two generators that load ctf and poses from real datasets
 def get_dataset_params(n_images, grid_size, ctf_file, poses_file):
