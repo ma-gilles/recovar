@@ -4,9 +4,10 @@ import numpy as np
 import functools, time, jax
 import nvtx
 import equinox as eqx
-from recovar import core, jax_config, utils, linalg
+from recovar import core, jax_config, utils
+from recovar.core import linalg
 from recovar.heterogeneity import covariance_core
-from recovar.configs import ForwardModelConfig, BatchData, ModelState, EmbeddingOpts
+from recovar.core.configs import ForwardModelConfig, BatchData, ModelState, EmbeddingOpts
 import recovar.core.forward as core_forward
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
 
     if USE_CUBIC:
         disc_type = 'cubic'
-        from recovar import cubic_interpolation
+        from recovar.core import cubic_interpolation
         if mean_cubic is not None:
             mean = mean_cubic
         else:

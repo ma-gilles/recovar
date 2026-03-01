@@ -5,7 +5,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar import multi_gpu_utils as mgu
+from recovar.utils import multi_gpu as mgu
 
 pytestmark = pytest.mark.unit
 

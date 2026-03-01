@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import jax
 
 from recovar import output, metrics, plot_utils, synthetic_dataset, utils, simulator, recovar
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.commands import pipeline, compute_state
 
 LOWER_IS_BETTER_TOKENS = (

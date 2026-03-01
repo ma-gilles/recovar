@@ -1,7 +1,7 @@
 import logging
 import jax.numpy as jnp
 import numpy as np
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
 import skimage
 from scipy.ndimage import binary_dilation, distance_transform_edt

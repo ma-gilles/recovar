@@ -6,7 +6,7 @@ import recovar.simulator as simulator
 import recovar.synthetic_dataset as synthetic_dataset
 from recovar import dataset
 from recovar import core
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import utils, starfile
 
 

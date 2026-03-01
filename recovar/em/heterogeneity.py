@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import equinox as eqx
 from recovar import core, utils, jax_config, relion_functions, noise
 from recovar.heterogeneity import covariance_estimation, principal_components
-from recovar.configs import ForwardModelConfig
+from recovar.core.configs import ForwardModelConfig
 from .core import batch_vol_slice_volume_by_map
 from recovar.heterogeneity.principal_components import get_cov_svds, pca_by_projected_covariance
 from recovar.heterogeneity.covariance_estimation import compute_both_H_B, compute_covariance_regularization_relion_style
@@ -528,7 +528,7 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
     # logger.info(f"batch size in compute_projected_covariance {batch_size}")
 
     if disc_type_mean == 'cubic':
-        from recovar import cubic_interpolation
+        from recovar.core import cubic_interpolation
         mean = cubic_interpolation.calculate_spline_coefficients(mean.reshape(experiment_dataset.volume_shape))
 
     if disc_type_u == 'cubic':

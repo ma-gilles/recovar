@@ -4,7 +4,7 @@ import pytest
 pytest.importorskip("jax")
 import recovar.core as core
 import recovar.core.ctf as core_ctf
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 pytestmark = pytest.mark.unit
 

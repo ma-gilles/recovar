@@ -4,9 +4,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib, pickle, os, json
 import recovar.heterogeneity.latent_density as ld
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.heterogeneity import embedding
-from recovar import linalg
+from recovar.core import linalg
 from recovar.heterogeneity import trajectory
 from recovar import utils
 from recovar import dataset

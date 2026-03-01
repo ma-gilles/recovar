@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax import vjp
 
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.geometry import (
     get_stencil,
     get_unrotated_plane_grid_points,
@@ -46,7 +46,7 @@ def adjoint_slice_volume_by_map(slices, rotation_matrices, image_shape, volume_s
         # For cubic, slice_volume_by_map expects pre-computed spline coefficients (shape N+2 per dim).
         # The VJP must be defined over the flat raw volume space, so we compute the coefficients
         # inside the function-to-differentiate so the gradient flows back to the flat volume.
-        from recovar import cubic_interpolation
+        from recovar.core import cubic_interpolation
 
         def f(volume_flat):
             coeffs = cubic_interpolation.calculate_spline_coefficients(volume_flat.reshape(volume_shape))
@@ -775,7 +775,7 @@ def map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_sha
         rotation_matrices, image_shape, volume_shape
     )
     if order == 3:
-        from recovar import cubic_interpolation
+        from recovar.core import cubic_interpolation
 
         slices = cubic_interpolation.map_coordinates_with_cubic_spline(
             volume, batch_grid_pt_vec_ind_of_images, mode="fill", cval=0.0

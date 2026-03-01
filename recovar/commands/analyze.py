@@ -6,9 +6,9 @@ from recovar import dataset, utils
 from recovar.heterogeneity import latent_density, embedding
 from scipy.spatial import distance_matrix
 import os, argparse
-from recovar.utils_core import cleanup_temp_files, copy_data_from_pipeline_output
+from recovar.utils import cleanup_temp_files, copy_data_from_pipeline_output
 logger = logging.getLogger(__name__)
-from recovar import parser_args
+from recovar.utils import parser_args
 
 def add_args(parser: argparse.ArgumentParser):
 

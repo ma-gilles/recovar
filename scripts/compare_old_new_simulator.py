@@ -62,7 +62,7 @@ def test_single_batch_equivalence():
     print("=" * 70)
 
     from recovar import core, simulator, utils
-    from recovar.configs import ForwardModelConfig
+    from recovar.core.configs import ForwardModelConfig
     from recovar.core import ctf as core_ctf
 
     for grid_size in [32, 64, 128]:
@@ -83,7 +83,7 @@ def test_single_batch_equivalence():
                 volume = jnp.array(rng.randn(np.prod(volume_shape)).astype(np.float32))
 
                 if disc_type == "cubic":
-                    from recovar import cubic_interpolation
+                    from recovar.core import cubic_interpolation
                     volume = cubic_interpolation.calculate_spline_coefficients(
                         volume.reshape(volume_shape)
                     )
@@ -220,8 +220,8 @@ def test_oom_scenario():
     print("=" * 70)
 
     from recovar import core, simulator, utils, core_ctf
-    from recovar.configs import ForwardModelConfig
-    from recovar import cubic_interpolation
+    from recovar.core.configs import ForwardModelConfig
+    from recovar.core import cubic_interpolation
 
     grid_size = 128
     batch_size = 1280  # This is what get_image_batch_size(128, 80) * 1 gives
@@ -325,7 +325,7 @@ def test_pipeline_functions():
     print("=" * 70)
 
     from recovar import core, core_forward, simulator, core_ctf
-    from recovar.configs import ForwardModelConfig
+    from recovar.core.configs import ForwardModelConfig
 
     grid_size = 32
     n_images = 64

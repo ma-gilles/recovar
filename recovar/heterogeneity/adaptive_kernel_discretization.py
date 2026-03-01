@@ -14,10 +14,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar import core, dataset, jax_config, linalg, noise, regularization, relion_functions, utils
-from recovar.configs import BatchData, ForwardModelConfig
+from recovar import core, dataset, jax_config, noise, regularization, relion_functions, utils
+from recovar.core import linalg
+from recovar.core.configs import BatchData, ForwardModelConfig
 import recovar.core.forward as core_forward
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
 

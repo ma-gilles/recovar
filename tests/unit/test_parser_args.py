@@ -2,7 +2,7 @@ import argparse
 
 import pytest
 
-from recovar import parser_args
+from recovar.utils import parser_args
 
 pytestmark = pytest.mark.unit
 

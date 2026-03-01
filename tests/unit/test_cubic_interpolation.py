@@ -4,7 +4,7 @@ import pytest
 pytest.importorskip("jax")
 pytest.importorskip("lineax")
 
-from recovar import cubic_interpolation as ci
+from recovar.core import cubic_interpolation as ci
 
 pytestmark = pytest.mark.unit
 

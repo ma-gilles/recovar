@@ -7,7 +7,7 @@ import nvtx
 logger = logging.getLogger(__name__)
 
 from recovar import core, jax_config
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 # NVTX domain for regularization operations
 NVTX_DOMAIN_REG = "regularization"

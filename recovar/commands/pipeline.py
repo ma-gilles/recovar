@@ -5,11 +5,12 @@ import jax
 import numpy as np
 import os, argparse, time, sys
 from recovar import output as o
-from recovar import dataset, homogeneous, mask, utils, noise, output
+from recovar import dataset, homogeneous, utils, noise, output
+from recovar.core import mask
 from recovar.heterogeneity import embedding, principal_components, covariance_estimation
 from recovar.output_paths import ResultPaths
-import recovar.fourier_transform_utils as fourier_transform_utils
-from recovar.utils_core import copy_data_to_temp_folder, save_original_paths_info, cleanup_temp_files
+import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar.utils import copy_data_to_temp_folder, save_original_paths_info, cleanup_temp_files
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -383,7 +384,7 @@ def _build_focus_masks(args, means, volume_mask, volume_shape, cryos):
     if args.use_complement_mask:
         complement_mask = (volume_mask > 0.90) * 1.0 - (focus_mask > 0.9) * 1.0
         complement_mask = (complement_mask > 0)
-        from recovar import mask as mask_fn
+        from recovar.core import mask as mask_fn
         complement_mask = np.array(mask_fn.soften_volume_mask(complement_mask, 3).astype(np.float32))
         return [complement_mask, focus_mask]
     else:
@@ -604,7 +605,7 @@ def standard_recovar_pipeline(args):
         utils.report_memory_device(logger=logger)
 
         # --- Pre-compute cubic spline coefficients for mean (once) ---
-        from recovar import cubic_interpolation
+        from recovar.core import cubic_interpolation
         mean_cubic = cubic_interpolation.calculate_spline_coefficients(
             means['combined'].reshape(volume_shape))
         logger.info("Pre-computed cubic spline coefficients for mean estimate")

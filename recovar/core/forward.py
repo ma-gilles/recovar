@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 from jax import vjp
 
-from recovar.configs import ForwardModelConfig
+from recovar.core.configs import ForwardModelConfig
 from recovar.core.geometry import translate_images
 from recovar.core.slicing import adjoint_slice_volume_by_trilinear, slice_volume_by_map
 

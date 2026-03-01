@@ -8,11 +8,11 @@ import jax.numpy as jnp
 import mrcfile
 import numpy as np
 
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
 from recovar import core, dataset, noise
 from recovar import load_utils
-from recovar.configs import ForwardModelConfig
+from recovar.core.configs import ForwardModelConfig
 
 CONSTANT_CTF=False
 logger = logging.getLogger(__name__)
@@ -750,7 +750,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
         if disc_type == "nufft":
             vol_real = fourier_transform_utils.get_idft3(volumes[vol_idx].reshape(experiment_dataset.volume_shape))
         elif 'cubic' in disc_type:
-            from recovar import cubic_interpolation
+            from recovar.core import cubic_interpolation
             volume = cubic_interpolation.calculate_spline_coefficients(volumes[vol_idx].reshape(experiment_dataset.volume_shape))
         else:
             volume = volumes[vol_idx]
@@ -830,7 +830,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 
 
             if pad_before_ctf:
-                from recovar import padding
+                from recovar.core import padding
                 # IF this is on, we did not apply CTF above.
                 upsample_factor=2
                 # print("DEBUGGING HERE !!!")
@@ -890,7 +890,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                     # for k in range(images_batch.shape[0]):
                     #     if k > 3:
                     #         break
-                    from recovar import padding
+                    from recovar.core import padding
                     padded_images = padding.pad_images_spatial_domain(images_batch,experiment_dataset.grid_size)
                     if plotting:
                         import matplotlib.pyplot as plt
@@ -935,7 +935,7 @@ def make_noise_batch(subkey, noise_image, images_batch_shape):
     image_size = images_batch_shape[-1] * images_batch_shape[-2]
     noise_batch = jax.random.normal(subkey, images_batch_shape ) / jnp.sqrt(image_size)
     
-    # import recovar.fourier_transform_utils
+    # import recovar.core.fourier_transform_utils
     # if recovar.fourier_transform_utils.DEFAULT_FFT_NORM == "backward":
     #     noise_batch = noise_batch /  jnp.sqrt(image_size)
 

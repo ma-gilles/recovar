@@ -16,7 +16,7 @@ sys.path.insert(0, '/scratch/gpfs/GILLES/mg6942/heterogeneity_dev-1')
 
 from recovar import core, noise
 from recovar.heterogeneity import covariance_core, embedding
-from recovar.configs import ForwardModelConfig, BatchData, ModelState, EmbeddingOpts
+from recovar.core.configs import ForwardModelConfig, BatchData, ModelState, EmbeddingOpts
 import recovar.core.forward as core_forward
 
 np.random.seed(42)

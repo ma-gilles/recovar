@@ -11,12 +11,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from recovar import core, utils
-from recovar.configs import ForwardModelConfig
+from recovar.core.configs import ForwardModelConfig
 import recovar.core.forward as core_forward
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from jax import vjp
 import functools
-from recovar import mask
+from recovar.core import mask
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ def map_coordinates_on_ewald_sphere(volume, rotation_matrices, image_shape, volu
     batch_grid_pt_vec_ind_of_images = batch_grid_pt_vec_ind_of_images.reshape(-1,3).T
 
     if order ==3:
-        from recovar import cubic_interpolation
+        from recovar.core import cubic_interpolation
         slices = cubic_interpolation.map_coordinates_with_cubic_spline(volume, batch_grid_pt_vec_ind_of_images, mode = 'fill', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)
     else:
         slices = jax.scipy.ndimage.map_coordinates(volume.reshape(volume_shape), batch_grid_pt_vec_ind_of_images, order = order, mode = 'constant', cval = 0.0).reshape(batch_grid_pt_vec_ind_of_images_og_shape[:-1] ).astype(volume.dtype)

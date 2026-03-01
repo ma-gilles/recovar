@@ -3,8 +3,8 @@ import pytest
 
 pytest.importorskip("jax")
 
-import recovar.fourier_transform_utils as fourier_transform_utils
-import recovar.linalg as linalg
+import recovar.core.fourier_transform_utils as fourier_transform_utils
+import recovar.core.linalg as linalg
 
 pytestmark = pytest.mark.unit
 

@@ -27,7 +27,7 @@ import grain.python as grain
 
 from recovar.image_loader import ImageSource
 from recovar import starfile
-from recovar import mask
+from recovar.core import mask
 
 try:
     import nvtx
@@ -211,7 +211,7 @@ class ParticleImageDataset:
     def apply_preprocessing(self, images: np.ndarray, use_mask: bool = False) -> np.ndarray:
         if use_mask:
             images = images * self.image_mask
-        import recovar.padding as pad
+        import recovar.core.padding as pad
         images = pad.padded_dft(images * self.data_multiplier, self.D, self.padding)
         return images.astype(self.dtype, copy=False)
 

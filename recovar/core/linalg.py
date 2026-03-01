@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import functools
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import utils
 
 # Some functions that do linear algera on batch in GPU. I find it strange that there is not already a decent library to do this, but I couldn't find one.

@@ -7,7 +7,7 @@ import glob
 import numpy as np
 from recovar import utils
 from recovar.heterogeneity import locres
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
 
