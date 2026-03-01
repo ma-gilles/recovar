@@ -283,7 +283,7 @@ def get_minus_vec_index(picked_v_idx,volume_shape):
         minus_idx = core.frequencies_to_vec_indices(-freq, volume_shape)
         return minus_idx
     
-flip_vec_cpu = jax.jit(flip_vec, backend = 'cpu', static_argnums = (1,))
+flip_vec_cpu = jax.jit(flip_vec, static_argnums = (1,))
 batch_flip_vec = jax.vmap(flip_vec_cpu, in_axes = (1, None))
 
 def make_symmetric_columns(columns, picked_frequencies, volume_shape):
@@ -296,7 +296,7 @@ def make_symmetric_columns(columns, picked_frequencies, volume_shape):
     
     return columns_flipped.T, minus_indices, good_idx
 
-make_symmetric_columns_cpu = jax.jit(make_symmetric_columns, backend = 'cpu', static_argnums = (2))
+make_symmetric_columns_cpu = jax.jit(make_symmetric_columns, static_argnums = (2,))
 
 def make_symmetric_columns_np(columns, picked_frequencies, volume_shape):
     freqs = np.array(core.vec_indices_to_frequencies(picked_frequencies, volume_shape))
