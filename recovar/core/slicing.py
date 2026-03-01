@@ -93,6 +93,26 @@ def slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, di
     return _slice_volume_by_map_jax(volume, rotation_matrices, image_shape, volume_shape, disc_type)
 
 
+def batch_slice_volume_by_map(volumes, rotation_matrices, image_shape, volume_shape, disc_type):
+    """Project a batch of volumes to images.
+
+    Uses the batched CUDA kernel when available (avoids slow vmap-of-ffi_call).
+    Falls back to vmap over :func:`slice_volume_by_map` otherwise.
+
+    Parameters
+    ----------
+    volumes : complex, shape ``(batch, vol_flat_size)``
+    rotation_matrices : real, shape ``(n_images, 3, 3)``
+    """
+    order = decide_order(disc_type)
+    if order <= 1 and _check_cuda() and _is_complex(volumes):
+        from recovar.cuda_backproject import batch_project
+        return batch_project(volumes, rotation_matrices, image_shape, volume_shape, order=order)
+    return jax.vmap(
+        lambda v: slice_volume_by_map(v, rotation_matrices, image_shape, volume_shape, disc_type)
+    )(volumes)
+
+
 def adjoint_slice_volume_by_map(slices, rotation_matrices, image_shape, volume_shape, disc_type):
     order = decide_order(disc_type)
     if order <= 1 and _check_cuda() and _is_complex(slices):

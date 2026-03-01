@@ -211,7 +211,7 @@ def backproject(
         _TARGET_BACKPROJECT,
         out_type,
         input_output_aliases={2: 0},
-        vmap_method="broadcast_all",
+        vmap_method="sequential",
     )(images, rot6, volume, **kw)
 
 
@@ -246,7 +246,7 @@ def project(
     return jax.ffi.ffi_call(
         _TARGET_PROJECT,
         out_type,
-        vmap_method="broadcast_all",
+        vmap_method="sequential",
     )(volume, rot6, **kw)
 
 
@@ -292,7 +292,7 @@ def batch_backproject(
         _TARGET_BATCH_BACKPROJECT,
         out_type,
         input_output_aliases={2: 0},
-        vmap_method="broadcast_all",
+        vmap_method="sequential",
     )(images, rot6, volumes, **kw)
 
 
@@ -330,7 +330,7 @@ def batch_project(
     return jax.ffi.ffi_call(
         _TARGET_BATCH_PROJECT,
         out_type,
-        vmap_method="broadcast_all",
+        vmap_method="sequential",
     )(volumes, rot6, **kw)
 
 
