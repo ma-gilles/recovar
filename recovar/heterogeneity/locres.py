@@ -179,7 +179,7 @@ def get_subsample_indices(array_shape, offset, radius):
     grid = jnp.mgrid[:size,:size,:size]
     grid = grid.reshape(3, -1).T
     grid += offset - radius
-    vec_indices = jnp.ravel_multi_index(grid.T, array_shape, mode = 'clip')#.reshape(og_shape[:-1])
+    vec_indices = jnp.ravel_multi_index(grid.T, array_shape, mode = 'clip')
 
     good_idx =  (grid >= 0).all(axis = 1) * (grid < array_shape[0]).all(axis = 1) 
 
@@ -188,13 +188,7 @@ def get_subsample_indices(array_shape, offset, radius):
 batch_get_subsample_indices = jax.vmap(get_subsample_indices, in_axes = (None, 0, None))
 
 def subsample_array(array, offset, radius):
-    # l_bounds = offset - radius
-    # u_bounds = offset + radius
     size = 2*radius
-    # grid = jnp.mgrid[:size,:size,:size]
-    # grid = grid.reshape(3, -1).T
-    # grid += offset - radius
-    # vec_indices = jnp.ravel_multi_index(grid.T, array.shape, mode = 'clip')#.reshape(og_shape[:-1])
     vec_indices, good_idx = get_subsample_indices(array.shape, offset, radius)
     return (array.ravel()[vec_indices] * good_idx).reshape(size, size, size)
 
@@ -329,9 +323,8 @@ def apply_fsc_weighting(FT, fsc):
     return FT
 
 def filter_with_local_fsc(ft_sum, fsc, local_resol, voxel_size, filter_edgewidth):
-    # ft_sum_inp = ft_sum.copy()
-    ft_sum  = apply_fsc_weighting(ft_sum, fsc) # 
-    ft_sum = low_pass_filter_map(ft_sum, ft_sum.shape[0], local_resol, voxel_size, filter_edgewidth)#.astype(ft_sum.dtype)
+    ft_sum  = apply_fsc_weighting(ft_sum, fsc)
+    ft_sum = low_pass_filter_map(ft_sum, ft_sum.shape[0], local_resol, voxel_size, filter_edgewidth)
     ift_sum = fourier_transform_utils.get_idft3(ft_sum).real
     return  ift_sum
 
@@ -509,8 +502,7 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
         # multiplier = 3
         # rad = maskrad_pix * multiplier
         rad = get_local_error_subvolume_rad(locres_maskrad, voxel_size)
-        # downsampled_noise_variance_ift = fourier_transform_utils.get_idft3(jnp.sqrt(noise_variance) )
-        downsampled_noise_variance_ift = fourier_transform_utils.get_idft3((noise_variance) )#.real
+        downsampled_noise_variance_ift = fourier_transform_utils.get_idft3(noise_variance)
 
         downsampled_noise_variance_ift_subs = subsample_array(downsampled_noise_variance_ift, map1.shape[0]//2+1, rad)
         noise_variance_small = fourier_transform_utils.get_dft3(downsampled_noise_variance_ift_subs ) * noise_variance.size / downsampled_noise_variance_ift_subs.size
