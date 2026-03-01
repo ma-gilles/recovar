@@ -594,7 +594,7 @@ def plot_latent_space_scatter(z, axes=None, centers=None, labels=None, title="La
 
             try:
                 ax.hexbin(z[:, i], z[:, j], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
-            except Exception:
+            except (ValueError, TypeError):
                 pass
 
             ax.scatter(z[:, i], z[:, j], alpha=0.6, s=1, c=plot_colors[idx], edgecolors='none')
@@ -761,7 +761,7 @@ def plot_pipeline_summary(po, zdim_key, output_folder):
     try:
         plot_noise_profile(po, ax=ax_noise)
         ax_noise.set_title('Noise Profile', fontsize=12, fontweight='bold')
-    except Exception as e:
+    except (KeyError, FileNotFoundError, ValueError) as e:
         logger.debug("Could not plot noise profile in summary: %s", e)
         ax_noise.text(0.5, 0.5, 'Noise profile\nnot available', ha='center', va='center', transform=ax_noise.transAxes)
 
@@ -780,7 +780,7 @@ def plot_pipeline_summary(po, zdim_key, output_folder):
     try:
         contrasts = po.get('contrasts')[zdim_key]
         plot_contrast_histogram(contrasts, ax=ax_contrast, zdim_key=zdim_key)
-    except Exception as e:
+    except (KeyError, FileNotFoundError, ValueError) as e:
         logger.debug("Could not plot contrast histogram in summary: %s", e)
         ax_contrast.text(0.5, 0.5, 'Contrast histogram\nnot available', ha='center', va='center', transform=ax_contrast.transAxes)
 
@@ -817,5 +817,5 @@ def _load_latent_coords(po):
             if z.shape[0] < 10:
                 return None
         return z
-    except Exception:
+    except (KeyError, IndexError, TypeError, ValueError, AttributeError):
         return None

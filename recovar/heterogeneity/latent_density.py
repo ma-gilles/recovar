@@ -107,8 +107,7 @@ def compute_latent_space_bounds(zs, percentile = 1):
     pca_bounds = []
     # FIND BOUNDS ON SPACE TO DISCRETIZE
     for pca_dim in range(zs.shape[-1]):
-        k = pca_dim
-        x = zs[:,k]
+        x = zs[:,pca_dim]
         min_x = np.percentile(x, percentile) 
         max_x = np.percentile(x, 100-percentile) 
         pca_bounds.append([min_x, max_x])

@@ -130,7 +130,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
             try:
                 fsc_mask = po.get('volume_mask')
                 logger.info("Using pipeline output volume_mask for FSC filtering")
-            except Exception:
+            except (KeyError, FileNotFoundError):
                 logger.warning("Could not load volume_mask from pipeline output, proceeding without FSC mask")
 
         if density_path is not None:

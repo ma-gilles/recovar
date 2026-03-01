@@ -695,7 +695,7 @@ def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path, like
         # Create hexbin density plot for background
         try:
             ax.hexbin(zs[:,0], zs[:,1], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
-        except Exception:
+        except (ValueError, TypeError):
             pass
         
         greater_x = likelihoods[:,k] > vmin
@@ -1131,7 +1131,7 @@ def plot_trajectories_over_scatter(trajectories,  subsampled = None, colors = No
         # Create hexbin density plot for background
         try:
             ax.hexbin(zs[:,axis_x], zs[:,axis_y], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
-        except Exception:
+        except (ValueError, TypeError):
             pass
         
         # Main scatter plot with improved styling
@@ -1277,7 +1277,7 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
                 logger.warning("Too few valid particles after cleaning. Skipping PC analysis.")
                 return
                 
-    except Exception as e:
+    except (KeyError, FileNotFoundError, ValueError) as e:
         logger.error("Error loading latent coordinates: %s", e)
         return
 
@@ -1307,7 +1307,7 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
             axes = [axes]
         else:
             axes = axes.flatten()
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.error("Error creating subplots: %s", e)
         return
 
@@ -1335,7 +1335,7 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
                 if len(x_data) > 50:
                     axes[idx].hexbin(x_data, y_data, gridsize=30,
                                    alpha=0.3, cmap='Blues', mincnt=1)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logger.debug(f"Could not add hexbin for PC{i+1} vs PC{j+1}: {e}")
             axes[idx].scatter(x_data, y_data, alpha=0.3, s=0.5,
                             c='cornflowerblue', edgecolors='none', rasterized=True)
@@ -1344,7 +1344,7 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
             axes[idx].set_title(f'PC{i+1} vs PC{j+1}', fontweight='bold')
             axes[idx].grid(True, alpha=0.3)
 
-        except Exception as e:
+        except (ValueError, TypeError, IndexError) as e:
             logger.error("Error plotting PC%d vs PC%d: %s", i+1, j+1, e)
             axes[idx].set_visible(False)
 
@@ -1361,7 +1361,7 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
         plt.savefig(output_path, bbox_inches='tight', dpi=300)
         logger.info("PC analysis plot saved to %s", output_path)
         
-    except Exception as e:
+    except (OSError, ValueError) as e:
         logger.error("Error saving PC analysis plot: %s", e)
     finally:
         plt.close()
@@ -1370,7 +1370,7 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
     try:
         plot_utils.plot_pipeline_summary(po, zdim_key, output_folder)
         logger.info("Pipeline summary plot saved to %s", os.path.join(output_folder, 'pipeline_summary.png'))
-    except Exception as e:
+    except (KeyError, FileNotFoundError, ValueError, TypeError) as e:
         logger.warning("Could not generate pipeline summary plot: %s", e)
 
 
@@ -1397,7 +1397,7 @@ def scatter_annotate(
 
     try:
         ax.hexbin(x, y, gridsize=30, alpha=0.3, cmap="Blues", mincnt=1)
-    except Exception:
+    except (ValueError, TypeError):
         pass
 
     ax.scatter(x, y, alpha=alpha, s=s, c="cornflowerblue", edgecolors="none", rasterized=True)

@@ -712,7 +712,7 @@ class StarLoader(MultiMRCLoader):
             )
         try:
             df['mrc_index'] = parts[0].astype(int) - 1
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             raise ValueError(
                 "Malformed _rlnImageName entries: index part is not an integer"
             ) from exc

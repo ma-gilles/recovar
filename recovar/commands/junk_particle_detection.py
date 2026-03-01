@@ -1619,7 +1619,7 @@ def create_junk_detection_visualizations(halfmap_fscs, vs_mean_fscs, halfmap_auc
         else:
             hb = ax.hexbin(combined_fsc, combined_auc, gridsize=20, cmap='Blues', alpha=0.6, 
                            mincnt=1, reduce_C_function=np.mean)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.warning("Hexbin failed: %s", e)
         hb = None
     
