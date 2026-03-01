@@ -199,8 +199,8 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
         initial_noise_variance_radials = []
 
         # Get max tilt index
-        max_noise_index = jnp.max(experiment_dataset.noise.dose_indices) + 1
-        
+        max_noise_index = int(jnp.max(experiment_dataset.noise.dose_indices)) + 1
+
         # Fit noise model separately for each tilt
         for tilt_idx in range(max_noise_index):
             # Get images for this tilt
@@ -208,9 +208,13 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
             tilt_images = np.where(tilt_mask)[0]
             
             # Intersect with provided image subset if any
-            images_to_use = (tilt_images if image_subset is None 
+            images_to_use = (tilt_images if image_subset is None
                            else np.intersect1d(image_subset, tilt_images))
             images_to_use = np.array(images_to_use)
+
+            if images_to_use.size == 0:
+                logger.info("No images for tilt index %d, skipping", tilt_idx)
+                continue
 
             # Fit noise model for this tilt
             noise_variance, initial_noise_variance_radial = fit_noise_model_to_images(
@@ -433,7 +437,7 @@ def upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, cryos, means,
     if isinstance(cryos[0].noise, VariableRadialNoiseModel):
         # Get max tilt index
         experiment_dataset = cryos[0]
-        max_noise_index = jnp.max(experiment_dataset.noise.dose_indices) + 1
+        max_noise_index = int(jnp.max(experiment_dataset.noise.dose_indices)) + 1
         ub_noise_var_by_var_ests = []
         # Fit noise model separately for each tilt
         for tilt_idx in range(max_noise_index):
@@ -478,7 +482,8 @@ def upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size
             if np.any(variance_est_low_res_5_pc < 0):
                 logger.info("Estimated variance resolution is < 0. Noise was likely incorrectly estimated. Recomputing noise")
                 logger.info("5 percentile: %s", variance_est_low_res_5_pc)
-                logger.info("5 percentile/median over low shells: %s", variance_est_low_res_5_pc/variance_est_low_res_median)
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    logger.info("5 percentile/median over low shells: %s", variance_est_low_res_5_pc/np.where(variance_est_low_res_median != 0, variance_est_low_res_median, 1.0))
 
                 # This is a bit of a hack. We are using the variance estimate to bound the noise variance
                 # This is not correct, but it is better than nothing
@@ -509,7 +514,6 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
         subset_indices=image_subset
     )
 
-    total_loss = 0.0
     n_images = (image_subset.size if image_subset is not None else experiment_dataset.n_images)
     for batch, _, batch_ind in data_generator:
         batch = experiment_dataset.image_stack.process_images(batch)
@@ -539,22 +543,23 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
 
     logger.info("Finished processing all batches")
     estimated_noise = lhs / rhs
-    # Replace any inf entries with the last non-inf value. Inf value can happen when the CTF is 0, because of weight dosing.
-    non_inf_mask = ~jnp.isinf(estimated_noise)
-    if not jnp.all(non_inf_mask):
-        # Find the last non-inf value
-        last_valid_idx = jnp.where(non_inf_mask)[0][-1]
-        last_valid_value = estimated_noise[last_valid_idx]
-        # Replace inf values with the last valid value
-        estimated_noise = jnp.where(non_inf_mask, estimated_noise, last_valid_value)
+    # Replace any inf/NaN entries with the last valid value. Can happen when CTF is 0 due to dose weighting.
+    valid_mask = jnp.isfinite(estimated_noise)
+    if not jnp.all(valid_mask):
+        valid_indices = jnp.where(valid_mask)[0]
+        if valid_indices.size > 0:
+            last_valid_value = estimated_noise[valid_indices[-1]]
+        else:
+            logger.warning("All noise estimates are inf/NaN; falling back to ones")
+            last_valid_value = 1.0
+        estimated_noise = jnp.where(valid_mask, estimated_noise, last_valid_value)
     return estimated_noise
 
 
 def batch_make_radial_noise(average_image_PS, image_shape):
     return jax.vmap(lambda amp: make_radial_noise(amp, image_shape))(average_image_PS)
 
-    
-    # Perhaps it should be mean at low freq and median at high freq?
+# Perhaps it should be mean at low freq and median at high freq?
 mean_fn = np.mean
 
 @nvtx.annotate("estimate_noise_variance", color="yellow", domain=NVTX_DOMAIN_NOISE)
@@ -578,8 +583,6 @@ def estimate_noise_variance(experiment_dataset, batch_size, max_images = 10000):
 
     # Subsample at most 10000 images
     if experiment_dataset.n_images > max_images:
-        # Calculate subsampling ratio
-        subsample_ratio = max_images / experiment_dataset.n_images
         # Create subset indices for subsampling
         subset_indices = np.random.choice(
             experiment_dataset.n_images, 
@@ -746,8 +749,11 @@ def estimate_noise_variance_from_outside_mask_inner(batch, volume_mask, rotation
     image_size = batch.shape[-1]
     # Integral of mask:
     image_mask_2 = fourier_transform_utils.get_dft2(image_mask)
-    image_mask_sums = jnp.sum(jnp.abs(image_mask_2)**2, axis =(-2, -1)) / image_size**2 
-    masked_image_PS = regularization.batch_average_over_shells(jnp.abs(batch)**2, image_shape, 0) / image_mask_sums[:,None]
+    image_mask_sums = jnp.sum(jnp.abs(image_mask_2)**2, axis =(-2, -1)) / image_size**2
+    # Guard against division by zero when the inverted mask is all-zero
+    # (volume mask covers the full image, leaving no outside region).
+    safe_mask_sums = jnp.where(image_mask_sums > 0, image_mask_sums, jnp.ones_like(image_mask_sums))
+    masked_image_PS = regularization.batch_average_over_shells(jnp.abs(batch)**2, image_shape, 0) / safe_mask_sums[:,None]
 
 
     return masked_image_PS, image_PS

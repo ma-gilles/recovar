@@ -554,7 +554,7 @@ def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset
         variance["corrected" + str(idx)] = rhs_l[idx] / lhs_l[idx]
 
     lhs = (lhs_l[0] + lhs_l[1])/2
-    variance_prior, fsc, prior_avg = regularization.compute_fsc_prior_gpu_v2(cryos.volume_shape, variance["corrected0"], variance["corrected1"], lhs, jnp.ones(cryos.volume_size, dtype = cryos.dtype_real) * np.inf, frequency_shift = jnp.array([0,0,0]), upsampling_factor = 1, substract_shell_mean = True)
+    variance_prior, fsc, _ = regularization.compute_fsc_prior_gpu_v2(cryos.volume_shape, variance["corrected0"], variance["corrected1"], lhs, jnp.ones(cryos.volume_size, dtype = cryos.dtype_real) * np.inf, frequency_shift = jnp.array([0,0,0]), upsampling_factor = 1, substract_shell_mean = True)
 
     if use_regularization:
         for idx, cryo in enumerate(cryos):
@@ -867,10 +867,6 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
                 batch_grid_pt_vec_ind_of_images = core.batch_get_gridpoint_coords(
                     experiment_dataset.rotation_matrices[batch_image_ind],
                     experiment_dataset.image_shape, experiment_dataset.volume_shape )
-        else:
-            all_one_volume = jnp.ones(experiment_dataset.volume_size, dtype = experiment_dataset.dtype)
-            ones_mapped = core.forward_model(all_one_volume, batch_CTF, batch_grid_pt_vec_ind_of_images)
-
         _cpu = jax.devices("cpu")[0]
         with nvtx.annotate("frequency_loop", color="red", domain=NVTX_DOMAIN_H_B):
             for (k, picked_freq_idx) in enumerate(picked_frequency_indices):
