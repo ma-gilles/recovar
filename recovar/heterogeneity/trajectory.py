@@ -50,9 +50,15 @@ def find_trajectory_in_grid(density, g_st, g_end, latent_space_bounds, eps = 1e-
 
     while path is None:
         if eps > 0.1:
-            logger.warning("Failed to find path, and eps>0.1. Probably a bug. Exiting.")
-            break
-        
+            logger.warning("Failed to find path after increasing eps to %g. "
+                           "Gradient descent did not converge.", eps)
+            raise RuntimeError(
+                f"Trajectory computation failed: gradient descent did not converge "
+                f"between grid points {g_st} and {g_end} (eps={eps:.1e}). "
+                f"This can happen when endpoints are too close, outside the density "
+                f"support, or when the density landscape has no clear path."
+            )
+
         eps *= 10
         density_p_eps = density + np.max(density) * eps
         travel_time = compute_travel_time(density_p_eps, g_st, latent_space_bounds)

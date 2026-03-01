@@ -47,7 +47,7 @@ echo ">>> Step 1: Running pipeline (no contrast correction)..."
 rm -rf "$OUT"
 $PYTHON -m recovar.command_line pipeline particles.256.mrcs \
     --poses poses.pkl --ctf ctf.pkl \
-    --mask mask_from_filtered_variance_mean_0802.mrc \
+    --mask recovar_masks/mask_10076.mrc \
     -o "$OUT"
 echo ">>> Pipeline finished: $(date)"
 echo
@@ -79,7 +79,7 @@ echo
 echo ">>> Step 4: Re-running pipeline on subset..."
 $PYTHON -m recovar.command_line pipeline particles.256.mrcs \
     --poses poses.pkl --ctf ctf.pkl \
-    --mask mask_from_filtered_variance_mean_0802.mrc \
+    --mask recovar_masks/mask_10076.mrc \
     --ind "$OUT_SUBSET/subset_ind.pkl" \
     -o "$OUT_SUBSET"
 echo ">>> Subset pipeline finished: $(date)"

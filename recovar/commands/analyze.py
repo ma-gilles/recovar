@@ -229,11 +229,16 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
                 traj_folder = os.path.join(output_folder, f'traj{pair_idx:03d}/')
                 o.mkdir_safe(traj_folder)
-                full_path, subsampled_path = o.make_trajectory_plots_from_results(
-                    po, zdim, traj_folder, cryos=cryos, z_st=z_st, z_end=z_end, gt_volumes=None,
-                    n_vols_along_path=n_vols_along_path, plot_llh=False, input_density=input_density,
-                    latent_space_bounds=latent_space_bounds
-                )
+                try:
+                    full_path, subsampled_path = o.make_trajectory_plots_from_results(
+                        po, zdim, traj_folder, cryos=cryos, z_st=z_st, z_end=z_end, gt_volumes=None,
+                        n_vols_along_path=n_vols_along_path, plot_llh=False, input_density=input_density,
+                        latent_space_bounds=latent_space_bounds
+                    )
+                except RuntimeError as e:
+                    logger.warning("Trajectory %d (clusters %d→%d) failed: %s. "
+                                   "Skipping this trajectory.", pair_idx, pair[0], pair[1], e)
+                    continue
 
                 logger.info("trajectory %d done", pair_idx)
                 o.compute_and_save_reweighted(
