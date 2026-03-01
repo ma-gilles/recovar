@@ -67,6 +67,7 @@ from recovar.core.slicing import (
     adjoint_slice_volume_by_trilinear_from_weights,
     batch_adjoint_slice_volume_by_trilinear,
     batch_over_vol_summed_adjoint_slice_by_nearest,
+    batch_slice_volume_by_map,
     batch_slice_volume_by_nearest,
     batch_slice_volume_by_trilinear,
     decide_order,
