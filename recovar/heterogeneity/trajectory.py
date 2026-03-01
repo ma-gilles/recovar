@@ -77,7 +77,7 @@ def evaluate_function_off_grid(density, pts):
 def gradient_descent_nd(travel_time, x_st, x_end, dx, step_size = 0.25, n_theta = 10, max_steps = 2000, ):
     
     def f_lambda(pts):
-        return evaluate_function_off_grid(travel_time, pts)#scipy.ndimage.map_coordinates(travel_time, pts.T, order = 1)
+        return evaluate_function_off_grid(travel_time, pts)
     
     x_grid = np.linspace(-1.0, 1.0, n_theta, dtype=np.float32)
     grids = np.meshgrid(*(x_st.shape[0] * [x_grid]), copy=False, sparse=False, indexing="xy")
@@ -197,7 +197,7 @@ def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, dens
     grid_to_z_curr_dim, z_to_grid_curr_dim = latent_density.get_grid_z_mappings(latent_space_bounds[:low_dim], num_points)
     current_path_z = grid_to_z_curr_dim(current_path_grid)
     # resample.
-    current_path_z = resample_at_uniform_pts(current_path_z, n_vols_along_path = current_path_z.shape[0])#int(current_path_z.shape[0] * 1.2))
+    current_path_z = resample_at_uniform_pts(current_path_z, n_vols_along_path = current_path_z.shape[0])
     
     for dim in range(low_dim, max_dim):
         num_points = 200
