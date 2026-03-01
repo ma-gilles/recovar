@@ -91,7 +91,6 @@ def get_fourier_transform_of_molecules_on_k_grid(atom_coords, weights, voxel_siz
 
 def get_fourier_transform_of_molecules_at_freq_coords(atom_coords, weights, voxel_size, freq_coords, eps = FINUFFT_EPS, jax_backend = False):    
 
-    # normalized_atom_coords = (atom_coords)/grid_size * (2*np.pi) / voxel_size
     scale = np.max( np.abs(atom_coords))
     
     normalized_atom_coords = (atom_coords  * 2 * np.pi / scale).astype(np.dtype('float64'))
@@ -109,8 +108,6 @@ def get_fourier_transform_of_molecules_at_freq_coords(atom_coords, weights, voxe
 
     ft = finufft.nufft3d3(x,y,z,c,s,t,u, out = None, isign=-1, eps = eps)
 
-    # ft = finufft.nufft3d3(normalized_atom_coords[:,0], normalized_atom_coords[:,1], normalized_atom_coords[:,2], weights, normalized_freqs[:,0], normalized_freqs[:,1], normalized_freqs[:,2] , out = None, isign=-1, eps = eps)
-    
     if np.isnan(np.sum(ft)):
         with open("nufft_nans", "wb") as f:
             import pickle
@@ -124,16 +121,8 @@ def get_fourier_transform_of_molecules_at_freq_coords(atom_coords, weights, voxe
     return ft
 
 
-def get_fourier_transform_of_volume_at_freq_coords(volume, freq_coords, voxel_size, eps = FINUFFT_EPS, jax_backend = False):    
-    # normalized_atom_coords = (atom_coords)/grid_size * (2*np.pi) / voxel_size    
-    # # Since x \in [ -pi, pi], this already does the same scaling that the DFT_to_FT_scaling does
-    # if jax_backend:
-    #     import jax_finufft
-    #     ft = jax_finufft.nufft1((grid_size,grid_size,grid_size), weights, normalized_atom_coords[:,0], normalized_atom_coords[:,1], normalized_atom_coords[:,2], iflag=-1, eps = eps)
-    # else:
+def get_fourier_transform_of_volume_at_freq_coords(volume, freq_coords, voxel_size, eps = FINUFFT_EPS, jax_backend = False):
     scaled_freq_coords = freq_coords * 2 * np.pi *  voxel_size
-    #N = volume.shape[0]
-    #scaled_freq_coords = freq_coords * ( N * voxel_size)
     ft = finufft.nufft3d2(scaled_freq_coords[:,0], scaled_freq_coords[:,1], scaled_freq_coords[:,2], volume, isign= -1, eps = eps)    
     return ft
 
