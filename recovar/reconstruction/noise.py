@@ -2,7 +2,6 @@
 
 import functools
 import logging
-import os
 import time
 
 import equinox as eqx
@@ -156,7 +155,6 @@ def predict_noise_variance(noise_variance, CTF_params, voxel_size, CTF_fun, imag
     return predicted_noise_variance
 
 
-# @functools.partial(jax.jit, static_argnums=(5, 7,8, 9))
 def noise_variance_loss(images, noise_variance, translations, CTF_params, voxel_size, CTF_fun, image_masks, image_shape, radial , premultiplied_ctf):
     # Compute the predicted noise variance
 
@@ -168,9 +166,6 @@ def noise_variance_loss(images, noise_variance, translations, CTF_params, voxel_
     loss = jnp.sum( jnp.abs( jnp.abs(masked_images)**2 - predicted_noise_variance )**2  ) / np.prod(image_shape)
 
     return loss
-
-
-DEBUG = False
 
 
 @nvtx.annotate("fit_noise_model_to_images", color="red", domain=NVTX_DOMAIN_NOISE)
@@ -195,10 +190,6 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
     # Import optimization libraries
     from jaxopt import ScipyBoundedMinimize, OptaxSolver
     import optax
-
-    # Map unique CTF parameter values to sequential indices using unique
-    # _, dose_indices = jnp.unique(experiment_dataset.CTF_params[:,9], return_inverse=True)
-    # experiment_dataset.dose_indices = dose_indices
 
     # Special handling for tilt series data
     if isinstance(experiment_dataset.noise, VariableRadialNoiseModel) and not tilt_dose_inner:
@@ -485,7 +476,7 @@ def upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size
                 logger.info("Estimated noise greater than upper bound. Bounding noise using estimated upper bound")
 
             if np.any(variance_est_low_res_5_pc < 0):
-                logger.info("Estimated variance resolutino is < 0. This probably means that the noise was incorrectly estimated. Recomputing noise")
+                logger.info("Estimated variance resolution is < 0. Noise was likely incorrectly estimated. Recomputing noise")
                 logger.info("5 percentile: %s", variance_est_low_res_5_pc)
                 logger.info("5 percentile/median over low shells: %s", variance_est_low_res_5_pc/variance_est_low_res_median)
 
@@ -669,10 +660,6 @@ def estimate_noise_variance_from_outside_mask_v2(experiment_dataset, volume_mask
                     experiment_dataset.image_stack.process_images)
         top_fraction += top_fraction_this
         kernel_sq_sum+= kernel_sq_sum_this
-        # images_estimates[batch_ind] = np.array(per_image_est)
-        # image_PSs[batch_ind] = np.array(image_PS)
-        # masked_image_PSs[batch_ind] = np.array(masked_image_PS)
-
     predicted_pixel_variances= top_fraction / kernel_sq_sum
     predicted_pixel_variances = jnp.fft.ifft2( predicted_pixel_variances).real * experiment_dataset.image_size
 
@@ -766,9 +753,6 @@ def estimate_noise_variance_from_outside_mask_inner(batch, volume_mask, rotation
     return masked_image_PS, image_PS
     
 
-# # Assume noise constant across images and within frequency bands. Estimate the noise by the outside of the mask, and report some statistics
-
-
 def estimate_radial_noise_upper_bound_from_inside_mask_v2(experiment_dataset, mean_estimate, volume_mask, batch_size):
     noise_dist, per_pixel, aa = get_average_residual_square_just_mean(experiment_dataset, volume_mask, mean_estimate, batch_size, disc_type = 'linear_interp')
     return noise_dist, per_pixel, aa
@@ -793,7 +777,6 @@ def estimate_noise_from_heterogeneity_residuals_inside_mask(experiment_dataset, 
     masked_image_PS =  get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type, subset_indices=subset_indices  )
     return mean_fn(masked_image_PS, axis =0), np.std(masked_image_PS, axis =0)
 
-# @functools.partial(jax.jit, static_argnums = [5])    
 def get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp', subset_indices = None):
     
     if subset_indices is None:
@@ -871,13 +854,8 @@ def get_average_residual_square_inner(batch, mean_estimate, volume_mask, basis, 
     residual_squared = jnp.abs(batch - predicted_images)**2    / image_mask_sums[...,None]
     averaged_residual_squared = regularization.batch_average_over_shells(residual_squared, image_shape,0) 
 
-    return averaged_residual_squared#, averaged_residual_squared
-    
+    return averaged_residual_squared
 
-# # @functools.partial(jax.jit, static_argnums = [5])    
-
-# @functools.partial(jax.jit, static_argnums = [9,10,11,13,14,15,16,20])
-    
 
 def get_average_residual_square_just_mean(experiment_dataset, volume_mask, mean_estimate, batch_size, disc_type = 'linear_interp', subset_indices = None, subset_fn = None):
     contrasts = np.ones(experiment_dataset.n_images, dtype = experiment_dataset.dtype_real)
@@ -891,7 +869,6 @@ def estimate_noise_from_heterogeneity_residuals_inside_mask_v2(experiment_datase
     return get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type )
 
 
-# @functools.partial(jax.jit, static_argnums = [5])    
 def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp', subset_indices = None, subset_fn = None):
 
 
@@ -962,26 +939,19 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
 def basis_times_coords(basis, coords):
     assert basis.shape[-1] == coords.shape[-1]
     return jnp.sum(basis * coords, axis=-1)
-batch_basis_times_coords = jax.vmap(basis_times_coords, in_axes = (None,0))
-
-
-# An atrocious function to do this without allocating too much memory.
-# Basically writes the product of array which would be of size (256,256,256, 10) x (1000,10) where 1000 is n_images, 10 is size of basis and 256 volume size, as a matvec, then reshapes things back.
 def batch_basis_times_coords2(basis, coords):
-
+    """Compute basis @ coords.T reshaped for batched images, memory-efficiently."""
     assert basis.shape[-1] == coords.shape[-1]
     basis_shape_inp = basis.shape
 
     basis = basis.transpose(-1, *np.arange(basis.ndim-1) )
     basis = basis.reshape((coords.shape[-1], np.prod(basis_shape_inp[:-1])))
 
-    # # Put into a matrix of size n_coeffs x dim of basis
     summed = basis.T @ coords.T
 
     summed = summed.T
     summed = summed.reshape(coords.shape[0], *basis_shape_inp[:-1])
-    # summed.transpose(-1, *np.arange(summed.ndim-1) )
-    return summed#.transpose(-1, *np.arange(summed.ndim-1) )
+    return summed
 
 
 # ============================================================================

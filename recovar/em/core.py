@@ -30,7 +30,7 @@ batch_vol_slice_volume_by_map = jax.vmap(core.slice_volume_by_map, in_axes = (0,
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 def crosscorr_from_ft(many_images, one_image, image_shape):
-    return fourier_transform_utils.get_idft2( jnp.conj(one_image.reshape(1, *image_shape)) * (many_images.reshape(-1, *image_shape)))#.reshape(-1, *image_shape)).reshape(-1, *image_shape)
+    return fourier_transform_utils.get_idft2( jnp.conj(one_image.reshape(1, *image_shape)) * (many_images.reshape(-1, *image_shape)))
 
 def norm_squared_residuals_from_ft_one_image(many_images, one_image, image_shape):
     many_images_of_shape = many_images.shape
@@ -55,11 +55,7 @@ def compute_dot_products(projections, batch, translations, CTF_params, CTF_fun, 
     batch *= CTF_fun( CTF_params, image_shape, voxel_size) / noise_variance
     result = jnp.empty((batch.shape[0], projections.shape[0], translations.shape[0]), dtype = jnp.float32)
 
-    # One bad thing about the FFT shifting way is that is involve allocating size(projections) * num_images
-    # This way relies a lot on never allocating things of that size, so that we can handle a ton of projections x images at once.
-    # It's not very clear whether it's better to do. Compute all shifted images, then compute IP, or compute IP for each shift.
-    # The latter is probably better for memory, but the former is probably better for speed. We probably want to do the latter.
-
+    # Compute IP for each shift (memory-efficient over computing all shifted images at once).
     shifted_images = core.batch_trans_translate_images(batch, jnp.repeat(translations[None], batch.shape[0], axis=0), image_shape)
     n_shifted_images = np.prod(shifted_images.shape[:-1])
     result = -2 * (jnp.conj(shifted_images).reshape(n_shifted_images, shifted_images.shape[-1] ) @ projections.T).real

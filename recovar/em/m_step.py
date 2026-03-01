@@ -18,7 +18,6 @@ def sum_up_translate_one_image(image, probabilities, translations, image_shape, 
         image_size = np.prod(image_shape)
         images_probs = jnp.zeros( (*probabilities.shape[:-1], image_size), dtype = probabilities.dtype)
         translations_indices = translations_to_indices(translations, image_shape)
-        # This allows for duplicates which may or may not be good?
         images_probs = images_probs.at[...,translations_indices].add(probabilities)
         images_probs = fourier_transform_utils.get_dft2(images_probs.reshape(*images_probs.shape[:-1], *image_shape))
         summed_up_images = (image) * (images_probs.reshape(*images_probs.shape[:-2], np.prod(image_shape)))
@@ -140,10 +139,8 @@ def sum_up_images_fixed_rots(batch, probabilities, translations, rotations, CTF_
 def M_with_precompute(experiment_dataset, probabilities, rotations, translations, noise_variance, disc_type, image_indices = None):
 
     logger.info("starting precomp proj. Num rotations %s, num translations %s. Total = %s", rotations.shape[0], translations.shape[0], rotations.shape[0] * translations.shape[0])
-    # Probably should stop storing rotations as matrices at some point.
     projections = np.zeros((rotations.shape[0], experiment_dataset.image_size), dtype = np.complex64)
 
-    # batch_size = utils.get_num
     image_shape = experiment_dataset.image_shape
     n_rotations = rotations.shape[0]
     n_translations = translations.shape[0]
@@ -169,7 +166,6 @@ def M_with_precompute(experiment_dataset, probabilities, rotations, translations
 
     Ft_y, Ft_ctf = jnp.zeros((experiment_dataset.volume_size), dtype = experiment_dataset.dtype), jnp.zeros((experiment_dataset.volume_size), experiment_dataset.dtype)
 
-    # n_rotation_batch = rotations.shape[0]//10
     mult = 5
     rotation_batch = max(1, rotations.shape[0] // mult)
     logger.info("Starting sum up images. Batch size %s, rotation batch %s", batch_size, rotation_batch)
@@ -178,10 +174,7 @@ def M_with_precompute(experiment_dataset, probabilities, rotations, translations
         batch = jnp.asarray(batch)
         end_idx = start_idx + len(indices)
 
-        for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):# k in range(mult):
-            # could just not backproject until the end
-            # rot_indices = utils.get_batch_of_indices_arange(n_rotations, rotation_batch, k)
-            # Hmmm this is a bit of a hack. Indexing is not what I wish it was
+        for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):
             Ft_y, Ft_ctf = sum_up_images_fixed_rots_eqx(
                 config, batch,
                 probabilities[start_idx:end_idx, rot_indices[0]:rot_indices[-1]+1],

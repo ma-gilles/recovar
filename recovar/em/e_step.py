@@ -23,11 +23,7 @@ from .heterogeneity import compute_bHb_terms
 logger = logging.getLogger(__name__)
 
 def E_with_precompute(experiment_dataset, volume, rotations, translations, noise_variance, disc_type, image_indices = None, u = None, s = None):
-    # I am not sure this is a reasonable way to be passing things around.
-
     logger.info("starting precomp proj. Num rotations %s, num translations %s. Total = %s", rotations.shape[0], translations.shape[0], rotations.shape[0] * translations.shape[0])
-    # Probably should stop storing rotations as matrices at some point.
-    # batch_size = utils.get_num
     image_shape = experiment_dataset.image_shape
     image_size = experiment_dataset.image_size
     n_rotations = rotations.shape[0]
@@ -67,14 +63,11 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
         utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory - utils.get_size_in_gb(projections)) / translations.shape[0] * 10)
     logger.info("Starting IP. Dot product batch size %s. Remaining memory %s", dot_product_batch_size, gpu_memory - utils.get_size_in_gb(projections))
     utils.report_memory_device(logger=logger)
-    # dot_product_batch_size = batch_size // translations.shape[0]
     data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=dot_product_batch_size, subset_indices = image_indices)
     image_indices = np.arange(n_images) if image_indices is None else image_indices
 
     start_idx = 0
     for batch, _, indices in data_generator:
-        # running_idx
-        # Only place where image mask is used ?
         end_idx = start_idx + len(indices)
         residuals[start_idx:end_idx] = compute_dot_products_eqx(
             config, projections, batch, translations,
@@ -97,8 +90,7 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
             batch = jnp.asarray(batch)
             end_idx = start_idx + len(indices)
 
-            for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):# k in range(mult):
-                # Hmmm this is a bit of a hack. Indexing is not what I wish it was
+            for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):
                 rot_indices = np.array(rot_indices)
                 residuals[start_idx:end_idx, rot_indices] -= compute_bHb_terms(projections[rot_indices], u_projections[rot_indices], s, batch, translations, experiment_dataset.CTF_params[indices], experiment_dataset.CTF_fun, noise_variance, experiment_dataset.voxel_size, image_shape, experiment_dataset.image_stack.process_images)
 
@@ -115,7 +107,6 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
         utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory - utils.get_size_in_gb(projections)) * 3)
 
     for array_indices, dataset_indices in utils.subset_and_indices_batch_iter(image_indices, norm_batch_size):
-        # indices = utils.get_batch_of_indices_arange(n_images, norm_batch_size, k)
         res = compute_CTFed_proj_norms_eqx(
             config, projections,
             experiment_dataset.CTF_params[dataset_indices], noise_variance,

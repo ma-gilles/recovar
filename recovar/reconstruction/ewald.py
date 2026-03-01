@@ -98,7 +98,6 @@ def adjoint_slice_sphere_nearest(images, rotation_matrices, image_shape, volume_
 
 # Nearest neighbor
 def batch_get_nearest_gridpoint_indices_ewald_sphere(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam):
-    # get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
     rotated_plane = batch_get_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
     rotated_indices = core.round_to_int(rotated_plane)
     rotated_indices = core.vol_indices_to_vec_indices(rotated_indices, volume_shape)
@@ -107,7 +106,6 @@ def batch_get_nearest_gridpoint_indices_ewald_sphere(rotation_matrix, image_shap
 
 # Nearest neighbor
 def get_nearest_gridpoint_indices_ewald_sphere(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam):
-    # get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
     rotated_plane = get_ewald_sphere_gridpoint_coords(rotation_matrix, image_shape, volume_shape, grid_size, voxel_size, lam)
     rotated_indices = core.round_to_int(rotated_plane)
     rotated_indices = core.vol_indices_to_vec_indices(rotated_indices, volume_shape)
@@ -284,10 +282,7 @@ def compute_ewald_LS_matvec_in_batches(experiment_dataset, input_volume_real, in
 
 
 def compute_diag_mean(experiment_dataset, batch_size, disc_type, noise_variance  ):
-
-#     logger.info("batch size in second order: %s", batch_size)
-
-    diagonal = 0 
+    diagonal = 0
 
     # \sum_i A_i^T (1/sigma_i^2) A_i v
     # in batches
@@ -352,7 +347,6 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
         phase_shift = np.arcsin(ctf_params[:,core.CTFParamIndex.W]) / np.pi * 180
         ctf_params[:,core.CTFParamIndex.W] = 0
         ctf_params[:,core.CTFParamIndex.PHASE_SHIFT] = phase_shift
-        # ctf_params[:,core.volt_ind] = 100
         experiment_dataset.CTF_params = ctf_params
 
 
@@ -373,16 +367,7 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
         return vec_masked(z_real, z_imag, experiment_dataset.volume_shape)
     
 
-    def mat_vec_wrapped_up_2(x):
-        # volume_real, volume_imag = unvec_masked(x, experiment_dataset.volume_shape, mask_size)
-        z_real, z_imag = compute_ewald_LS_matvec_in_batches(experiment_dataset, x.real, x.imag, batch_size, disc_type, signal_variance, noise_variance  )
-        return z_real + 1j *  z_imag
-
-    # experimenting with preconditioner
-
     diag_mean2 = compute_diag_mean(experiment_dataset, batch_size, disc_type, noise_variance  )
-
-    # diag_mean3, _ = homogeneous.solve_least_squares_mean_iteration(experiment_dataset , None, noise_variance,  batch_size, None, disc_type = disc_type, return_lhs_rhs = True )
     diag_mean = (1/ signal_variance + diag_mean2).reshape(-1)
     diag_mean = vec_masked(diag_mean, diag_mean, experiment_dataset.volume_shape)
     diag_mean2 = np.array(diag_mean2)
@@ -396,8 +381,6 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
 
 
     def planar_model(x):
-        # get diag_mean
-        # diag_mean4 = np.where(diag_mean == 0, 1, diag_mean)
         return x / diag_mean
     
 
@@ -410,22 +393,15 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
     planar_op = scipy.sparse.linalg.LinearOperator(ATA_shape, planar_model)
 
     ress = []
-    global iter_count
-    iter_count = 0
     def report(xk):
         frame = inspect.currentframe().f_back
         ress.append(frame.f_locals['resid'] / np.linalg.norm(rhs))
         logger.info("CG iter %s, residual: %s", len(ress), ress[-1])
-        # iter_count += 1
     logger.debug(utils.report_memory_device())
     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, x0 = x0_masked, maxiter=max_iter, tol=tol, M = planar_op, callback=report)
 
-    # from recovar import utils
-    # outdir = '/home/mg6942/mytigress/'
-    # utils.pickle_dump((volume_real, volume_imag), outdir + 'volume_real_imag.pkl')
-
     volume_real, volume_imag = unvec_masked(x_result, experiment_dataset.volume_shape, mask_size)
-    vol = fourier_transform_utils.get_idft3((volume_real + 1j * volume_imag).reshape(experiment_dataset.volume_shape))#.real
+    vol = fourier_transform_utils.get_idft3((volume_real + 1j * volume_imag).reshape(experiment_dataset.volume_shape))
 
     return vol, ress
 

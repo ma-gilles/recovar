@@ -99,7 +99,6 @@ def get_fsc(vol1, vol2, volume_shape, substract_shell_mean = False, frequency_sh
     """
     return get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean, frequency_shift)
 
-# @functools.partial(jax.jit, static_argnums = [7,8,9,10, 11, 12,13])    
 @nvtx.annotate("get_fsc_gpu", color="blue", domain=NVTX_DOMAIN_REG)
 def get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean = False, frequency_shift = 0):
     
@@ -117,18 +116,16 @@ def get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean = False, frequenc
     bot2 = average_over_shells(jnp.abs(vol2)**2, volume_shape, frequency_shift = frequency_shift)    
     bot = jnp.sqrt(bot1 * bot2)
     fsc = top_avg / bot
-    # fsc = jnp.where(bot  > jax_config.EPSILON , top_avg / bot, jax_config.EPSILON)
     fsc = jnp.where(jnp.isnan(fsc) + jnp.isinf(fsc), 0, fsc)
     fsc = fsc.at[0].set(fsc[1]) # Always set this 1st shell?
     return fsc
 
 
-# @functools.partial(jax.jit, static_argnums = [1,2])
 @nvtx.annotate("average_over_shells", color="green", domain=NVTX_DOMAIN_REG)
 def average_over_shells(input_vec, volume_shape, frequency_shift = 0 ):
     radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled = False, frequency_shift = frequency_shift).astype(int).reshape(-1) 
     labels = radial_distances.reshape(-1)
-    indices = jnp.arange(0, volume_shape[0]//2 - 1)        ## I  wish there wasn't a -1 here, hmmmm
+    indices = jnp.arange(0, volume_shape[0]//2 - 1)
     return jax_scipy_nd_image_mean(input_vec.reshape(-1), labels = labels, index = indices)    
 
 
@@ -139,20 +136,8 @@ def jax_scipy_nd_image_mean(input, labels=None, index=None):
     return jax_scipy_nd_image_mean_inner(input, labels = labels, index = index)
 
 def jax_scipy_nd_image_mean_inner(input, labels=None, index=None):
-    # A jittable simplified scipy.ndimage.mean method
-    # numpy = np
-    # unique_labels = index #, new_labels = numpy.unique(labels, return_inverse=True)
-    # new_labels = labels
-    
-    # # counts = numpy.bincount(new_labels,length = index.size )
-    # counts = numpy.bincount(new_labels)#,length = index.size )
-
-    # # sums = numpy.bincount(new_labels, weights=input.ravel(),length = index.size )
-    # sums = numpy.bincount(new_labels, weights=input.ravel())#,length = index.size )
-
-
     numpy = jnp
-    unique_labels = index #, new_labels = numpy.unique(labels, return_inverse=True)
+    unique_labels = index
     new_labels = labels
     
     # counts = numpy.bincount(new_labels,length = index.size )
@@ -184,9 +169,9 @@ def sum_over_shells(input_vec, volume_shape, frequency_shift = 0 ):
     return jax_scipy_nd_image_sum(input_vec.reshape(-1), labels = labels, index = indices)    
 
 def jax_scipy_nd_image_sum(input, labels=None, index=None):
-    # A jittable simplified scipy.ndimage.mean method
+    # A jittable simplified scipy.ndimage.sum method
     numpy = jnp
-    unique_labels = index #, new_labels = numpy.unique(labels, return_inverse=True)
+    unique_labels = index
     new_labels = labels
     
     counts = numpy.bincount(new_labels,length = index.size )
@@ -260,8 +245,6 @@ def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequenc
     fsc = jnp.where(fsc_raw > epsilon , fsc_raw, epsilon )
     fsc = jnp.where(fsc < 1 - epsilon, fsc, 1 - epsilon )
         
-    # SNR = jnp.where(fsc < 1 - epsilon, fsc / ( 1 - fsc), jnp.inf)
-
     SNR = fsc / (1 - fsc)
     
     # Gotta somehow downsample lhs by a factor of 2
@@ -352,9 +335,6 @@ def prior_iteration_relion_style(H0, H1, B0, B1, frequency_shift, init_regulariz
     else:
         raise ValueError("Prior iterations must be a non-negative integer or -1 (no reg)")
     
-    ## NOTE THIS ONE IS NEVER MASKED. IT GETS MASKED LATER. PERHAPS SHOULD BE MASKED HERE
-    # downsample_from_fsc(array, fsc, volume_shape)
-
     if downsample_from_fsc_flag:
         B = downsample_from_fsc(B0 + B1, fsc, volume_shape)
     else:
@@ -369,7 +349,7 @@ def downsample_from_fsc(array, fsc, volume_shape):
     # Accept both NumPy and JAX arrays.
     fsc = jnp.asarray(fsc)
     array = jnp.asarray(array)
-    fsc_above_threshold = fsc >= 0.0001 #* #0.001
+    fsc_above_threshold = fsc >= 0.0001
     # Sometimes the FSC dips at low resolution. We want to avoid that case.
     fsc_above_threshold = fsc_above_threshold.at[:16].set(1)
     ires_max = locres.find_first_zero_in_bool(fsc_above_threshold)
