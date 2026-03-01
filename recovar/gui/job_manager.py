@@ -963,6 +963,46 @@ echo "Completed at: $(date)"
             logger.error("Failed to load k-means data: %s", e)
             return None
 
+    def _find_particles_file(self, job: Job) -> Optional[str]:
+        """Try to find the particles file near the job output directory.
+
+        Pipeline params may store an absolute path that no longer exists
+        (e.g. after a filesystem migration).  We attempt to locate the
+        particles file relative to the job output directory so that
+        downstream commands can use --particles to override.
+        """
+        try:
+            import pickle
+            params_path = os.path.join(job.output_dir, "model", "params.pkl")
+            if not os.path.isfile(params_path):
+                return None
+            with open(params_path, "rb") as f:
+                params = pickle.load(f)
+            input_args = params.get("input_args") if isinstance(params, dict) else None
+            if input_args is None:
+                return None
+            stored_path = getattr(input_args, "particles", None)
+            if not stored_path:
+                return None
+            # If the stored path exists, no override needed
+            if os.path.isfile(stored_path):
+                return None
+            # Try to find the particles file by name in parent directories
+            basename = os.path.basename(stored_path)
+            for search_dir in [
+                os.path.dirname(job.output_dir),       # parent of output_dir
+                job.output_dir,                         # output_dir itself
+                os.path.join(job.output_dir, ".."),     # parent again (resolved)
+            ]:
+                candidate = os.path.join(os.path.realpath(search_dir), basename)
+                if os.path.isfile(candidate):
+                    logger.info("Auto-resolved particles: %s -> %s",
+                                stored_path, candidate)
+                    return candidate
+        except Exception as e:
+            logger.debug("Could not auto-resolve particles: %s", e)
+        return None
+
     # ── Compute task management ──────────────────────────────────
 
     def submit_compute_task(self, job_id: str, task_type: str,
@@ -979,6 +1019,11 @@ echo "Completed at: $(date)"
         output_dir = os.path.join(job.output_dir, "gui_computed", task_id)
         os.makedirs(output_dir, exist_ok=True)
 
+        # Try to find the particles file for --particles override.
+        # Discovered jobs may reference particle paths that have moved since
+        # the pipeline was run.  We look near the job output directory.
+        particles_override = self._find_particles_file(job)
+
         if task_type == "volume":
             coords = np.array(params["coords"], dtype=np.float32)
             if coords.ndim == 1:
@@ -992,6 +1037,8 @@ echo "Completed at: $(date)"
                 "--outdir", output_dir,
                 "--lazy",
             ]
+            if particles_override:
+                cmd.extend(["--particles", particles_override])
         elif task_type == "trajectory":
             z_st = np.array(params["z_start"], dtype=np.float32)
             z_end = np.array(params["z_end"], dtype=np.float32)
@@ -1009,6 +1056,8 @@ echo "Completed at: $(date)"
                 "--endpts", os.path.join(output_dir, "endpoints.txt"),
                 "--lazy",
             ]
+            if particles_override:
+                cmd.extend(["--particles", particles_override])
         else:
             return None
 
