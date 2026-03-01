@@ -251,8 +251,8 @@ def generate_volume_from_atom_positions_and_types(atom_coords, atom_types, voxel
         out_complex_dtype = np.complex128
 
     atom_indices = defaultdict(list)
-    for k in range(len(atom_types)):
-        atom_indices[atom_types[k]].append(k)
+    for k, atype in enumerate(atom_types):
+        atom_indices[atype].append(k)
 
     atoms_grouped_by_elements = {}
     for atom_name in atom_indices:
@@ -301,8 +301,8 @@ def get_average_atom_shape_fn(atoms):
     # Group atoms by elements
     atom_names = atoms.getData('element')
     atom_indices = defaultdict(list)
-    for k in range(len(atom_names)):
-        atom_indices[atom_names[k]].append(k)
+    for k, aname in enumerate(atom_names):
+        atom_indices[aname].append(k)
 
 
     atom_shape_fns = {}; atom_proportions = {}

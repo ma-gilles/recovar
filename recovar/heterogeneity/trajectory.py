@@ -137,9 +137,9 @@ def gradient_descent_nd(travel_time, x_st, x_end, dx, step_size = 0.25, n_theta 
 
 def get_grid_spacing(latent_space_bounds, density):
     dx = []
-    for k in range(len(latent_space_bounds)):
+    for k, bounds in enumerate(latent_space_bounds):
         dx.append(
-            (latent_space_bounds[k][1] - latent_space_bounds[k][0]) / density.shape[k]
+            (bounds[1] - bounds[0]) / density.shape[k]
             )
     return dx
     
