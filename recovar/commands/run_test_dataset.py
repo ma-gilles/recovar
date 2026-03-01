@@ -209,7 +209,9 @@ def main():
                     with open(embedding_model_path, 'rb') as f:
                         embeddings = pickle.load(f)
                     with open(embedding_2_path, 'wb') as f:
-                        pickle.dump(embeddings['zs'][2], f)
+                        # Support both new and legacy embedding format
+                        coords = embeddings.get('latent_coords', embeddings.get('zs', {}))
+                        pickle.dump(coords[2], f)
                 except Exception as e:
                     print(f"Failed: prepare embedding for reconstruction ({e})\n")
                     failed_functions.append('prepare_embedding_for_reconstruct')

@@ -62,8 +62,9 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
         mean_cubic: Pre-computed cubic-interpolation coefficients.
 
     Returns:
-        Tuple ``(zs, cov_zs, est_contrasts, bias)`` where *zs* has shape
-        ``(n_images, basis_size)``, *cov_zs* has shape
+        Tuple ``(zs, precision_zs, est_contrasts, bias)`` where *zs* has shape
+        ``(n_images, basis_size)``, *precision_zs* is the per-image posterior
+        precision matrix (inverse covariance) with shape
         ``(n_images, basis_size, basis_size)`` (or ``None``),
         *est_contrasts* has shape ``(n_images,)``, and *bias* is
         ``None`` unless *compute_bias* is ``True``.
@@ -175,7 +176,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
 
     xs = np.zeros((n_units, basis_size), dtype=basis.dtype)
-    image_latent_covariances = np.zeros((n_units, basis_size, basis_size), dtype=basis.dtype) if compute_covariances else None
+    image_latent_precisions = np.zeros((n_units, basis_size, basis_size), dtype=basis.dtype) if compute_covariances else None
     image_latent_bias = np.zeros((n_units, basis_size, basis_size), dtype=basis.dtype) if compute_bias else None
 
     contrast_units = n_units if contrast_shared_across_tilt_series else experiment_dataset.n_images
@@ -217,12 +218,12 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
             estimated_contrasts[particles_ind] = contrast_single
 
         if compute_covariances:
-            image_latent_covariances[np.array(particles_ind)] = cov_batch
+            image_latent_precisions[np.array(particles_ind)] = cov_batch
 
         if compute_bias:
             image_latent_bias[np.array(particles_ind)] = bias
 
-    return xs, image_latent_covariances, estimated_contrasts, image_latent_bias
+    return xs, image_latent_precisions, estimated_contrasts, image_latent_bias
 
 
 def slice_ar(indx, arr):

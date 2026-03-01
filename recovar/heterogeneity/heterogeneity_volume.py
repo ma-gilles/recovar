@@ -83,7 +83,10 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
     noise_variance = results['cov_noise']
     latent_points = latent_point[None]
 
-    log_likelihoods = recovar.heterogeneity.latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], results['zs'][ndim], results['cov_zs'][ndim])[...,0]
+    # Support both new (latent_coords/latent_precision) and legacy (zs/cov_zs) dict formats
+    coords = results.get('latent_coords', results.get('zs', {}))
+    precision = results.get('latent_precision', results.get('cov_zs', {}))
+    log_likelihoods = recovar.heterogeneity.latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], coords[ndim], precision[ndim])[...,0]
     heterogeneity_distances = cryos.split_array(log_likelihoods)
     if metric_used == "global":
         pass

@@ -5,10 +5,12 @@ from jaxopt import ScipyBoundedMinimize
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
-def get_raw_density(pipeline_output, zdim = 10, pca_dim_max = 5, percentile_reject = 10, num_points = 50, percentile_bound = 0.1):
+def get_raw_density(pipeline_output, zdim=10, noreg=False, pca_dim_max=5, percentile_reject=10, num_points=50, percentile_bound=0.1):
+    coords_entry = 'latent_coords_noreg' if noreg else 'latent_coords'
+    precision_entry = 'latent_precision_noreg' if noreg else 'latent_precision'
 
-    zs = pipeline_output.get('zs')[zdim]
-    cov_zs =  pipeline_output.get('cov_zs')[zdim]
+    zs = pipeline_output.get(coords_entry)[zdim]
+    cov_zs = pipeline_output.get(precision_entry)[zdim]
 
     cov_zs_norm = np.linalg.norm(cov_zs, axis=(-1,-2), ord = 2)
     good_zs = cov_zs_norm >np.percentile(cov_zs_norm, percentile_reject)
@@ -27,16 +29,15 @@ def get_raw_density(pipeline_output, zdim = 10, pca_dim_max = 5, percentile_reje
 
     return density, kernel, total_covar, grids, bds
 
-def get_deconvolved_density(pipeline_output, zdim = '4_noreg', pca_dim_max = 4, percentile_reject = 10, num_points = 50, kernel_option = 'sampling', alphas = None, percentile_bound = 1, save_to_file = None):
+def get_deconvolved_density(pipeline_output, zdim=4, noreg=True, pca_dim_max=4, percentile_reject=10, num_points=50, kernel_option='sampling', alphas=None, percentile_bound=1, save_to_file=None):
     alphas = np.flip(np.logspace(-4, 1, 10)) if alphas is None else alphas
 
-    density, kernel, total_covar, grids, bounds = get_raw_density(pipeline_output, zdim = zdim, pca_dim_max = pca_dim_max, percentile_reject = percentile_reject, num_points = num_points, percentile_bound=percentile_bound)
+    density, kernel, total_covar, grids, bounds = get_raw_density(pipeline_output, zdim=zdim, noreg=noreg, pca_dim_max=pca_dim_max, percentile_reject=percentile_reject, num_points=num_points, percentile_bound=percentile_bound)
     lbfgsb_sols, cost, reg_cost, alphas = compute_deconvolved_density(density, kernel, total_covar, grids, kernel_option = kernel_option, alphas = alphas)
-    
+
     if save_to_file is not None:
         from recovar import utils
-        utils.pickle_dump({'deconv_densities': lbfgsb_sols, 'alphas': alphas, 'cost': cost, 'reg_cost': reg_cost,  'density': density, 'kernel': kernel, 'total_covar': total_covar, 'grids': grids, 'bounds': bounds, 'zdim': zdim}, save_to_file)
-
+        utils.pickle_dump({'deconv_densities': lbfgsb_sols, 'alphas': alphas, 'cost': cost, 'reg_cost': reg_cost,  'density': density, 'kernel': kernel, 'total_covar': total_covar, 'grids': grids, 'bounds': bounds, 'zdim': zdim, 'noreg': noreg}, save_to_file)
 
     return lbfgsb_sols, alphas, cost, reg_cost, density, total_covar, grids, bounds
 

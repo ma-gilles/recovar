@@ -108,36 +108,28 @@ def compute_state(args):
                 logger.warning("Did you mean to use --zdim1?")
                 target_zs = target_zs[None]
 
+        # Select reg vs noreg entry names
+        coords_entry = 'latent_coords_noreg' if no_z_regularization else 'latent_coords'
+        precision_entry = 'latent_precision_noreg' if no_z_regularization else 'latent_precision'
+        contrast_entry = 'contrasts_noreg' if no_z_regularization else 'contrasts'
+
         if hasattr(po, "get_embedding_keys"):
-            zs_keys = po.get_embedding_keys("zs")
-            cov_keys = po.get_embedding_keys("cov_zs")
-            contrast_keys = po.get_embedding_keys("contrasts")
+            zs_keys = po.get_embedding_keys(coords_entry)
         else:
-            zs_all = po.get('zs')
-            cov_zs_all = po.get('cov_zs')
-            contrasts_all = po.get('contrasts')
-            zs_keys = list(zs_all.keys())
-            cov_keys = list(cov_zs_all.keys())
-            contrast_keys = list(contrasts_all.keys())
+            zs_keys = list(po.get(coords_entry).keys())
 
         if zdim not in zs_keys:
             options = ','.join(str(e) for e in zs_keys)
             raise ValueError(f"zdim {zdim} from provided latent points is not found in embedding results. Options are: {options}")
 
-        zdim_key = f"{zdim}_noreg" if no_z_regularization else zdim
-        if zdim_key not in zs_keys or zdim_key not in contrast_keys or zdim_key not in cov_keys:
-            raise ValueError(
-                f"Requested embedding key {zdim_key} is missing in pipeline output zs/contrasts/cov_zs."
-            )
-
         if hasattr(po, "get_embedding_component"):
-            contrasts_key = po.get_embedding_component('contrasts', zdim_key)
-            zs_key = po.get_embedding_component('zs', zdim_key)
-            cov_zs_key = po.get_embedding_component('cov_zs', zdim_key)
+            contrasts_key = po.get_embedding_component(contrast_entry, zdim)
+            zs_key = po.get_embedding_component(coords_entry, zdim)
+            cov_zs_key = po.get_embedding_component(precision_entry, zdim)
         else:
-            contrasts_key = contrasts_all[zdim_key]
-            zs_key = zs_all[zdim_key]
-            cov_zs_key = cov_zs_all[zdim_key]
+            contrasts_key = po.get(contrast_entry)[zdim]
+            zs_key = po.get(coords_entry)[zdim]
+            cov_zs_key = po.get(precision_entry)[zdim]
 
         # Keep memory footprint low for downstream JAX kernels.
         contrasts_key = np.asarray(contrasts_key).astype(np.float32, copy=False)

@@ -793,7 +793,7 @@ def plot_pipeline_summary(po, zdim_key, output_folder):
 def _load_latent_coords(po):
     """Load 4-D latent coordinates from pipeline output, or None on failure."""
     try:
-        zs_data = po.get('zs')
+        zs_data = po.get('latent_coords')
         if zs_data is None:
             return None
         if isinstance(zs_data, dict):

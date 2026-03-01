@@ -74,18 +74,15 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         path_mapping = copy_data_from_pipeline_output(po, args.copy_to_folder)
 
     try:
+        # Select reg vs noreg entry names
+        coords_entry = 'latent_coords_noreg' if no_z_reg else 'latent_coords'
+        precision_entry = 'latent_precision_noreg' if no_z_reg else 'latent_precision'
+        contrast_entry = 'contrasts_noreg' if no_z_reg else 'contrasts'
+
         if hasattr(po, "get_embedding_keys"):
-            zs_keys = list(po.get_embedding_keys("zs"))
-            cov_keys = list(po.get_embedding_keys("cov_zs"))
-            contrast_keys = list(po.get_embedding_keys("contrasts"))
-            zs_all = cov_zs_all = contrasts_all = None
+            zs_keys = list(po.get_embedding_keys(coords_entry))
         else:
-            zs_all = po.get('zs')
-            cov_zs_all = po.get('cov_zs')
-            contrasts_all = po.get('contrasts')
-            zs_keys = list(zs_all.keys())
-            cov_keys = list(cov_zs_all.keys())
-            contrast_keys = list(contrasts_all.keys())
+            zs_keys = list(po.get(coords_entry).keys())
 
         if zdim is None and len(zs_keys) > 1:
             logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --zdim=4")
@@ -94,29 +91,23 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         elif zdim is None:
             zdim = zs_keys[0]
             logger.info(f"using zdim={zdim}")
-        zdim_key = f"{zdim}_noreg" if no_z_reg else zdim
-        contrast_key = zdim_key
 
+        noreg_suffix = '_noreg' if no_z_reg else ''
         if output_folder is None:
-            output_folder = recovar_result_dir + f'/analysis_{zdim_key}/'
+            output_folder = recovar_result_dir + f'/analysis_{zdim}{noreg_suffix}/'
 
         if zdim not in zs_keys:
             logger.error("z-dim not found in results. Options are:" + ','.join(str(e) for e in zs_keys))
             raise ValueError("Requested zdim was not found in embedding outputs.")
 
-        if zdim_key not in zs_keys or zdim_key not in cov_keys or zdim_key not in contrast_keys:
-            raise ValueError(
-                f"Requested embedding key {zdim_key} is missing in pipeline output zs/contrasts/cov_zs."
-            )
-
         if hasattr(po, "get_embedding_component"):
-            zs = po.get_embedding_component('zs', zdim_key)
-            cov_zs = po.get_embedding_component('cov_zs', zdim_key)
-            contrasts = po.get_embedding_component('contrasts', contrast_key)
+            zs = po.get_embedding_component(coords_entry, zdim)
+            cov_zs = po.get_embedding_component(precision_entry, zdim)
+            contrasts = po.get_embedding_component(contrast_entry, zdim)
         else:
-            zs = zs_all[zdim_key]
-            cov_zs = cov_zs_all[zdim_key]
-            contrasts = contrasts_all[contrast_key]
+            zs = po.get(coords_entry)[zdim]
+            cov_zs = po.get(precision_entry)[zdim]
+            contrasts = po.get(contrast_entry)[zdim]
 
         # Keep memory footprint low for downstream JAX kernels.
         zs = np.asarray(zs).astype(np.float32, copy=False)
@@ -144,7 +135,6 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
             latent_space_bounds = dens_pkl['latent_space_bounds']
             logger.warning(f"density dimension is less than zs dimension, truncate zs dimension to match density dimension = {input_density.ndim}")
             zdim = input_density.ndim
-            zdim_key = f"{zdim}_noreg" if no_z_reg else zdim
             zs = zs[:, :zdim]
             cov_zs = cov_zs[:, :zdim, :zdim]
         else:
@@ -164,7 +154,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         import matplotlib.pyplot as plt
         from recovar.output import plot_utils
         fig, ax = plt.subplots(figsize=(8, 6))
-        plot_utils.plot_contrast_histogram(contrasts, ax=ax, zdim_key=zdim_key)
+        plot_utils.plot_contrast_histogram(contrasts, ax=ax, zdim_key=f"{zdim}{noreg_suffix}")
         plt.savefig(os.path.join(output_folder, 'contrast_histogram.png'), bbox_inches='tight')
         plt.close()
 
@@ -225,7 +215,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
                 traj_folder = os.path.join(output_folder, f'traj{pair_idx:03d}/')
                 o.mkdir_safe(traj_folder)
                 full_path, subsampled_path = o.make_trajectory_plots_from_results(
-                    po, zdim_key, traj_folder, cryos=cryos, z_st=z_st, z_end=z_end, gt_volumes=None,
+                    po, zdim, traj_folder, cryos=cryos, z_st=z_st, z_end=z_end, gt_volumes=None,
                     n_vols_along_path=n_vols_along_path, plot_llh=False, input_density=input_density,
                     latent_space_bounds=latent_space_bounds
                 )

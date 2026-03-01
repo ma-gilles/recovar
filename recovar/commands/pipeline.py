@@ -452,17 +452,24 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
                         focus_masks, zdim_for_rest, args, mean_cubic=None):
     """Compute per-image embeddings for all requested zdim values.
 
-    Returns (zs, cov_zs, est_contrasts) dicts keyed by zdim (int or str).
+    Returns six dicts, all keyed by zdim (int):
+        (latent_coords, latent_coords_noreg,
+         latent_precision, latent_precision_noreg,
+         contrasts, contrasts_noreg)
     """
     num_foc_masks = len(focus_masks)
-    zs = {}
-    cov_zs = {}
-    est_contrasts = {}
+    latent_coords = {}
+    latent_coords_noreg = {}
+    latent_precision = {}
+    latent_precision_noreg = {}
+    contrasts = {}
+    contrasts_noreg = {}
 
+    # Regularized embeddings
     for zdim in options['zs_dim_to_test']:
         n_pcs_to_use = (num_foc_masks - 1) * zdim_for_rest + zdim
         z_time = time.time()
-        zs[zdim], cov_zs[zdim], est_contrasts[zdim], _ = embedding.get_per_image_embedding(
+        latent_coords[zdim], latent_precision[zdim], contrasts[zdim], _ = embedding.get_per_image_embedding(
             means['combined'], u['rescaled'], s['rescaled'], n_pcs_to_use,
             cryos, volume_mask, gpu_memory, 'linear_interp',
             contrast_grid=None, contrast_option=options['contrast'],
@@ -470,12 +477,11 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
             mean_cubic=mean_cubic)
         logger.info(f"embedding time for zdim={zdim}: {time.time() - z_time}")
 
-    # Also compute unregularized embeddings (s -> inf means no prior)
+    # Unregularized embeddings (s -> inf means no prior)
     for zdim in options['zs_dim_to_test']:
         z_time = time.time()
         n_pcs_to_use = (num_foc_masks - 1) * zdim_for_rest + zdim
-        key = f"{zdim}_noreg"
-        zs[key], cov_zs[key], est_contrasts[key], _ = embedding.get_per_image_embedding(
+        latent_coords_noreg[zdim], latent_precision_noreg[zdim], contrasts_noreg[zdim], _ = embedding.get_per_image_embedding(
             means['combined'], u['rescaled'], s['rescaled'] * 0 + np.inf, n_pcs_to_use,
             cryos, volume_mask, gpu_memory, 'linear_interp',
             contrast_grid=None, contrast_option=options['contrast'],
@@ -483,7 +489,9 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
             mean_cubic=mean_cubic)
         logger.info(f"embedding time for zdim={zdim}_noreg: {time.time() - z_time}")
 
-    return zs, cov_zs, est_contrasts
+    return (latent_coords, latent_coords_noreg,
+            latent_precision, latent_precision_noreg,
+            contrasts, contrasts_noreg)
 
 
 # ---------------------------------------------------------------------------
@@ -607,6 +615,7 @@ def standard_recovar_pipeline(args):
     logger.info(f"volume batch size: {utils.get_vol_batch_size(cryos.grid_size, gpu_memory)}")
     logger.info(f"column batch size: {utils.get_column_batch_size(cryos.grid_size, gpu_memory)}")
     logger.info(f"number of images: {cryos.n_total_images}")
+    logger.info(f"image size: {cryos.grid_size}x{cryos.grid_size}")
     utils.report_memory_device(logger=logger)
 
     # --- Initial noise estimate from half-maps ---
@@ -796,13 +805,17 @@ def standard_recovar_pipeline(args):
             covariance_cols = None
 
         # --- Compute embeddings ---
-        zs, cov_zs, est_contrasts = _compute_embeddings(
+        (latent_coords, latent_coords_noreg,
+         latent_precision, latent_precision_noreg,
+         est_contrasts, est_contrasts_noreg) = _compute_embeddings(
             means, u, s, cryos, volume_mask, options, gpu_memory,
             focus_masks, zdim_for_rest, args, mean_cubic=mean_cubic)
 
         if repeat == 1:
             for key in est_contrasts:
                 est_contrasts[key] = est_contrasts[key] * contrasts_for_second
+            for key in est_contrasts_noreg:
+                est_contrasts_noreg[key] = est_contrasts_noreg[key] * contrasts_for_second
 
     # --- Post-embedding: noise residual estimate ---
     zdim = np.max(options['zs_dim_to_test'])
@@ -811,7 +824,7 @@ def standard_recovar_pipeline(args):
         noise_var_from_het_residual, _, _ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(
             cryos[0], dilated_volume_mask, means['combined'], u['rescaled'][:, :n_pcs_to_use],
             # //10: heterogeneity residual estimation is memory-intensive (holds full embedding + projections)
-            est_contrasts[zdim], zs[zdim], utils.safe_batch_size(batch_size // 10),
+            est_contrasts[zdim], latent_coords[zdim], utils.safe_batch_size(batch_size // 10),
             disc_type=covariance_options['disc_type'])
     else:
         noise_var_from_het_residual = None
@@ -823,11 +836,15 @@ def standard_recovar_pipeline(args):
     # --- Handle complement mask trimming ---
     if args.use_complement_mask:
         import copy
-        zs_full = copy.deepcopy(zs)
-        for key in zs:
-            zs[key] = zs[key][:, zdim_for_rest:]
-        for key in cov_zs:
-            cov_zs[key] = cov_zs[key][:, zdim_for_rest:, zdim_for_rest:]
+        zs_full = copy.deepcopy(latent_coords)
+        for key in latent_coords:
+            latent_coords[key] = latent_coords[key][:, zdim_for_rest:]
+        for key in latent_coords_noreg:
+            latent_coords_noreg[key] = latent_coords_noreg[key][:, zdim_for_rest:]
+        for key in latent_precision:
+            latent_precision[key] = latent_precision[key][:, zdim_for_rest:, zdim_for_rest:]
+        for key in latent_precision_noreg:
+            latent_precision_noreg[key] = latent_precision_noreg[key][:, zdim_for_rest:, zdim_for_rest:]
         u['rescaled'] = u['rescaled'][:, zdim_for_rest:]
         s['rescaled'] = s['rescaled'][zdim_for_rest:]
 
@@ -853,12 +870,15 @@ def standard_recovar_pipeline(args):
     else:
         particles_ind_split = ind_split
 
-    embedding_dict = o.build_embedding_dict(zs, cov_zs, est_contrasts)
+    embedding_dict = o.build_embedding_dict(
+        latent_coords, latent_coords_noreg,
+        latent_precision, latent_precision_noreg,
+        est_contrasts, est_contrasts_noreg)
 
     # Reorder embeddings from halfset ordering to original particle ordering
     for entry in embedding_dict:
         for key in embedding_dict[entry]:
-            if entry == 'contrasts' and args.tilt_series and ('shared' not in options['contrast']):
+            if entry.startswith('contrasts') and args.tilt_series and ('shared' not in options['contrast']):
                 embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(
                     embedding_dict[entry][key], ind_split)
             else:
