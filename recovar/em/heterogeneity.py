@@ -13,7 +13,6 @@ from .core import batch_vol_slice_volume_by_map
 from recovar.heterogeneity.principal_components import get_cov_svds, pca_by_projected_covariance
 from recovar.heterogeneity.covariance_estimation import compute_both_H_B, compute_covariance_regularization_relion_style
 
-import time
 logger = logging.getLogger(__name__)
 
 
@@ -27,7 +26,6 @@ def compute_UPLambdainvPU(u_projections, CTF, noise_variance):
     # Form H
     u_projections = u_projections.swapaxes(1,2)
     u_outer_projections = u_projections[...,None] @ jnp.conj(u_projections[...,None,:])
-    #[:,:,None] @ jnp.conj(u_projections.T[:,None])
     u_outer_projections = u_outer_projections.reshape(*u_outer_projections.shape[:-1], -1)
     # Now mat vec with CTFs and whatnot
     CTF_squared = CTF**2 / noise_variance
@@ -51,67 +49,18 @@ def compute_little_H_b(mean_projections, u_projections, s, batch, translations, 
     n_rotations = u_projections.shape[0]
     n_images = batch.shape[0]
     n_translations = translations.shape[0]
-    # n_shifted_images = n_images * n_translations
-    # n_u_projections = n_principal_components * n_rotations
-    # image_size = batch.shape[-1]
-
-    # # Form H
-    # u_projections = u_projections.swapaxes(1,2)
-    # u_outer_projections = u_projections[...,None] @ jnp.conj(u_projections[...,None,:])
-    # #[:,:,None] @ jnp.conj(u_projections.T[:,None])
-    # u_outer_projections = u_outer_projections.reshape(*u_outer_projections.shape[:-1], -1)
-    # # Now mat vec with CTFs and whatnot
-    # CTF_squared = CTF_fun(CTF_params, image_shape, voxel_size)**2 / noise_variance
-
-    # u_outer_projections = u_outer_projections.transpose(0,2,3,1)
-    # 
-    # # Now matvec
-    # u_outer_projections =  u_outer_projections @ CTF_squared.T
-    # # Now reshape back
-    # H = u_outer_projections.transpose(0, 3, 1, 2)
 
     CTF = CTF_fun(CTF_params, image_shape, voxel_size)
     H = compute_UPLambdainvPU(u_projections, CTF, noise_variance)
-    
-    # These are the H matrices we seek
-    
     H += jnp.diag(1/s)
-    
 
-    # Form b    
-    batch = process_images(batch, apply_image_mask = False) 
+    batch = process_images(batch, apply_image_mask = False)
     batch *= CTF_fun( CTF_params, image_shape, voxel_size) / noise_variance
 
     b = compute_bLambdainvPU_terms(mean_projections, u_projections, batch, translations, CTF, noise_variance, image_shape)
 
-    # # Going to split b into two: 2 (y_i^* \noiseinv S_s C_i) P_j U and 2 \left( C_i P_j \mu \right)^* \noiseinv\left( C_i P_j U \right)
-    # # First: 2 (y_i^* \noiseinv S_s C_i) P_j U
-    # shifted_images = core.batch_trans_translate_images(batch, jnp.repeat(translations[None], batch.shape[0], axis=0), image_shape)
-    # # Is reshape necessary?
-    # shifted_images = shifted_images.reshape(n_shifted_images, shifted_images.shape[-1])
-    # b1 = jnp.conj(shifted_images) @ u_projections#.swapaxes(1,2)
-    # 
-    # b1 = b1.reshape(n_rotations, n_images, n_translations , n_principal_components)
-    # # Should be size n_images x n_rotations x n_principal_components x n_translations 
-    # # UGH. GROSS
-    # # b1 is stored as rotations, images, principal_components, translations
-    # b1 = b1.transpose(0,1,3,2) 
-
-    # Getting lost in the indices... hopefully this is right?
-
-    # Second: 2 \left( C_i P_j \mu \right)^* \noiseinv\left( C_i P_j U \right)
-    # First, compute terms like P_j \mu * P_j U
-    # u_projections_times_mu_projection = u_projections * jnp.conj(mean_projections[...,None])
-    # b2 =  CTF_squared @ u_projections_times_mu_projection 
-    # b = 2 * (- b1 +  b2[...,None] )
-    # b = - 0.5 * b # To agree with definition of Gaussian integral
-     
-    # Reshape or vmap? the eternal question
-    # b = b.transpose(n_images, n_rotations, n_principal_components, n_translations).reshape(n_images * n_rotations, n_principal_components )
-    # b = b.transpose(0, 3, 2, 1).reshape(n_images * n_rotations, n_principal_components )
     return H, b
 
-# diag_vmap = jax.vmap(jnp.diag, in_axes = 0, out_axes = 1)
 batch_batch_diag = jax.vmap(jax.vmap(jnp.diag, in_axes = 0, out_axes = 0), in_axes = 0, out_axes = 0)
 
 @functools.partial(jax.jit, static_argnums=[6,9,10])
@@ -127,15 +76,10 @@ def compute_bHb_terms(mean_projections, u_projections, s, batch, translations, C
 
     bHinvb = jnp.sum(jnp.conj(b) * Hinvb, axis =-2)
     log_det = 2 * jnp.sum(jnp.log(jnp.abs(batch_batch_diag(H_chol))), axis = -1)
-    ## THings are off by a factor of 2 everywhere. YUCK. This is why the last 2
     half_inv_logdet = - 0.5 * log_det * 2
-    # log_det_H2 =  jnp.log((jnp.linalg.det(H)))
-
-    # This could be done more efficiently by solving Chol of H.
-    log_det_H =  half_inv_logdet #jnp.log((1/jnp.linalg.det(H)))
-    logger.warning("Make sure this is correct...")
+    log_det_H = half_inv_logdet
     summed = bHinvb + log_det_H[...,None]
-    return summed.transpose(1,0,2) #, Hinvb # I think also need to compute det(H)??? Check
+    return summed.transpose(1,0,2)
 
 def compute_bLambdainvPU_terms(mean_projections, u_projections, invnoise_CTFed_images, translations, CTF, noise_variance, image_shape):
 
@@ -146,41 +90,18 @@ def compute_bLambdainvPU_terms(mean_projections, u_projections, invnoise_CTFed_i
     n_shifted_images = n_images * n_translations
 
     u_projections = u_projections.swapaxes(1,2)
-    # Going to split b into two: 2 (y_i^* \noiseinv S_s C_i) P_j U and 2 \left( C_i P_j \mu \right)^* \noiseinv\left( C_i P_j U \right)
-    # First: 2 (y_i^* \noiseinv S_s C_i) P_j U
+
     shifted_images = core.batch_trans_translate_images(invnoise_CTFed_images, jnp.repeat(translations[None], invnoise_CTFed_images.shape[0], axis=0), image_shape)
-    # Is reshape necessary?
     shifted_images = shifted_images.reshape(n_shifted_images, shifted_images.shape[-1])
-    b1 = (jnp.conj(shifted_images) @ u_projections).real#.swapaxes(1,2)
-    
-    b1 = b1.reshape(n_rotations, n_images, n_translations , n_principal_components)
-    # Should be size n_images x n_rotations x n_principal_components x n_translations 
-    # UGH. GROSS
-    # b1 is stored as rotations, images, principal_components, translations
-    b1 = b1.transpose(0,1,3,2) 
+    b1 = (jnp.conj(shifted_images) @ u_projections).real
+    b1 = b1.reshape(n_rotations, n_images, n_translations, n_principal_components)
+    b1 = b1.transpose(0,1,3,2)
 
-
-
-    # shifted_images = core.batch_trans_translate_images(batch, jnp.repeat(translations[None], batch.shape[0], axis=0), image_shape)
-    # # Is reshape necessary?
-    # shifted_images = shifted_images.reshape(n_shifted_images, shifted_images.shape[-1])
-    # b1 = jnp.conj(shifted_images) @ u_projections#.swapaxes(1,2)
-    
-    # b1 = b1.reshape(n_rotations, n_images, n_translations , n_principal_components)
-    # # Should be size n_images x n_rotations x n_principal_components x n_translations 
-    # # UGH. GROSS
-    # # b1 is stored as rotations, images, principal_components, translations
-    # b1 = b1.transpose(0,1,3,2) 
-
-    # Getting lost in the indices... hopefully this is right?
-
-    # Second: 2 \left( C_i P_j \mu \right)^* \noiseinv\left( C_i P_j U \right)
-    ## First, compute terms like P_j \mu * P_j U
     u_projections_times_mu_projection = u_projections * jnp.conj(mean_projections[...,None])
-    b2 =  (( CTF**2 /noise_variance )  @ u_projections_times_mu_projection ).real
-    b = 2 * (- b1 +  b2[...,None] )
-    b = - 0.5 * b # To agree with definition of Gaussian integral
-    return b #, Hinvb # I think also need to compute det(H)??? Check
+    b2 = ((CTF**2 / noise_variance) @ u_projections_times_mu_projection).real
+    b = 2 * (-b1 + b2[...,None])
+    b = -0.5 * b
+    return b
 
 
 # ============================================================================
@@ -298,9 +219,7 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
     # Memory in here scales as O (batch_size )
 
     logger.warning("Not using mask in compute_H_B. Not implemented yet")
-    # utils.report_memory_device()
 
-    # volume_size = mean_estimate.size
     image_shape = experiment_dataset.image_shape
     image_size = experiment_dataset.image_size
     volume_shape = experiment_dataset.volume_shape
@@ -315,32 +234,15 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
     H = [jnp.zeros(volume_size, dtype = experiment_dataset.dtype_real )] * n_picked_indices
     B = [jnp.zeros(volume_size, dtype = experiment_dataset.dtype )] * n_picked_indices
 
-    # H_B_fn = options["covariance_fn"]
-    # f_jit = jax.jit(compute_H_B_triangular, static_argnums = [7,8,9,10,11,12])
-
-
-    # if experiment_dataset.tilt_series_flag:
-    #     assert "kernel" in H_B_fn, "Only kernel implemented for tilt series"
-
-    # if options['disc_type'] == 'cubic':
-    #     these_disc = 'cubic'
-    #     from recovar import cryojax_map_coordinates
-    #     mean_estimate = cryojax_map_coordinates.compute_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
-    # else:
-    #     these_disc = 'linear_interp'
-
-
     gpu_memory = utils.get_gpu_memory_total()
     # *10: slicing is cheap per image, use larger batches for mean projection precomputation
     batch_size = utils.safe_batch_size(utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) * 10)
     n_batches = utils.get_number_of_index_batch(n_rotations, batch_size)
 
     mean_projections = np.zeros((rotations.shape[0], image_size), dtype = np.complex64)
-    for rot_indices in utils.index_batch_iter(n_rotations, batch_size):    
+    for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
         mean_projections[rot_indices] = core.slice_volume_by_map(mean, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, mean_disc)
 
-    # batch_size = utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) // translations.shape[0] * 20
-    
     picked_freq_coords = core.vec_indices_to_vol_indices(picked_frequency_indices, volume_shape)
 
     # Divide by translations to account for per-translation memory in inner loop
@@ -372,9 +274,7 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
             gridpoints = core.batch_get_gridpoint_coords(
                 rotations[rot_indices],
                 image_shape, volume_shape )
-            # There is a lot of compute to win by skipping rotations for which the right kernel will evaluate to zero.
             for (k, picked_freq_coord) in enumerate(picked_freq_coords):
-                # picked_freq_coord = core.vec_indices_to_vol_indices(picked_freq_idx, volume_shape)
                 H[k], B[k] = sum_up_images_fixed_rots_covariance_with_precompute_eqx(
                     config, shifted_CTFed_images, mean_projections[np.array(rot_indices)],
                     CTF, gridpoints, prob_batch[:,rot_indices], rotations[rot_indices],
@@ -384,121 +284,58 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
 
         start_idx = end_idx
 
-        # del image_mask
-        # del images, batch_CTF, batch_grid_pt_vec_ind_of_images
-
-    # H = np.stack(H, axis =1)
-    # B = np.stack(B, axis =1)
     return H, B
 
 
 @functools.partial(jax.jit, static_argnums=[3,5,6])
 def sum_up_images_fixed_rots_covariance_precompute(batch, translations, CTF_params, CTF_fun, voxel_size, image_shape, process_images):
 
-    # probabilities is shape n_images x n_rotations x n_translations
-    # assert(probabilities.shape[0] == batch.shape[0])
-    # assert(probabilities.shape[1] == rotations.shape[0])
-    # assert(probabilities.shape[2] == translations.shape[0])
-    n_translations = translations.shape[0]
-    n_images = batch.shape[0]
-    n_shifted_images = n_images * n_translations
-
-    # batch_size = utils.get_num
-    # image_shape = experiment_dataset.image_shape
     CTF = CTF_fun(CTF_params, image_shape, voxel_size)
-    batch = process_images(batch, apply_image_mask = False) * CTF 
-    shifted_CTFed_images= core.batch_trans_translate_images(batch, jnp.repeat(translations[None], batch.shape[0], axis=0), image_shape)
+    batch = process_images(batch, apply_image_mask = False) * CTF
+    shifted_CTFed_images = core.batch_trans_translate_images(batch, jnp.repeat(translations[None], batch.shape[0], axis=0), image_shape)
 
     return shifted_CTFed_images, CTF
 
 
 @functools.partial(jax.jit, static_argnums=[7,8,12,13])
-def sum_up_images_fixed_rots_covariance_with_precompute(shifted_CTFed_images, mean_projections, CTF, gridpoints, probabilities, rotations,  noise_variance, image_shape, volume_shape, gridpoint_target, H = 0, B = 0, right_kernel_width = 2, right_kernel = "triangular"):
+def sum_up_images_fixed_rots_covariance_with_precompute(shifted_CTFed_images, mean_projections, CTF, gridpoints, probabilities, rotations, noise_variance, image_shape, volume_shape, gridpoint_target, H=0, B=0, right_kernel_width=2, right_kernel="triangular"):
 
-    # probabilities is shape n_images x n_rotations x n_translations
-    # assert(probabilities.shape[0] == batch.shape[0])
-    # assert(probabilities.shape[1] == rotations.shape[0])
-    # assert(probabilities.shape[2] == translations.shape[0])
     n_rotations = rotations.shape[0]
     n_translations = shifted_CTFed_images.shape[1]
     n_images = shifted_CTFed_images.shape[0]
     n_shifted_images = n_images * n_translations
     image_size = shifted_CTFed_images.shape[-1]
-    # batch_size = utils.get_num
-    # image_shape = experiment_dataset.image_shape
-    # CTF = CTF_fun(CTF_params, image_shape, voxel_size)
-    # batch = process_images(batch, apply_image_mask = False) * CTF / noise_variance
-    # This should be a matvec 
-    # We are computing \sum_i \sum  S_s y_i p_{i,s,j} over images j .... (Here the direction is fixed)
-    # Will first form the S_s y_i
-    #  P @ Y
-    # Y is n_shifted_images x image_size
-    # P is n_rotations x n_shifted_images
-    # shifted_images = core.batch_trans_translate_images(batch, jnp.repeat(translations[None], batch.shape[0], axis=0), image_shape)
-    # shifted_images = shifted_images.reshape(n_shifted_images, shifted_images.shape[-1])
-
-    # Put n_rotations first, then reshape for mat-mat
-    # Alright...
-    # P = probabilities.swapaxes(0,1).reshape(n_rotations, n_shifted_images )
-    # Compute e_2
-    # gridpoints = None## Compute this.
 
     from recovar.heterogeneity import covariance_core
-    # One kernel per rotation
-    kernel_vals = covariance_core.evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel = right_kernel, kernel_width = right_kernel_width)
-    
-    # Kernel vals is size n_rotations x image_size
+    kernel_vals = covariance_core.evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel=right_kernel, kernel_width=right_kernel_width)
 
     e2_p1 = shifted_CTFed_images @ kernel_vals.T
-    # Should reshape so that translation is last index
-    # e2_p1 is size n_rotations x n_shifted_images 
-
-    # want to compute kernelvals.^T_e2 (CTF_i *  u_proj). CTF_i * u _proj is n_rotations x n_images x image_size which is not what we want to allocate.
-    # Can compute  instead C_i ^T (kernelvals * u_proj) . 
-    # u_proj* kernel = kernel_vals * CTF
-
-    e2_p2 = (CTF**2) @ (kernel_vals * mean_projections).T 
+    e2_p2 = (CTF**2) @ (kernel_vals * mean_projections).T
     e2 = e2_p1 - e2_p2[:,None,:]
-    # e2 is size n_images x n_translations x n_rotations
-    # Put it to n_images x n_rotations x n_translations
     e2 = e2.swapaxes(1,2)
     e2 = jnp.conj(e2)
 
     gamma_2 = probabilities * e2
-
-    # Summed over translations
-    gamma_2_summed_over_translations = jnp.sum(gamma_2, axis = -1)
+    gamma_2_summed_over_translations = jnp.sum(gamma_2, axis=-1)
     summed_CTF_squared_gamma2 = (CTF**2).T @ gamma_2_summed_over_translations
     summed_CTF_squared_gamma2 = summed_CTF_squared_gamma2.T
-    #Piece 1
     before_adj_B2 = -summed_CTF_squared_gamma2 * mean_projections
 
-    # Piece 2
-    # gamma_2 is size n_images x n_rotations x n_translations
-    # Need to swap axis to make a big matvec with shifted images
     gamma_2 = gamma_2.swapaxes(1,2).reshape(n_images * n_translations, n_rotations)
     shifted_CTFed_images = shifted_CTFed_images.reshape(n_images * n_translations, image_size)
-
     before_adj_B2 += gamma_2.T @ shifted_CTFed_images
 
-    #Noise piece... No image mask here
-    probabilties_summed_over_translations = jnp.sum(probabilities, axis = -1)
-
-
-    CTF_squared_times_noise = (CTF**2 * noise_variance ).T @ probabilties_summed_over_translations #@ kernel_vals.T
+    probabilties_summed_over_translations = jnp.sum(probabilities, axis=-1)
+    CTF_squared_times_noise = (CTF**2 * noise_variance).T @ probabilties_summed_over_translations
     noise_piece = CTF_squared_times_noise.T * kernel_vals
     before_adj_B2 -= noise_piece
 
-    ## Now adjoint
     before_adj_B2_half = fourier_transform_utils.full_image_to_half_image(before_adj_B2, image_shape)
     B = core.adjoint_slice_volume_by_trilinear_from_half_images(before_adj_B2_half, rotations, image_shape, volume_shape, B)
 
-    # Now for H
     CTF_squared = CTF**2
     CTF_squared_kernel_vals = kernel_vals @ CTF_squared.T
-    # Size n_rotations x n_images
     gamma_3 = probabilties_summed_over_translations.T * CTF_squared_kernel_vals
-    # This mat vec should integrate over rotation
     H_before_adj = gamma_3 @ CTF_squared
 
     H_before_adj_half = fourier_transform_utils.full_image_to_half_image(H_before_adj, image_shape)
@@ -514,23 +351,18 @@ def compute_projected_covariance(experiment_datasets, mean, basis, rotations, tr
     
     lhs, rhs = compute_projected_covariance_rhs_lhs(experiment_datasets, mean, basis, rotations, translations, probabilities, volume_mask, noise_variance, disc_type_mean, disc_type_u, image_indices = None)
     covar = solve_covariance(lhs, rhs)
-    return covar #, lhs, rhs
+    return covar
 
 
 def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotations, translations, probabilities, volume_mask, noise_variance, disc_type_mean, disc_type_u, image_indices = None):
     
     # experiment_dataset = experiment_datasets[0]
 
-    basis = basis.T.astype(experiment_dataset.dtype)
-    # Make sure variables used in every iteration are on gpu.
-    basis = jnp.asarray(basis)
-    # volume_mask = jnp.array(volume_mask).astype(experiment_dataset.dtype_real)
+    basis = jnp.asarray(basis.T, dtype=experiment_dataset.dtype)
     mean = jnp.asarray(mean, dtype=experiment_dataset.dtype)
 
-    lhs =0
-    rhs =0 
-    # summed_batch_kron_cpu = jax.jit(summed_batch_kron, backend='cpu')
-    # logger.info("batch size in compute_projected_covariance %s", batch_size)
+    lhs = 0
+    rhs = 0
 
     if disc_type_mean == 'cubic':
         from recovar.core import cubic_interpolation
@@ -558,11 +390,9 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
 
     
     del basis, mean
-
     logger.info("done with u_proj %s", batch_size)
     basis_size = u_projections.shape[1]
 
-    # batch_size = 100
     rotation_batch = max(1, rotations.shape[0] // 10)
 
     memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() -  (2*basis_size**4*8/1e9 + utils.get_size_in_gb(mean_projections[:rotation_batch])* ( 1 + basis_size**2) )
@@ -570,10 +400,8 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
     batch_size = utils.safe_batch_size(
         utils.get_image_batch_size(experiment_dataset.grid_size, memory_left_over_after_kron_allocate) / translations.shape[0])
 
-    # batch_size = utils.get_embedding_batch_size(basis, experiment_dataset.image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate )
-    logger.info('batch size for projected covariance computation: ' + str(batch_size))
+    logger.info('batch size for projected covariance computation: %s', batch_size)
 
-    # change_device= False
     rotation_batch = max(1, rotations.shape[0] // 10)
 
     config = ForwardModelConfig.from_dataset(
@@ -581,7 +409,6 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
         process_fn=experiment_dataset.image_stack.process_images,
     )
 
-    # for experiment_dataset in experiment_datasets:
     data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = image_indices)
     start_idx = 0
     for batch, _, batch_image_ind in data_generator:
@@ -603,11 +430,6 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
     return lhs, rhs
 
 def solve_covariance(lhs, rhs):
-        # del lhs_this, rhs_this
-    # del basis
-    # Deallocate some memory?
-
-    # Solve dense least squares?
     def vec(X):
         return X.T.reshape(-1)
 
@@ -619,17 +441,11 @@ def solve_covariance(lhs, rhs):
     logger.info("end of covariance computation - before solve")
     rhs = vec(rhs)
 
-    # if change_device:
-    #     rhs = jax.device_put(rhs, jax.devices("gpu")[0])
-    #     lhs = jax.device_put(lhs, jax.devices("gpu")[0])
-    # lhs_this = jax.device_put(lhs_this, jax.devices("gpu")[0])
-
-    covar = jax.scipy.linalg.solve( lhs ,rhs, assume_a='pos')
-    # covar = linalg.batch_linear_solver(lhs, rhs)
+    covar = jax.scipy.linalg.solve(lhs, rhs, assume_a='pos')
     covar = unvec(covar)
     logger.info("end of solve")
 
-    return covar #, lhs, rhs
+    return covar
 
 
 
@@ -638,20 +454,14 @@ def solve_covariance(lhs, rhs):
 def reduce_covariance_est_inner(mean_projections, u_projections, probabilities, batch, translations, CTF_params, CTF_fun, noise_variance, voxel_size, image_shape, process_images):
 
     CTF = CTF_fun(CTF_params, image_shape, voxel_size)
-    # These are the H matrices we seek
-    # H = H + jnp.diag(1/s)
 
-    # Form b    
-    batch = process_images(batch, apply_image_mask = False) 
-    batch *= CTF_fun( CTF_params, image_shape, voxel_size) #/ noise_variance
+    batch = process_images(batch, apply_image_mask = False)
+    batch *= CTF_fun( CTF_params, image_shape, voxel_size)
 
     probabilities = probabilities.swapaxes(0,1)
 
-    # This is size n_images x n_rotations x n_principal_components x n_translations 
     b = compute_bLambdainvPU_terms(mean_projections, u_projections, batch, translations, CTF, jnp.ones_like(noise_variance), image_shape)
-    # Reshape to n_rotations x n_images x n_translsations x n_principal
     b = b.swapaxes(-1,-2)
-    # b = compute_bLambdainvPU_terms(mean_projections, u_projections, batch, translations, CTF, noise_variance, image_shape)
     b *= jnp.sqrt(probabilities[...,None])
     outer_products = covariance_estimation.summed_outer_products(b.reshape(-1, b.shape[-1]))
 
@@ -665,24 +475,14 @@ def reduce_covariance_est_inner(mean_projections, u_projections, probabilities, 
     H = compute_UPLambdainvPU(u_projections, CTF, jnp.ones_like(noise_variance))
 
     H *= jnp.sqrt(probabilities_summed_over_translations[...,None,None])
-    H = H.reshape(-1, H.shape[-2],  H.shape[-1])
+    H = H.reshape(-1, H.shape[-2], H.shape[-1])
     lhs = jnp.sum(covariance_estimation.batch_kron(H, H), axis=(0))
 
-    # if shared_label:
-    #     AU_t_images = jnp.sum(AU_t_images, axis=0,keepdims=True)
-    #     AU_t_AU = jnp.sum(AU_t_AU, axis=0,keepdims=True)
-
-    
-    # return AU_t_AU, rhs
-    # Perhaps this should use: jax.lax.fori_loop. This is a lot of memory.
-    # Or maybe jax.lax.reduce ?
-    
     return lhs, rhs
 
 
 def estimate_principal_components_simple(experiment_dataset, mean, mean_signal_variance, probabilities, rotations, translations, noise_variance,  volume_mask, picked_frequency_indices, batch_size, image_indices, disc_type_mean, covariance_options):
     covariance_options = covariance_estimation.get_default_covariance_computation_options() if covariance_options is None else covariance_options
-    covariance_options
     H,B = compute_H_B(experiment_dataset, mean, probabilities, rotations, translations, noise_variance, volume_mask, picked_frequency_indices, image_indices, disc_type_mean)
     H = np.stack(H, axis =1)
     B = np.stack(B, axis =1)
@@ -700,10 +500,9 @@ def estimate_principal_components_simple(experiment_dataset, mean, mean_signal_v
     basis_size = 3
     basis = basis[:,:basis_size]
 
-    ####
-    memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() -  2*basis_size**4*8/1e9
-    batch_size = utils.get_embedding_batch_size(basis, experiment_dataset.image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate )
-    logger.info('batch size for covariance computation: ' + str(batch_size))
+    memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() - 2*basis_size**4*8/1e9
+    batch_size = utils.get_embedding_batch_size(basis, experiment_dataset.image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate)
+    logger.info('batch size for covariance computation: %s', batch_size)
 
     covariance = compute_projected_covariance([experiment_dataset], mean, basis, rotations, translations, probabilities, volume_mask, noise_variance, batch_size, disc_type_mean, covariance_options['disc_type_u'], image_indices = None)
     ss, u = np.linalg.eigh(covariance)
@@ -716,7 +515,6 @@ def estimate_principal_components_simple(experiment_dataset, mean, mean_signal_v
 
 def estimate_principal_components_halfset(cryos, means, mean_signal_variance, cov_prior, probabilities, rotations, translations, noise_variance,  volume_mask, picked_frequency_indices, batch_size, image_indices, disc_type_mean, covariance_options):
     covariance_options = covariance_estimation.get_default_covariance_computation_options() if covariance_options is None else covariance_options
-    covariance_options
 
     gpu_memory = utils.report_gpu_memory()
     volume_shape = cryos[0].volume_shape
@@ -726,29 +524,20 @@ def estimate_principal_components_halfset(cryos, means, mean_signal_variance, co
     
     volume_noise_var = None
     volume_mask = None
-    _, covariance_prior, covariance_fscs = principal_components.compute_covariance_regularization_relion_style(Hs, Bs, mean_signal_variance, picked_frequency_indices, volume_noise_var, volume_mask, cryos[0].volume_shape,  gpu_memory, reg_init_multiplier = jax_config.REG_INIT_MULTIPLIER, options = covariance_options)
-
-    from recovar.reconstruction import relion_functions
+    _, covariance_prior, covariance_fscs = principal_components.compute_covariance_regularization_relion_style(Hs, Bs, mean_signal_variance, picked_frequency_indices, volume_noise_var, volume_mask, cryos[0].volume_shape, gpu_memory, reg_init_multiplier = jax_config.REG_INIT_MULTIPLIER, options = covariance_options)
 
     cov_cols = 2 * [None]
     us = 2 * [None]; ss = 2 * [None]
     for cryo_idx, cryo in enumerate(cryos):
         cov_cols[cryo_idx] = relion_functions.post_process_from_filter_v2(Hs[cryo_idx], Bs[cryo_idx], volume_shape, volume_upsampling_factor = 1, tau = covariance_prior, kernel = covariance_options['left_kernel'], use_spherical_mask = covariance_options['use_spherical_mask'], grid_correct = covariance_options['grid_correct'], gridding_correct = "square", kernel_width = 1, volume_mask = volume_mask )
 
-        # options['substract_shell_mean'], 
-        # volume_shape, options['left_kernel'], 
-        # options['use_spherical_mask'],  options['grid_correct'],  volume_mask, options["prior_n_iterations"], options["downsample_from_fsc"])
-
-        # logger.info("image batch size: %s", batch_size)
-        # logger.info("volume batch size: %s", utils.get_vol_batch_size(cryo.grid_size, gpu_memory))
-        # logger.info("column batch size: %s", utils.get_column_batch_size(cryo.grid_size, gpu_memory))
         vol_batch_size = utils.get_vol_batch_size(cryo.grid_size, gpu_memory)
         orthog_cov_cols,_ = principal_components.get_cov_svds(cov_cols[cryo_idx], picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, gpu_memory, False, covariance_options['randomized_sketch_size'])
 
         basis_size = cov_cols[cryo_idx].shape[0]
         memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() -  2*basis_size**4*8/1e9
         batch_size = utils.get_embedding_batch_size(orthog_cov_cols, cryo.image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate )
-        logger.info('batch size for covariance computation: ' + str(batch_size))
+        logger.info('batch size for covariance computation: %s', batch_size)
 
         covariance = compute_projected_covariance([cryo], means[cryo_idx], orthog_cov_cols, rotations, translations, probabilities, volume_mask, noise_variance, batch_size, disc_type_mean, covariance_options['disc_type_u'], image_indices = None)
         ss, u = np.linalg.eigh(covariance)
@@ -772,7 +561,6 @@ def estimate_principal_components(cryos, options,  means, mean_signal_variance, 
 
     volume_shape = cryos[0].volume_shape
     vol_batch_size = utils.get_vol_batch_size(cryos[0].grid_size, gpu_memory_to_use)
-    
 
     covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns_in_batch(cryos, means, mean_signal_variance, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, noise_model, covariance_options, picked_frequencies)
     logger.info("memory after covariance estimation")
@@ -801,18 +589,13 @@ def compute_regularized_covariance_columns(cryos, means, mean_signal_variance, c
     cryo = cryos[0]
     volume_shape = cryos[0].volume_shape
 
-    # These options should probably be left as is.
     mask_ls = dilated_volume_mask
     mask_final = volume_mask
-    # substract_shell_mean = False 
-    # shift_fsc = False
-    keep_intermediate = False
     image_noise_var = noise.make_radial_noise(cov_noise, cryos[0].image_shape)
 
     utils.report_memory_device(logger = logger)
     disc_type = 'nearest'
     Hs, Bs = compute_both_H_B(cryos, means, mask_ls, picked_frequencies, gpu_memory, image_noise_var, disc_type, parallel_analysis = False, options = options)
-    st_time = time.time()
     volume_noise_var = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].volume_shape))
     covariance_cols = {}
 

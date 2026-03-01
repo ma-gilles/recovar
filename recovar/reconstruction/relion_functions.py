@@ -229,17 +229,8 @@ def adjust_regularization_relion_style(filter, volume_shape, tau = None, padding
         og_volume_shape = (volume_shape[0]//padding_factor, volume_shape[1]//padding_factor, volume_shape[2]//padding_factor)
         tau = upscale_tau(tau, padding_factor, og_volume_shape, tau_is_1d = False)
         inv_tau = 1 / (oversampling_factor * tau)
-        # filter_this =  jnp.where(lhs > 1e-20 , 1/ ( 0.001 * jnp.where(filter > 1e-20, filter, 0 )
         inv_tau = jnp.where( (tau < 1e-20) * (filter > 1e-20 ),  1./ ( 0.001 * filter), inv_tau)
         inv_tau = jnp.where( (tau < 1e-20) * (filter <= 1e-20 ),  0, inv_tau)
-
-
-        # This is funky business
-        # tau2 = regularization.average_over_shells(tau, og_volume_shape)
-        # tau3 = regularization.average_over_shells(tau_new, volume_shape)
-        # filter_avg = regularization.average_over_shells(filter, volume_shape)
-        # tau_avg = regularization.average_over_shells(inv_tau, volume_shape)
-        # assert False, ""
 
         regularized_filter = filter + inv_tau
     else:
@@ -324,11 +315,6 @@ def post_process_from_filter_v2(Ft_ctf, F_ty, og_volume_shape, volume_upsampling
         grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
         myreliontest, sinc = grid_fn(myreliontest.reshape(og_volume_shape), og_volume_shape[0], volume_upsampling_factor/kernel_width, order = order)
 
-        # import matplotlib.pyplot as plt
-        # plt.figure()
-        # plt.imshow(sinc[sinc.shape[0]//2])
-        # plt.colorbar()
-        # plt.show()
     myreliontest = fourier_transform_utils.get_dft3(myreliontest.reshape(og_volume_shape))
 
 

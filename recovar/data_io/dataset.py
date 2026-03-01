@@ -326,7 +326,6 @@ class CryoEMDataset:
         batch_image_ind = np.array([i])
         if self.tilt_series_flag:
             assert ( tilt_idx is not None), "Tilt index must be specified for tilt series"
-        # tilt_idx = None if tilt_idx is None else np.array([tilt_idx])
 
         if tilt_idx is not None:
             images, _, image_ind = self.image_stack.__getitem__(i)
@@ -334,7 +333,6 @@ class CryoEMDataset:
             CTFs = self.CTF_fun(self.CTF_params[image_ind[tilt_idx]][None], self.image_shape, self.voxel_size) # Compute CTF
         else:
             images, _, _ = self.image_stack.__getitem__(i)
-            images = images
             CTFs = self.CTF_fun(self.CTF_params[i][None], self.image_shape, self.voxel_size) # Compute CTF
         images = self.image_stack.process_images(images) # Compute DFT, masking
         images = (CTFs / (CTFs**2 + weiner_param)) * images  # CTF correction
@@ -733,13 +731,9 @@ def load_dataset(
                 ctf_params[:,core.CTFParamIndex.CONTRAST+1] = tilt_dataset_this.ctfscalefactor
 
             tilt_numbers = tilt_dataset_this.tilt_numbers
-            # tilt_angles = dataset.tilt_angles[dataset.tilt_indices]
-            # tilt_angles = angle_per_tilt * torch.ceil(tilt_numbers / 2)
-            ctf_params = np.concatenate( [ctf_params, tilt_numbers[...,None]], axis =-1)#, tilt_angles[...,None]], axis =-1)
+            ctf_params = np.concatenate( [ctf_params, tilt_numbers[...,None]], axis =-1)
 
-            assert (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)) , "Critical exposure calculation requires 200kV or 300kV imaging" 
-            # angle_per_tilt = 3 
-            # dose_per_tilt = 2.9
+            assert (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)) , "Critical exposure calculation requires 200kV or 300kV imaging"
             CTF_fun = core.get_cryo_ET_CTF_fun(dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt)
             logger.info('CTF from dose weighting')
         elif "v2" in tilt_series_ctf:

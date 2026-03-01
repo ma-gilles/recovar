@@ -132,9 +132,9 @@ def compute_state(args):
             cov_zs_key = po.get(precision_entry)[zdim]
 
         # Keep memory footprint low for downstream JAX kernels.
-        contrasts_key = np.asarray(contrasts_key).astype(np.float32, copy=False)
-        zs_key = np.asarray(zs_key).astype(np.float32, copy=False)
-        cov_zs_key = np.asarray(cov_zs_key).astype(np.float32, copy=False)
+        contrasts_key = np.asarray(contrasts_key, dtype=np.float32)
+        zs_key = np.asarray(zs_key, dtype=np.float32)
+        cov_zs_key = np.asarray(cov_zs_key, dtype=np.float32)
 
         cryos = po.get('lazy_dataset') if lazy else po.get('dataset')
         embedding.set_contrasts_in_cryos(cryos, contrasts_key)

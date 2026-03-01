@@ -114,9 +114,9 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
             contrasts = po.get(contrast_entry)[zdim]
 
         # Keep memory footprint low for downstream JAX kernels.
-        zs = np.asarray(zs).astype(np.float32, copy=False)
-        cov_zs = np.asarray(cov_zs).astype(np.float32, copy=False)
-        contrasts = np.asarray(contrasts).astype(np.float32, copy=False)
+        zs = np.asarray(zs, dtype=np.float32)
+        cov_zs = np.asarray(cov_zs, dtype=np.float32)
+        contrasts = np.asarray(contrasts, dtype=np.float32)
 
         if lazy:
             cryos = po.get('lazy_dataset')

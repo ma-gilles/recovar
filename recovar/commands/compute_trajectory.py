@@ -114,9 +114,9 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
             contrasts = po.get(contrast_entry)[zdim]
 
         # Keep memory footprint low for downstream JAX kernels.
-        zs = np.asarray(zs).astype(np.float32, copy=False)
-        cov_zs = np.asarray(cov_zs).astype(np.float32, copy=False)
-        contrasts = np.asarray(contrasts).astype(np.float32, copy=False)
+        zs = np.asarray(zs, dtype=np.float32)
+        cov_zs = np.asarray(cov_zs, dtype=np.float32)
+        contrasts = np.asarray(contrasts, dtype=np.float32)
 
         cryos = po.get('lazy_dataset') if lazy else po.get('dataset')
         embedding.set_contrasts_in_cryos(cryos, contrasts)

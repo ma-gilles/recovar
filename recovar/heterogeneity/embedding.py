@@ -151,7 +151,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
     n_units = experiment_dataset.n_units if not force_not_shared_label else experiment_dataset.n_images
 
     # Transfer arrays to GPU once before the batch loop
-    basis = jnp.asarray(basis.astype(experiment_dataset.dtype))
+    basis = jnp.asarray(basis, dtype=experiment_dataset.dtype)
     volume_mask = jnp.asarray(volume_mask, dtype=experiment_dataset.dtype_real)
     mean_estimate = jnp.asarray(mean_estimate, dtype=experiment_dataset.dtype)
     eigenvalues = jnp.asarray(eigenvalues, dtype=experiment_dataset.dtype)
