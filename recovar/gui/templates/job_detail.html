@@ -1448,24 +1448,29 @@ function jobExplorer() {
 
       try {
         if (typeof molstar === 'undefined') {
-          throw new Error('Mol* library not loaded');
+          throw new Error('Mol* library not loaded. Check that molstar.js is served correctly.');
         }
 
         // Create viewer if needed
         if (!this.viewer) {
-          const viewer = await molstar.Viewer.create(el, {
-            layoutIsExpanded: false,
-            layoutShowControls: true,
-            layoutShowRemoteState: false,
-            layoutShowSequence: false,
-            layoutShowLog: false,
-            layoutShowLeftPanel: false,
-            collapseRightPanel: true,
-            viewportShowExpand: false,
-            viewportShowSelectionMode: false,
-            viewportShowAnimation: false,
-            viewportShowTrajectoryControls: false,
-          });
+          let viewer;
+          try {
+            viewer = await molstar.Viewer.create(el, {
+              layoutIsExpanded: false,
+              layoutShowControls: true,
+              layoutShowRemoteState: false,
+              layoutShowSequence: false,
+              layoutShowLog: false,
+              layoutShowLeftPanel: false,
+              collapseRightPanel: true,
+              viewportShowExpand: false,
+              viewportShowSelectionMode: false,
+              viewportShowAnimation: false,
+              viewportShowTrajectoryControls: false,
+            });
+          } catch (createErr) {
+            throw new Error('Failed to create Mol* viewer (WebGL may not be available): ' + createErr.message);
+          }
 
           viewer.plugin.canvas3d?.setProps({
             renderer: { backgroundColor: 0x0f172a },
@@ -1485,17 +1490,17 @@ function jobExplorer() {
               { type: 'relative', value: this.isoLevel, color: color, alpha: this.isoAlpha },
             ];
 
-        // Load the volume — try 'mrc' format first, fall back to 'ccp4'
+        // Load the volume — try 'ccp4' format first (Mol* has better support), fall back to 'mrc'
         try {
           await this.viewer.loadVolumeFromUrl(
-            { url, format: 'mrc', isBinary: true },
+            { url, format: 'ccp4', isBinary: true },
             isoConfigs,
             { entryId: this.currentVolumeName }
           );
-        } catch (mrcErr) {
-          console.warn('MRC format failed, trying CCP4:', mrcErr.message);
+        } catch (ccp4Err) {
+          console.warn('CCP4 format failed, trying MRC:', ccp4Err.message);
           await this.viewer.loadVolumeFromUrl(
-            { url, format: 'ccp4', isBinary: true },
+            { url, format: 'mrc', isBinary: true },
             isoConfigs,
             { entryId: this.currentVolumeName }
           );

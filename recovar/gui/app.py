@@ -37,6 +37,8 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
     # Store config on app
     app.config["PYTHON_PATH"] = python_path
     app.config["SCAN_DIRS"] = scan_dirs or []
+    # Store repo root so SLURM jobs get the correct PYTHONPATH
+    app.config["REPO_ROOT"] = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
     @app.context_processor
     def inject_recent_jobs():
@@ -542,6 +544,7 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
             python_path=python_path,
             use_slurm=use_slurm,
             slurm_opts=slurm_opts,
+            repo_root=app.config.get("REPO_ROOT"),
         )
         if task is None:
             return jsonify({"error": "Failed to create task"}), 500
