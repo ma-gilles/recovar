@@ -31,6 +31,7 @@ def test_estimate_conformational_density_forwards_percentile_and_defaults(monkey
     def fake_get_deconvolved_density(
         pipeline_output,
         zdim,
+        noreg,
         pca_dim_max,
         percentile_reject,
         kernel_option,
@@ -41,6 +42,7 @@ def test_estimate_conformational_density_forwards_percentile_and_defaults(monkey
     ):
         calls["args"] = {
             "zdim": zdim,
+            "noreg": noreg,
             "pca_dim_max": pca_dim_max,
             "percentile_reject": percentile_reject,
             "num_points": num_points,
@@ -85,7 +87,8 @@ def test_estimate_conformational_density_forwards_percentile_and_defaults(monkey
         percentile_bound=9,
     )
 
-    assert calls["args"]["zdim"] == "2_noreg"
+    assert calls["args"]["zdim"] == 2
+    assert calls["args"]["noreg"] is True
     assert calls["args"]["pca_dim_max"] == 2
     assert calls["args"]["percentile_reject"] == 37
     assert calls["args"]["num_points"] == 200  # pca_dim=2 default
@@ -101,7 +104,7 @@ def test_compute_embedding_uses_saved_z_keys(monkeypatch):
         "s": {"rescaled": np.ones(2, dtype=np.float32)},
         "cov_noise": np.ones(4, dtype=np.float32),
         "volume_mask": np.ones(4, dtype=np.float32),
-        "zs": {10: np.zeros((3, 10)), 4: np.zeros((3, 4))},
+        "latent_coords": {10: np.zeros((3, 10)), 4: np.zeros((3, 4))},
     }
 
     calls = []
@@ -130,11 +133,11 @@ def test_compute_embedding_uses_saved_z_keys(monkeypatch):
 
     monkeypatch.setattr(compute_embedding.embedding, "get_per_image_embedding", fake_get_per_image_embedding)
 
-    zs, cov_zs, contrasts = compute_embedding.compute_embedding("/tmp/fake")
+    latent_coords, latent_precision, contrasts = compute_embedding.compute_embedding("/tmp/fake")
 
     assert calls == [4, 10]
-    assert set(zs.keys()) == {4, 10}
-    assert cov_zs[4].shape == (5, 4, 4)
+    assert set(latent_coords.keys()) == {4, 10}
+    assert latent_precision[4].shape == (5, 4, 4)
     assert contrasts[10].shape == (5,)
 
 
@@ -161,9 +164,9 @@ def test_compute_embedding_falls_back_to_input_args_zdim(monkeypatch):
         lambda *_args, **_kwargs: (calls.append(_args[3]) or (np.zeros((2, _args[3])), np.zeros((2, _args[3], _args[3])), np.zeros(2))),
     )
 
-    zs, cov_zs, _ = compute_embedding.compute_embedding("/tmp/fake")
+    latent_coords, latent_precision, _ = compute_embedding.compute_embedding("/tmp/fake")
     assert calls == [6]
-    assert 6 in zs and 6 in cov_zs
+    assert 6 in latent_coords and 6 in latent_precision
 
 
 def test_compute_embedding_main_not_implemented():

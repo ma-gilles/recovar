@@ -107,7 +107,7 @@ def test_pipeline_with_outliers_restores_argv_and_uses_previous_round_image_indi
         calls.append({"outdir": args.outdir, "ind": args.ind, "tilt_ind": args.tilt_ind})
         model_dir = os.path.join(args.outdir, "model")
         os.makedirs(model_dir, exist_ok=True)
-        embeddings = {"zs": {4: np.zeros((6, 4), dtype=np.float32)}}
+        embeddings = {"latent_coords": {4: np.zeros((6, 4), dtype=np.float32)}}
         with open(os.path.join(model_dir, "embeddings.pkl"), "wb") as f:
             pickle.dump(embeddings, f)
 
@@ -185,7 +185,7 @@ def test_pipeline_with_outliers_restores_argv_when_outlier_detection_raises(monk
     def fake_standard_recovar_pipeline(args):
         model_dir = os.path.join(args.outdir, "model")
         os.makedirs(model_dir, exist_ok=True)
-        embeddings = {"zs": {4: np.zeros((4, 4), dtype=np.float32)}}
+        embeddings = {"latent_coords": {4: np.zeros((4, 4), dtype=np.float32)}}
         with open(os.path.join(model_dir, "embeddings.pkl"), "wb") as f:
             pickle.dump(embeddings, f)
 

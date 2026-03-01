@@ -48,8 +48,8 @@ def test_pipeline_output_get_embedding_component_uses_particle_halfsets(tmp_path
     utils.pickle_dump(params, str(model_dir / "params.pkl"))
     utils.pickle_dump(
         {
-            "zs": {2: np.array([[0, 10], [1, 11], [2, 12], [3, 13]], dtype=np.float32)},
-            "cov_zs": {2: np.zeros((4, 2, 2), dtype=np.float32)},
+            "latent_coords": {2: np.array([[0, 10], [1, 11], [2, 12], [3, 13]], dtype=np.float32)},
+            "latent_precision": {2: np.zeros((4, 2, 2), dtype=np.float32)},
             "contrasts": {2: np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)},
         },
         str(model_dir / "embeddings.pkl"),
@@ -62,7 +62,7 @@ def test_pipeline_output_get_embedding_component_uses_particle_halfsets(tmp_path
     )
 
     po = output.PipelineOutput(str(result_path))
-    zs_sel = po.get_embedding_component("zs", 2)
+    zs_sel = po.get_embedding_component("latent_coords", 2)
     contrasts_sel = po.get_embedding_component("contrasts", 2)
     np.testing.assert_array_equal(zs_sel, np.array([[2, 12], [0, 10], [3, 13], [1, 11]], dtype=np.float32))
     np.testing.assert_array_equal(contrasts_sel, np.array([2.0, 0.0, 3.0, 1.0], dtype=np.float32))
@@ -80,8 +80,8 @@ def test_pipeline_output_get_embedding_component_uses_image_halfsets_for_unshare
     utils.pickle_dump(params, str(model_dir / "params.pkl"))
     utils.pickle_dump(
         {
-            "zs": {2: np.array([[0, 10], [1, 11], [2, 12], [3, 13]], dtype=np.float32)},
-            "cov_zs": {2: np.zeros((4, 2, 2), dtype=np.float32)},
+            "latent_coords": {2: np.array([[0, 10], [1, 11], [2, 12], [3, 13]], dtype=np.float32)},
+            "latent_precision": {2: np.zeros((4, 2, 2), dtype=np.float32)},
             "contrasts": {2: np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)},
         },
         str(model_dir / "embeddings.pkl"),
@@ -108,8 +108,8 @@ def test_pipeline_output_get_embedding_component_missing_shared_flag_defaults_to
     utils.pickle_dump(params, str(model_dir / "params.pkl"))
     utils.pickle_dump(
         {
-            "zs": {2: np.zeros((4, 2), dtype=np.float32)},
-            "cov_zs": {2: np.zeros((4, 2, 2), dtype=np.float32)},
+            "latent_coords": {2: np.zeros((4, 2), dtype=np.float32)},
+            "latent_precision": {2: np.zeros((4, 2, 2), dtype=np.float32)},
             "contrasts": {2: np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)},
         },
         str(model_dir / "embeddings.pkl"),
@@ -137,8 +137,8 @@ def test_pipeline_output_get_embedding_component_dict_input_args_unshared_tilt_u
     utils.pickle_dump(params, str(model_dir / "params.pkl"))
     utils.pickle_dump(
         {
-            "zs": {2: np.zeros((4, 2), dtype=np.float32)},
-            "cov_zs": {2: np.zeros((4, 2, 2), dtype=np.float32)},
+            "latent_coords": {2: np.zeros((4, 2), dtype=np.float32)},
+            "latent_precision": {2: np.zeros((4, 2, 2), dtype=np.float32)},
             "contrasts": {2: np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)},
         },
         str(model_dir / "embeddings.pkl"),
