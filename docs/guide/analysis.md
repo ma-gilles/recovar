@@ -126,3 +126,7 @@ Load the trajectory volumes as a series in ChimeraX to create conformational mov
 ```
 open vol0000.mrc vol0001.mrc vol0002.mrc ... as_series
 ```
+
+## Example output
+
+See the [Tutorial](tutorial.md) for a complete worked example with all output plots from `recovar analyze` on EMPIAR-10076.

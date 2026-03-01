@@ -80,6 +80,7 @@ nav:
     - Docker & Containers: getting-started/docker.md
     - Test Your Installation: getting-started/testing.md
   - Guide:
+    - Tutorial: guide/tutorial.md
     - Input Data: guide/input-data.md
     - Masks: guide/masks.md
     - Downsampling: guide/downsampling.md
