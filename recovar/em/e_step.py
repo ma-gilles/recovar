@@ -43,7 +43,6 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     gpu_memory = utils.get_gpu_memory_total()
     # *5: slicing is cheap per image, use larger batches for projection precomputation
     batch_size = utils.safe_batch_size(utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) * 5)
-    n_batches = utils.get_number_of_index_batch(n_rotations, batch_size)
 
     projections = np.zeros((rotations.shape[0], image_size), dtype = np.complex64)
     for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
@@ -118,7 +117,6 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
 
     # //10: probability computation is memory-intensive (softmax over rotations)
     prob_batch_size = utils.safe_batch_size(batch_size // 10)
-    n_batches = utils.get_number_of_index_batch(n_images, prob_batch_size)
     for array_indices, _ in utils.subset_and_indices_batch_iter(image_indices, prob_batch_size):
         residuals[array_indices] = compute_probability_from_residual_normal_squared_one_image(residuals[array_indices])
 

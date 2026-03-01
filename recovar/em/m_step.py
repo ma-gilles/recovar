@@ -24,7 +24,8 @@ def sum_up_translate_one_image(image, probabilities, translations, image_shape, 
     else:  
         
         translated_images = core.batch_trans_translate_images(image[None], translations[None], image_shape)
-        summed_up_images = jnp.sum(translated_images * probabilities[...,None], axis = 2)
+        # Sum over the translation axis (axis=1), not the pixel axis (axis=2)
+        summed_up_images = jnp.sum(translated_images * probabilities[...,None], axis = 1)
 
     return summed_up_images
 
