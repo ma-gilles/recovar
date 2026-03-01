@@ -72,6 +72,20 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
     po = o.PipelineOutput(recovar_result_dir)
 
+    # Auto-remap stored paths when filesystem has been migrated
+    _params = getattr(po, "params", None)
+    _input_args = _params.get('input_args') if hasattr(_params, "get") else None
+    if _input_args is not None:
+        from recovar.commands.compute_state import _auto_remap_paths
+        if args is not None:
+            if getattr(args, "particles", None) is not None:
+                _input_args.particles = args.particles
+            if getattr(args, "datadir", None) is not None:
+                _input_args.datadir = args.datadir
+            if getattr(args, "strip_prefix", None) is not None:
+                _input_args.strip_prefix = args.strip_prefix
+        _auto_remap_paths(_input_args, recovar_result_dir)
+
     # Copy data to temp folder if requested
     path_mapping = None
     if args is not None and hasattr(args, 'copy_to_folder') and args.copy_to_folder is not None:

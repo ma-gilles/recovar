@@ -11,6 +11,46 @@ from recovar.utils import parser_args
 from recovar.utils import cleanup_temp_files, copy_data_from_pipeline_output
 
 
+def _auto_remap_paths(input_args, actual_result_dir: str):
+    """Remap stored absolute paths when the data has moved.
+
+    Detects if ``input_args.outdir`` differs from *actual_result_dir* and
+    derives an old→new prefix mapping.  Then rewrites all file-path
+    attributes (particles, ctf, poses, etc.) using that mapping.
+    """
+    stored_outdir = getattr(input_args, "outdir", None)
+    if stored_outdir is None:
+        return
+    stored_outdir = os.path.realpath(stored_outdir)
+    actual = os.path.realpath(actual_result_dir)
+    if stored_outdir == actual:
+        return
+    # Walk from the end to find the common suffix
+    sp = stored_outdir.split(os.sep)
+    ap = actual.split(os.sep)
+    common = 0
+    for i in range(1, min(len(sp), len(ap)) + 1):
+        if sp[-i] == ap[-i]:
+            common = i
+        else:
+            break
+    if common == 0:
+        return
+    old_prefix = os.sep.join(sp[:-common])
+    new_prefix = os.sep.join(ap[:-common])
+    if not old_prefix or not new_prefix or old_prefix == new_prefix:
+        return
+    logger.info("Auto-remapping data paths: %s -> %s", old_prefix, new_prefix)
+    for attr in ("particles", "ctf", "poses", "ind", "halfsets",
+                 "focus_mask", "tilt_series_ctf"):
+        val = getattr(input_args, attr, None)
+        if isinstance(val, str) and val.startswith(old_prefix):
+            new_val = new_prefix + val[len(old_prefix):]
+            if os.path.exists(new_val):
+                setattr(input_args, attr, new_val)
+                logger.info("  %s: %s -> %s", attr, val, new_val)
+
+
 def add_args(parser: argparse.ArgumentParser):
     parser = parser_args.standard_downstream_args(parser)
 
@@ -57,6 +97,8 @@ def compute_state(args):
             input_args.datadir = datadir_override
         if strip_prefix_override is not None:
             input_args.strip_prefix = strip_prefix_override
+        # Auto-remap stored paths when they no longer exist (filesystem migration)
+        _auto_remap_paths(input_args, result_dir)
     elif particles_override is not None or datadir_override is not None or strip_prefix_override is not None:
         logger.warning("Pipeline output is missing input_args; ignoring particles/datadir/strip-prefix overrides.")
 
