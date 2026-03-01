@@ -91,6 +91,42 @@ def test_forward_model_and_adjoint_contracts():
     assert np.asarray(pulled).shape == (config.volume_size,)
 
 
+def test_adjoint_forward_model_trilinear_shape():
+    """adjoint_forward_model_trilinear should produce correct output shape."""
+    config = _make_config(disc_type="linear_interp")
+    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
+    ctf_params = np.zeros((1, 9), dtype=np.float32)
+    slices = np.ones((1, config.image_size), dtype=np.float32)
+    out = np.asarray(
+        core_forward.adjoint_forward_model_trilinear(
+            config, slices, ctf_params, rotation_matrices, skip_ctf=True
+        )
+    )
+    assert out.shape == (config.volume_size,)
+    assert np.all(np.isfinite(out))
+
+
+def test_adjoint_forward_model_trilinear_applies_ctf():
+    """adjoint_forward_model_trilinear should scale by CTF when not skipped."""
+    config_2x = _make_config(disc_type="linear_interp", ctf_fun=_twos_ctf)
+    config_1x = _make_config(disc_type="linear_interp", ctf_fun=_ones_ctf)
+    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
+    ctf_params = np.zeros((1, 9), dtype=np.float32)
+    slices = np.ones((1, config_2x.image_size), dtype=np.float32)
+
+    out_1x = np.asarray(
+        core_forward.adjoint_forward_model_trilinear(
+            config_1x, slices, ctf_params, rotation_matrices, skip_ctf=False
+        )
+    )
+    out_2x = np.asarray(
+        core_forward.adjoint_forward_model_trilinear(
+            config_2x, slices, ctf_params, rotation_matrices, skip_ctf=False
+        )
+    )
+    np.testing.assert_allclose(out_2x, 2.0 * out_1x)
+
+
 def test_compute_AtAv_returns_singleton_tuple():
     config = _make_config()
     volume = np.ones(config.volume_size, dtype=np.float32)

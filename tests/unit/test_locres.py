@@ -188,6 +188,59 @@ def test_make_sampling_volume_shape():
     assert vol.shape == (8, 8, 8)
 
 
+def test_masked_noisy_error_split_over_shells_v1_runs():
+    """masked_noisy_error_split_over_shells should return finite per-shell norms."""
+    import jax.numpy as jnp
+    rng = np.random.default_rng(42)
+    size = 12
+    diff = jnp.array(rng.normal(size=(size, size, size)).astype(np.float32))
+    # noise_variance_small matches the subsampled volume size
+    maskrad_pix = 2
+    multiplier = 3
+    sub_size = 2 * multiplier * maskrad_pix
+    noise_var = jnp.ones((sub_size, sub_size, sub_size), dtype=jnp.float32)
+    offset = jnp.array([0, 0, 0], dtype=jnp.int32)
+    result = np.asarray(locres.masked_noisy_error_split_over_shells(
+        diff, noise_var, offset, maskrad_pix, 2, multiplier))
+    assert result.ndim == 1
+    assert np.all(np.isfinite(result))
+    assert np.all(result >= 0)
+
+
+def test_masked_noisy_error_split_over_shells_v2_runs():
+    """masked_noisy_error_split_over_shells_v2 should return finite per-shell norms.
+
+    This also verifies the fix for the previously undefined `diff_masked` variable.
+    """
+    import jax.numpy as jnp
+    rng = np.random.default_rng(42)
+    size = 12
+    diff = jnp.array(rng.normal(size=(size, size, size)).astype(np.float32))
+    maskrad_pix = 2
+    multiplier = 3
+    sub_size = 2 * multiplier * maskrad_pix
+    noise_var = jnp.ones((sub_size, sub_size, sub_size), dtype=jnp.float32)
+    offset = jnp.array([0, 0, 0], dtype=jnp.int32)
+    result = np.asarray(locres.masked_noisy_error_split_over_shells_v2(
+        diff, noise_var, offset, maskrad_pix, 2, multiplier))
+    assert result.ndim == 1
+    assert np.all(np.isfinite(result))
+    assert np.all(result >= 0)
+
+
+def test_masked_noisy_error_basic():
+    """masked_noisy_error should return a positive finite scalar."""
+    import jax.numpy as jnp
+    rng = np.random.default_rng(42)
+    size = 8
+    diff = jnp.array(rng.normal(size=(size, size, size)).astype(np.float32))
+    noise_var = jnp.ones((size, size, size), dtype=jnp.float32)
+    offset = jnp.array([0, 0, 0], dtype=jnp.int32)
+    result = float(np.asarray(locres.masked_noisy_error(diff, noise_var, offset, 2, 2)))
+    assert np.isfinite(result)
+    assert result >= 0
+
+
 # ---------------------------------------------------------------------------
 # GPU tests – verify CPU/GPU numerical equivalence
 # ---------------------------------------------------------------------------

@@ -1179,7 +1179,7 @@ def estimate_local_pol_covariances_inner(XWX, estimate_0, estimate_1, prior_inve
     prior_inverse_covariance = get_prior_from_options(prior_inverse_covariance, prior_option, frequency_vec_indices, volume_shape )
     XWX = undo_keep_upper_triangular(XWX)
     U = (XWX + prior_inverse_covariance)
-    krons = batch_kron(K,K)
+    krons = batch_kron(U,U)
     summed_krons = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_shape[0]//2-1, krons.reshape(krons.shape[0], -1), radiuses, None).reshape([-1, krons.shape[-1], krons.shape[-1] ])
 
     estimate_covariance = linalg.broadcast_outer(estimate_0 , estimate_1 )

@@ -869,6 +869,75 @@ def test_adjoint_slice_volume_by_map_cubic_adjointness():
     assert np.any(np.abs(ATw) > 1e-8), "Adjoint returned all-zero values"
 
 
+def test_batch_slice_volume_by_nearest_matches_loop():
+    """batch_slice_volume_by_nearest (vmapped) should match sequential calls."""
+    rng = np.random.default_rng(55)
+    volume_size = 16
+    volume = rng.standard_normal(volume_size).astype(np.float32)
+    n_images = 3
+    n_pixels = 4
+    idx = rng.integers(0, volume_size, size=(n_images, n_pixels)).astype(np.int32)
+    batch_out = np.asarray(core_slicing.batch_slice_volume_by_nearest(volume, idx))
+    for i in range(n_images):
+        single_out = np.asarray(core_slicing.slice_volume_by_nearest(volume, idx[i]))
+        np.testing.assert_array_equal(batch_out[i], single_out)
+
+
+def test_nosummed_adjoint_slice_by_nearest_preserves_individual_images():
+    """nosummed_adjoint_slice_by_nearest should backproject each image independently."""
+    volume_size = 8
+    n_images = 2
+    n_pixels = 3
+    image_vecs = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
+    idx = np.array([[0, 1, 2], [3, 4, 5]], dtype=np.int32)
+    out = np.asarray(core_slicing.nosummed_adjoint_slice_by_nearest(volume_size, image_vecs, idx))
+    assert out.shape == (n_images, volume_size)
+    # Each row should only have contributions from its corresponding image
+    np.testing.assert_array_equal(out[0, :3], [1, 2, 3])
+    np.testing.assert_array_equal(out[0, 3:], [0, 0, 0, 0, 0])
+    np.testing.assert_array_equal(out[1, :3], [0, 0, 0])
+    np.testing.assert_array_equal(out[1, 3:6], [4, 5, 6])
+
+
+def test_batch_over_vol_summed_adjoint_slice_by_nearest_sums_by_column():
+    """batch_over_vol_summed_adjoint should accumulate across images for each volume column."""
+    volume_size = 4
+    n_images = 2
+    n_pixels = 2
+    n_volumes = 3
+    # image_vecs shape: (n_images, n_pixels, n_volumes) for vmapping over last dim
+    image_vecs = np.ones((n_images, n_pixels, n_volumes), dtype=np.float32)
+    idx = np.array([[0, 1], [0, 1]], dtype=np.int32)
+    out = np.asarray(core_slicing.batch_over_vol_summed_adjoint_slice_by_nearest(
+        volume_size, image_vecs, idx, None
+    ))
+    assert out.shape == (volume_size, n_volumes)
+    # Each volume column should have 2 images contributing to indices 0 and 1
+    np.testing.assert_array_equal(out[0, :], [2, 2, 2])
+    np.testing.assert_array_equal(out[1, :], [2, 2, 2])
+
+
+def test_slice_volume_by_map_from_half_volume_matches_full():
+    """slice_volume_by_map_from_half_volume should match projecting from the full volume."""
+    import jax.numpy as jnp
+    rng = np.random.default_rng(88)
+    volume_shape = (8, 8, 8)
+    image_shape = (4, 8)
+    # Create a real-space volume, then FFT to get a proper Hermitian Fourier volume
+    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
+    volume_ft = np.asarray(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
+    half_volume = np.asarray(fourier_transform_utils.full_volume_to_half_volume(volume_ft, volume_shape))
+    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
+
+    out_full = np.asarray(core_slicing.slice_volume_by_map(
+        volume_ft, rotation_matrices, image_shape, volume_shape, "nearest"
+    ))
+    out_half = np.asarray(core_slicing.slice_volume_by_map_from_half_volume(
+        half_volume, rotation_matrices, image_shape, volume_shape, "nearest"
+    ))
+    np.testing.assert_allclose(out_half, out_full, atol=1e-4, rtol=1e-4)
+
+
 def test_adjoint_slice_volume_by_half_images_rejects_invalid_shapes():
     image_shape = (4, 8)
     volume_shape = (8, 8, 8)
