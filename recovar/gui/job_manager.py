@@ -404,7 +404,6 @@ class JobManager:
 #SBATCH --account={slurm_account}{extra_sbatch}
 
 set -euo pipefail
-export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
 echo "Node: $(hostname)"
@@ -430,7 +429,7 @@ echo "Completed at: $(date)"
                     proc = subprocess.Popen(
                         [python_path, "-m"] + command.split(),
                         stdout=lf, stderr=subprocess.STDOUT,
-                        env={**os.environ, "PYTHONNOUSERSITE": "1",
+                        env={**os.environ,
                              "XLA_PYTHON_CLIENT_PREALLOCATE": "false"},
                     )
                 job.pid = proc.pid
@@ -1019,7 +1018,7 @@ echo "Completed at: $(date)"
             label=params.get("label", task_type),
         )
 
-        env = {**os.environ, "PYTHONNOUSERSITE": "1",
+        env = {**os.environ,
                "XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
 
         if use_slurm and _has_slurm():
@@ -1040,7 +1039,6 @@ echo "Completed at: $(date)"
 #SBATCH --account={opts.get('account', 'amits')}
 
 set -euo pipefail
-export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
 {' '.join(cmd)}
@@ -1078,7 +1076,21 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
             if task.slurm_job_id:
                 new_status = _slurm_job_status(task.slurm_job_id)
                 if new_status:
+                    old = task.status
                     task.status = new_status
+                    if new_status == STATUS_FAILED and old != STATUS_FAILED:
+                        # Extract error from compute log
+                        log_path = os.path.join(task.output_dir, "compute.log")
+                        if os.path.isfile(log_path):
+                            try:
+                                with open(log_path) as lf:
+                                    lines = lf.read().strip().splitlines()
+                                # Last non-empty line is usually the error
+                                task.error = lines[-1][:200] if lines else "Unknown error"
+                            except Exception:
+                                task.error = "Job failed (could not read log)"
+                        else:
+                            task.error = "Job failed"
             elif task.pid:
                 try:
                     os.kill(task.pid, 0)
