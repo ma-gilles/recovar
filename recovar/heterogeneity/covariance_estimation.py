@@ -156,17 +156,17 @@ def get_default_covariance_computation_options(grid_size=None):
         "left_kernel": "triangular",
         "right_kernel": "triangular",
         "left_kernel_width": 1,
-        "right_kernel_width": 2, # Probably should try 1 -2 - 3 ? 
-        "shift_fsc": False, # Probably should be kept like this
-        "substract_shell_mean": False, # Probably should be kept like this
-        "grid_correct": True, # worth trying on/off
+        "right_kernel_width": 2,
+        "shift_fsc": False,
+        "substract_shell_mean": False,
+        "grid_correct": True,
         "use_spherical_mask": True,
         "use_mask_in_fsc": True,
         "column_sampling_scheme": 'high_snr_from_var_est',
         "column_radius": 5,
-        "use_combined_mean": True, # doesn't seem to change anything? worth a try
-        "sampling_avoid_in_radius": 2, # Tuned
-        "sampling_n_cols": 300, # A weird number for purely historical reasons. Change?
+        "use_combined_mean": True,
+        "sampling_avoid_in_radius": 2,
+        "sampling_n_cols": 300,
         "n_pcs_to_compute" : n_pcs,
         "randomized_sketch_size" : 300,
         "prior_n_iterations" : 20,
@@ -352,7 +352,6 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask
 
     volume_shape = cryos.volume_shape
 
-    # These options should probably be left as is.
     mask_ls = dilated_volume_mask
     mask_final = volume_mask
     keep_intermediate = False
@@ -589,14 +588,11 @@ def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies, gpu_
         mean = means["combined"] if options["use_combined_mean"] else means["corrected" + str(cryo_idx)]
         H, B = compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gpu_memory, parallel_analysis, options = options, use_multi_gpu = use_multi_gpu, n_gpus = n_gpus, mean_cubic=mean_cubic)
         logger.info("Time to cov %s", time.time() - st_time)
-        # check_memory()
         Hs.append(H)
         Bs.append(B)
     return Hs, Bs
 
 
-# AT SOME POINT, I CONVINCED MYSELF THAT IT WAS BETTER FOR MEMORY TRANSFER REASONS TO DO THIS IN BATCHES OVER VOLS, THEN OVER IMAGES. I am not sure anymore.
-# Covariance_cols
 @nvtx.annotate("compute_H_B_in_volume_batch", color="blue")
 def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gpu_memory, parallel_analysis = False, options = None, use_multi_gpu = False, n_gpus = None, mean_cubic=None):
 
@@ -753,7 +749,6 @@ def compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, co
     def init_regularization_of_column_k(k):
         return regularization_init[None] * regularization_init[picked_frequencies[np.array(k)], None] 
 
-    # This should probably be rewritten.
     for cryo_idx in range(len(Hs)):
         Hs[cryo_idx] = Hs[cryo_idx].T
         Bs[cryo_idx] = Bs[cryo_idx].T
