@@ -229,12 +229,10 @@ def adjust_regularization_relion_style(filter, volume_shape, tau = None, padding
 
 
         # This is funky business
-        # print("WARNING CHECK THIS IS CORRECT OVERSAMPLING SOMEHOW?")
         # tau2 = regularization.average_over_shells(tau, og_volume_shape)
         # tau3 = regularization.average_over_shells(tau_new, volume_shape)
         # filter_avg = regularization.average_over_shells(filter, volume_shape)
         # tau_avg = regularization.average_over_shells(inv_tau, volume_shape)
-        # print(filter_avg/tau_avg)
         # assert False, ""
 
         regularized_filter = filter + inv_tau
@@ -319,7 +317,6 @@ def post_process_from_filter_v2(Ft_ctf, F_ty, og_volume_shape, volume_upsampling
 
         grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
         myreliontest, sinc = grid_fn(myreliontest.reshape(og_volume_shape), og_volume_shape[0], volume_upsampling_factor/kernel_width, order = order)
-        # print(cryo.volume_upsampling_factor/kernel_width)
 
         # import matplotlib.pyplot as plt
         # plt.figure()

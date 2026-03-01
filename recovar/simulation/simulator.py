@@ -398,12 +398,8 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
     dataset_param_generator = get_pose_ctf_generator(dataset_params_option)
     noise_variance = get_noise_model(noise_model, grid_size) / 50000 * noise_level
 
-    mrc_file = None# mrcfile.new_mmap( output_folder + '/particles.'+str(grid_size)+'.mrcs', shape=(n_images, grid_size, grid_size), mrc_mode=2, overwrite = True)
+    mrc_file = None
 
-    # print( 'CHANGE THIS BACK')
-    # print( 'CHANGE THIS BACK')
-    # print( 'CHANGE THIS BACK')
-    # print( 'CHANGE THIS BACK')
     rescale_noise = True
     if rescale_noise:
         # Dont use premultiplied_ctf for
@@ -411,7 +407,6 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
         norm_image_square = np.mean(main_image_stack**2)
         norm_image = (norm_image_square)
 
-        # print(norm_image)
         noise_variance = noise_variance / (norm_image)
         volumes = volumes / np.sqrt(norm_image)
         scale_vol =  scale_vol / np.sqrt(norm_image)
@@ -611,7 +606,6 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         trans_2/= np.linalg.norm(trans_2, axis =-1,keepdims=True)
         # Move the center by around twice the radius
         trans_2 *= 2 * volume_radius * volume_shape[0] / 2
-        # print(np.mean(np.linalg.norm(trans_2, axis =-1)))
         other_particles_dataset = dataset.CryoEMDataset( None, voxel_size,
                                 rots_2, trans_2, ctf_params, CTF_fun = CTF_fun, dataset_indices = None, grid_size = grid_size)
         # No noise in this stack.
@@ -678,7 +672,6 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         #     image_assignments[ind_tilt_outliers] = -2
         #     tilt_series_assignment[ind_tilt_outliers] = -1
         # else:
-        #     print(f"Warning: Not enough non-outlier images ({len(non_outlier_indices)}) for {n_tilt_outliers} tilt outliers")
 
     if n_tilts > 0:
         # Note that b_facs are stored here just so that the get saved in the starfile in WARP style...
@@ -835,7 +828,6 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 from recovar.core import padding
                 # IF this is on, we did not apply CTF above.
                 upsample_factor=2
-                # print("DEBUGGING HERE !!!")
                 upsampled_shape = tuple(np.array(experiment_dataset.image_shape) * upsample_factor)
                 upsampled_CTF = experiment_dataset.CTF_fun(experiment_dataset.CTF_params[indices],  upsampled_shape, experiment_dataset.voxel_size)
                 # upsampled_CTF2 = experiment_dataset.CTF_fun(experiment_dataset.CTF_params[indices],  experiment_dataset.image_shape, experiment_dataset.voxel_size)
@@ -936,10 +928,6 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 def make_noise_batch(subkey, noise_image, images_batch_shape):
     image_size = images_batch_shape[-1] * images_batch_shape[-2]
     noise_batch = jax.random.normal(subkey, images_batch_shape ) / jnp.sqrt(image_size)
-    
-    # import recovar.core.fourier_transform_utils
-    # if recovar.fourier_transform_utils.DEFAULT_FFT_NORM == "backward":
-    #     noise_batch = noise_batch /  jnp.sqrt(image_size)
 
     noise_batch_ft = fourier_transform_utils.get_dft2(noise_batch.reshape(images_batch_shape))
     noise_batch_ft *= jnp.sqrt(noise_image)
@@ -1020,7 +1008,6 @@ def compute_projections_with_nufft(atom_group, plane_coords, voxel_size):
 
     plane_coords_vec = np.array(plane_coords.reshape(-1, 3)).astype(np.float64)
     X_ims = np.array(gsm.generate_potential_at_freqs_from_atoms(atom_group, voxel_size, plane_coords_vec).astype(np.complex64))
-    # print(np.max(np.abs(atom_group.getCoords())))
     if np.isnan(np.sum(X_ims)):
         raise ValueError("NaN in generated scattering potential slices")
     X_ims = X_ims.reshape(plane_coords.shape[:-1])

@@ -39,7 +39,6 @@ def backproject_one_image(probabilities, images_i, rotation_matrices, translatio
     # images3 = sum_up_translations(images, probabilities, translations, image_shape, translation_fn)
     
     # images2 = sum_up_translations(images, probabilities, translations, image_shape, 'nofft')
-    # print(jnp.linalg.norm(images3 - images2)/jnp.linalg.norm(images))
     # # print(jnp.linalg.norm(images3 - images2, axis = (0,1,2) )/jnp.linalg.norm(images, axis = (0,1,2) ))
     # kk=0
     # plt.imshow(fourier_transform_utils.get_idft2((images2-images3)[0,0,kk].reshape(image_shape)).real); plt.colorbar(); plt.title(f'diff k {kk}'); plt.show()

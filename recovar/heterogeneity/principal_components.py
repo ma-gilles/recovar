@@ -623,7 +623,6 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
     images_chosen_index = likelihoods_sorted[index]
 
 
-    # print(most_likelihood_idx)
 
 
     for zdim_idx, zdim in enumerate(zdims):

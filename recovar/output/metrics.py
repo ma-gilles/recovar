@@ -7,8 +7,6 @@ from recovar.core import linalg, mask
 from recovar.heterogeneity import locres
 
 logger = logging.getLogger(__name__)
-import matplotlib.pyplot as plt
-import recovar
 import os.path
 
 def qr_on_cpu(Q):
@@ -19,8 +17,6 @@ def qr_on_cpu(Q):
     return Q, R
 
 def captured_variance(test_v, U, s):
-    # test_v, _ = qr_on_cpu(test_v)
-    
     x = (jnp.conj(test_v.T) @ U) * np.sqrt(s)
     norms = np.linalg.norm(x, axis=-1)**2
     return np.cumsum(norms)
@@ -84,26 +80,6 @@ def get_variance_error():
 def get_covariance_fsc_score():
     # Maybe summed auc across columns
     return
-
-
-# def local_fsc_metric(map1, map2, voxel_size, mask, fsc_threshold=1/7, locres_sampling = 25 ):
-    
-    
-#     fscs, local_resols, i_loc_res, i_loc_auc = locres.local_resolution(map1, map2, 0, voxel_size, locres_sampling = locres_sampling, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = False, use_v2 = True, fsc_threshold = fsc_threshold)
-#     mask = mask > 1e-3
-    
-#     good_resols = i_loc_res[mask]
-#     good_aucs = i_loc_auc[mask]
-    
-    
-#     median_locres = np.median(good_resols)
-#     ninety_pc_locres = np.percentile(good_aucs, 90)
-
-#     median_auc = np.median(good_resols)
-#     ninety_pc_auc = np.percentile(good_aucs, 90)
-
-#     return median_locres, ninety_pc_locres, ninety_pc_auc
-
 
 
 def local_fsc_metric(map1, map2, voxel_size, mask, fsc_threshold=1/7, locres_sampling = 25 ):
@@ -208,7 +184,7 @@ def evaluate_this_choice(target_real, output_folder, voxel_size, mask = None, pa
     k = 0 
     errors_gt= {}
     while os.path.isfile(file(k)):
-        map2 = recovar.utils.load_mrc(file(k))
+        map2 = utils.load_mrc(file(k))
         errors_gt[k] = locres.local_error(target_real, map2, voxel_size, locres_sampling = 15)
         k = k + 1
 
@@ -221,26 +197,26 @@ def evaluate_this_choice(target_real, output_folder, voxel_size, mask = None, pa
             error_metrics["choice_partial_l2_error"] = None
             error_metrics["choice_partial_l2_bias"] = None
     else:
-        choice1 = recovar.utils.load_mrc(output_folder + "ml_optimized_choice.mrc")
+        choice1 = utils.load_mrc(output_folder + "ml_optimized_choice.mrc")
         error_metrics = {"gt_choice": gt_choice}
         error_metrics["choice_l2_error"], error_metrics["choice_l2_bias"]  = metrics.masked_l2_difference(gt_choice, choice1, voxel_size, mask= mask)
         if partial_mask is not None:
             error_metrics["choice_partial_l2_error"], error_metrics["choice_partial_l2_bias"]  = metrics.masked_l2_difference(gt_choice, choice1, voxel_size, mask= partial_mask)
 
-    unfiltered_map = recovar.utils.load_mrc(output_folder + "ml_optimized_unfiltered.mrc")
+    unfiltered_map = utils.load_mrc(output_folder + "ml_optimized_unfiltered.mrc")
     gt_unfilt_metrics = metrics.compute_volume_error_metrics_from_gt(target_real, unfiltered_map, voxel_size, mask= mask, partial_mask = partial_mask )
     add_dict_with_prefix(error_metrics, gt_unfilt_metrics, "gt_unfilt_")
 
-    filtered_map = recovar.utils.load_mrc(output_folder + "ml_optimized_filtered.mrc")
+    filtered_map = utils.load_mrc(output_folder + "ml_optimized_filtered.mrc")
     gt_filt_metrics = metrics.compute_volume_error_metrics_from_gt(target_real, filtered_map, voxel_size, mask= mask, partial_mask = partial_mask )
     add_dict_with_prefix(error_metrics, gt_filt_metrics, "gt_filt_")
 
-    filtered_map = recovar.utils.load_mrc(output_folder + "ml_optimized_filtered_before.mrc")
+    filtered_map = utils.load_mrc(output_folder + "ml_optimized_filtered_before.mrc")
     gt_filt_metrics = metrics.compute_volume_error_metrics_from_gt(target_real, filtered_map, voxel_size, mask= mask, partial_mask = partial_mask )
     add_dict_with_prefix(error_metrics, gt_filt_metrics, "gt_filt_before")
 
-    halfmap1 = recovar.utils.load_mrc(output_folder + "ml_optimized_half1_unfil.mrc")
-    halfmap2 = recovar.utils.load_mrc(output_folder + "ml_optimized_half2_unfil.mrc")
+    halfmap1 = utils.load_mrc(output_folder + "ml_optimized_half1_unfil.mrc")
+    halfmap2 = utils.load_mrc(output_folder + "ml_optimized_half2_unfil.mrc")
     halfmap_metrics = metrics.compute_volume_error_metrics_from_halfmaps(halfmap1, halfmap2, voxel_size, mask= mask, partial_mask = partial_mask )
     add_dict_with_prefix(error_metrics, halfmap_metrics, "halfmap_")
     

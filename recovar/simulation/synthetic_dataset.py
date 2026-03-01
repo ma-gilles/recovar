@@ -7,7 +7,6 @@ from recovar import core, utils, jax_config
 from recovar.simulation import simulator
 from recovar.core import linalg, mask
 
-# Maybe should take out these dependencies?
 
 def load_heterogeneous_reconstruction(simulation_info_file, volumes_path_root = None, load_volumes = True):
     if isinstance(simulation_info_file, dict):
@@ -18,7 +17,6 @@ def load_heterogeneous_reconstruction(simulation_info_file, volumes_path_root = 
     volumes_path_root = simulation_info['volumes_path_root'] if volumes_path_root is None else volumes_path_root
 
     if load_volumes:
-        # Probably should delete this at some point
         if 'scale_vol' in simulation_info:
             volumes = simulator.load_volumes_from_folder(volumes_path_root, simulation_info['grid_size'] , simulation_info['trailing_zero_format_in_vol_name'], normalize=False )
             volumes = volumes * simulation_info['scale_vol']
@@ -39,10 +37,7 @@ class HeterogeneousVolumeDistribution():
         self.volume_shape = utils.guess_vol_shape_from_vol_size(volumes.shape[-1])
         self.vol_batch_size = utils.get_vol_batch_size(self.volume_shape[0], utils.get_gpu_memory_total()) if vol_batch_size is None else vol_batch_size
         self.volumes = volumes
-        # self.volumes = linalg.batch_dft3(volumes, self.volume_shape, self.vol_batch_size)
         valid_indices = mask.get_radial_mask(self.volume_shape, radius = None) if valid_indices is None else valid_indices
-        # print('CHANGE THIS BACK')
-        # valid_indices = mask.get_radial_mask(self.volume_shape, radius = self.volume_shape[0]//8) if valid_indices is None else valid_indices
         self.valid_indices = np.array(valid_indices.reshape(-1))
         if self.volumes is not None:
             self.volumes *= self.valid_indices[None,:]
@@ -146,24 +141,6 @@ class HeterogeneousVolumeDistribution():
         return np.linalg.norm(vols, axis=-1)**2
 
 
-
-
-
-# def generate_ground_truth_volumes(image_option, volume_params, grid_size, voxel_size, padding):
-#     if "from_mrc" in image_option:
-#         # gt_volumes =  generate_volumes_from_mrcs(volume_params)
-#         gt_volumes, voxel_size = generate_volumes_from_mrcs(volume_params, grid_size, padding)
-
-#     elif "from_pdb" in image_option:
-#         import simulate_scattering_potential as gsm
-#         gt_volumes = gsm.generate_volumes_from_atom_groups(volume_params, voxel_size, grid_size)
-#     return gt_volumes, voxel_size
-
-# def get_gt_reconstruction(grid_size, voxel_size, padding, exp_name, valid_indices ):
-#     datadir, vol_datadir, fake_vol_exp_name, fake_vol_datadir, indf, label_file, cov_noise_inp, uninvert_data, ctf_pose_datadir = preprocessed_datasets.get_dataset_params(exp_name, on_della=True)
-#     gt_reconstruction = ExperimentReconstruction(grid_size, voxel_size, padding, exp_name, datadir, fake_vol_datadir,
-#                                                      label_file = label_file, valid_indices = valid_indices)
-#     return gt_reconstruction
 
 def get_col_covariance_for_one_X_one_index(X, Xmean, vec_index):
     return (X - Xmean) * jnp.conj(X[vec_index] - Xmean[vec_index])

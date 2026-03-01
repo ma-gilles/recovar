@@ -104,10 +104,7 @@ class SGDState():
                 f"|update|={np.linalg.norm(self.update)}, |x|={np.linalg.norm(mean)}"
             )
 
-        logger.warning("There is a necessary 0.1 that shouldn't be there")
         self.mean = mean
-
-        # iter +=1
         return
         
     def finish_up_M_step(self, experiment_dataset, disc_type):
