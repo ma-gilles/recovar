@@ -336,6 +336,112 @@ class JobManager:
                             pass
                 self._jobs[job_id] = job
         self._save()
+        self._recover_compute_tasks()
+
+    def _recover_compute_tasks(self):
+        """Re-discover compute tasks from gui_computed/ dirs on disk.
+
+        This recovers tasks from previous GUI sessions so they appear in the
+        task list even after a restart.
+        """
+        for job in self._jobs.values():
+            computed_dir = os.path.join(job.output_dir, "gui_computed")
+            if not os.path.isdir(computed_dir):
+                continue
+            for tdir_name in os.listdir(computed_dir):
+                if tdir_name in self._compute_tasks:
+                    continue  # already tracked in memory
+                tdir = os.path.join(computed_dir, tdir_name)
+                if not os.path.isdir(tdir):
+                    continue
+                # Determine task type from the directory name prefix
+                if tdir_name.startswith("volume_"):
+                    task_type = "volume"
+                elif tdir_name.startswith("trajectory_"):
+                    task_type = "trajectory"
+                else:
+                    continue
+                # Check if it produced output
+                has_output = any(
+                    f.endswith(".mrc") and "_half" not in f and "_unfil" not in f and "_mask" not in f
+                    for f in os.listdir(tdir)
+                    if os.path.isfile(os.path.join(tdir, f))
+                )
+                # Try to load persisted task metadata
+                meta_path = os.path.join(tdir, "task_meta.json")
+                meta = {}
+                if os.path.isfile(meta_path):
+                    try:
+                        with open(meta_path) as f:
+                            meta = json.load(f)
+                    except Exception:
+                        pass
+
+                slurm_job_id = meta.get("slurm_job_id")
+                label = meta.get("label", task_type)
+
+                # Determine status
+                # If we have a SLURM job ID (from task_meta.json), check it first
+                # because the job might still be producing more output files
+                if slurm_job_id:
+                    slurm_status = _slurm_job_status(slurm_job_id)
+                    if slurm_status in (STATUS_RUNNING, STATUS_QUEUED):
+                        status = slurm_status
+                    elif has_output:
+                        status = STATUS_COMPLETED
+                    else:
+                        status = STATUS_FAILED
+                elif has_output:
+                    # Check if compute.log was modified recently (within 10 min)
+                    # which would indicate the task is still running.
+                    # GPU compute can go minutes between log writes.
+                    log_path = os.path.join(tdir, "compute.log")
+                    if os.path.isfile(log_path):
+                        try:
+                            log_age = time.time() - os.path.getmtime(log_path)
+                            if log_age < 600:
+                                status = STATUS_RUNNING
+                            else:
+                                status = STATUS_COMPLETED
+                        except OSError:
+                            status = STATUS_COMPLETED
+                    else:
+                        status = STATUS_COMPLETED
+                else:
+                    status = STATUS_FAILED
+
+                # Fall back to generating label from files if no metadata
+                if label == task_type:
+                    if task_type == "volume":
+                        lp = os.path.join(tdir, "latent_points.txt")
+                        if os.path.isfile(lp):
+                            try:
+                                import numpy as np
+                                pts = np.loadtxt(lp)
+                                coords = pts.flatten()[:3]
+                                label = f"Volume at [{', '.join(f'{c:.2f}' for c in coords)}{'...' if len(pts.flatten()) > 3 else ''}]"
+                            except Exception:
+                                pass
+                    elif task_type == "trajectory":
+                        label = "Trajectory A\u2192B"
+
+                try:
+                    created_at = meta.get("created_at") or os.path.getmtime(tdir)
+                except OSError:
+                    created_at = 0.0
+
+                task = ComputeTask(
+                    id=tdir_name,
+                    job_id=meta.get("job_id", job.id),
+                    task_type=task_type,
+                    status=status,
+                    output_dir=tdir,
+                    slurm_job_id=slurm_job_id,
+                    created_at=created_at,
+                    label=label,
+                )
+                self._compute_tasks[tdir_name] = task
+                logger.info("Recovered compute task: %s (%s)", tdir_name, status)
 
     def list_jobs(self) -> list[Job]:
         """Return all jobs sorted by creation time (newest first)."""
@@ -721,7 +827,7 @@ echo "Completed at: $(date)"
                     kmeans_dir = os.path.join(analysis_dir, kmeans_name)
                     if os.path.isdir(kmeans_dir):
                         for f in sorted(os.listdir(kmeans_dir)):
-                            if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f:
+                            if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f and "_mask" not in f:
                                 analysis["kmeans_volumes"].append({
                                     "path": os.path.join(kmeans_dir, f),
                                     "name": f,
@@ -741,7 +847,7 @@ echo "Completed at: $(date)"
                         if not os.path.isdir(traj_subdir):
                             continue
                         for f in sorted(os.listdir(traj_subdir)):
-                            if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f:
+                            if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f and "_mask" not in f:
                                 traj_vols.append({
                                     "path": os.path.join(traj_subdir, f),
                                     "name": f,
@@ -790,7 +896,7 @@ echo "Completed at: $(date)"
                 if not os.path.isdir(task_dir):
                     continue
                 for f in sorted(os.listdir(task_dir)):
-                    if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f:
+                    if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f and "_mask" not in f:
                         info["computed"].append({
                             "path": os.path.join(task_dir, f),
                             "name": f"{tdir}/{f}",
@@ -1058,6 +1164,7 @@ echo "which python: {python_path}"
             if slurm_id:
                 task.slurm_job_id = slurm_id
                 task.status = STATUS_QUEUED
+                self._save_task_meta(task)  # persist SLURM job ID
             else:
                 task.status = STATUS_FAILED
                 task.error = "Failed to submit SLURM job"
@@ -1074,13 +1181,41 @@ echo "which python: {python_path}"
                 task.error = str(e)
 
         self._compute_tasks[task_id] = task
+        # Persist task metadata so it can be recovered after GUI restart
+        self._save_task_meta(task)
         return task
+
+    def _save_task_meta(self, task: ComputeTask):
+        """Write task metadata to disk for recovery after restart."""
+        meta_path = os.path.join(task.output_dir, "task_meta.json")
+        try:
+            meta = {
+                "id": task.id, "job_id": task.job_id,
+                "task_type": task.task_type, "label": task.label,
+                "slurm_job_id": task.slurm_job_id,
+                "created_at": task.created_at,
+            }
+            with open(meta_path, "w") as f:
+                json.dump(meta, f, indent=2)
+        except Exception as e:
+            logger.warning("Failed to save task meta: %s", e)
 
     def get_compute_task(self, task_id: str) -> Optional[dict]:
         """Get status of a compute task, including output volumes if done."""
         task = self._compute_tasks.get(task_id)
         if not task:
             return None
+
+        # Re-check failed tasks: if output appeared since recovery, promote to completed
+        if task.status == STATUS_FAILED:
+            has_output = any(
+                f.endswith(".mrc") and "_half" not in f and "_unfil" not in f and "_mask" not in f
+                for f in os.listdir(task.output_dir)
+                if os.path.isfile(os.path.join(task.output_dir, f))
+            )
+            if has_output:
+                task.status = STATUS_COMPLETED
+                task.error = None
 
         # Refresh status
         if task.status in (STATUS_QUEUED, STATUS_RUNNING):
@@ -1108,7 +1243,7 @@ echo "which python: {python_path}"
                 except OSError:
                     # Process exited - check for output
                     has_output = any(
-                        f.endswith(".mrc") and "_half" not in f and "_unfil" not in f
+                        f.endswith(".mrc") and "_half" not in f and "_unfil" not in f and "_mask" not in f
                         for f in os.listdir(task.output_dir)
                         if os.path.isfile(os.path.join(task.output_dir, f))
                     )
@@ -1127,7 +1262,7 @@ echo "which python: {python_path}"
 
         if task.status == STATUS_COMPLETED:
             for f in sorted(os.listdir(task.output_dir)):
-                if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f:
+                if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f and "_mask" not in f:
                     result["volumes"].append({
                         "path": os.path.join(task.output_dir, f),
                         "name": f,
