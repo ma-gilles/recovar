@@ -199,20 +199,23 @@ def main():
     cmd_parts.extend(["--mask", mask])
 
     # ── Step 4: Downsampling ─────────────────────────────────────────────
-    _heading("Step 4: Downsampling (optional)")
-    _info("If images are large (>256px), downsampling speeds up the run.")
+    _heading("Step 4: Downsampling")
+    _info("By default, images are downsampled to 256px (skipped if already near that size).")
     _info("Fourier cropping preserves frequency content up to the new Nyquist.")
 
-    downsample = _prompt("Downsample to box size (or Enter to skip)", required=False)
+    downsample = _prompt("Downsample to box size (Enter for default 256, 'no' to disable)", required=False)
     if downsample:
-        try:
-            ds_int = int(downsample)
-            if ds_int % 2 != 0:
-                _warn("Box size must be even. Rounding down.")
-                ds_int = ds_int - 1
-            cmd_parts.extend(["--downsample", str(ds_int)])
-        except ValueError:
-            _warn(f"Invalid number '{downsample}', skipping downsampling.")
+        if downsample.lower() in ('no', 'none', 'off', 'false'):
+            cmd_parts.append("--no-downsample")
+        else:
+            try:
+                ds_int = int(downsample)
+                if ds_int % 2 != 0:
+                    _warn("Box size must be even. Rounding down.")
+                    ds_int = ds_int - 1
+                cmd_parts.extend(["--downsample", str(ds_int)])
+            except ValueError:
+                _warn(f"Invalid number '{downsample}', using default (256).")
 
     # ── Step 5: Poses & CTF (only if not .star/.cs) ──────────────────────
     if not is_star_or_cs:
