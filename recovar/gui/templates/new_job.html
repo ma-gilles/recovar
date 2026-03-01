@@ -421,6 +421,7 @@
       <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-2">Extra Arguments</h3>
       <p class="text-xs text-slate-500 mb-3">Any additional command-line flags not covered above (appended as-is to the command).</p>
       <input name="extra_args" type="text"
+             value="{{ clone_params.extra_args if clone_params and clone_params.extra_args else '' }}"
              class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3.5 py-2.5 text-sm text-white font-mono placeholder-slate-600 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none transition"
              placeholder="e.g. --some-flag value --another-flag">
     </div>

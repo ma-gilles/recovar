@@ -73,7 +73,6 @@
   <!-- Tab: Overview                                                   -->
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <div x-show="tab === 'overview'"
-       x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0 translate-y-1" x-transition:enter-end="opacity-100 translate-y-0"
        class="space-y-5">
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
       <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
@@ -199,8 +198,7 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <!-- Tab: Explore (Embedding + Volume Viewer)                        -->
   <!-- ═══════════════════════════════════════════════════════════════ -->
-  <div x-show="tab === 'explore'" x-cloak
-       x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0 translate-y-1" x-transition:enter-end="opacity-100 translate-y-0"
+  <div x-show="tab === 'explore'" style="display:none"
        class="space-y-4">
 
     <!-- No embeddings message -->
@@ -217,7 +215,7 @@
       </p>
     </div>
 
-    <div x-show="analysisInfo && analysisInfo.has_embeddings" x-cloak class="space-y-4">
+    <div x-show="analysisInfo && analysisInfo.has_embeddings" style="display:none" class="space-y-4">
         <!-- zdim selector + axis selector -->
         <div class="flex items-center justify-between flex-wrap gap-3">
           <div class="flex items-center gap-2">
@@ -504,13 +502,11 @@
         </div>
       </div>
     </div>
-  </div>
 
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <!-- Tab: Volumes (Categorized Browser)                              -->
   <!-- ═══════════════════════════════════════════════════════════════ -->
-  <div x-show="tab === 'volumes'" x-cloak
-       x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0 translate-y-1" x-transition:enter-end="opacity-100 translate-y-0"
+  <div x-show="tab === 'volumes'" style="display:none"
        class="space-y-4">
     <template x-if="!analysisInfo || (!analysisInfo.volumes.length && !Object.keys(analysisInfo.analyses).length)">
       <div class="text-center py-16 text-slate-500">
@@ -709,8 +705,7 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <!-- Tab: Images                                                     -->
   <!-- ═══════════════════════════════════════════════════════════════ -->
-  <div x-show="tab === 'images'" x-cloak
-       x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0 translate-y-1" x-transition:enter-end="opacity-100 translate-y-0">
+  <div x-show="tab === 'images'" style="display:none">
     {% set all_images = job.result_images %}
     {% if all_images %}
     <div class="space-y-4">
@@ -750,7 +745,7 @@
     {% endif %}
 
     <!-- Image lightbox -->
-    <div x-show="expandedImage" x-cloak @click="expandedImage = null" @keydown.escape.window="expandedImage = null"
+    <div x-show="expandedImage" style="display:none" @click="expandedImage = null" @keydown.escape.window="expandedImage = null"
          class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-8 cursor-pointer">
       <img :src="'/api/image?path=' + encodeURIComponent(expandedImage)" class="max-w-full max-h-full object-contain">
     </div>
@@ -759,13 +754,20 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <!-- Tab: Logs                                                       -->
   <!-- ═══════════════════════════════════════════════════════════════ -->
-  <div x-show="tab === 'logs'" x-cloak
-       x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0 translate-y-1" x-transition:enter-end="opacity-100 translate-y-0">
+  <div x-show="tab === 'logs'" style="display:none">
     <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
       <div class="flex items-center justify-between px-4 py-2.5 border-b border-slate-800">
         <span class="text-xs font-medium text-slate-400">Log Output</span>
         <div class="flex items-center gap-3">
           <span class="text-[11px] text-slate-500">{% if job.status in ('running', 'queued') %}Auto-refreshes every 3s{% endif %}</span>
+          <button @click="fetchLogs()"
+                  class="text-[11px] text-slate-500 hover:text-slate-300 transition-colors flex items-center gap-1"
+                  :class="logLoading ? 'animate-spin' : ''">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            Refresh
+          </button>
           <button onclick="navigator.clipboard.writeText(document.getElementById('log-container').innerText).then(() => showToast('Logs copied', 'success'))"
                   class="text-[11px] text-slate-500 hover:text-slate-300 transition-colors flex items-center gap-1">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -780,7 +782,7 @@
            hx-get="{{ url_for('api_job_logs', job_id=job.id) }}"
            hx-trigger="load{% if job.status in ('running', 'queued') %}, every 3s{% endif %}"
            hx-swap="innerHTML">
-        <pre class="text-xs text-slate-300 font-mono">Loading...</pre>
+        <pre class="text-xs text-slate-300 font-mono">Loading logs...</pre>
       </div>
     </div>
   </div>
@@ -788,8 +790,7 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <!-- Tab: Parameters                                                 -->
   <!-- ═══════════════════════════════════════════════════════════════ -->
-  <div x-show="tab === 'params'" x-cloak
-       x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0 translate-y-1" x-transition:enter-end="opacity-100 translate-y-0">
+  <div x-show="tab === 'params'" style="display:none">
     <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
       <div class="px-4 py-2.5 border-b border-slate-800">
         <span class="text-xs font-medium text-slate-400">Job Parameters</span>
@@ -832,9 +833,9 @@
 <!-- ════════════════════════════════════════════════════════════════ -->
 <!-- External Libraries                                              -->
 <!-- ════════════════════════════════════════════════════════════════ -->
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
-<link rel="stylesheet" type="text/css" href="https://molstar.org/viewer/molstar.css">
-<script type="text/javascript" src="https://molstar.org/viewer/molstar.js"></script>
+<script async src="{{ url_for('static', filename='vendor/plotly.min.js') }}" charset="utf-8"></script>
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='vendor/molstar.css') }}">
+<script async src="{{ url_for('static', filename='vendor/molstar.js') }}"></script>
 
 <script>
 function jobExplorer() {
@@ -882,7 +883,7 @@ function jobExplorer() {
     currentVolumePath: '',
     volumeInfo: null,
     volumeLoading: false,
-    isoLevel: 3.0,  // sigma
+    isoLevel: 1.5,  // sigma
     isoAlpha: 0.85,
     viewMode: '3d',  // '3d' or 'slices'
 
@@ -905,6 +906,11 @@ function jobExplorer() {
 
     // Volume browser
     volFilter: 'all',
+
+    // Logs
+    logContent: '<pre class="text-xs text-slate-300 font-mono">Click the Logs tab to load...</pre>',
+    logLoading: false,
+    _logInterval: null,
 
     // Image lightbox
     expandedImage: null,
@@ -963,12 +969,25 @@ function jobExplorer() {
         if (newTab === 'explore' && this.analysisInfo?.has_embeddings && !this.embeddingData && this.selectedZdim) {
           this.loadEmbedding();
         }
+        // Fetch logs when switching to logs tab
+        if (newTab === 'logs') {
+          this.fetchLogs();
+          {% if job.status in ('running', 'queued') %}
+          // Poll every 3s for active jobs
+          if (!this._logInterval) {
+            this._logInterval = setInterval(() => {
+              if (this.tab === 'logs') this.fetchLogs();
+            }, 3000);
+          }
+          {% endif %}
+        }
       });
 
       // Watch view mode changes to load 3D viewer when switching
       this.$watch('viewMode', (mode) => {
         if (mode === '3d' && this.currentVolumePath && !this.viewer) {
-          this._load3DVolume(this.currentVolumePath);
+          const isPC = this._isEigenvector(this.currentVolumePath);
+          this._load3DVolume(this.currentVolumePath, { dualIso: isPC });
         }
       });
 
@@ -989,12 +1008,23 @@ function jobExplorer() {
         }
       });
 
-      // Auto-scroll logs to bottom after htmx swap
-      document.body.addEventListener('htmx:afterSwap', (evt) => {
-        if (evt.detail.target && evt.detail.target.id === 'log-container') {
-          evt.detail.target.scrollTop = evt.detail.target.scrollHeight;
+    },
+
+    async fetchLogs() {
+      if (this.logLoading) return;
+      this.logLoading = true;
+      const el = document.getElementById('log-container');
+      try {
+        const resp = await fetch('/api/jobs/{{ job.id }}/logs');
+        const html = await resp.text();
+        if (el) {
+          el.innerHTML = html;
+          el.scrollTop = el.scrollHeight;
         }
-      });
+      } catch (e) {
+        if (el) el.innerHTML = '<pre class="text-xs text-slate-300 font-mono text-red-400">Error loading logs: ' + e.message + '</pre>';
+      }
+      this.logLoading = false;
     },
 
     // ── Embedding ─────────────────────────────────────────────────
@@ -1353,6 +1383,12 @@ function jobExplorer() {
     },
 
     // ── Volume Viewer ─────────────────────────────────────────────
+    _isEigenvector(path) {
+      // Detect if a volume is an eigenvector (PC) by its filename
+      const basename = path.split('/').pop() || '';
+      return /^eigen_pos\d+\.mrc$/i.test(basename);
+    },
+
     async loadVolume(path, name, add = false) {
       this.currentVolumeName = name;
       this.currentVolumePath = path;
@@ -1376,7 +1412,8 @@ function jobExplorer() {
 
       // Load 3D view if in 3D mode
       if (this.viewMode === '3d') {
-        await this._load3DVolume(path, { replace: !add });
+        const isPC = this._isEigenvector(path);
+        await this._load3DVolume(path, { replace: !add, dualIso: isPC });
       }
       this.volumeLoading = false;
     },
@@ -1394,6 +1431,7 @@ function jobExplorer() {
       }
 
       const replaceAll = options.replace !== false;
+      const dualIso = options.dualIso || false;
       const color = options.color || this.volumeColorPalette[this.nextVolumeColor % this.volumeColorPalette.length];
 
       // Destroy previous viewer if replacing or switching viewports
@@ -1437,40 +1475,62 @@ function jobExplorer() {
           this.viewerTarget = viewportId;
         }
 
+        // Build isosurface config — PCs get both +σ (blue) and -σ (red)
+        const isoConfigs = dualIso
+          ? [
+              { type: 'relative', value: this.isoLevel, color: 0x38bdf8, alpha: this.isoAlpha },   // + (blue)
+              { type: 'relative', value: -this.isoLevel, color: 0xf43f5e, alpha: this.isoAlpha },   // - (red)
+            ]
+          : [
+              { type: 'relative', value: this.isoLevel, color: color, alpha: this.isoAlpha },
+            ];
+
         // Load the volume — try 'mrc' format first, fall back to 'ccp4'
         try {
           await this.viewer.loadVolumeFromUrl(
             { url, format: 'mrc', isBinary: true },
-            [{
-              type: 'relative',
-              value: this.isoLevel,
-              color: color,
-              alpha: this.isoAlpha,
-            }],
+            isoConfigs,
             { entryId: this.currentVolumeName }
           );
         } catch (mrcErr) {
           console.warn('MRC format failed, trying CCP4:', mrcErr.message);
           await this.viewer.loadVolumeFromUrl(
             { url, format: 'ccp4', isBinary: true },
-            [{
-              type: 'relative',
-              value: this.isoLevel,
-              color: color,
-              alpha: this.isoAlpha,
-            }],
+            isoConfigs,
             { entryId: this.currentVolumeName }
           );
         }
 
         // Track loaded volume
-        this.loadedVolumes.push({
-          path: path,
-          name: this.currentVolumeName,
-          color: '#' + color.toString(16).padStart(6, '0'),
-          visible: true,
-        });
+        if (dualIso) {
+          this.loadedVolumes.push({
+            path: path,
+            name: this.currentVolumeName + ' (+)',
+            color: '#38bdf8',
+            visible: true,
+          });
+          this.loadedVolumes.push({
+            path: path,
+            name: this.currentVolumeName + ' (\u2212)',
+            color: '#f43f5e',
+            visible: true,
+          });
+        } else {
+          this.loadedVolumes.push({
+            path: path,
+            name: this.currentVolumeName,
+            color: '#' + color.toString(16).padStart(6, '0'),
+            visible: true,
+          });
+        }
         this.nextVolumeColor++;
+
+        // Auto-focus camera on loaded volume
+        try {
+          this.viewer.plugin.canvas3d?.requestCameraReset();
+        } catch (camErr) {
+          console.warn('Camera reset failed:', camErr);
+        }
 
         console.log('Mol* volume loaded:', this.currentVolumeName);
       } catch (e) {
@@ -1491,7 +1551,8 @@ function jobExplorer() {
       clearTimeout(this._isoDebounce);
       this._isoDebounce = setTimeout(() => {
         if (this.currentVolumePath && this.viewer) {
-          this._load3DVolume(this.currentVolumePath);
+          const isPC = this._isEigenvector(this.currentVolumePath);
+          this._load3DVolume(this.currentVolumePath, { dualIso: isPC });
         }
       }, 300);
     },

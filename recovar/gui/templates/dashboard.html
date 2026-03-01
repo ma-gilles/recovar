@@ -46,8 +46,9 @@
   </div>
   {% else %}
 
-  <!-- Status filter pills + Sort -->
-  <div class="flex items-center justify-between flex-wrap gap-3" x-data="{ filter: 'all' }">
+  <!-- Status filter pills + Sort + Job cards (shared Alpine scope) -->
+  <div x-data="{ filter: 'all' }" class="space-y-4">
+  <div class="flex items-center justify-between flex-wrap gap-3">
     <div class="flex gap-2">
       <button @click="filter = 'all'"
               :class="filter === 'all' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'"
@@ -175,6 +176,7 @@
     </a>
     {% endfor %}
   </div>
+  </div>{# close x-data wrapper #}
   {% endif %}
 </div>
 {% endblock %}
