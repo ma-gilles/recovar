@@ -48,6 +48,8 @@ typing_extensions = "*"
 nvtx = ">=0.2.13"
 
 [pypi-dependencies]
+# Documentation
+mkdocstrings = { extras = ["python"], version = "*" }
 # PyPI packages that need to be installed via pip
 scikit-fmm = "==2025.6.23"
 jax = { extras = ["cuda12"], version = "==0.5.0" }

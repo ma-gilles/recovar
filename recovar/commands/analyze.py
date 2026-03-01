@@ -1,3 +1,5 @@
+"""Post-pipeline analysis: k-means, trajectories, UMAP, volume generation."""
+
 import recovar.jax_config
 import logging
 import numpy as np

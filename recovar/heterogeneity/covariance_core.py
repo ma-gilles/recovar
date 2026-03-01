@@ -1,3 +1,5 @@
+"""Low-level covariance column computation kernels (JAX)."""
+
 import logging
 import jax
 import jax.numpy as jnp

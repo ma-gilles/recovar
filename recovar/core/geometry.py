@@ -1,3 +1,5 @@
+"""Image translation, rotation matrix construction, and coordinate transforms."""
+
 import functools
 
 import jax
@@ -62,6 +64,19 @@ def get_nearest_gridpoint_indices(rotation_matrix, image_shape, volume_shape):
 
 @functools.partial(jax.jit, static_argnums=[1, 2])
 def get_gridpoint_coords(rotation_matrix, image_shape, volume_shape):
+    """Compute 3-D Fourier grid coordinates for a rotated central slice.
+
+    Applies *rotation_matrix* to the unrotated 2-D frequency plane and
+    returns the corresponding 3-D grid indices in the volume.
+
+    Args:
+        rotation_matrix: Rotation matrix, shape ``(3, 3)``.
+        image_shape: 2-D image side length (static).
+        volume_shape: 3-D volume shape tuple (static).
+
+    Returns:
+        Rotated grid coordinates, shape ``(image_size, 3)``.
+    """
     three_d_upsampling_factor = volume_shape[0] // image_shape[0]
     unrotated_plane_indices = get_unrotated_plane_grid_points(
         image_shape, three_d_upsampling_factor=three_d_upsampling_factor
@@ -108,6 +123,18 @@ batch_translate = jax.vmap(translate_single_image, in_axes=(0, 0, None))
 
 @functools.partial(jax.jit, static_argnums=2)
 def translate_images(image, translation, image_shape):
+    """Apply in-plane translations to Fourier-space images via phase shifts.
+
+    Args:
+        image: Fourier-space image(s), shape ``(batch, image_size)`` or
+            ``(image_size,)``.
+        translation: Shift(s) in fractional pixel units, shape
+            ``(batch, 2)`` or ``(2,)``.
+        image_shape: Image side length (static).
+
+    Returns:
+        Translated image(s) with the same shape as *image*.
+    """
     twod_lattice = get_unrotated_plane_coords(image_shape, voxel_size=1, scaled=True)[:, :2]
     return batch_translate(image, translation, twod_lattice)
 

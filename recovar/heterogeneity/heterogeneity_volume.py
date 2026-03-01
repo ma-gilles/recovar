@@ -1,3 +1,5 @@
+"""Kernel-regression volume reconstruction from latent embeddings."""
+
 import recovar.jax_config
 import numpy as np
 from recovar.data_io import dataset
@@ -56,6 +58,23 @@ def pick_heterogeneity_bins2(ndim, log_likelihoods, q = 0.5, min_images = 50, n_
 
 
 def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos = None, n_bins = 11, output_folder = None, B_factor = 0, metric_used = "locmost_likely", n_min_particles = 50 ):
+    """Reconstruct a volume at an arbitrary latent-space point.
+
+    Convenience wrapper around :func:`make_volumes_kernel_estimate_local`
+    that loads the dataset and computes heterogeneity distances from a
+    pipeline results dict.
+
+    Args:
+        latent_point: Target point in latent space, shape ``(zdim,)``.
+        results: Pipeline output dictionary (loaded from pickle).
+        ndim: Latent dimensionality to use.
+        cryos: Pre-loaded ``CryoEMHalfsets`` (loaded from *results* if ``None``).
+        n_bins: Number of heterogeneity bins for kernel regression.
+        output_folder: Directory for output MRC files.
+        B_factor: B-factor sharpening in Angstroms squared.
+        metric_used: Volume quality metric for selection.
+        n_min_particles: Minimum particles per bin.
+    """
 
     cryos = dataset.load_dataset_from_args(results['input_args'], lazy = False) if cryos is None else cryos
     output_folder = results['input_args'].outdir + "/output/" if output_folder is None else output_folder
@@ -75,6 +94,33 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
 
 @nvtx.annotate("make_volumes_kernel_estimate_local", color="yellow")
 def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_folder, ndim, bins, B_factor, tau = None, n_min_particles = 50, metric_used = "locshellmost_likely", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None, kernel_rad = 4, save_all_estimates = False, heterogeneity_kernel = "parabola" ):
+    """Reconstruct volumes along a heterogeneity path using kernel regression.
+
+    For each bin along the heterogeneity axis, selects nearby images
+    weighted by a kernel function and performs a local 3-D reconstruction
+    with local-resolution filtering.  Results are written as MRC files.
+
+    Args:
+        heterogeneity_distances: Per-half-set log-likelihood distances,
+            list of two arrays each of shape ``(n_images,)``.
+        cryos: Half-set datasets (``CryoEMHalfsets``).
+        output_folder: Directory for output MRC files.
+        ndim: Latent dimensionality (``-1`` for automatic).
+        bins: Number of bins (int) or explicit bin edges (array).
+        B_factor: B-factor sharpening in Angstroms squared.
+        tau: Regularization parameter (``None`` = auto).
+        n_min_particles: Minimum particles per bin.
+        metric_used: Volume quality metric for local-resolution selection.
+        upsampling_for_ests: Upsampling factor for estimates.
+        use_mask_ests: Apply mask to estimates.
+        grid_correct_ests: Apply gridding correction.
+        locres_sampling: Number of local-resolution shells.
+        locres_maskrad: Local-resolution mask radius.
+        locres_edgwidth: Local-resolution mask edge width.
+        kernel_rad: Radius of the heterogeneity kernel.
+        save_all_estimates: Save all intermediate estimates.
+        heterogeneity_kernel: Kernel shape (``'parabola'`` or ``'flat'``).
+    """
 
     if type(bins) == int:
         logger.warning(f"Picking bins based on number of particles only. n_min_particles = {n_min_particles}") 

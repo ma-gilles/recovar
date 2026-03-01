@@ -1,3 +1,5 @@
+"""RELION-compatible reconstruction and Wiener filtering routines."""
+
 import numpy as np
 from recovar import core
 from recovar.reconstruction import noise

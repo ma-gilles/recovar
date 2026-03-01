@@ -1,3 +1,5 @@
+"""Linear algebra helpers: batch SVD, QR, eigendecomposition on CPU/GPU."""
+
 import logging
 import jax
 import jax.numpy as jnp

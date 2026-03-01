@@ -1,4 +1,4 @@
-# This code is meant only to evaluate performance of the algorithm on synthetic data.
+"""Synthetic heterogeneous dataset generation for testing."""
 
 import jax
 import jax.numpy as jnp

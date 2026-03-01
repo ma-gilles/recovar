@@ -1,3 +1,5 @@
+"""EM state containers: EMState, SGDState, HeterogeneousEMState."""
+
 import logging
 import numpy as np
 import jax

@@ -1,3 +1,5 @@
+"""Frequency-to-volume index mapping and radial shell utilities."""
+
 import functools
 
 import jax

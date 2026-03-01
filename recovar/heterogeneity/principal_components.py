@@ -1,3 +1,5 @@
+"""Principal component analysis of the estimated covariance operator."""
+
 import logging
 import jax.numpy as jnp
 import numpy as np
@@ -20,7 +22,34 @@ NVTX_DOMAIN_PCA = "principal_components"
 def estimate_principal_components(cryos, options,  means, mean_prior, volume_mask,
                                 dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use,
                                 covariance_options = None, variance_estimate = None, use_reg_mean_in_contrast = False, use_multi_gpu = False, n_gpus = None, mean_cubic=None):
-    
+    """Estimate principal components of the covariance operator.
+
+    Computes regularized covariance columns, then extracts their leading
+    eigenvectors and eigenvalues via SVD.
+
+    Args:
+        cryos: Half-set datasets (``CryoEMHalfsets``).
+        options: Pipeline options namespace.
+        means: Dict with mean volume estimates.
+        mean_prior: Prior mean volume (Fourier coefficients).
+        volume_mask: Binary mask selecting valid voxels.
+        dilated_volume_mask: Dilated version of *volume_mask*.
+        valid_idx: Indices of valid Fourier frequencies.
+        batch_size: Image batch size for GPU processing.
+        gpu_memory_to_use: Available GPU memory in GB.
+        covariance_options: Options dict (default: auto-generated).
+        variance_estimate: Pre-computed variance estimate.
+        use_reg_mean_in_contrast: Use regularized mean for contrast estimation.
+        use_multi_gpu: Distribute across multiple GPUs.
+        n_gpus: Number of GPUs (``None`` = auto-detect).
+        mean_cubic: Pre-computed cubic-interpolation coefficients.
+
+    Returns:
+        Tuple ``(u, s, covariance_cols, picked_frequencies, column_fscs)``
+        where *u* and *s* are dicts with keys ``'real'`` and ``'rescaled'``
+        containing eigenvectors and eigenvalues respectively.
+    """
+
     covariance_options = covariance_estimation.get_default_covariance_computation_options() if covariance_options is None else covariance_options
 
     volume_shape = cryos.volume_shape

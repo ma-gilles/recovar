@@ -1,3 +1,5 @@
+"""Local resolution estimation and local filtering of reconstructed volumes."""
+
 import functools
 import logging
 

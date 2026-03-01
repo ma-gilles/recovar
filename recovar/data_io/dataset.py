@@ -1,3 +1,5 @@
+"""Dataset loading, half-set splitting, and image access for cryo-EM/cryo-ET."""
+
 from __future__ import annotations
 
 import logging

@@ -1,3 +1,5 @@
+"""E-step: posterior probability computation over poses and translations."""
+
 import functools
 import logging
 import numpy as np

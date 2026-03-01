@@ -1,3 +1,5 @@
+"""Per-image latent coordinate estimation via linear projection."""
+
 import logging
 import jax.numpy as jnp
 import numpy as np
@@ -31,6 +33,41 @@ def generate_conformation_from_reprojection(xs, mean, u ):
 
 @nvtx.annotate("get_per_image_embedding", color="purple", domain=NVTX_DOMAIN_EMBED)
 def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None, mean_cubic=None):
+    """Compute per-image latent coordinates by projecting onto principal components.
+
+    For each image, estimates the linear coefficients (latent embedding)
+    that best explain the image given the mean volume and eigenvectors,
+    optionally estimating per-image contrast and covariance.
+
+    Args:
+        mean: Mean volume in Fourier space, shape ``(volume_size,)``.
+        u: Eigenvectors, shape ``(volume_size, n_components)``.
+        s: Eigenvalues, shape ``(n_components,)``.
+        basis_size: Number of principal components to use.
+        cryos: Half-set datasets (``CryoEMHalfsets``).
+        volume_mask: Binary mask selecting valid voxels.
+        gpu_memory: Available GPU memory in GB.
+        disc_type: Discretization type (``'linear_interp'`` or ``'cubic'``).
+        contrast_grid: Grid of contrast values to search over.
+        contrast_option: Contrast estimation mode (``'contrast'``,
+            ``'contrast_shared'``, or ``'none'``).
+        to_real: Convert output to real-valued coordinates.
+        parallel_analysis: Run parallel analysis for significance testing.
+        compute_covariances: Compute per-image latent covariance matrices.
+        ignore_zero_frequency: Exclude the DC component.
+        contrast_mean: Prior mean for contrast estimation.
+        contrast_variance: Prior variance for contrast estimation.
+        compute_bias: Compute per-image bias terms.
+        image_subset_in_tilt_series: Subset of tilt images to use.
+        mean_cubic: Pre-computed cubic-interpolation coefficients.
+
+    Returns:
+        Tuple ``(zs, cov_zs, est_contrasts, bias)`` where *zs* has shape
+        ``(n_images, basis_size)``, *cov_zs* has shape
+        ``(n_images, basis_size, basis_size)`` (or ``None``),
+        *est_contrasts* has shape ``(n_images,)``, and *bias* is
+        ``None`` unless *compute_bias* is ``True``.
+    """
 
     assert u.shape[0] == cryos.volume_size, "input u should be volume_size x basis_size"
     st_time = time.time()    

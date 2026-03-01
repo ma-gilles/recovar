@@ -1,3 +1,5 @@
+"""CTF evaluation and parameter handling for cryo-EM images."""
+
 import functools
 from enum import IntEnum
 
@@ -26,6 +28,22 @@ class CTFParamIndex(IntEnum):
 
 @jax.jit
 def evaluate_ctf(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfactor):
+    """Evaluate the Contrast Transfer Function at given frequencies.
+
+    Args:
+        freqs: 2-D frequency coordinates, shape ``(..., 2)`` in 1/Angstrom.
+        dfu: Defocus U in Angstroms.
+        dfv: Defocus V in Angstroms.
+        dfang: Astigmatism angle in degrees.
+        volt: Accelerating voltage in kV.
+        cs: Spherical aberration in mm.
+        w: Amplitude contrast fraction (0–1).
+        phase_shift: Phase shift in degrees.
+        bfactor: B-factor for envelope decay in Angstroms squared.
+
+    Returns:
+        CTF values with the same shape as ``freqs[..., 0]``.
+    """
     assert freqs.shape[-1] == 2
     volt = volt * 1000
     cs = cs * 10**7

@@ -1,3 +1,5 @@
+"""Homogeneous (mean) 3-D reconstruction via direct Fourier inversion."""
+
 import logging
 import numpy as np
 import time
