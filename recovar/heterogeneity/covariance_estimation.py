@@ -1038,6 +1038,12 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
         rhs = jax.device_put(rhs, jax.devices("gpu")[0])
         lhs = jax.device_put(lhs, jax.devices("gpu")[0])
 
+    # Tikhonov regularization: prevents NaN from near-singular LHS
+    # (can happen when n_images is small relative to basis_size)
+    reg = jnp.float32(1e-6) * jnp.trace(lhs) / lhs.shape[0]
+    diag_idx = jnp.arange(lhs.shape[0])
+    lhs = lhs.at[diag_idx, diag_idx].add(reg)
+
     covar = jax.scipy.linalg.solve( lhs ,rhs, assume_a='pos')
     covar = unvec(covar)
     logger.info("end of solve")

@@ -144,7 +144,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         u['rescaled_no_contrast'] = u['rescaled']
         s['rescaled_no_contrast'] = s['rescaled']
 
-        mean_used = means['combined_regularized'] if use_reg_mean_in_contrast else means['combined'] 
+        mean_used = means['combined_regularized'] if use_reg_mean_in_contrast else means['combined']
         u['rescaled'],s['rescaled'] = knock_out_mean_component_2(u['rescaled'], s['rescaled'],mean_used, volume_mask, volume_shape, vol_batch_size, options['ignore_zero_frequency'], options['contrast'] == "contrast_qr" )
 
         if not options['keep_intermediate']:
@@ -184,8 +184,10 @@ def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , dis
     if not np.all(np.isfinite(covariance)):
         n_nan = np.sum(np.isnan(covariance))
         n_inf = np.sum(np.isinf(covariance))
-        logger.warning("projected covariance has %d NaN, %d Inf out of %d elements — replacing with zeros", n_nan, n_inf, covariance.size)
-        covariance = np.where(np.isfinite(covariance), covariance, 0.0)
+        raise ValueError(
+            f"projected covariance has {n_nan} NaN, {n_inf} Inf out of {covariance.size} elements"
+        )
+
     ss, u = np.linalg.eigh(covariance)
     u =  np.fliplr(u)
     s = np.flip(ss)
