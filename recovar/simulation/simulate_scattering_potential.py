@@ -7,13 +7,36 @@ Created on Thu Sep 30 16:04:24 2021
 """
 import json, os, finufft
 
+from recovar.simulation.pdb_utils import AtomGroup as _AtomGroup, parse_pdb as _parse_pdb, write_pdb as _write_pdb
 
-def check_prody():
-    try:
-        import prody
-    except:
-        raise Exception("Did not find prody. Prody is not in recovar by default anymore If you need it, install it by running: pip install prody. You might need to install some dependencies.")
+# Try prody first; fall back to built-in pdb_utils
+try:
+    import prody as _prody
+    _HAS_PRODY = True
+except ImportError:
+    _HAS_PRODY = False
 
+
+def _parsePDB(path_or_id):
+    """Parse PDB using prody if available, otherwise built-in parser."""
+    if _HAS_PRODY:
+        return _prody.parsePDB(path_or_id)
+    return _parse_pdb(path_or_id)
+
+
+def _writePDB(filepath, atoms):
+    """Write PDB using prody if available, otherwise built-in writer."""
+    if _HAS_PRODY:
+        _prody.writePDB(filepath, atoms)
+    else:
+        _write_pdb(filepath, atoms)
+
+
+def _newAtomGroup():
+    """Create AtomGroup using prody if available, otherwise built-in."""
+    if _HAS_PRODY:
+        return _prody.AtomGroup()
+    return _AtomGroup()
 
 
 import numpy as np
@@ -184,14 +207,12 @@ def five_gaussian_atom_shape(psi, coeffs):
 
 
 def generate_volume_from_pdb(molecule, voxel_size, grid_size):
-    check_prody()
-    atoms = prody.parsePDB(molecule)
+    atoms = _parsePDB(molecule)
     return generate_volume_from_atoms(atoms, voxel_size = voxel_size, grid_size = grid_size)
 
 
 def generate_potential_at_freqs_from_pdb(molecule, voxel_size, freq_coords):
-    check_prody()
-    atoms = center_atoms(prody.parsePDB(molecule))
+    atoms = center_atoms(_parsePDB(molecule))
     return generate_volume_from_atoms(atoms, voxel_size = voxel_size, grid_size = None, freq_coords = freq_coords)
 
 def generate_potential_at_freqs_from_atoms(atoms, voxel_size, freq_coords):
@@ -314,16 +335,17 @@ def generate_synthetic_atomgroup(radius):
     atom_coor = get_random_points_in_unit_ball(N_atoms) * radius
 
     ATOM_TYPE = 'C'
-    ATOMGROUP_FLAGS = ['hetatm', 'pdbter', 'ca', 'calpha', 'protein', 'aminoacid', 'nucleic', 'hetero']
-    check_prody()
-    atoms = prody.AtomGroup()
+    atoms = _newAtomGroup()
     atoms.setCoords(atom_coor)
     atoms.setNames(np.array(N_atoms *[ATOM_TYPE],  dtype='<U6'))
     atoms.setElements(np.array(N_atoms *[ATOM_TYPE],  dtype='<U6'))
 
-    atoms._flags = {}
-    for key in ATOMGROUP_FLAGS:
-        atoms._flags[key] = np.zeros(N_atoms, dtype = bool)
+    # ProDy compatibility: set internal flags if using prody AtomGroup
+    if _HAS_PRODY:
+        ATOMGROUP_FLAGS = ['hetatm', 'pdbter', 'ca', 'calpha', 'protein', 'aminoacid', 'nucleic', 'hetero']
+        atoms._flags = {}
+        for key in ATOMGROUP_FLAGS:
+            atoms._flags[key] = np.zeros(N_atoms, dtype = bool)
     return atoms
 
 def generate_synthetic_pdb_dataset(directory, radius, n_samples = 1):
@@ -334,8 +356,7 @@ def generate_synthetic_pdb_dataset(directory, radius, n_samples = 1):
     for k in range(n_samples):
         atoms = generate_synthetic_atomgroup(radius)
         filename = directory + "/mol" + str(k) + ".pdb"
-        check_prody()
-        prody.writePDB(filename, atoms)
+        _writePDB(filename, atoms)
 
     
 # From the paper
@@ -384,8 +405,7 @@ def generate_molecule_spectrum_from_pdb_id(molecule, voxel_size, grid_size, forc
     # prody.confProDy(verbosity=verbosity)
     
     if not from_atom_group:
-        check_prody()
-        atoms = prody.parsePDB(molecule)
+        atoms = _parsePDB(molecule)
     else:
         atoms = molecule
 

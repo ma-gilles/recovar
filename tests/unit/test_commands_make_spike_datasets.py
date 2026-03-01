@@ -23,16 +23,11 @@ class _FakeAtoms:
 
 
 def test_make_spike_main_uses_utils_pickle_dump(monkeypatch, tmp_path):
-    monkeypatch.setitem(
-        sys.modules,
-        "prody",
-        types.SimpleNamespace(parsePDB=lambda _path: _FakeAtoms()),
-    )
-    sys.modules.pop("recovar.commands.make_spike_datasets", None)
-    msd = importlib.import_module("recovar.commands.make_spike_datasets")
+    from recovar.commands import make_spike_datasets as msd
 
     calls = {"pickle_paths": [], "assignment_disc_type": None, "dataset_lazy": None}
 
+    monkeypatch.setattr(msd.ssp, "_parsePDB", lambda _path: _FakeAtoms())
     monkeypatch.setattr(msd.ssp, "get_center_coord_offset", lambda _coords: np.zeros(3, dtype=np.float32))
     monkeypatch.setattr(
         msd.ssp,
