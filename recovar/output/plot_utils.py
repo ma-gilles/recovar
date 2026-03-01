@@ -727,7 +727,7 @@ def plot_pipeline_summary(po, zdim_key, output_folder):
     variance = po.get('variance')
     if variance is not None:
         var_vol = np.real(np.array(variance)).reshape(volume_shape)
-        ax_var.imshow(np.sum(var_vol, axis=0), cmap='inferno')
+        ax_var.imshow(np.sum(var_vol, axis=0), cmap='viridis')
     ax_var.set_title('Variance', fontsize=12, fontweight='bold')
     ax_var.set_xticks([])
     ax_var.set_yticks([])

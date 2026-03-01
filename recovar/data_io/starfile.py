@@ -172,9 +172,10 @@ class StarFile:
         # Load from file if provided
         if starfile is not None:
             data, data_optics = read_star(starfile)
-        
+
         self.df = data
         self.data_optics = data_optics
+        self._star_path = starfile
         
         # Set up optics table index if present
         if self.has_optics:
@@ -311,16 +312,54 @@ class StarFile:
     
     @property
     def apix(self) -> Optional[np.ndarray]:
-        """Pixel size (Angstroms/pixel) for each particle."""
-        return self.get_optics_values('_rlnImagePixelSize', dtype=np.float32)
-    
+        """Pixel size (Angstroms/pixel) for each particle.
+
+        Tries ``_rlnImagePixelSize`` first (RELION 3.1 optics table).
+        Falls back to ``_rlnDetectorPixelSize * 10000 / _rlnMagnification``
+        for RELION 3.0 format files.
+        """
+        vals = self.get_optics_values('_rlnImagePixelSize', dtype=np.float32)
+        if vals is not None:
+            return vals
+        # RELION 3.0 fallback: Apix = DetectorPixelSize * 10000 / Magnification
+        det = self.get_optics_values('_rlnDetectorPixelSize', dtype=np.float64)
+        mag = self.get_optics_values('_rlnMagnification', dtype=np.float64)
+        if det is not None and mag is not None:
+            return (det * 10000.0 / mag).astype(np.float32)
+        return None
+
     @property
     def resolution(self) -> Optional[np.ndarray]:
-        """Image size (pixels) for each particle."""
+        """Image size (pixels) for each particle.
+
+        Tries ``_rlnImageSize`` first (RELION 3.1 optics table).
+        Falls back to reading the MRC header of the first particle stack
+        referenced in ``_rlnImageName`` (RELION 3.0 files).
+        """
         vals = self.get_optics_values('_rlnImageSize', dtype=np.float32)
         if vals is not None:
-            vals = vals.astype(np.int64)
-        return vals
+            return vals.astype(np.int64)
+        # RELION 3.0 fallback: read dimension from MRC header
+        image_name = self.get_optics_values('_rlnImageName', dtype=str)
+        if image_name is not None:
+            try:
+                # _rlnImageName format: "idx@path/to/stack.mrcs"
+                first = str(image_name[0])
+                mrcs_path = first.split('@')[-1] if '@' in first else first
+                # Resolve relative to STAR file directory
+                import os
+                if not os.path.isabs(mrcs_path) and hasattr(self, '_star_path'):
+                    mrcs_path = os.path.join(
+                        os.path.dirname(self._star_path), mrcs_path
+                    )
+                if os.path.exists(mrcs_path):
+                    import mrcfile
+                    with mrcfile.open(mrcs_path, mode='r', header_only=True) as mrc:
+                        D = int(mrc.header.ny)
+                    return np.full(len(self), D, dtype=np.int64)
+            except Exception:
+                pass
+        return None
     
     def flatten_to_relion30(self) -> pd.DataFrame:
         """Convert to RELION 3.0 format by flattening optics into main table.

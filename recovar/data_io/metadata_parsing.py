@@ -141,10 +141,23 @@ def parse_ctf_from_star(
         orig_apix = orig_apix.astype(np.float64)
         orig_D = orig_D.astype(np.float64)
         new_apix = orig_D * orig_apix / float(D)
+    elif orig_apix is not None:
+        # Have Apix (e.g. from RELION 3.0 Magnification/DetectorPixelSize)
+        # but no _rlnImageSize.  Assume the STAR pixel size describes the
+        # images at their native resolution; if images are later downsampled,
+        # the pipeline adjusts Apix separately.
+        orig_apix = orig_apix.astype(np.float64)
+        new_apix = orig_apix
+        logger.info(
+            "No _rlnImageSize in STAR; using Apix=%.4f from "
+            "Magnification/DetectorPixelSize (assuming native resolution).",
+            orig_apix[0],
+        )
     else:
         logger.warning(
-            "Could not determine original pixel size / image size from STAR optics. "
-            "Using values as-is; Apix may be incorrect if images were downsampled."
+            "Could not determine pixel size from STAR file. "
+            "Using Apix=1.0; this will be incorrect. "
+            "Provide a --ctf pkl file or a RELION 3.1+ .star with optics table."
         )
         new_apix = np.ones(n, dtype=np.float64)
 

@@ -1301,43 +1301,39 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
 
     # Generate pairwise combinations
     combinations = [(i, j) for i in range(max_pcs) for j in range(i+1, max_pcs)]
-    colors = plt.cm.viridis(np.linspace(0, 1, len(combinations)))
 
     for idx, (i, j) in enumerate(combinations):
         if idx >= len(axes):
             break
-            
+
         try:
-            # Validate data for this combination
             x_data = z[:, i]
             y_data = z[:, j]
-            
+
             if np.any(np.isnan(x_data)) or np.any(np.isnan(y_data)):
                 logger.warning("Skipping PC%d vs PC%d due to NaN values", i+1, j+1)
                 continue
-                
+
             if np.any(np.isinf(x_data)) or np.any(np.isinf(y_data)):
                 logger.warning("Skipping PC%d vs PC%d due to infinite values", i+1, j+1)
                 continue
-            
-            # Scatter plot
-            axes[idx].scatter(x_data, y_data, alpha=0.6, s=1, c=colors[idx])
+
+            # Hexbin density + scatter (consistent with scatter_annotate)
+            try:
+                if len(x_data) > 50:
+                    axes[idx].hexbin(x_data, y_data, gridsize=30,
+                                   alpha=0.3, cmap='Blues', mincnt=1)
+            except Exception as e:
+                logger.debug(f"Could not add hexbin for PC{i+1} vs PC{j+1}: {e}")
+            axes[idx].scatter(x_data, y_data, alpha=0.3, s=0.5,
+                            c='cornflowerblue', edgecolors='none', rasterized=True)
             axes[idx].set_xlabel(f'PC{i+1}')
             axes[idx].set_ylabel(f'PC{j+1}')
             axes[idx].set_title(f'PC{i+1} vs PC{j+1}', fontweight='bold')
             axes[idx].grid(True, alpha=0.3)
-            
-            # Add density contours with error handling
-            try:
-                if len(x_data) > 50:  # Only add hexbin for sufficient data points
-                    axes[idx].hexbin(x_data, y_data, gridsize=min(30, len(x_data)//10), 
-                                   alpha=0.3, cmap='Blues', mincnt=1)
-            except Exception as e:
-                logger.debug("Could not add density contours for PC%d vs PC%d: %s", i+1, j+1, e)
-                
+
         except Exception as e:
             logger.error("Error plotting PC%d vs PC%d: %s", i+1, j+1, e)
-            # Hide the problematic subplot
             axes[idx].set_visible(False)
 
     # Hide unused subplots
