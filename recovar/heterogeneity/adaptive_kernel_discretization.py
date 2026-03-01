@@ -790,7 +790,12 @@ def estimate_optimal_covariance_and_volume(init_variance, init_prior_covariance_
         eigs = jnp.where(eigs > 0, eigs , 0)
 
         # If eigenvalues are too small, maybe should bump them all the way to signal variance
-        get_inv_s = jax.vmap( lambda eigs :  jnp.where( eigs >  EPS * jnp.max(jnp.abs(eigs)) , 1/eigs, 1/ (EPS * jnp.max(jnp.abs(eigs))) ) )
+        def _safe_inv_eigs(eigs):
+            max_abs = jnp.max(jnp.abs(eigs))
+            # Guard against all-zero eigenvalues: use 1.0 as fallback denominator
+            safe_denom = jnp.where(max_abs > 0, EPS * max_abs, jnp.float32(1.0))
+            return jnp.where(eigs > EPS * max_abs, 1 / eigs, 1 / safe_denom)
+        get_inv_s = jax.vmap(_safe_inv_eigs)
         s =get_inv_s(eigs)
         
         invert_from_svd = jax.vmap( lambda U, s :  (U * s[None]) @ jnp.conj(U).T  , in_axes = (0,0))
