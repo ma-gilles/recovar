@@ -143,9 +143,9 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
                     cmd_parts.extend([flag_name, val])
             for opt_name, flag_name in [
                 ("multi_gpu", "--multi-gpu"),
-                ("low_memory", "--low-memory"),
+                ("low_memory", "--low-memory-option"),
                 ("keep_intermediate", "--keep-intermediate"),
-                ("ignore_zero_freq", "--ignore-zero-freq"),
+                ("ignore_zero_freq", "--ignore-zero-frequency"),
                 ("keep_input_mask", "--keep-input-mask"),
                 ("use_complement_mask", "--use-complement-mask"),
             ]:
@@ -162,24 +162,22 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
 
             cmd_parts = [
                 "recovar.commands.analyze",
-                "--result-dir", result_dir,
+                result_dir,
                 "-o", output_dir,
                 "--zdim", analyze_zdim,
                 "--n-clusters", n_clusters,
-                "--n-traj-vols", n_traj_vols,
+                "--n-vols-along-path", n_traj_vols,
             ]
             if form.get("lazy") == "on":
                 cmd_parts.append("--lazy")
 
         elif job_type == "compute_state":
             result_dir = form.get("result_dir", "").strip()
-            compute_zdim = form.get("compute_zdim", "4").strip()
 
             cmd_parts = [
                 "recovar.commands.compute_state",
-                "--result-dir", result_dir,
+                result_dir,
                 "--outdir", output_dir,
-                "--zdim", compute_zdim,
                 "--lazy",
             ]
 
@@ -189,7 +187,7 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
 
             cmd_parts = [
                 "recovar.commands.compute_trajectory",
-                "--result-dir", result_dir,
+                result_dir,
                 "--outdir", output_dir,
                 "--zdim", compute_zdim,
                 "--lazy",
