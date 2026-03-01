@@ -228,7 +228,6 @@ def estimate_bfactor_from_halfmaps(halfmap1, voxel_size, plot_path=None):
     """
     import numpy as np
     import matplotlib.pyplot as plt
-    from numpy.fft import fftn
     import logging
     
     logger = logging.getLogger(__name__)

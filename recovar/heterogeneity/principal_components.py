@@ -6,7 +6,6 @@ import nvtx
 
 from recovar import core, jax_config, utils
 from recovar.reconstruction import noise
-from recovar.output import plot_utils
 from recovar.core import linalg
 from recovar.heterogeneity import covariance_estimation, embedding
 import recovar.core.fourier_transform_utils as fourier_transform_utils

@@ -13,8 +13,6 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 try:
     import nvtx
 except ImportError:
-    import contextlib
-
     class _NvtxStub:
         @staticmethod
         def annotate(msg="", color=None, domain=None):
