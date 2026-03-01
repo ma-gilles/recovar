@@ -506,6 +506,7 @@ echo "Completed at: $(date)"
 
         # 2. Standard log files (shown first, may be from older runs)
         for candidate in [
+            os.path.join(job.output_dir, "run.log"),
             os.path.join(job.output_dir, "gui_run.log"),
         ]:
             if os.path.isfile(candidate) and candidate not in slurm_logs:
