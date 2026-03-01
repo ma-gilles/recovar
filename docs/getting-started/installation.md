@@ -82,9 +82,67 @@ pixi install
 pixi run test
 ```
 
-## Docker & HPC containers
+## Docker
 
-For reproducible GPU environments, especially on HPC clusters, RECOVAR provides
-Docker and Apptainer/Singularity container definitions. See the
-[Docker & Containers guide](docker.md) for building images, running containers,
-and submitting jobs with Slurm.
+Docker gives you a reproducible GPU environment without managing conda/pip
+dependencies on your host. You need Docker and the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
+
+### 1. Build the image
+
+```bash
+git clone https://github.com/ma-gilles/recovar.git
+cd recovar
+bash scripts/build_container.sh
+```
+
+This creates `recovar:latest` with CUDA 12.6, pixi, and Nsight Systems.
+Your host user ID is baked in so bind-mounted files have correct ownership.
+
+### 2. Run RECOVAR
+
+```bash
+docker run --rm --gpus all \
+    -v $(pwd):/workspace -w /workspace \
+    --user $(id -u):$(id -g) \
+    recovar:latest -c "
+        pixi install
+        pixi run install-recovar
+        recovar run_test_dataset
+    "
+```
+
+Or start an interactive shell:
+
+```bash
+docker run --rm -it --gpus all \
+    -v $(pwd):/workspace -w /workspace \
+    --user $(id -u):$(id -g) \
+    recovar:latest
+```
+
+Then inside the container:
+
+```bash
+pixi install
+pixi run install-recovar
+recovar pipeline particles.star -o output --mask mask.mrc
+```
+
+### 3. HPC clusters (Apptainer/Singularity)
+
+HPC compute nodes typically cannot pull Docker images. Convert to `.sif` first:
+
+```bash
+bash scripts/build_recovar_sif.sh
+```
+
+Then submit jobs with the workload script:
+
+```bash
+./scripts/crun_recovar_workload_della.sh smoke-recovar
+```
+
+See the [Docker & Containers guide](docker.md) for the full reference
+on environment variables, Slurm configuration, available actions, and
+troubleshooting.
