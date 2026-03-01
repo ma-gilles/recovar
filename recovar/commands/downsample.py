@@ -93,11 +93,14 @@ def downsample_to_disk(
 
     # ── Determine pixel size ─────────────────────────────────────────────
     orig_apix = _get_pixel_size(particles_file)
-    new_apix = orig_apix * orig_D / target_D if orig_apix else None
-    if new_apix:
-        logger.info("Pixel size: %.4f \u00c5 \u2192 %.4f \u00c5", orig_apix, new_apix)
-    else:
-        logger.warning("Could not determine pixel size from input file.")
+    if orig_apix is None:
+        raise ValueError(
+            f"Could not determine pixel size from input file: {particles_file}. "
+            "Ensure the STAR file has an optics table with rlnImagePixelSize, "
+            "the CS file has blob/psize_A, or the MRC file has a valid voxel size."
+        )
+    new_apix = orig_apix * orig_D / target_D
+    logger.info("Pixel size: %.4f \u00c5 \u2192 %.4f \u00c5", orig_apix, new_apix)
 
     # ── Fourier-crop and write ───────────────────────────────────────────
     out_mrcs = os.path.join(outdir, f"particles.{target_D}.mrcs")
@@ -265,7 +268,7 @@ def _write_output_star(input_path, mrcs_path, star_path, target_D, new_apix, n_i
 
             # Update optics table
             if 'optics' in data:
-                data['optics']['rlnImagePixelSize'] = new_apix or 1.0
+                data['optics']['rlnImagePixelSize'] = new_apix
                 data['optics']['rlnImageSize'] = target_D
 
             # Update image names

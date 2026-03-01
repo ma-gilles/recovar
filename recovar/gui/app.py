@@ -53,55 +53,146 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
     @app.route("/jobs/new")
     def new_job():
         return render_template("new_job.html", has_slurm=_has_slurm(),
-                               python_path=python_path)
+                               python_path=python_path, clone_from=None)
 
     @app.route("/jobs", methods=["POST"])
     def create_job():
         form = request.form
-        name = form.get("name", "pipeline_run")
-        output_dir = form.get("output_dir", "")
-        particles = form.get("particles", "")
-        mask = form.get("mask", "from_halfmaps")
-        zdim = form.get("zdim", "1,2,4,10,20")
-        downsample = form.get("downsample", "256")
-        no_downsample = form.get("no_downsample") == "on"
-        correct_contrast = form.get("correct_contrast") == "on"
-        tilt_series = form.get("tilt_series") == "on"
-        lazy = form.get("lazy") == "on"
-        only_mean = form.get("only_mean") == "on"
-        accept_cpu = form.get("accept_cpu") == "on"
-        gpu_memory = form.get("gpu_memory", "")
-
-        # Build command
-        cmd_parts = [
-            "recovar.commands.pipeline",
-            particles,
-            "-o", output_dir,
-            "--mask", mask,
-        ]
-        if zdim:
-            cmd_parts.extend(["--zdim", zdim])
-        if no_downsample:
-            cmd_parts.append("--no-downsample")
-        elif downsample and downsample != "256":
-            cmd_parts.extend(["--downsample", downsample])
-        if correct_contrast:
-            cmd_parts.append("--correct-contrast")
-        if tilt_series:
-            cmd_parts.append("--tilt-series")
-        if lazy:
-            cmd_parts.append("--lazy")
-        if only_mean:
-            cmd_parts.append("--only-mean")
-        if accept_cpu:
-            cmd_parts.append("--accept-cpu")
-        if gpu_memory:
-            cmd_parts.extend(["--gpu-gb", gpu_memory])
-
-        command = " ".join(cmd_parts)
+        job_type = form.get("job_type", "pipeline")
+        name = form.get("name", f"{job_type}_run")
+        output_dir = form.get("output_dir", "").strip()
 
         use_slurm = form.get("execution") == "slurm"
-        ds_val = None if no_downsample else (int(downsample) if downsample else None)
+        slurm_partition = form.get("slurm_partition", "cryoem")
+        slurm_account = form.get("slurm_account", "amits")
+        slurm_gpus = int(form.get("slurm_gpus", "1"))
+        slurm_mem = form.get("slurm_mem", "64G")
+        slurm_time = form.get("slurm_time", "4:00:00")
+        slurm_cpus = form.get("slurm_cpus", "8")
+        slurm_extra = form.get("slurm_extra", "").strip()
+        gpu_memory = form.get("gpu_memory", "")
+
+        particles = ""
+        mask = ""
+        ds_val = None
+
+        if job_type == "pipeline":
+            particles = form.get("particles", "").strip()
+            mask = form.get("mask", "from_halfmaps").strip()
+            zdim = form.get("zdim", "1,2,4,10,20").strip()
+            downsample = form.get("downsample", "256").strip()
+            no_downsample = form.get("no_downsample") == "on"
+            correct_contrast = form.get("correct_contrast") == "on"
+            tilt_series = form.get("tilt_series") == "on"
+            lazy = form.get("lazy") == "on"
+            only_mean = form.get("only_mean") == "on"
+            accept_cpu = form.get("accept_cpu") == "on"
+
+            cmd_parts = [
+                "recovar.commands.pipeline",
+                particles,
+                "-o", output_dir,
+                "--mask", mask,
+            ]
+            if zdim:
+                cmd_parts.extend(["--zdim", zdim])
+            if no_downsample:
+                cmd_parts.append("--no-downsample")
+            elif downsample:
+                cmd_parts.extend(["--downsample", downsample])
+            if correct_contrast:
+                cmd_parts.append("--correct-contrast")
+            if tilt_series:
+                cmd_parts.append("--tilt-series")
+            if lazy:
+                cmd_parts.append("--lazy")
+            if only_mean:
+                cmd_parts.append("--only-mean")
+            if accept_cpu:
+                cmd_parts.append("--accept-cpu")
+            if gpu_memory:
+                cmd_parts.extend(["--gpu-gb", gpu_memory])
+
+            # Advanced options
+            for opt_name, flag_name in [
+                ("focus_mask", "--focus-mask"),
+                ("mask_dilate_iter", "--mask-dilate-iter"),
+                ("ind", "--ind"),
+                ("halfsets", "--halfsets"),
+                ("datadir", "--datadir"),
+                ("n_images", "--n-images"),
+                ("dose_per_tilt", "--dose-per-tilt"),
+                ("angle_per_tilt", "--angle-per-tilt"),
+                ("ntilts", "--ntilts"),
+                ("tilt_series_ctf", "--tilt-series-ctf"),
+            ]:
+                val = form.get(opt_name, "").strip()
+                if val:
+                    cmd_parts.extend([flag_name, val])
+            for opt_name, flag_name in [
+                ("multi_gpu", "--multi-gpu"),
+                ("low_memory", "--low-memory"),
+                ("keep_intermediate", "--keep-intermediate"),
+                ("ignore_zero_freq", "--ignore-zero-freq"),
+                ("keep_input_mask", "--keep-input-mask"),
+                ("use_complement_mask", "--use-complement-mask"),
+            ]:
+                if form.get(opt_name) == "on":
+                    cmd_parts.append(flag_name)
+
+            ds_val = None if no_downsample else (int(downsample) if downsample else None)
+
+        elif job_type == "analyze":
+            result_dir = form.get("result_dir", "").strip()
+            analyze_zdim = form.get("analyze_zdim", "20").strip()
+            n_clusters = form.get("n_clusters", "20").strip()
+            n_traj_vols = form.get("n_traj_vols", "6").strip()
+
+            cmd_parts = [
+                "recovar.commands.analyze",
+                "--result-dir", result_dir,
+                "-o", output_dir,
+                "--zdim", analyze_zdim,
+                "--n-clusters", n_clusters,
+                "--n-traj-vols", n_traj_vols,
+            ]
+            if form.get("lazy") == "on":
+                cmd_parts.append("--lazy")
+
+        elif job_type == "compute_state":
+            result_dir = form.get("result_dir", "").strip()
+            compute_zdim = form.get("compute_zdim", "4").strip()
+
+            cmd_parts = [
+                "recovar.commands.compute_state",
+                "--result-dir", result_dir,
+                "--outdir", output_dir,
+                "--zdim", compute_zdim,
+                "--lazy",
+            ]
+
+        elif job_type == "compute_trajectory":
+            result_dir = form.get("result_dir", "").strip()
+            compute_zdim = form.get("compute_zdim", "4").strip()
+
+            cmd_parts = [
+                "recovar.commands.compute_trajectory",
+                "--result-dir", result_dir,
+                "--outdir", output_dir,
+                "--zdim", compute_zdim,
+                "--lazy",
+            ]
+
+        else:
+            cmd_parts = []
+
+        # Append any extra CLI arguments the user typed in
+        extra_args = form.get("extra_args", "").strip()
+        if extra_args:
+            import shlex
+            cmd_parts.extend(shlex.split(extra_args))
+
+        command = " ".join(cmd_parts)
 
         job = manager.create_job(
             name=name,
@@ -111,14 +202,25 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
             mask=mask,
             downsample=ds_val,
             use_slurm=use_slurm,
-            slurm_partition=form.get("slurm_partition", "cryoem"),
-            slurm_account=form.get("slurm_account", "amits"),
-            slurm_gpus=int(form.get("slurm_gpus", "1")),
-            slurm_mem=form.get("slurm_mem", "64G"),
-            slurm_time=form.get("slurm_time", "4:00:00"),
+            slurm_partition=slurm_partition,
+            slurm_account=slurm_account,
+            slurm_gpus=slurm_gpus,
+            slurm_mem=slurm_mem,
+            slurm_time=slurm_time,
+            slurm_cpus=slurm_cpus,
+            slurm_extra=slurm_extra,
             python_path=python_path,
         )
         return redirect(url_for("job_detail", job_id=job.id))
+
+    @app.route("/jobs/<job_id>/clone")
+    def clone_job(job_id):
+        """Pre-fill a new job form from an existing job's parameters."""
+        job = manager.get_job(job_id)
+        if not job:
+            return redirect(url_for("new_job"))
+        return render_template("new_job.html", has_slurm=_has_slurm(),
+                               python_path=python_path, clone_from=job)
 
     # ── Job Detail ─────────────────────────────────────────────────────
     @app.route("/jobs/<job_id>")
@@ -126,6 +228,12 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         job = manager.get_job(job_id)
         if not job:
             return "Job not found", 404
+        # Lazily populate error for failed jobs
+        if job.status == "failed" and not job.error:
+            err = manager.get_error_summary(job_id)
+            if err:
+                job.error = err
+                manager._save()
         params = manager.get_job_params(job_id)
         return render_template("job_detail.html", job=job, params=params)
 
@@ -150,15 +258,41 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         job = manager.get_job(job_id)
         if not job:
             return ""
+        # Lazily populate error summary for failed jobs
+        if job.status == "failed" and not job.error:
+            err = manager.get_error_summary(job_id)
+            if err:
+                job.error = err
+                manager._save()
         color = _status_color(job.status)
-        return f'<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium {color}">' \
+        html = f'<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium {color}">' \
                f'<span class="w-2 h-2 rounded-full bg-current"></span>{job.status.upper()}</span>'
+        # Include error summary for failed jobs
+        if job.status == "failed" and job.error:
+            html += f'<div class="mt-2 text-xs text-red-400 bg-red-950/50 border border-red-500/20 rounded-lg px-3 py-2 font-mono">{_escape(job.error)}</div>'
+        return html
+
+    @app.route("/api/jobs/<job_id>/error")
+    def api_job_error(job_id):
+        """Return parsed error summary for a failed job."""
+        summary = manager.get_error_summary(job_id)
+        return jsonify({"error": summary})
 
     # ── API: File Browser ──────────────────────────────────────────────
     @app.route("/api/browse")
     def api_browse():
         path = request.args.get("path", os.path.expanduser("~"))
         result = browse_directory(path)
+        return jsonify(result)
+
+    # ── API: Validate STAR file ───────────────────────────────────────
+    @app.route("/api/validate-star")
+    def api_validate_star():
+        """Quick validation of a STAR/CS file: check for poses, CTF, particle count."""
+        path = request.args.get("path", "")
+        if not path or not os.path.isfile(path):
+            return jsonify({"valid": False, "error": "File not found"})
+        result = _validate_particles_file(path)
         return jsonify(result)
 
     # ── API: Volume slice ──────────────────────────────────────────────
@@ -260,6 +394,84 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
             return jsonify({"error": "Embeddings not available"}), 404
         return jsonify(data)
 
+    # ── API: UMAP Embeddings ─────────────────────────────────────
+    @app.route("/api/jobs/<job_id>/embeddings/umap")
+    def api_umap_embeddings(job_id):
+        """Return UMAP coordinates for scatter plot visualization."""
+        zdim = request.args.get("zdim", type=int)
+        max_points = request.args.get("max_points", 15000, type=int)
+        if zdim is None:
+            return jsonify({"error": "zdim parameter required"}), 400
+        data = manager.get_umap_data(job_id, zdim, max_points)
+        if data is None:
+            return jsonify({"error": "UMAP embeddings not available"}), 404
+        return jsonify(data)
+
+    # ── API: K-means Labels ───────────────────────────────────────
+    @app.route("/api/jobs/<job_id>/embeddings/kmeans")
+    def api_kmeans_labels(job_id):
+        """Return k-means cluster labels for coloring the scatter plot."""
+        zdim = request.args.get("zdim", type=int)
+        max_points = request.args.get("max_points", 15000, type=int)
+        if zdim is None:
+            return jsonify({"error": "zdim parameter required"}), 400
+        data = manager.get_kmeans_data(job_id, zdim, max_points)
+        if data is None:
+            return jsonify({"error": "K-means data not available"}), 404
+        return jsonify(data)
+
+    # ── API: Mask Export ──────────────────────────────────────────
+    @app.route("/api/volume/mask", methods=["POST"])
+    def api_volume_mask():
+        """Create a binary mask from a volume at a given threshold."""
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "JSON body required"}), 400
+
+        path = data.get("path", "")
+        threshold_sigma = float(data.get("threshold_sigma", 3.0))
+
+        if not os.path.isfile(path) or not path.endswith(".mrc"):
+            return jsonify({"error": "Volume not found"}), 404
+
+        try:
+            import mrcfile
+            from scipy.ndimage import binary_fill_holes, binary_dilation
+
+            with mrcfile.open(path, mode="r") as mrc:
+                vol = mrc.data.copy()
+                voxel_size = float(mrc.voxel_size.x)
+
+            threshold = vol.mean() + threshold_sigma * vol.std()
+            mask = (vol >= threshold).astype(np.float32)
+
+            # Fill holes and slight dilation for cleaner mask
+            mask = binary_fill_holes(mask).astype(np.float32)
+            mask = binary_dilation(mask, iterations=1).astype(np.float32)
+
+            volume_fraction = float(mask.sum() / mask.size)
+
+            # Save mask alongside the input volume
+            mask_dir = os.path.dirname(path)
+            base = os.path.splitext(os.path.basename(path))[0]
+            output_path = data.get("output_path") or os.path.join(
+                mask_dir, f"{base}_mask_{threshold_sigma:.1f}sigma.mrc"
+            )
+
+            with mrcfile.new(output_path, overwrite=True) as mrc_out:
+                mrc_out.set_data(mask)
+                mrc_out.voxel_size = voxel_size
+
+            return jsonify({
+                "path": output_path,
+                "threshold": float(threshold),
+                "threshold_sigma": threshold_sigma,
+                "volume_fraction": volume_fraction,
+            })
+        except Exception as e:
+            logger.error("Mask export failed: %s", e)
+            return jsonify({"error": str(e)}), 500
+
     # ── API: Compute (volume / trajectory) ────────────────────────────
     @app.route("/api/jobs/<job_id>/compute", methods=["POST"])
     def api_compute(job_id):
@@ -353,3 +565,108 @@ def _escape(text):
             .replace("<", "&lt;")
             .replace(">", "&gt;")
             .replace('"', "&quot;"))
+
+
+def _validate_particles_file(path: str) -> dict:
+    """Validate a particles file and return info about its contents."""
+    result = {"valid": False, "path": path, "warnings": [], "info": {}}
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+
+    if ext == "star":
+        try:
+            import starfile
+            data = starfile.read(path, always_dict=True)
+
+            # Find the particles table
+            particles_df = None
+            for key in ["particles", "data_particles", ""]:
+                if key in data:
+                    particles_df = data[key]
+                    break
+            if particles_df is None:
+                # Try first available table
+                for key, val in data.items():
+                    if hasattr(val, "columns") and len(val) > 10:
+                        particles_df = val
+                        break
+
+            if particles_df is None:
+                result["error"] = "No particle data table found in STAR file"
+                return result
+
+            n_particles = len(particles_df)
+            result["info"]["n_particles"] = n_particles
+            cols = set(particles_df.columns)
+
+            # Check for poses
+            pose_cols = {"rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi"}
+            has_poses = pose_cols.issubset(cols)
+            result["info"]["has_poses"] = has_poses
+            if not has_poses:
+                result["warnings"].append(
+                    "Missing pose columns (rlnAngleRot/Tilt/Psi). "
+                    "Pipeline will fail unless you provide a --poses PKL file."
+                )
+
+            # Check for CTF
+            ctf_cols = {"rlnDefocusU", "rlnDefocusV"}
+            has_ctf = ctf_cols.issubset(cols)
+            result["info"]["has_ctf"] = has_ctf
+            if not has_ctf:
+                result["warnings"].append("No CTF columns found (rlnDefocusU/V)")
+
+            # Check for image paths
+            has_images = "rlnImageName" in cols
+            result["info"]["has_images"] = has_images
+            if not has_images:
+                result["warnings"].append("No rlnImageName column — can't locate particle images")
+
+            # Check for optics group
+            has_optics = "optics" in data or "data_optics" in data
+            result["info"]["has_optics"] = has_optics
+
+            # Get pixel size if available
+            if has_optics:
+                optics_key = "optics" if "optics" in data else "data_optics"
+                optics = data[optics_key]
+                if hasattr(optics, "columns") and "rlnImagePixelSize" in optics.columns:
+                    result["info"]["pixel_size"] = float(optics["rlnImagePixelSize"].iloc[0])
+                if hasattr(optics, "columns") and "rlnImageSize" in optics.columns:
+                    result["info"]["image_size"] = int(optics["rlnImageSize"].iloc[0])
+
+            result["valid"] = True
+            if result["warnings"]:
+                result["valid"] = False  # Has critical warnings
+
+        except Exception as e:
+            result["error"] = f"Failed to parse STAR file: {e}"
+
+    elif ext == "cs":
+        try:
+            import numpy as np
+            cs = np.load(path)
+            n_particles = len(cs)
+            result["info"]["n_particles"] = n_particles
+            fields = set(cs.dtype.names) if cs.dtype.names else set()
+
+            has_poses = any("pose" in f.lower() for f in fields)
+            has_ctf = any("ctf" in f.lower() for f in fields)
+            result["info"]["has_poses"] = has_poses
+            result["info"]["has_ctf"] = has_ctf
+
+            if not has_poses:
+                result["warnings"].append("No pose fields found in CS file")
+
+            result["valid"] = True
+        except Exception as e:
+            result["error"] = f"Failed to parse CS file: {e}"
+
+    elif ext in ("mrcs", "mrc"):
+        result["valid"] = True
+        result["info"]["format"] = "MRCS stack"
+        result["warnings"].append("MRCS file selected — you'll also need poses and CTF (as PKL files or in a STAR file)")
+
+    else:
+        result["error"] = f"Unsupported file format: .{ext}"
+
+    return result

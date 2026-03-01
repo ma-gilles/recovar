@@ -90,13 +90,14 @@ class Job:
         for fname in sorted(os.listdir(output_dir)):
             if fname.endswith((".png", ".jpg", ".svg")):
                 images.append(os.path.join(output_dir, fname))
-        # Also check analysis subdirectories
-        analysis_dir = os.path.join(output_dir, "analysis")
-        if os.path.isdir(analysis_dir):
-            for root, _, files in os.walk(analysis_dir):
-                for fname in sorted(files):
-                    if fname.endswith((".png", ".jpg", ".svg")):
-                        images.append(os.path.join(root, fname))
+        # Check analysis_* subdirectories (inside output/)
+        for entry in sorted(os.listdir(output_dir)):
+            if entry.startswith("analysis_"):
+                analysis_dir = os.path.join(output_dir, entry)
+                if os.path.isdir(analysis_dir):
+                    for fname in sorted(os.listdir(analysis_dir)):
+                        if fname.endswith((".png", ".jpg", ".svg")):
+                            images.append(os.path.join(analysis_dir, fname))
         return images
 
     @property
@@ -278,37 +279,60 @@ class JobManager:
             json.dump(data, f, indent=2)
 
     def discover_jobs(self, scan_dirs: list[str]):
-        """Scan directories for existing pipeline outputs."""
+        """Scan directories for existing pipeline outputs.
+
+        Recognises a pipeline output directory by the presence of any of:
+        - ``metadata.json`` (top-level)
+        - ``params.pkl`` (top-level, legacy)
+        - ``model/params.pkl`` (current layout)
+        """
         for scan_dir in scan_dirs:
             if not os.path.isdir(scan_dir):
                 continue
             for entry in os.listdir(scan_dir):
                 job_dir = os.path.join(scan_dir, entry)
+                if not os.path.isdir(job_dir):
+                    continue
                 meta_file = os.path.join(job_dir, "metadata.json")
-                params_file = os.path.join(job_dir, "params.pkl")
-                if os.path.isfile(meta_file) or os.path.isfile(params_file):
-                    job_id = f"discovered_{entry}"
-                    if job_id in self._jobs:
-                        continue
-                    job = Job(
-                        id=job_id,
-                        name=entry,
-                        output_dir=job_dir,
-                        status=STATUS_COMPLETED,
-                        created_at=os.path.getmtime(job_dir),
-                    )
-                    # Try to read metadata
-                    if os.path.isfile(meta_file):
+                # Check multiple possible locations for params.pkl
+                is_pipeline_output = (
+                    os.path.isfile(meta_file) or
+                    os.path.isfile(os.path.join(job_dir, "params.pkl")) or
+                    os.path.isfile(os.path.join(job_dir, "model", "params.pkl"))
+                )
+                if not is_pipeline_output:
+                    continue
+                job_id = f"discovered_{entry}"
+                if job_id in self._jobs:
+                    continue
+                job = Job(
+                    id=job_id,
+                    name=entry,
+                    output_dir=job_dir,
+                    status=STATUS_COMPLETED,
+                    created_at=os.path.getmtime(job_dir),
+                )
+                # Try to read metadata
+                if os.path.isfile(meta_file):
+                    try:
+                        with open(meta_file) as f:
+                            meta = json.load(f)
+                        job.particles = meta.get("particles_file", "")
+                        job.grid_size = meta.get("grid_size")
+                        job.n_images = meta.get("n_images")
+                        job.downsample = meta.get("downsample_applied")
+                    except Exception:
+                        pass
+                # Try to get particle info from command.txt if no metadata
+                if not job.particles:
+                    cmd_file = os.path.join(job_dir, "command.txt")
+                    if os.path.isfile(cmd_file):
                         try:
-                            with open(meta_file) as f:
-                                meta = json.load(f)
-                            job.particles = meta.get("particles_file", "")
-                            job.grid_size = meta.get("grid_size")
-                            job.n_images = meta.get("n_images")
-                            job.downsample = meta.get("downsample_applied")
+                            with open(cmd_file) as f:
+                                job.command = f.read().strip()
                         except Exception:
                             pass
-                    self._jobs[job_id] = job
+                self._jobs[job_id] = job
         self._save()
 
     def list_jobs(self) -> list[Job]:
@@ -331,6 +355,8 @@ class JobManager:
                    slurm_gpus: int = 1,
                    slurm_mem: str = "64G",
                    slurm_time: str = "4:00:00",
+                   slurm_cpus: str = "8",
+                   slurm_extra: str = "",
                    python_path: str = "python3") -> Job:
         """Create and launch a new pipeline job."""
         job_id = f"job_{int(time.time())}_{name.replace(' ', '_')}"
@@ -353,6 +379,15 @@ class JobManager:
             script = os.path.join(self.state_dir, f"{job_id}.sbatch")
             log_dir = os.path.join(output_dir, "logs")
             os.makedirs(log_dir, exist_ok=True)
+
+            extra_sbatch = ""
+            if slurm_extra:
+                extra_sbatch = "\n".join(f"#SBATCH {flag.strip()}"
+                                         for flag in slurm_extra.split() if flag.strip())
+                extra_sbatch = "\n" + extra_sbatch
+
+            gpu_line = f"\n#SBATCH --gres=gpu:{slurm_gpus}" if slurm_gpus > 0 else ""
+
             with open(script, "w") as f:
                 f.write(f"""#!/bin/bash
 #SBATCH --job-name=recovar-{name[:20]}
@@ -360,12 +395,11 @@ class JobManager:
 #SBATCH --error={log_dir}/slurm-%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task={slurm_cpus}
 #SBATCH --mem={slurm_mem}
 #SBATCH --time={slurm_time}
-#SBATCH --partition={slurm_partition}
-#SBATCH --gres=gpu:{slurm_gpus}
-#SBATCH --account={slurm_account}
+#SBATCH --partition={slurm_partition}{gpu_line}
+#SBATCH --account={slurm_account}{extra_sbatch}
 
 set -euo pipefail
 export PYTHONNOUSERSITE=1
@@ -444,28 +478,95 @@ echo "Completed at: $(date)"
         job = self._jobs.get(job_id)
         if not job:
             return ""
-        log_path = job.log_file
-        # Also try gui_run.log
-        if not os.path.isfile(log_path):
-            log_path = os.path.join(job.output_dir, "gui_run.log")
-        if not os.path.isfile(log_path):
-            # Check for slurm logs in logs/
+
+        # Collect log content from all available log files
+        # SLURM logs go LAST so they appear at the tail end (most relevant)
+        log_sources = []
+        slurm_logs = []
+
+        # 1. Find SLURM logs (added to combined output last)
+        if job.slurm_job_id:
             log_dir = os.path.join(job.output_dir, "logs")
             if os.path.isdir(log_dir):
-                logs = sorted(
-                    [os.path.join(log_dir, f) for f in os.listdir(log_dir) if f.endswith(".out")],
+                out_files = sorted(
+                    [os.path.join(log_dir, f) for f in os.listdir(log_dir)
+                     if f.endswith(".out")],
                     key=os.path.getmtime, reverse=True,
                 )
-                if logs:
-                    log_path = logs[0]
-        if not os.path.isfile(log_path):
+                err_files = sorted(
+                    [os.path.join(log_dir, f) for f in os.listdir(log_dir)
+                     if f.endswith(".err") and os.path.getsize(os.path.join(log_dir, f)) > 0],
+                    key=os.path.getmtime, reverse=True,
+                )
+                if out_files:
+                    slurm_logs.append(out_files[0])
+                if err_files:
+                    slurm_logs.append(err_files[0])
+
+        # 2. Standard log files (shown first, may be from older runs)
+        for candidate in [
+            os.path.join(job.output_dir, "gui_run.log"),
+        ]:
+            if os.path.isfile(candidate) and candidate not in slurm_logs:
+                log_sources.append(candidate)
+
+        # 3. Add SLURM logs last (so errors appear at the end)
+        log_sources.extend(slurm_logs)
+
+        if not log_sources:
             return "No log file found yet."
-        try:
-            with open(log_path) as f:
-                lines = f.readlines()
-            return "".join(lines[-n_lines:])
-        except Exception as e:
-            return f"Error reading log: {e}"
+
+        # Combine all sources
+        combined = []
+        for path in log_sources:
+            try:
+                with open(path) as f:
+                    content = f.read()
+                if content.strip():
+                    label = os.path.basename(path)
+                    combined.append(f"── {label} ──\n{content}")
+            except Exception:
+                pass
+
+        if not combined:
+            return "Log files are empty."
+
+        full_text = "\n".join(combined)
+        lines = full_text.split("\n")
+        return "\n".join(lines[-n_lines:])
+
+    def get_error_summary(self, job_id: str) -> str:
+        """Extract a short error summary from logs (last traceback or error line)."""
+        job = self._jobs.get(job_id)
+        if not job:
+            return ""
+        if job.error and job.error != "Process exited":
+            return job.error
+
+        log_content = self.get_log_content(job_id, n_lines=500)
+        if not log_content:
+            return ""
+
+        lines = log_content.split("\n")
+        # Find last traceback
+        last_tb_start = -1
+        for i, line in enumerate(lines):
+            if line.strip().startswith("Traceback"):
+                last_tb_start = i
+        if last_tb_start >= 0:
+            # Extract just the error type and message (last line of traceback)
+            for i in range(len(lines) - 1, last_tb_start, -1):
+                line = lines[i].strip()
+                if line and not line.startswith("File ") and not line.startswith("^"):
+                    return line[:200]
+
+        # Look for lines with ERROR or Error
+        for line in reversed(lines):
+            stripped = line.strip()
+            if "Error:" in stripped or "ERROR" in stripped:
+                return stripped[:200]
+
+        return ""
 
     def get_job_params(self, job_id: str) -> dict:
         """Read job parameters from metadata.json or params.pkl."""
@@ -493,7 +594,13 @@ echo "Completed at: $(date)"
         if job.slurm_job_id:
             new_status = _slurm_job_status(job.slurm_job_id)
             if new_status:
+                old_status = job.status
                 job.status = new_status
+                # Extract error summary when job transitions to failed
+                if new_status == STATUS_FAILED and old_status != STATUS_FAILED:
+                    err = self.get_error_summary(job.id)
+                    if err:
+                        job.error = err
         elif job.pid:
             try:
                 os.kill(job.pid, 0)  # Check if process is alive
@@ -504,7 +611,8 @@ echo "Completed at: $(date)"
                 else:
                     job.status = STATUS_FAILED
                     if not job.error:
-                        job.error = "Process exited"
+                        err = self.get_error_summary(job.id)
+                        job.error = err or "Process exited"
 
 
     # ── Analysis discovery ──────────────────────────────────────────
@@ -538,7 +646,18 @@ echo "Completed at: $(date)"
                     emb = pickle.load(f)
                 for key in ["latent_coords", "zs"]:
                     if key in emb and isinstance(emb[key], dict):
-                        info["available_zdims"] = sorted(int(k) for k in emb[key].keys())
+                        zdims = []
+                        for k in emb[key].keys():
+                            try:
+                                zdims.append(int(k))
+                            except (ValueError, TypeError):
+                                # Keys like '1_noreg' — extract numeric prefix
+                                if isinstance(k, str) and "_" in k:
+                                    try:
+                                        zdims.append(int(k.split("_")[0]))
+                                    except ValueError:
+                                        pass
+                        info["available_zdims"] = sorted(set(zdims))
                         break
             except Exception as e:
                 logger.warning("Failed to read embeddings: %s", e)
@@ -558,61 +677,107 @@ echo "Completed at: $(date)"
                         "category": _categorize_volume(fname),
                     })
 
-        # Scan analysis directories
-        if os.path.isdir(job.output_dir):
-            for entry in sorted(os.listdir(job.output_dir)):
+        # Scan analysis directories — check both top-level and output/
+        analysis_search_dirs = [job.output_dir, os.path.join(job.output_dir, "output")]
+        seen_analysis_names = set()
+        for search_dir in analysis_search_dirs:
+            if not os.path.isdir(search_dir):
+                continue
+            for entry in sorted(os.listdir(search_dir)):
                 if not entry.startswith("analysis_"):
                     continue
-                zdim_str = entry.split("_", 1)[1]
-                try:
-                    zdim = int(zdim_str)
-                except ValueError:
+                if entry in seen_analysis_names:
                     continue
-                analysis_dir = os.path.join(job.output_dir, entry)
+                seen_analysis_names.add(entry)
+
+                # Parse zdim from name like "analysis_20" or "analysis_20_noreg"
+                parts = entry.split("_")
+                zdim_parsed = None
+                for part in parts[1:]:
+                    try:
+                        zdim_parsed = int(part)
+                        break
+                    except ValueError:
+                        continue
+                if zdim_parsed is None:
+                    continue
+
+                analysis_dir = os.path.join(search_dir, entry)
                 if not os.path.isdir(analysis_dir):
                     continue
 
-                analysis = {"plots": [], "kmeans_volumes": [], "trajectories": []}
+                analysis = {
+                    "name": entry,
+                    "plots": [],
+                    "kmeans_volumes": [],
+                    "trajectories": [],
+                }
 
-                # K-means volumes
-                kmeans_dir = os.path.join(analysis_dir, "kmeans")
-                if os.path.isdir(kmeans_dir):
-                    for f in sorted(os.listdir(kmeans_dir)):
-                        if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f:
-                            analysis["kmeans_volumes"].append({
-                                "path": os.path.join(kmeans_dir, f),
-                                "name": f,
-                                "display_name": _vol_display_name(f),
-                            })
+                # K-means volumes in centers/ or kmeans/ subdirs
+                for kmeans_name in ["centers", "kmeans"]:
+                    kmeans_dir = os.path.join(analysis_dir, kmeans_name)
+                    if os.path.isdir(kmeans_dir):
+                        for f in sorted(os.listdir(kmeans_dir)):
+                            if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f:
+                                analysis["kmeans_volumes"].append({
+                                    "path": os.path.join(kmeans_dir, f),
+                                    "name": f,
+                                    "display_name": _vol_display_name(f),
+                                })
 
-                # Trajectories
+                # Trajectories: traj* or path* subdirs
                 for tentry in sorted(os.listdir(analysis_dir)):
-                    if not tentry.startswith("traj"):
+                    if not (tentry.startswith("traj") or tentry.startswith("path")):
                         continue
                     traj_dir = os.path.join(analysis_dir, tentry)
                     if not os.path.isdir(traj_dir):
                         continue
                     traj_vols = []
+                    # Check top-level and density/ subdir
+                    for traj_subdir in [traj_dir, os.path.join(traj_dir, "density")]:
+                        if not os.path.isdir(traj_subdir):
+                            continue
+                        for f in sorted(os.listdir(traj_subdir)):
+                            if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f:
+                                traj_vols.append({
+                                    "path": os.path.join(traj_subdir, f),
+                                    "name": f,
+                                    "display_name": _vol_display_name(f),
+                                })
+                    traj_plots = []
                     for f in sorted(os.listdir(traj_dir)):
-                        if f.endswith(".mrc") and "_half" not in f and "_unfil" not in f:
-                            traj_vols.append({
-                                "path": os.path.join(traj_dir, f),
-                                "name": f,
-                                "display_name": _vol_display_name(f),
-                            })
-                    if traj_vols:
+                        if f.endswith((".png", ".jpg", ".svg")):
+                            traj_plots.append(os.path.join(traj_dir, f))
+                    if traj_vols or traj_plots:
                         analysis["trajectories"].append({
                             "name": tentry,
                             "volumes": traj_vols,
+                            "plots": traj_plots,
                         })
 
-                # Plots and images
-                for root, _, files in os.walk(analysis_dir):
-                    for f in sorted(files):
+                # Plots and images (top-level of analysis dir, not recursive to avoid huge scans)
+                for f in sorted(os.listdir(analysis_dir)):
+                    if f.endswith((".png", ".jpg", ".svg")):
+                        analysis["plots"].append(os.path.join(analysis_dir, f))
+                # Also check umap/ subdir
+                umap_dir = os.path.join(analysis_dir, "umap")
+                if os.path.isdir(umap_dir):
+                    for f in sorted(os.listdir(umap_dir)):
                         if f.endswith((".png", ".jpg", ".svg")):
-                            analysis["plots"].append(os.path.join(root, f))
+                            analysis["plots"].append(os.path.join(umap_dir, f))
 
-                info["analyses"][str(zdim)] = analysis
+                # Check for UMAP and k-means availability
+                umap_embedding = os.path.join(analysis_dir, "umap", "umap_embedding.pkl")
+                analysis["has_umap"] = os.path.isfile(umap_embedding)
+
+                kmeans_result = os.path.join(analysis_dir, "kmeans_result.pkl")
+                analysis["has_kmeans"] = os.path.isfile(kmeans_result)
+
+                # Use zdim as key, but append suffix for multiple analyses at same zdim
+                key = str(zdim_parsed)
+                if key in info["analyses"]:
+                    key = f"{zdim_parsed}_{entry}"
+                info["analyses"][key] = analysis
 
         # Scan GUI-computed volumes
         computed_dir = os.path.join(job.output_dir, "gui_computed")
@@ -657,10 +822,16 @@ echo "Completed at: $(date)"
             if coords_dict is None:
                 return None
 
-            if zdim not in coords_dict:
+            # Try exact key first, then integer, then string variants
+            zs_arr = None
+            for candidate in [zdim, str(zdim)]:
+                if candidate in coords_dict:
+                    zs_arr = coords_dict[candidate]
+                    break
+            if zs_arr is None:
                 return None
 
-            zs = np.asarray(coords_dict[zdim], dtype=np.float32)
+            zs = np.asarray(zs_arr, dtype=np.float32)
             n_total = zs.shape[0]
             actual_zdim = zs.shape[1] if zs.ndim > 1 else 1
 
@@ -687,6 +858,108 @@ echo "Completed at: $(date)"
             return result
         except Exception as e:
             logger.error("Failed to load embeddings: %s", e)
+            return None
+
+    def _find_analysis_dir(self, job: Job, zdim: int) -> Optional[str]:
+        """Find the analysis directory for a given zdim."""
+        for search_dir in [job.output_dir, os.path.join(job.output_dir, "output")]:
+            if not os.path.isdir(search_dir):
+                continue
+            for entry in sorted(os.listdir(search_dir)):
+                if not entry.startswith(f"analysis_{zdim}"):
+                    continue
+                path = os.path.join(search_dir, entry)
+                if os.path.isdir(path):
+                    return path
+        return None
+
+    def get_umap_data(self, job_id: str, zdim: int,
+                      max_points: int = 15000) -> Optional[dict]:
+        """Load UMAP coordinates for scatter plot visualization."""
+        import numpy as np
+        job = self._jobs.get(job_id)
+        if not job:
+            return None
+
+        analysis_dir = self._find_analysis_dir(job, zdim)
+        if not analysis_dir:
+            return None
+
+        umap_path = os.path.join(analysis_dir, "umap", "umap_embedding.pkl")
+        if not os.path.isfile(umap_path):
+            return None
+
+        try:
+            import pickle
+            with open(umap_path, "rb") as f:
+                umap_raw = pickle.load(f)
+
+            umap_emb = np.asarray(umap_raw, dtype=np.float32)
+            if umap_emb.ndim == 1:
+                return None
+            n_total = umap_emb.shape[0]
+
+            if n_total > max_points:
+                rng = np.random.RandomState(42)
+                indices = rng.choice(n_total, max_points, replace=False)
+                indices.sort()
+                umap_emb = umap_emb[indices]
+
+            return {
+                "n_total": n_total,
+                "n_displayed": len(umap_emb),
+                "umap0": umap_emb[:, 0].tolist(),
+                "umap1": umap_emb[:, 1].tolist(),
+            }
+        except Exception as e:
+            logger.error("Failed to load UMAP data: %s", e)
+            return None
+
+    def get_kmeans_data(self, job_id: str, zdim: int,
+                        max_points: int = 15000) -> Optional[dict]:
+        """Load k-means cluster labels for coloring the scatter plot."""
+        import numpy as np
+        job = self._jobs.get(job_id)
+        if not job:
+            return None
+
+        analysis_dir = self._find_analysis_dir(job, zdim)
+        if not analysis_dir:
+            return None
+
+        kmeans_path = os.path.join(analysis_dir, "kmeans_result.pkl")
+        if not os.path.isfile(kmeans_path):
+            return None
+
+        try:
+            import pickle
+            with open(kmeans_path, "rb") as f:
+                kmeans_raw = pickle.load(f)
+
+            # kmeans_result.pkl may be a dict with 'labels' or just an array
+            if isinstance(kmeans_raw, dict):
+                labels = np.asarray(kmeans_raw.get("labels", kmeans_raw.get("cluster_labels")), dtype=np.int32)
+            else:
+                labels = np.asarray(kmeans_raw, dtype=np.int32)
+
+            n_total = len(labels)
+            n_clusters = int(labels.max()) + 1
+
+            # Apply same subsampling as embeddings for consistency
+            if n_total > max_points:
+                rng = np.random.RandomState(42)
+                indices = rng.choice(n_total, max_points, replace=False)
+                indices.sort()
+                labels = labels[indices]
+
+            return {
+                "labels": labels.tolist(),
+                "n_clusters": n_clusters,
+                "n_total": n_total,
+                "n_displayed": len(labels),
+            }
+        except Exception as e:
+            logger.error("Failed to load k-means data: %s", e)
             return None
 
     # ── Compute task management ──────────────────────────────────
