@@ -55,7 +55,9 @@ def save_volumes(volumes,  save_path , volume_shape = None, from_ft = True, inde
         save_volume(vol, save_path + format(index_offset + v_idx, '04d') , volume_shape, from_ft = from_ft, voxel_size = voxel_size)
 
 
-def sum_over_other(x, use_axis = [0,1], *args, **kwargs):
+def sum_over_other(x, use_axis = None, *args, **kwargs):
+    if use_axis is None:
+        use_axis = [0, 1]
     other_axes = []
     for k in range(x.ndim):
         if k not in use_axis:
@@ -262,7 +264,9 @@ def plot_kmeans_over_density(density, centers, plot_folder = None, cmap = 'infer
 
 
 
-def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us_to_save = 50, us_to_var = [4,10,20], voxel_size = None):
+def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us_to_save = 50, us_to_var = None, voxel_size = None):
+    if us_to_var is None:
+        us_to_var = [4, 10, 20]
 
     vol_dir = os.path.join(output_folder, 'volumes')
     mkdir_safe(vol_dir)
@@ -508,7 +512,7 @@ def write_metadata_json(paths, result):
     try:
         with open(paths.metadata, 'w') as f:
             json.dump(metadata, f, indent=2)
-    except Exception as e:
+    except (IOError, OSError, TypeError) as e:
         logger.warning("Could not write metadata.json: %s", e)
 
 
@@ -775,7 +779,7 @@ class PipelineOutput:
         input_args = self.params["input_args"]
         try:
             return input_args.item()
-        except Exception:
+        except (ValueError, AttributeError):
             return input_args
 
     def _use_image_halfsets_for_unshared_tilt_contrast(self):
@@ -967,7 +971,7 @@ class PipelineOutput:
         elif key == 'input_args':
             try:
                 return self.params['input_args'].item()
-            except Exception:
+            except (ValueError, AttributeError):
                 return self.params['input_args']
 
         # Backward compat: fields removed in v0.6 (were always None or redundant)
@@ -1368,9 +1372,6 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
         logger.info("Pipeline summary plot saved to %s", os.path.join(output_folder, 'pipeline_summary.png'))
     except Exception as e:
         logger.warning("Could not generate pipeline summary plot: %s", e)
-
-    return
-
 
 
 from typing import Optional, Union, Tuple

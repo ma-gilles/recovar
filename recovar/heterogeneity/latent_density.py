@@ -77,7 +77,9 @@ def compute_latent_space_density(zs, cov_zs, pca_dim_max = 4, num_points = 50, d
     return summed_probs_sq, latent_space_bounds
 
 
-def compute_latent_space_density_on_2_axes(zs, cov_zs, axes = [0,1], num_points = 50):
+def compute_latent_space_density_on_2_axes(zs, cov_zs, axes = None, num_points = 50):
+    if axes is None:
+        axes = [0, 1]
     return compute_latent_space_density(zs[:,axes], cov_zs[:,axes][:,:,axes], pca_dim_max = 2, num_points = num_points)
 
 

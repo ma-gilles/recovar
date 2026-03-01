@@ -149,7 +149,7 @@ def compute_state(args):
             try:
                 fsc_mask = po.get('volume_mask')
                 logger.info("Using pipeline output volume_mask for FSC filtering")
-            except Exception:
+            except (KeyError, FileNotFoundError):
                 logger.warning("Could not load volume_mask from pipeline output, proceeding without FSC mask")
 
         o.compute_and_save_reweighted(
