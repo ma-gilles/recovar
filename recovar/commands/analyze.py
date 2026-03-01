@@ -162,11 +162,10 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         utils.basic_config_logger(output_folder)
 
         import matplotlib.pyplot as plt
-        plt.figure(figsize=(10, 10))
-        plt.hist(contrasts, bins=50)
-        plt.xlabel('Contrast')
-        plt.ylabel('Number of particles')
-        plt.savefig(os.path.join(output_folder, 'contrast_histogram.png'))
+        from recovar.output import plot_utils
+        fig, ax = plt.subplots(figsize=(8, 6))
+        plot_utils.plot_contrast_histogram(contrasts, ax=ax, zdim_key=zdim_key)
+        plt.savefig(os.path.join(output_folder, 'contrast_histogram.png'), bbox_inches='tight')
         plt.close()
 
         zs_unsort = zs

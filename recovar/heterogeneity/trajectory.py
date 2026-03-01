@@ -16,10 +16,6 @@ def subsample_path(path, n_pts):
     pts_along_coor = np.round(np.linspace(0, path.shape[0]-1, n_pts)).astype(int)
     return path[pts_along_coor]
 
-def subsample_path_indices(path, n_pts):
-    pts_along_coor = np.round(np.linspace(0, path.shape[0]-1, n_pts)).astype(int)
-    return pts_along_coor
-
 def resample_at_uniform_pts(gt_vols, n_vols_along_path = 6):
     distances_between_volumes = get_cum_curvelength(gt_vols)
     # n_volumes at approximately equispaced points 
@@ -28,31 +24,6 @@ def resample_at_uniform_pts(gt_vols, n_vols_along_path = 6):
     for k in range(gt_vols.shape[-1]):
         gt_vols_x[:,k] = np.interp(x, distances_between_volumes, gt_vols[:,k], left=None, right=None, period=None)
     return gt_vols_x
-
-def resample_at_uniform_pts2(gt_vols, n_vols_along_path = 6):
-    distances_between_volumes = get_cum_curvelength(gt_vols.T)
-    # n_volumes at approximately equispaced points 
-    x = np.linspace(0, distances_between_volumes[-1], n_vols_along_path, endpoint=True)
-    gt_vols_x = np.zeros([ gt_vols.shape[0], n_vols_along_path], dtype = gt_vols.dtype)
-
-    lower_idx = np.searchsorted(distances_between_volumes, x, side = 'right') - 1
-    upper_idx = np.searchsorted(distances_between_volumes, x, side = 'right')
-    lower_idx = np.clip(lower_idx, 0, distances_between_volumes.size-1)
-    upper_idx = np.clip(upper_idx, 0, distances_between_volumes.size-1)
-
-    for k in range(n_vols_along_path):
-        lower_x = distances_between_volumes[lower_idx[k]]
-        upper_x = distances_between_volumes[upper_idx[k]]
-        lower_val = gt_vols[:,lower_idx[k]]
-        upper_val = gt_vols[:,upper_idx[k]]
-        if lower_idx[k] == upper_idx[k]:
-            gt_vols_x[:,k] = lower_val
-        else:
-            gt_vols_x[:,k] = lower_val + (x[k] - lower_x) * (upper_val - lower_val) / (upper_x - lower_x)
-        # gt_vols_x[:,k] = np.interp(x, distances_between_volumes, gt_vols[:,k], left=None, right=None, period=None)
-     
-    return gt_vols_x
-
 
 def get_cum_curvelength(gt_vols):
     distances_between_volumes = np.linalg.norm(gt_vols[1:,...] - gt_vols[:-1,...], axis =1)

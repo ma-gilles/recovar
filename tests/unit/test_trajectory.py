@@ -8,14 +8,6 @@ from recovar.heterogeneity import trajectory
 pytestmark = pytest.mark.unit
 
 
-def test_subsample_path_and_indices():
-    path = np.arange(20, dtype=np.float32).reshape(10, 2)
-    idx = trajectory.subsample_path_indices(path, n_pts=4)
-    sub = trajectory.subsample_path(path, n_pts=4)
-    assert idx.shape == (4,)
-    assert np.all(idx == np.array([0, 3, 6, 9]))
-    assert np.allclose(sub, path[idx])
-
 
 def test_get_cum_curvelength_monotonic():
     pts = np.array(
@@ -40,18 +32,6 @@ def test_resample_at_uniform_pts_shapes():
     assert np.isclose(out[0, 0], 0.0)
     assert np.isclose(out[-1, 0], 3.0)
 
-
-def test_resample_at_uniform_pts2_shapes():
-    vals = np.vstack(
-        [
-            np.linspace(0.0, 1.0, 8),
-            np.linspace(2.0, 3.0, 8),
-            np.linspace(-1.0, 1.0, 8),
-        ]
-    ).astype(np.float32)
-    out = trajectory.resample_at_uniform_pts2(vals, n_vols_along_path=5)
-    assert out.shape == (3, 5)
-    assert np.all(np.isfinite(out))
 
 
 def test_get_grid_spacing():

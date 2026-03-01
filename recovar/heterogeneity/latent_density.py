@@ -12,12 +12,7 @@ logger = logging.getLogger(__name__)
 def get_log_likelihood_threshold(k = 4, q=0.954499736104):
     return chi2.ppf(q,df=k)
 
-def compute_weights_of_conformation_2(latent_points, zs, cov_zs,likelihood_threshold ):
-    log_likelihoods = compute_latent_quadratic_forms_in_batch(latent_points, zs, cov_zs)
-    weights = np.array(1.0 * ( log_likelihoods <= likelihood_threshold))
-    return weights
-
-# Handling change between latent space and the grid 
+# Handling change between latent space and the grid
 
 def pca_coord_to_grid(x, bounds, num_points, to_int = False):
     v =  (x - bounds[:,0] ) / ( bounds[:,1]  - bounds[:,0] ) * (num_points - 1)    

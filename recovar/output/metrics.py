@@ -11,14 +11,17 @@ from recovar.heterogeneity import locres
 logger = logging.getLogger(__name__)
 import os.path
 
-def qr_on_cpu(Q):
-    Q = jax.device_put(Q, device=jax.devices("cpu")[0])
-    Q,R = jnp.linalg.qr(Q)
-    Q = np.array(Q) # I don't know why but not doing this causes massive slowdowns sometimes?
-    R = np.array(R)
-    return Q, R
-
 def captured_variance(test_v, U, s):
+    """Compute cumulative captured variance of test vectors in a subspace.
+
+    Args:
+        test_v: Test vectors, shape (n_voxels, n_test).
+        U: Eigenvector matrix, shape (n_voxels, n_pcs).
+        s: Eigenvalue array, shape (n_pcs,).
+
+    Returns:
+        Cumulative captured variance array, shape (n_test,).
+    """
     x = (jnp.conj(test_v.T) @ U) * np.sqrt(s)
     norms = np.linalg.norm(x, axis=-1)**2
     return np.cumsum(norms)
@@ -61,6 +64,17 @@ def find_angle_between_subspaces(v1,v2, max_rank):
 
 
 def subspace_angles(u ,v, max_rank = None, check_orthogonalize = False):
+    """Compute principal angles between two subspaces of increasing rank.
+
+    Args:
+        u: First set of basis vectors, shape (n_voxels, n_pcs).
+        v: Second set of basis vectors, shape (n_voxels, n_pcs).
+        max_rank: Maximum subspace rank to evaluate.
+        check_orthogonalize: If True, QR-orthogonalize u and v first.
+
+    Returns:
+        Array of sine of principal angles, shape (max_rank,).
+    """
     max_rank = u.shape[-1] if max_rank is None else max_rank
     sine_angles = np.zeros(max_rank)
     if check_orthogonalize:
@@ -74,18 +88,20 @@ def subspace_angles(u ,v, max_rank = None, check_orthogonalize = False):
             sine_angles[k-1] = find_angle_between_subspaces(u[:,:k], v[:,:k], max_rank = k )
     return sine_angles  
 
-def get_variance_error():
-
-    return
-
-
-def get_covariance_fsc_score():
-    # Maybe summed auc across columns
-    return
-
-
 def local_fsc_metric(map1, map2, voxel_size, mask, fsc_threshold=1/7, locres_sampling = 25 ):
-    
+    """Compute local resolution and local AUC metrics within a mask.
+
+    Args:
+        map1: First half-map (3-D real-space array).
+        map2: Second half-map (3-D real-space array).
+        voxel_size: Voxel size in Angstroms.
+        mask: Boolean mask selecting voxels to evaluate.
+        fsc_threshold: FSC threshold for resolution (default 1/7).
+        locres_sampling: Sampling factor for local resolution windows.
+
+    Returns:
+        Tuple of (median_locres, ninety_pc_locres, median_auc, ten_pc_auc).
+    """
     fscs, local_resols, i_loc_res, i_loc_auc = locres.local_resolution(map1, map2, 0, voxel_size, locres_sampling = locres_sampling, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = False, use_v2 = True, fsc_threshold = fsc_threshold)
     
     good_resols = i_loc_res[mask]
@@ -178,64 +194,6 @@ def compute_volume_error_metrics_from_halfmaps(estimate1, estimate2, voxel_size,
     return errors_metrics
 
 
-def evaluate_this_choice(target_real, output_folder, voxel_size, mask = None, partial_mask = None, shell_split = False ):
-    
-    mask = gt_mask_fn(target_real) if mask is None else mask
-
-    file = lambda k : output_folder + "estimates_half2_unfil"+format(k, '04d')  +".mrc"
-    k = 0 
-    errors_gt= {}
-    while os.path.isfile(file(k)):
-        map2 = utils.load_mrc(file(k))
-        errors_gt[k] = locres.local_error(target_real, map2, voxel_size, locres_sampling = 15)
-        k = k + 1
-
-    gt_choice = np.argmin(np.array(list(errors_gt.values())), axis=0)
-    if shell_split:    
-        error_metrics = {"gt_choice": gt_choice}
-        error_metrics["choice_l2_error"] = None
-        error_metrics["choice_l2_bias"] = None
-        if partial_mask is not None:
-            error_metrics["choice_partial_l2_error"] = None
-            error_metrics["choice_partial_l2_bias"] = None
-    else:
-        choice1 = utils.load_mrc(output_folder + "ml_optimized_choice.mrc")
-        error_metrics = {"gt_choice": gt_choice}
-        error_metrics["choice_l2_error"], error_metrics["choice_l2_bias"]  = metrics.masked_l2_difference(gt_choice, choice1, voxel_size, mask= mask)
-        if partial_mask is not None:
-            error_metrics["choice_partial_l2_error"], error_metrics["choice_partial_l2_bias"]  = metrics.masked_l2_difference(gt_choice, choice1, voxel_size, mask= partial_mask)
-
-    unfiltered_map = utils.load_mrc(output_folder + "ml_optimized_unfiltered.mrc")
-    gt_unfilt_metrics = metrics.compute_volume_error_metrics_from_gt(target_real, unfiltered_map, voxel_size, mask= mask, partial_mask = partial_mask )
-    add_dict_with_prefix(error_metrics, gt_unfilt_metrics, "gt_unfilt_")
-
-    filtered_map = utils.load_mrc(output_folder + "ml_optimized_filtered.mrc")
-    gt_filt_metrics = metrics.compute_volume_error_metrics_from_gt(target_real, filtered_map, voxel_size, mask= mask, partial_mask = partial_mask )
-    add_dict_with_prefix(error_metrics, gt_filt_metrics, "gt_filt_")
-
-    filtered_map = utils.load_mrc(output_folder + "ml_optimized_filtered_before.mrc")
-    gt_filt_metrics = metrics.compute_volume_error_metrics_from_gt(target_real, filtered_map, voxel_size, mask= mask, partial_mask = partial_mask )
-    add_dict_with_prefix(error_metrics, gt_filt_metrics, "gt_filt_before")
-
-    halfmap1 = utils.load_mrc(output_folder + "ml_optimized_half1_unfil.mrc")
-    halfmap2 = utils.load_mrc(output_folder + "ml_optimized_half2_unfil.mrc")
-    halfmap_metrics = metrics.compute_volume_error_metrics_from_halfmaps(halfmap1, halfmap2, voxel_size, mask= mask, partial_mask = partial_mask )
-    add_dict_with_prefix(error_metrics, halfmap_metrics, "halfmap_")
-    
-    return error_metrics
-    
-def add_dict_with_prefix(dict1, dict_to_add, prefix):
-    for key,value in dict_to_add.items():
-        dict1[prefix + key] = value
-
-
-def embed_from_median_label(z, gt_image_assignment):
-    max_im = np.max(gt_image_assignment)+1
-    median_labels = np.zeros((max_im, z.shape[1]))
-    for k in range(max_im):
-        median_labels[k] = np.median(z[gt_image_assignment == k], axis=0)
-    return median_labels
-
 def variance_of_zs(z, gt_image_assignment):
     """
     Estimate per-label variances and overall variance of z.
@@ -279,23 +237,8 @@ def variance_of_zs(z, gt_image_assignment):
     return label_variances, weighted_avg_variance / overall_variance
 
 
-def get_embedding_from_median(zs, image_assignment, n_classes = None):
-    n_classes = np.max(image_assignment)+1 if n_classes is None else n_classes 
-    # labels = np.unique(image_assignments)
-    embeddings = np.zeros((n_classes, zs.shape[-1]))
-    for lab in range(n_classes):
-        embeddings[lab] = np.median(zs[image_assignment == lab], axis=0)
-    return embeddings
-
-
-def get_gt_embedding_from_projection(gt_volumes, u, mean):
-    return (np.conj(u) @ (gt_volumes - mean).T).T.real
-
-
 def fro_norm_diff_low_rank(U, s, V, d):
-    """
-    ChatGPTed
-    Compute the Frobenius norm of (A - B) where
+    """Compute the Frobenius norm of (A - B) where
     A = U * diag(s) * U^T and B = V * diag(d) * V^T,
     using only their low-rank representations.
 
