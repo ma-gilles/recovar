@@ -389,13 +389,18 @@
             <div class="divide-y divide-slate-800/50 max-h-[600px] overflow-y-auto scrollbar-thin">
               <template x-for="vol in filteredVolumes" :key="vol.path">
                 <button @click="loadVolume(vol.path, vol.display_name)"
-                        class="w-full text-left px-3 py-2 flex items-center gap-2.5 hover:bg-slate-800 transition-colors"
+                        class="w-full text-left px-3 py-2 flex items-center gap-2.5 hover:bg-slate-800 transition-colors group/vol"
                         :class="currentVolumePath === vol.path ? 'bg-slate-800 border-l-2 border-sky-500' : ''">
+                  <img :src="'/api/volume/slice?path=' + encodeURIComponent(vol.path) + '&axis=2'"
+                       class="w-8 h-8 rounded object-contain bg-slate-800 flex-shrink-0 opacity-70 group-hover/vol:opacity-100 transition-opacity"
+                       loading="lazy" alt="">
+                  <div class="flex-1 min-w-0">
+                    <span class="text-xs truncate block" :class="currentVolumePath === vol.path ? 'text-sky-400' : 'text-slate-300'"
+                          x-text="vol.display_name"></span>
+                    <span class="text-[10px] text-slate-600 block" x-text="vol.category"></span>
+                  </div>
                   <span class="w-1.5 h-1.5 rounded-full flex-shrink-0"
                         :class="volCategoryColor(vol.category)"></span>
-                  <span class="text-xs truncate" :class="currentVolumePath === vol.path ? 'text-sky-400' : 'text-slate-300'"
-                        x-text="vol.display_name"></span>
-                  <span class="ml-auto text-[10px] text-slate-600" x-text="vol.category"></span>
                 </button>
               </template>
             </div>
@@ -705,6 +710,13 @@ function jobExplorer() {
       } catch (e) {
         console.error('Failed to load analysis info:', e);
       }
+
+      // Watch tab changes to auto-load embedding on first Explore visit
+      this.$watch('tab', (newTab) => {
+        if (newTab === 'explore' && this.analysisInfo?.has_embeddings && !this.embeddingData && this.selectedZdim) {
+          this.loadEmbedding();
+        }
+      });
     },
 
     // ── Embedding ─────────────────────────────────────────────────
@@ -909,11 +921,12 @@ function jobExplorer() {
         });
         const result = await resp.json();
         if (result.error) {
-          alert('Compute error: ' + result.error);
+          showToast('Compute error: ' + result.error, 'error');
           this.computing = false;
           return;
         }
         if (result.task_id) {
+          showToast('Volume computation submitted', 'success');
           this.activeTasks.push({
             id: result.task_id,
             status: result.status || 'running',
@@ -924,7 +937,7 @@ function jobExplorer() {
         }
       } catch (e) {
         console.error('Compute failed:', e);
-        alert('Failed to start computation: ' + e.message);
+        showToast('Failed to start computation: ' + e.message, 'error');
       }
       this.computing = false;
     },
@@ -943,16 +956,17 @@ function jobExplorer() {
             z_start: this.selectedPoint,
             z_end: this.selectedPoint2,
             n_vols: 6,
-            label: 'Trajectory A→B',
+            label: 'Trajectory A\u2192B',
           }),
         });
         const result = await resp.json();
         if (result.error) {
-          alert('Compute error: ' + result.error);
+          showToast('Compute error: ' + result.error, 'error');
           this.computing = false;
           return;
         }
         if (result.task_id) {
+          showToast('Trajectory computation submitted', 'success');
           this.activeTasks.push({
             id: result.task_id,
             status: result.status || 'running',
@@ -963,7 +977,7 @@ function jobExplorer() {
         }
       } catch (e) {
         console.error('Compute failed:', e);
-        alert('Failed to start computation: ' + e.message);
+        showToast('Failed to start computation: ' + e.message, 'error');
       }
       this.computing = false;
     },
@@ -982,6 +996,8 @@ function jobExplorer() {
 
           if (task.status === 'completed') {
             this.activeTasks[idx].volumes = task.volumes || [];
+            const nVols = (task.volumes || []).length;
+            showToast(`Computation complete — ${nVols} volume${nVols !== 1 ? 's' : ''} ready`, 'success', 5000);
             // Auto-load first volume
             if (task.volumes && task.volumes.length > 0) {
               this.loadVolume(task.volumes[0].path, task.volumes[0].display_name || task.volumes[0].name);
@@ -991,6 +1007,7 @@ function jobExplorer() {
             this.analysisInfo = await resp2.json();
           } else if (task.status === 'failed') {
             this.activeTasks[idx].error = task.error;
+            showToast('Computation failed: ' + (task.error || 'unknown error'), 'error', 6000);
           } else {
             // Still running, poll again
             setTimeout(poll, 3000);
@@ -1088,34 +1105,4 @@ function jobExplorer() {
 }
 </script>
 
-<!-- Auto-load embedding when switching to Explore tab -->
-<script>
-document.addEventListener('alpine:init', () => {
-  Alpine.effect(() => {
-    const explorer = Alpine.store('explorer');
-  });
-});
-
-// Watch for tab changes to load embedding data
-document.addEventListener('DOMContentLoaded', () => {
-  // Use MutationObserver or Alpine watcher to load embeddings on tab switch
-  const checkTab = setInterval(() => {
-    const el = document.querySelector('[x-data]');
-    if (el && el.__x) {
-      clearInterval(checkTab);
-      const component = el.__x.$data;
-      // Watch for tab changes
-      let lastTab = '';
-      setInterval(() => {
-        if (component.tab === 'explore' && lastTab !== 'explore') {
-          if (component.analysisInfo?.has_embeddings && !component.embeddingData && component.selectedZdim) {
-            component.loadEmbedding();
-          }
-        }
-        lastTab = component.tab;
-      }, 200);
-    }
-  }, 100);
-});
-</script>
 {% endblock %}
