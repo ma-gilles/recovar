@@ -99,9 +99,17 @@ _cuda_ok = None  # cached result: None = not checked, True/False = result
 
 
 def cuda_available() -> bool:
-    """Return True if CUDA backproject/project kernels can be used (cached)."""
+    """Return True if CUDA backproject/project kernels can be used (cached).
+
+    Set env var ``RECOVAR_DISABLE_CUDA=1`` to force-disable.
+    """
     global _cuda_ok
     if _cuda_ok is not None:
+        return _cuda_ok
+    import os
+    if os.environ.get("RECOVAR_DISABLE_CUDA", "0") == "1":
+        _cuda_ok = False
+        logger.info("CUDA kernels disabled via RECOVAR_DISABLE_CUDA")
         return _cuda_ok
     try:
         if not any(d.platform == "gpu" for d in jax.devices()):

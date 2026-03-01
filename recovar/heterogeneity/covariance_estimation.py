@@ -1012,6 +1012,8 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
                 experiment_dataset.image_stack.mask,
                 jax_random_key=subkey,
             )
+            if not jnp.all(jnp.isfinite(lhs_this)) or not jnp.all(jnp.isfinite(rhs_this)):
+                logger.error("NaN/Inf in covariance batch (images %s)", batch_image_ind[:5])
 
             lhs += lhs_this
             rhs += rhs_this
