@@ -66,6 +66,7 @@ def main():
         port=args.port,
         debug=args.debug,
         use_reloader=args.debug,
+        threaded=True,
     )
 
 

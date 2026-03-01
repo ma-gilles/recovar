@@ -180,6 +180,9 @@ def _vol_display_name(filename):
     if name.startswith("eigen_pos"):
         idx = name.replace("eigen_pos", "")
         return f"PC {int(idx)}"
+    if name.startswith("eigen_neg"):
+        idx = name.replace("eigen_neg", "")
+        return f"PC {int(idx)} (neg, legacy)"
     if name.startswith("variance"):
         n = name.replace("variance", "")
         return f"Variance (top {n} PCs)"

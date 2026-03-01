@@ -22,6 +22,7 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
     app = Flask(
         __name__,
         template_folder=os.path.join(os.path.dirname(__file__), "templates"),
+        static_folder=os.path.join(os.path.dirname(__file__), "static"),
     )
     app.secret_key = os.urandom(24)
 
@@ -692,12 +693,13 @@ def _parse_command_params(command: str) -> dict:
     elif 'compute_trajectory' in module:
         params['job_type'] = 'compute_trajectory'
 
-    # Map CLI flags to form field names
+    # Map CLI flags to form field names (these have dedicated form fields)
     value_flags = {
         '--mask': 'mask',
         '--zdim': 'zdim',
         '--downsample': 'downsample',
         '--gpu-gb': 'gpu_memory',
+        '--gpu-memory': 'gpu_memory',
         '--focus-mask': 'focus_mask',
         '--mask-dilate-iter': 'mask_dilate_iter',
         '--ind': 'ind',
@@ -709,10 +711,13 @@ def _parse_command_params(command: str) -> dict:
         '--ntilts': 'ntilts',
         '--tilt-series-ctf': 'tilt_series_ctf',
         '-o': 'output_dir',
-        '--result-dir': 'result_dir',
         '--outdir': 'output_dir',
+        '--result-dir': 'result_dir',
         '--n-clusters': 'n_clusters',
         '--n-traj-vols': 'n_traj_vols',
+        # analyze
+        '--zdim-for-analysis': 'analyze_zdim',
+        '--compute-zdim': 'compute_zdim',
     }
     boolean_flags = {
         '--no-downsample': 'no_downsample',
@@ -723,11 +728,15 @@ def _parse_command_params(command: str) -> dict:
         '--accept-cpu': 'accept_cpu',
         '--multi-gpu': 'multi_gpu',
         '--low-memory': 'low_memory',
+        '--low-memory-option': 'low_memory',
         '--keep-intermediate': 'keep_intermediate',
         '--ignore-zero-freq': 'ignore_zero_freq',
+        '--ignore-zero-frequency': 'ignore_zero_freq',
         '--keep-input-mask': 'keep_input_mask',
         '--use-complement-mask': 'use_complement_mask',
     }
+
+    extra_parts = []  # CLI args not mapped to dedicated form fields
 
     i = 1  # skip module name
     # First positional arg after module is particles (for pipeline)
@@ -744,8 +753,19 @@ def _parse_command_params(command: str) -> dict:
         elif arg in boolean_flags:
             params[boolean_flags[arg]] = True
             i += 1
+        elif arg.startswith('-') and i + 1 < len(parts) and not parts[i + 1].startswith('-'):
+            # Unrecognized flag with a value -> extra args
+            extra_parts.append(f"{arg} {shlex.quote(parts[i + 1])}")
+            i += 2
+        elif arg.startswith('-'):
+            # Unrecognized boolean flag -> extra args
+            extra_parts.append(arg)
+            i += 1
         else:
             i += 1
+
+    if extra_parts:
+        params['extra_args'] = ' '.join(extra_parts)
 
     return params
 
