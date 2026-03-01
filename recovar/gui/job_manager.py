@@ -969,7 +969,8 @@ echo "Completed at: $(date)"
     def submit_compute_task(self, job_id: str, task_type: str,
                             params: dict, python_path: str,
                             use_slurm: bool = False,
-                            slurm_opts: Optional[dict] = None) -> Optional[ComputeTask]:
+                            slurm_opts: Optional[dict] = None,
+                            repo_root: Optional[str] = None) -> Optional[ComputeTask]:
         """Submit an async compute task (volume or trajectory)."""
         import numpy as np
         job = self._jobs.get(job_id)
@@ -1021,6 +1022,8 @@ echo "Completed at: $(date)"
 
         env = {**os.environ,
                "XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
+        if repo_root:
+            env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
 
         if use_slurm and _has_slurm():
             opts = slurm_opts or {}
@@ -1041,6 +1044,7 @@ echo "Completed at: $(date)"
 
 set -euo pipefail
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+{f'export PYTHONPATH="{repo_root}:$PYTHONPATH"' if repo_root else ''}
 
 {' '.join(cmd)}
 """)
