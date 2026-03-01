@@ -3,7 +3,9 @@ import jax.numpy as jnp
 from recovar.core import mask as mask_fn
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar
-from recovar import utils, simulator
+from recovar import utils
+from recovar.simulation import simulator
+from recovar.reconstruction import regularization
 import logging
 import jax
 logger = logging.getLogger(__name__)
@@ -252,7 +254,7 @@ def compute_local_fsc_v2(offset, ift_sum_orig, map1, map2, maskrad_pix, edgewidt
     map1_sub = map1_sub * mask
     map2_sub = map2_sub * mask
 
-    fsc = recovar.regularization.get_fsc(fourier_transform_utils.get_dft3(map1_sub), fourier_transform_utils.get_dft3(map2_sub), volume_shape = map1_sub.shape)
+    fsc = regularization.get_fsc(fourier_transform_utils.get_dft3(map1_sub), fourier_transform_utils.get_dft3(map2_sub), volume_shape = map1_sub.shape)
 
 
     # local_resol = jnp.argmin(fsc >= fsc_treshold)
@@ -284,7 +286,7 @@ def compute_local_fsc(offset, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, lo
     mask = mask_fn.raised_cosine_mask(ft_sum.shape, maskrad_pix, maskrad_pix + edgewidth_pix, offset)
     map1 = map1 * mask
     map2 = map2 * mask
-    fsc = recovar.regularization.get_fsc(fourier_transform_utils.get_dft3(map1), fourier_transform_utils.get_dft3(map2), volume_shape = map1.shape)
+    fsc = regularization.get_fsc(fourier_transform_utils.get_dft3(map1), fourier_transform_utils.get_dft3(map2), volume_shape = map1.shape)
 
     # first fsc above threshold
 
@@ -665,7 +667,7 @@ def split_by_shells(input_vec, volume_shape ):
     return split_by_shell
 
 
-from recovar import regularization
+from recovar.reconstruction import regularization
 
 
 @functools.partial(jax.jit, static_argnums = [3,4,5])    

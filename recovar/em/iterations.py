@@ -49,7 +49,7 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
         state_objs[i].finish_up_M_step(experiment_dataset, disc_type)
 
     ## Update prior and estimate resolution
-    from recovar import regularization
+    from recovar.reconstruction import regularization
     from recovar.heterogeneity import locres
     # sgd_updates priors
     cryo = experiment_datasets[0]
@@ -57,7 +57,7 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
     use_fsc_prior= state_objs[0].name != 'SGD'
     means = [state_obj.mean for state_obj in state_objs]
     if use_fsc_prior:
-        from recovar import relion_functions
+        from recovar.reconstruction import relion_functions
         # relion_functions.post_process_from_filter(experiment_dataset, self.Ft_CTF, self.Ft_y, tau = self.mean_variance, disc_type = disc_type).reshape(-1)
         unreg_means = [relion_functions.post_process_from_filter(experiment_dataset, state_obj.Ft_CTF, state_obj.Ft_y, tau = None, disc_type = disc_type) for state_obj in state_objs]
         mean_signal_variance, fsc, _ = regularization.compute_relion_prior(
@@ -78,11 +78,11 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
         mean_signal_variance += np.max(mean_signal_variance) * 1e-6
         # mean_signal_variance  = 1 /signal_variance
 
-    from recovar import plot_utils
+    from recovar.output import plot_utils
     # plot_utils.plot_fsc(cryo, means[0], means[1])
     
     ##  Estimate noise level
-    from recovar import noise
+    from recovar.reconstruction import noise
     # if heterogeneous:
     # This doesn't really make sense...
 

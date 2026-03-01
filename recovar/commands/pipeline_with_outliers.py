@@ -7,7 +7,7 @@ import pickle
 import shutil
 import logging
 import matplotlib
-from recovar import output
+from recovar.output import output
 
 # Import necessary functions from pipeline.py and output module
 from recovar.commands.pipeline import add_args, standard_recovar_pipeline

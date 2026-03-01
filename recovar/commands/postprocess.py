@@ -625,7 +625,7 @@ def estimate_bfactor_from_fsc_weighted_halfmaps(halfmap1, halfmap2, voxel_size, 
             map2 = halfmap2
         # Compute FSC if not provided
         if fsc_external is None:
-            from recovar.regularization import get_fsc
+            from recovar.reconstruction.regularization import get_fsc
             ft1 = fourier_transform_utils.get_dft3(map1)
             ft2 = fourier_transform_utils.get_dft3(map2)
             fsc = get_fsc(ft1, ft2, volume_shape=map1.shape)

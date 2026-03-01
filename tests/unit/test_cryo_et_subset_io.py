@@ -37,7 +37,7 @@ import pytest
 pytest.importorskip("jax")
 
 from helpers import tiny_synthetic
-from recovar import dataset as recovar_dataset, tilt_dataset
+from recovar.data_io import dataset as recovar_dataset, tilt_dataset
 
 pytestmark = pytest.mark.unit
 

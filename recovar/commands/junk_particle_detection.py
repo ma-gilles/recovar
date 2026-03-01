@@ -27,7 +27,9 @@ import matplotlib
 import matplotlib.pyplot as plt
 import logging
 from sklearn.cluster import KMeans
-from recovar import output, relion_functions, plot_utils, utils
+from recovar import utils
+from recovar.reconstruction import relion_functions
+from recovar.output import output, plot_utils
 
 
 def _safe_savefig(filepath, **kwargs):
@@ -224,7 +226,7 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
         
         # Apply low-pass filtering if requested
         if filter_resolution is not None:
-            from recovar import regularization
+            from recovar.reconstruction import regularization
             
             # Convert resolution to frequency
             freq_threshold = 1.0 / filter_resolution  # 1/Angstrom

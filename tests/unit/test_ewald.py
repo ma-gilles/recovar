@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar import ewald
+from recovar.reconstruction import ewald
 
 pytestmark = pytest.mark.unit
 

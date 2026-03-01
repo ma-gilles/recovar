@@ -1,5 +1,6 @@
 import recovar.jax_config
-from recovar import simulator, output
+from recovar.simulation import simulator
+from recovar.output import output
 import numpy as np
 import os
 import argparse

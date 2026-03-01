@@ -3,7 +3,8 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar import core, utils, simulator, jax_config
+from recovar import core, utils, jax_config
+from recovar.simulation import simulator
 from recovar.core import linalg, mask
 
 # Maybe should take out these dependencies?

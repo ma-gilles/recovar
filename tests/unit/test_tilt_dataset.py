@@ -1,7 +1,7 @@
 import pytest
 
-import recovar.cryo_dataset as cryo_dataset
-import recovar.tilt_dataset as tilt_dataset
+import recovar.data_io.cryo_dataset as cryo_dataset
+import recovar.data_io.tilt_dataset as tilt_dataset
 
 pytestmark = pytest.mark.unit
 

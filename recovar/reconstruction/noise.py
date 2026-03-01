@@ -5,7 +5,8 @@ import jax, time
 import functools
 import nvtx
 import equinox as eqx
-from recovar import core, regularization, utils, jax_config
+from recovar import core, utils, jax_config
+from recovar.reconstruction import regularization
 from recovar.heterogeneity import covariance_core
 import recovar.core.forward as core_forward
 from recovar.core.configs import ForwardModelConfig, BatchData, ModelState

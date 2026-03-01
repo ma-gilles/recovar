@@ -4,7 +4,7 @@ import pytest
 pytest.importorskip("jax")
 
 from recovar.heterogeneity import embedding
-from recovar.dataset import CryoEMHalfsets
+from recovar.data_io.dataset import CryoEMHalfsets
 
 pytestmark = pytest.mark.unit
 

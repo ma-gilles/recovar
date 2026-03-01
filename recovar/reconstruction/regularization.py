@@ -289,7 +289,7 @@ def prior_iteration(H0, H1, B0, B1, frequency_shift, init_regularization, substr
     
     return prior, fsc
 
-from recovar import relion_functions
+from recovar.reconstruction import relion_functions
 @functools.partial(jax.jit, static_argnums = [6,7,8,9,10, 12,13])    
 @nvtx.annotate("prior_iteration_relion_style", color="red", domain=NVTX_DOMAIN_REG)
 def prior_iteration_relion_style(H0, H1, B0, B1, frequency_shift, init_regularization, substract_shell_mean, volume_shape, kernel = 'triangular', use_spherical_mask = True, grid_correct = True, volume_mask = None, prior_iterations = 3, downsample_from_fsc_flag = False):

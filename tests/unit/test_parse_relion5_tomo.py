@@ -13,7 +13,7 @@ from recovar.commands.parse_relion5_tomo import (
     _parse_visible_frames,
     convert,
 )
-from recovar.starfile import read_star, StarFile
+from recovar.data_io.starfile import read_star, StarFile
 
 pytestmark = pytest.mark.unit
 

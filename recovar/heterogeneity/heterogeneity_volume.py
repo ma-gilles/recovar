@@ -1,9 +1,10 @@
 import recovar.jax_config
 import numpy as np
-from recovar import dataset
+from recovar.data_io import dataset
 import jax.numpy as jnp
 import jax.scipy
 from recovar import utils
+from recovar.output import output as output_mod
 from recovar.heterogeneity import locres
 from recovar.heterogeneity import adaptive_kernel_discretization
 import recovar.heterogeneity.latent_density
@@ -62,7 +63,7 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
     cryos = dataset.load_dataset_from_args(results['input_args'], lazy = False) if cryos is None else cryos
     output_folder = results['input_args'].outdir + "/output/" if output_folder is None else output_folder
     logger.info("Dumping to %s", output_folder)
-    recovar.output.mkdir_safe(output_folder)
+    output_mod.mkdir_safe(output_folder)
     noise_variance = results['cov_noise']
     latent_points = latent_point[None]
 
@@ -200,7 +201,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
                 opt_filtered_before, smoothed_choice = smoothed_best_choice(loc_filtered_estimates , choice, kernel_rad=kernel_rad)
                 recovar.utils.write_mrc(output_folder + name + prefix + "filtered_before_smooth.mrc", opt_filtered_before, voxel_size = cryos.voxel_size)
 
-            recovar.output.save_volumes(loc_filtered_estimates, output_folder + "estimates_filt", cryos.volume_shape, voxel_size = cryos.voxel_size, from_ft = from_ft)
+            output_mod.save_volumes(loc_filtered_estimates, output_folder + "estimates_filt", cryos.volume_shape, voxel_size = cryos.voxel_size, from_ft = from_ft)
 
             # recovar.utils.write_mrc(output_folder + name + "est_filtered.mrc", loc_filtered_estimates, voxel_size = cryos.voxel_size)
 
@@ -226,8 +227,8 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
 
     if save_all_estimates:
         # For debugging
-        recovar.output.save_volumes(estimates[0], output_folder + "estimates_half1_unfil", cryos.volume_shape, voxel_size = cryos.voxel_size, from_ft = from_ft)
-        recovar.output.save_volumes(estimates[1], output_folder + "estimates_half2_unfil", cryos.volume_shape, voxel_size = cryos.voxel_size, from_ft = from_ft)
+        output_mod.save_volumes(estimates[0], output_folder + "estimates_half1_unfil", cryos.volume_shape, voxel_size = cryos.voxel_size, from_ft = from_ft)
+        output_mod.save_volumes(estimates[1], output_folder + "estimates_half2_unfil", cryos.volume_shape, voxel_size = cryos.voxel_size, from_ft = from_ft)
 
         recovar.utils.write_mrc(output_folder + "CV_estimates_half1_unfil.mrc", cross_validation_estimators[0], voxel_size = cryos.voxel_size)
         recovar.utils.write_mrc(output_folder + "CV_noise_half1.mrc", lhs[0], voxel_size = cryos.voxel_size)

@@ -3,7 +3,7 @@ import numpy as np
 import time
 import nvtx
 
-from recovar import regularization
+from recovar.reconstruction import regularization
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ def get_mean_conformation_relion(cryos, batch_size, noise_variance=None, use_reg
         grid_correct: Whether to apply grid correction
     """
     st_time = time.time()
-    from recovar import relion_functions
+    from recovar.reconstruction import relion_functions
 
     means = {}
     ft_ctfs = [None, None]

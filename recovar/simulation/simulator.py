@@ -10,14 +10,16 @@ import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
-from recovar import core, dataset, noise
-from recovar import load_utils
+from recovar import core
+from recovar.reconstruction import noise
+from recovar.data_io import dataset
+from recovar.data_io import load_utils
 from recovar.core.configs import ForwardModelConfig
 
 CONSTANT_CTF=False
 logger = logging.getLogger(__name__)
 
-data_path = os.path.join(os.path.dirname(__file__),'data/')
+data_path = os.path.join(os.path.dirname(__file__), '..', 'data', '')
 
 # Two generators that load ctf and poses from real datasets
 def get_dataset_params(n_images, grid_size, ctf_file, poses_file):
@@ -378,7 +380,7 @@ def generate_synthetic_dataset(output_folder, voxel_size,  volumes_path_root, n_
                                image_dtype = np.float16, image_offset_n_std = 0.0, per_particle_contrast=True, 
                                premultiplied_ctf = False, noise_increase_per_tilt = None, 
                                create_nested_structure = False, nested_prefix = "Extract/job193", percent_tilt_series_outliers = 0.0):
-    from recovar import output
+    from recovar.output import output
     output.mkdir_safe(output_folder)
     volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize = False )
     scale_vol = 1 / np.mean(np.linalg.norm(volumes, axis =(-1)))
@@ -726,7 +728,7 @@ roll_batch = jax.vmap(lambda x,y,z: jax.numpy.roll(x,y,axis = z), in_axes = (0, 
 def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = 'linear_interp', mrc_file = None, pad_before_translate = False, Bfactor=100, premultiplied_ctf = False ):
 
     if disc_type == "pdb":
-        from recovar import simulate_scattering_potential as gsm
+        from recovar.simulation import simulate_scattering_potential as gsm
         gt_vols = [gsm.generate_volume_from_atoms(vol, voxel_size = experiment_dataset.voxel_size,  grid_size = experiment_dataset.grid_size,  freq_coords = None, jax_backend = False).reshape(-1) for vol in volumes ]
         B_fac_vols = [Bfactorize_vol(volume, experiment_dataset.voxel_size, Bfactor, experiment_dataset.volume_shape) for volume in gt_vols]
         gt_vols_norm = np.mean(np.linalg.norm(B_fac_vols, axis =(-1)))
@@ -794,7 +796,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 # disc_type_e = disc_type.split("_")[1]
                 disc_type_e = disc_type[6:]
 
-                from recovar import ewald
+                from recovar.reconstruction import ewald
                 # lam = ewald.volt_to_wavelength(experiment_dataset.CTF_params[0,3])
                 images_batch_real, images_batch_real_imag = ewald.ewald_sphere_forward_model(
                         volume.real, 
@@ -1013,7 +1015,7 @@ def simulate_nufft_data_batch_from_pdb(atom_group, rotation_matrices, translatio
 
 
 def compute_projections_with_nufft(atom_group, plane_coords, voxel_size):
-    from recovar import simulate_scattering_potential as gsm
+    from recovar.simulation import simulate_scattering_potential as gsm
     # plane_coords = cu.get_unrotated_plane_coords(image_shape, voxel_size, scaled =True )
 
     plane_coords_vec = np.array(plane_coords.reshape(-1, 3)).astype(np.float64)
@@ -1032,7 +1034,7 @@ def get_nufft_slices(volume, rotation_matrices, image_shape, volume_shape, grid_
     return clean_image_mol
 
 def compute_volume_projections_with_nufft(volume, plane_coords, voxel_size):
-    from recovar import simulate_scattering_potential as gsm
+    from recovar.simulation import simulate_scattering_potential as gsm
     # This is here because I don't want to impose the dependencies for nufft. If you want to run this, you should 
     # pip install finufft
     # plane_coords = cu.get_unrotated_plane_coords(image_shape, voxel_size, scaled =True )

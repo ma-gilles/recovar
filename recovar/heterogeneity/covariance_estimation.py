@@ -5,7 +5,8 @@ import jax, time
 import functools
 import nvtx
 import equinox as eqx
-from recovar import core, regularization, utils, jax_config, noise
+from recovar import core, utils, jax_config
+from recovar.reconstruction import regularization, noise
 from recovar.core import cubic_interpolation
 from recovar.heterogeneity import covariance_core
 from recovar.core.configs import ForwardModelConfig, BatchData, ModelState, CovarianceOpts
@@ -483,7 +484,7 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, b
 def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset = None, use_regularization = False, disc_type = '', noise_ind_subset = None, mean_cubic=None):
     st_time = time.time()
 
-    from recovar import relion_functions
+    from recovar.reconstruction import relion_functions
 
     variance = dict()
     lhs_l = 2 * [None]

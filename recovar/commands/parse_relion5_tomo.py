@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 from scipy.spatial.transform import Rotation as R
 
-from recovar import starfile
+from recovar.data_io import starfile
 
 logger = logging.getLogger(__name__)
 

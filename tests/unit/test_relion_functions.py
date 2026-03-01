@@ -6,7 +6,7 @@ import jax.numpy as jnp
 
 from recovar import jax_config
 from recovar import core
-from recovar import relion_functions as rf
+from recovar.reconstruction import relion_functions as rf
 
 
 def test_gridding_correct_invalid_order_raises():

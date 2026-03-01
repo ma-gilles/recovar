@@ -18,7 +18,7 @@ import jax
 import jax.numpy as jnp
 
 import recovar.heterogeneity.adaptive_kernel_discretization as akd
-from recovar.dataset import CryoEMHalfsets
+from recovar.data_io.dataset import CryoEMHalfsets
 from helpers.tiny_synthetic import make_tiny_cryo_dataset_with_images
 
 pytestmark = pytest.mark.unit

@@ -6,7 +6,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from recovar import output, utils
+from recovar import utils
+from recovar.output import output
 from recovar.heterogeneity import deconvolve_density
 
 logger = logging.getLogger(__name__)

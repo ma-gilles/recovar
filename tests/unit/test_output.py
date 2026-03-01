@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar import output
+from recovar.output import output
 
 pytestmark = pytest.mark.unit
 

@@ -1,6 +1,8 @@
 import numpy as np
-from recovar import core, noise
-from recovar import regularization, jax_config, utils
+from recovar import core
+from recovar.reconstruction import noise
+from recovar import jax_config, utils
+from recovar.reconstruction import regularization
 from recovar.core import padding, mask
 from recovar.core.configs import ForwardModelConfig
 import recovar.core.forward as core_forward

@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-import recovar.metrics as metrics
+import recovar.output.metrics as metrics
 from helpers.tiny_synthetic import make_tiny_hvd_from_simulation, make_tiny_simulation
 
 pytestmark = pytest.mark.unit

@@ -5,8 +5,8 @@ pytest.importorskip("jax")
 
 import recovar.heterogeneity.principal_components as pc
 import recovar.core as core
-from recovar import dataset
-from recovar.dataset import CryoEMHalfsets
+from recovar.data_io import dataset
+from recovar.data_io.dataset import CryoEMHalfsets
 from helpers.tiny_synthetic import make_tiny_simulation, make_tiny_cryo_dataset_with_images
 
 pytestmark = pytest.mark.unit

@@ -8,7 +8,6 @@ from recovar.heterogeneity import locres
 
 logger = logging.getLogger(__name__)
 import matplotlib.pyplot as plt
-from recovar import metrics
 import recovar
 import os.path
 

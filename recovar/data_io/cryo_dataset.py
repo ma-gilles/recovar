@@ -25,8 +25,8 @@ import jax.numpy as jnp
 
 import grain.python as grain
 
-from recovar.image_loader import ImageSource
-from recovar import starfile
+from recovar.data_io.image_loader import ImageSource
+from recovar.data_io import starfile
 from recovar.core import mask
 
 try:
@@ -159,7 +159,7 @@ class ParticleImageDataset:
         )
 
         if downsample_D is not None:
-            from recovar.image_loader import DownsamplingImageLoader
+            from recovar.data_io.image_loader import DownsamplingImageLoader
             self.source = DownsamplingImageLoader(self.source, downsample_D)
 
         self.image_size = self.source.D

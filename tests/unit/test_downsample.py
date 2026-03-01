@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-from recovar.downsample import downsample_images, downsample_images_batch
+from recovar.data_io.downsample import downsample_images, downsample_images_batch
 
 pytestmark = pytest.mark.unit
 

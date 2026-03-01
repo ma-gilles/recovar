@@ -3,10 +3,10 @@ import pandas as pd
 import pytest
 from pathlib import Path
 
-from recovar import image_loader
-from recovar import starfile
+from recovar.data_io import image_loader
+from recovar.data_io import starfile
 from recovar import utils
-from recovar import cryo_dataset
+from recovar.data_io import cryo_dataset
 
 pytestmark = pytest.mark.unit
 

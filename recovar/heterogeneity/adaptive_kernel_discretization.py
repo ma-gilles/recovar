@@ -14,7 +14,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar import core, dataset, jax_config, noise, regularization, relion_functions, utils
+from recovar import core, jax_config, utils
+from recovar.reconstruction import noise, regularization, relion_functions
+from recovar.data_io import dataset
 from recovar.core import linalg
 from recovar.core.configs import BatchData, ForwardModelConfig
 import recovar.core.forward as core_forward
@@ -601,7 +603,7 @@ def estimate_from_relion_style(cryos, discretization_params, XWXs, Fs, volume_sh
     assert pol_degree == 0, "Only p = 0 supported for now"
 
     volume_size = np.prod(cryos.volume_shape)
-    from recovar import relion_functions
+    from recovar.reconstruction import relion_functions
 
     # Polynomial estimates
     XWX_summed_neighbors = [None,None]
@@ -691,7 +693,7 @@ def pick_best_heterogeneity_from_residual(estimates, full_test_dataset, heteroge
 
 
     # residuals to pick best one
-    from recovar import dataset
+    from recovar.data_io import dataset
 
     if residual_threshold is not None:
         good_indices = heterogeneity_distances <= residual_threshold
@@ -870,7 +872,7 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, noise_varia
     first_estimates = first_estimates.reshape([*first_estimates.shape[:2], -1, first_estimates.shape[-1]])
 
 
-    from recovar import dataset
+    from recovar.data_io import dataset
     if residual_threshold is not None:
         good_indices = heterogeneity_distances[1] < residual_threshold
         test_dataset = dataset.subsample_cryoem_dataset(experiment_datasets[1], good_indices)
@@ -905,13 +907,13 @@ def naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, 
     og_contrast = experiment_dataset.CTF_params[:,8]
     idx =0 
     for residual_threshold in heterogeneity_bins:
-        from recovar import dataset
+        from recovar.data_io import dataset
         good_indices = heterogeneity_distances <= residual_threshold
         # utils.report_memory_device(logger=logger)
 
         test_dataset = dataset.subsample_cryoem_dataset(experiment_dataset, good_indices)
         utils.report_memory_device(logger=logger)
-        from recovar import relion_functions
+        from recovar.reconstruction import relion_functions
 
 
         if compute_lhs_rhs:
@@ -952,7 +954,8 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
 
 
     for idx in range(heterogeneity_bins.size):
-        from recovar import dataset, relion_functions
+        from recovar.reconstruction import relion_functions
+        from recovar.data_io import dataset
 
         estimate = relion_functions.post_process_from_filter(experiment_dataset, half_volume_to_full_volume(XWX[idx], experiment_dataset.upsampled_volume_shape), half_volume_to_full_volume(F[idx],experiment_dataset.upsampled_volume_shape), tau = tau, disc_type = disc_type, use_spherical_mask = True, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
         estimates.append(np.array(estimate.reshape(-1)))

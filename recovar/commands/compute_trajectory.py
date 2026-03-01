@@ -1,8 +1,9 @@
 import recovar.jax_config
 import logging
 import numpy as np
-from recovar import output as o
-from recovar import dataset, utils
+from recovar.output import output as o
+from recovar import utils
+from recovar.data_io import dataset
 from recovar.heterogeneity import latent_density, embedding
 import os, argparse
 from recovar.utils import parser_args

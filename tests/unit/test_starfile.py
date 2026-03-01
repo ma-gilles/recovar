@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from recovar.starfile import StarFile, read_star, write_star
+from recovar.data_io.starfile import StarFile, read_star, write_star
 
 pytestmark = pytest.mark.unit
 
