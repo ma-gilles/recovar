@@ -907,8 +907,16 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
     H_out = np.empty([volume_size, n_picked_indices], dtype=experiment_dataset.dtype)
     B_out = np.empty([volume_size, n_picked_indices], dtype=experiment_dataset.dtype)
     
-    # Transfer in batches to balance memory and performance
-    batch_size = 50  # Empirically determined from benchmarks
+    # Transfer in batches to balance memory and performance.
+    # Each element is volume_size * 8 bytes (complex64). Stacking N of them
+    # on GPU needs ~2 * N * volume_size * 8 bytes (input + output).
+    # Use available memory (not total) to avoid OOM when basis is resident.
+    gpu_mem_bytes = utils.get_gpu_memory_total() * 1e9
+    element_bytes = volume_size * 8  # complex64
+    # Use 10% of total GPU memory for stacking — conservative to account
+    # for basis, mean, and other resident allocations.
+    batch_size = max(1, int(0.10 * gpu_mem_bytes / (2 * element_bytes)))
+    batch_size = min(batch_size, 50)  # cap at 50 for performance
     with nvtx.annotate("batched_stack_transfer", color="yellow", domain=NVTX_DOMAIN_H_B):
         for batch_start in range(0, n_picked_indices, batch_size):
             batch_end = min(batch_start + batch_size, n_picked_indices)
