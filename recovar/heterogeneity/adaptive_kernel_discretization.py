@@ -682,7 +682,7 @@ def pick_best_heterogeneity_from_residual(estimates, full_test_dataset, heteroge
     max_pol_degree = np.max([ pol_degree for pol_degree, _, _ in discretization_params ])
 
     if residual_threshold is None:
-        logger.warning("didn't specify either residual_threshold or residual_num_images, using first bin with at least " + str(min_number_of_images_in_bin) + " images")
+        logger.warning("didn't specify either residual_threshold or residual_num_images, using first bin with at least %s images", min_number_of_images_in_bin)
         residual_threshold = heterogeneity_bins
         n_in_bins = np.zeros(heterogeneity_bins.size)
         for idx, b in enumerate(heterogeneity_bins):
@@ -701,7 +701,7 @@ def pick_best_heterogeneity_from_residual(estimates, full_test_dataset, heteroge
 
         assert test_dataset.n_images > 0, "No images in bin"
 
-    logger.info("Number of images used for residual computation: " + str(test_dataset.n_images))
+    logger.info("Number of images used for residual computation: %s", test_dataset.n_images)
 
     upsample_fac = test_dataset.volume_upsampling_factor
     test_dataset.update_volume_upsampling_factor(1)
@@ -880,7 +880,7 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, noise_varia
         good_indices = np.argsort(heterogeneity_distances[1])[:residual_num_images]
         test_dataset = dataset.subsample_cryoem_dataset(experiment_datasets[1], good_indices)
 
-    logger.info("Number of images used for residual computation: " + str(test_dataset.n_images))
+    logger.info("Number of images used for residual computation: %s", test_dataset.n_images)
     residuals, _ = compute_residuals_many_weights_in_weight_batch(test_dataset, first_estimates[0], max_pol_degree )
     all_params = []
     for param in discretization_params:

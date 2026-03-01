@@ -801,7 +801,7 @@ def main():
     pipeline_parser = pipeline.add_args(argparse.ArgumentParser())
     pipeline_args = pipeline_parser.parse_args(cmd)
     logger.info("\nRunning pipeline, as if:")
-    logger.info("recovar " + " ".join(cmd))
+    logger.info("recovar %s", " ".join(cmd))
     pipeline.standard_recovar_pipeline(pipeline_args)
 
 
@@ -848,7 +848,7 @@ def main():
     cs_args = cs_parser.parse_args(cmd)
 
     logger.info("\nRunning compute_state, as if:")
-    logger.info("recovar compute_state " + " ".join(cmd))
+    logger.info("recovar compute_state %s", " ".join(cmd))
 
     compute_state.compute_state(cs_args)
 
