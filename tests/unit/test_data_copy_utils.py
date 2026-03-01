@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from recovar import starfile, utils
-from recovar.utils_core import data_copy
+from recovar.utils import data_copy
 
 pytestmark = pytest.mark.unit
 

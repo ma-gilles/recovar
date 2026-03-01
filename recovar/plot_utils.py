@@ -15,7 +15,7 @@ except ImportError:
     dfi = None  # Functions relying on dfi will check for None and skip saving images
 
 import jax.numpy as jnp
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import regularization, utils, metrics
 colors = dict(mcolors.BASE_COLORS, **mcolors.CSS4_COLORS)
 

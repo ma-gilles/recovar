@@ -8,8 +8,9 @@ jnp = pytest.importorskip("jax.numpy")
 pytest.importorskip("mrcfile")
 pytest.importorskip("starfile")
 
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import utils
+from recovar.utils import helpers as _utils_helpers
 
 pytestmark = pytest.mark.unit
 
@@ -59,15 +60,15 @@ def test_estimate_variance():
 
 
 def test_get_gpu_memory_helpers_without_gpu(monkeypatch):
-    monkeypatch.setattr(utils, "GPU_MEMORY_LIMIT", None)
-    monkeypatch.setattr(utils, "jax_has_gpu", lambda: False)
+    monkeypatch.setattr(_utils_helpers, "GPU_MEMORY_LIMIT", None)
+    monkeypatch.setattr(_utils_helpers, "jax_has_gpu", lambda: False)
     assert utils.get_gpu_memory_total() == 80
     assert utils.get_gpu_memory_used() == 0
     assert utils.get_peak_gpu_memory_used() == 0
 
 
 def test_get_gpu_memory_total_limit_override(monkeypatch):
-    monkeypatch.setattr(utils, "GPU_MEMORY_LIMIT", 12)
+    monkeypatch.setattr(_utils_helpers, "GPU_MEMORY_LIMIT", 12)
     assert utils.get_gpu_memory_total() == 12
 
 
@@ -81,9 +82,9 @@ def test_get_gpu_memory_helpers_with_mocked_stats(monkeypatch):
                 "peak_bytes_in_use": 9 * 10**9,
             }
 
-    monkeypatch.setattr(utils, "GPU_MEMORY_LIMIT", None)
-    monkeypatch.setattr(utils, "jax_has_gpu", lambda: True)
-    monkeypatch.setattr(utils.jax, "local_devices", lambda: [FakeDevice()])
+    monkeypatch.setattr(_utils_helpers, "GPU_MEMORY_LIMIT", None)
+    monkeypatch.setattr(_utils_helpers, "jax_has_gpu", lambda: True)
+    monkeypatch.setattr(_utils_helpers.jax, "local_devices", lambda: [FakeDevice()])
     assert utils.get_gpu_memory_total() == 42
     assert utils.get_gpu_memory_used() == 7
     assert utils.get_peak_gpu_memory_used() == 9
@@ -92,20 +93,20 @@ def test_get_gpu_memory_helpers_with_mocked_stats(monkeypatch):
 def test_report_memory_device_with_logger(monkeypatch):
     captured = {"msg": None}
     logger = SimpleNamespace(info=lambda msg: captured.__setitem__("msg", msg))
-    monkeypatch.setattr(utils, "get_gpu_memory_used", lambda device=0: 1)
-    monkeypatch.setattr(utils, "get_peak_gpu_memory_used", lambda device=0: 2)
-    monkeypatch.setattr(utils, "get_gpu_memory_total", lambda device=0: 3)
-    monkeypatch.setattr(utils, "get_process_memory_used", lambda: 4)
-    utils.report_memory_device(logger=logger)
+    monkeypatch.setattr(_utils_helpers, "get_gpu_memory_used", lambda device=0: 1)
+    monkeypatch.setattr(_utils_helpers, "get_peak_gpu_memory_used", lambda device=0: 2)
+    monkeypatch.setattr(_utils_helpers, "get_gpu_memory_total", lambda device=0: 3)
+    monkeypatch.setattr(_utils_helpers, "get_process_memory_used", lambda: 4)
+    _utils_helpers.report_memory_device(logger=logger)
     assert "GPU mem in use:1; peak:2; total available:3, process mem in use:4" == captured["msg"]
 
 
 def test_report_memory_device_without_logger(monkeypatch, capsys):
-    monkeypatch.setattr(utils, "get_gpu_memory_used", lambda device=0: 1)
-    monkeypatch.setattr(utils, "get_peak_gpu_memory_used", lambda device=0: 2)
-    monkeypatch.setattr(utils, "get_gpu_memory_total", lambda device=0: 3)
-    monkeypatch.setattr(utils, "get_process_memory_used", lambda: 4)
-    utils.report_memory_device(logger=None)
+    monkeypatch.setattr(_utils_helpers, "get_gpu_memory_used", lambda device=0: 1)
+    monkeypatch.setattr(_utils_helpers, "get_peak_gpu_memory_used", lambda device=0: 2)
+    monkeypatch.setattr(_utils_helpers, "get_gpu_memory_total", lambda device=0: 3)
+    monkeypatch.setattr(_utils_helpers, "get_process_memory_used", lambda: 4)
+    _utils_helpers.report_memory_device(logger=None)
     captured = capsys.readouterr()
     assert "GPU mem in use:1; peak:2; total available:3, process mem in use:4" in captured.out
 

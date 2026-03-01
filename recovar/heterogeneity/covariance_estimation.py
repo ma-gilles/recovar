@@ -5,11 +5,12 @@ import jax, time
 import functools
 import nvtx
 import equinox as eqx
-from recovar import core, regularization, utils, jax_config, noise, cubic_interpolation
+from recovar import core, regularization, utils, jax_config, noise
+from recovar.core import cubic_interpolation
 from recovar.heterogeneity import covariance_core
-from recovar.configs import ForwardModelConfig, BatchData, ModelState, CovarianceOpts
+from recovar.core.configs import ForwardModelConfig, BatchData, ModelState, CovarianceOpts
 import recovar.core.forward as core_forward
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
 
@@ -561,7 +562,7 @@ def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequenc
 
     # Multi-GPU path
     if use_multi_gpu:
-        from recovar import multi_gpu_utils
+        from recovar.utils import multi_gpu as multi_gpu_utils
         
         logger.info("=" * 60)
         logger.info("MULTI-GPU MODE ENABLED")
@@ -886,7 +887,7 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
     return H_out, B_out
 
 
-from recovar import cubic_interpolation
+from recovar.core import cubic_interpolation
 vmap_calculate_spline_coefficients = jax.vmap(cubic_interpolation.calculate_spline_coefficients, in_axes = 0, out_axes = 0)
 
 @nvtx.annotate("compute_spline_coeffs_in_batch", color="magenta")

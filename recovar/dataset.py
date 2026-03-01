@@ -10,8 +10,9 @@ import numpy as np
 import pickle
 from numpy.typing import NDArray
 
-from recovar import plot_utils, core, mask
-import recovar.fourier_transform_utils as fourier_transform_utils
+from recovar import plot_utils, core
+from recovar.core import mask
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import tilt_dataset
 
 logger = logging.getLogger(__name__)
@@ -367,7 +368,7 @@ class CryoEMDataset:
         Returns:
             Predicted images in real space if spatial=True, otherwise in Fourier space
         """
-        from recovar.configs import ForwardModelConfig
+        from recovar.core.configs import ForwardModelConfig
         import recovar.core.forward as core_forward
         config = ForwardModelConfig.from_dataset(self, disc_type='linear_interp')
         predicted_images = core_forward.forward_model(

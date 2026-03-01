@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import mrcfile
 import numpy as np
 import psutil
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 import more_itertools
 

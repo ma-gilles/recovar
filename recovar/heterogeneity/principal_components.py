@@ -4,9 +4,10 @@ import numpy as np
 import jax, time
 import nvtx
 
-from recovar import core, plot_utils, linalg, jax_config, utils, noise
+from recovar import core, plot_utils, jax_config, utils, noise
+from recovar.core import linalg
 from recovar.heterogeneity import covariance_estimation, embedding
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
 

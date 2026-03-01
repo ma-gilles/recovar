@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import jax
 import functools
 
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 
 # PADDING FUNCTIONS 

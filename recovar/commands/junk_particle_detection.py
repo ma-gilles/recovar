@@ -43,7 +43,7 @@ def _safe_savefig(filepath, **kwargs):
     except (ValueError, TypeError):
         kwargs.pop('bbox_inches', None)
         plt.savefig(filepath, **kwargs)
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 import jax.numpy as jnp
 import seaborn as sns
 import mrcfile

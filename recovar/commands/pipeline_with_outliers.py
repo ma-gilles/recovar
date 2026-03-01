@@ -11,7 +11,7 @@ from recovar import output
 
 # Import necessary functions from pipeline.py and output module
 from recovar.commands.pipeline import add_args, standard_recovar_pipeline
-from recovar.utils_core import cleanup_temp_files
+from recovar.utils import cleanup_temp_files
 matplotlib.rcParams["contour.negative_linestyle"] = "solid"
 
 def run_pipeline_with_outlier_removal():

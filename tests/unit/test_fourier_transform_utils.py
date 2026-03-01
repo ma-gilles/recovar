@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 pytest.importorskip("jax")
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 pytestmark = pytest.mark.unit
 

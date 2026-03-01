@@ -1,9 +1,10 @@
 import numpy as np
 from recovar import core, noise
-from recovar import regularization, jax_config, utils, padding, mask
-from recovar.configs import ForwardModelConfig
+from recovar import regularization, jax_config, utils
+from recovar.core import padding, mask
+from recovar.core.configs import ForwardModelConfig
 import recovar.core.forward as core_forward
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 import jax.numpy as jnp
 import functools, logging, jax
 import equinox as eqx

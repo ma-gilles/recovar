@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 from recovar import core
-from recovar.configs import ForwardModelConfig
+from recovar.core.configs import ForwardModelConfig
 from .core import (
     batch_vol_slice_volume_by_map,
     batch_vol_rot_slice_volume_by_map,

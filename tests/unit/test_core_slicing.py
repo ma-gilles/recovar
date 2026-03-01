@@ -10,7 +10,7 @@ pytest.importorskip("jax")
 import jax
 import recovar.core as core
 import recovar.core.slicing as core_slicing
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 pytestmark = pytest.mark.unit
 
@@ -50,7 +50,7 @@ def _run_half_perf_case(case_name):
         os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
         import recovar.core.slicing as core_slicing
-        import recovar.fourier_transform_utils as fourier_transform_utils
+        import recovar.core.fourier_transform_utils as fourier_transform_utils
 
         case_name = os.environ["RECOVAR_HALF_PERF_CASE"]
         rng = np.random.default_rng(123)
@@ -727,7 +727,7 @@ def test_slice_volume_by_map_cubic_with_precomputed_spline_coefficients():
     map_coordinates_on_slices for order=3, which crashed when the volume was already the
     (N+2)^3 coefficient array (size mismatch with the N^3 volume_shape).
     """
-    import recovar.cubic_interpolation as cubic_interpolation
+    import recovar.core.cubic_interpolation as cubic_interpolation
 
     rng = np.random.default_rng(42)
     image_shape = (4, 8)
@@ -765,7 +765,7 @@ def test_slice_volume_by_map_cubic_flat_and_precomputed_agree():
     result as calling map_coordinates directly with those coefficients.
     The slice values should be finite and non-trivially zero for a non-zero volume.
     """
-    import recovar.cubic_interpolation as cubic_interpolation
+    import recovar.core.cubic_interpolation as cubic_interpolation
     from recovar.core.geometry import rotations_to_grid_point_coords
 
     rng = np.random.default_rng(43)
@@ -814,7 +814,7 @@ def test_adjoint_slice_volume_by_map_cubic_adjointness():
 
     This exercises the VJP code path that the rfft commits had broken.
     """
-    import recovar.cubic_interpolation as cubic_interpolation
+    import recovar.core.cubic_interpolation as cubic_interpolation
 
     rng = np.random.default_rng(44)
     image_shape = (4, 8)

@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 from recovar import core
-from recovar.configs import ForwardModelConfig
+from recovar.core.configs import ForwardModelConfig
 import numpy as np
 import logging
 from scipy.spatial.transform import Rotation as R
@@ -26,7 +26,7 @@ batch_vol_slice_volume_by_map = jax.vmap(core.slice_volume_by_map, in_axes = (0,
 
 
 
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 def crosscorr_from_ft(many_images, one_image, image_shape):
     return fourier_transform_utils.get_idft2( jnp.conj(one_image.reshape(1, *image_shape)) * (many_images.reshape(-1, *image_shape)))#.reshape(-1, *image_shape)).reshape(-1, *image_shape)
 

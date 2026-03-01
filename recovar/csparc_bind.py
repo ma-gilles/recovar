@@ -1,6 +1,6 @@
 import numpy as np
 from recovar import utils
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from os.path import exists
 
 def load_3dva_results(root, dft = False):

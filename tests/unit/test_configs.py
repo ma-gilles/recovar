@@ -8,7 +8,7 @@ pytest.importorskip("jax")
 
 import jax.numpy as jnp
 
-from recovar.configs import (
+from recovar.core.configs import (
     BatchData,
     CovarianceOpts,
     EmbeddingOpts,

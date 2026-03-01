@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-import recovar.padding as padding
+import recovar.core.padding as padding
 
 pytestmark = pytest.mark.unit
 

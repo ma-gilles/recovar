@@ -8,8 +8,8 @@ import equinox as eqx
 from recovar import core, regularization, utils, jax_config
 from recovar.heterogeneity import covariance_core
 import recovar.core.forward as core_forward
-from recovar.configs import ForwardModelConfig, BatchData, ModelState
-import recovar.fourier_transform_utils as fourier_transform_utils
+from recovar.core.configs import ForwardModelConfig, BatchData, ModelState
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 import os
 
 logger = logging.getLogger(__name__)
@@ -883,7 +883,7 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
 
     if disc_type == 'cubic':
         st_time = time.time()
-        from recovar import cubic_interpolation
+        from recovar.core import cubic_interpolation
         from recovar.heterogeneity import covariance_estimation
         mean_estimate = cubic_interpolation.calculate_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)

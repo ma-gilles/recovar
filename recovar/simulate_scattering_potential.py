@@ -18,7 +18,7 @@ def check_prody():
 
 import numpy as np
 from collections import defaultdict
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 FINUFFT_EPS = 1e-8
 
 # This code simulated the scattering potential of a molecule using a nufft, and the atomic positions, and the atomic shape function that was experimentally determined in a paper

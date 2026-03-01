@@ -5,11 +5,12 @@ import numpy as np
 import nvtx
 import equinox as eqx
 
-import recovar.padding as pad
+import recovar.core.padding as pad
 import functools
-from recovar import core, mask
-from recovar.configs import ForwardModelConfig
-import recovar.fourier_transform_utils as fourier_transform_utils
+from recovar import core
+from recovar.core import mask
+from recovar.core.configs import ForwardModelConfig
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.core.forward as core_forward
 
 logger = logging.getLogger(__name__)

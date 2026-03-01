@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("jax")
 import jax
 import recovar.core.forward as core_forward
-from recovar.configs import ForwardModelConfig
+from recovar.core.configs import ForwardModelConfig
 
 pytestmark = pytest.mark.unit
 

@@ -1,7 +1,7 @@
 import numpy as np
 import jax.numpy as jnp
-from recovar import mask as mask_fn
-import recovar.fourier_transform_utils as fourier_transform_utils
+from recovar.core import mask as mask_fn
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar
 from recovar import utils, simulator
 import logging

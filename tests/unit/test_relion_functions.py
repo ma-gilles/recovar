@@ -45,7 +45,7 @@ def test_adjust_regularization_relion_style_lower_bounded():
 
 def test_relion_kernel_batch_normalizes_noise_variance_shapes(monkeypatch):
     # Keep this test focused on noise-shape normalization behavior.
-    from recovar.configs import ForwardModelConfig
+    from recovar.core.configs import ForwardModelConfig
     import recovar.core.forward as core_forward_mod
     monkeypatch.setattr(core, "translate_images", lambda images, translations, image_shape: images)
     monkeypatch.setattr(

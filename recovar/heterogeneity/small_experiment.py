@@ -2,9 +2,10 @@ import numpy as np
 import jax.numpy as jnp
 import jax
 from jax.experimental import sparse
-from recovar import core, simulator, mask, utils
+from recovar import core, simulator, utils
+from recovar.core import mask
 from recovar.heterogeneity import covariance_estimation
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 import logging
 logger = logging.getLogger(__name__)
 

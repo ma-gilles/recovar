@@ -2,7 +2,8 @@ import logging
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar import utils, linalg, mask
+from recovar import utils
+from recovar.core import linalg, mask
 from recovar.heterogeneity import locres
 
 logger = logging.getLogger(__name__)
@@ -155,7 +156,7 @@ def masked_l2_difference(gt_map, target_map, voxel_size, mask= None ):
     return l2_error, bias
 
 def gt_mask_fn(gt_map):
-    from recovar import mask as mask_fn
+    from recovar.core import mask as mask_fn
     mask = mask_fn.make_mask_from_gt(gt_map, smax = 3, iter = 1 , from_ft = False)
     mask = (mask > 0.5).astype(bool)
 
@@ -183,7 +184,7 @@ def compute_volume_error_metrics_from_gt(gt_map, estimate_map, voxel_size, mask 
 def compute_volume_error_metrics_from_halfmaps(estimate1, estimate2, voxel_size, mask , partial_mask = None , normalize_by_map1 = False ):
     
     if mask is None:
-        from recovar import mask as mask_fn
+        from recovar.core import mask as mask_fn
         mask = mask_fn.make_mask_from_half_maps(estimate1, estimate2)
         mask = (mask > 1e-3).astype(bool)
     

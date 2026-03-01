@@ -5,8 +5,8 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 from recovar import core
-from recovar.configs import ForwardModelConfig
-import recovar.fourier_transform_utils as fourier_transform_utils
+from recovar.core.configs import ForwardModelConfig
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from .sampling import translations_to_indices
 from .core import VOL_AXIS
 logger = logging.getLogger(__name__)

@@ -7,8 +7,8 @@ from recovar.heterogeneity import embedding
 import pickle
 import os, argparse
 logger = logging.getLogger(__name__)
-from recovar import parser_args
-from recovar.utils_core import cleanup_temp_files, copy_data_from_pipeline_output
+from recovar.utils import parser_args
+from recovar.utils import cleanup_temp_files, copy_data_from_pipeline_output
 
 
 def add_args(parser: argparse.ArgumentParser):

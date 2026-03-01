@@ -8,7 +8,7 @@ from recovar.heterogeneity import locres
 from recovar.heterogeneity import adaptive_kernel_discretization
 import recovar.heterogeneity.latent_density
 import logging
-import recovar.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
 try:
     import nvtx
@@ -319,7 +319,7 @@ def choice_best_locres( estimates1, target0, voxel_size):
 
     return choice, locressol, choice2, auc_score
 
-from recovar import mask
+from recovar.core import mask
 def smoothed_best_choice(estimates, choice, kernel_rad = 4):
     smoothed_choice = mask.soften_volume_mask(choice, kernel_rad)
     bot_boundary = jnp.floor(smoothed_choice).astype(int)
