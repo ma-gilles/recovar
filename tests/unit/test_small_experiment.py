@@ -6,7 +6,7 @@ pytest.importorskip("jax")
 import jax.numpy as jnp
 from jax.experimental import sparse
 
-from recovar import small_experiment as se
+from recovar.heterogeneity import small_experiment as se
 
 
 def test_vec_unvec_roundtrip():

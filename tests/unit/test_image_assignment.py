@@ -6,7 +6,7 @@ import scipy.stats
 
 pytest.importorskip("jax")
 
-from recovar import image_assignment as ia
+from recovar.heterogeneity import image_assignment as ia
 
 pytestmark = pytest.mark.unit
 

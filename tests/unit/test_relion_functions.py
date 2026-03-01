@@ -43,8 +43,9 @@ def test_adjust_regularization_relion_style_lower_bounded():
     assert (reg_np >= jax_config.EPSILON).all()
 
 
-def test_relion_style_kernel_batch_normalizes_noise_variance_shapes(monkeypatch):
+def test_relion_kernel_batch_normalizes_noise_variance_shapes(monkeypatch):
     # Keep this test focused on noise-shape normalization behavior.
+    from recovar.configs import ForwardModelConfig
     import recovar.core.forward as core_forward_mod
     monkeypatch.setattr(core, "translate_images", lambda images, translations, image_shape: images)
     monkeypatch.setattr(
@@ -55,6 +56,13 @@ def test_relion_style_kernel_batch_normalizes_noise_variance_shapes(monkeypatch)
 
     def ctf_fun(params, image_shape, voxel_size):
         return jnp.ones((params.shape[0], image_shape[0] * image_shape[1]), dtype=jnp.float32)
+
+    config = ForwardModelConfig(
+        image_shape=(4, 4), volume_shape=(4, 4, 4),
+        grid_size=4, voxel_size=1.5,
+        padding=0, disc_type="linear_interp", CTF_fun=ctf_fun,
+        premultiplied_ctf=False, volume_mask_threshold=0.0,
+    )
 
     bsz = 5
     images = jnp.ones((bsz, 16), dtype=jnp.complex64)
@@ -69,19 +77,8 @@ def test_relion_style_kernel_batch_normalizes_noise_variance_shapes(monkeypatch)
         jnp.ones((bsz, 16), dtype=jnp.float32),
     ]
     for noise_var in candidate_noises:
-        ft_y, ft_ctf = rf.relion_style_triangular_kernel_batch(
-            images,
-            ctf_params,
-            rots,
-            trans,
-            (4, 4),
-            (4, 4, 4),
-            1.5,
-            ctf_fun,
-            "linear_interp",
-            noise_var,
-            False,
-            False,
+        ft_y, ft_ctf = rf.relion_kernel_batch(
+            config, images, ctf_params, rots, trans, noise_var,
         )
         assert np.asarray(ft_y).shape == (64,)
         assert np.asarray(ft_ctf).shape == (64,)

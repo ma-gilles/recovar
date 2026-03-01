@@ -86,6 +86,7 @@ class ForwardModelConfig(eqx.Module):
         cryo,
         disc_type: str = "linear_interp",
         process_fn: Optional[Callable] = None,
+        use_upsampled: bool = False,
     ) -> ForwardModelConfig:
         """Create from a CryoEMDataset or CryoEMHalfsets instance.
 
@@ -97,6 +98,9 @@ class ForwardModelConfig(eqx.Module):
             Discretization type (e.g. 'linear_interp', 'cubic', '').
         process_fn : callable, optional
             Image preprocessing function applied inside jitted code.
+        use_upsampled : bool
+            If True, use the upsampled volume shape/grid_size for
+            back-projection (needed by RELION-style reconstruction).
         """
         # CryoEMHalfsets.CTF_fun is a method; we need the underlying callable
         # that takes (ctf_params, image_shape, voxel_size) directly.
@@ -110,10 +114,17 @@ class ForwardModelConfig(eqx.Module):
             # Duck-type: assume it has the right attributes
             ctf_fun = cryo.CTF_fun
 
+        if use_upsampled:
+            volume_shape = tuple(cryo.upsampled_volume_shape)
+            grid_size = int(cryo.upsampled_grid_size)
+        else:
+            volume_shape = tuple(cryo.volume_shape)
+            grid_size = int(cryo.grid_size)
+
         return cls(
             image_shape=tuple(cryo.image_shape),
-            volume_shape=tuple(cryo.volume_shape),
-            grid_size=int(cryo.grid_size),
+            volume_shape=volume_shape,
+            grid_size=grid_size,
             voxel_size=float(cryo.voxel_size),
             padding=int(getattr(cryo, 'padding', 0)),
             disc_type=disc_type,
