@@ -23,7 +23,10 @@ from typing import Optional, List, Dict
 import numpy as np
 import jax.numpy as jnp
 
-import grain.python as grain
+try:
+    import grain.python as grain
+except ImportError:
+    grain = None
 
 from recovar.data_io.image_loader import ImageSource
 from recovar.data_io import starfile
@@ -604,6 +607,11 @@ class JAXDataLoader:
 
     def _iter_batches(self):
         """Yield collated batches from Grain-backed iteration."""
+        if grain is None:
+            raise ImportError(
+                "JAXDataLoader requires 'grain' (pip install grain). "
+                "Install it or use a different data loader."
+            )
         ds = grain.MapDataset.source(self.dataset)
         if self.shuffle:
             ds = ds.shuffle(seed=np.random.randint(0, 2**31))
