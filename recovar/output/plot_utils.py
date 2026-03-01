@@ -298,8 +298,6 @@ def plot_summary_t(pipeline_output, n_eigs=3, filename=None):
         plt.savefig(filename)
         plt.close()
 
-    return
-
 
 def plot_cov_results(u, s, max_eig=40, savefile=None):
     """Plot eigenvalue spectra and subspace angle comparison.

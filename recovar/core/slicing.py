@@ -25,7 +25,7 @@ def _check_cuda():
     try:
         from recovar.cuda_backproject import cuda_available
         return cuda_available()
-    except Exception:
+    except (ImportError, OSError):
         return False
 
 

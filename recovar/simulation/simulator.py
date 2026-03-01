@@ -202,7 +202,7 @@ def kent_sampling_scheme(n_images, grid_size, seed =0, arguments = None ):
     try:
         import sphstat
         
-    except Exception:
+    except ImportError:
         raise ImportError("sphstat is not installed. Please install it with `pip install sphstat`")
 
     if arguments is not None:

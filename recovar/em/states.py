@@ -17,7 +17,7 @@ def get_default_sgd_options():
     options['minibatch_size'] = 30
     options['steps_size'] = 'hess'
     options['mu'] = 0.9
-    return 
+    return options
 
 
 
@@ -33,21 +33,18 @@ class EMState():
         self.mean = mean
         self.mean_variance = mean_variance
         self.noise_variance = noise_variance
-        return
-    
+
     def E_step(self, experiment_dataset, rotations, translations, disc_type, big_image_batch):
         probabilities = E_with_precompute(experiment_dataset, self.mean, rotations, translations, self.noise_variance, disc_type, big_image_batch)
         return probabilities
-    
+
     def M_step(self, experiment_dataset, probabilities, rotations, translations, disc_type, big_image_batch):
         Ft_y_this, Ft_CTF_this = M_with_precompute(experiment_dataset, probabilities, rotations, translations, self.noise_variance, disc_type, big_image_batch)
         self.Ft_y += Ft_y_this
         self.Ft_CTF += Ft_CTF_this
-        return
 
     def finish_up_M_step(self, experiment_dataset, disc_type):
         self.mean = relion_functions.post_process_from_filter(experiment_dataset, self.Ft_CTF, self.Ft_y, tau = self.mean_variance, disc_type = disc_type).reshape(-1)
-        return
 
 
 
@@ -64,8 +61,7 @@ class SGDState():
         self.mean = mean
         self.mean_variance = mean_variance
         self.noise_variance = noise_variance
-        return
-    
+
     def E_step(self, experiment_dataset, rotations, translations, disc_type, big_image_batch):
         probabilities = E_with_precompute(experiment_dataset, self.mean, rotations, translations, self.noise_variance, disc_type, big_image_batch)
         return probabilities
@@ -107,11 +103,9 @@ class SGDState():
             )
 
         self.mean = mean
-        return
-        
+
     def finish_up_M_step(self, experiment_dataset, disc_type):
-        # nothing
-        return
+        pass
 
 
 class HeterogeneousEMState():
@@ -152,10 +146,7 @@ class HeterogeneousEMState():
         self.mean_variance = mean_variance
         self.noise_variance = noise_variance
         grid_size = utils.guess_grid_size_from_vol_size(mean.size)
-        self.volume_mask = mask_fn.raised_cosine_mask(3 * [grid_size], grid_size//2 -3, grid_size//2, -1)  
-        return
-    
-
+        self.volume_mask = mask_fn.raised_cosine_mask(3 * [grid_size], grid_size//2 -3, grid_size//2, -1)
 
     def E_step(self, experiment_dataset, rotations, translations, disc_type, big_image_batch):
         probabilities = E_with_precompute(experiment_dataset, self.mean, rotations, translations, self.noise_variance, disc_type, big_image_batch, u = self.u, s = self.s)

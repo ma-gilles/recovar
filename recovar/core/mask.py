@@ -261,8 +261,8 @@ def soft_mask_outside_map(vol, radius=-1, cosine_width=3, Mnoise=None):
 
     if Mnoise is None:
         sum_bg = jnp.sum((vol * mask) * (mask3 + mask2))
-        sum = jnp.sum((mask) * (mask3 + mask2))
-        avg_bg = sum_bg / sum
+        mask_sum = jnp.sum((mask) * (mask3 + mask2))
+        avg_bg = sum_bg / mask_sum
     else:
         avg_bg = None
 

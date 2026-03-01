@@ -227,8 +227,6 @@ class CryoEMDataset:
         self.upsampled_volume_shape = tuple(3*[self.grid_size * volume_upsampling_factor ])
         self.upsampled_volume_size = np.prod(self.upsampled_volume_shape)
 
-        return
-
     def get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
         return self.image_stack.get_dataset_generator(batch_size, num_workers=num_workers, **kwargs)
     
@@ -852,7 +850,7 @@ def _read_relion_halfsets_from_star(particles_file, ind_file=None, datadir=None,
     try:
         from recovar.data_io.starfile import read_star
         df, _ = read_star(particles_file)
-    except Exception:
+    except (ImportError, FileNotFoundError, ValueError):
         return None
 
     if '_rlnRandomSubset' not in df.columns:
