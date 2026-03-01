@@ -17,8 +17,6 @@ def E_M_batches_2(experiment_dataset, state_obj, rotations, translations, disc_t
     total_hidden = rotations.shape[0] * translations.shape[0]
     logger.info("starting precomp proj. Num rotations %s, num translations %s. Total = %s", rotations.shape[0], translations.shape[0], total_hidden)
     n_images_batch = int(memory_to_use * 1e9 / ( total_hidden * 8  ))
-    # If we count the allocated memor
-
     if n_images_batch < 1:
         n_images_batch = 1
         logger.warning("Memory to use is too small. Setting n_images_batch to %s. May run out of memory", n_images_batch)
@@ -53,7 +51,6 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
     ## Update prior and estimate resolution
     from recovar.reconstruction import regularization
     from recovar.heterogeneity import locres
-    # sgd_updates priors
     cryo = experiment_datasets[0]
 
     use_fsc_prior= state_objs[0].name != 'SGD'
@@ -86,7 +83,6 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
     noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)
     current_pixel_res = locres.find_fsc_resol(fsc, threshold = 1/7)
     current_res = current_pixel_res / cryo.voxel_size
-    # logger.info("Current resolution is", current_res, "pixel resolution: ", current_pixel_res)
     logger.info("Current resolution is %s, pixel resolution: %s", current_res, current_pixel_res)
 
     if state_objs[0].name == 'HeterogeneousEM':

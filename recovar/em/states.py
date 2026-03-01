@@ -85,7 +85,7 @@ class SGDState():
             logger.debug('|prior|/ grad: %s', np.linalg.norm( 2/ self.mean_variance * mean) / np.linalg.norm(grad))
             logger.debug('|x|: %s', np.linalg.norm( mean))
             logger.debug('|dx|: %s', np.linalg.norm( self.update))
-        mean -= self.update * 0.1#0.01 
+        mean -= self.update * 0.1
         mean = self.sgd_projection(mean)
 
         std_multiplier = 10
@@ -128,7 +128,6 @@ class HeterogeneousEMState():
     projected_cov_lhs = 0
     projected_cov_rhs = 0
     subspace = None
-    cov_cols = None
 
     # PCA stuff
     u = None
@@ -170,7 +169,6 @@ class HeterogeneousEMState():
             projected_cov_lhs_this, projected_cov_rhs_this = compute_projected_covariance_rhs_lhs(experiment_dataset, self.mean, self.subspace, rotations, translations, probabilities, None, self.noise_variance, disc_type_mean = self.covariance_options['disc_type'], disc_type_u = self.covariance_options['disc_type_u'], image_indices = big_image_batch)
             self.projected_cov_lhs += projected_cov_lhs_this
             self.projected_cov_rhs += projected_cov_rhs_this
-        return 
 
     def finish_up_M_step(self, experiment_dataset, disc_type):
         self.mean = relion_functions.post_process_from_filter(experiment_dataset, self.Ft_CTF, self.Ft_y, tau = self.mean_variance, disc_type = disc_type).reshape(-1)
@@ -187,10 +185,6 @@ class HeterogeneousEMState():
         
         self.cov_cols = post_process_vmap(self.H, self.B, experiment_dataset.volume_shape, 1, self.covariance_prior, self.covariance_options['left_kernel'], False, self.covariance_options['grid_correct'],  "square",  1, self.volume_mask ).reshape(self.H.shape[0], -1).T
 
-        # basis,_ = principal_components.get_cov_svds(cov_col0, picked_frequency_indices)
-        # spherical_mask = 
         memory_to_use = utils.get_gpu_memory_total()
         self.subspace, _ , _ = principal_components.randomized_real_svd_of_columns(self.cov_cols, self.picked_frequency_indices, None, experiment_dataset.volume_shape, 50, test_size=self.covariance_options['randomized_sketch_size'], gpu_memory_to_use=memory_to_use)
-        # Keep only the first n_pcs_to_compute
         self.subspace = self.subspace[:,:self.covariance_options['n_pcs_to_compute']]
-        return
