@@ -592,6 +592,24 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         info["has_slurm"] = _has_slurm()
         return jsonify(info)
 
+    @app.route("/debug/molstar")
+    def debug_molstar():
+        """Diagnostic page to test Mol* 3D viewer independently."""
+        # Pick the first available volume for testing
+        test_vol = request.args.get("path", "")
+        if not test_vol:
+            # Try to find any .mrc file from discovered jobs
+            for jid, job in manager._jobs.items():
+                vols_dir = os.path.join(job.output_dir, "volumes")
+                if os.path.isdir(vols_dir):
+                    for f in sorted(os.listdir(vols_dir)):
+                        if f.endswith(".mrc") and not f.startswith("eigen"):
+                            test_vol = os.path.join(vols_dir, f)
+                            break
+                if test_vol:
+                    break
+        return render_template("debug_molstar.html", test_vol=test_vol)
+
     return app
 
 

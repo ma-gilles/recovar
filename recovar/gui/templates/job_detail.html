@@ -413,9 +413,9 @@
                   </div>
                 </div>
               </div>
-              <!-- NGL 3D viewport -->
-              <div x-show="viewMode === '3d'" id="ngl-viewport-explore" style="height: 480px; position: relative;">
-                <div x-show="!currentVolumeName" class="absolute inset-0 flex items-center justify-center">
+              <!-- NGL 3D viewport wrapper -->
+              <div x-show="viewMode === '3d'" style="height: 480px; position: relative;">
+                <div x-show="!currentVolumeName" class="absolute inset-0 flex items-center justify-center z-[5]">
                   <p class="text-sm text-slate-600">Select a volume to visualize</p>
                 </div>
                 <div x-show="volumeLoading" class="absolute inset-0 flex items-center justify-center bg-slate-900/80 z-10">
@@ -424,6 +424,8 @@
                     Loading volume...
                   </div>
                 </div>
+                <!-- Isolated Mol* container: Alpine must not manage its children -->
+                <div id="ngl-viewport-explore" style="position: absolute; inset: 0;" x-ignore></div>
               </div>
               <!-- Slice viewer -->
               <div x-show="viewMode === 'slices'" class="p-4" style="min-height: 480px;">
@@ -653,9 +655,9 @@
                 </label>
               </div>
             </div>
-            <!-- 3D viewport -->
-            <div x-show="viewMode === '3d'" id="molstar-viewport-volumes" style="height: 520px; position: relative;">
-              <div x-show="!currentVolumeName" class="absolute inset-0 flex items-center justify-center">
+            <!-- 3D viewport wrapper -->
+            <div x-show="viewMode === '3d'" style="height: 520px; position: relative;">
+              <div x-show="!currentVolumeName" class="absolute inset-0 flex items-center justify-center z-[5]">
                 <p class="text-sm text-slate-600">Click a volume from the list to view it</p>
               </div>
               <div x-show="volumeLoading" class="absolute inset-0 flex items-center justify-center bg-slate-900/80 z-10">
@@ -664,6 +666,8 @@
                   Loading volume...
                 </div>
               </div>
+              <!-- Isolated Mol* container: Alpine must not manage its children -->
+              <div id="molstar-viewport-volumes" style="position: absolute; inset: 0;" x-ignore></div>
             </div>
             <!-- Slice viewer -->
             <div x-show="viewMode === 'slices'" class="p-4" style="min-height: 520px;">
@@ -1394,28 +1398,35 @@ function jobExplorer() {
       this.currentVolumePath = path;
       this.volumeLoading = true;
 
-      // Load volume info
       try {
-        const resp = await fetch('/api/volume/info?path=' + encodeURIComponent(path));
-        this.volumeInfo = await resp.json();
-        if (this.volumeInfo.shape) {
-          this.sliceMax = this.volumeInfo.shape[this.sliceAxis] - 1;
-          this.sliceIdx = Math.floor(this.sliceMax / 2);
+        // Load volume info
+        try {
+          const resp = await fetch('/api/volume/info?path=' + encodeURIComponent(path));
+          this.volumeInfo = await resp.json();
+          if (this.volumeInfo.shape) {
+            this.sliceMax = this.volumeInfo.shape[this.sliceAxis] - 1;
+            this.sliceIdx = Math.floor(this.sliceMax / 2);
+          }
+        } catch (e) {
+          console.error('Volume info error:', e);
+          this.volumeInfo = null;
         }
-      } catch (e) {
-        console.error('Volume info error:', e);
-        this.volumeInfo = null;
-      }
 
-      // Update slice view immediately
-      this.updateSlice();
+        // Update slice view immediately
+        this.updateSlice();
 
-      // Load 3D view if in 3D mode
-      if (this.viewMode === '3d') {
-        const isPC = this._isEigenvector(path);
-        await this._load3DVolume(path, { replace: !add, dualIso: isPC });
+        // Load 3D view if in 3D mode (with timeout to prevent hanging)
+        if (this.viewMode === '3d') {
+          const isPC = this._isEigenvector(path);
+          const timeoutMs = 30000;
+          await Promise.race([
+            this._load3DVolume(path, { replace: !add, dualIso: isPC }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('3D viewer timed out')), timeoutMs)),
+          ]).catch(e => console.error('3D volume load failed:', e.message));
+        }
+      } finally {
+        this.volumeLoading = false;
       }
-      this.volumeLoading = false;
     },
 
     async _load3DVolume(path, options = {}) {
@@ -1424,10 +1435,20 @@ function jobExplorer() {
 
       // Ensure DOM is ready (x-show may not have rendered yet)
       await this.$nextTick();
+      // Allow an extra frame for the browser to layout the now-visible container
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
       const el = document.getElementById(viewportId);
       if (!el) {
         console.warn('Viewport element not found:', viewportId);
         return;
+      }
+
+      // Verify the container has actual dimensions (needed for WebGL canvas)
+      const rect = el.getBoundingClientRect();
+      console.log(`Mol* viewport "${viewportId}": ${rect.width}x${rect.height}px`);
+      if (rect.width === 0 || rect.height === 0) {
+        console.error('Viewport has zero dimensions — container may be hidden');
       }
 
       const replaceAll = options.replace !== false;
@@ -1457,11 +1478,12 @@ function jobExplorer() {
           try {
             viewer = await molstar.Viewer.create(el, {
               layoutIsExpanded: false,
-              layoutShowControls: true,
+              layoutShowControls: false,
               layoutShowRemoteState: false,
               layoutShowSequence: false,
               layoutShowLog: false,
               layoutShowLeftPanel: false,
+              collapseLeftPanel: true,
               collapseRightPanel: true,
               viewportShowExpand: false,
               viewportShowSelectionMode: false,
@@ -1472,39 +1494,36 @@ function jobExplorer() {
             throw new Error('Failed to create Mol* viewer (WebGL may not be available): ' + createErr.message);
           }
 
-          viewer.plugin.canvas3d?.setProps({
+          // Verify WebGL context was created
+          if (!viewer.plugin.canvas3d) {
+            throw new Error('WebGL context failed to initialize (canvas3d is null). Check browser WebGL support.');
+          }
+
+          viewer.plugin.canvas3d.setProps({
             renderer: { backgroundColor: 0x0f172a },
           });
 
           this.viewer = viewer;
           this.viewerTarget = viewportId;
+          console.log('Mol* viewer created successfully');
         }
 
-        // Build isosurface config — PCs get both +σ (blue) and -σ (red)
+        // Build isosurface config — PCs get both +sigma (blue) and -sigma (red)
         const isoConfigs = dualIso
           ? [
-              { type: 'relative', value: this.isoLevel, color: 0x38bdf8, alpha: this.isoAlpha },   // + (blue)
-              { type: 'relative', value: -this.isoLevel, color: 0xf43f5e, alpha: this.isoAlpha },   // - (red)
+              { type: 'relative', value: this.isoLevel, color: 0x38bdf8, alpha: this.isoAlpha },
+              { type: 'relative', value: -this.isoLevel, color: 0xf43f5e, alpha: this.isoAlpha },
             ]
           : [
               { type: 'relative', value: this.isoLevel, color: color, alpha: this.isoAlpha },
             ];
 
-        // Load the volume — try 'ccp4' format first (Mol* has better support), fall back to 'mrc'
-        try {
-          await this.viewer.loadVolumeFromUrl(
-            { url, format: 'ccp4', isBinary: true },
-            isoConfigs,
-            { entryId: this.currentVolumeName }
-          );
-        } catch (ccp4Err) {
-          console.warn('CCP4 format failed, trying MRC:', ccp4Err.message);
-          await this.viewer.loadVolumeFromUrl(
-            { url, format: 'mrc', isBinary: true },
-            isoConfigs,
-            { entryId: this.currentVolumeName }
-          );
-        }
+        // Load the volume using CCP4 format (MRC2014 is CCP4-compatible)
+        await this.viewer.loadVolumeFromUrl(
+          { url, format: 'ccp4', isBinary: true },
+          isoConfigs,
+          { entryId: this.currentVolumeName }
+        );
 
         // Track loaded volume
         if (dualIso) {
@@ -1540,13 +1559,17 @@ function jobExplorer() {
         console.log('Mol* volume loaded:', this.currentVolumeName);
       } catch (e) {
         console.error('Mol* 3D load error:', e);
+        this.viewer = null;
         el.innerHTML = `
-          <div class="flex flex-col items-center justify-center h-full text-slate-400 gap-4">
-            <p class="text-xs">3D viewer error: ${e.message || 'unknown'}</p>
+          <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:#94a3b8;padding:20px;">
+            <p style="font-size:13px;font-weight:600;color:#f87171;">3D Viewer Error</p>
+            <p style="font-size:11px;max-width:500px;text-align:center;word-break:break-word;">${(e.message || 'unknown').replace(/</g, '&lt;')}</p>
             <img src="/api/volume/slice?path=${encodeURIComponent(path)}&axis=2"
-                 class="max-h-80 rounded-lg" alt="Central slice">
-            <button onclick="this.closest('[x-data]').__x.$data.viewMode='slices'"
-                    class="text-xs text-sky-400 hover:text-sky-300">Switch to slice view</button>
+                 style="max-height:280px;border-radius:8px;" alt="Central slice fallback">
+            <div style="display:flex;gap:8px;">
+              <a href="/debug/molstar?path=${encodeURIComponent(path)}" target="_blank"
+                 style="font-size:11px;color:#38bdf8;text-decoration:underline;">Run diagnostics</a>
+            </div>
           </div>`;
       }
     },
