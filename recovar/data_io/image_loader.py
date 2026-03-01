@@ -52,6 +52,15 @@ logger = logging.getLogger(__name__)
 NVTX_DOMAIN_DATA_IO = "data_io"
 
 
+def _swap_mrc_ext(filepath: str) -> Optional[str]:
+    """Return filepath with .mrc/.mrcs swapped, or None if not applicable."""
+    if filepath.endswith('.mrc'):
+        return filepath + 's'
+    elif filepath.endswith('.mrcs'):
+        return filepath[:-1]
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Index helpers
 # ---------------------------------------------------------------------------
@@ -417,9 +426,11 @@ class MultiMRCLoader(ImageLoader):
     """Load images distributed across multiple MRC files."""
 
     def __init__(self, file_map: pd.DataFrame, indices: Optional[np.ndarray] = None,
-                 lazy: bool = True, max_threads: int = 1):
+                 lazy: bool = True, max_threads: int = 1,
+                 raw_paths: Optional[list] = None):
         self._file_map = file_map.copy()
         self._max_threads = max_threads
+        self._raw_paths = raw_paths  # original paths from metadata (for error hints)
 
         if indices is not None:
             iloc_idx = _normalize_selection_indices(
@@ -437,26 +448,44 @@ class MultiMRCLoader(ImageLoader):
 
         self._loaders: dict[str, MRCLoader] = {}
         missing_files = []
+        ext_swaps: dict[str, str] = {}  # original -> swapped path
         for filepath in self._file_map['mrc_file'].unique():
             try:
                 self._loaders[filepath] = MRCLoader(filepath, lazy=True)
             except FileNotFoundError:
-                missing_files.append(filepath)
+                # Try .mrc <-> .mrcs swap (common in cryo-EM workflows)
+                swapped = _swap_mrc_ext(filepath)
+                if swapped and os.path.isfile(swapped):
+                    self._loaders[filepath] = MRCLoader(swapped, lazy=True)
+                    ext_swaps[filepath] = swapped
+                    logger.info("File not found: %s, using %s instead", filepath, swapped)
+                else:
+                    missing_files.append(filepath)
+
+        # Update file_map to use the swapped paths so _load() uses correct keys
+        if ext_swaps:
+            self._file_map['mrc_file'] = self._file_map['mrc_file'].replace(ext_swaps)
+            # Re-key loaders under the new paths
+            for old, new in ext_swaps.items():
+                self._loaders[new] = self._loaders.pop(old)
 
         if missing_files:
             n_missing = len(missing_files)
             sample = missing_files[0]
             basename = os.path.basename(sample)
-            hint = ""
-            parent_parts = sample.rsplit('/', 2)
-            if len(parent_parts) >= 2:
-                hint = (
-                    f"\n\nTo fix broken paths, try:\n"
-                    f"  --datadir /path/to/directory/containing/{basename}\n"
-                )
-                if '/' in sample:
-                    prefix = sample.rsplit('/', 1)[0]
-                    hint += f"  --strip-prefix {prefix}\n"
+            hint = (
+                f"\n\nTo fix broken paths, try:\n"
+                f"  --datadir /path/to/directory/containing/{basename}\n"
+            )
+            # Use raw metadata path for strip-prefix hint (before datadir was joined)
+            if self._raw_paths:
+                raw_sample = self._raw_paths[0]
+                if '/' in raw_sample:
+                    raw_prefix = raw_sample.rsplit('/', 1)[0]
+                    hint += f"  --strip-prefix {raw_prefix}\n"
+            elif '/' in sample:
+                prefix = sample.rsplit('/', 1)[0]
+                hint += f"  --strip-prefix {prefix}\n"
             raise FileNotFoundError(
                 f"Cannot find {n_missing} MRC file(s) referenced in the metadata.\n"
                 f"  First missing: {sample}\n"
@@ -607,9 +636,13 @@ class StarLoader(MultiMRCLoader):
         else:
             datadir = os.path.abspath(datadir)
 
+        # Save raw paths (after strip but before datadir join) for error hints
+        raw_paths = df['mrc_file'].unique().tolist()
+
         df['mrc_file'] = df['mrc_file'].apply(lambda p: os.path.join(datadir, p))
 
-        super().__init__(df[['mrc_file', 'mrc_index']], indices, lazy, max_threads)
+        super().__init__(df[['mrc_file', 'mrc_index']], indices, lazy, max_threads,
+                         raw_paths=raw_paths)
 
 
 class CryoSparcLoader(MultiMRCLoader):
@@ -651,11 +684,14 @@ class CryoSparcLoader(MultiMRCLoader):
         elif not os.path.isabs(datadir):
             datadir = os.path.join(os.path.dirname(filepath), datadir)
 
+        # Save raw paths (after strip but before datadir join) for error hints
+        raw_paths = list(dict.fromkeys(clean_paths))  # unique, order-preserving
+
         full_paths = [os.path.join(datadir, p) for p in clean_paths]
 
         df = pd.DataFrame({'mrc_file': full_paths, 'mrc_index': blob_idx})
 
-        super().__init__(df, indices, lazy, max_threads)
+        super().__init__(df, indices, lazy, max_threads, raw_paths=raw_paths)
 
 
 # ---------------------------------------------------------------------------
