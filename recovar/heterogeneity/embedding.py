@@ -1,7 +1,7 @@
 import logging
 import jax.numpy as jnp
 import numpy as np
-import functools, time, jax
+import time, jax
 import nvtx
 import equinox as eqx
 from recovar import core, jax_config, utils

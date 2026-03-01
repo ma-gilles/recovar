@@ -429,8 +429,6 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
         return x / diag_mean
     
 
-    import matplotlib.pyplot as plt
-    
     import scipy.sparse
     import inspect
 

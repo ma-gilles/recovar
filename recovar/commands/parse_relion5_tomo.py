@@ -19,7 +19,6 @@ Usage::
 import argparse
 import logging
 import os
-import sys
 from ast import literal_eval
 
 import mrcfile
