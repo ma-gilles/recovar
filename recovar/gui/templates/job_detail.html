@@ -3,7 +3,7 @@
 {% block page_title %}{{ job.name }}{% endblock %}
 
 {% block content %}
-<div class="fade-in space-y-6" x-data="{ tab: 'overview' }">
+<div class="fade-in space-y-5" x-data="jobExplorer()" x-init="init()">
 
   <!-- Header -->
   <div class="flex items-center justify-between">
@@ -15,11 +15,9 @@
       </a>
       <div>
         <h2 class="text-xl font-bold text-white">{{ job.name }}</h2>
-        <p class="text-sm text-slate-400">{{ job.output_dir }}</p>
+        <p class="text-xs text-slate-500 font-mono truncate max-w-lg">{{ job.output_dir }}</p>
       </div>
     </div>
-
-    <!-- Status badge (auto-refreshes) -->
     <div id="status-badge"
          hx-get="{{ url_for('api_job_status', job_id=job.id) }}"
          hx-trigger="load{% if job.status in ('running', 'queued') %}, every 5s{% endif %}"
@@ -37,22 +35,26 @@
   <!-- Tabs -->
   <div class="border-b border-slate-800">
     <nav class="flex gap-1" role="tablist">
-      {% for t, label in [('overview', 'Overview'), ('logs', 'Logs'), ('results', 'Results'), ('volumes', 'Volumes'), ('params', 'Parameters')] %}
-      <button @click="tab = '{{ t }}'"
-              :class="tab === '{{ t }}' ? 'text-sky-400 border-sky-400' : 'text-slate-400 border-transparent hover:text-slate-200'"
-              class="px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px">
-        {{ label }}
-      </button>
-      {% endfor %}
+      <template x-for="t in tabs" :key="t.id">
+        <button @click="tab = t.id"
+                :class="tab === t.id ? 'text-sky-400 border-sky-400' : 'text-slate-400 border-transparent hover:text-slate-200'"
+                class="px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px flex items-center gap-2">
+          <span x-text="t.label"></span>
+          <template x-if="t.badge">
+            <span class="bg-slate-700 text-slate-300 text-[10px] px-1.5 py-0.5 rounded-full" x-text="t.badge"></span>
+          </template>
+        </button>
+      </template>
     </nav>
   </div>
 
-  <!-- Tab: Overview -->
-  <div x-show="tab === 'overview'" class="space-y-6">
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <!-- Info cards -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- Tab: Overview                                                   -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div x-show="tab === 'overview'" class="space-y-5">
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
       <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
-        <div class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">Status</div>
+        <div class="text-[11px] font-medium text-slate-500 uppercase tracking-wider mb-2">Status</div>
         <div class="text-lg font-semibold
           {% if job.status == 'completed' %}text-emerald-400
           {% elif job.status == 'running' %}text-sky-400
@@ -60,43 +62,72 @@
           {% else %}text-red-400{% endif %}">
           {{ job.status|upper }}
         </div>
-        {% if job.slurm_job_id %}
-        <div class="text-xs text-slate-500 mt-1">SLURM ID: {{ job.slurm_job_id }}</div>
-        {% endif %}
-        {% if job.error %}
-        <div class="text-xs text-red-400 mt-1">{{ job.error }}</div>
-        {% endif %}
+        {% if job.slurm_job_id %}<div class="text-xs text-slate-500 mt-1">SLURM: {{ job.slurm_job_id }}</div>{% endif %}
+        {% if job.error %}<div class="text-xs text-red-400 mt-1">{{ job.error }}</div>{% endif %}
       </div>
 
       <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
-        <div class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">Particles</div>
+        <div class="text-[11px] font-medium text-slate-500 uppercase tracking-wider mb-2">Dataset</div>
         <div class="text-sm text-white truncate">{{ job.particles.split('/')[-1] if job.particles else 'N/A' }}</div>
-        {% if job.n_images %}
-        <div class="text-xs text-slate-500 mt-1">{{ "{:,}".format(job.n_images) }} images</div>
-        {% endif %}
+        {% if job.n_images %}<div class="text-xs text-slate-500 mt-1">{{ "{:,}".format(job.n_images) }} images</div>{% endif %}
       </div>
 
       <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
-        <div class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">Created</div>
-        <div class="text-sm text-white">{{ job.created_str }}</div>
-        {% if job.grid_size %}
-        <div class="text-xs text-slate-500 mt-1">Box {{ job.grid_size }}{% if job.downsample %} → {{ job.downsample }}{% endif %}</div>
-        {% endif %}
+        <div class="text-[11px] font-medium text-slate-500 uppercase tracking-wider mb-2">Resolution</div>
+        <div class="text-sm text-white">
+          {% if job.grid_size %}Box {{ job.grid_size }}{% if job.downsample %} &rarr; {{ job.downsample }}{% endif %}{% else %}N/A{% endif %}
+        </div>
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div class="text-[11px] font-medium text-slate-500 uppercase tracking-wider mb-2">Created</div>
+        <div class="text-sm text-white">{{ job.created_str or 'N/A' }}</div>
       </div>
     </div>
 
-    <!-- Quick preview of results -->
+    <!-- What's available -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-5" x-show="analysisInfo">
+      <h3 class="text-sm font-semibold text-slate-300 mb-3">Available Results</h3>
+      <div class="flex flex-wrap gap-2">
+        <template x-if="analysisInfo && analysisInfo.volumes && analysisInfo.volumes.length > 0">
+          <button @click="tab = 'volumes'" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 transition-colors">
+            <span x-text="analysisInfo.volumes.length + ' Volumes'"></span>
+          </button>
+        </template>
+        <template x-if="analysisInfo && analysisInfo.has_embeddings">
+          <button @click="tab = 'explore'" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-violet-500/10 text-violet-400 hover:bg-violet-500/20 transition-colors">
+            Latent Space Explorer
+          </button>
+        </template>
+        <template x-for="[zdim, info] in Object.entries(analysisInfo?.analyses || {})">
+          <div class="flex gap-1">
+            <template x-if="info.kmeans_volumes && info.kmeans_volumes.length > 0">
+              <button @click="tab = 'volumes'" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors">
+                <span x-text="'K-means (z=' + zdim + ')'"></span>
+              </button>
+            </template>
+            <template x-if="info.trajectories && info.trajectories.length > 0">
+              <button @click="tab = 'volumes'" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 transition-colors">
+                <span x-text="info.trajectories.length + ' Trajectories (z=' + zdim + ')'"></span>
+              </button>
+            </template>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Quick preview -->
     {% set images = job.result_images %}
     {% if images %}
     <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
-      <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">Result Preview</h3>
-      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+      <h3 class="text-sm font-semibold text-slate-300 mb-3">Result Preview</h3>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
         {% for img in images[:8] %}
         <div class="bg-slate-800 rounded-lg overflow-hidden cursor-pointer hover:ring-2 hover:ring-sky-500 transition-all"
-             @click="tab = 'results'">
+             @click="tab = 'images'">
           <img src="{{ url_for('api_image', path=img) }}" alt="{{ img.split('/')[-1] }}"
-               class="w-full h-32 object-contain" loading="lazy">
-          <div class="px-2 py-1.5 text-[11px] text-slate-400 truncate">{{ img.split('/')[-1] }}</div>
+               class="w-full h-28 object-contain" loading="lazy">
+          <div class="px-2 py-1 text-[10px] text-slate-400 truncate">{{ img.split('/')[-1] }}</div>
         </div>
         {% endfor %}
       </div>
@@ -106,140 +137,451 @@
     <!-- Actions -->
     <div class="flex gap-3">
       {% if job.status in ('running', 'queued') %}
-      <form method="POST" action="{{ url_for('cancel_job', job_id=job.id) }}"
-            onsubmit="return confirm('Cancel this job?')">
-        <button class="px-4 py-2 text-sm font-medium text-red-400 bg-red-400/10 hover:bg-red-400/20 rounded-lg transition-colors">
-          Cancel Job
-        </button>
+      <form method="POST" action="{{ url_for('cancel_job', job_id=job.id) }}" onsubmit="return confirm('Cancel this job?')">
+        <button class="px-4 py-2 text-sm font-medium text-red-400 bg-red-400/10 hover:bg-red-400/20 rounded-lg transition-colors">Cancel Job</button>
       </form>
       {% endif %}
-      <form method="POST" action="{{ url_for('delete_job', job_id=job.id) }}"
-            onsubmit="return confirm('Remove this job from the list? (Output files are preserved)')">
-        <button class="px-4 py-2 text-sm font-medium text-slate-400 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors">
-          Remove from List
-        </button>
+      <form method="POST" action="{{ url_for('delete_job', job_id=job.id) }}" onsubmit="return confirm('Remove from list? (Output files are preserved)')">
+        <button class="px-4 py-2 text-sm font-medium text-slate-400 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors">Remove from List</button>
       </form>
     </div>
   </div>
 
-  <!-- Tab: Logs -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- Tab: Explore (Embedding + Volume Viewer)                        -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div x-show="tab === 'explore'" x-cloak class="space-y-4">
+
+    <!-- No embeddings message -->
+    <template x-if="!analysisInfo || !analysisInfo.has_embeddings">
+      <div class="text-center py-16">
+        <div class="w-16 h-16 rounded-2xl bg-slate-800/50 flex items-center justify-center mx-auto mb-4">
+          <svg class="w-8 h-8 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+          </svg>
+        </div>
+        <h3 class="text-lg font-semibold text-white mb-2">No Embeddings Available</h3>
+        <p class="text-slate-400 text-sm max-w-md mx-auto">
+          Embeddings will appear here once the pipeline completes.
+          Run <code class="text-sky-400 bg-sky-400/10 px-1.5 py-0.5 rounded">recovar pipeline</code> to compute them.
+        </p>
+      </div>
+    </template>
+
+    <template x-if="analysisInfo && analysisInfo.has_embeddings">
+      <div class="space-y-4">
+        <!-- zdim selector + axis selector -->
+        <div class="flex items-center justify-between flex-wrap gap-3">
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-slate-500 font-medium">Latent Dim:</span>
+            <div class="flex gap-1">
+              <template x-for="z in analysisInfo.available_zdims" :key="z">
+                <button @click="selectZdim(z)"
+                        :class="selectedZdim === z ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'"
+                        class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
+                        x-text="'z=' + z"></button>
+              </template>
+            </div>
+          </div>
+          <div class="flex items-center gap-3" x-show="embeddingData && embeddingData.zdim > 2">
+            <div class="flex items-center gap-1.5">
+              <span class="text-xs text-slate-500">X:</span>
+              <select x-model.number="axisX" @change="renderPlot()" class="bg-slate-800 text-white text-xs rounded px-2 py-1 border border-slate-700">
+                <template x-for="i in Array.from({length: Math.min(embeddingData?.zdim || 2, 10)}, (_, k) => k)" :key="i">
+                  <option :value="i" x-text="'PC ' + (i+1)"></option>
+                </template>
+              </select>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <span class="text-xs text-slate-500">Y:</span>
+              <select x-model.number="axisY" @change="renderPlot()" class="bg-slate-800 text-white text-xs rounded px-2 py-1 border border-slate-700">
+                <template x-for="i in Array.from({length: Math.min(embeddingData?.zdim || 2, 10)}, (_, k) => k)" :key="i">
+                  <option :value="i" x-text="'PC ' + (i+1)"></option>
+                </template>
+              </select>
+            </div>
+          </div>
+          <div class="text-xs text-slate-500" x-show="embeddingData">
+            <span x-text="embeddingData?.n_displayed?.toLocaleString() || ''"></span>
+            <span x-show="embeddingData && embeddingData.n_displayed < embeddingData.n_total">
+              / <span x-text="embeddingData?.n_total?.toLocaleString() || ''"></span>
+            </span>
+            particles
+          </div>
+        </div>
+
+        <!-- Two-panel layout -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <!-- Left: Embedding scatter -->
+          <div class="space-y-3">
+            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+              <div id="embedding-plot" style="height: 480px;" class="relative">
+                <div x-show="embeddingLoading" class="absolute inset-0 flex items-center justify-center bg-slate-900/80 z-10">
+                  <div class="flex items-center gap-3 text-slate-400">
+                    <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    Loading embedding...
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Selected points + action buttons -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+              <div class="flex items-center justify-between">
+                <h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Selection</h4>
+                <div class="flex gap-2">
+                  <button @click="clearSelection()" x-show="selectedPoint"
+                          class="text-xs text-slate-500 hover:text-slate-300 transition-colors">Clear</button>
+                </div>
+              </div>
+
+              <div x-show="!selectedPoint" class="text-xs text-slate-500 py-2">
+                Click a point in the scatter plot to select it.
+                <span class="text-slate-600">Shift+click to select a second point for trajectory.</span>
+              </div>
+
+              <div x-show="selectedPoint" class="space-y-2">
+                <div class="flex items-center gap-2">
+                  <span class="w-3 h-3 rounded-full bg-rose-500 flex-shrink-0"></span>
+                  <span class="text-xs text-slate-300">Point A:</span>
+                  <span class="text-xs text-white font-mono" x-text="formatCoords(selectedPoint)"></span>
+                </div>
+                <div x-show="selectedPoint2" class="flex items-center gap-2">
+                  <span class="w-3 h-3 rounded-full bg-green-500 flex-shrink-0"></span>
+                  <span class="text-xs text-slate-300">Point B:</span>
+                  <span class="text-xs text-white font-mono" x-text="formatCoords(selectedPoint2)"></span>
+                </div>
+              </div>
+
+              <div class="flex gap-2 pt-1" x-show="selectedPoint">
+                <button @click="computeVolume()"
+                        :disabled="computing"
+                        class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-sky-600 hover:bg-sky-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+                  <span x-text="computing ? 'Computing...' : 'Compute Volume at A'"></span>
+                </button>
+                <button @click="selectSecondPoint()" x-show="!selectedPoint2 && !selectingSecond"
+                        class="px-3 py-2 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors">
+                  Select Point B
+                </button>
+                <button x-show="selectingSecond"
+                        class="px-3 py-2 text-xs font-medium rounded-lg bg-green-600/20 text-green-400 animate-pulse">
+                  Click on plot to select B...
+                </button>
+                <button @click="computeTrajectory()" x-show="selectedPoint2"
+                        :disabled="computing"
+                        class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-violet-600 hover:bg-violet-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+                  Compute Trajectory A&rarr;B
+                </button>
+              </div>
+
+              <!-- Computing status -->
+              <template x-for="task in activeTasks" :key="task.id">
+                <div class="flex items-center gap-2 py-1.5 px-3 rounded-lg"
+                     :class="task.status === 'completed' ? 'bg-emerald-500/10' : task.status === 'failed' ? 'bg-red-500/10' : 'bg-sky-500/10'">
+                  <template x-if="task.status === 'running' || task.status === 'queued'">
+                    <svg class="w-3.5 h-3.5 text-sky-400 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                  </template>
+                  <template x-if="task.status === 'completed'">
+                    <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                  </template>
+                  <template x-if="task.status === 'failed'">
+                    <svg class="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                  </template>
+                  <span class="text-xs" :class="task.status === 'completed' ? 'text-emerald-400' : task.status === 'failed' ? 'text-red-400' : 'text-sky-400'"
+                        x-text="task.label + ' — ' + task.status"></span>
+                  <template x-if="task.status === 'completed' && task.volumes">
+                    <div class="flex gap-1 ml-auto">
+                      <template x-for="vol in task.volumes" :key="vol.path">
+                        <button @click="loadVolume(vol.path, vol.display_name || vol.name)"
+                                class="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 transition-colors"
+                                x-text="vol.display_name || vol.name"></button>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- Right: Mol* volume viewer -->
+          <div class="space-y-3">
+            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+              <div class="flex items-center justify-between px-4 py-2.5 border-b border-slate-800">
+                <span class="text-xs font-medium text-slate-400" x-text="currentVolumeName || 'No volume loaded'"></span>
+                <div class="flex items-center gap-3" x-show="currentVolumeName">
+                  <label class="flex items-center gap-1.5 text-[11px] text-slate-400">
+                    Iso
+                    <input type="range" min="0" max="100" step="1" x-model="isoPercent"
+                           class="w-24 h-1 bg-slate-700 rounded-full appearance-none cursor-pointer accent-sky-500">
+                    <span x-text="isoPercent + '%'" class="w-8 text-right"></span>
+                  </label>
+                </div>
+              </div>
+              <div id="molstar-viewport" style="height: 480px; position: relative;">
+                <div x-show="!currentVolumeName" class="absolute inset-0 flex items-center justify-center">
+                  <p class="text-sm text-slate-600">Select a volume to visualize</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Volume info -->
+            <div x-show="volumeInfo" class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+              <div class="grid grid-cols-4 gap-3 text-xs">
+                <div>
+                  <span class="text-slate-500">Shape</span>
+                  <div class="text-white mt-0.5" x-text="volumeInfo?.shape?.join(' x ') || ''"></div>
+                </div>
+                <div>
+                  <span class="text-slate-500">Voxel Size</span>
+                  <div class="text-white mt-0.5" x-text="(volumeInfo?.voxel_size?.toFixed(2) || '') + ' A/px'"></div>
+                </div>
+                <div>
+                  <span class="text-slate-500">Range</span>
+                  <div class="text-white mt-0.5" x-text="(volumeInfo?.min?.toFixed(3) || '') + ' / ' + (volumeInfo?.max?.toFixed(3) || '')"></div>
+                </div>
+                <div>
+                  <span class="text-slate-500">Mean</span>
+                  <div class="text-white mt-0.5" x-text="volumeInfo?.mean?.toFixed(4) || ''"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- Tab: Volumes (Categorized Browser)                              -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div x-show="tab === 'volumes'" x-cloak class="space-y-4">
+    <template x-if="!analysisInfo || (!analysisInfo.volumes.length && !Object.keys(analysisInfo.analyses).length)">
+      <div class="text-center py-16 text-slate-500">
+        <p>No volumes found yet.</p>
+      </div>
+    </template>
+
+    <template x-if="analysisInfo && (analysisInfo.volumes.length || Object.keys(analysisInfo.analyses).length)">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <!-- Left: Volume list -->
+        <div class="space-y-4">
+
+          <!-- Category filter -->
+          <div class="flex flex-wrap gap-1.5">
+            <button @click="volFilter = 'all'"
+                    :class="volFilter === 'all' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'"
+                    class="px-2.5 py-1 text-[11px] font-medium rounded-full transition-colors">All</button>
+            <template x-for="cat in volumeCategories" :key="cat.id">
+              <button @click="volFilter = cat.id"
+                      :class="volFilter === cat.id ? cat.activeClass : 'text-slate-400 hover:text-white'"
+                      class="px-2.5 py-1 text-[11px] font-medium rounded-full transition-colors"
+                      x-text="cat.label"></button>
+            </template>
+          </div>
+
+          <!-- Pipeline volumes -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+            <div class="px-3 py-2 border-b border-slate-800">
+              <span class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Pipeline Output</span>
+            </div>
+            <div class="divide-y divide-slate-800/50 max-h-[600px] overflow-y-auto scrollbar-thin">
+              <template x-for="vol in filteredVolumes" :key="vol.path">
+                <button @click="loadVolume(vol.path, vol.display_name)"
+                        class="w-full text-left px-3 py-2 flex items-center gap-2.5 hover:bg-slate-800 transition-colors"
+                        :class="currentVolumePath === vol.path ? 'bg-slate-800 border-l-2 border-sky-500' : ''">
+                  <span class="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                        :class="volCategoryColor(vol.category)"></span>
+                  <span class="text-xs truncate" :class="currentVolumePath === vol.path ? 'text-sky-400' : 'text-slate-300'"
+                        x-text="vol.display_name"></span>
+                  <span class="ml-auto text-[10px] text-slate-600" x-text="vol.category"></span>
+                </button>
+              </template>
+            </div>
+          </div>
+
+          <!-- Analysis volumes (k-means, trajectories) -->
+          <template x-for="[zdim, info] in Object.entries(analysisInfo?.analyses || {})" :key="zdim">
+            <div x-show="volFilter === 'all' || volFilter === 'kmeans' || volFilter === 'trajectory'">
+              <!-- K-means -->
+              <div x-show="info.kmeans_volumes && info.kmeans_volumes.length && (volFilter === 'all' || volFilter === 'kmeans')"
+                   class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden mb-3">
+                <div class="px-3 py-2 border-b border-slate-800 flex items-center gap-2">
+                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  <span class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider" x-text="'K-means Centers (z=' + zdim + ')'"></span>
+                </div>
+                <div class="divide-y divide-slate-800/50 max-h-[300px] overflow-y-auto scrollbar-thin">
+                  <template x-for="vol in info.kmeans_volumes" :key="vol.path">
+                    <button @click="loadVolume(vol.path, vol.display_name)"
+                            class="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-slate-800 transition-colors"
+                            :class="currentVolumePath === vol.path ? 'bg-slate-800 border-l-2 border-sky-500' : ''">
+                      <span class="text-xs truncate" :class="currentVolumePath === vol.path ? 'text-sky-400' : 'text-slate-300'"
+                            x-text="vol.display_name"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+
+              <!-- Trajectories -->
+              <template x-for="traj in info.trajectories || []" :key="traj.name">
+                <div x-show="volFilter === 'all' || volFilter === 'trajectory'"
+                     class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden mb-3">
+                  <div class="px-3 py-2 border-b border-slate-800 flex items-center gap-2">
+                    <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                    <span class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider"
+                          x-text="traj.name + ' (z=' + zdim + ')'"></span>
+                  </div>
+                  <div class="divide-y divide-slate-800/50">
+                    <template x-for="vol in traj.volumes" :key="vol.path">
+                      <button @click="loadVolume(vol.path, vol.display_name)"
+                              class="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-slate-800 transition-colors"
+                              :class="currentVolumePath === vol.path ? 'bg-slate-800 border-l-2 border-sky-500' : ''">
+                        <span class="text-xs" :class="currentVolumePath === vol.path ? 'text-sky-400' : 'text-slate-300'"
+                              x-text="vol.display_name"></span>
+                      </button>
+                    </template>
+                    <!-- Play all trajectory button -->
+                    <button @click="playTrajectory(traj.volumes)" x-show="traj.volumes.length > 1"
+                            class="w-full text-left px-3 py-2 flex items-center gap-2 text-xs text-violet-400 hover:bg-slate-800 transition-colors">
+                      <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                      Play trajectory
+                    </button>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+
+          <!-- GUI-computed volumes -->
+          <template x-if="analysisInfo?.computed?.length">
+            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+              <div class="px-3 py-2 border-b border-slate-800 flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full bg-rose-400"></span>
+                <span class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Computed (GUI)</span>
+              </div>
+              <div class="divide-y divide-slate-800/50 max-h-[200px] overflow-y-auto scrollbar-thin">
+                <template x-for="vol in analysisInfo.computed" :key="vol.path">
+                  <button @click="loadVolume(vol.path, vol.display_name || vol.name)"
+                          class="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-slate-800 transition-colors"
+                          :class="currentVolumePath === vol.path ? 'bg-slate-800 border-l-2 border-sky-500' : ''">
+                    <span class="text-xs truncate" :class="currentVolumePath === vol.path ? 'text-sky-400' : 'text-slate-300'"
+                          x-text="vol.display_name || vol.name"></span>
+                  </button>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- Right: Volume viewer (shared with explore tab via ID) -->
+        <div class="lg:col-span-2 space-y-3">
+          <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+            <div class="flex items-center justify-between px-4 py-2.5 border-b border-slate-800">
+              <span class="text-xs font-medium text-slate-400" x-text="currentVolumeName || 'Select a volume'"></span>
+              <div class="flex items-center gap-3" x-show="currentVolumeName">
+                <label class="flex items-center gap-1.5 text-[11px] text-slate-400">
+                  Iso
+                  <input type="range" min="0" max="100" step="1" x-model="isoPercent"
+                         class="w-24 h-1 bg-slate-700 rounded-full appearance-none cursor-pointer accent-sky-500">
+                  <span x-text="isoPercent + '%'" class="w-8 text-right"></span>
+                </label>
+              </div>
+            </div>
+            <div id="molstar-viewport-volumes" style="height: 520px; position: relative;">
+              <div x-show="!currentVolumeName" class="absolute inset-0 flex items-center justify-center">
+                <p class="text-sm text-slate-600">Click a volume from the list to view it</p>
+              </div>
+            </div>
+          </div>
+
+          <div x-show="volumeInfo" class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+            <div class="grid grid-cols-4 gap-3 text-xs">
+              <div><span class="text-slate-500">Shape</span><div class="text-white mt-0.5" x-text="volumeInfo?.shape?.join(' x ') || ''"></div></div>
+              <div><span class="text-slate-500">Voxel Size</span><div class="text-white mt-0.5" x-text="(volumeInfo?.voxel_size?.toFixed(2) || '') + ' A/px'"></div></div>
+              <div><span class="text-slate-500">Range</span><div class="text-white mt-0.5" x-text="(volumeInfo?.min?.toFixed(3) || '') + ' / ' + (volumeInfo?.max?.toFixed(3) || '')"></div></div>
+              <div><span class="text-slate-500">Mean</span><div class="text-white mt-0.5" x-text="volumeInfo?.mean?.toFixed(4) || ''"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- Tab: Images                                                     -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div x-show="tab === 'images'" x-cloak>
+    {% set all_images = job.result_images %}
+    {% if all_images %}
+    <div class="space-y-4">
+      <!-- Analysis images by zdim -->
+      <template x-for="[zdim, info] in Object.entries(analysisInfo?.analyses || {})" :key="'img_'+zdim">
+        <div x-show="info.plots && info.plots.length > 0" class="space-y-3">
+          <h3 class="text-sm font-semibold text-slate-300" x-text="'Analysis z=' + zdim"></h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <template x-for="imgPath in info.plots" :key="imgPath">
+              <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden group cursor-pointer"
+                   @click="expandedImage = imgPath">
+                <img :src="'/api/image?path=' + encodeURIComponent(imgPath)"
+                     class="w-full h-48 object-contain bg-slate-950" loading="lazy">
+                <div class="px-2 py-1.5 text-[10px] text-slate-400 truncate" x-text="imgPath.split('/').pop()"></div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <!-- Other images (from output/) -->
+      {% for img in all_images %}
+      <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+        <div class="px-4 py-2 border-b border-slate-800">
+          <span class="text-xs font-medium text-slate-400">{{ img.split('/')[-1] }}</span>
+        </div>
+        <div class="p-4 flex items-center justify-center bg-slate-950">
+          <img src="{{ url_for('api_image', path=img) }}" alt="{{ img.split('/')[-1] }}"
+               class="max-w-full max-h-[400px] object-contain cursor-pointer"
+               @click="expandedImage = '{{ img }}'" loading="lazy">
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="text-center py-16 text-slate-500"><p>No result images found yet.</p></div>
+    {% endif %}
+
+    <!-- Image lightbox -->
+    <div x-show="expandedImage" x-cloak @click="expandedImage = null" @keydown.escape.window="expandedImage = null"
+         class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-8 cursor-pointer">
+      <img :src="'/api/image?path=' + encodeURIComponent(expandedImage)" class="max-w-full max-h-full object-contain">
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- Tab: Logs                                                       -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
   <div x-show="tab === 'logs'" x-cloak>
     <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-      <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800">
+      <div class="flex items-center justify-between px-4 py-2.5 border-b border-slate-800">
         <span class="text-xs font-medium text-slate-400">Log Output</span>
-        <span class="text-xs text-slate-500">Auto-refreshes{% if job.status in ('running', 'queued') %} every 3s{% endif %}</span>
+        <span class="text-[11px] text-slate-500">{% if job.status in ('running', 'queued') %}Auto-refreshes every 3s{% endif %}</span>
       </div>
       <div class="p-4 max-h-[600px] overflow-y-auto scrollbar-thin"
            id="log-container"
            hx-get="{{ url_for('api_job_logs', job_id=job.id) }}"
            hx-trigger="load{% if job.status in ('running', 'queued') %}, every 3s{% endif %}"
            hx-swap="innerHTML">
-        <pre class="text-xs text-slate-300 font-mono">Loading logs...</pre>
+        <pre class="text-xs text-slate-300 font-mono">Loading...</pre>
       </div>
     </div>
   </div>
 
-  <!-- Tab: Results (images) -->
-  <div x-show="tab === 'results'" x-cloak>
-    {% set images = job.result_images %}
-    {% if images %}
-    <div class="space-y-4">
-      {% for img in images %}
-      <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-        <div class="px-4 py-3 border-b border-slate-800">
-          <span class="text-xs font-medium text-slate-400">{{ img.split('/')[-1] }}</span>
-        </div>
-        <div class="p-4 flex items-center justify-center bg-slate-950">
-          <img src="{{ url_for('api_image', path=img) }}" alt="{{ img.split('/')[-1] }}"
-               class="max-w-full max-h-[500px] object-contain" loading="lazy">
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-    {% else %}
-    <div class="text-center py-20 text-slate-500">
-      <p>No result images found yet.</p>
-    </div>
-    {% endif %}
-  </div>
-
-  <!-- Tab: Volumes (3D viewer) -->
-  <div x-show="tab === 'volumes'" x-cloak x-data="volumeViewer()">
-    {% set volumes = job.result_volumes %}
-    {% if volumes %}
-    <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
-      <!-- Volume list -->
-      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
-        <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Available Volumes</h3>
-        <div class="space-y-1">
-          {% for vol in volumes %}
-          <button @click="loadVolume('{{ vol }}', '{{ vol.split('/')[-1] }}')"
-                  class="w-full text-left px-3 py-2 rounded-lg text-sm transition-colors hover:bg-slate-800"
-                  :class="currentVolumeName === '{{ vol.split('/')[-1] }}' ? 'bg-slate-800 text-sky-400' : 'text-slate-300'">
-            {{ vol.split('/')[-1] }}
-          </button>
-          {% endfor %}
-        </div>
-      </div>
-
-      <!-- 3D Viewer -->
-      <div class="lg:col-span-3 space-y-4">
-        <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-          <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800">
-            <span class="text-xs font-medium text-slate-400" x-text="currentVolumeName || 'Select a volume'"></span>
-            <div class="flex items-center gap-4" x-show="currentVolumeName">
-              <label class="flex items-center gap-2 text-xs text-slate-400">
-                Threshold
-                <input type="range" min="0" max="100" step="1" x-model="isoPercent"
-                       @input="updateIsolevel()"
-                       class="w-32 h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-sky-500">
-                <span x-text="isoPercent + '%'" class="w-10 text-right"></span>
-              </label>
-              <label class="flex items-center gap-2 text-xs text-slate-400">
-                Opacity
-                <input type="range" min="0" max="100" step="5" x-model="opacity"
-                       @input="updateOpacity()"
-                       class="w-20 h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-sky-500">
-              </label>
-            </div>
-          </div>
-          <div id="molstar-viewport" style="height: 500px; position: relative;"></div>
-        </div>
-
-        <!-- Volume info -->
-        <div x-show="volumeInfo" class="bg-slate-900 border border-slate-800 rounded-xl p-4">
-          <div class="grid grid-cols-4 gap-4 text-xs">
-            <div>
-              <span class="text-slate-500">Shape</span>
-              <div class="text-white mt-0.5" x-text="volumeInfo?.shape?.join(' x ') || ''"></div>
-            </div>
-            <div>
-              <span class="text-slate-500">Voxel Size</span>
-              <div class="text-white mt-0.5" x-text="(volumeInfo?.voxel_size?.toFixed(2) || '') + ' A/px'"></div>
-            </div>
-            <div>
-              <span class="text-slate-500">Min / Max</span>
-              <div class="text-white mt-0.5" x-text="(volumeInfo?.min?.toFixed(4) || '') + ' / ' + (volumeInfo?.max?.toFixed(4) || '')"></div>
-            </div>
-            <div>
-              <span class="text-slate-500">Mean</span>
-              <div class="text-white mt-0.5" x-text="volumeInfo?.mean?.toFixed(4) || ''"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-    {% else %}
-    <div class="text-center py-20 text-slate-500">
-      <p>No volume files found yet.</p>
-    </div>
-    {% endif %}
-  </div>
-
-  <!-- Tab: Parameters -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- Tab: Parameters                                                 -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
   <div x-show="tab === 'params'" x-cloak>
     <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-      <div class="px-4 py-3 border-b border-slate-800">
+      <div class="px-4 py-2.5 border-b border-slate-800">
         <span class="text-xs font-medium text-slate-400">Job Parameters</span>
       </div>
       <div class="p-4">
@@ -248,8 +590,8 @@
           <tbody>
             {% for key, value in params.items() %}
             <tr class="border-b border-slate-800/50 last:border-0">
-              <td class="py-2.5 pr-4 text-slate-400 font-mono text-xs align-top w-1/3">{{ key }}</td>
-              <td class="py-2.5 text-white text-xs break-all">
+              <td class="py-2 pr-4 text-slate-400 font-mono text-xs align-top w-1/3">{{ key }}</td>
+              <td class="py-2 text-white text-xs break-all">
                 {% if value is mapping %}
                 <pre class="text-xs text-slate-300">{{ value|tojson(indent=2) }}</pre>
                 {% elif value is iterable and value is not string %}
@@ -277,89 +619,503 @@
   </div>
 </div>
 
-<!-- Mol* (Molstar) Viewer -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- External Libraries                                              -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 <link rel="stylesheet" type="text/css" href="https://www.ebi.ac.uk/pdbe/pdb-component-library/css/pdbe-molstar-3.1.3.css">
 <script type="text/javascript" src="https://www.ebi.ac.uk/pdbe/pdb-component-library/js/pdbe-molstar-plugin-3.1.3.js"></script>
+
 <script>
-function volumeViewer() {
+function jobExplorer() {
   return {
+    // ── State ─────────────────────────────────────────────────────
+    tab: 'overview',
+    tabs: [
+      { id: 'overview', label: 'Overview', badge: null },
+      { id: 'explore', label: 'Explore', badge: null },
+      { id: 'volumes', label: 'Volumes', badge: null },
+      { id: 'images', label: 'Images', badge: null },
+      { id: 'logs', label: 'Logs', badge: null },
+      { id: 'params', label: 'Parameters', badge: null },
+    ],
+
+    // Analysis
+    analysisInfo: null,
+
+    // Embedding
+    selectedZdim: null,
+    embeddingData: null,
+    embeddingLoading: false,
+    axisX: 0,
+    axisY: 1,
+
+    // Selection
+    selectedPoint: null,
+    selectedPoint2: null,
+    selectingSecond: false,
+
+    // Compute
+    computing: false,
+    activeTasks: [],
+
+    // Volume viewer
     viewer: null,
+    viewerTarget: null, // which div the viewer is in
     currentVolumeName: '',
-    isoPercent: 50,
-    opacity: 70,
+    currentVolumePath: '',
     volumeInfo: null,
-    isoMin: 0,
-    isoMax: 1,
-    currentPath: '',
+    isoPercent: 50,
 
-    init() {},
+    // Volume browser
+    volFilter: 'all',
 
-    async loadVolume(path, name) {
-      this.currentVolumeName = name;
-      this.currentPath = path;
+    // Image lightbox
+    expandedImage: null,
 
-      // Load volume info from our API
+    volumeCategories: [
+      { id: 'reconstruction', label: 'Reconstruction', activeClass: 'bg-sky-500/20 text-sky-400' },
+      { id: 'eigenvectors', label: 'PCs', activeClass: 'bg-violet-500/20 text-violet-400' },
+      { id: 'variance', label: 'Variance', activeClass: 'bg-amber-500/20 text-amber-400' },
+      { id: 'masks', label: 'Masks', activeClass: 'bg-slate-600/30 text-slate-300' },
+      { id: 'kmeans', label: 'K-means', activeClass: 'bg-emerald-500/20 text-emerald-400' },
+      { id: 'trajectory', label: 'Trajectories', activeClass: 'bg-orange-500/20 text-orange-400' },
+    ],
+
+    // ── Computed properties ───────────────────────────────────────
+    get filteredVolumes() {
+      if (!this.analysisInfo) return [];
+      const vols = this.analysisInfo.volumes || [];
+      if (this.volFilter === 'all') return vols;
+      return vols.filter(v => v.category === this.volFilter);
+    },
+
+    // ── Lifecycle ─────────────────────────────────────────────────
+    async init() {
       try {
-        const infoResp = await fetch('/api/volume/info?path=' + encodeURIComponent(path));
-        this.volumeInfo = await infoResp.json();
-        if (this.volumeInfo.min !== undefined) {
-          this.isoMin = this.volumeInfo.min;
-          this.isoMax = this.volumeInfo.max;
+        const resp = await fetch('/api/jobs/{{ job.id }}/analysis');
+        this.analysisInfo = await resp.json();
+        const zdims = this.analysisInfo.available_zdims || [];
+        if (zdims.length > 0) {
+          // Default to a reasonable zdim (4 if available, else first)
+          this.selectedZdim = zdims.includes(4) ? 4 : zdims[0];
         }
-      } catch(e) {
-        console.error('Failed to get volume info:', e);
+        // Update tab badges
+        this.tabs[2].badge = this.analysisInfo.volumes?.length || null;
+      } catch (e) {
+        console.error('Failed to load analysis info:', e);
       }
+    },
 
-      // Initialize or recreate Mol* viewer
-      const el = document.getElementById('molstar-viewport');
-      if (!el) return;
+    // ── Embedding ─────────────────────────────────────────────────
+    async selectZdim(zdim) {
+      this.selectedZdim = zdim;
+      this.selectedPoint = null;
+      this.selectedPoint2 = null;
+      this.selectingSecond = false;
+      await this.loadEmbedding();
+    },
 
-      // Clear previous
-      if (this.viewer) {
-        this.viewer.clear();
+    async loadEmbedding() {
+      if (!this.selectedZdim) return;
+      this.embeddingLoading = true;
+      try {
+        const resp = await fetch(`/api/jobs/{{ job.id }}/embeddings?zdim=${this.selectedZdim}`);
+        const data = await resp.json();
+        if (data.error) {
+          console.error('Embedding error:', data.error);
+          this.embeddingData = null;
+          return;
+        }
+        this.embeddingData = data;
+        // Reset axes if needed
+        if (this.axisX >= data.zdim) this.axisX = 0;
+        if (this.axisY >= data.zdim) this.axisY = Math.min(1, data.zdim - 1);
+        this.$nextTick(() => this.renderPlot());
+      } catch (e) {
+        console.error('Failed to load embedding:', e);
+      } finally {
+        this.embeddingLoading = false;
       }
+    },
 
-      // Create viewer
-      this.viewer = new PDBeMolstarPlugin();
-      const options = {
-        customData: {
-          url: '/api/volume/raw?path=' + encodeURIComponent(path),
-          format: 'ccp4',
-          binary: true,
+    renderPlot() {
+      const data = this.embeddingData;
+      if (!data) return;
+
+      const xKey = `dim${this.axisX}`;
+      const yKey = `dim${this.axisY}`;
+      if (!data[xKey] || !data[yKey]) return;
+
+      const trace = {
+        x: data[xKey],
+        y: data[yKey],
+        mode: 'markers',
+        type: 'scattergl',
+        marker: {
+          size: 2.5,
+          color: 'rgba(56, 189, 248, 0.25)',
+          line: { width: 0 },
         },
-        hideControls: false,
-        hideCanvasControls: ['selection', 'animation', 'controlToggle'],
-        bgColor: {r: 15, g: 23, b: 42},
-        landscape: true,
-        reactive: true,
+        hoverinfo: 'text',
+        text: data[xKey].map((x, i) =>
+          `PC${this.axisX+1}: ${x.toFixed(3)}<br>PC${this.axisY+1}: ${data[yKey][i].toFixed(3)}`
+        ),
       };
 
-      try {
-        await this.viewer.render(el, options);
-      } catch(e) {
-        console.error('Mol* render failed:', e);
-        // Fallback: show slice images instead
-        el.innerHTML = '<div class="flex items-center justify-center h-full text-slate-400 text-sm">' +
-          '<div class="text-center"><p>3D viewer failed to load this volume.</p>' +
-          '<p class="text-xs mt-2">Showing slice view instead.</p>' +
-          '<img src="/api/volume/slice?path=' + encodeURIComponent(path) + '&axis=2" class="mt-4 max-h-96 mx-auto">' +
-          '</div></div>';
+      const layout = {
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: '#1e293b',
+        font: { color: '#94a3b8', family: 'Inter, system-ui', size: 11 },
+        xaxis: {
+          title: { text: `PC ${this.axisX + 1}`, standoff: 10 },
+          gridcolor: '#334155',
+          zerolinecolor: '#475569',
+        },
+        yaxis: {
+          title: { text: `PC ${this.axisY + 1}`, standoff: 10 },
+          gridcolor: '#334155',
+          zerolinecolor: '#475569',
+        },
+        margin: { l: 55, r: 15, t: 15, b: 50 },
+        dragmode: 'pan',
+        hovermode: 'closest',
+      };
+
+      const plotEl = document.getElementById('embedding-plot');
+      if (!plotEl) return;
+
+      Plotly.newPlot(plotEl, [trace], layout, {
+        responsive: true,
+        scrollZoom: true,
+        displayModeBar: true,
+        modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
+        displaylogo: false,
+      });
+
+      // Click handler
+      plotEl.removeAllListeners('plotly_click');
+      plotEl.on('plotly_click', (evtData) => {
+        if (!evtData.points || !evtData.points.length) return;
+        const pt = evtData.points[0];
+        const idx = pt.pointIndex;
+
+        // Build full coordinate vector from all dims
+        const coords = [];
+        for (let i = 0; i < this.embeddingData.zdim; i++) {
+          const key = `dim${i}`;
+          if (this.embeddingData[key]) {
+            coords.push(this.embeddingData[key][idx]);
+          }
+        }
+
+        if (this.selectingSecond) {
+          this.selectedPoint2 = coords;
+          this.selectingSecond = false;
+        } else {
+          this.selectedPoint = coords;
+          this.selectedPoint2 = null;
+        }
+
+        this.updateMarkers();
+      });
+
+      // Restore markers if points already selected
+      if (this.selectedPoint) {
+        this.$nextTick(() => this.updateMarkers());
       }
     },
 
-    getIsolevel() {
-      return this.isoMin + (this.isoMax - this.isoMin) * (this.isoPercent / 100);
+    updateMarkers() {
+      const plotEl = document.getElementById('embedding-plot');
+      if (!plotEl || !plotEl.data) return;
+
+      // Remove old marker traces (keep only the first data trace)
+      while (plotEl.data.length > 1) {
+        Plotly.deleteTraces(plotEl, -1);
+      }
+
+      const traces = [];
+      if (this.selectedPoint) {
+        traces.push({
+          x: [this.selectedPoint[this.axisX]],
+          y: [this.selectedPoint[this.axisY]],
+          mode: 'markers',
+          type: 'scatter',
+          marker: { size: 16, color: '#f43f5e', symbol: 'star', line: { width: 2, color: 'white' } },
+          showlegend: false,
+          hoverinfo: 'skip',
+        });
+      }
+      if (this.selectedPoint2) {
+        traces.push({
+          x: [this.selectedPoint2[this.axisX]],
+          y: [this.selectedPoint2[this.axisY]],
+          mode: 'markers',
+          type: 'scatter',
+          marker: { size: 16, color: '#22c55e', symbol: 'star', line: { width: 2, color: 'white' } },
+          showlegend: false,
+          hoverinfo: 'skip',
+        });
+        // Draw line between points
+        traces.push({
+          x: [this.selectedPoint[this.axisX], this.selectedPoint2[this.axisX]],
+          y: [this.selectedPoint[this.axisY], this.selectedPoint2[this.axisY]],
+          mode: 'lines',
+          type: 'scatter',
+          line: { color: '#a78bfa', width: 2, dash: 'dash' },
+          showlegend: false,
+          hoverinfo: 'skip',
+        });
+      }
+
+      if (traces.length > 0) {
+        Plotly.addTraces(plotEl, traces);
+      }
     },
 
-    updateIsolevel() {
-      // Mol* manages its own isosurface through its built-in UI
-      // External control requires deeper plugin API integration
+    // ── Selection ─────────────────────────────────────────────────
+    clearSelection() {
+      this.selectedPoint = null;
+      this.selectedPoint2 = null;
+      this.selectingSecond = false;
+      this.updateMarkers();
     },
 
-    updateOpacity() {
-      // Mol* manages opacity through its built-in controls
+    selectSecondPoint() {
+      this.selectingSecond = true;
     },
-  }
+
+    formatCoords(coords) {
+      if (!coords) return '';
+      return '[' + coords.map(c => c.toFixed(3)).join(', ') + ']';
+    },
+
+    // ── Compute ───────────────────────────────────────────────────
+    async computeVolume() {
+      if (!this.selectedPoint || this.computing) return;
+      this.computing = true;
+
+      try {
+        const resp = await fetch(`/api/jobs/{{ job.id }}/compute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'volume',
+            zdim: this.selectedZdim,
+            coords: this.selectedPoint,
+            label: `Volume at [${this.selectedPoint.slice(0,3).map(c => c.toFixed(2)).join(', ')}${this.selectedPoint.length > 3 ? '...' : ''}]`,
+          }),
+        });
+        const result = await resp.json();
+        if (result.error) {
+          alert('Compute error: ' + result.error);
+          this.computing = false;
+          return;
+        }
+        if (result.task_id) {
+          this.activeTasks.push({
+            id: result.task_id,
+            status: result.status || 'running',
+            label: `Volume computation`,
+            volumes: [],
+          });
+          this.pollTask(result.task_id);
+        }
+      } catch (e) {
+        console.error('Compute failed:', e);
+        alert('Failed to start computation: ' + e.message);
+      }
+      this.computing = false;
+    },
+
+    async computeTrajectory() {
+      if (!this.selectedPoint || !this.selectedPoint2 || this.computing) return;
+      this.computing = true;
+
+      try {
+        const resp = await fetch(`/api/jobs/{{ job.id }}/compute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'trajectory',
+            zdim: this.selectedZdim,
+            z_start: this.selectedPoint,
+            z_end: this.selectedPoint2,
+            n_vols: 6,
+            label: 'Trajectory A→B',
+          }),
+        });
+        const result = await resp.json();
+        if (result.error) {
+          alert('Compute error: ' + result.error);
+          this.computing = false;
+          return;
+        }
+        if (result.task_id) {
+          this.activeTasks.push({
+            id: result.task_id,
+            status: result.status || 'running',
+            label: 'Trajectory computation',
+            volumes: [],
+          });
+          this.pollTask(result.task_id);
+        }
+      } catch (e) {
+        console.error('Compute failed:', e);
+        alert('Failed to start computation: ' + e.message);
+      }
+      this.computing = false;
+    },
+
+    async pollTask(taskId) {
+      const poll = async () => {
+        try {
+          const resp = await fetch(`/api/jobs/{{ job.id }}/tasks/${taskId}`);
+          const task = await resp.json();
+
+          const idx = this.activeTasks.findIndex(t => t.id === taskId);
+          if (idx < 0) return;
+
+          this.activeTasks[idx].status = task.status;
+          this.activeTasks[idx].label = task.label || this.activeTasks[idx].label;
+
+          if (task.status === 'completed') {
+            this.activeTasks[idx].volumes = task.volumes || [];
+            // Auto-load first volume
+            if (task.volumes && task.volumes.length > 0) {
+              this.loadVolume(task.volumes[0].path, task.volumes[0].display_name || task.volumes[0].name);
+            }
+            // Refresh analysis info to include new computed volumes
+            const resp2 = await fetch('/api/jobs/{{ job.id }}/analysis');
+            this.analysisInfo = await resp2.json();
+          } else if (task.status === 'failed') {
+            this.activeTasks[idx].error = task.error;
+          } else {
+            // Still running, poll again
+            setTimeout(poll, 3000);
+          }
+        } catch (e) {
+          console.error('Poll error:', e);
+          setTimeout(poll, 5000);
+        }
+      };
+
+      setTimeout(poll, 2000);
+    },
+
+    // ── Volume Viewer ─────────────────────────────────────────────
+    async loadVolume(path, name) {
+      this.currentVolumeName = name;
+      this.currentVolumePath = path;
+
+      // Load volume info
+      try {
+        const resp = await fetch('/api/volume/info?path=' + encodeURIComponent(path));
+        this.volumeInfo = await resp.json();
+      } catch (e) {
+        console.error('Volume info error:', e);
+        this.volumeInfo = null;
+      }
+
+      // Determine which viewport to use based on current tab
+      const viewportId = this.tab === 'volumes' ? 'molstar-viewport-volumes' : 'molstar-viewport';
+      const el = document.getElementById(viewportId);
+      if (!el) return;
+
+      // Clean up previous viewer
+      if (this.viewer) {
+        try { this.viewer.clear(); } catch(e) {}
+      }
+
+      // Create new Mol* viewer
+      try {
+        this.viewer = new PDBeMolstarPlugin();
+        this.viewerTarget = viewportId;
+
+        await this.viewer.render(el, {
+          customData: {
+            url: '/api/volume/raw?path=' + encodeURIComponent(path),
+            format: 'ccp4',
+            binary: true,
+          },
+          hideControls: false,
+          hideCanvasControls: ['selection', 'animation', 'controlToggle'],
+          bgColor: { r: 15, g: 23, b: 42 },
+          landscape: true,
+          reactive: true,
+        });
+      } catch (e) {
+        console.error('Mol* error:', e);
+        // Fallback: show slice image
+        el.innerHTML = `
+          <div class="flex items-center justify-center h-full text-slate-400">
+            <div class="text-center">
+              <p class="text-sm mb-2">3D viewer unavailable</p>
+              <img src="/api/volume/slice?path=${encodeURIComponent(path)}&axis=2"
+                   class="max-h-80 mx-auto rounded-lg" alt="Central slice">
+            </div>
+          </div>`;
+      }
+    },
+
+    // ── Trajectory playback ───────────────────────────────────────
+    async playTrajectory(volumes) {
+      if (!volumes || volumes.length === 0) return;
+      for (let i = 0; i < volumes.length; i++) {
+        await this.loadVolume(volumes[i].path, volumes[i].display_name);
+        if (i < volumes.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+      }
+    },
+
+    // ── Helpers ───────────────────────────────────────────────────
+    volCategoryColor(category) {
+      const colors = {
+        reconstruction: 'bg-sky-400',
+        halfmaps: 'bg-sky-300',
+        eigenvectors: 'bg-violet-400',
+        variance: 'bg-amber-400',
+        masks: 'bg-slate-400',
+        kmeans: 'bg-emerald-400',
+        trajectory: 'bg-orange-400',
+        other: 'bg-slate-500',
+      };
+      return colors[category] || 'bg-slate-500';
+    },
+  };
 }
+</script>
+
+<!-- Auto-load embedding when switching to Explore tab -->
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.effect(() => {
+    const explorer = Alpine.store('explorer');
+  });
+});
+
+// Watch for tab changes to load embedding data
+document.addEventListener('DOMContentLoaded', () => {
+  // Use MutationObserver or Alpine watcher to load embeddings on tab switch
+  const checkTab = setInterval(() => {
+    const el = document.querySelector('[x-data]');
+    if (el && el.__x) {
+      clearInterval(checkTab);
+      const component = el.__x.$data;
+      // Watch for tab changes
+      let lastTab = '';
+      setInterval(() => {
+        if (component.tab === 'explore' && lastTab !== 'explore') {
+          if (component.analysisInfo?.has_embeddings && !component.embeddingData && component.selectedZdim) {
+            component.loadEmbedding();
+          }
+        }
+        lastTab = component.tab;
+      }, 200);
+    }
+  }, 100);
+});
 </script>
 {% endblock %}
