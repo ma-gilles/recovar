@@ -95,7 +95,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
 
         logger.info("Largest frequency computed: %s", np.max(np.abs(picked_frequencies_in_frequencies_format)))
         if np.max(np.abs(picked_frequencies_in_frequencies_format)) > cryos.grid_size//2-1:
-            logger.warning("Largest frequency computed is larger than grid size//2-1. This may cause big issues in SVD. This probably means variance estimates were wrong")
+            logger.warning("Largest frequency computed is larger than grid size//2-1. This may cause issues in SVD. Check that variance estimates are correct")
     else:
         raise NotImplementedError('unrecognized column sampling scheme')
     
@@ -558,7 +558,7 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     utils.report_memory_device(logger=logger)
     Q = jax.device_put(Q, device=jax.devices("cpu")[0])
     Q,_ = jnp.linalg.qr(Q)
-    Q = np.array(Q) # I don't know why but not doing this causes massive slowdowns sometimes?
+    Q = np.array(Q)  # Force transfer to host to avoid JAX tracing slowdowns
     logger.info("QR time: %s", time.time() - st_time)
 
     # In principle, should apply (I - mask mask.T / \|mask\|^2 )  again, but should already be orthogonal
@@ -750,7 +750,7 @@ def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, z
                 Ft_ctf, Ft_y = relion_functions.residual_relion_style_triangular_kernel(cryos[cryo_idx], estimators[cryo_idx][0], noise_variance.astype(np.float32) * 0 ,  100,  index_subset = image_subset)
                 Ft_y = (Ft_y * cryos[0].get_valid_frequency_indices())#.reshape(cryos[0].volume_shape)
 
-                if first == True:
+                if first:
                     Ft_ctf_avg = regularization.average_over_shells(Ft_ctf, cryos[0].volume_shape) / 10
                     Ft_avg_radial = utils.make_radial_image(Ft_ctf_avg, cryos[0].volume_shape)
                     first = False

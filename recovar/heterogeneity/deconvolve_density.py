@@ -95,14 +95,10 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
     else:
         raise NotImplementedError(f"Unknown kernel_option={kernel_option}")
 
-    # kernel_on_grid = kernel #compute_kernel_on_grid_nd(grids).astype(np.float32)
-
-    density = density.astype(np.float32) / np.mean(density) #*circ_mask
+    density = density.astype(np.float32) / np.mean(density)
 
     density = jnp.array(density)
     kernel_on_grid = jnp.array(kernel_on_grid)
-    # from recovar import utils
-    # utils.pickle_dump(kernel_on_grid, '/home/mg6942/kernel_on_grid.pkl')
     def forward_model_grid(fun_on_grid):
         convolve_fun = convolve_with_pad_nd(fun_on_grid, kernel_on_grid)
         return convolve_fun
@@ -161,7 +157,6 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
     return lbfgsb_sols, cost, reg_cost, alphas
 
 def plot_density(lbfgsb_sols, density, alphas, function = None, cmap = 'inferno'):
-    # plt.axis('square');
     from recovar.output.output import sum_over_other
 
     def half_slice_other(density, axes):
@@ -185,7 +180,7 @@ def plot_density(lbfgsb_sols, density, alphas, function = None, cmap = 'inferno'
     n_plots = len(lbfgsb_sols)+1
     n_cols = density.ndim +1 if density.ndim < 2 else density.ndim 
 
-    fig, axs = plt.subplots( n_plots, n_cols, figsize = ( n_cols *5, n_plots*5 ))#, 6*3))
+    fig, axs = plt.subplots( n_plots, n_cols, figsize = ( n_cols *5, n_plots*5 ))
     global is_first
     is_first = True
 
@@ -210,25 +205,19 @@ def plot_density(lbfgsb_sols, density, alphas, function = None, cmap = 'inferno'
             axs[n_plot,k-1].set_yticklabels([])
 
             to_plot = function(density, [0,k])
-            # plt.figure()
-            # plt.title(title)
-            axs[n_plot,k-1].imshow(to_plot.T, cmap =cmap)#.sum(axis=-1))
-            # plt.show()
+            axs[n_plot,k-1].imshow(to_plot.T, cmap =cmap)
             if is_first:            
                 axs[n_plot,k-1].set_title(f"PC x={0}, y={k}")
 
 
         if density.ndim > 2:
             to_plot = function(density, [1,2])
-            # plt.figure()
-            # plt.title(title)
-            axs[n_plot,k].imshow(to_plot.T, cmap =cmap)#.sum(axis=-1))
+            axs[n_plot,k].imshow(to_plot.T, cmap =cmap)
             axs[n_plot,k].set_xticklabels([])
             axs[n_plot,k].set_yticklabels([])
             if is_first:            
                 axs[n_plot,k].set_title(f"PC x={1}, y={2}")
         is_first = False
-            # plt.show()
 
     # axs[n_plot,0].set_ylabel(name)
 
@@ -242,34 +231,22 @@ def plot_density(lbfgsb_sols, density, alphas, function = None, cmap = 'inferno'
 
 
 def plot_density_centers(density, centers):
-    # plt.axis('square');
     from recovar.output.output import sum_over_other
 
-    plt.rcParams.update({
-        # "text.usetex": True,
-        # "font.family": "serif",
-        # "font.sans-serif": "Helvetica",
-    })
     font = {'weight' : 'bold',
             'size'   : 22}
     import matplotlib
     matplotlib.rc('font', **font)
 
     n_plots = 1
-    fig, axs = plt.subplots( n_plots, density.ndim, figsize = ( density.ndim *10, n_plots*6 ))#, 6*3))
+    fig, axs = plt.subplots( n_plots, density.ndim, figsize = ( density.ndim *10, n_plots*6 ))
     global is_first
     is_first = True
 
     def plot_dens(density, title, n_plot):
 
-        # if is_first:            
-        #     axs[n_plot,k].set_title(f"projection {k}")
-
         if density.ndim ==2:
-            # plt.figure()
-            # plt.title(title)
-            axs[n_plot,k].imshow(density)#.sum(axis=-1))
-            # plt.show()
+            axs[n_plot,k].imshow(density)
         else:
 
             for k in range(1, density.ndim):
@@ -279,25 +256,19 @@ def plot_density_centers(density, centers):
                 axs[n_plot,k-1].set_yticklabels([])
 
                 to_plot = sum_over_other(density, [0,k])
-                # plt.figure()
-                # plt.title(title)
-                axs[n_plot,k-1].imshow(to_plot)#.sum(axis=-1))
+                axs[n_plot,k-1].imshow(to_plot)
                 axs[n_plot,k-1].scatter(centers[:,0], centers[:,k] )
                 for i in range(centers.shape[0]):
                     axs[n_plot,k-1].annotate(str(i), centers[i, [0,k]] + np.array([0.1, 0.1]))
 
-                # plt.show()
-            to_plot = sum_over_other(density, [0,2])
-            # plt.figure()
-            # plt.title(title)
-            axs[n_plot,k].imshow(to_plot)#.sum(axis=-1))
+                to_plot = sum_over_other(density, [0,2])
+            axs[n_plot,k].imshow(to_plot)
             axs[n_plot,k].scatter(centers[:,0], centers[:,2] )
             for i in range(centers.shape[0]):
                 axs[n_plot,k].annotate(str(i), centers[i, [0,2]] + np.array([0.1, 0.1]))
 
             axs[n_plot,k].set_xticklabels([])
             axs[n_plot,k].set_yticklabels([])
-            # plt.show()
     # axs[n_plot,0].set_ylabel(name)
 
     plot_dens(density, 'raw density', 0)
@@ -406,9 +377,6 @@ def find_local_maxs_of_density(density_deconv, latent_space_bounds, percent_top 
             plt.savefig(plot_folder + 'local_max_viz.png')
             plt.close()
 
-
-    # plt.figure()
-    # plt.scatter(large_dens_indices[:,0], large_dens_indices[:,3], large_dens_indices[:,2], c = kmeans.labels_)
 
     grid_to_z, _ = latent_density.get_grid_z_mappings(latent_space_bounds, density_deconv.shape[0])
     max_within_cluster_z = grid_to_z(max_within_cluster)

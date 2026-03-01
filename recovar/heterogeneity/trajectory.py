@@ -33,7 +33,6 @@ def get_cum_curvelength(gt_vols):
 
 ## TRAJECTORY FUNCTIONS
 def find_trajectory_in_grid(density, g_st, g_end, latent_space_bounds, eps = 1e-6, use_log_density = False, debug = False):
-    # use_log_density = True
     density_p_eps = density + np.max(density) * eps
     if use_log_density:
         normalized_dens = density / np.max(density*(1+eps))
@@ -47,12 +46,7 @@ def find_trajectory_in_grid(density, g_st, g_end, latent_space_bounds, eps = 1e-
     
     max_steps = np.linalg.norm(density.shape) * 50
     dx = get_grid_spacing(latent_space_bounds, density)
-    # logger.info("dx %s", dx)
     path = gradient_descent_nd(travel_time, g_st, g_end, dx,  step_size = 0.25, n_theta = 10, max_steps = max_steps )
-    debug = False
-    if debug:
-        plt.imshow(density, aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
-        plt.imshow(np.log(travel_time), aspect = density.shape[1]/ density.shape[0]); plt.colorbar(); plt.show()
 
     while path is None:
         if eps > 0.1:
@@ -113,9 +107,6 @@ def gradient_descent_nd(travel_time, x_st, x_end, dx, step_size = 0.25, n_theta 
         k += 1
         
         if k > max_steps:
-            cur_path = np.flip(np.stack(path), axis =0)
-            plt.scatter(cur_path[:,0], cur_path[:,1])
-            plt.show()
             logger.info("Failed to find path. Increasing minimum density")
             return None
             

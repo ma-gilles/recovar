@@ -5,7 +5,6 @@ logger = logging.getLogger(__name__)
 import recovar.jax_config
 import numpy as np
 import os, argparse, time, sys
-from recovar.output import output as o
 from recovar import utils
 from recovar.reconstruction import homogeneous, noise
 from recovar.output import output
@@ -665,13 +664,13 @@ def standard_recovar_pipeline(args):
         # --- Save mean and mask volumes ---
         paths.ensure_volumes_dir()
         # save_volume appends .mrc, so strip the extension from the path
-        o.save_volume(means['combined'], os.path.splitext(paths.mean_volume)[0], volume_shape,
+        output.save_volume(means['combined'], os.path.splitext(paths.mean_volume)[0], volume_shape,
                       from_ft=True, voxel_size=cryos.voxel_size)
-        o.save_volume(means['corrected0'], os.path.splitext(paths.mean_half1_unfil)[0], volume_shape,
+        output.save_volume(means['corrected0'], os.path.splitext(paths.mean_half1_unfil)[0], volume_shape,
                       from_ft=True, voxel_size=cryos.voxel_size)
-        o.save_volume(means['corrected1'], os.path.splitext(paths.mean_half2_unfil)[0], volume_shape,
+        output.save_volume(means['corrected1'], os.path.splitext(paths.mean_half2_unfil)[0], volume_shape,
                       from_ft=True, voxel_size=cryos.voxel_size)
-        o.save_volume(volume_mask, os.path.splitext(paths.mask_volume)[0], volume_shape,
+        output.save_volume(volume_mask, os.path.splitext(paths.mask_volume)[0], volume_shape,
                       from_ft=False, voxel_size=cryos.voxel_size)
 
         # Filter and save mean
@@ -680,7 +679,7 @@ def standard_recovar_pipeline(args):
         half2 = fourier_transform_utils.get_idft3(means['corrected1'].reshape(volume_shape))
         best_filtered_nob, _, _, _, _ = locres.local_resolution(
             half1, half2, 0, cryos.voxel_size, use_filter=True, fsc_threshold=1/7, use_v2=True)
-        o.save_volume(best_filtered_nob, os.path.splitext(paths.mean_filtered)[0], volume_shape,
+        output.save_volume(best_filtered_nob, os.path.splitext(paths.mean_filtered)[0], volume_shape,
                       from_ft=False, voxel_size=cryos.voxel_size)
 
         if args.only_mean:
@@ -824,18 +823,18 @@ def standard_recovar_pipeline(args):
 
     # --- Save volumes ---
     paths.ensure_volumes_dir()
-    o.save_covar_output_volumes(paths.output_dir, means['combined'], u['rescaled'], s,
+    output.save_covar_output_volumes(paths.output_dir, means['combined'], u['rescaled'], s,
                                 volume_mask, volume_shape, voxel_size=cryos.voxel_size)
-    o.save_volume(volume_mask, os.path.splitext(paths.mask_volume)[0], volume_shape,
+    output.save_volume(volume_mask, os.path.splitext(paths.mask_volume)[0], volume_shape,
                   from_ft=False, voxel_size=cryos.voxel_size)
-    o.save_volume(dilated_volume_mask, os.path.splitext(paths.dilated_mask_volume)[0], volume_shape,
+    output.save_volume(dilated_volume_mask, os.path.splitext(paths.dilated_mask_volume)[0], volume_shape,
                   from_ft=False, voxel_size=cryos.voxel_size)
 
     focus_mask = focus_masks[-1]
-    o.save_volume(focus_mask, os.path.splitext(paths.focus_mask_volume)[0], volume_shape,
+    output.save_volume(focus_mask, os.path.splitext(paths.focus_mask_volume)[0], volume_shape,
                   from_ft=False, voxel_size=cryos.voxel_size)
     if args.use_complement_mask:
-        o.save_volume(focus_masks[0], os.path.splitext(paths.complement_mask_volume)[0], volume_shape,
+        output.save_volume(focus_masks[0], os.path.splitext(paths.complement_mask_volume)[0], volume_shape,
                       from_ft=False, voxel_size=cryos.voxel_size)
 
     # --- Build result dict and save ---
@@ -904,7 +903,7 @@ def standard_recovar_pipeline(args):
     if path_mapping is not None:
         result['original_paths'] = path_mapping
 
-    o.save_pipeline_results(
+    output.save_pipeline_results(
         paths,
         result,
         embedding_dict,
