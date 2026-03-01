@@ -1177,20 +1177,20 @@ def estimate_local_pol_covariances_inner(XWX, estimate_0, estimate_1, prior_inve
     krons = batch_kron(K,K)
     summed_krons = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_shape[0]//2-1, krons.reshape(krons.shape[0], -1), radiuses, None).reshape([-1, krons.shape[-1], krons.shape[-1] ])
 
-    estimate_covariance = linalg.broadcast_outer(estimate_0 , estimate_1 )#.swapaxes(-1,-2).reshape(-1, estimate_0.shape[-1]**2)
+    estimate_covariance = linalg.broadcast_outer(estimate_0 , estimate_1 )
     estimate_covariance = 0.5 * (estimate_covariance + jnp.conj(estimate_covariance.swapaxes(-1,-2)))
     estimate_covariance = batch_vec(estimate_covariance)
 
-    estimate_covariance_summed = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_shape[0]//2-1, estimate_covariance.reshape(krons.shape[0], -1), radiuses, None)#.reshape([-1, estimate_0.shape[-1], estimate_0.shape[-1] ])
+    estimate_covariance_summed = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_shape[0]//2-1, estimate_covariance.reshape(krons.shape[0], -1), radiuses, None)
 
     good_v = jnp.where(frequencies[...,0] == 0, 0, 1)
 
     # Add the hermitian conjugate
-    estimate_covariance = linalg.broadcast_outer(jnp.conj(estimate_0) * good_v[...,None], jnp.conj(estimate_1) * good_v[...,None])#.swapaxes(-1,-2).reshape(-1, estimate_0.shape[-1]**2)
+    estimate_covariance = linalg.broadcast_outer(jnp.conj(estimate_0) * good_v[...,None], jnp.conj(estimate_1) * good_v[...,None])
     estimate_covariance = 0.5 * (estimate_covariance + jnp.conj(estimate_covariance.swapaxes(-1,-2)))
     estimate_covariance = batch_vec(estimate_covariance)
 
-    estimate_covariance_summed += core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_shape[0]//2-1, estimate_covariance.reshape(krons.shape[0], -1), radiuses, None)#.reshape([-1, estimate_0.shape[-1], estimate_0.shape[-1] ])
+    estimate_covariance_summed += core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_shape[0]//2-1, estimate_covariance.reshape(krons.shape[0], -1), radiuses, None)
 
 
     ## TODO There is a wild 0.5 here b/c we are treating real and imaginary part as independent
@@ -1226,7 +1226,7 @@ def estimate_local_covariances(XWX_0, XWX_1, estimate_0, estimate_1, prior_inver
 
     estimated_covariances = linalg.batch_hermitian_linear_solver(krons, batch_vec(estimate_covariance_averaged).real)#, assume_a='pos' )
 
-    estimated_covariances = batch_unvec(estimated_covariances)#.reshape([-1, num_params,num_params]).swapaxes(-1,-2)
+    estimated_covariances = batch_unvec(estimated_covariances)
     logger.info("end of local covariances estimation")
 
     bad_covars = jnp.linalg.cond(krons) > 1e4
@@ -1383,8 +1383,7 @@ def compute_weights_from_precompute(volume_shape, XWX, F, prior_inverse_covarian
         prior_inverse_covariance = None
 
     memory_per_pixel = (2*h_max +1)**3 * big_gram_matrix_size(pol_degree) * 2 * 8 * 4
-    ## TODO this should be fixed now. 
-    ## There seems to be a strange bug with JAX. If it just barely runs out of memory, it won't throw an error but the memory will get corrupted and the answer is nonsense. This is an incredibly difficult thing to debug. 
+    # JAX can silently corrupt memory near OOM without raising errors.
     if h_max == 0:
         memory_per_pixel = (2*1 +1)**3 * big_gram_matrix_size(pol_degree) * 2 * 8 * 4
     # Safety factor: JAX can silently corrupt memory near OOM without raising errors

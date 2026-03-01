@@ -681,7 +681,7 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
                 from recovar.heterogeneity import adaptive_kernel_discretization
                 estimators[cryo_idx], lhs[cryo_idx], rhs[cryo_idx] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[cryo_idx], noise_variance.astype(np.float32), None, best_likelihood, single_bin, tau= None, grid_correct=False, use_spherical_mask=False, return_lhs_rhs=True)
                 lhs[cryo_idx] = adaptive_kernel_discretization.half_volume_to_full_volume(lhs[cryo_idx][0], cryos[cryo_idx].volume_shape)
-                lhs[cryo_idx] = (lhs[cryo_idx] * cryos[0].get_valid_frequency_indices())#.reshape(cryos[0].volume_shape)
+                lhs[cryo_idx] = (lhs[cryo_idx] * cryos[0].get_valid_frequency_indices())
                 real_estimators[cryo_idx] = fourier_transform_utils.get_idft3(estimators[cryo_idx].reshape(cryos[0].volume_shape))
                 all_estimators[zdim][cryo_idx] = estimators[cryo_idx]
                 all_lhs[zdim][cryo_idx] = lhs[cryo_idx]
@@ -748,7 +748,7 @@ def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, z
 
                 image_subset = np.argwhere(images_used).reshape(-1)
                 Ft_ctf, Ft_y = relion_functions.residual_relion_style_triangular_kernel(cryos[cryo_idx], estimators[cryo_idx][0], noise_variance.astype(np.float32) * 0 ,  100,  index_subset = image_subset)
-                Ft_y = (Ft_y * cryos[0].get_valid_frequency_indices())#.reshape(cryos[0].volume_shape)
+                Ft_y = (Ft_y * cryos[0].get_valid_frequency_indices())
 
                 if first:
                     Ft_ctf_avg = regularization.average_over_shells(Ft_ctf, cryos[0].volume_shape) / 10
