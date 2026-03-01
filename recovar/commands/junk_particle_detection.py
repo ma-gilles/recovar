@@ -1905,12 +1905,13 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
     os.makedirs(output_folder, exist_ok=True)
     
     # Set up logging
+    from recovar.utils.helpers import RobustFileHandler, RobustStreamHandler
     logging.basicConfig(
         format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
         level=logging.INFO,
         handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler(os.path.join(output_folder, 'junk_detection.log'))
+            RobustStreamHandler(),
+            RobustFileHandler(os.path.join(output_folder, 'junk_detection.log'))
         ]
     )
     

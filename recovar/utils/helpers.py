@@ -503,14 +503,39 @@ def downsample_vol_by_fourier_truncation(vol_input, target_grid_size):
     X[:,:,0] = X[:,:,0].real
     return fourier_transform_utils.get_idft3(X)
 
+class RobustStreamHandler(logging.StreamHandler):
+    """StreamHandler that silently handles stale NFS/GPFS file handles."""
+
+    def emit(self, record):
+        try:
+            super().emit(record)
+        except OSError:
+            pass
+
+
+class RobustFileHandler(logging.FileHandler):
+    """FileHandler that reopens the file on stale NFS/GPFS handles."""
+
+    def emit(self, record):
+        try:
+            super().emit(record)
+        except OSError:
+            try:
+                self.close()
+                self._open()
+                super().emit(record)
+            except OSError:
+                pass
+
+
 def basic_config_logger(output_folder):
     logging.basicConfig(
     format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
                     level=logging.INFO,
-                    force = True, 
+                    force = True,
                     handlers=[
-    logging.FileHandler(f"{output_folder}/run.log"),
-    logging.StreamHandler()])
+    RobustFileHandler(f"{output_folder}/run.log"),
+    RobustStreamHandler()])
 
 
 

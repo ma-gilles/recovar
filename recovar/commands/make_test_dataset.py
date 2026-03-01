@@ -11,7 +11,7 @@ def make_test_dataset(output_dir, image_size = 64, noise_level = 0.1, n_images =
         np.random.seed(seed)
     grid_size = image_size
     this_dir = os.path.dirname(__file__)
-    volume_folder_input = os.path.join(this_dir, '..', 'data', 'vol')
+    volume_folder_input = os.path.join(this_dir, '..', 'assets', 'vol')
     print(volume_folder_input)
 
     output_folder = os.path.join(output_dir, 'test_dataset')

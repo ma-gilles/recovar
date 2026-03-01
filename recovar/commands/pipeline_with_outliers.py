@@ -11,6 +11,8 @@ from recovar.output import output
 
 # Import necessary functions from pipeline.py and output module
 from recovar.commands.pipeline import add_args, standard_recovar_pipeline
+from recovar.utils.helpers import RobustFileHandler as _RobustFileHandler
+from recovar.utils.helpers import RobustStreamHandler as _RobustStreamHandler
 from recovar.utils import cleanup_temp_files
 matplotlib.rcParams["contour.negative_linestyle"] = "solid"
 
@@ -74,8 +76,8 @@ def run_pipeline_with_outlier_removal():
         format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
         level=logging.INFO,
         handlers=[
-            logging.FileHandler(os.path.join(args.outdir, 'run.log')),
-            logging.StreamHandler()
+            _RobustFileHandler(os.path.join(args.outdir, 'run.log')),
+            _RobustStreamHandler()
         ]
     )
     logger = logging.getLogger(__name__)

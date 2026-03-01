@@ -48,12 +48,13 @@ def main():
     log_dir = os.path.dirname(args.output_path)
     log_file = os.path.join(log_dir, "extract_subset_run.log")
 
+    from recovar.utils.helpers import RobustFileHandler, RobustStreamHandler
     logging.basicConfig(format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
                         level=logging.INFO,
-                        force = True, 
+                        force = True,
                         handlers=[
-        logging.FileHandler(f"{log_file}"),
-        logging.StreamHandler()])
+        RobustFileHandler(f"{log_file}"),
+        RobustStreamHandler()])
 
     # Check that either subvol_idx, or mask or coordinate are provided
     extract_image_subset_from_kmeans(args.path_to_centers, args.kmeans_indices, args.inverse, args.output_path)
