@@ -53,12 +53,16 @@ NVTX_DOMAIN_DATA_IO = "data_io"
 
 
 def _swap_mrc_ext(filepath: str) -> Optional[str]:
-    """Return filepath with .mrc/.mrcs swapped, or None if not applicable."""
-    if filepath.endswith('.mrc'):
+    """Return filepath with .mrc/.mrcs extension swapped, or None if not applicable."""
+    if filepath.endswith('.mrc') and not filepath.endswith('.mrcs'):
         return filepath + 's'
     elif filepath.endswith('.mrcs'):
         return filepath[:-1]
     return None
+
+
+# Alias so all callers use the same function
+_swap_mrc_extension = _swap_mrc_ext
 
 
 # ---------------------------------------------------------------------------
@@ -133,15 +137,6 @@ def _resolve_mrc_path(candidate: str) -> str:
             return alt_flat
 
     return candidate
-
-
-def _swap_mrc_extension(path: str):
-    """Return path with .mrc <-> .mrcs swapped, or None if not applicable."""
-    if path.endswith('.mrcs'):
-        return path[:-1]  # .mrcs -> .mrc
-    if path.endswith('.mrc'):
-        return path + 's'  # .mrc -> .mrcs
-    return None
 
 
 def _search_for_basename(missing_path: str):
