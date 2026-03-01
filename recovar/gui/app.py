@@ -599,7 +599,7 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         test_vol = request.args.get("path", "")
         if not test_vol:
             # Try to find any .mrc file from discovered jobs
-            for jid, job in manager._jobs.items():
+            for job in manager._jobs.values():
                 vols_dir = os.path.join(job.output_dir, "volumes")
                 if os.path.isdir(vols_dir):
                     for f in sorted(os.listdir(vols_dir)):
