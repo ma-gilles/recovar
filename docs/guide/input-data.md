@@ -68,6 +68,29 @@ recovar pipeline particles.star -o output --mask mask.mrc \
 !!! tip
     If paths break, RECOVAR shows the first missing file and suggests the correct `--datadir` / `--strip-prefix` to use.
 
+### Automatic path resolution
+
+RECOVAR automatically tries common fixes when image paths don't resolve:
+
+- **Extension fallback**: If `file.mrc` doesn't exist, tries `file.mrcs` (and vice versa)
+- **Flat directory fallback**: If `datadir/J3/imported/file.mrcs` doesn't exist, tries `datadir/file.mrcs`
+
+When a fallback is used, an INFO-level log message explains what happened.
+
+### Diagnosing path issues
+
+Use `recovar check_paths` to preview how paths will resolve without running the full pipeline:
+
+```bash
+# Check a cryoSPARC file
+recovar check_paths particles.cs --datadir /path/to/project
+
+# Check a STAR file with prefix stripping
+recovar check_paths particles.star --strip-prefix Extract/job193 --datadir /data
+```
+
+This shows which paths resolve, which use automatic fallbacks, and which are missing, along with concrete suggestions for how to fix them.
+
 ## Auto-extraction details
 
 When no `--poses` or `--ctf` pkl files are provided, RECOVAR automatically extracts:

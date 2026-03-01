@@ -91,6 +91,93 @@ def _normalize_selection_indices(indices, n_total: int, name: str) -> np.ndarray
 
 
 # ---------------------------------------------------------------------------
+# Path resolution with fallbacks
+# ---------------------------------------------------------------------------
+
+def _resolve_mrc_path(candidate: str) -> str:
+    """Try to find an MRC file, with extension and basename fallbacks.
+
+    Resolution order:
+    1. candidate as-is
+    2. Extension swap: .mrc <-> .mrcs
+    3. Basename only in deepest existing parent directory
+    4. Basename with swapped extension in that directory
+
+    Returns the first existing path, or the original candidate if none found.
+    """
+    if os.path.isfile(candidate):
+        return candidate
+
+    # Extension fallback
+    alt_ext = _swap_mrc_extension(candidate)
+    if alt_ext and os.path.isfile(alt_ext):
+        logger.info("Path fallback: %s -> %s (extension swap)", candidate, alt_ext)
+        return alt_ext
+
+    # Basename fallback: walk up to find the deepest existing directory
+    basename = os.path.basename(candidate)
+    search_dir = os.path.dirname(candidate)
+    while search_dir and not os.path.isdir(search_dir):
+        search_dir = os.path.dirname(search_dir)
+
+    if search_dir:
+        flat = os.path.join(search_dir, basename)
+        if os.path.isfile(flat):
+            logger.info("Path fallback: %s -> %s (basename in parent)", candidate, flat)
+            return flat
+
+        # Basename + extension swap
+        alt_flat = _swap_mrc_extension(flat)
+        if alt_flat and os.path.isfile(alt_flat):
+            logger.info("Path fallback: %s -> %s (basename + extension swap)", candidate, alt_flat)
+            return alt_flat
+
+    return candidate
+
+
+def _swap_mrc_extension(path: str):
+    """Return path with .mrc <-> .mrcs swapped, or None if not applicable."""
+    if path.endswith('.mrcs'):
+        return path[:-1]  # .mrcs -> .mrc
+    if path.endswith('.mrc'):
+        return path + 's'  # .mrc -> .mrcs
+    return None
+
+
+def _search_for_basename(missing_path: str):
+    """Search up to 3 levels above and below the missing path for its basename.
+
+    Returns the directory containing the file, or None.
+    """
+    basename = os.path.basename(missing_path)
+    alt_basename = None
+    swapped = _swap_mrc_extension(basename)
+    if swapped:
+        alt_basename = os.path.basename(swapped)
+
+    # Find deepest existing ancestor
+    search_root = os.path.dirname(missing_path)
+    for _ in range(4):
+        parent = os.path.dirname(search_root)
+        if parent == search_root:
+            break
+        search_root = parent
+
+    if not os.path.isdir(search_root):
+        return None
+
+    for dirpath, dirnames, filenames in os.walk(search_root):
+        depth = dirpath[len(search_root):].count(os.sep)
+        if depth > 3:
+            dirnames.clear()
+            continue
+        if basename in filenames or (alt_basename and alt_basename in filenames):
+            return dirpath
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -471,27 +558,43 @@ class MultiMRCLoader(ImageLoader):
 
         if missing_files:
             n_missing = len(missing_files)
-            sample = missing_files[0]
-            basename = os.path.basename(sample)
-            hint = (
-                f"\n\nTo fix broken paths, try:\n"
-                f"  --datadir /path/to/directory/containing/{basename}\n"
-            )
+            n_show = min(3, n_missing)
+            samples = missing_files[:n_show]
+            basename = os.path.basename(samples[0])
+
+            # Try to locate the basename on disk for a concrete suggestion
+            found_dir = _search_for_basename(samples[0])
+
+            lines = [
+                f"Cannot find {n_missing} MRC file(s) referenced in the metadata.",
+                "",
+                "Resolved paths that were tried (after --datadir/--strip-prefix):",
+            ]
+            for s in samples:
+                lines.append(f"  {s}")
+            if n_missing > n_show:
+                lines.append(f"  ... and {n_missing - n_show} more")
+
+            lines.append("")
+            lines.append("To fix broken paths, try:")
+            if found_dir:
+                lines.append(f"  --datadir {found_dir}")
+            else:
+                lines.append(f"  --datadir /path/to/directory/containing/{basename}")
             # Use raw metadata path for strip-prefix hint (before datadir was joined)
             if self._raw_paths:
                 raw_sample = self._raw_paths[0]
                 if '/' in raw_sample:
                     raw_prefix = raw_sample.rsplit('/', 1)[0]
-                    hint += f"  --strip-prefix {raw_prefix}\n"
-            elif '/' in sample:
-                prefix = sample.rsplit('/', 1)[0]
-                hint += f"  --strip-prefix {prefix}\n"
-            raise FileNotFoundError(
-                f"Cannot find {n_missing} MRC file(s) referenced in the metadata.\n"
-                f"  First missing: {sample}\n"
-                f"  File basename: {basename}"
-                f"{hint}"
-            )
+                    lines.append(f"  --strip-prefix {raw_prefix}")
+            elif '/' in samples[0]:
+                prefix = samples[0].rsplit('/', 1)[0]
+                lines.append(f"  --strip-prefix {prefix}")
+
+            lines.append("")
+            lines.append("Tip: use 'recovar check_paths <particles_file>' to diagnose path issues.")
+
+            raise FileNotFoundError("\n".join(lines))
 
         # Get image size and dtype from the first successfully loaded file.
         first_loader = next(iter(self._loaders.values()))
@@ -639,7 +742,9 @@ class StarLoader(MultiMRCLoader):
         # Save raw paths (after strip but before datadir join) for error hints
         raw_paths = df['mrc_file'].unique().tolist()
 
-        df['mrc_file'] = df['mrc_file'].apply(lambda p: os.path.join(datadir, p))
+        full_paths = df['mrc_file'].apply(lambda p: os.path.join(datadir, p))
+        unique_map = {p: _resolve_mrc_path(p) for p in full_paths.unique()}
+        df['mrc_file'] = full_paths.map(unique_map)
 
         super().__init__(df[['mrc_file', 'mrc_index']], indices, lazy, max_threads,
                          raw_paths=raw_paths)
@@ -687,7 +792,10 @@ class CryoSparcLoader(MultiMRCLoader):
         # Save raw paths (after strip but before datadir join) for error hints
         raw_paths = list(dict.fromkeys(clean_paths))  # unique, order-preserving
 
-        full_paths = [os.path.join(datadir, p) for p in clean_paths]
+        joined_paths = [os.path.join(datadir, p) for p in clean_paths]
+        unique_joined = set(joined_paths)
+        resolved_map = {p: _resolve_mrc_path(p) for p in unique_joined}
+        full_paths = [resolved_map[p] for p in joined_paths]
 
         df = pd.DataFrame({'mrc_file': full_paths, 'mrc_index': blob_idx})
 
