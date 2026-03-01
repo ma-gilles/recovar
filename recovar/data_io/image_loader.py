@@ -729,6 +729,8 @@ class StarLoader(MultiMRCLoader):
 
         if not datadir:
             datadir = os.path.abspath(os.path.dirname(filepath))
+        elif not os.path.isabs(datadir):
+            datadir = os.path.abspath(os.path.join(os.path.dirname(filepath), datadir))
         else:
             datadir = os.path.abspath(datadir)
 
@@ -778,6 +780,8 @@ class CryoSparcLoader(MultiMRCLoader):
 
         if not datadir:
             datadir = os.path.abspath(os.path.dirname(filepath))
+        elif not os.path.isabs(datadir):
+            datadir = os.path.abspath(os.path.join(os.path.dirname(filepath), datadir))
         else:
             datadir = os.path.abspath(datadir)
 
