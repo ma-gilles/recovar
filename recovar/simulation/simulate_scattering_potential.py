@@ -74,7 +74,7 @@ atom_coeffs = atom_coeffs2
 
 def generate_bag_of_atom_projection(grid_size, radius, voxel_size, N_atoms, atom_shape_fn):
     ft_mol = generate_synthetic_spectrum_of_molecule(radius, grid_size, voxel_size, atom_shape_fn, N_atoms)
-    image = np.real(fourier_transform_utils.get_inverse_fourier_transform(ft_mol[grid_size//2], voxel_size = voxel_size))#.astype(np.float)
+    image = np.real(fourier_transform_utils.get_inverse_fourier_transform(ft_mol[grid_size//2], voxel_size = voxel_size))
     return image
 
 
@@ -147,7 +147,6 @@ def compute_gaussian_on_k_grid(sigma, grid_size, voxel_size):
     return cst * np.exp(-rs**2 * expo)
 
 def get_gaussian_fn_on_k(sigma):
-    #rs = get_grid_of_radial_distances(3*[grid_size], voxel_size = voxel_size, scaled = True)
     expo, cst = get_exponent_and_constant_of_gaussian_FT(sigma, dim = 3)
     def gaussian_fn(x):
         return cst * np.exp(-np.linalg.norm(x, axis = -1)**2 * expo)
@@ -160,11 +159,7 @@ def generate_synthetic_spectrum_of_molecule(radius, grid_size, voxel_size = 1, a
 
     assert radius < (grid_size/ 2 * voxel_size ) 
 
-    atom_coords = get_random_points_in_unit_ball(N_atoms) * radius 
-    # fourier_transform = get_fourier_transform_of_molecules_on_k_grid(atom_coords, np.ones(N_atoms) , grid_size, voxel_size )
-    # k_coords = get_k_coordinate_of_each_pixel(3*[grid_size], voxel_size= voxel_size, scaled=True)
-    # weight = atom_shape_fn(k_coords).reshape(fourier_transform.shape)        
-    
+    atom_coords = get_random_points_in_unit_ball(N_atoms) * radius
     return generate_spectrum_of_molecule_from_atom_coords(atom_coords, grid_size, voxel_size, atom_shape_fn)
 
 def generate_spectrum_of_molecule_from_atom_coords(atom_coords, voxel_size,  grid_size, atom_shape_fn, jax_backend = False):
@@ -245,7 +240,6 @@ def generate_volume_from_atom_positions_and_types(atom_coords, atom_types, voxel
 
     atoms_grouped_by_elements = {}
     for atom_name in atom_indices:
-        #import jax.numpy as jnp
         xx = np.array(atom_indices[atom_name])
         atoms_grouped_by_elements[atom_name] = atom_coords[xx]
 
@@ -256,7 +250,6 @@ def generate_volume_from_atom_positions_and_types(atom_coords, atom_types, voxel
         
         atom_shape_fn = lambda x: five_gaussian_atom_shape(x, atom_coeffs[atom_name])
         if use_freq_coords:
-            # density += generate_spectrum_of_molecule_from_atom_coords_at_freq_coords(atoms_grouped_by_elements[atom_name], voxel_size,  freq_coords = freq_coords,  atom_shape_fn = atom_shape_fn, jax_backend = jax_backend)
             xx = generate_spectrum_of_molecule_from_atom_coords_at_freq_coords(atoms_grouped_by_elements[atom_name], voxel_size,  freq_coords = freq_coords,  atom_shape_fn = atom_shape_fn, jax_backend = jax_backend)
             density = density + xx.astype(out_complex_dtype, copy=False)
         else:
@@ -394,8 +387,6 @@ def generate_molecule_spectrum_from_pdb_id(molecule, voxel_size, grid_size, forc
     
     do_center_atoms = not from_atom_group if do_center_atoms is None else do_center_atoms
 
-    # prody.confProDy(verbosity=verbosity)
-    
     if not from_atom_group:
         atoms = _parsePDB(molecule)
     else:
@@ -404,8 +395,6 @@ def generate_molecule_spectrum_from_pdb_id(molecule, voxel_size, grid_size, forc
     if do_center_atoms:
         atoms = center_atoms(atoms)
 
-
-    image_shape = 3 * [grid_size]
     ft_mol = generate_volume_from_atoms(atoms, grid_size = grid_size, voxel_size = voxel_size)
 
     if (grid_size % 2) == 0 and force_symmetry:

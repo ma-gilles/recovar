@@ -509,9 +509,6 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         x_angles[::2] = -x_angles_half[:-1]  if n_tilts % 2 == 0 else -x_angles_half
         x_angles[1::2] = x_angles_half[1:]   
 
-        # ctf_params[:,core.CTFParamIndex.CONTRAST] =  np.cos(  x_angles / 180 * np.pi )
-
-
         x_angles_zz = np.concatenate([x_angles[:,None], np.zeros([n_tilts,2])], axis = -1)
         from scipy.spatial.transform import Rotation    
         x_rotations = Rotation.from_euler('xyz', x_angles_zz, degrees=True).as_matrix()
@@ -542,8 +539,6 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         # Angle ind is just set to 0 in this version
         dose =  (tilt_numbers + 0.5) * dose_per_tilt
 
-        # The cryo-EM / angle (unsused?) / dose (used)
-        # ctf_params_big = np.zeros([n_images, 11])
         ctf_params = np.concatenate([ctf_params, dose[:,None], np.zeros_like(tilt_numbers[:,None]) ], axis = -1)
 
         ##
@@ -644,15 +639,6 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
                                                tilt_outlier_noise_scale, tilt_outlier_contrast, seed=2, 
                                                disc_type=disc_type, mrc_file=None, premultiplied_ctf=premultiplied_ctf)
         main_image_stack[image_indices_tilt_series_outliers] = tilt_outlier_image_stack
-        # Select random tilts to replace (avoiding particle outliers)
-        # non_outlier_indices = np.where(image_assignments != -1)[0]
-        # if n_tilt_groups >= n_tilt_outliers:
-        #     ind_tilt_outliers = np.random.choice(np.arange(n_tilt_groups), n_tilt_outliers, replace=False)
-        #     main_image_stack[ind_tilt_outliers] = tilt_outlier_image_stack
-        #     # Mark these as tilt outliers (different assignment value)
-        #     image_assignments[ind_tilt_outliers] = -2
-        #     tilt_series_assignment[ind_tilt_outliers] = -1
-        # else:
 
     if n_tilts > 0:
         # Note that b_facs are stored here just so that the get saved in the starfile in WARP style...
@@ -695,7 +681,6 @@ def save_ctf_params(outdir, D: int, ctf_params, voxel_size):
 roll_batch = jax.vmap(lambda x,y,z: jax.numpy.roll(x,y,axis = z), in_axes = (0, 0, None))
 
 
-# Solves the linear system Dx = b.
 def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, image_assignments, per_image_contrast, per_image_noise_scale, seed =0, disc_type = 'linear_interp', mrc_file = None, pad_before_translate = False, Bfactor=100, premultiplied_ctf = False ):
 
     if disc_type == "pdb":
@@ -764,7 +749,6 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 
 
             elif "ewald" in disc_type:
-                # disc_type_e = disc_type.split("_")[1]
                 disc_type_e = disc_type[6:]
 
                 from recovar.reconstruction import ewald
@@ -849,27 +833,11 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
             else:
 
                 if pad_before_translate:
-                    plotting = True
-                    # for k in range(images_batch.shape[0]):
-                    #     if k > 3:
-                    #         break
                     from recovar.core import padding
                     padded_images = padding.pad_images_spatial_domain(images_batch,experiment_dataset.grid_size)
-                    if plotting:
-                        import matplotlib.pyplot as plt
-                        plt.imshow(padded_images[0])
-                        plt.show()
                     padded_images = roll_batch(padded_images, -np.round(experiment_dataset.translations[indices]).astype(int)[:,0], -1 )
                     padded_images = roll_batch(padded_images, -np.round(experiment_dataset.translations[indices]).astype(int)[:,1], -2 )
-                    if plotting:
-                        plt.imshow(padded_images[0])
-                        plt.show()
-                    images_batch2 = padding.unpad_images_spatial_domain(padded_images, experiment_dataset.grid_size)
-
-                    if plotting:
-                        plt.imshow(images_batch2[0]); plt.show()
-                        plt.show()
-                    images_batch = images_batch2
+                    images_batch = padding.unpad_images_spatial_domain(padded_images, experiment_dataset.grid_size)
                 
                 images_batch = fourier_transform_utils.get_idft2(images_batch.reshape([-1, *experiment_dataset.image_shape]))
                 images_batch = images_batch.real
@@ -882,10 +850,9 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 
 
             n_images_done += indices.size
-            # if n_images_done % 1000 == 0:
             logger.info("Batch %s: Generated %s images so far", k, n_images_done)
 
-    logger.info("Discretizing with: " + disc_type)
+    logger.info("Discretizing with: %s", disc_type)
     logger.info("Done generating data")
 
     if mrc_file is not None:
@@ -945,7 +912,6 @@ def simulate_nufft_data_batch(volume, rotation_matrices, translations, CTF_param
     return translated_images
 
 
-# MOVED HERE BECAUSE ONLY USED HERE
 @functools.partial(jax.jit, static_argnums=[1,2,3])
 def get_rotated_plane_coords(rotation_matrix, image_shape, voxel_size, scaled = True):
     unrotated_plane_indices = core.get_unrotated_plane_coords(image_shape, voxel_size, scaled = scaled)
@@ -973,8 +939,6 @@ def simulate_nufft_data_batch_from_pdb(atom_group, rotation_matrices, translatio
 
 def compute_projections_with_nufft(atom_group, plane_coords, voxel_size):
     from recovar.simulation import simulate_scattering_potential as gsm
-    # plane_coords = cu.get_unrotated_plane_coords(image_shape, voxel_size, scaled =True )
-
     plane_coords_vec = np.array(plane_coords.reshape(-1, 3)).astype(np.float64)
     X_ims = np.array(gsm.generate_potential_at_freqs_from_atoms(atom_group, voxel_size, plane_coords_vec).astype(np.complex64))
     if np.isnan(np.sum(X_ims)):
@@ -991,9 +955,6 @@ def get_nufft_slices(volume, rotation_matrices, image_shape, volume_shape, grid_
 
 def compute_volume_projections_with_nufft(volume, plane_coords, voxel_size):
     from recovar.simulation import simulate_scattering_potential as gsm
-    # This is here because I don't want to impose the dependencies for nufft. If you want to run this, you should 
-    # pip install finufft
-    # plane_coords = cu.get_unrotated_plane_coords(image_shape, voxel_size, scaled =True )
     plane_coords_vec = np.array(plane_coords.reshape(-1, 3)).astype(np.float64)
     X_ims = gsm.get_fourier_transform_of_volume_at_freq_coords(np.array(volume).astype(np.complex128), plane_coords_vec, voxel_size )
     X_ims = X_ims.reshape(plane_coords.shape[:-1])
