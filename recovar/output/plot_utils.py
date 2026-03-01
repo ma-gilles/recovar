@@ -6,7 +6,6 @@ import matplotlib
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib import colors as mcolors
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import utils
@@ -14,13 +13,6 @@ from recovar.output import metrics
 from recovar.reconstruction import regularization
 
 logger = logging.getLogger(__name__)
-colors = dict(mcolors.BASE_COLORS, **mcolors.CSS4_COLORS)
-
-names_to_show = { "diagonal": "diagonal", "wilson": "Wilson", "diagonal masked": "diagonal masked", "wilson masked": "Wilson masked" }
-colors_name = { "diagonal": "cornflowerblue", "wilson": "lightsalmon", "diagonal masked": "blue", "wilson masked": "orangered"  }
-use_tex = False
-if use_tex:
-    plt.rcParams['text.usetex'] = True
 
 def plot_noise_profile(pipeline_output, yscale='linear', ax=None):
     """Plot noise power spectrum profiles from pipeline output.
@@ -690,7 +682,6 @@ def plot_pipeline_summary(po, zdim_key, output_folder):
         output_folder: Directory to save the summary PNG.
     """
     import os
-
     fig = plt.figure(figsize=(20, 18), constrained_layout=True)
 
     # Use GridSpec for flexible layout
@@ -786,7 +777,6 @@ def plot_pipeline_summary(po, zdim_key, output_folder):
 
     fig.suptitle('RECOVAR Pipeline Summary', fontsize=16, fontweight='bold', y=1.01)
 
-    import os
     plt.savefig(os.path.join(output_folder, 'pipeline_summary.png'), dpi=150, bbox_inches='tight', facecolor='white')
     plt.close(fig)
 

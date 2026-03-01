@@ -1,7 +1,6 @@
 """Flask application for the RECOVAR web GUI."""
 
 import io
-import json
 import logging
 import os
 import re
@@ -10,7 +9,7 @@ import shlex
 import numpy as np
 from flask import (
     Flask, render_template, request, jsonify, redirect, url_for,
-    send_file, Response,
+    send_file,
 )
 
 from recovar.gui.job_manager import JobManager, browse_directory
@@ -201,7 +200,6 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         # Append any extra CLI arguments the user typed in
         extra_args = form.get("extra_args", "").strip()
         if extra_args:
-            import shlex
             cmd_parts.extend(shlex.split(extra_args))
 
         command = " ".join(cmd_parts)
@@ -277,7 +275,6 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
     # ── API: Logs (htmx partial) ───────────────────────────────────────
     @app.route("/api/jobs/<job_id>/logs")
     def api_job_logs(job_id):
-        import re
         content = manager.get_log_content(job_id, n_lines=300)
         # Strip ANSI escape codes
         content = re.sub(r'\x1b\[[0-9;]*m', '', content)
