@@ -617,7 +617,7 @@ def masked_noisy_error_3(diff, noise_variance_small, offset, maskrad_pix, edgewi
 
 @functools.partial(jax.jit, static_argnums = [3,4,5])
 def masked_noisy_error_split_over_shells(diff, noise_variance_small, offset, maskrad_pix, edgewidth_pix,multiplier =3 ):
-    # NOT IMPLEMENTED
+    # Split error computation over radial shells (v1: simple shell decomposition)
     offset += diff.shape[0]//2
 
     diff = subsample_array(diff, offset, multiplier*maskrad_pix)
@@ -632,13 +632,13 @@ def masked_noisy_error_split_over_shells(diff, noise_variance_small, offset, mas
 
 @functools.partial(jax.jit, static_argnums = [3,4,5])    
 def masked_noisy_error_split_over_shells_v2(diff, noise_variance_small, offset, maskrad_pix, edgewidth_pix,multiplier =3 ):
-    # NOT IMPLEMENTED
+    # Split error computation over radial shells (v2: uses shell-wise mask convolution)
     offset += diff.shape[0]//2
 
     # y = S M diff
     diff = subsample_array(diff, offset, multiplier*maskrad_pix)
     mask = mask_fn.raised_cosine_mask(diff.shape, maskrad_pix, edgewidth_pix, 0)
-    diff_ft = fourier_transform_utils.get_dft3(diff_masked)
+    diff_ft = fourier_transform_utils.get_dft3(diff * mask)
 
     # Now to compute (S M D M^* S^*)^dagger
     # = 
