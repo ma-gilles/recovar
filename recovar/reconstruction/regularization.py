@@ -116,7 +116,7 @@ def get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean = False, frequenc
     bot2 = average_over_shells(jnp.abs(vol2)**2, volume_shape, frequency_shift = frequency_shift)    
     bot = jnp.sqrt(bot1 * bot2)
     fsc = top_avg / bot
-    fsc = jnp.where(jnp.isnan(fsc) + jnp.isinf(fsc), 0, fsc)
+    fsc = jnp.where(~jnp.isfinite(fsc), 0, fsc)
     fsc = fsc.at[0].set(fsc[1]) # Always set this 1st shell?
     return fsc
 
@@ -256,7 +256,8 @@ def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequenc
         # Safe division: avoid inf when lhs==0 (no-coverage voxels)
         bot = jnp.where(lhs > epsilon, 1 / lhs, 0)
     else:
-        denom = (lhs + 1/prior)**2
+        safe_prior = jnp.where(prior > 0, prior, jnp.float32(epsilon))
+        denom = (lhs + 1/safe_prior)**2
         safe_denom = jnp.where(denom > 0, denom, jnp.float32(1.0))
         top = lhs**2 / safe_denom
         bot = lhs / safe_denom
@@ -276,12 +277,14 @@ def compute_fsc_prior_gpu_v2(volume_shape, image0, image1, lhs , prior, frequenc
 @nvtx.annotate("covariance_update_col", color="yellow", domain=NVTX_DOMAIN_REG)
 def covariance_update_col(H, B, prior, epsilon = jax_config.EPSILON):
     # H is not divided by sigma.
-    cov = jnp.where( jnp.abs(H) < epsilon , 0,  B / ( H + (1 / prior) ) )
+    safe_prior = jnp.where(prior > 0, prior, jnp.float32(epsilon))
+    cov = jnp.where( jnp.abs(H) < epsilon , 0,  B / ( H + (1 / safe_prior) ) )
     return cov
 
 def covariance_update_col_with_mask(H, B, prior, volume_mask, valid_idx, volume_shape, epsilon = jax_config.EPSILON):
     # H is not divided by sigma.
-    cov = (jnp.where( jnp.abs(H) < epsilon , 0,  B / ( H + (1 / prior) ) ) * valid_idx).reshape(volume_shape)
+    safe_prior = jnp.where(prior > 0, prior, jnp.float32(epsilon))
+    cov = (jnp.where( jnp.abs(H) < epsilon , 0,  B / ( H + (1 / safe_prior) ) ) * valid_idx).reshape(volume_shape)
     cov = fourier_transform_utils.get_dft3( fourier_transform_utils.get_idft3(cov ) * volume_mask ).reshape(-1)
     return cov
 
@@ -295,14 +298,14 @@ def prior_iteration(H0, H1, B0, B1, frequency_shift, init_regularization, substr
 
     cov_col0 =  covariance_update_col(H0,B0, prior)
     cov_col1 =  covariance_update_col(H1,B1, prior)
-    prior, fsc, _ = compute_fsc_prior_gpu_v2(volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift = 0)
+    prior, fsc, _ = compute_fsc_prior_gpu_v2(volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift = frequency_shift)
 
     cov_col0 =  covariance_update_col(H0,B0, prior)
     cov_col1 =  covariance_update_col(H1,B1, prior)
-    prior, fsc, _ = compute_fsc_prior_gpu_v2(volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift = 0)
+    prior, fsc, _ = compute_fsc_prior_gpu_v2(volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift = frequency_shift)
     cov_col0 =  covariance_update_col(H0,B0, prior)
     cov_col1 =  covariance_update_col(H1,B1, prior)
-    prior, fsc, _ = compute_fsc_prior_gpu_v2(volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift = 0)
+    prior, fsc, _ = compute_fsc_prior_gpu_v2(volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift = frequency_shift)
     
     return prior, fsc
 

@@ -446,7 +446,7 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
     if starfile is not None and starfile.endswith('.star'):
         try:
             particle_to_tilts, tilts_to_particle = tilt_dataset.TiltSeriesData.parse_particle_tilt(starfile)
-            micrographtilt_to_tilts, tilts_to_micrographtilt = tilt_dataset.TiltSeriesData.parse_micrograph_tilt(starfile)
+            micrographtilt_to_tilts, tilts_to_micrographtilt = tilt_dataset.TiltSeriesData.parse_micrograph_tilt_mapping(starfile)
         except (KeyError, ValueError, FileNotFoundError) as e:
             logger.warning("Failed to parse starfile %s: %s", starfile, e)
             logger.warning("Skipping particle and micrograph-based outlier detection")
