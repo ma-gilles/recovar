@@ -64,6 +64,12 @@ def _get_lib():
 _ffi_registered = False
 _ffi_lock = threading.Lock()
 
+# FFI target name constants
+_TARGET_BACKPROJECT = "cuda_backproject"
+_TARGET_PROJECT = "cuda_project"
+_TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
+_TARGET_BATCH_PROJECT = "cuda_batch_project"
+
 
 def _ensure_ffi():
     global _ffi_registered
@@ -74,30 +80,40 @@ def _ensure_ffi():
             return
         lib = _get_lib()
         jax.ffi.register_ffi_target(
-            "cuda_backproject", jax.ffi.pycapsule(lib.Backproject), platform="CUDA"
+            _TARGET_BACKPROJECT, jax.ffi.pycapsule(lib.Backproject), platform="CUDA"
         )
         jax.ffi.register_ffi_target(
-            "cuda_project", jax.ffi.pycapsule(lib.Project), platform="CUDA"
+            _TARGET_PROJECT, jax.ffi.pycapsule(lib.Project), platform="CUDA"
         )
         jax.ffi.register_ffi_target(
-            "cuda_batch_backproject", jax.ffi.pycapsule(lib.BatchBackproject), platform="CUDA"
+            _TARGET_BATCH_BACKPROJECT, jax.ffi.pycapsule(lib.BatchBackproject), platform="CUDA"
         )
         jax.ffi.register_ffi_target(
-            "cuda_batch_project", jax.ffi.pycapsule(lib.BatchProject), platform="CUDA"
+            _TARGET_BATCH_PROJECT, jax.ffi.pycapsule(lib.BatchProject), platform="CUDA"
         )
         _ffi_registered = True
-        logger.debug("Registered CUDA FFI targets (backproject, project, batch_backproject, batch_project)")
+        logger.debug("Registered CUDA FFI targets")
+
+
+_cuda_ok = None  # cached result: None = not checked, True/False = result
 
 
 def cuda_available() -> bool:
-    """Return True if CUDA backproject/project kernels can be used."""
+    """Return True if CUDA backproject/project kernels can be used (cached)."""
+    global _cuda_ok
+    if _cuda_ok is not None:
+        return _cuda_ok
     try:
         if not any(d.platform == "gpu" for d in jax.devices()):
-            return False
-        _ensure_ffi()
-        return True
-    except Exception:
-        return False
+            _cuda_ok = False
+        else:
+            _ensure_ffi()
+            _cuda_ok = True
+            logger.info("CUDA backproject/project kernels enabled")
+    except Exception as e:
+        _cuda_ok = False
+        logger.debug("CUDA backproject not available: %s", e)
+    return _cuda_ok
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -124,6 +140,26 @@ def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image):
         raise ValueError(
             f"volume_shape[0] ({N0}) must be divisible by image_shape[0] ({ih})"
         )
+
+
+def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image):
+    """Compute the shared FFI scalar keyword arguments (used by all 4 targets)."""
+    ih, iw_full = image_shape
+    N0, N1, N2 = volume_shape
+    ups = N0 // ih
+    iw_eff = iw_full // 2 + 1 if half_image else iw_full
+    return dict(
+        image_h=np.int64(ih),
+        image_w=np.int64(iw_eff),
+        N0=np.int64(N0),
+        N1=np.int64(N1),
+        N2=np.int64(N2),
+        upsampling=np.int64(ups),
+        order=np.int64(order),
+        half_volume=np.int64(int(half_volume)),
+        half_image=np.int64(int(half_image)),
+        full_image_w=np.int64(iw_full),
+    ), ih, iw_eff
 
 
 @functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7))
@@ -159,36 +195,16 @@ def backproject(
     """
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
-    ih, iw_full = image_shape
-    N0, N1, N2 = volume_shape
-    ups = N0 // ih
-
-    if half_image:
-        iw_eff = iw_full // 2 + 1  # rfft width
-    else:
-        iw_eff = iw_full
-
+    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image)
     rot6 = _rot_to_compact(rotation_matrices)
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
 
     return jax.ffi.ffi_call(
-        "cuda_backproject",
+        _TARGET_BACKPROJECT,
         out_type,
         input_output_aliases={2: 0},
         vmap_method="broadcast_all",
-    )(
-        images, rot6, volume,
-        image_h=np.int64(ih),
-        image_w=np.int64(iw_eff),
-        N0=np.int64(N0),
-        N1=np.int64(N1),
-        N2=np.int64(N2),
-        upsampling=np.int64(ups),
-        order=np.int64(order),
-        half_volume=np.int64(int(half_volume)),
-        half_image=np.int64(int(half_image)),
-        full_image_w=np.int64(iw_full),
-    )
+    )(images, rot6, volume, **kw)
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
@@ -213,37 +229,17 @@ def project(
     """
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
-    ih, iw_full = image_shape
-    N0, N1, N2 = volume_shape
-    ups = N0 // ih
+    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image)
     n_images = rotation_matrices.shape[0]
-
-    if half_image:
-        iw_eff = iw_full // 2 + 1
-    else:
-        iw_eff = iw_full
     n_pixels = ih * iw_eff
-
     rot6 = _rot_to_compact(rotation_matrices)
     out_type = jax.ShapeDtypeStruct((n_images, n_pixels), volume.dtype)
 
     return jax.ffi.ffi_call(
-        "cuda_project",
+        _TARGET_PROJECT,
         out_type,
         vmap_method="broadcast_all",
-    )(
-        volume, rot6,
-        image_h=np.int64(ih),
-        image_w=np.int64(iw_eff),
-        N0=np.int64(N0),
-        N1=np.int64(N1),
-        N2=np.int64(N2),
-        upsampling=np.int64(ups),
-        order=np.int64(order),
-        half_volume=np.int64(int(half_volume)),
-        half_image=np.int64(int(half_image)),
-        full_image_w=np.int64(iw_full),
-    )
+    )(volume, rot6, **kw)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -280,36 +276,16 @@ def batch_backproject(
     """
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
-    ih, iw_full = image_shape
-    N0, N1, N2 = volume_shape
-    ups = N0 // ih
-
-    if half_image:
-        iw_eff = iw_full // 2 + 1
-    else:
-        iw_eff = iw_full
-
+    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image)
     rot6 = _rot_to_compact(rotation_matrices)
     out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
 
     return jax.ffi.ffi_call(
-        "cuda_batch_backproject",
+        _TARGET_BATCH_BACKPROJECT,
         out_type,
         input_output_aliases={2: 0},
         vmap_method="broadcast_all",
-    )(
-        images, rot6, volumes,
-        image_h=np.int64(ih),
-        image_w=np.int64(iw_eff),
-        N0=np.int64(N0),
-        N1=np.int64(N1),
-        N2=np.int64(N2),
-        upsampling=np.int64(ups),
-        order=np.int64(order),
-        half_volume=np.int64(int(half_volume)),
-        half_image=np.int64(int(half_image)),
-        full_image_w=np.int64(iw_full),
-    )
+    )(images, rot6, volumes, **kw)
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
@@ -336,38 +312,18 @@ def batch_project(
     """
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
-    ih, iw_full = image_shape
-    N0, N1, N2 = volume_shape
-    ups = N0 // ih
+    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image)
     n_images = rotation_matrices.shape[0]
     batch = volumes.shape[0]
-
-    if half_image:
-        iw_eff = iw_full // 2 + 1
-    else:
-        iw_eff = iw_full
     n_pixels = ih * iw_eff
-
     rot6 = _rot_to_compact(rotation_matrices)
     out_type = jax.ShapeDtypeStruct((batch, n_images, n_pixels), volumes.dtype)
 
     return jax.ffi.ffi_call(
-        "cuda_batch_project",
+        _TARGET_BATCH_PROJECT,
         out_type,
         vmap_method="broadcast_all",
-    )(
-        volumes, rot6,
-        image_h=np.int64(ih),
-        image_w=np.int64(iw_eff),
-        N0=np.int64(N0),
-        N1=np.int64(N1),
-        N2=np.int64(N2),
-        upsampling=np.int64(ups),
-        order=np.int64(order),
-        half_volume=np.int64(int(half_volume)),
-        half_image=np.int64(int(half_image)),
-        full_image_w=np.int64(iw_full),
-    )
+    )(volumes, rot6, **kw)
 
 
 # ──────────────────────────────────────────────────────────────────────

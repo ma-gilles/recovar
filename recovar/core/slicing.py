@@ -19,26 +19,14 @@ from recovar.core.indexing import vol_indices_to_vec_indices
 logger = logging.getLogger(__name__)
 
 # ── CUDA acceleration (optional) ──────────────────────────────────────
-_cuda_available = None  # tri-state: None = not checked, True/False = result
-
 
 def _check_cuda():
-    global _cuda_available
-    if _cuda_available is not None:
-        return _cuda_available
+    """Return True if CUDA project/backproject kernels are available."""
     try:
-        # Only use CUDA if we actually have a GPU backend
-        if not any(d.platform == "gpu" for d in jax.devices()):
-            _cuda_available = False
-            return False
-        from recovar.cuda_backproject import _ensure_ffi  # noqa: F401
-        _ensure_ffi()
-        _cuda_available = True
-        logger.info("CUDA backproject/project kernels enabled")
-    except Exception as e:
-        _cuda_available = False
-        logger.debug("CUDA backproject not available: %s", e)
-    return _cuda_available
+        from recovar.cuda_backproject import cuda_available
+        return cuda_available()
+    except Exception:
+        return False
 
 
 @jax.jit
@@ -657,9 +645,33 @@ def get_trilinear_weights_and_vol_indices(grid_coords, volume_shape):
 
 def slice_volume_by_trilinear(volume, rotation_matrices, image_shape, volume_shape):
     if _check_cuda() and _is_complex(volume):
-        from recovar.cuda_backproject import project as cuda_project
-        return cuda_project(volume, rotation_matrices, image_shape, volume_shape, order=1)
+        return _slice_volume_by_trilinear_cuda(volume, rotation_matrices, image_shape, volume_shape)
     return _slice_volume_by_trilinear_jax(volume, rotation_matrices, image_shape, volume_shape)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(2, 3))
+def _slice_volume_by_trilinear_cuda(volume, rotation_matrices, image_shape, volume_shape):
+    from recovar.cuda_backproject import project as cuda_project
+    return cuda_project(volume, rotation_matrices, image_shape, volume_shape, order=1)
+
+
+def _slice_trilinear_cuda_fwd(volume, rotation_matrices, image_shape, volume_shape):
+    result = _slice_volume_by_trilinear_cuda(volume, rotation_matrices, image_shape, volume_shape)
+    return result, (rotation_matrices,)
+
+
+def _slice_trilinear_cuda_bwd(image_shape, volume_shape, res, g):
+    from recovar.cuda_backproject import backproject as cuda_backproject
+    (rotation_matrices,) = res
+    vol_size = 1
+    for s in volume_shape:
+        vol_size *= s
+    volume = jnp.zeros(vol_size, dtype=g.dtype)
+    adj = cuda_backproject(volume, g, rotation_matrices, image_shape, volume_shape, order=1)
+    return (adj, jnp.zeros_like(rotation_matrices))
+
+
+_slice_volume_by_trilinear_cuda.defvjp(_slice_trilinear_cuda_fwd, _slice_trilinear_cuda_bwd)
 
 
 def slice_volume_by_trilinear_from_half_volume(half_volume, rotation_matrices, image_shape, volume_shape):
