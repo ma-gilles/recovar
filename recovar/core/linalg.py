@@ -128,13 +128,11 @@ def randomized_svd(A, n_pcs = 200):
     n_pcs = n_pcs if n_pcs < A.shape[1] else A.shape[1]
     gauss = np.random.randn(A.shape[1], n_pcs)
     Agauss = blockwise_A_X(A, gauss, memory_to_use = utils.get_gpu_memory_total()//3)
-    qr_cpu = jax.jit(jnp.linalg.qr, backend='cpu')
-    Q, _ = qr_cpu(Agauss)
+    Q, _ = jax.jit(jnp.linalg.qr)(Agauss)
     logger.info("QR done")
     Y = blockwise_Y_T_X(Q,A) #np.conj(Q).T @ A
     logger.info("Q^TA done")
-    svd_cpu = jax.jit( lambda X :jnp.linalg.svd(X, full_matrices = True), backend='cpu')
-    U, S, Vh = svd_cpu(Y)
+    U, S, Vh = jax.jit(lambda X: jnp.linalg.svd(X, full_matrices=True))(Y)
     QU = blockwise_A_X(Q, U, memory_to_use = utils.get_gpu_memory_total()//3)
 
     return QU, S, Vh

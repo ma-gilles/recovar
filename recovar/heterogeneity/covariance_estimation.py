@@ -962,7 +962,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
 
     lhs = 0
     rhs = 0
-    summed_batch_kron_cpu = jax.jit(summed_batch_kron, backend='cpu')
+    summed_batch_kron_cpu = jax.jit(summed_batch_kron)
     logger.info("batch size in compute_projected_covariance %s", batch_size)
 
     if disc_type == 'cubic':
