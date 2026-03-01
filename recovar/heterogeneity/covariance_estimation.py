@@ -38,7 +38,7 @@ try:
             logger.warning("cudaProfilerStop returned error code: %s", ret)
     
     CUDA_PROFILER_AVAILABLE = True
-except Exception as e:
+except (ImportError, OSError, AttributeError) as e:
     CUDA_PROFILER_AVAILABLE = False
     logger.warning("CUDA profiler not available - profiling disabled: %s", e)
 

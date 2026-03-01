@@ -110,7 +110,7 @@ def cuda_available() -> bool:
             _ensure_ffi()
             _cuda_ok = True
             logger.info("CUDA backproject/project kernels enabled")
-    except Exception as e:
+    except (ImportError, OSError, RuntimeError, AttributeError) as e:
         _cuda_ok = False
         logger.debug("CUDA backproject not available: %s", e)
     return _cuda_ok

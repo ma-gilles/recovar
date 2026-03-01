@@ -221,7 +221,7 @@ def _get_pixel_size(filepath: str):
             apix = sf.apix
             if apix is not None and len(apix) > 0:
                 return float(apix[0])
-        except Exception:
+        except (ImportError, KeyError, ValueError, OSError):
             pass
 
     elif ext == 'cs':
@@ -229,7 +229,7 @@ def _get_pixel_size(filepath: str):
             data = np.load(filepath, allow_pickle=True)
             if 'blob/psize_A' in data.dtype.names:
                 return float(data['blob/psize_A'][0])
-        except Exception:
+        except (ValueError, KeyError, OSError, IndexError):
             pass
 
     elif ext in ('mrcs', 'mrc'):
@@ -238,7 +238,7 @@ def _get_pixel_size(filepath: str):
                 vsize = float(mrc.voxel_size.x)
                 if vsize > 0:
                     return vsize
-        except Exception:
+        except (ValueError, OSError):
             pass
 
     return None
@@ -282,7 +282,7 @@ def _write_output_star(input_path, mrcs_path, star_path, target_D, new_apix, n_i
             starfile.write(data, star_path, overwrite=True)
             logger.info("Wrote STAR file with full metadata from input")
             return
-        except Exception as e:
+        except (ImportError, KeyError, ValueError, OSError) as e:
             logger.warning("Failed to copy STAR metadata: %s. Writing minimal STAR.", e)
 
     elif ext == 'cs':
@@ -291,7 +291,7 @@ def _write_output_star(input_path, mrcs_path, star_path, target_D, new_apix, n_i
             _write_star_from_cs(input_path, star_path, mrcs_rel, target_D,
                                 new_apix, n_images)
             return
-        except Exception as e:
+        except (ImportError, KeyError, ValueError, OSError) as e:
             logger.warning("Failed to convert CS metadata: %s. Writing minimal STAR.", e)
 
     # Fallback: write minimal STAR file

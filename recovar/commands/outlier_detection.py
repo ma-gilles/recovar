@@ -447,7 +447,7 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
         try:
             particle_to_tilts, tilts_to_particle = tilt_dataset.TiltSeriesData.parse_particle_tilt(starfile)
             micrographtilt_to_tilts, tilts_to_micrographtilt = tilt_dataset.TiltSeriesData.parse_micrograph_tilt(starfile)
-        except Exception as e:
+        except (KeyError, ValueError, FileNotFoundError) as e:
             logger.warning("Failed to parse starfile %s: %s", starfile, e)
             logger.warning("Skipping particle and micrograph-based outlier detection")
             particle_to_tilts = None
@@ -1390,7 +1390,7 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
                 gridsize = min(50, max(20, int(np.sqrt(len(umap_coords) / 100))))
                 hb = ax.hexbin(umap_coords[:, 0], umap_coords[:, 1], gridsize=gridsize, 
                               cmap='Blues', alpha=0.4, mincnt=1, reduce_C_function=np.mean)
-            except Exception:
+            except (ValueError, TypeError):
                 pass
             
             # Downsample points for scatter plot to avoid overcrowding
@@ -1421,7 +1421,7 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
             gridsize = min(50, max(20, int(np.sqrt(len(zs) / 100))))
             hb = ax.hexbin(zs[:, 0], zs[:, 1], gridsize=gridsize, 
                           cmap='Blues', alpha=0.4, mincnt=1, reduce_C_function=np.mean)
-        except Exception:
+        except (ValueError, TypeError):
             pass
         
         # Downsample points for scatter plot
@@ -1450,7 +1450,7 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
             gridsize = min(50, max(20, int(np.sqrt(len(zs) / 100))))
             hb = ax.hexbin(zs[:, 2], zs[:, 3], gridsize=gridsize, 
                           cmap='Blues', alpha=0.4, mincnt=1, reduce_C_function=np.mean)
-        except Exception:
+        except (ValueError, TypeError):
             pass
         
         # Downsample points for scatter plot
@@ -1536,7 +1536,7 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
             gridsize = min(50, max(20, int(np.sqrt(len(zs) / 100))))
             hb = ax.hexbin(zs[:, 0], zs[:, 2], gridsize=gridsize, 
                           cmap='Blues', alpha=0.4, mincnt=1, reduce_C_function=np.mean)
-        except Exception:
+        except (ValueError, TypeError):
             pass
         
         # Downsample points for scatter plot
@@ -1565,7 +1565,7 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
             gridsize = min(50, max(20, int(np.sqrt(len(zs) / 100))))
             hb = ax.hexbin(zs[:, 1], zs[:, 3], gridsize=gridsize, 
                           cmap='Blues', alpha=0.4, mincnt=1, reduce_C_function=np.mean)
-        except Exception:
+        except (ValueError, TypeError):
             pass
         
         # Downsample points for scatter plot

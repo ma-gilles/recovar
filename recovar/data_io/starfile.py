@@ -356,7 +356,7 @@ class StarFile:
                     with mrcfile.open(mrcs_path, mode='r', header_only=True) as mrc:
                         D = int(mrc.header.ny)
                     return np.full(len(self), D, dtype=np.int64)
-            except Exception:
+            except (ImportError, FileNotFoundError, OSError, KeyError):
                 pass
         return None
     
