@@ -18,34 +18,7 @@ from typing import Optional, Tuple, Iterator
 from concurrent.futures import ThreadPoolExecutor
 import logging
 
-try:
-    import nvtx
-    _NVTX_AVAILABLE = True
-except ImportError:
-    import functools as _functools
-
-    class _NvtxStub:
-        """No-op stub used when nvtx is not installed."""
-
-        @staticmethod
-        def annotate(msg="", color=None, domain=None):
-            class _NoOp:
-                def __call__(self, fn):
-                    @_functools.wraps(fn)
-                    def wrapper(*args, **kwargs):
-                        return fn(*args, **kwargs)
-                    return wrapper
-
-                def __enter__(self):
-                    return self
-
-                def __exit__(self, *exc):
-                    return False
-
-            return _NoOp()
-
-    nvtx = _NvtxStub()
-    _NVTX_AVAILABLE = False
+from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 

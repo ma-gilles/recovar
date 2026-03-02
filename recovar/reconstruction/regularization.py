@@ -6,7 +6,7 @@ import logging
 import jax
 import jax.numpy as jnp
 import numpy as np
-import nvtx
+from recovar.utils.nvtx_shim import nvtx
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, jax_config

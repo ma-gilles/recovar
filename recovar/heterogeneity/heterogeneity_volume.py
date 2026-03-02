@@ -13,30 +13,7 @@ from recovar import utils
 from recovar.data_io import dataset
 from recovar.heterogeneity import adaptive_kernel_discretization, locres
 from recovar.output import output as output_mod
-try:
-    import nvtx
-except ImportError:
-    class _NvtxStub:
-        @staticmethod
-        def annotate(msg="", color=None, domain=None):
-            import functools
-
-            class _NoOp:
-                def __call__(self, fn):
-                    @functools.wraps(fn)
-                    def wrapper(*args, **kwargs):
-                        return fn(*args, **kwargs)
-                    return wrapper
-
-                def __enter__(self):
-                    return self
-
-                def __exit__(self, *exc):
-                    return False
-
-            return _NoOp()
-
-    nvtx = _NvtxStub()
+from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@ import logging
 import time
 
 import numpy as np
-import nvtx
+from recovar.utils.nvtx_shim import nvtx
 
 from recovar.reconstruction import regularization
 
