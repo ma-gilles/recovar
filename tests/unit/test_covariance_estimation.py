@@ -498,14 +498,18 @@ def _make_variance_test_fixtures(grid_size=4, n_images=4, seed=42):
     images_batch, _, indices = next(iter(images_gen))
 
     batch_data = BatchData(
-        images=jnp.asarray(images_batch),
+        # nan_to_num: tiny-grid DFTs can produce NaN at edge frequencies;
+        # NaN in slices propagates through the VJP-based JAX half-volume adjoint.
+        images=jnp.nan_to_num(jnp.asarray(images_batch)),
         ctf_params=jnp.asarray(cryo.CTF_params[indices]),
         rotation_matrices=jnp.asarray(cryo.rotation_matrices[indices]),
         translations=jnp.asarray(cryo.translations[indices]),
         noise_variance=jnp.asarray(cryo.noise.get(indices)),
     )
     mean_estimate = jnp.zeros(config.volume_size, dtype=jnp.complex64)
-    volume_mask = jnp.ones(config.volume_size, dtype=jnp.float32)
+    # volume_mask must be 3D (volume_shape), not flat — pad_volume_spatial_domain
+    # expects a spatial-domain grid.
+    volume_mask = jnp.ones(config.volume_shape, dtype=jnp.float32)
     image_mask = jnp.ones(config.image_shape, dtype=jnp.float32)
     return config, batch_data, mean_estimate, volume_mask, image_mask
 
@@ -576,10 +580,10 @@ def test_variance_kernel_no_mask_matches_reference():
     )
 
     vol_shape = config.volume_shape
-    np.testing.assert_allclose(_to_full(new_y, vol_shape), np.asarray(ref_y), atol=1e-4, rtol=1e-4)
-    np.testing.assert_allclose(_to_full(new_ctf, vol_shape), np.asarray(ref_ctf), atol=1e-4, rtol=1e-4)
-    np.testing.assert_allclose(_to_full(new_im, vol_shape), np.asarray(ref_im), atol=1e-4, rtol=1e-4)
-    np.testing.assert_allclose(_to_full(new_one, vol_shape), np.asarray(ref_one), atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(_to_full(new_y, vol_shape), np.asarray(ref_y), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(_to_full(new_ctf, vol_shape), np.asarray(ref_ctf), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(_to_full(new_im, vol_shape), np.asarray(ref_im), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(_to_full(new_one, vol_shape), np.asarray(ref_one), atol=1e-5, rtol=1e-5)
 
 
 def test_variance_kernel_with_mask_matches_reference():
@@ -594,10 +598,10 @@ def test_variance_kernel_with_mask_matches_reference():
     )
 
     vol_shape = config.volume_shape
-    np.testing.assert_allclose(_to_full(new_y, vol_shape), np.asarray(ref_y), atol=1e-4, rtol=1e-4)
-    np.testing.assert_allclose(_to_full(new_ctf, vol_shape), np.asarray(ref_ctf), atol=1e-4, rtol=1e-4)
-    np.testing.assert_allclose(_to_full(new_im, vol_shape), np.asarray(ref_im), atol=1e-4, rtol=1e-4)
-    np.testing.assert_allclose(_to_full(new_one, vol_shape), np.asarray(ref_one), atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(_to_full(new_y, vol_shape), np.asarray(ref_y), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(_to_full(new_ctf, vol_shape), np.asarray(ref_ctf), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(_to_full(new_im, vol_shape), np.asarray(ref_im), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(_to_full(new_one, vol_shape), np.asarray(ref_one), atol=1e-5, rtol=1e-5)
 
 
 def test_variance_kernel_accumulator_matches_sequential_sum():
