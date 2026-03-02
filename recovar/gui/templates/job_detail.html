@@ -8,7 +8,7 @@
   <!-- Header -->
   <div class="flex items-center justify-between">
     <div class="flex items-center gap-4">
-      <a href="{{ url_for('dashboard') }}" class="text-slate-400 hover:text-white transition-colors">
+      <a href="{{ url_for('dashboard') }}" class="text-slate-400 hover:text-white transition-colors" aria-label="Back to dashboard">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
         </svg>
@@ -57,7 +57,9 @@
   <div class="border-b border-slate-800">
     <nav class="flex gap-1" role="tablist">
       <template x-for="t in tabs" :key="t.id">
-        <button @click="tab = t.id"
+        <button @click="tab = t.id" role="tab"
+                :aria-selected="tab === t.id" :tabindex="tab === t.id ? 0 : -1"
+                :id="'tab-' + t.id" :aria-controls="'panel-' + t.id"
                 :class="tab === t.id ? 'text-sky-400 border-sky-400' : 'text-slate-400 border-transparent hover:text-slate-200'"
                 class="px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px flex items-center gap-2">
           <span x-text="t.label"></span>
@@ -748,8 +750,11 @@
     {% endif %}
 
     <!-- Image lightbox -->
-    <div x-show="expandedImage" style="display:none" @click="expandedImage = null" @keydown.escape.window="expandedImage = null"
+    <div x-show="expandedImage" style="display:none" @click.self="expandedImage = null" @keydown.escape.window="expandedImage = null"
+         role="dialog" aria-modal="true" aria-label="Expanded image"
          class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-8 cursor-pointer">
+      <button @click="expandedImage = null" aria-label="Close"
+              class="absolute top-4 right-4 w-10 h-10 flex items-center justify-center rounded-full bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors text-xl">&times;</button>
       <img x-bind:src="expandedImage ? '/api/image?path=' + encodeURIComponent(expandedImage) : ''" class="max-w-full max-h-full object-contain">
     </div>
   </div>
