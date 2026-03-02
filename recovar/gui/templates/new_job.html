@@ -18,7 +18,8 @@
   </div>
   {% endif %}
 
-  <form method="POST" action="{{ url_for('create_job') }}" class="space-y-6" @submit="submitting = true">
+  <form method="POST" action="{{ url_for('create_job') }}" class="space-y-6"
+        @submit="if (submitting) { $event.preventDefault(); return; } submitting = true">
 
     <!-- Job type selector -->
     <div class="flex gap-2 flex-wrap">
@@ -538,13 +539,14 @@
 
   <!-- File Browser Modal -->
   <div x-show="browserOpen" x-cloak
+       role="dialog" aria-modal="true" aria-label="Browse files"
        class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
        @keydown.escape.window="browserOpen = false">
     <div class="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-[700px] max-h-[80vh] flex flex-col"
          @click.away="browserOpen = false">
       <div class="flex items-center justify-between px-5 py-4 border-b border-slate-800">
         <h3 class="text-sm font-semibold text-white">Browse Files</h3>
-        <button @click="browserOpen = false" class="text-slate-400 hover:text-white">
+        <button @click="browserOpen = false" class="text-slate-400 hover:text-white" aria-label="Close file browser">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
           </svg>
@@ -615,7 +617,7 @@
 <script>
 function jobForm() {
   return {
-    jobType: '{{ clone_params.job_type if clone_params and clone_params.job_type else "pipeline" }}',
+    jobType: {{ (clone_params.job_type if clone_params and clone_params.job_type else "pipeline")|tojson }},
     jobTypes: [
       { id: 'pipeline', label: 'Pipeline', desc: 'Full RECOVAR pipeline: mean reconstruction, covariance estimation, PCA, and latent space embedding.', docs: 'https://ma-gilles.github.io/recovar/guide/pipeline/' },
       { id: 'analyze', label: 'Analyze', desc: 'Run analysis on existing pipeline output: k-means clustering, trajectory computation, and UMAP embedding.', docs: 'https://ma-gilles.github.io/recovar/guide/analysis/' },
@@ -624,13 +626,13 @@ function jobForm() {
     ],
 
     submitting: false,
-    outputDir: '{{ clone_params.output_dir if clone_params else "" }}',
-    particles: '{{ clone_params.particles if clone_params else "" }}',
-    mask: '{{ clone_params.mask if clone_params and clone_params.mask else "from_halfmaps" }}',
-    resultDir: '{{ clone_params.result_dir if clone_params and clone_params.result_dir else "" }}',
+    outputDir: {{ (clone_params.output_dir if clone_params else "")|tojson }},
+    particles: {{ (clone_params.particles if clone_params else "")|tojson }},
+    mask: {{ (clone_params.mask if clone_params and clone_params.mask else "from_halfmaps")|tojson }},
+    resultDir: {{ (clone_params.result_dir if clone_params and clone_params.result_dir else "")|tojson }},
     noDownsample: {{ 'true' if clone_params and clone_params.get('no_downsample') else 'false' }},
     tiltSeries: {{ 'true' if clone_params and clone_params.get('tilt_series') else 'false' }},
-    execution: '{{ clone_params.execution if clone_params and clone_params.execution else ("slurm" if has_slurm else "local") }}',
+    execution: {{ (clone_params.execution if clone_params and clone_params.execution else ("slurm" if has_slurm else "local"))|tojson }},
 
     // STAR file validation
     starValidation: { valid: false, checking: false, error: null, warnings: [], info: {} },
