@@ -1808,11 +1808,11 @@ function jobExplorer() {
         // Load 3D view if in 3D mode (with timeout to prevent hanging)
         if (this.viewMode === '3d') {
           const isPC = this._isEigenvector(path);
-          const timeoutMs = 30000;
+          const timeoutMs = 120000;
           try {
             await Promise.race([
               this._load3DVolume(path, { replace: !add, dualIso: isPC }),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('3D viewer timed out after 30s')), timeoutMs)),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('3D viewer timed out after 2min')), timeoutMs)),
             ]);
           } catch (e) {
             console.error('3D volume load failed:', e.message);
@@ -1923,7 +1923,7 @@ function jobExplorer() {
             isoConfigs,
             { entryId: this.currentVolumeName }
           ),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Volume loading timed out (20s) — file may be too large')), 20000)),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Volume loading timed out (60s)')), 60000)),
         ]);
 
         // Track loaded volume
