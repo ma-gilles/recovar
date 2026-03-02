@@ -163,6 +163,16 @@
             </template>
           </div>
         </template>
+        <template x-if="analysisInfo?.density">
+          <button @click="tab = 'explore'" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 transition-colors">
+            Conformational Density
+          </button>
+        </template>
+        <template x-if="analysisInfo?.stable_states?.coords?.length > 0">
+          <button @click="tab = 'explore'" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 transition-colors">
+            <span x-text="analysisInfo.stable_states.coords.length + ' Stable States'"></span>
+          </button>
+        </template>
       </div>
     </div>
 
@@ -400,6 +410,21 @@
                   <input type="number" min="1" max="6" x-model.number="densityPcaDim"
                          class="w-14 bg-slate-800 text-white text-xs rounded px-2 py-1 border border-slate-700">
                   <span class="text-[10px] text-slate-600">(2-6, higher = slower)</span>
+                  <button @click="showSlurmOpts = !showSlurmOpts"
+                          class="ml-auto text-[10px] text-slate-500 hover:text-slate-300 transition-colors"
+                          x-text="showSlurmOpts ? 'Hide SLURM' : 'SLURM opts'"></button>
+                </div>
+                <div x-show="showSlurmOpts" x-collapse class="grid grid-cols-2 gap-2 py-1">
+                  <div>
+                    <label class="text-[10px] text-slate-600">Memory:</label>
+                    <input type="text" x-model="slurmMemDensity"
+                           class="w-full bg-slate-800 text-white text-[10px] rounded px-2 py-0.5 border border-slate-700">
+                  </div>
+                  <div>
+                    <label class="text-[10px] text-slate-600">Time:</label>
+                    <input type="text" x-model="slurmTimeDensity"
+                           class="w-full bg-slate-800 text-white text-[10px] rounded px-2 py-0.5 border border-slate-700">
+                  </div>
                 </div>
                 <button @click="computeDensity()"
                         :disabled="densityComputing"
@@ -1071,6 +1096,13 @@ function jobExplorer() {
     densityResult: null,       // { density_pkl, plots }
     densityPcaDim: 4,
 
+    // SLURM options for density/stable_states
+    showSlurmOpts: false,
+    slurmMemDensity: '128G',
+    slurmTimeDensity: '2:00:00',
+    slurmMemStable: '64G',
+    slurmTimeStable: '1:00:00',
+
     // Stable states
     stableStatesComputing: false,
     stableStatesResult: null,  // { coords: [[...], ...], plots }
@@ -1571,6 +1603,7 @@ function jobExplorer() {
           body: JSON.stringify({
             type: 'density',
             pca_dim: this.densityPcaDim,
+            slurm_opts: { mem: this.slurmMemDensity, time: this.slurmTimeDensity },
             label: `Conformational Density (PCA dim=${this.densityPcaDim})`,
           }),
         });
@@ -1610,6 +1643,7 @@ function jobExplorer() {
             density_pkl: this.densityResult.density_pkl,
             percent_top: this.stablePercentTop,
             n_local_maxs: this.stableNMaxs,
+            slurm_opts: { mem: this.slurmMemStable, time: this.slurmTimeStable },
             label: `Stable States (top ${this.stablePercentTop}%, max ${this.stableNMaxs})`,
           }),
         });
@@ -1671,10 +1705,14 @@ function jobExplorer() {
     },
 
     async pollTask(taskId) {
+      let errorCount = 0;
+      const maxErrors = 5;
       const poll = async () => {
         try {
           const resp = await fetch(`/api/jobs/{{ job.id }}/tasks/${taskId}`);
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const task = await resp.json();
+          errorCount = 0;  // reset on success
 
           const idx = this.activeTasks.findIndex(t => t.id === taskId);
           if (idx < 0) return;
@@ -1719,8 +1757,18 @@ function jobExplorer() {
             setTimeout(poll, 3000);
           }
         } catch (e) {
-          console.error('Poll error:', e);
-          setTimeout(poll, 5000);
+          errorCount++;
+          console.error(`Poll error (${errorCount}/${maxErrors}):`, e);
+          if (errorCount >= maxErrors) {
+            const idx = this.activeTasks.findIndex(t => t.id === taskId);
+            if (idx >= 0) {
+              this.activeTasks[idx].status = 'failed';
+              this.activeTasks[idx].error = 'Lost connection to server';
+            }
+            showToast('Task polling stopped — lost connection to server', 'error', 6000);
+          } else {
+            setTimeout(poll, 5000);
+          }
         }
       };
 
