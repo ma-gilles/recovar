@@ -11,7 +11,7 @@ import numpy as np
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, jax_config, utils
 from recovar.core import mask, padding
-from recovar.core.configs import BatchData, ForwardModelConfig
+from recovar.core.configs import BatchData, DataIterator, ForwardModelConfig
 from recovar.reconstruction import noise, regularization
 
 logger = logging.getLogger(__name__)
@@ -54,30 +54,27 @@ def griddingCorrect_square(vol_in, ori_size, padding_factor, order=0):
 
 
 def relion_style_triangular_kernel(
-    experiment_dataset, cov_noise, batch_size=None, disc_type='linear_interp',
-    data_generator=None, upsampling_factor=None,
+    experiment_dataset, cov_noise, batch_size, disc_type='linear_interp',
+    index_subset=None, upsampling_factor=None,
 ):
     """RELION-style triangular kernel reconstruction.
 
-    Loops over batches from *experiment_dataset*, accumulating the weighted
-    back-projection (Ft_y) and CTF weight sum (Ft_ctf) in half-volume layout.
+    Accumulates weighted back-projection (Ft_y) and CTF weight sum (Ft_ctf)
+    in half-volume layout, then expands to full volume before returning.
 
     Parameters
     ----------
     experiment_dataset : CryoEMDataset
     cov_noise : array or None
-        Radial shell variances or a pre-expanded noise array.  When None,
-        per-batch noise is drawn from ``experiment_dataset.noise``.
-    batch_size : int, optional
-        Mutually exclusive with *data_generator*.
+        Radial shell variances or pre-expanded noise.  When None, noise is
+        drawn per-batch from ``experiment_dataset.noise``.
+    batch_size : int
     disc_type : str
-    data_generator : iterable, optional
+    index_subset : array-like, optional
+        If given, only iterate over these image indices (e.g. a cluster subset).
     upsampling_factor : int, optional
-        Defaults to the dataset's ``volume_upsampling_factor``.
+        Defaults to ``experiment_dataset.volume_upsampling_factor``.
     """
-    if batch_size is not None:
-        data_generator = experiment_dataset.get_image_generator(batch_size=batch_size)
-
     uf = upsampling_factor if upsampling_factor is not None else experiment_dataset.volume_upsampling_factor
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, upsampling_factor=uf)
     noise_model = (
@@ -87,14 +84,7 @@ def relion_style_triangular_kernel(
     )
 
     Ft_y, Ft_ctf = None, None
-    for batch, particles_ind, indices in data_generator:
-        batch_data = BatchData(
-            images=batch,
-            ctf_params=experiment_dataset.CTF_params[indices],
-            rotation_matrices=experiment_dataset.rotation_matrices[indices],
-            translations=experiment_dataset.translations[indices],
-            noise_variance=noise_model.get_half(indices),
-        )
+    for batch_data in DataIterator(experiment_dataset, batch_size, noise_model=noise_model, index_subset=index_subset):
         Ft_y, Ft_ctf = relion_kernel_batch(config, batch_data, Ft_y=Ft_y, Ft_ctf=Ft_ctf)
 
     if Ft_y is not None:

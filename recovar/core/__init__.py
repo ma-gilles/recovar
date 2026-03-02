@@ -55,6 +55,7 @@ from recovar.core.ctf import (
     get_dose_filters_from_tilt_number,
     cryodrgn_CTF_half,
 )
+from recovar.core.configs import BatchData, DataIterator, ForwardModelConfig
 from recovar.core.forward import (
     batch_translate_images,
 )
@@ -83,6 +84,7 @@ from recovar.core.slicing import (
 )
 
 __all__ = [
+    "BatchData",
     "CTFParamIndex",
     "CTFParams",
     "adjoint_slice_volume_by_map",
@@ -107,6 +109,7 @@ __all__ = [
     "critical_exposure",
     "cryodrgn_CTF",
     "cryodrgn_CTF_half",
+    "DataIterator",
     "decide_order",
     "distance_to_max_grid_dist",
     "evaluate_ctf",
@@ -118,6 +121,7 @@ __all__ = [
     "evaluate_ctf_wrapper_tilt_series_v2",
     "evaluate_ctf_wrapper_tilt_series_v2_half",
     "find_frequencies_within_grid_dist",
+    "ForwardModelConfig",
     "forward_model",
     "frequencies_to_vec_indices",
     "frequencies_to_vol_indices",
