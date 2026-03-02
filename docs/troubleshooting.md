@@ -27,6 +27,9 @@ RECOVAR automatically tries extension swaps (`.mrc` ↔ `.mrcs`) and flat-direct
 
 See [Fixing broken paths](guide/input-data.md#fixing-broken-file-paths).
 
+!!! tip
+    The [web GUI](guide/gui.md) validates input files when you select them — it checks that paths resolve and shows the particle count before you submit a job.
+
 ### "CS file has no alignments3D/pose field"
 
 Your `.cs` file doesn't contain pose information (e.g., it's a passthrough file or import job). Use the `*_particles.cs` file from a refinement job, not a passthrough or import file.
@@ -95,6 +98,7 @@ XLA_PYTHON_CLIENT_PREALLOCATE=false recovar pipeline ...
 2. Run with `--only-mean` first to quickly verify setup
 3. Try `--mask=sphere` to rule out mask issues
 4. Check that poses are from a good consensus refinement
+5. Use the GUI's slice viewer (`recovar gui`) to inspect the mean volume and mask side-by-side
 
 ### Results differ between runs
 
