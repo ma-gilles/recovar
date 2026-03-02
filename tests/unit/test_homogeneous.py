@@ -44,7 +44,7 @@ def test_get_mean_conformation_relion_flow_and_restore(monkeypatch):
         upsampling_factor=3,
     )
 
-    assert set(means.keys()) == {"combined", "corrected0", "corrected1", "corrected0reg", "corrected1reg"}
+    assert {"combined", "corrected0", "corrected1", "corrected0reg", "corrected1reg", "lhs", "prior"}.issubset(means.keys())
     assert means["combined"].shape == (4,)
     assert isinstance(mean_prior, np.ndarray)
     assert np.asarray(fsc).size > 0
