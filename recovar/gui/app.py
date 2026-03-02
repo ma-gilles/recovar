@@ -533,8 +533,8 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
             return jsonify({"error": "JSON body required"}), 400
 
         task_type = data.get("type")
-        if task_type not in ("volume", "trajectory"):
-            return jsonify({"error": "type must be 'volume' or 'trajectory'"}), 400
+        if task_type not in ("volume", "trajectory", "density", "stable_states"):
+            return jsonify({"error": "type must be 'volume', 'trajectory', 'density', or 'stable_states'"}), 400
 
         use_slurm = data.get("use_slurm", _has_slurm())
         slurm_opts = data.get("slurm_opts")

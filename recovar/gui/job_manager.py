@@ -88,6 +88,25 @@ def _has_output_volumes(directory: str) -> bool:
         return False
 
 
+def _has_density_output(directory):
+    """Return True if *directory* contains density estimation output."""
+    return os.path.isfile(os.path.join(directory, "deconv_density_knee.pkl"))
+
+
+def _has_stable_states_output(directory):
+    """Return True if *directory* contains stable states output."""
+    return os.path.isfile(os.path.join(directory, "stable_state_all_coords.txt"))
+
+
+def _has_task_output(directory, task_type):
+    """Return True if *directory* contains expected output for *task_type*."""
+    if task_type == "density":
+        return _has_density_output(directory)
+    elif task_type == "stable_states":
+        return _has_stable_states_output(directory)
+    return _has_output_volumes(directory)
+
+
 # ---------------------------------------------------------------------------
 # Job model
 # ---------------------------------------------------------------------------
@@ -435,6 +454,10 @@ class JobManager:
                     task_type = "volume"
                 elif tdir_name.startswith("trajectory_"):
                     task_type = "trajectory"
+                elif tdir_name.startswith("density_"):
+                    task_type = "density"
+                elif tdir_name.startswith("stable_states_"):
+                    task_type = "stable_states"
                 else:
                     continue
                 # Must have a compute.sbatch or task_meta.json to be a real task
@@ -442,7 +465,7 @@ class JobManager:
                 if not (os.path.isfile(os.path.join(tdir, "compute.sbatch")) or
                         os.path.isfile(os.path.join(tdir, "task_meta.json"))):
                     continue
-                has_output = _has_output_volumes(tdir)
+                has_output = _has_task_output(tdir, task_type)
                 meta = _load_json(os.path.join(tdir, "task_meta.json")) or {}
 
                 slurm_job_id = meta.get("slurm_job_id")
@@ -492,6 +515,10 @@ class JobManager:
                                 pass
                     elif task_type == "trajectory":
                         label = "Trajectory A\u2192B"
+                    elif task_type == "density":
+                        label = "Conformational Density"
+                    elif task_type == "stable_states":
+                        label = "Stable States"
 
                 try:
                     created_at = meta.get("created_at") or os.path.getmtime(tdir)
@@ -956,6 +983,52 @@ echo "Completed at: $(date)"
                     vol["name"] = f"{tdir}/{vol['name']}"
                     info["computed"].append(vol)
 
+        # Discover density estimation results
+        # Check CLI-generated output in density/ subdir
+        density_info = None
+        cli_density_pkl = os.path.join(job.output_dir, "density", "deconv_density_knee.pkl")
+        if os.path.isfile(cli_density_pkl):
+            density_info = {
+                "density_pkl": cli_density_pkl,
+                "plots": _list_images(os.path.join(job.output_dir, "density")),
+            }
+        # Check GUI-generated output in gui_computed/density_*/
+        if os.path.isdir(computed_dir):
+            for tdir in sorted(os.listdir(computed_dir), reverse=True):
+                if not tdir.startswith("density_"):
+                    continue
+                task_dir = os.path.join(computed_dir, tdir)
+                knee_pkl = os.path.join(task_dir, "deconv_density_knee.pkl")
+                if os.path.isfile(knee_pkl):
+                    density_info = {
+                        "density_pkl": knee_pkl,
+                        "plots": _list_images(task_dir),
+                    }
+                    break  # use most recent
+        if density_info:
+            info["density"] = density_info
+
+        # Discover stable states results from gui_computed/stable_states_*/
+        if os.path.isdir(computed_dir):
+            for tdir in sorted(os.listdir(computed_dir), reverse=True):
+                if not tdir.startswith("stable_states_"):
+                    continue
+                task_dir = os.path.join(computed_dir, tdir)
+                coords_file = os.path.join(task_dir, "stable_state_all_coords.txt")
+                if os.path.isfile(coords_file):
+                    try:
+                        coords = np.loadtxt(coords_file)
+                        if coords.ndim == 1:
+                            coords = coords.reshape(1, -1)
+                        info["stable_states"] = {
+                            "coords": coords.tolist(),
+                            "plots": (_list_images(task_dir) +
+                                      _list_images(os.path.join(task_dir, "density"))),
+                        }
+                    except Exception:
+                        pass
+                    break  # use most recent
+
         return info
 
     def get_embedding_data(self, job_id: str, zdim: int,
@@ -1183,6 +1256,30 @@ echo "Completed at: $(date)"
                 "--endpts", os.path.join(output_dir, "endpoints.txt"),
                 "--lazy",
             ]
+        elif task_type == "density":
+            pca_dim = params.get("pca_dim", 4)
+            cmd = [
+                python_path, "-m",
+                "recovar.commands.estimate_conformational_density",
+                job.output_dir,
+                "--output_dir", output_dir,
+                "--pca_dim", str(pca_dim),
+            ]
+            z_dim_used = params.get("z_dim_used")
+            if z_dim_used:
+                cmd.extend(["--z_dim_used", str(z_dim_used)])
+        elif task_type == "stable_states":
+            density_pkl = params.get("density_pkl", "")
+            percent_top = params.get("percent_top", 1)
+            n_local_maxs = params.get("n_local_maxs", 3)
+            cmd = [
+                python_path, "-m",
+                "recovar.commands.estimate_stable_states",
+                density_pkl,
+                "-o", output_dir,
+                "--percent_top", str(percent_top),
+                "--n_local_maxs", str(n_local_maxs),
+            ]
         else:
             return None
 
@@ -1199,6 +1296,7 @@ echo "Completed at: $(date)"
 
         if use_slurm and _has_slurm():
             opts = slurm_opts or {}
+            needs_gpu = task_type not in ("density", "stable_states")
             script_path = os.path.join(output_dir, "compute.sbatch")
             with open(script_path, "w") as f:
                 f.write(f"""#!/bin/bash
@@ -1211,7 +1309,7 @@ echo "Completed at: $(date)"
 #SBATCH --mem={opts.get('mem', '32G')}
 #SBATCH --time={opts.get('time', '1:00:00')}
 #SBATCH --partition={opts.get('partition', 'cryoem')}
-#SBATCH --gres=gpu:1
+{"#SBATCH --gres=gpu:1" if needs_gpu else "# No GPU needed for " + task_type}
 #SBATCH --account={opts.get('account', 'amits')}
 
 set -euo pipefail
@@ -1266,7 +1364,7 @@ echo "which python: {python_path}"
             return None
 
         # Re-check failed tasks: if output appeared since recovery, promote to completed
-        if task.status == STATUS_FAILED and _has_output_volumes(task.output_dir):
+        if task.status == STATUS_FAILED and _has_task_output(task.output_dir, task.task_type):
             task.status = STATUS_COMPLETED
             task.error = None
 
@@ -1295,11 +1393,11 @@ echo "which python: {python_path}"
                     os.kill(task.pid, 0)
                 except OSError:
                     # Process exited - check for output
-                    if _has_output_volumes(task.output_dir):
+                    if _has_task_output(task.output_dir, task.task_type):
                         task.status = STATUS_COMPLETED
                     else:
                         task.status = STATUS_FAILED
-                        task.error = "No output volumes generated"
+                        task.error = "No output generated"
 
         result = {
             "id": task.id,
@@ -1308,10 +1406,29 @@ echo "which python: {python_path}"
             "error": task.error,
             "label": task.label,
             "volumes": [],
+            "plots": [],
         }
 
         if task.status == STATUS_COMPLETED:
-            result["volumes"] = _list_volumes(task.output_dir)
+            if task.task_type == "density":
+                knee_pkl = os.path.join(task.output_dir, "deconv_density_knee.pkl")
+                if os.path.isfile(knee_pkl):
+                    result["density_pkl"] = knee_pkl
+                result["plots"] = _list_images(task.output_dir)
+            elif task.task_type == "stable_states":
+                coords_file = os.path.join(task.output_dir, "stable_state_all_coords.txt")
+                if os.path.isfile(coords_file):
+                    try:
+                        coords = np.loadtxt(coords_file)
+                        if coords.ndim == 1:
+                            coords = coords.reshape(1, -1)
+                        result["stable_states"] = coords.tolist()
+                    except Exception:
+                        result["stable_states"] = []
+                result["plots"] = (_list_images(task.output_dir) +
+                                   _list_images(os.path.join(task.output_dir, "density")))
+            else:
+                result["volumes"] = _list_volumes(task.output_dir)
 
         return result
 
