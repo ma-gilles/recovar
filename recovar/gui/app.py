@@ -536,6 +536,22 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         if task_type not in ("volume", "trajectory", "density", "stable_states"):
             return jsonify({"error": "type must be 'volume', 'trajectory', 'density', or 'stable_states'"}), 400
 
+        # Type-specific parameter validation
+        if task_type == "volume":
+            if not data.get("coords"):
+                return jsonify({"error": "coords required for volume computation"}), 400
+        elif task_type == "trajectory":
+            if not data.get("z_start") or not data.get("z_end"):
+                return jsonify({"error": "z_start and z_end required for trajectory"}), 400
+        elif task_type == "density":
+            pca_dim = data.get("pca_dim", 4)
+            if not isinstance(pca_dim, int) or pca_dim < 1 or pca_dim > 6:
+                return jsonify({"error": "pca_dim must be an integer between 1 and 6"}), 400
+        elif task_type == "stable_states":
+            density_pkl = data.get("density_pkl", "")
+            if not density_pkl or not os.path.isfile(density_pkl):
+                return jsonify({"error": "density_pkl must point to an existing density pickle file"}), 400
+
         use_slurm = data.get("use_slurm", _has_slurm())
         slurm_opts = data.get("slurm_opts")
 
