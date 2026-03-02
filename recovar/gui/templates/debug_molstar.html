@@ -175,45 +175,38 @@
         return;
       }
 
-      // Step 6b: Load via blob URL
-      log('Creating blob URL and calling loadVolumeFromUrl...');
-      const blob = new Blob([volData], { type: 'application/octet-stream' });
-      const blobUrl = URL.createObjectURL(blob);
+      // Step 6b: Load via File object + loadFiles (different code path from loadVolumeFromUrl)
+      log('Method 1: loadFiles with File object...');
+      const file = new File([volData], 'volume.mrc', { type: 'application/octet-stream' });
       const t1 = performance.now();
       try {
         await Promise.race([
-          viewer.loadVolumeFromUrl(
-            { url: blobUrl, format: 'ccp4', isBinary: true },
-            [{ type: 'relative', value: 1.5, color: 0x38bdf8, alpha: 0.85 }],
-            { entryId: 'test-volume' }
-          ),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('loadVolumeFromUrl timed out after 30s')), 30000)),
+          viewer.loadFiles([file]),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('loadFiles timed out after 30s')), 30000)),
         ]);
         const loadMs = (performance.now() - t1).toFixed(0);
-        log(`Volume loaded with CCP4 format in ${loadMs}ms!`, 'ok');
+        log(`loadFiles completed in ${loadMs}ms!`, 'ok');
       } catch (e) {
         const loadMs = (performance.now() - t1).toFixed(0);
-        log(`CCP4 load FAILED after ${loadMs}ms: ` + e.message, 'err');
+        log(`loadFiles FAILED after ${loadMs}ms: ` + e.message, 'err');
 
-        // Fallback: try direct URL (not blob)
-        log('Fallback: trying loadVolumeFromUrl with direct URL...');
+        // Fallback: try loadVolumeFromUrl with direct URL
+        log('Method 2: loadVolumeFromUrl with direct URL...');
         const t2 = performance.now();
         try {
           await Promise.race([
             viewer.loadVolumeFromUrl(
               { url, format: 'ccp4', isBinary: true },
               [{ type: 'relative', value: 1.5, color: 0x38bdf8, alpha: 0.85 }],
-              { entryId: 'test-volume-2' }
+              { entryId: 'test-volume' }
             ),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Direct URL timed out after 30s')), 30000)),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('loadVolumeFromUrl timed out after 30s')), 30000)),
           ]);
           const directMs = (performance.now() - t2).toFixed(0);
-          log(`Direct URL loaded in ${directMs}ms!`, 'ok');
+          log(`loadVolumeFromUrl completed in ${directMs}ms!`, 'ok');
         } catch (e2) {
-          log('Direct URL also FAILED: ' + e2.message, 'err');
+          log('loadVolumeFromUrl also FAILED: ' + e2.message, 'err');
         }
-      } finally {
-        URL.revokeObjectURL(blobUrl);
       }
 
       // Step 7: Camera reset
