@@ -1917,18 +1917,18 @@ function jobExplorer() {
             ];
 
         // Load the volume using CCP4 format (MRC2014 is CCP4-compatible)
-        // Fetch data ourselves first, then pass to Mol* via blob URL
-        // (Mol*'s internal fetch can hang when going through SSH tunnel)
+        // Fetch data ourselves first, then pass blob URL to Mol*.
         console.time('volumeFetch');
-        console.log('Fetching volume:', url);
+        console.log('[Volume] Fetching:', url);
         const volResp = await fetch(url);
         if (!volResp.ok) throw new Error(`Volume fetch failed: HTTP ${volResp.status}`);
         const volData = await volResp.arrayBuffer();
         console.timeEnd('volumeFetch');
-        console.log('Volume data:', volData.byteLength, 'bytes');
+        console.log('[Volume] Downloaded:', volData.byteLength, 'bytes');
 
         const blob = new Blob([volData], { type: 'application/octet-stream' });
         const blobUrl = URL.createObjectURL(blob);
+        console.log('[Volume] Calling loadVolumeFromUrl with blob...');
         console.time('molstarLoad');
         try {
           await this.viewer.loadVolumeFromUrl(
@@ -1936,10 +1936,15 @@ function jobExplorer() {
             isoConfigs,
             { entryId: this.currentVolumeName }
           );
+          console.timeEnd('molstarLoad');
+          console.log('[Volume] Load complete!');
+        } catch (loadErr) {
+          console.timeEnd('molstarLoad');
+          console.error('[Volume] loadVolumeFromUrl error:', loadErr);
+          throw loadErr;
         } finally {
           URL.revokeObjectURL(blobUrl);
         }
-        console.timeEnd('molstarLoad');
 
         // Track loaded volume
         if (dualIso) {
