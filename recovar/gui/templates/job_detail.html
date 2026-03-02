@@ -827,8 +827,6 @@
   <!-- Tab: Images                                                     -->
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <div x-show="tab === 'images'" style="display:none">
-    {% set all_images = job.result_images %}
-    {% if all_images %}
     <div class="space-y-4">
       <!-- Analysis images by zdim -->
       <template x-for="[zdim, info] in Object.entries(analysisInfo?.analyses || {})" :key="'img_'+zdim">
@@ -882,6 +880,7 @@
       </template>
 
       <!-- Other images (from output/) -->
+      {% set all_images = job.result_images %}
       {% for img in all_images %}
       <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
         <div class="px-4 py-2 border-b border-slate-800">
@@ -894,10 +893,13 @@
         </div>
       </div>
       {% endfor %}
+
+      <!-- Empty state: shown only when no images of any kind exist -->
+      {% if not all_images %}
+      <div x-show="!analysisInfo?.density?.plots?.length && !analysisInfo?.stable_states?.plots?.length && !Object.values(analysisInfo?.analyses || {}).some(a => a.plots?.length > 0)"
+           class="text-center py-16 text-slate-500"><p>No result images found yet.</p></div>
+      {% endif %}
     </div>
-    {% else %}
-    <div class="text-center py-16 text-slate-500"><p>No result images found yet.</p></div>
-    {% endif %}
 
     <!-- Image lightbox -->
     <div x-show="expandedImage" style="display:none" @click.self="expandedImage = null" @keydown.escape.window="expandedImage = null"
@@ -1733,6 +1735,7 @@ function jobExplorer() {
     },
 
     async loadVolume(path, name, add = false) {
+      if (this.volumeLoading) return;  // prevent double-loading
       this.currentVolumeName = name;
       this.currentVolumePath = path;
       this.volumeLoading = true;
@@ -1758,10 +1761,15 @@ function jobExplorer() {
         if (this.viewMode === '3d') {
           const isPC = this._isEigenvector(path);
           const timeoutMs = 30000;
-          await Promise.race([
-            this._load3DVolume(path, { replace: !add, dualIso: isPC }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('3D viewer timed out')), timeoutMs)),
-          ]).catch(e => console.error('3D volume load failed:', e.message));
+          try {
+            await Promise.race([
+              this._load3DVolume(path, { replace: !add, dualIso: isPC }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('3D viewer timed out after 30s')), timeoutMs)),
+            ]);
+          } catch (e) {
+            console.error('3D volume load failed:', e.message);
+            showToast('3D viewer: ' + e.message, 'error', 6000);
+          }
         }
       } finally {
         this.volumeLoading = false;
@@ -1815,20 +1823,23 @@ function jobExplorer() {
         if (!this.viewer) {
           let viewer;
           try {
-            viewer = await molstar.Viewer.create(el, {
-              layoutIsExpanded: false,
-              layoutShowControls: false,
-              layoutShowRemoteState: false,
-              layoutShowSequence: false,
-              layoutShowLog: false,
-              layoutShowLeftPanel: false,
-              collapseLeftPanel: true,
-              collapseRightPanel: true,
-              viewportShowExpand: false,
-              viewportShowSelectionMode: false,
-              viewportShowAnimation: false,
-              viewportShowTrajectoryControls: false,
-            });
+            viewer = await Promise.race([
+              molstar.Viewer.create(el, {
+                layoutIsExpanded: false,
+                layoutShowControls: false,
+                layoutShowRemoteState: false,
+                layoutShowSequence: false,
+                layoutShowLog: false,
+                layoutShowLeftPanel: false,
+                collapseLeftPanel: true,
+                collapseRightPanel: true,
+                viewportShowExpand: false,
+                viewportShowSelectionMode: false,
+                viewportShowAnimation: false,
+                viewportShowTrajectoryControls: false,
+              }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('Mol* viewer creation timed out (15s)')), 15000)),
+            ]);
           } catch (createErr) {
             throw new Error('Failed to create Mol* viewer (WebGL may not be available): ' + createErr.message);
           }
@@ -1858,11 +1869,14 @@ function jobExplorer() {
             ];
 
         // Load the volume using CCP4 format (MRC2014 is CCP4-compatible)
-        await this.viewer.loadVolumeFromUrl(
-          { url, format: 'ccp4', isBinary: true },
-          isoConfigs,
-          { entryId: this.currentVolumeName }
-        );
+        await Promise.race([
+          this.viewer.loadVolumeFromUrl(
+            { url, format: 'ccp4', isBinary: true },
+            isoConfigs,
+            { entryId: this.currentVolumeName }
+          ),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Volume loading timed out (20s) — file may be too large')), 20000)),
+        ]);
 
         // Track loaded volume
         if (dualIso) {
