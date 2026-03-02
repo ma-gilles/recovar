@@ -199,7 +199,7 @@ def test_to_batched_pixel_noise_normalizes_common_shapes():
 
     n2 = np.arange(16, dtype=np.float32).reshape(4, 4)
     out2 = np.asarray(noise.to_batched_pixel_noise(n2, image_shape, batch_size=3))
-    assert out2.shape == (3, 16)
+    assert out2.shape == (1, 16)  # (1, N) — callers broadcast; no explicit repeat
 
     n3 = np.arange(2 * 16, dtype=np.float32).reshape(2, 4, 4)
     out3 = np.asarray(noise.to_batched_pixel_noise(n3, image_shape))
@@ -369,23 +369,22 @@ def test_variable_radial_noise_model_get_half_matches_full():
 
 
 def test_to_batched_half_pixel_noise_scalar():
-    """Scalar noise should broadcast to half-pixel shape."""
+    """Scalar noise should expand to (1, N_half) — callers broadcast."""
     image_shape = (8, 8)
     half_pixel_count = image_shape[0] * (image_shape[1] // 2 + 1)
     out = np.asarray(noise.to_batched_half_pixel_noise(2.5, image_shape, batch_size=3))
-    assert out.shape == (3, half_pixel_count)
+    assert out.shape == (1, half_pixel_count)  # (1, N) — XLA broadcasts to (B, N)
     np.testing.assert_allclose(out, 2.5, atol=1e-7)
 
 
 def test_to_batched_half_pixel_noise_passthrough():
-    """Half-pixel input should pass through unchanged."""
+    """Half-pixel input should pass through unchanged (no explicit repeat)."""
     image_shape = (8, 8)
     half_pixel_count = image_shape[0] * (image_shape[1] // 2 + 1)
     half_input = np.arange(half_pixel_count, dtype=np.float32).reshape(1, -1)
     out = np.asarray(noise.to_batched_half_pixel_noise(half_input, image_shape, batch_size=2))
-    assert out.shape == (2, half_pixel_count)
+    assert out.shape == (1, half_pixel_count)  # (1, N) — XLA broadcasts to (B, N)
     np.testing.assert_array_equal(out[0], half_input.ravel())
-    np.testing.assert_array_equal(out[1], half_input.ravel())
 
 
 def test_to_batched_half_pixel_noise_full_converts():
