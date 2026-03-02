@@ -622,7 +622,7 @@ def standard_recovar_pipeline(args):
     for repeat in range(n_repeats):
 
         if repeat == 1:
-            ndim = 10 if 10 in options['zs_dim_to_test'] else np.median(options['zs_dim_to_test'])
+            ndim = 10 if 10 in options['zs_dim_to_test'] else int(np.median(options['zs_dim_to_test']))
             logger.warning("repeating with contrast of zdim=%s", ndim)
             contrasts_for_second = est_contrasts[ndim]
             contrasts_for_second /= np.mean(contrasts_for_second)

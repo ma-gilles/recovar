@@ -228,7 +228,8 @@ def adjust_regularization_relion_style(filter, volume_shape, tau = None, padding
         oversampling_factor = padding_factor ** (3)
         og_volume_shape = (volume_shape[0]//padding_factor, volume_shape[1]//padding_factor, volume_shape[2]//padding_factor)
         tau = upscale_tau(tau, padding_factor, og_volume_shape, tau_is_1d = False)
-        inv_tau = 1 / (oversampling_factor * tau)
+        safe_tau = jnp.where(tau > 1e-20, tau, jnp.float32(1.0))
+        inv_tau = 1 / (oversampling_factor * safe_tau)
         inv_tau = jnp.where( (tau < 1e-20) * (filter > 1e-20 ),  1./ ( 0.001 * filter), inv_tau)
         inv_tau = jnp.where( (tau < 1e-20) * (filter <= 1e-20 ),  0, inv_tau)
 

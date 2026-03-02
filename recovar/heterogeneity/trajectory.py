@@ -71,7 +71,7 @@ def find_trajectory_in_latent_space(density, z_st, z_end, z_to_grid, grid_to_z, 
     g_st = z_to_grid(z_st, to_int = True) # Start needs to be on a grid point
     g_st = np.clip(g_st, 0, np.array(density.shape) - 1)
     g_end = z_to_grid(z_end)
-    g_end = check_in_bound(g_end)
+    g_end = np.clip(g_end, 0, np.array(density.shape) - 1)
     
     path_g = find_trajectory_in_grid(density, g_st, g_end, latent_space_bounds, eps = density_eps)
     return grid_to_z(path_g)
