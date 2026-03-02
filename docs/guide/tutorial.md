@@ -13,6 +13,9 @@ A typical RECOVAR workflow:
 2. **`recovar analyze`** — k-means clustering, UMAP embedding, representative volumes, trajectories.
 3. **Inspect & iterate** — examine plots, extract particle subsets, estimate conformational density, compute trajectories.
 
+!!! tip "CLI or GUI — your choice"
+    This tutorial uses the **command line**, which is reproducible and scriptable. RECOVAR also provides a **web GUI** (`recovar gui`) that lets you do all of this through a browser — launch jobs, explore the latent space interactively, click to generate volumes, and view 3D reconstructions. See the [GUI Guide](gui.md) for details.
+
 ## Prerequisites
 
 - A particle stack (`.star`, `.cs`, or `.mrcs`)
@@ -50,6 +53,9 @@ recovar pipeline particles.256.mrcs \
     ```bash
     recovar pipeline particles.star -o output --mask mask.mrc
     ```
+
+!!! tip "GUI alternative"
+    In the GUI, click **New Job** :material-plus:, select **Pipeline**, browse to your particle file, select a mask, and click **Submit**. The GUI auto-detects the file format and validates inputs before submission. See [GUI: Creating Jobs](gui.md#creating-jobs).
 
 #### Key pipeline outputs
 
@@ -135,6 +141,15 @@ chimerax output_subset/analysis_20/kmeans/center*.mrc
 chimerax output_subset/analysis_20/traj000/state*.mrc
 ```
 
+!!! tip "Interactive exploration with the GUI"
+    Instead of viewing static plots and loading volumes manually, the RECOVAR GUI provides an interactive workflow:
+
+    - **Latent space explorer** — view PCA scatter plots and UMAP embeddings interactively. Click on any point to generate a volume on the fly.
+    - **3D volume viewer** — view isosurface renderings directly in the browser with adjustable threshold. Ctrl+click to overlay multiple volumes.
+    - **Trajectory builder** — select two points in the scatter plot to compute a trajectory between them and animate the conformational transition.
+
+    See the [GUI Guide](gui.md) for full details.
+
 ---
 
 ## EMPIAR-10180: Pre-catalytic Spliceosome
@@ -148,7 +163,7 @@ chimerax output_subset/analysis_20/traj000/state*.mrc
 ```bash
 recovar pipeline particles.256.mrcs \
     --poses poses.pkl --ctf ctf.pkl \
-    --mask mask_10180.mrc \
+    --mask full_mask.mrc \
     --focus-mask focus_mask.mrc \
     --correct-contrast \
     --ind filtered.ind.pkl \
@@ -157,7 +172,7 @@ recovar pipeline particles.256.mrcs \
 
 | Flag | Purpose |
 |------|---------|
-| `--mask` | Solvent mask covering the entire complex |
+| `--mask` | Solvent mask covering the entire complex (used for mean reconstruction) |
 | `--focus-mask` | Focus mask restricting heterogeneity analysis to a flexible subregion |
 | `--correct-contrast` | Correct per-particle amplitude scaling |
 | `--ind` | Pre-filtered particle subset (excluding junk from a prior round) |
@@ -234,6 +249,38 @@ View the trajectory in ChimeraX:
 chimerax output/trajectory_density/state*.mrc
 ```
 
+!!! tip "GUI alternative for trajectories"
+    In the GUI's **Latent Space Explorer**, you can select two points directly on the scatter plot to define trajectory endpoints and compute volumes along the path — no need to look up cluster indices or coordinate files. The volumes appear in the 3D viewer automatically.
+
+---
+
+## Using the GUI for analysis
+
+After running `pipeline` and `analyze` (either via CLI or the GUI itself), you can launch the GUI to interactively explore results:
+
+```bash
+# Launch the GUI pointing to your results
+recovar gui --scan-dir output
+
+# With SSH port forwarding from a remote cluster
+ssh -L 5000:localhost:5000 user@cluster
+# Then on the cluster:
+recovar gui --scan-dir output
+# Open http://localhost:5000 in your local browser
+```
+
+The GUI provides:
+
+- **Dashboard** — overview of all jobs with status indicators
+- **Latent Space Explorer** — interactive PCA and UMAP scatter plots with k-means coloring
+- **On-demand volumes** — click any point in the latent space to generate a volume at that coordinate
+- **3D volume viewer** — browser-based isosurface rendering with adjustable threshold
+- **Slice viewer** — orthogonal slices through any volume
+- **Trajectory builder** — select two endpoints to compute and animate a conformational transition
+- **Volume browser** — organized listing of all output volumes (mean, eigenvolumes, k-means centers, trajectories)
+
+For the full GUI reference, see the [GUI Guide](gui.md).
+
 ---
 
 ## Output directory reference
@@ -270,6 +317,7 @@ output/analysis_<zdim>/
 | Density estimation | `recovar estimate_conformational_density out --pca_dim=4` |
 | Trajectory | `recovar compute_trajectory out -o traj --density density.pkl --endpts centers.txt` |
 | Custom volumes | `recovar compute_state out -o vols --latent-points coords.txt` |
+| Launch GUI | `recovar gui --scan-dir out` |
 
 ## Tips
 
@@ -283,4 +331,4 @@ output/analysis_<zdim>/
     Use `--lazy` for lazy loading and `--downsample 128` for speed.
 
 !!! tip "Interactive setup"
-    Use `recovar quickstart` for a guided wizard.
+    Use `recovar quickstart` for a guided wizard, or `recovar gui` for a full web interface.

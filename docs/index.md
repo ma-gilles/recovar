@@ -38,6 +38,14 @@ RECOVAR is a software tool for analyzing conformational heterogeneity in cryo-EM
 
     [:octicons-arrow-right-24: Cryo-ET](guide/cryo-et.md)
 
+-   :material-monitor-dashboard:{ .lg .middle } **Web GUI**
+
+    ---
+
+    Browser-based interface for job management and interactive analysis
+
+    [:octicons-arrow-right-24: Web GUI](guide/gui.md)
+
 </div>
 
 ## Key features
@@ -49,6 +57,7 @@ RECOVAR is a software tool for analyzing conformational heterogeneity in cryo-EM
 - **Focus masks** — supports focus masks for targeted heterogeneity analysis
 - **Cryo-ET support** — tilt-series data with focus masks (same format as cryoDRGN-ET)
 - **Transparent volume generation** — kernel regression method produces no hallucinations, useful for validating other methods
+- **Web GUI** — browser-based interface for launching jobs, exploring latent spaces, and viewing 3D volumes interactively
 
 ## How it works
 
@@ -63,6 +72,8 @@ recovar pipeline particles.star -o output --mask mask.mrc
 # 2. Analyze results (k-means, trajectories, UMAP)
 recovar analyze output --zdim=10
 
-# 3. View results in ChimeraX
-open output/output/analysis_10/centers/all_volumes/vol0000.mrc
+# 3. Explore results interactively
+recovar gui --scan-dir output
+# Or view volumes in ChimeraX:
+# chimerax output/output/analysis_10/centers/all_volumes/vol0000.mrc
 ```

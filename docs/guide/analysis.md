@@ -98,6 +98,9 @@ Choose one of:
 
 ## Viewing results
 
+!!! tip "Interactive exploration"
+    Use `recovar gui --scan-dir output` to explore results interactively in your browser — view scatter plots, click to generate volumes, and inspect 3D renderings. See the [GUI Guide](gui.md).
+
 ### Volume files
 
 Open `.mrc` files in ChimeraX, Chimera, or any MRC viewer:

@@ -86,6 +86,7 @@ nav:
     - Downsampling: guide/downsampling.md
     - Running the Pipeline: guide/pipeline.md
     - Analyzing Results: guide/analysis.md
+    - Web GUI: guide/gui.md
     - Conformational Density: guide/conformational-density.md
     - Extracting Subsets: guide/extracting-subsets.md
     - Outlier Detection: guide/outlier-detection.md

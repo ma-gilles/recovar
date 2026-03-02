@@ -52,9 +52,20 @@ output/output/analysis_10/centers/all_volumes/vol0001.mrc
 ...
 ```
 
+## Web GUI
+
+For a visual interface, launch the RECOVAR web GUI:
+
+```bash
+recovar gui
+```
+
+The GUI lets you configure and launch jobs, interactively explore the latent space, and view 3D volumes — all from your browser. See the [GUI Guide](../guide/gui.md) for details.
+
 ## What's next
 
 - [Tutorial](../guide/tutorial.md) — full worked example with plots on EMPIAR-10076
+- [Web GUI](../guide/gui.md) — browser-based interface for job management and interactive analysis
 - [Input Data](../guide/input-data.md) — understand supported formats and data preparation
 - [Downsampling](../guide/downsampling.md) — when and how to downsample
 - [Running the Pipeline](../guide/pipeline.md) — all pipeline options explained
