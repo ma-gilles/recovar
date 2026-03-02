@@ -33,15 +33,28 @@ class RadialNoiseModel():
     def __init__(self, noise_variance_radial, image_shape = None):
         self.noise_variance_radial = noise_variance_radial
         self.image_shape = image_shape if image_shape is not None else (2 * (len(noise_variance_radial)+1) , 2 * (len(noise_variance_radial)+1) )
+        self._precompute()
+
+    def _precompute(self):
+        # Compute once; store as CPU numpy arrays to avoid GPU memory pressure.
+        # to_batched_half_pixel_noise / jnp.asarray handles GPU transfer per batch.
+        self._noise_full = np.asarray(
+            make_radial_noise(self.noise_variance_radial, self.image_shape).reshape(1, -1)
+        )
+        self._noise_half = np.asarray(
+            make_radial_noise_half(self.noise_variance_radial, self.image_shape).reshape(1, -1)
+        )
+
     def get(self, *args, **kwargs):
-        return make_radial_noise(self.noise_variance_radial, self.image_shape).reshape(1, -1)
+        return self._noise_full
 
     def get_half(self, *args, **kwargs):
         """Return noise in half-spectrum (rfft-packed) layout ``(1, H*(W//2+1))``."""
-        return make_radial_noise_half(self.noise_variance_radial, self.image_shape).reshape(1, -1)
+        return self._noise_half
 
     def set_variance(self, noise_variance_radial):
         self.noise_variance_radial = noise_variance_radial
+        self._precompute()
 
     def get_average_radial_noise(self, *args, **kwargs):
         return self.noise_variance_radial
@@ -50,24 +63,36 @@ class RadialNoiseModel():
 class VariableRadialNoiseModel():
     def __init__(self, noise_variance_radials, dose_indices, image_shape = None):
         self.noise_variance_radials = noise_variance_radials
-        self.dose_indices = dose_indices
+        self.dose_indices = np.asarray(dose_indices)
         self.image_shape = image_shape if image_shape is not None else (2 * (len(noise_variance_radials[0])+1) , 2 * (len(noise_variance_radials[0])+1) )
+        self._precompute()
+
+    def _precompute(self):
+        # Precompute expanded arrays for every dose-index level; store on CPU.
+        # Per-batch get() / get_half() is then a cheap numpy index, not a JAX call.
+        self._noise_full = np.asarray(
+            batch_make_radial_noise(self.noise_variance_radials, self.image_shape)
+        )
+        self._noise_half = np.asarray(
+            batch_make_radial_noise_half(self.noise_variance_radials, self.image_shape)
+        )
 
     def get(self, indices, *args, **kwargs):
-        dose_indices_batch = self.dose_indices[indices]
-        return batch_make_radial_noise(self.noise_variance_radials[dose_indices_batch,:], self.image_shape)
+        dose_indices_batch = self.dose_indices[np.asarray(indices)]
+        return self._noise_full[dose_indices_batch]
 
     def get_half(self, indices, *args, **kwargs):
         """Return noise in half-spectrum (rfft-packed) layout ``(B, H*(W//2+1))``."""
-        dose_indices_batch = self.dose_indices[indices]
-        return batch_make_radial_noise_half(self.noise_variance_radials[dose_indices_batch,:], self.image_shape)
+        dose_indices_batch = self.dose_indices[np.asarray(indices)]
+        return self._noise_half[dose_indices_batch]
 
     def get_average_radial_noise(self, *args, **kwargs):
-        counts = jnp.bincount(self.dose_indices) / self.dose_indices.size
-        return jnp.sum(self.noise_variance_radials * counts[:,None], axis=0)
+        counts = jnp.bincount(jnp.asarray(self.dose_indices)) / self.dose_indices.size
+        return jnp.sum(jnp.asarray(self.noise_variance_radials) * counts[:,None], axis=0)
 
     def set_variance(self, noise_variance_radials):
         self.noise_variance_radials = noise_variance_radials
+        self._precompute()
 
 
 class ConstantNoiseModel:
@@ -691,7 +716,7 @@ def estimate_noise_variance(experiment_dataset, batch_size, max_images = 10000):
 
     for batch, _, _ in data_generator:
         batch = experiment_dataset.image_stack.process_images(batch)
-        sum_sq += jnp.sum(np.abs(batch)**2, axis =0)
+        sum_sq += jnp.sum(jnp.abs(batch)**2, axis =0)
 
     mean_PS =  sum_sq / n_images_used
     cov_noise_mask = jnp.median(mean_PS)
@@ -863,7 +888,7 @@ def estimate_radial_noise_statistic_from_outside_mask(experiment_dataset, volume
 def make_radial_noise(average_image_PS, image_shape):
     # If you pass a scalar, return a constant
     if average_image_PS.size == 1:
-        return np.ones(image_shape, dtype =average_image_PS.dtype ) * average_image_PS
+        return jnp.ones(int(np.prod(image_shape)), dtype=average_image_PS.dtype) * average_image_PS
 
     return utils.make_radial_image(average_image_PS, image_shape, extend_last_frequency = True)
 
@@ -875,7 +900,7 @@ def make_radial_noise_half(average_image_PS, image_shape):
     """
     if average_image_PS.size == 1:
         half_shape = fourier_transform_utils.image_shape_to_half_image_shape(image_shape)
-        return np.ones(half_shape, dtype=average_image_PS.dtype) * average_image_PS
+        return jnp.ones(int(np.prod(half_shape)), dtype=average_image_PS.dtype) * average_image_PS
     return utils.make_radial_image_half(average_image_PS, image_shape, extend_last_frequency=True)
 
 
