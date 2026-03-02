@@ -750,22 +750,19 @@ class CryoSparcLoader(MultiMRCLoader):
         if np.any(blob_idx < 0):
             raise ValueError("CS file contains negative blob/idx values")
 
-        clean_paths = []
-        for p in blob_paths:
-            if isinstance(p, (bytes, np.bytes_)):
-                p = p.decode("utf-8", errors="replace")
-            else:
-                p = str(p)
-            clean_paths.append(p.lstrip('>'))
+        # Decode bytes → str in one vectorised step via pandas.
+        # np.bytes_ arrays come from cryoSPARC; str arrays also occur.
+        paths_series = pd.array(blob_paths, dtype=object)
+        paths_series = pd.Series(paths_series).astype(str)
+        # Strip leading '>' (cryoSPARC path marker)
+        paths_series = paths_series.str.lstrip('>')
 
-        # Strip prefix if provided (same as StarLoader)
         if strip_prefix:
-            if not any(p.startswith(strip_prefix) for p in clean_paths):
+            if not paths_series.str.startswith(strip_prefix).any():
                 raise ValueError(f"No paths match strip_prefix: {strip_prefix}")
-            clean_paths = [
-                p[len(strip_prefix):].lstrip('/') if p.startswith(strip_prefix) else p
-                for p in clean_paths
-            ]
+            mask = paths_series.str.startswith(strip_prefix)
+            paths_series = paths_series.copy()
+            paths_series[mask] = paths_series[mask].str[len(strip_prefix):].str.lstrip('/')
 
         if not datadir:
             datadir = os.path.abspath(os.path.dirname(filepath))
@@ -775,14 +772,22 @@ class CryoSparcLoader(MultiMRCLoader):
             datadir = os.path.abspath(datadir)
 
         # Save raw paths (after strip but before datadir join) for error hints
-        raw_paths = list(dict.fromkeys(clean_paths))  # unique, order-preserving
+        raw_paths = list(dict.fromkeys(paths_series.tolist()))
 
-        joined_paths = [os.path.join(datadir, p) for p in clean_paths]
-        unique_joined = set(joined_paths)
-        resolved_map = {p: _resolve_mrc_path(p) for p in unique_joined}
-        full_paths = [resolved_map[p] for p in joined_paths]
+        # Vectorised path join (same approach as StarLoader)
+        rel_mask = ~paths_series.str.startswith('/')
+        if rel_mask.all():
+            full_paths_series = datadir + os.sep + paths_series
+        elif rel_mask.any():
+            full_paths_series = paths_series.copy()
+            full_paths_series[rel_mask] = datadir + os.sep + full_paths_series[rel_mask]
+        else:
+            full_paths_series = paths_series
 
-        df = pd.DataFrame({'mrc_file': full_paths, 'mrc_index': blob_idx})
+        unique_map = {p: _resolve_mrc_path(p) for p in full_paths_series.unique()}
+        full_paths_series = full_paths_series.map(unique_map)
+
+        df = pd.DataFrame({'mrc_file': full_paths_series.values, 'mrc_index': blob_idx})
 
         super().__init__(df, indices, lazy, max_threads, raw_paths=raw_paths)
 

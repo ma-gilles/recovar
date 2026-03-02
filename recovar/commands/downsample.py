@@ -234,7 +234,7 @@ def _get_pixel_size(filepath: str):
 
     elif ext in ('mrcs', 'mrc'):
         try:
-            with mrcfile.open(filepath, mode='r') as mrc:
+            with mrcfile.open(filepath, mode='r', header_only=True) as mrc:
                 vsize = float(mrc.voxel_size.x)
                 if vsize > 0:
                     return vsize
@@ -261,28 +261,29 @@ def _write_output_star(input_path, mrcs_path, star_path, target_D, new_apix, n_i
     mrcs_rel = os.path.relpath(mrcs_abs, star_dir)
 
     if ext == 'star':
-        # Copy metadata from input star, update pixel size and image names
+        # Copy metadata from input star, update pixel size and image names.
+        # Use our own cached read_star (fast) rather than the external starfile package.
         try:
-            import starfile
-            data = starfile.read(input_path, always_dict=True)
+            from recovar.data_io.starfile import read_star, write_star
+            import pandas as pd
 
-            # Update optics table
-            if 'optics' in data:
-                data['optics']['rlnImagePixelSize'] = new_apix
-                data['optics']['rlnImageSize'] = target_D
+            particles_df, optics_df = read_star(input_path)
 
-            # Update image names
-            particles_key = 'particles' if 'particles' in data else list(data.keys())[-1]
-            img_col = 'rlnImageName'
-            if img_col in data[particles_key].columns:
-                data[particles_key][img_col] = [
-                    f"{i+1}@{mrcs_rel}" for i in range(len(data[particles_key]))
+            if optics_df is not None:
+                if '_rlnImagePixelSize' in optics_df.columns:
+                    optics_df['_rlnImagePixelSize'] = str(new_apix)
+                if '_rlnImageSize' in optics_df.columns:
+                    optics_df['_rlnImageSize'] = str(target_D)
+
+            if '_rlnImageName' in particles_df.columns:
+                particles_df['_rlnImageName'] = [
+                    f"{i+1}@{mrcs_rel}" for i in range(len(particles_df))
                 ]
 
-            starfile.write(data, star_path, overwrite=True)
+            write_star(star_path, particles_df, optics_df)
             logger.info("Wrote STAR file with full metadata from input")
             return
-        except (ImportError, KeyError, ValueError, OSError) as e:
+        except (KeyError, ValueError, OSError) as e:
             logger.warning("Failed to copy STAR metadata: %s. Writing minimal STAR.", e)
 
     elif ext == 'cs':
