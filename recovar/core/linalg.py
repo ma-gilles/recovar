@@ -122,7 +122,8 @@ def thin_svd(X, np = np, epsilon = 1e-8):
     Y = np.conj(X).T @ X
     Ys, Yu = np.linalg.eigh(Y)#, full_matrices = True)
     sigma = np.sqrt(np.where(Ys > 0, Ys, 0))
-    sigma_inv = np.where( sigma > epsilon , 1/ sigma, 0)
+    safe_sigma = np.where(sigma > epsilon, sigma, 1)
+    sigma_inv = np.where(sigma > epsilon, 1 / safe_sigma, 0)
     U = (X @ Yu) * sigma_inv
     V = Yu
     return np.flip(U, axis =1), np.flip(sigma), np.flip(V, axis =1)

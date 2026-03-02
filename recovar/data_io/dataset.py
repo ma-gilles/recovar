@@ -301,7 +301,8 @@ class CryoEMDataset:
 
     def get_image(self, i , tilt_idx = None):
         if self.tilt_series_flag:
-            assert ( tilt_idx is not None), "Tilt index must be specified for tilt series"
+            if tilt_idx is None:
+                raise ValueError("Tilt index must be specified for tilt series")
 
         if tilt_idx is None:
             image = self.image_stack.__getitem__(i)[0]#[None]
@@ -325,7 +326,8 @@ class CryoEMDataset:
     def get_denoised_image(self,i, tilt_idx=None, to_real= np.real, hide_padding = True, weiner_param =1):
         batch_image_ind = np.array([i])
         if self.tilt_series_flag:
-            assert ( tilt_idx is not None), "Tilt index must be specified for tilt series"
+            if tilt_idx is None:
+                raise ValueError("Tilt index must be specified for tilt series")
 
         if tilt_idx is not None:
             images, _, image_ind = self.image_stack.__getitem__(i)
@@ -733,7 +735,8 @@ def load_dataset(
             tilt_numbers = tilt_dataset_this.tilt_numbers
             ctf_params = np.concatenate( [ctf_params, tilt_numbers[...,None]], axis =-1)
 
-            assert (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)) , "Critical exposure calculation requires 200kV or 300kV imaging"
+            if not (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)):
+                raise ValueError("Critical exposure calculation requires 200kV or 300kV imaging")
             CTF_fun = core.get_cryo_ET_CTF_fun(dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt)
             logger.info('CTF from dose weighting')
         elif "v2" in tilt_series_ctf:
@@ -755,7 +758,8 @@ def load_dataset(
 
             CTF_fun = core.evaluate_ctf_wrapper_tilt_series_v2
             ctf_params = np.concatenate( [ctf_params, dose[...,None], angles[...,None]], axis =-1)
-            assert (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)) , "Critical exposure calculation requires 200kV or 300kV imaging" 
+            if not (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)):
+                raise ValueError("Critical exposure calculation requires 200kV or 300kV imaging") 
             logger.info('CTF from dose weighting - V2')
             
 
@@ -782,7 +786,8 @@ def load_dataset(
         logger.info("Auto-extracted poses from %s", source_file)
 
     voxel_sizes = ctf_params[:, 0]
-    assert np.all(np.isclose(voxel_sizes - voxel_sizes[0], 0))
+    if not np.all(np.isclose(voxel_sizes - voxel_sizes[0], 0)):
+        raise ValueError("All voxel sizes must be the same")
     voxel_size = np.float32(voxel_sizes[0])
 
     # Make sure everything is in correct dtype:

@@ -600,7 +600,8 @@ def estimate_from_relion_style(cryos, discretization_params, XWXs, Fs, volume_sh
     logger.info("Starting adaptive disc with params = %s", discretization_params)
     h = discretization_params[1]
     pol_degree = discretization_params[0]
-    assert pol_degree == 0, "Only p = 0 supported for now"
+    if pol_degree != 0:
+        raise NotImplementedError("Only p = 0 supported for now")
 
     volume_size = np.prod(cryos.volume_shape)
     from recovar.reconstruction import relion_functions
@@ -627,7 +628,8 @@ def estimate_multiple_disc_relion_style(experiment_datasets, noise_variance, dis
 
     # prior_option = discretization_params[0][2]
     max_pol_degree = np.max([ pol_degree for pol_degree, _, _ in discretization_params ])
-    assert max_pol_degree == 0, "Only p = 0 supported for now"
+    if max_pol_degree != 0:
+        raise NotImplementedError("Only p = 0 supported for now")
 
     # Precomputation
     XWXs = [None,None]; Fs = [None,None]
@@ -699,7 +701,8 @@ def pick_best_heterogeneity_from_residual(estimates, full_test_dataset, heteroge
         good_indices = heterogeneity_distances <= residual_threshold
         test_dataset = dataset.subsample_cryoem_dataset(full_test_dataset, good_indices)
 
-        assert test_dataset.n_images > 0, "No images in bin"
+        if test_dataset.n_images <= 0:
+            raise ValueError("No images in bin after applying residual threshold")
 
     logger.info("Number of images used for residual computation: %s", test_dataset.n_images)
 

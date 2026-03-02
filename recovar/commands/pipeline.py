@@ -357,8 +357,8 @@ def _estimate_noise(cryos, means, dilated_volume_mask, batch_size, args, noise_m
     white_noise_var_outside_mask_val = np.median(masked_image_PS)
 
     if use_new_noise_fn:
-        assert (noise_model == "radial" or noise_model == "radial_per_tilt"), \
-            f"new noise fn only works with radial noise model. You set {noise_model}"
+        if noise_model not in ("radial", "radial_per_tilt"):
+            raise ValueError(f"new noise fn only works with radial noise model, got {noise_model}")
 
     logger.info("time to estimate noise is %s", time.time() - noise_time)
     utils.report_memory_device(logger=logger)

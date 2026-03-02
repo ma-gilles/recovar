@@ -191,6 +191,30 @@ def get_real_fft_packed_last_axis_indices(n):
     return jnp.asarray(list(range(half, n)), dtype=jnp.int32)
 
 
+def get_shifted_conjugate_partner_indices(n):
+    """Index of the conjugate-symmetric partner for each bin in a shifted FFT axis.
+
+    For a length-*n* axis after ``fftshift``, bin *i* holds frequency
+    ``u = (i + n//2) % n``.  Its conjugate partner is at frequency ``-u % n``,
+    which maps back to shifted index ``(-u % n - n//2) % n``.  This function
+    returns that mapping as an int32 array of length *n*.
+    """
+    n = int(n)
+    if n <= 0:
+        raise ValueError(f"n must be positive, got {n}")
+    half = n // 2
+    i = jnp.arange(n, dtype=jnp.int32)
+    u = (i + half) % n
+    u_partner = (-u) % n
+    return ((u_partner - half) % n).astype(jnp.int32)
+
+
+def get_real_fft_memory_saving_ratio(shape):
+    """Ratio of packed (rfft) to full spectrum size: ``prod(packed) / prod(shape)``."""
+    packed = get_real_fft_packed_shape(shape)
+    return int(np.prod(packed)) / int(np.prod(shape))
+
+
 def _normalize_volume_shape_3d(volume_shape):
     volume_shape = tuple(int(s) for s in volume_shape)
     if len(volume_shape) != 3:

@@ -137,7 +137,8 @@ def get_radial_mask(shape, radius = None):
 
 # Standard image masking (Other masking are used, too)
 def window_mask(D, in_rad, out_rad):
-    assert D % 2 == 0
+    if D % 2 != 0:
+        raise ValueError(f"D must be even, got {D}")
     x0, x1 = np.meshgrid(np.linspace(-1, 1, D, endpoint=False, dtype=np.float32), 
                          np.linspace(-1, 1, D, endpoint=False, dtype=np.float32))
     r = (x0**2 + x1**2)**.5

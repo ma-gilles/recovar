@@ -123,7 +123,8 @@ def compute_latent_space_density_on_curve(zs, cov_zs, path,  latent_space_bounds
 
     type_used = np.float32
     # pca_dim = zs.shape[1] if pca_dim is None # Should add one more dimension to the path
-    assert zs.shape[1] == pca_dim+1
+    if zs.shape[1] != pca_dim + 1:
+        raise ValueError(f"zs.shape[1] ({zs.shape[1]}) must equal pca_dim+1 ({pca_dim + 1})")
 
     # Computes a 2D density on a [path(t) x zs[path.shape[1]]] grid.
     for k in [pca_dim]:
@@ -210,10 +211,14 @@ def compute_latent_quadratic_forms(test_pts, xs, cov_xs):
 
 
 def compute_latent_quadratic_forms_in_batch(test_pts, zs, cov_zs):
-    assert zs.shape[1] == test_pts.shape[1]
-    assert zs.shape[1] == cov_zs.shape[1]
-    assert test_pts.ndim == 2
-    assert cov_zs.ndim == zs.ndim + 1
+    if zs.shape[1] != test_pts.shape[1]:
+        raise ValueError(f"zs dim ({zs.shape[1]}) != test_pts dim ({test_pts.shape[1]})")
+    if zs.shape[1] != cov_zs.shape[1]:
+        raise ValueError(f"zs dim ({zs.shape[1]}) != cov_zs dim ({cov_zs.shape[1]})")
+    if test_pts.ndim != 2:
+        raise ValueError(f"test_pts must be 2D, got {test_pts.ndim}D")
+    if cov_zs.ndim != zs.ndim + 1:
+        raise ValueError(f"cov_zs.ndim ({cov_zs.ndim}) must be zs.ndim+1 ({zs.ndim + 1})")
 
     quads = np.zeros([zs.shape[0], test_pts.shape[0]] )
     n_images = zs.shape[0]
@@ -226,10 +231,14 @@ def compute_latent_quadratic_forms_in_batch(test_pts, zs, cov_zs):
     return quads
 
 def compute_latent_log_likelihood(test_pts, zs, cov_zs):
-    assert zs.shape[1] == test_pts.shape[1]
-    assert zs.shape[1] == cov_zs.shape[1]
-    assert test_pts.ndim == 2
-    assert cov_zs.ndim == zs.ndim + 1
+    if zs.shape[1] != test_pts.shape[1]:
+        raise ValueError(f"zs dim ({zs.shape[1]}) != test_pts dim ({test_pts.shape[1]})")
+    if zs.shape[1] != cov_zs.shape[1]:
+        raise ValueError(f"zs dim ({zs.shape[1]}) != cov_zs dim ({cov_zs.shape[1]})")
+    if test_pts.ndim != 2:
+        raise ValueError(f"test_pts must be 2D, got {test_pts.ndim}D")
+    if cov_zs.ndim != zs.ndim + 1:
+        raise ValueError(f"cov_zs.ndim ({cov_zs.ndim}) must be zs.ndim+1 ({zs.ndim + 1})")
 
     det_cov_zs = compute_log_det_cov(cov_zs)
     quads = np.zeros([zs.shape[0], test_pts.shape[0]] )

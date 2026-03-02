@@ -112,7 +112,8 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
             logger.info("using zdim=%s", zdim)
         noreg_suffix = '_noreg' if no_z_reg else ''
         logger.info("using zdim=%s%s", zdim, noreg_suffix)
-        assert output_folder is not None
+        if output_folder is None:
+            raise ValueError("output_folder is required")
 
         if zdim not in zs_keys:
             logger.error("z-dim not found in results. Options are: %s", ','.join(str(e) for e in zs_keys))

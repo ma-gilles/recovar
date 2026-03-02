@@ -878,7 +878,8 @@ def estimate_noise_from_heterogeneity_residuals_inside_mask_v2(experiment_datase
 def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp', subset_indices = None, subset_fn = None):
 
 
-    assert basis.shape[0] == experiment_dataset.volume_size, "input u should be volume_size x basis_size"
+    if basis.shape[0] != experiment_dataset.volume_size:
+        raise ValueError(f"input u should be volume_size x basis_size, got {basis.shape[0]} != {experiment_dataset.volume_size}")
     st_time = time.time()    
     basis = np.asarray(basis[:, :basis_coordinates.shape[-1]]).T
 
@@ -943,11 +944,13 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
 
 
 def basis_times_coords(basis, coords):
-    assert basis.shape[-1] == coords.shape[-1]
+    if basis.shape[-1] != coords.shape[-1]:
+        raise ValueError(f"basis last dim ({basis.shape[-1]}) != coords last dim ({coords.shape[-1]})")
     return jnp.sum(basis * coords, axis=-1)
 def batch_basis_times_coords2(basis, coords):
     """Compute basis @ coords.T reshaped for batched images, memory-efficiently."""
-    assert basis.shape[-1] == coords.shape[-1]
+    if basis.shape[-1] != coords.shape[-1]:
+        raise ValueError(f"basis last dim ({basis.shape[-1]}) != coords last dim ({coords.shape[-1]})")
     basis_shape_inp = basis.shape
 
     basis = basis.transpose(-1, *np.arange(basis.ndim-1) )

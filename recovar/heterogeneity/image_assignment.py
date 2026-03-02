@@ -64,7 +64,8 @@ def estimate_false_positive_rate(experiment_dataset, volumes, noise_variance, ba
     volumes = jnp.asarray(volumes, dtype=experiment_dataset.dtype)
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
     alphas = np.zeros((experiment_dataset.n_units,), dtype=experiment_dataset.dtype_real)
-    assert volumes.shape[0] == 2, 'Only two volumes are supported'
+    if volumes.shape[0] != 2:
+        raise ValueError(f"Only two volumes are supported, got {volumes.shape[0]}")
     difference = volumes[0] - volumes[1]
     for batch, particles_ind, batch_image_ind in data_generator:
         res = compute_residual(
