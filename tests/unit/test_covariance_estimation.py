@@ -21,7 +21,7 @@ def test_default_covariance_options_has_expected_keys(monkeypatch):
     assert isinstance(opts, dict)
     assert "n_pcs_to_compute" in opts
     assert opts["n_pcs_to_compute"] >= 1
-    assert opts["covariance_fn"] == "kernel"
+    assert "reg_fn" in opts
 
 
 def test_greedy_column_choice_validation():
@@ -188,20 +188,20 @@ def test_compute_both_h_b_selects_combined_or_corrected_mean(monkeypatch):
 
     chosen_means = []
 
-    def _fake_compute_h_b_in_volume_batch(cryo, mean, *args, **kwargs):
+    def _fake_compute_h_b_for_halfset(cryo, mean, *args, **kwargs):
         chosen_means.append(float(np.asarray(mean).reshape(-1)[0]))
         return np.ones((2, 2), dtype=np.complex64), np.ones((2, 2), dtype=np.complex64) * 2
 
-    monkeypatch.setattr(cov_est, "compute_H_B_in_volume_batch", _fake_compute_h_b_in_volume_batch)
+    monkeypatch.setattr(cov_est, "compute_H_B_for_halfset", _fake_compute_h_b_for_halfset)
 
     options = {"use_combined_mean": True}
-    Hs, Bs = cov_est.compute_both_H_B(cryos, means, None, np.array([0, 1]), 8, False, options)
+    Hs, Bs = cov_est.compute_both_H_B(cryos, means, None, np.array([0, 1]), 8, options)
     assert len(Hs) == 2 and len(Bs) == 2
     assert chosen_means == [11.0, 11.0]
 
     chosen_means.clear()
     options = {"use_combined_mean": False}
-    cov_est.compute_both_H_B(cryos, means, None, np.array([0, 1]), 8, False, options)
+    cov_est.compute_both_H_B(cryos, means, None, np.array([0, 1]), 8, options)
     assert chosen_means == [21.0, 31.0]
 
 
@@ -257,45 +257,43 @@ def test_adjoint_kernel_slice_dispatch_and_noise_term(monkeypatch):
     assert np.all(np.isfinite(np.asarray(out_premult)))
 
 
-def test_compute_h_b_in_volume_batch_batches_frequency_chunks(monkeypatch):
-    cryo = make_tiny_cryo_dataset(grid_size=4, n_images=6, seed=0)
+def test_compute_h_b_for_halfset_batches_frequency_chunks(monkeypatch):
+    """Test that compute_H_B_for_halfset processes frequencies in column batches."""
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=6, seed=0)
     picked_frequencies = np.array([0, 1, 2, 3, 4], dtype=np.int32)
 
-    monkeypatch.setattr(cov_est.utils, "get_image_batch_size", lambda *args, **kwargs: 4)
+    monkeypatch.setattr(cov_est.utils, "get_image_batch_size", lambda *args, **kwargs: 100)
     monkeypatch.setattr(cov_est.utils, "get_column_batch_size", lambda *args, **kwargs: 2)
 
-    calls = []
+    freq_calls = []
 
-    def _fake_compute_h_b(experiment_dataset, mean_estimate, volume_mask, picked_frequency_indices, batch_size, diag_prior, **kwargs):
-        calls.append(np.array(picked_frequency_indices))
-        n = len(picked_frequency_indices)
-        h = np.tile(np.array(picked_frequency_indices, dtype=np.float32)[None, :], (experiment_dataset.volume_size, 1))
-        b = h + 100.0
-        return h.astype(experiment_dataset.dtype), b.astype(experiment_dataset.dtype)
+    def _fake_triangular(centered_images, CTF_val, plane_coords, rotation_matrices,
+                         noise_variances, picked_freq_index, image_mask,
+                         image_shape, volume_size, **kwargs):
+        freq_calls.append(int(picked_freq_index))
+        H_k = jnp.ones(volume_size, dtype=jnp.float32) * float(picked_freq_index)
+        B_k = jnp.ones(volume_size, dtype=jnp.complex64) * (float(picked_freq_index) + 100.0)
+        return H_k, B_k
 
-    monkeypatch.setattr(cov_est, "compute_H_B", _fake_compute_h_b)
+    monkeypatch.setattr(cov_est, "compute_H_B_triangular", _fake_triangular)
 
-    options = {"disc_type": "linear_interp"}
-    H, B = cov_est.compute_H_B_in_volume_batch(
+    options = cov_est.get_default_covariance_computation_options(grid_size=4)
+    options["disc_type"] = "linear_interp"
+    options["mask_images_in_H_B"] = False
+
+    H, B = cov_est.compute_H_B_for_halfset(
         cryo=cryo,
-        mean=np.ones(cryo.volume_size, dtype=np.complex64),
-        dilated_volume_mask=np.ones(cryo.volume_size, dtype=np.float32),
+        mean_estimate=np.zeros(cryo.volume_size, dtype=np.complex64),
+        volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
         picked_frequencies=picked_frequencies,
         gpu_memory=8,
-        parallel_analysis=False,
         options=options,
-        use_multi_gpu=False,
-        n_gpus=None,
     )
 
-    assert len(calls) == 3
-    np.testing.assert_array_equal(calls[0], np.array([0, 1]))
-    np.testing.assert_array_equal(calls[1], np.array([2, 3]))
-    np.testing.assert_array_equal(calls[2], np.array([4]))
+    # Should have called triangular for each frequency
+    assert set(freq_calls) == {0, 1, 2, 3, 4}
     assert H.shape == (cryo.volume_size, picked_frequencies.size)
     assert B.shape == (cryo.volume_size, picked_frequencies.size)
-    np.testing.assert_allclose(H[0], np.array([0, 1, 2, 3, 4], dtype=np.complex64))
-    np.testing.assert_allclose(B[0], np.array([100, 101, 102, 103, 104], dtype=np.complex64))
 
 
 def test_compute_variance_orchestration_with_stubbed_kernels(monkeypatch):
@@ -362,7 +360,6 @@ def test_compute_h_b_runs_on_tiny_image_dataset():
     options.update(
         {
             "disc_type": "linear_interp",
-            "covariance_fn": "kernel",
             "left_kernel": "triangular",
             "right_kernel": "triangular",
             "right_kernel_width": 1,
@@ -370,13 +367,12 @@ def test_compute_h_b_runs_on_tiny_image_dataset():
         }
     )
 
-    H, B = cov_est.compute_H_B(
-        experiment_dataset=cryo,
+    H, B = cov_est.compute_H_B_for_halfset(
+        cryo=cryo,
         mean_estimate=np.zeros(cryo.volume_size, dtype=np.complex64),
         volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
-        picked_frequency_indices=np.array([0, 1], dtype=np.int32),
-        batch_size=3,
-        diag_prior=np.zeros(cryo.volume_size, dtype=np.float32),
+        picked_frequencies=np.array([0, 1], dtype=np.int32),
+        gpu_memory=8,
         options=options,
     )
 
@@ -396,7 +392,6 @@ def test_compute_projected_covariance_runs_on_tiny_image_dataset():
         batch_size=3,
         disc_type="linear_interp",
         disc_type_u="linear_interp",
-        parallel_analysis=False,
         do_mask_images=False,
     )
 

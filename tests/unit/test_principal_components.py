@@ -365,7 +365,6 @@ def test_pca_by_projected_covariance_real_tiny_dataset_runs():
         disc_type_u="linear_interp",
         gpu_memory_to_use=8,
         use_mask=False,
-        parallel_analysis=False,
         n_pcs_to_compute=2,
     )
 
