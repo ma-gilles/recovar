@@ -1004,6 +1004,16 @@ echo "Completed at: $(date)"
                         "density_pkl": knee_pkl,
                         "plots": _list_images(task_dir),
                     }
+                    # Try to read pca_dim from task metadata
+                    meta_path = os.path.join(task_dir, "task_meta.json")
+                    if os.path.isfile(meta_path):
+                        try:
+                            meta = _load_json(meta_path)
+                            pd = meta.get("params", {}).get("pca_dim")
+                            if pd:
+                                density_info["pca_dim"] = pd
+                        except Exception:
+                            pass
                     break  # use most recent
         if density_info:
             info["density"] = density_info
@@ -1288,6 +1298,9 @@ echo "Completed at: $(date)"
             output_dir=output_dir, created_at=time.time(),
             label=params.get("label", task_type),
         )
+        # Stash selected params for metadata persistence
+        if task_type == "density":
+            task._params = {"pca_dim": params.get("pca_dim", 4)}
 
         env = {**os.environ,
                "XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
@@ -1297,6 +1310,12 @@ echo "Completed at: $(date)"
         if use_slurm and _has_slurm():
             opts = slurm_opts or {}
             needs_gpu = task_type not in ("density", "stable_states")
+            # Task-specific SLURM defaults: density needs lots of memory & time
+            _slurm_defaults = {
+                "density":       {"mem": "128G", "time": "2:00:00"},
+                "stable_states": {"mem": "64G",  "time": "1:00:00"},
+            }
+            _td = _slurm_defaults.get(task_type, {"mem": "32G", "time": "1:00:00"})
             script_path = os.path.join(output_dir, "compute.sbatch")
             with open(script_path, "w") as f:
                 f.write(f"""#!/bin/bash
@@ -1306,8 +1325,8 @@ echo "Completed at: $(date)"
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem={opts.get('mem', '32G')}
-#SBATCH --time={opts.get('time', '1:00:00')}
+#SBATCH --mem={opts.get('mem', _td['mem'])}
+#SBATCH --time={opts.get('time', _td['time'])}
 #SBATCH --partition={opts.get('partition', 'cryoem')}
 {"#SBATCH --gres=gpu:1" if needs_gpu else "# No GPU needed for " + task_type}
 #SBATCH --account={opts.get('account', 'amits')}
@@ -1350,12 +1369,15 @@ echo "which python: {python_path}"
 
     def _save_task_meta(self, task: ComputeTask):
         """Write task metadata to disk for recovery after restart."""
-        _save_json(os.path.join(task.output_dir, "task_meta.json"), {
+        meta = {
             "id": task.id, "job_id": task.job_id,
             "task_type": task.task_type, "label": task.label,
             "slurm_job_id": task.slurm_job_id,
             "created_at": task.created_at,
-        })
+        }
+        if hasattr(task, '_params'):
+            meta["params"] = task._params
+        _save_json(os.path.join(task.output_dir, "task_meta.json"), meta)
 
     def get_compute_task(self, task_id: str) -> Optional[dict]:
         """Get status of a compute task, including output volumes if done."""
@@ -1399,6 +1421,7 @@ echo "which python: {python_path}"
                         task.status = STATUS_FAILED
                         task.error = "No output generated"
 
+        log_path = os.path.join(task.output_dir, "compute.log")
         result = {
             "id": task.id,
             "type": task.task_type,
@@ -1407,6 +1430,7 @@ echo "which python: {python_path}"
             "label": task.label,
             "volumes": [],
             "plots": [],
+            "log_path": log_path if os.path.isfile(log_path) else None,
         }
 
         if task.status == STATUS_COMPLETED:
@@ -1414,6 +1438,18 @@ echo "which python: {python_path}"
                 knee_pkl = os.path.join(task.output_dir, "deconv_density_knee.pkl")
                 if os.path.isfile(knee_pkl):
                     result["density_pkl"] = knee_pkl
+                # Include pca_dim from stored params or task_meta
+                pca_dim = getattr(task, '_params', {}).get("pca_dim")
+                if not pca_dim:
+                    meta_path = os.path.join(task.output_dir, "task_meta.json")
+                    if os.path.isfile(meta_path):
+                        try:
+                            meta = _load_json(meta_path)
+                            pca_dim = meta.get("params", {}).get("pca_dim")
+                        except Exception:
+                            pass
+                if pca_dim:
+                    result["pca_dim"] = pca_dim
                 result["plots"] = _list_images(task.output_dir)
             elif task.task_type == "stable_states":
                 coords_file = os.path.join(task.output_dir, "stable_state_all_coords.txt")
