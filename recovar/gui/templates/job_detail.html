@@ -309,8 +309,7 @@
               </div>
 
               <div x-show="!selectedPoint" class="text-xs text-slate-500 py-2">
-                Click a point in the scatter plot to select it.
-                <span class="text-slate-600">Shift+click to select a second point for trajectory.</span>
+                Click a point in the scatter plot to select it, then compute a volume or select a second point for trajectory.
               </div>
 
               <div x-show="selectedPoint" class="space-y-2">
@@ -937,15 +936,20 @@ function jobExplorer() {
     },
 
     get hasUmap() {
-      if (!this.analysisInfo || !this.selectedZdim) return false;
+      if (!this.analysisInfo) return false;
+      // Check exact zdim match first, then any analysis entry
+      const analyses = this.analysisInfo.analyses || {};
       const key = String(this.selectedZdim);
-      return this.analysisInfo.analyses?.[key]?.has_umap || false;
+      if (analyses[key]?.has_umap) return true;
+      return Object.values(analyses).some(a => a.has_umap);
     },
 
     get hasKmeans() {
-      if (!this.analysisInfo || !this.selectedZdim) return false;
+      if (!this.analysisInfo) return false;
+      const analyses = this.analysisInfo.analyses || {};
       const key = String(this.selectedZdim);
-      return this.analysisInfo.analyses?.[key]?.has_kmeans || false;
+      if (analyses[key]?.has_kmeans) return true;
+      return Object.values(analyses).some(a => a.has_kmeans);
     },
 
     // ── Lifecycle ─────────────────────────────────────────────────
@@ -966,6 +970,7 @@ function jobExplorer() {
         }
       } catch (e) {
         console.error('Failed to load analysis info:', e);
+        showToast('Failed to load analysis data', 'error');
       }
 
       // Watch tab changes to auto-load embedding on first Explore visit
@@ -1009,6 +1014,14 @@ function jobExplorer() {
           e.preventDefault();
           this.sliceIdx = Math.max(this.sliceIdx - 1, 0);
           this.updateSlice();
+        }
+      });
+
+      // Clean up interval on page unload
+      window.addEventListener('beforeunload', () => {
+        if (this._logInterval) {
+          clearInterval(this._logInterval);
+          this._logInterval = null;
         }
       });
 

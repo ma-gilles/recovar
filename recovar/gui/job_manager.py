@@ -162,6 +162,19 @@ class Job:
                 sub = os.path.join(output_dir, entry)
                 if os.path.isdir(sub) and (entry.startswith("analysis_") or entry == "plots"):
                     images.extend(_list_images(sub))
+        # Also check top-level analysis dirs (analyze/, analysis_*/)
+        if os.path.isdir(self.output_dir):
+            for entry in sorted(os.listdir(self.output_dir)):
+                if not (entry.startswith("analysis_") or entry == "analyze"):
+                    continue
+                analysis_dir = os.path.join(self.output_dir, entry)
+                if not os.path.isdir(analysis_dir):
+                    continue
+                images.extend(_list_images(analysis_dir))
+                for sub in ["umap", "PCA"]:
+                    subdir = os.path.join(analysis_dir, sub)
+                    if os.path.isdir(subdir):
+                        images.extend(_list_images(subdir))
         return images
 
     @property
@@ -836,33 +849,50 @@ echo "Completed at: $(date)"
                     })
 
         # Scan analysis directories — check both top-level and output/
+        # Recognises both "analysis_<zdim>" (standard) and bare "analyze" dirs
         analysis_search_dirs = [job.output_dir, os.path.join(job.output_dir, "output")]
         seen_analysis_names = set()
         for search_dir in analysis_search_dirs:
             if not os.path.isdir(search_dir):
                 continue
             for entry in sorted(os.listdir(search_dir)):
-                if not entry.startswith("analysis_"):
+                if not (entry.startswith("analysis_") or entry == "analyze"):
                     continue
                 if entry in seen_analysis_names:
-                    continue
-                seen_analysis_names.add(entry)
-
-                # Parse zdim from name like "analysis_20" or "analysis_20_noreg"
-                parts = entry.split("_")
-                zdim_parsed = None
-                for part in parts[1:]:
-                    try:
-                        zdim_parsed = int(part)
-                        break
-                    except ValueError:
-                        continue
-                if zdim_parsed is None:
                     continue
 
                 analysis_dir = os.path.join(search_dir, entry)
                 if not os.path.isdir(analysis_dir):
                     continue
+
+                # Verify it looks like an analysis dir (has kmeans or umap)
+                has_markers = (
+                    os.path.isfile(os.path.join(analysis_dir, "kmeans_result.pkl")) or
+                    os.path.isdir(os.path.join(analysis_dir, "umap")) or
+                    os.path.isdir(os.path.join(analysis_dir, "kmeans"))
+                )
+                if not has_markers:
+                    continue
+
+                seen_analysis_names.add(entry)
+
+                # Parse zdim from name like "analysis_20" or "analysis_20_noreg"
+                zdim_parsed = None
+                if entry.startswith("analysis_"):
+                    parts = entry.split("_")
+                    for part in parts[1:]:
+                        try:
+                            zdim_parsed = int(part)
+                            break
+                        except ValueError:
+                            continue
+
+                # For bare "analyze" dirs, use the largest available zdim
+                if zdim_parsed is None:
+                    if info["available_zdims"]:
+                        zdim_parsed = max(info["available_zdims"])
+                    else:
+                        zdim_parsed = 20  # reasonable default
 
                 analysis = {
                     "name": entry,
@@ -896,9 +926,11 @@ echo "Completed at: $(date)"
                         })
 
                 # Plots and images
-                analysis["plots"] = _list_images(analysis_dir) + _list_images(
-                    os.path.join(analysis_dir, "umap")
-                )
+                analysis["plots"] = _list_images(analysis_dir)
+                for plot_subdir in ["umap", "PCA"]:
+                    analysis["plots"].extend(_list_images(
+                        os.path.join(analysis_dir, plot_subdir)
+                    ))
 
                 # Check for UMAP and k-means availability
                 umap_embedding = os.path.join(analysis_dir, "umap", "umap_embedding.pkl")
@@ -991,16 +1023,28 @@ echo "Completed at: $(date)"
             return None
 
     def _find_analysis_dir(self, job: Job, zdim: int) -> Optional[str]:
-        """Find the analysis directory for a given zdim."""
+        """Find the analysis directory for a given zdim.
+
+        Checks for both ``analysis_<zdim>`` directories and bare ``analyze/``
+        directories (which contain results for the largest available zdim).
+        """
         for search_dir in [job.output_dir, os.path.join(job.output_dir, "output")]:
             if not os.path.isdir(search_dir):
                 continue
+            # Prefer exact analysis_<zdim> match
             for entry in sorted(os.listdir(search_dir)):
-                if not entry.startswith(f"analysis_{zdim}"):
-                    continue
-                path = os.path.join(search_dir, entry)
-                if os.path.isdir(path):
-                    return path
+                if entry.startswith(f"analysis_{zdim}"):
+                    path = os.path.join(search_dir, entry)
+                    if os.path.isdir(path):
+                        return path
+        # Fall back to bare "analyze" dir (typically the largest zdim)
+        for search_dir in [job.output_dir, os.path.join(job.output_dir, "output")]:
+            analyze_dir = os.path.join(search_dir, "analyze")
+            if os.path.isdir(analyze_dir) and (
+                os.path.isfile(os.path.join(analyze_dir, "kmeans_result.pkl")) or
+                os.path.isdir(os.path.join(analyze_dir, "umap"))
+            ):
+                return analyze_dir
         return None
 
     def get_umap_data(self, job_id: str, zdim: int,
@@ -1175,7 +1219,7 @@ export PYTHONUNBUFFERED=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 {f'export PYTHONPATH="{repo_root}:${{PYTHONPATH:-}}"' if repo_root else ''}
 
-echo "PYTHONPATH=${PYTHONPATH:-}"
+echo "PYTHONPATH=${{PYTHONPATH:-}}"
 echo "which python: {python_path}"
 {python_path} -c "import recovar; print('recovar from:', recovar.__file__); from recovar.cuda_backproject import cuda_available; print('CUDA available:', cuda_available())" || echo "Pre-check failed"
 

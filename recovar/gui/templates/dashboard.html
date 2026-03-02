@@ -107,7 +107,8 @@
             {% elif job.status == 'running' %}bg-sky-400 animate-pulse
             {% elif job.status == 'queued' %}bg-amber-400 animate-pulse
             {% else %}bg-red-400{% endif %}"></span>
-          <h3 class="font-semibold text-white group-hover:text-sky-400 transition-colors truncate max-w-[200px]">
+          <h3 class="font-semibold text-white group-hover:text-sky-400 transition-colors truncate max-w-[200px]"
+              title="{{ job.name }}">
             {{ job.name }}
           </h3>
         </div>
@@ -156,7 +157,7 @@
           <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 font-medium">Results ready</span>
         </div>
         {% elif job.error %}
-        <span class="text-[11px] text-red-400 truncate max-w-[150px]">{{ job.error }}</span>
+        <span class="text-[11px] text-red-400 truncate max-w-[150px]" title="{{ job.error }}">{{ job.error }}</span>
         {% endif %}
       </div>
 
