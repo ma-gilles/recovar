@@ -14,7 +14,7 @@ import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, utils, jax_config
 from recovar.core import cubic_interpolation
-from recovar.core.configs import ForwardModelConfig, BatchData, ModelState, CovarianceOpts
+from recovar.core.configs import ForwardModelConfig, BatchData, DataIterator, ModelState, CovarianceOpts
 from recovar.heterogeneity import covariance_core
 from recovar.reconstruction import regularization, noise
 
@@ -421,10 +421,15 @@ def variance_relion_kernel_trilinear(
     volume_mask: jax.Array,
     image_mask: jax.Array,
     soften: int = 5,
+    Ft_y: jax.Array = None,
+    Ft_ctf: jax.Array = None,
+    Ft_im: jax.Array = None,
+    Ft_one: jax.Array = None,
 ):
     """Variance estimation via RELION-style trilinear kernel — Equinox API.
 
-    Replaces the 18-param ``variance_relion_style_triangular_kernel_batch_trilinear``.
+    Backprojects into half-volume accumulators (Ft_y, Ft_ctf, Ft_im, Ft_one).
+    Pass None to initialise from zero; pass an existing half-volume to accumulate.
     """
     images = batch_data.images
     ctf_params = batch_data.ctf_params
@@ -446,12 +451,9 @@ def variance_relion_kernel_trilinear(
         ) * CTF
         noise_p_variance_ctf = jnp.ones_like(images)
 
-    Ft_im = core.adjoint_slice_volume_by_trilinear(
-        jnp.abs(images) ** 2, rotation_matrices, config.image_shape, config.volume_shape
-    )
-    Ft_one = core.adjoint_slice_volume_by_trilinear(
-        noise_p_variance_ctf, rotation_matrices, config.image_shape, config.volume_shape
-    )
+    # Save pre-masking quantities for Ft_im and Ft_one backprojections.
+    img_power_full = jnp.abs(images) ** 2
+    cov_noise = jnp.zeros_like(images)
 
     if volume_mask is not None:
         image_mask = covariance_core.get_per_image_tight_mask(
@@ -472,21 +474,26 @@ def variance_relion_kernel_trilinear(
     if not config.premultiplied_ctf:
         images_squared *= CTF_squared
 
-    Ft_y = core.adjoint_slice_volume_by_trilinear(
-        images_squared, rotation_matrices, config.image_shape, config.volume_shape
-    )
-    Ft_ctf = core.adjoint_slice_volume_by_trilinear(
-        CTF_squared ** 2, rotation_matrices, config.image_shape, config.volume_shape
-    )
+    def _half(arr):
+        return fourier_transform_utils.full_image_to_half_image(arr, config.image_shape)
+
+    def _backproject(half_imgs, volume):
+        return core.adjoint_slice_volume_by_trilinear_from_half_images(
+            half_imgs, rotation_matrices, config.image_shape, config.volume_shape,
+            volume=volume, half_volume=True,
+        )
+
+    Ft_y = _backproject(_half(images_squared), Ft_y)
+    Ft_ctf = _backproject(_half(CTF_squared ** 2), Ft_ctf)
+    Ft_im = _backproject(_half(img_power_full), Ft_im)
+    Ft_one = _backproject(_half(noise_p_variance_ctf), Ft_one)
+
     return Ft_y, Ft_ctf, Ft_im, Ft_one
 
 
 @nvtx.annotate("variance_relion_style_triangular_kernel", color="yellow")
 def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, batch_size, image_subset=None, volume_mask=None, disc_type=''):
-
-    data_generator = experiment_dataset.get_image_subset_generator(batch_size=batch_size, subset_indices=image_subset)
-
-    # Construct config once (uses upsampled_volume_shape for variance estimation)
+    # Variance uses upsampled_volume_shape (not regular volume_shape).
     config = ForwardModelConfig(
         image_shape=tuple(experiment_dataset.image_shape),
         volume_shape=tuple(experiment_dataset.upsampled_volume_shape),
@@ -499,26 +506,26 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, b
         volume_mask_threshold=float(experiment_dataset.volume_mask_threshold),
     )
 
-    Ft_y, Ft_ctf, Ft_im, Ft_one = 0, 0, 0, 0
-    for batch, particles_ind, indices in data_generator:
-        batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask=False)
-        noise_variances = experiment_dataset.noise.get(indices)
-
-        batch_data = BatchData(
-            images=batch,
-            ctf_params=experiment_dataset.CTF_params[indices],
-            rotation_matrices=experiment_dataset.rotation_matrices[indices],
-            translations=experiment_dataset.translations[indices],
-            noise_variance=noise_variances,
-        )
-        Ft_y_b, Ft_ctf_b, Ft_im_b, Ft_one_b = variance_relion_kernel_trilinear(
+    # Full-spectrum noise needed for masked noise variance inside the kernel.
+    Ft_y, Ft_ctf, Ft_im, Ft_one = None, None, None, None
+    for batch_data in DataIterator(
+        experiment_dataset, batch_size,
+        noise_model=experiment_dataset.noise,
+        noise_half=False,
+        apply_process_images=True,
+        index_subset=image_subset,
+    ):
+        Ft_y, Ft_ctf, Ft_im, Ft_one = variance_relion_kernel_trilinear(
             config, batch_data, mean_estimate, volume_mask,
             experiment_dataset.image_stack.mask, soften=5,
+            Ft_y=Ft_y, Ft_ctf=Ft_ctf, Ft_im=Ft_im, Ft_one=Ft_one,
         )
-        Ft_y += Ft_y_b
-        Ft_ctf += Ft_ctf_b
-        Ft_im += Ft_im_b
-        Ft_one += Ft_one_b
+
+    if Ft_y is not None:
+        Ft_y = fourier_transform_utils.half_volume_to_full_volume(Ft_y, config.volume_shape)
+        Ft_ctf = fourier_transform_utils.half_volume_to_full_volume(Ft_ctf, config.volume_shape)
+        Ft_im = fourier_transform_utils.half_volume_to_full_volume(Ft_im, config.volume_shape)
+        Ft_one = fourier_transform_utils.half_volume_to_full_volume(Ft_one, config.volume_shape)
 
     return Ft_ctf, Ft_y, Ft_one, Ft_im
 
