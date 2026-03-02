@@ -1852,8 +1852,7 @@ function jobExplorer() {
           throw new Error('Mol* library not loaded. Check that molstar.js is served correctly.');
         }
 
-        // Create viewer if needed (and wait for full initialization)
-        let viewerJustCreated = false;
+        // Create viewer if needed
         if (!this.viewer) {
           const viewer = await molstar.Viewer.create(el, {
             layoutIsExpanded: false,
@@ -1878,46 +1877,23 @@ function jobExplorer() {
 
           this.viewer = viewer;
           this.viewerTarget = viewportId;
-          viewerJustCreated = true;
           console.log('[Volume] Mol* viewer created');
         }
 
-        // Fetch volume data ourselves (reliable over SSH tunnel)
-        console.log('[Volume] Fetching:', url);
-        const volResp = await fetch(url);
-        if (!volResp.ok) throw new Error('Volume fetch failed: HTTP ' + volResp.status);
-        const volData = await volResp.arrayBuffer();
-        console.log('[Volume] Downloaded:', volData.byteLength, 'bytes');
-
-        // If viewer was just created, wait for the internal task queue to settle.
-        // Mol* initialization spawns async React rendering and WebGL tasks.
-        // loadVolumeFromUrl uses dataTransaction which queues a task — if
-        // initialization tasks are still pending, it can deadlock.
-        if (viewerJustCreated) {
-          console.log('[Volume] Waiting for viewer initialization to settle...');
-          await new Promise(r => setTimeout(r, 1500));
-        }
-
-        // Try loadVolumeFromUrl — the standard volume loading API.
-        // Uses CCP4 format (MRC2014 is CCP4-compatible).
+        // Use isLazy: true to bypass the hanging dataTransaction.
+        // isLazy uses build().commit() (simple state tree update) instead
+        // of dataTransaction which wraps in runTask(Se.create(...)) and hangs.
+        // The volume data is fetched lazily when the viewport renders.
         const isoConfigs = [
           { type: 'relative', value: this.isoLevel, color: color, alpha: this.isoAlpha },
         ];
-        const blobUrl = URL.createObjectURL(new Blob([volData], { type: 'application/octet-stream' }));
-        console.log('[Volume] Calling loadVolumeFromUrl...');
-        try {
-          await Promise.race([
-            this.viewer.loadVolumeFromUrl(
-              { url: blobUrl, format: 'ccp4', isBinary: true },
-              isoConfigs,
-              { entryId: this.currentVolumeName }
-            ),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Volume loading timed out (30s)')), 30000)),
-          ]);
-          console.log('[Volume] loadVolumeFromUrl complete!');
-        } finally {
-          URL.revokeObjectURL(blobUrl);
-        }
+        console.log('[Volume] Loading via loadVolumeFromUrl (isLazy)...');
+        await this.viewer.loadVolumeFromUrl(
+          { url, format: 'ccp4', isBinary: true },
+          isoConfigs,
+          { entryId: this.currentVolumeName, isLazy: true }
+        );
+        console.log('[Volume] Lazy volume node created');
 
         // Auto-focus camera
         try {

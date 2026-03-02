@@ -140,10 +140,18 @@
 
       // Step 5: Check registered formats
       log('--- Data Formats ---');
-      const formats = viewer.plugin.dataFormats;
-      for (const fmt of ['ccp4', 'mrc', 'dsn6', 'dscif', 'map']) {
-        const has = formats.get(fmt);
-        log(`  Format "${fmt}": ${has ? 'registered' : 'NOT registered'}`, has ? 'ok' : 'warn');
+      try {
+        const formats = viewer.plugin.dataFormats;
+        for (const fmt of ['ccp4', 'mrc', 'dsn6', 'dscif', 'map']) {
+          try {
+            const has = formats.get(fmt);
+            log(`  Format "${fmt}": ${has ? 'registered' : 'NOT registered'}`, has ? 'ok' : 'warn');
+          } catch (fmtErr) {
+            log(`  Format "${fmt}": ERROR - ${fmtErr.message}`, 'err');
+          }
+        }
+      } catch (e) {
+        log('Data formats check error: ' + e.message, 'err');
       }
 
       // Step 6: Load volume
@@ -175,64 +183,46 @@
         return;
       }
 
-      // Step 6b: Wait for viewer to fully settle before loading
-      log('Waiting 1.5s for viewer initialization to settle...');
-      await new Promise(r => setTimeout(r, 1500));
-
-      // Method 1: loadVolumeFromUrl with blob (after settle delay)
-      log('Method 1: loadVolumeFromUrl with blob URL (after settle)...');
-      const blob1 = new Blob([volData], { type: 'application/octet-stream' });
-      const blobUrl1 = URL.createObjectURL(blob1);
+      // Method 1: isLazy (bypasses dataTransaction which hangs)
+      log('Method 1: loadVolumeFromUrl with isLazy=true...');
       const t1 = performance.now();
       try {
         await Promise.race([
           viewer.loadVolumeFromUrl(
-            { url: blobUrl1, format: 'ccp4', isBinary: true },
+            { url, format: 'ccp4', isBinary: true },
             [{ type: 'relative', value: 1.5, color: 0x38bdf8, alpha: 0.85 }],
-            { entryId: 'test-volume' }
+            { entryId: 'test-volume', isLazy: true }
           ),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('loadVolumeFromUrl timed out after 30s')), 30000)),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('isLazy timed out after 15s')), 15000)),
         ]);
         const loadMs = (performance.now() - t1).toFixed(0);
-        log(`loadVolumeFromUrl completed in ${loadMs}ms!`, 'ok');
+        log(`isLazy completed in ${loadMs}ms`, 'ok');
       } catch (e) {
         const loadMs = (performance.now() - t1).toFixed(0);
         log(`Method 1 FAILED after ${loadMs}ms: ` + e.message, 'err');
+      }
 
-        // Method 2: loadFiles with File object
-        log('Method 2: loadFiles with File object...');
-        const file = new File([volData], 'volume.mrc', { type: 'application/octet-stream' });
-        const t2 = performance.now();
-        try {
-          await Promise.race([
-            viewer.loadFiles([file]),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('loadFiles timed out after 30s')), 30000)),
-          ]);
-          const fileMs = (performance.now() - t2).toFixed(0);
-          log(`loadFiles completed in ${fileMs}ms`, 'ok');
-        } catch (e2) {
-          log('Method 2 also FAILED: ' + e2.message, 'err');
-        }
+      // Wait a moment for lazy loading to kick in
+      log('Waiting 3s for lazy loading to fetch data...');
+      await new Promise(r => setTimeout(r, 3000));
 
-        // Method 3: loadVolumeFromUrl with direct API URL
-        log('Method 3: loadVolumeFromUrl with direct URL...');
-        const t3 = performance.now();
-        try {
-          await Promise.race([
-            viewer.loadVolumeFromUrl(
-              { url, format: 'ccp4', isBinary: true },
-              [{ type: 'relative', value: 1.5, color: 0x38bdf8, alpha: 0.85 }],
-              { entryId: 'test-volume-3' }
-            ),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('direct URL timed out after 30s')), 30000)),
-          ]);
-          const directMs = (performance.now() - t3).toFixed(0);
-          log(`Direct URL loaded in ${directMs}ms!`, 'ok');
-        } catch (e3) {
-          log('Method 3 also FAILED: ' + e3.message, 'err');
-        }
-      } finally {
-        URL.revokeObjectURL(blobUrl1);
+      // Method 2: loadVolumeFromUrl normal (known to hang — 10s timeout)
+      log('Method 2: loadVolumeFromUrl normal (will likely hang)...');
+      const t2 = performance.now();
+      try {
+        await Promise.race([
+          viewer.loadVolumeFromUrl(
+            { url, format: 'ccp4', isBinary: true },
+            [{ type: 'relative', value: 1.5, color: 0x38bdf8, alpha: 0.85 }],
+            { entryId: 'test-volume-2' }
+          ),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('normal loadVolumeFromUrl timed out after 10s')), 10000)),
+        ]);
+        const loadMs2 = (performance.now() - t2).toFixed(0);
+        log(`Normal load completed in ${loadMs2}ms!`, 'ok');
+      } catch (e2) {
+        const loadMs2 = (performance.now() - t2).toFixed(0);
+        log(`Method 2 FAILED after ${loadMs2}ms: ` + e2.message, 'err');
       }
 
       // Step 7: Camera reset
