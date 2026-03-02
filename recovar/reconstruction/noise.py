@@ -70,6 +70,48 @@ class VariableRadialNoiseModel():
         self.noise_variance_radials = noise_variance_radials
 
 
+class ConstantNoiseModel:
+    """Wraps a pre-expanded noise array that is the same for every image.
+
+    Satisfies the same ``get`` / ``get_half`` interface as the radial models so
+    callers can treat all noise sources uniformly.
+    """
+
+    def __init__(self, noise_array):
+        self._arr = noise_array
+
+    def get(self, *args, **kwargs):
+        return self._arr
+
+    def get_half(self, *args, **kwargs):
+        return self._arr
+
+
+def as_noise_model(cov_noise, image_shape):
+    """Convert a raw noise array into a noise model with a ``get_half`` method.
+
+    Parameters
+    ----------
+    cov_noise : array-like
+        1-D radial shell variances *or* a pre-expanded (1, pixels) array.
+    image_shape : tuple of int
+
+    Returns
+    -------
+    RadialNoiseModel or ConstantNoiseModel
+    """
+    import numpy as _np
+    arr = _np.asarray(cov_noise)
+    half_pixel_count = image_shape[0] * (image_shape[1] // 2 + 1)
+    pixel_count = image_shape[0] * image_shape[1]
+    if arr.ndim == 1 and arr.size not in (pixel_count, half_pixel_count):
+        # Pure radial: delegate to RadialNoiseModel which knows how to build
+        # the half-spectrum on demand.
+        return RadialNoiseModel(arr, image_shape)
+    # Already expanded (full or half image): return as constant noise.
+    return ConstantNoiseModel(cov_noise)
+
+
 def to_batched_pixel_noise(noise_variances, image_shape, batch_size=None):
     """Normalize noise variance into shape (B, D*D).
 

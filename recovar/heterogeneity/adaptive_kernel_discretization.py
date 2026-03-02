@@ -24,6 +24,59 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
 
+
+@eqx.filter_jit
+def _heterogeneity_kernel_batch_from_fft(
+    config: ForwardModelConfig,
+    batch: BatchData,
+    Ft_y: jax.Array = None,
+    Ft_ctf: jax.Array = None,
+):
+    """Backproject pre-FFTed images with 2x-upsampled CTF for aliasing suppression.
+
+    Like :func:`relion_kernel_batch_from_fft` but the CTF weight accumulator
+    (Ft_ctf) is built from CTF² evaluated on a 2x-upsampled image grid and
+    box-filtered back to native resolution, reducing aliasing in the
+    heterogeneity kernel.
+    """
+    from recovar.core.geometry import translate_half_images
+    from recovar.reconstruction import noise as noise_mod
+
+    half_images = fourier_transform_utils.full_image_to_half_image(batch.images, config.image_shape)
+    half_images = translate_half_images(half_images, batch.translations, config.image_shape)
+    noise_half = noise_mod.to_batched_half_pixel_noise(
+        batch.noise_variance, config.image_shape, batch_size=half_images.shape[0]
+    )
+    half_images = half_images / noise_half
+
+    Ft_y = core_forward.adjoint_forward_model(
+        config, half_images, batch.ctf_params, batch.rotation_matrices,
+        skip_ctf=config.premultiplied_ctf,
+        volume=Ft_y, half_image=True, half_volume=True,
+    )
+
+    # CTF² on 2x-upsampled grid → box-filter → downsample → half-spectrum
+    upsample_factor = 2
+    upsampled_shape = tuple(np.array(config.image_shape) * upsample_factor)
+    ctf_up = config.CTF_fun(batch.ctf_params, upsampled_shape, config.voxel_size) ** 2
+    bsz = ctf_up.shape[0]
+    kernel_size = upsample_factor + upsample_factor // 2
+    box_kernel = jnp.ones((1, 1, kernel_size, kernel_size), dtype=ctf_up.dtype) / kernel_size ** 2
+    ctf_up = jax.lax.conv_general_dilated(
+        ctf_up.reshape(bsz, 1, *upsampled_shape),
+        box_kernel, window_strides=(1, 1), padding='SAME',
+        dimension_numbers=('NCHW', 'IOHW', 'NCHW'),
+    ).squeeze(1)[:, ::upsample_factor, ::upsample_factor]
+    ctf_half = fourier_transform_utils.full_image_to_half_image(
+        ctf_up.reshape(bsz, -1), config.image_shape
+    ) / noise_half
+
+    Ft_ctf = core_forward.adjoint_forward_model(
+        config, ctf_half, batch.ctf_params, batch.rotation_matrices,
+        skip_ctf=True, volume=Ft_ctf, half_image=True, half_volume=True,
+    )
+    return Ft_y, Ft_ctf
+
 def make_X_mat(rotation_matrices, volume_shape, image_shape, pol_degree = 0, dtype = np.float32):
 
     grid_point_vec_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape )
@@ -976,7 +1029,7 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
 
     return estimates
 
-def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola", use_upsampled_ctf = True, upsampling_factor=None):
+def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola", upsampling_factor=None):
 
     estimates = []
 
@@ -1015,10 +1068,8 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
                 translations=experiment_dataset.translations[indices],
                 noise_variance=experiment_dataset.noise.get(indices),
             )
-            Ft_y_acc, Ft_ctf_acc = relion_functions.relion_kernel_batch_from_fft(
-                config, batch_data,
-                use_upsampled_ctf=use_upsampled_ctf,
-                Ft_y=Ft_y_acc, Ft_ctf=Ft_ctf_acc,
+            Ft_y_acc, Ft_ctf_acc = _heterogeneity_kernel_batch_from_fft(
+                config, batch_data, Ft_y=Ft_y_acc, Ft_ctf=Ft_ctf_acc,
             )
 
         if Ft_y_acc is not None:
