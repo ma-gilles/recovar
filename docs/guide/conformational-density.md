@@ -6,13 +6,25 @@ RECOVAR can estimate the probability density of conformations in the latent spac
 - Identification of stable conformational states
 - High-density trajectory computation
 
+!!! tip "Worked example"
+    The [Tutorial](tutorial.md#step-3-estimate-conformational-density) demonstrates conformational density estimation on EMPIAR-10180 (spliceosome), including trajectory computation through the density landscape.
+
 ## Estimating density
 
 ```bash
-recovar estimate_conformational_density output -o density_output
+recovar estimate_conformational_density output --pca_dim=4 --z_dim_used=4
 ```
 
-This produces density estimates in the latent space.
+This deconvolves the particle distribution in latent space to produce density estimates at multiple regularization levels. The output includes a recommended "knee" regularization (`deconv_density_knee.pkl`) that balances noise suppression with resolution.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--pca_dim` | 4 | PCA dimensions for density estimation |
+| `--z_dim_used` | Auto | Latent dimension to use |
+| `--percentile_reject` | 10 | Reject % of data with large covariance |
+
+!!! note
+    Runtime scales exponentially with `--pca_dim`. Keep it at 4 or below.
 
 ## Estimating stable states
 
@@ -35,3 +47,5 @@ recovar compute_trajectory output -o trajectory --zdim=10 \
 
 Without `--density`, trajectories follow straight lines in latent space. With density, they curve to follow high-density (low free-energy) regions.
 
+!!! tip "GUI alternative"
+    In the GUI's latent space explorer, you can select two points on the scatter plot to compute a trajectory interactively. See the [GUI Guide](gui.md#latent-space-explorer).

@@ -52,6 +52,9 @@ You can create a focus mask in UCSF Chimera or ChimeraX:
 
 See [cryoSPARC's guide on mask generation](https://guide.cryosparc.com/processing-data/tutorials-and-case-studies/mask-selection-and-generation-in-ucsf-chimera) for step-by-step instructions.
 
+!!! tip "GUI mask selection"
+    In the [web GUI](gui.md), you can browse and select mask files when creating a pipeline job — or choose `from_halfmaps` / `sphere` from a dropdown.
+
 ## Mask dilation
 
 To expand a mask by a few pixels:

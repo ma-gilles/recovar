@@ -6,6 +6,9 @@ RECOVAR can identify which images contributed to a particular feature in a gener
 - Re-importing selected particles into RELION or cryoSPARC
 - Understanding which particles contribute to observed features
 
+!!! tip "Worked example"
+    The [Tutorial](tutorial.md#step-3-extract-a-clean-subset) demonstrates subset extraction on EMPIAR-10076, where an outlier cluster is identified and excluded before re-running the pipeline on the cleaned subset.
+
 ## Based on volume features
 
 The `extract_image_subset` command identifies images that produced a particular region of a volume.

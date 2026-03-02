@@ -2,6 +2,9 @@
 
 RECOVAR includes tools for detecting junk particles and outliers in your dataset.
 
+!!! tip "Manual outlier detection via k-means"
+    A common approach is to run `recovar analyze` with k-means clustering, then inspect the PC scatter plots for isolated clusters. The [Tutorial](tutorial.md#step-2-analyze-results) demonstrates this on EMPIAR-10076: cluster 0 (1.3% of particles) is visibly separated from the main body and is removed using `extract_image_subset_from_kmeans` before re-running the pipeline.
+
 ## Junk particle detection
 
 ```bash
