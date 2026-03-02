@@ -14,70 +14,77 @@ from recovar import utils
 
 logger = logging.getLogger(__name__)
 
+# Module-level JIT kernels — compiled once, reused across calls.
+_conj_t_matmul = jax.jit(lambda y, x: jnp.conj(y).T @ x)
+_gram = jax.jit(lambda x: jnp.conj(x).T @ x)
+_matmul = jax.jit(lambda x, y: x @ y)
+
+
 def batch_st_end(k, batch_size, n_rows):
     batch_st = int(k * batch_size)
-    batch_end = int(np.min( [(k+1) * batch_size, n_rows]))
+    batch_end = int(np.min([(k+1) * batch_size, n_rows]))
     return batch_st, batch_end
 
-def blockwise_Y_T_X(Y,X, batch_size = None, memory_to_use = 10):
-    # X and Y are tall and skinny
+def blockwise_Y_T_X(Y, X, batch_size=None, memory_to_use=10):
+    # X and Y are tall and skinny; result Y^T @ X is small.
     if batch_size is None:
         size_of_X = utils.get_size_in_gb(X)
         size_of_Y = utils.get_size_in_gb(Y)
         n_blocks = np.ceil(4 * (size_of_X + size_of_Y) / memory_to_use).astype(int)
         batch_size = np.floor(X.shape[0] / n_blocks)
-        
+
     n_rows = X.shape[0]
-    YX = jnp.zeros_like(X, shape =[Y.shape[-1], X.shape[-1]])
-    square_jit = jax.jit( lambda y, x: jnp.conj(y).T @ x)
-    logger.info("Y^T @ X %d blocks", int(np.ceil(n_rows/batch_size)))
-    for k in range(0, int(np.ceil(n_rows/batch_size))):
+    YX = jnp.zeros((Y.shape[-1], X.shape[-1]), dtype=X.dtype)
+    n_blocks = int(np.ceil(n_rows / batch_size))
+    logger.info("Y^T @ X %d blocks", n_blocks)
+    for k in range(n_blocks):
         batch_st, batch_end = batch_st_end(k, batch_size, n_rows)
-        YX += square_jit(Y[batch_st:batch_end], X[batch_st:batch_end])
+        YX += _conj_t_matmul(Y[batch_st:batch_end], X[batch_st:batch_end])
     return np.array(YX)
 
 
-def blockwise_X_T_X(X, batch_size = None, memory_to_use = 10):
-    # X
+def blockwise_X_T_X(X, batch_size=None, memory_to_use=10):
+    # Result X^T @ X is small (cols × cols); accumulate on device.
     if batch_size is None:
         size_of_X = utils.get_size_in_gb(X)
         n_blocks = np.ceil(size_of_X / memory_to_use).astype(int)
         batch_size = np.floor(X.shape[0] / n_blocks)
-        
+
     n_rows = X.shape[0]
-    XX = jnp.zeros_like(X, shape =[X.shape[-1], X.shape[-1]])
-    square_jit = jax.jit( lambda x: jnp.conj(x).T @ x)
-    logger.info("X^T @ X in %d blocks", int(np.ceil(n_rows / batch_size)))
+    XX = jnp.zeros((X.shape[-1], X.shape[-1]), dtype=X.dtype)
+    n_blocks = int(np.ceil(n_rows / batch_size))
+    logger.info("X^T @ X in %d blocks", n_blocks)
 
-    for k in range(0, int(np.ceil(n_rows/batch_size))):
+    for k in range(n_blocks):
         batch_st, batch_end = batch_st_end(k, batch_size, n_rows)
-        Z = jnp.array(X[batch_st:batch_end])
-        XX += square_jit(Z)
+        # JAX auto-transfers the numpy slice; no need for explicit jnp.array()
+        XX += _gram(X[batch_st:batch_end])
 
-    return np.array(XX)        
-            
+    return np.array(XX)
 
-def blockwise_A_X(A, X, batch_size = None, memory_to_use = 10):
+
+def blockwise_A_X(A, X, batch_size=None, memory_to_use=10):
     if batch_size is None:
         size_of_X = utils.get_size_in_gb(X)
         usable_memory = memory_to_use - size_of_X
-        max_item_size = (A[0,0] * X[0,0]).itemsize
+        max_item_size = (A[0, 0] * X[0, 0]).itemsize
 
-        size_of_A = A.shape[0]* ( np.max([A.shape[1], X.shape[1]])) * max_item_size / 1e9
-        n_blocks = np.ceil( 4 * size_of_A / usable_memory).astype(int)
+        size_of_A = A.shape[0] * (np.max([A.shape[1], X.shape[1]])) * max_item_size / 1e9
+        n_blocks = np.ceil(4 * size_of_A / usable_memory).astype(int)
         batch_size = np.floor(A.shape[0] / n_blocks)
-        
+
     n_rows = A.shape[0]
-    # Compute the bottom of fraction.
-    Z = np.zeros_like(A, shape = [A.shape[0], X.shape[-1]])
-    utils.report_memory_device(logger =logger)
-    X = jnp.array(X)
-    
-    mat_mat_jit = jax.jit( lambda x, y: x @ y)
-    logger.info("A@X in %d blocks", int(np.ceil(n_rows/batch_size)))
-    for k in range(0, int(np.ceil(n_rows/batch_size))):
+    # Output is large (n_rows × X.cols) — must stay on CPU.
+    Z = np.zeros((A.shape[0], X.shape[-1]), dtype=np.result_type(A.dtype, X.dtype))
+    utils.report_memory_device(logger=logger)
+    # Transfer X once; it stays resident on device for all blocks.
+    X_dev = jnp.array(X)
+
+    n_blocks = int(np.ceil(n_rows / batch_size))
+    logger.info("A@X in %d blocks", n_blocks)
+    for k in range(n_blocks):
         batch_st, batch_end = batch_st_end(k, batch_size, n_rows)
-        Z[batch_st:batch_end] = np.array(mat_mat_jit( A[batch_st:batch_end],  X))
+        Z[batch_st:batch_end] = np.array(_matmul(A[batch_st:batch_end], X_dev))
     return Z        
 
 
@@ -121,19 +128,21 @@ def thin_svd(X, np = np, epsilon = 1e-8):
     return np.flip(U, axis =1), np.flip(sigma), np.flip(V, axis =1)
 
 
-def randomized_svd(A, n_pcs = 200):
-    '''
-    For some reason, the built in svd seems to allocate a lot more memory than necessary.
-    '''
+_qr_jit = jax.jit(jnp.linalg.qr)
+_svd_full_jit = jax.jit(lambda X: jnp.linalg.svd(X, full_matrices=True))
+
+
+def randomized_svd(A, n_pcs=200):
+    """Randomized SVD for large matrices that don't fit on GPU."""
     n_pcs = n_pcs if n_pcs < A.shape[1] else A.shape[1]
     gauss = np.random.randn(A.shape[1], n_pcs)
-    Agauss = blockwise_A_X(A, gauss, memory_to_use = utils.get_gpu_memory_total()//3)
-    Q, _ = jax.jit(jnp.linalg.qr)(Agauss)
+    Agauss = blockwise_A_X(A, gauss, memory_to_use=utils.get_gpu_memory_total() // 3)
+    Q, _ = _qr_jit(Agauss)
     logger.info("QR done")
-    Y = blockwise_Y_T_X(Q,A) #np.conj(Q).T @ A
+    Y = blockwise_Y_T_X(Q, A)
     logger.info("Q^TA done")
-    U, S, Vh = jax.jit(lambda X: jnp.linalg.svd(X, full_matrices=True))(Y)
-    QU = blockwise_A_X(Q, U, memory_to_use = utils.get_gpu_memory_total()//3)
+    U, S, Vh = _svd_full_jit(Y)
+    QU = blockwise_A_X(Q, U, memory_to_use=utils.get_gpu_memory_total() // 3)
 
     return QU, S, Vh
 
@@ -155,22 +164,28 @@ def dft3(x, vec_shape):
     x = x.reshape([-1, x.shape[-1]])
     return x
 def batch_idft3(x, vec_shape, batch_size):
-    x_out = np.zeros_like(x) 
+    x_out = np.empty_like(x)
     n_tot = x.shape[-1]
-    logger.info("batch_idft3 in %d blocks", int(np.ceil(n_tot/batch_size)))
-    for k in range(0, int(np.ceil(n_tot/batch_size))):
+    n_blocks = int(np.ceil(n_tot / batch_size))
+    logger.info("batch_idft3 in %d blocks", n_blocks)
+    for k in range(n_blocks):
         batch_st, batch_end = batch_st_end(k, batch_size, n_tot)
-        x_out[:,batch_st:batch_end] = np.array(idft3(x[:,batch_st:batch_end], vec_shape = vec_shape))
+        x_out[:, batch_st:batch_end] = jax.device_get(
+            idft3(x[:, batch_st:batch_end], vec_shape=vec_shape)
+        )
     return x_out
-    
-    
+
+
 def batch_dft3(x, vec_shape, batch_size):
-    x_out = np.zeros_like(x, dtype = 'complex64')
+    x_out = np.empty(x.shape, dtype=np.complex64)
     n_tot = x.shape[-1]
-    logger.info("batch_dft3 in %d blocks", int(np.ceil(n_tot/batch_size)))
-    for k in range(0, int(np.ceil(n_tot/batch_size))):
+    n_blocks = int(np.ceil(n_tot / batch_size))
+    logger.info("batch_dft3 in %d blocks", n_blocks)
+    for k in range(n_blocks):
         batch_st, batch_end = batch_st_end(k, batch_size, n_tot)
-        x_out[:,batch_st:batch_end] = np.array(dft3(x[:,batch_st:batch_end], vec_shape = vec_shape))
+        x_out[:, batch_st:batch_end] = jax.device_get(
+            dft3(x[:, batch_st:batch_end], vec_shape=vec_shape)
+        )
     return x_out
 
 
