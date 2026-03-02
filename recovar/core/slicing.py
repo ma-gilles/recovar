@@ -144,6 +144,12 @@ def slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, di
     order = decide_order(disc_type)
     if order <= 1 and _check_cuda() and _is_complex(volume) and not _is_jvp_tracer(volume):
         return _slice_volume_by_map_cuda(volume, rotation_matrices, image_shape, volume_shape, order)
+    if order <= 1 and not _is_jvp_tracer(volume):
+        logger.warning(
+            "slice_volume_by_map: CUDA kernel not available (cuda=%s) — "
+            "falling back to slower JAX implementation.",
+            _check_cuda(),
+        )
     return _slice_volume_by_map_jax(volume, rotation_matrices, image_shape, volume_shape, disc_type)
 
 
@@ -176,8 +182,7 @@ def adjoint_slice_volume_by_map(slices, rotation_matrices, image_shape, volume_s
     half_image : bool
         If True, *slices* are rfft-packed half-spectrum images with shape
         ``(n, H * (W // 2 + 1))``.  The CUDA kernel scatters each pixel
-        and its Hermitian conjugate automatically.  The JAX fallback expands
-        half-images to full before applying the adjoint.
+        and its Hermitian conjugate automatically.
     half_volume : bool
         If True, the output volume uses rfft-packed layout with shape
         ``(N0 * N1 * (N2 // 2 + 1),)``.
@@ -185,35 +190,32 @@ def adjoint_slice_volume_by_map(slices, rotation_matrices, image_shape, volume_s
     order = decide_order(disc_type)
     if order <= 1 and _check_cuda():
         from recovar.cuda_backproject import backproject as cuda_backproject
-        # CUDA kernel requires complex input; auto-cast real → complex
         if not _is_complex(slices):
-            cdtype = jnp.result_type(slices, jnp.complex64)
-            slices = slices.astype(cdtype)
+            slices = slices.astype(jnp.result_type(slices, jnp.complex64))
         if volume is None:
-            if half_volume:
-                half_vol_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
-                volume = jnp.zeros(np.prod(half_vol_shape), dtype=slices.dtype)
-            else:
-                volume = jnp.zeros(np.prod(volume_shape), dtype=slices.dtype)
+            vol_shape = (
+                fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+                if half_volume else volume_shape
+            )
+            volume = jnp.zeros(np.prod(vol_shape), dtype=slices.dtype)
         return cuda_backproject(volume, slices, rotation_matrices, image_shape, volume_shape,
                                 order=order, half_image=half_image, half_volume=half_volume)
+    logger.warning(
+        "adjoint_slice_volume_by_map: CUDA kernel not available (order=%d, cuda=%s) — "
+        "falling back to slower JAX implementation.",
+        order, _check_cuda(),
+    )
+    # JAX fallback: expand half-images once (CUDA handles this natively via Hermitian scatter)
+    if half_image:
+        slices = fourier_transform_utils.half_image_to_full_image(slices, image_shape)
     if order > 1:
         if half_volume:
             raise NotImplementedError("half_volume=True with cubic interpolation requires CUDA kernels")
-        if half_image:
-            slices = fourier_transform_utils.half_image_to_full_image(slices, image_shape)
         result = _adjoint_slice_volume_by_map_jax(slices, rotation_matrices, image_shape, volume_shape, disc_type)
-        return result if volume is None else result + volume
-    # JAX fallback for nearest/linear.
-    if half_image:
-        slices = fourier_transform_utils.half_image_to_full_image(slices, image_shape)
-        half_image = False
-    if half_volume:
-        result = _adjoint_slice_volume_by_map_half_jax(
-            slices, rotation_matrices, image_shape, volume_shape, disc_type, half_image=False, half_volume=True
-        )
     else:
-        result = _adjoint_slice_volume_by_map_jax(slices, rotation_matrices, image_shape, volume_shape, disc_type)
+        result = _adjoint_slice_volume_by_map_half_jax(
+            slices, rotation_matrices, image_shape, volume_shape, disc_type, half_image=False, half_volume=half_volume
+        )
     return result if volume is None else result + volume
 
 
