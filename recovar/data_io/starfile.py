@@ -6,7 +6,9 @@ Supports both RELION 3.0 (single data table) and RELION 3.1 (with optics table).
 Equivalent to cryodrgn/starfile
 """
 
+import functools
 import logging
+import os
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -16,57 +18,73 @@ from typing_extensions import Self
 logger = logging.getLogger(__name__)
 
 
+@functools.lru_cache(maxsize=8)
+def _read_star_cached(filepath: str, mtime: float) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
+    """Cached implementation — filepath + mtime together are the cache key.
+
+    Including mtime means any write to the file automatically invalidates the
+    cached entry (new mtime → cache miss → re-parse).  The stat() call in
+    read_star() is negligible compared to parsing.
+    """
+    return _parse_star_file(filepath)
+
+
 def read_star(filepath: str) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
     """Parse a RELION .star file into main data and optional optics tables.
-    
+
+    Results are cached by normalised absolute path + file mtime so that
+    repeated calls for the same unchanged file (e.g. once for halfsets, once
+    per halfset for CTF/poses/image loading) incur only one disk read, while
+    any write to the file automatically triggers a re-parse.
+
     Args:
         filepath: Path to .star file
-        
+
     Returns:
         Tuple of (main_data, optics_data) where optics_data is None for RELION 3.0
     """
+    abs_path = os.path.realpath(os.path.abspath(filepath))
+    mtime = os.path.getmtime(abs_path)
+    main_df, optics_df = _read_star_cached(abs_path, mtime)
+    # Return copies so callers can mutate without corrupting the shared cache entry.
+    return main_df.copy(), (optics_df.copy() if optics_df is not None else None)
+
+
+def _parse_star_file(filepath: str) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
+    """Internal: read and parse a .star file (no caching)."""
     if not filepath.endswith('.star'):
         raise ValueError(f"Expected .star file, got: {filepath}")
-    
-    # Storage for all data blocks found
-    data_blocks = {}
-    current_block_name = None
-    
+
+    data_blocks: dict = {}
+    current_block_name: Optional[str] = None
+
     with open(filepath, 'r') as f:
         for line in f:
             line = line.strip()
-            
-            # Start of a new data block
+
             if line.startswith('data_'):
                 current_block_name = line
                 if current_block_name in data_blocks:
                     raise ValueError(f"Duplicate data block: {current_block_name}")
                 data_blocks[current_block_name] = {'columns': [], 'rows': []}
-            
-            # Column headers (field names)
+
             elif line.startswith('_'):
                 if current_block_name is None:
                     continue
-                field_name = line.split()[0]
-                data_blocks[current_block_name]['columns'].append(field_name)
-            
-            # Data rows
+                data_blocks[current_block_name]['columns'].append(line.split()[0])
+
             elif line and current_block_name is not None:
-                # Skip comments and loop declarations
-                if not line.startswith('#') and not line.startswith('loop_'):
+                if not line.startswith('#') and line != 'loop_':
                     values = line.split()
                     if values:
                         data_blocks[current_block_name]['rows'].append(values)
-    
-    # Convert to DataFrames
-    dfs = {}
+
+    dfs: dict = {}
     for block_name, block_data in data_blocks.items():
         if not block_data['rows']:
             continue
         cols = block_data['columns']
 
-        # Validate row lengths explicitly before constructing ndarray so we
-        # raise a deterministic parse error instead of NumPy ragged errors.
         row_lengths = [len(row) for row in block_data['rows']]
         if len(set(row_lengths)) != 1:
             raise ValueError(f"Inconsistent row lengths in {block_name}")
@@ -77,28 +95,18 @@ def read_star(filepath: str) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
             )
 
         rows_array = np.array(block_data['rows'])
-        
-        # Validation
-        if rows_array.ndim != 2:
-            raise ValueError(f"Inconsistent row lengths in {block_name}")
-        if rows_array.shape[1] != len(cols):
-            raise ValueError(
-                f"Column count mismatch in {block_name}: "
-                f"{rows_array.shape[1]} values vs {len(cols)} headers"
-            )
-        
         dfs[block_name] = pd.DataFrame(rows_array, columns=cols)
-    
+
     # Extract optics table if present
     optics_df = dfs.pop('data_optics', None)
-    
+
     # Find main data table (largest non-optics table)
     main_df = None
     for name, df in dfs.items():
         if name.startswith('data_') and name != 'data_optics':
             if main_df is None or len(df) > len(main_df):
                 main_df = df
-    
+
     if main_df is None:
         raise ValueError(f"No data table found in {filepath}")
 
@@ -242,11 +250,9 @@ class StarFile:
         if self.has_optics and field in self.data_optics.columns:
             # Map optics group to each particle
             if '_rlnOpticsGroup' in self.df.columns:
-                optics_groups = self.df['_rlnOpticsGroup'].values
-                values = np.array([
-                    self.data_optics.loc[group, field] 
-                    for group in optics_groups
-                ])
+                # Vectorised: pandas .map() is O(N) in C vs an O(N) Python loop
+                optics_series = self.data_optics[field]
+                values = self.df['_rlnOpticsGroup'].map(optics_series).to_numpy()
             else:
                 # Single optics group for all particles
                 single_value = self.data_optics[field].iloc[0]
