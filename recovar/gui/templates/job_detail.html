@@ -365,12 +365,105 @@
                   </template>
                   <span class="text-xs" :class="task.status === 'completed' ? 'text-emerald-400' : task.status === 'failed' ? 'text-red-400' : 'text-sky-400'"
                         x-text="task.label + ' — ' + task.status"></span>
-                  <template x-if="task.status === 'completed' && task.volumes">
+                  <template x-if="task.status === 'completed' && task.volumes && task.volumes.length > 0">
                     <div class="flex gap-1 ml-auto">
                       <template x-for="vol in task.volumes" :key="vol.path">
                         <button @click="loadVolume(vol.path, vol.display_name || vol.name, $event.ctrlKey || $event.metaKey)"
                                 class="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 transition-colors"
                                 x-text="vol.display_name || vol.name"></button>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+
+            <!-- Density Analysis panel -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+              <h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Density Analysis</h4>
+
+              <!-- Estimate Conformational Density -->
+              <div class="space-y-2">
+                <div class="flex items-center gap-2">
+                  <label class="text-xs text-slate-500">PCA Dim:</label>
+                  <input type="number" min="1" max="6" x-model.number="densityPcaDim"
+                         class="w-14 bg-slate-800 text-white text-xs rounded px-2 py-1 border border-slate-700">
+                  <span class="text-[10px] text-slate-600">(2-6, higher = slower)</span>
+                </div>
+                <button @click="computeDensity()"
+                        :disabled="densityComputing"
+                        class="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-orange-600 hover:bg-orange-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                  <span x-text="densityComputing ? 'Estimating...' : 'Estimate Conformational Density'"></span>
+                </button>
+              </div>
+
+              <!-- Density result plots -->
+              <template x-if="densityResult && densityResult.plots && densityResult.plots.length > 0">
+                <div class="space-y-2">
+                  <div class="text-[10px] text-emerald-400 flex items-center gap-1">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                    Density estimated
+                  </div>
+                  <div class="flex gap-2 overflow-x-auto">
+                    <template x-for="plot in densityResult.plots" :key="plot">
+                      <img :src="'/api/image?path=' + encodeURIComponent(plot)"
+                           class="h-24 rounded cursor-pointer hover:ring-2 hover:ring-orange-500 transition-all"
+                           @click="expandedImage = plot"
+                           :alt="plot.split('/').pop()">
+                    </template>
+                  </div>
+                </div>
+              </template>
+
+              <!-- Find Stable States (only when density exists) -->
+              <template x-if="densityResult && densityResult.density_pkl">
+                <div class="border-t border-slate-800 pt-3 space-y-2">
+                  <div class="flex items-center gap-2">
+                    <label class="text-xs text-slate-500">Top %:</label>
+                    <input type="number" min="0.1" max="50" step="0.5" x-model.number="stablePercentTop"
+                           class="w-14 bg-slate-800 text-white text-xs rounded px-2 py-1 border border-slate-700">
+                    <label class="text-xs text-slate-500 ml-2">Max States:</label>
+                    <input type="number" min="1" max="20" x-model.number="stableNMaxs"
+                           class="w-14 bg-slate-800 text-white text-xs rounded px-2 py-1 border border-slate-700">
+                  </div>
+                  <button @click="computeStableStates()"
+                          :disabled="stableStatesComputing"
+                          class="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-amber-600 hover:bg-amber-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"/></svg>
+                    <span x-text="stableStatesComputing ? 'Finding States...' : 'Find Stable States'"></span>
+                  </button>
+                </div>
+              </template>
+
+              <!-- Stable states results -->
+              <template x-if="stableStatesResult && stableStatesResult.coords && stableStatesResult.coords.length > 0">
+                <div class="border-t border-slate-800 pt-3 space-y-2">
+                  <div class="text-[10px] text-amber-400 flex items-center gap-1">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                    <span x-text="stableStatesResult.coords.length + ' stable state(s) found'"></span>
+                  </div>
+                  <div class="space-y-1">
+                    <template x-for="(coord, idx) in stableStatesResult.coords" :key="idx">
+                      <div class="flex items-center gap-2 py-1 px-2 rounded bg-slate-800/50">
+                        <span class="text-[10px] font-bold text-amber-400" x-text="'S' + idx"></span>
+                        <span class="text-[10px] text-slate-400 font-mono truncate flex-1"
+                              x-text="'[' + coord.slice(0,3).map(c => c.toFixed(3)).join(', ') + (coord.length > 3 ? '...' : '') + ']'"></span>
+                        <button @click="useStableStateAsPoint(idx, 'A')"
+                                class="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 transition-colors">Set A</button>
+                        <button @click="useStableStateAsPoint(idx, 'B')"
+                                class="text-[10px] px-1.5 py-0.5 rounded bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors">Set B</button>
+                      </div>
+                    </template>
+                  </div>
+                  <!-- Stable states plots -->
+                  <template x-if="stableStatesResult.plots && stableStatesResult.plots.length > 0">
+                    <div class="flex gap-2 overflow-x-auto pt-1">
+                      <template x-for="plot in stableStatesResult.plots" :key="plot">
+                        <img :src="'/api/image?path=' + encodeURIComponent(plot)"
+                             class="h-24 rounded cursor-pointer hover:ring-2 hover:ring-amber-500 transition-all"
+                             @click="expandedImage = plot"
+                             :alt="plot.split('/').pop()">
                       </template>
                     </div>
                   </template>
@@ -912,6 +1005,17 @@ function jobExplorer() {
     // Mask export
     maskExporting: false,
 
+    // Density analysis
+    densityComputing: false,
+    densityResult: null,       // { density_pkl, plots }
+    densityPcaDim: 4,
+
+    // Stable states
+    stableStatesComputing: false,
+    stableStatesResult: null,  // { coords: [[...], ...], plots }
+    stablePercentTop: 1,
+    stableNMaxs: 3,
+
     // Volume browser
     volFilter: 'all',
 
@@ -969,6 +1073,15 @@ function jobExplorer() {
         }
         // Update tab badges
         this.tabs[2].badge = this.analysisInfo.volumes?.length || null;
+
+        // Restore density/stable states results from analysis info
+        if (this.analysisInfo.density) {
+          this.densityResult = this.analysisInfo.density;
+        }
+        if (this.analysisInfo.stable_states) {
+          this.stableStatesResult = this.analysisInfo.stable_states;
+        }
+
         // If already on explore tab when analysis loads, trigger embedding
         if (this.tab === 'explore' && this.analysisInfo?.has_embeddings && this.selectedZdim) {
           this.loadEmbedding();
@@ -1264,6 +1377,27 @@ function jobExplorer() {
         });
       }
 
+      // Stable state markers (amber diamonds)
+      if (this.stableStatesResult?.coords?.length > 0) {
+        const coords = this.stableStatesResult.coords;
+        const sx = coords.map(c => c[this.axisX] || 0);
+        const sy = coords.map(c => c[this.axisY] || 0);
+        const labels = coords.map((_, i) => 'S' + i);
+        traces.push({
+          x: sx,
+          y: sy,
+          mode: 'markers+text',
+          type: 'scatter',
+          marker: { size: 14, color: '#f59e0b', symbol: 'diamond', line: { width: 2, color: 'white' } },
+          text: labels,
+          textposition: 'top center',
+          textfont: { color: '#f59e0b', size: 10 },
+          showlegend: false,
+          hoverinfo: 'text',
+          hovertext: coords.map((c, i) => `S${i}: [${c.slice(0,3).map(v => v.toFixed(3)).join(', ')}${c.length > 3 ? '...' : ''}]`),
+        });
+      }
+
       if (traces.length > 0) {
         Plotly.addTraces(plotEl, traces);
       }
@@ -1365,6 +1499,92 @@ function jobExplorer() {
       this.computing = false;
     },
 
+    async computeDensity() {
+      if (this.densityComputing) return;
+      this.densityComputing = true;
+
+      try {
+        const resp = await fetch(`/api/jobs/{{ job.id }}/compute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'density',
+            pca_dim: this.densityPcaDim,
+            label: `Conformational Density (PCA dim=${this.densityPcaDim})`,
+          }),
+        });
+        const result = await resp.json();
+        if (result.error) {
+          showToast('Density error: ' + result.error, 'error');
+          this.densityComputing = false;
+          return;
+        }
+        if (result.task_id) {
+          showToast('Density estimation submitted', 'success');
+          this.activeTasks.push({
+            id: result.task_id,
+            status: result.status || 'running',
+            label: 'Conformational Density',
+            volumes: [],
+          });
+          this.pollTask(result.task_id);
+        }
+      } catch (e) {
+        showToast('Failed to start density estimation: ' + e.message, 'error');
+      }
+      this.densityComputing = false;
+    },
+
+    async computeStableStates() {
+      if (this.stableStatesComputing || !this.densityResult?.density_pkl) return;
+      this.stableStatesComputing = true;
+
+      try {
+        const resp = await fetch(`/api/jobs/{{ job.id }}/compute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'stable_states',
+            density_pkl: this.densityResult.density_pkl,
+            percent_top: this.stablePercentTop,
+            n_local_maxs: this.stableNMaxs,
+            label: `Stable States (top ${this.stablePercentTop}%, max ${this.stableNMaxs})`,
+          }),
+        });
+        const result = await resp.json();
+        if (result.error) {
+          showToast('Stable states error: ' + result.error, 'error');
+          this.stableStatesComputing = false;
+          return;
+        }
+        if (result.task_id) {
+          showToast('Stable states search submitted', 'success');
+          this.activeTasks.push({
+            id: result.task_id,
+            status: result.status || 'running',
+            label: 'Stable States',
+            volumes: [],
+          });
+          this.pollTask(result.task_id);
+        }
+      } catch (e) {
+        showToast('Failed to start stable states search: ' + e.message, 'error');
+      }
+      this.stableStatesComputing = false;
+    },
+
+    useStableStateAsPoint(idx, which) {
+      if (!this.stableStatesResult?.coords?.[idx]) return;
+      const coord = this.stableStatesResult.coords[idx];
+      if (which === 'A') {
+        this.selectedPoint = coord;
+      } else {
+        this.selectedPoint2 = coord;
+      }
+      this.selectingSecond = false;
+      this.updateMarkers();
+    },
+
     async pollTask(taskId) {
       const poll = async () => {
         try {
@@ -1379,13 +1599,30 @@ function jobExplorer() {
 
           if (task.status === 'completed') {
             this.activeTasks[idx].volumes = task.volumes || [];
-            const nVols = (task.volumes || []).length;
-            showToast(`Computation complete — ${nVols} volume${nVols !== 1 ? 's' : ''} ready`, 'success', 5000);
-            // Auto-load first volume
-            if (task.volumes && task.volumes.length > 0) {
-              this.loadVolume(task.volumes[0].path, task.volumes[0].display_name || task.volumes[0].name);
+
+            if (task.type === 'density') {
+              this.densityResult = {
+                density_pkl: task.density_pkl,
+                plots: task.plots || [],
+              };
+              showToast('Density estimation complete', 'success', 5000);
+            } else if (task.type === 'stable_states') {
+              this.stableStatesResult = {
+                coords: task.stable_states || [],
+                plots: task.plots || [],
+              };
+              const nStates = (task.stable_states || []).length;
+              showToast(`Found ${nStates} stable state${nStates !== 1 ? 's' : ''}`, 'success', 5000);
+              this.updateMarkers();
+            } else {
+              const nVols = (task.volumes || []).length;
+              showToast(`Computation complete — ${nVols} volume${nVols !== 1 ? 's' : ''} ready`, 'success', 5000);
+              // Auto-load first volume
+              if (task.volumes && task.volumes.length > 0) {
+                this.loadVolume(task.volumes[0].path, task.volumes[0].display_name || task.volumes[0].name);
+              }
             }
-            // Refresh analysis info to include new computed volumes
+            // Refresh analysis info to include new computed results
             const resp2 = await fetch('/api/jobs/{{ job.id }}/analysis');
             this.analysisInfo = await resp2.json();
           } else if (task.status === 'failed') {
