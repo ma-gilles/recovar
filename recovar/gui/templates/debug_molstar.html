@@ -175,38 +175,64 @@
         return;
       }
 
-      // Step 6b: Load via File object + loadFiles (different code path from loadVolumeFromUrl)
-      log('Method 1: loadFiles with File object...');
-      const file = new File([volData], 'volume.mrc', { type: 'application/octet-stream' });
+      // Step 6b: Wait for viewer to fully settle before loading
+      log('Waiting 1.5s for viewer initialization to settle...');
+      await new Promise(r => setTimeout(r, 1500));
+
+      // Method 1: loadVolumeFromUrl with blob (after settle delay)
+      log('Method 1: loadVolumeFromUrl with blob URL (after settle)...');
+      const blob1 = new Blob([volData], { type: 'application/octet-stream' });
+      const blobUrl1 = URL.createObjectURL(blob1);
       const t1 = performance.now();
       try {
         await Promise.race([
-          viewer.loadFiles([file]),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('loadFiles timed out after 30s')), 30000)),
+          viewer.loadVolumeFromUrl(
+            { url: blobUrl1, format: 'ccp4', isBinary: true },
+            [{ type: 'relative', value: 1.5, color: 0x38bdf8, alpha: 0.85 }],
+            { entryId: 'test-volume' }
+          ),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('loadVolumeFromUrl timed out after 30s')), 30000)),
         ]);
         const loadMs = (performance.now() - t1).toFixed(0);
-        log(`loadFiles completed in ${loadMs}ms!`, 'ok');
+        log(`loadVolumeFromUrl completed in ${loadMs}ms!`, 'ok');
       } catch (e) {
         const loadMs = (performance.now() - t1).toFixed(0);
-        log(`loadFiles FAILED after ${loadMs}ms: ` + e.message, 'err');
+        log(`Method 1 FAILED after ${loadMs}ms: ` + e.message, 'err');
 
-        // Fallback: try loadVolumeFromUrl with direct URL
-        log('Method 2: loadVolumeFromUrl with direct URL...');
+        // Method 2: loadFiles with File object
+        log('Method 2: loadFiles with File object...');
+        const file = new File([volData], 'volume.mrc', { type: 'application/octet-stream' });
         const t2 = performance.now();
+        try {
+          await Promise.race([
+            viewer.loadFiles([file]),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('loadFiles timed out after 30s')), 30000)),
+          ]);
+          const fileMs = (performance.now() - t2).toFixed(0);
+          log(`loadFiles completed in ${fileMs}ms`, 'ok');
+        } catch (e2) {
+          log('Method 2 also FAILED: ' + e2.message, 'err');
+        }
+
+        // Method 3: loadVolumeFromUrl with direct API URL
+        log('Method 3: loadVolumeFromUrl with direct URL...');
+        const t3 = performance.now();
         try {
           await Promise.race([
             viewer.loadVolumeFromUrl(
               { url, format: 'ccp4', isBinary: true },
               [{ type: 'relative', value: 1.5, color: 0x38bdf8, alpha: 0.85 }],
-              { entryId: 'test-volume' }
+              { entryId: 'test-volume-3' }
             ),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('loadVolumeFromUrl timed out after 30s')), 30000)),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('direct URL timed out after 30s')), 30000)),
           ]);
-          const directMs = (performance.now() - t2).toFixed(0);
-          log(`loadVolumeFromUrl completed in ${directMs}ms!`, 'ok');
-        } catch (e2) {
-          log('loadVolumeFromUrl also FAILED: ' + e2.message, 'err');
+          const directMs = (performance.now() - t3).toFixed(0);
+          log(`Direct URL loaded in ${directMs}ms!`, 'ok');
+        } catch (e3) {
+          log('Method 3 also FAILED: ' + e3.message, 'err');
         }
+      } finally {
+        URL.revokeObjectURL(blobUrl1);
       }
 
       // Step 7: Camera reset
