@@ -435,14 +435,10 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     freq_axis = x / (2 * len(all_fsc_curves[0]))
     
     # Use hexbin density plot for background like in output.py
-    # try:
-    #     # Create 2D histogram of FSC curves vs frequency
     curve_data = np.array(all_fsc_curves)
     freq_mesh, curve_mesh = np.meshgrid(freq_axis, np.arange(len(curve_data)))
-    hb = ax.hexbin(freq_mesh.flatten(), curve_data.flatten(), 
+    hb = ax.hexbin(freq_mesh.flatten(), curve_data.flatten(),
                   gridsize=30, cmap='Blues', alpha=0.3, mincnt=1)
-    # except:
-    #     pass
     
     # Color code curves by FSC score with better transparency
     colors_curves = cm.viridis(np.array(halfmap_fscs))
@@ -481,14 +477,10 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     # --- Plot all vs-mean FSC curves with improved styling ---
     fig, ax = plt.subplots(figsize=(12, 8))
     
-    # Use hexbin density plot for background
-    # try:
     curve_data = np.array(all_vs_mean_curves)
     freq_mesh, curve_mesh = np.meshgrid(freq_axis, np.arange(len(curve_data)))
-    hb = ax.hexbin(freq_mesh.flatten(), curve_data.flatten(), 
+    hb = ax.hexbin(freq_mesh.flatten(), curve_data.flatten(),
                   gridsize=30, cmap='Blues', alpha=0.3, mincnt=1)
-    # except:
-    #     pass
     
     # Color code curves by vs-mean FSC score
     colors_curves = cm.viridis(np.array(vs_mean_fscs))
@@ -769,11 +761,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
         # Plot 6: FSC vs Mean FSC comparison with improved scatter
         ax = axes[1, 2]
         
-        # Create hexbin density plot for background
-        # try:
         hb = ax.hexbin(halfmap_fscs, vs_mean_fscs, gridsize=20, cmap='Blues', alpha=0.3, mincnt=1)
-        # except:
-        #     pass
         
         # Main scatter plot with improved styling
         scatter = ax.scatter(halfmap_fscs, vs_mean_fscs, c=halfmap_fscs, cmap='viridis', 
@@ -862,11 +850,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     # Plot 5: Half-map FSC vs Half-map FSC AUC scatter with improved styling
     ax = axes[1, 1]
     
-    # Create hexbin density plot for background
-    # try:
     hb = ax.hexbin(halfmap_fscs, halfmap_aucs, gridsize=20, cmap='Blues', alpha=0.3, mincnt=1)
-    # except:
-    #     pass
     
     scatter = ax.scatter(halfmap_fscs, halfmap_aucs, c=halfmap_fscs, cmap='viridis', 
                         alpha=0.7, s=50, edgecolors='black', linewidth=0.5)
@@ -880,11 +864,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     # Plot 6: Half-map FSC vs vs-Mean FSC comparison with improved styling
     ax = axes[1, 2]
     
-    # Create hexbin density plot for background
-    # try:
     hb = ax.hexbin(halfmap_fscs, vs_mean_fscs, gridsize=20, cmap='Blues', alpha=0.3, mincnt=1)
-    # except:
-    #     pass
     
     scatter = ax.scatter(halfmap_fscs, vs_mean_fscs, c=halfmap_fscs, cmap='viridis', 
                         alpha=0.7, s=50, edgecolors='black', linewidth=0.5)

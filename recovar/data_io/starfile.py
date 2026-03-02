@@ -304,7 +304,7 @@ class StarFile:
         # Update main data table
         elif field in self.df.columns:
             # Map from optics groups if needed
-            if len(values) == len(self.data_optics):
+            if self.has_optics and len(values) == len(self.data_optics):
                 optics_groups = self.df['_rlnOpticsGroup'].values
                 mapped_values = [
                     values[self.data_optics['_rlnOpticsGroup'].tolist().index(g)]
