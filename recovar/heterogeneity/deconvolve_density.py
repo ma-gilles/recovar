@@ -1,3 +1,5 @@
+import logging
+
 import jax
 import jax.numpy as jnp
 import jaxopt
@@ -6,6 +8,8 @@ import numpy as np
 from jaxopt import ScipyBoundedMinimize
 
 from recovar.heterogeneity import latent_density
+
+logger = logging.getLogger(__name__)
 
 def get_raw_density(pipeline_output, zdim=10, noreg=False, pca_dim_max=5, percentile_reject=10, num_points=50, percentile_bound=0.1):
     coords_entry = 'latent_coords_noreg' if noreg else 'latent_coords'
@@ -128,6 +132,7 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
     cost = np.zeros_like(alphas)
     reg_cost = np.zeros_like(alphas)
     lbfgsb_sols = []
+    logger.info("Deconvolving density: %d regularization alphas, kernel=%s", len(alphas), kernel_option)
     for alpha_idx, alpha in enumerate(alphas):
         # w_init = density# * 0 +1
         w_init = jnp.array(density)# * 0 +1
@@ -153,6 +158,8 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
         cost[alpha_idx] = ridge_reg_objective_grid(lbfgsb_sol, alpha = 0) / ridge_reg_objective_grid(lbfgsb_sol * 0, alpha = 0) 
         reg_cost[alpha_idx] = ridge_reg_objective_grid(lbfgsb_sol, alpha = alpha) / ridge_reg_objective_grid(lbfgsb_sol * 0, alpha = 0)
         lbfgsb_sols.append(np.array(lbfgsb_sol))
+        logger.debug("  alpha[%d]=%.2e: cost=%.4e, reg_cost=%.4e",
+                     alpha_idx, alpha, cost[alpha_idx], reg_cost[alpha_idx])
 
     return lbfgsb_sols, cost, reg_cost, alphas
 

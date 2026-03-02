@@ -1,11 +1,14 @@
 """Real-space zero-padding and unpadding for Fourier oversampling."""
 
 import functools
+import logging
 
 import jax
 import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+
+logger = logging.getLogger(__name__)
 
 
 # PADDING FUNCTIONS 

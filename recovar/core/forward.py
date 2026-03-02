@@ -4,10 +4,14 @@ Provides Equinox-based APIs (``forward_model``, ``adjoint_forward_model``, etc.)
 that take a :class:`~recovar.configs.ForwardModelConfig` as first argument.
 """
 
+import logging
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax import vjp
+
+logger = logging.getLogger(__name__)
 
 from recovar.core.configs import ForwardModelConfig
 from recovar.core.geometry import translate_images

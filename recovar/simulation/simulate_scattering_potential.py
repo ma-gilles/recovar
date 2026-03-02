@@ -6,9 +6,12 @@ Created on Thu Sep 30 16:04:24 2021
 @author: marcaurele
 """
 import json
+import logging
 import os
 
 import finufft
+
+logger = logging.getLogger(__name__)
 
 # Try prody first; fall back to built-in pdb_utils
 try:

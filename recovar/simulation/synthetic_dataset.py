@@ -1,9 +1,13 @@
 """Synthetic heterogeneous dataset generation for testing."""
 
+import logging
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 from recovar import core, utils, jax_config
+
+logger = logging.getLogger(__name__)
 from recovar.simulation import simulator
 from recovar.core import linalg, mask
 

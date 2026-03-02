@@ -1,6 +1,7 @@
 """CTF evaluation and parameter handling for cryo-EM images."""
 
 import functools
+import logging
 from enum import IntEnum
 
 import jax
@@ -8,6 +9,8 @@ import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+
+logger = logging.getLogger(__name__)
 
 
 class CTFParamIndex(IntEnum):

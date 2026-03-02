@@ -17,11 +17,14 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 from typing import Callable, Optional, Tuple
 
 import equinox as eqx
 import jax
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +124,7 @@ class ForwardModelConfig(eqx.Module):
             volume_shape = tuple(cryo.volume_shape)
             grid_size = int(cryo.grid_size)
 
-        return cls(
+        config = cls(
             image_shape=tuple(cryo.image_shape),
             volume_shape=volume_shape,
             grid_size=grid_size,
@@ -133,6 +136,9 @@ class ForwardModelConfig(eqx.Module):
             volume_mask_threshold=float(getattr(cryo, 'volume_mask_threshold', 0.0)),
             process_fn=process_fn,
         )
+        logger.debug("ForwardModelConfig: grid=%d, image=%s, disc=%s, premult_ctf=%s",
+                     grid_size, config.image_shape, disc_type, config.premultiplied_ctf)
+        return config
 
 
 # ---------------------------------------------------------------------------

@@ -9,8 +9,19 @@ entry that invokes :func:`main_commands`.
 """
 
 import importlib
+import logging
 import os
 import sys
+
+logger = logging.getLogger(__name__)
+
+
+def _print_available_commands(available_cmds, file=None):
+    """Print the list of available commands."""
+    file = file if file is not None else sys.stderr
+    print("Available commands:", file=file)
+    for cmd in available_cmds:
+        print(f"  {cmd}", file=file)
 
 
 def main_commands() -> None:
@@ -24,18 +35,14 @@ def main_commands() -> None:
     )
 
     if len(sys.argv) < 2:
-        print("Usage: recovar <command>")
-        print("Available commands:")
-        for cmd in available_cmds:
-            print(f"  {cmd}")
+        print("Usage: recovar <command>", file=sys.stderr)
+        _print_available_commands(available_cmds)
         sys.exit(1)
 
     cmd_name = sys.argv[1]
     if cmd_name not in available_cmds:
-        print(f"Command '{cmd_name}' not found.")
-        print("Available commands:")
-        for cmd in available_cmds:
-            print(f"  {cmd}")
+        print(f"Command '{cmd_name}' not found.", file=sys.stderr)
+        _print_available_commands(available_cmds)
         sys.exit(1)
 
     # Remove the subcommand from sys.argv so the subcommand's parser
@@ -46,13 +53,13 @@ def main_commands() -> None:
     try:
         mod = importlib.import_module(module_name)
     except ImportError as e:
-        print(f"Error importing {module_name}: {e}")
+        print(f"Error importing {module_name}: {e}", file=sys.stderr)
         sys.exit(1)
 
     if hasattr(mod, "main"):
         mod.main()
     else:
-        print(f"Module {module_name} does not define a main() function.")
+        print(f"Module {module_name} does not define a main() function.", file=sys.stderr)
         sys.exit(1)
 
 

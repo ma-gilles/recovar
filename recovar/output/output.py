@@ -1307,7 +1307,7 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
                     axes[idx].hexbin(x_data, y_data, gridsize=30,
                                    alpha=0.3, cmap='Blues', mincnt=1)
             except (ValueError, TypeError) as e:
-                logger.debug(f"Could not add hexbin for PC{i+1} vs PC{j+1}: {e}")
+                logger.debug("Could not add hexbin for PC%d vs PC%d: %s", i+1, j+1, e)
             axes[idx].scatter(x_data, y_data, alpha=0.3, s=0.5,
                             c='cornflowerblue', edgecolors='none', rasterized=True)
             axes[idx].set_xlabel(f'PC{i+1}')

@@ -7,6 +7,7 @@ Reimplementation of the cubic spline interpolation from cryojax.
 """
 
 import functools
+import logging
 from typing import Sequence
 
 import jax
@@ -14,6 +15,8 @@ import jax.numpy as jnp
 import lineax as lx
 from jax import vmap
 from jaxtyping import Array, ArrayLike
+
+logger = logging.getLogger(__name__)
 
 
 @jax.jit

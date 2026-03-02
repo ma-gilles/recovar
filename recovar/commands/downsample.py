@@ -172,13 +172,9 @@ def main():
 
     args = parser.parse_args()
 
-    if args.target_D % 2 != 0:
-        print(f"Error: target box size must be even, got {args.target_D}", file=sys.stderr)
-        sys.exit(1)
-
     # Set up logging for CLI usage
-    log_path = os.path.join(args.outdir, "downsample.log")
     os.makedirs(args.outdir, exist_ok=True)
+    log_path = os.path.join(args.outdir, "downsample.log")
     from recovar.utils.helpers import RobustFileHandler, RobustStreamHandler
     logging.basicConfig(
         level=logging.INFO,
@@ -188,6 +184,10 @@ def main():
             RobustFileHandler(log_path),
         ],
     )
+
+    if args.target_D % 2 != 0:
+        logger.error("Target box size must be even, got %d", args.target_D)
+        sys.exit(1)
 
     logger.info("Downsampling %s \u2192 D=%d", args.particles, args.target_D)
     logger.info("Output directory: %s", args.outdir)
