@@ -285,7 +285,7 @@
             <select @change="setColorBy($event.target.value)"
                     class="bg-slate-800 text-white text-xs rounded px-2 py-1.5 border border-slate-700">
               <option value="none" :selected="colorBy === 'none'">Uniform</option>
-              <option value="kmeans" :selected="colorBy === 'kmeans'">K-means</option>
+              <option value="kmeans" :selected="colorBy === 'kmeans'" x-show="hasKmeans">K-means</option>
             </select>
           </div>
           <div x-show="representation === 'umap'" class="text-[10px] text-amber-400/70 flex items-center gap-1">
@@ -544,8 +544,9 @@
               </div>
               <!-- NGL 3D viewport wrapper -->
               <div x-show="viewMode === '3d'" style="height: 480px; position: relative;">
-                <div x-show="!currentVolumeName" class="absolute inset-0 flex items-center justify-center z-[5]">
-                  <p class="text-sm text-slate-600">Select a volume to visualize</p>
+                <div x-show="!currentVolumeName" class="absolute inset-0 flex flex-col items-center justify-center z-[5] gap-2">
+                  <svg class="w-10 h-10 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+                  <p class="text-sm text-slate-600">Click a point to compute a volume, or browse the Volumes tab</p>
                 </div>
                 <div x-show="volumeLoading" class="absolute inset-0 flex items-center justify-center bg-slate-900/80 z-10">
                   <div class="flex items-center gap-3 text-slate-400">
@@ -840,10 +841,15 @@
        class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-8">
     <div class="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-3xl max-h-[80vh] flex flex-col" @click.stop>
       <div class="flex items-center justify-between px-4 py-2.5 border-b border-slate-800">
-        <span class="text-xs font-medium text-slate-400">Task Log</span>
-        <button @click="taskLogId = null" class="text-slate-400 hover:text-white">&times;</button>
+        <span class="text-xs font-medium text-slate-400">
+          Task Log — <span class="text-slate-300" x-text="activeTasks.find(t => t.id === taskLogId)?.label || taskLogId"></span>
+        </span>
+        <button @click="taskLogId = null" class="text-slate-400 hover:text-white text-lg leading-none px-1" aria-label="Close">&times;</button>
       </div>
       <div class="p-4 overflow-auto flex-1 scrollbar-thin" x-html="taskLogHtml"></div>
+      <div class="flex justify-end px-4 py-2.5 border-t border-slate-800">
+        <button @click="taskLogId = null" class="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors">Close</button>
+      </div>
     </div>
   </div>
 
@@ -1168,7 +1174,14 @@ function jobExplorer() {
           this.selectedZdim = zdims.includes(4) ? 4 : zdims[0];
         }
         // Update tab badges
-        this.tabs[2].badge = this.analysisInfo.volumes?.length || null;
+        let totalVols = (this.analysisInfo.volumes || []).length;
+        for (const info of Object.values(this.analysisInfo.analyses || {})) {
+          totalVols += (info.kmeans_volumes || []).length;
+          for (const traj of (info.trajectories || [])) totalVols += (traj.volumes || []).length;
+        }
+        totalVols += (this.analysisInfo.computed || []).length;
+        this.tabs[2].badge = totalVols || null;
+        if (this.analysisInfo.has_embeddings) this.tabs[1].badge = 'z=' + (this.analysisInfo.available_zdims || []).join(',');
 
         // Restore density/stable states results from analysis info
         if (this.analysisInfo.density) {
@@ -1187,6 +1200,30 @@ function jobExplorer() {
         showToast('Failed to load analysis data', 'error');
       }
 
+      // Restore running/queued tasks from the API so they survive page refresh
+      try {
+        const taskResp = await fetch('/api/jobs/{{ job.id }}/tasks');
+        if (taskResp.ok) {
+          const taskData = await taskResp.json();
+          for (const task of (taskData.tasks || [])) {
+            if (task.status === 'running' || task.status === 'queued') {
+              this.activeTasks.push({
+                id: task.id,
+                type: task.type || 'volume',
+                status: task.status,
+                label: task.label || task.id,
+                volumes: task.volumes || [],
+              });
+              this.pollTask(task.id, () => {
+                if (task.type === 'density') this.densityComputing = false;
+                else if (task.type === 'stable_states') this.stableStatesComputing = false;
+                else this.computing = false;
+              });
+            }
+          }
+        }
+      } catch (_) { /* non-critical */ }
+
       // Watch tab changes to auto-load embedding on first Explore visit
       this.$watch('tab', (newTab) => {
         if (newTab === 'explore' && this.analysisInfo?.has_embeddings && !this.embeddingData && this.selectedZdim) {
@@ -1199,7 +1236,15 @@ function jobExplorer() {
           // Poll every 3s for active jobs
           if (!this._logInterval) {
             this._logInterval = setInterval(() => {
-              if (this.tab === 'logs') this.fetchLogs();
+              if (this.tab === 'logs') {
+                this.fetchLogs();
+                // Stop polling if status badge shows completed or failed
+                const badge = document.getElementById('status-badge')?.textContent?.trim()?.toLowerCase() || '';
+                if (badge.includes('completed') || badge.includes('failed')) {
+                  clearInterval(this._logInterval);
+                  this._logInterval = null;
+                }
+              }
             }, 3000);
           }
           {% endif %}
@@ -1269,6 +1314,7 @@ function jobExplorer() {
       this.selectingSecond = false;
       this.umapData = null;
       this.kmeansData = null;
+      this.colorBy = 'none';
       this.representation = 'pcs';
       await this.loadEmbedding();
     },
