@@ -1,4 +1,4 @@
-[project]
+[workspace]
 name = "recovar"
 version = "0.1.0"
 description = "RECOVAR cryo-EM heterogeneity analysis"
@@ -47,20 +47,24 @@ typing_extensions = "*"
 # profiling
 nvtx = ">=0.2.13"
 
+# Testing
+pytest = ">=8.0"
+pytest-cov = ">=5.0"
+
 [pypi-dependencies]
 # Documentation
 mkdocstrings = { extras = ["python"], version = "*" }
-# PyPI packages that need to be installed via pip
-scikit-fmm = "==2025.6.23"
-jax = { extras = ["cuda12"], version = "==0.5.0" }
+# JAX 0.9.x with CUDA 12 support
+jax = { extras = ["cuda12"], version = "==0.9.0.1" }
 # Build tools
 twine = "*"
 # Specialized packages not available in conda-forge
+scikit-fmm = "==2025.6.23"
 dataframe_image = "==0.2.7"
 finufft = "==2.3.1"
 healpy = "==1.18.0"
 jax_finufft = "==0.1.0"
-jaxopt = "==0.8.3"
+jaxopt = "==0.8.5"
 jaxtyping = "==0.2.38"
 kneed = "==0.8.5"
 lineax = "==0.0.7"
@@ -71,12 +75,13 @@ cufflinks = "*"
 starfile = "==0.5.11"
 tensorflow_cpu = "*"
 umap-learn = { extras = ["plot"] }
-optax = "*"
+optax = "==0.2.7"
 grain = "==0.2.16"
+equinox = "==0.13.4"
 
 [feature.cuda.dependencies]
 # CUDA dependencies for GPU acceleration
-pytorch = { version = "==2.3.1", channel = "pytorch" }
+pytorch = { version = ">=2.3.1", channel = "pytorch" }
 
 [environments]
 default = { features = ["cuda"] }
@@ -91,11 +96,17 @@ test-recovar = "recovar run_test_dataset"
 # Quick smoke test: verifies the environment can import the package without running workloads.
 smoke-import-recovar = "python -c \"import recovar; print('recovar_import_ok')\""
 
+# Pytest tasks
+test-fast = "python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py"
+test-smoke = "python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py --run-integration -k smoke"
+test-gpu = "python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py --run-gpu"
+test-full = "python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py --run-integration --run-gpu --run-slow"
+
 # Dataset creation tasks
 create-dataset-small = "bash ./scripts/run_test.sh create 128 100000"
 create-dataset-large = "bash ./scripts/run_test.sh create 256 300000"
 
-# Pipeline tasks  
+# Pipeline tasks
 pipeline-small = "bash ./scripts/run_test.sh pipeline 128 100000"
 pipeline-large = "bash ./scripts/run_test.sh pipeline 256 300000"
 

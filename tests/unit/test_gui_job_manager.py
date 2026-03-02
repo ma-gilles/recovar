@@ -406,7 +406,9 @@ class TestGetAnalysisInfo:
         # Create an analysis directory with kmeans
         analysis_dir = os.path.join(job.output_dir, "analysis_10")
         centers_dir = os.path.join(analysis_dir, "centers")
+        kmeans_dir = os.path.join(analysis_dir, "kmeans")
         os.makedirs(centers_dir)
+        os.makedirs(kmeans_dir)  # marker dir required by get_analysis_info
         for i in range(3):
             open(os.path.join(centers_dir, f"center{i}.mrc"), "w").close()
 
@@ -420,7 +422,9 @@ class TestGetAnalysisInfo:
 
         analysis_dir = os.path.join(job.output_dir, "analysis_5")
         traj_dir = os.path.join(analysis_dir, "traj0")
+        umap_dir = os.path.join(analysis_dir, "umap")
         os.makedirs(traj_dir)
+        os.makedirs(umap_dir)  # marker dir required by get_analysis_info
         for i in range(5):
             open(os.path.join(traj_dir, f"state{i}.mrc"), "w").close()
 
