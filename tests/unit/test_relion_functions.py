@@ -54,14 +54,8 @@ def test_adjust_regularization_relion_style_lower_bounded():
     assert (reg_np >= jax_config.EPSILON).all()
 
 
-def test_relion_kernel_batch_normalizes_noise_variance_shapes(monkeypatch):
+def test_relion_kernel_batch_normalizes_noise_variance_shapes():
     from recovar.core.configs import ForwardModelConfig
-    import recovar.core.forward as core_forward_mod
-    monkeypatch.setattr(
-        core_forward_mod,
-        "adjoint_forward_model",
-        lambda config, images, *args, **kwargs: jnp.ones((64,), dtype=jnp.complex64) * jnp.sum(images),
-    )
 
     def ctf_fun(params, image_shape, voxel_size):
         return jnp.ones((params.shape[0], image_shape[0] * image_shape[1]), dtype=jnp.float32)
@@ -79,6 +73,8 @@ def test_relion_kernel_batch_normalizes_noise_variance_shapes(monkeypatch):
     rots = jnp.tile(jnp.eye(3, dtype=jnp.float32), (bsz, 1, 1))
     trans = jnp.zeros((bsz, 2), dtype=jnp.float32)
 
+    # relion_kernel_batch_from_fft accumulates in half-volume layout: 4*4*(4//2+1) = 48
+    half_vol_size = 4 * 4 * (4 // 2 + 1)
     candidate_noises = [
         jnp.ones((16,), dtype=jnp.float32),
         jnp.ones((4, 4), dtype=jnp.float32),
@@ -89,8 +85,8 @@ def test_relion_kernel_batch_normalizes_noise_variance_shapes(monkeypatch):
         ft_y, ft_ctf = rf.relion_kernel_batch_from_fft(
             config, _make_batch_data(images, ctf_params, rots, trans, noise_var),
         )
-        assert np.asarray(ft_y).shape == (64,)
-        assert np.asarray(ft_ctf).shape == (64,)
+        assert np.asarray(ft_y).shape == (half_vol_size,)
+        assert np.asarray(ft_ctf).shape == (half_vol_size,)
         assert np.isfinite(np.asarray(ft_y)).all()
 
 

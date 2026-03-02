@@ -8,7 +8,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, jax_config, utils
 from recovar.core import mask, padding
@@ -61,56 +60,40 @@ def relion_style_triangular_kernel(
     """RELION-style triangular kernel reconstruction.
 
     Loops over batches from *experiment_dataset*, accumulating the weighted
-    back-projection (Ft_y) and CTF weight sum (Ft_ctf).
-
-    When CUDA is available, accumulation uses half-volume layout for ~2x
-    memory savings. The half-volumes are expanded to full volumes before
-    returning.
+    back-projection (Ft_y) and CTF weight sum (Ft_ctf) in half-volume layout.
 
     Parameters
     ----------
     experiment_dataset : CryoEMDataset
     cov_noise : array or None
-        Per-image or radial noise variance. When None, per-batch noise is
-        fetched from ``experiment_dataset.noise``.
+        Radial shell variances or a pre-expanded noise array.  When None,
+        per-batch noise is drawn from ``experiment_dataset.noise``.
     batch_size : int, optional
-        Used to create an image generator internally. Mutually exclusive
-        with *data_generator*.
+        Mutually exclusive with *data_generator*.
     disc_type : str
     data_generator : iterable, optional
-        Pre-built generator of ``(batch, particles_ind, indices)`` tuples.
     upsampling_factor : int, optional
-        Volume oversampling factor. Defaults to the dataset's own
-        ``volume_upsampling_factor``.
+        Defaults to the dataset's ``volume_upsampling_factor``.
     """
     if batch_size is not None:
         data_generator = experiment_dataset.get_image_generator(batch_size=batch_size)
 
     uf = upsampling_factor if upsampling_factor is not None else experiment_dataset.volume_upsampling_factor
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, upsampling_factor=uf)
-
-    # Pre-expand 1D radial noise to half-image format once, outside the loop.
-    if cov_noise is not None:
-        cov_noise_arr = np.asarray(cov_noise)
-        half_pixel_count = int(config.image_shape[0] * (config.image_shape[1] // 2 + 1))
-        pixel_count = int(np.prod(config.image_shape))
-        if cov_noise_arr.ndim == 1 and cov_noise_arr.size not in (pixel_count, half_pixel_count):
-            cov_noise = noise.make_radial_noise_half(cov_noise_arr, config.image_shape).reshape(1, -1)
+    noise_model = (
+        noise.as_noise_model(cov_noise, config.image_shape)
+        if cov_noise is not None
+        else experiment_dataset.noise
+    )
 
     Ft_y, Ft_ctf = None, None
     for batch, particles_ind, indices in data_generator:
-        if cov_noise is not None:
-            batch_noise = cov_noise
-        elif hasattr(experiment_dataset.noise, 'get_half'):
-            batch_noise = experiment_dataset.noise.get_half(indices)
-        else:
-            batch_noise = experiment_dataset.noise.get(indices)
         batch_data = BatchData(
             images=batch,
             ctf_params=experiment_dataset.CTF_params[indices],
             rotation_matrices=experiment_dataset.rotation_matrices[indices],
             translations=experiment_dataset.translations[indices],
-            noise_variance=batch_noise,
+            noise_variance=noise_model.get_half(indices),
         )
         Ft_y, Ft_ctf = relion_kernel_batch(config, batch_data, Ft_y=Ft_y, Ft_ctf=Ft_ctf)
 
@@ -143,7 +126,7 @@ def relion_kernel_batch(
     )
     return _relion_kernel_batch_half(
         config, half_images, batch.ctf_params, batch.rotation_matrices, batch.translations,
-        batch.noise_variance, False, Ft_y, Ft_ctf,
+        batch.noise_variance, Ft_y, Ft_ctf,
     )
 
 
@@ -151,7 +134,6 @@ def relion_kernel_batch(
 def relion_kernel_batch_from_fft(
     config: ForwardModelConfig,
     batch: BatchData,
-    use_upsampled_ctf: bool = False,
     Ft_y: jax.Array = None,
     Ft_ctf: jax.Array = None,
 ):
@@ -163,64 +145,34 @@ def relion_kernel_batch_from_fft(
     Parameters
     ----------
     batch : BatchData with complex-valued ``(batch, H*W)`` pre-processed images.
-    use_upsampled_ctf : if True, compute CTF on 2x grid then downsample
-        (used by the heterogeneity pipeline for aliasing suppression).
     Ft_y, Ft_ctf : optional accumulator volumes (half-volume layout) to add into.
     """
     half_images = fourier_transform_utils.full_image_to_half_image(batch.images, config.image_shape)
     return _relion_kernel_batch_half(
         config, half_images, batch.ctf_params, batch.rotation_matrices, batch.translations,
-        batch.noise_variance, use_upsampled_ctf, Ft_y, Ft_ctf,
+        batch.noise_variance, Ft_y, Ft_ctf,
     )
 
 
 def _relion_kernel_batch_half(
-    config, half_images, ctf_params, rotation_matrices, translations,
-    noise_variances, use_upsampled_ctf, Ft_y, Ft_ctf,
+    config, half_images, ctf_params, rotation_matrices, translations, noise_variances, Ft_y, Ft_ctf,
 ):
-    """Shared implementation: backproject half-spectrum images into half-volume accumulators."""
-    from recovar.core.geometry import translate_half_images
-
-    half_images = translate_half_images(half_images, translations, config.image_shape)
+    """Backproject half-spectrum images into half-volume accumulators."""
+    half_images = core.translate_half_images(half_images, translations, config.image_shape)
     noise_half = noise.to_batched_half_pixel_noise(
         noise_variances, config.image_shape, batch_size=half_images.shape[0]
     )
-    half_images = half_images / noise_half
+    ctf_half = config.compute_ctf_half(ctf_params)
 
-    Ft_y = core_forward.adjoint_forward_model(
-        config, half_images, ctf_params, rotation_matrices,
-        skip_ctf=config.premultiplied_ctf,
+    images_weighted = (ctf_half * half_images if not config.premultiplied_ctf else half_images) / noise_half
+    Ft_y = core.adjoint_slice_volume_by_map(
+        images_weighted, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
         volume=Ft_y, half_image=True, half_volume=True,
     )
-
-    if use_upsampled_ctf:
-        # Compute CTF on 2x-upsampled grid and box-filter back to native
-        # resolution before backprojecting. Used by the heterogeneity pipeline.
-        upsample_factor = 2
-        upsampled_shape = tuple(np.array(config.image_shape) * upsample_factor)
-        ctf_up = config.CTF_fun(ctf_params, upsampled_shape, config.voxel_size) ** 2
-        batch_size = ctf_up.shape[0]
-        kernel_size = upsample_factor + upsample_factor // 2
-        kernel = jnp.ones((1, 1, kernel_size, kernel_size), dtype=ctf_up.dtype) / (kernel_size ** 2)
-        ctf_up = jax.lax.conv_general_dilated(
-            ctf_up.reshape(batch_size, 1, *upsampled_shape),
-            kernel, window_strides=(1, 1), padding='SAME',
-            dimension_numbers=('NCHW', 'IOHW', 'NCHW'),
-        ).squeeze(1)[:, ::upsample_factor, ::upsample_factor]
-        ctf_half = fourier_transform_utils.full_image_to_half_image(
-            ctf_up.reshape(batch_size, -1), config.image_shape
-        ) / noise_half
-        Ft_ctf = core_forward.adjoint_forward_model(
-            config, ctf_half, ctf_params, rotation_matrices, skip_ctf=True,
-            volume=Ft_ctf, half_image=True, half_volume=True,
-        )
-    else:
-        ctf_half = config.compute_ctf_half(ctf_params) / noise_half
-        Ft_ctf = core_forward.adjoint_forward_model(
-            config, ctf_half, ctf_params, rotation_matrices,
-            volume=Ft_ctf, half_image=True, half_volume=True,
-        )
-
+    Ft_ctf = core.adjoint_slice_volume_by_map(
+        ctf_half ** 2 / noise_half, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
+        volume=Ft_ctf, half_image=True, half_volume=True,
+    )
     return Ft_y, Ft_ctf
 
 
