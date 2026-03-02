@@ -38,7 +38,7 @@ def test_variable_radial_noise_model_get_and_average():
 def test_make_radial_noise_scalar_and_vector():
     scalar = np.array([2.5], dtype=np.float32)
     out_scalar = np.asarray(noise.make_radial_noise(scalar, (6, 6)))
-    assert out_scalar.shape == (6, 6)
+    assert out_scalar.shape == (36,)  # flat, consistent with vector path
     assert np.allclose(out_scalar, 2.5)
 
     vec = np.array([1.0, 2.0], dtype=np.float32)
