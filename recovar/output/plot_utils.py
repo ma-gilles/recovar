@@ -32,7 +32,7 @@ def plot_noise_profile(pipeline_output, yscale='linear', ax=None):
         fig = ax.figure
 
     # Get noise variance - use noise_var_used instead of noise_var
-    yy = pipeline_output.get('noise_var_used')
+    yy = pipeline_output.get('noise_var_used').copy()
 
     # Handle different noise model types
     if yy.ndim == 1:
