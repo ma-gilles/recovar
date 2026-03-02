@@ -1019,8 +1019,8 @@
 <!-- External Libraries                                              -->
 <!-- ════════════════════════════════════════════════════════════════ -->
 <script src="{{ url_for('static', filename='vendor/plotly.min.js') }}" charset="utf-8"></script>
-<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='vendor/molstar.css') }}">
-<script src="{{ url_for('static', filename='vendor/molstar.js') }}"></script>
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='vendor/pdbe-molstar-3.1.3.css') }}">
+<script src="{{ url_for('static', filename='vendor/pdbe-molstar-plugin-3.1.3.js') }}"></script>
 
 <script>
 function jobExplorer() {
@@ -1206,8 +1206,7 @@ function jobExplorer() {
       // Watch view mode changes to load 3D viewer when switching
       this.$watch('viewMode', (mode) => {
         if (mode === '3d' && this.currentVolumePath && !this.viewer) {
-          const isPC = this._isEigenvector(this.currentVolumePath);
-          this._load3DVolume(this.currentVolumePath, { dualIso: isPC });
+          this._load3DVolume(this.currentVolumePath, {});
         }
       });
 
@@ -1805,15 +1804,10 @@ function jobExplorer() {
         // Update slice view immediately
         this.updateSlice();
 
-        // Load 3D view if in 3D mode (with timeout to prevent hanging)
+        // Load 3D view if in 3D mode
         if (this.viewMode === '3d') {
-          const isPC = this._isEigenvector(path);
-          const timeoutMs = 120000;
           try {
-            await Promise.race([
-              this._load3DVolume(path, { replace: !add, dualIso: isPC }),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('3D viewer timed out after 2min')), timeoutMs)),
-            ]);
+            await this._load3DVolume(path, { replace: !add });
           } catch (e) {
             console.error('3D volume load failed:', e.message);
             showToast('3D viewer: ' + e.message, 'error', 6000);
@@ -1830,7 +1824,6 @@ function jobExplorer() {
 
       // Ensure DOM is ready (x-show may not have rendered yet)
       await this.$nextTick();
-      // Allow an extra frame for the browser to layout the now-visible container
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
       const el = document.getElementById(viewportId);
@@ -1839,143 +1832,53 @@ function jobExplorer() {
         return;
       }
 
-      // Verify the container has actual dimensions (needed for WebGL canvas)
-      const rect = el.getBoundingClientRect();
-      console.log(`Mol* viewport "${viewportId}": ${rect.width}x${rect.height}px`);
-      if (rect.width === 0 || rect.height === 0) {
-        console.error('Viewport has zero dimensions — container may be hidden');
-      }
-
       const replaceAll = options.replace !== false;
-      const dualIso = options.dualIso || false;
       const color = options.color || this.volumeColorPalette[this.nextVolumeColor % this.volumeColorPalette.length];
 
-      // Destroy previous viewer if replacing or switching viewports
+      // Dispose previous viewer if replacing or switching viewports
       if (replaceAll || !this.viewer || this.viewerTarget !== viewportId) {
         if (this.viewer) {
-          try { this.viewer.plugin.dispose(); } catch (e) {}
-          this.viewer = null;
+          try { this.viewer.plugin?.clear(); } catch (e) {}
         }
         el.innerHTML = '';
         this.loadedVolumes = [];
+        this.viewer = null;
       }
 
       const url = '/api/volume/raw?path=' + encodeURIComponent(path);
 
       try {
-        if (typeof molstar === 'undefined') {
-          throw new Error('Mol* library not loaded. Check that molstar.js is served correctly.');
+        if (typeof PDBeMolstarPlugin === 'undefined') {
+          throw new Error('PDBe Mol* plugin not loaded. Check that pdbe-molstar-plugin.js is served correctly.');
         }
 
-        // Create viewer if needed
-        if (!this.viewer) {
-          let viewer;
-          try {
-            viewer = await Promise.race([
-              molstar.Viewer.create(el, {
-                layoutIsExpanded: false,
-                layoutShowControls: false,
-                layoutShowRemoteState: false,
-                layoutShowSequence: false,
-                layoutShowLog: false,
-                layoutShowLeftPanel: false,
-                collapseLeftPanel: true,
-                collapseRightPanel: true,
-                viewportShowExpand: false,
-                viewportShowSelectionMode: false,
-                viewportShowAnimation: false,
-                viewportShowTrajectoryControls: false,
-              }),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('Mol* viewer creation timed out (15s)')), 15000)),
-            ]);
-          } catch (createErr) {
-            throw new Error('Failed to create Mol* viewer (WebGL may not be available): ' + createErr.message);
-          }
+        // PDBeMolstarPlugin handles viewer creation + data loading in one call
+        const viewer = new PDBeMolstarPlugin();
 
-          // Verify WebGL context was created
-          if (!viewer.plugin.canvas3d) {
-            throw new Error('WebGL context failed to initialize (canvas3d is null). Check browser WebGL support.');
-          }
+        await viewer.render(el, {
+          customData: {
+            url: url,
+            format: 'ccp4',
+            binary: true,
+          },
+          hideControls: true,
+          hideCanvasControls: ['selection', 'animation', 'controlToggle', 'controlInfo'],
+          bgColor: { r: 15, g: 23, b: 42 },
+          landscape: true,
+          reactive: true,
+        });
 
-          viewer.plugin.canvas3d.setProps({
-            renderer: { backgroundColor: 0x0f172a },
-          });
-
-          this.viewer = viewer;
-          this.viewerTarget = viewportId;
-          console.log('Mol* viewer created successfully');
-        }
-
-        // Build isosurface config — PCs get both +sigma (blue) and -sigma (red)
-        const isoConfigs = dualIso
-          ? [
-              { type: 'relative', value: this.isoLevel, color: 0x38bdf8, alpha: this.isoAlpha },
-              { type: 'relative', value: -this.isoLevel, color: 0xf43f5e, alpha: this.isoAlpha },
-            ]
-          : [
-              { type: 'relative', value: this.isoLevel, color: color, alpha: this.isoAlpha },
-            ];
-
-        // Load the volume using CCP4 format (MRC2014 is CCP4-compatible)
-        // Fetch data ourselves first, then pass blob URL to Mol*.
-        console.time('volumeFetch');
-        console.log('[Volume] Fetching:', url);
-        const volResp = await fetch(url);
-        if (!volResp.ok) throw new Error(`Volume fetch failed: HTTP ${volResp.status}`);
-        const volData = await volResp.arrayBuffer();
-        console.timeEnd('volumeFetch');
-        console.log('[Volume] Downloaded:', volData.byteLength, 'bytes');
-
-        const blob = new Blob([volData], { type: 'application/octet-stream' });
-        const blobUrl = URL.createObjectURL(blob);
-        console.log('[Volume] Calling loadVolumeFromUrl with blob...');
-        console.time('molstarLoad');
-        try {
-          await this.viewer.loadVolumeFromUrl(
-            { url: blobUrl, format: 'ccp4', isBinary: true },
-            isoConfigs,
-            { entryId: this.currentVolumeName }
-          );
-          console.timeEnd('molstarLoad');
-          console.log('[Volume] Load complete!');
-        } catch (loadErr) {
-          console.timeEnd('molstarLoad');
-          console.error('[Volume] loadVolumeFromUrl error:', loadErr);
-          throw loadErr;
-        } finally {
-          URL.revokeObjectURL(blobUrl);
-        }
+        this.viewer = viewer;
+        this.viewerTarget = viewportId;
 
         // Track loaded volume
-        if (dualIso) {
-          this.loadedVolumes.push({
-            path: path,
-            name: this.currentVolumeName + ' (+)',
-            color: '#38bdf8',
-            visible: true,
-          });
-          this.loadedVolumes.push({
-            path: path,
-            name: this.currentVolumeName + ' (\u2212)',
-            color: '#f43f5e',
-            visible: true,
-          });
-        } else {
-          this.loadedVolumes.push({
-            path: path,
-            name: this.currentVolumeName,
-            color: '#' + color.toString(16).padStart(6, '0'),
-            visible: true,
-          });
-        }
+        this.loadedVolumes.push({
+          path: path,
+          name: this.currentVolumeName,
+          color: '#' + color.toString(16).padStart(6, '0'),
+          visible: true,
+        });
         this.nextVolumeColor++;
-
-        // Auto-focus camera on loaded volume
-        try {
-          this.viewer.plugin.canvas3d?.requestCameraReset();
-        } catch (camErr) {
-          console.warn('Camera reset failed:', camErr);
-        }
 
         console.log('Mol* volume loaded:', this.currentVolumeName);
       } catch (e) {
@@ -2000,8 +1903,7 @@ function jobExplorer() {
       clearTimeout(this._isoDebounce);
       this._isoDebounce = setTimeout(() => {
         if (this.currentVolumePath && this.viewer) {
-          const isPC = this._isEigenvector(this.currentVolumePath);
-          this._load3DVolume(this.currentVolumePath, { dualIso: isPC });
+          this._load3DVolume(this.currentVolumePath, {});
         }
       }, 300);
     },
@@ -2049,7 +1951,7 @@ function jobExplorer() {
 
     clearAllVolumes() {
       if (this.viewer) {
-        try { this.viewer.plugin.dispose(); } catch (e) {}
+        try { this.viewer.plugin?.clear(); } catch (e) {}
         this.viewer = null;
       }
       this.loadedVolumes = [];
