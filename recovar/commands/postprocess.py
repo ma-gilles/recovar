@@ -195,7 +195,7 @@ def find_volume_directories(volumes_dir):
 
 def get_voxel_size_from_mrc(mrc_path):
     import mrcfile
-    with mrcfile.open(mrc_path) as mrc:
+    with mrcfile.open(mrc_path, header_only=True) as mrc:
         vsize = mrc.voxel_size.x
         # Handle tuple/list/array or single float
         return float(vsize)
