@@ -82,7 +82,7 @@
     </div>
     <div class="flex items-center gap-2">
       <span class="text-[11px] text-slate-500">Sort:</span>
-      <select onchange="window.location.href='/?sort='+this.value"
+      <select onchange="window.location.href='/?sort='+encodeURIComponent(this.value)"
               class="bg-slate-800 text-slate-300 text-xs rounded-lg px-2 py-1.5 border border-slate-700 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none">
         <option value="newest" {{ 'selected' if current_sort == 'newest' }}>Newest</option>
         <option value="oldest" {{ 'selected' if current_sort == 'oldest' }}>Oldest</option>
