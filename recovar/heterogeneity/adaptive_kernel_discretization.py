@@ -926,10 +926,10 @@ def naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, 
 
         if compute_lhs_rhs:
 
-            test_dataset.update_volume_upsampling_factor(1)
-            Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(test_dataset , noise_variance.astype(np.float32),  batch_size,  disc_type = disc_type, return_lhs_rhs = False )
+            Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(test_dataset , noise_variance.astype(np.float32),  batch_size,  disc_type = disc_type, upsampling_factor=1)
 
-            estimate = relion_functions.post_process_from_filter(test_dataset, Ft_ctf, F_ty, tau = tau, disc_type = disc_type, use_spherical_mask = False, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
+            kernel_type = 'triangular' if disc_type == 'linear_interp' else 'square'
+            estimate = relion_functions.post_process_from_filter_v2(Ft_ctf, F_ty, test_dataset.volume_shape, 1, tau = tau, kernel = kernel_type, use_spherical_mask = False, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
 
             lhs.append(np.array(Ft_ctf))
             rhs.append(np.array(F_ty))
@@ -960,55 +960,84 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
     XWX = XWX[:,0,:].T
     F = F[:,0,:].T
 
-
+    kernel_type = 'triangular' if disc_type == 'linear_interp' else 'square'
+    upsampled_vol_shape = tuple(experiment_dataset.upsampled_volume_shape)
     for idx in range(heterogeneity_bins.size):
         from recovar.reconstruction import relion_functions
-        from recovar.data_io import dataset
 
-        estimate = relion_functions.post_process_from_filter(experiment_dataset, half_volume_to_full_volume(XWX[idx], experiment_dataset.upsampled_volume_shape), half_volume_to_full_volume(F[idx],experiment_dataset.upsampled_volume_shape), tau = tau, disc_type = disc_type, use_spherical_mask = True, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
+        estimate = relion_functions.post_process_from_filter_v2(
+            half_volume_to_full_volume(XWX[idx], upsampled_vol_shape),
+            half_volume_to_full_volume(F[idx], upsampled_vol_shape),
+            experiment_dataset.volume_shape, 2,
+            tau = tau, kernel = kernel_type, use_spherical_mask = True,
+            grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
         estimates.append(np.array(estimate.reshape(-1)))
     estimates = np.array(estimates)
 
     return estimates
 
-def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola", use_upsampled_ctf = True):
+def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola", use_upsampled_ctf = True, upsampling_factor=None):
 
     estimates = []
 
     bins = heterogeneity_bins
     inds = np.digitize(heterogeneity_distances, bins, right = True)
     n_bins = bins.size
-    half_volume_size = np.prod(volume_shape_to_half_volume_shape(experiment_dataset.upsampled_volume_shape))
+
+    if upsampling_factor is not None:
+        upsampled_vol_shape = tuple(3 * [experiment_dataset.grid_size * upsampling_factor])
+    else:
+        upsampled_vol_shape = tuple(experiment_dataset.upsampled_volume_shape)
+    half_volume_size = np.prod(volume_shape_to_half_volume_shape(upsampled_vol_shape))
 
     lhs_all = np.zeros((n_bins, half_volume_size), dtype =experiment_dataset.dtype_real )
     rhs_all = np.zeros((n_bins, half_volume_size), dtype =experiment_dataset.dtype )
 
+    if upsampling_factor is not None:
+        config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, upsampling_factor=upsampling_factor)
+    else:
+        config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, use_upsampled=True)
+
+    # Use half-volume accumulation when CUDA is available
+    try:
+        from recovar.cuda_backproject import cuda_available
+        use_half_vol = cuda_available()
+    except (ImportError, OSError):
+        use_half_vol = False
 
     for bin_idx in range(n_bins):
         image_inds = np.sort(np.where(inds == bin_idx)[0])
 
         data_generator = experiment_dataset.get_dataset_subset_generator( batch_size=batch_size, subset_indices = image_inds, mode ='images')
-        lhs = jnp.zeros(half_volume_size, dtype = experiment_dataset.dtype_real )
-        rhs = jnp.zeros(half_volume_size, dtype = experiment_dataset.dtype )
+
+        Ft_y_acc, Ft_ctf_acc = None, None
         for batch, particles_ind, indices in data_generator:
 
             # Only place where image mask is used ?
             batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
-            noise_variances = experiment_dataset.noise.get(indices) 
-            config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, use_upsampled=True)
-            Ft_y_b, Ft_ctf_b = relion_functions.relion_kernel_batch(
+            noise_variances = experiment_dataset.noise.get(indices)
+            Ft_y_acc, Ft_ctf_acc = relion_functions.relion_kernel_batch_from_fft(
                 config, batch,
                 experiment_dataset.CTF_params[indices],
                 experiment_dataset.rotation_matrices[indices],
                 experiment_dataset.translations[indices],
                 noise_variances,
                 use_upsampled_ctf=use_upsampled_ctf,
+                Ft_y=Ft_y_acc, Ft_ctf=Ft_ctf_acc,
+                half_volume=use_half_vol,
             )
 
-
-            rhs += full_volume_to_half_volume(Ft_y_b, experiment_dataset.upsampled_volume_shape)
-            lhs += full_volume_to_half_volume(Ft_ctf_b, experiment_dataset.upsampled_volume_shape)
-            del Ft_y_b, Ft_ctf_b
+        if Ft_y_acc is not None:
+            if use_half_vol:
+                # Already in half-volume layout
+                rhs = Ft_y_acc
+                lhs = Ft_ctf_acc.real
+            else:
+                rhs = full_volume_to_half_volume(Ft_y_acc, upsampled_vol_shape)
+                lhs = full_volume_to_half_volume(Ft_ctf_acc, upsampled_vol_shape).real
+        else:
+            rhs = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
+            lhs = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype_real)
 
         rhs_all[bin_idx] = rhs
         lhs_all[bin_idx] = lhs
@@ -1044,11 +1073,14 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
     else:
         raise NotImplementedError
 
+    kernel_type = 'triangular' if disc_type == 'linear_interp' else 'square'
+    vol_upsample = upsampling_factor if upsampling_factor is not None else int(experiment_dataset.volume_upsampling_factor)
     for idx in range(heterogeneity_bins.size):
-        estimate = relion_functions.post_process_from_filter(experiment_dataset, 
-            half_volume_to_full_volume(lhs_all[idx], experiment_dataset.upsampled_volume_shape), 
-            half_volume_to_full_volume(rhs_all[idx],experiment_dataset.upsampled_volume_shape),
-            tau = tau, disc_type = disc_type, 
+        estimate = relion_functions.post_process_from_filter_v2(
+            half_volume_to_full_volume(lhs_all[idx], upsampled_vol_shape),
+            half_volume_to_full_volume(rhs_all[idx], upsampled_vol_shape),
+            experiment_dataset.volume_shape, vol_upsample,
+            tau = tau, kernel = kernel_type,
             use_spherical_mask = use_spherical_mask, grid_correct = grid_correct,
             gridding_correct = "square", kernel_width = 1 )
 
@@ -1066,8 +1098,7 @@ def compute_lhs_rhs(cryo,noise_variance, heterogeneity_distances, residual_thres
     
     good_indices = heterogeneity_distances <= residual_threshold
     test_dataset = dataset.subsample_cryoem_dataset(cryo, good_indices)
-    test_dataset.update_volume_upsampling_factor(1)
-    Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(test_dataset , noise_variance.astype(np.float32),  batch_size,  disc_type = disc_type, return_lhs_rhs = False )
+    Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(test_dataset , noise_variance.astype(np.float32),  batch_size,  disc_type = disc_type, upsampling_factor=1)
     return Ft_ctf, F_ty
 
 

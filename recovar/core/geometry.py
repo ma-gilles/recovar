@@ -142,6 +142,24 @@ def translate_images(image, translation, image_shape):
 batch_trans_translate_images = jax.vmap(translate_images, in_axes=(None, -2, None), out_axes=-2)
 
 
+@functools.partial(jax.jit, static_argnums=2)
+def translate_half_images(image, translation, image_shape):
+    """Apply in-plane translations to half-spectrum Fourier images.
+
+    Like :func:`translate_images` but for rfft-packed half-spectrum images
+    with shape ``(batch, H * (W // 2 + 1))``.
+
+    Args:
+        image: Half-spectrum Fourier image(s).
+        translation: Shift(s) in fractional pixel units, shape ``(batch, 2)``.
+        image_shape: Full real-space image shape ``(H, W)`` (static).
+    """
+    twod_lattice = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+        image_shape, voxel_size=1, scaled=True
+    )
+    return batch_translate(image, translation, twod_lattice)
+
+
 __all__ = [
     "round_to_int",
     "find_frequencies_within_grid_dist",
@@ -158,5 +176,6 @@ __all__ = [
     "translate_single_image",
     "batch_translate",
     "translate_images",
+    "translate_half_images",
     "batch_trans_translate_images",
 ]

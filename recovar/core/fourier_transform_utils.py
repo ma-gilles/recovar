@@ -191,6 +191,25 @@ def get_real_fft_packed_last_axis_indices(n):
     return jnp.asarray(list(range(half, n)), dtype=jnp.int32)
 
 
+def _half_image_pixel_indices(image_shape):
+    """Flat pixel indices into the full ``(H*W,)`` array corresponding to half-image pixels.
+
+    This mirrors the extraction performed by :func:`full_image_to_half_image`:
+    reshape ``(H*W,)`` to ``(H, W)``, take columns ``packed_last_idx``, flatten
+    to ``(H*(W//2+1),)``.
+    """
+    H, W = image_shape
+    packed_col = get_real_fft_packed_last_axis_indices(W)
+    row_idx = jnp.arange(H)[:, None]
+    return (row_idx * W + packed_col[None, :]).ravel()
+
+
+def get_k_coordinate_of_each_pixel_half(image_shape, voxel_size, scaled=True):
+    """Half-image frequency coords consistent with ``full_image_to_half_image``."""
+    full = get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled)
+    return full[_half_image_pixel_indices(image_shape)]
+
+
 def get_shifted_conjugate_partner_indices(n):
     """Index of the conjugate-symmetric partner for each bin in a shifted FFT axis.
 

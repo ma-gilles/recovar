@@ -35,7 +35,11 @@ class RadialNoiseModel():
         self.image_shape = image_shape if image_shape is not None else (2 * (len(noise_variance_radial)+1) , 2 * (len(noise_variance_radial)+1) )
     def get(self, *args, **kwargs):
         return make_radial_noise(self.noise_variance_radial, self.image_shape).reshape(1, -1)
-    
+
+    def get_half(self, *args, **kwargs):
+        """Return noise in half-spectrum (rfft-packed) layout ``(1, H*(W//2+1))``."""
+        return make_radial_noise_half(self.noise_variance_radial, self.image_shape).reshape(1, -1)
+
     def set_variance(self, noise_variance_radial):
         self.noise_variance_radial = noise_variance_radial
 
@@ -52,11 +56,16 @@ class VariableRadialNoiseModel():
     def get(self, indices, *args, **kwargs):
         dose_indices_batch = self.dose_indices[indices]
         return batch_make_radial_noise(self.noise_variance_radials[dose_indices_batch,:], self.image_shape)
-    
+
+    def get_half(self, indices, *args, **kwargs):
+        """Return noise in half-spectrum (rfft-packed) layout ``(B, H*(W//2+1))``."""
+        dose_indices_batch = self.dose_indices[indices]
+        return batch_make_radial_noise_half(self.noise_variance_radials[dose_indices_batch,:], self.image_shape)
+
     def get_average_radial_noise(self, *args, **kwargs):
-        counts = jnp.bincount(self.dose_indices) / self.dose_indices.size      
+        counts = jnp.bincount(self.dose_indices) / self.dose_indices.size
         return jnp.sum(self.noise_variance_radials * counts[:,None], axis=0)
-    
+
     def set_variance(self, noise_variance_radials):
         self.noise_variance_radials = noise_variance_radials
 
@@ -65,6 +74,7 @@ def to_batched_pixel_noise(noise_variances, image_shape, batch_size=None):
     """Normalize noise variance into shape (B, D*D).
 
     Accepts common forms used in the codebase:
+    - scalar (white noise, broadcast to all pixels)
     - (D, D)
     - (1, D, D) or (B, D, D)
     - (D*D,)
@@ -72,7 +82,11 @@ def to_batched_pixel_noise(noise_variances, image_shape, batch_size=None):
     """
     arr = jnp.asarray(noise_variances)
 
-    if arr.ndim == 3:
+    if arr.ndim == 0:
+        # Scalar white noise → broadcast to (1, D*D)
+        pixel_count = int(np.prod(image_shape))
+        arr = jnp.full((1, pixel_count), arr)
+    elif arr.ndim == 3:
         arr = arr.reshape(arr.shape[0], -1)
     elif arr.ndim == 2 and tuple(arr.shape) == tuple(image_shape):
         arr = arr.reshape(1, -1)
@@ -82,6 +96,40 @@ def to_batched_pixel_noise(noise_variances, image_shape, batch_size=None):
     if batch_size is not None and arr.ndim == 2 and arr.shape[0] == 1 and batch_size > 1:
         arr = jnp.repeat(arr, batch_size, axis=0)
     return arr
+
+
+def to_batched_half_pixel_noise(noise_variances, image_shape, batch_size=None):
+    """Normalize noise variance into half-spectrum shape (B, H*(W//2+1)).
+
+    Accepts inputs already in half-pixel format and passes them through.
+    For scalar or full-pixel inputs, converts via the full-spectrum path.
+    """
+    arr = jnp.asarray(noise_variances)
+    half_pixel_count = int(fourier_transform_utils.image_shape_to_half_image_shape(image_shape)[-1]
+                           * image_shape[0])
+
+    # Fast path: already in half-pixel format
+    if arr.ndim == 2 and arr.shape[-1] == half_pixel_count:
+        if batch_size is not None and arr.shape[0] == 1 and batch_size > 1:
+            arr = jnp.repeat(arr, batch_size, axis=0)
+        return arr
+    if arr.ndim == 1 and arr.size == half_pixel_count:
+        arr = arr.reshape(1, -1)
+        if batch_size is not None and batch_size > 1:
+            arr = jnp.repeat(arr, batch_size, axis=0)
+        return arr
+
+    # Scalar: broadcast directly to half shape
+    if arr.ndim == 0:
+        arr = jnp.full((1, half_pixel_count), arr)
+        if batch_size is not None and batch_size > 1:
+            arr = jnp.repeat(arr, batch_size, axis=0)
+        return arr
+
+    # Full-pixel input: convert via existing path
+    full = to_batched_pixel_noise(noise_variances, image_shape, batch_size=batch_size)
+    return fourier_transform_utils.full_image_to_half_image(full, image_shape)
+
 
 @functools.partial(jax.jit, static_argnums=(3,4,6))
 def get_image_masks(volume_mask, rotation_matrices, volume_mask_threshold, volume_shape, image_shape, image_mask, invert_mask):
@@ -774,8 +822,23 @@ def make_radial_noise(average_image_PS, image_shape):
     # If you pass a scalar, return a constant
     if average_image_PS.size == 1:
         return np.ones(image_shape, dtype =average_image_PS.dtype ) * average_image_PS
-    
+
     return utils.make_radial_image(average_image_PS, image_shape, extend_last_frequency = True)
+
+
+def make_radial_noise_half(average_image_PS, image_shape):
+    """Expand radial noise profile directly to half-image (rfft-packed) layout.
+
+    Output shape: ``(H * (W//2+1),)`` instead of ``(H * W,)``.
+    """
+    if average_image_PS.size == 1:
+        half_shape = fourier_transform_utils.image_shape_to_half_image_shape(image_shape)
+        return np.ones(half_shape, dtype=average_image_PS.dtype) * average_image_PS
+    return utils.make_radial_image_half(average_image_PS, image_shape, extend_last_frequency=True)
+
+
+def batch_make_radial_noise_half(average_image_PS, image_shape):
+    return jax.vmap(lambda amp: make_radial_noise_half(amp, image_shape))(average_image_PS)
 
 
 # Assume noise constant across images and within frequency bands. Estimate the noise by the outside of the mask, and report some statistics
