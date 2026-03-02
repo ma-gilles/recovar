@@ -7,12 +7,14 @@ with SLURM for cluster job submission and monitoring.
 import json
 import logging
 import os
+import pickle
 import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field, asdict
-from pathlib import Path
 from typing import Optional
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,65 @@ def _is_output_volume(filename: str) -> bool:
         and "_unfil" not in filename
         and "_mask" not in filename
     )
+
+
+def _list_volumes(directory: str) -> list[dict]:
+    """List primary output MRC volumes in *directory* as dicts with path/name/display_name."""
+    if not os.path.isdir(directory):
+        return []
+    return [
+        {
+            "path": os.path.join(directory, f),
+            "name": f,
+            "display_name": _vol_display_name(f),
+        }
+        for f in sorted(os.listdir(directory))
+        if _is_output_volume(f)
+    ]
+
+
+def _list_images(directory: str) -> list[str]:
+    """List image files (png/jpg/svg) in *directory* as absolute paths."""
+    if not os.path.isdir(directory):
+        return []
+    return [
+        os.path.join(directory, f)
+        for f in sorted(os.listdir(directory))
+        if f.endswith((".png", ".jpg", ".svg"))
+    ]
+
+
+def _load_json(path: str) -> Optional[dict]:
+    """Load a JSON file, returning None on any error."""
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError, ValueError) as e:
+        logger.debug("Failed to load JSON %s: %s", path, e)
+        return None
+
+
+def _save_json(path: str, data: dict) -> bool:
+    """Write *data* as JSON. Returns True on success."""
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+        return True
+    except OSError as e:
+        logger.warning("Failed to save JSON %s: %s", path, e)
+        return False
+
+
+def _has_output_volumes(directory: str) -> bool:
+    """Return True if *directory* contains any primary output MRC files."""
+    try:
+        return any(
+            _is_output_volume(f)
+            for f in os.listdir(directory)
+            if os.path.isfile(os.path.join(directory, f))
+        )
+    except OSError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -94,20 +155,13 @@ class Job:
     @property
     def result_images(self):
         """List available result image files."""
-        images = []
         output_dir = os.path.join(self.output_dir, "output")
-        if not os.path.isdir(output_dir):
-            return images
-        for fname in sorted(os.listdir(output_dir)):
-            if fname.endswith((".png", ".jpg", ".svg")):
-                images.append(os.path.join(output_dir, fname))
-        # Check subdirectories (plots/, analysis_*/) inside output/
-        for entry in sorted(os.listdir(output_dir)):
-            sub = os.path.join(output_dir, entry)
-            if os.path.isdir(sub) and (entry.startswith("analysis_") or entry == "plots"):
-                for fname in sorted(os.listdir(sub)):
-                    if fname.endswith((".png", ".jpg", ".svg")):
-                        images.append(os.path.join(sub, fname))
+        images = _list_images(output_dir)
+        if os.path.isdir(output_dir):
+            for entry in sorted(os.listdir(output_dir)):
+                sub = os.path.join(output_dir, entry)
+                if os.path.isdir(sub) and (entry.startswith("analysis_") or entry == "plots"):
+                    images.extend(_list_images(sub))
         return images
 
     @property
@@ -237,7 +291,7 @@ def _slurm_job_status(job_id: str) -> Optional[str]:
                 if "PENDING" in state:
                     return STATUS_QUEUED
     except Exception:
-        pass
+        logger.debug("sacct query failed for job %s", job_id, exc_info=True)
     return None
 
 
@@ -287,9 +341,7 @@ class JobManager:
                 logger.warning("Failed to load jobs file: %s", e)
 
     def _save(self):
-        data = {"jobs": [j.to_dict() for j in self._jobs.values()]}
-        with open(self.jobs_file, "w") as f:
-            json.dump(data, f, indent=2)
+        _save_json(self.jobs_file, {"jobs": [j.to_dict() for j in self._jobs.values()]})
 
     def discover_jobs(self, scan_dirs: list[str]):
         """Scan directories for existing pipeline outputs.
@@ -377,21 +429,8 @@ class JobManager:
                 if not (os.path.isfile(os.path.join(tdir, "compute.sbatch")) or
                         os.path.isfile(os.path.join(tdir, "task_meta.json"))):
                     continue
-                # Check if it produced output
-                has_output = any(
-                    _is_output_volume(f)
-                    for f in os.listdir(tdir)
-                    if os.path.isfile(os.path.join(tdir, f))
-                )
-                # Try to load persisted task metadata
-                meta_path = os.path.join(tdir, "task_meta.json")
-                meta = {}
-                if os.path.isfile(meta_path):
-                    try:
-                        with open(meta_path) as f:
-                            meta = json.load(f)
-                    except Exception:
-                        pass
+                has_output = _has_output_volumes(tdir)
+                meta = _load_json(os.path.join(tdir, "task_meta.json")) or {}
 
                 slurm_job_id = meta.get("slurm_job_id")
                 label = meta.get("label", task_type)
@@ -432,7 +471,7 @@ class JobManager:
                         lp = os.path.join(tdir, "latent_points.txt")
                         if os.path.isfile(lp):
                             try:
-                                import numpy as np
+
                                 pts = np.loadtxt(lp)
                                 coords = pts.flatten()[:3]
                                 label = f"Volume at [{', '.join(f'{c:.2f}' for c in coords)}{'...' if len(pts.flatten()) > 3 else ''}]"
@@ -578,7 +617,7 @@ echo "Completed at: $(date)"
                 self._save()
                 return True
             except Exception:
-                pass
+                logger.warning("Failed to cancel SLURM job %s", job.slurm_job_id, exc_info=True)
         if job.pid:
             try:
                 os.kill(job.pid, 15)  # SIGTERM
@@ -586,8 +625,8 @@ echo "Completed at: $(date)"
                 job.error = "Cancelled by user"
                 self._save()
                 return True
-            except Exception:
-                pass
+            except OSError:
+                logger.warning("Failed to kill process %d", job.pid, exc_info=True)
         return False
 
     def delete_job(self, job_id: str) -> bool:
@@ -650,8 +689,8 @@ echo "Completed at: $(date)"
                 if content.strip():
                     label = os.path.basename(path)
                     combined.append(f"── {label} ──\n{content}")
-            except Exception:
-                pass
+            except OSError as e:
+                logger.debug("Failed to read log %s: %s", label, e)
 
         if not combined:
             return "Log files are empty."
@@ -698,14 +737,8 @@ echo "Completed at: $(date)"
         job = self._jobs.get(job_id)
         if not job:
             return {}
-        meta_file = os.path.join(job.output_dir, "metadata.json")
-        if os.path.isfile(meta_file):
-            try:
-                with open(meta_file) as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return {"command": job.command, "output_dir": job.output_dir}
+        meta = _load_json(os.path.join(job.output_dir, "metadata.json"))
+        return meta if meta is not None else {"command": job.command, "output_dir": job.output_dir}
 
     def _refresh_statuses(self):
         for job in self._jobs.values():
@@ -766,7 +799,7 @@ echo "Completed at: $(date)"
         if os.path.isfile(embeddings_path):
             info["has_embeddings"] = True
             try:
-                import pickle
+
                 with open(embeddings_path, "rb") as f:
                     emb = pickle.load(f)
                 for key in ["latent_coords", "zs"]:
@@ -840,15 +873,9 @@ echo "Completed at: $(date)"
 
                 # K-means volumes in centers/ or kmeans/ subdirs
                 for kmeans_name in ["centers", "kmeans"]:
-                    kmeans_dir = os.path.join(analysis_dir, kmeans_name)
-                    if os.path.isdir(kmeans_dir):
-                        for f in sorted(os.listdir(kmeans_dir)):
-                            if _is_output_volume(f):
-                                analysis["kmeans_volumes"].append({
-                                    "path": os.path.join(kmeans_dir, f),
-                                    "name": f,
-                                    "display_name": _vol_display_name(f),
-                                })
+                    analysis["kmeans_volumes"].extend(
+                        _list_volumes(os.path.join(analysis_dir, kmeans_name))
+                    )
 
                 # Trajectories: traj* or path* subdirs
                 for tentry in sorted(os.listdir(analysis_dir)):
@@ -857,22 +884,10 @@ echo "Completed at: $(date)"
                     traj_dir = os.path.join(analysis_dir, tentry)
                     if not os.path.isdir(traj_dir):
                         continue
-                    traj_vols = []
-                    # Check top-level and density/ subdir
-                    for traj_subdir in [traj_dir, os.path.join(traj_dir, "density")]:
-                        if not os.path.isdir(traj_subdir):
-                            continue
-                        for f in sorted(os.listdir(traj_subdir)):
-                            if _is_output_volume(f):
-                                traj_vols.append({
-                                    "path": os.path.join(traj_subdir, f),
-                                    "name": f,
-                                    "display_name": _vol_display_name(f),
-                                })
-                    traj_plots = []
-                    for f in sorted(os.listdir(traj_dir)):
-                        if f.endswith((".png", ".jpg", ".svg")):
-                            traj_plots.append(os.path.join(traj_dir, f))
+                    traj_vols = _list_volumes(traj_dir) + _list_volumes(
+                        os.path.join(traj_dir, "density")
+                    )
+                    traj_plots = _list_images(traj_dir)
                     if traj_vols or traj_plots:
                         analysis["trajectories"].append({
                             "name": tentry,
@@ -880,16 +895,10 @@ echo "Completed at: $(date)"
                             "plots": traj_plots,
                         })
 
-                # Plots and images (top-level of analysis dir, not recursive to avoid huge scans)
-                for f in sorted(os.listdir(analysis_dir)):
-                    if f.endswith((".png", ".jpg", ".svg")):
-                        analysis["plots"].append(os.path.join(analysis_dir, f))
-                # Also check umap/ subdir
-                umap_dir = os.path.join(analysis_dir, "umap")
-                if os.path.isdir(umap_dir):
-                    for f in sorted(os.listdir(umap_dir)):
-                        if f.endswith((".png", ".jpg", ".svg")):
-                            analysis["plots"].append(os.path.join(umap_dir, f))
+                # Plots and images
+                analysis["plots"] = _list_images(analysis_dir) + _list_images(
+                    os.path.join(analysis_dir, "umap")
+                )
 
                 # Check for UMAP and k-means availability
                 umap_embedding = os.path.join(analysis_dir, "umap", "umap_embedding.pkl")
@@ -911,20 +920,16 @@ echo "Completed at: $(date)"
                 task_dir = os.path.join(computed_dir, tdir)
                 if not os.path.isdir(task_dir):
                     continue
-                for f in sorted(os.listdir(task_dir)):
-                    if _is_output_volume(f):
-                        info["computed"].append({
-                            "path": os.path.join(task_dir, f),
-                            "name": f"{tdir}/{f}",
-                            "display_name": _vol_display_name(f),
-                        })
+                for vol in _list_volumes(task_dir):
+                    vol["name"] = f"{tdir}/{vol['name']}"
+                    info["computed"].append(vol)
 
         return info
 
     def get_embedding_data(self, job_id: str, zdim: int,
                            max_points: int = 15000) -> Optional[dict]:
         """Load embedding coordinates for scatter plot visualization."""
-        import numpy as np
+
         job = self._jobs.get(job_id)
         if not job:
             return None
@@ -934,7 +939,7 @@ echo "Completed at: $(date)"
             return None
 
         try:
-            import pickle
+
             with open(embeddings_path, "rb") as f:
                 emb = pickle.load(f)
 
@@ -1001,7 +1006,7 @@ echo "Completed at: $(date)"
     def get_umap_data(self, job_id: str, zdim: int,
                       max_points: int = 15000) -> Optional[dict]:
         """Load UMAP coordinates for scatter plot visualization."""
-        import numpy as np
+
         job = self._jobs.get(job_id)
         if not job:
             return None
@@ -1015,7 +1020,7 @@ echo "Completed at: $(date)"
             return None
 
         try:
-            import pickle
+
             with open(umap_path, "rb") as f:
                 umap_raw = pickle.load(f)
 
@@ -1043,7 +1048,7 @@ echo "Completed at: $(date)"
     def get_kmeans_data(self, job_id: str, zdim: int,
                         max_points: int = 15000) -> Optional[dict]:
         """Load k-means cluster labels for coloring the scatter plot."""
-        import numpy as np
+
         job = self._jobs.get(job_id)
         if not job:
             return None
@@ -1057,7 +1062,7 @@ echo "Completed at: $(date)"
             return None
 
         try:
-            import pickle
+
             with open(kmeans_path, "rb") as f:
                 kmeans_raw = pickle.load(f)
 
@@ -1095,7 +1100,7 @@ echo "Completed at: $(date)"
                             slurm_opts: Optional[dict] = None,
                             repo_root: Optional[str] = None) -> Optional[ComputeTask]:
         """Submit an async compute task (volume or trajectory)."""
-        import numpy as np
+
         job = self._jobs.get(job_id)
         if not job:
             return None
@@ -1203,18 +1208,12 @@ echo "which python: {python_path}"
 
     def _save_task_meta(self, task: ComputeTask):
         """Write task metadata to disk for recovery after restart."""
-        meta_path = os.path.join(task.output_dir, "task_meta.json")
-        try:
-            meta = {
-                "id": task.id, "job_id": task.job_id,
-                "task_type": task.task_type, "label": task.label,
-                "slurm_job_id": task.slurm_job_id,
-                "created_at": task.created_at,
-            }
-            with open(meta_path, "w") as f:
-                json.dump(meta, f, indent=2)
-        except Exception as e:
-            logger.warning("Failed to save task meta: %s", e)
+        _save_json(os.path.join(task.output_dir, "task_meta.json"), {
+            "id": task.id, "job_id": task.job_id,
+            "task_type": task.task_type, "label": task.label,
+            "slurm_job_id": task.slurm_job_id,
+            "created_at": task.created_at,
+        })
 
     def get_compute_task(self, task_id: str) -> Optional[dict]:
         """Get status of a compute task, including output volumes if done."""
@@ -1223,15 +1222,9 @@ echo "which python: {python_path}"
             return None
 
         # Re-check failed tasks: if output appeared since recovery, promote to completed
-        if task.status == STATUS_FAILED:
-            has_output = any(
-                _is_output_volume(f)
-                for f in os.listdir(task.output_dir)
-                if os.path.isfile(os.path.join(task.output_dir, f))
-            )
-            if has_output:
-                task.status = STATUS_COMPLETED
-                task.error = None
+        if task.status == STATUS_FAILED and _has_output_volumes(task.output_dir):
+            task.status = STATUS_COMPLETED
+            task.error = None
 
         # Refresh status
         if task.status in (STATUS_QUEUED, STATUS_RUNNING):
@@ -1258,13 +1251,10 @@ echo "which python: {python_path}"
                     os.kill(task.pid, 0)
                 except OSError:
                     # Process exited - check for output
-                    has_output = any(
-                        _is_output_volume(f)
-                        for f in os.listdir(task.output_dir)
-                        if os.path.isfile(os.path.join(task.output_dir, f))
-                    )
-                    task.status = STATUS_COMPLETED if has_output else STATUS_FAILED
-                    if not has_output:
+                    if _has_output_volumes(task.output_dir):
+                        task.status = STATUS_COMPLETED
+                    else:
+                        task.status = STATUS_FAILED
                         task.error = "No output volumes generated"
 
         result = {
@@ -1277,13 +1267,7 @@ echo "which python: {python_path}"
         }
 
         if task.status == STATUS_COMPLETED:
-            for f in sorted(os.listdir(task.output_dir)):
-                if _is_output_volume(f):
-                    result["volumes"].append({
-                        "path": os.path.join(task.output_dir, f),
-                        "name": f,
-                        "display_name": _vol_display_name(f),
-                    })
+            result["volumes"] = _list_volumes(task.output_dir)
 
         return result
 
