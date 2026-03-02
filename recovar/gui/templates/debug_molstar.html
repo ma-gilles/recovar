@@ -165,64 +165,23 @@
       log('--- Loading Volume ---');
       log('URL: ' + url);
 
-      // Step 6a: Fetch volume data ourselves
-      let volData;
-      try {
-        log('Fetching volume data: ' + url);
-        const t0 = performance.now();
-        const resp = await fetch(url);
-        if (!resp.ok) {
-          log('Volume fetch FAILED: HTTP ' + resp.status, 'err');
-          return;
-        }
-        volData = await resp.arrayBuffer();
-        const fetchMs = (performance.now() - t0).toFixed(0);
-        log(`Volume fetched: ${volData.byteLength} bytes in ${fetchMs}ms`, 'ok');
-      } catch (e) {
-        log('Fetch error: ' + e.message, 'err');
-        return;
-      }
-
-      // Method 1: isLazy (bypasses dataTransaction which hangs)
-      log('Method 1: loadVolumeFromUrl with isLazy=true...');
+      // Load volume using normal loadVolumeFromUrl (same path as job page)
+      log('Loading volume via loadVolumeFromUrl...');
       const t1 = performance.now();
       try {
         await Promise.race([
           viewer.loadVolumeFromUrl(
             { url, format: 'ccp4', isBinary: true },
             [{ type: 'relative', value: 1.5, color: 0x38bdf8, alpha: 0.85 }],
-            { entryId: 'test-volume', isLazy: true }
+            { entryId: 'test-volume' }
           ),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('isLazy timed out after 15s')), 15000)),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('loadVolumeFromUrl timed out after 30s')), 30000)),
         ]);
         const loadMs = (performance.now() - t1).toFixed(0);
-        log(`isLazy completed in ${loadMs}ms`, 'ok');
+        log(`Volume loaded in ${loadMs}ms`, 'ok');
       } catch (e) {
         const loadMs = (performance.now() - t1).toFixed(0);
-        log(`Method 1 FAILED after ${loadMs}ms: ` + e.message, 'err');
-      }
-
-      // Wait a moment for lazy loading to kick in
-      log('Waiting 3s for lazy loading to fetch data...');
-      await new Promise(r => setTimeout(r, 3000));
-
-      // Method 2: loadVolumeFromUrl normal (known to hang — 10s timeout)
-      log('Method 2: loadVolumeFromUrl normal (will likely hang)...');
-      const t2 = performance.now();
-      try {
-        await Promise.race([
-          viewer.loadVolumeFromUrl(
-            { url, format: 'ccp4', isBinary: true },
-            [{ type: 'relative', value: 1.5, color: 0x38bdf8, alpha: 0.85 }],
-            { entryId: 'test-volume-2' }
-          ),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('normal loadVolumeFromUrl timed out after 10s')), 10000)),
-        ]);
-        const loadMs2 = (performance.now() - t2).toFixed(0);
-        log(`Normal load completed in ${loadMs2}ms!`, 'ok');
-      } catch (e2) {
-        const loadMs2 = (performance.now() - t2).toFixed(0);
-        log(`Method 2 FAILED after ${loadMs2}ms: ` + e2.message, 'err');
+        log(`Volume load FAILED after ${loadMs}ms: ` + e.message, 'err');
       }
 
       // Step 7: Camera reset

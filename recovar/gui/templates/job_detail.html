@@ -1020,9 +1020,21 @@
 <!-- ════════════════════════════════════════════════════════════════ -->
 <script src="{{ url_for('static', filename='vendor/plotly.min.js') }}" charset="utf-8"></script>
 <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='vendor/molstar.css') }}">
+<style>
+  /* Hide Mol* UI chrome — we only want the 3D canvas */
+  .msp-highlight-toast-wrapper,
+  .msp-viewport-controls,
+  .msp-logo { display: none !important; }
+</style>
 <script src="{{ url_for('static', filename='vendor/molstar.js') }}"></script>
 
 <script>
+// Store Mol* viewer OUTSIDE Alpine's reactive proxy scope.
+// Alpine wraps all x-data properties in Proxy objects, which breaks
+// Mol*'s internal state management (dataTransaction hangs forever).
+let _molstarViewer = null;
+let _molstarTarget = null;
+
 function jobExplorer() {
   return {
     // ── State ─────────────────────────────────────────────────────
@@ -1063,9 +1075,7 @@ function jobExplorer() {
     taskLogId: null,   // task ID whose log is displayed
     taskLogHtml: '',   // HTML content of the log
 
-    // Volume viewer
-    viewer: null,
-    viewerTarget: null, // which div the viewer is in
+    // Volume viewer (actual Mol* objects stored in _molstarViewer/_molstarTarget outside Alpine)
     currentVolumeName: '',
     currentVolumePath: '',
     volumeInfo: null,
@@ -1205,7 +1215,7 @@ function jobExplorer() {
 
       // Watch view mode changes to load 3D viewer when switching
       this.$watch('viewMode', (mode) => {
-        if (mode === '3d' && this.currentVolumePath && !this.viewer) {
+        if (mode === '3d' && this.currentVolumePath && !_molstarViewer) {
           this._load3DVolume(this.currentVolumePath, {});
         }
       });
@@ -1836,13 +1846,13 @@ function jobExplorer() {
       const color = options.color || this.volumeColorPalette[this.nextVolumeColor % this.volumeColorPalette.length];
 
       // Dispose previous viewer if replacing or switching viewports
-      if (replaceAll || !this.viewer || this.viewerTarget !== viewportId) {
-        if (this.viewer) {
-          try { this.viewer.plugin?.dispose(); } catch (e) {}
+      if (replaceAll || !_molstarViewer || _molstarTarget !== viewportId) {
+        if (_molstarViewer) {
+          try { _molstarViewer.plugin?.dispose(); } catch (e) {}
         }
         el.innerHTML = '';
         this.loadedVolumes = [];
-        this.viewer = null;
+        _molstarViewer = null;
       }
 
       const url = '/api/volume/raw?path=' + encodeURIComponent(path);
@@ -1853,20 +1863,24 @@ function jobExplorer() {
         }
 
         // Create viewer if needed
-        if (!this.viewer) {
+        if (!_molstarViewer) {
           const viewer = await molstar.Viewer.create(el, {
             layoutIsExpanded: false,
-            layoutShowControls: false,
+            layoutShowControls: true,   // Must be true — dataTransaction hangs without panel infrastructure
             layoutShowRemoteState: false,
-            layoutShowSequence: false,
-            layoutShowLog: false,
-            layoutShowLeftPanel: false,
+            layoutShowSequence: false,   // Hide sequence panel (top)
+            layoutShowLog: false,        // Hide log panel (bottom)
+            layoutShowLeftPanel: false,  // Hide left panel
             collapseLeftPanel: true,
-            collapseRightPanel: true,
+            collapseRightPanel: true,    // Collapse right panel
             viewportShowExpand: false,
             viewportShowSelectionMode: false,
             viewportShowAnimation: false,
             viewportShowTrajectoryControls: false,
+            viewportShowSettings: false,
+            viewportShowScreenshotControls: false,
+            viewportShowControls: false,
+            viewportShowReset: false,
           });
 
           if (viewer.plugin.canvas3d) {
@@ -1875,29 +1889,28 @@ function jobExplorer() {
             });
           }
 
-          this.viewer = viewer;
-          this.viewerTarget = viewportId;
+          _molstarViewer = viewer;
+          _molstarTarget = viewportId;
           console.log('[Volume] Mol* viewer created');
         }
 
-        // Use isLazy: true to bypass the hanging dataTransaction.
-        // isLazy uses build().commit() (simple state tree update) instead
-        // of dataTransaction which wraps in runTask(Se.create(...)) and hangs.
-        // The volume data is fetched lazily when the viewport renders.
         const isoConfigs = [
           { type: 'relative', value: this.isoLevel, color: color, alpha: this.isoAlpha },
         ];
-        console.log('[Volume] Loading via loadVolumeFromUrl (isLazy)...');
-        await this.viewer.loadVolumeFromUrl(
-          { url, format: 'ccp4', isBinary: true },
-          isoConfigs,
-          { entryId: this.currentVolumeName, isLazy: true }
-        );
-        console.log('[Volume] Lazy volume node created');
+        console.log('[Volume] Loading volume via loadVolumeFromUrl...');
+        await Promise.race([
+          _molstarViewer.loadVolumeFromUrl(
+            { url, format: 'ccp4', isBinary: true },
+            isoConfigs,
+            { entryId: this.currentVolumeName }
+          ),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Volume load timed out after 30s')), 30000)),
+        ]);
+        console.log('[Volume] Volume loaded successfully');
 
         // Auto-focus camera
         try {
-          this.viewer.plugin.canvas3d?.requestCameraReset();
+          _molstarViewer.plugin.canvas3d?.requestCameraReset();
         } catch (camErr) {
           console.warn('Camera reset failed:', camErr);
         }
@@ -1914,7 +1927,7 @@ function jobExplorer() {
         console.log('Mol* volume loaded:', this.currentVolumeName);
       } catch (e) {
         console.error('Mol* 3D load error:', e);
-        this.viewer = null;
+        _molstarViewer = null;
         el.innerHTML = `
           <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:#94a3b8;padding:20px;">
             <p style="font-size:13px;font-weight:600;color:#f87171;">3D Viewer Error</p>
@@ -1933,7 +1946,7 @@ function jobExplorer() {
     updateIso() {
       clearTimeout(this._isoDebounce);
       this._isoDebounce = setTimeout(() => {
-        if (this.currentVolumePath && this.viewer) {
+        if (this.currentVolumePath && _molstarViewer) {
           this._load3DVolume(this.currentVolumePath, {});
         }
       }, 300);
@@ -1981,13 +1994,13 @@ function jobExplorer() {
     },
 
     clearAllVolumes() {
-      if (this.viewer) {
-        try { this.viewer.plugin?.dispose(); } catch (e) {}
-        this.viewer = null;
+      if (_molstarViewer) {
+        try { _molstarViewer.plugin?.dispose(); } catch (e) {}
+        _molstarViewer = null;
       }
       this.loadedVolumes = [];
       this.nextVolumeColor = 0;
-      const el = document.getElementById(this.viewerTarget || 'ngl-viewport-explore');
+      const el = document.getElementById(_molstarTarget || 'ngl-viewport-explore');
       if (el) el.innerHTML = '';
     },
 
