@@ -32,30 +32,7 @@ from recovar.data_io.image_loader import ImageSource
 from recovar.data_io import starfile
 from recovar.core import mask
 
-try:
-    import nvtx
-except ImportError:
-    import functools as _functools
-
-    class _NvtxStub:
-        @staticmethod
-        def annotate(msg="", color=None, domain=None):
-            class _NoOp:
-                def __call__(self, fn):
-                    @_functools.wraps(fn)
-                    def wrapper(*args, **kwargs):
-                        return fn(*args, **kwargs)
-                    return wrapper
-
-                def __enter__(self):
-                    return self
-
-                def __exit__(self, *exc):
-                    return False
-
-            return _NoOp()
-
-    nvtx = _NvtxStub()
+from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 

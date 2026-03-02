@@ -5,7 +5,7 @@ and defines numerical constants used throughout the codebase.
 """
 import logging
 import os
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".90"
+os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", ".90")
 import jax
 jax.config.update("jax_enable_x64", True)
 logger = logging.getLogger(__name__)
@@ -13,11 +13,10 @@ logger = logging.getLogger(__name__)
 try:
     devices = jax.devices()
     logger.info("Devices found: %s", ','.join([d.device_kind for d in devices]))
-except RuntimeError as e:
+except Exception as e:
     logger.warning("---------------------------------------------------")
-    logger.warning("---------------------------------------------------")
-    logger.warning("No JAX devices found! Falling back to CPU-only mode.")
-    logger.warning("---------------------------------------------------")
+    logger.warning("JAX device query failed: %s", e)
+    logger.warning("Falling back to CPU-only mode.")
     logger.warning("---------------------------------------------------")
 
 

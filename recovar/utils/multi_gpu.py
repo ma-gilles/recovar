@@ -13,7 +13,7 @@ import numpy as np
 import jax
 from typing import List, Tuple, Optional, Callable
 import time
-import nvtx
+from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 
