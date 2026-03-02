@@ -1917,6 +1917,8 @@ function jobExplorer() {
             ];
 
         // Load the volume using CCP4 format (MRC2014 is CCP4-compatible)
+        console.time('loadVolumeFromUrl');
+        console.log('Loading volume from:', url, '(format: ccp4)');
         await Promise.race([
           this.viewer.loadVolumeFromUrl(
             { url, format: 'ccp4', isBinary: true },
@@ -1925,6 +1927,7 @@ function jobExplorer() {
           ),
           new Promise((_, reject) => setTimeout(() => reject(new Error('Volume loading timed out (60s)')), 60000)),
         ]);
+        console.timeEnd('loadVolumeFromUrl');
 
         // Track loaded volume
         if (dualIso) {
