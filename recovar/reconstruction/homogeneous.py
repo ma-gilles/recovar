@@ -10,92 +10,79 @@ from recovar.reconstruction import regularization
 
 logger = logging.getLogger(__name__)
 
-# NVTX domain for homogeneous reconstruction
 NVTX_DOMAIN_HOMO = "homogeneous"
 
 
 @nvtx.annotate("get_mean_conformation_relion", color="blue", domain=NVTX_DOMAIN_HOMO)
-def get_mean_conformation_relion(cryos, batch_size, noise_variance=None, use_regularization=False, 
-                                upsampling_factor=2, disc_type='linear_interp', tau=None, 
-                                use_spherical_mask=True, grid_correct=True):
+def get_mean_conformation_relion(
+    cryos, batch_size, noise_variance=None, use_regularization=False, upsampling_factor=2,
+):
+    """Compute the mean conformation using RELION-style half-set reconstruction.
+
+    Runs one accumulation pass per half-set, computes the FSC-based prior, then
+    optionally re-post-processes with regularization.
+
+    Parameters
+    ----------
+    cryos : CryoEMHalfsets (iterable of CryoEMDataset)
+    batch_size : int
+    noise_variance : array, optional
+    use_regularization : bool
+        If True, ``means["combined"]`` is the average of the per-half
+        regularized reconstructions; otherwise it is the average of the
+        unregularized reconstructions.
+    upsampling_factor : int
+        Volume oversampling factor (default 2).
+
+    Returns
+    -------
+    means : dict with keys ``"corrected0"``, ``"corrected1"``, ``"combined"``,
+        ``"corrected0reg"``, ``"corrected1reg"``
+    mean_prior : ndarray  —  FSC-derived regularization prior
+    fsc : ndarray
     """
-    Compute mean conformation using RELION-style reconstruction.
-    
-    Args:
-        cryos: CryoEMHalfsets or iterable of CryoEMDataset
-        batch_size: Batch size for processing
-        noise_variance: Noise variance estimate
-        use_regularization: Whether to use regularized reconstruction
-        upsampling_factor: Volume upsampling factor
-        disc_type: Discretization type
-        tau: Regularization parameter
-        use_spherical_mask: Whether to use spherical mask
-        grid_correct: Whether to apply grid correction
-    """
-    st_time = time.time()
     from recovar.reconstruction import relion_functions
 
-    means = {}
+    st_time = time.time()
+
     ft_ctfs = [None, None]
     ft_ys = [None, None]
-    kernel = 'triangular' if disc_type == 'linear_interp' else 'square'
+    corrected = [None, None]
 
-    # First pass: compute unregularized reconstructions
     for idx, cryo in enumerate(cryos):
-        # Compute triangular kernel filters
         ft_ctfs[idx], ft_ys[idx] = relion_functions.relion_style_triangular_kernel(
-            cryo, noise_variance.astype(np.float32), batch_size, disc_type=disc_type,
+            cryo, noise_variance.astype(np.float32), batch_size,
             upsampling_factor=upsampling_factor,
         )
-
-        # Post-process to get unregularized reconstruction
-        means[f"corrected{idx}"] = relion_functions.post_process_from_filter_v2(
-            ft_ctfs[idx], ft_ys[idx],
-            cryo.volume_shape, upsampling_factor,
-            tau=tau, kernel=kernel,
-            use_spherical_mask=use_spherical_mask, grid_correct=grid_correct,
-            gridding_correct="square", kernel_width=1,
+        corrected[idx] = relion_functions.post_process_from_filter_v2(
+            ft_ctfs[idx], ft_ys[idx], cryo.volume_shape, upsampling_factor,
         )
 
-    # Compute prior from unregularized reconstructions
     mean_prior, fsc, _ = regularization.compute_relion_prior(
-        cryos, noise_variance, means["corrected0"], means["corrected1"], batch_size
+        cryos, noise_variance, corrected[0], corrected[1], batch_size,
     )
 
-    # Store unregularized combined mean
-    means["combined"] = (means["corrected0"] + means["corrected1"]) / 2
-
-    # Second pass: compute regularized reconstructions
-    for idx, cryo in enumerate(cryos):
-        means[f"corrected{idx}reg"] = relion_functions.post_process_from_filter_v2(
-            ft_ctfs[idx], ft_ys[idx],
-            cryo.volume_shape, upsampling_factor,
-            tau=mean_prior, kernel=kernel,
-            use_spherical_mask=use_spherical_mask, grid_correct=grid_correct,
-            gridding_correct="square", kernel_width=1,
+    corrected_reg = [
+        relion_functions.post_process_from_filter_v2(
+            ft_ctfs[idx], ft_ys[idx], cryo.volume_shape, upsampling_factor,
+            tau=mean_prior,
         )
+        for idx, cryo in enumerate(cryos)
+    ]
 
-    # Store regularized combined mean
-    means["combined_regularized"] = (means["corrected0reg"] + means["corrected1reg"]) / 2
-
-    # Use regularized version if requested
     if use_regularization:
-        means["combined"] = means["combined_regularized"]
+        combined = (corrected_reg[0] + corrected_reg[1]) / 2
+    else:
+        combined = (corrected[0] + corrected[1]) / 2
 
-    # Compute combined LHS and convert to numpy arrays
-    lhs = (ft_ctfs[0] + ft_ctfs[1]) / 2
     mean_prior = np.array(mean_prior)
-    
-    # Store additional results
-    means["prior"] = mean_prior
-    means["lhs"] = lhs
+    means = {
+        "combined":    np.array(combined),
+        "corrected0":  np.array(corrected[0]),
+        "corrected1":  np.array(corrected[1]),
+        "corrected0reg": np.array(corrected_reg[0]),
+        "corrected1reg": np.array(corrected_reg[1]),
+    }
 
-    # Convert all means to numpy arrays
-    for key in means:
-        means[key] = np.array(means[key])
-
-    end_time = time.time()
-    logger.info(" mean computation completed in %.2fs", end_time - st_time)
-
+    logger.info("mean computation completed in %.2fs", time.time() - st_time)
     return means, mean_prior, fsc
-

@@ -998,13 +998,6 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
     else:
         config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, use_upsampled=True)
 
-    # Use half-volume accumulation when CUDA is available
-    try:
-        from recovar.cuda_backproject import cuda_available
-        use_half_vol = cuda_available()
-    except (ImportError, OSError):
-        use_half_vol = False
-
     for bin_idx in range(n_bins):
         image_inds = np.sort(np.where(inds == bin_idx)[0])
 
@@ -1015,26 +1008,22 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
 
             # Only place where image mask is used ?
             batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask = False)
-            noise_variances = experiment_dataset.noise.get(indices)
+            batch_data = BatchData(
+                images=batch,
+                ctf_params=experiment_dataset.CTF_params[indices],
+                rotation_matrices=experiment_dataset.rotation_matrices[indices],
+                translations=experiment_dataset.translations[indices],
+                noise_variance=experiment_dataset.noise.get(indices),
+            )
             Ft_y_acc, Ft_ctf_acc = relion_functions.relion_kernel_batch_from_fft(
-                config, batch,
-                experiment_dataset.CTF_params[indices],
-                experiment_dataset.rotation_matrices[indices],
-                experiment_dataset.translations[indices],
-                noise_variances,
+                config, batch_data,
                 use_upsampled_ctf=use_upsampled_ctf,
                 Ft_y=Ft_y_acc, Ft_ctf=Ft_ctf_acc,
-                half_volume=use_half_vol,
             )
 
         if Ft_y_acc is not None:
-            if use_half_vol:
-                # Already in half-volume layout
-                rhs = Ft_y_acc
-                lhs = Ft_ctf_acc.real
-            else:
-                rhs = full_volume_to_half_volume(Ft_y_acc, upsampled_vol_shape)
-                lhs = full_volume_to_half_volume(Ft_ctf_acc, upsampled_vol_shape).real
+            rhs = Ft_y_acc
+            lhs = Ft_ctf_acc.real
         else:
             rhs = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
             lhs = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype_real)
