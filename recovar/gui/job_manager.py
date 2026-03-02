@@ -318,7 +318,7 @@ def _slurm_job_status(job_id: str) -> Optional[str]:
                     return STATUS_RUNNING
                 if "COMPLETED" in state:
                     return STATUS_COMPLETED
-                if "FAILED" in state or "CANCELLED" in state or "TIMEOUT" in state:
+                if any(kw in state for kw in ("FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_ME")):
                     return STATUS_FAILED
                 if "PENDING" in state:
                     return STATUS_QUEUED
