@@ -1852,7 +1852,8 @@ function jobExplorer() {
           throw new Error('Mol* library not loaded. Check that molstar.js is served correctly.');
         }
 
-        // Create viewer if needed
+        // Create viewer if needed (and wait for full initialization)
+        let viewerJustCreated = false;
         if (!this.viewer) {
           const viewer = await molstar.Viewer.create(el, {
             layoutIsExpanded: false,
@@ -1877,6 +1878,7 @@ function jobExplorer() {
 
           this.viewer = viewer;
           this.viewerTarget = viewportId;
+          viewerJustCreated = true;
           console.log('[Volume] Mol* viewer created');
         }
 
@@ -1887,13 +1889,35 @@ function jobExplorer() {
         const volData = await volResp.arrayBuffer();
         console.log('[Volume] Downloaded:', volData.byteLength, 'bytes');
 
-        // Create a File object and use loadFiles() — different code path from
-        // loadVolumeFromUrl (uses applyAction instead of dataTransaction)
-        const file = new File([volData], (this.currentVolumeName || 'volume') + '.mrc',
-          { type: 'application/octet-stream' });
-        console.log('[Volume] Loading via loadFiles...');
-        await this.viewer.loadFiles([file]);
-        console.log('[Volume] loadFiles complete');
+        // If viewer was just created, wait for the internal task queue to settle.
+        // Mol* initialization spawns async React rendering and WebGL tasks.
+        // loadVolumeFromUrl uses dataTransaction which queues a task — if
+        // initialization tasks are still pending, it can deadlock.
+        if (viewerJustCreated) {
+          console.log('[Volume] Waiting for viewer initialization to settle...');
+          await new Promise(r => setTimeout(r, 1500));
+        }
+
+        // Try loadVolumeFromUrl — the standard volume loading API.
+        // Uses CCP4 format (MRC2014 is CCP4-compatible).
+        const isoConfigs = [
+          { type: 'relative', value: this.isoLevel, color: color, alpha: this.isoAlpha },
+        ];
+        const blobUrl = URL.createObjectURL(new Blob([volData], { type: 'application/octet-stream' }));
+        console.log('[Volume] Calling loadVolumeFromUrl...');
+        try {
+          await Promise.race([
+            this.viewer.loadVolumeFromUrl(
+              { url: blobUrl, format: 'ccp4', isBinary: true },
+              isoConfigs,
+              { entryId: this.currentVolumeName }
+            ),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Volume loading timed out (30s)')), 30000)),
+          ]);
+          console.log('[Volume] loadVolumeFromUrl complete!');
+        } finally {
+          URL.revokeObjectURL(blobUrl);
+        }
 
         // Auto-focus camera
         try {
