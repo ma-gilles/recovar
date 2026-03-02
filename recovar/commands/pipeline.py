@@ -250,6 +250,83 @@ def add_args(parser: argparse.ArgumentParser):
 # Helper functions — extracted from standard_recovar_pipeline for clarity
 # ---------------------------------------------------------------------------
 
+def _peek_image_size(particles_file: str, datadir: str = '', strip_prefix=None) -> int:
+    """Get the image box size D without constructing a full ImageLoader.
+
+    For RELION 3.1 .star files ``_rlnImageSize`` lives in the optics block at
+    the very top of the file (typically fewer than 50 lines).  We read only
+    until that value is found and return immediately, skipping the potentially
+    huge particle data table and avoiding the MRC-header opens that
+    ``StarLoader`` performs for every unique stack file.
+
+    For .mrc/.mrcs files we open with ``header_only=True`` (~1 kB read).
+    For .cs files we load just the numpy structured array header.
+    Falls back to a full ``load_images()`` call for anything not handled above.
+    """
+    ext = particles_file.rsplit('.', 1)[-1].lower()
+
+    if ext == 'star':
+        # Fast path: scan only the optics block for _rlnImageSize.
+        in_optics = False
+        cols: list[str] = []
+        with open(particles_file) as fh:
+            for line in fh:
+                s = line.strip()
+                if s == 'data_optics':
+                    in_optics = True
+                    continue
+                if not in_optics:
+                    continue
+                if s.startswith('data_') and s != 'data_optics':
+                    break  # left optics block without finding _rlnImageSize
+                if s.startswith('_'):
+                    cols.append(s.split()[0])
+                elif s and not s.startswith(('#', 'loop_')) and cols:
+                    vals = s.split()
+                    if '_rlnImageSize' in cols and len(vals) >= len(cols):
+                        return int(float(vals[cols.index('_rlnImageSize')]))
+        # RELION 3.0 / fallback: open the first MRC file referenced
+        # (just one header open instead of all unique stacks)
+        with open(particles_file) as fh:
+            for line in fh:
+                if '@' in line:
+                    parts = line.strip().split('@')
+                    if len(parts) == 2:
+                        mrcs_path = parts[1].split()[0]
+                        if strip_prefix and mrcs_path.startswith(strip_prefix):
+                            mrcs_path = mrcs_path[len(strip_prefix):].lstrip('/')
+                        full = os.path.join(datadir or os.path.dirname(particles_file), mrcs_path)
+                        if os.path.exists(full):
+                            import mrcfile
+                            with mrcfile.open(full, mode='r', header_only=True) as mrc:
+                                return int(mrc.header.ny)
+                        break
+
+    elif ext in ('mrc', 'mrcs'):
+        import mrcfile
+        with mrcfile.open(particles_file, mode='r', header_only=True) as mrc:
+            return int(mrc.header.ny)
+
+    elif ext == 'cs':
+        cs_data = np.load(particles_file)
+        if 'blob/shape' in cs_data.dtype.names:
+            return int(cs_data['blob/shape'][0][1])
+
+    elif ext == 'txt':
+        with open(particles_file) as fh:
+            first = fh.readline().strip()
+        if first:
+            import mrcfile
+            with mrcfile.open(first, mode='r', header_only=True) as mrc:
+                return int(mrc.header.ny)
+
+    # Generic fallback — expensive for .star (opens all MRC headers)
+    from recovar.data_io.image_loader import load_images
+    loader = load_images(particles_file, lazy=True,
+                         datadir=datadir or '', strip_prefix=strip_prefix)
+    return loader.image_size
+
+
 def _resolve_downsample(args):
     """Decide whether downsampling is actually needed.
 
@@ -266,15 +343,11 @@ def _resolve_downsample(args):
     if args.downsample is None:
         return
 
-    from recovar.data_io.image_loader import load_images
-
-    loader = load_images(
+    orig_D = _peek_image_size(
         args.particles,
-        lazy=True,
-        datadir=getattr(args, 'datadir', None) or "",
+        datadir=getattr(args, 'datadir', None) or '',
         strip_prefix=getattr(args, 'strip_prefix', None),
     )
-    orig_D = loader.image_size
     target_D = args.downsample
 
     if orig_D <= target_D:

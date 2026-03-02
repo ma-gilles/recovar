@@ -70,7 +70,8 @@ def compute_latent_space_density(zs, cov_zs, pca_dim_max = 4, num_points = 50, d
     
     st_time = time.time()    
     summed_probs = compute_probs_in_batch(grids_flat, zs, cov_zs)
-    summed_probs_sq = summed_probs.reshape(grids[0].shape)
+    grid_shape = tuple([num_points] * pca_dim_max)
+    summed_probs_sq = summed_probs.reshape(grid_shape)
     end_time = time.time()
     logger.info("latent space computation:, %s", end_time - st_time)
     
@@ -171,12 +172,12 @@ def compute_kde_density(points, gauss_kde, normalize = True):
     return pdfs
 
 def gauss_kde_log_pdf_in_batch(gauss_kde, points):
-    n_images = gauss_kde.dataset.shape[-1]
     dim = gauss_kde.dataset.shape[0]
-    log_pdfs = np.zeros(points.shape[0])
+    n_points = points.shape[0]
+    log_pdfs = np.zeros(n_points)
     batch_size_x = np.max([int(15 / (utils.get_size_in_gb(gauss_kde.dataset) * dim**1)), 1])
-    for k in range(0, int(np.ceil(n_images/batch_size_x))):
-        batch_st, batch_end = utils.get_batch_of_indices(n_images, batch_size_x, k)
+    for k in range(0, int(np.ceil(n_points/batch_size_x))):
+        batch_st, batch_end = utils.get_batch_of_indices(n_points, batch_size_x, k)
         log_pdfs[batch_st:batch_end] = gauss_kde.logpdf(points[batch_st:batch_end].T)
     return log_pdfs
 
