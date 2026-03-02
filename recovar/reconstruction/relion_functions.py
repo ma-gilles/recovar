@@ -67,11 +67,26 @@ def griddingCorrect_square(vol_in, ori_size, padding_factor, order = 0,):
     return vol_out.reshape(og_shape), kernel_ar.reshape(og_shape)
 
 
-def relion_style_triangular_kernel(experiment_dataset, cov_noise, batch_size=None, disc_type='linear_interp', data_generator=None):
+def relion_style_triangular_kernel(experiment_dataset, cov_noise, batch_size=None, disc_type='linear_interp', data_generator=None, upsampling_factor=None):
     """RELION-style triangular kernel reconstruction.
 
     Loops over batches from *experiment_dataset*, accumulating the weighted
     back-projection (Ft_y) and CTF sum (Ft_ctf).
+
+    Raw real-space images are passed directly to :func:`relion_kernel_batch`
+    which handles pad + rfft → half-spectrum processing inside JIT.
+
+    When CUDA is available, accumulation uses half-volume layout for better
+    memory efficiency and cache utilization.  The half-volumes are expanded
+    to full volumes before returning.
+
+    Parameters
+    ----------
+    upsampling_factor : int, optional
+        Volume upsampling factor.  When given, the config is created with
+        this factor directly (no dataset mutation needed).  When ``None``,
+        falls back to ``use_upsampled=True`` which reads the dataset's
+        current ``volume_upsampling_factor``.
     """
     if batch_size is None and data_generator is None:
         raise ValueError("Either batch_size or data_generator must be provided")
@@ -81,21 +96,56 @@ def relion_style_triangular_kernel(experiment_dataset, cov_noise, batch_size=Non
     if batch_size is not None:
         data_generator = experiment_dataset.get_image_generator(batch_size=batch_size)
 
-    config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, use_upsampled=True)
+    if upsampling_factor is not None:
+        config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, upsampling_factor=upsampling_factor)
+    else:
+        config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, use_upsampled=True)
 
-    Ft_y, Ft_ctf = 0, 0
+    # Expand 1D radial noise to half-image format directly
+    if cov_noise is not None:
+        cov_noise_arr = np.asarray(cov_noise)
+        half_pixel_count = int(config.image_shape[0] * (config.image_shape[1] // 2 + 1))
+        pixel_count = np.prod(config.image_shape)
+        if cov_noise_arr.ndim == 1 and cov_noise_arr.size != pixel_count and cov_noise_arr.size != half_pixel_count:
+            # Radial noise → half-pixel expansion (native)
+            cov_noise = noise.make_radial_noise_half(cov_noise_arr, config.image_shape).reshape(1, -1)
+
+    # Use half-volume accumulation when CUDA is available for ~2x less memory
+    try:
+        from recovar.cuda_backproject import cuda_available
+        use_half_vol = cuda_available()
+        logger.info("CUDA backproject/project kernels enabled")
+    except (ImportError, OSError):
+        use_half_vol = False
+        logger.info("CUDA backproject/project kernels disabled")
+        
+    Ft_y, Ft_ctf = None, None
     for batch, particles_ind, indices in data_generator:
-        batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask=False)
-        batch_noise = cov_noise if cov_noise is not None else experiment_dataset.noise.get(indices)
-        Ft_y_b, Ft_ctf_b = relion_kernel_batch(
+        if cov_noise is not None:
+            batch_noise = cov_noise
+        elif hasattr(experiment_dataset.noise, 'get_half'):
+            batch_noise = experiment_dataset.noise.get_half(indices)
+        else:
+            batch_noise = experiment_dataset.noise.get(indices)
+        Ft_y, Ft_ctf = relion_kernel_batch(
             config, batch,
             experiment_dataset.CTF_params[indices],
             experiment_dataset.rotation_matrices[indices],
             experiment_dataset.translations[indices],
             batch_noise,
+            Ft_y=Ft_y, Ft_ctf=Ft_ctf,
+            half_volume=use_half_vol,
         )
-        Ft_y += Ft_y_b
-        Ft_ctf += Ft_ctf_b
+
+    # Convert half-volume → full-volume for downstream consumers
+    if use_half_vol and Ft_y is not None:
+        Ft_y = fourier_transform_utils.half_volume_to_full_volume(
+            Ft_y, config.volume_shape
+        ).reshape(-1)
+        Ft_ctf = fourier_transform_utils.half_volume_to_full_volume(
+            Ft_ctf, config.volume_shape
+        ).reshape(-1)
+
     return Ft_ctf, Ft_y
 
 
@@ -108,17 +158,84 @@ def relion_kernel_batch(
     translations: jax.Array,
     noise_variances: jax.Array,
     use_upsampled_ctf: bool = False,
+    Ft_y: jax.Array = None,
+    Ft_ctf: jax.Array = None,
+    half_volume: bool = False,
 ):
-    """RELION-style triangular kernel batch — Equinox API."""
-    noise_variances = noise.to_batched_pixel_noise(
-        noise_variances, config.image_shape, batch_size=images.shape[0]
+    """RELION-style triangular kernel batch for raw real-space images.
+
+    Takes raw real-space images ``(batch, H, W)``, applies pad + rfft2 to
+    get half-spectrum, then backprojects with ``half_image=True``.
+
+    Parameters
+    ----------
+    images : real-valued ``(batch, H, W)`` raw images.
+    Ft_y, Ft_ctf : optional accumulator volumes to add into directly.
+    half_volume : if True, output volumes use rfft-packed layout.
+    """
+    half_images = padding.padded_rfft(
+        images * config.data_multiplier, config.grid_size, config.padding
     )
-    images = core.translate_images(images, translations, config.image_shape) / noise_variances
+    return _relion_kernel_batch_half(
+        config, half_images, ctf_params, rotation_matrices, translations,
+        noise_variances, use_upsampled_ctf, Ft_y, Ft_ctf, half_volume,
+    )
+
+
+@eqx.filter_jit
+def relion_kernel_batch_from_fft(
+    config: ForwardModelConfig,
+    images: jax.Array,
+    ctf_params: jax.Array,
+    rotation_matrices: jax.Array,
+    translations: jax.Array,
+    noise_variances: jax.Array,
+    use_upsampled_ctf: bool = False,
+    Ft_y: jax.Array = None,
+    Ft_ctf: jax.Array = None,
+    half_volume: bool = False,
+):
+    """RELION-style triangular kernel batch for pre-FFTed complex images.
+
+    Takes full-spectrum complex images ``(batch, H*W)``, extracts the
+    half-spectrum, then backprojects with ``half_image=True``.
+
+    Parameters
+    ----------
+    images : complex-valued ``(batch, H*W)`` pre-processed images.
+    Ft_y, Ft_ctf : optional accumulator volumes to add into directly.
+    half_volume : if True, output volumes use rfft-packed layout.
+    """
+    half_images = fourier_transform_utils.full_image_to_half_image(
+        images, config.image_shape
+    )
+    return _relion_kernel_batch_half(
+        config, half_images, ctf_params, rotation_matrices, translations,
+        noise_variances, use_upsampled_ctf, Ft_y, Ft_ctf, half_volume,
+    )
+
+
+def _relion_kernel_batch_half(
+    config, half_images, ctf_params, rotation_matrices, translations,
+    noise_variances, use_upsampled_ctf, Ft_y, Ft_ctf, half_volume,
+):
+    """Shared implementation: backproject half-spectrum images."""
+    from recovar.core.geometry import translate_half_images
+
+    half_images = translate_half_images(half_images, translations, config.image_shape)
+
+    noise_half = noise.to_batched_half_pixel_noise(
+        noise_variances, config.image_shape, batch_size=half_images.shape[0]
+    )
+    half_images = half_images / noise_half
+
     Ft_y = core_forward.adjoint_forward_model(
-        config, images, ctf_params, rotation_matrices,
+        config, half_images, ctf_params, rotation_matrices,
         skip_ctf=config.premultiplied_ctf,
+        volume=Ft_y, half_image=True, half_volume=half_volume,
     )
-    CTF = config.compute_ctf(ctf_params) / noise_variances
+
+    ctf_half = config.compute_ctf_half(ctf_params) / noise_half
 
     if use_upsampled_ctf:
         upsample_factor = 2
@@ -135,14 +252,19 @@ def relion_kernel_batch(
             dimension_numbers=('NCHW', 'IOHW', 'NCHW'),
         )
         ctf = jnp.squeeze(ctf, axis=1)[:, ::upsample_factor, ::upsample_factor]
-        CTF_squared = ctf.reshape(batch_size, -1) / noise_variances
+        CTF_squared = ctf.reshape(batch_size, -1)
+        CTF_squared_half = fourier_transform_utils.full_image_to_half_image(
+            CTF_squared, config.image_shape
+        ) / noise_half
         Ft_ctf = core_forward.adjoint_forward_model(
-            config, CTF_squared, ctf_params, rotation_matrices, skip_ctf=True,
+            config, CTF_squared_half, ctf_params, rotation_matrices, skip_ctf=True,
+            volume=Ft_ctf, half_image=True, half_volume=half_volume,
         )
         return Ft_y, Ft_ctf
 
     Ft_ctf = core_forward.adjoint_forward_model(
-        config, CTF, ctf_params, rotation_matrices,
+        config, ctf_half, ctf_params, rotation_matrices,
+        volume=Ft_ctf, half_image=True, half_volume=half_volume,
     )
     return Ft_y, Ft_ctf
 
@@ -156,23 +278,34 @@ def residual_relion_kernel_trilinear(
     rotation_matrices: jax.Array,
     translations: jax.Array,
     cov_noise: jax.Array,
+    Ft_y: jax.Array = None,
+    Ft_ctf: jax.Array = None,
+    half_volume: bool = False,
 ):
-    """Residual RELION-style kernel (trilinear) — Equinox API."""
-    CTF_squared = config.compute_ctf(ctf_params)
+    """Residual RELION-style kernel (trilinear) — Equinox API.
+
+    Parameters
+    ----------
+    Ft_y, Ft_ctf : optional accumulator volumes to add into directly.
+    half_volume : if True, accumulate in rfft-packed half-volume layout.
+    """
+    CTF = config.compute_ctf(ctf_params)
     images = core.translate_images(images, translations, config.image_shape)
     images = images - core.slice_volume_by_trilinear(
         mean_estimate, rotation_matrices, config.image_shape, config.volume_shape,
-    ) * CTF_squared
+    ) * CTF
     images_squared = jnp.abs(images) ** 2 - cov_noise
-    CTF_squared = CTF_squared ** 2
+    CTF_fourth = CTF ** 4
 
     images_squared_half = fourier_transform_utils.full_image_to_half_image(images_squared, config.image_shape)
     Ft_y = core.adjoint_slice_volume_by_trilinear_from_half_images(
         images_squared_half, rotation_matrices, config.image_shape, config.volume_shape,
+        volume=Ft_y, half_volume=half_volume,
     )
-    CTF_sq_half = fourier_transform_utils.full_image_to_half_image(CTF_squared ** 2, config.image_shape)
+    CTF_fourth_half = fourier_transform_utils.full_image_to_half_image(CTF_fourth, config.image_shape)
     Ft_ctf = core.adjoint_slice_volume_by_trilinear_from_half_images(
-        CTF_sq_half, rotation_matrices, config.image_shape, config.volume_shape,
+        CTF_fourth_half, rotation_matrices, config.image_shape, config.volume_shape,
+        volume=Ft_ctf, half_volume=half_volume,
     )
     return Ft_y, Ft_ctf
 
@@ -186,18 +319,39 @@ def residual_relion_style_triangular_kernel(experiment_dataset, mean_estimate, c
 
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type='linear_interp', use_upsampled=True)
 
-    Ft_y, Ft_ctf = 0, 0
+    try:
+        from recovar.cuda_backproject import cuda_available
+        use_half_vol = cuda_available()
+    except (ImportError, OSError):
+        use_half_vol = False
+
+    Ft_y, Ft_ctf = None, None
     for batch, particles_ind, indices in data_generator:
         batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask=False)
-        Ft_y_b, Ft_ctf_b = residual_relion_kernel_trilinear(
+        Ft_y, Ft_ctf = residual_relion_kernel_trilinear(
             config, mean_estimate, batch,
             experiment_dataset.CTF_params[indices],
             experiment_dataset.rotation_matrices[indices],
             experiment_dataset.translations[indices],
             cov_noise,
+            Ft_y=Ft_y, Ft_ctf=Ft_ctf,
+            half_volume=use_half_vol,
         )
-        Ft_y += Ft_y_b
-        Ft_ctf += Ft_ctf_b
+
+    # Convert half-volume → full-volume for downstream consumers
+    if use_half_vol and Ft_y is not None:
+        Ft_y = fourier_transform_utils.half_volume_to_full_volume(
+            Ft_y, config.volume_shape
+        ).reshape(-1)
+        Ft_ctf = fourier_transform_utils.half_volume_to_full_volume(
+            Ft_ctf, config.volume_shape
+        ).reshape(-1)
+
+    if Ft_y is None:
+        vol_size = int(np.prod(config.volume_shape))
+        Ft_y = jnp.zeros(vol_size, dtype=experiment_dataset.dtype)
+        Ft_ctf = jnp.zeros(vol_size, dtype=experiment_dataset.dtype_real)
+
     return Ft_ctf, Ft_y
 
 
@@ -322,9 +476,16 @@ def post_process_from_filter_v2(Ft_ctf, F_ty, og_volume_shape, volume_upsampling
 
 
 def relion_reconstruct(cryo, noise_variance, batch_size=100, disc_type='linear_interp', use_spherical_mask=True, upsampling_factor=2, grid_correct=True, gridding_correct="square", tau=None):
-    og_upsampling = cryo.volume_upsampling_factor
-    cryo.update_volume_upsampling_factor(upsampling_factor)
-    Ft_ctf, F_ty = relion_style_triangular_kernel(cryo, noise_variance.astype(np.float32), batch_size, disc_type=disc_type)
-    estimate = post_process_from_filter(cryo, Ft_ctf, F_ty, tau=tau, disc_type=disc_type, use_spherical_mask=use_spherical_mask, grid_correct=grid_correct, gridding_correct="square", kernel_width=1)
-    cryo.update_volume_upsampling_factor(og_upsampling)
+    Ft_ctf, F_ty = relion_style_triangular_kernel(
+        cryo, noise_variance.astype(np.float32), batch_size, disc_type=disc_type,
+        upsampling_factor=upsampling_factor,
+    )
+    kernel = 'triangular' if disc_type == 'linear_interp' else 'square'
+    estimate = post_process_from_filter_v2(
+        Ft_ctf, F_ty,
+        cryo.volume_shape, upsampling_factor,
+        tau=tau, kernel=kernel,
+        use_spherical_mask=use_spherical_mask, grid_correct=grid_correct,
+        gridding_correct=gridding_correct, kernel_width=1,
+    )
     return estimate, Ft_ctf

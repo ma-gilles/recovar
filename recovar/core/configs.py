@@ -24,6 +24,28 @@ import jax
 import numpy as np
 
 
+def _resolve_ctf_half(ctf_fun):
+    """Resolve the native half-grid CTF function for a given full CTF function.
+
+    Checks for a ``_half_variant`` attribute (set by closure factories like
+    ``get_cryo_ET_CTF_fun``), then falls back to a lookup table of known
+    module-level CTF functions.  Returns ``None`` if no half variant is found
+    (caller should fall back to full → half extraction).
+    """
+    half = getattr(ctf_fun, '_half_variant', None)
+    if half is not None:
+        return half
+
+    from recovar.core import ctf as ctf_mod
+    _KNOWN_HALF_MAP = {
+        ctf_mod.cryodrgn_CTF: ctf_mod.cryodrgn_CTF_half,
+        ctf_mod.evaluate_ctf_wrapper: ctf_mod.evaluate_ctf_wrapper_half,
+        ctf_mod.evaluate_ctf_wrapper_tilt_series_v2: ctf_mod.evaluate_ctf_wrapper_tilt_series_v2_half,
+        ctf_mod.evaluate_ctf_wrapper_tilt_series: ctf_mod.evaluate_ctf_wrapper_tilt_series_half,
+    }
+    return _KNOWN_HALF_MAP.get(ctf_fun, None)
+
+
 # ---------------------------------------------------------------------------
 # ForwardModelConfig — static compile-time constants for the forward model
 # ---------------------------------------------------------------------------
@@ -43,17 +65,34 @@ class ForwardModelConfig(eqx.Module):
     padding: int = eqx.field(static=True)
     disc_type: str = eqx.field(static=True)
     CTF_fun: Callable = eqx.field(static=True)
-    premultiplied_ctf: bool = eqx.field(static=True)
-    volume_mask_threshold: float = eqx.field(static=True)
+    CTF_fun_half: Optional[Callable] = eqx.field(static=True, default=None)
+    premultiplied_ctf: bool = eqx.field(static=True, default=False)
+    volume_mask_threshold: float = eqx.field(static=True, default=0.0)
+    volume_upsampling_factor: int = eqx.field(static=True, default=1)
+    data_multiplier: float = eqx.field(static=True, default=1.0)
     process_fn: Optional[Callable] = eqx.field(static=True, default=None)
 
     def compute_ctf(self, ctf_params: jax.Array) -> jax.Array:
-        """Compute CTF values for a batch of images.
-
-        Replaces the ubiquitous ``CTF_fun(CTF_params, image_shape, voxel_size)``
-        pattern with ``config.compute_ctf(ctf_params)``.
-        """
+        """Compute CTF values for a batch of images (full spectrum)."""
         return self.CTF_fun(ctf_params, self.image_shape, self.voxel_size)
+
+    def compute_ctf_half(self, ctf_params: jax.Array) -> jax.Array:
+        """Compute CTF at half-spectrum (rfft-packed) frequencies.
+
+        Uses the native half-grid CTF function when available, otherwise
+        falls back to computing full CTF then extracting the half-spectrum.
+        """
+        if self.CTF_fun_half is not None:
+            return self.CTF_fun_half(ctf_params, self.image_shape, self.voxel_size)
+        import recovar.core.fourier_transform_utils as ftu
+        full_ctf = self.CTF_fun(ctf_params, self.image_shape, self.voxel_size)
+        return ftu.full_image_to_half_image(full_ctf, self.image_shape)
+
+    @property
+    def base_volume_shape(self) -> Tuple[int, int, int]:
+        """Original (non-upsampled) volume shape."""
+        gs = self.grid_size // self.volume_upsampling_factor
+        return (gs, gs, gs)
 
     def replace(self, **kwargs) -> ForwardModelConfig:
         """Create a new config with some fields replaced.
@@ -65,8 +104,11 @@ class ForwardModelConfig(eqx.Module):
             image_shape=self.image_shape, volume_shape=self.volume_shape,
             grid_size=self.grid_size, voxel_size=self.voxel_size,
             padding=self.padding, disc_type=self.disc_type,
-            CTF_fun=self.CTF_fun, premultiplied_ctf=self.premultiplied_ctf,
+            CTF_fun=self.CTF_fun, CTF_fun_half=self.CTF_fun_half,
+            premultiplied_ctf=self.premultiplied_ctf,
             volume_mask_threshold=self.volume_mask_threshold,
+            volume_upsampling_factor=self.volume_upsampling_factor,
+            data_multiplier=self.data_multiplier,
             process_fn=self.process_fn,
         )
         fields.update(kwargs)
@@ -87,6 +129,7 @@ class ForwardModelConfig(eqx.Module):
         disc_type: str = "linear_interp",
         process_fn: Optional[Callable] = None,
         use_upsampled: bool = False,
+        upsampling_factor: Optional[int] = None,
     ) -> ForwardModelConfig:
         """Create from a CryoEMDataset or CryoEMHalfsets instance.
 
@@ -99,9 +142,21 @@ class ForwardModelConfig(eqx.Module):
         process_fn : callable, optional
             Image preprocessing function applied inside jitted code.
         use_upsampled : bool
-            If True, use the upsampled volume shape/grid_size for
-            back-projection (needed by RELION-style reconstruction).
+            If True, use the upsampled volume shape/grid_size from the
+            dataset (reads ``cryo.volume_upsampling_factor``).
+            Prefer ``upsampling_factor`` for new code.
+        upsampling_factor : int, optional
+            Volume upsampling factor (e.g. 2 for 2× oversampled grid).
+            Computes the upsampled volume shape directly without
+            mutating the dataset object.  Cannot be combined with
+            ``use_upsampled=True``.
         """
+        if use_upsampled and upsampling_factor is not None:
+            raise ValueError(
+                "Cannot specify both use_upsampled=True and upsampling_factor. "
+                "Prefer upsampling_factor for new code."
+            )
+
         # CryoEMHalfsets.CTF_fun is a method; we need the underlying callable
         # that takes (ctf_params, image_shape, voxel_size) directly.
         from recovar.data_io.dataset import CryoEMDataset, CryoEMHalfsets
@@ -114,23 +169,37 @@ class ForwardModelConfig(eqx.Module):
             # Duck-type: assume it has the right attributes
             ctf_fun = cryo.CTF_fun
 
-        if use_upsampled:
-            volume_shape = tuple(cryo.upsampled_volume_shape)
+        base_grid_size = int(cryo.grid_size)
+
+        if upsampling_factor is not None:
+            volume_upsampling = int(upsampling_factor)
+            grid_size = base_grid_size * volume_upsampling
+            volume_shape = (grid_size, grid_size, grid_size)
+        elif use_upsampled:
+            volume_shape = tuple(int(x) for x in cryo.upsampled_volume_shape)
             grid_size = int(cryo.upsampled_grid_size)
+            volume_upsampling = int(getattr(cryo, 'volume_upsampling_factor', 1))
         else:
-            volume_shape = tuple(cryo.volume_shape)
-            grid_size = int(cryo.grid_size)
+            volume_shape = tuple(int(x) for x in cryo.volume_shape)
+            grid_size = base_grid_size
+            volume_upsampling = 1
+
+        # Resolve native half-grid CTF function
+        ctf_fun_half = _resolve_ctf_half(ctf_fun)
 
         return cls(
-            image_shape=tuple(cryo.image_shape),
+            image_shape=tuple(int(x) for x in cryo.image_shape),
             volume_shape=volume_shape,
             grid_size=grid_size,
             voxel_size=float(cryo.voxel_size),
             padding=int(getattr(cryo, 'padding', 0)),
             disc_type=disc_type,
             CTF_fun=ctf_fun,
+            CTF_fun_half=ctf_fun_half,
             premultiplied_ctf=bool(getattr(cryo, 'premultiplied_ctf', False)),
             volume_mask_threshold=float(getattr(cryo, 'volume_mask_threshold', 0.0)),
+            volume_upsampling_factor=volume_upsampling,
+            data_multiplier=float(getattr(cryo, 'data_multiplier', 1.0)),
             process_fn=process_fn,
         )
 

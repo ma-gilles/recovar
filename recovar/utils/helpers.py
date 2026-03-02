@@ -31,6 +31,25 @@ def make_radial_image(average_image_PS, image_shape, extend_last_frequency = Tru
 batch_make_radial_image = jax.vmap(make_radial_image, in_axes = (0,None,None))
 
 
+@functools.partial(jax.jit, static_argnums=[1, 2])
+def make_radial_image_half(average_image_PS, image_shape, extend_last_frequency=True):
+    """Like :func:`make_radial_image` but outputs rfft-packed half-spectrum.
+
+    Uses ``get_grid_of_radial_distances_real`` so the output has shape
+    ``(H * (W//2+1),)`` instead of ``(H * W,)``.
+    """
+    if extend_last_frequency:
+        last_noise_band = average_image_PS[-1]
+        average_image_PS = jnp.concatenate([average_image_PS, last_noise_band * jnp.ones_like(average_image_PS)])
+    radial_distances = fourier_transform_utils.get_grid_of_radial_distances_real(
+        image_shape, scaled=False, frequency_shift=0
+    ).astype(int).reshape(-1)
+    prior = jnp.asarray(average_image_PS)[radial_distances]
+    return prior
+
+batch_make_radial_image_half = jax.vmap(make_radial_image_half, in_axes=(0, None, None))
+
+
 def index_batch_iter(n_units, batch_size):
     if batch_size < 1:
         raise ValueError("batch_size must be >= 1")

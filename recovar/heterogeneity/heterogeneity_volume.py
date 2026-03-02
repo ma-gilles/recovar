@@ -140,21 +140,16 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
     lhs, rhs = [None, None], [None, None]
     cross_validation_estimators = [None, None]
     for k in range(2):
-        cryos[k].update_volume_upsampling_factor(upsampling_for_ests)
-
-        estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], None, heterogeneity_distances[k], heterogeneity_bins, tau= tau, grid_correct=grid_correct_ests, use_spherical_mask=use_mask_ests, heterogeneity_kernel= heterogeneity_kernel)
+        estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k], None, heterogeneity_distances[k], heterogeneity_bins, tau= tau, grid_correct=grid_correct_ests, use_spherical_mask=use_mask_ests, heterogeneity_kernel= heterogeneity_kernel, upsampling_factor=upsampling_for_ests)
         estimates[k] = fourier_transform_utils.get_idft3(estimates[k].reshape(-1, *cryos.volume_shape)).real.astype(np.float32)
         logger.info("Computing estimates done")
 
-        cryos[k].update_volume_upsampling_factor(1)
-
-        cross_validation_estimators[k], lhs[k], rhs[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k],  None, heterogeneity_distances[k], heterogeneity_bins[0:1], tau= tau, grid_correct=False, use_spherical_mask=False, return_lhs_rhs=True, heterogeneity_kernel= heterogeneity_kernel)
+        cross_validation_estimators[k], lhs[k], rhs[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k],  None, heterogeneity_distances[k], heterogeneity_bins[0:1], tau= tau, grid_correct=False, use_spherical_mask=False, return_lhs_rhs=True, heterogeneity_kernel= heterogeneity_kernel, upsampling_factor=1)
 
         lhs[k] = adaptive_kernel_discretization.half_volume_to_full_volume(lhs[k][0], cryos[k].volume_shape)
         # Zero out things after Nyquist - these won't be used in CV
         lhs[k] = (lhs[k] * cryos.get_valid_frequency_indices()).reshape(cryos.volume_shape)
         cross_validation_estimators[k] = fourier_transform_utils.get_idft3(cross_validation_estimators[k].reshape(cryos.volume_shape)).real.astype(np.float32)
-        cryos[k].update_volume_upsampling_factor(upsampling_for_ests)
 
 
     logger.info("Computing estimates done")
@@ -176,8 +171,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
 
     for k in range(2):
         logger.info("Computing estimates start")
-        cryos[k].update_volume_upsampling_factor(2)
-        estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k],  None, heterogeneity_distances[k], heterogeneity_bins, tau= None, grid_correct=True, use_spherical_mask=True,heterogeneity_kernel= heterogeneity_kernel)
+        estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[k],  None, heterogeneity_distances[k], heterogeneity_bins, tau= None, grid_correct=True, use_spherical_mask=True,heterogeneity_kernel= heterogeneity_kernel, upsampling_factor=2)
         estimates[k] = fourier_transform_utils.get_idft3(estimates[k].reshape(-1, *cryos.volume_shape)).real.astype(np.float32)
 
 
