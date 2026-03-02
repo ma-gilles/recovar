@@ -38,9 +38,9 @@ def main():
     try:
         import flask
     except ImportError:
-        print("ERROR: Flask is required for the GUI. Install it with:")
-        print("  pip install flask")
-        print("  # or: pip install recovar[gui]")
+        print("ERROR: Flask is required for the GUI. Install it with:", file=sys.stderr)
+        print("  pip install flask", file=sys.stderr)
+        print("  # or: pip install recovar[gui]", file=sys.stderr)
         sys.exit(1)
 
     from recovar.gui.app import create_app

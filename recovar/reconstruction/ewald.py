@@ -351,7 +351,7 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
 
 
     noise_variance = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape)
-    logger.debug(utils.report_memory_device())
+    utils.report_memory_device(logger=logger)
     rhs_real, rhs_imag = compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance)
     rhs = vec_masked(rhs_real, rhs_imag, experiment_dataset.volume_shape)
     del rhs_imag, rhs_real
@@ -397,7 +397,7 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
         frame = inspect.currentframe().f_back
         ress.append(frame.f_locals['resid'] / np.linalg.norm(rhs))
         logger.info("CG iter %s, residual: %s", len(ress), ress[-1])
-    logger.debug(utils.report_memory_device())
+    utils.report_memory_device(logger=logger)
     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, x0 = x0_masked, maxiter=max_iter, tol=tol, M = planar_op, callback=report)
 
     volume_real, volume_imag = unvec_masked(x_result, experiment_dataset.volume_shape, mask_size)

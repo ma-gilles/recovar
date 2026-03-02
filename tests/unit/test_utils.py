@@ -104,14 +104,17 @@ def test_report_memory_device_with_logger(monkeypatch):
     assert "GPU mem in use:1; peak:2; total available:3, process mem in use:4" == captured["msg"]
 
 
-def test_report_memory_device_without_logger(monkeypatch, capsys):
+def test_report_memory_device_without_logger(monkeypatch):
+    """When logger=None, report_memory_device falls back to the module logger."""
+    captured = {"msg": None}
+    fake_logger = SimpleNamespace(info=lambda msg: captured.__setitem__("msg", msg))
+    monkeypatch.setattr(_utils_helpers, "_module_logger", fake_logger)
     monkeypatch.setattr(_utils_helpers, "get_gpu_memory_used", lambda device=0: 1)
     monkeypatch.setattr(_utils_helpers, "get_peak_gpu_memory_used", lambda device=0: 2)
     monkeypatch.setattr(_utils_helpers, "get_gpu_memory_total", lambda device=0: 3)
     monkeypatch.setattr(_utils_helpers, "get_process_memory_used", lambda: 4)
     _utils_helpers.report_memory_device(logger=None)
-    captured = capsys.readouterr()
-    assert "GPU mem in use:1; peak:2; total available:3, process mem in use:4" in captured.out
+    assert "GPU mem in use:1; peak:2; total available:3, process mem in use:4" == captured["msg"]
 
 
 def test_misc_size_and_shape_helpers():

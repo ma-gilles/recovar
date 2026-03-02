@@ -284,23 +284,22 @@ def estimate_multi_gpu_speedup(n_images: int, n_gpus: int) -> dict:
 # Example usage and testing
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    
+
     # Test GPU detection
-    print("Testing GPU detection...")
+    logger.info("Testing GPU detection...")
     devices = get_available_gpus()
-    print(f"Found {len(devices)} GPU(s)\n")
-    
+    logger.info("Found %d GPU(s)", len(devices))
+
     # Test index splitting
-    print("Testing index splitting...")
+    logger.info("Testing index splitting...")
     for n_gpus in [2, 4, 8]:
         splits = split_indices_for_gpus(100000, n_gpus)
-        print(f"{n_gpus} GPUs: sizes = {[len(s) for s in splits]}")
-    print()
-    
+        logger.info("%d GPUs: sizes = %s", n_gpus, [len(s) for s in splits])
+
     # Test speedup estimation
-    print("Testing speedup estimation...")
+    logger.info("Testing speedup estimation...")
     for n_gpus in [1, 2, 4, 8]:
         est = estimate_multi_gpu_speedup(300000, n_gpus)
-        print(f"{n_gpus} GPUs: {est['expected_speedup']:.2f}× speedup "
-              f"({est['efficiency']*100:.1f}% efficiency)")
+        logger.info("%d GPUs: %.2f× speedup (%.1f%% efficiency)",
+                    n_gpus, est['expected_speedup'], est['efficiency'] * 100)
 
