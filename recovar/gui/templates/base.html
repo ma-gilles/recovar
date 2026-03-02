@@ -50,7 +50,7 @@
 
     /* Focus ring for keyboard nav */
     :focus-visible { outline: 2px solid #38bdf8; outline-offset: 2px; }
-    input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; }
+    input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; box-shadow: 0 0 0 2px #38bdf8; border-radius: 4px; }
 
     /* Log severity highlighting */
     .log-error { color: #f87171; background: rgba(239,68,68,0.08); display: inline-block; width: 100%; }
@@ -172,7 +172,7 @@
   </div>
 
   <!-- Toast notifications -->
-  <div x-data="toastManager()" id="toast-container" role="status" aria-live="polite" class="fixed bottom-4 right-4 z-50 flex flex-col-reverse gap-2 pointer-events-none">
+  <div x-data="toastManager()" @show-toast.window="show($event.detail.message, $event.detail.type, $event.detail.duration)" id="toast-container" role="status" aria-live="polite" class="fixed bottom-4 right-4 z-50 flex flex-col-reverse gap-2 pointer-events-none">
     <template x-for="toast in toasts" :key="toast.id">
       <div class="pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-lg shadow-xl shadow-black/30 text-sm max-w-sm fade-in border"
            :class="{
@@ -222,10 +222,9 @@
 
     // Global toast function for use from any component
     window.showToast = function(message, type = 'info', duration = 4000) {
-      const el = document.getElementById('toast-container');
-      if (el && el._x_dataStack) {
-        el._x_dataStack[0].show(message, type, duration);
-      }
+      window.dispatchEvent(new CustomEvent('show-toast', {
+        detail: { message, type, duration }
+      }));
     };
 
     // htmx system info handler

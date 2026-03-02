@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import shlex
+import subprocess
 import time
 
 import numpy as np
@@ -254,7 +255,7 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
     def job_detail(job_id):
         job = manager.get_job(job_id)
         if not job:
-            return "Job not found", 404
+            return redirect(url_for("dashboard"))
         # Lazily populate error for failed jobs
         if job.status == "failed" and not job.error:
             err = manager.get_error_summary(job_id)
@@ -614,8 +615,11 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         info = {"hostname": os.uname().nodename}
         # GPU info
         try:
-            result = os.popen("nvidia-smi --query-gpu=name,memory.total --format=csv,noheader").read()
-            info["gpus"] = [line.strip() for line in result.strip().split("\n") if line.strip()]
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=10,
+            )
+            info["gpus"] = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
         except Exception:
             logger.debug("nvidia-smi query failed", exc_info=True)
             info["gpus"] = []
