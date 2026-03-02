@@ -6,6 +6,9 @@ pytest.importorskip("jax")
 import jax.numpy as jnp
 
 import recovar.heterogeneity.covariance_estimation as cov_est
+import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar import core
+from recovar.core.configs import ForwardModelConfig, BatchData
 from recovar.data_io.dataset import CryoEMHalfsets
 from helpers.tiny_synthetic import make_tiny_cryo_dataset, make_tiny_cryo_dataset_with_images
 
@@ -485,3 +488,158 @@ def test_preprocess_tilt_labels_for_batch_gpu(gpu_device):
         gpu_out = np.asarray(cov_est.preprocess_tilt_labels_for_batch(labels_g))
 
     np.testing.assert_array_equal(cpu_out, gpu_out)
+
+
+# ---------------------------------------------------------------------------
+# Variance kernel equivalence: new half-vol must match old full-vol reference
+# ---------------------------------------------------------------------------
+
+def _make_variance_test_fixtures(grid_size=4, n_images=4, seed=42):
+    """Return (config, batch_data, mean_estimate, volume_mask, image_mask)."""
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=grid_size, n_images=n_images, seed=seed)
+    config = ForwardModelConfig.from_dataset(cryo, disc_type="linear_interp")
+
+    images_gen = cryo.image_stack.get_dataset_generator(batch_size=n_images)
+    images_batch, _, indices = next(iter(images_gen))
+
+    batch_data = BatchData(
+        images=jnp.asarray(images_batch),
+        ctf_params=jnp.asarray(cryo.CTF_params[indices]),
+        rotation_matrices=jnp.asarray(cryo.rotation_matrices[indices]),
+        translations=jnp.asarray(cryo.translations[indices]),
+        noise_variance=jnp.asarray(cryo.noise.get(indices)),
+    )
+    mean_estimate = jnp.zeros(config.volume_size, dtype=jnp.complex64)
+    volume_mask = jnp.ones(config.volume_size, dtype=jnp.float32)
+    image_mask = jnp.ones(config.image_shape, dtype=jnp.float32)
+    return config, batch_data, mean_estimate, volume_mask, image_mask
+
+
+def _reference_variance_kernel(config, batch_data, mean_estimate, volume_mask, image_mask, soften=5):
+    """Old full-volume backprojection logic, for numerical equivalence testing."""
+    from recovar.heterogeneity import covariance_core
+    from recovar.reconstruction import noise as noise_mod
+
+    images = batch_data.images
+    noise_variances = batch_data.noise_variance
+    CTF = config.compute_ctf(batch_data.ctf_params)
+    images = core.translate_images(images, batch_data.translations, config.image_shape)
+
+    if config.premultiplied_ctf:
+        images = images - core.slice_volume_by_map(
+            mean_estimate, batch_data.rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
+        ) * CTF ** 2
+        noise_p_variance_ctf = CTF ** 2
+    else:
+        images = images - core.slice_volume_by_map(
+            mean_estimate, batch_data.rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
+        ) * CTF
+        noise_p_variance_ctf = jnp.ones_like(images)
+
+    img_power_full = jnp.abs(images) ** 2
+    cov_noise = jnp.zeros_like(images)
+
+    if volume_mask is not None:
+        image_mask_per_image = covariance_core.get_per_image_tight_mask(
+            volume_mask, batch_data.rotation_matrices, image_mask, config.volume_mask_threshold,
+            config.image_shape, config.volume_shape, config.grid_size, config.padding,
+            "linear_interp", soften=soften,
+        )
+        images = covariance_core.apply_image_masks(images, image_mask_per_image, config.image_shape)
+        if config.premultiplied_ctf:
+            noise_variances = noise_variances * CTF ** 2
+        cov_noise = noise_mod.get_masked_noise_variance_from_noise_variance(
+            image_mask_per_image, noise_variances, config.image_shape
+        )
+
+    images_squared = jnp.abs(images) ** 2 - cov_noise.reshape(images.shape)
+    CTF_squared = CTF ** 2
+    if not config.premultiplied_ctf:
+        images_squared *= CTF_squared
+
+    def _bp(arr):
+        return core.adjoint_slice_volume_by_trilinear(
+            arr, batch_data.rotation_matrices, config.image_shape, config.volume_shape
+        )
+
+    return _bp(images_squared), _bp(CTF_squared ** 2), _bp(img_power_full), _bp(noise_p_variance_ctf)
+
+
+def _to_full(half_vol, volume_shape):
+    return np.asarray(fourier_transform_utils.half_volume_to_full_volume(half_vol, volume_shape))
+
+
+def test_variance_kernel_no_mask_matches_reference():
+    """New kernel (half-vol accumulation) matches old full-vol backprojection — no mask."""
+    config, batch_data, mean_estimate, _, image_mask = _make_variance_test_fixtures()
+
+    ref_y, ref_ctf, ref_im, ref_one = _reference_variance_kernel(
+        config, batch_data, mean_estimate, volume_mask=None, image_mask=image_mask
+    )
+    new_y, new_ctf, new_im, new_one = cov_est.variance_relion_kernel_trilinear(
+        config, batch_data, mean_estimate, volume_mask=None, image_mask=image_mask
+    )
+
+    vol_shape = config.volume_shape
+    np.testing.assert_allclose(_to_full(new_y, vol_shape), np.asarray(ref_y), atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(_to_full(new_ctf, vol_shape), np.asarray(ref_ctf), atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(_to_full(new_im, vol_shape), np.asarray(ref_im), atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(_to_full(new_one, vol_shape), np.asarray(ref_one), atol=1e-4, rtol=1e-4)
+
+
+def test_variance_kernel_with_mask_matches_reference():
+    """New kernel (half-vol accumulation) matches old full-vol backprojection — with mask."""
+    config, batch_data, mean_estimate, volume_mask, image_mask = _make_variance_test_fixtures()
+
+    ref_y, ref_ctf, ref_im, ref_one = _reference_variance_kernel(
+        config, batch_data, mean_estimate, volume_mask, image_mask
+    )
+    new_y, new_ctf, new_im, new_one = cov_est.variance_relion_kernel_trilinear(
+        config, batch_data, mean_estimate, volume_mask, image_mask
+    )
+
+    vol_shape = config.volume_shape
+    np.testing.assert_allclose(_to_full(new_y, vol_shape), np.asarray(ref_y), atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(_to_full(new_ctf, vol_shape), np.asarray(ref_ctf), atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(_to_full(new_im, vol_shape), np.asarray(ref_im), atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(_to_full(new_one, vol_shape), np.asarray(ref_one), atol=1e-4, rtol=1e-4)
+
+
+def test_variance_kernel_accumulator_matches_sequential_sum():
+    """Accumulator pattern gives the same result as summing per-batch contributions."""
+    config, batch_data, mean_estimate, volume_mask, image_mask = _make_variance_test_fixtures(n_images=6)
+
+    # Split into two half-batches.
+    def _slice_batch(bd, sl):
+        return BatchData(
+            images=bd.images[sl],
+            ctf_params=bd.ctf_params[sl],
+            rotation_matrices=bd.rotation_matrices[sl],
+            translations=bd.translations[sl],
+            noise_variance=bd.noise_variance[sl],
+        )
+
+    b1 = _slice_batch(batch_data, slice(0, 3))
+    b2 = _slice_batch(batch_data, slice(3, 6))
+
+    # Reference: run separately, convert, sum.
+    kwargs = dict(mean_estimate=mean_estimate, volume_mask=volume_mask, image_mask=image_mask)
+    y1, ctf1, im1, one1 = cov_est.variance_relion_kernel_trilinear(config, b1, **kwargs)
+    y2, ctf2, im2, one2 = cov_est.variance_relion_kernel_trilinear(config, b2, **kwargs)
+    vol_shape = config.volume_shape
+    ref_y = _to_full(y1, vol_shape) + _to_full(y2, vol_shape)
+    ref_ctf = _to_full(ctf1, vol_shape) + _to_full(ctf2, vol_shape)
+    ref_im = _to_full(im1, vol_shape) + _to_full(im2, vol_shape)
+    ref_one = _to_full(one1, vol_shape) + _to_full(one2, vol_shape)
+
+    # Accumulator: pass running accumulators between calls.
+    acc_y, acc_ctf, acc_im, acc_one = cov_est.variance_relion_kernel_trilinear(config, b1, **kwargs)
+    acc_y, acc_ctf, acc_im, acc_one = cov_est.variance_relion_kernel_trilinear(
+        config, b2, mean_estimate=mean_estimate, volume_mask=volume_mask, image_mask=image_mask,
+        Ft_y=acc_y, Ft_ctf=acc_ctf, Ft_im=acc_im, Ft_one=acc_one,
+    )
+
+    np.testing.assert_allclose(_to_full(acc_y, vol_shape), ref_y, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(_to_full(acc_ctf, vol_shape), ref_ctf, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(_to_full(acc_im, vol_shape), ref_im, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(_to_full(acc_one, vol_shape), ref_one, atol=1e-5, rtol=1e-5)

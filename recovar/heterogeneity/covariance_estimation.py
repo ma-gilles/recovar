@@ -16,7 +16,7 @@ from recovar import core, utils, jax_config
 from recovar.core import cubic_interpolation
 from recovar.core.configs import ForwardModelConfig, BatchData, DataIterator, ModelState, CovarianceOpts
 from recovar.heterogeneity import covariance_core
-from recovar.reconstruction import regularization, noise
+from recovar.reconstruction import regularization, relion_functions, noise
 
 logger = logging.getLogger(__name__)
 
@@ -530,63 +530,90 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, b
     return Ft_ctf, Ft_y, Ft_one, Ft_im
 
 
+def _safe_div(numerator, denominator, threshold=1e-20):
+    """Element-wise division, returning 0 where denominator is below threshold."""
+    safe_denom = jnp.where(denominator > threshold, denominator, jnp.float32(1.0))
+    return jnp.where(denominator > threshold, numerator / safe_denom, jnp.float32(0.0))
+
+
 @nvtx.annotate("compute_variance", color="yellow")
-def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset = None, use_regularization = False, disc_type = '', noise_ind_subset = None, mean_cubic=None):
-    st_time = time.time()
-
-    from recovar.reconstruction import relion_functions
-
-    variance = dict()
-    lhs_l = 2 * [None]
-    rhs_l = 2 * [None]
-    noise_p_variance_lhs = 2 * [None]
-    noise_p_variance_rhs = 2 * [None]
+def compute_variance(
+    cryos,
+    mean_estimate,
+    batch_size,
+    volume_mask,
+    image_subset=None,
+    use_regularization=False,
+    disc_type='',
+    noise_ind_subset=None,
+    mean_cubic=None,
+):
+    st = time.time()
 
     if disc_type == 'cubic':
-        if mean_cubic is not None:
-            mean_estimate = mean_cubic
-        else:
-            mean_estimate = cubic_interpolation.calculate_spline_coefficients(mean_estimate.reshape(cryos.volume_shape))
+        mean_estimate = (
+            mean_cubic if mean_cubic is not None
+            else cubic_interpolation.calculate_spline_coefficients(
+                mean_estimate.reshape(cryos.volume_shape)
+            )
+        )
 
+    # Run variance kernel for each half-set.
+    # variance_relion_style_triangular_kernel returns (Ft_ctf, Ft_y, Ft_one, Ft_im):
+    #   ctf_w   — CTF^4 accumulator (Wiener denominator)
+    #   signal  — residual^2·CTF^2 accumulator (Wiener numerator)
+    #   noise_w — noise-normalisation denominator
+    #   noise_s — |residuals|^2 accumulator (noise-normalisation numerator)
+    ctf_w, signal, noise_w, noise_s = [], [], [], []
+    for cryo in cryos:
+        subset = (
+            np.where(cryo.noise.dose_indices == noise_ind_subset)[0]
+            if noise_ind_subset is not None else image_subset
+        )
+        fw, sig, nw, ns = variance_relion_style_triangular_kernel(
+            cryo, mean_estimate, batch_size,
+            image_subset=subset, volume_mask=volume_mask, disc_type=disc_type,
+        )
+        ctf_w.append(relion_functions.adjust_regularization_relion_style(fw, cryos.volume_shape))
+        signal.append(sig)
+        noise_w.append(nw)
+        noise_s.append(ns)
 
-    for idx, cryo in enumerate(cryos):
-        if noise_ind_subset is not None:
-            image_subset = np.where(cryo.noise.dose_indices == noise_ind_subset)[0]
-        else:
-            image_subset = None
+    variance = {f"corrected{i}": _safe_div(signal[i], ctf_w[i]) for i in range(2)}
 
-        lhs_l[idx], rhs_l[idx], noise_p_variance_lhs[idx] , noise_p_variance_rhs[idx] = variance_relion_style_triangular_kernel(cryo, mean_estimate, batch_size, image_subset = image_subset, volume_mask = volume_mask, disc_type = disc_type)
-
-        lhs_l[idx] = relion_functions.adjust_regularization_relion_style(lhs_l[idx], cryos.volume_shape, tau = None, padding_factor = 1, max_res_shell = None)
-        safe_lhs = jnp.where(lhs_l[idx] > 1e-20, lhs_l[idx], jnp.float32(1.0))
-        variance["corrected" + str(idx)] = jnp.where(lhs_l[idx] > 1e-20, rhs_l[idx] / safe_lhs, jnp.float32(0.0))
-
-    lhs = (lhs_l[0] + lhs_l[1])/2
-    variance_prior, fsc, _ = regularization.compute_fsc_prior_gpu_v2(cryos.volume_shape, variance["corrected0"], variance["corrected1"], lhs, jnp.ones(cryos.volume_size, dtype = cryos.dtype_real) * np.inf, frequency_shift = jnp.array([0,0,0]), upsampling_factor = 1, substract_shell_mean = True)
+    lhs = (ctf_w[0] + ctf_w[1]) / 2
+    variance_prior, fsc, _ = regularization.compute_fsc_prior_gpu_v2(
+        cryos.volume_shape,
+        variance["corrected0"], variance["corrected1"],
+        lhs,
+        jnp.ones(cryos.volume_size, dtype=cryos.dtype_real) * np.inf,
+        frequency_shift=jnp.array([0, 0, 0]),
+        upsampling_factor=1,
+        substract_shell_mean=True,
+    )
 
     if use_regularization:
-        for idx, cryo in enumerate(cryos):
-            lhs_l[idx] = relion_functions.adjust_regularization_relion_style(lhs_l[idx], cryos.volume_shape, tau = variance_prior, padding_factor = 1, max_res_shell = None)
-            safe_lhs_reg = jnp.where(lhs_l[idx] > 1e-20, lhs_l[idx], jnp.float32(1.0))
-            variance["corrected" + str(idx)] = jnp.where(lhs_l[idx] > 1e-20, rhs_l[idx] / safe_lhs_reg, jnp.float32(0.0))
+        for i in range(2):
+            reg_lhs = relion_functions.adjust_regularization_relion_style(
+                ctf_w[i], cryos.volume_shape, tau=variance_prior,
+            )
+            variance[f"corrected{i}"] = _safe_div(signal[i], reg_lhs)
 
-    variance_prior = np.array(variance_prior)
-    variance["combined"] = (variance["corrected0"] + variance["corrected1"])/2
-    variance["prior"] = variance_prior
+    variance["combined"] = (variance["corrected0"] + variance["corrected1"]) / 2
+    variance["prior"] = np.array(variance_prior)
     variance["lhs"] = lhs
+    variance = {k: np.array(v).real for k, v in variance.items()}
 
-    for key in variance:
-        variance[key] = np.array(variance[key]).real
+    noise_p_variance_est = _safe_div(noise_s[0] + noise_s[1], noise_w[0] + noise_w[1])
 
-
-    noise_lhs_sum = noise_p_variance_lhs[0] + noise_p_variance_lhs[1]
-    safe_noise_lhs = jnp.where(noise_lhs_sum > 1e-20, noise_lhs_sum, jnp.float32(1.0))
-    noise_p_variance_est = jnp.where(noise_lhs_sum > 1e-20, (noise_p_variance_rhs[0] + noise_p_variance_rhs[1]) / safe_noise_lhs, jnp.float32(0.0))
-
-    end_time = time.time()
-    logger.info("time to compute variance: %s", end_time- st_time)
-
-    return variance, variance_prior.real, fsc.real, lhs.real, noise_p_variance_est.real
+    logger.info("time to compute variance: %.1fs", time.time() - st)
+    return (
+        variance,
+        np.array(variance_prior).real,
+        np.array(fsc).real,
+        np.array(lhs).real,
+        np.array(noise_p_variance_est).real,
+    )
 
 
 @nvtx.annotate("compute_both_H_B", color="blue")
