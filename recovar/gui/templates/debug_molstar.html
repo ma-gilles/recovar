@@ -157,58 +157,63 @@
       log('--- Loading Volume ---');
       log('URL: ' + url);
 
-      // First verify the endpoint responds
+      // Step 6a: Fetch volume data ourselves
+      let volData;
       try {
-        const resp = await fetch(url, { method: 'HEAD' });
-        log(`Endpoint HEAD response: ${resp.status} ${resp.statusText}`, resp.ok ? 'ok' : 'err');
+        log('Fetching volume data: ' + url);
+        const t0 = performance.now();
+        const resp = await fetch(url);
         if (!resp.ok) {
-          log('Volume file not found on server!', 'err');
+          log('Volume fetch FAILED: HTTP ' + resp.status, 'err');
           return;
         }
+        volData = await resp.arrayBuffer();
+        const fetchMs = (performance.now() - t0).toFixed(0);
+        log(`Volume fetched: ${volData.byteLength} bytes in ${fetchMs}ms`, 'ok');
       } catch (e) {
         log('Fetch error: ' + e.message, 'err');
         return;
       }
 
-      // Try CCP4 format
-      log('Attempting loadVolumeFromUrl with format="ccp4"...');
+      // Step 6b: Load via blob URL
+      log('Creating blob URL and calling loadVolumeFromUrl...');
+      const blob = new Blob([volData], { type: 'application/octet-stream' });
+      const blobUrl = URL.createObjectURL(blob);
+      const t1 = performance.now();
       try {
-        await viewer.loadVolumeFromUrl(
-          { url, format: 'ccp4', isBinary: true },
-          [{ type: 'relative', value: 1.5, color: 0x38bdf8, alpha: 0.85 }],
-          { entryId: 'test-volume' }
-        );
-        log('Volume loaded with CCP4 format!', 'ok');
-      } catch (e) {
-        log('CCP4 format FAILED: ' + e.message, 'err');
-        log('Stack: ' + (e.stack || '').slice(0, 300), 'err');
-
-        // Try MRC format
-        log('Attempting loadVolumeFromUrl with format="mrc"...');
-        try {
-          await viewer.loadVolumeFromUrl(
-            { url, format: 'mrc', isBinary: true },
+        await Promise.race([
+          viewer.loadVolumeFromUrl(
+            { url: blobUrl, format: 'ccp4', isBinary: true },
             [{ type: 'relative', value: 1.5, color: 0x38bdf8, alpha: 0.85 }],
             { entryId: 'test-volume' }
-          );
-          log('Volume loaded with MRC format!', 'ok');
-        } catch (e2) {
-          log('MRC format FAILED: ' + e2.message, 'err');
+          ),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('loadVolumeFromUrl timed out after 30s')), 30000)),
+        ]);
+        const loadMs = (performance.now() - t1).toFixed(0);
+        log(`Volume loaded with CCP4 format in ${loadMs}ms!`, 'ok');
+      } catch (e) {
+        const loadMs = (performance.now() - t1).toFixed(0);
+        log(`CCP4 load FAILED after ${loadMs}ms: ` + e.message, 'err');
 
-          // Try MAP format
-          log('Attempting loadVolumeFromUrl with format="map"...');
-          try {
-            await viewer.loadVolumeFromUrl(
-              { url, format: 'map', isBinary: true },
+        // Fallback: try direct URL (not blob)
+        log('Fallback: trying loadVolumeFromUrl with direct URL...');
+        const t2 = performance.now();
+        try {
+          await Promise.race([
+            viewer.loadVolumeFromUrl(
+              { url, format: 'ccp4', isBinary: true },
               [{ type: 'relative', value: 1.5, color: 0x38bdf8, alpha: 0.85 }],
-              { entryId: 'test-volume' }
-            );
-            log('Volume loaded with MAP format!', 'ok');
-          } catch (e3) {
-            log('MAP format FAILED: ' + e3.message, 'err');
-            log('All volume formats failed!', 'err');
-          }
+              { entryId: 'test-volume-2' }
+            ),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Direct URL timed out after 30s')), 30000)),
+          ]);
+          const directMs = (performance.now() - t2).toFixed(0);
+          log(`Direct URL loaded in ${directMs}ms!`, 'ok');
+        } catch (e2) {
+          log('Direct URL also FAILED: ' + e2.message, 'err');
         }
+      } finally {
+        URL.revokeObjectURL(blobUrl);
       }
 
       // Step 7: Camera reset
