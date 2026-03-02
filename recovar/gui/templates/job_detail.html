@@ -39,8 +39,7 @@
         </svg>
         Re-run
       </a>
-      {% endif %}
-      {% if not job.id.startswith('discovered_') %}
+      {% elif not job.id.startswith('discovered_') %}
       <a href="{{ url_for('clone_job', job_id=job.id) }}"
          class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
          title="Clone this job with modified parameters">
@@ -74,7 +73,7 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <!-- Tab: Overview                                                   -->
   <!-- ═══════════════════════════════════════════════════════════════ -->
-  <div x-show="tab === 'overview'"
+  <div x-show="tab === 'overview'" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview"
        class="space-y-5">
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
       <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
@@ -210,7 +209,7 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <!-- Tab: Explore (Embedding + Volume Viewer)                        -->
   <!-- ═══════════════════════════════════════════════════════════════ -->
-  <div x-show="tab === 'explore'" style="display:none"
+  <div x-show="tab === 'explore'" style="display:none" id="panel-explore" role="tabpanel" aria-labelledby="tab-explore"
        class="space-y-4">
 
     <!-- No embeddings message -->
@@ -638,7 +637,7 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <!-- Tab: Volumes (Categorized Browser)                              -->
   <!-- ═══════════════════════════════════════════════════════════════ -->
-  <div x-show="tab === 'volumes'" style="display:none"
+  <div x-show="tab === 'volumes'" style="display:none" id="panel-volumes" role="tabpanel" aria-labelledby="tab-volumes"
        class="space-y-4">
     <template x-if="!analysisInfo || (!analysisInfo.volumes.length && !Object.keys(analysisInfo.analyses).length)">
       <div class="text-center py-16 text-slate-500">
@@ -851,7 +850,7 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <!-- Tab: Images                                                     -->
   <!-- ═══════════════════════════════════════════════════════════════ -->
-  <div x-show="tab === 'images'" style="display:none">
+  <div x-show="tab === 'images'" style="display:none" id="panel-images" role="tabpanel" aria-labelledby="tab-images">
     <div class="space-y-4">
       <!-- Analysis images by zdim -->
       <template x-for="[zdim, info] in Object.entries(analysisInfo?.analyses || {})" :key="'img_'+zdim">
@@ -939,16 +938,15 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <!-- Tab: Logs                                                       -->
   <!-- ═══════════════════════════════════════════════════════════════ -->
-  <div x-show="tab === 'logs'" style="display:none">
+  <div x-show="tab === 'logs'" style="display:none" id="panel-logs" role="tabpanel" aria-labelledby="tab-logs">
     <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
       <div class="flex items-center justify-between px-4 py-2.5 border-b border-slate-800">
         <span class="text-xs font-medium text-slate-400">Log Output</span>
         <div class="flex items-center gap-3">
           <span class="text-[11px] text-slate-500">{% if job.status in ('running', 'queued') %}Auto-refreshes every 3s{% endif %}</span>
           <button @click="fetchLogs()"
-                  class="text-[11px] text-slate-500 hover:text-slate-300 transition-colors flex items-center gap-1"
-                  :class="logLoading ? 'animate-spin' : ''">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  class="text-[11px] text-slate-500 hover:text-slate-300 transition-colors flex items-center gap-1">
+            <svg class="w-3.5 h-3.5" :class="logLoading ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
             </svg>
             Refresh
@@ -963,10 +961,7 @@
         </div>
       </div>
       <div class="p-4 max-h-[600px] overflow-y-auto scrollbar-thin"
-           id="log-container"
-           hx-get="{{ url_for('api_job_logs', job_id=job.id) }}"
-           hx-trigger="load{% if job.status in ('running', 'queued') %}, every 3s{% endif %}"
-           hx-swap="innerHTML">
+           id="log-container">
         <pre class="text-xs text-slate-300 font-mono">Loading logs...</pre>
       </div>
     </div>
@@ -975,7 +970,7 @@
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <!-- Tab: Parameters                                                 -->
   <!-- ═══════════════════════════════════════════════════════════════ -->
-  <div x-show="tab === 'params'" style="display:none">
+  <div x-show="tab === 'params'" style="display:none" id="panel-params" role="tabpanel" aria-labelledby="tab-params">
     <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
       <div class="px-4 py-2.5 border-b border-slate-800">
         <span class="text-xs font-medium text-slate-400">Job Parameters</span>
@@ -1020,9 +1015,21 @@
 <!-- ════════════════════════════════════════════════════════════════ -->
 <script src="{{ url_for('static', filename='vendor/plotly.min.js') }}" charset="utf-8"></script>
 <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='vendor/molstar.css') }}">
+<style>
+  /* Hide Mol* UI chrome — we only want the 3D canvas */
+  .msp-highlight-toast-wrapper,
+  .msp-viewport-controls,
+  .msp-logo { display: none !important; }
+</style>
 <script src="{{ url_for('static', filename='vendor/molstar.js') }}"></script>
 
 <script>
+// Store Mol* viewer OUTSIDE Alpine's reactive proxy scope.
+// Alpine wraps all x-data properties in Proxy objects, which breaks
+// Mol*'s internal state management (dataTransaction hangs forever).
+let _molstarViewer = null;
+let _molstarTarget = null;
+
 function jobExplorer() {
   return {
     // ── State ─────────────────────────────────────────────────────
@@ -1063,9 +1070,7 @@ function jobExplorer() {
     taskLogId: null,   // task ID whose log is displayed
     taskLogHtml: '',   // HTML content of the log
 
-    // Volume viewer
-    viewer: null,
-    viewerTarget: null, // which div the viewer is in
+    // Volume viewer (actual Mol* objects stored in _molstarViewer/_molstarTarget outside Alpine)
     currentVolumeName: '',
     currentVolumePath: '',
     volumeInfo: null,
@@ -1139,25 +1144,23 @@ function jobExplorer() {
 
     get hasUmap() {
       if (!this.analysisInfo) return false;
-      // Check exact zdim match first, then any analysis entry
       const analyses = this.analysisInfo.analyses || {};
       const key = String(this.selectedZdim);
-      if (analyses[key]?.has_umap) return true;
-      return Object.values(analyses).some(a => a.has_umap);
+      return analyses[key]?.has_umap ?? false;
     },
 
     get hasKmeans() {
       if (!this.analysisInfo) return false;
       const analyses = this.analysisInfo.analyses || {};
       const key = String(this.selectedZdim);
-      if (analyses[key]?.has_kmeans) return true;
-      return Object.values(analyses).some(a => a.has_kmeans);
+      return analyses[key]?.has_kmeans ?? false;
     },
 
     // ── Lifecycle ─────────────────────────────────────────────────
     async init() {
       try {
         const resp = await fetch('/api/jobs/{{ job.id }}/analysis');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
         this.analysisInfo = await resp.json();
         const zdims = this.analysisInfo.available_zdims || [];
         if (zdims.length > 0) {
@@ -1205,7 +1208,7 @@ function jobExplorer() {
 
       // Watch view mode changes to load 3D viewer when switching
       this.$watch('viewMode', (mode) => {
-        if (mode === '3d' && this.currentVolumePath && !this.viewer) {
+        if (mode === '3d' && this.currentVolumePath && !_molstarViewer) {
           this._load3DVolume(this.currentVolumePath, {});
         }
       });
@@ -1243,6 +1246,7 @@ function jobExplorer() {
       const el = document.getElementById('log-container');
       try {
         const resp = await fetch('/api/jobs/{{ job.id }}/logs');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const html = await resp.text();
         if (el) {
           el.innerHTML = html;
@@ -1271,6 +1275,7 @@ function jobExplorer() {
       this.embeddingLoading = true;
       try {
         const resp = await fetch(`/api/jobs/{{ job.id }}/embeddings?zdim=${this.selectedZdim}`);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const data = await resp.json();
         if (data.error) {
           console.error('Embedding error:', data.error);
@@ -1395,6 +1400,7 @@ function jobExplorer() {
       if (!this.selectedZdim) return;
       try {
         const resp = await fetch(`/api/jobs/{{ job.id }}/embeddings/umap?zdim=${this.selectedZdim}`);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const data = await resp.json();
         if (data.error) {
           showToast('UMAP not available: ' + data.error, 'error');
@@ -1410,6 +1416,7 @@ function jobExplorer() {
       if (this.kmeansData || !this.selectedZdim) return;
       try {
         const resp = await fetch(`/api/jobs/{{ job.id }}/embeddings/kmeans?zdim=${this.selectedZdim}`);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const data = await resp.json();
         if (data.error) return;
         this.kmeansData = data;
@@ -1542,13 +1549,15 @@ function jobExplorer() {
             label: `Volume computation`,
             volumes: [],
           });
-          this.pollTask(result.task_id);
+          this.pollTask(result.task_id, () => { this.computing = false; });
+        } else {
+          this.computing = false;
         }
       } catch (e) {
         console.error('Compute failed:', e);
         showToast('Failed to start computation: ' + e.message, 'error');
+        this.computing = false;
       }
-      this.computing = false;
     },
 
     async computeTrajectory() {
@@ -1582,13 +1591,15 @@ function jobExplorer() {
             label: 'Trajectory computation',
             volumes: [],
           });
-          this.pollTask(result.task_id);
+          this.pollTask(result.task_id, () => { this.computing = false; });
+        } else {
+          this.computing = false;
         }
       } catch (e) {
         console.error('Compute failed:', e);
         showToast('Failed to start computation: ' + e.message, 'error');
+        this.computing = false;
       }
-      this.computing = false;
     },
 
     async computeDensity() {
@@ -1621,12 +1632,14 @@ function jobExplorer() {
             label: 'Conformational Density',
             volumes: [],
           });
-          this.pollTask(result.task_id);
+          this.pollTask(result.task_id, () => { this.densityComputing = false; });
+        } else {
+          this.densityComputing = false;
         }
       } catch (e) {
         showToast('Failed to start density estimation: ' + e.message, 'error');
+        this.densityComputing = false;
       }
-      this.densityComputing = false;
     },
 
     async computeStableStates() {
@@ -1661,12 +1674,14 @@ function jobExplorer() {
             label: 'Stable States',
             volumes: [],
           });
-          this.pollTask(result.task_id);
+          this.pollTask(result.task_id, () => { this.stableStatesComputing = false; });
+        } else {
+          this.stableStatesComputing = false;
         }
       } catch (e) {
         showToast('Failed to start stable states search: ' + e.message, 'error');
+        this.stableStatesComputing = false;
       }
-      this.stableStatesComputing = false;
     },
 
     useStableStateAsPoint(idx, which) {
@@ -1697,13 +1712,14 @@ function jobExplorer() {
       this.taskLogHtml = '<p class="text-slate-500 text-xs">Loading log...</p>';
       try {
         const resp = await fetch(`/api/jobs/{{ job.id }}/tasks/${taskId}/log`);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
         this.taskLogHtml = await resp.text();
       } catch (e) {
         this.taskLogHtml = `<p class="text-red-400 text-xs">Failed to load log: ${e.message}</p>`;
       }
     },
 
-    async pollTask(taskId) {
+    async pollTask(taskId, onDone) {
       let errorCount = 0;
       const maxErrors = 5;
       const poll = async () => {
@@ -1748,9 +1764,11 @@ function jobExplorer() {
             // Refresh analysis info to include new computed results
             const resp2 = await fetch('/api/jobs/{{ job.id }}/analysis');
             this.analysisInfo = await resp2.json();
+            onDone?.();
           } else if (task.status === 'failed') {
             this.activeTasks[idx].error = task.error;
             showToast('Computation failed: ' + (task.error || 'unknown error'), 'error', 6000);
+            onDone?.();
           } else {
             // Still running, poll again
             setTimeout(poll, 3000);
@@ -1765,6 +1783,7 @@ function jobExplorer() {
               this.activeTasks[idx].error = 'Lost connection to server';
             }
             showToast('Task polling stopped — lost connection to server', 'error', 6000);
+            onDone?.();
           } else {
             setTimeout(poll, 5000);
           }
@@ -1791,6 +1810,7 @@ function jobExplorer() {
         // Load volume info
         try {
           const resp = await fetch('/api/volume/info?path=' + encodeURIComponent(path));
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
           this.volumeInfo = await resp.json();
           if (this.volumeInfo.shape) {
             this.sliceMax = this.volumeInfo.shape[this.sliceAxis] - 1;
@@ -1836,13 +1856,13 @@ function jobExplorer() {
       const color = options.color || this.volumeColorPalette[this.nextVolumeColor % this.volumeColorPalette.length];
 
       // Dispose previous viewer if replacing or switching viewports
-      if (replaceAll || !this.viewer || this.viewerTarget !== viewportId) {
-        if (this.viewer) {
-          try { this.viewer.plugin?.dispose(); } catch (e) {}
+      if (replaceAll || !_molstarViewer || _molstarTarget !== viewportId) {
+        if (_molstarViewer) {
+          try { _molstarViewer.plugin?.dispose(); } catch (e) {}
         }
         el.innerHTML = '';
         this.loadedVolumes = [];
-        this.viewer = null;
+        _molstarViewer = null;
       }
 
       const url = '/api/volume/raw?path=' + encodeURIComponent(path);
@@ -1853,20 +1873,24 @@ function jobExplorer() {
         }
 
         // Create viewer if needed
-        if (!this.viewer) {
+        if (!_molstarViewer) {
           const viewer = await molstar.Viewer.create(el, {
             layoutIsExpanded: false,
-            layoutShowControls: false,
+            layoutShowControls: true,   // Must be true — dataTransaction hangs without panel infrastructure
             layoutShowRemoteState: false,
-            layoutShowSequence: false,
-            layoutShowLog: false,
-            layoutShowLeftPanel: false,
+            layoutShowSequence: false,   // Hide sequence panel (top)
+            layoutShowLog: false,        // Hide log panel (bottom)
+            layoutShowLeftPanel: false,  // Hide left panel
             collapseLeftPanel: true,
-            collapseRightPanel: true,
+            collapseRightPanel: true,    // Collapse right panel
             viewportShowExpand: false,
             viewportShowSelectionMode: false,
             viewportShowAnimation: false,
             viewportShowTrajectoryControls: false,
+            viewportShowSettings: false,
+            viewportShowScreenshotControls: false,
+            viewportShowControls: false,
+            viewportShowReset: false,
           });
 
           if (viewer.plugin.canvas3d) {
@@ -1875,29 +1899,24 @@ function jobExplorer() {
             });
           }
 
-          this.viewer = viewer;
-          this.viewerTarget = viewportId;
-          console.log('[Volume] Mol* viewer created');
+          _molstarViewer = viewer;
+          _molstarTarget = viewportId;
         }
 
-        // Use isLazy: true to bypass the hanging dataTransaction.
-        // isLazy uses build().commit() (simple state tree update) instead
-        // of dataTransaction which wraps in runTask(Se.create(...)) and hangs.
-        // The volume data is fetched lazily when the viewport renders.
         const isoConfigs = [
           { type: 'relative', value: this.isoLevel, color: color, alpha: this.isoAlpha },
         ];
-        console.log('[Volume] Loading via loadVolumeFromUrl (isLazy)...');
-        await this.viewer.loadVolumeFromUrl(
-          { url, format: 'ccp4', isBinary: true },
-          isoConfigs,
-          { entryId: this.currentVolumeName, isLazy: true }
-        );
-        console.log('[Volume] Lazy volume node created');
-
+        await Promise.race([
+          _molstarViewer.loadVolumeFromUrl(
+            { url, format: 'ccp4', isBinary: true },
+            isoConfigs,
+            { entryId: this.currentVolumeName }
+          ),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Volume load timed out after 30s')), 30000)),
+        ]);
         // Auto-focus camera
         try {
-          this.viewer.plugin.canvas3d?.requestCameraReset();
+          _molstarViewer.plugin.canvas3d?.requestCameraReset();
         } catch (camErr) {
           console.warn('Camera reset failed:', camErr);
         }
@@ -1910,11 +1929,9 @@ function jobExplorer() {
           visible: true,
         });
         this.nextVolumeColor++;
-
-        console.log('Mol* volume loaded:', this.currentVolumeName);
       } catch (e) {
         console.error('Mol* 3D load error:', e);
-        this.viewer = null;
+        _molstarViewer = null;
         el.innerHTML = `
           <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:#94a3b8;padding:20px;">
             <p style="font-size:13px;font-weight:600;color:#f87171;">3D Viewer Error</p>
@@ -1933,7 +1950,7 @@ function jobExplorer() {
     updateIso() {
       clearTimeout(this._isoDebounce);
       this._isoDebounce = setTimeout(() => {
-        if (this.currentVolumePath && this.viewer) {
+        if (this.currentVolumePath && _molstarViewer) {
           this._load3DVolume(this.currentVolumePath, {});
         }
       }, 300);
@@ -1981,13 +1998,13 @@ function jobExplorer() {
     },
 
     clearAllVolumes() {
-      if (this.viewer) {
-        try { this.viewer.plugin?.dispose(); } catch (e) {}
-        this.viewer = null;
+      if (_molstarViewer) {
+        try { _molstarViewer.plugin?.dispose(); } catch (e) {}
+        _molstarViewer = null;
       }
       this.loadedVolumes = [];
       this.nextVolumeColor = 0;
-      const el = document.getElementById(this.viewerTarget || 'ngl-viewport-explore');
+      const el = document.getElementById(_molstarTarget || 'ngl-viewport-explore');
       if (el) el.innerHTML = '';
     },
 

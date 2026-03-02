@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import pickle
+import shlex
 import shutil
 import subprocess
 import time
@@ -310,7 +311,11 @@ def _slurm_job_status(job_id: str) -> Optional[str]:
             ["sacct", "-j", job_id, "--format=State", "--noheader", "-P"],
             capture_output=True, text=True, timeout=10,
         )
-        if result.returncode == 0 and result.stdout.strip():
+        if result.returncode != 0:
+            logger.warning("sacct failed for job %s (rc=%d): %s",
+                           job_id, result.returncode, result.stderr.strip())
+            return None
+        if result.stdout.strip():
             states = [s.strip() for s in result.stdout.strip().split("\n") if s.strip()]
             if states:
                 state = states[0].upper()
@@ -327,8 +332,8 @@ def _slurm_job_status(job_id: str) -> Optional[str]:
     return None
 
 
-def _slurm_submit(script_path: str) -> Optional[str]:
-    """Submit a SLURM batch script. Returns job ID or None."""
+def _slurm_submit(script_path: str) -> tuple[Optional[str], str]:
+    """Submit a SLURM batch script. Returns (job_id, error_message)."""
     try:
         result = subprocess.run(
             ["sbatch", script_path],
@@ -338,10 +343,16 @@ def _slurm_submit(script_path: str) -> Optional[str]:
             # Parse "Submitted batch job 12345"
             parts = result.stdout.strip().split()
             if len(parts) >= 4:
-                return parts[-1]
+                return parts[-1], ""
+            logger.error("sbatch unexpected output: %s", result.stdout.strip())
+            return None, f"Unexpected sbatch output: {result.stdout.strip()}"
+        else:
+            stderr = result.stderr.strip() or result.stdout.strip()
+            logger.error("sbatch failed (rc=%d): %s", result.returncode, stderr)
+            return None, f"sbatch error: {stderr}"
     except Exception as e:
         logger.error("SLURM submit failed: %s", e)
-    return None
+        return None, str(e)
 
 
 # ---------------------------------------------------------------------------
@@ -615,21 +626,21 @@ echo "Started at: $(date)"
 
 echo "Completed at: $(date)"
 """)
-            slurm_id = _slurm_submit(script)
+            slurm_id, slurm_err = _slurm_submit(script)
             if slurm_id:
                 job.slurm_job_id = slurm_id
                 job.status = STATUS_QUEUED
                 logger.info("Submitted SLURM job %s for %s", slurm_id, name)
             else:
                 job.status = STATUS_FAILED
-                job.error = "Failed to submit SLURM job"
+                job.error = f"Failed to submit SLURM job: {slurm_err}"
         else:
             # Run directly as subprocess
             try:
                 log_file = os.path.join(output_dir, "gui_run.log")
                 with open(log_file, "w") as lf:
                     proc = subprocess.Popen(
-                        [python_path, "-m"] + command.split(),
+                        [python_path, "-m"] + shlex.split(command),
                         stdout=lf, stderr=subprocess.STDOUT,
                         env={**os.environ,
                              "XLA_PYTHON_CLIENT_PREALLOCATE": "false"},
@@ -1342,14 +1353,14 @@ echo "which python: {python_path}"
 
 {' '.join(cmd)}
 """)
-            slurm_id = _slurm_submit(script_path)
+            slurm_id, slurm_err = _slurm_submit(script_path)
             if slurm_id:
                 task.slurm_job_id = slurm_id
                 task.status = STATUS_QUEUED
                 self._save_task_meta(task)  # persist SLURM job ID
             else:
                 task.status = STATUS_FAILED
-                task.error = "Failed to submit SLURM job"
+                task.error = f"Failed to submit SLURM job: {slurm_err}"
         else:
             try:
                 log_file = os.path.join(output_dir, "compute.log")
