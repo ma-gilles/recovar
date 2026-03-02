@@ -7,6 +7,17 @@ import jax.numpy as jnp
 from recovar import jax_config
 from recovar import core
 from recovar.reconstruction import relion_functions as rf
+from recovar.core.configs import BatchData
+
+
+def _make_batch_data(images, ctf_params, rots, trans, noise_var):
+    return BatchData(
+        images=images,
+        ctf_params=ctf_params,
+        rotation_matrices=rots,
+        translations=trans,
+        noise_variance=noise_var,
+    )
 
 
 def test_gridding_correct_invalid_order_raises():
@@ -44,10 +55,8 @@ def test_adjust_regularization_relion_style_lower_bounded():
 
 
 def test_relion_kernel_batch_normalizes_noise_variance_shapes(monkeypatch):
-    # Keep this test focused on noise-shape normalization behavior.
     from recovar.core.configs import ForwardModelConfig
     import recovar.core.forward as core_forward_mod
-    monkeypatch.setattr(core, "translate_images", lambda images, translations, image_shape: images)
     monkeypatch.setattr(
         core_forward_mod,
         "adjoint_forward_model",
@@ -78,7 +87,7 @@ def test_relion_kernel_batch_normalizes_noise_variance_shapes(monkeypatch):
     ]
     for noise_var in candidate_noises:
         ft_y, ft_ctf = rf.relion_kernel_batch_from_fft(
-            config, images, ctf_params, rots, trans, noise_var,
+            config, _make_batch_data(images, ctf_params, rots, trans, noise_var),
         )
         assert np.asarray(ft_y).shape == (64,)
         assert np.asarray(ft_ctf).shape == (64,)
@@ -144,7 +153,6 @@ def test_relion_kernel_batch_half_image_matches_full_reference():
     from recovar.core.ctf import cryodrgn_CTF
     from recovar.core import padding
     import recovar.core.forward as core_forward
-    import recovar.core.fourier_transform_utils as ftu
     from recovar.reconstruction import noise as noise_mod
 
     rng = np.random.default_rng(42)
@@ -164,72 +172,63 @@ def test_relion_kernel_batch_half_image_matches_full_reference():
         data_multiplier=data_multiplier,
     )
 
-    # Synthetic data
     raw_images = rng.standard_normal((bsz, grid_size, grid_size)).astype(np.float32)
     rots = np.stack([
         np.eye(3, dtype=np.float32),
         rng.standard_normal((3, 3)).astype(np.float32),
         rng.standard_normal((3, 3)).astype(np.float32),
     ])
-    # Make rotations orthogonal via QR
     for i in range(1, bsz):
         q, _ = np.linalg.qr(rots[i])
-        rots[i] = q * np.sign(np.linalg.det(q))  # ensure det=+1
+        rots[i] = q * np.sign(np.linalg.det(q))
 
     trans = rng.standard_normal((bsz, 2)).astype(np.float32) * 0.5
     ctf_params = np.zeros((bsz, 9), dtype=np.float32)
-    ctf_params[:, 0] = 300.0   # kV
-    ctf_params[:, 1] = 2.7     # Cs
-    ctf_params[:, 2] = 0.1     # amplitude contrast
-    ctf_params[:, 3] = rng.uniform(1.0, 3.0, bsz)  # defocusU
-    ctf_params[:, 4] = ctf_params[:, 3]              # defocusV = defocusU (no astigmatism)
-    ctf_params[:, 5] = 0.0     # defocus angle
-    ctf_params[:, 6] = 1.0     # phase shift
-    ctf_params[:, 7] = 10.0    # Bfactor
+    ctf_params[:, 0] = 300.0
+    ctf_params[:, 1] = 2.7
+    ctf_params[:, 2] = 0.1
+    ctf_params[:, 3] = rng.uniform(1.0, 3.0, bsz)
+    ctf_params[:, 4] = ctf_params[:, 3]
+    ctf_params[:, 6] = 1.0
+    ctf_params[:, 7] = 10.0
     noise_var = rng.uniform(0.5, 2.0, (bsz, np.prod(image_shape))).astype(np.float32)
 
     # --- Reference: old full-image path ---
-    # 1. padded_dft (same as process_images)
-    full_images = padding.padded_dft(
-        jnp.array(raw_images) * data_multiplier, grid_size, pad
-    )
-    # 2. translate (full spectrum)
+    full_images = padding.padded_dft(jnp.array(raw_images) * data_multiplier, grid_size, pad)
     full_images = core.translate_images(full_images, jnp.array(trans), image_shape)
-    # 3. noise normalize (full spectrum)
     noise_full = noise_mod.to_batched_pixel_noise(jnp.array(noise_var), image_shape, batch_size=bsz)
     full_images_normed = full_images / noise_full
-    # 4. backproject images (full, half_image=False)
     ref_Ft_y = np.asarray(core_forward.adjoint_forward_model(
         config, full_images_normed, jnp.array(ctf_params), jnp.array(rots),
         skip_ctf=False, volume=None, half_image=False,
     ))
-    # 5. backproject CTF weights
     ctf_full = config.compute_ctf(jnp.array(ctf_params)) / noise_full
     ref_Ft_ctf = np.asarray(core_forward.adjoint_forward_model(
         config, ctf_full, jnp.array(ctf_params), jnp.array(rots),
         volume=None, half_image=False,
     ))
 
-    # --- New: half-image path via relion_kernel_batch ---
-    new_Ft_y, new_Ft_ctf = rf.relion_kernel_batch(
-        config, jnp.array(raw_images), jnp.array(ctf_params),
-        jnp.array(rots), jnp.array(trans), jnp.array(noise_var),
+    # --- New: half-image path via relion_kernel_batch (outputs half-volume) ---
+    import recovar.core.fourier_transform_utils as ftu
+    half_Ft_y, half_Ft_ctf = rf.relion_kernel_batch(
+        config, _make_batch_data(
+            jnp.array(raw_images), jnp.array(ctf_params),
+            jnp.array(rots), jnp.array(trans), jnp.array(noise_var),
+        ),
     )
-    new_Ft_y = np.asarray(new_Ft_y)
-    new_Ft_ctf = np.asarray(new_Ft_ctf)
-
+    new_Ft_y = np.asarray(ftu.half_volume_to_full_volume(half_Ft_y, volume_shape)).reshape(-1)
+    new_Ft_ctf = np.asarray(ftu.half_volume_to_full_volume(half_Ft_ctf, volume_shape)).reshape(-1)
     np.testing.assert_allclose(new_Ft_y, ref_Ft_y, atol=1e-4, rtol=1e-4)
     np.testing.assert_allclose(new_Ft_ctf, ref_Ft_ctf, atol=1e-4, rtol=1e-4)
 
 
 def test_relion_kernel_batch_complex_input_matches_full_reference():
-    """relion_kernel_batch with pre-processed complex images (adaptive path)
-    also matches the full-image reference."""
+    """relion_kernel_batch_from_fft with pre-processed complex images
+    matches the full-image reference."""
     from recovar.core.configs import ForwardModelConfig
     from recovar.core.ctf import cryodrgn_CTF
     from recovar.core import padding
     import recovar.core.forward as core_forward
-    import recovar.core.fourier_transform_utils as ftu
     from recovar.reconstruction import noise as noise_mod
 
     rng = np.random.default_rng(99)
@@ -237,25 +236,18 @@ def test_relion_kernel_batch_complex_input_matches_full_reference():
     pad = 4
     image_shape = (grid_size + pad, grid_size + pad)
     volume_shape = (grid_size + pad,) * 3
-    voxel_size = 1.5
     bsz = 3
-    data_multiplier = 1.0
 
     config = ForwardModelConfig(
         image_shape=image_shape, volume_shape=volume_shape,
-        grid_size=grid_size, voxel_size=voxel_size,
+        grid_size=grid_size, voxel_size=1.5,
         padding=pad, disc_type="linear_interp", CTF_fun=cryodrgn_CTF,
         premultiplied_ctf=False, volume_mask_threshold=0.0,
-        data_multiplier=data_multiplier,
     )
 
-    # Pre-processed complex images (as the adaptive path produces them)
     raw_images = rng.standard_normal((bsz, grid_size, grid_size)).astype(np.float32)
-    complex_images = padding.padded_dft(
-        jnp.array(raw_images) * data_multiplier, grid_size, pad
-    )
-
-    rots = np.stack([np.eye(3, dtype=np.float32)] * bsz)
+    complex_images = padding.padded_dft(jnp.array(raw_images), grid_size, pad)
+    rots = jnp.tile(jnp.eye(3, dtype=jnp.float32), (bsz, 1, 1))
     trans = jnp.zeros((bsz, 2), dtype=jnp.float32)
     ctf_params = np.zeros((bsz, 9), dtype=np.float32)
     ctf_params[:, 0] = 300.0
@@ -270,30 +262,27 @@ def test_relion_kernel_batch_complex_input_matches_full_reference():
     noise_full = noise_mod.to_batched_pixel_noise(jnp.array(noise_var), image_shape, batch_size=bsz)
     full_normed = full_images / noise_full
     ref_Ft_y = np.asarray(core_forward.adjoint_forward_model(
-        config, full_normed, jnp.array(ctf_params), jnp.array(rots),
+        config, full_normed, jnp.array(ctf_params), rots,
         skip_ctf=False, volume=None, half_image=False,
     ))
     ctf_full = config.compute_ctf(jnp.array(ctf_params)) / noise_full
     ref_Ft_ctf = np.asarray(core_forward.adjoint_forward_model(
-        config, ctf_full, jnp.array(ctf_params), jnp.array(rots),
-        volume=None, half_image=False,
+        config, ctf_full, jnp.array(ctf_params), rots, volume=None, half_image=False,
     ))
 
-    # --- New: half-image path (complex input via relion_kernel_batch_from_fft) ---
-    new_Ft_y, new_Ft_ctf = rf.relion_kernel_batch_from_fft(
-        config, complex_images, jnp.array(ctf_params),
-        jnp.array(rots), trans, jnp.array(noise_var),
+    # --- New: half-image path (outputs half-volume) ---
+    import recovar.core.fourier_transform_utils as ftu
+    half_Ft_y, half_Ft_ctf = rf.relion_kernel_batch_from_fft(
+        config, _make_batch_data(complex_images, jnp.array(ctf_params), rots, trans, jnp.array(noise_var)),
     )
-    new_Ft_y = np.asarray(new_Ft_y)
-    new_Ft_ctf = np.asarray(new_Ft_ctf)
-
+    new_Ft_y = np.asarray(ftu.half_volume_to_full_volume(half_Ft_y, volume_shape)).reshape(-1)
+    new_Ft_ctf = np.asarray(ftu.half_volume_to_full_volume(half_Ft_ctf, volume_shape)).reshape(-1)
     np.testing.assert_allclose(new_Ft_y, ref_Ft_y, atol=1e-4, rtol=1e-4)
     np.testing.assert_allclose(new_Ft_ctf, ref_Ft_ctf, atol=1e-4, rtol=1e-4)
 
 
 def test_relion_kernel_batch_accumulator_matches_sequential():
-    """Calling relion_kernel_batch twice with accumulators matches
-    summing two independent calls."""
+    """Calling relion_kernel_batch twice with accumulators matches summing two independent calls."""
     from recovar.core.configs import ForwardModelConfig
     from recovar.core.ctf import cryodrgn_CTF
 
@@ -318,28 +307,26 @@ def test_relion_kernel_batch_accumulator_matches_sequential():
     ctf_params = jnp.zeros((bsz, 9), dtype=jnp.float32)
     noise_var = jnp.ones((1, np.prod(image_shape)), dtype=jnp.float32)
 
+    bd1 = _make_batch_data(imgs1, ctf_params, rots, trans, noise_var)
+    bd2 = _make_batch_data(imgs2, ctf_params, rots, trans, noise_var)
+
     # Two independent calls, sum result
-    y1, c1 = rf.relion_kernel_batch(config, imgs1, ctf_params, rots, trans, noise_var)
-    y2, c2 = rf.relion_kernel_batch(config, imgs2, ctf_params, rots, trans, noise_var)
+    y1, c1 = rf.relion_kernel_batch(config, bd1)
+    y2, c2 = rf.relion_kernel_batch(config, bd2)
     sum_Ft_y = np.asarray(y1) + np.asarray(y2)
     sum_Ft_ctf = np.asarray(c1) + np.asarray(c2)
 
-    # Accumulated version: pass accumulators through
-    acc_y, acc_c = rf.relion_kernel_batch(config, imgs1, ctf_params, rots, trans, noise_var)
-    acc_y, acc_c = rf.relion_kernel_batch(
-        config, imgs2, ctf_params, rots, trans, noise_var, Ft_y=acc_y, Ft_ctf=acc_c,
-    )
-    acc_Ft_y = np.asarray(acc_y)
-    acc_Ft_ctf = np.asarray(acc_c)
+    # Accumulated version
+    acc_y, acc_c = rf.relion_kernel_batch(config, bd1)
+    acc_y, acc_c = rf.relion_kernel_batch(config, bd2, Ft_y=acc_y, Ft_ctf=acc_c)
 
-    np.testing.assert_allclose(acc_Ft_y, sum_Ft_y, atol=1e-5, rtol=1e-5)
-    np.testing.assert_allclose(acc_Ft_ctf, sum_Ft_ctf, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(np.asarray(acc_y), sum_Ft_y, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(np.asarray(acc_c), sum_Ft_ctf, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.gpu
-def test_relion_kernel_batch_half_volume_matches_full_volume(gpu_device):
-    """half_volume=True output matches half_volume=False after converting
-    to full volume."""
+def test_relion_kernel_batch_half_volume_output_on_gpu(gpu_device):
+    """relion_kernel_batch on GPU produces finite half-volume outputs."""
     from recovar.core.configs import ForwardModelConfig
     from recovar.core.ctf import cryodrgn_CTF
     import recovar.core.fourier_transform_utils as ftu
@@ -369,27 +356,17 @@ def test_relion_kernel_batch_half_volume_matches_full_volume(gpu_device):
     ctf_params = ctf_params.at[:, 3].set(2.0)
     ctf_params = ctf_params.at[:, 4].set(2.0)
     noise_var = jnp.ones((1, np.prod(image_shape)), dtype=jnp.float32)
+    bd = _make_batch_data(raw_images, ctf_params, rots, trans, noise_var)
 
     with jax.default_device(gpu_device):
-        # Full volume path
-        full_y, full_c = rf.relion_kernel_batch(
-            config, raw_images, ctf_params, rots, trans, noise_var,
-            half_volume=False,
-        )
-        # Half volume path
-        half_y, half_c = rf.relion_kernel_batch(
-            config, raw_images, ctf_params, rots, trans, noise_var,
-            half_volume=True,
-        )
+        half_y, half_c = rf.relion_kernel_batch(config, bd)
 
-    # Convert half volume → full volume for comparison
-    half_y_full = np.asarray(ftu.half_volume_to_full_volume(half_y, volume_shape)).reshape(-1)
-    half_c_full = np.asarray(ftu.half_volume_to_full_volume(half_c, volume_shape)).reshape(-1)
-    full_y = np.asarray(full_y)
-    full_c = np.asarray(full_c)
-
-    np.testing.assert_allclose(half_y_full, full_y, atol=1e-4, rtol=1e-4)
-    np.testing.assert_allclose(half_c_full, full_c, atol=1e-4, rtol=1e-4)
+    # Expand and verify shape + finiteness
+    full_y = np.asarray(ftu.half_volume_to_full_volume(half_y, volume_shape)).reshape(-1)
+    full_c = np.asarray(ftu.half_volume_to_full_volume(half_c, volume_shape)).reshape(-1)
+    assert full_y.shape == (int(np.prod(volume_shape)),)
+    assert np.isfinite(full_y).all()
+    assert np.isfinite(full_c).all()
 
 
 @pytest.mark.gpu

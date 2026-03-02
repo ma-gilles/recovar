@@ -17,12 +17,13 @@ class _FakeCryo:
 
 
 def test_get_mean_conformation_relion_flow_and_restore(monkeypatch):
-    def fake_triangular_kernel(cryo, noise_variance, batch_size, disc_type, **kwargs):
-        _ = (noise_variance, batch_size, disc_type, kwargs)
-        return np.ones(4, dtype=np.float32) * (1 + cryo.tag), np.ones(4, dtype=np.float32) * (10 + cryo.tag)
+    def fake_triangular_kernel(cryo, noise_variance, batch_size, **kwargs):
+        return (
+            np.ones(4, dtype=np.float32) * (1 + cryo.tag),
+            np.ones(4, dtype=np.float32) * (10 + cryo.tag),
+        )
 
     def fake_post_process_from_filter_v2(ft_ctf, ft_y, volume_shape, upsampling_factor, tau=None, **kwargs):
-        _ = (volume_shape, upsampling_factor, kwargs)
         base = float(np.mean(ft_ctf) + np.mean(ft_y) + (0 if tau is None else np.mean(tau)))
         return np.full(4, base, dtype=np.float32)
 
@@ -41,13 +42,10 @@ def test_get_mean_conformation_relion_flow_and_restore(monkeypatch):
         noise_variance=np.ones(4, dtype=np.float32),
         use_regularization=False,
         upsampling_factor=3,
-        disc_type="linear_interp",
     )
 
-    assert "combined" in means
-    assert "combined_regularized" in means
+    assert set(means.keys()) == {"combined", "corrected0", "corrected1", "corrected0reg", "corrected1reg"}
     assert means["combined"].shape == (4,)
-    assert means["prior"].shape == (4,)
     assert isinstance(mean_prior, np.ndarray)
     assert np.asarray(fsc).size > 0
 
@@ -60,7 +58,6 @@ def test_get_mean_conformation_relion_use_regularization_switch(monkeypatch):
     )
 
     def fake_pp_v2(ft_ctf, ft_y, volume_shape, upsampling_factor, tau=None, **kwargs):
-        _ = (ft_ctf, ft_y, volume_shape, upsampling_factor, kwargs)
         if tau is None:
             return np.array([1.0, 1.0], dtype=np.float32)
         return np.array([3.0, 3.0], dtype=np.float32)
@@ -73,10 +70,19 @@ def test_get_mean_conformation_relion_use_regularization_switch(monkeypatch):
     )
 
     cryos = [_FakeCryo(0), _FakeCryo(1)]
-    means, *_ = homogeneous.get_mean_conformation_relion(
-        cryos=cryos,
-        batch_size=1,
+
+    means_unreg, *_ = homogeneous.get_mean_conformation_relion(
+        cryos=cryos, batch_size=1,
+        noise_variance=np.ones(2, dtype=np.float32),
+        use_regularization=False,
+    )
+    means_reg, *_ = homogeneous.get_mean_conformation_relion(
+        cryos=cryos, batch_size=1,
         noise_variance=np.ones(2, dtype=np.float32),
         use_regularization=True,
     )
-    assert np.allclose(means["combined"], means["combined_regularized"])
+
+    # unregularized combined = average of tau=None outputs = 1.0
+    assert np.allclose(means_unreg["combined"], 1.0)
+    # regularized combined = average of tau!=None outputs = 3.0
+    assert np.allclose(means_reg["combined"], 3.0)
