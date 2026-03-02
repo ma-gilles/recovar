@@ -36,14 +36,9 @@ class RadialNoiseModel():
         self._precompute()
 
     def _precompute(self):
-        # Compute once; store as CPU numpy arrays to avoid GPU memory pressure.
-        # to_batched_half_pixel_noise / jnp.asarray handles GPU transfer per batch.
-        self._noise_full = np.asarray(
-            make_radial_noise(self.noise_variance_radial, self.image_shape).reshape(1, -1)
-        )
-        self._noise_half = np.asarray(
-            make_radial_noise_half(self.noise_variance_radial, self.image_shape).reshape(1, -1)
-        )
+        # Compute once; keep as JAX arrays (GPU) so callers pay zero transfer cost.
+        self._noise_full = make_radial_noise(self.noise_variance_radial, self.image_shape).reshape(1, -1)
+        self._noise_half = make_radial_noise_half(self.noise_variance_radial, self.image_shape).reshape(1, -1)
 
     def get(self, *args, **kwargs):
         return self._noise_full
@@ -63,31 +58,25 @@ class RadialNoiseModel():
 class VariableRadialNoiseModel():
     def __init__(self, noise_variance_radials, dose_indices, image_shape = None):
         self.noise_variance_radials = noise_variance_radials
-        self.dose_indices = np.asarray(dose_indices)
+        self.dose_indices = jnp.asarray(dose_indices)
         self.image_shape = image_shape if image_shape is not None else (2 * (len(noise_variance_radials[0])+1) , 2 * (len(noise_variance_radials[0])+1) )
         self._precompute()
 
     def _precompute(self):
-        # Precompute expanded arrays for every dose-index level; store on CPU.
-        # Per-batch get() / get_half() is then a cheap numpy index, not a JAX call.
-        self._noise_full = np.asarray(
-            batch_make_radial_noise(self.noise_variance_radials, self.image_shape)
-        )
-        self._noise_half = np.asarray(
-            batch_make_radial_noise_half(self.noise_variance_radials, self.image_shape)
-        )
+        # Precompute expanded arrays for every dose-index level as JAX GPU arrays.
+        # Per-batch get() / get_half() is a GPU gather (no host transfer).
+        self._noise_full = batch_make_radial_noise(self.noise_variance_radials, self.image_shape)
+        self._noise_half = batch_make_radial_noise_half(self.noise_variance_radials, self.image_shape)
 
     def get(self, indices, *args, **kwargs):
-        dose_indices_batch = self.dose_indices[np.asarray(indices)]
-        return self._noise_full[dose_indices_batch]
+        return self._noise_full[self.dose_indices[jnp.asarray(indices)]]
 
     def get_half(self, indices, *args, **kwargs):
         """Return noise in half-spectrum (rfft-packed) layout ``(B, H*(W//2+1))``."""
-        dose_indices_batch = self.dose_indices[np.asarray(indices)]
-        return self._noise_half[dose_indices_batch]
+        return self._noise_half[self.dose_indices[jnp.asarray(indices)]]
 
     def get_average_radial_noise(self, *args, **kwargs):
-        counts = jnp.bincount(jnp.asarray(self.dose_indices)) / self.dose_indices.size
+        counts = jnp.bincount(self.dose_indices) / self.dose_indices.size
         return jnp.sum(jnp.asarray(self.noise_variance_radials) * counts[:,None], axis=0)
 
     def set_variance(self, noise_variance_radials):
@@ -138,10 +127,12 @@ def as_noise_model(cov_noise, image_shape):
 
 
 def to_batched_pixel_noise(noise_variances, image_shape, batch_size=None):
-    """Normalize noise variance into shape (B, D*D).
+    """Normalize noise variance into shape broadcastable with (B, D*D).
 
+    Returns (1, D*D) for uniform noise (callers rely on XLA broadcasting),
+    or (B, D*D) when the input is already per-image.
     Accepts common forms used in the codebase:
-    - scalar (white noise, broadcast to all pixels)
+    - scalar (white noise)
     - (D, D)
     - (1, D, D) or (B, D, D)
     - (D*D,)
@@ -150,51 +141,39 @@ def to_batched_pixel_noise(noise_variances, image_shape, batch_size=None):
     arr = jnp.asarray(noise_variances)
 
     if arr.ndim == 0:
-        # Scalar white noise → broadcast to (1, D*D)
         pixel_count = int(np.prod(image_shape))
-        arr = jnp.full((1, pixel_count), arr)
-    elif arr.ndim == 3:
-        arr = arr.reshape(arr.shape[0], -1)
-    elif arr.ndim == 2 and tuple(arr.shape) == tuple(image_shape):
-        arr = arr.reshape(1, -1)
-    elif arr.ndim == 1:
-        arr = arr.reshape(1, -1)
-
-    if batch_size is not None and arr.ndim == 2 and arr.shape[0] == 1 and batch_size > 1:
-        arr = jnp.repeat(arr, batch_size, axis=0)
+        return jnp.full((1, pixel_count), arr)
+    if arr.ndim == 3:
+        return arr.reshape(arr.shape[0], -1)
+    if arr.ndim == 2 and tuple(arr.shape) == tuple(image_shape):
+        return arr.reshape(1, -1)
+    if arr.ndim == 1:
+        return arr.reshape(1, -1)
     return arr
 
 
 def to_batched_half_pixel_noise(noise_variances, image_shape, batch_size=None):
-    """Normalize noise variance into half-spectrum shape (B, H*(W//2+1)).
+    """Normalize noise variance into half-spectrum layout broadcastable with (B, H*(W//2+1)).
 
-    Accepts inputs already in half-pixel format and passes them through.
-    For scalar or full-pixel inputs, converts via the full-spectrum path.
+    Returns (1, N_half) for uniform noise or (B, N_half) for per-image noise.
+    Callers should rely on XLA broadcasting rather than expecting exact (B, N_half).
     """
     arr = jnp.asarray(noise_variances)
     half_pixel_count = int(fourier_transform_utils.image_shape_to_half_image_shape(image_shape)[-1]
                            * image_shape[0])
 
-    # Fast path: already in half-pixel format
+    # Already in half-pixel format — return as-is (broadcast or per-image)
     if arr.ndim == 2 and arr.shape[-1] == half_pixel_count:
-        if batch_size is not None and arr.shape[0] == 1 and batch_size > 1:
-            arr = jnp.repeat(arr, batch_size, axis=0)
         return arr
     if arr.ndim == 1 and arr.size == half_pixel_count:
-        arr = arr.reshape(1, -1)
-        if batch_size is not None and batch_size > 1:
-            arr = jnp.repeat(arr, batch_size, axis=0)
-        return arr
+        return arr.reshape(1, -1)
 
-    # Scalar: broadcast directly to half shape
+    # Scalar → (1, N_half)
     if arr.ndim == 0:
-        arr = jnp.full((1, half_pixel_count), arr)
-        if batch_size is not None and batch_size > 1:
-            arr = jnp.repeat(arr, batch_size, axis=0)
-        return arr
+        return jnp.full((1, half_pixel_count), arr)
 
-    # Full-pixel input: convert via existing path
-    full = to_batched_pixel_noise(noise_variances, image_shape, batch_size=batch_size)
+    # Full-pixel input: convert via full-spectrum path then extract half
+    full = to_batched_pixel_noise(noise_variances, image_shape)
     return fourier_transform_utils.full_image_to_half_image(full, image_shape)
 
 
