@@ -10,9 +10,12 @@ logger = logging.getLogger(__name__)
 
 
 def extract_image_subset_from_kmeans(path_to_centers, kmeans_indices, inverse, output_path):
-    assert os.path.exists(path_to_centers), f"Path to centers {path_to_centers} does not exist"
-    assert path_to_centers.endswith('.pkl'), "path_to_centers must be a .pkl file"
-    assert output_path.endswith('.pkl'), "output_path must be a .pkl file"
+    if not os.path.exists(path_to_centers):
+        raise FileNotFoundError(f"Path to centers {path_to_centers} does not exist")
+    if not path_to_centers.endswith('.pkl'):
+        raise ValueError("path_to_centers must be a .pkl file")
+    if not output_path.endswith('.pkl'):
+        raise ValueError("output_path must be a .pkl file")
 
     centers = utils.pickle_load(path_to_centers)
     raw_labels = centers['labels']

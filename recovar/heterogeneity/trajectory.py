@@ -140,8 +140,10 @@ def compute_travel_time(density, g_st, latent_space_bounds):
 
 def compute_fixed_dimensional_path(z_st, z_end, density_low_dim, latent_space_bounds, density_eps = 1e-5, debug_plot = False, density_option = "kde", use_log_density = False):
 
-    assert z_st.shape[-1] == density_low_dim.ndim, "Start point should be in the same dimension as density"
-    assert np.isclose(np.array(density_low_dim.shape) -  density_low_dim.shape[0], 0).all(), "Density should be on square grid"
+    if z_st.shape[-1] != density_low_dim.ndim:
+        raise ValueError(f"Start point dim ({z_st.shape[-1]}) must match density ndim ({density_low_dim.ndim})")
+    if not np.isclose(np.array(density_low_dim.shape) - density_low_dim.shape[0], 0).all():
+        raise ValueError("Density should be on a square grid")
 
     # max_dim = zs.shape[-1] if max_dim is None else max_dim
     num_points = density_low_dim.shape[0]
@@ -167,7 +169,8 @@ def compute_fixed_dimensional_path(z_st, z_end, density_low_dim, latent_space_bo
 
 def compute_high_dimensional_path(zs, cov_zs, z_st, z_end, density_low_dim, density_eps = 1e-5, max_dim = None, percentile_bound = 1, num_points = 50, use_log_density = False, debug_plot = False, density_option = "kde"):
 
-    assert np.isclose(np.array(density_low_dim.shape) -  density_low_dim.shape[0], 0).all(), "Density should be on square grid"
+    if not np.isclose(np.array(density_low_dim.shape) - density_low_dim.shape[0], 0).all():
+        raise ValueError("Density should be on a square grid")
     max_dim = zs.shape[-1] if max_dim is None else max_dim
     latent_space_bounds = latent_density.compute_latent_space_bounds(zs, percentile = percentile_bound)
 

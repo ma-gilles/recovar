@@ -123,7 +123,7 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
         elif fun_on_grid.ndim ==5:
             dx = grids[1,1,1,1,1,:] - grids[0,0,0,0,0,:] 
         else:
-            assert False
+            raise ValueError(f"Unsupported grid dimensionality: {fun_on_grid.ndim}")
 
         dx/= jnp.mean(dx)
 
@@ -307,7 +307,8 @@ def _centered(arr, newshape):
 def ifftn(arr, s= None, axes = None):
     axes = np.arange(arr.ndim)
     s = arr.shape if s is None else s
-    assert len(axes) <= 6, "only implemented up to dim 6"
+    if len(axes) > 6:
+        raise ValueError(f"ifftn only implemented up to dim 6, got {len(axes)}")
     if len(axes) <= 3:
         arr = jnp.fft.ifftn(arr, s, axes)
     else:
@@ -318,7 +319,8 @@ def ifftn(arr, s= None, axes = None):
 def fftn(arr, s= None, axes = None):
     axes = np.arange(arr.ndim)
     s = arr.shape if s is None else s
-    assert len(axes) <= 6, "only implemented up to dim 6"
+    if len(axes) > 6:
+        raise ValueError(f"fftn only implemented up to dim 6, got {len(axes)}")
     if len(axes) <= 3:
         arr = jnp.fft.fftn(arr, s, axes)
     else:

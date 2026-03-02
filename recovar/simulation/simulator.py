@@ -592,7 +592,8 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     if percent_outliers > 0:
         # Perhaps a reasonable way to throw in outliers is to put a different structure entirely with wrong angles
 
-        assert outlier_volume is not None, "if you want outliers, need to provide a structure"
+        if outlier_volume is None:
+            raise ValueError("if you want outliers, need to provide a structure")
         # Make sure they are on the same scale
 
         outlier_volume  = outlier_volume / np.linalg.norm(outlier_volume) * np.mean(np.linalg.norm(volumes,axis=(-1)))
@@ -611,7 +612,8 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
 
     # Handle tilt outliers for tilt series (individual tilts within normal particles)
     if n_tilts > 0 and percent_tilt_series_outliers > 0:
-        assert outlier_volume is not None, "if you want tilt outliers, need to provide a structure"
+        if outlier_volume is None:
+            raise ValueError("if you want tilt outliers, need to provide a structure")
         
         # Calculate number of tilt outliers
         n_tilt_series_outliers = np.round(percent_tilt_series_outliers * n_tilt_groups).astype(int)
@@ -670,7 +672,8 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
 
 def save_ctf_params(outdir, D: int, ctf_params, voxel_size):
 
-    assert D % 2 == 0
+    if D % 2 != 0:
+        raise ValueError(f"D must be even, got {D}")
     ctf_params_all = np.zeros([ctf_params.shape[0], ctf_params.shape[1] + 2])
     ctf_params_all[:,2:] = ctf_params
     ctf_params_all[:,0] = D

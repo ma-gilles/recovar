@@ -106,7 +106,8 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
     colors = ['k', 'cornflowerblue', 'g' , 'r', 'b', 'w', 'c'] if colors is None else colors
     path_exists = trajectories is not None
 
-    assert projection_function in ['slice', 'slice_point', 'sum', None], "Unknown projection function"
+    if projection_function not in ('slice', 'slice_point', 'sum', None):
+        raise ValueError(f"Unknown projection function: {projection_function}")
     projection_function = half_slice_other if projection_function == 'slice' else projection_function
     projection_function = slice_at_point if projection_function == 'slice_point' else projection_function
 
@@ -118,8 +119,8 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
 
     compute_density = False
     if density is None:
-        assert zs is not None
-        assert cov_zs is not None 
+        if zs is None or cov_zs is None:
+            raise ValueError("zs and cov_zs are required when density is not provided")
         compute_density = True
         
     if compute_density:
@@ -128,7 +129,8 @@ def plot_over_density(density, trajectories = None, latent_space_bounds = None, 
         num_points= density.shape[0]
 
     if path_exists:
-        assert latent_space_bounds is not None, "Need latent space bounds to plot trajectories"
+        if latent_space_bounds is None:
+            raise ValueError("Need latent space bounds to plot trajectories")
         _, z_to_grid = ld.get_grid_z_mappings(latent_space_bounds, num_points)
     
     def plot_traj_along_axes(axes, points = None ):
@@ -1002,10 +1004,12 @@ def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folde
         input_density: Pre-computed density array (or None to compute).
         latent_space_bounds: Bounds for the latent space grid.
     """
-    assert (((z_st is not None) and (z_end is not None)) or (gt_volumes is not None)), 'either z_st and z_end should be passed, or gt_volumes'
+    if not (((z_st is not None) and (z_end is not None)) or (gt_volumes is not None)):
+        raise ValueError("either z_st and z_end should be passed, or gt_volumes")
 
     if input_density is not None:
-        assert latent_space_bounds is not None, 'need latent_space_bounds if providing density'
+        if latent_space_bounds is None:
+            raise ValueError("need latent_space_bounds if providing density")
 
     latent_space_bounds = ld.compute_latent_space_bounds(pipeline_output.get('latent_coords')[basis_size]) if latent_space_bounds is None else latent_space_bounds
 

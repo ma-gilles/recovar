@@ -342,7 +342,8 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
 
     if not np.isclose(experiment_dataset.CTF_params[:,core.CTFParamIndex.W],0).all():
         ctf_params = experiment_dataset.CTF_params
-        assert np.isclose(experiment_dataset.CTF_params[:,core.CTFParamIndex.PHASE_SHIFT],0).all(), "Either w or phase shift should be zero"
+        if not np.isclose(experiment_dataset.CTF_params[:,core.CTFParamIndex.PHASE_SHIFT],0).all():
+            raise ValueError("Either w or phase shift should be zero")
 
         phase_shift = np.arcsin(ctf_params[:,core.CTFParamIndex.W]) / np.pi * 180
         ctf_params[:,core.CTFParamIndex.W] = 0

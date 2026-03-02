@@ -73,7 +73,8 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
         ``None`` unless *compute_bias* is ``True``.
     """
 
-    assert u.shape[0] == cryos.volume_size, "input u should be volume_size x basis_size"
+    if u.shape[0] != cryos.volume_size:
+        raise ValueError(f"input u should be volume_size x basis_size, got {u.shape[0]} != {cryos.volume_size}")
     st_time = time.time()    
     basis = np.asarray(u[:, :basis_size]).T
     eigenvalues = (s + jax_config.ROOT_EPSILON)

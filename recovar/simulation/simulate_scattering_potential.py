@@ -160,7 +160,8 @@ def generate_synthetic_spectrum_of_molecule(radius, grid_size, voxel_size = 1, a
     atom_shape_fn = (lambda x : gaussian_atom_shape_fn(x,1)) if atom_shape_fn is None else atom_shape_fn
     N_atoms = choose_number_of_atoms(radius) if N_atoms is None else N_atoms
 
-    assert radius < (grid_size/ 2 * voxel_size ) 
+    if radius >= (grid_size / 2 * voxel_size):
+        raise ValueError(f"radius ({radius}) must be < grid_size/2 * voxel_size ({grid_size / 2 * voxel_size})") 
 
     atom_coords = get_random_points_in_unit_ball(N_atoms) * radius
     return generate_spectrum_of_molecule_from_atom_coords(atom_coords, grid_size, voxel_size, atom_shape_fn)

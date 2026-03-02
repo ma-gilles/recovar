@@ -47,7 +47,8 @@ def evaluate_ctf(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfactor):
     Returns:
         CTF values with the same shape as ``freqs[..., 0]``.
     """
-    assert freqs.shape[-1] == 2
+    if freqs.shape[-1] != 2:
+        raise ValueError(f"freqs last dimension must be 2, got {freqs.shape[-1]}")
     volt = volt * 1000
     cs = cs * 10**7
     dfang = dfang * jnp.pi / 180

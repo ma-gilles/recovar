@@ -402,7 +402,7 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask
         logger.info("reg time: %s", time.time() - st_time)
         utils.report_memory_device(logger = logger)
     else:
-        assert False, "wrong covariance reg fn"
+        raise ValueError("wrong covariance reg fn")
 
     return covariance_cols, picked_frequencies, np.asarray(fscs)
 
@@ -807,10 +807,11 @@ def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency
         if "kernel" in H_B_fn:
             f_jit = jax.jit(compute_H_B_triangular, static_argnums = [7,8,9,10,11,12, 13])
         else:
-            assert False, "Not recognized covariance_fn"
+            raise ValueError(f"Not recognized covariance_fn: {H_B_fn}")
 
     if experiment_dataset.tilt_series_flag:
-        assert "kernel" in H_B_fn, "Only kernel implemented for tilt series"
+        if "kernel" not in H_B_fn:
+            raise ValueError("Only kernel covariance_fn is implemented for tilt series")
 
     if options['disc_type'] == 'cubic':
         these_disc = 'cubic'
@@ -1132,7 +1133,8 @@ def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_pa
 
     # This is not correct if we are using the mask and the CTF is premultiplied
     if do_mask_images:
-        assert not premultiplied_ctf, "Not implemented yet"
+        if premultiplied_ctf:
+            raise NotImplementedError("Masking with premultiplied CTF is not implemented yet")
 
     AU_t_AU = batch_x_T_y(AUs,AUs).real.astype(CTF_params.dtype)
     
@@ -1233,7 +1235,8 @@ def reduce_covariance_inner(
         AU_t_images = batch_x_T_y(AUs, batch)
 
     if do_mask_images:
-        assert not config.premultiplied_ctf, "Not implemented yet"
+        if config.premultiplied_ctf:
+            raise NotImplementedError("Masking with premultiplied CTF is not implemented yet")
 
     AU_t_AU = batch_x_T_y(AUs, AUs).real.astype(ctf_params.dtype)
 

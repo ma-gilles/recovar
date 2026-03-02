@@ -48,8 +48,10 @@ def estimate_conformational_density(recovar_result_dir, output_dir=None, pca_dim
         z_dim_all = z_dim_all[z_dim_all >= pca_dim]
         z_dim_used = np.min(z_dim_all)
 
-    assert (pca_dim <= z_dim_used), f"pca_dim {pca_dim} should be less than or equal to z_dim_used {z_dim_used}"
-    assert (pca_dim <= 6), f"pca_dim {pca_dim} should be less than or equal to 6. It will take very long even for 5."
+    if pca_dim > z_dim_used:
+        raise ValueError(f"pca_dim {pca_dim} should be less than or equal to z_dim_used {z_dim_used}")
+    if pca_dim > 6:
+        raise ValueError(f"pca_dim {pca_dim} should be less than or equal to 6. It will take very long even for 5.")
 
     output_dir = Path(output_dir).expanduser().resolve() if output_dir is not None else recovar_result_dir / 'density'
     output.mkdir_safe(str(output_dir))
