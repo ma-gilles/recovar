@@ -2,6 +2,8 @@ import logging
 
 import jax.numpy as jnp
 import numpy as np
+import scipy.stats
+
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
 import recovar.core.forward as core_forward
@@ -75,7 +77,6 @@ def estimate_false_positive_rate(experiment_dataset, volumes, noise_variance, ba
             experiment_dataset.image_stack.process_images,
         )
         alphas[particles_ind] = 0.5 * jnp.sqrt(res)
-    import scipy.stats
     gamma = 1 - np.mean(scipy.stats.norm.cdf(alphas))
 
     return gamma

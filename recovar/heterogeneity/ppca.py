@@ -1,8 +1,11 @@
 import logging
-import jax.numpy as jnp
-import numpy as np
+
 import jax
+import jax.numpy as jnp
+import jax.random as jr
+import numpy as np
 import functools
+
 from recovar import core
 from recovar.core import linalg
 from recovar.heterogeneity import embedding
@@ -71,8 +74,6 @@ def M_step(experiment_dataset, latent_means, latent_covariances, noise_variance,
 def EM(experiment_dataset, mean_estimate, noise_variance, EM_iter = 20, basis_size = 10):
 
     # Initialize
-    import jax.random as jr
-
     matrix_key, vector_key = jr.split(jr.PRNGKey(0))
     W = jr.normal(matrix_key, (experiment_dataset.volume_size, basis_size), dtype = experiment_dataset.dtype_real)
     W = linalg.batch_dft3(W, experiment_dataset.volume_shape, basis_size)
