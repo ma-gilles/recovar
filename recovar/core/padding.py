@@ -13,16 +13,29 @@ logger = logging.getLogger(__name__)
 
 # PADDING FUNCTIONS 
     
-@functools.partial(jax.jit, static_argnums = [1,2])    
+@functools.partial(jax.jit, static_argnums = [1,2])
 def padded_dft(images, image_size, padding : int):
     n_images = images.shape[0]
     images_shape = images.shape[-2:]
     padded_image_x = images_shape[0] + padding
     padded_image_y = images_shape[1] + padding
     images_big = jnp.zeros_like(images, shape = [n_images, padded_image_x, padded_image_y] )
-    images_big = images_big.at[...,padding//2:images_shape[0] + padding//2, padding//2:images_shape[1] + padding//2].set(images)    
+    images_big = images_big.at[...,padding//2:images_shape[0] + padding//2, padding//2:images_shape[1] + padding//2].set(images)
     padded_image_size = padded_image_x * padded_image_y
     return fourier_transform_utils.get_dft2(images_big).reshape([n_images, padded_image_size])
+
+
+@functools.partial(jax.jit, static_argnums=[1, 2])
+def padded_rfft(images, image_size, padding: int):
+    """Pad real-space images and compute real FFT → half-spectrum output.
+
+    Like :func:`padded_dft` but uses rfft2, producing flattened half-spectrum
+    images of shape ``(n_images, H * (W // 2 + 1))``.
+    """
+    if images.dtype == jnp.float16:
+        images = images.astype(jnp.float32)
+    images_big = pad_images_spatial_domain(images, padding)
+    return fourier_transform_utils.get_dft2_real(images_big).reshape([images.shape[0], -1])
 
 def pad_images_spatial_domain(images, padding):
     n_images = images.shape[0]

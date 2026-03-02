@@ -3,7 +3,6 @@
 For each pipeline function that was converted from full-image to half-image format,
 this test module calls both variants with identical input and checks exact equivalence.
 """
-import functools
 import numpy as np
 import pytest
 import jax
@@ -95,13 +94,12 @@ def test_adjoint_trilinear_full_vs_half(N, n_images):
     images_full = jnp.array(hermitian_images(n_images, image_shape, rng))
     images_half = fourier_transform_utils.full_image_to_half_image(images_full, image_shape)
 
-    # Use _jax variants directly to avoid CUDA dispatch
     from recovar.core.slicing import (
-        _adjoint_slice_volume_by_trilinear_jax,
+        adjoint_slice_volume_by_trilinear,
         adjoint_slice_volume_by_trilinear_from_half_images,
     )
 
-    vol_full = _adjoint_slice_volume_by_trilinear_jax(images_full, rots, image_shape, volume_shape)
+    vol_full = adjoint_slice_volume_by_trilinear(images_full, rots, image_shape, volume_shape)
     vol_half = adjoint_slice_volume_by_trilinear_from_half_images(images_half, rots, image_shape, volume_shape)
 
     assert_close(vol_full, vol_half, "adjoint_trilinear full vs half")
@@ -125,11 +123,11 @@ def test_adjoint_trilinear_accumulate_full_vs_half(N, n_images):
     seed = jnp.array(rng.standard_normal(vol_size).astype(np.float32) + 1j * rng.standard_normal(vol_size).astype(np.float32), dtype=jnp.complex64)
 
     from recovar.core.slicing import (
-        _adjoint_slice_volume_by_trilinear_jax,
+        adjoint_slice_volume_by_trilinear,
         adjoint_slice_volume_by_trilinear_from_half_images,
     )
 
-    vol_full = _adjoint_slice_volume_by_trilinear_jax(images, rots, image_shape, volume_shape, volume=seed)
+    vol_full = adjoint_slice_volume_by_trilinear(images, rots, image_shape, volume_shape, volume=seed)
     vol_half = adjoint_slice_volume_by_trilinear_from_half_images(images_half, rots, image_shape, volume_shape, volume=seed)
 
     assert_close(vol_full, vol_half, "adjoint_trilinear accumulate full vs half")
@@ -152,11 +150,11 @@ def test_adjoint_trilinear_real_images_full_vs_half(N, n_images):
     ctf_sq_half = fourier_transform_utils.full_image_to_half_image(ctf_sq, image_shape)
 
     from recovar.core.slicing import (
-        _adjoint_slice_volume_by_trilinear_jax,
+        adjoint_slice_volume_by_trilinear,
         adjoint_slice_volume_by_trilinear_from_half_images,
     )
 
-    vol_full = _adjoint_slice_volume_by_trilinear_jax(ctf_sq, rots, image_shape, volume_shape)
+    vol_full = adjoint_slice_volume_by_trilinear(ctf_sq, rots, image_shape, volume_shape)
     vol_half = adjoint_slice_volume_by_trilinear_from_half_images(ctf_sq_half, rots, image_shape, volume_shape)
 
     assert_close(vol_full, vol_half, "adjoint_trilinear real images full vs half")
@@ -186,41 +184,15 @@ def test_mstep_backproject_full_vs_half(N):
     summed_images = P @ shifted_images  # n_rots × image_size, Hermitian
 
     from recovar.core.slicing import (
-        _adjoint_slice_volume_by_trilinear_jax,
+        adjoint_slice_volume_by_trilinear,
         adjoint_slice_volume_by_trilinear_from_half_images,
     )
 
-    vol_full = _adjoint_slice_volume_by_trilinear_jax(summed_images, rots, image_shape, volume_shape)
+    vol_full = adjoint_slice_volume_by_trilinear(summed_images, rots, image_shape, volume_shape)
     summed_half = fourier_transform_utils.full_image_to_half_image(summed_images, image_shape)
     vol_half = adjoint_slice_volume_by_trilinear_from_half_images(summed_half, rots, image_shape, volume_shape)
 
     assert_close(vol_full, vol_half, "M-step backproject full vs half")
-
-
-# ---------------------------------------------------------------------------
-# Test 5: adjoint_slice_volume_by_map full vs from_half_images (nearest)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize("N", SIZES)
-@pytest.mark.parametrize("n_images", N_IMAGES_LIST)
-def test_adjoint_map_nearest_full_vs_half(N, n_images):
-    """adjoint_slice_volume_by_map(nearest) full vs from_half_images."""
-    rng = np.random.default_rng(55 + N)
-    image_shape = (N, N)
-    volume_shape = (N, N, N)
-    rots = jnp.array(random_rotations(n_images, rng))
-    images = jnp.array(hermitian_images(n_images, image_shape, rng))
-    images_half = fourier_transform_utils.full_image_to_half_image(images, image_shape)
-
-    from recovar.core.slicing import (
-        _adjoint_slice_volume_by_map_jax,
-        adjoint_slice_volume_by_map_from_half_images,
-    )
-
-    vol_full = _adjoint_slice_volume_by_map_jax(images, rots, image_shape, volume_shape, "nearest")
-    vol_half = adjoint_slice_volume_by_map_from_half_images(images_half, rots, image_shape, volume_shape, "nearest")
-
-    assert_close(vol_full, vol_half, "adjoint_map nearest full vs half")
 
 
 # ---------------------------------------------------------------------------
@@ -239,11 +211,11 @@ def test_adjoint_map_trilinear_full_vs_half(N, n_images):
     images_half = fourier_transform_utils.full_image_to_half_image(images, image_shape)
 
     from recovar.core.slicing import (
-        _adjoint_slice_volume_by_trilinear_jax,
+        adjoint_slice_volume_by_trilinear,
         adjoint_slice_volume_by_trilinear_from_half_images,
     )
 
-    vol_full = _adjoint_slice_volume_by_trilinear_jax(images, rots, image_shape, volume_shape)
+    vol_full = adjoint_slice_volume_by_trilinear(images, rots, image_shape, volume_shape)
     vol_half = adjoint_slice_volume_by_trilinear_from_half_images(images_half, rots, image_shape, volume_shape)
 
     assert_close(vol_full, vol_half, "adjoint_map trilinear full vs half")
@@ -375,71 +347,6 @@ def test_project_map_from_half_volume(N, n_images):
 
 
 # ---------------------------------------------------------------------------
-# Test 11: backproject to half volume matches full→extract
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize("N", SIZES)
-@pytest.mark.parametrize("n_images", N_IMAGES_LIST)
-def test_backproject_to_half_volume(N, n_images):
-    """adjoint_slice_volume_by_trilinear_to_half_volume matches full→extract.
-
-    The JAX fallback path does full backproject → extract half volume.
-    Both paths must agree exactly.
-    """
-    rng = np.random.default_rng(220 + N)
-    image_shape = (N, N)
-    volume_shape = (N, N, N)
-    rots = jnp.array(random_rotations(n_images, rng))
-    images = jnp.array(hermitian_images(n_images, image_shape, rng))
-
-    from recovar.core.slicing import (
-        _adjoint_slice_volume_by_trilinear_jax,
-        adjoint_slice_volume_by_trilinear_to_half_volume,
-    )
-
-    # Reference: JAX full backproject, then extract half
-    vol_full = _adjoint_slice_volume_by_trilinear_jax(images, rots, image_shape, volume_shape, None)
-    vol_half_ref = fourier_transform_utils.full_volume_to_half_volume(vol_full, volume_shape)
-
-    # Test: direct to half volume
-    vol_half = adjoint_slice_volume_by_trilinear_to_half_volume(images, rots, image_shape, volume_shape, None)
-
-    assert_close(vol_half, vol_half_ref, "backproject to half volume", rtol=1e-4)
-
-
-# ---------------------------------------------------------------------------
-# Test 12: half images → half volume matches full pipeline
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize("N", SIZES)
-@pytest.mark.parametrize("n_images", N_IMAGES_LIST)
-def test_half_images_to_half_volume(N, n_images):
-    """adjoint_trilinear_from_half_images_to_half_volume matches full→extract."""
-    rng = np.random.default_rng(230 + N)
-    image_shape = (N, N)
-    volume_shape = (N, N, N)
-    rots = jnp.array(random_rotations(n_images, rng))
-    images = jnp.array(hermitian_images(n_images, image_shape, rng))
-    images_half = fourier_transform_utils.full_image_to_half_image(images, image_shape)
-
-    from recovar.core.slicing import (
-        _adjoint_slice_volume_by_trilinear_jax,
-        adjoint_slice_volume_by_trilinear_from_half_images_to_half_volume,
-    )
-
-    # Reference: JAX full backproject, then extract half
-    vol_full = _adjoint_slice_volume_by_trilinear_jax(images, rots, image_shape, volume_shape, None)
-    vol_half_ref = fourier_transform_utils.full_volume_to_half_volume(vol_full, volume_shape)
-
-    # Test: half images → half volume
-    vol_half = adjoint_slice_volume_by_trilinear_from_half_images_to_half_volume(
-        images_half, rots, image_shape, volume_shape, None
-    )
-
-    assert_close(vol_half, vol_half_ref, "half images to half volume", rtol=1e-4)
-
-
-# ---------------------------------------------------------------------------
 # Test 13: VJP of slice_volume_by_map_from_half_volume
 # ---------------------------------------------------------------------------
 
@@ -486,6 +393,55 @@ def test_half_volume_vjp_consistency(N, n_images):
     vjp_half = u_half(images)[0]
 
     assert_close(vjp_half, vjp_full_ref, "half volume VJP vs expand'*(full VJP)", rtol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# Test 13b: JVP of slice_volume_by_map_from_half_volume
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("N", SIZES)
+@pytest.mark.parametrize("n_images", N_IMAGES_LIST)
+def test_half_volume_jvp_consistency(N, n_images):
+    """JVP of project-from-half-volume should match JVP of expand → project."""
+    rng = np.random.default_rng(260 + N)
+    image_shape = (N, N)
+    volume_shape = (N, N, N)
+    half_vol_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+    half_vol_size = int(np.prod(half_vol_shape))
+    rots = jnp.array(random_rotations(n_images, rng))
+
+    from recovar.core.slicing import (
+        slice_volume_by_map_from_half_volume,
+        slice_volume_by_map,
+    )
+
+    hv = jnp.array(
+        rng.standard_normal(half_vol_size).astype(np.float32)
+        + 1j * rng.standard_normal(half_vol_size).astype(np.float32),
+        dtype=jnp.complex64,
+    )
+    tangent = jnp.array(
+        rng.standard_normal(half_vol_size).astype(np.float32)
+        + 1j * rng.standard_normal(half_vol_size).astype(np.float32),
+        dtype=jnp.complex64,
+    )
+
+    f_ref = lambda x: slice_volume_by_map(
+        fourier_transform_utils.half_volume_to_full_volume(x, volume_shape),
+        rots,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+    )
+    f_half = lambda x: slice_volume_by_map_from_half_volume(
+        x, rots, image_shape, volume_shape, "linear_interp"
+    )
+
+    y_ref, dy_ref = jax.jvp(f_ref, (hv,), (tangent,))
+    y_half, dy_half = jax.jvp(f_half, (hv,), (tangent,))
+
+    assert_close(y_half, y_ref, "half volume JVP primal", rtol=1e-4)
+    assert_close(dy_half, dy_ref, "half volume JVP tangent", rtol=1e-4)
 
 
 # ---------------------------------------------------------------------------

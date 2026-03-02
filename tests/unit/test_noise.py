@@ -294,3 +294,107 @@ def test_get_masked_noise_variance_gpu(gpu_device):
         gpu_out = np.asarray(noise.get_masked_noise_variance_from_noise_variance(masks_g, noise_g, image_shape))
 
     np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# Half-image noise equivalence tests
+# ---------------------------------------------------------------------------
+
+import recovar.core.fourier_transform_utils as fourier_transform_utils
+
+
+def test_make_radial_noise_half_matches_full_extraction():
+    """Verify make_radial_noise_half matches full_image_to_half_image(make_radial_noise)."""
+    for image_shape in [(8, 8), (6, 10), (4, 8)]:
+        vec = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        full = np.asarray(noise.make_radial_noise(vec, image_shape))
+        half_native = np.asarray(noise.make_radial_noise_half(vec, image_shape))
+        half_from_full = np.asarray(
+            fourier_transform_utils.full_image_to_half_image(full.reshape(1, -1), image_shape)
+        ).ravel()
+        np.testing.assert_allclose(half_native, half_from_full, atol=1e-6, rtol=1e-6,
+                                   err_msg=f"Failed for image_shape={image_shape}")
+
+
+def test_make_radial_noise_half_scalar():
+    """Verify scalar noise broadcasts correctly in half layout."""
+    image_shape = (8, 8)
+    scalar = np.array([2.5], dtype=np.float32)
+    half = np.asarray(noise.make_radial_noise_half(scalar, image_shape))
+    expected_size = image_shape[0] * (image_shape[1] // 2 + 1)
+    assert half.size == expected_size
+    np.testing.assert_allclose(half.ravel(), 2.5, atol=1e-7)
+
+
+def test_batch_make_radial_noise_half_matches_full():
+    """Verify batch_make_radial_noise_half matches full_image_to_half_image(batch_make_radial_noise)."""
+    image_shape = (6, 10)
+    radials = np.array(
+        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+        dtype=np.float32,
+    )
+    full = np.asarray(noise.batch_make_radial_noise(radials, image_shape))
+    half_native = np.asarray(noise.batch_make_radial_noise_half(radials, image_shape))
+    half_from_full = np.asarray(
+        fourier_transform_utils.full_image_to_half_image(full, image_shape)
+    )
+    np.testing.assert_allclose(half_native, half_from_full, atol=1e-6, rtol=1e-6)
+
+
+def test_radial_noise_model_get_half_matches_full():
+    """Verify RadialNoiseModel.get_half() matches extraction from get()."""
+    radial = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    image_shape = (8, 8)
+    model = noise.RadialNoiseModel(radial, image_shape=image_shape)
+    full = np.asarray(model.get())
+    half = np.asarray(model.get_half())
+    expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
+    np.testing.assert_allclose(half, expected, atol=1e-6, rtol=1e-6)
+
+
+def test_variable_radial_noise_model_get_half_matches_full():
+    """Verify VariableRadialNoiseModel.get_half() matches extraction from get()."""
+    radials = np.array(
+        [[1.0, 2.0, 3.0], [2.0, 4.0, 6.0]],
+        dtype=np.float32,
+    )
+    dose_idx = np.array([0, 1, 1, 0], dtype=np.int32)
+    image_shape = (8, 8)
+    model = noise.VariableRadialNoiseModel(radials, dose_idx, image_shape=image_shape)
+    indices = np.array([0, 2, 3], dtype=np.int32)
+    full = np.asarray(model.get(indices))
+    half = np.asarray(model.get_half(indices))
+    expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
+    np.testing.assert_allclose(half, expected, atol=1e-6, rtol=1e-6)
+
+
+def test_to_batched_half_pixel_noise_scalar():
+    """Scalar noise should broadcast to half-pixel shape."""
+    image_shape = (8, 8)
+    half_pixel_count = image_shape[0] * (image_shape[1] // 2 + 1)
+    out = np.asarray(noise.to_batched_half_pixel_noise(2.5, image_shape, batch_size=3))
+    assert out.shape == (3, half_pixel_count)
+    np.testing.assert_allclose(out, 2.5, atol=1e-7)
+
+
+def test_to_batched_half_pixel_noise_passthrough():
+    """Half-pixel input should pass through unchanged."""
+    image_shape = (8, 8)
+    half_pixel_count = image_shape[0] * (image_shape[1] // 2 + 1)
+    half_input = np.arange(half_pixel_count, dtype=np.float32).reshape(1, -1)
+    out = np.asarray(noise.to_batched_half_pixel_noise(half_input, image_shape, batch_size=2))
+    assert out.shape == (2, half_pixel_count)
+    np.testing.assert_array_equal(out[0], half_input.ravel())
+    np.testing.assert_array_equal(out[1], half_input.ravel())
+
+
+def test_to_batched_half_pixel_noise_full_converts():
+    """Full-pixel input should be converted to half-pixel via full_image_to_half_image."""
+    image_shape = (4, 4)
+    full_pixel_count = 16
+    half_pixel_count = 4 * 3  # 4*(4//2+1) = 12
+    full_input = np.arange(full_pixel_count, dtype=np.float32).reshape(1, -1)
+    out = np.asarray(noise.to_batched_half_pixel_noise(full_input, image_shape))
+    assert out.shape == (1, half_pixel_count)
+    expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full_input, image_shape))
+    np.testing.assert_allclose(out, expected, atol=1e-6)

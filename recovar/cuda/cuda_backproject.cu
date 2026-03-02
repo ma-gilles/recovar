@@ -18,9 +18,12 @@
  *
  * Volume: (N0, N1, N2) complex  stored as interleaved T pairs.
  * Half  : (N0, N1, N2/2+1) complex.
- * Images full : (n_images, H*W) complex.
- * Images rfft : (n_images, H*(W//2+1)) complex.
+ * Images full : (n_images, H*W) complex, row-major (k1/col varies fastest).
+ * Images rfft : (n_images, H*(W//2+1)) complex, row-major.
  * Rotations: (n_images, 6) T  — first two rows of 3×3 matrix, row-major.
+ *
+ * Pixel indexing: row-major — k0_idx = pix / image_w, k1_idx = pix % image_w.
+ * This matches NumPy/JAX C-order flatten convention.
  */
 
 #include <cuda_runtime.h>
@@ -54,7 +57,13 @@ static __device__ __forceinline__ int round_int(double x) { return (int)rint(x);
 /*   Device helpers: scatter one value into volume at rotated coords   */
 /* ================================================================== */
 
-/* scatter_nearest: atomicAdd one complex value at the nearest voxel. */
+/* scatter_nearest: atomicAdd one complex value at the nearest voxel.
+ *
+ * HALF_VOL: uses full centered-volume coords for bounds checking.
+ * Restrict approach: only scatter voxels with kz >= 0 (kept half),
+ * drop kz < 0.  Equivalent to scattering into full 3D grid then
+ * restricting to rfft3 storage.  Halves atomicAdd count.
+ */
 template <typename T, bool HALF_VOL>
 static __device__ __forceinline__ void scatter_nearest(
     T* __restrict__ vol,
@@ -62,12 +71,29 @@ static __device__ __forceinline__ void scatter_nearest(
     T c0, T c1, T c2,
     int N0, int N1, int N2_eff, int stride0, int stride1)
 {
-    if (HALF_VOL && rk2 < (T)0) {
-        rk0 = -rk0; rk1 = -rk1; rk2 = -rk2; val_im = -val_im;
-    }
     const T g0 = rk0 + c0;
     const T g1 = rk1 + c1;
-    const T g2 = HALF_VOL ? rk2 : (rk2 + c2);
+
+    if (HALF_VOL) {
+        const int ic2 = (int)c2;
+        const int N2_full = 2 * ic2;
+        const T g2_full = rk2 + c2;
+        const int i0 = round_int(g0);
+        const int i1 = round_int(g1);
+        const int i2 = round_int(g2_full);
+        if ((unsigned)i0 >= (unsigned)N0 ||
+            (unsigned)i1 >= (unsigned)N1 ||
+            (unsigned)i2 >= (unsigned)N2_full) return;
+        const int kz = i2 - ic2;
+        if (kz < 0) return;  /* drop kz < 0: restrict */
+        const int off = (i0 * stride0 + i1 * stride1 + kz) * 2;
+        atomicAdd(&vol[off],     val_re);
+        atomicAdd(&vol[off + 1], val_im);
+        return;
+    }
+
+    /* Non-HALF_VOL path */
+    const T g2 = rk2 + c2;
     const int i0 = round_int(g0);
     const int i1 = round_int(g1);
     const int i2 = round_int(g2);
@@ -79,7 +105,13 @@ static __device__ __forceinline__ void scatter_nearest(
     atomicAdd(&vol[off + 1], val_im);
 }
 
-/* scatter_trilinear: atomicAdd one complex value at 8 trilinear neighbors. */
+/* scatter_trilinear: atomicAdd one complex value at 8 trilinear neighbors.
+ *
+ * HALF_VOL: uses full centered-volume coords for bounds checking.
+ * Restrict approach: only scatter neighbors with kz >= 0, drop kz < 0.
+ * Equivalent to scattering into full 3D grid then restricting to rfft3
+ * storage.  Halves the atomicAdd count vs Hermitian folding.
+ */
 template <typename T, bool HALF_VOL>
 static __device__ __forceinline__ void scatter_trilinear(
     T* __restrict__ vol,
@@ -87,12 +119,57 @@ static __device__ __forceinline__ void scatter_trilinear(
     T c0, T c1, T c2,
     int N0, int N1, int N2_eff, int stride0, int stride1)
 {
-    if (HALF_VOL && rk2 < (T)0) {
-        rk0 = -rk0; rk1 = -rk1; rk2 = -rk2; val_im = -val_im;
-    }
     const T g0 = rk0 + c0;
     const T g1 = rk1 + c1;
-    const T g2 = HALF_VOL ? rk2 : (rk2 + c2);
+
+    if (HALF_VOL) {
+        const int ic2 = (int)c2;
+        const int N2_full = 2 * ic2;
+        const T g2_full = rk2 + c2;
+
+        if (g0 < (T)-1 || g0 >= (T)N0 ||
+            g1 < (T)-1 || g1 >= (T)N1 ||
+            g2_full < (T)-1 || g2_full >= (T)N2_full) return;
+
+        const int b0 = floor_int(g0);
+        const int b1 = floor_int(g1);
+        const int b2 = floor_int(g2_full);
+        const T f0 = g0 - (T)b0, f1 = g1 - (T)b1, f2 = g2_full - (T)b2;
+        const T w0[2] = {(T)1 - f0, f0};
+        const T w1[2] = {(T)1 - f1, f1};
+        const T w2[2] = {(T)1 - f2, f2};
+
+        /* Restrict approach: only scatter neighbors with kz >= 0.
+         * Neighbors with kz < 0 are dropped — equivalent to scattering
+         * into the full 3D grid then restricting to the kz >= 0 half.
+         * This halves the atomicAdd count compared to Hermitian folding. */
+        #pragma unroll
+        for (int d0 = 0; d0 < 2; d0++) {
+            const int j0 = b0 + d0;
+            if ((unsigned)j0 >= (unsigned)N0) continue;
+            #pragma unroll
+            for (int d1 = 0; d1 < 2; d1++) {
+                const int j1 = b1 + d1;
+                if ((unsigned)j1 >= (unsigned)N1) continue;
+                const T ww = w0[d0] * w1[d1];
+                #pragma unroll
+                for (int d2 = 0; d2 < 2; d2++) {
+                    const int j2 = b2 + d2;
+                    if ((unsigned)j2 >= (unsigned)N2_full) continue;
+                    const int kz = j2 - ic2;
+                    if (kz < 0) continue;  /* drop kz < 0: restrict */
+                    const T w = ww * w2[d2];
+                    const int off = (j0 * stride0 + j1 * stride1 + kz) * 2;
+                    atomicAdd(&vol[off],     w * val_re);
+                    atomicAdd(&vol[off + 1], w * val_im);
+                }
+            }
+        }
+        return;
+    }
+
+    /* Non-HALF_VOL path */
+    const T g2 = rk2 + c2;
 
     if (g0 < (T)-1 || g0 >= (T)N0 ||
         g1 < (T)-1 || g1 >= (T)N1 ||
@@ -152,9 +229,9 @@ backproject_kernel(
     __syncthreads();
     if (pix >= n_pixels) return;
 
-    /* On-the-fly frequency coords */
-    const int k0_idx = pix % image_h;
-    const int k1_idx = pix / image_h;
+    /* On-the-fly frequency coords — row-major pixel layout */
+    const int k0_idx = pix / image_w;   /* row index */
+    const int k1_idx = pix % image_w;   /* col index */
 
     const T k0 = (T)(k0_idx - image_h / 2) * upsampling;
     T k1;
@@ -193,17 +270,15 @@ backproject_kernel(
 
     /* Conjugate scatter for rfft non-boundary pixels.
      * Boundary: k1_idx == 0  or  k1_idx == full_image_w/2 (Nyquist, even W).
-     * For non-boundary pixels, scatter conj(value) at rotated(-k0, -k1). */
+     * For non-boundary pixels, scatter conj(value) at rotated(-k0, -k1).
+     * Uses the same scatter function as the primary — HALF_VOL bounds
+     * checking naturally handles negative g2 (no fold needed). */
     if (HALF_IMG) {
         if (k1_idx > 0 && k1_idx * 2 != full_image_w) {
             T crk0, crk1, crk2;
-            /* For most pixels (non-Nyquist k0): -k0 is just negation,
-             * so R*(-k0,-k1) = -(R*(k0,k1)) = (-rk0,-rk1,-rk2).
-             * Only for Nyquist k0 (k0_idx==0, even H) does -(-H/2) wrap
-             * to -H/2, requiring a fresh rotation. */
             if (k0_idx == 0 && (image_h & 1) == 0) {
                 const T neg_k1 = -k1;
-                crk0 = k0 * R[0] + neg_k1 * R[3];   /* neg_k0 == k0 at Nyquist */
+                crk0 = k0 * R[0] + neg_k1 * R[3];
                 crk1 = k0 * R[1] + neg_k1 * R[4];
                 crk2 = k0 * R[2] + neg_k1 * R[5];
             } else {
@@ -248,31 +323,22 @@ project_kernel(
     __syncthreads();
     if (pix >= n_pixels) return;
 
-    const int k0_idx = pix % image_h;
+    /* Row-major pixel layout */
+    const int k0_idx = pix / image_w;   /* row index */
+    const int k1_idx = pix % image_w;   /* col index */
     T k0 = (T)(k0_idx - image_h / 2) * upsampling;
     T k1;
     if (HALF_IMG) {
-        const int k1_idx = pix / image_h;
         k1 = (k1_idx * 2 == full_image_w)
              ? (T)(-k1_idx) * upsampling
              : (T)(k1_idx)  * upsampling;
     } else {
-        k1 = (T)(pix / image_h - image_w / 2) * upsampling;
+        k1 = (T)(k1_idx - image_w / 2) * upsampling;
     }
 
     T rk0 = k0 * R[0] + k1 * R[3];
     T rk1 = k0 * R[1] + k1 * R[4];
     T rk2 = k0 * R[2] + k1 * R[5];
-
-    bool conj = false;
-    if (HALF_VOL && rk2 < (T)0) {
-        rk0 = -rk0;  rk1 = -rk1;  rk2 = -rk2;
-        conj = true;
-    }
-
-    const T g0 = rk0 + c0;
-    const T g1 = rk1 + c1;
-    const T g2 = HALF_VOL ? rk2 : (rk2 + c2);
 
     const int stride1 = N2_eff;
     const int stride0 = N1 * N2_eff;
@@ -280,6 +346,180 @@ project_kernel(
     using V2 = vec2_t<T>;
     V2* img2 = reinterpret_cast<V2*>(img);
     const int img_off = img_idx * n_pixels + pix;
+
+    /* ── HALF_VOL: per-neighbor Hermitian read from half-volume ──────
+     *
+     * Use the full centered-volume coordinate system for bounds checks
+     * (matching full-volume behavior).  For each trilinear neighbor,
+     * convert the centered z index to half-volume kz.  Neighbors with
+     * kz >= 0 read directly from the half-volume; neighbors with kz < 0
+     * read the Hermitian partner at (-kx, -ky, -kz) and conjugate.
+     */
+    if (HALF_VOL) {
+        const T g0 = rk0 + c0;
+        const T g1 = rk1 + c1;
+        /* N2_full = 2 * c2 for even N;  recover it for the full-vol
+         * z coordinate (g2_full) and its bounds check. */
+        const int ic2 = (int)c2;          /* N2/2 */
+        const int N2_full = 2 * ic2;      /* == N2 for even N2 */
+        const T g2_full = rk2 + c2;
+
+        if (ORDER == 0) {
+            const int i0 = round_int(g0);
+            const int i1 = round_int(g1);
+            const int i2 = round_int(g2_full);
+            if ((unsigned)i0 >= (unsigned)N0 ||
+                (unsigned)i1 >= (unsigned)N1 ||
+                (unsigned)i2 >= (unsigned)N2_full) {
+                img2[img_off] = make_v2((T)0, (T)0);
+                return;
+            }
+            /* Convert centered index i2 to half-volume kz */
+            const int kz = i2 - ic2;
+            int ri, rj, rk;
+            bool cj = false;
+            if (kz >= 0) {
+                ri = i0; rj = i1; rk = kz;
+            } else {
+                ri = (N0 - i0) % N0;
+                rj = (N1 - i1) % N1;
+                rk = -kz;
+                cj = true;
+            }
+            const int off = ri * stride0 + rj * stride1 + rk;
+            V2 v = __ldg(&reinterpret_cast<const V2*>(vol)[off]);
+            if (cj) v.y = -v.y;
+            img2[img_off] = v;
+            return;
+        }
+
+        /* ──── trilinear HALF_VOL ──── */
+        if (g0 < (T)-1 || g0 >= (T)N0 ||
+            g1 < (T)-1 || g1 >= (T)N1 ||
+            g2_full < (T)-1 || g2_full >= (T)N2_full) {
+            img2[img_off] = make_v2((T)0, (T)0);
+            return;
+        }
+
+        const int b0 = floor_int(g0);
+        const int b1 = floor_int(g1);
+        const int b2 = floor_int(g2_full);
+        const T f0 = g0 - (T)b0, f1 = g1 - (T)b1, f2 = g2_full - (T)b2;
+        const T w0[2] = {(T)1 - f0, f0};
+        const T w1[2] = {(T)1 - f1, f1};
+        const T w2[2] = {(T)1 - f2, f2};
+
+        T sum_re = 0, sum_im = 0;
+        const V2* vol2 = reinterpret_cast<const V2*>(vol);
+
+        const bool all_in = (b0 >= 0 && b0 + 1 < N0 &&
+                             b1 >= 0 && b1 + 1 < N1 &&
+                             b2 >= 0 && b2 + 1 < N2_full);
+
+        if (all_in && b2 >= ic2) {
+            /* Fast path: all in-bounds, all kz >= 0 — direct reads.
+             * Prefetch all 8 neighbors so the compiler pipelines loads. */
+            const int kz0 = b2 - ic2;
+            const V2 v000 = __ldg(&vol2[b0*stride0 + b1*stride1 + kz0]);
+            const V2 v001 = __ldg(&vol2[b0*stride0 + b1*stride1 + kz0 + 1]);
+            const V2 v010 = __ldg(&vol2[b0*stride0 + (b1+1)*stride1 + kz0]);
+            const V2 v011 = __ldg(&vol2[b0*stride0 + (b1+1)*stride1 + kz0 + 1]);
+            const V2 v100 = __ldg(&vol2[(b0+1)*stride0 + b1*stride1 + kz0]);
+            const V2 v101 = __ldg(&vol2[(b0+1)*stride0 + b1*stride1 + kz0 + 1]);
+            const V2 v110 = __ldg(&vol2[(b0+1)*stride0 + (b1+1)*stride1 + kz0]);
+            const V2 v111 = __ldg(&vol2[(b0+1)*stride0 + (b1+1)*stride1 + kz0 + 1]);
+            #pragma unroll
+            for (int d0 = 0; d0 < 2; d0++) {
+                #pragma unroll
+                for (int d1 = 0; d1 < 2; d1++) {
+                    const T ww = w0[d0] * w1[d1];
+                    #pragma unroll
+                    for (int d2 = 0; d2 < 2; d2++) {
+                        const T w = ww * w2[d2];
+                        const V2& v = (d0 == 0)
+                            ? ((d1 == 0) ? (d2 == 0 ? v000 : v001) : (d2 == 0 ? v010 : v011))
+                            : ((d1 == 0) ? (d2 == 0 ? v100 : v101) : (d2 == 0 ? v110 : v111));
+                        sum_re += w * v.x;
+                        sum_im += w * v.y;
+                    }
+                }
+            }
+        } else if (all_in && b2 + 1 < ic2) {
+            /* Fast path: all in-bounds, all kz < 0 — Hermitian partner reads.
+             * Since weights are real, conj(Σ w·v) = Σ w·conj(v),
+             * so we sum normally then negate imaginary. */
+            const int r0_0 = (N0 - b0) % N0,     r0_1 = (N0 - b0 - 1) % N0;
+            const int r1_0 = (N1 - b1) % N1,     r1_1 = (N1 - b1 - 1) % N1;
+            const int rk0  = ic2 - b2,            rk1  = rk0 - 1;
+            const V2 v000 = __ldg(&vol2[r0_0*stride0 + r1_0*stride1 + rk0]);
+            const V2 v001 = __ldg(&vol2[r0_0*stride0 + r1_0*stride1 + rk1]);
+            const V2 v010 = __ldg(&vol2[r0_0*stride0 + r1_1*stride1 + rk0]);
+            const V2 v011 = __ldg(&vol2[r0_0*stride0 + r1_1*stride1 + rk1]);
+            const V2 v100 = __ldg(&vol2[r0_1*stride0 + r1_0*stride1 + rk0]);
+            const V2 v101 = __ldg(&vol2[r0_1*stride0 + r1_0*stride1 + rk1]);
+            const V2 v110 = __ldg(&vol2[r0_1*stride0 + r1_1*stride1 + rk0]);
+            const V2 v111 = __ldg(&vol2[r0_1*stride0 + r1_1*stride1 + rk1]);
+            #pragma unroll
+            for (int d0 = 0; d0 < 2; d0++) {
+                #pragma unroll
+                for (int d1 = 0; d1 < 2; d1++) {
+                    const T ww = w0[d0] * w1[d1];
+                    #pragma unroll
+                    for (int d2 = 0; d2 < 2; d2++) {
+                        const T w = ww * w2[d2];
+                        const V2& v = (d0 == 0)
+                            ? ((d1 == 0) ? (d2 == 0 ? v000 : v001) : (d2 == 0 ? v010 : v011))
+                            : ((d1 == 0) ? (d2 == 0 ? v100 : v101) : (d2 == 0 ? v110 : v111));
+                        sum_re += w * v.x;
+                        sum_im += w * v.y;
+                    }
+                }
+            }
+            sum_im = -sum_im;  /* conjugate the result */
+        } else {
+            /* Slow path: boundary or mixed kz (b2 = ic2-1) */
+            #pragma unroll
+            for (int d0 = 0; d0 < 2; d0++) {
+                const int j0 = b0 + d0;
+                if ((unsigned)j0 >= (unsigned)N0) continue;
+                #pragma unroll
+                for (int d1 = 0; d1 < 2; d1++) {
+                    const int j1 = b1 + d1;
+                    if ((unsigned)j1 >= (unsigned)N1) continue;
+                    const T ww = w0[d0] * w1[d1];
+                    #pragma unroll
+                    for (int d2 = 0; d2 < 2; d2++) {
+                        const int j2 = b2 + d2;
+                        if ((unsigned)j2 >= (unsigned)N2_full) continue;
+                        const int kz = j2 - ic2;
+                        const T w = ww * w2[d2];
+                        int ri, rj, rk;
+                        bool cj = false;
+                        if (kz >= 0) {
+                            ri = j0; rj = j1; rk = kz;
+                        } else {
+                            ri = (N0 - j0) % N0;
+                            rj = (N1 - j1) % N1;
+                            rk = -kz;
+                            cj = true;
+                        }
+                        const int off = ri * stride0 + rj * stride1 + rk;
+                        V2 v = __ldg(&vol2[off]);
+                        if (cj) v.y = -v.y;
+                        sum_re += w * v.x;
+                        sum_im += w * v.y;
+                    }
+                }
+            }
+        }
+        img2[img_off] = make_v2(sum_re, sum_im);
+        return;
+    }
+
+    /* ── Non-HALF_VOL path (unchanged) ───────────────────────────── */
+    const T g0 = rk0 + c0;
+    const T g1 = rk1 + c1;
+    const T g2 = rk2 + c2;
 
     if (ORDER == 0) {
         const int i0 = round_int(g0);
@@ -293,12 +533,11 @@ project_kernel(
         }
         const int off = i0 * stride0 + i1 * stride1 + i2;
         V2 v = __ldg(&reinterpret_cast<const V2*>(vol)[off]);
-        if (conj) v.y = -v.y;
         img2[img_off] = v;
         return;
     }
 
-    /* ──── trilinear ──── */
+    /* ──── trilinear (full volume) ──── */
     if (g0 < (T)-1 || g0 >= (T)N0 ||
         g1 < (T)-1 || g1 >= (T)N1 ||
         g2 < (T)-1 || g2 >= (T)N2_eff) {
@@ -372,7 +611,6 @@ project_kernel(
         }
     }
 
-    if (conj) sum_im = -sum_im;
     img2[img_off] = make_v2(sum_re, sum_im);
 }
 
@@ -500,9 +738,9 @@ batch_backproject_kernel(
     __syncthreads();
     if (pix >= n_pixels) return;
 
-    /* Compute rotation-dependent coords once, reuse across batch */
-    const int k0_idx = pix % image_h;
-    const int k1_idx = pix / image_h;
+    /* Compute rotation-dependent coords once, reuse across batch (row-major) */
+    const int k0_idx = pix / image_w;   /* row index */
+    const int k1_idx = pix % image_w;   /* col index */
     const T k0 = (T)(k0_idx - image_h / 2) * upsampling;
     T k1;
     if (HALF_IMG) {
@@ -583,39 +821,206 @@ batch_project_kernel(
     __syncthreads();
     if (pix >= n_pixels) return;
 
-    /* Compute rotation-dependent coords once */
-    const int k0_idx = pix % image_h;
+    /* Compute rotation-dependent coords once (row-major) */
+    const int k0_idx = pix / image_w;   /* row index */
+    const int k1_idx = pix % image_w;   /* col index */
     T k0 = (T)(k0_idx - image_h / 2) * upsampling;
     T k1;
     if (HALF_IMG) {
-        const int k1_idx = pix / image_h;
         k1 = (k1_idx * 2 == full_image_w)
              ? (T)(-k1_idx) * upsampling
              : (T)(k1_idx)  * upsampling;
     } else {
-        k1 = (T)(pix / image_h - image_w / 2) * upsampling;
+        k1 = (T)(k1_idx - image_w / 2) * upsampling;
     }
 
     T rk0 = k0 * R[0] + k1 * R[3];
     T rk1 = k0 * R[1] + k1 * R[4];
     T rk2 = k0 * R[2] + k1 * R[5];
 
-    bool conj = false;
-    if (HALF_VOL && rk2 < (T)0) {
-        rk0 = -rk0;  rk1 = -rk1;  rk2 = -rk2;
-        conj = true;
-    }
-
-    const T g0 = rk0 + c0;
-    const T g1 = rk1 + c1;
-    const T g2 = HALF_VOL ? rk2 : (rk2 + c2);
-
     const int stride1 = N2_eff;
     const int stride0 = N1 * N2_eff;
     const int img_stride = n_images * n_pixels;
     using V2 = vec2_t<T>;
 
-    /* Inner loop over batch — same coords, different volumes */
+    /* ── HALF_VOL: per-neighbor Hermitian read (precompute once, reuse) ── */
+    if (HALF_VOL) {
+        const T g0 = rk0 + c0;
+        const T g1 = rk1 + c1;
+        const int ic2 = (int)c2;
+        const int N2_full = 2 * ic2;
+        const T g2_full = rk2 + c2;
+
+        if (ORDER == 0) {
+            const int i0 = round_int(g0);
+            const int i1 = round_int(g1);
+            const int i2 = round_int(g2_full);
+            const bool oob = ((unsigned)i0 >= (unsigned)N0 ||
+                              (unsigned)i1 >= (unsigned)N1 ||
+                              (unsigned)i2 >= (unsigned)N2_full);
+            int ri = 0, rj = 0, rk = 0;
+            bool cj = false;
+            if (!oob) {
+                const int kz = i2 - ic2;
+                if (kz >= 0) {
+                    ri = i0; rj = i1; rk = kz;
+                } else {
+                    ri = (N0 - i0) % N0;
+                    rj = (N1 - i1) % N1;
+                    rk = -kz;
+                    cj = true;
+                }
+            }
+            const int voff = ri * stride0 + rj * stride1 + rk;
+            for (int b = 0; b < batch_size; b++) {
+                V2* out = reinterpret_cast<V2*>(imgs) + b * img_stride + img_idx * n_pixels;
+                if (oob) { out[pix] = make_v2((T)0, (T)0); continue; }
+                V2 v = __ldg(&reinterpret_cast<const V2*>(vols + b * vol_stride * 2)[voff]);
+                if (cj) v.y = -v.y;
+                out[pix] = v;
+            }
+            return;
+        }
+
+        /* trilinear HALF_VOL — precompute neighbor info, reuse across batch */
+        const bool oob = (g0 < (T)-1 || g0 >= (T)N0 ||
+                          g1 < (T)-1 || g1 >= (T)N1 ||
+                          g2_full < (T)-1 || g2_full >= (T)N2_full);
+
+        if (oob) {
+            for (int b = 0; b < batch_size; b++) {
+                V2* out = reinterpret_cast<V2*>(imgs) + b * img_stride + img_idx * n_pixels;
+                out[pix] = make_v2((T)0, (T)0);
+            }
+            return;
+        }
+
+        const int bb0 = floor_int(g0);
+        const int bb1 = floor_int(g1);
+        const int bb2 = floor_int(g2_full);
+        const T f0 = g0 - (T)bb0, f1 = g1 - (T)bb1, f2 = g2_full - (T)bb2;
+        const T wt0[2] = {(T)1 - f0, f0};
+        const T wt1[2] = {(T)1 - f1, f1};
+        const T wt2[2] = {(T)1 - f2, f2};
+
+        const bool all_in = (bb0 >= 0 && bb0 + 1 < N0 &&
+                             bb1 >= 0 && bb1 + 1 < N1 &&
+                             bb2 >= 0 && bb2 + 1 < N2_full);
+
+        if (all_in && bb2 >= ic2) {
+            /* Fast path: all kz >= 0 — precompute 8 offsets + weights */
+            const int kz0 = bb2 - ic2;
+            int off[8]; T wt[8];
+            #pragma unroll
+            for (int d0 = 0; d0 < 2; d0++) {
+                #pragma unroll
+                for (int d1 = 0; d1 < 2; d1++) {
+                    #pragma unroll
+                    for (int d2 = 0; d2 < 2; d2++) {
+                        const int idx = d0*4 + d1*2 + d2;
+                        off[idx] = (bb0+d0)*stride0 + (bb1+d1)*stride1 + kz0+d2;
+                        wt[idx] = wt0[d0] * wt1[d1] * wt2[d2];
+                    }
+                }
+            }
+            for (int b = 0; b < batch_size; b++) {
+                V2* out = reinterpret_cast<V2*>(imgs) + b * img_stride + img_idx * n_pixels;
+                const V2* vol2 = reinterpret_cast<const V2*>(vols + b * vol_stride * 2);
+                T sr = 0, si = 0;
+                #pragma unroll
+                for (int i = 0; i < 8; i++) {
+                    V2 v = __ldg(&vol2[off[i]]);
+                    sr += wt[i] * v.x;
+                    si += wt[i] * v.y;
+                }
+                out[pix] = make_v2(sr, si);
+            }
+        } else if (all_in && bb2 + 1 < ic2) {
+            /* Fast path: all kz < 0 — Hermitian partner reads, conjugate sum */
+            const int r0[2] = {(N0 - bb0) % N0, (N0 - bb0 - 1) % N0};
+            const int r1[2] = {(N1 - bb1) % N1, (N1 - bb1 - 1) % N1};
+            const int rk0 = ic2 - bb2, rk1 = rk0 - 1;
+            int off[8]; T wt[8];
+            #pragma unroll
+            for (int d0 = 0; d0 < 2; d0++) {
+                #pragma unroll
+                for (int d1 = 0; d1 < 2; d1++) {
+                    #pragma unroll
+                    for (int d2 = 0; d2 < 2; d2++) {
+                        const int idx = d0*4 + d1*2 + d2;
+                        off[idx] = r0[d0]*stride0 + r1[d1]*stride1 + (d2 == 0 ? rk0 : rk1);
+                        wt[idx] = wt0[d0] * wt1[d1] * wt2[d2];
+                    }
+                }
+            }
+            for (int b = 0; b < batch_size; b++) {
+                V2* out = reinterpret_cast<V2*>(imgs) + b * img_stride + img_idx * n_pixels;
+                const V2* vol2 = reinterpret_cast<const V2*>(vols + b * vol_stride * 2);
+                T sr = 0, si = 0;
+                #pragma unroll
+                for (int i = 0; i < 8; i++) {
+                    V2 v = __ldg(&vol2[off[i]]);
+                    sr += wt[i] * v.x;
+                    si += wt[i] * v.y;
+                }
+                out[pix] = make_v2(sr, -si);  /* conjugate the result */
+            }
+        } else {
+            /* Slow path: boundary or mixed kz — variable-length neighbor table */
+            struct { int off; T w; bool cj; } nbr[8];
+            int n_nbr = 0;
+            #pragma unroll
+            for (int d0 = 0; d0 < 2; d0++) {
+                const int j0 = bb0 + d0;
+                if ((unsigned)j0 >= (unsigned)N0) continue;
+                #pragma unroll
+                for (int d1 = 0; d1 < 2; d1++) {
+                    const int j1 = bb1 + d1;
+                    if ((unsigned)j1 >= (unsigned)N1) continue;
+                    const T ww = wt0[d0] * wt1[d1];
+                    #pragma unroll
+                    for (int d2 = 0; d2 < 2; d2++) {
+                        const int j2 = bb2 + d2;
+                        if ((unsigned)j2 >= (unsigned)N2_full) continue;
+                        const int kz = j2 - ic2;
+                        int ri, rj, rkk;
+                        bool cjj = false;
+                        if (kz >= 0) {
+                            ri = j0; rj = j1; rkk = kz;
+                        } else {
+                            ri = (N0 - j0) % N0;
+                            rj = (N1 - j1) % N1;
+                            rkk = -kz;
+                            cjj = true;
+                        }
+                        nbr[n_nbr].off = ri * stride0 + rj * stride1 + rkk;
+                        nbr[n_nbr].w   = ww * wt2[d2];
+                        nbr[n_nbr].cj  = cjj;
+                        n_nbr++;
+                    }
+                }
+            }
+            for (int b = 0; b < batch_size; b++) {
+                V2* out = reinterpret_cast<V2*>(imgs) + b * img_stride + img_idx * n_pixels;
+                const V2* vol2 = reinterpret_cast<const V2*>(vols + b * vol_stride * 2);
+                T sr = 0, si = 0;
+                for (int i = 0; i < n_nbr; i++) {
+                    V2 v = __ldg(&vol2[nbr[i].off]);
+                    if (nbr[i].cj) v.y = -v.y;
+                    sr += nbr[i].w * v.x;
+                    si += nbr[i].w * v.y;
+                }
+                out[pix] = make_v2(sr, si);
+            }
+        }
+        return;
+    }
+
+    /* ── Non-HALF_VOL path (unchanged) ───────────────────────────── */
+    const T g0 = rk0 + c0;
+    const T g1 = rk1 + c1;
+    const T g2 = rk2 + c2;
+
     for (int b = 0; b < batch_size; b++) {
         const T* vol = vols + b * vol_stride * 2;
         V2* out = reinterpret_cast<V2*>(imgs) + b * img_stride + img_idx * n_pixels;
@@ -632,7 +1037,6 @@ batch_project_kernel(
             }
             const int off = i0 * stride0 + i1 * stride1 + i2;
             V2 v = __ldg(&reinterpret_cast<const V2*>(vol)[off]);
-            if (conj) v.y = -v.y;
             out[pix] = v;
             continue;
         }
@@ -707,7 +1111,6 @@ batch_project_kernel(
             }
         }
 
-        if (conj) sum_im = -sum_im;
         out[pix] = make_v2(sum_re, sum_im);
     }
 }

@@ -220,10 +220,16 @@ class CryoEMDataset:
         del self.noise
 
     def update_volume_upsampling_factor(self, volume_upsampling_factor):
-
+        import warnings
+        warnings.warn(
+            "update_volume_upsampling_factor is deprecated. Pass upsampling_factor "
+            "to ForwardModelConfig.from_dataset() or pipeline functions instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.volume_upsampling_factor = volume_upsampling_factor
         self.upsampled_grid_size = self.grid_size * volume_upsampling_factor
-        
+
         self.upsampled_volume_shape = tuple(3*[self.grid_size * volume_upsampling_factor ])
         self.upsampled_volume_size = np.prod(self.upsampled_volume_shape)
 

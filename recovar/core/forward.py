@@ -15,7 +15,11 @@ logger = logging.getLogger(__name__)
 
 from recovar.core.configs import ForwardModelConfig
 from recovar.core.geometry import translate_images
-from recovar.core.slicing import adjoint_slice_volume_by_trilinear, slice_volume_by_map
+from recovar.core.slicing import (
+    adjoint_slice_volume_by_map,
+    adjoint_slice_volume_by_trilinear,
+    slice_volume_by_map,
+)
 
 
 @eqx.filter_jit
@@ -56,11 +60,30 @@ def adjoint_forward_model(
     ctf_params: jax.Array,
     rotation_matrices: jax.Array,
     skip_ctf: bool = False,
+    volume: jax.Array = None,
+    half_image: bool = False,
+    half_volume: bool = False,
 ) -> jax.Array:
-    """Adjoint of the forward model (back-projection via VJP)."""
-    f = lambda v: forward_model(config, v, ctf_params, rotation_matrices, skip_ctf)
-    _, u = vjp(f, jnp.zeros(config.volume_size, dtype=slices.dtype))
-    return u(slices)[0]
+    """Adjoint of the forward model (direct back-projection).
+
+    Uses :func:`adjoint_slice_volume_by_map` which dispatches to CUDA
+    when available, avoiding the VJP-through-FFI overhead.
+
+    Parameters
+    ----------
+    volume : optional accumulator array to add into (avoids fresh allocation).
+    half_image : if True, *slices* are rfft-packed half-spectrum images.
+        CTF is computed in half-spectrum format when ``skip_ctf=False``.
+    half_volume : if True, output volume uses rfft-packed layout
+        ``(N0 * N1 * (N2 // 2 + 1),)``.  Only supported with CUDA.
+    """
+    if not skip_ctf:
+        ctf = config.compute_ctf_half(ctf_params) if half_image else config.compute_ctf(ctf_params)
+        slices = slices * ctf
+    return adjoint_slice_volume_by_map(
+        slices, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
+        volume=volume, half_image=half_image, half_volume=half_volume,
+    )
 
 
 @eqx.filter_jit
@@ -70,12 +93,24 @@ def adjoint_forward_model_trilinear(
     ctf_params: jax.Array,
     rotation_matrices: jax.Array,
     skip_ctf: bool = False,
+    volume: jax.Array = None,
+    half_image: bool = False,
+    half_volume: bool = False,
 ) -> jax.Array:
-    """Adjoint via trilinear interpolation (direct, not VJP-based)."""
+    """Adjoint via trilinear interpolation (direct, not VJP-based).
+
+    Parameters
+    ----------
+    volume : optional accumulator array to add into.
+    half_image : if True, *slices* are rfft-packed half-spectrum images.
+    half_volume : if True, output volume uses rfft-packed layout (CUDA only).
+    """
     if not skip_ctf:
-        slices = slices * config.compute_ctf(ctf_params)
+        ctf = config.compute_ctf_half(ctf_params) if half_image else config.compute_ctf(ctf_params)
+        slices = slices * ctf
     return adjoint_slice_volume_by_trilinear(
-        slices, rotation_matrices, config.image_shape, config.volume_shape, volume=None
+        slices, rotation_matrices, config.image_shape, config.volume_shape,
+        volume=volume, half_image=half_image, half_volume=half_volume,
     )
 
 
