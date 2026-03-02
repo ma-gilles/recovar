@@ -1253,7 +1253,10 @@ function jobExplorer() {
           el.scrollTop = el.scrollHeight;
         }
       } catch (e) {
-        if (el) el.innerHTML = '<pre class="text-xs text-slate-300 font-mono text-red-400">Error loading logs: ' + e.message + '</pre>';
+        if (el) {
+          const msg = (e.message || 'unknown').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          el.innerHTML = '<pre class="text-xs font-mono text-red-400">Error loading logs: ' + msg + '</pre>';
+        }
       }
       this.logLoading = false;
     },
@@ -1361,7 +1364,7 @@ function jobExplorer() {
       });
 
       // Click handler — only for PCs mode (UMAP coords can't be used for volume computation)
-      plotEl.removeAllListeners('plotly_click');
+      plotEl.removeAllListeners?.('plotly_click');
       if (enableSelection) {
         plotEl.on('plotly_click', (evtData) => {
           if (!evtData.points || !evtData.points.length) return;
@@ -1766,8 +1769,10 @@ function jobExplorer() {
               }
             }
             // Refresh analysis info to include new computed results
-            const resp2 = await fetch('/api/jobs/{{ job.id }}/analysis');
-            this.analysisInfo = await resp2.json();
+            try {
+              const resp2 = await fetch('/api/jobs/{{ job.id }}/analysis');
+              if (resp2.ok) this.analysisInfo = await resp2.json();
+            } catch (_) { /* non-critical */ }
             onDone?.();
           } else if (task.status === 'failed') {
             this.activeTasks[idx].error = task.error;
@@ -1939,7 +1944,7 @@ function jobExplorer() {
         el.innerHTML = `
           <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:#94a3b8;padding:20px;">
             <p style="font-size:13px;font-weight:600;color:#f87171;">3D Viewer Error</p>
-            <p style="font-size:11px;max-width:500px;text-align:center;word-break:break-word;">${(e.message || 'unknown').replace(/</g, '&lt;')}</p>
+            <p style="font-size:11px;max-width:500px;text-align:center;word-break:break-word;">${(e.message || 'unknown').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}</p>
             <img src="/api/volume/slice?path=${encodeURIComponent(path)}&axis=2"
                  style="max-height:280px;border-radius:8px;" alt="Central slice fallback">
             <div style="display:flex;gap:8px;">

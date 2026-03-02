@@ -93,7 +93,10 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         use_slurm = form.get("execution") == "slurm"
         slurm_partition = form.get("slurm_partition", "cryoem")
         slurm_account = form.get("slurm_account", "amits")
-        slurm_gpus = int(form.get("slurm_gpus", "1"))
+        try:
+            slurm_gpus = int(form.get("slurm_gpus", "1"))
+        except (ValueError, TypeError):
+            slurm_gpus = 1
         slurm_mem = form.get("slurm_mem", "64G")
         slurm_time = form.get("slurm_time", "4:00:00")
         slurm_cpus = form.get("slurm_cpus", "8")
@@ -358,11 +361,17 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         if not path or not os.path.isfile(path) or not path.endswith(".mrc"):
             return jsonify({"error": "Volume not found"}), 404
 
-        axis = int(request.args.get("axis", 2))
+        try:
+            axis = int(request.args.get("axis", 2))
+        except (ValueError, TypeError):
+            axis = 2
         axis = max(0, min(axis, 2))
         idx = request.args.get("idx")
         if idx is not None:
-            idx = int(idx)
+            try:
+                idx = int(idx)
+            except (ValueError, TypeError):
+                idx = None
 
         # Check cache first
         cached = _get_cached_slice(path, axis, idx)
@@ -494,7 +503,10 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
             return jsonify({"error": "JSON body required"}), 400
 
         path = _safe_path(data.get("path", ""))
-        threshold_sigma = float(data.get("threshold_sigma", 3.0))
+        try:
+            threshold_sigma = float(data.get("threshold_sigma", 3.0))
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid threshold value"}), 400
 
         if not path or not os.path.isfile(path) or not path.endswith(".mrc"):
             return jsonify({"error": "Volume not found"}), 404
