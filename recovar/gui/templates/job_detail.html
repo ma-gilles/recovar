@@ -374,6 +374,17 @@
                       </template>
                     </div>
                   </template>
+                  <template x-if="task.status === 'completed' && task.type === 'density'">
+                    <span class="ml-auto text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-400">Density ready</span>
+                  </template>
+                  <template x-if="task.status === 'completed' && task.type === 'stable_states'">
+                    <span class="ml-auto text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-400">States found</span>
+                  </template>
+                  <template x-if="task.status === 'failed' && task.error">
+                    <span class="text-[10px] text-red-400 truncate max-w-[200px]" x-text="task.error"></span>
+                  </template>
+                  <button @click="viewTaskLog(task.id)"
+                          class="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors shrink-0">Log</button>
                 </div>
               </template>
             </div>
@@ -800,6 +811,18 @@
     </template>
   </div>
 
+  <!-- Task log modal -->
+  <div x-show="taskLogId" style="display:none" @click.self="taskLogId = null" @keydown.escape.window="taskLogId = null"
+       class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-8">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-3xl max-h-[80vh] flex flex-col" @click.stop>
+      <div class="flex items-center justify-between px-4 py-2.5 border-b border-slate-800">
+        <span class="text-xs font-medium text-slate-400">Task Log</span>
+        <button @click="taskLogId = null" class="text-slate-400 hover:text-white">&times;</button>
+      </div>
+      <div class="p-4 overflow-auto flex-1 scrollbar-thin" x-html="taskLogHtml"></div>
+    </div>
+  </div>
+
   <!-- ═══════════════════════════════════════════════════════════════ -->
   <!-- Tab: Images                                                     -->
   <!-- ═══════════════════════════════════════════════════════════════ -->
@@ -814,6 +837,40 @@
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             <template x-for="imgPath in info.plots" :key="imgPath">
               <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden group cursor-pointer"
+                   @click="expandedImage = imgPath">
+                <img :src="'/api/image?path=' + encodeURIComponent(imgPath)"
+                     class="w-full h-48 object-contain bg-slate-950" loading="lazy">
+                <div class="px-2 py-1.5 text-[10px] text-slate-400 truncate" x-text="imgPath.split('/').pop()"></div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <!-- Density estimation plots -->
+      <template x-if="analysisInfo?.density?.plots?.length > 0">
+        <div class="space-y-3">
+          <h3 class="text-sm font-semibold text-amber-400">Conformational Density</h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <template x-for="imgPath in analysisInfo.density.plots" :key="imgPath">
+              <div class="bg-slate-900 border border-amber-900/40 rounded-xl overflow-hidden group cursor-pointer"
+                   @click="expandedImage = imgPath">
+                <img :src="'/api/image?path=' + encodeURIComponent(imgPath)"
+                     class="w-full h-48 object-contain bg-slate-950" loading="lazy">
+                <div class="px-2 py-1.5 text-[10px] text-slate-400 truncate" x-text="imgPath.split('/').pop()"></div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <!-- Stable states plots -->
+      <template x-if="analysisInfo?.stable_states?.plots?.length > 0">
+        <div class="space-y-3">
+          <h3 class="text-sm font-semibold text-amber-400">Stable States</h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <template x-for="imgPath in analysisInfo.stable_states.plots" :key="imgPath">
+              <div class="bg-slate-900 border border-amber-900/40 rounded-xl overflow-hidden group cursor-pointer"
                    @click="expandedImage = imgPath">
                 <img :src="'/api/image?path=' + encodeURIComponent(imgPath)"
                      class="w-full h-48 object-contain bg-slate-950" loading="lazy">
@@ -976,6 +1033,8 @@ function jobExplorer() {
     // Compute
     computing: false,
     activeTasks: [],
+    taskLogId: null,   // task ID whose log is displayed
+    taskLogHtml: '',   // HTML content of the log
 
     // Volume viewer
     viewer: null,
@@ -1523,6 +1582,7 @@ function jobExplorer() {
           showToast('Density estimation submitted', 'success');
           this.activeTasks.push({
             id: result.task_id,
+            type: 'density',
             status: result.status || 'running',
             label: 'Conformational Density',
             volumes: [],
@@ -1561,6 +1621,7 @@ function jobExplorer() {
           showToast('Stable states search submitted', 'success');
           this.activeTasks.push({
             id: result.task_id,
+            type: 'stable_states',
             status: result.status || 'running',
             label: 'Stable States',
             volumes: [],
@@ -1575,7 +1636,18 @@ function jobExplorer() {
 
     useStableStateAsPoint(idx, which) {
       if (!this.stableStatesResult?.coords?.[idx]) return;
-      const coord = this.stableStatesResult.coords[idx];
+      const raw = [...this.stableStatesResult.coords[idx]];
+      // Pad or truncate to match the currently selected z-dimension
+      const zdim = this.selectedZdim || raw.length;
+      let coord;
+      if (raw.length >= zdim) {
+        coord = raw.slice(0, zdim);
+      } else {
+        coord = [...raw, ...Array(zdim - raw.length).fill(0)];
+      }
+      if (raw.length !== zdim) {
+        showToast(`Stable state has ${raw.length}D coords, padded/trimmed to ${zdim}D for current z-dim`, 'info', 4000);
+      }
       if (which === 'A') {
         this.selectedPoint = coord;
       } else {
@@ -1583,6 +1655,17 @@ function jobExplorer() {
       }
       this.selectingSecond = false;
       this.updateMarkers();
+    },
+
+    async viewTaskLog(taskId) {
+      this.taskLogId = taskId;
+      this.taskLogHtml = '<p class="text-slate-500 text-xs">Loading log...</p>';
+      try {
+        const resp = await fetch(`/api/jobs/{{ job.id }}/tasks/${taskId}/log`);
+        this.taskLogHtml = await resp.text();
+      } catch (e) {
+        this.taskLogHtml = `<p class="text-red-400 text-xs">Failed to load log: ${e.message}</p>`;
+      }
     },
 
     async pollTask(taskId) {
@@ -1603,6 +1686,7 @@ function jobExplorer() {
             if (task.type === 'density') {
               this.densityResult = {
                 density_pkl: task.density_pkl,
+                pca_dim: task.pca_dim || this.densityPcaDim,
                 plots: task.plots || [],
               };
               showToast('Density estimation complete', 'success', 5000);

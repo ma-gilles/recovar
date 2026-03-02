@@ -566,6 +566,25 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
             return jsonify({"error": "Task not found"}), 404
         return jsonify(result)
 
+    @app.route("/api/jobs/<job_id>/tasks/<task_id>/log")
+    def api_task_log(job_id, task_id):
+        """Return the last N lines of a compute task's log."""
+        result = manager.get_compute_task(task_id)
+        if result is None:
+            return "Task not found", 404
+        log_path = result.get("log_path")
+        if not log_path or not os.path.isfile(log_path):
+            return "No log available", 404
+        n_lines = request.args.get("n", 200, type=int)
+        try:
+            with open(log_path) as f:
+                lines = f.readlines()
+            content = "".join(lines[-n_lines:])
+            content = re.sub(r'\x1b\[[0-9;]*m', '', content)
+            return f'<pre class="text-xs text-slate-300 font-mono whitespace-pre-wrap">{_escape(content)}</pre>'
+        except Exception as e:
+            return f"Error reading log: {e}", 500
+
     @app.route("/api/jobs/<job_id>/tasks")
     def api_list_tasks(job_id):
         """List all compute tasks for a job."""
