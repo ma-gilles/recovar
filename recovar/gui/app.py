@@ -78,6 +78,18 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         name = form.get("name", f"{job_type}_run")
         output_dir = form.get("output_dir", "").strip()
 
+        # Validate required fields
+        if not output_dir:
+            return render_template("new_job.html", has_slurm=_has_slurm(),
+                                   python_path=python_path, clone_from=None,
+                                   clone_params=None,
+                                   error="Output directory is required"), 400
+        if job_type == "pipeline" and not form.get("particles", "").strip():
+            return render_template("new_job.html", has_slurm=_has_slurm(),
+                                   python_path=python_path, clone_from=None,
+                                   clone_params=None,
+                                   error="Particles file is required for pipeline jobs"), 400
+
         use_slurm = form.get("execution") == "slurm"
         slurm_partition = form.get("slurm_partition", "cryoem")
         slurm_account = form.get("slurm_account", "amits")
