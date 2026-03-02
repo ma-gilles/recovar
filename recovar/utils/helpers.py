@@ -18,6 +18,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 
 logger = logging.getLogger(__name__)
+_module_logger = logger  # alias for use in functions where 'logger' is a parameter
 
 @functools.partial(jax.jit, static_argnums = [1,2])    
 def make_radial_image(average_image_PS, image_shape, extend_last_frequency = True):
@@ -107,10 +108,8 @@ def get_peak_gpu_memory_used(device =0):
 
 def report_memory_device(device=0, logger=None):
     output_str = f"GPU mem in use:{get_gpu_memory_used(device)}; peak:{get_peak_gpu_memory_used(device)}; total available:{get_gpu_memory_total(device)}, process mem in use:{get_process_memory_used()}"
-    if logger is not None:
-        logger.info(output_str)
-    else:
-        print(output_str)
+    _log = logger if logger is not None else _module_logger
+    _log.info(output_str)
 
 def get_size_in_gb(x):
     return x.size * x.itemsize / 1e9
