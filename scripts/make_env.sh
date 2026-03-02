@@ -1,11 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
 
-ENVIRONMENT=recovar_dev_2
-conda init
+ENVIRONMENT=recovar_dev_3
+
+# Source conda's shell integration so `conda activate` works in scripts
+source "$(conda info --base)/etc/profile.d/conda.sh"
 
 # Create a fresh environment
 conda create --name $ENVIRONMENT python=3.11 -y
-
-conda init
 
 # Enable the environment
 conda activate $ENVIRONMENT

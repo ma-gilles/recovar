@@ -202,16 +202,18 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
                 if noise_variance is None:
                     noise_variance = np.ones(len(closest_indices), dtype=np.float32)
 
-            cryos[i].update_volume_upsampling_factor(2)
             Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(
                 cryos[i], noise_variance, batch_size=None,
                 disc_type='linear_interp',
-                data_generator=cryos[i].get_dataset_subset_generator(batch_size, closest_indices, mode = 'images')
+                data_generator=cryos[i].get_dataset_subset_generator(batch_size, closest_indices, mode = 'images'),
+                upsampling_factor=2,
             )
-            halfmap = relion_functions.post_process_from_filter(
-                cryos[i], Ft_ctf, F_ty, 
-                disc_type='linear_interp', use_spherical_mask=True, 
-                grid_correct=True, gridding_correct="square"
+            halfmap = relion_functions.post_process_from_filter_v2(
+                Ft_ctf, F_ty,
+                cryos[i].volume_shape, 2,
+                kernel='triangular',
+                use_spherical_mask=True,
+                grid_correct=True, gridding_correct="square",
             )
             halfmaps[i] = halfmap
 

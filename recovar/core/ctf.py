@@ -85,9 +85,15 @@ def get_dose_filters_from_tilt_number(Apix, image_shape, dose_per_tilt, angle_pe
     return get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage)
 
 
-def get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage):
-    freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, Apix, scaled=True)
+def get_dose_filters_from_tilt_number_half(Apix, image_shape, dose_per_tilt, angle_per_tilt, tilt_numbers, voltage):
+    """Half-spectrum dose filters from tilt number."""
+    cumulative_dose = tilt_numbers * dose_per_tilt
+    tilt_angles = angle_per_tilt * jnp.ceil(tilt_numbers / 2)
+    return get_dose_filters_half(Apix, image_shape, cumulative_dose, tilt_angles, voltage)
 
+
+def _dose_filter_from_freqs(freqs, cumulative_dose, tilt_angles, voltage):
+    """Shared dose-filter logic for arbitrary frequency coordinates."""
     s2 = freqs[..., 0] ** 2 + freqs[..., 1] ** 2
     s = jnp.sqrt(s2)
 
@@ -100,6 +106,17 @@ def get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage):
     return freq_correction * angle_correction[:, None]
 
 
+def get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage):
+    freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, Apix, scaled=True)
+    return _dose_filter_from_freqs(freqs, cumulative_dose, tilt_angles, voltage)
+
+
+def get_dose_filters_half(Apix, image_shape, cumulative_dose, tilt_angles, voltage):
+    """Dose filters on half-spectrum pixels (consistent with full_image_to_half_image)."""
+    freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(image_shape, Apix, scaled=True)
+    return _dose_filter_from_freqs(freqs, cumulative_dose, tilt_angles, voltage)
+
+
 def cryodrgn_CTF(CTF_params, image_shape, voxel_size):
     psi = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=True)
     return batch_evaluate_ctf(psi, CTF_params)
@@ -107,9 +124,9 @@ def cryodrgn_CTF(CTF_params, image_shape, voxel_size):
 
 @functools.partial(jax.jit, static_argnums=[1])
 def cryodrgn_CTF_half(CTF_params, image_shape, voxel_size):
-    """Half-spectrum CTF (packed real-FFT layout), equivalent to full CTF mapped to half."""
-    full = cryodrgn_CTF(CTF_params, image_shape, voxel_size)
-    return fourier_transform_utils.full_image_to_half_image(full, image_shape)
+    """Half-spectrum CTF (consistent with full_image_to_half_image pixel ordering)."""
+    psi = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size, scaled=True)
+    return batch_evaluate_ctf(psi, CTF_params)
 
 
 @functools.partial(jax.jit, static_argnums=[1])
@@ -126,9 +143,15 @@ def evaluate_ctf_wrapper_tilt_series_v2(CTF_params, image_shape, voxel_size):
 
 @functools.partial(jax.jit, static_argnums=[1])
 def evaluate_ctf_wrapper_tilt_series_v2_half(CTF_params, image_shape, voxel_size):
-    """Half-spectrum tilt-series CTF wrapper, equivalent to mapped full output."""
-    full = evaluate_ctf_wrapper_tilt_series_v2(CTF_params, image_shape, voxel_size)
-    return fourier_transform_utils.full_image_to_half_image(full, image_shape)
+    """Half-spectrum tilt-series CTF computed directly on rfft-packed frequencies."""
+    dose_filter = get_dose_filters_half(
+        voxel_size,
+        image_shape,
+        CTF_params[:, CTFParamIndex.DOSE],
+        CTF_params[:, CTFParamIndex.TILT_ANGLE],
+        CTF_params[0, CTFParamIndex.VOLT],
+    )
+    return dose_filter * cryodrgn_CTF_half(CTF_params[:, :9], image_shape, voxel_size)
 
 
 @functools.partial(jax.jit, static_argnums=[1])
@@ -146,21 +169,23 @@ def evaluate_ctf_wrapper_tilt_series(CTF_params, image_shape, voxel_size, dose_p
 
 @functools.partial(jax.jit, static_argnums=[1])
 def evaluate_ctf_wrapper_tilt_series_half(CTF_params, image_shape, voxel_size, dose_per_tilt=None, angle_per_tilt=None):
-    """Half-spectrum tilt-series CTF wrapper, equivalent to mapped full output."""
-    full = evaluate_ctf_wrapper_tilt_series(
-        CTF_params,
-        image_shape,
+    """Half-spectrum tilt-series CTF computed directly on rfft-packed frequencies."""
+    dose_filter = get_dose_filters_from_tilt_number_half(
         voxel_size,
-        dose_per_tilt=dose_per_tilt,
-        angle_per_tilt=angle_per_tilt,
+        image_shape,
+        dose_per_tilt,
+        angle_per_tilt,
+        CTF_params[:, CTFParamIndex.DOSE],
+        CTF_params[0, CTFParamIndex.VOLT],
     )
-    return fourier_transform_utils.full_image_to_half_image(full, image_shape)
+    return dose_filter * cryodrgn_CTF_half(CTF_params[:, :9], image_shape, voxel_size)
 
 
 def get_cryo_ET_CTF_fun(dose_per_tilt=2.9, angle_per_tilt=3):
     def CTF_ET_fun(*args):
         return evaluate_ctf_wrapper_tilt_series(*args, dose_per_tilt=dose_per_tilt, angle_per_tilt=angle_per_tilt)
 
+    CTF_ET_fun._half_variant = get_cryo_ET_CTF_fun_half(dose_per_tilt, angle_per_tilt)
     return CTF_ET_fun
 
 
@@ -202,8 +227,13 @@ def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, antialiasing=False
 
 
 def evaluate_ctf_wrapper_half(CTF_params, image_shape, voxel_size, antialiasing=False):
-    """Half-spectrum CTF wrapper, equivalent to mapped full output."""
-    full = evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, antialiasing=antialiasing)
+    """Half-spectrum CTF computed directly on rfft-packed frequencies.
+
+    Falls back to full→half for antialiasing path (involves convolution).
+    """
+    if not antialiasing:
+        return cryodrgn_CTF_half(CTF_params, image_shape, voxel_size)
+    full = evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, antialiasing=True)
     return fourier_transform_utils.full_image_to_half_image(full, image_shape)
 
 
@@ -284,6 +314,8 @@ __all__ = [
     "critical_exposure",
     "get_dose_filters_from_tilt_number",
     "get_dose_filters",
+    "get_dose_filters_half",
+    "get_dose_filters_from_tilt_number_half",
     "evaluate_ctf_wrapper",
     "cryodrgn_CTF",
     "evaluate_ctf_wrapper_half",

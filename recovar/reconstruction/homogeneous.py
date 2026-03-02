@@ -38,24 +38,23 @@ def get_mean_conformation_relion(cryos, batch_size, noise_variance=None, use_reg
     means = {}
     ft_ctfs = [None, None]
     ft_ys = [None, None]
-    original_upsamplings = []
+    kernel = 'triangular' if disc_type == 'linear_interp' else 'square'
 
     # First pass: compute unregularized reconstructions
     for idx, cryo in enumerate(cryos):
-        # Store and update upsampling factor
-        original_upsamplings.append(cryo.volume_upsampling_factor)
-        cryo.update_volume_upsampling_factor(upsampling_factor)
-        
         # Compute triangular kernel filters
         ft_ctfs[idx], ft_ys[idx] = relion_functions.relion_style_triangular_kernel(
-            cryo, noise_variance.astype(np.float32), batch_size, disc_type=disc_type
+            cryo, noise_variance.astype(np.float32), batch_size, disc_type=disc_type,
+            upsampling_factor=upsampling_factor,
         )
-        
+
         # Post-process to get unregularized reconstruction
-        means[f"corrected{idx}"] = relion_functions.post_process_from_filter(
-            cryo, ft_ctfs[idx], ft_ys[idx], tau=tau, disc_type=disc_type, 
-            use_spherical_mask=use_spherical_mask, grid_correct=grid_correct, 
-            gridding_correct="square", kernel_width=1
+        means[f"corrected{idx}"] = relion_functions.post_process_from_filter_v2(
+            ft_ctfs[idx], ft_ys[idx],
+            cryo.volume_shape, upsampling_factor,
+            tau=tau, kernel=kernel,
+            use_spherical_mask=use_spherical_mask, grid_correct=grid_correct,
+            gridding_correct="square", kernel_width=1,
         )
 
     # Compute prior from unregularized reconstructions
@@ -68,14 +67,13 @@ def get_mean_conformation_relion(cryos, batch_size, noise_variance=None, use_reg
 
     # Second pass: compute regularized reconstructions
     for idx, cryo in enumerate(cryos):
-        means[f"corrected{idx}reg"] = relion_functions.post_process_from_filter(
-            cryo, ft_ctfs[idx], ft_ys[idx], tau=mean_prior, disc_type=disc_type, 
-            use_spherical_mask=use_spherical_mask, grid_correct=grid_correct, 
-            gridding_correct="square", kernel_width=1
+        means[f"corrected{idx}reg"] = relion_functions.post_process_from_filter_v2(
+            ft_ctfs[idx], ft_ys[idx],
+            cryo.volume_shape, upsampling_factor,
+            tau=mean_prior, kernel=kernel,
+            use_spherical_mask=use_spherical_mask, grid_correct=grid_correct,
+            gridding_correct="square", kernel_width=1,
         )
-        
-        # Restore original upsampling factor
-        cryo.update_volume_upsampling_factor(original_upsamplings[idx])
 
     # Store regularized combined mean
     means["combined_regularized"] = (means["corrected0reg"] + means["corrected1reg"]) / 2
