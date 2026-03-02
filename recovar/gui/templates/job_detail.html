@@ -1535,6 +1535,7 @@ function jobExplorer() {
             label: `Volume at [${this.selectedPoint.slice(0,3).map(c => c.toFixed(2)).join(', ')}${this.selectedPoint.length > 3 ? '...' : ''}]`,
           }),
         });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const result = await resp.json();
         if (result.error) {
           showToast('Compute error: ' + result.error, 'error');
@@ -1577,6 +1578,7 @@ function jobExplorer() {
             label: 'Trajectory A\u2192B',
           }),
         });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const result = await resp.json();
         if (result.error) {
           showToast('Compute error: ' + result.error, 'error');
@@ -1617,6 +1619,7 @@ function jobExplorer() {
             label: `Conformational Density (PCA dim=${this.densityPcaDim})`,
           }),
         });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const result = await resp.json();
         if (result.error) {
           showToast('Density error: ' + result.error, 'error');
@@ -1659,6 +1662,7 @@ function jobExplorer() {
             label: `Stable States (top ${this.stablePercentTop}%, max ${this.stableNMaxs})`,
           }),
         });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const result = await resp.json();
         if (result.error) {
           showToast('Stable states error: ' + result.error, 'error');
@@ -2021,6 +2025,7 @@ function jobExplorer() {
             threshold_sigma: this.isoLevel,
           }),
         });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const result = await resp.json();
         if (result.error) {
           showToast('Mask export error: ' + result.error, 'error');
