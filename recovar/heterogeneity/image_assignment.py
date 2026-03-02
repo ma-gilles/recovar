@@ -1,8 +1,12 @@
+import logging
+
 import jax.numpy as jnp
 import numpy as np
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
 import recovar.core.forward as core_forward
+
+logger = logging.getLogger(__name__)
 
 
 def compute_residual(batch, mean_estimate, CTF_params, rotation_matrices, translations,
@@ -28,6 +32,8 @@ def compute_image_assignment(experiment_dataset, volumes, noise_variance, batch_
 
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
 
+    logger.info("Computing image assignment: %d volumes, %d images, batch_size=%d",
+                volumes.shape[0], experiment_dataset.n_units, batch_size)
     volumes = jnp.asarray(volumes, dtype=experiment_dataset.dtype)
     data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
     residuals = np.zeros((volumes.shape[0], experiment_dataset.n_units), dtype=experiment_dataset.dtype_real)

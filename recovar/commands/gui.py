@@ -12,8 +12,11 @@ When using SSH, forward the port: ssh -L 5000:localhost:5000 user@cluster
 """
 
 import argparse
+import logging
 import os
 import sys
+
+logger = logging.getLogger(__name__)
 
 
 def main():
@@ -34,13 +37,16 @@ def main():
                         help="Python interpreter path for launching jobs (default: current interpreter)")
     args = parser.parse_args()
 
+    # Set up basic logging for CLI usage
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
     # Check for Flask
     try:
         import flask
     except ImportError:
-        print("ERROR: Flask is required for the GUI. Install it with:", file=sys.stderr)
-        print("  pip install flask", file=sys.stderr)
-        print("  # or: pip install recovar[gui]", file=sys.stderr)
+        logger.error("Flask is required for the GUI. Install it with:\n"
+                     "  pip install flask\n"
+                     "  # or: pip install recovar[gui]")
         sys.exit(1)
 
     from recovar.gui.app import create_app

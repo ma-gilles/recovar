@@ -382,13 +382,17 @@ class GpuArray:
 
     def free(self):
         if self._ptr:
-            try: _get_cudart().cudaFree(self._ptr)
-            except Exception: pass
+            try:
+                _get_cudart().cudaFree(self._ptr)
+            except Exception:
+                logger.debug("cudaFree failed", exc_info=True)
             self._ptr = ctypes.c_void_p()
 
     def __del__(self):
-        try: self.free()
-        except Exception: pass
+        try:
+            self.free()
+        except Exception:
+            pass  # destructors must not raise
 
 
 def _random_rotations_6(n, rng=None):

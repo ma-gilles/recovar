@@ -1,9 +1,12 @@
 import argparse
+import logging
 import os
 
 import numpy as np
 
 from recovar import utils
+
+logger = logging.getLogger(__name__)
 from recovar.heterogeneity import deconvolve_density
 from recovar.output import output
 

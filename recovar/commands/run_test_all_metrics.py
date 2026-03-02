@@ -207,7 +207,7 @@ def make_big_test_dataset(input_dir, output_dir, noise_level=0.1, grid_size=128,
         noise_scale_std=0.0, contrast_std=contrast_std, disc_type='cubic',
         n_tilts=n_tilts, premultiplied_ctf=premultiplied_ctf, noise_increase_per_tilt=noise_increase_per_tilt)
 
-    logging.info(f"Finished generating dataset {output_folder}")
+    logging.info("Finished generating dataset %s", output_folder)
     return sim_info
 
 

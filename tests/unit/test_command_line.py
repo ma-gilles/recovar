@@ -14,9 +14,9 @@ def test_main_commands_shows_usage_when_no_subcommand(monkeypatch, capsys):
     with pytest.raises(SystemExit) as exc:
         command_line.main_commands()
     assert exc.value.code == 1
-    out = capsys.readouterr().out
-    assert "Usage: recovar <command>" in out
-    assert "foo" in out
+    err = capsys.readouterr().err
+    assert "Usage: recovar <command>" in err
+    assert "foo" in err
 
 
 def test_main_commands_rejects_unknown_subcommand(monkeypatch, capsys):
@@ -26,9 +26,9 @@ def test_main_commands_rejects_unknown_subcommand(monkeypatch, capsys):
     with pytest.raises(SystemExit) as exc:
         command_line.main_commands()
     assert exc.value.code == 1
-    out = capsys.readouterr().out
-    assert "Command 'bar' not found." in out
-    assert "foo" in out
+    err = capsys.readouterr().err
+    assert "Command 'bar' not found." in err
+    assert "foo" in err
 
 
 def test_main_commands_dispatches_and_strips_subcommand(monkeypatch):
@@ -57,7 +57,7 @@ def test_main_commands_import_error_exits(monkeypatch, capsys):
     with pytest.raises(SystemExit) as exc:
         command_line.main_commands()
     assert exc.value.code == 1
-    assert "Error importing recovar.commands.foo: boom" in capsys.readouterr().out
+    assert "Error importing recovar.commands.foo: boom" in capsys.readouterr().err
 
 
 def test_main_commands_requires_module_main(monkeypatch, capsys):
@@ -68,7 +68,7 @@ def test_main_commands_requires_module_main(monkeypatch, capsys):
     with pytest.raises(SystemExit) as exc:
         command_line.main_commands()
     assert exc.value.code == 1
-    assert "does not define a main() function" in capsys.readouterr().out
+    assert "does not define a main() function" in capsys.readouterr().err
 
 
 def test_main_commands_ignores_non_python_files(monkeypatch, capsys):
@@ -77,10 +77,10 @@ def test_main_commands_ignores_non_python_files(monkeypatch, capsys):
 
     with pytest.raises(SystemExit):
         command_line.main_commands()
-    out = capsys.readouterr().out
-    assert "foo" in out
-    assert "README" not in out
-    assert "bar.txt" not in out
+    err = capsys.readouterr().err
+    assert "foo" in err
+    assert "README" not in err
+    assert "bar.txt" not in err
 
 
 def test_main_commands_lists_available_commands_in_sorted_order(monkeypatch, capsys):
@@ -89,6 +89,6 @@ def test_main_commands_lists_available_commands_in_sorted_order(monkeypatch, cap
 
     with pytest.raises(SystemExit):
         command_line.main_commands()
-    out = capsys.readouterr().out
+    err = capsys.readouterr().err
 
-    assert out.index("alpha") < out.index("zeta")
+    assert err.index("alpha") < err.index("zeta")

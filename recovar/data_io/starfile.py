@@ -6,11 +6,14 @@ Supports both RELION 3.0 (single data table) and RELION 3.1 (with optics table).
 Equivalent to cryodrgn/starfile
 """
 
+import logging
 import numpy as np
 import pandas as pd
 from datetime import datetime
 from typing import Optional, Tuple, Union, TextIO, List
 from typing_extensions import Self
+
+logger = logging.getLogger(__name__)
 
 
 def read_star(filepath: str) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
@@ -98,7 +101,10 @@ def read_star(filepath: str) -> Tuple[pd.DataFrame, Optional[pd.DataFrame]]:
     
     if main_df is None:
         raise ValueError(f"No data table found in {filepath}")
-    
+
+    logger.debug("Parsed %s: %d particles, %d columns, optics=%s",
+                 filepath, len(main_df), len(main_df.columns),
+                 optics_df is not None)
     return main_df, optics_df
 
 
@@ -356,8 +362,8 @@ class StarFile:
                     with mrcfile.open(mrcs_path, mode='r', header_only=True) as mrc:
                         D = int(mrc.header.ny)
                     return np.full(len(self), D, dtype=np.int64)
-            except (ImportError, FileNotFoundError, OSError, KeyError):
-                pass
+            except (ImportError, FileNotFoundError, OSError, KeyError) as e:
+                logger.debug("Could not read MRC header for resolution: %s", e)
         return None
     
     def flatten_to_relion30(self) -> pd.DataFrame:
