@@ -575,7 +575,7 @@ def estimate_principal_components(cryos, options,  means, mean_signal_variance, 
             covariance_cols[key] = None
     image_cov_noise = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].image_shape))
 
-    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], image_cov_noise, dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'])
+    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], image_cov_noise, dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'])
 
     if not options['keep_intermediate']:
         u['real'] = None
@@ -586,27 +586,26 @@ def estimate_principal_components(cryos, options,  means, mean_signal_variance, 
 
 def compute_regularized_covariance_columns(cryos, means, mean_signal_variance, cov_noise, volume_mask, dilated_volume_mask, gpu_memory, noise_model, options, picked_frequencies):
 
-    cryo = cryos[0]
     volume_shape = cryos[0].volume_shape
-
-    mask_ls = dilated_volume_mask
     mask_final = volume_mask
-    image_noise_var = noise.make_radial_noise(cov_noise, cryos[0].image_shape)
 
-    utils.report_memory_device(logger = logger)
-    disc_type = 'nearest'
-    Hs, Bs = compute_both_H_B(cryos, means, mask_ls, picked_frequencies, gpu_memory, image_noise_var, disc_type, parallel_analysis = False, options = options)
+    utils.report_memory_device(logger=logger)
+    Hs, Bs = compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies,
+                               gpu_memory, options=options)
     volume_noise_var = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].volume_shape))
     covariance_cols = {}
 
     logger.info("using new covariance reg fn")
-    utils.report_memory_device(logger = logger)
+    utils.report_memory_device(logger=logger)
 
-    covariance_cols["est_mask"], prior, fscs = compute_covariance_regularization_relion_style(Hs, Bs, 1/mean_signal_variance, picked_frequencies, volume_noise_var, mask_final, volume_shape,  gpu_memory, reg_init_multiplier = jax_config.REG_INIT_MULTIPLIER, options = options)
+    covariance_cols["est_mask"], prior, fscs = compute_covariance_regularization_relion_style(
+        Hs, Bs, 1/mean_signal_variance, picked_frequencies, volume_noise_var,
+        mask_final, volume_shape, gpu_memory,
+        reg_init_multiplier=jax_config.REG_INIT_MULTIPLIER, options=options)
     covariance_cols["est_mask"] = covariance_cols["est_mask"].T
     del Hs, Bs
     logger.info("after reg fn")
-    
-    utils.report_memory_device(logger = logger)
+
+    utils.report_memory_device(logger=logger)
 
     return covariance_cols, picked_frequencies, np.asarray(fscs)

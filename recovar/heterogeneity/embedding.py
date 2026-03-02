@@ -35,7 +35,7 @@ def generate_conformation_from_reprojection(xs, mean, u ):
 
 
 @nvtx.annotate("get_per_image_embedding", color="purple", domain=NVTX_DOMAIN_EMBED)
-def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, parallel_analysis = False, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None, mean_cubic=None):
+def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None, mean_cubic=None):
     """Compute per-image latent coordinates by projecting onto principal components.
 
     For each image, estimates the linear coefficients (latent embedding)
@@ -55,7 +55,6 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
         contrast_option: Contrast estimation mode (``'contrast'``,
             ``'contrast_shared'``, or ``'none'``).
         to_real: Convert output to real-valued coordinates.
-        parallel_analysis: Run parallel analysis for significance testing.
         compute_covariances: Compute per-image latent covariance matrices.
         ignore_zero_frequency: Exclude the DC component.
         contrast_mean: Prior mean for contrast estimation.
@@ -121,7 +120,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
         zs[cryo_idx], cov_zs[cryo_idx], est_contrasts[cryo_idx], bias[cryo_idx] = get_coords_in_basis_and_contrast_3(
             cryo, mean, basis, eigenvalues[:basis.shape[0]], volume_mask,
              contrast_grid, batch_size, disc_type, 
-            parallel_analysis = parallel_analysis, compute_covariances = compute_covariances, contrast_mean = contrast_mean, contrast_variance = contrast_variance , compute_bias = compute_bias, image_subset_in_tilt_series = image_subset_in_tilt_series, contrast_shared_across_tilt_series= contrast_shared_across_tilt_series)
+            compute_covariances = compute_covariances, contrast_mean = contrast_mean, contrast_variance = contrast_variance , compute_bias = compute_bias, image_subset_in_tilt_series = image_subset_in_tilt_series, contrast_shared_across_tilt_series= contrast_shared_across_tilt_series)
 
     
     zs = np.concatenate(zs, axis = 0)
@@ -146,7 +145,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
     
 
 @nvtx.annotate("get_coords_in_basis_and_contrast", color="blue", domain=NVTX_DOMAIN_EMBED)
-def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None, force_not_shared_label = False, contrast_shared_across_tilt_series = False):
+def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, contrast_grid, batch_size, disc_type, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None, force_not_shared_label = False, contrast_shared_across_tilt_series = False):
 
     shared_label = experiment_dataset.tilt_series_flag and not force_not_shared_label
     n_units = experiment_dataset.n_units if not force_not_shared_label else experiment_dataset.n_images

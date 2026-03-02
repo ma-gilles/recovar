@@ -226,6 +226,7 @@ class BatchData(eqx.Module):
     translations: jax.Array
     ctf_params: jax.Array
     noise_variance: Optional[jax.Array] = None
+    particle_indices: Optional[jax.Array] = None
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +260,10 @@ class DataIterator:
         When *True*, call ``noise_model.get_half(indices)`` (half-spectrum
         noise for half-image backprojection). When *False*, call
         ``noise_model.get(indices)`` (full-spectrum noise).
+    noise_by_particle : bool, default False
+        When *True*, use ``particles_ind`` (particle-group indices) for
+        noise lookup instead of flat ``indices``.  Needed by the covariance
+        column path where ``noise.get(particles_ind)`` is the correct call.
     index_subset : array-like, optional
         If given, iterate only over these image indices.
     use_image_generator : bool, default True
@@ -287,13 +292,14 @@ class DataIterator:
 
     def __init__(
         self, dataset, batch_size, *,
-        noise_model=None, noise_half=True,
+        noise_model=None, noise_half=True, noise_by_particle=False,
         index_subset=None, use_image_generator=True, apply_process_images=False,
     ):
         self.dataset = dataset
         self.batch_size = batch_size
         self.noise_model = noise_model
         self.noise_half = noise_half
+        self.noise_by_particle = noise_by_particle
         self.index_subset = index_subset
         self.use_image_generator = use_image_generator
         self.apply_process_images = apply_process_images
@@ -317,17 +323,25 @@ class DataIterator:
             )
         nm = self.noise_model
         do_process = self.apply_process_images
-        for batch, _particles_ind, indices in gen:
+        noise_by_particle = self.noise_by_particle
+        for batch, particles_ind, indices in gen:
             if do_process:
                 batch = self.dataset.image_stack.process_images(batch, apply_image_mask=False)
+            # Noise indexing: particle-grouped generators use particles_ind
+            # for noise lookup (covariance path), while image generators use
+            # flat indices (mean reconstruction path).
+            if nm is not None:
+                noise_idx = particles_ind if noise_by_particle else indices
+                nv = nm.get_half(noise_idx) if self.noise_half else nm.get(noise_idx)
+            else:
+                nv = None
             yield BatchData(
                 images=batch,
                 rotation_matrices=self.dataset.rotation_matrices[indices],
                 translations=self.dataset.translations[indices],
                 ctf_params=self.dataset.CTF_params[indices],
-                noise_variance=(
-                    nm.get_half(indices) if self.noise_half else nm.get(indices)
-                ) if nm is not None else None,
+                noise_variance=nv,
+                particle_indices=particles_ind,
             )
 
 
@@ -352,13 +366,22 @@ class ModelState(eqx.Module):
 # Per-function option modules (all static — controls compilation)
 # ---------------------------------------------------------------------------
 
+class CovColumnOpts(eqx.Module):
+    """Static options for covariance column (H/B) computation."""
+
+    right_kernel: str = eqx.field(static=True, default="triangular")
+    left_kernel: str = eqx.field(static=True, default="triangular")
+    right_kernel_width: int = eqx.field(static=True, default=2)
+    mask_images: bool = eqx.field(static=True, default=True)
+    soften_mask: int = eqx.field(static=True, default=3)
+
+
 class CovarianceOpts(eqx.Module):
     """Options for covariance estimation inner functions."""
 
     disc_type_u: str = eqx.field(static=True)
     do_mask_images: bool = eqx.field(static=True, default=True)
     shared_label: bool = eqx.field(static=True, default=False)
-    parallel_analysis: bool = eqx.field(static=True, default=False)
     soften: int = eqx.field(static=True, default=5)
 
 

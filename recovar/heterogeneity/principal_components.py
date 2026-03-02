@@ -126,7 +126,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         for key in covariance_cols.keys():
             covariance_cols[key] = None
 
-    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'], mean_cubic=mean_cubic)
+    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'], mean_cubic=mean_cubic)
 
     if not options['keep_intermediate']:
         u['real'] = None
@@ -168,7 +168,7 @@ def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,
 
 
 @nvtx.annotate("pca_by_projected_covariance", color="green", domain=NVTX_DOMAIN_PCA)
-def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = None, mean_cubic=None):
+def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, ignore_zero_frequency = False, n_pcs_to_compute = None, mean_cubic=None):
 
     basis_size = basis.shape[1] if n_pcs_to_compute is None else n_pcs_to_compute
     basis = basis[:,:basis_size]
@@ -179,7 +179,7 @@ def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , dis
 
     logger.info('batch size for covariance computation: ' + str(batch_size))
 
-    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, batch_size,  disc_type, disc_type_u, parallel_analysis = parallel_analysis, do_mask_images = use_mask, mean_cubic=mean_cubic)
+    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, batch_size,  disc_type, disc_type_u, do_mask_images = use_mask, mean_cubic=mean_cubic)
 
     if not np.all(np.isfinite(covariance)):
         n_nan = np.sum(np.isnan(covariance))
@@ -616,7 +616,7 @@ def test_different_embeddings(cryos, volume_mask, mean_estimate, basis, eigenval
     residuals_flipped = np.zeros(zdims.size)
     for zdim_idx, zdim in enumerate(zdims):
         if zdim > 0:
-            basis_coordinates, image_latent_covariances, estimated_contrasts = embedding.get_coords_in_basis_and_contrast_3(cryo, mean_estimate, basis[:,:zdim], eigenvalues[:zdim], volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = False )
+            basis_coordinates, image_latent_covariances, estimated_contrasts = embedding.get_coords_in_basis_and_contrast_3(cryo, mean_estimate, basis[:,:zdim], eigenvalues[:zdim], volume_mask, noise_variance, contrast_grid, batch_size, disc_type, compute_covariances = False )
         else:
             basis_coordinates = np.zeros((cryo.n_images, 0))
         logger.info("embd ")#, end="")
@@ -627,7 +627,7 @@ def test_different_embeddings(cryos, volume_mask, mean_estimate, basis, eigenval
         basis_flipped[:,zdim-1] = basis[:,zdim-1] * (np.random.randint(0,2, size = basis[:,zdim-1].shape)*2 - 1)
 
         if zdim > 0:
-            basis_coordinates, image_latent_covariances, estimated_contrasts = embedding.get_coords_in_basis_and_contrast_3(cryo, mean_estimate, basis_flipped, eigenvalues[:zdim], volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = False )
+            basis_coordinates, image_latent_covariances, estimated_contrasts = embedding.get_coords_in_basis_and_contrast_3(cryo, mean_estimate, basis_flipped, eigenvalues[:zdim], volume_mask, noise_variance, contrast_grid, batch_size, disc_type, compute_covariances = False )
         else:
             basis_coordinates = np.zeros((cryo.n_images, 0))
         logger.info("embd ")#, end="")

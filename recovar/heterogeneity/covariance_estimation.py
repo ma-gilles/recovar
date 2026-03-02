@@ -14,7 +14,7 @@ import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, utils, jax_config
 from recovar.core import cubic_interpolation
-from recovar.core.configs import ForwardModelConfig, BatchData, DataIterator, ModelState, CovarianceOpts
+from recovar.core.configs import ForwardModelConfig, BatchData, DataIterator, ModelState, CovarianceOpts, CovColumnOpts
 from recovar.heterogeneity import covariance_core
 from recovar.reconstruction import regularization, relion_functions, noise
 
@@ -95,8 +95,8 @@ def get_default_covariance_computation_options(grid_size=None):
             provided, the number of PCs is scaled to fit in GPU memory.
 
     Returns:
-        Dictionary with keys ``covariance_fn``, ``reg_fn``,
-        ``left_kernel``, ``right_kernel``, ``column_sampling_scheme``,
+        Dictionary with keys ``reg_fn``, ``left_kernel``,
+        ``right_kernel``, ``column_sampling_scheme``,
         ``n_pcs_to_compute``, among others.
     """
 
@@ -151,7 +151,6 @@ def get_default_covariance_computation_options(grid_size=None):
             logger.info("Using %s PCs for covariance computation (GPU memory: %s GB)", n_pcs, gpu_memory)
 
     options = {
-        "covariance_fn": "kernel",
         "reg_fn": "new",
         "left_kernel": "triangular",
         "right_kernel": "triangular",
@@ -348,61 +347,40 @@ def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, vo
 
 
 @nvtx.annotate("compute_regularized_covariance_columns", color="purple")
-def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory,  options, picked_frequencies, use_multi_gpu = False, n_gpus = None, mean_cubic=None):
+def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, options, picked_frequencies, use_multi_gpu=False, n_gpus=None, mean_cubic=None):
 
     volume_shape = cryos.volume_shape
-
-    mask_ls = dilated_volume_mask
     mask_final = volume_mask
-    keep_intermediate = False
 
-    utils.report_memory_device(logger = logger)
-    
+    utils.report_memory_device(logger=logger)
+
     # Start CUDA profiler for covariance computation
     if CUDA_PROFILER_AVAILABLE:
         cudaProfilerStart()
         logger.info("CUDA Profiler: Started profiling covariance computation")
-    
-    Hs, Bs = compute_both_H_B(cryos, means, mask_ls, picked_frequencies, gpu_memory,  parallel_analysis = False, options = options, use_multi_gpu = use_multi_gpu, n_gpus = n_gpus, mean_cubic=mean_cubic)
-    
+
+    Hs, Bs = compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies,
+                               gpu_memory, options=options, use_multi_gpu=use_multi_gpu,
+                               n_gpus=n_gpus, mean_cubic=mean_cubic)
+
     # Stop CUDA profiler after covariance computation
     if CUDA_PROFILER_AVAILABLE:
         cudaProfilerStop()
         logger.info("CUDA Profiler: Stopped profiling covariance computation")
-    
-    st_time = time.time() 
-    volume_noise_var = np.asarray(noise.make_radial_noise(cryos[0].noise.get_average_radial_noise(), cryos.volume_shape))
+
+    volume_noise_var = np.asarray(noise.make_radial_noise(
+        cryos[0].noise.get_average_radial_noise(), cryos.volume_shape))
 
     covariance_cols = {}
-    if options["reg_fn"] == "new":
-        logger.info("using new covariance reg fn")
-        utils.report_memory_device(logger = logger)
-        covariance_cols["est_mask"], prior, fscs = compute_covariance_regularization_relion_style(Hs, Bs, mean_prior, picked_frequencies, volume_noise_var, mask_final, volume_shape,  gpu_memory, reg_init_multiplier = jax_config.REG_INIT_MULTIPLIER, options = options)
-        covariance_cols["est_mask"] = covariance_cols["est_mask"].T
-        del Hs, Bs
-        logger.info("after reg fn")
-        utils.report_memory_device(logger = logger)
-    elif options["reg_fn"] == "old":
-        logger.info("using old covariance reg fn")
-        H_comb, B_comb, prior, fscs = compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, volume_noise_var, mask_final, volume_shape,  gpu_memory, prior_iterations = 3, keep_intermediate = keep_intermediate, reg_init_multiplier = jax_config.REG_INIT_MULTIPLIER, substract_shell_mean = options["substract_shell_mean"], shift_fsc = options["shift_fsc"])
-
-        del Hs, Bs
-
-        H_comb = np.stack(H_comb).astype(dtype = cryos.dtype)
-        B_comb = np.stack(B_comb).astype(dtype = cryos.dtype)
-
-        st_time2 = time.time()
-        cols2 = []
-        for col_idx in range(picked_frequencies.size):
-            cols2.append(np.array(regularization.covariance_update_col(H_comb[col_idx], B_comb[col_idx], prior[col_idx]) * valid_idx ))
-            
-
-        logger.info("cov update time: %s", time.time() - st_time2)
-        covariance_cols["est_mask"] = np.stack(cols2, axis =-1).astype(cryos.dtype)
-        logger.info("reg time: %s", time.time() - st_time)
-        utils.report_memory_device(logger = logger)
-    else:
-        raise ValueError("wrong covariance reg fn")
+    utils.report_memory_device(logger=logger)
+    covariance_cols["est_mask"], prior, fscs = compute_covariance_regularization_relion_style(
+        Hs, Bs, mean_prior, picked_frequencies, volume_noise_var, mask_final,
+        volume_shape, gpu_memory, reg_init_multiplier=jax_config.REG_INIT_MULTIPLIER,
+        options=options)
+    covariance_cols["est_mask"] = covariance_cols["est_mask"].T
+    del Hs, Bs
+    logger.info("after reg fn")
+    utils.report_memory_device(logger=logger)
 
     return covariance_cols, picked_frequencies, np.asarray(fscs)
 
@@ -617,112 +595,226 @@ def compute_variance(
 
 
 @nvtx.annotate("compute_both_H_B", color="blue")
-def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies, gpu_memory, parallel_analysis, options, use_multi_gpu = False, n_gpus = None, mean_cubic=None):
+def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies,
+                     gpu_memory, options, use_multi_gpu=False, n_gpus=None,
+                     mean_cubic=None):
+    """Compute H and B matrices for both half-sets."""
     Hs = []
     Bs = []
     st_time = time.time()
 
     for cryo_idx, cryo in enumerate(cryos):
         mean = means["combined"] if options["use_combined_mean"] else means["corrected" + str(cryo_idx)]
-        H, B = compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gpu_memory, parallel_analysis, options = options, use_multi_gpu = use_multi_gpu, n_gpus = n_gpus, mean_cubic=mean_cubic)
+        if use_multi_gpu:
+            H, B = _compute_H_B_multi_gpu(
+                cryo, mean, dilated_volume_mask, picked_frequencies,
+                gpu_memory, options, n_gpus=n_gpus, mean_cubic=mean_cubic)
+        else:
+            H, B = compute_H_B_for_halfset(
+                cryo, mean, dilated_volume_mask, picked_frequencies,
+                gpu_memory, options, mean_cubic=mean_cubic)
         logger.info("Time to cov %s", time.time() - st_time)
         Hs.append(H)
         Bs.append(B)
     return Hs, Bs
 
 
-@nvtx.annotate("compute_H_B_in_volume_batch", color="blue")
-def compute_H_B_in_volume_batch(cryo, mean, dilated_volume_mask, picked_frequencies, gpu_memory, parallel_analysis = False, options = None, use_multi_gpu = False, n_gpus = None, mean_cubic=None):
+def _compute_H_B_multi_gpu(cryo, mean, dilated_volume_mask, picked_frequencies,
+                            gpu_memory, options, n_gpus=None, mean_cubic=None):
+    """Multi-GPU wrapper: splits images across GPUs, each calls compute_H_B_for_halfset."""
+    from recovar.utils import multi_gpu as multi_gpu_utils
 
-    # //2 for cubic: spline coefficient arrays use ~2x more memory than linear
+    logger.info("=" * 60)
+    logger.info("MULTI-GPU MODE ENABLED")
+    logger.info("=" * 60)
+
+    def _single_gpu_wrapper(experiment_dataset, mean_estimate, volume_mask,
+                            picked_frequency_indices, batch_size, options,
+                            image_subset=None):
+        return compute_H_B_for_halfset(
+            experiment_dataset, mean_estimate, volume_mask,
+            picked_frequency_indices, gpu_memory, options,
+            image_subset=image_subset, mean_cubic=mean_cubic)
+
+    H, B = multi_gpu_utils.compute_H_B_multi_gpu(
+        compute_H_B_fn=_single_gpu_wrapper,
+        experiment_dataset=cryo,
+        n_gpus=n_gpus,
+        mean_estimate=mean,
+        volume_mask=dilated_volume_mask,
+        picked_frequency_indices=picked_frequencies,
+        batch_size=0,  # unused — compute_H_B_for_halfset sizes its own batches
+        options=options,
+    )
+
+    logger.info("=" * 60)
+    logger.info("MULTI-GPU COMPUTATION COMPLETED")
+    logger.info("=" * 60)
+
+    return H, B
+
+
+def preprocess_covariance_batch(config, batch_data, mean_estimate, volume_mask,
+                                image_stack_mask, opts):
+    """Preprocess one image batch for covariance column computation.
+
+    Applies tight mask, centers images (y_i - A_i*mu), masks, computes CTF,
+    and gets grid-point coordinates.  Each sub-step calls existing JIT-compiled
+    helpers; this function is a Python-level orchestrator (not itself jitted).
+
+    Returns
+    -------
+    tuple of (centered_images, ctf_on_grid, plane_coords, image_mask, tilt_labels)
+    """
+    images = batch_data.images
+    rotation_matrices = batch_data.rotation_matrices
+    ctf_params = batch_data.ctf_params
+
+    # 1. Per-image tight mask
+    image_mask = covariance_core.get_per_image_tight_mask(
+        volume_mask, rotation_matrices, image_stack_mask,
+        config.volume_mask_threshold,
+        config.image_shape, config.volume_shape,
+        config.grid_size, config.padding,
+        'linear_interp', soften=opts.soften_mask)
+    if not opts.mask_images:
+        image_mask = jnp.ones_like(image_mask)
+
+    # 2. Center images: y_i - A_i * mu
+    images = covariance_core.centered_images(
+        config, images, mean_estimate,
+        ctf_params, rotation_matrices,
+        batch_data.translations)
+
+    # 3. Apply image masks
+    images = covariance_core.apply_image_masks(images, image_mask, config.image_shape)
+
+    # 4. Compute CTF
+    ctf_on_grid = config.compute_ctf(ctf_params)
+
+    # 5. Grid-point coordinates
+    plane_coords = core.batch_get_gridpoint_coords(
+        rotation_matrices, config.image_shape, config.volume_shape)
+
+    # 6. Tilt labels (from particle_indices)
+    tilt_labels = batch_data.particle_indices
+
+    return images, ctf_on_grid, plane_coords, image_mask, tilt_labels
+
+
+def _batched_stack_transfer(H, B, H_out, B_out, freq_offset, volume_size, n_items):
+    """Stack JAX arrays in GPU batches and transfer to pre-allocated CPU arrays.
+
+    Avoids OOM from stacking all columns at once and minimizes the number
+    of individual DtoH transfers.
+    """
+    batch_size = 50
+    element_bytes = volume_size * 8  # complex64
+    gpu_mem_total = utils.get_gpu_memory_total()
+    if 2 * batch_size * element_bytes > 0.10 * gpu_mem_total * 1e9:
+        gpu_mem_bytes = gpu_mem_total * 1e9
+        batch_size = max(1, int(0.10 * gpu_mem_bytes / (2 * element_bytes)))
+
+    for batch_start in range(0, n_items, batch_size):
+        batch_end = min(batch_start + batch_size, n_items)
+        H_batch_jax = jnp.stack(H[batch_start:batch_end], axis=1)
+        B_batch_jax = jnp.stack(B[batch_start:batch_end], axis=1)
+        col_start = freq_offset + batch_start
+        col_end = freq_offset + batch_end
+        H_out[:, col_start:col_end] = np.asarray(H_batch_jax)
+        B_out[:, col_start:col_end] = np.asarray(B_batch_jax)
+        del H_batch_jax, B_batch_jax
+
+
+@nvtx.annotate("compute_H_B_for_halfset", color="blue", domain=NVTX_DOMAIN_H_B)
+def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies,
+                            gpu_memory, options, image_subset=None, mean_cubic=None):
+    """Compute H and B matrices for one half-set.
+
+    Replaces the old ``compute_H_B`` + ``compute_H_B_in_volume_batch`` pair.
+    Uses :class:`DataIterator` for data loading and :class:`CovColumnOpts`
+    for static kernel options.
+    """
+    volume_size = cryo.volume_size
+
+    # Resolve discretization and mean
+    if options['disc_type'] == 'cubic':
+        disc_type = 'cubic'
+        if mean_cubic is not None:
+            mean_estimate = mean_cubic
+        else:
+            mean_estimate = cubic_interpolation.calculate_spline_coefficients(
+                jnp.array(mean_estimate).reshape(cryo.volume_shape))
+    else:
+        disc_type = 'linear_interp'
+
+    mean_estimate = jnp.array(mean_estimate)
+
+    config = ForwardModelConfig.from_dataset(cryo, disc_type=disc_type)
+    opts = CovColumnOpts(
+        right_kernel=options["right_kernel"],
+        left_kernel=options["left_kernel"],
+        right_kernel_width=options["right_kernel_width"],
+        mask_images=options["mask_images_in_H_B"],
+        soften_mask=3,
+    )
+
+    # Batch sizes
     image_batch_size = utils.safe_batch_size(
-        utils.get_image_batch_size(cryo.grid_size, gpu_memory) // (2 if options['disc_type'] =='cubic' else 1))
+        utils.get_image_batch_size(cryo.grid_size, gpu_memory) // (2 if disc_type == 'cubic' else 1))
     column_batch_size = utils.get_column_batch_size(cryo.grid_size, gpu_memory)
 
-    # Multi-GPU path
-    if use_multi_gpu:
-        from recovar.utils import multi_gpu as multi_gpu_utils
-        
-        logger.info("=" * 60)
-        logger.info("MULTI-GPU MODE ENABLED")
-        logger.info("=" * 60)
-        
-        # Define wrapper function that matches the signature expected by multi_gpu_utils
-        def compute_H_B_single_gpu_wrapper(experiment_dataset, mean_estimate, volume_mask, 
-                                            picked_frequency_indices, batch_size, diag_prior,
-                                            parallel_analysis, jax_random_key, options, image_subset=None):
-            """Wrapper that processes all frequencies for a subset of images."""
-            H = np.empty([experiment_dataset.volume_size, picked_frequency_indices.size], dtype=experiment_dataset.dtype)
-            B = np.empty([experiment_dataset.volume_size, picked_frequency_indices.size], dtype=experiment_dataset.dtype)
-            frequency_batch = column_batch_size
-            
-            for k in range(0, int(np.ceil(picked_frequency_indices.size/frequency_batch))):
-                batch_st = int(k * frequency_batch)
-                batch_end = int(np.min([(k+1) * frequency_batch, picked_frequency_indices.size]))
-                
-                H_batch, B_batch = compute_H_B(experiment_dataset, mean_estimate, volume_mask,
-                                                picked_frequency_indices[batch_st:batch_end],
-                                                batch_size,
-                                                None,
-                                                parallel_analysis=parallel_analysis,
-                                                jax_random_key=jax_random_key,
-                                                options=options,
-                                                image_subset=image_subset,
-                                                mean_cubic=mean_cubic)
-                
-                # Tag the array copy operations after compute_H_B returns
-                with nvtx.annotate("copy_H_B_to_output", color="gold", domain=NVTX_DOMAIN_H_B):
-                    # Avoid unnecessary copy if already NumPy array
-                    H[:, batch_st:batch_end] = H_batch if isinstance(H_batch, np.ndarray) else np.array(H_batch)
-                    B[:, batch_st:batch_end] = B_batch if isinstance(B_batch, np.ndarray) else np.array(B_batch)
-                
-                # Tag the cleanup operation
-                with nvtx.annotate("delete_H_B_batch", color="gray", domain=NVTX_DOMAIN_H_B):
-                    del H_batch, B_batch
-            
-            return H, B
-        
-        # Use multi-GPU computation
-        H, B = multi_gpu_utils.compute_H_B_multi_gpu(
-            compute_H_B_fn=compute_H_B_single_gpu_wrapper,
-            experiment_dataset=cryo,
-            n_gpus=n_gpus,
-            mean_estimate=mean,
-            volume_mask=dilated_volume_mask,
-            picked_frequency_indices=picked_frequencies,
-            batch_size=image_batch_size,
-            diag_prior=None,
-            parallel_analysis=parallel_analysis,
-            jax_random_key=0,
-            options=options
-        )
-        
-        logger.info("=" * 60)
-        logger.info("MULTI-GPU COMPUTATION COMPLETED")
-        logger.info("=" * 60)
-        
-        return H, B
-    
-    # Original single-GPU path
-    H = np.empty( [cryo.volume_size, picked_frequencies.size] , dtype = cryo.dtype)
-    B = np.empty( [cryo.volume_size, picked_frequencies.size] , dtype = cryo.dtype)
-    frequency_batch = column_batch_size
+    n_picked = picked_frequencies.size
+    H_out = np.empty([volume_size, n_picked], dtype=cryo.dtype)
+    B_out = np.empty([volume_size, n_picked], dtype=cryo.dtype)
 
-    for k in range(0, int(np.ceil(picked_frequencies.size/frequency_batch))):
-        batch_st = int(k * frequency_batch)
-        batch_end = int(np.min( [(k+1) * frequency_batch ,picked_frequencies.size  ]))
-        H_batch, B_batch = compute_H_B(cryo, mean, dilated_volume_mask,
-                                                                 picked_frequencies[batch_st:batch_end],
-                                                                 image_batch_size,
-                                                                 None,
-                                                                 parallel_analysis = parallel_analysis,
-                                                                 jax_random_key = 0, options = options,
-                                                                 mean_cubic=mean_cubic)
-        H[:, batch_st:batch_end]  = H_batch
-        B[:, batch_st:batch_end]  = B_batch
-        del H_batch, B_batch
-        
-    return H,B
+    # Outer loop: frequency batches (for GPU memory)
+    for freq_k in range(0, int(np.ceil(n_picked / column_batch_size))):
+        freq_st = int(freq_k * column_batch_size)
+        freq_end = int(np.min([(freq_k + 1) * column_batch_size, n_picked]))
+        freq_batch = picked_frequencies[freq_st:freq_end]
+        n_freq_batch = freq_batch.size
+
+        H = [0] * n_freq_batch
+        B = [0] * n_freq_batch
+
+        # Inner loop: image batches via DataIterator
+        for batch_data in DataIterator(
+                cryo, image_batch_size,
+                noise_model=cryo.noise, noise_half=False,
+                noise_by_particle=True,
+                index_subset=image_subset,
+                use_image_generator=image_subset is not None,
+                apply_process_images=True):
+
+            images, ctf_on_grid, plane_coords, image_mask, tilt_labels = \
+                preprocess_covariance_batch(
+                    config, batch_data, mean_estimate, volume_mask,
+                    cryo.image_stack.mask, opts)
+
+            # Per-frequency accumulation
+            for k, freq_idx in enumerate(freq_batch):
+                H_k, B_k = compute_H_B_triangular(
+                    images, ctf_on_grid, plane_coords,
+                    batch_data.rotation_matrices,
+                    batch_data.noise_variance,
+                    freq_idx, image_mask,
+                    config.image_shape, volume_size,
+                    right_kernel=opts.right_kernel,
+                    left_kernel=opts.left_kernel,
+                    kernel_width=opts.right_kernel_width,
+                    shared_label=cryo.tilt_series_flag,
+                    premultiplied_ctf=cryo.premultiplied_ctf,
+                    tilt_labels=tilt_labels)
+                H[k] += H_k.real.astype(cryo.dtype_real)
+                B[k] += B_k
+
+            del images, ctf_on_grid, plane_coords, image_mask
+
+        # Batched stack + GPU→CPU transfer
+        _batched_stack_transfer(H, B, H_out, B_out, freq_st, volume_size, n_freq_batch)
+
+    return H_out, B_out
 
 
 @nvtx.annotate("compute_covariance_regularization_relion_style", color="cyan")
@@ -779,194 +871,6 @@ def compute_covariance_regularization_relion_style(Hs, Bs, mean_prior, picked_fr
 
     return combined_cov_cols, fsc_priors, fscs
 
-@nvtx.annotate("compute_covariance_regularization", color="cyan")
-def compute_covariance_regularization(Hs, Bs, mean_prior, picked_frequencies, cov_noise, volume_mask, volume_shape, gpu_memory,  prior_iterations = 3, keep_intermediate = False, reg_init_multiplier = 1, substract_shell_mean = False, shift_fsc = False):
-
-    # 
-    regularization_init = (mean_prior + 1e-14) * reg_init_multiplier / cov_noise
-    def init_regularization_of_column_k(k):
-        return regularization_init[None] * regularization_init[picked_frequencies[np.array(k)], None] 
-
-    for cryo_idx in range(len(Hs)):
-        Hs[cryo_idx] = Hs[cryo_idx].T
-        Bs[cryo_idx] = Bs[cryo_idx].T
-    
-    # Column-wise regularize 
-    shifts = core.vec_indices_to_frequencies(picked_frequencies, volume_shape) * (shift_fsc)
-    n_freqs = picked_frequencies.size
-
-    fsc_priors = [None] * n_freqs
-    H_combined = [None] * n_freqs
-    B_combined = [None] * n_freqs
-    fscs = [None] * n_freqs
-
-    # //4: regularization needs 4 volume-sized arrays simultaneously (H0, H1, B0, B1)
-    batch_size = utils.safe_batch_size(utils.get_column_batch_size(volume_shape[0], gpu_memory) // 4)
-    cpu_device = jax.devices("cpu")[0]
-
-    for k in range(int(np.ceil(n_freqs/batch_size))-1, -1, -1):
-        batch_st = int(k * batch_size)
-        batch_end = int(np.min( [(k+1) * batch_size, n_freqs]))
-        indices = jnp.arange(batch_st, batch_end)
-        H0_batch = Hs[0][batch_st:batch_end]
-        H1_batch = Hs[1][batch_st:batch_end]
-        B0_batch = Bs[0][batch_st:batch_end]
-        B1_batch = Bs[1][batch_st:batch_end]
-
-        priors, fscs_this = regularization.prior_iteration_batch(H0_batch, H1_batch, B0_batch, B1_batch, shifts[indices], init_regularization_of_column_k(np.array(indices)), substract_shell_mean, volume_shape, prior_iterations )
-        priors = jax.device_put(priors, cpu_device)
-        for j, ind in enumerate(indices):
-            fsc_priors[ind] = priors[j].real
-            H_combined[ind] = H0_batch[j] + H1_batch[j]
-            B_combined[ind] = B0_batch[j] + B1_batch[j]
-            fscs[ind] = fscs_this[j]
-
-    fsc_priors = np.stack(fsc_priors, axis =0).real
-    # Symmetricize prior    
-    fsc_priors[:,picked_frequencies] = 0.5 * ( fsc_priors[:,picked_frequencies] + fsc_priors[:,picked_frequencies].T ) 
-    return H_combined, B_combined, fsc_priors, fscs
-
-    
-@nvtx.annotate("compute_H_B", color="blue", domain=NVTX_DOMAIN_H_B)
-def compute_H_B(experiment_dataset, mean_estimate, volume_mask, picked_frequency_indices, batch_size, diag_prior, parallel_analysis = False, jax_random_key = 0, batch_over_H_B = False, soften_mask = 3, options = None, image_subset = None, mean_cubic=None):
-    volume_size = mean_estimate.size
-    n_picked_indices = picked_frequency_indices.size
-
-    # Use lists to accumulate JAX arrays (keeps data on GPU/in JAX)
-    H = [0] * n_picked_indices
-    B = [0] * n_picked_indices
-
-    jax_random_key = jax.random.PRNGKey(jax_random_key)
-    mean_estimate = jnp.array(mean_estimate)
-
-
-    H_B_fn = options["covariance_fn"]
-    with nvtx.annotate("create_jit_function", color="pink", domain=NVTX_DOMAIN_H_B):
-        if "kernel" in H_B_fn:
-            f_jit = jax.jit(compute_H_B_triangular, static_argnums = [7,8,9,10,11,12, 13])
-        else:
-            raise ValueError(f"Not recognized covariance_fn: {H_B_fn}")
-
-    if experiment_dataset.tilt_series_flag:
-        if "kernel" not in H_B_fn:
-            raise ValueError("Only kernel covariance_fn is implemented for tilt series")
-
-    if options['disc_type'] == 'cubic':
-        these_disc = 'cubic'
-        if mean_cubic is not None:
-            mean_estimate = mean_cubic
-        else:
-            mean_estimate = cubic_interpolation.calculate_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
-    else:
-        these_disc = 'linear_interp'
-
-    config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=these_disc)
-
-    # Use subset generator if image_subset is provided, otherwise use full dataset
-    if image_subset is not None:
-        data_generator = experiment_dataset.get_image_subset_generator(batch_size=batch_size, subset_indices=image_subset)
-    else:
-        data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size, mode='images')
-    for images, particles_ind, batch_image_ind in data_generator:
-        noise_variances = experiment_dataset.noise.get(particles_ind)
-        
-        with nvtx.annotate("get_per_image_tight_mask", color="green", domain=NVTX_DOMAIN_H_B):
-            image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
-                                                  experiment_dataset.rotation_matrices[batch_image_ind], 
-                                                  experiment_dataset.image_stack.mask, 
-                                                  experiment_dataset.volume_mask_threshold, 
-                                                  experiment_dataset.image_shape, 
-                                                  experiment_dataset.volume_shape, experiment_dataset.grid_size, 
-                                                experiment_dataset.padding, 'linear_interp', soften = soften_mask )
-            if not options["mask_images_in_H_B"]:
-                image_mask = jnp.ones_like(image_mask)
-
-        with nvtx.annotate("process_and_center_images", color="cyan", domain=NVTX_DOMAIN_H_B):
-            images = experiment_dataset.image_stack.process_images(images)
-            images = covariance_core.centered_images(config, images, mean_estimate,
-                                         experiment_dataset.CTF_params[batch_image_ind],
-                                         experiment_dataset.rotation_matrices[batch_image_ind],
-                                         experiment_dataset.translations[batch_image_ind])
-                    
-            images = covariance_core.apply_image_masks(images, image_mask, experiment_dataset.image_shape)  
-
-        with nvtx.annotate("compute_CTF", color="yellow", domain=NVTX_DOMAIN_H_B):
-            batch_CTF = experiment_dataset.CTF_fun( experiment_dataset.CTF_params[batch_image_ind],
-                                                   experiment_dataset.image_shape,
-                                                   experiment_dataset.voxel_size)
-        
-        with nvtx.annotate("get_gridpoint_indices", color="magenta", domain=NVTX_DOMAIN_H_B):
-            batch_grid_pt_vec_ind_of_images = core.batch_get_nearest_gridpoint_indices(
-                experiment_dataset.rotation_matrices[batch_image_ind],
-                experiment_dataset.image_shape, experiment_dataset.volume_shape )
-        
-
-        if "kernel" in H_B_fn:
-            with nvtx.annotate("get_gridpoint_coords", color="magenta", domain=NVTX_DOMAIN_H_B):
-                batch_grid_pt_vec_ind_of_images = core.batch_get_gridpoint_coords(
-                    experiment_dataset.rotation_matrices[batch_image_ind],
-                    experiment_dataset.image_shape, experiment_dataset.volume_shape )
-        _cpu = jax.devices("cpu")[0]
-        with nvtx.annotate("frequency_loop", color="red", domain=NVTX_DOMAIN_H_B):
-            for (k, picked_freq_idx) in enumerate(picked_frequency_indices):
-
-                with nvtx.annotate(f"jit_compute_H_B_triangular_freq_{k}", color="orange", domain=NVTX_DOMAIN_H_B):
-                    H_k, B_k = f_jit(images, batch_CTF, batch_grid_pt_vec_ind_of_images, experiment_dataset.rotation_matrices[batch_image_ind],  noise_variances, picked_freq_idx, image_mask, experiment_dataset.image_shape, volume_size, right_kernel = options["right_kernel"], left_kernel = options["left_kernel"], kernel_width = options["right_kernel_width"], shared_label = experiment_dataset.tilt_series_flag, premultiplied_ctf = experiment_dataset.premultiplied_ctf, tilt_labels = particles_ind)
-
-                with nvtx.annotate("accumulate_H_B", color="purple", domain=NVTX_DOMAIN_H_B):
-                    if batch_over_H_B:
-                        # Send to cpu and accumulate in list (keeps as JAX arrays)
-                        H[k] += jax.device_put(H_k, _cpu)
-                        B[k] += jax.device_put(B_k, _cpu)
-                        del H_k, B_k
-                    else:
-                        # Accumulate in list (keeps as JAX arrays)
-                        H[k] += H_k.real.astype(experiment_dataset.dtype_real)
-                        B[k] += B_k
-        with nvtx.annotate("cleanup_batch", color="gray", domain=NVTX_DOMAIN_H_B):
-            del image_mask
-            del images, batch_CTF, batch_grid_pt_vec_ind_of_images
-    
-    # Stack arrays in batches to avoid GPU memory exhaustion
-    # OPTIMIZATION: Batched GPU stack + batched transfers
-    # Previous approach: np.stack() triggered 300+ sequential DtoH transfers (~15s)
-    # New approach: Batched stack + transfer (~7s) - 2.25x speedup, 55.6% improvement
-    # Note: Full GPU stack (Strategy A) is faster but can cause OOM in multi-GPU mode
-    # See stacking_bench/benchmark_results.json for benchmarking results
-    
-    # Pre-allocate output arrays
-    H_out = np.empty([volume_size, n_picked_indices], dtype=experiment_dataset.dtype)
-    B_out = np.empty([volume_size, n_picked_indices], dtype=experiment_dataset.dtype)
-    
-    # Transfer in batches to balance memory and performance.
-    # batch_size=50 is tuned for grid_size<=256. For larger grids, scale
-    # down to avoid OOM (each element is volume_size * 8 bytes, stacking
-    # N needs ~2*N*element_bytes on GPU).
-    batch_size = 50
-    element_bytes = volume_size * 8  # complex64
-    if 2 * batch_size * element_bytes > 0.10 * utils.get_gpu_memory_total() * 1e9:
-        gpu_mem_bytes = utils.get_gpu_memory_total() * 1e9
-        batch_size = max(1, int(0.10 * gpu_mem_bytes / (2 * element_bytes)))
-    with nvtx.annotate("batched_stack_transfer", color="yellow", domain=NVTX_DOMAIN_H_B):
-        for batch_start in range(0, n_picked_indices, batch_size):
-            batch_end = min(batch_start + batch_size, n_picked_indices)
-            
-            # Stack batch on GPU
-            with nvtx.annotate(f"stack_batch_{batch_start}", color="orange", domain=NVTX_DOMAIN_H_B):
-                H_batch_jax = jnp.stack(H[batch_start:batch_end], axis=1)
-                B_batch_jax = jnp.stack(B[batch_start:batch_end], axis=1)
-            
-            # Transfer batch to CPU
-            with nvtx.annotate(f"transfer_batch_{batch_start}", color="cyan", domain=NVTX_DOMAIN_H_B):
-                H_out[:, batch_start:batch_end] = np.asarray(H_batch_jax)
-                B_out[:, batch_start:batch_end] = np.asarray(B_batch_jax)
-            
-            # Clean up batch
-            del H_batch_jax, B_batch_jax
-    
-    return H_out, B_out
-
-
 from recovar.core import cubic_interpolation
 vmap_calculate_spline_coefficients = jax.vmap(cubic_interpolation.calculate_spline_coefficients, in_axes = 0, out_axes = 0)
 
@@ -985,7 +889,7 @@ def compute_spline_coeffs_in_batch(basis, volume_shape, gpu_memory= None):
 ## REDUCED COVARIANCE COMPUTATION
 
 @nvtx.annotate("compute_projected_covariance", color="green")
-def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volume_mask, batch_size, disc_type, disc_type_u, parallel_analysis = False, do_mask_images = True, mean_cubic=None):
+def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volume_mask, batch_size, disc_type, disc_type_u, do_mask_images=True, mean_cubic=None):
 
     experiment_dataset = experiment_datasets[0]
 
@@ -993,11 +897,9 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     basis = jnp.asarray(basis)
     volume_mask = jnp.asarray(volume_mask, dtype=experiment_dataset.dtype_real)
     mean_estimate = jnp.asarray(mean_estimate, dtype=experiment_dataset.dtype)
-    jax_random_key = jax.random.PRNGKey(0)
 
     lhs = 0
     rhs = 0
-    summed_batch_kron_cpu = jax.jit(summed_batch_kron)
     logger.info("batch size in compute_projected_covariance %s", batch_size)
 
     if disc_type == 'cubic':
@@ -1025,12 +927,10 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
             disc_type_u=disc_type_u,
             do_mask_images=do_mask_images,
             shared_label=experiment_dataset.tilt_series_flag,
-            parallel_analysis=parallel_analysis,
         )
 
         data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
         for batch, _, batch_image_ind in data_generator:
-            jax_random_key, subkey = jax.random.split(jax_random_key)
             noise_variances = experiment_dataset.noise.get(batch_image_ind)
 
             batch_data = BatchData(
@@ -1043,7 +943,6 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
             lhs_this, rhs_this = reduce_covariance_inner(
                 config, batch_data, model, opts,
                 experiment_dataset.image_stack.mask,
-                jax_random_key=subkey,
             )
             if not jnp.all(jnp.isfinite(lhs_this)) or not jnp.all(jnp.isfinite(rhs_this)):
                 logger.error("NaN/Inf in covariance batch (images %s); zeroing batch contribution", batch_image_ind[:5])
@@ -1089,112 +988,8 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     return covar
 
 
-@functools.partial(jax.jit, static_argnums = [8,9,10,11,12,13,14,15,17,18, 19,21,22,23])    
-@nvtx.annotate("reduce_covariance_est_inner", color="green")
-def reduce_covariance_est_inner(batch, mean_estimate, volume_mask, basis, CTF_params,
-                                rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape,
-                                volume_shape, grid_size, voxel_size, padding, disc_type, 
-                                disc_type_u, noise_variance, process_fn, CTF_fun, parallel_analysis = False,
-                                jax_random_key = None, do_mask_images = True, shared_label = False, premultiplied_ctf = False):
-    
-
-    if (disc_type != 'linear_interp') and (disc_type != 'cubic'):
-        logger.warning("USING NEAREST NEIGHBOR DISCRETIZATION IN reduce_covariance_est_inner. disc_type=%s, disc_type_u=%s", disc_type, disc_type_u)
-
-    if premultiplied_ctf and do_mask_images:
-        logger.warning('cannot use premultiplied ctf and mask images at the same time. Using premultiplied ctf!!!! CHECK IF THIS MATTERS')
-        do_mask_images = False
-
-
-    # Memory to do this is ~ size(volume_mask) * batch_size
-    if do_mask_images:
-        image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
-                                            rotation_matrices,
-                                            image_mask, 
-                                            volume_mask_threshold,
-                                            image_shape, 
-                                            volume_shape, grid_size, 
-                                            padding, 
-                                            'linear_interp' )
-        logger.warning("USING mask in reduce_covariance_est_inner")
-    else:
-        image_mask = jnp.ones_like(batch).real
-        logger.info("NOT using mask in reduce_covariance_est_inner")
-        
-
-    batch = process_fn(batch)
-    batch = core.translate_images(batch, translations , image_shape)
-
-    config = ForwardModelConfig(
-        image_shape=image_shape, volume_shape=volume_shape,
-        grid_size=volume_shape[0], voxel_size=voxel_size,
-        padding=padding, disc_type=disc_type, CTF_fun=CTF_fun,
-        premultiplied_ctf=premultiplied_ctf, volume_mask_threshold=volume_mask_threshold,
-    )
-
-    # P_i mean
-    projected_mean = core_forward.forward_model(
-        config, mean_estimate, CTF_params, rotation_matrices,
-    )
-
-    ## DO MASK BUSINESS HERE.
-    if do_mask_images:
-        batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
-        projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, image_shape)
-
-    config_u = config.replace(disc_type=disc_type_u)
-    AUs = covariance_core.batch_vol_forward_from_map(
-        config_u, basis, CTF_params, rotation_matrices,
-        skip_ctf=premultiplied_ctf,
-    )
-    
-    # Apply mask on operator
-    if do_mask_images:
-        AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, image_shape )
-    AUs = AUs.transpose(1,2,0)
-    
-
-    # IF premultiplied_ctf, this is CTF_i * (y_i - P_i mean)
-    # If not, this is just y_i - P_i mean
-    if premultiplied_ctf:
-        CTF = CTF_fun(CTF_params, image_shape, voxel_size) 
-        batch = batch - projected_mean * CTF
-        AU_t_images = batch_x_T_y(AUs, batch)
-
-        AUs = AUs * CTF[...,None] # Then CTF multiply
-
-    else:
-        # If we are here, AUs are CTFed, so no need to multiply on images
-        batch = batch - projected_mean
-        AU_t_images = batch_x_T_y(AUs, batch)
-    # This gets inner product of AU with images
-
-    # This is not correct if we are using the mask and the CTF is premultiplied
-    if do_mask_images:
-        if premultiplied_ctf:
-            raise NotImplementedError("Masking with premultiplied CTF is not implemented yet")
-
-    AU_t_AU = batch_x_T_y(AUs,AUs).real.astype(CTF_params.dtype)
-    
-    # To save some memory, do it in place... but still unsure if this matters for JAX
-    AUs *= jnp.sqrt(noise_variance)[...,None]
-    UALambdaAUs = jnp.sum(batch_x_T_y(AUs,AUs), axis=0)
-
-    if shared_label:
-        AU_t_images = jnp.sum(AU_t_images, axis=0,keepdims=True)
-        AU_t_AU = jnp.sum(AU_t_AU, axis=0,keepdims=True)
-
-    outer_products = summed_outer_products(AU_t_images)
-
-    rhs = outer_products - UALambdaAUs
-    rhs = rhs.real.astype(CTF_params.dtype)
-    lhs = jnp.sum(batch_kron(AU_t_AU, AU_t_AU), axis=0)
-
-    return lhs, rhs
-
-
 # ============================================================================
-# New Equinox-based API for covariance estimation
+# Equinox-based API for covariance estimation
 # ============================================================================
 
 
@@ -1206,7 +1001,6 @@ def reduce_covariance_inner(
     model: ModelState,
     opts: CovarianceOpts,
     image_mask: jax.Array,
-    jax_random_key=None,
 ):
     """Covariance estimation inner loop — Equinox API.
 
@@ -1346,6 +1140,7 @@ def group_sum_by_labels(array, tilt_labels, max_groups):
 #  B_{k_1, k_2} & = \sum_{i,j_1, j_2} c_{i,j_1} c_{i,j_2} \left(l_{i,j_1} \overline{l_{i,j_2}} - \Lambda^{i}_{j_1, j_2}\right)K\left(\xi^{k_1} , \xi_{i,j_1} \right)  K\left(\xi^{k_2} , \xi_{i,j_2} \right)  \label{eq:B}
 # For a fixed k_2
 #  Eq. 12-13 in arxiv version?
+@functools.partial(jax.jit, static_argnums=[7, 8, 9, 10, 11, 12, 13])
 @nvtx.annotate("compute_H_B_triangular", color="blue", domain=NVTX_DOMAIN_H_B)
 def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coords_on_grid_stacked, rotation_matrices,  noise_variances, picked_freq_index, image_mask, image_shape, volume_size, right_kernel = "triangular", left_kernel = "triangular", kernel_width = 2, shared_label = False, premultiplied_ctf = False, tilt_labels = None):
 

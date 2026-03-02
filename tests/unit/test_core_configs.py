@@ -139,13 +139,34 @@ class TestModelState:
 # CovarianceOpts
 # ---------------------------------------------------------------------------
 
+class TestCovColumnOpts:
+    def test_defaults(self):
+        opts = configs.CovColumnOpts()
+        assert opts.right_kernel == "triangular"
+        assert opts.left_kernel == "triangular"
+        assert opts.right_kernel_width == 2
+        assert opts.mask_images is True
+        assert opts.soften_mask == 3
+
+    def test_custom_values(self):
+        opts = configs.CovColumnOpts(
+            right_kernel="square",
+            left_kernel="square",
+            right_kernel_width=1,
+            mask_images=False,
+            soften_mask=5,
+        )
+        assert opts.right_kernel == "square"
+        assert opts.mask_images is False
+        assert opts.soften_mask == 5
+
+
 class TestCovarianceOpts:
     def test_defaults(self):
         opts = configs.CovarianceOpts(disc_type_u="linear_interp")
         assert opts.disc_type_u == "linear_interp"
         assert opts.do_mask_images is True
         assert opts.shared_label is False
-        assert opts.parallel_analysis is False
         assert opts.soften == 5
 
     def test_custom_values(self):
@@ -153,13 +174,11 @@ class TestCovarianceOpts:
             disc_type_u="cubic",
             do_mask_images=False,
             shared_label=True,
-            parallel_analysis=True,
             soften=3,
         )
         assert opts.disc_type_u == "cubic"
         assert opts.do_mask_images is False
         assert opts.shared_label is True
-        assert opts.parallel_analysis is True
         assert opts.soften == 3
 
 

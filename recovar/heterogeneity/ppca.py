@@ -84,7 +84,7 @@ def EM(experiment_dataset, mean_estimate, noise_variance, EM_iter = 20, basis_si
     disc_type = 'nearest'
     for iter_i in range(EM_iter):
         # E-step
-        latent_means, latent_covariances, _ = embedding.get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, W, eigenvalue, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, parallel_analysis = False, compute_covariances = True )
+        latent_means, latent_covariances, _ = embedding.get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, W, eigenvalue, volume_mask, noise_variance, contrast_grid, batch_size, disc_type, compute_covariances = True )
 
         # M-step
         W = M_step(experiment_dataset, latent_means, latent_covariances, noise_variance, batch_size)

@@ -150,7 +150,6 @@ class TestOptionModules:
         opts = CovarianceOpts(disc_type_u="linear_interp")
         assert opts.do_mask_images is True
         assert opts.shared_label is False
-        assert opts.parallel_analysis is False
         assert opts.soften == 5
 
     def test_embedding_opts_defaults(self):
