@@ -271,6 +271,12 @@ class TiltSeriesDataset(ParticleImageDataset):
         self.ctfscalefactor = np.asarray(star.df["_rlnCtfScalefactor"], dtype=np.float32)
         if '_rlnCtfBfactor' in star.df.columns:
             self.ctfBfactor = np.asarray(star.df["_rlnCtfBfactor"], dtype=np.float32)
+        elif tilt_file_option == 'warp':
+            raise ValueError(
+                "Warp tilt ordering requires '_rlnCtfBfactor' column in the "
+                "STAR file, but it was not found. Check that your STAR file "
+                "was exported from Warp with B-factor information."
+            )
         if tilt_file_option == 'relion5':
             self.dose = np.asarray(star.df["_rlnMicrographPreExposure"], dtype=np.float32)
 

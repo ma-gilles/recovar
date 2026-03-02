@@ -551,7 +551,8 @@ def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset
         lhs_l[idx], rhs_l[idx], noise_p_variance_lhs[idx] , noise_p_variance_rhs[idx] = variance_relion_style_triangular_kernel(cryo, mean_estimate, batch_size, image_subset = image_subset, volume_mask = volume_mask, disc_type = disc_type)
 
         lhs_l[idx] = relion_functions.adjust_regularization_relion_style(lhs_l[idx], cryos.volume_shape, tau = None, padding_factor = 1, max_res_shell = None)
-        variance["corrected" + str(idx)] = rhs_l[idx] / lhs_l[idx]
+        safe_lhs = jnp.where(lhs_l[idx] > 1e-20, lhs_l[idx], jnp.float32(1.0))
+        variance["corrected" + str(idx)] = jnp.where(lhs_l[idx] > 1e-20, rhs_l[idx] / safe_lhs, jnp.float32(0.0))
 
     lhs = (lhs_l[0] + lhs_l[1])/2
     variance_prior, fsc, _ = regularization.compute_fsc_prior_gpu_v2(cryos.volume_shape, variance["corrected0"], variance["corrected1"], lhs, jnp.ones(cryos.volume_size, dtype = cryos.dtype_real) * np.inf, frequency_shift = jnp.array([0,0,0]), upsampling_factor = 1, substract_shell_mean = True)
@@ -559,7 +560,8 @@ def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset
     if use_regularization:
         for idx, cryo in enumerate(cryos):
             lhs_l[idx] = relion_functions.adjust_regularization_relion_style(lhs_l[idx], cryos.volume_shape, tau = variance_prior, padding_factor = 1, max_res_shell = None)
-            variance["corrected" + str(idx)] = rhs_l[idx] / lhs_l[idx]
+            safe_lhs_reg = jnp.where(lhs_l[idx] > 1e-20, lhs_l[idx], jnp.float32(1.0))
+            variance["corrected" + str(idx)] = jnp.where(lhs_l[idx] > 1e-20, rhs_l[idx] / safe_lhs_reg, jnp.float32(0.0))
 
     variance_prior = np.array(variance_prior)
     variance["combined"] = (variance["corrected0"] + variance["corrected1"])/2
@@ -570,7 +572,9 @@ def compute_variance(cryos, mean_estimate, batch_size, volume_mask, image_subset
         variance[key] = np.array(variance[key]).real
 
 
-    noise_p_variance_est = ( noise_p_variance_rhs[0] + noise_p_variance_rhs[1]) / (noise_p_variance_lhs[0] + noise_p_variance_lhs[1])
+    noise_lhs_sum = noise_p_variance_lhs[0] + noise_p_variance_lhs[1]
+    safe_noise_lhs = jnp.where(noise_lhs_sum > 1e-20, noise_lhs_sum, jnp.float32(1.0))
+    noise_p_variance_est = jnp.where(noise_lhs_sum > 1e-20, (noise_p_variance_rhs[0] + noise_p_variance_rhs[1]) / safe_noise_lhs, jnp.float32(0.0))
 
     end_time = time.time()
     logger.info("time to compute variance: %s", end_time- st_time)

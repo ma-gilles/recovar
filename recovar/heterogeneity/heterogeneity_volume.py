@@ -70,7 +70,7 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
         pass
     else:
         logger.warning("Choosing threshold only based on number of images")
-        make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, noise_variance, output_folder, -1, n_bins, B_factor, tau = None, n_min_particles = n_min_particles, metric_used = metric_used)
+        make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, output_folder, -1, n_bins, B_factor, tau = None, n_min_particles = n_min_particles, metric_used = metric_used)
     
 
 @nvtx.annotate("make_volumes_kernel_estimate_local", color="yellow")

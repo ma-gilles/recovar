@@ -116,31 +116,53 @@ def copy_data_to_temp_folder(args):
         args.particles = temp_particles
         path_mapping['temp_particles'] = temp_particles
 
-        # If particles is a .star file and --copy-to-folder is used, enforce --datadir and check all referenced files
+        # If particles is a .star file and --copy-to-folder is used, copy only
+        # the MRC stacks actually referenced in the star (not the entire datadir).
         if temp_particles.endswith('.star'):
             if not args.datadir:
                 raise RuntimeError("When using --copy-to-folder with a .star file as particles input, you must also provide --datadir pointing to the directory containing the referenced image files.")
-            # Parse the .star file to find referenced image files
-            referenced_files = []
+            original_datadir = args.datadir  # save before we modify args.datadir below
+            # Collect unique referenced MRC paths from the star file
+            strip_prefix = getattr(args, 'strip_prefix', None)
+            seen_rel_paths: set = set()
+            files_to_copy: list = []
             with open(temp_particles, 'r') as f:
                 for line in f:
                     if '@' in line:
                         parts = line.strip().split('@')
                         if len(parts) == 2:
-                            referenced_files.append(parts[1].split()[0])
-            # Apply strip-prefix if present
-            strip_prefix = getattr(args, 'strip_prefix', None)
-            for ref_file in referenced_files:
-                rel_path = ref_file
-                if strip_prefix and rel_path.startswith(strip_prefix):
-                    rel_path = rel_path[len(strip_prefix):].lstrip('/')
-                abs_path = os.path.join(args.datadir, rel_path)
-                if not os.path.exists(abs_path):
-                    raise FileNotFoundError(f"File referenced in star file not found: {abs_path}.\nThis usually means --datadir is incorrect or missing files. Make sure all files referenced in the star file exist in the directory specified by --datadir (after applying --strip-prefix if used).\nFailing file: {ref_file}")
-                # Copy the referenced file into the temp folder
-                temp_ref_path = os.path.join(temp_folder, os.path.basename(rel_path))
+                            ref_file = parts[1].split()[0]
+                            rel_path = ref_file
+                            if strip_prefix and rel_path.startswith(strip_prefix):
+                                rel_path = rel_path[len(strip_prefix):].lstrip('/')
+                            if rel_path in seen_rel_paths:
+                                continue
+                            seen_rel_paths.add(rel_path)
+                            abs_path = os.path.join(original_datadir, rel_path)
+                            if not os.path.exists(abs_path):
+                                raise FileNotFoundError(
+                                    f"File referenced in star file not found: {abs_path}.\n"
+                                    "This usually means --datadir is incorrect or missing files. "
+                                    "Make sure all files referenced in the star file exist in the "
+                                    "directory specified by --datadir (after applying --strip-prefix "
+                                    f"if used).\nFailing file: {ref_file}"
+                                )
+                            files_to_copy.append((abs_path, rel_path))
+            # Copy only the referenced files, preserving their relative paths so
+            # that --datadir can simply point at temp_folder.
+            for abs_path, rel_path in files_to_copy:
+                temp_ref_path = os.path.join(temp_folder, rel_path)
+                temp_ref_dir = os.path.dirname(temp_ref_path)
+                if temp_ref_dir:
+                    os.makedirs(temp_ref_dir, exist_ok=True)
                 if not os.path.exists(temp_ref_path):
                     shutil.copy2(abs_path, temp_ref_path)
+            logger.info("Copied %d unique MRC stack(s) from datadir to temp folder", len(files_to_copy))
+            # Point datadir at temp_folder root; referenced files are at
+            # temp_folder/<rel_path> matching what StarLoader will look for.
+            path_mapping['original_datadir'] = original_datadir
+            path_mapping['temp_datadir'] = temp_folder
+            args.datadir = temp_folder
     
     # Copy poses file with caching
     if args.poses and os.path.exists(args.poses):
@@ -166,8 +188,10 @@ def copy_data_to_temp_folder(args):
         args.ctf = temp_ctf
         path_mapping['temp_ctf'] = temp_ctf
     
-    # Copy datadir if it exists and is a directory
-    if args.datadir and os.path.isdir(args.datadir):
+    # Copy datadir for non-.star inputs (CS, TXT, …) where the star-file block
+    # above has not already handled this.  For .star particles args.datadir was
+    # already updated to temp_folder, so we skip to avoid a redundant copytree.
+    if args.datadir and os.path.isdir(args.datadir) and args.datadir != temp_folder:
         temp_datadir = os.path.join(temp_folder, 'datadir')
         shutil.copytree(args.datadir, temp_datadir, dirs_exist_ok=True)
         args.datadir = temp_datadir

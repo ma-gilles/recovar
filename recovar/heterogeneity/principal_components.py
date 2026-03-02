@@ -168,9 +168,9 @@ def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,
 
 
 @nvtx.annotate("pca_by_projected_covariance", color="green", domain=NVTX_DOMAIN_PCA)
-def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = -1, mean_cubic=None):
+def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, parallel_analysis = False ,ignore_zero_frequency = False, n_pcs_to_compute = None, mean_cubic=None):
 
-    basis_size = n_pcs_to_compute
+    basis_size = basis.shape[1] if n_pcs_to_compute is None else n_pcs_to_compute
     basis = basis[:,:basis_size]
 
     ####
@@ -225,12 +225,14 @@ def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_s
         # Apply matrix (I - mask mask.T / \|mask^2\| ) 
         masked_mean -= norm_volume_mask * (norm_volume_mask.T @ masked_mean)
 
-    # Project out the mean
+    # Project out the mean (and optionally the mask direction).
+    # Apply projections sequentially so both take effect when both flags are True.
+    u_m_proj = u_real
     if correct_contrast:
-        u_m_proj = u_real - masked_mean[:,None] @  (np.conj(masked_mean).T @ u_real )[None]
-    
+        u_m_proj = u_m_proj - masked_mean[:,None] @  (np.conj(masked_mean).T @ u_m_proj )[None]
+
     if ignore_zero_frequency:
-        u_m_proj = u_real - norm_volume_mask[:,None] @  (np.conj(norm_volume_mask).T @ u_real )[None]
+        u_m_proj = u_m_proj - norm_volume_mask[:,None] @  (np.conj(norm_volume_mask).T @ u_m_proj )[None]
 
     cov_chol = u_m_proj * np.sqrt(s)
 

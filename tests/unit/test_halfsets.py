@@ -133,8 +133,9 @@ def _write_star_with_subsets(path, subsets):
 def test_read_relion_halfsets_from_star(tmp_path):
     star = tmp_path / "particles.star"
     _write_star_with_subsets(star, [1, 2, 1, 2, 1, 2])
-    result = _read_relion_halfsets_from_star(str(star))
+    result, n_total = _read_relion_halfsets_from_star(str(star))
     assert result is not None
+    assert n_total == 6
     assert len(result) == 2
     np.testing.assert_array_equal(result[0], [0, 2, 4])
     np.testing.assert_array_equal(result[1], [1, 3, 5])
@@ -145,13 +146,15 @@ def test_read_relion_halfsets_no_column(tmp_path):
     with open(star, "w") as f:
         f.write("data_particles\n\nloop_\n_rlnImageName\n")
         f.write("000001@particles.mrcs\n")
-    result = _read_relion_halfsets_from_star(str(star))
+    result, n_total = _read_relion_halfsets_from_star(str(star))
     assert result is None
+    assert n_total == 1
 
 
 def test_read_relion_halfsets_non_star():
-    result = _read_relion_halfsets_from_star("particles.mrcs")
+    result, n_total = _read_relion_halfsets_from_star("particles.mrcs")
     assert result is None
+    assert n_total is None
 
 
 def test_read_relion_halfsets_with_ind_filter(tmp_path):
@@ -161,7 +164,8 @@ def test_read_relion_halfsets_with_ind_filter(tmp_path):
     ind_file = tmp_path / "ind.pkl"
     with open(ind_file, "wb") as f:
         pickle.dump(np.array([0, 1, 2, 3], dtype=np.int32), f)
-    result = _read_relion_halfsets_from_star(str(star), ind_file=str(ind_file))
+    result, n_total = _read_relion_halfsets_from_star(str(star), ind_file=str(ind_file))
     assert result is not None
+    assert n_total == 6
     np.testing.assert_array_equal(result[0], [0, 2])
     np.testing.assert_array_equal(result[1], [1, 3])
