@@ -229,6 +229,109 @@ class BatchData(eqx.Module):
 
 
 # ---------------------------------------------------------------------------
+# DataIterator — yields BatchData from a dataset
+# ---------------------------------------------------------------------------
+
+class DataIterator:
+    """Wraps a dataset generator to yield :class:`BatchData` objects.
+
+    Pulls images from *dataset* in batches and bundles them with the
+    requested per-image metadata into a :class:`BatchData` ready for
+    jitted computation kernels.
+
+    Uses ``get_image_generator`` / ``get_image_subset_generator`` by default,
+    which iterates over individual images regardless of tilt-series grouping.
+    This is correct for mean reconstruction and other per-image kernels.
+    Pass ``use_image_generator=False`` to use the particle-grouped generator
+    (``get_dataset_generator``), which is needed for tilt-series EM E-steps.
+
+    Parameters
+    ----------
+    dataset : CryoEMDataset
+        Source for images and per-image metadata
+        (``rotation_matrices``, ``translations``, ``CTF_params``).
+    batch_size : int
+    noise_model : optional
+        Object exposing ``get_half(indices)`` and ``get(indices)``
+        (e.g. :class:`~recovar.reconstruction.noise.RadialNoiseModel`).
+        When *None*, ``BatchData.noise_variance`` is left as *None*.
+    noise_half : bool, default True
+        When *True*, call ``noise_model.get_half(indices)`` (half-spectrum
+        noise for half-image backprojection). When *False*, call
+        ``noise_model.get(indices)`` (full-spectrum noise).
+    index_subset : array-like, optional
+        If given, iterate only over these image indices.
+    use_image_generator : bool, default True
+        When *True* (default), use ``get_image_generator`` /
+        ``get_image_subset_generator`` (flat per-image iteration, correct for
+        mean reconstruction and tilt-series treated image-by-image).
+        When *False*, use ``get_dataset_generator`` /
+        ``get_dataset_subset_generator`` (particle-grouped, for tilt-series EM).
+    apply_process_images : bool, default False
+        When *True*, call ``dataset.image_stack.process_images(batch,
+        apply_image_mask=False)`` on each raw batch before yielding.
+        Required for kernels that expect preprocessed real-space images
+        (e.g. the heterogeneity and residual kernels).
+
+    Example::
+
+        nm = noise.as_noise_model(cov_noise, config.image_shape)
+        for batch in DataIterator(dataset, batch_size=512, noise_model=nm):
+            Ft_y, Ft_ctf = relion_kernel_batch(config, batch, Ft_y, Ft_ctf)
+
+        # Heterogeneity pipeline — preprocessed images, full-spectrum noise:
+        for batch in DataIterator(dataset, batch_size=512, noise_model=nm,
+                                  noise_half=False, apply_process_images=True):
+            ...
+    """
+
+    def __init__(
+        self, dataset, batch_size, *,
+        noise_model=None, noise_half=True,
+        index_subset=None, use_image_generator=True, apply_process_images=False,
+    ):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.noise_model = noise_model
+        self.noise_half = noise_half
+        self.index_subset = index_subset
+        self.use_image_generator = use_image_generator
+        self.apply_process_images = apply_process_images
+
+    def __iter__(self):
+        if self.index_subset is None:
+            gen = (
+                self.dataset.get_image_generator(batch_size=self.batch_size)
+                if self.use_image_generator
+                else self.dataset.get_dataset_generator(batch_size=self.batch_size)
+            )
+        else:
+            gen = (
+                self.dataset.get_image_subset_generator(
+                    batch_size=self.batch_size, subset_indices=self.index_subset,
+                )
+                if self.use_image_generator
+                else self.dataset.get_dataset_subset_generator(
+                    batch_size=self.batch_size, subset_indices=self.index_subset,
+                )
+            )
+        nm = self.noise_model
+        do_process = self.apply_process_images
+        for batch, _particles_ind, indices in gen:
+            if do_process:
+                batch = self.dataset.image_stack.process_images(batch, apply_image_mask=False)
+            yield BatchData(
+                images=batch,
+                rotation_matrices=self.dataset.rotation_matrices[indices],
+                translations=self.dataset.translations[indices],
+                ctf_params=self.dataset.CTF_params[indices],
+                noise_variance=(
+                    nm.get_half(indices) if self.noise_half else nm.get(indices)
+                ) if nm is not None else None,
+            )
+
+
+# ---------------------------------------------------------------------------
 # ModelState — current reconstruction state (dynamic arrays)
 # ---------------------------------------------------------------------------
 
