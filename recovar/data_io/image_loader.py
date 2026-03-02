@@ -350,12 +350,18 @@ class MRCLoader(ImageLoader):
         self._filepath = filepath
         self._memmap = None  # lazy-created on first sequential read
 
-        with mrcfile.open(filepath, mode='r', permissive=True) as mrc:
-            nz, ny, nx = mrc.data.shape
-            self._file_dtype = mrc.data.dtype
-            extended_header_size = (
-                mrc.extended_header.nbytes if mrc.extended_header is not None else 0
-            )
+        # header_only=True reads only the 1 kB header — avoids mapping the entire
+        # data array (which can be tens of GB for large particle stacks).
+        with mrcfile.open(filepath, mode='r', header_only=True, permissive=True) as mrc:
+            nz = int(mrc.header.nz)
+            ny = int(mrc.header.ny)
+            nx = int(mrc.header.nx)
+            mode = int(mrc.header.mode)
+            extended_header_size = int(mrc.header.nsymbt)
+        # Map MRC mode to numpy dtype (standard MRC mode field)
+        _MRC_MODE_DTYPE = {0: np.int8, 1: np.int16, 2: np.float32,
+                           3: np.complex64, 4: np.complex64, 6: np.uint16, 12: np.float16}
+        self._file_dtype = np.dtype(_MRC_MODE_DTYPE.get(mode, np.float32))
 
         if ny != nx:
             raise ValueError(f"Non-square images not supported: {ny} x {nx}")
@@ -710,7 +716,17 @@ class StarLoader(MultiMRCLoader):
         # Save raw paths (after strip but before datadir join) for error hints
         raw_paths = df['mrc_file'].unique().tolist()
 
-        full_paths = df['mrc_file'].apply(lambda p: os.path.join(datadir, p))
+        # Vectorised path join: avoids a 300K-iteration Python loop.
+        # Only join when the path is NOT already absolute (the common case for
+        # cryo-EM star files where paths are always relative).
+        rel_mask = ~df['mrc_file'].str.startswith('/')
+        if rel_mask.all():
+            full_paths = datadir + os.sep + df['mrc_file']
+        elif rel_mask.any():
+            full_paths = df['mrc_file'].copy()
+            full_paths[rel_mask] = datadir + os.sep + full_paths[rel_mask]
+        else:
+            full_paths = df['mrc_file']
         unique_map = {p: _resolve_mrc_path(p) for p in full_paths.unique()}
         df['mrc_file'] = full_paths.map(unique_map)
 
