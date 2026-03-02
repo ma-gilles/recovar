@@ -29,9 +29,6 @@ OUT=/scratch/gpfs/GILLES/mg6942/benchmark/examples/10180
 POSES=$REPO/recovar/assets/poses_10180.pkl
 CTF=$REPO/recovar/assets/ctf_10180.pkl
 
-# Focus mask from paper run
-FOCUS_MASK=$DATA/paper_run/output/volumes/focus_mask.mrc
-
 cd "$DATA"
 
 echo "============================================================"
@@ -52,8 +49,8 @@ echo ">>> Step 1: Running pipeline..."
 rm -rf "$OUT"
 $PYTHON -m recovar.command_line pipeline particles.256.mrcs \
     --poses "$POSES" --ctf "$CTF" \
-    --mask recovar_masks/mask_10180.mrc \
-    --focus-mask "$FOCUS_MASK" \
+    --mask 10180_full_mask.mrc \
+    --focus-mask recovar_masks/mask_10180.mrc \
     --correct-contrast \
     --ind filtered.ind.pkl \
     -o "$OUT"

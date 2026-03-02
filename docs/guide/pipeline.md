@@ -2,6 +2,9 @@
 
 The RECOVAR pipeline takes particle images and a mask, then computes the mean reconstruction, covariance, principal components, and embeddings.
 
+!!! tip "GUI alternative"
+    All pipeline options can be configured through the [web GUI](gui.md) (`recovar gui`), which provides a form-based interface with input validation and SLURM job submission.
+
 ## Basic usage
 
 ```bash

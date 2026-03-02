@@ -139,28 +139,28 @@ def test_empty_result_when_no_cluster_matches(monkeypatch, tmp_path):
 
 
 def test_path_validation_rejects_missing_centers_file(tmp_path):
-    """Passing a non-existent path_to_centers must raise AssertionError."""
+    """Passing a non-existent path_to_centers must raise FileNotFoundError."""
     missing = str(tmp_path / "does_not_exist.pkl")
     out = str(tmp_path / "out.pkl")
-    with pytest.raises(AssertionError):
+    with pytest.raises(FileNotFoundError):
         ekm_cmd.extract_image_subset_from_kmeans(missing, [0], False, out)
 
 
 def test_path_validation_requires_pkl_extension_for_centers(tmp_path):
-    """path_to_centers must end with .pkl; otherwise AssertionError is raised."""
+    """path_to_centers must end with .pkl; otherwise ValueError is raised."""
     wrong_ext = _touch(str(tmp_path / "centers.txt"))
     out = str(tmp_path / "out.pkl")
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         ekm_cmd.extract_image_subset_from_kmeans(wrong_ext, [0], False, out)
 
 
 def test_path_validation_requires_pkl_extension_for_output(monkeypatch, tmp_path):
-    """output_path must end with .pkl; otherwise AssertionError is raised."""
+    """output_path must end with .pkl; otherwise ValueError is raised."""
     centers = _touch(str(tmp_path / "centers.pkl"))
     wrong_out = str(tmp_path / "output.csv")
 
     monkeypatch.setattr(ekm_cmd.utils, "pickle_load",
                         lambda _: _fake_centers(np.array([0, 1])))
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         ekm_cmd.extract_image_subset_from_kmeans(centers, [0], False, wrong_out)

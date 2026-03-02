@@ -8,6 +8,7 @@ All RECOVAR commands follow the pattern `recovar <command> [arguments]`.
 |---------|-------------|
 | `pipeline` | Run the full heterogeneity analysis pipeline |
 | `analyze` | Post-pipeline analysis (k-means, volumes, UMAP) |
+| `gui` | Launch the web GUI for interactive job management and analysis |
 | `quickstart` | Interactive wizard for pipeline setup |
 | `downsample` | Pre-downsample images to disk |
 | `parse_relion5_tomo` | Convert RELION5 tilt-series data to 2D tilt format |
@@ -261,3 +262,23 @@ recovar parse_relion5_tomo \
 | `-v`, `--verbose` | False | Enable verbose logging |
 
 See [Cryo-ET](../guide/cryo-et.md#importing-from-relion5) for usage details.
+
+---
+
+## `gui`
+
+Launch the web GUI for interactive job management and result exploration.
+
+```bash
+recovar gui [options]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port` | 5000 | Port to bind to |
+| `--host` | 127.0.0.1 | Bind address (`0.0.0.0` for remote access) |
+| `--scan-dir` | None | Discover existing pipeline outputs (repeatable) |
+| `--debug` | False | Debug mode with auto-reload |
+| `--python-path` | Current | Python interpreter for job execution |
+
+See the [GUI Guide](../guide/gui.md) for full documentation.
