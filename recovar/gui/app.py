@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import shlex
+import time
 
 import numpy as np
 from flask import (
@@ -411,7 +412,8 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
                     "mean": float(mrc.data.mean()),
                 })
         except Exception as e:
-            return jsonify({"error": str(e)})
+            logger.warning("Volume info error for %s: %s", path, e)
+            return jsonify({"error": str(e)}), 500
 
     # ── Serve result images ────────────────────────────────────────────
     @app.route("/api/image")
@@ -580,6 +582,7 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
             result = os.popen("nvidia-smi --query-gpu=name,memory.total --format=csv,noheader").read()
             info["gpus"] = [line.strip() for line in result.strip().split("\n") if line.strip()]
         except Exception:
+            logger.debug("nvidia-smi query failed", exc_info=True)
             info["gpus"] = []
         # Disk space
         try:
@@ -587,6 +590,7 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
             info["disk_free_gb"] = round(usage.free / (1024**3), 1)
             info["disk_total_gb"] = round(usage.total / (1024**3), 1)
         except Exception:
+            logger.debug("disk_usage query failed", exc_info=True)
             info["disk_free_gb"] = 0
             info["disk_total_gb"] = 0
         info["has_slurm"] = _has_slurm()
@@ -646,15 +650,23 @@ def _safe_path(path: str):
     return resolved
 
 
-# Simple in-memory cache for volume slices
-_slice_cache = {}
+# Simple in-memory cache for volume slices with TTL
+_slice_cache: dict[tuple, tuple[float, bytes]] = {}  # key -> (timestamp, bytes)
 _SLICE_CACHE_MAX = 200
+_SLICE_CACHE_TTL = 300  # seconds
 
 
 def _get_cached_slice(path, axis, idx):
     try:
         key = (path, axis, idx, os.path.getmtime(path))
-        return _slice_cache.get(key)
+        entry = _slice_cache.get(key)
+        if entry is None:
+            return None
+        ts, buf = entry
+        if time.time() - ts > _SLICE_CACHE_TTL:
+            del _slice_cache[key]
+            return None
+        return buf
     except OSError:
         return None
 
@@ -665,7 +677,7 @@ def _set_cached_slice(path, axis, idx, buf_bytes):
         if len(_slice_cache) >= _SLICE_CACHE_MAX:
             oldest_key = next(iter(_slice_cache))
             del _slice_cache[oldest_key]
-        _slice_cache[key] = buf_bytes
+        _slice_cache[key] = (time.time(), buf_bytes)
     except OSError:
         pass
 
@@ -835,7 +847,7 @@ def _parse_sbatch_params(state_dir: str, job_id: str) -> dict:
             params['slurm_extra'] = ' '.join(extra)
         params['execution'] = 'slurm'
     except Exception:
-        pass
+        logger.debug("Failed to extract SLURM params from job script", exc_info=True)
     return params
 
 
