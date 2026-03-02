@@ -174,16 +174,6 @@ def batch_dft3(x, vec_shape, batch_size):
     return x_out
 
 
-def batch_dft3_2(x, vec_shape, batch_size):
-    x_out = jnp.empty(x.shape, dtype = np.complex64, device =jax.devices("cpu")[0])
-    n_tot = x.shape[-1]
-    logger.info("batch_dft3 in %d blocks", int(np.ceil(n_tot/batch_size)))
-    for k in range(0, int(np.ceil(n_tot/batch_size))):
-        batch_st, batch_end = batch_st_end(k, batch_size, n_tot)
-        x_out[:,batch_st:batch_end] = (dft3(x[:,batch_st:batch_end], vec_shape = vec_shape))
-    return x_out
-
-
 def broadcast_dot(x,y):
     return jax.lax.batch_matmul(jnp.conj(x[...,None,:]),y[...,:,None])[...,0,0]
 

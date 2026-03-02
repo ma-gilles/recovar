@@ -179,15 +179,6 @@ def get_real_fft_packed_shape(shape):
     return tuple(shape[:-1]) + (shape[-1] // 2 + 1,)
 
 
-def get_real_fft_memory_saving_ratio(shape):
-    """Return packed/full coefficient ratio for real-input FFT storage."""
-    shape = tuple(int(s) for s in shape)
-    packed_shape = get_real_fft_packed_shape(shape)
-    full_size = int(jnp.prod(jnp.asarray(shape)))
-    packed_size = int(jnp.prod(jnp.asarray(packed_shape)))
-    return packed_size / max(full_size, 1)
-
-
 def get_real_fft_packed_last_axis_indices(n):
     """Indices in shifted full spectrum that correspond to packed real bins."""
     n = int(n)
@@ -198,20 +189,6 @@ def get_real_fft_packed_last_axis_indices(n):
         # [0, 1, ..., n/2] mapped into shifted axis ordering.
         return jnp.asarray(list(range(half, n)) + [0], dtype=jnp.int32)
     return jnp.asarray(list(range(half, n)), dtype=jnp.int32)
-
-
-def get_shifted_conjugate_partner_indices(n):
-    """For shifted-spectrum last axis, return conjugate-symmetry partner indices."""
-    n = int(n)
-    if n <= 0:
-        raise ValueError(f"n must be positive, got {n}")
-    half = n // 2
-    # Work in unshifted indexing where Hermitian partner is simply (-u) mod n.
-    i = jnp.arange(n, dtype=jnp.int32)
-    u = (i + half) % n
-    u_partner = (-u) % n
-    i_partner = (u_partner - half) % n
-    return i_partner
 
 
 def _normalize_volume_shape_3d(volume_shape):

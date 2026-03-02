@@ -115,17 +115,6 @@ def create_soft_edged_kernel_pxl(r1, shape):
                                  kern_sphere_soft )
     return kern_sphere_soft / jnp.sum(kern_sphere_soft)
 
-def create_hard_edged_kernel_pxl(r1, shape):
-    
-    # Are these offset by 1 pixel ? or 1/2 or something
-    volume_coords =  fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size = 1, scaled = False).reshape(list(shape) + [len(list(shape))]) + 1
-    distances =  jnp.linalg.norm(volume_coords, axis =-1)
-    
-    kern_sphere_soft = jnp.where((distances <= r1), jnp.ones_like(distances), jnp.zeros_like(distances))
-
-    return kern_sphere_soft / jnp.sum(kern_sphere_soft)
-
-
 def soften_volume_mask_new(binary_volume_mask, kernel_size):
 
     distance_to_mask = distance_transform_edt(binary_volume_mask < 0.9)
