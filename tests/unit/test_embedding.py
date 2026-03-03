@@ -786,57 +786,66 @@ def _run_half_vs_full_compute_batch_coords(H=16, W=16, n_images=32, n_basis=6):
 
 @pytest.mark.gpu
 def test_compute_batch_coords_half_vs_full_gpu(gpu_device, monkeypatch):
-    """compute_batch_coords half-spectrum path == full-spectrum on GPU.
+    """compute_batch_coords half-spectrum == full-spectrum on GPU with Hermitian data.
 
-    Uses monkeypatched perfectly Hermitian-symmetric arrays (same approach as the
-    CPU test) to avoid interpolation-induced symmetry breaking in the forward model.
-    Verifies that xs, contrasts, covariance matrices, and bias match between the
-    half-spectrum and full-spectrum paths when running on GPU.
+    Injects exactly Hermitian-symmetric projections via monkeypatching, bypassing
+    the actual CUDA forward model.  The CUDA trilinear kernel does NOT preserve
+    Hermitian symmetry at grid boundaries (interpolation weights at ``k`` and
+    ``-k`` differ because the fractional parts are ``frac`` vs ``1-frac``).
+    Non-Hermitian projections cause the full-spectrum inner products to have
+    non-negligible imaginary parts, so the two linear systems (full vs half)
+    solve different problems — a difference that has nothing to do with the
+    correctness of the embedding code.
+
+    By injecting exactly Hermitian data (DFTs of real images), both paths must
+    agree to float32 BLAS precision, which is what this test verifies.
+    Arrays are placed on the GPU so that GPU execution paths are exercised.
     """
     n_images, n_basis = 7, 3
     H, W = 8, 8
     image_shape = (H, W)
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(123)
 
-    images_flat = _hermitian_flat(rng, n_images, H, W)
-    proj_mean   = _hermitian_flat(rng, n_images, H, W)
-    aus = jnp.stack([_hermitian_flat(rng, n_images, H, W) for _ in range(n_basis)])
-    noise_var = jnp.ones((n_images, H * W), dtype=jnp.float32)
+    with jax.default_device(gpu_device):
+        images_flat = _hermitian_flat(rng, n_images, H, W)
+        proj_mean   = _hermitian_flat(rng, n_images, H, W)
+        aus = jnp.stack([_hermitian_flat(rng, n_images, H, W) for _ in range(n_basis)])
+        noise_var   = jnp.ones((n_images, H * W), dtype=jnp.float32)
 
-    monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s: b)
-    monkeypatch.setattr(embedding.core_forward, "forward_model",
-                        _make_forward_model_mock(proj_mean, image_shape))
-    monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",
-                        _make_batch_vol_mock(aus, image_shape))
+        monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s: b)
+        monkeypatch.setattr(embedding.core_forward, "forward_model",
+                            _make_forward_model_mock(proj_mean, image_shape))
+        monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",
+                            _make_batch_vol_mock(aus, image_shape))
 
-    config = _minimal_config(image_shape, premultiplied_ctf=False)
-    batch_data = BatchData(
-        images=images_flat,
-        rotation_matrices=jnp.zeros((n_images, 3, 3)),
-        translations=jnp.zeros((n_images, 2)),
-        ctf_params=jnp.zeros((n_images, 9)),
-        noise_variance=noise_var,
-    )
-    model = ModelState(
-        mean_estimate=jnp.zeros((H ** 3,), dtype=jnp.complex64),
-        volume_mask=jnp.ones((H ** 3,), dtype=jnp.float32),
-        basis=jnp.zeros((n_basis, H ** 3), dtype=jnp.complex64),
-        eigenvalues=jnp.ones(n_basis, dtype=jnp.complex64),
-    )
-    opts = EmbeddingOpts(compute_covariances=True, compute_bias=True, shared_label=False)
-    contrast_grid = jnp.linspace(0.2, 2.0, 10, dtype=jnp.float32)
-    image_mask = jnp.ones((H * W,), dtype=jnp.float32)
-    hw = embedding._rfft2_hermitian_weights(image_shape)
-
-    with jax.default_device(gpu_device), jax.disable_jit():
-        full_xs, full_contrast, full_cov, full_bias = embedding.compute_batch_coords(
-            config, batch_data, model, opts, image_mask, contrast_grid,
-            hermitian_weights=None,
+        config = _minimal_config(image_shape, premultiplied_ctf=False)
+        batch_data = BatchData(
+            images=images_flat,
+            rotation_matrices=jnp.zeros((n_images, 3, 3)),
+            translations=jnp.zeros((n_images, 2)),
+            ctf_params=jnp.zeros((n_images, 9)),
+            noise_variance=noise_var,
         )
-        half_xs, half_contrast, half_cov, half_bias = embedding.compute_batch_coords(
-            config, batch_data, model, opts, image_mask, contrast_grid,
-            hermitian_weights=hw,
+        model = ModelState(
+            mean_estimate=jnp.zeros((H ** 3,), dtype=jnp.complex64),
+            volume_mask=jnp.ones((H ** 3,), dtype=jnp.float32),
+            basis=jnp.zeros((n_basis, H ** 3), dtype=jnp.complex64),
+            eigenvalues=jnp.ones(n_basis, dtype=jnp.complex64),
         )
+        opts = EmbeddingOpts(compute_covariances=True, compute_bias=True, shared_label=False)
+        contrast_grid = jnp.linspace(0.2, 2.0, 10, dtype=jnp.float32)
+        image_mask = jnp.ones((H * W,), dtype=jnp.float32)
+        hw = embedding._rfft2_hermitian_weights(image_shape)
+
+        with jax.disable_jit():
+            full_xs, full_contrast, full_cov, full_bias = embedding.compute_batch_coords(
+                config, batch_data, model, opts, image_mask, contrast_grid,
+                hermitian_weights=None,
+            )
+            half_xs, half_contrast, half_cov, half_bias = embedding.compute_batch_coords(
+                config, batch_data, model, opts, image_mask, contrast_grid,
+                hermitian_weights=hw,
+            )
 
     for name, full_val, half_val in [
         ("xs",       full_xs,       half_xs),
@@ -846,6 +855,9 @@ def test_compute_batch_coords_half_vs_full_gpu(gpu_device, monkeypatch):
     ]:
         f_np = np.asarray(full_val)
         h_np = np.asarray(half_val)
+        # For exactly Hermitian data, half ≈ Re(full) to float32 BLAS precision.
+        # atol=1.0 handles small-magnitude off-diagonal Gram matrix entries where
+        # absolute BLAS GEMM error (~0.2) can dominate the relative tolerance.
         np.testing.assert_allclose(
             h_np, f_np.real,
             rtol=5e-3, atol=1.0,

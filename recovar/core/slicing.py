@@ -147,16 +147,52 @@ def batch_slice_volume_by_map_to_half_image(volumes, rotation_matrices, image_sh
     )(full)
 
 
-def slice_volume_by_map_from_half_volume(half_volume, rotation_matrices, image_shape, volume_shape, disc_type):
-    """Project a Hermitian half-volume to images.
+def slice_volume_by_map_from_half_volume(half_volume, rotation_matrices, image_shape, volume_shape, disc_type, half_image=False):
+    """Project a Hermitian half-volume to images. CUDA when available; else expand then slice.
 
-    Always expands to full Hermitian format before slicing.  The dedicated
-    CUDA half_volume=True kernel exists in cuda_ops but is not yet numerically
-    validated (max_err ~75 vs reference); the expand-then-slice path gives
-    correct results on all backends.
+    Parameters
+    ----------
+    half_image : bool
+        If True, output images are rfft-packed half-spectrum ``(n_images, H*(W//2+1))``.
     """
-    full_volume = fourier_transform_utils.half_volume_to_full_volume(half_volume, volume_shape)
-    return slice_volume_by_map(full_volume, rotation_matrices, image_shape, volume_shape, disc_type)
+    order = decide_order(disc_type)
+    half_volume_flat = jnp.asarray(half_volume).reshape(-1)
+    if order <= 1 and _check_cuda() and _is_complex(half_volume_flat) and not _is_jvp_tracer(half_volume_flat):
+        if half_image:
+            from recovar.core.cuda_ops import cuda_slice_from_half_vol_to_half_image
+            return cuda_slice_from_half_vol_to_half_image(half_volume_flat, rotation_matrices, image_shape, volume_shape, order)
+        from recovar.core.cuda_ops import cuda_slice_from_half_vol
+        return cuda_slice_from_half_vol(half_volume_flat, rotation_matrices, image_shape, volume_shape, order)
+    full_volume = fourier_transform_utils.half_volume_to_full_volume(half_volume, volume_shape).reshape(-1)
+    slices = _slice_volume_by_map_jax(full_volume, rotation_matrices, image_shape, volume_shape, disc_type)
+    if half_image:
+        return fourier_transform_utils.full_image_to_half_image(slices, image_shape)
+    return slices
+
+
+def batch_slice_volume_by_map_from_half_volume(volumes, rotation_matrices, image_shape, volume_shape, disc_type, half_image=False):
+    """Project a batch of rfft-packed half-volumes to images.
+
+    Uses the batched CUDA kernel when available. Falls back to vmap over
+    :func:`slice_volume_by_map_from_half_volume`.
+
+    Parameters
+    ----------
+    volumes : complex, shape ``(batch, N0*N1*(N2//2+1))``
+    rotation_matrices : real, shape ``(n_images, 3, 3)``
+    half_image : bool
+        If True, output images are rfft-packed ``(n_images, H*(W//2+1))``.
+    """
+    order = decide_order(disc_type)
+    if order <= 1 and _check_cuda() and _is_complex(volumes):
+        from recovar.cuda_backproject import batch_project
+        return batch_project(volumes, rotation_matrices, image_shape, volume_shape,
+                             order=order, half_volume=True, half_image=half_image)
+    return jax.vmap(
+        lambda v: slice_volume_by_map_from_half_volume(
+            v, rotation_matrices, image_shape, volume_shape, disc_type, half_image=half_image
+        )
+    )(volumes)
 
 
 def adjoint_slice_volume_by_map(slices, rotation_matrices, image_shape, volume_shape, disc_type,
@@ -231,6 +267,27 @@ def slice_volume_by_trilinear_from_half_volume(half_volume, rotation_matrices, i
 def batch_slice_volume_by_trilinear(volumes, rotation_matrices, image_shape, volume_shape):
     """Thin wrapper: batch slice with linear interpolation."""
     return batch_slice_volume_by_map(volumes, rotation_matrices, image_shape, volume_shape, "linear_interp")
+
+
+def adjoint_slice_volume_by_trilinear(images, rotation_matrices, image_shape, volume_shape,
+                                      volume=None, half_image=False, half_volume=False):
+    """Adjoint trilinear slicing with optional half-image/half-volume support."""
+    return adjoint_slice_volume_by_map(
+        images, rotation_matrices, image_shape, volume_shape, "linear_interp",
+        volume=volume, half_image=half_image, half_volume=half_volume,
+    )
+
+
+def adjoint_slice_volume_by_trilinear_from_half_images(
+    half_images, rotation_matrices, image_shape, volume_shape, volume=None,
+    half_volume=False,
+):
+    """Adjoint trilinear slicing from packed real-FFT image spectra."""
+    half_images_flat = jnp.asarray(half_images).reshape(-1)
+    return adjoint_slice_volume_by_map(
+        half_images_flat, rotation_matrices, image_shape, volume_shape, "linear_interp",
+        volume=volume, half_image=True, half_volume=half_volume,
+    )
 
 
 def batch_adjoint_slice_volume_by_trilinear(images, rotation_matrices, image_shape, volume_shape, volumes=None):
@@ -360,8 +417,13 @@ __all__ = [
     "slice_volume_by_map_to_half_image",
     "batch_slice_volume_by_map_to_half_image",
     "slice_volume_by_map_from_half_volume",
+    "batch_slice_volume_by_map_from_half_volume",
     "slice_volume_by_trilinear_from_half_volume",
     "batch_slice_volume_by_trilinear",
+    "adjoint_slice_volume_by_trilinear",
+    "adjoint_slice_volume_by_trilinear_from_half_images",
+    "batch_adjoint_slice_volume_by_trilinear",
+    "adjoint_slice_volume_by_trilinear_from_weights",
     "adjoint_slice_volume_by_map",
     "map_coordinates_on_slices",
     "precompute_cubic_half_coefficients",
