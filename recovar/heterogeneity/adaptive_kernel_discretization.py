@@ -1043,11 +1043,8 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
     return estimates
 
 def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola", upsampling_factor=None, return_real_space=False):
-
-    estimates = []
-
     bins = heterogeneity_bins
-    inds = np.digitize(heterogeneity_distances, bins, right = True)
+    inds = np.digitize(heterogeneity_distances, bins, right = True).astype(np.int32)
     n_bins = bins.size
 
     if upsampling_factor is not None:
@@ -1056,16 +1053,18 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
         upsampled_vol_shape = tuple(experiment_dataset.upsampled_volume_shape)
     half_volume_size = np.prod(volume_shape_to_half_volume_shape(upsampled_vol_shape))
 
-    lhs_all = np.zeros((n_bins, half_volume_size), dtype =experiment_dataset.dtype_real )
-    rhs_all = np.zeros((n_bins, half_volume_size), dtype =experiment_dataset.dtype )
+    rhs_all = jnp.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype)
+    lhs_all = jnp.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype_real)
 
     if upsampling_factor is not None:
         config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, upsampling_factor=upsampling_factor)
     else:
         config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, use_upsampled=True)
 
-    for bin_idx in range(n_bins):
-        image_inds = np.sort(np.where(inds == bin_idx)[0])
+    image_inds_by_bin = [np.flatnonzero(inds == bin_idx).astype(np.int32) for bin_idx in range(n_bins)]
+    for bin_idx, image_inds in enumerate(image_inds_by_bin):
+        if image_inds.size == 0:
+            continue
 
         Ft_y_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
         Ft_ctf_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype_real)
@@ -1079,8 +1078,8 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
                 config, batch_data, Ft_y=Ft_y_acc, Ft_ctf=Ft_ctf_acc,
             )
 
-        rhs_all[bin_idx] = Ft_y_acc
-        lhs_all[bin_idx] = Ft_ctf_acc
+        rhs_all = rhs_all.at[bin_idx].set(Ft_y_acc)
+        lhs_all = lhs_all.at[bin_idx].set(Ft_ctf_acc)
 
     # A slight improvement is an almost triangular kernel/ pyramid kernel
     #    _
@@ -1103,18 +1102,21 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
         for idx in range(1, n_bins):
             weights = kernel_fn(np_to_use.sqrt(distances/h_grid[idx]))
             weight_matrix[:,idx] = weights
-        rhs_all = linalg.blockwise_A_X(rhs_all.T, weight_matrix).T
-        lhs_all = linalg.blockwise_A_X(lhs_all.T, weight_matrix).T
+        weight_matrix = jnp.asarray(weight_matrix, dtype=lhs_all.dtype)
+        # (rhs.T @ W).T == W.T @ rhs; keep this on device.
+        rhs_all = jnp.matmul(weight_matrix.T.astype(rhs_all.real.dtype), rhs_all)
+        lhs_all = jnp.matmul(weight_matrix.T, lhs_all)
 
 
     elif heterogeneity_kernel == "square":
-        rhs_all = np.cumsum(rhs_all, axis=0)
-        lhs_all = np.cumsum(lhs_all, axis=0)
+        rhs_all = jnp.cumsum(rhs_all, axis=0)
+        lhs_all = jnp.cumsum(lhs_all, axis=0)
     else:
         raise NotImplementedError
 
     kernel_type = 'triangular' if disc_type == 'linear_interp' else 'square'
     vol_upsample = upsampling_factor if upsampling_factor is not None else int(experiment_dataset.volume_upsampling_factor)
+    estimate_bins = []
     for idx in range(heterogeneity_bins.size):
         estimate = relion_functions.post_process_from_filter_v2(
             lhs_all[idx],
@@ -1126,13 +1128,11 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
             return_real_space=return_real_space,
             input_half_volume=True,
         )
+        estimate_bins.append(estimate.reshape(-1))
 
-
-        estimates.append(np.array(estimate.reshape(-1)))
-
-    estimates = np.array(estimates)
+    estimates = np.asarray(jnp.stack(estimate_bins, axis=0))
     if return_lhs_rhs:
-        return estimates, lhs_all, rhs_all
+        return estimates, np.asarray(lhs_all), np.asarray(rhs_all)
     
     return estimates
 
