@@ -325,13 +325,19 @@ def adjoint_slice_volume_by_trilinear_from_weights(images, grid_vec_indices, wei
     return volume
 
 
-# ── Cubic B-spline slicer ─────────────────────────────────────────────────
+# ── Cubic half-volume slicer ──────────────────────────────────────────────
 
-def precompute_cubic_coefficients(volume, volume_shape):
+def precompute_cubic_half_coefficients(volume, volume_shape):
     """Precompute cubic B-spline coefficients for a volume.
 
     Takes a full complex volume (centered-FFT convention) and fits the
     3-D cubic B-spline coefficient array of shape ``(N0+2, N1+2, N2+2)``.
+
+    The "half" in the name refers to typical usage: callers hold the volume
+    in half-spectrum (rfft3) format and expand it before calling this
+    function.  Full coefficients are returned so that cubic interpolation
+    evaluates correctly everywhere (natural-boundary-condition cubic splines
+    are NOT Hermitian-symmetric — only the data values are).
 
     Parameters
     ----------
@@ -343,7 +349,7 @@ def precompute_cubic_coefficients(volume, volume_shape):
     -------
     complex array, shape ``(N0+2, N1+2, N2+2)``
         Full cubic B-spline coefficients, ready for
-        :func:`slice_from_cubic_coefficients`.
+        :func:`slice_from_cubic_half_coefficients`.
     """
     from recovar.core import cubic_interpolation
     N0, N1, N2 = tuple(int(s) for s in volume_shape)
@@ -351,18 +357,14 @@ def precompute_cubic_coefficients(volume, volume_shape):
     return cubic_interpolation.calculate_spline_coefficients(volume_grid)
 
 
-# Keep old name as alias for backwards compatibility.
-precompute_cubic_half_coefficients = precompute_cubic_coefficients
-
-
 @functools.partial(jax.jit, static_argnums=[2, 3])
-def _slice_from_cubic_coeffs_jax(coeffs, rotation_matrices, image_shape, volume_shape):
+def _slice_from_half_cubic_coeffs_jax(coeffs, rotation_matrices, image_shape, volume_shape):
     """Sample rotated central slices from precomputed cubic coefficients.
 
     Parameters
     ----------
     coeffs : complex array, shape ``(N0+2, N1+2, N2+2)``
-        As returned by :func:`precompute_cubic_coefficients`.
+        As returned by :func:`precompute_cubic_half_coefficients`.
     rotation_matrices : float array, shape ``(n_images, 3, 3)``
     image_shape : (H, W)  [static]
     volume_shape : (N0, N1, N2)  [static]
@@ -384,17 +386,15 @@ def _slice_from_cubic_coeffs_jax(coeffs, rotation_matrices, image_shape, volume_
     return vals.reshape(n_images, H * W).astype(coeffs.dtype)
 
 
-# Keep old name as alias for backwards compatibility.
-_slice_from_half_cubic_coeffs_jax = _slice_from_cubic_coeffs_jax
-
-
-def slice_from_cubic_coefficients(coeffs, rotation_matrices, image_shape, volume_shape):
+def slice_from_cubic_half_coefficients(coeffs, rotation_matrices, image_shape, volume_shape):
     """Project from precomputed cubic coefficients to images.
+
+    Convenience wrapper around :func:`_slice_from_half_cubic_coeffs_jax`.
 
     Parameters
     ----------
     coeffs : complex array, shape ``(N0+2, N1+2, N2+2)``
-        As returned by :func:`precompute_cubic_coefficients`.
+        As returned by :func:`precompute_cubic_half_coefficients`.
     rotation_matrices : float array, shape ``(n_images, 3, 3)``
     image_shape : (H, W)
     volume_shape : (N0, N1, N2)
@@ -403,13 +403,9 @@ def slice_from_cubic_coefficients(coeffs, rotation_matrices, image_shape, volume
     -------
     complex array, shape ``(n_images, H*W)``
     """
-    return _slice_from_cubic_coeffs_jax(
+    return _slice_from_half_cubic_coeffs_jax(
         jnp.asarray(coeffs), rotation_matrices, image_shape, volume_shape
     )
-
-
-# Keep old name as alias for backwards compatibility.
-slice_from_cubic_half_coefficients = slice_from_cubic_coefficients
 
 
 __all__ = [
@@ -430,8 +426,6 @@ __all__ = [
     "adjoint_slice_volume_by_trilinear_from_weights",
     "adjoint_slice_volume_by_map",
     "map_coordinates_on_slices",
-    "precompute_cubic_coefficients",
-    "precompute_cubic_half_coefficients",  # backwards-compat alias
-    "slice_from_cubic_coefficients",
-    "slice_from_cubic_half_coefficients",  # backwards-compat alias
+    "precompute_cubic_half_coefficients",
+    "slice_from_cubic_half_coefficients",
 ]

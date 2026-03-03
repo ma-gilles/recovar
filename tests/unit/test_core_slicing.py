@@ -473,22 +473,22 @@ def test_batch_slice_volume_by_map_from_half_volume_jax(monkeypatch):
         np.testing.assert_allclose(batch_out_hi[i], single_hi, atol=1e-5, rtol=1e-5)
 
 
-def test_precompute_cubic_coefficients_shape():
-    """precompute_cubic_coefficients must return full coefficient shape (N0+2, N1+2, N2+2)."""
+def test_precompute_cubic_half_coefficients_shape():
+    """precompute_cubic_half_coefficients must return full coefficient shape (N0+2, N1+2, N2+2)."""
     rng = np.random.default_rng(600)
     for volume_shape in [(8, 8, 8), (6, 8, 10), (7, 9, 11)]:
         N0, N1, N2 = volume_shape
         real_vol = rng.standard_normal(volume_shape).astype(np.float32)
         vol_ft = np.asarray(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
-        coeffs = core_slicing.precompute_cubic_coefficients(vol_ft, volume_shape)
+        coeffs = core_slicing.precompute_cubic_half_coefficients(vol_ft, volume_shape)
         expected = (N0 + 2, N1 + 2, N2 + 2)
         assert coeffs.shape == expected, (
             f"volume_shape={volume_shape}: got {coeffs.shape}, expected {expected}"
         )
 
 
-def test_cubic_coefficients_slice_matches_map_coordinates():
-    """slice_from_cubic_coefficients must match map_coordinates_on_slices(order=3)."""
+def test_cubic_half_coefficients_slice_matches_full_cubic():
+    """slice_from_cubic_half_coefficients must give identical results to map_coordinates_on_slices."""
     import recovar.core.cubic_interpolation as cubic_interpolation
 
     rng = np.random.default_rng(601)
@@ -515,24 +515,24 @@ def test_cubic_coefficients_slice_matches_map_coordinates():
             )
         )
 
-        # Precompute + slice path
+        # New path: precompute coefficients, then slice
         coeffs = np.asarray(
-            core_slicing.precompute_cubic_coefficients(vol_ft, volume_shape)
+            core_slicing.precompute_cubic_half_coefficients(vol_ft, volume_shape)
         )
-        slices_out = np.asarray(
-            core_slicing.slice_from_cubic_coefficients(
+        slices_half = np.asarray(
+            core_slicing.slice_from_cubic_half_coefficients(
                 coeffs, rots, image_shape, volume_shape
             )
         )
 
         np.testing.assert_allclose(
-            slices_out, slices_ref, atol=1e-4, rtol=1e-4,
+            slices_half, slices_ref, atol=1e-4, rtol=1e-4,
             err_msg=f"Mismatch for volume_shape={volume_shape}",
         )
         assert np.any(np.abs(slices_ref) > 1e-6), "Reference slices are all zero"
 
 
-def test_cubic_coefficients_slice_odd_dims():
+def test_cubic_half_coefficients_slice_matches_full_cubic_odd_dims():
     """Cubic coefficient slicer must work for odd N2."""
     import recovar.core.cubic_interpolation as cubic_interpolation
 
@@ -560,19 +560,19 @@ def test_cubic_coefficients_slice_odd_dims():
     )
 
     coeffs = np.asarray(
-        core_slicing.precompute_cubic_coefficients(vol_ft, volume_shape)
+        core_slicing.precompute_cubic_half_coefficients(vol_ft, volume_shape)
     )
-    slices_out = np.asarray(
-        core_slicing.slice_from_cubic_coefficients(
+    slices_half = np.asarray(
+        core_slicing.slice_from_cubic_half_coefficients(
             coeffs, rots, image_shape, volume_shape
         )
     )
 
-    np.testing.assert_allclose(slices_out, slices_ref, atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(slices_half, slices_ref, atol=1e-4, rtol=1e-4)
 
 
-def test_cubic_coefficients_slice_vjp_finite():
-    """VJP through _slice_from_cubic_coeffs_jax must be finite and non-zero."""
+def test_cubic_half_coefficients_slice_vjp_finite():
+    """VJP through slice_from_cubic_half_coefficients must be finite and non-zero."""
     rng = np.random.default_rng(603)
     image_shape = (4, 8)
     volume_shape = (8, 8, 8)
@@ -585,13 +585,13 @@ def test_cubic_coefficients_slice_vjp_finite():
     real_vol = rng.standard_normal(volume_shape).astype(np.float32)
     vol_ft = jnp.array(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
 
-    coeffs = core_slicing.precompute_cubic_coefficients(vol_ft, volume_shape)
+    coeffs = core_slicing.precompute_cubic_half_coefficients(vol_ft, volume_shape)
 
     n_images = rots.shape[0]
     H, W = image_shape
     g = jnp.ones((n_images, H * W), dtype=jnp.complex64)
 
-    f = lambda c: core_slicing._slice_from_cubic_coeffs_jax(
+    f = lambda c: core_slicing._slice_from_half_cubic_coeffs_jax(
         c, rots, image_shape, volume_shape
     )
     _, vjp_fn = jax.vjp(f, jnp.asarray(coeffs))
@@ -599,44 +599,6 @@ def test_cubic_coefficients_slice_vjp_finite():
 
     assert np.isfinite(grad).all(), "VJP returned non-finite values"
     assert np.any(np.abs(grad) > 1e-10), "VJP returned all-zero gradient"
-
-
-def test_cubic_coefficients_reuse_across_rotations():
-    """Precomputed coefficients should give consistent results when reused."""
-    rng = np.random.default_rng(604)
-    volume_shape = (8, 8, 8)
-    image_shape = (4, 8)
-
-    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
-    vol_ft = np.asarray(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
-
-    coeffs = core_slicing.precompute_cubic_coefficients(vol_ft, volume_shape)
-
-    # Slice with two separate batches of rotations
-    rots_a = _random_rotations(rng, 3)
-    rots_b = _random_rotations(rng, 2)
-    rots_all = np.concatenate([rots_a, rots_b], axis=0)
-
-    slices_all = np.asarray(
-        core_slicing.slice_from_cubic_coefficients(coeffs, rots_all, image_shape, volume_shape)
-    )
-    slices_a = np.asarray(
-        core_slicing.slice_from_cubic_coefficients(coeffs, rots_a, image_shape, volume_shape)
-    )
-    slices_b = np.asarray(
-        core_slicing.slice_from_cubic_coefficients(coeffs, rots_b, image_shape, volume_shape)
-    )
-
-    np.testing.assert_allclose(slices_all[:3], slices_a, atol=1e-6, rtol=1e-6)
-    np.testing.assert_allclose(slices_all[3:], slices_b, atol=1e-6, rtol=1e-6)
-    assert np.any(np.abs(slices_all) > 1e-6), "Slices are all zero"
-
-
-def test_cubic_coefficients_backwards_compat_aliases():
-    """Old 'half' names must still work as aliases."""
-    assert core_slicing.precompute_cubic_half_coefficients is core_slicing.precompute_cubic_coefficients
-    assert core_slicing.slice_from_cubic_half_coefficients is core_slicing.slice_from_cubic_coefficients
-    assert core_slicing._slice_from_half_cubic_coeffs_jax is core_slicing._slice_from_cubic_coeffs_jax
 
 
 @pytest.mark.gpu
