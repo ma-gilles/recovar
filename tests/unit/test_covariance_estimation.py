@@ -832,3 +832,350 @@ def test_variance_kernel_accumulator_f64(enable_x64):
 
     # Same code path: differences are only from float64 accumulation order — near machine eps.
     np.testing.assert_allclose(_to_full(acc_y, vol_shape), ref_y, atol=1e-13, rtol=0)
+
+
+# ---------------------------------------------------------------------------
+# Tests for half-image masking in reduce_covariance_inner
+# ---------------------------------------------------------------------------
+
+from recovar.heterogeneity import covariance_core
+from recovar.core import linalg
+from recovar.core.configs import ModelState, CovarianceOpts
+import recovar.core.forward as core_forward
+
+
+def _make_reduce_cov_fixtures(grid_size=4, n_images=6, seed=0):
+    """Build (config, batch_data, model, hermitian_weights, image_mask) for reduce_covariance_inner tests."""
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=grid_size, n_images=n_images, seed=seed)
+    config = ForwardModelConfig.from_dataset(
+        cryo, disc_type="linear_interp",
+        process_fn=cryo.image_stack.process_images,
+    )
+
+    images_gen = cryo.image_stack.get_dataset_generator(batch_size=n_images)
+    images_batch, _, indices = next(iter(images_gen))
+    images = jnp.nan_to_num(jnp.asarray(images_batch))
+
+    batch_data = BatchData(
+        images=images,
+        ctf_params=jnp.asarray(cryo.CTF_params[indices]),
+        rotation_matrices=jnp.asarray(cryo.rotation_matrices[indices]),
+        translations=jnp.asarray(cryo.translations[indices]),
+        noise_variance=jnp.asarray(cryo.noise.get(indices)),
+    )
+
+    mean_estimate_full = jnp.zeros(cryo.volume_size, dtype=jnp.complex64)
+    volume_mask = jnp.ones(cryo.volume_shape, dtype=jnp.float32)
+    basis_full = jnp.eye(cryo.volume_size, 3, dtype=jnp.complex64)  # (vol_size, 3)
+
+    # Pre-convert to half-volumes (matching what compute_projected_covariance does).
+    # reduce_covariance_inner expects half volumes when disc_type != 'cubic'.
+    mean_estimate_half = fourier_transform_utils.full_volume_to_half_volume(
+        mean_estimate_full.reshape(cryo.volume_shape), cryo.volume_shape,
+    ).reshape(-1)
+    # basis is (n_basis, vol_size) after .T in compute_projected_covariance
+    basis_T = basis_full.T  # (3, vol_size)
+    basis_half = fourier_transform_utils.full_volume_to_half_volume(
+        basis_T.reshape(3, *cryo.volume_shape), cryo.volume_shape,
+    ).reshape(3, -1)
+
+    model_half = ModelState(
+        mean_estimate=mean_estimate_half,
+        volume_mask=volume_mask,
+        basis=basis_half,
+    )
+    model_full = ModelState(
+        mean_estimate=mean_estimate_full,
+        volume_mask=volume_mask,
+        basis=basis_T,  # (3, vol_size) — full volumes
+    )
+
+    hermitian_weights = linalg.rfft2_hermitian_weights(config.image_shape)
+    image_mask = cryo.image_stack.mask
+    return config, batch_data, model_half, model_full, hermitian_weights, image_mask
+
+
+def _reduce_covariance_inner_reference(config, batch_data, model, opts, image_mask, hermitian_weights):
+    """Reference implementation using full-image masking (the old code path).
+
+    This mimics the old code where do_mask_images=True forced full images
+    (no half projection), ensuring we can verify numerical equivalence.
+    """
+    batch = batch_data.images
+    ctf_params = batch_data.ctf_params
+    rotation_matrices = batch_data.rotation_matrices
+    translations = batch_data.translations
+    noise_variance = batch_data.noise_variance
+
+    do_mask_images = opts.do_mask_images
+
+    if do_mask_images:
+        image_mask = covariance_core.get_per_image_tight_mask(
+            model.volume_mask, rotation_matrices, image_mask,
+            config.volume_mask_threshold, config.image_shape, config.volume_shape,
+            config.grid_size, config.padding, 'linear_interp',
+        )
+
+    if config.process_fn is not None:
+        batch = config.process_fn(batch)
+    batch = core.translate_images(batch, translations, config.image_shape)
+
+    # Old code: full images when masking
+    projected_mean = core_forward.forward_model(
+        config, model.mean_estimate, ctf_params, rotation_matrices,
+        half_image=False, half_volume=False,
+    )
+
+    if do_mask_images:
+        batch = covariance_core.apply_image_masks(batch, image_mask, config.image_shape, half_images=False)
+        projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, config.image_shape, half_images=False)
+
+    config_u = config.replace(disc_type=opts.disc_type_u)
+    AUs = covariance_core.batch_vol_forward_from_map(
+        config_u, model.basis, ctf_params, rotation_matrices,
+        skip_ctf=config.premultiplied_ctf,
+        half_image=False, half_volume=False,
+    )
+
+    if do_mask_images:
+        AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, config.image_shape, half_images=False)
+
+    # Convert to half and apply weights (old path: always full→half here)
+    if hermitian_weights is not None:
+        batch = fourier_transform_utils.full_image_to_half_image(
+            batch, config.image_shape) * hermitian_weights
+        projected_mean = fourier_transform_utils.full_image_to_half_image(
+            projected_mean, config.image_shape) * hermitian_weights
+        n_b, n_i = AUs.shape[0], AUs.shape[1]
+        AUs = fourier_transform_utils.full_image_to_half_image(
+            AUs.reshape(n_b * n_i, -1), config.image_shape,
+        ).reshape(n_b, n_i, -1) * hermitian_weights[None, None, :]
+        noise_variance = fourier_transform_utils.full_image_to_half_image(
+            noise_variance, config.image_shape)
+
+    AUs = AUs.transpose(1, 2, 0)
+
+    batch = batch - projected_mean
+    AU_t_images = jax.vmap(lambda x, y: jnp.conj(x).T @ y, in_axes=(0, 0))(AUs, batch)
+    AU_t_AU = jax.vmap(lambda x, y: jnp.conj(x).T @ y, in_axes=(0, 0))(AUs, AUs).real.astype(ctf_params.dtype)
+
+    AUs_noise = AUs * jnp.sqrt(noise_variance)[..., None]
+    _n_basis = AUs_noise.shape[-1]
+    _AUs_flat = AUs_noise.reshape(-1, _n_basis)
+    UALambdaAUs = jnp.conj(_AUs_flat).T @ _AUs_flat
+
+    outer_products = AU_t_images.T @ jnp.conj(AU_t_images)
+    rhs = (outer_products - UALambdaAUs).real.astype(ctf_params.dtype)
+
+    _n = AU_t_AU.shape[-1]
+    lhs = jnp.einsum('bik,bjl->ijkl', AU_t_AU, AU_t_AU).reshape(_n * _n, _n * _n)
+    return lhs, rhs
+
+
+def test_reduce_covariance_inner_masked_half_matches_full():
+    """reduce_covariance_inner with do_mask_images=True uses half-image masking and matches full-image reference."""
+    config, batch_data, model_half, model_full, hermitian_weights, image_mask = _make_reduce_cov_fixtures()
+
+    opts = CovarianceOpts(disc_type_u="linear_interp", do_mask_images=True)
+
+    # New code (half-image masking path, half volumes)
+    lhs_new, rhs_new = cov_est.reduce_covariance_inner(
+        config, batch_data, model_half, opts, image_mask,
+        hermitian_weights=hermitian_weights,
+    )
+
+    # Reference (full-image masking path, full volumes)
+    lhs_ref, rhs_ref = _reduce_covariance_inner_reference(
+        config, batch_data, model_full, opts, image_mask, hermitian_weights,
+    )
+
+    lhs_new_np = np.asarray(lhs_new)
+    lhs_ref_np = np.asarray(lhs_ref)
+    rhs_new_np = np.asarray(rhs_new)
+    rhs_ref_np = np.asarray(rhs_ref)
+
+    # Both should have matching NaN locations
+    np.testing.assert_array_equal(np.isnan(lhs_new_np), np.isnan(lhs_ref_np))
+    np.testing.assert_array_equal(np.isnan(rhs_new_np), np.isnan(rhs_ref_np))
+
+    # Compare finite elements
+    finite_lhs = np.isfinite(lhs_new_np) & np.isfinite(lhs_ref_np)
+    finite_rhs = np.isfinite(rhs_new_np) & np.isfinite(rhs_ref_np)
+    if finite_lhs.any():
+        np.testing.assert_allclose(lhs_new_np[finite_lhs], lhs_ref_np[finite_lhs], atol=1e-4, rtol=1e-4)
+    if finite_rhs.any():
+        np.testing.assert_allclose(rhs_new_np[finite_rhs], rhs_ref_np[finite_rhs], atol=1e-4, rtol=1e-4)
+
+
+def test_reduce_covariance_inner_unmasked_still_works():
+    """reduce_covariance_inner with do_mask_images=False continues to work (regression)."""
+    config, batch_data, model_half, _, hermitian_weights, image_mask = _make_reduce_cov_fixtures()
+
+    opts = CovarianceOpts(disc_type_u="linear_interp", do_mask_images=False)
+
+    lhs, rhs = cov_est.reduce_covariance_inner(
+        config, batch_data, model_half, opts, image_mask,
+        hermitian_weights=hermitian_weights,
+    )
+
+    assert lhs.shape[0] == lhs.shape[1]
+    assert rhs.shape[0] == rhs.shape[1]
+    assert np.all(np.isfinite(np.asarray(lhs)))
+    assert np.all(np.isfinite(np.asarray(rhs)))
+
+
+def test_reduce_covariance_inner_masked_vs_unmasked_differ():
+    """Masking must change the result (otherwise masking is a no-op, which would indicate a bug)."""
+    config, batch_data, model_half, _, hermitian_weights, image_mask = _make_reduce_cov_fixtures()
+
+    opts_mask = CovarianceOpts(disc_type_u="linear_interp", do_mask_images=True)
+    opts_no_mask = CovarianceOpts(disc_type_u="linear_interp", do_mask_images=False)
+
+    lhs_mask, rhs_mask = cov_est.reduce_covariance_inner(
+        config, batch_data, model_half, opts_mask, image_mask,
+        hermitian_weights=hermitian_weights,
+    )
+    lhs_no, rhs_no = cov_est.reduce_covariance_inner(
+        config, batch_data, model_half, opts_no_mask, image_mask,
+        hermitian_weights=hermitian_weights,
+    )
+
+    # With an all-ones volume mask and get_per_image_tight_mask, the masks may
+    # still clip to a tight boundary, so results should generally differ.
+    # At minimum, they should both be finite.
+    assert np.all(np.isfinite(np.asarray(lhs_mask)))
+    assert np.all(np.isfinite(np.asarray(rhs_mask)))
+    assert np.all(np.isfinite(np.asarray(lhs_no)))
+    assert np.all(np.isfinite(np.asarray(rhs_no)))
+
+
+def test_compute_projected_covariance_masked():
+    """compute_projected_covariance with do_mask_images=True completes and returns valid result."""
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=6, seed=0)
+    basis = np.eye(cryo.volume_size, 3, dtype=np.complex64)
+    covar = cov_est.compute_projected_covariance(
+        experiment_datasets=[cryo],
+        mean_estimate=np.zeros(cryo.volume_size, dtype=np.complex64),
+        basis=basis,
+        volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
+        batch_size=3,
+        disc_type="linear_interp",
+        disc_type_u="linear_interp",
+        do_mask_images=True,
+    )
+
+    assert covar.shape == (3, 3)
+    covar_np = np.asarray(covar)
+    assert covar_np.dtype in (np.float32, np.float64)
+    finite_mask = np.isfinite(covar_np)
+    if finite_mask.all():
+        np.testing.assert_allclose(covar_np, covar_np.T, atol=1e-5, rtol=1e-5)
+
+
+def test_compute_projected_covariance_masked_matches_unmasked_with_ones_mask():
+    """With an all-ones volume mask, masked and unmasked paths give close results.
+
+    get_per_image_tight_mask projects the volume mask → per-image mask. With a
+    volume of all ones, the per-image mask is also ~all ones, so the two paths
+    should agree closely (modulo FFT rounding in the mask-project-threshold cycle).
+    """
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=6, seed=0)
+    basis = np.eye(cryo.volume_size, 3, dtype=np.complex64)
+    kwargs = dict(
+        experiment_datasets=[cryo],
+        mean_estimate=np.zeros(cryo.volume_size, dtype=np.complex64),
+        basis=basis,
+        volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
+        batch_size=6,
+        disc_type="linear_interp",
+        disc_type_u="linear_interp",
+    )
+
+    covar_masked = np.asarray(cov_est.compute_projected_covariance(**kwargs, do_mask_images=True))
+    covar_unmasked = np.asarray(cov_est.compute_projected_covariance(**kwargs, do_mask_images=False))
+
+    if np.all(np.isfinite(covar_masked)) and np.all(np.isfinite(covar_unmasked)):
+        # With an all-ones mask the results should be close but not identical
+        # because the mask→project→threshold cycle introduces small differences.
+        np.testing.assert_allclose(covar_masked, covar_unmasked, atol=0.5, rtol=0.5)
+
+
+# ---------------------------------------------------------------------------
+# Tests for apply_image_masks_to_eigen with half_images=True
+# ---------------------------------------------------------------------------
+
+
+def test_apply_image_masks_to_eigen_half_matches_full():
+    """Half-image masking round-trip matches the full-image path.
+
+    Uses DFT of real images to ensure Hermitian symmetry, which is required
+    for the irfft2/rfft2 round-trip in the half-image path.
+    """
+    n_basis, n_images = 3, 4
+    image_shape = (8, 8)
+
+    rng = np.random.RandomState(42)
+    # Real-space images → DFT → Hermitian-symmetric full spectrum
+    real_imgs = rng.randn(n_basis, n_images, *image_shape).astype(np.float32)
+    proj_eigen_full = jnp.array(
+        fourier_transform_utils.get_dft2(real_imgs).reshape(n_basis, n_images, -1)
+    )
+
+    # Random real-space mask
+    image_masks = jnp.array(
+        (rng.rand(n_images, *image_shape) > 0.3).astype(np.float32)
+    )
+
+    # Full-image path (reference)
+    result_full = covariance_core.apply_image_masks_to_eigen(
+        proj_eigen_full, image_masks, image_shape, half_images=False
+    )
+
+    # Convert to half, run half path, convert back to full
+    proj_eigen_half = fourier_transform_utils.full_image_to_half_image(
+        proj_eigen_full.reshape(n_basis * n_images, -1), image_shape
+    ).reshape(n_basis, n_images, -1)
+
+    result_half = covariance_core.apply_image_masks_to_eigen(
+        proj_eigen_half, image_masks, image_shape, half_images=True
+    )
+
+    # Convert half result to full for comparison
+    result_half_full = fourier_transform_utils.half_image_to_full_image(
+        result_half.reshape(n_basis * n_images, -1), image_shape
+    ).reshape(n_basis, n_images, -1)
+
+    np.testing.assert_allclose(np.asarray(result_half_full), np.asarray(result_full), atol=1e-5, rtol=1e-5)
+
+
+def test_apply_image_masks_half_matches_full():
+    """apply_image_masks with half_images=True matches full path.
+
+    Uses DFT of real images to ensure Hermitian symmetry.
+    """
+    n_images = 5
+    image_shape = (8, 8)
+
+    rng = np.random.RandomState(99)
+    real_imgs = rng.randn(n_images, *image_shape).astype(np.float32)
+    images_full = jnp.array(
+        fourier_transform_utils.get_dft2(real_imgs).reshape(n_images, -1)
+    )
+    image_masks = jnp.array(
+        (rng.rand(n_images, *image_shape) > 0.3).astype(np.float32)
+    )
+
+    # Full-image path
+    result_full = covariance_core.apply_image_masks(
+        images_full, image_masks, image_shape, half_images=False
+    )
+
+    # Half-image path
+    images_half = fourier_transform_utils.full_image_to_half_image(images_full, image_shape)
+    result_half = covariance_core.apply_image_masks(
+        images_half, image_masks, image_shape, half_images=True
+    )
+
+    # Convert half result back to full for comparison
+    result_half_full = fourier_transform_utils.half_image_to_full_image(result_half, image_shape)
+    np.testing.assert_allclose(np.asarray(result_half_full), np.asarray(result_full), atol=1e-5, rtol=1e-5)

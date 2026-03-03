@@ -104,12 +104,20 @@ def apply_image_masks(images, image_masks, image_shape, half_images=False):
     return images
 
 
-@functools.partial(jax.jit, static_argnums = [2])    
+@functools.partial(jax.jit, static_argnums = [2, 3])
 @nvtx.annotate("apply_image_masks_to_eigen", color="cyan", domain=NVTX_DOMAIN_COV_CORE)
-def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape):
-    proj_eigen = fourier_transform_utils.get_idft2(proj_eigen.reshape([*proj_eigen.shape[0:2], *image_shape]))
-    proj_eigen = proj_eigen * image_masks
-    proj_eigen = fourier_transform_utils.get_dft2(proj_eigen).reshape([*proj_eigen.shape[0:2], -1])
+def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape, half_images=False):
+    if half_images:
+        half_shape = fourier_transform_utils.image_shape_to_half_image_shape(image_shape)
+        proj_eigen = fourier_transform_utils.get_idft2_real(
+            proj_eigen.reshape([*proj_eigen.shape[0:2], *half_shape]), image_shape=image_shape
+        )
+        proj_eigen = proj_eigen * image_masks
+        proj_eigen = fourier_transform_utils.get_dft2_real(proj_eigen).reshape([*proj_eigen.shape[0:2], -1])
+    else:
+        proj_eigen = fourier_transform_utils.get_idft2(proj_eigen.reshape([*proj_eigen.shape[0:2], *image_shape]))
+        proj_eigen = proj_eigen * image_masks
+        proj_eigen = fourier_transform_utils.get_dft2(proj_eigen).reshape([*proj_eigen.shape[0:2], -1])
     return proj_eigen
 
 
