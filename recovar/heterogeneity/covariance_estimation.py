@@ -684,7 +684,12 @@ def preprocess_covariance_batch(config, batch_data, mean_estimate, volume_mask,
         rotation_matrices, config.image_shape, config.volume_shape)
 
     # 6. Tilt labels (from particle_indices)
+    # particle_indices from JAXDataLoader(batch_size=1) is per-particle (shape (1,)),
+    # but we need per-image labels for the scatter-add in group_sum_by_labels.
+    # Broadcast the single particle index to match all images in the tilt-series batch.
     tilt_labels = batch_data.particle_indices
+    if tilt_labels is not None and tilt_labels.shape[0] != images.shape[0]:
+        tilt_labels = jnp.broadcast_to(tilt_labels, (images.shape[0],))
 
     return images, ctf_on_grid, plane_coords, image_mask, tilt_labels
 
