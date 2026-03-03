@@ -324,13 +324,13 @@ def _compute_batch_coords_p1(
     A_mean_norm_sq = jnp.linalg.norm(projected_mean, axis=-1) ** 2
     image_norms_sq = jnp.linalg.norm(batch, axis=-1) ** 2
 
-    # Cross inner products are real for Hermitian cryo-EM data; .real enforces
-    # this after the half-spectrum computation where spurious imaginary parts arise.
-    if hermitian_weights is not None:
-        AU_t_images = AU_t_images.real
-        AU_t_Amean = AU_t_Amean.real
-        AU_t_AU = AU_t_AU.real
-        image_T_A_mean = image_T_A_mean.real
+    # Cross inner products are real for Hermitian cryo-EM data.  CUDA trilinear
+    # interpolation breaks exact Hermitian symmetry in float32, producing spurious
+    # ~1e-1 imaginary parts even in the full-spectrum path; discard unconditionally.
+    AU_t_images = AU_t_images.real
+    AU_t_Amean = AU_t_Amean.real
+    AU_t_AU = AU_t_AU.real
+    image_T_A_mean = image_T_A_mean.real
 
     return AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq
 
