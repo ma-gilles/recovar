@@ -71,11 +71,7 @@ except (ImportError, OSError, AttributeError) as e:
 # ANNOTATED FUNCTIONS IN compute_H_B DOMAIN:
 # -------------------------------------------
 # - compute_H_B (main function)
-# - frequency_loop (inner loop over frequencies)
-# - jit_compute_H_B_triangular_freq_{k} (per-frequency computation)
-# - accumulate_H_B (result accumulation)
-# - compute_H_B_triangular (core computation kernel)
-# - compute_noise_term (noise correction)
+# - compute_freq_batch (batched frequency computation via fori_loop)
 # - adjoint_kernel_slice (backprojection)
 # - get_per_image_tight_mask, process_and_center_images, compute_CTF, etc.
 #
@@ -1142,81 +1138,6 @@ def group_sum_by_labels(array, tilt_labels, max_groups):
     return summed_by_label[tilt_labels]
 
 
-# This computes the sums
-#  H_{k_1, k_2} & = \sum_{i,j_1, j_2} c_{i,j_1}^2 c_{i,j_2}^2 K\left(\xi^{k_1} , \xi_{i,j_1} \right)  K\left(\xi^{k_2} , \xi_{i,j_2} \right)   \label{eq:H} \\
-#  B_{k_1, k_2} & = \sum_{i,j_1, j_2} c_{i,j_1} c_{i,j_2} \left(l_{i,j_1} \overline{l_{i,j_2}} - \Lambda^{i}_{j_1, j_2}\right)K\left(\xi^{k_1} , \xi_{i,j_1} \right)  K\left(\xi^{k_2} , \xi_{i,j_2} \right)  \label{eq:B}
-# For a fixed k_2
-#  Eq. 12-13 in arxiv version?
-@functools.partial(jax.jit, static_argnums=[7, 8, 9, 10, 11, 12, 13])
-@nvtx.annotate("compute_H_B_triangular", color="blue", domain=NVTX_DOMAIN_H_B)
-def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coords_on_grid_stacked, rotation_matrices,  noise_variances, picked_freq_index, image_mask, image_shape, volume_size, right_kernel = "triangular", left_kernel = "triangular", kernel_width = 2, shared_label = False, premultiplied_ctf = False, tilt_labels = None):
-
-    volume_shape = utils.guess_vol_shape_from_vol_size(volume_size)
-    picked_freq_coord = core.vec_indices_to_vol_indices(picked_freq_index, volume_shape)
-
-    # The image term
-    # this is c_i l_i...
-    if premultiplied_ctf:
-        ctfed_images = centered_images
-    else:
-        ctfed_images = centered_images * jnp.conj(CTF_val_on_grid_stacked)
-
-    # If ctf is premultiplied. the noise distribution is mask@ctf@noise_variance@ctf@mask
-    # If not premultiplied, the noise distribution is ctf@mask@noise_variance@mask@ctf
-
-    # The assumption in this is that the mask doesn't affect the signal, that is that  mask @ ctf * P @ x = ctf * P @ x. 
-    # This is not true, but hopefully okay if the mask is sufficiently dilated
-
-
-    # Between SPA and tomography, the only difference here is that we want to treat all images
-    # (which are assumed to be from same tilt series) as a single measurement. 
-    # Why the hell did I call this images_prod??? 
-    # \xi^{k_2} frequency at k_2 == picked_freq_ind == column of covariance
-    # This computes K(x_i, freq) for all x_i grid frequencies, then sums up 
-    # c_{i,j_2} l_{i,j_2} K( \xi_{i,j_2}, k_2) over j_2
-    images_prod = covariance_core.sum_up_over_near_grid_points(ctfed_images, plane_coords_on_grid_stacked, picked_freq_coord, kernel = right_kernel, kernel_width = kernel_width)
-    
-
-    if shared_label:
-        
-        # Group images by tilt_labels and sum within each group
-        if tilt_labels is not None:
-            # Use the jittable grouping function
-            max_tilt_n_groups = centered_images.shape[0]  # Worst case: each image is its own group
-            tilt_labels = preprocess_tilt_labels_for_batch(tilt_labels)
-            images_prod = group_sum_by_labels(images_prod, tilt_labels, max_tilt_n_groups)
-        else:
-            # Fallback to original behavior if no tilt_labels provided
-            images_prod = jnp.repeat(jnp.sum(images_prod, axis=0, keepdims=True), images_prod.shape[0], axis=0)
-
-    ctfed_images  *= jnp.conj(images_prod)[...,None]
-    # - noise term
-    # Noise subtraction term (may need revisiting for cryo-ET)
-    ctfed_images -= compute_noise_term(plane_coords_on_grid_stacked, picked_freq_coord, CTF_val_on_grid_stacked, image_shape, image_mask, noise_variances, kernel = right_kernel, kernel_width = kernel_width, premultiplied_ctf= premultiplied_ctf)
-    
-    rhs_summed_up = adjoint_kernel_slice(ctfed_images, rotation_matrices, image_shape, volume_shape, left_kernel)
-
-    # lhs term 
-    ctf_squared = CTF_val_on_grid_stacked * jnp.conj(CTF_val_on_grid_stacked)
-
-    ctfs_prods = covariance_core.sum_up_over_near_grid_points(ctf_squared, plane_coords_on_grid_stacked, picked_freq_coord , kernel = right_kernel, kernel_width = kernel_width)
-
-    if shared_label:
-        # Group images by tilt_labels and sum within each group
-        if tilt_labels is not None:
-            # Use the jittable grouping function
-            max_tilt_n_groups = centered_images.shape[0]  # Worst case: each image is its own group
-            ctfs_prods = group_sum_by_labels(ctfs_prods, tilt_labels, max_tilt_n_groups)
-        else:
-            # Fallback to original behavior if no tilt_labels provided
-            ctfs_prods = jnp.repeat(jnp.sum(ctfs_prods, axis=0, keepdims=True), ctfs_prods.shape[0], axis=0)
-
-    ctf_squared *= ctfs_prods[...,None]
-    lhs_summed_up = adjoint_kernel_slice(ctf_squared, rotation_matrices, image_shape, volume_shape, left_kernel)
-
-    return lhs_summed_up, rhs_summed_up
-
-
 @nvtx.annotate("adjoint_kernel_slice", color="blue", domain=NVTX_DOMAIN_H_B)
 def adjoint_kernel_slice(images, rotation_matrices, image_shape, volume_shape, kernel="triangular", volumes=None):
     """Backproject images to volume(s).
@@ -1229,58 +1150,22 @@ def adjoint_kernel_slice(images, rotation_matrices, image_shape, volume_shape, k
     if kernel not in ("triangular", "square"):
         raise ValueError("Kernel not implemented")
     if images.ndim == 3:
+        if volumes is None:
+            volumes = jnp.zeros((images.shape[0], int(np.prod(volume_shape))), dtype=images.dtype)
         return jax.vmap(
-            lambda im: core.adjoint_slice_volume_by_map(
-                im, rotation_matrices, image_shape, volume_shape, disc_type)
-        )(images)
+            lambda im, vol: core.adjoint_slice_volume_by_map(
+                im, rotation_matrices, image_shape, volume_shape, disc_type, volume=vol)
+        )(images, volumes)
     return core.adjoint_slice_volume_by_map(
         images, rotation_matrices, image_shape, volume_shape, disc_type, volume=volumes)
 
 
-# This computes the sums
-#  B_{k_1, k_2} & = \sum_{i,j_1, j_2} c_{i,j_1} c_{i,j_2}  \Lambda^{i}_{j_1, j_2} K\left(\xi^{k_1} , \xi_{i,j_1} \right)  K\left(\xi^{k_2} , \xi_{i,j_2} \right)  \label{eq:B}
-# For a fixed k_2
-
-@nvtx.annotate("compute_noise_term", color="blue", domain=NVTX_DOMAIN_H_B)
-def compute_noise_term(plane_coords, target_coord, CTF_on_grid, image_shape, image_mask, noise_variances, kernel = "triangular", kernel_width = 1, premultiplied_ctf = False):
-    # Evaluate kernel
-
-    # If ctf is premultiplied. the noise distribution is mask@ctf@noise_variance@ctf@mask
-    # If not premultiplied, the noise distribution is ctf@mask@noise_variance@mask@ctf
-
-
-    k_xi_x1 = covariance_core.evaluate_kernel_on_grid(plane_coords, target_coord, kernel = kernel, kernel_width = kernel_width) 
-    if not premultiplied_ctf:
-        k_xi_x1 *= CTF_on_grid
-
-    # Apply mask
-    k_xi_x1 = covariance_core.apply_image_masks(k_xi_x1, image_mask, image_shape)
-
-    if premultiplied_ctf:
-        k_xi_x1 *= jnp.conj(CTF_on_grid)
-
-    # Multiply by noise
-    k_xi_x1 *= noise_variances
-
-    if premultiplied_ctf:
-        k_xi_x1 *= jnp.conj(CTF_on_grid)
-
-    # Apply mask again
-    k_xi_x1 = covariance_core.apply_image_masks(k_xi_x1, image_mask, image_shape)
-
-    if not premultiplied_ctf:
-        k_xi_x1 *= jnp.conj(CTF_on_grid)
-
-    # mutiply by CTF again
-    return k_xi_x1
-
-
 def _compute_noise_from_kernel_vals(kernel_vals, CTF_on_grid, image_shape, image_mask,
                                      noise_variances, premultiplied_ctf):
-    """Noise term using pre-computed kernel_vals (avoids redundant kernel eval).
+    """Noise term using pre-computed kernel_vals.
 
-    Same math as ``compute_noise_term`` but skips the internal
-    ``evaluate_kernel_on_grid`` call, reusing *kernel_vals* instead.
+    If ctf is premultiplied: noise = mask @ ctf @ noise_variance @ ctf @ mask
+    If not premultiplied:    noise = ctf @ mask @ noise_variance @ mask @ ctf
     """
     k = kernel_vals
     if not premultiplied_ctf:
@@ -1295,87 +1180,6 @@ def _compute_noise_from_kernel_vals(kernel_vals, CTF_on_grid, image_shape, image
     if not premultiplied_ctf:
         k = k * jnp.conj(CTF_on_grid)
     return k
-
-
-@functools.partial(jax.jit, static_argnums=[7, 8, 9, 10, 11, 12, 13, 14])
-@nvtx.annotate("compute_H_B_column_fast", color="blue", domain=NVTX_DOMAIN_H_B)
-def compute_H_B_column_fast(
-    images, CTF_val_on_grid_stacked, plane_coords_on_grid_stacked,
-    rotation_matrices, noise_variances, picked_freq_index, image_mask,
-    image_shape, volume_size,
-    right_kernel="triangular", left_kernel="triangular",
-    kernel_width=2, shared_label=False,
-    premultiplied_ctf=False, no_mask=False,
-    tilt_labels=None,
-):
-    """Optimized H/B column: single kernel eval, skip noise FFTs when no mask.
-
-    Same math as ``compute_H_B_triangular`` with these optimizations:
-    - ``evaluate_kernel_on_grid`` called once and reused 3 times (was 3 calls)
-    - When *no_mask* is True (mask is all-ones), the noise term simplifies to
-      pure elementwise ops, eliminating 4 FFTs per frequency.
-    """
-    volume_shape = utils.guess_vol_shape_from_vol_size(volume_size)
-    picked_freq_coord = core.vec_indices_to_vol_indices(picked_freq_index, volume_shape)
-
-    # ── Frequency-dependent terms ──
-    if premultiplied_ctf:
-        ctfed_images = images
-    else:
-        ctfed_images = images * jnp.conj(CTF_val_on_grid_stacked)
-
-    ctf_squared = CTF_val_on_grid_stacked * jnp.conj(CTF_val_on_grid_stacked)
-
-    # ── Evaluate kernel ONCE (was called 3× in compute_H_B_triangular) ──
-    kernel_vals = covariance_core.evaluate_kernel_on_grid(
-        plane_coords_on_grid_stacked, picked_freq_coord,
-        kernel=right_kernel, kernel_width=kernel_width)
-
-    # ── B term ──
-    images_prod = jnp.sum(kernel_vals * ctfed_images, axis=-1)
-
-    if shared_label:
-        if tilt_labels is not None:
-            max_groups = ctfed_images.shape[0]
-            tilt_labels = preprocess_tilt_labels_for_batch(tilt_labels)
-            images_prod = group_sum_by_labels(images_prod, tilt_labels, max_groups)
-        else:
-            images_prod = jnp.repeat(
-                jnp.sum(images_prod, axis=0, keepdims=True),
-                images_prod.shape[0], axis=0)
-
-    rhs = ctfed_images * jnp.conj(images_prod)[..., None]
-
-    # Noise subtraction: skip 4 FFTs when mask is trivial (all ones)
-    if no_mask:
-        if not premultiplied_ctf:
-            noise = kernel_vals * ctf_squared * noise_variances
-        else:
-            noise = kernel_vals * jnp.conj(CTF_val_on_grid_stacked) ** 2 * noise_variances
-    else:
-        noise = _compute_noise_from_kernel_vals(
-            kernel_vals, CTF_val_on_grid_stacked, image_shape, image_mask,
-            noise_variances, premultiplied_ctf)
-
-    rhs = rhs - noise
-    B_k = adjoint_kernel_slice(rhs, rotation_matrices, image_shape, volume_shape, left_kernel)
-
-    # ── H term ──
-    ctfs_prods = jnp.sum(kernel_vals * ctf_squared, axis=-1)
-
-    if shared_label:
-        if tilt_labels is not None:
-            max_groups = ctfed_images.shape[0]
-            ctfs_prods = group_sum_by_labels(ctfs_prods, tilt_labels, max_groups)
-        else:
-            ctfs_prods = jnp.repeat(
-                jnp.sum(ctfs_prods, axis=0, keepdims=True),
-                ctfs_prods.shape[0], axis=0)
-
-    lhs = ctf_squared * ctfs_prods[..., None]
-    H_k = adjoint_kernel_slice(lhs, rotation_matrices, image_shape, volume_shape, left_kernel)
-
-    return H_k, B_k
 
 
 @eqx.filter_jit
