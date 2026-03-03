@@ -151,12 +151,13 @@ def batch_slice_volume_by_map_to_half_image(volumes, rotation_matrices, image_sh
 
 
 def slice_volume_by_map_from_half_volume(half_volume, rotation_matrices, image_shape, volume_shape, disc_type):
-    """Project a Hermitian half-volume to images. CUDA when available; else expand then slice."""
-    order = decide_order(disc_type)
-    half_volume_flat = jnp.asarray(half_volume).reshape(-1)
-    if order <= 1 and _check_cuda() and _is_complex(half_volume_flat) and not _is_jvp_tracer(half_volume_flat):
-        from recovar.core.cuda_ops import cuda_slice_from_half_vol
-        return cuda_slice_from_half_vol(half_volume_flat, rotation_matrices, image_shape, volume_shape, order)
+    """Project a Hermitian half-volume to images.
+
+    Always expands to full Hermitian format before slicing.  The dedicated
+    CUDA half_volume=True kernel exists in cuda_ops but is not yet numerically
+    validated (max_err ~75 vs reference); the expand-then-slice path gives
+    correct results on all backends.
+    """
     full_volume = fourier_transform_utils.half_volume_to_full_volume(half_volume, volume_shape)
     return slice_volume_by_map(full_volume, rotation_matrices, image_shape, volume_shape, disc_type)
 
@@ -174,6 +175,11 @@ def adjoint_slice_volume_by_map(slices, rotation_matrices, image_shape, volume_s
     order = decide_order(disc_type)
     if order <= 1 and _check_cuda():
         from recovar.cuda_backproject import backproject as cuda_backproject
+        # CUDA half_image=True backproject kernel is not yet numerically validated
+        # (max_err ~42 vs reference); expand to full spectrum before dispatching.
+        if half_image:
+            slices = fourier_transform_utils.half_image_to_full_image(slices, image_shape)
+            half_image = False
         if not _is_complex(slices):
             slices = slices.astype(jnp.result_type(slices, jnp.complex64))
         if volume is None:
