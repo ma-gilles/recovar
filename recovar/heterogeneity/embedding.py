@@ -23,28 +23,7 @@ NVTX_DOMAIN_EMBED = "embedding"
 USE_CUBIC = True
 
 
-def _rfft2_hermitian_weights(image_shape):
-    """Precompute sqrt(w) weights for computing full-spectrum inner products from half-spectrum data.
-
-    For a real image of shape ``(H, W)``, the rfft2/half-spectrum representation stores
-    frequencies with columns kx=0 and kx=W//2 (Nyquist, even W only) once, and all
-    interior columns twice (Hermitian partners in the omitted half).  To recover the
-    correct full-spectrum inner product::
-
-        <A, B>_full = sum_{k in full} conj(A[k]) * B[k]
-                    = sum_{k in half} w[k] * conj(A[k]) * B[k]
-
-    we weight each half-spectrum coefficient by ``sqrt(w[k])`` before taking the
-    standard un-weighted inner product over the half.  Returns a ``(H*(W//2+1),)``
-    JAX array with values in ``{1, sqrt(2)}``.
-    """
-    H, W = int(image_shape[0]), int(image_shape[1])
-    half_W = W // 2 + 1
-    weights = np.full((H, half_W), 2.0, dtype=np.float32)
-    weights[:, 0] = 1.0               # DC column (kx=0): self-Hermitian
-    if W % 2 == 0:
-        weights[:, W // 2] = 1.0     # Nyquist column: self-Hermitian (even W only)
-    return jnp.asarray(np.sqrt(weights).reshape(-1))
+_rfft2_hermitian_weights = linalg.rfft2_hermitian_weights
 
 
 def split_weights(weight, cryos):
