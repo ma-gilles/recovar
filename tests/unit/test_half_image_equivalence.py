@@ -80,13 +80,13 @@ def n_images(request):
 
 
 # ---------------------------------------------------------------------------
-# Test 1: adjoint_slice_volume_by_trilinear full vs from_half_images
+# Test 1: adjoint_slice_volume_by_map full vs from_half_images
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
-def test_adjoint_trilinear_full_vs_half(N, n_images):
-    """adjoint_slice_volume_by_trilinear(full) == adjoint_trilinear_from_half(half)."""
+def test_adjoint_full_vs_half_images(N, n_images):
+    """adjoint_slice_volume_by_map(full) == adjoint_slice_volume_by_map(half, half_image=True)."""
     rng = np.random.default_rng(42 + N)
     image_shape = (N, N)
     volume_shape = (N, N, N)
@@ -95,23 +95,22 @@ def test_adjoint_trilinear_full_vs_half(N, n_images):
     images_half = fourier_transform_utils.full_image_to_half_image(images_full, image_shape)
 
     from recovar.core.slicing import (
-        adjoint_slice_volume_by_trilinear,
-        adjoint_slice_volume_by_trilinear_from_half_images,
+        adjoint_slice_volume_by_map,
     )
 
-    vol_full = adjoint_slice_volume_by_trilinear(images_full, rots, image_shape, volume_shape)
-    vol_half = adjoint_slice_volume_by_trilinear_from_half_images(images_half, rots, image_shape, volume_shape)
+    vol_full = adjoint_slice_volume_by_map(images_full, rots, image_shape, volume_shape, "linear_interp")
+    vol_half = adjoint_slice_volume_by_map(images_half, rots, image_shape, volume_shape, "linear_interp", half_image=True)
 
-    assert_close(vol_full, vol_half, "adjoint_trilinear full vs half")
+    assert_close(vol_full, vol_half, "adjoint_map full vs half")
 
 
 # ---------------------------------------------------------------------------
-# Test 2: adjoint_slice_volume_by_trilinear with volume accumulation
+# Test 2: adjoint_slice_volume_by_map with volume accumulation
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
-def test_adjoint_trilinear_accumulate_full_vs_half(N, n_images):
+def test_adjoint_accumulate_full_vs_half(N, n_images):
     """Full vs half with volume accumulation (Ft_y += ...)."""
     rng = np.random.default_rng(123 + N)
     image_shape = (N, N)
@@ -123,14 +122,13 @@ def test_adjoint_trilinear_accumulate_full_vs_half(N, n_images):
     seed = jnp.array(rng.standard_normal(vol_size).astype(np.float32) + 1j * rng.standard_normal(vol_size).astype(np.float32), dtype=jnp.complex64)
 
     from recovar.core.slicing import (
-        adjoint_slice_volume_by_trilinear,
-        adjoint_slice_volume_by_trilinear_from_half_images,
+        adjoint_slice_volume_by_map,
     )
 
-    vol_full = adjoint_slice_volume_by_trilinear(images, rots, image_shape, volume_shape, volume=seed)
-    vol_half = adjoint_slice_volume_by_trilinear_from_half_images(images_half, rots, image_shape, volume_shape, volume=seed)
+    vol_full = adjoint_slice_volume_by_map(images, rots, image_shape, volume_shape, "linear_interp", volume=seed)
+    vol_half = adjoint_slice_volume_by_map(images_half, rots, image_shape, volume_shape, "linear_interp", volume=seed, half_image=True)
 
-    assert_close(vol_full, vol_half, "adjoint_trilinear accumulate full vs half")
+    assert_close(vol_full, vol_half, "adjoint_map accumulate full vs half")
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +137,7 @@ def test_adjoint_trilinear_accumulate_full_vs_half(N, n_images):
 
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
-def test_adjoint_trilinear_real_images_full_vs_half(N, n_images):
+def test_adjoint_real_images_full_vs_half(N, n_images):
     """CTF^2 / noise terms are real in Fourier space (symmetric, not just Hermitian)."""
     rng = np.random.default_rng(77 + N)
     image_shape = (N, N)
@@ -150,14 +148,13 @@ def test_adjoint_trilinear_real_images_full_vs_half(N, n_images):
     ctf_sq_half = fourier_transform_utils.full_image_to_half_image(ctf_sq, image_shape)
 
     from recovar.core.slicing import (
-        adjoint_slice_volume_by_trilinear,
-        adjoint_slice_volume_by_trilinear_from_half_images,
+        adjoint_slice_volume_by_map,
     )
 
-    vol_full = adjoint_slice_volume_by_trilinear(ctf_sq, rots, image_shape, volume_shape)
-    vol_half = adjoint_slice_volume_by_trilinear_from_half_images(ctf_sq_half, rots, image_shape, volume_shape)
+    vol_full = adjoint_slice_volume_by_map(ctf_sq, rots, image_shape, volume_shape, "linear_interp")
+    vol_half = adjoint_slice_volume_by_map(ctf_sq_half, rots, image_shape, volume_shape, "linear_interp", half_image=True)
 
-    assert_close(vol_full, vol_half, "adjoint_trilinear real images full vs half")
+    assert_close(vol_full, vol_half, "adjoint_map real images full vs half")
 
 
 # ---------------------------------------------------------------------------
@@ -184,25 +181,24 @@ def test_mstep_backproject_full_vs_half(N):
     summed_images = P @ shifted_images  # n_rots × image_size, Hermitian
 
     from recovar.core.slicing import (
-        adjoint_slice_volume_by_trilinear,
-        adjoint_slice_volume_by_trilinear_from_half_images,
+        adjoint_slice_volume_by_map,
     )
 
-    vol_full = adjoint_slice_volume_by_trilinear(summed_images, rots, image_shape, volume_shape)
+    vol_full = adjoint_slice_volume_by_map(summed_images, rots, image_shape, volume_shape, "linear_interp")
     summed_half = fourier_transform_utils.full_image_to_half_image(summed_images, image_shape)
-    vol_half = adjoint_slice_volume_by_trilinear_from_half_images(summed_half, rots, image_shape, volume_shape)
+    vol_half = adjoint_slice_volume_by_map(summed_half, rots, image_shape, volume_shape, "linear_interp", half_image=True)
 
     assert_close(vol_full, vol_half, "M-step backproject full vs half")
 
 
 # ---------------------------------------------------------------------------
-# Test 6: adjoint_slice_volume_by_map full vs from_half_images (trilinear)
+# Test 6: adjoint_slice_volume_by_map full vs from_half_images (linear_interp)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
-def test_adjoint_map_trilinear_full_vs_half(N, n_images):
-    """adjoint_slice_volume_by_map(linear_interp) full vs from_half_images."""
+def test_adjoint_map_full_vs_half(N, n_images):
+    """adjoint_slice_volume_by_map(linear_interp) full vs half_image=True."""
     rng = np.random.default_rng(66 + N)
     image_shape = (N, N)
     volume_shape = (N, N, N)
@@ -211,14 +207,13 @@ def test_adjoint_map_trilinear_full_vs_half(N, n_images):
     images_half = fourier_transform_utils.full_image_to_half_image(images, image_shape)
 
     from recovar.core.slicing import (
-        adjoint_slice_volume_by_trilinear,
-        adjoint_slice_volume_by_trilinear_from_half_images,
+        adjoint_slice_volume_by_map,
     )
 
-    vol_full = adjoint_slice_volume_by_trilinear(images, rots, image_shape, volume_shape)
-    vol_half = adjoint_slice_volume_by_trilinear_from_half_images(images_half, rots, image_shape, volume_shape)
+    vol_full = adjoint_slice_volume_by_map(images, rots, image_shape, volume_shape, "linear_interp")
+    vol_half = adjoint_slice_volume_by_map(images_half, rots, image_shape, volume_shape, "linear_interp", half_image=True)
 
-    assert_close(vol_full, vol_half, "adjoint_map trilinear full vs half")
+    assert_close(vol_full, vol_half, "adjoint_map full vs half")
 
 
 # ---------------------------------------------------------------------------
@@ -278,18 +273,18 @@ def test_batch_vol_adjoint_full_vs_half(N):
 
     # VOL_AXIS=0 here to match the (n_vols, ...) leading axis
     batch_full_jax = jax.vmap(
-        lambda imgs, rots, is_, vs, v: core.adjoint_slice_volume_by_trilinear(imgs, rots, is_, vs, v),
-        in_axes=(0, 0, None, None, None), out_axes=0,
+        lambda imgs, rots: core.adjoint_slice_volume_by_map(imgs, rots, image_shape, volume_shape, "linear_interp"),
+        in_axes=(0, 0), out_axes=0,
     )
     batch_half = jax.vmap(
-        lambda imgs, rots, is_, vs, v: core.adjoint_slice_volume_by_trilinear_from_half_images(imgs, rots, is_, vs, v),
-        in_axes=(0, 0, None, None, None), out_axes=0,
+        lambda imgs, rots: core.adjoint_slice_volume_by_map(imgs, rots, image_shape, volume_shape, "linear_interp", half_image=True),
+        in_axes=(0, 0), out_axes=0,
     )
 
     images_half = fourier_transform_utils.full_image_to_half_image(images, image_shape)
 
-    vol_full = batch_full_jax(images, rots_batched, image_shape, volume_shape, None)
-    vol_half = batch_half(images_half, rots_batched, image_shape, volume_shape, None)
+    vol_full = batch_full_jax(images, rots_batched)
+    vol_half = batch_half(images_half, rots_batched)
 
     assert_close(vol_full, vol_half, "batch_vol adjoint full vs half")
 
@@ -301,7 +296,7 @@ def test_batch_vol_adjoint_full_vs_half(N):
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
 def test_project_from_half_volume(N, n_images):
-    """slice_volume_by_trilinear_from_half_volume matches full volume projection."""
+    """slice_volume_by_map_from_half_volume matches full volume projection."""
     rng = np.random.default_rng(200 + N)
     image_shape = (N, N)
     volume_shape = (N, N, N)
@@ -310,12 +305,12 @@ def test_project_from_half_volume(N, n_images):
     vol_half = fourier_transform_utils.full_volume_to_half_volume(vol, volume_shape)
 
     from recovar.core.slicing import (
-        slice_volume_by_trilinear,
-        slice_volume_by_trilinear_from_half_volume,
+        slice_volume_by_map,
+        slice_volume_by_map_from_half_volume,
     )
 
-    proj_full = slice_volume_by_trilinear(vol, rots, image_shape, volume_shape)
-    proj_half = slice_volume_by_trilinear_from_half_volume(vol_half, rots, image_shape, volume_shape)
+    proj_full = slice_volume_by_map(vol, rots, image_shape, volume_shape, "linear_interp")
+    proj_half = slice_volume_by_map_from_half_volume(vol_half, rots, image_shape, volume_shape, "linear_interp")
 
     assert_close(proj_full, proj_half, "project from half volume", rtol=1e-4)
 
@@ -454,7 +449,7 @@ BATCH_SIZES = [3, 7]
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
 @pytest.mark.parametrize("batch", BATCH_SIZES)
 def test_batch_project(N, n_images, batch):
-    """batch_slice_volume_by_trilinear should match per-volume slice_volume_by_trilinear."""
+    """batch_slice_volume_by_map should match per-volume slice_volume_by_map."""
     rng = np.random.default_rng(300 + N + batch)
     image_shape = (N, N)
     volume_shape = (N, N, N)
@@ -466,13 +461,13 @@ def test_batch_project(N, n_images, batch):
         + 1j * rng.standard_normal((batch, vol_size)).astype(np.float32)
     )
 
-    from recovar.core.slicing import batch_slice_volume_by_trilinear, slice_volume_by_trilinear
+    from recovar.core.slicing import batch_slice_volume_by_map, slice_volume_by_map
 
-    batch_result = batch_slice_volume_by_trilinear(volumes, rots, image_shape, volume_shape)
+    batch_result = batch_slice_volume_by_map(volumes, rots, image_shape, volume_shape, "linear_interp")
     assert batch_result.shape == (batch, n_images, N * N)
 
     for b in range(batch):
-        ref = slice_volume_by_trilinear(volumes[b], rots, image_shape, volume_shape)
+        ref = slice_volume_by_map(volumes[b], rots, image_shape, volume_shape, "linear_interp")
         assert_close(batch_result[b], ref, f"batch_project vol {b}", rtol=1e-5)
 
 
@@ -484,7 +479,7 @@ def test_batch_project(N, n_images, batch):
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
 @pytest.mark.parametrize("batch", BATCH_SIZES)
 def test_batch_backproject(N, n_images, batch):
-    """batch_adjoint_slice_volume_by_trilinear should match per-volume adjoint."""
+    """vmap adjoint_slice_volume_by_map should match per-volume adjoint."""
     rng = np.random.default_rng(400 + N + batch)
     image_shape = (N, N)
     volume_shape = (N, N, N)
@@ -496,13 +491,15 @@ def test_batch_backproject(N, n_images, batch):
         + 1j * rng.standard_normal((batch, n_images, N * N)).astype(np.float32)
     )
 
-    from recovar.core.slicing import batch_adjoint_slice_volume_by_trilinear, adjoint_slice_volume_by_trilinear
+    from recovar.core.slicing import adjoint_slice_volume_by_map
 
-    batch_result = batch_adjoint_slice_volume_by_trilinear(images, rots, image_shape, volume_shape)
+    batch_result = jax.vmap(
+        lambda im: adjoint_slice_volume_by_map(im, rots, image_shape, volume_shape, "linear_interp")
+    )(images)
     assert batch_result.shape == (batch, vol_size)
 
     for b in range(batch):
-        ref = adjoint_slice_volume_by_trilinear(images[b], rots, image_shape, volume_shape)
+        ref = adjoint_slice_volume_by_map(images[b], rots, image_shape, volume_shape, "linear_interp")
         assert_close(batch_result[b], ref, f"batch_backproject vol {b}", rtol=1e-4)
 
 
@@ -530,14 +527,14 @@ def test_batch_backproject_with_seed(N, n_images):
         + 1j * rng.standard_normal((batch, vol_size)).astype(np.float32)
     )
 
-    from recovar.core.slicing import batch_adjoint_slice_volume_by_trilinear, adjoint_slice_volume_by_trilinear
+    from recovar.core.slicing import adjoint_slice_volume_by_map
 
-    batch_result = batch_adjoint_slice_volume_by_trilinear(
-        images, rots, image_shape, volume_shape, volumes=seed_vols
-    )
+    batch_result = jax.vmap(
+        lambda im, v: adjoint_slice_volume_by_map(im, rots, image_shape, volume_shape, "linear_interp", volume=v)
+    )(images, seed_vols)
 
     for b in range(batch):
-        ref = adjoint_slice_volume_by_trilinear(
-            images[b], rots, image_shape, volume_shape, volume=seed_vols[b]
+        ref = adjoint_slice_volume_by_map(
+            images[b], rots, image_shape, volume_shape, "linear_interp", volume=seed_vols[b]
         )
         assert_close(batch_result[b], ref, f"batch_backproject_seed vol {b}", rtol=1e-4)

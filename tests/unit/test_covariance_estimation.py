@@ -233,14 +233,14 @@ def test_group_sum_by_labels_and_preprocess_labels():
 
 
 def test_adjoint_kernel_slice_dispatch_and_noise_term(monkeypatch):
-    monkeypatch.setattr(cov_est.core, "adjoint_slice_volume_by_trilinear", lambda images, *_: images + 1)
-    monkeypatch.setattr(cov_est.core, "adjoint_slice_volume_by_map", lambda images, *_: images + 2)
+    monkeypatch.setattr(cov_est.core, "adjoint_slice_volume_by_map", lambda images, *_, **__: images + 1)
 
     images = jnp.ones((2, 4), dtype=jnp.complex64)
     out_tri = cov_est.adjoint_kernel_slice(images, None, (2, 2), (2, 2, 1), kernel="triangular")
     out_sq = cov_est.adjoint_kernel_slice(images, None, (2, 2), (2, 2, 1), kernel="square")
+    # Both kernels now dispatch to adjoint_slice_volume_by_map with disc_type
     np.testing.assert_allclose(np.asarray(out_tri), np.asarray(images + 1))
-    np.testing.assert_allclose(np.asarray(out_sq), np.asarray(images + 2))
+    np.testing.assert_allclose(np.asarray(out_sq), np.asarray(images + 1))
     with pytest.raises(ValueError):
         cov_est.adjoint_kernel_slice(images, None, (2, 2), (2, 2, 1), kernel="bad")
 
@@ -267,15 +267,26 @@ def test_compute_h_b_for_halfset_batches_frequency_chunks(monkeypatch):
 
     freq_calls = []
 
-    def _fake_triangular(centered_images, CTF_val, plane_coords, rotation_matrices,
-                         noise_variances, picked_freq_index, image_mask,
-                         image_shape, volume_size, **kwargs):
-        freq_calls.append(int(picked_freq_index))
-        H_k = jnp.ones(volume_size, dtype=jnp.float32) * float(picked_freq_index)
-        B_k = jnp.ones(volume_size, dtype=jnp.complex64) * (float(picked_freq_index) + 100.0)
-        return H_k, B_k
+    def _fake_freq_batch(config, opts, freq_batch, images, ctf_on_grid,
+                         plane_coords, rotation_matrices, noise_variances,
+                         image_mask, tilt_labels, premultiplied_ctf,
+                         shared_label, no_mask, H_accum=None, B_accum=None):
+        n_freq = freq_batch.shape[0]
+        volume_size = config.volume_size
+        freq_calls.extend(int(f) for f in np.asarray(freq_batch))
+        H = jnp.broadcast_to(
+            jnp.asarray(freq_batch, dtype=jnp.float32)[:, None],
+            (n_freq, volume_size)).astype(jnp.complex64)
+        B = jnp.broadcast_to(
+            (jnp.asarray(freq_batch, dtype=jnp.float32)[:, None] + 100.0).astype(jnp.complex64),
+            (n_freq, volume_size))
+        if H_accum is not None:
+            H = H_accum + H
+        if B_accum is not None:
+            B = B_accum + B
+        return H, B
 
-    monkeypatch.setattr(cov_est, "compute_H_B_triangular", _fake_triangular)
+    monkeypatch.setattr(cov_est, "compute_freq_batch", _fake_freq_batch)
 
     options = cov_est.get_default_covariance_computation_options(grid_size=4)
     options["disc_type"] = "linear_interp"
@@ -290,7 +301,7 @@ def test_compute_h_b_for_halfset_batches_frequency_chunks(monkeypatch):
         options=options,
     )
 
-    # Should have called triangular for each frequency
+    # Should have called compute_freq_batch for each frequency
     assert set(freq_calls) == {0, 1, 2, 3, 4}
     assert H.shape == (cryo.volume_size, picked_frequencies.size)
     assert B.shape == (cryo.volume_size, picked_frequencies.size)
@@ -379,6 +390,125 @@ def test_compute_h_b_runs_on_tiny_image_dataset():
     assert H.shape == (cryo.volume_size, 2)
     assert B.shape == (cryo.volume_size, 2)
     assert np.isfinite(np.asarray(H)).all()
+
+
+def test_compute_H_B_column_fast_matches_triangular():
+    """Verify compute_H_B_column_fast matches compute_H_B_triangular numerically."""
+    rng = np.random.RandomState(42)
+    grid_size = 4
+    n_images = 6
+    image_shape = (grid_size, grid_size)
+    volume_shape = (grid_size, grid_size, grid_size)
+    volume_size = grid_size ** 3
+    n_pix = grid_size ** 2
+
+    images = jnp.array(rng.randn(n_images, n_pix).astype(np.float32)
+                        + 1j * rng.randn(n_images, n_pix).astype(np.float32),
+                        dtype=jnp.complex64)
+    ctf = jnp.array(rng.randn(n_images, n_pix).astype(np.float32)
+                     + 1j * rng.randn(n_images, n_pix).astype(np.float32),
+                     dtype=jnp.complex64)
+    plane_coords = jnp.array(rng.randn(n_images, n_pix, 3).astype(np.float32))
+    rot = jnp.array(np.stack([np.eye(3, dtype=np.float32) for _ in range(n_images)]))
+    noise_var = jnp.array(rng.rand(n_images, n_pix).astype(np.float32) + 0.1)
+    image_mask = jnp.ones((n_images, *image_shape), dtype=jnp.float32)
+    freq_idx = 5
+
+    # Reference: compute_H_B_triangular
+    H_ref, B_ref = cov_est.compute_H_B_triangular(
+        images, ctf, plane_coords, rot, noise_var, freq_idx, image_mask,
+        image_shape, volume_size,
+        right_kernel="triangular", left_kernel="triangular",
+        kernel_width=1, shared_label=False, premultiplied_ctf=False,
+        tilt_labels=None)
+
+    # Optimized: compute_H_B_column_fast with no_mask=True (mask is all ones)
+    H_fast, B_fast = cov_est.compute_H_B_column_fast(
+        images, ctf, plane_coords, rot, noise_var, freq_idx, image_mask,
+        image_shape, volume_size,
+        right_kernel="triangular", left_kernel="triangular",
+        kernel_width=1, shared_label=False, premultiplied_ctf=False,
+        no_mask=True, tilt_labels=None)
+
+    np.testing.assert_allclose(np.asarray(H_fast), np.asarray(H_ref), atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(np.asarray(B_fast), np.asarray(B_ref), atol=1e-4, rtol=1e-4)
+
+    # Also test with no_mask=False (mask path, same all-ones mask — should give same result)
+    H_mask, B_mask = cov_est.compute_H_B_column_fast(
+        images, ctf, plane_coords, rot, noise_var, freq_idx, image_mask,
+        image_shape, volume_size,
+        right_kernel="triangular", left_kernel="triangular",
+        kernel_width=1, shared_label=False, premultiplied_ctf=False,
+        no_mask=False, tilt_labels=None)
+
+    np.testing.assert_allclose(np.asarray(H_mask), np.asarray(H_ref), atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(np.asarray(B_mask), np.asarray(B_ref), atol=1e-4, rtol=1e-4)
+
+
+def test_compute_freq_batch_matches_per_frequency():
+    """Verify compute_freq_batch matches per-frequency compute_H_B_column_fast."""
+    from recovar.core.configs import ForwardModelConfig, CovColumnOpts
+
+    rng = np.random.RandomState(123)
+    grid_size = 4
+    n_images = 6
+    image_shape = (grid_size, grid_size)
+    volume_shape = (grid_size, grid_size, grid_size)
+    volume_size = grid_size ** 3
+    n_pix = grid_size ** 2
+
+    images = jnp.array(rng.randn(n_images, n_pix).astype(np.float32)
+                        + 1j * rng.randn(n_images, n_pix).astype(np.float32),
+                        dtype=jnp.complex64)
+    ctf = jnp.array(rng.randn(n_images, n_pix).astype(np.float32)
+                     + 1j * rng.randn(n_images, n_pix).astype(np.float32),
+                     dtype=jnp.complex64)
+    plane_coords = jnp.array(rng.randn(n_images, n_pix, 3).astype(np.float32))
+    rot = jnp.array(np.stack([np.eye(3, dtype=np.float32) for _ in range(n_images)]))
+    noise_var = jnp.array(rng.rand(n_images, n_pix).astype(np.float32) + 0.1)
+    image_mask = jnp.ones((n_images, *image_shape), dtype=jnp.float32)
+
+    freq_indices = jnp.array([0, 3, 5, 10], dtype=jnp.int32)
+
+    # Reference: per-frequency compute_H_B_column_fast
+    H_refs, B_refs = [], []
+    for freq_idx in np.asarray(freq_indices):
+        H_k, B_k = cov_est.compute_H_B_column_fast(
+            images, ctf, plane_coords, rot, noise_var, int(freq_idx), image_mask,
+            image_shape, volume_size,
+            right_kernel="triangular", left_kernel="triangular",
+            kernel_width=1, shared_label=False, premultiplied_ctf=False,
+            no_mask=True, tilt_labels=None)
+        H_refs.append(H_k)
+        B_refs.append(B_k)
+    H_ref = jnp.stack(H_refs)
+    B_ref = jnp.stack(B_refs)
+
+    # Batched: compute_freq_batch
+    config = ForwardModelConfig(
+        image_shape=image_shape,
+        volume_shape=volume_shape,
+        grid_size=grid_size,
+        voxel_size=1.0,
+        padding=0,
+        disc_type="linear_interp",
+        CTF_fun=lambda params, shape, voxel: jnp.ones((params.shape[0], shape[0]*shape[1]), dtype=jnp.complex64),
+    )
+    opts = CovColumnOpts(
+        right_kernel="triangular",
+        left_kernel="triangular",
+        right_kernel_width=1,
+        mask_images=False,
+        soften_mask=3,
+    )
+    H_batch, B_batch = cov_est.compute_freq_batch(
+        config, opts, freq_indices,
+        images, ctf, plane_coords, rot, noise_var,
+        image_mask, None,
+        False, False, True)
+
+    np.testing.assert_allclose(np.asarray(H_batch), np.asarray(H_ref), atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(np.asarray(B_batch), np.asarray(B_ref), atol=1e-4, rtol=1e-4)
 
 
 def test_compute_projected_covariance_runs_on_tiny_image_dataset():
@@ -567,8 +697,8 @@ def _reference_variance_kernel(config, batch_data, mean_estimate, volume_mask, i
         images_squared *= CTF_squared
 
     def _bp(arr):
-        return core.adjoint_slice_volume_by_trilinear(
-            arr, batch_data.rotation_matrices, config.image_shape, config.volume_shape
+        return core.adjoint_slice_volume_by_map(
+            arr, batch_data.rotation_matrices, config.image_shape, config.volume_shape, "linear_interp"
         )
 
     return _bp(images_squared), _bp(CTF_squared ** 2), _bp(img_power_full), _bp(noise_p_variance_ctf)
