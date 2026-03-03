@@ -238,18 +238,14 @@ def precompute_kernel_batch(
     XWX_b = XWX_b[..., None] * heterogeneity_bins_this[..., None, None, :]
     XWX_b = XWX_b.reshape(XWX_b.shape[:-2] + (-1,))
 
-    XWX = core.batch_over_vol_summed_adjoint_slice_by_nearest(
-        half_volume_size, XWX_b, grid_point_indices.reshape(-1), XWX
-    )
+    XWX = XWX.at[grid_point_indices.reshape(-1)].add(XWX_b)
 
     images = core.translate_images(batch_data.images, batch_data.translations, config.image_shape)
     F_b = X * (images * CTF / noise_variance)[..., None]
     F_b = F_b[..., None] * heterogeneity_bins_this[..., None, None, :]
     F_b = F_b.reshape(F_b.shape[:-2] + (-1,))
 
-    F = core.batch_over_vol_summed_adjoint_slice_by_nearest(
-        half_volume_size, F_b, grid_point_indices.reshape(-1), F
-    )
+    F = F.at[grid_point_indices.reshape(-1)].add(F_b)
     return XWX, F
 
 
@@ -321,12 +317,8 @@ def compute_residuals_batch(
     residuals = jnp.abs(translated_images[..., None] - predicted_phi * CTF[..., None]) ** 2
 
     volume_size = np.prod(config.volume_shape)
-    summed_residuals = core.batch_over_vol_summed_adjoint_slice_by_nearest(
-        volume_size, residuals, gridpoint_indices.reshape(-1), None
-    )
-    summed_n = core.summed_adjoint_slice_by_nearest(
-        volume_size, jnp.ones_like(residuals[..., 0]), gridpoint_indices.reshape(-1)
-    )
+    summed_residuals = jnp.zeros((volume_size, residuals.shape[-1]), dtype=residuals.dtype).at[gridpoint_indices.reshape(-1)].add(residuals.reshape(-1, residuals.shape[-1]))
+    summed_n = jnp.zeros(volume_size, dtype=residuals.real.dtype).at[gridpoint_indices.reshape(-1)].add(jnp.ones_like(residuals[..., 0]).reshape(-1))
     return summed_residuals, summed_n
 
 
@@ -1254,13 +1246,16 @@ def estimate_local_pol_covariances_inner(XWX, estimate_0, estimate_1, prior_inve
     XWX = undo_keep_upper_triangular(XWX)
     U = (XWX + prior_inverse_covariance)
     krons = batch_kron(U,U)
-    summed_krons = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_shape[0]//2-1, krons.reshape(krons.shape[0], -1), radiuses, None).reshape([-1, krons.shape[-1], krons.shape[-1] ])
+    _n_shells = volume_shape[0] // 2 - 1
+    _krons_flat = krons.reshape(krons.shape[0], -1)
+    summed_krons = jnp.zeros((_n_shells, _krons_flat.shape[-1]), dtype=_krons_flat.dtype).at[radiuses].add(_krons_flat).reshape([-1, krons.shape[-1], krons.shape[-1]])
 
     estimate_covariance = linalg.broadcast_outer(estimate_0 , estimate_1 )
     estimate_covariance = 0.5 * (estimate_covariance + jnp.conj(estimate_covariance.swapaxes(-1,-2)))
     estimate_covariance = batch_vec(estimate_covariance)
 
-    estimate_covariance_summed = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_shape[0]//2-1, estimate_covariance.reshape(krons.shape[0], -1), radiuses, None)
+    _ec_flat = estimate_covariance.reshape(krons.shape[0], -1)
+    estimate_covariance_summed = jnp.zeros((_n_shells, _ec_flat.shape[-1]), dtype=_ec_flat.dtype).at[radiuses].add(_ec_flat)
 
     good_v = jnp.where(frequencies[...,0] == 0, 0, 1)
 
@@ -1269,7 +1264,7 @@ def estimate_local_pol_covariances_inner(XWX, estimate_0, estimate_1, prior_inve
     estimate_covariance = 0.5 * (estimate_covariance + jnp.conj(estimate_covariance.swapaxes(-1,-2)))
     estimate_covariance = batch_vec(estimate_covariance)
 
-    estimate_covariance_summed += core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_shape[0]//2-1, estimate_covariance.reshape(krons.shape[0], -1), radiuses, None)
+    estimate_covariance_summed = estimate_covariance_summed.at[radiuses].add(estimate_covariance.reshape(krons.shape[0], -1))
 
 
     ## TODO There is a wild 0.5 here b/c we are treating real and imaginary part as independent

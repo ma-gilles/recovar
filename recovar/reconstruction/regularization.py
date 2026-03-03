@@ -20,12 +20,10 @@ NVTX_DOMAIN_REG = "regularization"
 
 def compute_batch_prior_quantities(rotation_matrices, translations, CTF_params, noise_variance, voxel_size, dtype, volume_shape, image_shape, grid_size, CTF_fun , for_whitening = False):
     volume_size = np.prod(np.array(volume_shape))
-    grid_point_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape )
-    CTF = CTF_fun( CTF_params, image_shape, voxel_size)
-    all_one_volume = jnp.ones(volume_size, dtype = dtype)    
-    
-    ones_CTF_mapped = core.forward_model(all_one_volume, CTF, grid_point_indices) * CTF / noise_variance[None] 
-    diag_mean = core.sum_adj_forward_model(volume_size, ones_CTF_mapped, jnp.ones_like(CTF), grid_point_indices)
+    grid_point_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape)
+    CTF = CTF_fun(CTF_params, image_shape, voxel_size)
+    ctf_sq_over_noise = (CTF ** 2 / noise_variance[None]).reshape(-1)
+    diag_mean = jnp.zeros(volume_size, dtype=dtype).at[grid_point_indices.reshape(-1)].add(ctf_sq_over_noise)
     
     return diag_mean
 

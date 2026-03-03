@@ -449,9 +449,9 @@ def variance_relion_kernel_trilinear(
         images_squared = images_squared * CTF_squared
 
     def _backproject(half_imgs, volume):
-        return core.adjoint_slice_volume_by_trilinear_from_half_images(
+        return core.adjoint_slice_volume_by_map(
             half_imgs, rotation_matrices, config.image_shape, config.volume_shape,
-            volume=volume, half_volume=True,
+            "linear_interp", volume=volume, half_image=True, half_volume=True,
         )
 
     Ft_y = _backproject(images_squared, Ft_y)
@@ -657,15 +657,18 @@ def preprocess_covariance_batch(config, batch_data, mean_estimate, volume_mask,
     rotation_matrices = batch_data.rotation_matrices
     ctf_params = batch_data.ctf_params
 
-    # 1. Per-image tight mask
-    image_mask = covariance_core.get_per_image_tight_mask(
-        volume_mask, rotation_matrices, image_stack_mask,
-        config.volume_mask_threshold,
-        config.image_shape, config.volume_shape,
-        config.grid_size, config.padding,
-        'linear_interp', soften=opts.soften_mask)
-    if not opts.mask_images:
-        image_mask = jnp.ones_like(image_mask)
+    # 1. Per-image tight mask (skip expensive 3D FFT + projection when not masking)
+    if opts.mask_images:
+        image_mask = covariance_core.get_per_image_tight_mask(
+            volume_mask, rotation_matrices, image_stack_mask,
+            config.volume_mask_threshold,
+            config.image_shape, config.volume_shape,
+            config.grid_size, config.padding,
+            'linear_interp', soften=opts.soften_mask)
+    else:
+        image_mask = jnp.ones(
+            (rotation_matrices.shape[0], *config.image_shape),
+            dtype=jnp.float32)
 
     # 2. Center images: y_i - A_i * mu
     images = covariance_core.centered_images(
@@ -673,8 +676,9 @@ def preprocess_covariance_batch(config, batch_data, mean_estimate, volume_mask,
         ctf_params, rotation_matrices,
         batch_data.translations)
 
-    # 3. Apply image masks
-    images = covariance_core.apply_image_masks(images, image_mask, config.image_shape)
+    # 3. Apply image masks (skip FFT pair when mask is all ones)
+    if opts.mask_images:
+        images = covariance_core.apply_image_masks(images, image_mask, config.image_shape)
 
     # 4. Compute CTF
     ctf_on_grid = config.compute_ctf(ctf_params)
@@ -762,8 +766,12 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
         freq_batch = picked_frequencies[freq_st:freq_end]
         n_freq_batch = freq_batch.size
 
-        H = [0] * n_freq_batch
-        B = [0] * n_freq_batch
+        freq_batch_jax = jnp.asarray(freq_batch)
+        no_mask = not opts.mask_images
+
+        # Accumulators: backprojection adds into these via volumes= parameter
+        H_accum = jnp.zeros((n_freq_batch, volume_size), dtype=jnp.complex64)
+        B_accum = jnp.zeros((n_freq_batch, volume_size), dtype=jnp.complex64)
 
         # Inner loop: image batches via DataIterator
         for batch_data in DataIterator(
@@ -779,27 +787,21 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
                     config, batch_data, mean_estimate, volume_mask,
                     cryo.image_stack.mask, opts)
 
-            # Per-frequency accumulation
-            for k, freq_idx in enumerate(freq_batch):
-                H_k, B_k = compute_H_B_triangular(
-                    images, ctf_on_grid, plane_coords,
-                    batch_data.rotation_matrices,
-                    batch_data.noise_variance,
-                    freq_idx, image_mask,
-                    config.image_shape, volume_size,
-                    right_kernel=opts.right_kernel,
-                    left_kernel=opts.left_kernel,
-                    kernel_width=opts.right_kernel_width,
-                    shared_label=cryo.tilt_series_flag,
-                    premultiplied_ctf=cryo.premultiplied_ctf,
-                    tilt_labels=tilt_labels)
-                H[k] += H_k.real.astype(cryo.dtype_real)
-                B[k] += B_k
+            # All frequencies in single XLA program (fori_loop, accumulates via .at[k].add)
+            H_accum, B_accum = compute_freq_batch(
+                config, opts, freq_batch_jax,
+                images, ctf_on_grid, plane_coords,
+                batch_data.rotation_matrices,
+                batch_data.noise_variance,
+                image_mask, tilt_labels,
+                cryo.premultiplied_ctf, cryo.tilt_series_flag, no_mask,
+                H_accum, B_accum)
 
             del images, ctf_on_grid, plane_coords, image_mask
 
-        # Batched stack + GPU→CPU transfer
-        _batched_stack_transfer(H, B, H_out, B_out, freq_st, volume_size, n_freq_batch)
+        # GPU → CPU transfer (H is real, B is complex)
+        H_out[:, freq_st:freq_end] = _to_cpu(H_accum.real).T
+        B_out[:, freq_st:freq_end] = _to_cpu(B_accum).T
 
     return H_out, B_out
 
@@ -1216,14 +1218,23 @@ def compute_H_B_triangular(centered_images, CTF_val_on_grid_stacked, plane_coord
 
 
 @nvtx.annotate("adjoint_kernel_slice", color="blue", domain=NVTX_DOMAIN_H_B)
-def adjoint_kernel_slice(images, rotation_matrices, image_shape, volume_shape, kernel = "triangular"):
-    if kernel == "triangular":
-        lhs_summed_up = core.adjoint_slice_volume_by_trilinear(images, rotation_matrices,image_shape, volume_shape )
-    elif kernel == "square":
-        lhs_summed_up = core.adjoint_slice_volume_by_map(images, rotation_matrices,image_shape, volume_shape, 'nearest' )
-    else:
+def adjoint_kernel_slice(images, rotation_matrices, image_shape, volume_shape, kernel="triangular", volumes=None):
+    """Backproject images to volume(s).
+
+    When *images* is 3-D ``(batch, n_images, n_pix)``, vmaps over the batch.
+    *volumes* is an optional accumulator: the backprojection is **added**
+    into *volumes* instead of starting from zeros.
+    """
+    disc_type = "linear_interp" if kernel == "triangular" else "nearest"
+    if kernel not in ("triangular", "square"):
         raise ValueError("Kernel not implemented")
-    return lhs_summed_up
+    if images.ndim == 3:
+        return jax.vmap(
+            lambda im: core.adjoint_slice_volume_by_map(
+                im, rotation_matrices, image_shape, volume_shape, disc_type)
+        )(images)
+    return core.adjoint_slice_volume_by_map(
+        images, rotation_matrices, image_shape, volume_shape, disc_type, volume=volumes)
 
 
 # This computes the sums
@@ -1261,7 +1272,216 @@ def compute_noise_term(plane_coords, target_coord, CTF_on_grid, image_shape, ima
         k_xi_x1 *= jnp.conj(CTF_on_grid)
 
     # mutiply by CTF again
-    return k_xi_x1 
+    return k_xi_x1
+
+
+def _compute_noise_from_kernel_vals(kernel_vals, CTF_on_grid, image_shape, image_mask,
+                                     noise_variances, premultiplied_ctf):
+    """Noise term using pre-computed kernel_vals (avoids redundant kernel eval).
+
+    Same math as ``compute_noise_term`` but skips the internal
+    ``evaluate_kernel_on_grid`` call, reusing *kernel_vals* instead.
+    """
+    k = kernel_vals
+    if not premultiplied_ctf:
+        k = k * CTF_on_grid
+    k = covariance_core.apply_image_masks(k, image_mask, image_shape)
+    if premultiplied_ctf:
+        k = k * jnp.conj(CTF_on_grid)
+    k = k * noise_variances
+    if premultiplied_ctf:
+        k = k * jnp.conj(CTF_on_grid)
+    k = covariance_core.apply_image_masks(k, image_mask, image_shape)
+    if not premultiplied_ctf:
+        k = k * jnp.conj(CTF_on_grid)
+    return k
+
+
+@functools.partial(jax.jit, static_argnums=[7, 8, 9, 10, 11, 12, 13, 14])
+@nvtx.annotate("compute_H_B_column_fast", color="blue", domain=NVTX_DOMAIN_H_B)
+def compute_H_B_column_fast(
+    images, CTF_val_on_grid_stacked, plane_coords_on_grid_stacked,
+    rotation_matrices, noise_variances, picked_freq_index, image_mask,
+    image_shape, volume_size,
+    right_kernel="triangular", left_kernel="triangular",
+    kernel_width=2, shared_label=False,
+    premultiplied_ctf=False, no_mask=False,
+    tilt_labels=None,
+):
+    """Optimized H/B column: single kernel eval, skip noise FFTs when no mask.
+
+    Same math as ``compute_H_B_triangular`` with these optimizations:
+    - ``evaluate_kernel_on_grid`` called once and reused 3 times (was 3 calls)
+    - When *no_mask* is True (mask is all-ones), the noise term simplifies to
+      pure elementwise ops, eliminating 4 FFTs per frequency.
+    """
+    volume_shape = utils.guess_vol_shape_from_vol_size(volume_size)
+    picked_freq_coord = core.vec_indices_to_vol_indices(picked_freq_index, volume_shape)
+
+    # ── Frequency-dependent terms ──
+    if premultiplied_ctf:
+        ctfed_images = images
+    else:
+        ctfed_images = images * jnp.conj(CTF_val_on_grid_stacked)
+
+    ctf_squared = CTF_val_on_grid_stacked * jnp.conj(CTF_val_on_grid_stacked)
+
+    # ── Evaluate kernel ONCE (was called 3× in compute_H_B_triangular) ──
+    kernel_vals = covariance_core.evaluate_kernel_on_grid(
+        plane_coords_on_grid_stacked, picked_freq_coord,
+        kernel=right_kernel, kernel_width=kernel_width)
+
+    # ── B term ──
+    images_prod = jnp.sum(kernel_vals * ctfed_images, axis=-1)
+
+    if shared_label:
+        if tilt_labels is not None:
+            max_groups = ctfed_images.shape[0]
+            tilt_labels = preprocess_tilt_labels_for_batch(tilt_labels)
+            images_prod = group_sum_by_labels(images_prod, tilt_labels, max_groups)
+        else:
+            images_prod = jnp.repeat(
+                jnp.sum(images_prod, axis=0, keepdims=True),
+                images_prod.shape[0], axis=0)
+
+    rhs = ctfed_images * jnp.conj(images_prod)[..., None]
+
+    # Noise subtraction: skip 4 FFTs when mask is trivial (all ones)
+    if no_mask:
+        if not premultiplied_ctf:
+            noise = kernel_vals * ctf_squared * noise_variances
+        else:
+            noise = kernel_vals * jnp.conj(CTF_val_on_grid_stacked) ** 2 * noise_variances
+    else:
+        noise = _compute_noise_from_kernel_vals(
+            kernel_vals, CTF_val_on_grid_stacked, image_shape, image_mask,
+            noise_variances, premultiplied_ctf)
+
+    rhs = rhs - noise
+    B_k = adjoint_kernel_slice(rhs, rotation_matrices, image_shape, volume_shape, left_kernel)
+
+    # ── H term ──
+    ctfs_prods = jnp.sum(kernel_vals * ctf_squared, axis=-1)
+
+    if shared_label:
+        if tilt_labels is not None:
+            max_groups = ctfed_images.shape[0]
+            ctfs_prods = group_sum_by_labels(ctfs_prods, tilt_labels, max_groups)
+        else:
+            ctfs_prods = jnp.repeat(
+                jnp.sum(ctfs_prods, axis=0, keepdims=True),
+                ctfs_prods.shape[0], axis=0)
+
+    lhs = ctf_squared * ctfs_prods[..., None]
+    H_k = adjoint_kernel_slice(lhs, rotation_matrices, image_shape, volume_shape, left_kernel)
+
+    return H_k, B_k
+
+
+@eqx.filter_jit
+@nvtx.annotate("compute_freq_batch", color="red", domain=NVTX_DOMAIN_H_B)
+def compute_freq_batch(
+    config: ForwardModelConfig,
+    opts: CovColumnOpts,
+    freq_batch: jax.Array,
+    images: jax.Array,
+    ctf_on_grid: jax.Array,
+    plane_coords: jax.Array,
+    rotation_matrices: jax.Array,
+    noise_variances: jax.Array,
+    image_mask: jax.Array,
+    tilt_labels,
+    premultiplied_ctf: bool,
+    shared_label: bool,
+    no_mask: bool,
+    H_accum: jax.Array = None,
+    B_accum: jax.Array = None,
+):
+    """Compute H and B for a batch of frequencies in a single XLA program.
+
+    Replaces the Python for-loop over frequencies with
+    ``jax.lax.fori_loop``.  Each iteration computes one frequency's images
+    and backprojects them, accumulating into *H_accum* / *B_accum* via
+    ``.at[k].add()``.
+
+    Memory: only one frequency's intermediate images live at a time.
+    """
+    n_freq = freq_batch.shape[0]
+
+    # Pre-compute frequency-independent terms ONCE
+    if premultiplied_ctf:
+        ctfed_images = images
+    else:
+        ctfed_images = images * jnp.conj(ctf_on_grid)
+    ctf_squared = ctf_on_grid * jnp.conj(ctf_on_grid)
+
+    # Pre-process tilt labels ONCE (not per-frequency)
+    if shared_label and tilt_labels is not None:
+        tilt_labels = preprocess_tilt_labels_for_batch(tilt_labels)
+
+    max_groups = images.shape[0]
+
+    if H_accum is None:
+        H_accum = jnp.zeros((n_freq, config.volume_size), dtype=images.dtype)
+    if B_accum is None:
+        B_accum = jnp.zeros((n_freq, config.volume_size), dtype=images.dtype)
+
+    def body(k, carry):
+        H_acc, B_acc = carry
+        freq_idx = freq_batch[k]
+        picked_freq_coord = core.vec_indices_to_vol_indices(
+            freq_idx, config.volume_shape)
+
+        kernel_vals = covariance_core.evaluate_kernel_on_grid(
+            plane_coords, picked_freq_coord,
+            kernel=opts.right_kernel, kernel_width=opts.right_kernel_width)
+
+        # ── B term ──
+        images_prod = jnp.sum(kernel_vals * ctfed_images, axis=-1)
+        if shared_label:
+            if tilt_labels is not None:
+                images_prod = group_sum_by_labels(
+                    images_prod, tilt_labels, max_groups)
+            else:
+                images_prod = jnp.repeat(
+                    jnp.sum(images_prod, axis=0, keepdims=True),
+                    images_prod.shape[0], axis=0)
+
+        rhs = ctfed_images * jnp.conj(images_prod)[..., None]
+        if no_mask:
+            if not premultiplied_ctf:
+                noise = kernel_vals * ctf_squared * noise_variances
+            else:
+                noise = kernel_vals * jnp.conj(ctf_on_grid) ** 2 * noise_variances
+        else:
+            noise = _compute_noise_from_kernel_vals(
+                kernel_vals, ctf_on_grid, config.image_shape, image_mask,
+                noise_variances, premultiplied_ctf)
+        rhs = rhs - noise
+
+        B_k = adjoint_kernel_slice(
+            rhs, rotation_matrices, config.image_shape,
+            config.volume_shape, opts.left_kernel)
+
+        # ── H term ──
+        ctfs_prods = jnp.sum(kernel_vals * ctf_squared, axis=-1)
+        if shared_label:
+            if tilt_labels is not None:
+                ctfs_prods = group_sum_by_labels(
+                    ctfs_prods, tilt_labels, max_groups)
+            else:
+                ctfs_prods = jnp.repeat(
+                    jnp.sum(ctfs_prods, axis=0, keepdims=True),
+                    ctfs_prods.shape[0], axis=0)
+        lhs = ctf_squared * ctfs_prods[..., None]
+
+        H_k = adjoint_kernel_slice(
+            lhs, rotation_matrices, config.image_shape,
+            config.volume_shape, opts.left_kernel)
+
+        return H_acc.at[k].add(H_k), B_acc.at[k].add(B_k)
+
+    return jax.lax.fori_loop(0, n_freq, body, (H_accum, B_accum))
 
 
 @nvtx.annotate("preprocess_tilt_labels_for_batch", color="brown")

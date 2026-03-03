@@ -119,7 +119,10 @@ def check_mask(mask):
         logger.info("no mask used")
     return no_mask
 
-batch_forward_model = jax.vmap(core.forward_model, in_axes = (0, None, None))
+batch_forward_model = jax.vmap(
+    lambda v, ctf, gpi: core.slice_volume_by_nearest(v, gpi) * ctf,
+    in_axes=(0, None, None),
+)
 
 @functools.partial(jax.jit, static_argnums = [3,4,5,6,7])
 @nvtx.annotate("batch_over_vol_forward_model", color="blue", domain=NVTX_DOMAIN_COV_CORE)
