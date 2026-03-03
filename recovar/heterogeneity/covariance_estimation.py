@@ -937,19 +937,12 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
             noise_half=False,
             apply_process_images=False,
         ):
-            lhs_this, rhs_this = reduce_covariance_inner(
+            lhs, rhs = reduce_covariance_inner(
                 config, batch_data, model, opts,
                 experiment_dataset.image_stack.mask,
                 hermitian_weights=hermitian_weights,
+                lhs=lhs, rhs=rhs,
             )
-            if not jnp.all(jnp.isfinite(lhs_this)) or not jnp.all(jnp.isfinite(rhs_this)):
-                logger.error("NaN/Inf in covariance batch; zeroing batch contribution")
-                lhs_this = jnp.where(jnp.isfinite(lhs_this), lhs_this, 0.0)
-                rhs_this = jnp.where(jnp.isfinite(rhs_this), rhs_this, 0.0)
-
-            lhs += lhs_this
-            rhs += rhs_this
-            del lhs_this, rhs_this
     del basis
     # Deallocate some memory?
 
@@ -1000,6 +993,8 @@ def reduce_covariance_inner(
     opts: CovarianceOpts,
     image_mask: jax.Array,
     hermitian_weights=None,
+    lhs=None,
+    rhs=None,
 ):
     """Covariance estimation inner loop — Equinox API.
 
@@ -1109,13 +1104,16 @@ def reduce_covariance_inner(
         AU_t_AU = jnp.sum(AU_t_AU, axis=0, keepdims=True)
 
     outer_products = summed_outer_products(AU_t_images)
-    rhs = outer_products - UALambdaAUs
-    rhs = rhs.real.astype(ctf_params.dtype)
+    rhs_batch = (outer_products - UALambdaAUs).real.astype(ctf_params.dtype)
 
     # Kron product via einsum — avoids materialising (n_images, n²,n²) tensor.
     _n = AU_t_AU.shape[-1]
-    lhs = jnp.einsum('bik,bjl->ijkl', AU_t_AU, AU_t_AU).reshape(_n * _n, _n * _n)
-    return lhs, rhs
+    lhs_batch = jnp.einsum('bik,bjl->ijkl', AU_t_AU, AU_t_AU).reshape(_n * _n, _n * _n)
+    if lhs is not None:
+        lhs_batch += lhs
+    if rhs is not None:
+        rhs_batch += rhs
+    return lhs_batch, rhs_batch
 
 
 batch_kron = jax.vmap(jnp.kron, in_axes=(0,0))
