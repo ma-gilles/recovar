@@ -588,19 +588,14 @@ def slice_volume_by_trilinear_from_half_volume(half_volume, rotation_matrices, i
 def slice_volume_by_map_from_half_volume(half_volume, rotation_matrices, image_shape, volume_shape, disc_type):
     """Project from a packed half volume to full images via map_coordinates.
 
-    Uses direct Hermitian sampling from the packed half-volume for nearest/linear.
-    Falls back to half->full expansion for cubic.
+    Expands the half volume to full Hermitian format and delegates to the
+    validated full-volume projection path.  The dedicated CUDA half_volume=True
+    kernel exists but is not yet numerically validated; the expand-then-project
+    path produces correct results on all backends.
     """
-    order = decide_order(disc_type)
     half_volume_flat, _ = _coerce_half_volume_to_flat(half_volume, volume_shape, name="half_volume")
-    if order <= 1 and _check_cuda() and _is_complex(half_volume_flat) and not _is_jvp_tracer(half_volume_flat):
-        return _slice_from_half_volume_cuda(half_volume_flat, rotation_matrices, image_shape, volume_shape, order)
-    if order > 1:
-        full_volume = fourier_transform_utils.half_volume_to_full_volume(half_volume, volume_shape)
-        return slice_volume_by_map(full_volume, rotation_matrices, image_shape, volume_shape, disc_type)
-    return _slice_volume_by_map_from_half_volume_jax(
-        half_volume_flat, rotation_matrices, image_shape, volume_shape, disc_type, half_image=False
-    )
+    full_volume = fourier_transform_utils.half_volume_to_full_volume(half_volume_flat, volume_shape)
+    return slice_volume_by_map(full_volume, rotation_matrices, image_shape, volume_shape, disc_type)
 
 
 def _slice_volume_by_trilinear_jax(volume, rotation_matrices, image_shape, volume_shape):
@@ -646,8 +641,10 @@ def adjoint_slice_volume_by_trilinear_from_half_images(
 ):
     """Adjoint trilinear slicing from packed real-FFT image spectra.
 
-    Uses CUDA ``half_image=True`` when available (no expansion needed).
-    JAX fallback also operates directly on packed half-images.
+    Expands half-spectrum images to full Hermitian format and delegates to the
+    validated full-spectrum adjoint path.  The dedicated CUDA half_image=True
+    Hermitian-scatter kernel exists but is not yet numerically validated; the
+    expand-then-backproject path produces correct results on all backends.
 
     Parameters
     ----------
@@ -655,9 +652,10 @@ def adjoint_slice_volume_by_trilinear_from_half_images(
         If True, output volume uses rfft-packed layout.
     """
     half_images_flat, _ = _coerce_half_image_to_flat(half_images, image_shape, name="half_images")
+    full_images = fourier_transform_utils.half_image_to_full_image(half_images_flat, image_shape)
     return adjoint_slice_volume_by_map(
-        half_images_flat, rotation_matrices, image_shape, volume_shape, "linear_interp",
-        volume=volume, half_image=True, half_volume=half_volume,
+        full_images, rotation_matrices, image_shape, volume_shape, "linear_interp",
+        volume=volume, half_image=False, half_volume=half_volume,
     )
 
 
