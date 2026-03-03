@@ -802,11 +802,15 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 
                 ## adjust the radial noise to handle the upsampling
                 # Interpolate noise_variance onto a grid that is twice as fine
-                from scipy.interpolate import interp1d
-                original_grid = np.linspace(0, 1, len(noise_variance))
-                fine_grid = np.linspace(0, 1, len(noise_variance) * upsample_factor)
-                interpolator = interp1d(original_grid, noise_variance, kind='linear', fill_value="extrapolate")
-                noise_variance_mod = interpolator(fine_grid)
+                if len(noise_variance) <= 1:
+                    # Single radial bin: constant noise, just tile to upsampled size
+                    noise_variance_mod = np.repeat(noise_variance, upsample_factor)
+                else:
+                    from scipy.interpolate import interp1d
+                    original_grid = np.linspace(0, 1, len(noise_variance))
+                    fine_grid = np.linspace(0, 1, len(noise_variance) * upsample_factor)
+                    interpolator = interp1d(original_grid, noise_variance, kind='linear', fill_value="extrapolate")
+                    noise_variance_mod = interpolator(fine_grid)
                 noise_image = noise.make_radial_noise(noise_variance_mod, upsampled_shape).reshape(upsampled_shape)
 
                 ## AND THE MAGIC NUMBER IS... (to make things consistent with the non-premultiplied CTF case)
