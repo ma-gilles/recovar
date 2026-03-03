@@ -353,7 +353,9 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
 
 
 def test_pca_by_projected_covariance_real_tiny_dataset_runs():
-    cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=6, seed=0)
+    # grid_size>=6 required: simulator noise interpolation produces NaN at grid_size=4
+    # (only 1 radial frequency bin → scipy interp1d divides by zero)
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=6, n_images=6, seed=0)
     basis = np.eye(cryo.volume_size, 4, dtype=np.complex64)
 
     u, s = pc.pca_by_projected_covariance(
@@ -374,12 +376,9 @@ def test_pca_by_projected_covariance_real_tiny_dataset_runs():
     assert np.all(s >= pc.jax_config.EPSILON)
     assert np.all(s[:-1] >= s[1:])
     u_np = np.asarray(u)
-    if np.isfinite(u_np).all():
-        gram = u_np.T @ u_np
-        np.testing.assert_allclose(gram, np.eye(2), atol=5e-4, rtol=5e-4)
-    else:
-        # Tiny synthetic grids can trigger interpolation singularities in this path.
-        assert np.isnan(u_np).any()
+    assert np.isfinite(u_np).all()
+    gram = u_np.T @ u_np
+    np.testing.assert_allclose(gram, np.eye(2), atol=5e-4, rtol=5e-4)
 
 
 def test_right_matvec_with_spatial_sigma_v2_matches_v1_small_problem(monkeypatch):
