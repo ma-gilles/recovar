@@ -233,6 +233,124 @@ def batch_slice_volume_by_trilinear(volumes, rotation_matrices, image_shape, vol
     return batch_slice_volume_by_map(volumes, rotation_matrices, image_shape, volume_shape, "linear_interp")
 
 
+def batch_adjoint_slice_volume_by_trilinear(images, rotation_matrices, image_shape, volume_shape, volumes=None):
+    """Backproject per-volume images into a batch of volumes with shared rotations.
+
+    Parameters
+    ----------
+    images : complex, shape ``(batch, n_images, n_pixels)``
+    rotation_matrices : shape ``(n_images, 3, 3)``
+    volumes : optional, shape ``(batch, vol_flat_size)``
+
+    Returns
+    -------
+    complex, shape ``(batch, vol_flat_size)``
+    """
+    batch = images.shape[0]
+    if volumes is None:
+        volumes = jnp.zeros((batch, int(np.prod(volume_shape))), dtype=images.dtype)
+    if _check_cuda() and _is_complex(images):
+        from recovar.cuda_backproject import batch_backproject as cuda_batch_backproject
+        return cuda_batch_backproject(volumes, images, rotation_matrices, image_shape, volume_shape, order=1)
+    return jax.vmap(
+        lambda v, im: adjoint_slice_volume_by_trilinear(im, rotation_matrices, image_shape, volume_shape, volume=v)
+    )(volumes, images)
+
+
+def adjoint_slice_volume_by_trilinear_from_weights(images, grid_vec_indices, weights, volume_shape, volume=None):
+    if volume is None:
+        volume = jnp.zeros(np.prod(volume_shape), dtype=images.dtype)
+    else:
+        volume = jnp.asarray(volume)
+
+    weights *= images.reshape(-1, 1)
+    volume = volume.at[grid_vec_indices.reshape(-1)].add(weights.reshape(-1))
+    return volume
+
+
+# ── Cubic half-volume slicer ──────────────────────────────────────────────
+
+def precompute_cubic_half_coefficients(volume, volume_shape):
+    """Precompute cubic B-spline coefficients for a volume.
+
+    Takes a full complex volume (centered-FFT convention) and fits the
+    3-D cubic B-spline coefficient array of shape ``(N0+2, N1+2, N2+2)``.
+
+    The "half" in the name refers to typical usage: callers hold the volume
+    in half-spectrum (rfft3) format and expand it before calling this
+    function.  Full coefficients are returned so that cubic interpolation
+    evaluates correctly everywhere (natural-boundary-condition cubic splines
+    are NOT Hermitian-symmetric — only the data values are).
+
+    Parameters
+    ----------
+    volume : complex array, shape ``(N0, N1, N2)`` or ``(N0*N1*N2,)``
+        Full centered-FFT volume.
+    volume_shape : (N0, N1, N2)
+
+    Returns
+    -------
+    complex array, shape ``(N0+2, N1+2, N2+2)``
+        Full cubic B-spline coefficients, ready for
+        :func:`slice_from_cubic_half_coefficients`.
+    """
+    from recovar.core import cubic_interpolation
+    N0, N1, N2 = tuple(int(s) for s in volume_shape)
+    volume_grid = jnp.asarray(volume).reshape(N0, N1, N2)
+    return cubic_interpolation.calculate_spline_coefficients(volume_grid)
+
+
+@functools.partial(jax.jit, static_argnums=[2, 3])
+def _slice_from_half_cubic_coeffs_jax(coeffs, rotation_matrices, image_shape, volume_shape):
+    """Sample rotated central slices from precomputed cubic coefficients.
+
+    Parameters
+    ----------
+    coeffs : complex array, shape ``(N0+2, N1+2, N2+2)``
+        As returned by :func:`precompute_cubic_half_coefficients`.
+    rotation_matrices : float array, shape ``(n_images, 3, 3)``
+    image_shape : (H, W)  [static]
+    volume_shape : (N0, N1, N2)  [static]
+
+    Returns
+    -------
+    complex array, shape ``(n_images, H*W)``
+    """
+    from recovar.core import cubic_interpolation
+
+    coords, coords_og_shape = rotations_to_grid_point_coords(
+        rotation_matrices, image_shape, volume_shape
+    )
+    vals = cubic_interpolation.map_coordinates_with_cubic_spline(
+        coeffs, coords, mode="fill", cval=0.0
+    )
+    n_images = rotation_matrices.shape[0]
+    H, W = image_shape
+    return vals.reshape(n_images, H * W).astype(coeffs.dtype)
+
+
+def slice_from_cubic_half_coefficients(coeffs, rotation_matrices, image_shape, volume_shape):
+    """Project from precomputed cubic coefficients to images.
+
+    Convenience wrapper around :func:`_slice_from_half_cubic_coeffs_jax`.
+
+    Parameters
+    ----------
+    coeffs : complex array, shape ``(N0+2, N1+2, N2+2)``
+        As returned by :func:`precompute_cubic_half_coefficients`.
+    rotation_matrices : float array, shape ``(n_images, 3, 3)``
+    image_shape : (H, W)
+    volume_shape : (N0, N1, N2)
+
+    Returns
+    -------
+    complex array, shape ``(n_images, H*W)``
+    """
+    return _slice_from_half_cubic_coeffs_jax(
+        jnp.asarray(coeffs), rotation_matrices, image_shape, volume_shape
+    )
+
+
 __all__ = [
     "slice_volume_by_nearest",
     "batch_slice_volume_by_nearest",
@@ -246,4 +364,6 @@ __all__ = [
     "batch_slice_volume_by_trilinear",
     "adjoint_slice_volume_by_map",
     "map_coordinates_on_slices",
+    "precompute_cubic_half_coefficients",
+    "slice_from_cubic_half_coefficients",
 ]

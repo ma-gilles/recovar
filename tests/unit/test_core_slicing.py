@@ -392,6 +392,146 @@ def test_slice_volume_by_map_from_half_volume_matches_full():
     np.testing.assert_allclose(out_half, out_full, atol=1e-4, rtol=1e-4)
 
 
+def _random_rotations(rng, n):
+    """Generate n random rotation matrices (orthogonal, det=+1)."""
+    mats = []
+    for _ in range(n):
+        A = rng.standard_normal((3, 3)).astype(np.float32)
+        Q, _ = np.linalg.qr(A)
+        if np.linalg.det(Q) < 0:
+            Q[:, 0] *= -1
+        mats.append(Q.astype(np.float32))
+    return np.stack(mats, axis=0)
+
+
+def test_precompute_cubic_half_coefficients_shape():
+    """precompute_cubic_half_coefficients must return full coefficient shape (N0+2, N1+2, N2+2)."""
+    rng = np.random.default_rng(600)
+    for volume_shape in [(8, 8, 8), (6, 8, 10), (7, 9, 11)]:
+        N0, N1, N2 = volume_shape
+        real_vol = rng.standard_normal(volume_shape).astype(np.float32)
+        vol_ft = np.asarray(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
+        coeffs = core_slicing.precompute_cubic_half_coefficients(vol_ft, volume_shape)
+        expected = (N0 + 2, N1 + 2, N2 + 2)
+        assert coeffs.shape == expected, (
+            f"volume_shape={volume_shape}: got {coeffs.shape}, expected {expected}"
+        )
+
+
+def test_cubic_half_coefficients_slice_matches_full_cubic():
+    """slice_from_cubic_half_coefficients must give identical results to map_coordinates_on_slices."""
+    import recovar.core.cubic_interpolation as cubic_interpolation
+
+    rng = np.random.default_rng(601)
+    image_shape = (4, 8)
+
+    for volume_shape in [(8, 8, 8), (8, 8, 10), (8, 10, 12)]:
+        rots = np.concatenate([
+            np.eye(3, dtype=np.float32)[None],
+            _random_rotations(rng, 5),
+        ], axis=0)
+
+        real_vol = rng.standard_normal(volume_shape).astype(np.float32)
+        vol_ft = np.asarray(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
+
+        # Reference: full cubic slicing via map_coordinates_on_slices
+        coeffs_full = np.asarray(
+            cubic_interpolation.calculate_spline_coefficients(
+                jnp.asarray(vol_ft).reshape(volume_shape)
+            )
+        )
+        slices_ref = np.asarray(
+            core_slicing.map_coordinates_on_slices(
+                coeffs_full, rots, image_shape, volume_shape, order=3
+            )
+        )
+
+        # New path: precompute coefficients, then slice
+        coeffs = np.asarray(
+            core_slicing.precompute_cubic_half_coefficients(vol_ft, volume_shape)
+        )
+        slices_half = np.asarray(
+            core_slicing.slice_from_cubic_half_coefficients(
+                coeffs, rots, image_shape, volume_shape
+            )
+        )
+
+        np.testing.assert_allclose(
+            slices_half, slices_ref, atol=1e-4, rtol=1e-4,
+            err_msg=f"Mismatch for volume_shape={volume_shape}",
+        )
+        assert np.any(np.abs(slices_ref) > 1e-6), "Reference slices are all zero"
+
+
+def test_cubic_half_coefficients_slice_matches_full_cubic_odd_dims():
+    """Cubic coefficient slicer must work for odd N2."""
+    import recovar.core.cubic_interpolation as cubic_interpolation
+
+    rng = np.random.default_rng(602)
+    image_shape = (4, 8)
+    volume_shape = (8, 8, 9)   # odd N2
+
+    rots = np.concatenate([
+        np.eye(3, dtype=np.float32)[None],
+        _random_rotations(rng, 4),
+    ], axis=0)
+
+    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
+    vol_ft = np.asarray(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
+
+    coeffs_full = np.asarray(
+        cubic_interpolation.calculate_spline_coefficients(
+            jnp.asarray(vol_ft).reshape(volume_shape)
+        )
+    )
+    slices_ref = np.asarray(
+        core_slicing.map_coordinates_on_slices(
+            coeffs_full, rots, image_shape, volume_shape, order=3
+        )
+    )
+
+    coeffs = np.asarray(
+        core_slicing.precompute_cubic_half_coefficients(vol_ft, volume_shape)
+    )
+    slices_half = np.asarray(
+        core_slicing.slice_from_cubic_half_coefficients(
+            coeffs, rots, image_shape, volume_shape
+        )
+    )
+
+    np.testing.assert_allclose(slices_half, slices_ref, atol=1e-4, rtol=1e-4)
+
+
+def test_cubic_half_coefficients_slice_vjp_finite():
+    """VJP through slice_from_cubic_half_coefficients must be finite and non-zero."""
+    rng = np.random.default_rng(603)
+    image_shape = (4, 8)
+    volume_shape = (8, 8, 8)
+
+    rots = np.concatenate([
+        np.eye(3, dtype=np.float32)[None],
+        _random_rotations(rng, 2),
+    ], axis=0)
+
+    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
+    vol_ft = jnp.array(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
+
+    coeffs = core_slicing.precompute_cubic_half_coefficients(vol_ft, volume_shape)
+
+    n_images = rots.shape[0]
+    H, W = image_shape
+    g = jnp.ones((n_images, H * W), dtype=jnp.complex64)
+
+    f = lambda c: core_slicing._slice_from_half_cubic_coeffs_jax(
+        c, rots, image_shape, volume_shape
+    )
+    _, vjp_fn = jax.vjp(f, jnp.asarray(coeffs))
+    grad = np.asarray(vjp_fn(g)[0])
+
+    assert np.isfinite(grad).all(), "VJP returned non-finite values"
+    assert np.any(np.abs(grad) > 1e-10), "VJP returned all-zero gradient"
+
+
 @pytest.mark.gpu
 def test_half_image_backprojection_matches_full_on_gpu(gpu_device):
     device = gpu_device
@@ -427,3 +567,305 @@ def test_half_image_backprojection_matches_full_on_gpu(gpu_device):
             )
         )
     np.testing.assert_allclose(out_half, out_full, atol=1e-5, rtol=1e-5)
+
+
+# ── Tests for half-volume → half-image projection (new code paths) ────
+
+
+def test_slice_from_half_volume_to_half_image_multiple_shapes_jax(monkeypatch):
+    """half_image=True in slice_volume_by_map_from_half_volume matches full-vol reference
+    for multiple volume shapes including non-cubic and odd-N2 cases (JAX path)."""
+    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+
+    rng = np.random.default_rng(2010)
+    image_shape = (6, 8)
+
+    for volume_shape in [(8, 8, 8), (8, 8, 9), (8, 10, 12)]:
+        rots = np.concatenate(
+            [np.eye(3, dtype=np.float32)[None], _random_rotations(rng, 4)],
+            axis=0,
+        )
+        real_vol = rng.standard_normal(volume_shape).astype(np.float32)
+        vol_ft = np.asarray(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
+        half_vol = np.asarray(fourier_transform_utils.full_volume_to_half_volume(vol_ft, volume_shape))
+
+        ref = np.asarray(core_slicing.slice_volume_by_map_to_half_image(
+            vol_ft, rots, image_shape, volume_shape, "linear_interp"
+        ))
+        out = np.asarray(core_slicing.slice_volume_by_map_from_half_volume(
+            half_vol, rots, image_shape, volume_shape, "linear_interp", half_image=True
+        ))
+        np.testing.assert_allclose(
+            out, ref, atol=1e-5, rtol=1e-5,
+            err_msg=f"half_image=True mismatch for volume_shape={volume_shape}",
+        )
+        assert np.any(np.abs(out) > 1e-8), f"All-zero output for volume_shape={volume_shape}"
+
+
+def test_slice_from_half_volume_to_half_image_nearest_jax(monkeypatch):
+    """Nearest-neighbour variant of half_image=True path (JAX) matches full-vol reference."""
+    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+
+    rng = np.random.default_rng(2013)
+    image_shape = (6, 8)
+    volume_shape = (8, 8, 8)
+    rots = np.concatenate(
+        [np.eye(3, dtype=np.float32)[None], _random_rotations(rng, 3)],
+        axis=0,
+    )
+    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
+    vol_ft = np.asarray(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
+    half_vol = np.asarray(fourier_transform_utils.full_volume_to_half_volume(vol_ft, volume_shape))
+
+    ref = np.asarray(core_slicing.slice_volume_by_map_to_half_image(
+        vol_ft, rots, image_shape, volume_shape, "nearest"
+    ))
+    out = np.asarray(core_slicing.slice_volume_by_map_from_half_volume(
+        half_vol, rots, image_shape, volume_shape, "nearest", half_image=True
+    ))
+    np.testing.assert_allclose(out, ref, atol=1e-5, rtol=1e-5)
+
+
+def test_slice_from_half_volume_to_half_image_vjp_finite_jax(monkeypatch):
+    """VJP through slice_volume_by_map_from_half_volume(half_image=True) is finite and non-zero (JAX path)."""
+    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+
+    rng = np.random.default_rng(2011)
+    volume_shape = (8, 8, 8)
+    image_shape = (6, 8)
+    n_images = 3
+    rots = _random_rotations(rng, n_images)
+
+    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
+    vol_ft = jnp.array(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
+    half_vol = jnp.array(fourier_transform_utils.full_volume_to_half_volume(vol_ft, volume_shape))
+
+    half_img_shape = fourier_transform_utils.image_shape_to_half_image_shape(image_shape)
+    real_g = rng.standard_normal((n_images,) + half_img_shape).astype(np.float32)
+    imag_g = rng.standard_normal((n_images,) + half_img_shape).astype(np.float32)
+    g = jnp.array(real_g + 1j * imag_g).reshape(n_images, -1)
+
+    f = lambda v: core_slicing.slice_volume_by_map_from_half_volume(
+        v, rots, image_shape, volume_shape, "linear_interp", half_image=True
+    )
+    _, vjp_fn = jax.vjp(f, half_vol)
+    grad = np.asarray(vjp_fn(g)[0])
+
+    assert np.isfinite(grad).all(), "VJP returned non-finite values"
+    assert np.any(np.abs(grad) > 1e-10), "VJP returned all-zero gradient"
+
+
+def test_slice_from_half_volume_to_half_image_vjp_vs_reference_jax(monkeypatch):
+    """VJP of the half-vol→half-img path matches VJP of expand-then-slice reference (JAX path)."""
+    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+
+    rng = np.random.default_rng(2012)
+    volume_shape = (8, 8, 8)
+    image_shape = (6, 8)
+    n_images = 3
+    rots = _random_rotations(rng, n_images)
+
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+    half_size = int(np.prod(half_shape))
+
+    real_imgs = rng.standard_normal((n_images,) + image_shape).astype(np.float32)
+    half_imgs = jnp.asarray(fourier_transform_utils.get_dft2_real(real_imgs)).reshape(n_images, -1)
+
+    # New function: half_vol → half_images (JAX path, CUDA off)
+    f_new = lambda hv: core_slicing.slice_volume_by_map_from_half_volume(
+        hv, rots, image_shape, volume_shape, "linear_interp", half_image=True
+    )
+    _, vjp_new = jax.vjp(f_new, jnp.zeros(half_size, dtype=jnp.complex64))
+    grad_new = np.asarray(vjp_new(half_imgs)[0])
+
+    # Reference: expand half_vol → full_vol, then slice to half_img
+    def f_ref(hv):
+        full_vol = fourier_transform_utils.half_volume_to_full_volume(hv, volume_shape).reshape(-1)
+        return core_slicing.slice_volume_by_map_to_half_image(
+            full_vol, rots, image_shape, volume_shape, "linear_interp"
+        )
+
+    _, vjp_ref = jax.vjp(f_ref, jnp.zeros(half_size, dtype=jnp.complex64))
+    grad_ref = np.asarray(vjp_ref(half_imgs)[0])
+
+    np.testing.assert_allclose(grad_new, grad_ref, atol=1e-4, rtol=1e-4)
+    assert np.any(np.abs(grad_new) > 1e-10), "VJP returned all-zero gradient"
+
+
+def test_batch_slice_from_half_volume_to_half_image_vs_full_vol_batch_jax(monkeypatch):
+    """batch_slice_volume_by_map_from_half_volume(half_image=True) matches batch_slice_to_half_image(full_vols)."""
+    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+
+    rng = np.random.default_rng(2014)
+    volume_shape = (8, 8, 8)
+    image_shape = (6, 8)
+    n_volumes = 4
+    rots = np.concatenate(
+        [np.eye(3, dtype=np.float32)[None], _random_rotations(rng, 2)],
+        axis=0,
+    )
+
+    real_vols = rng.standard_normal((n_volumes,) + volume_shape).astype(np.float32)
+    full_vols = np.stack([
+        np.asarray(fourier_transform_utils.get_dft3(jnp.array(v))).reshape(-1)
+        for v in real_vols
+    ], axis=0)
+    half_vols = np.stack([
+        np.asarray(fourier_transform_utils.full_volume_to_half_volume(full_vols[i], volume_shape)).reshape(-1)
+        for i in range(n_volumes)
+    ], axis=0)
+
+    # Reference: batch project from full volumes to half images
+    ref = np.asarray(core_slicing.batch_slice_volume_by_map_to_half_image(
+        jnp.array(full_vols), rots, image_shape, volume_shape, "linear_interp"
+    ))
+    # New path: batch project from half volumes to half images
+    out = np.asarray(core_slicing.batch_slice_volume_by_map_from_half_volume(
+        jnp.array(half_vols), rots, image_shape, volume_shape, "linear_interp", half_image=True
+    ))
+
+    np.testing.assert_allclose(out, ref, atol=1e-5, rtol=1e-5)
+    assert out.shape == ref.shape
+
+
+def test_slice_from_half_volume_to_half_image_identity_rotation_jax(monkeypatch):
+    """For identity rotation, half_vol→half_img slice matches the full-vol reference (sanity check)."""
+    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+
+    rng = np.random.default_rng(2015)
+    volume_shape = (8, 8, 8)
+    image_shape = (8, 8)
+    rots = np.eye(3, dtype=np.float32)[None]
+
+    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
+    vol_ft = np.asarray(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
+    half_vol = np.asarray(fourier_transform_utils.full_volume_to_half_volume(vol_ft, volume_shape))
+
+    ref = np.asarray(core_slicing.slice_volume_by_map_to_half_image(
+        vol_ft, rots, image_shape, volume_shape, "linear_interp"
+    ))
+    out = np.asarray(core_slicing.slice_volume_by_map_from_half_volume(
+        half_vol, rots, image_shape, volume_shape, "linear_interp", half_image=True
+    ))
+    np.testing.assert_allclose(out, ref, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_slice_from_half_volume_to_half_image_cuda_vs_jax(gpu_device):
+    """CUDA half-vol→half-img projection matches JAX reference for multiple shapes."""
+    import unittest.mock as mock
+
+    device = gpu_device
+    rng = np.random.default_rng(2020)
+    image_shape = (6, 8)
+
+    for volume_shape in [(8, 8, 8), (8, 8, 9), (8, 10, 12)]:
+        rots = np.concatenate(
+            [np.eye(3, dtype=np.float32)[None], _random_rotations(rng, 3)],
+            axis=0,
+        )
+        real_vol = rng.standard_normal(volume_shape).astype(np.float32)
+        vol_ft = np.asarray(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
+        half_vol = np.asarray(fourier_transform_utils.full_volume_to_half_volume(vol_ft, volume_shape))
+
+        # JAX reference (CUDA off)
+        with mock.patch.object(core_slicing, "_check_cuda", return_value=False):
+            ref_jax = np.asarray(core_slicing.slice_volume_by_map_from_half_volume(
+                half_vol, rots, image_shape, volume_shape, "linear_interp", half_image=True
+            ))
+
+        with jax.default_device(device):
+            out_cuda = np.asarray(core_slicing.slice_volume_by_map_from_half_volume(
+                jax.device_put(jnp.array(half_vol)), jax.device_put(rots),
+                image_shape, volume_shape, "linear_interp", half_image=True,
+            ))
+        np.testing.assert_allclose(
+            out_cuda, ref_jax, atol=1e-4, rtol=1e-4,
+            err_msg=f"CUDA vs JAX mismatch for volume_shape={volume_shape}",
+        )
+
+
+@pytest.mark.gpu
+def test_slice_from_half_volume_to_half_image_cuda_vjp_adjointness(gpu_device):
+    """Custom VJP for CUDA half-vol→half-img satisfies adjoint identity <A(hv), g> = <hv, A^H(g)>."""
+    device = gpu_device
+    rng = np.random.default_rng(2021)
+    image_shape = (6, 8)
+    volume_shape = (8, 8, 8)
+    n_images = 5
+
+    rots = _random_rotations(rng, n_images)
+
+    half_vol_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+    half_img_shape = fourier_transform_utils.image_shape_to_half_image_shape(image_shape)
+    half_vol_size = int(np.prod(half_vol_shape))
+    half_img_size = int(np.prod(half_img_shape))
+
+    hv_re = rng.standard_normal(half_vol_size).astype(np.float32)
+    hv_im = rng.standard_normal(half_vol_size).astype(np.float32)
+    g_re = rng.standard_normal((n_images, half_img_size)).astype(np.float32)
+    g_im = rng.standard_normal((n_images, half_img_size)).astype(np.float32)
+
+    with jax.default_device(device):
+        hv = jax.device_put(jnp.array(hv_re + 1j * hv_im))
+        g = jax.device_put(jnp.array(g_re + 1j * g_im))
+        rots_d = jax.device_put(rots)
+
+        # Forward: A(hv) using CUDA custom_vjp function
+        Ahv = core_slicing._slice_from_half_volume_to_half_image_cuda(
+            hv, rots_d, image_shape, volume_shape, 1
+        )
+
+        # Adjoint via VJP: A^H(g)
+        f = lambda v: core_slicing._slice_from_half_volume_to_half_image_cuda(
+            v, rots_d, image_shape, volume_shape, 1
+        )
+        _, vjp_fn = jax.vjp(f, hv)
+        AHg = vjp_fn(g)[0]
+
+        # Check <A(hv), g> == <hv, A^H(g)>  (real part of sesquilinear inner product)
+        lhs = float(jnp.real(jnp.sum(jnp.conj(Ahv) * g)))
+        rhs = float(jnp.real(jnp.sum(jnp.conj(hv) * AHg)))
+
+    np.testing.assert_allclose(lhs, rhs, atol=1e-2, rtol=1e-2)
+    assert np.isfinite(np.asarray(AHg)).all(), "VJP returned non-finite values"
+    assert np.any(np.abs(np.asarray(AHg)) > 1e-10), "VJP returned all-zero gradient"
+
+
+@pytest.mark.gpu
+def test_batch_slice_from_half_volume_to_half_image_cuda_vs_jax(gpu_device):
+    """batch_slice_volume_by_map_from_half_volume(half_image=True) CUDA matches JAX batch reference."""
+    import unittest.mock as mock
+
+    device = gpu_device
+    rng = np.random.default_rng(2022)
+    image_shape = (6, 8)
+    volume_shape = (8, 8, 8)
+    n_volumes = 3
+    rots = np.concatenate(
+        [np.eye(3, dtype=np.float32)[None], _random_rotations(rng, 2)],
+        axis=0,
+    )
+
+    real_vols = rng.standard_normal((n_volumes,) + volume_shape).astype(np.float32)
+    half_vols = np.stack([
+        np.asarray(fourier_transform_utils.full_volume_to_half_volume(
+            np.asarray(fourier_transform_utils.get_dft3(jnp.array(v))).reshape(-1),
+            volume_shape,
+        )).reshape(-1)
+        for v in real_vols
+    ], axis=0)
+
+    # JAX reference (CUDA off)
+    with mock.patch.object(core_slicing, "_check_cuda", return_value=False):
+        ref_jax = np.asarray(core_slicing.batch_slice_volume_by_map_from_half_volume(
+            jnp.array(half_vols), rots, image_shape, volume_shape, "linear_interp", half_image=True
+        ))
+
+    with jax.default_device(device):
+        out_cuda = np.asarray(core_slicing.batch_slice_volume_by_map_from_half_volume(
+            jax.device_put(jnp.array(half_vols)), jax.device_put(rots),
+            image_shape, volume_shape, "linear_interp", half_image=True,
+        ))
+
+    np.testing.assert_allclose(out_cuda, ref_jax, atol=1e-4, rtol=1e-4)
