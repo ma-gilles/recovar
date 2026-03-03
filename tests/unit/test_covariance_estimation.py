@@ -642,3 +642,118 @@ def test_variance_kernel_accumulator_matches_sequential_sum():
     np.testing.assert_allclose(_to_full(acc_ctf, vol_shape), ref_ctf, atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(_to_full(acc_im, vol_shape), ref_im, atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(_to_full(acc_one, vol_shape), ref_one, atol=1e-5, rtol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# Double-precision equivalence: new kernel vs reference at float64
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def enable_x64():
+    """Enable 64-bit JAX arithmetic for this test, restoring the previous state afterward."""
+    import jax
+    prev = jax.config.jax_enable_x64
+    jax.config.update("jax_enable_x64", True)
+    yield
+    jax.config.update("jax_enable_x64", prev)
+
+
+def _cast_batch_data_f64(batch_data):
+    return BatchData(
+        images=batch_data.images.astype(jnp.complex128),
+        ctf_params=batch_data.ctf_params.astype(jnp.float64),
+        rotation_matrices=batch_data.rotation_matrices.astype(jnp.float64),
+        translations=batch_data.translations.astype(jnp.float64),
+        noise_variance=batch_data.noise_variance.astype(jnp.float64),
+    )
+
+
+def test_variance_kernel_no_mask_f64(enable_x64):
+    """New kernel matches old full-vol reference in float64.
+
+    Note: config.compute_ctf() always returns float32, so CTF-dependent
+    quantities (Ft_ctf) are limited to float32 precision (~1e-7 absolute).
+    atol=1e-7 is 100x tighter than the float32 tests (atol=1e-5).
+    """
+    config, batch_data, mean_estimate, _, image_mask = _make_variance_test_fixtures()
+    bd64 = _cast_batch_data_f64(batch_data)
+    mean64 = mean_estimate.astype(jnp.complex128)
+    im64 = image_mask.astype(jnp.float64)
+
+    ref_y, ref_ctf, ref_im, ref_one = _reference_variance_kernel(
+        config, bd64, mean64, volume_mask=None, image_mask=im64
+    )
+    new_y, new_ctf, new_im, new_one = cov_est.variance_relion_kernel_trilinear(
+        config, bd64, mean64, volume_mask=None, image_mask=im64
+    )
+
+    vol_shape = config.volume_shape
+    np.testing.assert_allclose(_to_full(new_y, vol_shape), np.asarray(ref_y), atol=1e-7, rtol=0)
+    np.testing.assert_allclose(_to_full(new_ctf, vol_shape), np.asarray(ref_ctf), atol=1e-7, rtol=0)
+    np.testing.assert_allclose(_to_full(new_im, vol_shape), np.asarray(ref_im), atol=1e-7, rtol=0)
+    np.testing.assert_allclose(_to_full(new_one, vol_shape), np.asarray(ref_one), atol=1e-7, rtol=0)
+
+
+def test_variance_kernel_with_mask_f64(enable_x64):
+    """New kernel matches old full-vol reference in float64 with mask (atol=1e-7)."""
+    config, batch_data, mean_estimate, volume_mask, image_mask = _make_variance_test_fixtures()
+    bd64 = _cast_batch_data_f64(batch_data)
+    mean64 = mean_estimate.astype(jnp.complex128)
+    vm64 = volume_mask.astype(jnp.float64)
+    im64 = image_mask.astype(jnp.float64)
+
+    ref_y, ref_ctf, ref_im, ref_one = _reference_variance_kernel(
+        config, bd64, mean64, vm64, im64
+    )
+    new_y, new_ctf, new_im, new_one = cov_est.variance_relion_kernel_trilinear(
+        config, bd64, mean64, vm64, im64
+    )
+
+    vol_shape = config.volume_shape
+    np.testing.assert_allclose(_to_full(new_y, vol_shape), np.asarray(ref_y), atol=1e-7, rtol=0)
+    np.testing.assert_allclose(_to_full(new_ctf, vol_shape), np.asarray(ref_ctf), atol=1e-7, rtol=0)
+    np.testing.assert_allclose(_to_full(new_im, vol_shape), np.asarray(ref_im), atol=1e-7, rtol=0)
+    np.testing.assert_allclose(_to_full(new_one, vol_shape), np.asarray(ref_one), atol=1e-7, rtol=0)
+
+
+def test_variance_kernel_accumulator_f64(enable_x64):
+    """Accumulator pattern is self-consistent at float64 precision (atol=1e-13).
+
+    This directly tests the half-image refactor: since both runs use the same
+    half-image code path, the comparison avoids full-vol vs half-vol differences
+    and achieves near-machine-epsilon agreement.
+    """
+    config, batch_data, mean_estimate, volume_mask, image_mask = _make_variance_test_fixtures(n_images=6)
+    bd64 = _cast_batch_data_f64(batch_data)
+    mean64 = mean_estimate.astype(jnp.complex128)
+    vm64 = volume_mask.astype(jnp.float64)
+    im64 = image_mask.astype(jnp.float64)
+
+    def _slice_batch(bd, sl):
+        return BatchData(
+            images=bd.images[sl],
+            ctf_params=bd.ctf_params[sl],
+            rotation_matrices=bd.rotation_matrices[sl],
+            translations=bd.translations[sl],
+            noise_variance=bd.noise_variance[sl],
+        )
+
+    b1 = _slice_batch(bd64, slice(0, 3))
+    b2 = _slice_batch(bd64, slice(3, 6))
+    kwargs = dict(mean_estimate=mean64, volume_mask=vm64, image_mask=im64)
+
+    # Sum of separate runs.
+    y1, c1, im1, o1 = cov_est.variance_relion_kernel_trilinear(config, b1, **kwargs)
+    y2, c2, im2, o2 = cov_est.variance_relion_kernel_trilinear(config, b2, **kwargs)
+    vol_shape = config.volume_shape
+    ref_y = _to_full(y1, vol_shape) + _to_full(y2, vol_shape)
+
+    # Accumulated run.
+    acc_y, acc_c, acc_im, acc_o = cov_est.variance_relion_kernel_trilinear(config, b1, **kwargs)
+    acc_y, acc_c, acc_im, acc_o = cov_est.variance_relion_kernel_trilinear(
+        config, b2, mean_estimate=mean64, volume_mask=vm64, image_mask=im64,
+        Ft_y=acc_y, Ft_ctf=acc_c, Ft_im=acc_im, Ft_one=acc_o,
+    )
+
+    # Same code path: differences are only from float64 accumulation order — near machine eps.
+    np.testing.assert_allclose(_to_full(acc_y, vol_shape), ref_y, atol=1e-13, rtol=0)
