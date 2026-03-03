@@ -247,6 +247,29 @@ def half_spectrum_last_axis_weights(last_axis_size, dtype=jnp.float32):
     return w
 
 
+def rfft2_hermitian_weights(image_shape, dtype=jnp.float32):
+    """Precompute ``sqrt(w)`` weights for 2-D half-spectrum (rfft2) inner products.
+
+    For Hermitian-symmetric arrays ``A``, ``B`` of shape ``(H, W)`` stored in
+    rfft2 half-spectrum format (shape ``(H, W//2+1)``), the weighted inner
+    product over the half equals the full-spectrum inner product::
+
+        sum_{k in half} w[k] * conj(A[k]) * B[k]  ==  sum_{k in full} conj(A[k]) * B[k]
+
+    Built from :func:`half_spectrum_last_axis_weights`, then tiled over the H rows.
+
+    Args:
+        image_shape: ``(H, W)`` tuple.
+        dtype: dtype for the returned array (default float32).
+
+    Returns:
+        JAX array of shape ``(H * (W // 2 + 1),)`` with values in ``{1, sqrt(2)}``.
+    """
+    H, W = int(image_shape[0]), int(image_shape[1])
+    w1d = jnp.sqrt(half_spectrum_last_axis_weights(W, dtype=dtype))  # (W//2+1,)
+    return jnp.tile(w1d, H)
+
+
 def _coerce_half_grid(arr, full_shape, name):
     full_shape = tuple(int(s) for s in full_shape)
     if len(full_shape) == 2:
