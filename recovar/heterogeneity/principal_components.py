@@ -81,7 +81,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         if covariance_options['column_sampling_scheme'] == 'high_snr':
             lhs = lhs / dist.reshape(-1)
         if covariance_options['column_sampling_scheme'] == 'high_snr_p':
-            lhs = lhs * means['prior']
+            lhs = lhs * mean_prior
         if covariance_options['column_sampling_scheme'] == 'high_snr_from_var_est':
             if variance_estimate is None:
                 raise ValueError("variance_estimate must be provided")
@@ -143,7 +143,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         u['rescaled_no_contrast'] = u['rescaled']
         s['rescaled_no_contrast'] = s['rescaled']
 
-        mean_used = means['combined_regularized'] if use_reg_mean_in_contrast else means['combined']
+        mean_used = (means['corrected0reg'] + means['corrected1reg']) / 2 if use_reg_mean_in_contrast else means['combined']
         u['rescaled'],s['rescaled'] = knock_out_mean_component_2(u['rescaled'], s['rescaled'],mean_used, volume_mask, volume_shape, vol_batch_size, options['ignore_zero_frequency'], options['contrast'] == "contrast_qr" )
 
         if not options['keep_intermediate']:
