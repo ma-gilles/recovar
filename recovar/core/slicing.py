@@ -131,23 +131,20 @@ def batch_slice_volume_by_map(volumes, rotation_matrices, image_shape, volume_sh
 
 def slice_volume_by_map_to_half_image(volume, rotation_matrices, image_shape, volume_shape, disc_type):
     """Project a full volume to rfft-packed half-spectrum images."""
-    order = decide_order(disc_type)
-    if order <= 1 and _check_cuda() and _is_complex(volume) and not _is_jvp_tracer(volume):
-        from recovar.core.cuda_ops import cuda_slice_to_half_image
-        return cuda_slice_to_half_image(volume, rotation_matrices, image_shape, volume_shape, order)
-    full = _slice_volume_by_map_jax(volume, rotation_matrices, image_shape, volume_shape, disc_type)
+    # CUDA half_image=True project kernel is not yet numerically validated;
+    # project to full images first, then convert to half-spectrum.
+    full = slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type)
     return fourier_transform_utils.full_image_to_half_image(full, image_shape)
 
 
 def batch_slice_volume_by_map_to_half_image(volumes, rotation_matrices, image_shape, volume_shape, disc_type):
     """Project a batch of full volumes to half-spectrum images."""
-    order = decide_order(disc_type)
-    if order <= 1 and _check_cuda() and _is_complex(volumes):
-        from recovar.cuda_backproject import batch_project
-        return batch_project(volumes, rotation_matrices, image_shape, volume_shape, order=order, half_image=True)
+    # CUDA half_image=True project kernel is not yet numerically validated;
+    # project to full images first, then convert to half-spectrum.
+    full = batch_slice_volume_by_map(volumes, rotation_matrices, image_shape, volume_shape, disc_type)
     return jax.vmap(
-        lambda v: slice_volume_by_map_to_half_image(v, rotation_matrices, image_shape, volume_shape, disc_type)
-    )(volumes)
+        lambda f: fourier_transform_utils.full_image_to_half_image(f, image_shape)
+    )(full)
 
 
 def slice_volume_by_map_from_half_volume(half_volume, rotation_matrices, image_shape, volume_shape, disc_type):
