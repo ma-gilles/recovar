@@ -1013,16 +1013,19 @@ def reduce_covariance_inner(
             config.volume_mask_threshold, config.image_shape, config.volume_shape,
             config.grid_size, config.padding, 'linear_interp',
         )
-
-    else:
-        image_mask = jnp.ones_like(batch).real
+    # (no else — image_mask is unused when do_mask_images=False)
 
     if config.process_fn is not None:
         batch = config.process_fn(batch)
     batch = core.translate_images(batch, translations, config.image_shape)
 
+    # When masking is off, project directly to half-image format to avoid the
+    # full→half conversion for projected_mean and AUs (the two dominant terms).
+    _use_half_proj = (not do_mask_images) and (hermitian_weights is not None)
+
     projected_mean = core_forward.forward_model(
         config, model.mean_estimate, ctf_params, rotation_matrices,
+        half_image=_use_half_proj,
     )
 
     if do_mask_images:
@@ -1034,6 +1037,7 @@ def reduce_covariance_inner(
     AUs = covariance_core.batch_vol_forward_from_map(
         config_u, model.basis, ctf_params, rotation_matrices,
         skip_ctf=config.premultiplied_ctf,
+        half_image=_use_half_proj,
     )
 
     if do_mask_images:
@@ -1047,13 +1051,18 @@ def reduce_covariance_inner(
     if hermitian_weights is not None:
         batch = fourier_transform_utils.full_image_to_half_image(
             batch, config.image_shape) * hermitian_weights
-        projected_mean = fourier_transform_utils.full_image_to_half_image(
-            projected_mean, config.image_shape) * hermitian_weights
-        # AUs: (n_basis, n_images, H*W) → (n_basis, n_images, H*(W//2+1))
-        n_b, n_i = AUs.shape[0], AUs.shape[1]
-        AUs = fourier_transform_utils.full_image_to_half_image(
-            AUs.reshape(n_b * n_i, -1), config.image_shape,
-        ).reshape(n_b, n_i, -1) * hermitian_weights[None, None, :]
+        if _use_half_proj:
+            # projected_mean and AUs are already in half-image format.
+            projected_mean = projected_mean * hermitian_weights
+            AUs = AUs * hermitian_weights[None, None, :]
+        else:
+            projected_mean = fourier_transform_utils.full_image_to_half_image(
+                projected_mean, config.image_shape) * hermitian_weights
+            # AUs: (n_basis, n_images, H*W) → (n_basis, n_images, H*(W//2+1))
+            n_b, n_i = AUs.shape[0], AUs.shape[1]
+            AUs = fourier_transform_utils.full_image_to_half_image(
+                AUs.reshape(n_b * n_i, -1), config.image_shape,
+            ).reshape(n_b, n_i, -1) * hermitian_weights[None, None, :]
         noise_variance = fourier_transform_utils.full_image_to_half_image(
             noise_variance, config.image_shape)
 
@@ -1076,7 +1085,10 @@ def reduce_covariance_inner(
     AU_t_AU = batch_x_T_y(AUs, AUs).real.astype(ctf_params.dtype)
 
     AUs *= jnp.sqrt(noise_variance)[..., None]
-    UALambdaAUs = jnp.sum(batch_x_T_y(AUs, AUs), axis=0)
+    # Single cuBLAS GEMM instead of vmap over n_images batches.
+    _n_basis = AUs.shape[-1]
+    _AUs_flat = AUs.reshape(-1, _n_basis)
+    UALambdaAUs = jnp.conj(_AUs_flat).T @ _AUs_flat
 
     if opts.shared_label:
         AU_t_images = jnp.sum(AU_t_images, axis=0, keepdims=True)
@@ -1086,7 +1098,9 @@ def reduce_covariance_inner(
     rhs = outer_products - UALambdaAUs
     rhs = rhs.real.astype(ctf_params.dtype)
 
-    lhs = jnp.sum(batch_kron(AU_t_AU, AU_t_AU), axis=0)
+    # Kron product via einsum — avoids materialising (n_images, n²,n²) tensor.
+    _n = AU_t_AU.shape[-1]
+    lhs = jnp.einsum('bik,bjl->ijkl', AU_t_AU, AU_t_AU).reshape(_n * _n, _n * _n)
     return lhs, rhs
 
 
