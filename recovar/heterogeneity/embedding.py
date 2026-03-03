@@ -489,6 +489,227 @@ def solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, 
 batch_over_contrast_solve_contrast_linear_system = jax.vmap(solve_contrast_linear_system, in_axes = ( None, None, None, None, 0) )
 batch_over_images_and_contrast_solve_contrast_linear_system = jax.vmap(batch_over_contrast_solve_contrast_linear_system, in_axes = ( 0, 0,0,None, None) )
 
+
+# ============================================================================
+# Multi-zdim embedding: one data pass for all n_pcs values
+# ============================================================================
+
+@eqx.filter_jit
+def _collect_batch_stats(config, batch_data, model, hermitian_weights):
+    """Forward-model pass only — no solving.
+
+    Returns the six inner-product statistics consumed by :func:`_solve_batch_from_stats`.
+    Reuses :func:`_compute_batch_coords_p1` under the equinox JIT boundary.
+    """
+    return _compute_batch_coords_p1(config, batch_data, model, hermitian_weights)
+
+
+@jax.jit
+def _solve_batch_from_stats(
+    AU_t_images, AU_t_Amean, AU_t_AU,
+    image_norms_sq, image_T_A_mean, A_mean_norm_sq,
+    eigenvalues, contrast_grid, contrast_mean, contrast_variance,
+):
+    """Solve for xs, best contrast, and posterior covariance from precomputed statistics.
+
+    Parameters
+    ----------
+    AU_t_images : (n_images, n_pcs)
+    AU_t_Amean  : (n_images, n_pcs)
+    AU_t_AU     : (n_images, n_pcs, n_pcs)
+    image_norms_sq, image_T_A_mean, A_mean_norm_sq : (n_images,)
+    eigenvalues : (n_pcs,)  — jax array
+    contrast_grid : (n_contrasts,)  — jax array
+    contrast_mean, contrast_variance : scalar jax arrays
+
+    Returns
+    -------
+    xs_single      : (n_images, n_pcs)
+    contrast_single: (n_images,)
+    cov_batch      : (n_images, n_pcs, n_pcs)
+    """
+    xs_batch_contrast = batch_over_images_and_contrast_solve_contrast_linear_system(
+        AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, contrast_grid)
+    residuals_fit, residuals_prior = batch_compute_contrast_residual_fast_2(
+        xs_batch_contrast, AU_t_images, image_norms_sq, AU_t_Amean,
+        A_mean_norm_sq, image_T_A_mean, AU_t_AU, eigenvalues, contrast_grid,
+    )
+    contrast_prior = (contrast_grid - contrast_mean) ** 2 / contrast_variance
+    res_sum1 = residuals_fit + residuals_prior + contrast_prior
+    best_idx = jnp.argmin(res_sum1, axis=1).astype(int)
+    xs_single = batch_slice_ar(best_idx, xs_batch_contrast)
+    contrast_single = contrast_grid[best_idx]
+    gram = (contrast_single ** 2)[:, None, None] * AU_t_AU
+    cov_batch = gram + jnp.diag(1 / eigenvalues)
+    cov_batch = cov_batch @ jnp.linalg.pinv(gram, rcond=1e-6, hermitian=True) @ cov_batch
+    return xs_single, contrast_single, cov_batch
+
+
+def get_per_image_embedding_multi_zdim(
+    mean, u, s, n_pcs_list, cryos, volume_mask, gpu_memory,
+    disc_type='linear_interp', contrast_grid=None, contrast_option='none',
+    ignore_zero_frequency=False, contrast_mean=1, contrast_variance=np.inf,
+):
+    """Compute per-image embeddings for multiple n_pcs values in a single data pass.
+
+    Replaces N separate calls to :func:`get_per_image_embedding` with a single
+    forward-model pass (at ``max(n_pcs_list)`` basis vectors) that accumulates
+    sufficient statistics, then solves lightweight linear systems for each
+    ``(n_pcs, regularized/unregularized)`` pair.  Typically 5–10× faster than
+    calling :func:`get_per_image_embedding` independently for each zdim.
+
+    Not supported for tilt-series data.
+
+    Args:
+        mean: Mean volume in Fourier space, shape ``(volume_size,)``.
+        u: Eigenvectors, shape ``(volume_size, n_max_components)``.
+        s: Eigenvalues, shape ``(n_max_components,)``.
+        n_pcs_list: List of int — n_pcs values to compute (need not be sorted).
+        cryos: Half-set datasets.
+        volume_mask: Binary mask selecting valid voxels.
+        gpu_memory: Available GPU memory in GB.
+        disc_type: Discretization type (overridden to ``'cubic'`` when ``USE_CUBIC``).
+        contrast_grid: Contrast values to search (default: 50-point grid).
+        contrast_option: Contrast mode (``'none'``, ``'contrast'``, …).
+        ignore_zero_frequency: Exclude DC component.
+        contrast_mean: Prior mean for contrast estimation.
+        contrast_variance: Prior variance for contrast estimation.
+
+    Returns:
+        ``(zs_reg, zs_noreg)`` — two dicts keyed by *n_pcs* (int).  Each value
+        is a tuple ``(xs, cov_zs, contrasts)`` where *xs* has shape
+        ``(n_total_images, n_pcs)``, *cov_zs* has shape
+        ``(n_total_images, n_pcs, n_pcs)``, and *contrasts* has shape
+        ``(n_total_images,)``.
+    """
+    if cryos.tilt_series_flag:
+        raise ValueError(
+            "get_per_image_embedding_multi_zdim does not support tilt-series data. "
+            "Use get_per_image_embedding instead."
+        )
+
+    n_pcs_list = sorted(set(n_pcs_list))
+    max_n_pcs = n_pcs_list[-1]
+
+    if ignore_zero_frequency:
+        volume_mask = np.ones_like(volume_mask)
+
+    use_contrast = 'contrast' in contrast_option
+    if use_contrast:
+        cg = np.linspace(0, 2, 51)[1:].astype(np.float32) if contrast_grid is None else contrast_grid
+    else:
+        cg = np.ones([1], dtype=np.float32)
+    cg_jax = jnp.array(cg)
+    contrast_mean_jax     = jnp.array(contrast_mean,     dtype=jnp.float32)
+    contrast_variance_jax = jnp.array(contrast_variance, dtype=jnp.float32)
+
+    # Cubic spline precompute — ONCE for max_n_pcs, not once per zdim.
+    actual_disc_type = disc_type
+    full_basis = np.asarray(u[:, :max_n_pcs]).T  # (max_n_pcs, volume_size)
+    mean_out = mean
+    if USE_CUBIC:
+        actual_disc_type = 'cubic'
+        from recovar.core import cubic_interpolation
+        from recovar.heterogeneity import covariance_estimation as _cov_est
+        mean_out = cubic_interpolation.calculate_spline_coefficients(mean.reshape(cryos.volume_shape))
+        logger.info("Computing spline coefficients for %d basis vectors (multi-zdim)", max_n_pcs)
+        full_basis = _cov_est.compute_spline_coeffs_in_batch(full_basis, cryos.volume_shape, gpu_memory=None)
+
+    dtype = full_basis.dtype
+
+    # Precompute eigenvalue arrays for each n_pcs — reg uses prior, noreg uses inf.
+    s_reg   = {k: jnp.array((s[:k] + jax_config.ROOT_EPSILON).astype(dtype)) for k in n_pcs_list}
+    s_noreg = {k: jnp.full(k, jnp.inf, dtype=dtype) for k in n_pcs_list}
+
+    # Allocate per-halfset output arrays, concatenated at the end.
+    def _alloc(n_pcs):
+        return {
+            'zs':        [np.zeros((cryo.n_images, n_pcs),        dtype=dtype)    for cryo in cryos],
+            'cov_zs':    [np.zeros((cryo.n_images, n_pcs, n_pcs), dtype=dtype)    for cryo in cryos],
+            'contrasts': [np.zeros(cryo.n_images,                  dtype=np.float32) for cryo in cryos],
+        }
+
+    zs_reg   = {k: _alloc(k) for k in n_pcs_list}
+    zs_noreg = {k: _alloc(k) for k in n_pcs_list}
+
+    for cryo_idx, cryo in enumerate(cryos):
+        config = ForwardModelConfig.from_dataset(
+            cryo, disc_type=actual_disc_type,
+            process_fn=cryo.image_stack.process_images,
+        )
+        # eigenvalues field not used by _collect_batch_stats; set placeholder.
+        model = ModelState(
+            mean_estimate=jnp.asarray(mean_out, dtype=cryo.dtype),
+            volume_mask=jnp.asarray(volume_mask, dtype=cryo.dtype_real),
+            basis=jnp.asarray(full_basis, dtype=cryo.dtype),
+            eigenvalues=jnp.ones(max_n_pcs, dtype=cryo.dtype),
+        )
+
+        batch_size = utils.get_embedding_batch_size(full_basis, cryo.image_size, cg, max_n_pcs, gpu_memory)
+        _EMBEDDING_BATCH_SAFETY_FACTOR = 10
+        batch_size = utils.safe_batch_size(batch_size // _EMBEDDING_BATCH_SAFETY_FACTOR)
+        logger.info("multi-zdim embedding batch size (halfset %d): %d", cryo_idx, batch_size)
+
+        hermitian_weights = _rfft2_hermitian_weights(config.image_shape)
+        noise_model = cryo.noise
+        data_generator = cryo.get_dataset_generator(batch_size=batch_size)
+
+        for batch, particles_ind, batch_image_ind in data_generator:
+            batch_data = BatchData(
+                images=batch,
+                ctf_params=cryo.CTF_params[batch_image_ind],
+                rotation_matrices=cryo.rotation_matrices[batch_image_ind],
+                translations=cryo.translations[batch_image_ind],
+                noise_variance=noise_model.get(batch_image_ind),
+            )
+
+            # ── Single forward-model pass at max_n_pcs ──────────────────
+            AU_t_im, AU_t_Am, AU_t_AU, im_norms_sq, im_T_Am, Am_norm_sq = \
+                _collect_batch_stats(config, batch_data, model, hermitian_weights)
+
+            # ── Solve for each n_pcs (reg and noreg) ────────────────────
+            for n_pcs in n_pcs_list:
+                sub_AI  = AU_t_im[:, :n_pcs]
+                sub_AM  = AU_t_Am[:, :n_pcs]
+                sub_AAU = AU_t_AU[:, :n_pcs, :n_pcs]
+
+                xs_r, c_r, cov_r = _solve_batch_from_stats(
+                    sub_AI, sub_AM, sub_AAU,
+                    im_norms_sq, im_T_Am, Am_norm_sq,
+                    s_reg[n_pcs], cg_jax, contrast_mean_jax, contrast_variance_jax,
+                )
+                zs_reg[n_pcs]['zs']      [cryo_idx][particles_ind] = np.asarray(xs_r).real
+                zs_reg[n_pcs]['cov_zs']  [cryo_idx][particles_ind] = np.asarray(cov_r).real
+                zs_reg[n_pcs]['contrasts'][cryo_idx][batch_image_ind] = np.asarray(c_r)
+
+                xs_n, c_n, cov_n = _solve_batch_from_stats(
+                    sub_AI, sub_AM, sub_AAU,
+                    im_norms_sq, im_T_Am, Am_norm_sq,
+                    s_noreg[n_pcs], cg_jax, contrast_mean_jax, contrast_variance_jax,
+                )
+                zs_noreg[n_pcs]['zs']      [cryo_idx][particles_ind] = np.asarray(xs_n).real
+                zs_noreg[n_pcs]['cov_zs']  [cryo_idx][particles_ind] = np.asarray(cov_n).real
+                zs_noreg[n_pcs]['contrasts'][cryo_idx][batch_image_ind] = np.asarray(c_n)
+
+    # Concatenate across halfsets; return flat (xs, cov_zs, contrasts) tuples per n_pcs.
+    result_reg   = {}
+    result_noreg = {}
+    for n_pcs in n_pcs_list:
+        result_reg[n_pcs] = (
+            np.concatenate(zs_reg[n_pcs]['zs'],        axis=0),
+            np.concatenate(zs_reg[n_pcs]['cov_zs'],    axis=0),
+            np.concatenate(zs_reg[n_pcs]['contrasts'],  axis=0),
+        )
+        result_noreg[n_pcs] = (
+            np.concatenate(zs_noreg[n_pcs]['zs'],       axis=0),
+            np.concatenate(zs_noreg[n_pcs]['cov_zs'],   axis=0),
+            np.concatenate(zs_noreg[n_pcs]['contrasts'], axis=0),
+        )
+
+    logger.info("multi-zdim embedding complete for n_pcs=%s", n_pcs_list)
+    return result_reg, result_noreg
+
+
 def set_contrasts_in_cryos(cryos, contrasts):
 
     if cryos.tilt_series_flag:

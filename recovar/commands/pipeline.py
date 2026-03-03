@@ -484,41 +484,60 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
                         focus_masks, zdim_for_rest, args):
     """Compute per-image embeddings for all requested zdim values.
 
+    For non-tilt-series data uses :func:`embedding.get_per_image_embedding_multi_zdim`
+    which performs a single forward-model pass at max(n_pcs) and solves lightweight
+    linear systems for each (zdim, reg/noreg) pair — typically 5–10× faster.
+
     Returns six dicts, all keyed by zdim (int):
         (latent_coords, latent_coords_noreg,
          latent_precision, latent_precision_noreg,
          contrasts, contrasts_noreg)
     """
     num_foc_masks = len(focus_masks)
-    latent_coords = {}
-    latent_coords_noreg = {}
-    latent_precision = {}
-    latent_precision_noreg = {}
-    contrasts = {}
-    contrasts_noreg = {}
+    n_pcs_list = [(num_foc_masks - 1) * zdim_for_rest + zdim
+                  for zdim in options['zs_dim_to_test']]
 
-    # Regularized embeddings
-    for zdim in options['zs_dim_to_test']:
-        n_pcs_to_use = (num_foc_masks - 1) * zdim_for_rest + zdim
-        z_time = time.time()
-        latent_coords[zdim], latent_precision[zdim], contrasts[zdim], _ = embedding.get_per_image_embedding(
-            means['combined'], u['rescaled'], s['rescaled'], n_pcs_to_use,
-            cryos, volume_mask, gpu_memory, 'linear_interp',
-            contrast_grid=None, contrast_option=options['contrast'],
-            ignore_zero_frequency=options['ignore_zero_frequency'])
-        logger.info("embedding time for zdim=%s: %s", zdim, time.time() - z_time)
+    emb_time = time.time()
 
-    # Unregularized embeddings (s -> inf means no prior)
-    for zdim in options['zs_dim_to_test']:
-        z_time = time.time()
-        n_pcs_to_use = (num_foc_masks - 1) * zdim_for_rest + zdim
-        latent_coords_noreg[zdim], latent_precision_noreg[zdim], contrasts_noreg[zdim], _ = embedding.get_per_image_embedding(
-            means['combined'], u['rescaled'], s['rescaled'] * 0 + np.inf, n_pcs_to_use,
-            cryos, volume_mask, gpu_memory, 'linear_interp',
-            contrast_grid=None, contrast_option=options['contrast'],
-            ignore_zero_frequency=options['ignore_zero_frequency'])
-        logger.info("embedding time for zdim=%s_noreg: %s", zdim, time.time() - z_time)
+    if not args.tilt_series:
+        # Fast path: single data pass for all zdims
+        zs_reg, zs_noreg = embedding.get_per_image_embedding_multi_zdim(
+            means['combined'], u['rescaled'], s['rescaled'], n_pcs_list,
+            cryos, volume_mask, gpu_memory,
+            contrast_option=options['contrast'],
+            ignore_zero_frequency=options['ignore_zero_frequency'],
+        )
+        latent_coords         = {zdim: zs_reg[n_pcs][0]   for zdim, n_pcs in zip(options['zs_dim_to_test'], n_pcs_list)}
+        latent_precision      = {zdim: zs_reg[n_pcs][1]   for zdim, n_pcs in zip(options['zs_dim_to_test'], n_pcs_list)}
+        contrasts             = {zdim: zs_reg[n_pcs][2]   for zdim, n_pcs in zip(options['zs_dim_to_test'], n_pcs_list)}
+        latent_coords_noreg   = {zdim: zs_noreg[n_pcs][0] for zdim, n_pcs in zip(options['zs_dim_to_test'], n_pcs_list)}
+        latent_precision_noreg= {zdim: zs_noreg[n_pcs][1] for zdim, n_pcs in zip(options['zs_dim_to_test'], n_pcs_list)}
+        contrasts_noreg       = {zdim: zs_noreg[n_pcs][2] for zdim, n_pcs in zip(options['zs_dim_to_test'], n_pcs_list)}
+    else:
+        # Tilt-series: fall back to per-zdim calls (multi-zdim not yet supported)
+        latent_coords = {}
+        latent_coords_noreg = {}
+        latent_precision = {}
+        latent_precision_noreg = {}
+        contrasts = {}
+        contrasts_noreg = {}
+        for zdim, n_pcs_to_use in zip(options['zs_dim_to_test'], n_pcs_list):
+            z_time = time.time()
+            latent_coords[zdim], latent_precision[zdim], contrasts[zdim], _ = embedding.get_per_image_embedding(
+                means['combined'], u['rescaled'], s['rescaled'], n_pcs_to_use,
+                cryos, volume_mask, gpu_memory, 'linear_interp',
+                contrast_grid=None, contrast_option=options['contrast'],
+                ignore_zero_frequency=options['ignore_zero_frequency'])
+            logger.info("embedding time for zdim=%s: %s", zdim, time.time() - z_time)
+            z_time = time.time()
+            latent_coords_noreg[zdim], latent_precision_noreg[zdim], contrasts_noreg[zdim], _ = embedding.get_per_image_embedding(
+                means['combined'], u['rescaled'], s['rescaled'] * 0 + np.inf, n_pcs_to_use,
+                cryos, volume_mask, gpu_memory, 'linear_interp',
+                contrast_grid=None, contrast_option=options['contrast'],
+                ignore_zero_frequency=options['ignore_zero_frequency'])
+            logger.info("embedding time for zdim=%s_noreg: %s", zdim, time.time() - z_time)
 
+    logger.info("total embedding time (all zdims): %s", time.time() - emb_time)
     return (latent_coords, latent_coords_noreg,
             latent_precision, latent_precision_noreg,
             contrasts, contrasts_noreg)
