@@ -10,6 +10,7 @@ import numpy as np
 from recovar.utils.nvtx_shim import nvtx
 
 import recovar.core.forward as core_forward
+import recovar.core.fourier_transform_utils as ftu
 from recovar import core, jax_config, utils
 from recovar.core import linalg
 from recovar.core.configs import ForwardModelConfig, BatchData, ModelState, EmbeddingOpts
@@ -20,6 +21,31 @@ logger = logging.getLogger(__name__)
 # NVTX domain for embedding/latent variable operations
 NVTX_DOMAIN_EMBED = "embedding"
 USE_CUBIC = True
+
+
+def _rfft2_hermitian_weights(image_shape):
+    """Precompute sqrt(w) weights for computing full-spectrum inner products from half-spectrum data.
+
+    For a real image of shape ``(H, W)``, the rfft2/half-spectrum representation stores
+    frequencies with columns kx=0 and kx=W//2 (Nyquist, even W only) once, and all
+    interior columns twice (Hermitian partners in the omitted half).  To recover the
+    correct full-spectrum inner product::
+
+        <A, B>_full = sum_{k in full} conj(A[k]) * B[k]
+                    = sum_{k in half} w[k] * conj(A[k]) * B[k]
+
+    we weight each half-spectrum coefficient by ``sqrt(w[k])`` before taking the
+    standard un-weighted inner product over the half.  Returns a ``(H*(W//2+1),)``
+    JAX array with values in ``{1, sqrt(2)}``.
+    """
+    H, W = int(image_shape[0]), int(image_shape[1])
+    half_W = W // 2 + 1
+    weights = np.full((H, half_W), 2.0, dtype=np.float32)
+    weights[:, 0] = 1.0               # DC column (kx=0): self-Hermitian
+    if W % 2 == 0:
+        weights[:, W // 2] = 1.0     # Nyquist column: self-Hermitian (even W only)
+    return jnp.asarray(np.sqrt(weights).reshape(-1))
+
 
 def split_weights(weight, cryos):
     start_idx = 0
@@ -185,6 +211,12 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
     contrast_units = n_units if contrast_shared_across_tilt_series else experiment_dataset.n_images
     estimated_contrasts = np.zeros(contrast_units, dtype=basis.dtype).real
 
+    # Precompute half-spectrum Hermitian weights once — halves memory and
+    # compute cost of the inner-product step inside compute_batch_coords.
+    hermitian_weights = _rfft2_hermitian_weights(config.image_shape)
+
+    noise_model = experiment_dataset.noise
+
     for batch, particles_ind, batch_image_ind in data_generator:
 
         # Handle tilt series image subsetting
@@ -195,19 +227,19 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
             batch = jnp.array(batch[subset])
             batch_image_ind = batch_image_ind[subset]
 
-        noise_variances = experiment_dataset.noise.get(batch_image_ind)
         batch_data = BatchData(
             images=batch,
             ctf_params=experiment_dataset.CTF_params[batch_image_ind],
             rotation_matrices=experiment_dataset.rotation_matrices[batch_image_ind],
             translations=experiment_dataset.translations[batch_image_ind],
-            noise_variance=np.array(noise_variances),
+            noise_variance=noise_model.get(batch_image_ind),
         )
 
         xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
             config, batch_data, model, opts,
             experiment_dataset.image_stack.mask, contrast_grid,
             contrast_mean, contrast_variance,
+            hermitian_weights,
         )
 
         if force_not_shared_label:
@@ -245,10 +277,21 @@ def _compute_batch_coords_p1(
     config: ForwardModelConfig,
     batch_data: BatchData,
     model: ModelState,
+    hermitian_weights=None,
 ):
     """Phase 1: compute inner products AU^T images, AU^T Amean, etc.
 
     Internal helper used by :func:`compute_batch_coords`.
+
+    Parameters
+    ----------
+    hermitian_weights : jax.Array or None
+        Precomputed ``sqrt(w)`` weights of shape ``(H*(W//2+1),)`` for
+        half-spectrum inner products (see :func:`_rfft2_hermitian_weights`).
+        When provided, all frequency arrays are converted to half-spectrum and
+        weighted so that the plain half-spectrum inner product equals the
+        correct full-spectrum inner product.  When ``None``, the computation
+        stays in full Fourier space.
     """
     batch = batch_data.images
     ctf_params = batch_data.ctf_params
@@ -265,11 +308,23 @@ def _compute_batch_coords_p1(
         skip_ctf=config.premultiplied_ctf,
     )
 
+    # AUs: (n_basis, n_images, n_pix)
     AUs = covariance_core.batch_vol_forward_from_map(
         config, model.basis, ctf_params, rotation_matrices,
         skip_ctf=config.premultiplied_ctf,
     )
-    AUs = AUs.transpose(1, 2, 0)
+
+    # --- Half-spectrum conversion (halves memory and inner-product cost) ---
+    # Multiply by sqrt(w) so that the plain half-spectrum inner product equals
+    # the correct Hermitian-weighted full-spectrum inner product:
+    #   <A_w, B_w>_half = sum_{k in half} w[k]*conj(A[k])*B[k] = <A, B>_full
+    if hermitian_weights is not None:
+        batch = ftu.full_image_to_half_image(batch, config.image_shape) * hermitian_weights
+        projected_mean = ftu.full_image_to_half_image(projected_mean, config.image_shape) * hermitian_weights
+        AUs = ftu.full_image_to_half_image(AUs, config.image_shape) * hermitian_weights[None, None, :]
+        noise_variance = ftu.full_image_to_half_image(noise_variance, config.image_shape)
+
+    AUs = AUs.transpose(1, 2, 0)  # (n_images, n_pix[_half], n_basis)
 
     # Noise normalization (clamp to avoid division by zero)
     safe_noise_std = jnp.sqrt(jnp.maximum(noise_variance, jnp.finfo(noise_variance.dtype).tiny))
@@ -280,7 +335,8 @@ def _compute_batch_coords_p1(
     if config.premultiplied_ctf:
         AU_t_images = batch_x_T_y(AUs, batch)
         image_T_A_mean = batch_x_T_y(batch, projected_mean)
-        CTF = config.compute_ctf(ctf_params)
+        # Use half-spectrum CTF when operating in half space
+        CTF = config.compute_ctf_half(ctf_params) if hermitian_weights is not None else config.compute_ctf(ctf_params)
         AUs *= CTF[..., None]
         projected_mean *= CTF
     else:
@@ -291,6 +347,14 @@ def _compute_batch_coords_p1(
     AU_t_AU = batch_x_T_y(AUs, AUs)
     A_mean_norm_sq = jnp.linalg.norm(projected_mean, axis=-1) ** 2
     image_norms_sq = jnp.linalg.norm(batch, axis=-1) ** 2
+
+    # Cross inner products are real for Hermitian cryo-EM data; .real enforces
+    # this after the half-spectrum computation where spurious imaginary parts arise.
+    if hermitian_weights is not None:
+        AU_t_images = AU_t_images.real
+        AU_t_Amean = AU_t_Amean.real
+        AU_t_AU = AU_t_AU.real
+        image_T_A_mean = image_T_A_mean.real
 
     return AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq
 
@@ -305,16 +369,25 @@ def compute_batch_coords(
     contrast_grid: jax.Array,
     contrast_mean: float = 1.0,
     contrast_variance: float = np.inf,
+    hermitian_weights=None,
 ):
     """Compute latent coordinates for a batch — Equinox API.
 
     Replaces the 27-param ``compute_single_batch_coords_split``.
+
+    Parameters
+    ----------
+    hermitian_weights : jax.Array or None
+        Precomputed ``sqrt(w)`` weights for half-spectrum inner products
+        (see :func:`_rfft2_hermitian_weights`).  When provided, all inner
+        products are computed in the compressed half-spectrum representation,
+        roughly halving memory use and compute for the inner-product step.
     """
     contrast_grid = jnp.array(contrast_grid)
     eigenvalues = model.eigenvalues
 
     AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq = \
-        _compute_batch_coords_p1(config, batch_data, model)
+        _compute_batch_coords_p1(config, batch_data, model, hermitian_weights)
 
     if opts.shared_label and not opts.contrast_shared_across_tilt_series:
         # Save unsummed copies for per-image contrast refinement.
