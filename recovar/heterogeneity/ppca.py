@@ -8,6 +8,7 @@ import functools
 
 from recovar import core
 from recovar.core import linalg
+from recovar.core.configs import DataIterator, ForwardModelConfig
 from recovar.heterogeneity import embedding
 
 logger = logging.getLogger(__name__)
@@ -39,24 +40,22 @@ def M_step_batch(images, lhs_summed, rhs_summed, mean_batch, covariance_batch, C
 
 
 def M_step(experiment_dataset, latent_means, latent_covariances, noise_variance, batch_size ):
-    
-            
+
+
     basis_size = latent_means.shape[-1]
-    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size) 
     rhs_summed = jnp.zeros((experiment_dataset.volume_size, basis_size), dtype = experiment_dataset.dtype)
     lhs_summed = jnp.zeros((experiment_dataset.volume_size, basis_size *  basis_size), dtype = experiment_dataset.dtype)
-        
-    for batch, particles_ind, batch_image_ind in data_generator:
-        
-        lhs_summed, rhs_summed = M_step_batch(batch, lhs_summed, rhs_summed,
-                                            latent_means[batch_image_ind], latent_covariances[batch_image_ind], 
-                                            experiment_dataset.CTF_params[batch_image_ind],
-                                            experiment_dataset.rotation_matrices[batch_image_ind],
-                                            experiment_dataset.translations[batch_image_ind],
-                                            experiment_dataset.image_shape, 
-                                            experiment_dataset.volume_shape, 
-                                            experiment_dataset.grid_size, 
-                                            experiment_dataset.voxel_size, 
+
+    for batch_data in DataIterator(experiment_dataset, batch_size):
+        lhs_summed, rhs_summed = M_step_batch(batch_data.images, lhs_summed, rhs_summed,
+                                            latent_means[batch_data.image_indices], latent_covariances[batch_data.image_indices],
+                                            batch_data.ctf_params,
+                                            batch_data.rotation_matrices,
+                                            batch_data.translations,
+                                            experiment_dataset.image_shape,
+                                            experiment_dataset.volume_shape,
+                                            experiment_dataset.grid_size,
+                                            experiment_dataset.voxel_size,
                                             noise_variance,
                                             experiment_dataset.CTF_fun)
         

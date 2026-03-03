@@ -227,6 +227,7 @@ class BatchData(eqx.Module):
     ctf_params: jax.Array
     noise_variance: Optional[jax.Array] = None
     particle_indices: Optional[jax.Array] = None
+    image_indices: Optional[jax.Array] = None
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +355,7 @@ class DataIterator:
                 ctf_params=self.dataset.CTF_params[indices],
                 noise_variance=nv,
                 particle_indices=particles_ind,
+                image_indices=indices,
             )
 
 
