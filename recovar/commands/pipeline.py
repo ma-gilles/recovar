@@ -492,7 +492,7 @@ def _build_focus_masks(args, means, volume_mask, volume_shape, cryos):
 
 
 def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
-                        focus_masks, zdim_for_rest, args, mean_cubic=None):
+                        focus_masks, zdim_for_rest, args):
     """Compute per-image embeddings for all requested zdim values.
 
     Returns six dicts, all keyed by zdim (int):
@@ -516,8 +516,7 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
             means['combined'], u['rescaled'], s['rescaled'], n_pcs_to_use,
             cryos, volume_mask, gpu_memory, 'linear_interp',
             contrast_grid=None, contrast_option=options['contrast'],
-            ignore_zero_frequency=options['ignore_zero_frequency'],
-            mean_cubic=mean_cubic)
+            ignore_zero_frequency=options['ignore_zero_frequency'])
         logger.info("embedding time for zdim=%s: %s", zdim, time.time() - z_time)
 
     # Unregularized embeddings (s -> inf means no prior)
@@ -528,8 +527,7 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
             means['combined'], u['rescaled'], s['rescaled'] * 0 + np.inf, n_pcs_to_use,
             cryos, volume_mask, gpu_memory, 'linear_interp',
             contrast_grid=None, contrast_option=options['contrast'],
-            ignore_zero_frequency=options['ignore_zero_frequency'],
-            mean_cubic=mean_cubic)
+            ignore_zero_frequency=options['ignore_zero_frequency'])
         logger.info("embedding time for zdim=%s_noreg: %s", zdim, time.time() - z_time)
 
     return (latent_coords, latent_coords_noreg,
@@ -723,12 +721,6 @@ def standard_recovar_pipeline(args):
         logger.info("mean computed in %s", time.time() - st_time)
         utils.report_memory_device(logger=logger)
 
-        # --- Pre-compute cubic spline coefficients for mean (once) ---
-        from recovar.core import cubic_interpolation
-        mean_cubic = cubic_interpolation.calculate_spline_coefficients(
-            means['combined'].reshape(volume_shape))
-        logger.info("Pre-computed cubic spline coefficients for mean estimate")
-
         # --- Compute mask ---
         volume_mask, dilated_volume_mask = mask.masking_options(
             args.mask, means, volume_shape, cryos.dtype_real,
@@ -774,7 +766,7 @@ def standard_recovar_pipeline(args):
         # //2: variance computation with cubic disc_type needs ~2x memory per image (spline coefficients)
         variance_est, _, variance_fsc, _, noise_p_variance_est = covariance_estimation.compute_variance(
             cryos, means['combined'], utils.safe_batch_size(batch_size // 2), dilated_volume_mask,
-            use_regularization=True, disc_type='cubic', mean_cubic=mean_cubic)
+            use_regularization=True, disc_type='cubic')
 
         utils.report_memory_device(logger=logger)
 
@@ -813,7 +805,7 @@ def standard_recovar_pipeline(args):
                     variance_estimate=variance_est['combined'],
                     use_reg_mean_in_contrast=args.use_reg_mean_in_contrast,
                     use_multi_gpu=args.multi_gpu, n_gpus=args.n_gpus,
-                    mean_cubic=mean_cubic)
+                    )
             if idx == num_foc_masks - 1:
                 s.append(s_this['rescaled'][:n_pcs_to_keep].copy())
                 u.append(u_this['rescaled'][:, :n_pcs_to_keep].copy())
@@ -855,7 +847,7 @@ def standard_recovar_pipeline(args):
          latent_precision, latent_precision_noreg,
          est_contrasts, est_contrasts_noreg) = _compute_embeddings(
             means, u, s, cryos, volume_mask, options, gpu_memory,
-            focus_masks, zdim_for_rest, args, mean_cubic=mean_cubic)
+            focus_masks, zdim_for_rest, args)
 
         if repeat == 1:
             for key in est_contrasts:
