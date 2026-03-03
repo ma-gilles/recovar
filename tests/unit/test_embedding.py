@@ -402,6 +402,35 @@ def _radial_noise_var(n_images, H, W):
     return jnp.tile(jnp.array(nv), (n_images, 1))
 
 
+def _half_image_of(arr_full, image_shape):
+    """Extract half-spectrum from a full-spectrum array: (n, H*W) → (n, H*(W//2+1))."""
+    import recovar.core.fourier_transform_utils as ftu_mod
+    return ftu_mod.full_image_to_half_image(arr_full, image_shape)
+
+
+def _make_forward_model_mock(proj_mean_full, image_shape):
+    """Return a forward_model mock that handles half_image=True/False."""
+    def mock(*a, half_image=False, **kw):
+        if half_image:
+            return _half_image_of(proj_mean_full, image_shape)
+        return proj_mean_full
+    return mock
+
+
+def _make_batch_vol_mock(aus_full, image_shape):
+    """Return a batch_vol_forward_from_map mock that handles half_image=True/False.
+
+    aus_full: (n_basis, n_images, H*W) full-spectrum.
+    """
+    def mock(*a, half_image=False, **kw):
+        if half_image:
+            n_b, n_i = aus_full.shape[0], aus_full.shape[1]
+            half = _half_image_of(aus_full.reshape(n_b * n_i, -1), image_shape)
+            return half.reshape(n_b, n_i, -1)
+        return aus_full
+    return mock
+
+
 def _minimal_config(image_shape, premultiplied_ctf=False):
     from recovar.core import ctf as ctf_mod
     H, _ = image_shape
@@ -451,9 +480,9 @@ def test_compute_batch_coords_p1_half_matches_full(H, W, noise_type, monkeypatch
     # Inject controlled Hermitian data; bypass translate (zero translations = identity anyway)
     monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s: b)
     monkeypatch.setattr(embedding.core_forward, "forward_model",
-                        lambda *a, **kw: proj_mean)
+                        _make_forward_model_mock(proj_mean, image_shape))
     monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",
-                        lambda *a, **kw: aus)
+                        _make_batch_vol_mock(aus, image_shape))
 
     config = _minimal_config(image_shape, premultiplied_ctf=False)
     batch_data = BatchData(
@@ -525,9 +554,9 @@ def test_compute_batch_coords_p1_premult_ctf_half_matches_full(H, W, monkeypatch
 
     monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s: b)
     monkeypatch.setattr(embedding.core_forward, "forward_model",
-                        lambda *a, **kw: proj_mean)
+                        _make_forward_model_mock(proj_mean, image_shape))
     monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",
-                        lambda *a, **kw: aus)
+                        _make_batch_vol_mock(aus, image_shape))
 
     config = _minimal_config(image_shape, premultiplied_ctf=True)
     # Use standard non-zero CTF params so CTF is non-trivial (defocus=1 μm, 300 kV)
@@ -593,9 +622,9 @@ def test_compute_batch_coords_p1_half_matches_full_float64(H, W, monkeypatch):
 
         monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s: b)
         monkeypatch.setattr(embedding.core_forward, "forward_model",
-                            lambda *a, **kw: proj_mean)
+                            _make_forward_model_mock(proj_mean, image_shape))
         monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",
-                            lambda *a, **kw: aus)
+                            _make_batch_vol_mock(aus, image_shape))
 
         from recovar.core import ctf as ctf_mod
         config = ForwardModelConfig(
@@ -794,9 +823,9 @@ def test_compute_batch_coords_half_vs_full_cpu(monkeypatch):
 
     monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s: b)
     monkeypatch.setattr(embedding.core_forward, "forward_model",
-                        lambda *a, **kw: proj_mean)
+                        _make_forward_model_mock(proj_mean, image_shape))
     monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",
-                        lambda *a, **kw: aus)
+                        _make_batch_vol_mock(aus, image_shape))
 
     config = _minimal_config(image_shape, premultiplied_ctf=False)
     batch_data = BatchData(

@@ -278,25 +278,26 @@ def _compute_batch_coords_p1(
         batch = config.process_fn(batch)
     batch = core.translate_images(batch, translations, config.image_shape)
 
+    # --- Project volumes to image space ---
+    # Multiply projected arrays by sqrt(w) so that the plain half-spectrum inner
+    # product equals the correct Hermitian-weighted full-spectrum inner product:
+    #   <A_w, B_w>_half = sum_{k in half} w[k]*conj(A[k])*B[k] = <A, B>_full
+    half = hermitian_weights is not None
     projected_mean = core_forward.forward_model(
         config, model.mean_estimate, ctf_params, rotation_matrices,
-        skip_ctf=config.premultiplied_ctf,
+        skip_ctf=config.premultiplied_ctf, half_image=half,
     )
-
-    # AUs: (n_basis, n_images, n_pix)
+    # AUs: (n_basis, n_images, n_pix[_half])
     AUs = covariance_core.batch_vol_forward_from_map(
         config, model.basis, ctf_params, rotation_matrices,
-        skip_ctf=config.premultiplied_ctf,
+        skip_ctf=config.premultiplied_ctf, half_image=half,
     )
 
-    # --- Half-spectrum conversion (halves memory and inner-product cost) ---
-    # Multiply by sqrt(w) so that the plain half-spectrum inner product equals
-    # the correct Hermitian-weighted full-spectrum inner product:
-    #   <A_w, B_w>_half = sum_{k in half} w[k]*conj(A[k])*B[k] = <A, B>_full
-    if hermitian_weights is not None:
+    if half:
+        # Observed images arrive full-spectrum; convert to half and weight.
         batch = ftu.full_image_to_half_image(batch, config.image_shape) * hermitian_weights
-        projected_mean = ftu.full_image_to_half_image(projected_mean, config.image_shape) * hermitian_weights
-        AUs = ftu.full_image_to_half_image(AUs, config.image_shape) * hermitian_weights[None, None, :]
+        projected_mean = projected_mean * hermitian_weights
+        AUs = AUs * hermitian_weights[None, None, :]
         noise_variance = ftu.full_image_to_half_image(noise_variance, config.image_shape)
 
     AUs = AUs.transpose(1, 2, 0)  # (n_images, n_pix[_half], n_basis)

@@ -181,6 +181,28 @@ def slice_volume_by_map_to_half_image(volume, rotation_matrices, image_shape, vo
     return _slice_volume_by_map_to_half_image_jax(volume, rotation_matrices, image_shape, volume_shape, disc_type)
 
 
+def batch_slice_volume_by_map_to_half_image(volumes, rotation_matrices, image_shape, volume_shape, disc_type):
+    """Project a batch of full volumes to half-spectrum (rfft-packed) images.
+
+    Uses the batched CUDA kernel (with ``half_image=True``) when available.
+    Falls back to vmap over :func:`slice_volume_by_map_to_half_image`, which for
+    cubic (order>1) does a full slice followed by half extraction.
+
+    Parameters
+    ----------
+    volumes : complex, shape ``(batch, vol_flat_size)``
+    rotation_matrices : real, shape ``(n_images, 3, 3)``
+    """
+    order = decide_order(disc_type)
+    if order <= 1 and _check_cuda() and _is_complex(volumes):
+        from recovar.cuda_backproject import batch_project
+        return batch_project(volumes, rotation_matrices, image_shape, volume_shape,
+                             order=order, half_image=True)
+    return jax.vmap(
+        lambda v: slice_volume_by_map_to_half_image(v, rotation_matrices, image_shape, volume_shape, disc_type)
+    )(volumes)
+
+
 def slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type):
     order = decide_order(disc_type)
     if order <= 1 and _check_cuda() and _is_complex(volume) and not _is_jvp_tracer(volume):
@@ -439,7 +461,9 @@ def _sample_half_volume_on_full_coords(half_volume_flat, rotation_matrices, imag
 def _slice_volume_by_map_to_half_image_jax(volume, rotation_matrices, image_shape, volume_shape, disc_type):
     order = decide_order(disc_type)
     if order > 1:
-        raise NotImplementedError("half-image projection only supports nearest/linear on the direct JAX path")
+        # Cubic: no dedicated half-coord cubic kernel — slice to full then extract half.
+        full = _slice_volume_by_map_jax(volume, rotation_matrices, image_shape, volume_shape, disc_type)
+        return fourier_transform_utils.full_image_to_half_image(full, image_shape)
     coords_half = _packed_half_image_coords(rotation_matrices, image_shape, volume_shape)
     sampled = _map_coordinates_volume_from_coords(volume.reshape(volume_shape), coords_half, order)
     H, W = image_shape
@@ -728,6 +752,7 @@ __all__ = [
     "decide_order",
     "slice_volume_by_map",
     "batch_slice_volume_by_map",
+    "batch_slice_volume_by_map_to_half_image",
     "slice_volume_by_map_from_half_volume",
     "adjoint_slice_volume_by_map",
     "summed_adjoint_slice_by_nearest",

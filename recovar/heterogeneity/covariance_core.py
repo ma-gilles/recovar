@@ -136,17 +136,33 @@ def batch_vol_forward_from_map(
     ctf_params: jax.Array,
     rotation_matrices: jax.Array,
     skip_ctf: bool = False,
+    half_image: bool = False,
 ) -> jax.Array:
     """Forward-model a batch of volumes via slice_volume_by_map (vmap over volume axis).
 
     Uses batched CUDA kernel when available for better performance.
+
+    Parameters
+    ----------
+    half_image : bool
+        If True, project directly to rfft-packed half-spectrum images and use
+        ``config.compute_ctf_half`` for CTF; roughly halves memory and compute
+        vs the default full-spectrum path.
     """
-    slices = core.batch_slice_volume_by_map(
-        volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
-    )
-    if not skip_ctf:
-        ctf = config.compute_ctf(ctf_params)
-        slices = slices * ctf[jnp.newaxis]  # (batch, n_images, n_pixels) * (n_images, n_pixels)
+    if half_image:
+        slices = core.batch_slice_volume_by_map_to_half_image(
+            volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
+        )
+        if not skip_ctf:
+            ctf = config.compute_ctf_half(ctf_params)
+            slices = slices * ctf[jnp.newaxis]
+    else:
+        slices = core.batch_slice_volume_by_map(
+            volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
+        )
+        if not skip_ctf:
+            ctf = config.compute_ctf(ctf_params)
+            slices = slices * ctf[jnp.newaxis]  # (batch, n_images, n_pixels) * (n_images, n_pixels)
     return slices
 
 
