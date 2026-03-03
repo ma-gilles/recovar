@@ -370,6 +370,44 @@ def test_half_full_image_mapping_matches_real_fft_helpers_for_real_input():
     np.testing.assert_allclose(np.asarray(full_from_half), np.asarray(full), atol=1e-5, rtol=1e-5)
 
 
+@pytest.mark.parametrize("shape", [
+    (4, 4, 8),   # all even
+    (5, 6, 8),   # odd × even × even
+    (5, 7, 9),   # all odd
+    (7, 5, 11),  # odd × odd × odd
+    (3, 3, 3),   # small odd
+    (6, 6, 6),   # small even
+    (4, 5, 6),   # mixed
+    (8, 7, 5),   # mixed reversed
+])
+def test_half_to_full_volume_matches_fft_diverse_shapes(shape):
+    """half_volume_to_full(rfft3(vol)) == fft3(vol) for diverse even/odd shapes."""
+    rng = np.random.default_rng(42)
+    x = rng.standard_normal(shape).astype(np.float32)
+    full_ref = np.asarray(fourier_transform_utils.get_dft3(x))
+    half = fourier_transform_utils.get_dft3_real(x)
+    full_from_half = np.asarray(fourier_transform_utils.half_volume_to_full_volume(half, shape))
+    np.testing.assert_allclose(full_from_half, full_ref, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.parametrize("shape", [
+    (4, 6),   # even × even
+    (5, 8),   # odd × even
+    (7, 9),   # odd × odd
+    (5, 5),   # small odd
+    (3, 3),   # tiny odd
+    (6, 7),   # even × odd
+])
+def test_half_to_full_image_matches_fft_diverse_shapes(shape):
+    """half_image_to_full(rfft2(img)) == fft2(img) for diverse even/odd shapes."""
+    rng = np.random.default_rng(42)
+    x = rng.standard_normal(shape).astype(np.float32)
+    full_ref = np.asarray(fourier_transform_utils.get_dft2(x))
+    half = fourier_transform_utils.get_dft2_real(x)
+    full_from_half = np.asarray(fourier_transform_utils.half_image_to_full_image(half, shape))
+    np.testing.assert_allclose(full_from_half, full_ref, atol=1e-5, rtol=1e-5)
+
+
 def test_half_full_volume_mapping_rejects_bad_input_shapes():
     volume_shape = (4, 4, 8)
     half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)

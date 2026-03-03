@@ -1,5 +1,5 @@
 /*
- * CUDA Backprojector / Projector  — v5
+ * CUDA Backprojector / Projector  — v6
  *
  *   - XLA FFI handlers → JIT-compatible inside JAX
  *   - C-linkage API    → ctypes benchmarks / standalone use
@@ -11,10 +11,20 @@
  *     For backproject, each non-boundary rfft pixel scatters both the
  *     primary value and its Hermitian conjugate at the negated coords.
  *
- * v5 changes:
- *   - Per-axis centers (correct for non-cubic volumes)
- *   - Conjugate scatter uses -rk shortcut (saves 6 FMA for 99.9% of pixels)
- *   - __launch_bounds__ for better register allocation
+ * v6 changes:
+ *   - CONJ_MODE template parameter for ~2x scatter speedup when
+ *     HALF_IMG + HALF_VOL: interior kz (0 < hkz < ic2) get doubled in
+ *     the primary scatter (CONJ_MODE=1) and skipped in the conjugate
+ *     scatter (CONJ_MODE=2).  This works because for interior kz, the
+ *     primary and conjugate scatters land at the same half-volume position
+ *     after Hermitian fold, making the conjugate scatter redundant.
+ *   - Nyquist fix: kz=-N/2 (Nyquist for even N) is self-conjugate and
+ *     scatters directly (no fold/conj) — fixes off-by-one error
+ *
+ * IMPORTANT: The HALF_VOL scatter (Hermitian fold) is the correct adjoint
+ * of the index-based half_volume_to_full_volume in fourier_transform_utils.py.
+ * Do NOT use an FFT-based half→full expand; its VJP distributes gradients
+ * differently, breaking the CUDA kernel's correctness.
  *
  * Volume: (N0, N1, N2) complex  stored as interleaved T pairs.
  * Half  : (N0, N1, N2/2+1) complex.
@@ -57,14 +67,25 @@ static __device__ __forceinline__ int round_int(double x) { return (int)rint(x);
 /*   Device helpers: scatter one value into volume at rotated coords   */
 /* ================================================================== */
 
-/* scatter_nearest: atomicAdd one complex value at the nearest voxel.
+/* scatter_nearest: atomicAdd one value at the nearest voxel.
  *
- * HALF_VOL: uses full centered-volume coords for bounds checking.
- * Restrict approach: only scatter voxels with kz >= 0 (kept half),
- * drop kz < 0.  Equivalent to scattering into full 3D grid then
- * restricting to rfft3 storage.  Halves atomicAdd count.
+ * HALF_VOL: Hermitian fold approach.  Voxels with kz >= 0 scatter
+ * directly.  Voxels with kz < 0 are folded to the Hermitian partner
+ * at ((N0-i0)%N0, (N1-i1)%N1, |kz|) with conjugated value.
+ * This is the correct adjoint of half_volume_to_full_volume (expand).
+ *
+ * CONJ_MODE (only when HALF_VOL):
+ *   0 = normal scatter
+ *   1 = double interior kz (0 < hkz < ic2) — primary scatter with
+ *       HALF_IMG optimization (accounts for conjugate partner)
+ *   2 = boundary only — skip interior kz, scatter only kz=0 and
+ *       Nyquist (conjugate scatter with HALF_IMG optimization)
+ *
+ * REAL_DATA: when true, vol stores 1 float per voxel (not 2).
+ *   Only val_re is used; val_im is ignored.  Hermitian fold does NOT
+ *   negate (conj(real) = real).  Offset skips the *2 complex stride.
  */
-template <typename T, bool HALF_VOL>
+template <typename T, bool HALF_VOL, int CONJ_MODE = 0, bool REAL_DATA = false>
 static __device__ __forceinline__ void scatter_nearest(
     T* __restrict__ vol,
     T rk0, T rk1, T rk2, T val_re, T val_im,
@@ -78,17 +99,48 @@ static __device__ __forceinline__ void scatter_nearest(
         const int ic2 = (int)c2;
         const int N2_full = 2 * ic2;
         const T g2_full = rk2 + c2;
-        const int i0 = round_int(g0);
-        const int i1 = round_int(g1);
+        int i0 = round_int(g0);
+        int i1 = round_int(g1);
         const int i2 = round_int(g2_full);
         if ((unsigned)i0 >= (unsigned)N0 ||
             (unsigned)i1 >= (unsigned)N1 ||
             (unsigned)i2 >= (unsigned)N2_full) return;
         const int kz = i2 - ic2;
-        if (kz < 0) return;  /* drop kz < 0: restrict */
-        const int off = (i0 * stride0 + i1 * stride1 + kz) * 2;
-        atomicAdd(&vol[off],     val_re);
-        atomicAdd(&vol[off + 1], val_im);
+        int hkz;
+        if (kz >= 0) {
+            hkz = kz;
+        } else if (-kz == ic2) {
+            /* Nyquist (kz = -N/2 = +N/2): self-conjugate, scatter directly */
+            hkz = ic2;
+        } else {
+            /* Fold to Hermitian partner in centered (fftshift) convention:
+             * shifted[j] = Y[(j - N//2) % N], Hermitian u' = (N - u) % N,
+             * partner(j) = (N - j + 2*(N//2)) % N.
+             * Even N: 2*(N//2) = N   => partner(j) = (N - j) % N
+             * Odd N:  2*(N//2) = N-1 => partner(j) = (N - 1 - j) % N
+             * General: partner(j) = (N - (N & 1) - j) % N.
+             * NOTE: the sign on (N & 1) is MINUS, not plus. */
+            i0 = (N0 - (N0 & 1) - i0) % N0;
+            i1 = (N1 - (N1 & 1) - i1) % N1;
+            hkz = -kz;
+            if (!REAL_DATA) val_im = -val_im;  /* conj(real) = real */
+        }
+        if (hkz > ic2) return;  /* out of half-vol bounds */
+        /* CONJ_MODE 2: only scatter to boundary columns (kz=0, Nyquist) */
+        if (CONJ_MODE == 2 && hkz > 0 && hkz < ic2) return;
+        /* CONJ_MODE 1: double interior kz to account for conjugate partner */
+        if (CONJ_MODE == 1 && hkz > 0 && hkz < ic2) {
+            val_re *= (T)2;
+            if (!REAL_DATA) val_im *= (T)2;
+        }
+        if (REAL_DATA) {
+            const int off = i0 * stride0 + i1 * stride1 + hkz;
+            atomicAdd(&vol[off], val_re);
+        } else {
+            const int off = (i0 * stride0 + i1 * stride1 + hkz) * 2;
+            atomicAdd(&vol[off],     val_re);
+            atomicAdd(&vol[off + 1], val_im);
+        }
         return;
     }
 
@@ -100,19 +152,27 @@ static __device__ __forceinline__ void scatter_nearest(
     if ((unsigned)i0 >= (unsigned)N0 ||
         (unsigned)i1 >= (unsigned)N1 ||
         (unsigned)i2 >= (unsigned)N2_eff) return;
-    const int off = (i0 * stride0 + i1 * stride1 + i2) * 2;
-    atomicAdd(&vol[off],     val_re);
-    atomicAdd(&vol[off + 1], val_im);
+    if (REAL_DATA) {
+        const int off = i0 * stride0 + i1 * stride1 + i2;
+        atomicAdd(&vol[off], val_re);
+    } else {
+        const int off = (i0 * stride0 + i1 * stride1 + i2) * 2;
+        atomicAdd(&vol[off],     val_re);
+        atomicAdd(&vol[off + 1], val_im);
+    }
 }
 
-/* scatter_trilinear: atomicAdd one complex value at 8 trilinear neighbors.
+/* scatter_trilinear: atomicAdd one value at 8 trilinear neighbors.
  *
- * HALF_VOL: uses full centered-volume coords for bounds checking.
- * Restrict approach: only scatter neighbors with kz >= 0, drop kz < 0.
- * Equivalent to scattering into full 3D grid then restricting to rfft3
- * storage.  Halves the atomicAdd count vs Hermitian folding.
+ * HALF_VOL: Hermitian fold approach.  For each trilinear neighbor,
+ * if kz >= 0, scatter w*val directly.  If kz < 0, fold to the
+ * Hermitian partner ((N0-j0)%N0, (N1-j1)%N1, |kz|) and scatter
+ * w*conj(val).  This is the correct adjoint of expand (half→full).
+ *
+ * CONJ_MODE: same as scatter_nearest (0=normal, 1=double interior, 2=boundary only)
+ * REAL_DATA: same as scatter_nearest (1 float/voxel, no conj, no *2 offset)
  */
-template <typename T, bool HALF_VOL>
+template <typename T, bool HALF_VOL, int CONJ_MODE = 0, bool REAL_DATA = false>
 static __device__ __forceinline__ void scatter_trilinear(
     T* __restrict__ vol,
     T rk0, T rk1, T rk2, T val_re, T val_im,
@@ -139,17 +199,15 @@ static __device__ __forceinline__ void scatter_trilinear(
         const T w1[2] = {(T)1 - f1, f1};
         const T w2[2] = {(T)1 - f2, f2};
 
-        /* Restrict approach: only scatter neighbors with kz >= 0.
-         * Neighbors with kz < 0 are dropped — equivalent to scattering
-         * into the full 3D grid then restricting to the kz >= 0 half.
-         * This halves the atomicAdd count compared to Hermitian folding. */
+        /* Per-neighbor Hermitian fold: kz >= 0 direct, kz < 0 fold+conj.
+         * This correctly implements the adjoint of half_volume_to_full_volume. */
         #pragma unroll
         for (int d0 = 0; d0 < 2; d0++) {
-            const int j0 = b0 + d0;
+            int j0 = b0 + d0;
             if ((unsigned)j0 >= (unsigned)N0) continue;
             #pragma unroll
             for (int d1 = 0; d1 < 2; d1++) {
-                const int j1 = b1 + d1;
+                int j1 = b1 + d1;
                 if ((unsigned)j1 >= (unsigned)N1) continue;
                 const T ww = w0[d0] * w1[d1];
                 #pragma unroll
@@ -157,11 +215,41 @@ static __device__ __forceinline__ void scatter_trilinear(
                     const int j2 = b2 + d2;
                     if ((unsigned)j2 >= (unsigned)N2_full) continue;
                     const int kz = j2 - ic2;
-                    if (kz < 0) continue;  /* drop kz < 0: restrict */
                     const T w = ww * w2[d2];
-                    const int off = (j0 * stride0 + j1 * stride1 + kz) * 2;
-                    atomicAdd(&vol[off],     w * val_re);
-                    atomicAdd(&vol[off + 1], w * val_im);
+                    int sj0 = j0, sj1 = j1;
+                    int hkz;
+                    T sre = w * val_re;
+                    T sim = REAL_DATA ? (T)0 : w * val_im;
+                    if (kz >= 0) {
+                        hkz = kz;
+                    } else if (-kz == ic2) {
+                        /* Nyquist: self-conjugate, scatter directly */
+                        hkz = ic2;
+                    } else {
+                        /* Fold to Hermitian partner in centered convention:
+                         * partner(j) = (N - (N & 1) - j) % N.
+                         * See scatter_nearest comment for derivation. */
+                        sj0 = (N0 - (N0 & 1) - j0) % N0;
+                        sj1 = (N1 - (N1 & 1) - j1) % N1;
+                        hkz = -kz;
+                        if (!REAL_DATA) sim = -sim;  /* conj(real) = real */
+                    }
+                    if (hkz > ic2) continue;  /* out of half-vol bounds */
+                    /* CONJ_MODE 2: only scatter to boundary columns (kz=0, Nyquist) */
+                    if (CONJ_MODE == 2 && hkz > 0 && hkz < ic2) continue;
+                    /* CONJ_MODE 1: double interior kz to account for conjugate partner */
+                    if (CONJ_MODE == 1 && hkz > 0 && hkz < ic2) {
+                        sre *= (T)2;
+                        if (!REAL_DATA) sim *= (T)2;
+                    }
+                    if (REAL_DATA) {
+                        const int off = sj0 * stride0 + sj1 * stride1 + hkz;
+                        atomicAdd(&vol[off], sre);
+                    } else {
+                        const int off = (sj0 * stride0 + sj1 * stride1 + hkz) * 2;
+                        atomicAdd(&vol[off],     sre);
+                        atomicAdd(&vol[off + 1], sim);
+                    }
                 }
             }
         }
@@ -197,9 +285,14 @@ static __device__ __forceinline__ void scatter_trilinear(
                 const int j2 = b2 + d2;
                 if ((unsigned)j2 >= (unsigned)N2_eff) continue;
                 const T w = ww * w2[d2];
-                const int off = (j0 * stride0 + j1 * stride1 + j2) * 2;
-                atomicAdd(&vol[off],     w * val_re);
-                atomicAdd(&vol[off + 1], w * val_im);
+                if (REAL_DATA) {
+                    const int off = j0 * stride0 + j1 * stride1 + j2;
+                    atomicAdd(&vol[off], w * val_re);
+                } else {
+                    const int off = (j0 * stride0 + j1 * stride1 + j2) * 2;
+                    atomicAdd(&vol[off],     w * val_re);
+                    atomicAdd(&vol[off + 1], w * val_im);
+                }
             }
         }
     }
@@ -209,7 +302,7 @@ static __device__ __forceinline__ void scatter_trilinear(
 /*                  Backproject kernel                                 */
 /* ================================================================== */
 
-template <typename T, int ORDER, bool HALF_VOL, bool HALF_IMG>
+template <typename T, int ORDER, bool HALF_VOL, bool HALF_IMG, bool REAL_DATA = false>
 __global__ void __launch_bounds__(BLOCK_SIZE)
 backproject_kernel(
     T*       __restrict__ vol,
@@ -250,29 +343,115 @@ backproject_kernel(
     const T rk1 = k0 * R[1] + k1 * R[4];
     const T rk2 = k0 * R[2] + k1 * R[5];
 
-    /* Load pixel (vectorized) */
-    using V2 = vec2_t<T>;
-    V2 px = reinterpret_cast<const V2*>(img)[img_idx * n_pixels + pix];
-    const T val_re = px.x;
-    const T val_im = px.y;
+    /* Load pixel — scalar for REAL_DATA, complex pair otherwise */
+    T val_re, val_im;
+    if (REAL_DATA) {
+        val_re = img[img_idx * n_pixels + pix];
+        val_im = (T)0;
+    } else {
+        using V2 = vec2_t<T>;
+        V2 px = reinterpret_cast<const V2*>(img)[img_idx * n_pixels + pix];
+        val_re = px.x;
+        val_im = px.y;
+    }
 
     const int stride1 = N2_eff;
     const int stride0 = N1 * N2_eff;
 
+    /* ── CONJ_MODE optimization for HALF_IMG + HALF_VOL backprojection ──
+     *
+     * For rfft half-images scattered into a half-volume, each non-boundary
+     * rfft pixel generates TWO scatters: primary at rotated(k0,k1) and
+     * conjugate at rotated(-k0,-k1) with conj(val).
+     *
+     * Key insight: when the conjugate coords satisfy crk = -rk (which is
+     * true for all pixels EXCEPT k0_idx==0 with even H), the conjugate
+     * scatter lands at the same half-volume position as the primary after
+     * Hermitian fold, for interior kz (0 < hkz < ic2).  So we can:
+     *   - CONJ_MODE=1 on primary: double interior kz weight
+     *   - CONJ_MODE=2 on conjugate: skip interior kz (only boundary)
+     * This eliminates ~all conjugate scatter work → ~2x speedup.
+     *
+     * The optimization does NOT apply when:
+     *   (a) Boundary rfft pixels (k1_idx==0 or Nyquist): no conjugate
+     *       scatter exists, so doubling the primary would be wrong.
+     *   (b) k0_idx==0 with even H: the Nyquist row's conjugate uses
+     *       crk = rot @ (k0, -k1) ≠ -rk, so scatters land at different
+     *       half-vol positions.  Must use normal scatter for both.
+     *
+     * IMPORTANT: Do NOT replace this with full→half volume conversion
+     * (e.g. backproject to full volume then contract).  That loses both
+     * the memory savings and the ~2x scatter speedup.
+     */
+
+    /* Determine if CONJ_MODE optimization applies to this pixel.
+     * True when: (1) this is a non-boundary rfft pixel with a conjugate
+     * scatter, (2) crk = -rk (not the k0 Nyquist special case), AND
+     * (3) BOTH primary (rk+c) and conjugate (-rk+c) scatter positions
+     * are within full-volume bounds.
+     *
+     * Why (3) is needed: if the primary is OOB, CONJ_MODE=1 doubling
+     * never fires, but CONJ_MODE=2 still skips the conjugate's interior
+     * kz → contribution lost.  Conversely, if the conjugate is OOB,
+     * CONJ_MODE=1 doubles the primary but the conjugate can't match →
+     * phantom contribution.  Disabling conj_opt when either is OOB
+     * makes both fall back to normal (CONJ_MODE=0) scatter. */
+    bool conj_opt = HALF_IMG && HALF_VOL
+        && (k1_idx > 0 && k1_idx * 2 != full_image_w)    /* non-boundary */
+        && !(k0_idx == 0 && (image_h & 1) == 0);         /* not Nyquist row */
+
+    if (conj_opt) {
+        const int ic2 = (int)c2;
+        const int N2_full = 2 * ic2;
+        if (ORDER == 0) {
+            /* Nearest: both round(rk+c) and round(-rk+c) must be in [0,N). */
+            const int pi0 = round_int(rk0+c0), pi1 = round_int(rk1+c1);
+            const int pi2 = round_int(rk2+c2);
+            const int ci0 = round_int(-rk0+c0), ci1 = round_int(-rk1+c1);
+            const int ci2 = round_int(-rk2+c2);
+            if ((unsigned)pi0 >= (unsigned)N0 || (unsigned)pi1 >= (unsigned)N1 ||
+                (unsigned)pi2 >= (unsigned)N2_full ||
+                (unsigned)ci0 >= (unsigned)N0 || (unsigned)ci1 >= (unsigned)N1 ||
+                (unsigned)ci2 >= (unsigned)N2_full)
+                conj_opt = false;
+        } else {
+            /* Trilinear: all 8 neighbors of both primary and conjugate must
+             * be within [0, N-1].  g in [0, N-1] ensures floor(g) >= 0 and
+             * floor(g)+1 <= N-1, so no trilinear neighbor is OOB.
+             * (At g = N-1 exactly, neighbor j+1 = N gets weight 0 → harmless.) */
+            const T pg0 = rk0+c0, pg1 = rk1+c1, pg2 = rk2+c2;
+            const T cg0 = -rk0+c0, cg1 = -rk1+c1, cg2 = -rk2+c2;
+            if (pg0 < (T)0 || pg0 > (T)(N0-1) ||
+                pg1 < (T)0 || pg1 > (T)(N1-1) ||
+                pg2 < (T)0 || pg2 > (T)(N2_full-1) ||
+                cg0 < (T)0 || cg0 > (T)(N0-1) ||
+                cg1 < (T)0 || cg1 > (T)(N1-1) ||
+                cg2 < (T)0 || cg2 > (T)(N2_full-1))
+                conj_opt = false;
+        }
+    }
+
     /* Primary scatter */
     if (ORDER == 0) {
-        scatter_nearest<T, HALF_VOL>(vol, rk0, rk1, rk2, val_re, val_im,
-                                     c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+        if (conj_opt)
+            scatter_nearest<T, true, 1, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
+                                        c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+        else
+            scatter_nearest<T, HALF_VOL, 0, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
+                                         c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
     } else {
-        scatter_trilinear<T, HALF_VOL>(vol, rk0, rk1, rk2, val_re, val_im,
-                                       c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+        if (conj_opt)
+            scatter_trilinear<T, true, 1, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
+                                          c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+        else
+            scatter_trilinear<T, HALF_VOL, 0, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
+                                           c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
     }
 
     /* Conjugate scatter for rfft non-boundary pixels.
      * Boundary: k1_idx == 0  or  k1_idx == full_image_w/2 (Nyquist, even W).
      * For non-boundary pixels, scatter conj(value) at rotated(-k0, -k1).
-     * Uses the same scatter function as the primary — HALF_VOL bounds
-     * checking naturally handles negative g2 (no fold needed). */
+     * For REAL_DATA: conj(real) = real, so conjugate value = same value. */
     if (HALF_IMG) {
         if (k1_idx > 0 && k1_idx * 2 != full_image_w) {
             T crk0, crk1, crk2;
@@ -286,14 +465,37 @@ backproject_kernel(
                 crk1 = -rk1;
                 crk2 = -rk2;
             }
+            /* For REAL_DATA: conjugate value is val_re (same), no -val_im needed */
+            const T conj_im = REAL_DATA ? (T)0 : -val_im;
             if (ORDER == 0) {
-                scatter_nearest<T, HALF_VOL>(vol, crk0, crk1, crk2,
-                                             val_re, -val_im,
-                                             c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                /* conj_opt: skip interior kz (already doubled in primary).
+                 * !conj_opt && HALF_VOL: normal scatter (Nyquist row special case).
+                 * !HALF_VOL: full-volume scatter (no fold needed). */
+                if (conj_opt)
+                    scatter_nearest<T, true, 2, REAL_DATA>(vol, crk0, crk1, crk2,
+                                                val_re, conj_im,
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                else if (HALF_VOL)
+                    scatter_nearest<T, true, 0, REAL_DATA>(vol, crk0, crk1, crk2,
+                                                val_re, conj_im,
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                else
+                    scatter_nearest<T, false, 0, REAL_DATA>(vol, crk0, crk1, crk2,
+                                              val_re, conj_im,
+                                              c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
             } else {
-                scatter_trilinear<T, HALF_VOL>(vol, crk0, crk1, crk2,
-                                               val_re, -val_im,
-                                               c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                if (conj_opt)
+                    scatter_trilinear<T, true, 2, REAL_DATA>(vol, crk0, crk1, crk2,
+                                                  val_re, conj_im,
+                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                else if (HALF_VOL)
+                    scatter_trilinear<T, true, 0, REAL_DATA>(vol, crk0, crk1, crk2,
+                                                  val_re, conj_im,
+                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                else
+                    scatter_trilinear<T, false, 0, REAL_DATA>(vol, crk0, crk1, crk2,
+                                                val_re, conj_im,
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
             }
         }
     }
@@ -381,8 +583,9 @@ project_kernel(
             if (kz >= 0) {
                 ri = i0; rj = i1; rk = kz;
             } else {
-                ri = (N0 - i0) % N0;
-                rj = (N1 - i1) % N1;
+                /* Hermitian partner: partner(j) = (N - (N & 1) - j) % N */
+                ri = (N0 - (N0 & 1) - i0) % N0;
+                rj = (N1 - (N1 & 1) - i1) % N1;
                 rk = -kz;
                 cj = true;
             }
@@ -448,8 +651,9 @@ project_kernel(
             /* Fast path: all in-bounds, all kz < 0 — Hermitian partner reads.
              * Since weights are real, conj(Σ w·v) = Σ w·conj(v),
              * so we sum normally then negate imaginary. */
-            const int r0_0 = (N0 - b0) % N0,     r0_1 = (N0 - b0 - 1) % N0;
-            const int r1_0 = (N1 - b1) % N1,     r1_1 = (N1 - b1 - 1) % N1;
+            /* partner(j) = (N - (N & 1) - j) % N */
+            const int r0_0 = (N0 - (N0 & 1) - b0) % N0,     r0_1 = (N0 - (N0 & 1) - b0 - 1) % N0;
+            const int r1_0 = (N1 - (N1 & 1) - b1) % N1,     r1_1 = (N1 - (N1 & 1) - b1 - 1) % N1;
             const int rk0  = ic2 - b2,            rk1  = rk0 - 1;
             const V2 v000 = __ldg(&vol2[r0_0*stride0 + r1_0*stride1 + rk0]);
             const V2 v001 = __ldg(&vol2[r0_0*stride0 + r1_0*stride1 + rk1]);
@@ -498,8 +702,9 @@ project_kernel(
                         if (kz >= 0) {
                             ri = j0; rj = j1; rk = kz;
                         } else {
-                            ri = (N0 - j0) % N0;
-                            rj = (N1 - j1) % N1;
+                            /* partner(j) = (N - (N & 1) - j) % N */
+                            ri = (N0 - (N0 & 1) - j0) % N0;
+                            rj = (N1 - (N1 & 1) - j1) % N1;
                             rk = -kz;
                             cj = true;
                         }
@@ -627,7 +832,7 @@ cudaError_t launch_backproject(
     int64_t ih, int64_t iw,
     int64_t N0, int64_t N1, int64_t N2,
     int64_t ups, int64_t order, int64_t half_vol, int64_t half_img,
-    int64_t full_iw)
+    int64_t full_iw, int64_t real_data = 0)
 {
     const int N2_eff = half_vol ? (int)(N2 / 2 + 1) : (int)N2;
     const T c0 = (T)(N0 / 2);
@@ -636,21 +841,31 @@ cudaError_t launch_backproject(
     dim3 grid((int)n_images, ((int)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
     dim3 block(BLOCK_SIZE);
 
-    #define BP(O, HV, HI) \
-        backproject_kernel<T, O, HV, HI><<<grid, block, 0, s>>>( \
+    #define BP(O, HV, HI, RD) \
+        backproject_kernel<T, O, HV, HI, RD><<<grid, block, 0, s>>>( \
             vol, img, rot, (int)n_pixels, (int)ih, (int)iw, \
             (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw)
 
-    int key = (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
+    int key = (real_data ? 8 : 0) | (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
     switch (key) {
-    case 0: BP(0, false, false); break;
-    case 1: BP(0, false, true);  break;
-    case 2: BP(0, true,  false); break;
-    case 3: BP(0, true,  true);  break;
-    case 4: BP(1, false, false); break;
-    case 5: BP(1, false, true);  break;
-    case 6: BP(1, true,  false); break;
-    case 7: BP(1, true,  true);  break;
+    /* complex data */
+    case  0: BP(0, false, false, false); break;
+    case  1: BP(0, false, true,  false); break;
+    case  2: BP(0, true,  false, false); break;
+    case  3: BP(0, true,  true,  false); break;
+    case  4: BP(1, false, false, false); break;
+    case  5: BP(1, false, true,  false); break;
+    case  6: BP(1, true,  false, false); break;
+    case  7: BP(1, true,  true,  false); break;
+    /* real data */
+    case  8: BP(0, false, false, true); break;
+    case  9: BP(0, false, true,  true); break;
+    case 10: BP(0, true,  false, true); break;
+    case 11: BP(0, true,  true,  true); break;
+    case 12: BP(1, false, false, true); break;
+    case 13: BP(1, false, true,  true); break;
+    case 14: BP(1, true,  false, true); break;
+    case 15: BP(1, true,  true,  true); break;
     }
     #undef BP
     return cudaGetLastError();
@@ -715,7 +930,7 @@ cudaError_t launch_project(
  * volume is accessed in a tight loop, keeping working sets in L2 cache.
  */
 
-template <typename T, int ORDER, bool HALF_VOL, bool HALF_IMG>
+template <typename T, int ORDER, bool HALF_VOL, bool HALF_IMG, bool REAL_DATA = false>
 __global__ void __launch_bounds__(BLOCK_SIZE)
 batch_backproject_kernel(
     T*       __restrict__ vols,
@@ -725,7 +940,7 @@ batch_backproject_kernel(
     int N0, int N1, int N2_eff,
     T c0, T c1, T c2,
     int upsampling, int full_image_w,
-    int vol_stride,    /* N0*N1*N2_eff (complex elements) */
+    int vol_stride,    /* N0*N1*N2_eff (complex elements for complex, real for REAL_DATA) */
     int n_images,
     int batch_size)
 {
@@ -775,25 +990,104 @@ batch_backproject_kernel(
         }
     }
 
+    /* CONJ_MODE optimization: same logic as backproject_kernel.
+     * Only applies when crk = -rk (true for all non-boundary pixels
+     * EXCEPT k0_idx==0 with even H where crk ≠ -rk), AND when both
+     * primary and conjugate positions are within volume bounds.
+     * See backproject_kernel comments for detailed explanation. */
+    bool conj_opt = HALF_IMG && HALF_VOL
+        && (k1_idx > 0 && k1_idx * 2 != full_image_w)
+        && !(k0_idx == 0 && (image_h & 1) == 0);
+
+    if (conj_opt) {
+        const int ic2 = (int)c2;
+        const int N2_full = 2 * ic2;
+        if (ORDER == 0) {
+            const int pi0 = round_int(rk0+c0), pi1 = round_int(rk1+c1);
+            const int pi2 = round_int(rk2+c2);
+            const int ci0 = round_int(-rk0+c0), ci1 = round_int(-rk1+c1);
+            const int ci2 = round_int(-rk2+c2);
+            if ((unsigned)pi0 >= (unsigned)N0 || (unsigned)pi1 >= (unsigned)N1 ||
+                (unsigned)pi2 >= (unsigned)N2_full ||
+                (unsigned)ci0 >= (unsigned)N0 || (unsigned)ci1 >= (unsigned)N1 ||
+                (unsigned)ci2 >= (unsigned)N2_full)
+                conj_opt = false;
+        } else {
+            const T pg0 = rk0+c0, pg1 = rk1+c1, pg2 = rk2+c2;
+            const T cg0 = -rk0+c0, cg1 = -rk1+c1, cg2 = -rk2+c2;
+            if (pg0 < (T)0 || pg0 > (T)(N0-1) ||
+                pg1 < (T)0 || pg1 > (T)(N1-1) ||
+                pg2 < (T)0 || pg2 > (T)(N2_full-1) ||
+                cg0 < (T)0 || cg0 > (T)(N0-1) ||
+                cg1 < (T)0 || cg1 > (T)(N1-1) ||
+                cg2 < (T)0 || cg2 > (T)(N2_full-1))
+                conj_opt = false;
+        }
+    }
+
+    /* Volume stride: REAL_DATA uses 1 T per voxel, complex uses 2 */
+    const int vol_bytes_stride = REAL_DATA ? vol_stride : vol_stride * 2;
+
     /* Inner loop over batch — same coords, different volumes and images */
     for (int b = 0; b < batch_size; b++) {
-        T* vol = vols + b * vol_stride * 2;
-        V2 px = reinterpret_cast<const V2*>(imgs)[(b * img_stride) + img_idx * n_pixels + pix];
+        T* vol = vols + b * vol_bytes_stride;
 
-        if (ORDER == 0)
-            scatter_nearest<T, HALF_VOL>(vol, rk0, rk1, rk2, px.x, px.y,
-                                         c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
-        else
-            scatter_trilinear<T, HALF_VOL>(vol, rk0, rk1, rk2, px.x, px.y,
-                                           c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+        /* Load pixel — scalar for REAL_DATA, complex pair for complex */
+        T val_re, val_im;
+        if (REAL_DATA) {
+            val_re = imgs[(b * img_stride) + img_idx * n_pixels + pix];
+            val_im = (T)0;
+        } else {
+            V2 px = reinterpret_cast<const V2*>(imgs)[(b * img_stride) + img_idx * n_pixels + pix];
+            val_re = px.x;
+            val_im = px.y;
+        }
+
+        if (ORDER == 0) {
+            if (conj_opt)
+                scatter_nearest<T, true, 1, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
+                                            c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+            else
+                scatter_nearest<T, HALF_VOL, 0, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
+                                             c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+        } else {
+            if (conj_opt)
+                scatter_trilinear<T, true, 1, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
+                                              c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+            else
+                scatter_trilinear<T, HALF_VOL, 0, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
+                                               c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+        }
 
         if (do_conj_scatter) {
-            if (ORDER == 0)
-                scatter_nearest<T, HALF_VOL>(vol, crk0, crk1, crk2, px.x, -px.y,
-                                             c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
-            else
-                scatter_trilinear<T, HALF_VOL>(vol, crk0, crk1, crk2, px.x, -px.y,
-                                               c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+            const T conj_im = REAL_DATA ? (T)0 : -val_im;
+            if (ORDER == 0) {
+                if (conj_opt)
+                    scatter_nearest<T, true, 2, REAL_DATA>(vol, crk0, crk1, crk2,
+                                                val_re, conj_im,
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                else if (HALF_VOL)
+                    scatter_nearest<T, true, 0, REAL_DATA>(vol, crk0, crk1, crk2,
+                                                val_re, conj_im,
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                else
+                    scatter_nearest<T, false, 0, REAL_DATA>(vol, crk0, crk1, crk2,
+                                              val_re, conj_im,
+                                              c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+            } else {
+                if (conj_opt)
+                    scatter_trilinear<T, true, 2, REAL_DATA>(vol, crk0, crk1, crk2,
+                                                  val_re, conj_im,
+                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                else if (HALF_VOL)
+                    scatter_trilinear<T, true, 0, REAL_DATA>(vol, crk0, crk1, crk2,
+                                                  val_re, conj_im,
+                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                else
+                    scatter_trilinear<T, false, 0, REAL_DATA>(vol, crk0, crk1, crk2,
+                                                val_re, conj_im,
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+            }
         }
     }
 }
@@ -865,8 +1159,9 @@ batch_project_kernel(
                 if (kz >= 0) {
                     ri = i0; rj = i1; rk = kz;
                 } else {
-                    ri = (N0 - i0) % N0;
-                    rj = (N1 - i1) % N1;
+                    /* partner(j) = (N - (N & 1) - j) % N */
+                    ri = (N0 - (N0 & 1) - i0) % N0;
+                    rj = (N1 - (N1 & 1) - i1) % N1;
                     rk = -kz;
                     cj = true;
                 }
@@ -937,8 +1232,9 @@ batch_project_kernel(
             }
         } else if (all_in && bb2 + 1 < ic2) {
             /* Fast path: all kz < 0 — Hermitian partner reads, conjugate sum */
-            const int r0[2] = {(N0 - bb0) % N0, (N0 - bb0 - 1) % N0};
-            const int r1[2] = {(N1 - bb1) % N1, (N1 - bb1 - 1) % N1};
+            /* partner(j) = (N - (N & 1) - j) % N */
+            const int r0[2] = {(N0 - (N0 & 1) - bb0) % N0, (N0 - (N0 & 1) - bb0 - 1) % N0};
+            const int r1[2] = {(N1 - (N1 & 1) - bb1) % N1, (N1 - (N1 & 1) - bb1 - 1) % N1};
             const int rk0 = ic2 - bb2, rk1 = rk0 - 1;
             int off[8]; T wt[8];
             #pragma unroll
@@ -988,8 +1284,9 @@ batch_project_kernel(
                         if (kz >= 0) {
                             ri = j0; rj = j1; rkk = kz;
                         } else {
-                            ri = (N0 - j0) % N0;
-                            rj = (N1 - j1) % N1;
+                            /* partner(j) = (N - (N & 1) - j) % N */
+                            ri = (N0 - (N0 & 1) - j0) % N0;
+                            rj = (N1 - (N1 & 1) - j1) % N1;
                             rkk = -kz;
                             cjj = true;
                         }
@@ -1125,7 +1422,7 @@ cudaError_t launch_batch_backproject(
     int64_t ih, int64_t iw,
     int64_t N0, int64_t N1, int64_t N2,
     int64_t ups, int64_t order, int64_t half_vol, int64_t half_img,
-    int64_t full_iw)
+    int64_t full_iw, int64_t real_data = 0)
 {
     const int N2_eff = half_vol ? (int)(N2 / 2 + 1) : (int)N2;
     const int vol_stride = (int)N0 * (int)N1 * N2_eff;
@@ -1135,22 +1432,32 @@ cudaError_t launch_batch_backproject(
     dim3 grid((int)n_images, ((int)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
     dim3 block(BLOCK_SIZE);
 
-    #define BBP(O, HV, HI) \
-        batch_backproject_kernel<T, O, HV, HI><<<grid, block, 0, s>>>( \
+    #define BBP(O, HV, HI, RD) \
+        batch_backproject_kernel<T, O, HV, HI, RD><<<grid, block, 0, s>>>( \
             vols, imgs, rot, (int)n_pixels, (int)ih, (int)iw, \
             (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, \
             vol_stride, (int)n_images, (int)batch_size)
 
-    int key = (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
+    int key = (real_data ? 8 : 0) | (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
     switch (key) {
-    case 0: BBP(0, false, false); break;
-    case 1: BBP(0, false, true);  break;
-    case 2: BBP(0, true,  false); break;
-    case 3: BBP(0, true,  true);  break;
-    case 4: BBP(1, false, false); break;
-    case 5: BBP(1, false, true);  break;
-    case 6: BBP(1, true,  false); break;
-    case 7: BBP(1, true,  true);  break;
+    /* complex data */
+    case  0: BBP(0, false, false, false); break;
+    case  1: BBP(0, false, true,  false); break;
+    case  2: BBP(0, true,  false, false); break;
+    case  3: BBP(0, true,  true,  false); break;
+    case  4: BBP(1, false, false, false); break;
+    case  5: BBP(1, false, true,  false); break;
+    case  6: BBP(1, true,  false, false); break;
+    case  7: BBP(1, true,  true,  false); break;
+    /* real data */
+    case  8: BBP(0, false, false, true); break;
+    case  9: BBP(0, false, true,  true); break;
+    case 10: BBP(0, true,  false, true); break;
+    case 11: BBP(0, true,  true,  true); break;
+    case 12: BBP(1, false, false, true); break;
+    case 13: BBP(1, false, true,  true); break;
+    case 14: BBP(1, true,  false, true); break;
+    case 15: BBP(1, true,  true,  true); break;
     }
     #undef BBP
     return cudaGetLastError();
@@ -1222,16 +1529,28 @@ ffi::Error BackprojectImpl(
         err = launch_backproject<float>(
             stream, (float*)vol_ptr, (const float*)img_ptr, (const float*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w);
+            order, half_volume, half_image, full_image_w, /*real_data=*/0);
         break;
     case ffi::DataType::C128:
         err = launch_backproject<double>(
             stream, (double*)vol_ptr, (const double*)img_ptr, (const double*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w);
+            order, half_volume, half_image, full_image_w, /*real_data=*/0);
+        break;
+    case ffi::DataType::F32:
+        err = launch_backproject<float>(
+            stream, (float*)vol_ptr, (const float*)img_ptr, (const float*)rot_ptr,
+            n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
+            order, half_volume, half_image, full_image_w, /*real_data=*/1);
+        break;
+    case ffi::DataType::F64:
+        err = launch_backproject<double>(
+            stream, (double*)vol_ptr, (const double*)img_ptr, (const double*)rot_ptr,
+            n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
+            order, half_volume, half_image, full_image_w, /*real_data=*/1);
         break;
     default:
-        return ffi::Error::InvalidArgument("backproject: images must be C64 or C128");
+        return ffi::Error::InvalidArgument("backproject: images must be C64, C128, F32, or F64");
     }
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
@@ -1343,16 +1662,28 @@ ffi::Error BatchBackprojectImpl(
         err = launch_batch_backproject<float>(
             stream, (float*)vol_ptr, (const float*)img_ptr, (const float*)rot_ptr,
             batch_size, n_images, n_pixels, image_h, image_w, N0, N1, N2,
-            upsampling, order, half_volume, half_image, full_image_w);
+            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/0);
         break;
     case ffi::DataType::C128:
         err = launch_batch_backproject<double>(
             stream, (double*)vol_ptr, (const double*)img_ptr, (const double*)rot_ptr,
             batch_size, n_images, n_pixels, image_h, image_w, N0, N1, N2,
-            upsampling, order, half_volume, half_image, full_image_w);
+            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/0);
+        break;
+    case ffi::DataType::F32:
+        err = launch_batch_backproject<float>(
+            stream, (float*)vol_ptr, (const float*)img_ptr, (const float*)rot_ptr,
+            batch_size, n_images, n_pixels, image_h, image_w, N0, N1, N2,
+            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/1);
+        break;
+    case ffi::DataType::F64:
+        err = launch_batch_backproject<double>(
+            stream, (double*)vol_ptr, (const double*)img_ptr, (const double*)rot_ptr,
+            batch_size, n_images, n_pixels, image_h, image_w, N0, N1, N2,
+            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/1);
         break;
     default:
-        return ffi::Error::InvalidArgument("batch_backproject: images must be C64 or C128");
+        return ffi::Error::InvalidArgument("batch_backproject: images must be C64, C128, F32, or F64");
     }
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));

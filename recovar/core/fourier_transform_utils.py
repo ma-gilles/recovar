@@ -305,6 +305,14 @@ def full_image_to_half_image(image, image_shape):
 def half_image_to_full_image(half_image, image_shape):
     """Map packed Hermitian 2D spectrum to centered full complex spectrum.
 
+    Uses index-based Hermitian conjugation: non-redundant columns are placed
+    at their packed positions, redundant columns are filled as
+    ``conj(half[(-i0)%H, |kx|])``.
+
+    IMPORTANT: Do NOT change this to an FFT-based round-trip (e.g. irfft2 → fft2).
+    This must stay consistent with half_volume_to_full_volume's approach so that
+    VJPs match the CUDA kernel's Hermitian fold scatter.
+
     Accepts either trailing packed grid shape
     `(..., *image_shape_to_half_image_shape(image_shape))` or flattened
     trailing axis `(..., prod(half_shape))`. Returns in the same style.
@@ -313,10 +321,32 @@ def half_image_to_full_image(half_image, image_shape):
     half_shape = image_shape_to_half_image_shape(image_shape)
     half_grid, was_flat = _coerce_grid_or_flat(half_image, half_shape, name="half_image")
 
-    # Reconstruct via inverse/forward FFT pair to match the centered packed
-    # convention used by get_dft2_real/get_idft2_real.
-    real_image = get_idft2_real(half_grid, image_shape=image_shape)
-    full_grid = get_dft2(real_image)
+    H, W = image_shape
+    ic = W // 2
+
+    # Place non-redundant columns at packed positions
+    packed_idx = get_real_fft_packed_last_axis_indices(W)
+    full_grid = jnp.zeros(half_grid.shape[:-2] + (H, W), dtype=half_grid.dtype)
+    full_grid = full_grid.at[..., :, packed_idx].set(half_grid)
+
+    # Fill redundant columns by Hermitian conjugation
+    if W % 2 == 0:
+        redundant = jnp.arange(1, ic)
+    else:
+        redundant = jnp.arange(0, ic)
+
+    if redundant.size > 0:
+        # Hermitian partner in centered (fftshift) convention:
+        #   shifted[j] = Y[(j - N//2) % N], partner u' = (N - u) % N
+        #   => partner(j) = (N - j + 2*(N//2)) % N
+        #   Even N: 2*(N//2) = N   => partner(j) = (N - j) % N
+        #   Odd N:  2*(N//2) = N-1 => partner(j) = (N - 1 - j) % N
+        #   General: partner(j) = (N - (N % 2) - j) % N
+        partner_i0 = (H - (H % 2) - jnp.arange(H)) % H
+        conj_partner = jnp.conj(jnp.take(half_grid, partner_i0, axis=-2))
+        source_cols = ic - redundant
+        full_grid = full_grid.at[..., :, redundant].set(conj_partner[..., source_cols])
+
     return _restore_grid_or_flat(full_grid, was_flat, n_spatial_dims=2)
 
 
@@ -337,6 +367,20 @@ def full_volume_to_half_volume(volume, volume_shape):
 def half_volume_to_full_volume(half_volume, volume_shape):
     """Map packed Hermitian 3D spectrum to centered full complex spectrum.
 
+    Uses index-based Hermitian conjugation: non-redundant columns are placed
+    at their packed positions, redundant columns (negative last-axis
+    frequencies) are filled as ``conj(half[(-i0)%N0, (-i1)%N1, |kz|])``.
+
+    This approach has a simple VJP that matches per-voxel Hermitian folding
+    in the CUDA backproject kernel (unlike the FFT round-trip which
+    distributes gradients through the FFT chain differently).
+
+    IMPORTANT: Do NOT change this to an FFT-based round-trip (e.g. irfft3 → fft3).
+    The VJP of an FFT round-trip distributes gradients differently than
+    per-voxel Hermitian folding, breaking the CUDA half-volume backproject
+    kernel's correctness.  The CUDA kernel's Hermitian fold scatter is
+    specifically designed to be the correct adjoint of THIS index-based expand.
+
     Accepts either trailing packed grid shape
     `(..., *volume_shape_to_half_volume_shape(volume_shape))` or flattened
     trailing axis `(..., prod(half_shape))`. Returns in the same style.
@@ -345,11 +389,36 @@ def half_volume_to_full_volume(half_volume, volume_shape):
     half_shape = volume_shape_to_half_volume_shape(volume_shape)
     half_grid, was_flat = _coerce_grid_or_flat(half_volume, half_shape, name="half_volume")
 
-    # Reconstruct via inverse/forward FFT pair. This stays consistent with the
-    # centered packed representation used by get_dft3_real/get_idft3_real even
-    # for odd grid sizes where direct conjugate-index filling needs phase terms.
-    real_volume = get_idft3_real(half_grid, volume_shape=volume_shape)
-    full_grid = get_dft3(real_volume)
+    N0, N1, N2 = volume_shape
+    ic2 = N2 // 2
+
+    # Place non-redundant columns (kz = 0, 1, ..., N2//2) at packed positions
+    packed_idx = get_real_fft_packed_last_axis_indices(N2)
+    full_grid = jnp.zeros(half_grid.shape[:-3] + (N0, N1, N2), dtype=half_grid.dtype)
+    full_grid = full_grid.at[..., :, :, packed_idx].set(half_grid)
+
+    # Fill redundant columns (negative kz) by Hermitian conjugation.
+    # For even N2, index 0 (Nyquist) is already placed by packed_idx.
+    # For odd N2, index 0 is redundant and needs filling.
+    if N2 % 2 == 0:
+        redundant = jnp.arange(1, ic2)
+    else:
+        redundant = jnp.arange(0, ic2)
+
+    if redundant.size > 0:
+        # Hermitian partner indices in the centered (fftshift) convention:
+        #   shifted[j] = Y[(j - N//2) % N], partner u' = (N - u) % N
+        #   => partner(j) = (N - j + 2*(N//2)) % N
+        #   Even N: 2*(N//2) = N   => partner(j) = (N - j) % N
+        #   Odd N:  2*(N//2) = N-1 => partner(j) = (N - 1 - j) % N
+        #   General: partner(j) = (N - (N % 2) - j) % N
+        partner_i0 = (N0 - (N0 % 2) - jnp.arange(N0)) % N0
+        partner_i1 = (N1 - (N1 % 2) - jnp.arange(N1)) % N1
+        conj_partner = jnp.conj(
+            jnp.take(jnp.take(half_grid, partner_i0, axis=-3), partner_i1, axis=-2)
+        )
+        source_cols = ic2 - redundant
+        full_grid = full_grid.at[..., :, :, redundant].set(conj_partner[..., source_cols])
 
     return _restore_grid_or_flat(full_grid, was_flat, n_spatial_dims=3)
 
