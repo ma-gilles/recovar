@@ -31,15 +31,18 @@ def _heterogeneity_kernel_batch_from_fft(
     batch: BatchData,
     Ft_y: jax.Array = None,
     Ft_ctf: jax.Array = None,
+    upsample_ctf: bool = False,
 ):
-    """Backproject half-spectrum images with 2x-upsampled CTF for aliasing suppression.
-
-    Like :func:`relion_kernel_batch_from_fft` but the CTF weight accumulator
-    (Ft_ctf) is built from CTF² evaluated on a 2x-upsampled image grid and
-    box-filtered back to native resolution, reducing aliasing in the
-    heterogeneity kernel.
+    """Backproject half-spectrum images into heterogeneity kernel accumulators.
 
     Expects ``batch.images`` in half-image (rfft) format.
+
+    Parameters
+    ----------
+    upsample_ctf : bool
+        If True, evaluate CTF² on a 2x-upsampled grid and box-filter back to
+        native resolution before backprojecting.  Reduces aliasing in the CTF
+        weight accumulator but is more expensive.  Default False.
     """
     from recovar.core.geometry import translate_half_images
     from recovar.reconstruction import noise as noise_mod
@@ -56,21 +59,24 @@ def _heterogeneity_kernel_batch_from_fft(
         volume=Ft_y, half_image=True, half_volume=True,
     )
 
-    # CTF² on 2x-upsampled grid → box-filter → downsample → half-spectrum
-    upsample_factor = 2
-    upsampled_shape = tuple(np.array(config.image_shape) * upsample_factor)
-    ctf_up = config.CTF_fun(batch.ctf_params, upsampled_shape, config.voxel_size) ** 2
-    bsz = ctf_up.shape[0]
-    kernel_size = upsample_factor + upsample_factor // 2
-    box_kernel = jnp.ones((1, 1, kernel_size, kernel_size), dtype=ctf_up.dtype) / kernel_size ** 2
-    ctf_up = jax.lax.conv_general_dilated(
-        ctf_up.reshape(bsz, 1, *upsampled_shape),
-        box_kernel, window_strides=(1, 1), padding='SAME',
-        dimension_numbers=('NCHW', 'IOHW', 'NCHW'),
-    ).squeeze(1)[:, ::upsample_factor, ::upsample_factor]
-    ctf_half = fourier_transform_utils.full_image_to_half_image(
-        ctf_up.reshape(bsz, -1), config.image_shape
-    ) / noise_half
+    if upsample_ctf:
+        # CTF² on 2x-upsampled grid → box-filter → downsample → half-spectrum
+        upsample_factor = 2
+        upsampled_shape = tuple(np.array(config.image_shape) * upsample_factor)
+        ctf_up = config.CTF_fun(batch.ctf_params, upsampled_shape, config.voxel_size) ** 2
+        bsz = ctf_up.shape[0]
+        kernel_size = upsample_factor + upsample_factor // 2
+        box_kernel = jnp.ones((1, 1, kernel_size, kernel_size), dtype=ctf_up.dtype) / kernel_size ** 2
+        ctf_up = jax.lax.conv_general_dilated(
+            ctf_up.reshape(bsz, 1, *upsampled_shape),
+            box_kernel, window_strides=(1, 1), padding='SAME',
+            dimension_numbers=('NCHW', 'IOHW', 'NCHW'),
+        ).squeeze(1)[:, ::upsample_factor, ::upsample_factor]
+        ctf_half = fourier_transform_utils.full_image_to_half_image(
+            ctf_up.reshape(bsz, -1), config.image_shape
+        ) / noise_half
+    else:
+        ctf_half = config.compute_ctf_half(batch.ctf_params) ** 2 / noise_half
 
     Ft_ctf = core_forward.adjoint_forward_model(
         config, ctf_half, batch.ctf_params, batch.rotation_matrices,
@@ -1060,7 +1066,8 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
     for bin_idx in range(n_bins):
         image_inds = np.sort(np.where(inds == bin_idx)[0])
 
-        Ft_y_acc, Ft_ctf_acc = None, None
+        Ft_y_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
+        Ft_ctf_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
         for batch_data in DataIterator(
             experiment_dataset, batch_size,
             noise_model=experiment_dataset.noise, noise_half=False,
@@ -1071,15 +1078,9 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
                 config, batch_data, Ft_y=Ft_y_acc, Ft_ctf=Ft_ctf_acc,
             )
 
-        if Ft_y_acc is not None:
-            rhs = Ft_y_acc
-            lhs = Ft_ctf_acc.real
-        else:
-            rhs = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
-            lhs = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype_real)
-
-        rhs_all[bin_idx] = rhs
-        lhs_all[bin_idx] = lhs
+        rhs_all[bin_idx] = Ft_y_acc
+        # Ft_ctf is real-valued (backprojection of real CTF²/noise); .real extracts dtype
+        lhs_all[bin_idx] = Ft_ctf_acc.real
 
     # A slight improvement is an almost triangular kernel/ pyramid kernel
     #    _
