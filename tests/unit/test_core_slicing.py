@@ -267,7 +267,7 @@ def test_adjoint_slice_volume_by_map_cubic_adjointness():
 
 
 def test_slice_volume_by_map_from_half_volume_jax_matches_expand(monkeypatch):
-    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
 
     rng = np.random.default_rng(901)
     image_shape = (8, 8)
@@ -302,7 +302,7 @@ def test_slice_volume_by_map_from_half_volume_jax_matches_expand(monkeypatch):
 
 
 def test_adjoint_slice_volume_by_map_half_volume_jax_vjp_consistency(monkeypatch):
-    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
 
     rng = np.random.default_rng(903)
     image_shape = (8, 8)
@@ -407,7 +407,7 @@ def _random_rotations(rng, n):
 def test_slice_volume_by_map_from_half_volume_half_image_jax(monkeypatch):
     """half_image=True in slice_volume_by_map_from_half_volume matches slice_to_half_image(full_vol)."""
     import jax.numpy as jnp
-    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
 
     rng = np.random.default_rng(2001)
     volume_shape = (8, 8, 8)
@@ -434,7 +434,7 @@ def test_slice_volume_by_map_from_half_volume_half_image_jax(monkeypatch):
 def test_batch_slice_volume_by_map_from_half_volume_jax(monkeypatch):
     """batch_slice_volume_by_map_from_half_volume matches vmap of single-volume version."""
     import jax.numpy as jnp
-    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
 
     rng = np.random.default_rng(2002)
     volume_shape = (8, 8, 8)
@@ -510,7 +510,7 @@ def test_cubic_half_coefficients_slice_matches_full_cubic():
             )
         )
         slices_ref = np.asarray(
-            core_slicing.map_coordinates_on_slices(
+            core_slicing._jax_slice(
                 coeffs_full, rots, image_shape, volume_shape, order=3
             )
         )
@@ -554,7 +554,7 @@ def test_cubic_half_coefficients_slice_matches_full_cubic_odd_dims():
         )
     )
     slices_ref = np.asarray(
-        core_slicing.map_coordinates_on_slices(
+        core_slicing._jax_slice(
             coeffs_full, rots, image_shape, volume_shape, order=3
         )
     )
@@ -644,7 +644,7 @@ def test_half_image_backprojection_matches_full_on_gpu(gpu_device):
 def test_slice_from_half_volume_to_half_image_multiple_shapes_jax(monkeypatch):
     """half_image=True in slice_volume_by_map_from_half_volume matches full-vol reference
     for multiple volume shapes including non-cubic and odd-N2 cases (JAX path)."""
-    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
 
     rng = np.random.default_rng(2010)
     image_shape = (6, 8)
@@ -673,7 +673,7 @@ def test_slice_from_half_volume_to_half_image_multiple_shapes_jax(monkeypatch):
 
 def test_slice_from_half_volume_to_half_image_nearest_jax(monkeypatch):
     """Nearest-neighbour variant of half_image=True path (JAX) matches full-vol reference."""
-    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
 
     rng = np.random.default_rng(2013)
     image_shape = (6, 8)
@@ -697,7 +697,7 @@ def test_slice_from_half_volume_to_half_image_nearest_jax(monkeypatch):
 
 def test_slice_from_half_volume_to_half_image_vjp_finite_jax(monkeypatch):
     """VJP through slice_volume_by_map_from_half_volume(half_image=True) is finite and non-zero (JAX path)."""
-    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
 
     rng = np.random.default_rng(2011)
     volume_shape = (8, 8, 8)
@@ -726,7 +726,7 @@ def test_slice_from_half_volume_to_half_image_vjp_finite_jax(monkeypatch):
 
 def test_slice_from_half_volume_to_half_image_vjp_vs_reference_jax(monkeypatch):
     """VJP of the half-vol→half-img path matches VJP of expand-then-slice reference (JAX path)."""
-    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
 
     rng = np.random.default_rng(2012)
     volume_shape = (8, 8, 8)
@@ -763,7 +763,7 @@ def test_slice_from_half_volume_to_half_image_vjp_vs_reference_jax(monkeypatch):
 
 def test_batch_slice_from_half_volume_to_half_image_vs_full_vol_batch_jax(monkeypatch):
     """batch_slice_volume_by_map_from_half_volume(half_image=True) matches batch_slice_to_half_image(full_vols)."""
-    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
 
     rng = np.random.default_rng(2014)
     volume_shape = (8, 8, 8)
@@ -799,7 +799,7 @@ def test_batch_slice_from_half_volume_to_half_image_vs_full_vol_batch_jax(monkey
 
 def test_slice_from_half_volume_to_half_image_identity_rotation_jax(monkeypatch):
     """For identity rotation, half_vol→half_img slice matches the full-vol reference (sanity check)."""
-    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
 
     rng = np.random.default_rng(2015)
     volume_shape = (8, 8, 8)

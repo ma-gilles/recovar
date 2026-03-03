@@ -185,10 +185,12 @@ def backproject(
 
     Parameters
     ----------
-    volume : complex64 | complex128, shape ``(prod(vol_shape),)``
+    volume : complex64 | complex128 | float32 | float64, shape ``(prod(vol_shape),)``
         Existing volume to accumulate into.  Pass zeros for a fresh start.
-    images : same complex dtype, shape ``(n_images, n_pixels)``
-    rotation_matrices : real dtype matching complex, shape ``(n_images, 3, 3)``
+        For real-valued Fourier quantities (CTF^2, noise variance), use
+        float32/float64 for 2x memory and scatter efficiency.
+    images : same dtype as volume, shape ``(n_images, n_pixels)``
+    rotation_matrices : float32 | float64, shape ``(n_images, 3, 3)``
     image_shape : (H, W) — real-space image dimensions.
         When half_image=True, images have shape ``(n, H*(W//2+1))``.
     volume_shape : (N0, N1, N2)   — full dimensions even when half_volume=True.
@@ -269,9 +271,10 @@ def batch_backproject(
 
     Parameters
     ----------
-    volumes : complex, shape ``(batch, vol_flat_size)``
-        Existing volumes to accumulate into.
-    images : complex, shape ``(batch, n_images, n_pixels)``
+    volumes : complex | real, shape ``(batch, vol_flat_size)``
+        Existing volumes to accumulate into.  Supports float32/float64
+        for real-valued Fourier quantities (2x efficiency).
+    images : same dtype as volumes, shape ``(batch, n_images, n_pixels)``
         Per-volume images (e.g. differently weighted).
     rotation_matrices : real, shape ``(n_images, 3, 3)``
         Shared across all volumes in the batch.

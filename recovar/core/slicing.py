@@ -1,12 +1,16 @@
 """Fourier slice extraction and adjoint (backprojection) operations.
 
-Design: CUDA kernels when available, JAX ``map_coordinates`` as fallback.
-There is no separate "trilinear" vs "by_map" distinction — all paths go
-through :func:`slice_volume_by_map` / :func:`adjoint_slice_volume_by_map`
-with ``disc_type`` selecting the interpolation order.
+Dispatch rules:
+  - GPU + order <= 1 → CUDA kernels (mandatory; error if unavailable)
+  - CPU or cubic     → JAX ``map_coordinates`` fallback
 
-CUDA custom-VJP wrappers live in :mod:`recovar.core.cuda_ops`; this module
-contains only dispatch logic and the JAX fallback implementations.
+Three core public functions handle all volume/image format combinations via
+``half_volume`` and ``half_image`` parameters:
+  - :func:`slice_volume_by_map`          (forward projection)
+  - :func:`batch_slice_volume_by_map`    (batched forward)
+  - :func:`adjoint_slice_volume_by_map`  (backprojection)
+
+CUDA custom-VJP wrappers live in :mod:`recovar.core.cuda_ops`.
 """
 
 import functools
@@ -17,48 +21,37 @@ import jax.numpy as jnp
 import numpy as np
 from jax import vjp
 
-import recovar.core.fourier_transform_utils as fourier_transform_utils
+import recovar.core.fourier_transform_utils as ftu
 from recovar.core.geometry import rotations_to_grid_point_coords
 
 logger = logging.getLogger(__name__)
 
 
-# ── CUDA availability (cached) ────────────────────────────────────────
+# ── Dispatch ─────────────────────────────────────────────────────────
 
 @functools.lru_cache(maxsize=None)
-def _check_cuda():
-    """Return True if CUDA project/backproject kernels are available."""
-    try:
-        from recovar.cuda_backproject import cuda_available
-        return cuda_available()
-    except (ImportError, OSError):
+def _on_gpu():
+    return jax.default_backend() == "gpu"
+
+
+def _use_cuda(order):
+    """Return True if CUDA should be used.  Error if on GPU but CUDA unavailable."""
+    if order > 1 or not _on_gpu():
         return False
+    from recovar.cuda_backproject import cuda_available
+    if not cuda_available():
+        raise RuntimeError(
+            "CUDA backproject/project kernels required on GPU but not available. "
+            "Rebuild the CUDA library or set RECOVAR_DISABLE_CUDA=1 to force JAX fallback."
+        )
+    return True
 
 
 def _is_complex(arr):
     return jnp.issubdtype(arr.dtype, jnp.complexfloating)
 
 
-def _is_jvp_tracer(arr):
-    """Detect forward-mode (JVP) tracing — custom_vjp doesn't support JVP."""
-    try:
-        from jax._src.interpreters.ad import JVPTracer
-        return isinstance(arr, JVPTracer)
-    except (ImportError, AttributeError):
-        return False
-
-
-# ── Nearest-neighbour gather (pre-computed indices) ───────────────────
-
-@jax.jit
-def slice_volume_by_nearest(volume_vec, plane_indices_on_grid):
-    return volume_vec[plane_indices_on_grid]
-
-
-batch_slice_volume_by_nearest = jax.vmap(slice_volume_by_nearest, (None, 0))
-
-
-# ── Interpolation order helper ────────────────────────────────────────
+# ── Interpolation order ──────────────────────────────────────────────
 
 def decide_order(disc_type):
     if disc_type == "linear_interp":
@@ -70,203 +63,167 @@ def decide_order(disc_type):
     raise ValueError("disc_type must be 'linear_interp', 'nearest', or 'cubic'")
 
 
-# ── Core JAX map_coordinates engine ──────────────────────────────────
+# ── JAX fallback engine (CPU or cubic) ───────────────────────────────
 
 @functools.partial(jax.jit, static_argnums=[2, 3, 4])
-def map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_shape, order):
+def _jax_slice(volume, rotation_matrices, image_shape, volume_shape, order):
+    """Project volume to images using JAX map_coordinates."""
     coords, og_shape = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
     if order == 3:
         from recovar.core import cubic_interpolation
-        slices = cubic_interpolation.map_coordinates_with_cubic_spline(
+        return cubic_interpolation.map_coordinates_with_cubic_spline(
             volume, coords, mode="fill", cval=0.0
         ).reshape(og_shape[:-1]).astype(volume.dtype)
-    else:
-        slices = jax.scipy.ndimage.map_coordinates(
-            volume.reshape(volume_shape), coords, order=order, mode="constant", cval=0.0,
-        ).reshape(og_shape[:-1]).astype(volume.dtype)
-    return slices
+    return jax.scipy.ndimage.map_coordinates(
+        volume.reshape(volume_shape), coords, order=order, mode="constant", cval=0.0,
+    ).reshape(og_shape[:-1]).astype(volume.dtype)
 
 
 @functools.partial(jax.jit, static_argnums=[2, 3, 4])
-def _slice_volume_by_map_jax(volume, rotation_matrices, image_shape, volume_shape, disc_type):
-    return map_coordinates_on_slices(volume, rotation_matrices, image_shape, volume_shape, decide_order(disc_type))
-
-
-@functools.partial(jax.jit, static_argnums=[2, 3, 4])
-def _adjoint_slice_volume_by_map_jax(slices, rotation_matrices, image_shape, volume_shape, disc_type):
+def _jax_adjoint_slice(slices, rotation_matrices, image_shape, volume_shape, order):
+    """Adjoint of _jax_slice via VJP."""
     volume_size = np.prod(volume_shape)
-    order = decide_order(disc_type)
     if order == 3:
         from recovar.core import cubic_interpolation
         def f(volume_flat):
             coeffs = cubic_interpolation.calculate_spline_coefficients(volume_flat.reshape(volume_shape))
-            return map_coordinates_on_slices(coeffs, rotation_matrices, image_shape, volume_shape, 3)
+            return _jax_slice(coeffs, rotation_matrices, image_shape, volume_shape, 3)
     else:
-        f = lambda v: _slice_volume_by_map_jax(v, rotation_matrices, image_shape, volume_shape, disc_type)
+        f = lambda v: _jax_slice(v, rotation_matrices, image_shape, volume_shape, order)
     _, u = vjp(f, jnp.zeros(volume_size, dtype=slices.dtype))
     return u(slices)[0]
 
 
-# ── Public API ────────────────────────────────────────────────────────
+# ── Nearest-neighbour gather (pre-computed indices) ──────────────────
 
-def slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type):
-    """Project volume to images via interpolation. CUDA when available, JAX fallback."""
-    order = decide_order(disc_type)
-    if order <= 1 and _check_cuda() and _is_complex(volume) and not _is_jvp_tracer(volume):
-        from recovar.core.cuda_ops import cuda_slice_full
-        return cuda_slice_full(volume, rotation_matrices, image_shape, volume_shape, order)
-    return _slice_volume_by_map_jax(volume, rotation_matrices, image_shape, volume_shape, disc_type)
+@jax.jit
+def slice_volume_by_nearest(volume_vec, plane_indices_on_grid):
+    return volume_vec[plane_indices_on_grid]
 
 
-def batch_slice_volume_by_map(volumes, rotation_matrices, image_shape, volume_shape, disc_type):
-    """Project a batch of volumes to images. Batched CUDA when available."""
-    order = decide_order(disc_type)
-    if order <= 1 and _check_cuda() and _is_complex(volumes):
-        from recovar.cuda_backproject import batch_project
-        return batch_project(volumes, rotation_matrices, image_shape, volume_shape, order=order)
-    return jax.vmap(
-        lambda v: slice_volume_by_map(v, rotation_matrices, image_shape, volume_shape, disc_type)
-    )(volumes)
+batch_slice_volume_by_nearest = jax.vmap(slice_volume_by_nearest, (None, 0))
 
 
-def slice_volume_by_map_to_half_image(volume, rotation_matrices, image_shape, volume_shape, disc_type):
-    """Project a full volume to rfft-packed half-spectrum images."""
-    # CUDA half_image=True project kernel is not yet numerically validated;
-    # project to full images first, then convert to half-spectrum.
-    full = slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type)
-    return fourier_transform_utils.full_image_to_half_image(full, image_shape)
+# ── Public API ───────────────────────────────────────────────────────
 
-
-def batch_slice_volume_by_map_to_half_image(volumes, rotation_matrices, image_shape, volume_shape, disc_type):
-    """Project a batch of full volumes to half-spectrum images."""
-    # CUDA half_image=True project kernel is not yet numerically validated;
-    # project to full images first, then convert to half-spectrum.
-    full = batch_slice_volume_by_map(volumes, rotation_matrices, image_shape, volume_shape, disc_type)
-    return jax.vmap(
-        lambda f: fourier_transform_utils.full_image_to_half_image(f, image_shape)
-    )(full)
-
-
-def slice_volume_by_map_from_half_volume(half_volume, rotation_matrices, image_shape, volume_shape, disc_type, half_image=False):
-    """Project a Hermitian half-volume to images. CUDA when available; else expand then slice.
+def slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type,
+                        half_volume=False, half_image=False):
+    """Project volume to images via interpolation.
 
     Parameters
     ----------
-    half_image : bool
-        If True, output images are rfft-packed half-spectrum ``(n_images, H*(W//2+1))``.
+    half_volume : if True, *volume* is rfft-packed ``(N0*N1*(N2//2+1),)``.
+    half_image : if True, output images are rfft-packed ``(n, H*(W//2+1))``.
     """
     order = decide_order(disc_type)
-    half_volume_flat = jnp.asarray(half_volume).reshape(-1)
-    if order <= 1 and _check_cuda() and _is_complex(half_volume_flat) and not _is_jvp_tracer(half_volume_flat):
-        if half_image:
-            from recovar.core.cuda_ops import cuda_slice_from_half_vol_to_half_image
-            return cuda_slice_from_half_vol_to_half_image(half_volume_flat, rotation_matrices, image_shape, volume_shape, order)
-        from recovar.core.cuda_ops import cuda_slice_from_half_vol
-        return cuda_slice_from_half_vol(half_volume_flat, rotation_matrices, image_shape, volume_shape, order)
-    full_volume = fourier_transform_utils.half_volume_to_full_volume(half_volume, volume_shape).reshape(-1)
-    slices = _slice_volume_by_map_jax(full_volume, rotation_matrices, image_shape, volume_shape, disc_type)
+    if _use_cuda(order):
+        if not _is_complex(volume):
+            volume = volume.astype(jnp.result_type(volume, jnp.complex64))
+        from recovar.core.cuda_ops import cuda_project
+        try:
+            return cuda_project(volume, rotation_matrices, image_shape, volume_shape,
+                                order, half_volume, half_image)
+        except TypeError:
+            pass  # JVP through custom_vjp — fall through to JAX
+    # JAX fallback (CPU, cubic, or JVP context)
+    if half_volume:
+        volume = ftu.half_volume_to_full_volume(volume, volume_shape)
+    result = _jax_slice(volume, rotation_matrices, image_shape, volume_shape, order)
     if half_image:
-        return fourier_transform_utils.full_image_to_half_image(slices, image_shape)
-    return slices
+        result = ftu.full_image_to_half_image(result, image_shape)
+    return result
 
 
-def batch_slice_volume_by_map_from_half_volume(volumes, rotation_matrices, image_shape, volume_shape, disc_type, half_image=False):
-    """Project a batch of rfft-packed half-volumes to images.
-
-    Uses the batched CUDA kernel when available. Falls back to vmap over
-    :func:`slice_volume_by_map_from_half_volume`.
+def batch_slice_volume_by_map(volumes, rotation_matrices, image_shape, volume_shape, disc_type,
+                              half_image=False):
+    """Project a batch of volumes to images.
 
     Parameters
     ----------
-    volumes : complex, shape ``(batch, N0*N1*(N2//2+1))``
-    rotation_matrices : real, shape ``(n_images, 3, 3)``
-    half_image : bool
-        If True, output images are rfft-packed ``(n_images, H*(W//2+1))``.
+    half_image : if True, output images are rfft-packed.
     """
     order = decide_order(disc_type)
-    if order <= 1 and _check_cuda() and _is_complex(volumes):
+    if _use_cuda(order):
+        if not _is_complex(volumes):
+            volumes = volumes.astype(jnp.result_type(volumes, jnp.complex64))
         from recovar.cuda_backproject import batch_project
         return batch_project(volumes, rotation_matrices, image_shape, volume_shape,
-                             order=order, half_volume=True, half_image=half_image)
+                             order=order, half_image=half_image)
     return jax.vmap(
-        lambda v: slice_volume_by_map_from_half_volume(
-            v, rotation_matrices, image_shape, volume_shape, disc_type, half_image=half_image
-        )
+        lambda v: slice_volume_by_map(v, rotation_matrices, image_shape, volume_shape,
+                                      disc_type, half_image=half_image)
     )(volumes)
 
 
 def adjoint_slice_volume_by_map(slices, rotation_matrices, image_shape, volume_shape, disc_type,
                                 volume=None, half_image=False, half_volume=False):
-    """Adjoint slice extraction (backprojection). CUDA when available, JAX VJP fallback.
+    """Adjoint slice extraction (backprojection).
 
     Parameters
     ----------
     half_image : if True, *slices* are rfft-packed half-spectrum images.
-    half_volume : if True, output uses rfft-packed half-volume layout (CUDA or JAX VJP).
+    half_volume : if True, output uses rfft-packed half-volume layout.
     volume : optional accumulator to add the result into.
     """
     order = decide_order(disc_type)
-    if order <= 1 and _check_cuda():
-        from recovar.cuda_backproject import backproject as cuda_backproject
-        # CUDA half_image=True backproject kernel is not yet numerically validated
-        # (max_err ~42 vs reference); expand to full spectrum before dispatching.
-        if half_image:
-            slices = fourier_transform_utils.half_image_to_full_image(slices, image_shape)
-            half_image = False
-        if not _is_complex(slices):
+    if _use_cuda(order):
+        from recovar.cuda_backproject import backproject
+        # Real inputs stay real for 2x efficiency; promote only if accumulator is complex.
+        if not _is_complex(slices) and volume is not None and _is_complex(volume):
             slices = slices.astype(jnp.result_type(slices, jnp.complex64))
-        if half_volume:
-            # CUDA backproject(half_volume=True) is not numerically validated
-            # (max_err ~75 vs reference).  Use full backproject + VJP of
-            # half_volume_to_full_volume to get the correct adjoint.
-            full_vol_zeros = jnp.zeros(int(np.prod(volume_shape)), dtype=slices.dtype)
-            full_grad = cuda_backproject(
-                full_vol_zeros, slices, rotation_matrices, image_shape, volume_shape, order=order
-            )
-            half_vol_size = int(np.prod(
-                fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
-            ))
-            _, vjp_expand = vjp(
-                lambda hv: fourier_transform_utils.half_volume_to_full_volume(hv, volume_shape),
-                jnp.zeros(half_vol_size, dtype=slices.dtype),
-            )
-            result = vjp_expand(full_grad)[0]
-            return result if volume is None else result + volume
+        vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
         if volume is None:
-            volume = jnp.zeros(int(np.prod(volume_shape)), dtype=slices.dtype)
-        return cuda_backproject(volume, slices, rotation_matrices, image_shape, volume_shape,
-                                order=order)
-    # JAX fallback
+            volume = jnp.zeros(int(np.prod(vol_shape)), dtype=slices.dtype)
+        return backproject(volume, slices, rotation_matrices, image_shape, volume_shape,
+                           order=order, half_image=half_image, half_volume=half_volume)
+    # JAX fallback (CPU or cubic)
     if half_image:
-        slices = fourier_transform_utils.half_image_to_full_image(slices, image_shape)
+        slices = ftu.half_image_to_full_image(slices, image_shape)
     if half_volume:
-        if order > 1:
-            raise NotImplementedError("half_volume=True with cubic requires CUDA kernels")
-        half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
-        vol_size = int(np.prod(half_shape))
-        f = lambda v: _slice_volume_by_map_jax(
-            fourier_transform_utils.half_volume_to_full_volume(v, volume_shape),
-            rotation_matrices, image_shape, volume_shape, disc_type,
+        half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+        f = lambda v: _jax_slice(
+            ftu.half_volume_to_full_volume(v, volume_shape),
+            rotation_matrices, image_shape, volume_shape, order,
         )
-        _, u = vjp(f, jnp.zeros(vol_size, dtype=slices.dtype))
+        _, u = vjp(f, jnp.zeros(int(np.prod(half_shape)), dtype=slices.dtype))
         result = u(slices)[0]
     else:
-        result = _adjoint_slice_volume_by_map_jax(slices, rotation_matrices, image_shape, volume_shape, disc_type)
+        result = _jax_adjoint_slice(slices, rotation_matrices, image_shape, volume_shape, order)
     return result if volume is None else result + volume
 
 
-# ── Backward-compat thin wrappers ─────────────────────────────────────
+# ── Backward-compat thin wrappers ────────────────────────────────────
 
-def slice_volume_by_trilinear_from_half_volume(half_volume, rotation_matrices, image_shape, volume_shape):
-    """Thin wrapper: slice from half-volume with linear interpolation."""
-    return slice_volume_by_map_from_half_volume(
-        half_volume, rotation_matrices, image_shape, volume_shape, disc_type="linear_interp"
-    )
+def slice_volume_by_map_to_half_image(volume, rotation_matrices, image_shape, volume_shape, disc_type):
+    return slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type,
+                               half_image=True)
 
 
-def batch_slice_volume_by_trilinear(volumes, rotation_matrices, image_shape, volume_shape):
-    """Thin wrapper: batch slice with linear interpolation."""
-    return batch_slice_volume_by_map(volumes, rotation_matrices, image_shape, volume_shape, "linear_interp")
+def batch_slice_volume_by_map_to_half_image(volumes, rotation_matrices, image_shape, volume_shape, disc_type):
+    return batch_slice_volume_by_map(volumes, rotation_matrices, image_shape, volume_shape, disc_type,
+                                     half_image=True)
+
+
+def slice_volume_by_map_from_half_volume(half_volume, rotation_matrices, image_shape, volume_shape, disc_type,
+                                         half_image=False):
+    return slice_volume_by_map(half_volume, rotation_matrices, image_shape, volume_shape, disc_type,
+                               half_volume=True, half_image=half_image)
+
+
+def batch_slice_volume_by_map_from_half_volume(volumes, rotation_matrices, image_shape, volume_shape, disc_type,
+                                                half_image=False):
+    """Project a batch of rfft-packed half-volumes to images."""
+    order = decide_order(disc_type)
+    if _use_cuda(order):
+        if not _is_complex(volumes):
+            volumes = volumes.astype(jnp.result_type(volumes, jnp.complex64))
+        from recovar.cuda_backproject import batch_project
+        return batch_project(volumes, rotation_matrices, image_shape, volume_shape,
+                             order=order, half_volume=True, half_image=half_image)
+    return jax.vmap(
+        lambda v: slice_volume_by_map(v, rotation_matrices, image_shape, volume_shape,
+                                      disc_type, half_volume=True, half_image=half_image)
+    )(volumes)
 
 
 def adjoint_slice_volume_by_trilinear(images, rotation_matrices, image_shape, volume_shape,
@@ -291,22 +248,13 @@ def adjoint_slice_volume_by_trilinear_from_half_images(
 
 
 def batch_adjoint_slice_volume_by_trilinear(images, rotation_matrices, image_shape, volume_shape, volumes=None):
-    """Backproject per-volume images into a batch of volumes with shared rotations.
-
-    Parameters
-    ----------
-    images : complex, shape ``(batch, n_images, n_pixels)``
-    rotation_matrices : shape ``(n_images, 3, 3)``
-    volumes : optional, shape ``(batch, vol_flat_size)``
-
-    Returns
-    -------
-    complex, shape ``(batch, vol_flat_size)``
-    """
+    """Backproject per-volume images into a batch of volumes with shared rotations."""
     batch = images.shape[0]
     if volumes is None:
         volumes = jnp.zeros((batch, int(np.prod(volume_shape))), dtype=images.dtype)
-    if _check_cuda() and _is_complex(images):
+    if _use_cuda(1):
+        if not _is_complex(images):
+            images = images.astype(jnp.result_type(images, jnp.complex64))
         from recovar.cuda_backproject import batch_backproject as cuda_batch_backproject
         return cuda_batch_backproject(volumes, images, rotation_matrices, image_shape, volume_shape, order=1)
     return jax.vmap(
@@ -333,12 +281,6 @@ def precompute_cubic_half_coefficients(volume, volume_shape):
     Takes a full complex volume (centered-FFT convention) and fits the
     3-D cubic B-spline coefficient array of shape ``(N0+2, N1+2, N2+2)``.
 
-    The "half" in the name refers to typical usage: callers hold the volume
-    in half-spectrum (rfft3) format and expand it before calling this
-    function.  Full coefficients are returned so that cubic interpolation
-    evaluates correctly everywhere (natural-boundary-condition cubic splines
-    are NOT Hermitian-symmetric — only the data values are).
-
     Parameters
     ----------
     volume : complex array, shape ``(N0, N1, N2)`` or ``(N0*N1*N2,)``
@@ -348,8 +290,6 @@ def precompute_cubic_half_coefficients(volume, volume_shape):
     Returns
     -------
     complex array, shape ``(N0+2, N1+2, N2+2)``
-        Full cubic B-spline coefficients, ready for
-        :func:`slice_from_cubic_half_coefficients`.
     """
     from recovar.core import cubic_interpolation
     N0, N1, N2 = tuple(int(s) for s in volume_shape)
@@ -359,20 +299,7 @@ def precompute_cubic_half_coefficients(volume, volume_shape):
 
 @functools.partial(jax.jit, static_argnums=[2, 3])
 def _slice_from_half_cubic_coeffs_jax(coeffs, rotation_matrices, image_shape, volume_shape):
-    """Sample rotated central slices from precomputed cubic coefficients.
-
-    Parameters
-    ----------
-    coeffs : complex array, shape ``(N0+2, N1+2, N2+2)``
-        As returned by :func:`precompute_cubic_half_coefficients`.
-    rotation_matrices : float array, shape ``(n_images, 3, 3)``
-    image_shape : (H, W)  [static]
-    volume_shape : (N0, N1, N2)  [static]
-
-    Returns
-    -------
-    complex array, shape ``(n_images, H*W)``
-    """
+    """Sample rotated central slices from precomputed cubic coefficients."""
     from recovar.core import cubic_interpolation
 
     coords, coords_og_shape = rotations_to_grid_point_coords(
@@ -387,45 +314,28 @@ def _slice_from_half_cubic_coeffs_jax(coeffs, rotation_matrices, image_shape, vo
 
 
 def slice_from_cubic_half_coefficients(coeffs, rotation_matrices, image_shape, volume_shape):
-    """Project from precomputed cubic coefficients to images.
-
-    Convenience wrapper around :func:`_slice_from_half_cubic_coeffs_jax`.
-
-    Parameters
-    ----------
-    coeffs : complex array, shape ``(N0+2, N1+2, N2+2)``
-        As returned by :func:`precompute_cubic_half_coefficients`.
-    rotation_matrices : float array, shape ``(n_images, 3, 3)``
-    image_shape : (H, W)
-    volume_shape : (N0, N1, N2)
-
-    Returns
-    -------
-    complex array, shape ``(n_images, H*W)``
-    """
+    """Project from precomputed cubic coefficients to images."""
     return _slice_from_half_cubic_coeffs_jax(
         jnp.asarray(coeffs), rotation_matrices, image_shape, volume_shape
     )
 
 
 __all__ = [
+    "decide_order",
     "slice_volume_by_nearest",
     "batch_slice_volume_by_nearest",
-    "decide_order",
     "slice_volume_by_map",
     "batch_slice_volume_by_map",
+    "adjoint_slice_volume_by_map",
+    # backward-compat wrappers
     "slice_volume_by_map_to_half_image",
     "batch_slice_volume_by_map_to_half_image",
     "slice_volume_by_map_from_half_volume",
     "batch_slice_volume_by_map_from_half_volume",
-    "slice_volume_by_trilinear_from_half_volume",
-    "batch_slice_volume_by_trilinear",
     "adjoint_slice_volume_by_trilinear",
     "adjoint_slice_volume_by_trilinear_from_half_images",
     "batch_adjoint_slice_volume_by_trilinear",
     "adjoint_slice_volume_by_trilinear_from_weights",
-    "adjoint_slice_volume_by_map",
-    "map_coordinates_on_slices",
     "precompute_cubic_half_coefficients",
     "slice_from_cubic_half_coefficients",
 ]

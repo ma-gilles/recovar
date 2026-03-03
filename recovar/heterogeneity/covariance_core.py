@@ -170,23 +170,14 @@ def batch_vol_forward_from_map(
             volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
             half_image=half_image,
         )
-        if not skip_ctf:
-            ctf = config.compute_ctf_half(ctf_params) if half_image else config.compute_ctf(ctf_params)
-            slices = slices * ctf[jnp.newaxis]
-    elif half_image:
-        slices = core.batch_slice_volume_by_map_to_half_image(
-            volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
-        )
-        if not skip_ctf:
-            ctf = config.compute_ctf_half(ctf_params)
-            slices = slices * ctf[jnp.newaxis]
     else:
         slices = core.batch_slice_volume_by_map(
             volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
+            half_image=half_image,
         )
-        if not skip_ctf:
-            ctf = config.compute_ctf(ctf_params)
-            slices = slices * ctf[jnp.newaxis]  # (batch, n_images, n_pixels) * (n_images, n_pixels)
+    if not skip_ctf:
+        ctf = config.compute_ctf_half(ctf_params) if half_image else config.compute_ctf(ctf_params)
+        slices = slices * ctf[jnp.newaxis]
     return slices
 
 

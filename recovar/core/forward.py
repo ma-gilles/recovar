@@ -18,8 +18,6 @@ from recovar.core.geometry import translate_images
 from recovar.core.slicing import (
     adjoint_slice_volume_by_map,
     slice_volume_by_map,
-    slice_volume_by_map_from_half_volume,
-    slice_volume_by_map_to_half_image,
 )
 
 
@@ -40,32 +38,16 @@ def forward_model(
     half_image : bool
         If True, return rfft-packed half-spectrum images and use
         ``config.compute_ctf_half`` for CTF, roughly halving memory and compute.
-        For cubic interpolation, falls back to full-slice + half extraction.
     half_volume : bool
         If True, *volume* is an rfft-packed half-volume ``(N0*N1*(N2//2+1),)``.
-        Uses :func:`slice_volume_by_map_from_half_volume` which dispatches to the
-        CUDA half-volume kernel, avoiding the Hermitian expand step.
     """
-    if half_volume:
-        slices = slice_volume_by_map_from_half_volume(
-            volume, rotation_matrices, config.image_shape, config.volume_shape,
-            config.disc_type, half_image=half_image,
-        )
-        if not skip_ctf:
-            ctf = config.compute_ctf_half(ctf_params) if half_image else config.compute_ctf(ctf_params)
-            slices = slices * ctf
-    elif half_image:
-        slices = slice_volume_by_map_to_half_image(
-            volume, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
-        )
-        if not skip_ctf:
-            slices = slices * config.compute_ctf_half(ctf_params)
-    else:
-        slices = slice_volume_by_map(
-            volume, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
-        )
-        if not skip_ctf:
-            slices = slices * config.compute_ctf(ctf_params)
+    slices = slice_volume_by_map(
+        volume, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
+        half_volume=half_volume, half_image=half_image,
+    )
+    if not skip_ctf:
+        ctf = config.compute_ctf_half(ctf_params) if half_image else config.compute_ctf(ctf_params)
+        slices = slices * ctf
     return slices
 
 
