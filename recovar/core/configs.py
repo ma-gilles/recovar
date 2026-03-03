@@ -277,6 +277,10 @@ class DataIterator:
         apply_image_mask=False)`` on each raw batch before yielding.
         Required for kernels that expect preprocessed real-space images
         (e.g. the heterogeneity and residual kernels).
+    half_images : bool, default False
+        When *True*, convert images to half-image (rfft-packed) format before
+        yielding.  Applied after ``apply_process_images`` (if any), so that
+        ``process_images`` always operates on full-spectrum images.
 
     Example::
 
@@ -294,6 +298,7 @@ class DataIterator:
         self, dataset, batch_size, *,
         noise_model=None, noise_half=True, noise_by_particle=False,
         index_subset=None, use_image_generator=True, apply_process_images=False,
+        half_images=False,
     ):
         self.dataset = dataset
         self.batch_size = batch_size
@@ -303,6 +308,7 @@ class DataIterator:
         self.index_subset = index_subset
         self.use_image_generator = use_image_generator
         self.apply_process_images = apply_process_images
+        self.half_images = half_images
 
     def __iter__(self):
         if self.index_subset is None:
@@ -324,9 +330,15 @@ class DataIterator:
         nm = self.noise_model
         do_process = self.apply_process_images
         noise_by_particle = self.noise_by_particle
+        do_half = self.half_images
+        if do_half:
+            import recovar.core.fourier_transform_utils as ftu
+            image_shape = tuple(self.dataset.image_shape)
         for batch, particles_ind, indices in gen:
             if do_process:
                 batch = self.dataset.image_stack.process_images(batch, apply_image_mask=False)
+            if do_half:
+                batch = ftu.full_image_to_half_image(batch, image_shape)
             # Noise indexing: particle-grouped generators use particles_ind
             # for noise lookup (covariance path), while image generators use
             # flat indices (mean reconstruction path).
