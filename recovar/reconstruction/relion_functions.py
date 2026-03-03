@@ -250,24 +250,63 @@ def upscale_tau(tau, padding_factor, volume_shape, tau_is_1d=False):
     return tau[radius]
 
 
-def adjust_regularization_relion_style(filter, volume_shape, tau=None, padding_factor=1, max_res_shell=None):
+def _as_flat_single_volume(arr, volume_shape):
+    """Accept flat or grid volume array and return flat vector + was_grid flag."""
+    arr = jnp.asarray(arr)
+    flat_size = int(np.prod(volume_shape))
+    if arr.ndim == len(volume_shape) and tuple(arr.shape) == tuple(volume_shape):
+        return arr.reshape(-1), True
+    if arr.ndim == 1 and int(arr.shape[0]) == flat_size:
+        return arr, False
+    raise ValueError(
+        f"Expected array with shape {volume_shape} or ({flat_size},), got {arr.shape}"
+    )
+
+
+def adjust_regularization_relion_style(
+    filter, volume_shape, tau=None, padding_factor=1, max_res_shell=None, half_volume=False
+):
     """Adjust the RELION-style regularization filter.
 
     Adds 1/tau to the filter (Wiener denominator) and floors small values at
     1/1000 of the spherically-averaged filter to avoid division by zero.
     See RELION backprojector.cpp for the original algorithm.
     """
+    volume_shape = tuple(int(s) for s in volume_shape)
+    packed_shape = (
+        fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+        if half_volume
+        else volume_shape
+    )
+    filter_flat, input_is_grid = _as_flat_single_volume(filter, packed_shape)
+
+    # Exact half-volume behavior: reuse full-volume implementation and repack.
+    if half_volume:
+        filter_full = fourier_transform_utils.half_volume_to_full_volume(
+            filter_flat, volume_shape
+        ).reshape(-1).real
+        reg_full = adjust_regularization_relion_style(
+            filter_full, volume_shape, tau=tau, padding_factor=padding_factor,
+            max_res_shell=max_res_shell, half_volume=False,
+        )
+        reg_half = fourier_transform_utils.full_volume_to_half_volume(
+            reg_full, volume_shape
+        ).reshape(-1)
+        if input_is_grid:
+            return reg_half.reshape(packed_shape)
+        return reg_half
+
     if tau is not None:
         oversampling_factor = padding_factor ** 3
         og_volume_shape = tuple(s // padding_factor for s in volume_shape)
         tau = upscale_tau(tau, padding_factor, og_volume_shape, tau_is_1d=False)
         safe_tau = jnp.where(tau > 1e-20, tau, jnp.float32(1.0))
         inv_tau = 1 / (oversampling_factor * safe_tau)
-        inv_tau = jnp.where((tau < 1e-20) & (filter > 1e-20), 1. / (0.001 * filter), inv_tau)
-        inv_tau = jnp.where((tau < 1e-20) & (filter <= 1e-20), 0, inv_tau)
-        regularized_filter = filter + inv_tau
+        inv_tau = jnp.where((tau < 1e-20) & (filter_flat > 1e-20), 1. / (0.001 * filter_flat), inv_tau)
+        inv_tau = jnp.where((tau < 1e-20) & (filter_flat <= 1e-20), 0, inv_tau)
+        regularized_filter = filter_flat + inv_tau
     else:
-        regularized_filter = filter
+        regularized_filter = filter_flat
 
     if max_res_shell is None:
         max_res_shell = volume_shape[0] // 2 - 1
@@ -278,7 +317,29 @@ def adjust_regularization_relion_style(filter, volume_shape, tau=None, padding_f
 
     regularized_filter = jnp.maximum(regularized_filter, avged_reg_volume)
     regularized_filter = jnp.maximum(regularized_filter, jax_config.EPSILON)
+    if input_is_grid:
+        return regularized_filter.reshape(packed_shape)
     return regularized_filter
+
+
+def _infer_half_volume_layout(arr, volume_shape):
+    """Infer whether a Fourier volume is packed half layout from its shape."""
+    full_shape = tuple(int(s) for s in volume_shape)
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(full_shape)
+    full_size = int(np.prod(full_shape))
+    half_size = int(np.prod(half_shape))
+    arr = jnp.asarray(arr)
+    if arr.ndim == 3 and tuple(arr.shape) == half_shape:
+        return True
+    if arr.ndim == 3 and tuple(arr.shape) == full_shape:
+        return False
+    if arr.ndim == 1 and int(arr.shape[0]) == half_size:
+        return True
+    if arr.ndim == 1 and int(arr.shape[0]) == full_size:
+        return False
+    raise ValueError(
+        f"Could not infer half/full Fourier layout for shape {arr.shape} and volume_shape={volume_shape}"
+    )
 
 
 def post_process_from_filter(cryo, Ft_ctf, F_ty, tau=None, disc_type='nearest', use_spherical_mask=True, grid_correct=True, gridding_correct="square", kernel_width=1):
@@ -297,30 +358,59 @@ def post_process_from_filter(cryo, Ft_ctf, F_ty, tau=None, disc_type='nearest', 
     )
 
 
-@functools.partial(jax.jit, static_argnums=[2, 3, 5, 6, 7, 8, 9])
+@functools.partial(jax.jit, static_argnums=[2, 3, 5, 6, 7, 8, 9, 11, 12, 13])
 def post_process_from_filter_v2(
     Ft_ctf, F_ty, og_volume_shape, volume_upsampling_factor,
     tau=None, kernel='triangular', use_spherical_mask=True,
     grid_correct=True, gridding_correct="square", kernel_width=1,
     volume_mask=None,
+    return_real_space=False,
+    return_half_volume=False,
+    input_half_volume=None,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
-    Steps: regularize → iDFT → crop → spherical mask → grid correct → DFT.
+    Steps: regularize -> iDFT -> crop -> spherical mask -> grid correct -> DFT.
+
+    Supports both full Fourier inputs ``(N0*N1*N2,)`` and packed half-volume
+    inputs ``(N0*N1*(N2//2+1),)``.
     """
     upsampled_volume_shape = tuple(3 * [og_volume_shape[0] * volume_upsampling_factor])
-    valid_indices = mask.get_radial_mask(
-        upsampled_volume_shape, radius=upsampled_volume_shape[0] // 2 - 1
-    ).reshape(-1).astype(Ft_ctf.real.dtype)
+    if input_half_volume is None:
+        input_half_volume = _infer_half_volume_layout(Ft_ctf, upsampled_volume_shape)
+
+    if input_half_volume:
+        packed_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(upsampled_volume_shape)
+        Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, packed_shape)
+        F_ty_flat, _ = _as_flat_single_volume(F_ty, packed_shape)
+        valid_full = mask.get_radial_mask(
+            upsampled_volume_shape, radius=upsampled_volume_shape[0] // 2 - 1
+        ).reshape(-1).astype(Ft_ctf_flat.real.dtype)
+        valid_indices = fourier_transform_utils.full_volume_to_half_volume(
+            valid_full, upsampled_volume_shape
+        ).reshape(-1).astype(Ft_ctf_flat.real.dtype)
+    else:
+        Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, upsampled_volume_shape)
+        F_ty_flat, _ = _as_flat_single_volume(F_ty, upsampled_volume_shape)
+        valid_indices = mask.get_radial_mask(
+            upsampled_volume_shape, radius=upsampled_volume_shape[0] // 2 - 1
+        ).reshape(-1).astype(Ft_ctf_flat.real.dtype)
 
     Ft_ctf2 = adjust_regularization_relion_style(
-        Ft_ctf.real, upsampled_volume_shape, tau=tau,
+        Ft_ctf_flat.real, upsampled_volume_shape, tau=tau,
         padding_factor=volume_upsampling_factor, max_res_shell=None,
+        half_volume=input_half_volume,
     )
-    vol = (F_ty * valid_indices) / Ft_ctf2
+    vol = (F_ty_flat * valid_indices) / Ft_ctf2
 
     # iDFT → crop to original size
-    vol = fourier_transform_utils.get_idft3(vol.reshape(upsampled_volume_shape))
+    if input_half_volume:
+        half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(upsampled_volume_shape)
+        vol = fourier_transform_utils.get_idft3_real(
+            vol.reshape(half_shape), volume_shape=upsampled_volume_shape
+        )
+    else:
+        vol = fourier_transform_utils.get_idft3(vol.reshape(upsampled_volume_shape))
     vol = padding.unpad_volume_spatial_domain(vol, upsampled_volume_shape[0] - og_volume_shape[0])
 
     if use_spherical_mask:
@@ -334,8 +424,21 @@ def post_process_from_filter_v2(
         grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
         vol, _ = grid_fn(vol.reshape(og_volume_shape), og_volume_shape[0], volume_upsampling_factor / kernel_width, order=order)
 
+    if return_real_space:
+        return vol.real.astype(Ft_ctf2.real.dtype)
+
+    if input_half_volume:
+        vol_half = fourier_transform_utils.get_dft3_real(vol.reshape(og_volume_shape))
+        if return_half_volume:
+            return vol_half.reshape(-1).astype(F_ty_flat.dtype)
+        vol = fourier_transform_utils.half_volume_to_full_volume(vol_half, og_volume_shape)
+        return vol.reshape(-1).astype(F_ty_flat.dtype)
+
     vol = fourier_transform_utils.get_dft3(vol.reshape(og_volume_shape))
-    return vol.astype(F_ty.dtype)
+    if return_half_volume:
+        vol = fourier_transform_utils.full_volume_to_half_volume(vol, og_volume_shape)
+        return vol.reshape(-1).astype(F_ty_flat.dtype)
+    return vol.astype(F_ty_flat.dtype)
 
 
 def relion_reconstruct(cryo, noise_variance, batch_size=100, disc_type='linear_interp', use_spherical_mask=True, upsampling_factor=2, grid_correct=True, gridding_correct="square", tau=None):

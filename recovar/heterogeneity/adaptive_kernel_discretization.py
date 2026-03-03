@@ -1026,22 +1026,23 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
     F = F[:,0,:].T
 
     kernel_type = 'triangular' if disc_type == 'linear_interp' else 'square'
-    upsampled_vol_shape = tuple(experiment_dataset.upsampled_volume_shape)
     for idx in range(heterogeneity_bins.size):
         from recovar.reconstruction import relion_functions
 
         estimate = relion_functions.post_process_from_filter_v2(
-            half_volume_to_full_volume(XWX[idx], upsampled_vol_shape),
-            half_volume_to_full_volume(F[idx], upsampled_vol_shape),
+            XWX[idx],
+            F[idx],
             experiment_dataset.volume_shape, 2,
             tau = tau, kernel = kernel_type, use_spherical_mask = True,
-            grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
+            grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1,
+            input_half_volume=True,
+        )
         estimates.append(np.array(estimate.reshape(-1)))
     estimates = np.array(estimates)
 
     return estimates
 
-def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola", upsampling_factor=None):
+def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola", upsampling_factor=None, return_real_space=False):
 
     estimates = []
 
@@ -1116,12 +1117,15 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
     vol_upsample = upsampling_factor if upsampling_factor is not None else int(experiment_dataset.volume_upsampling_factor)
     for idx in range(heterogeneity_bins.size):
         estimate = relion_functions.post_process_from_filter_v2(
-            half_volume_to_full_volume(lhs_all[idx], upsampled_vol_shape),
-            half_volume_to_full_volume(rhs_all[idx], upsampled_vol_shape),
+            lhs_all[idx],
+            rhs_all[idx],
             experiment_dataset.volume_shape, vol_upsample,
             tau = tau, kernel = kernel_type,
             use_spherical_mask = use_spherical_mask, grid_correct = grid_correct,
-            gridding_correct = "square", kernel_width = 1 )
+            gridding_correct = "square", kernel_width = 1,
+            return_real_space=return_real_space,
+            input_half_volume=True,
+        )
 
 
         estimates.append(np.array(estimate.reshape(-1)))
@@ -1628,5 +1632,3 @@ def compute_hessian(x):
 def compute_hessian_norm_squared(x):
     hessians = compute_hessian(x)
     return jnp.linalg.norm(hessians, axis = (0,1), ord =2)**2
-
-
