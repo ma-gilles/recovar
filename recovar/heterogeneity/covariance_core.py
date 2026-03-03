@@ -87,12 +87,20 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
     return proj_mask
 
 
-@functools.partial(jax.jit, static_argnums = [2])    
+@functools.partial(jax.jit, static_argnums = [2, 3])
 @nvtx.annotate("apply_image_masks", color="cyan", domain=NVTX_DOMAIN_COV_CORE)
-def apply_image_masks(images, image_masks, image_shape):
-    images = fourier_transform_utils.get_idft2(images.reshape([images.shape[0], *image_shape]))
-    images = images * image_masks
-    images = fourier_transform_utils.get_dft2(images).reshape([images.shape[0] , -1])
+def apply_image_masks(images, image_masks, image_shape, half_images=False):
+    if half_images:
+        half_shape = fourier_transform_utils.image_shape_to_half_image_shape(image_shape)
+        images = fourier_transform_utils.get_idft2_real(
+            images.reshape([images.shape[0], *half_shape]), image_shape=image_shape
+        )
+        images = images * image_masks
+        images = fourier_transform_utils.get_dft2_real(images).reshape([images.shape[0], -1])
+    else:
+        images = fourier_transform_utils.get_idft2(images.reshape([images.shape[0], *image_shape]))
+        images = images * image_masks
+        images = fourier_transform_utils.get_dft2(images).reshape([images.shape[0], -1])
     return images
 
 
