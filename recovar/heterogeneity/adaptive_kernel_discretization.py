@@ -82,7 +82,7 @@ def _heterogeneity_kernel_batch_from_fft(
         config, ctf_half, batch.ctf_params, batch.rotation_matrices,
         skip_ctf=True, volume=Ft_ctf, half_image=True, half_volume=True,
     )
-    return Ft_y, Ft_ctf
+    return Ft_y, Ft_ctf.real
 
 def make_X_mat(rotation_matrices, volume_shape, image_shape, pol_degree = 0, dtype = np.float32):
 
@@ -1067,7 +1067,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
         image_inds = np.sort(np.where(inds == bin_idx)[0])
 
         Ft_y_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
-        Ft_ctf_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
+        Ft_ctf_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype_real)
         for batch_data in DataIterator(
             experiment_dataset, batch_size,
             noise_model=experiment_dataset.noise, noise_half=False,
@@ -1079,8 +1079,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
             )
 
         rhs_all[bin_idx] = Ft_y_acc
-        # Ft_ctf is real-valued (backprojection of real CTF²/noise); .real extracts dtype
-        lhs_all[bin_idx] = Ft_ctf_acc.real
+        lhs_all[bin_idx] = Ft_ctf_acc
 
     # A slight improvement is an almost triangular kernel/ pyramid kernel
     #    _
