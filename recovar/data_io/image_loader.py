@@ -346,6 +346,11 @@ class MRCLoader(ImageLoader):
 
     def __init__(self, filepath: str, indices: Optional[np.ndarray] = None, lazy: bool = True):
         import mrcfile
+        from recovar.data_io.staging import get_cache_dir, stage_mrc
+
+        cache_dir = get_cache_dir()
+        if cache_dir:
+            filepath = stage_mrc(filepath, cache_dir)
 
         self._filepath = filepath
         self._memmap = None  # lazy-created on first sequential read
