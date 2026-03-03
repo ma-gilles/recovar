@@ -809,57 +809,59 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
 
 
 @nvtx.annotate("compute_covariance_regularization_relion_style", color="cyan")
-def compute_covariance_regularization_relion_style(Hs, Bs, mean_prior, picked_frequencies, cov_noise, volume_mask, volume_shape, gpu_memory, reg_init_multiplier, options):
-
+def compute_covariance_regularization_relion_style(
+    Hs, Bs, mean_prior, picked_frequencies, cov_noise,
+    volume_mask, volume_shape, gpu_memory, reg_init_multiplier, options,
+):
     volume_mask = volume_mask if options["use_mask_in_fsc"] else None
 
-    # 
     regularization_init = (mean_prior + 1e-14) * reg_init_multiplier / cov_noise
-    def init_regularization_of_column_k(k):
-        return regularization_init[None] * regularization_init[picked_frequencies[np.array(k)], None] 
+    # Per-column regularization: outer product of regularization_init with itself
+    # at the picked frequency.  Evaluated lazily per batch to avoid a large
+    # [n_freqs × volume_size] allocation.
+    def _reg_init_batch(indices):
+        return regularization_init[picked_frequencies[indices], None] * regularization_init[None]
 
-    
-    # Column-wise regularize 
-    shifts = core.vec_indices_to_frequencies(picked_frequencies, volume_shape) * (options["shift_fsc"])
+    shifts = core.vec_indices_to_frequencies(picked_frequencies, volume_shape) * options["shift_fsc"]
 
     n_freqs = picked_frequencies.size
+    # //4: regularization needs 4 volume-sized arrays simultaneously (H0, H1, B0, B1)
+    batch_size = utils.safe_batch_size(utils.get_column_batch_size(volume_shape[0], gpu_memory) // 4)
+
     fsc_priors = [None] * n_freqs
     fscs = [None] * n_freqs
     combined_cov_cols = [None] * n_freqs
 
-    # //4: regularization needs 4 volume-sized arrays simultaneously (H0, H1, B0, B1)
-    batch_size = utils.safe_batch_size(utils.get_column_batch_size(volume_shape[0], gpu_memory) // 4)
-    cpu_device = jax.devices("cpu")[0]
-
-    for k in range(int(np.ceil(n_freqs/batch_size))-1, -1, -1):
-        batch_st = int(k * batch_size)
-        batch_end = int(np.min( [(k+1) * batch_size, n_freqs]))
+    for batch_st in range(0, n_freqs, batch_size):
+        batch_end = min(batch_st + batch_size, n_freqs)
         indices = np.arange(batch_st, batch_end)
-        H0_batch = Hs[0][:,batch_st:batch_end].T
-        H1_batch = Hs[1][:,batch_st:batch_end].T
-        B0_batch = Bs[0][:,batch_st:batch_end].T
-        B1_batch = Bs[1][:,batch_st:batch_end].T
 
-        combined_cov_col, priors, fscs_this = regularization.prior_iteration_relion_style_batch(H0_batch, H1_batch, B0_batch, B1_batch,
-        shifts[indices],
-        init_regularization_of_column_k(np.array(indices)),
-        options['substract_shell_mean'],
-        volume_shape, options['left_kernel'],
-        options['use_spherical_mask'],  options['grid_correct'],  volume_mask, options["prior_n_iterations"], options["downsample_from_fsc"])
+        combined_cov_col, priors, fscs_this = regularization.prior_iteration_relion_style_batch(
+            Hs[0][:, batch_st:batch_end].T,
+            Hs[1][:, batch_st:batch_end].T,
+            Bs[0][:, batch_st:batch_end].T,
+            Bs[1][:, batch_st:batch_end].T,
+            shifts[indices],
+            _reg_init_batch(indices),
+            options['substract_shell_mean'],
+            volume_shape, options['left_kernel'],
+            options['use_spherical_mask'], options['grid_correct'],
+            volume_mask, options["prior_n_iterations"], options["downsample_from_fsc"],
+        )
 
-        priors = jax.device_put(priors, cpu_device)
-        for j, ind in enumerate(indices):
-            if options["prior_n_iterations"] >= 0:
-                fsc_priors[ind] = np.asarray(priors[j].real)
-            fscs[ind] = np.asarray(fscs_this[j])
-            combined_cov_cols[ind] = np.asarray(combined_cov_col[j])
-        del combined_cov_col, priors
+        # Transfer entire batches to CPU at once — avoids per-element DtoH copies.
+        combined_cov_cols[batch_st:batch_end] = list(np.asarray(combined_cov_col))
+        fscs[batch_st:batch_end] = list(np.asarray(fscs_this))
+        del combined_cov_col, fscs_this
+
+        if options["prior_n_iterations"] >= 0:
+            fsc_priors[batch_st:batch_end] = list(np.asarray(priors.real))
+        del priors
 
     if options["prior_n_iterations"] >= 0:
-        fsc_priors = np.stack(fsc_priors, axis =0).real
+        fsc_priors = np.stack(fsc_priors, axis=0).real
 
-    combined_cov_cols = np.stack(combined_cov_cols, axis =0)
-
+    combined_cov_cols = np.stack(combined_cov_cols, axis=0)
     return combined_cov_cols, fsc_priors, fscs
 
 from recovar.core import cubic_interpolation
