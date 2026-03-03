@@ -170,14 +170,14 @@ def sum_up_images_fixed_rots_covariance_with_precompute_eqx(config: ForwardModel
     before_adj_B2 -= noise_piece
 
     before_adj_B2_half = fourier_transform_utils.full_image_to_half_image(before_adj_B2, config.image_shape)
-    B = core.adjoint_slice_volume_by_trilinear_from_half_images(before_adj_B2_half, rotations, config.image_shape, config.volume_shape, B)
+    B = core.adjoint_slice_volume_by_map(before_adj_B2_half, rotations, config.image_shape, config.volume_shape, "linear_interp", volume=B, half_image=True)
 
     CTF_squared = CTF**2
     CTF_squared_kernel_vals = kernel_vals @ CTF_squared.T
     gamma_3 = probabilties_summed_over_translations.T * CTF_squared_kernel_vals
     H_before_adj = gamma_3 @ CTF_squared
     H_before_adj_half = fourier_transform_utils.full_image_to_half_image(H_before_adj, config.image_shape)
-    H = core.adjoint_slice_volume_by_trilinear_from_half_images(H_before_adj_half, rotations, config.image_shape, config.volume_shape, H)
+    H = core.adjoint_slice_volume_by_map(H_before_adj_half, rotations, config.image_shape, config.volume_shape, "linear_interp", volume=H, half_image=True)
 
     return H, B
 
@@ -331,7 +331,7 @@ def sum_up_images_fixed_rots_covariance_with_precompute(shifted_CTFed_images, me
     before_adj_B2 -= noise_piece
 
     before_adj_B2_half = fourier_transform_utils.full_image_to_half_image(before_adj_B2, image_shape)
-    B = core.adjoint_slice_volume_by_trilinear_from_half_images(before_adj_B2_half, rotations, image_shape, volume_shape, B)
+    B = core.adjoint_slice_volume_by_map(before_adj_B2_half, rotations, image_shape, volume_shape, "linear_interp", volume=B, half_image=True)
 
     CTF_squared = CTF**2
     CTF_squared_kernel_vals = kernel_vals @ CTF_squared.T
@@ -339,7 +339,7 @@ def sum_up_images_fixed_rots_covariance_with_precompute(shifted_CTFed_images, me
     H_before_adj = gamma_3 @ CTF_squared
 
     H_before_adj_half = fourier_transform_utils.full_image_to_half_image(H_before_adj, image_shape)
-    H = core.adjoint_slice_volume_by_trilinear_from_half_images(H_before_adj_half, rotations, image_shape, volume_shape, H)
+    H = core.adjoint_slice_volume_by_map(H_before_adj_half, rotations, image_shape, volume_shape, "linear_interp", volume=H, half_image=True)
     return H, B
 
 

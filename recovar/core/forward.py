@@ -17,7 +17,6 @@ from recovar.core.configs import ForwardModelConfig
 from recovar.core.geometry import translate_images
 from recovar.core.slicing import (
     adjoint_slice_volume_by_map,
-    adjoint_slice_volume_by_trilinear,
     slice_volume_by_map,
     slice_volume_by_map_to_half_image,
 )
@@ -104,34 +103,6 @@ def adjoint_forward_model(
 
 
 @eqx.filter_jit
-def adjoint_forward_model_trilinear(
-    config: ForwardModelConfig,
-    slices: jax.Array,
-    ctf_params: jax.Array,
-    rotation_matrices: jax.Array,
-    skip_ctf: bool = False,
-    volume: jax.Array = None,
-    half_image: bool = False,
-    half_volume: bool = False,
-) -> jax.Array:
-    """Adjoint via trilinear interpolation (direct, not VJP-based).
-
-    Parameters
-    ----------
-    volume : optional accumulator array to add into.
-    half_image : if True, *slices* are rfft-packed half-spectrum images.
-    half_volume : if True, output volume uses rfft-packed layout (CUDA only).
-    """
-    if not skip_ctf:
-        ctf = config.compute_ctf_half(ctf_params) if half_image else config.compute_ctf(ctf_params)
-        slices = slices * ctf
-    return adjoint_slice_volume_by_trilinear(
-        slices, rotation_matrices, config.image_shape, config.volume_shape,
-        volume=volume, half_image=half_image, half_volume=half_volume,
-    )
-
-
-@eqx.filter_jit
 def compute_AtAv(
     config: ForwardModelConfig,
     volume: jax.Array,
@@ -153,7 +124,6 @@ __all__ = [
     "forward_model",
     "forward_model_and_adjoint",
     "adjoint_forward_model",
-    "adjoint_forward_model_trilinear",
     "compute_AtAv",
     "batch_translate_images",
 ]

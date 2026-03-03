@@ -33,8 +33,7 @@ def _rotation_z(theta):
 def test_core_reexports_slicing_api():
     assert core.decide_order is core_slicing.decide_order
     assert core.slice_volume_by_nearest is core_slicing.slice_volume_by_nearest
-    assert core.get_trilinear_weights_and_vol_indices is core_slicing.get_trilinear_weights_and_vol_indices
-    assert core.adjoint_slice_volume_by_trilinear_from_half_images is core_slicing.adjoint_slice_volume_by_trilinear_from_half_images
+    assert core.adjoint_slice_volume_by_map is core_slicing.adjoint_slice_volume_by_map
 
 
 def test_decide_order_values():
@@ -45,62 +44,22 @@ def test_decide_order_values():
         core_slicing.decide_order("bad")
 
 
-def test_slice_volume_by_nearest_and_forward_model():
+def test_slice_volume_by_nearest():
     volume = np.array([10, 20, 30, 40], dtype=np.complex64)
     idx = np.array([[0, 2], [1, 3]], dtype=np.int32)
     sliced = np.asarray(core_slicing.slice_volume_by_nearest(volume, idx))
     np.testing.assert_array_equal(sliced, np.array([[10, 30], [20, 40]], dtype=np.complex64))
 
-    ctf = np.array([[1 + 0j, 2 + 0j], [3 + 0j, 4 + 0j]], dtype=np.complex64)
-    forward = np.asarray(core_slicing.forward_model(volume, ctf, idx))
-    np.testing.assert_array_equal(forward, sliced * ctf)
-
-
-
-
-def test_summed_adjoint_slice_by_nearest_accumulates():
-    volume_size = 4
-    image_vecs = np.array([[1, 2], [3, 4]], dtype=np.float32)
-    idx = np.array([[0, 2], [0, 2]], dtype=np.int32)
-    out = np.asarray(core_slicing.summed_adjoint_slice_by_nearest(volume_size, image_vecs, idx))
-    np.testing.assert_array_equal(out, np.array([4, 0, 6, 0], dtype=np.float32))
 
 
 
 
 
 
-def test_get_trilinear_weights_and_vol_indices_simple_cases():
-    # Integer coordinate should place full weight on one grid point.
-    grid_coords = np.array([[1.0, 1.0, 1.0]], dtype=np.float32)
-    points, weights = core_slicing.get_trilinear_weights_and_vol_indices(grid_coords, (4, 4, 4))
-    points = np.asarray(points)
-    weights = np.asarray(weights)
-    assert points.shape == (1, 8, 3)
-    assert weights.shape == (1, 8)
-    assert np.isclose(weights.sum(), 1.0)
-    assert np.isclose(weights.max(), 1.0)
-
-    # Out-of-bounds coordinate should have zero total weight after masking.
-    grid_coords_oob = np.array([[-2.0, -2.0, -2.0]], dtype=np.float32)
-    _, weights_oob = core_slicing.get_trilinear_weights_and_vol_indices(grid_coords_oob, (4, 4, 4))
-    assert np.isclose(np.asarray(weights_oob).sum(), 0.0)
 
 
-def test_adjoint_slice_volume_by_trilinear_from_weights_accumulates():
-    images = np.array([2.0, 3.0], dtype=np.float32)
-    grid_vec_indices = np.array([[0, 1], [1, 2]], dtype=np.int32)
-    weights = np.array([[0.5, 0.5], [0.25, 0.75]], dtype=np.float32)
-    out = np.asarray(
-        core_slicing.adjoint_slice_volume_by_trilinear_from_weights(
-            images, grid_vec_indices, weights, volume_shape=(3, 1, 1)
-        )
-    )
-    expected = np.array([1.0, 1.0 + 0.75, 2.25], dtype=np.float32)
-    np.testing.assert_allclose(out[:3], expected)
 
-
-def test_adjoint_slice_volume_by_trilinear_from_half_images_matches_full():
+def test_adjoint_slice_volume_by_map_half_image_matches_full():
     rng = np.random.default_rng(11)
     image_shape = (4, 8)
     volume_shape = (8, 8, 8)
@@ -116,21 +75,19 @@ def test_adjoint_slice_volume_by_trilinear_from_half_images_matches_full():
     full_images = fourier_transform_utils.get_dft2(real_images)
 
     out_full = np.asarray(
-        core_slicing.adjoint_slice_volume_by_trilinear(
-            full_images, rots, image_shape=image_shape, volume_shape=volume_shape
+        core_slicing.adjoint_slice_volume_by_map(
+            full_images, rots, image_shape=image_shape, volume_shape=volume_shape, disc_type="linear_interp"
         )
     )
     out_half = np.asarray(
-        core_slicing.adjoint_slice_volume_by_trilinear_from_half_images(
-            half_images, rots, image_shape=image_shape, volume_shape=volume_shape
+        core_slicing.adjoint_slice_volume_by_map(
+            half_images, rots, image_shape=image_shape, volume_shape=volume_shape, disc_type="linear_interp", half_image=True
         )
     )
     np.testing.assert_allclose(out_half, out_full, atol=1e-5, rtol=1e-5)
 
 
-
-
-def test_adjoint_slice_volume_by_trilinear_from_half_images_matches_full_for_flat_input():
+def test_adjoint_slice_volume_by_map_half_image_matches_full_flat_input():
     rng = np.random.default_rng(12)
     image_shape = (4, 8)
     volume_shape = (8, 8, 8)
@@ -140,13 +97,13 @@ def test_adjoint_slice_volume_by_trilinear_from_half_images_matches_full_for_fla
     full_flat = np.asarray(fourier_transform_utils.get_dft2(real_images)).reshape(2, -1)
 
     out_full = np.asarray(
-        core_slicing.adjoint_slice_volume_by_trilinear(
-            full_flat, rots, image_shape=image_shape, volume_shape=volume_shape
+        core_slicing.adjoint_slice_volume_by_map(
+            full_flat, rots, image_shape=image_shape, volume_shape=volume_shape, disc_type="linear_interp"
         )
     )
     out_half = np.asarray(
-        core_slicing.adjoint_slice_volume_by_trilinear_from_half_images(
-            half_flat, rots, image_shape=image_shape, volume_shape=volume_shape
+        core_slicing.adjoint_slice_volume_by_map(
+            half_flat, rots, image_shape=image_shape, volume_shape=volume_shape, disc_type="linear_interp", half_image=True
         )
     )
     np.testing.assert_allclose(out_half, out_full, atol=1e-5, rtol=1e-5)
@@ -412,38 +369,6 @@ def test_batch_slice_volume_by_nearest_matches_loop():
         np.testing.assert_array_equal(batch_out[i], single_out)
 
 
-def test_nosummed_adjoint_slice_by_nearest_preserves_individual_images():
-    """nosummed_adjoint_slice_by_nearest should backproject each image independently."""
-    volume_size = 8
-    n_images = 2
-    n_pixels = 3
-    image_vecs = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
-    idx = np.array([[0, 1, 2], [3, 4, 5]], dtype=np.int32)
-    out = np.asarray(core_slicing.nosummed_adjoint_slice_by_nearest(volume_size, image_vecs, idx))
-    assert out.shape == (n_images, volume_size)
-    # Each row should only have contributions from its corresponding image
-    np.testing.assert_array_equal(out[0, :3], [1, 2, 3])
-    np.testing.assert_array_equal(out[0, 3:], [0, 0, 0, 0, 0])
-    np.testing.assert_array_equal(out[1, :3], [0, 0, 0])
-    np.testing.assert_array_equal(out[1, 3:6], [4, 5, 6])
-
-
-def test_batch_over_vol_summed_adjoint_slice_by_nearest_sums_by_column():
-    """batch_over_vol_summed_adjoint should accumulate across images for each volume column."""
-    volume_size = 4
-    n_images = 2
-    n_pixels = 2
-    n_volumes = 3
-    # image_vecs shape: (n_images, n_pixels, n_volumes) for vmapping over last dim
-    image_vecs = np.ones((n_images, n_pixels, n_volumes), dtype=np.float32)
-    idx = np.array([[0, 1], [0, 1]], dtype=np.int32)
-    out = np.asarray(core_slicing.batch_over_vol_summed_adjoint_slice_by_nearest(
-        volume_size, image_vecs, idx, None
-    ))
-    assert out.shape == (volume_size, n_volumes)
-    # Each volume column should have 2 images contributing to indices 0 and 1
-    np.testing.assert_array_equal(out[0, :], [2, 2, 2])
-    np.testing.assert_array_equal(out[1, :], [2, 2, 2])
 
 
 def test_slice_volume_by_map_from_half_volume_matches_full():
@@ -468,7 +393,7 @@ def test_slice_volume_by_map_from_half_volume_matches_full():
 
 
 @pytest.mark.gpu
-def test_half_trilinear_backprojection_matches_full_on_gpu(gpu_device):
+def test_half_image_backprojection_matches_full_on_gpu(gpu_device):
     device = gpu_device
     rng = np.random.default_rng(801)
     image_shape = (4, 8)
@@ -483,19 +408,22 @@ def test_half_trilinear_backprojection_matches_full_on_gpu(gpu_device):
 
     with jax.default_device(device):
         out_half = np.asarray(
-            core_slicing.adjoint_slice_volume_by_trilinear_from_half_images(
+            core_slicing.adjoint_slice_volume_by_map(
                 jax.device_put(half_images),
                 jax.device_put(rots),
                 image_shape=image_shape,
                 volume_shape=volume_shape,
+                disc_type="linear_interp",
+                half_image=True,
             )
         )
         out_full = np.asarray(
-            core_slicing.adjoint_slice_volume_by_trilinear(
+            core_slicing.adjoint_slice_volume_by_map(
                 jax.device_put(full_images),
                 jax.device_put(rots),
                 image_shape=image_shape,
                 volume_shape=volume_shape,
+                disc_type="linear_interp",
             )
         )
     np.testing.assert_allclose(out_half, out_full, atol=1e-5, rtol=1e-5)
