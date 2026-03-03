@@ -342,6 +342,11 @@ class MRCLoader(ImageLoader):
     Uses contiguous seek+fromfile for sequential reads and individual
     seek+fromfile for scattered random access.  A lazy ``np.memmap`` view
     is available via ``_get_memmap()`` for bulk access patterns.
+
+    **Local staging**: if ``RECOVAR_CACHE_DIR`` (or ``$TMPDIR``) is set,
+    the MRC file is transparently copied to that directory on first access
+    and all subsequent reads go to the fast local copy.  See
+    :mod:`recovar.data_io.staging` for details and performance numbers.
     """
 
     def __init__(self, filepath: str, indices: Optional[np.ndarray] = None, lazy: bool = True):
