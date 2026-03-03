@@ -39,6 +39,81 @@ def generate_conformation_from_reprojection(xs, mean, u ):
     return ((mean[...,None] + u @ xs.T)[0]).T
 
 
+def _volume_layout_sizes(volume_shape):
+    full_size = int(np.prod(volume_shape))
+    half_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
+    return full_size, half_size
+
+
+def _mean_is_half_volume(mean_estimate, volume_shape):
+    _, half_size = _volume_layout_sizes(volume_shape)
+    return int(np.prod(mean_estimate.shape)) == half_size
+
+
+def _basis_is_half_volume(basis, volume_shape):
+    _, half_size = _volume_layout_sizes(volume_shape)
+    if basis.ndim < 1:
+        return False
+    per_vec_size = int(np.prod(basis.shape[1:])) if basis.shape[0] != 0 else 0
+    return per_vec_size == half_size
+
+
+def _prepare_model_half_volumes(config, mean_estimate, basis):
+    """Convert full Fourier volumes to half-volume layout when supported."""
+    if config.disc_type == "cubic":
+        return mean_estimate, basis
+
+    full_size, half_size = _volume_layout_sizes(config.volume_shape)
+
+    mean_size = int(np.prod(mean_estimate.shape))
+    if mean_size == full_size:
+        mean_estimate = ftu.full_volume_to_half_volume(
+            mean_estimate.reshape(config.volume_shape), config.volume_shape,
+        ).reshape(-1)
+    elif mean_size != half_size:
+        logger.warning(
+            "Unexpected mean_estimate size %d for volume_shape %s; expected %d (full) or %d (half).",
+            mean_size, config.volume_shape, full_size, half_size,
+        )
+
+    if basis.ndim >= 1 and basis.shape[0] > 0:
+        basis_size = int(np.prod(basis.shape[1:]))
+        if basis_size == full_size:
+            n_basis = basis.shape[0]
+            basis = ftu.full_volume_to_half_volume(
+                basis.reshape(n_basis, *config.volume_shape), config.volume_shape,
+            ).reshape(n_basis, -1)
+        elif basis_size != half_size:
+            logger.warning(
+                "Unexpected basis vector size %d for volume_shape %s; expected %d (full) or %d (half).",
+                basis_size, config.volume_shape, full_size, half_size,
+            )
+
+    return mean_estimate, basis
+
+
+def _noise_get_half_or_full(noise_model, image_indices):
+    """Fetch noise variance, preferring half-spectrum if the model supports it."""
+    if noise_model is None:
+        return None
+    get_half = getattr(noise_model, "get_half", None)
+    if callable(get_half):
+        return get_half(image_indices)
+    return noise_model.get(image_indices)
+
+
+def _particle_ids_per_image(particles_ind, n_images):
+    """Normalize batch particle ids to one id per image."""
+    particle_ids = np.asarray(particles_ind).reshape(-1)
+    if particle_ids.size == n_images:
+        return particle_ids
+    if particle_ids.size == 1:
+        return np.full(n_images, particle_ids[0], dtype=particle_ids.dtype)
+    raise ValueError(
+        f"Unexpected particles_ind size {particle_ids.size} for batch with {n_images} images"
+    )
+
+
 @nvtx.annotate("get_per_image_embedding", color="purple", domain=NVTX_DOMAIN_EMBED)
 def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None):
     """Compute per-image latent coordinates by projecting onto principal components.
@@ -163,6 +238,9 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
         experiment_dataset, disc_type=disc_type,
         process_fn=experiment_dataset.image_stack.process_images,
     )
+    # Embedding uses half-spectrum inner products by default; pre-convert model
+    # Fourier volumes once so forward passes can use native half-volume kernels.
+    mean_estimate, basis = _prepare_model_half_volumes(config, mean_estimate, basis)
     model = ModelState(
         mean_estimate=mean_estimate,
         volume_mask=volume_mask,
@@ -193,21 +271,66 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
     noise_model = experiment_dataset.noise
 
     for batch, particles_ind, batch_image_ind in data_generator:
+        batch = jnp.asarray(batch)
+        batch_image_ind = np.asarray(batch_image_ind).reshape(-1)
+        particle_ids = _particle_ids_per_image(particles_ind, batch.shape[0])
 
         # Handle tilt series image subsetting
         if image_subset_in_tilt_series is not None:
-            subset = image_subset_in_tilt_series
-            if np.max(image_subset_in_tilt_series) >= batch.shape[0]:
-                subset = image_subset_in_tilt_series[image_subset_in_tilt_series < batch.shape[0]]
-            batch = jnp.array(batch[subset])
+            subset = np.asarray(image_subset_in_tilt_series, dtype=np.int32).reshape(-1)
+            subset = subset[(subset >= 0) & (subset < batch.shape[0])]
+            if subset.size == 0:
+                continue
+            batch = batch[subset]
             batch_image_ind = batch_image_ind[subset]
+            particle_ids = particle_ids[subset]
+
+        if shared_label:
+            # Some iterators may return multiple particles in one image batch.
+            # Shared-label solves must be computed per particle (tilt series).
+            unique_particles = np.unique(particle_ids)
+            for pid in unique_particles:
+                mask = (particle_ids == pid)
+                if not np.any(mask):
+                    continue
+
+                local_image_ind = batch_image_ind[mask]
+                local_batch = batch[mask]
+                local_particle_ind = np.asarray([pid], dtype=np.int32)
+
+                batch_data = BatchData(
+                    images=local_batch,
+                    ctf_params=experiment_dataset.CTF_params[local_image_ind],
+                    rotation_matrices=experiment_dataset.rotation_matrices[local_image_ind],
+                    translations=experiment_dataset.translations[local_image_ind],
+                    noise_variance=_noise_get_half_or_full(noise_model, local_image_ind),
+                )
+
+                xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
+                    config, batch_data, model, opts,
+                    experiment_dataset.image_stack.mask, contrast_grid,
+                    contrast_mean, contrast_variance,
+                    hermitian_weights,
+                )
+
+                xs[local_particle_ind] = xs_single
+                if not contrast_shared_across_tilt_series:
+                    estimated_contrasts[local_image_ind] = contrast_single
+                else:
+                    estimated_contrasts[local_particle_ind] = contrast_single
+
+                if compute_covariances:
+                    image_latent_precisions[local_particle_ind] = cov_batch
+                if compute_bias:
+                    image_latent_bias[local_particle_ind] = bias
+            continue
 
         batch_data = BatchData(
             images=batch,
             ctf_params=experiment_dataset.CTF_params[batch_image_ind],
             rotation_matrices=experiment_dataset.rotation_matrices[batch_image_ind],
             translations=experiment_dataset.translations[batch_image_ind],
-            noise_variance=noise_model.get(batch_image_ind),
+            noise_variance=_noise_get_half_or_full(noise_model, batch_image_ind),
         )
 
         xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
@@ -217,21 +340,19 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
             hermitian_weights,
         )
 
-        if force_not_shared_label:
-            particles_ind = batch_image_ind
-
-        xs[particles_ind] = xs_single
+        target_ind = batch_image_ind if force_not_shared_label else np.asarray(particle_ids)
+        xs[target_ind] = xs_single
 
         if not contrast_shared_across_tilt_series:
             estimated_contrasts[batch_image_ind] = contrast_single
         else:
-            estimated_contrasts[particles_ind] = contrast_single
+            estimated_contrasts[target_ind] = contrast_single
 
         if compute_covariances:
-            image_latent_precisions[np.array(particles_ind)] = cov_batch
+            image_latent_precisions[target_ind] = cov_batch
 
         if compute_bias:
-            image_latent_bias[np.array(particles_ind)] = bias
+            image_latent_bias[target_ind] = bias
 
     return xs, image_latent_precisions, estimated_contrasts, image_latent_bias
 
@@ -276,29 +397,64 @@ def _compute_batch_coords_p1(
 
     if config.process_fn is not None:
         batch = config.process_fn(batch)
-    batch = core.translate_images(batch, translations, config.image_shape)
+    batch = batch.reshape(batch.shape[0], -1)
 
     # --- Project volumes to image space ---
     # Multiply projected arrays by sqrt(w) so that the plain half-spectrum inner
     # product equals the correct Hermitian-weighted full-spectrum inner product:
     #   <A_w, B_w>_half = sum_{k in half} w[k]*conj(A[k])*B[k] = <A, B>_full
     half = hermitian_weights is not None
+    full_image_size = int(np.prod(config.image_shape))
+    half_image_size = int(np.prod(ftu.image_shape_to_half_image_shape(config.image_shape)))
+
+    if half:
+        if batch.shape[-1] == full_image_size:
+            batch = ftu.full_image_to_half_image(batch, config.image_shape)
+        elif batch.shape[-1] != half_image_size:
+            raise ValueError(
+                f"Expected batch image size {full_image_size} (full) or {half_image_size} (half), got {batch.shape[-1]}"
+            )
+        batch = core.translate_half_images(batch, translations, config.image_shape)
+    else:
+        if batch.shape[-1] == half_image_size:
+            batch = ftu.half_image_to_full_image(batch, config.image_shape)
+        elif batch.shape[-1] != full_image_size:
+            raise ValueError(
+                f"Expected batch image size {full_image_size} (full) or {half_image_size} (half), got {batch.shape[-1]}"
+            )
+        batch = core.translate_images(batch, translations, config.image_shape)
+
+    mean_half_volume = half and _mean_is_half_volume(model.mean_estimate, config.volume_shape)
+    basis_half_volume = half and _basis_is_half_volume(model.basis, config.volume_shape)
     projected_mean = core_forward.forward_model(
         config, model.mean_estimate, ctf_params, rotation_matrices,
-        skip_ctf=config.premultiplied_ctf, half_image=half,
+        skip_ctf=config.premultiplied_ctf, half_image=half, half_volume=mean_half_volume,
     )
     # AUs: (n_basis, n_images, n_pix[_half])
     AUs = covariance_core.batch_vol_forward_from_map(
         config, model.basis, ctf_params, rotation_matrices,
-        skip_ctf=config.premultiplied_ctf, half_image=half,
+        skip_ctf=config.premultiplied_ctf, half_image=half, half_volume=basis_half_volume,
     )
 
     if half:
-        # Observed images arrive full-spectrum; convert to half and weight.
-        batch = ftu.full_image_to_half_image(batch, config.image_shape) * hermitian_weights
+        # Apply sqrt(w) so plain half-space inner products equal full-space ones.
+        batch = batch * hermitian_weights
         projected_mean = projected_mean * hermitian_weights
         AUs = AUs * hermitian_weights[None, None, :]
-        noise_variance = ftu.full_image_to_half_image(noise_variance, config.image_shape)
+
+    if noise_variance is None:
+        noise_variance = jnp.ones(batch.shape, dtype=batch.real.dtype)
+    else:
+        noise_variance = jnp.asarray(noise_variance)
+        if noise_variance.ndim > 2:
+            noise_variance = noise_variance.reshape(noise_variance.shape[0], -1)
+        elif noise_variance.ndim == 1:
+            noise_variance = noise_variance.reshape(1, -1)
+        if noise_variance.shape[-1] != batch.shape[-1]:
+            if half:
+                noise_variance = ftu.full_image_to_half_image(noise_variance, config.image_shape)
+            else:
+                noise_variance = ftu.half_image_to_full_image(noise_variance, config.image_shape)
 
     AUs = AUs.transpose(1, 2, 0)  # (n_images, n_pix[_half], n_basis)
 
@@ -644,6 +800,15 @@ def get_per_image_embedding_multi_zdim(
             basis=jnp.asarray(full_basis, dtype=cryo.dtype),
             eigenvalues=jnp.ones(max_n_pcs, dtype=cryo.dtype),
         )
+        mean_hv, basis_hv = _prepare_model_half_volumes(
+            config, model.mean_estimate, model.basis,
+        )
+        model = ModelState(
+            mean_estimate=mean_hv,
+            volume_mask=model.volume_mask,
+            basis=basis_hv,
+            eigenvalues=model.eigenvalues,
+        )
 
         batch_size = utils.get_embedding_batch_size(full_basis, cryo.image_size, cg, max_n_pcs, gpu_memory)
         _EMBEDDING_BATCH_SAFETY_FACTOR = 10
@@ -660,7 +825,7 @@ def get_per_image_embedding_multi_zdim(
                 ctf_params=cryo.CTF_params[batch_image_ind],
                 rotation_matrices=cryo.rotation_matrices[batch_image_ind],
                 translations=cryo.translations[batch_image_ind],
-                noise_variance=noise_model.get(batch_image_ind),
+                noise_variance=_noise_get_half_or_full(noise_model, batch_image_ind),
             )
 
             # ── Single forward-model pass at max_n_pcs ──────────────────

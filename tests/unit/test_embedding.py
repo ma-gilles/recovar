@@ -239,6 +239,93 @@ def test_get_per_image_embedding_supports_single_cryo_list(monkeypatch):
     assert bias.shape == (4, 1, 1)
 
 
+def test_get_coords_shared_label_splits_mixed_particle_batches(monkeypatch):
+    class _DummyNoise:
+        def get_half(self, idx):
+            return np.ones((len(np.asarray(idx).reshape(-1)), 16), dtype=np.float32)
+
+    class _DummyImageStack:
+        def __init__(self):
+            self.mask = np.ones((16,), dtype=np.float32)
+
+        def process_images(self, batch, apply_image_mask=False):
+            _ = apply_image_mask
+            return batch
+
+    class _DummyTiltCryo:
+        def __init__(self):
+            self.tilt_series_flag = True
+            self.n_units = 2
+            self.n_images = 4
+            self.dtype = np.complex64
+            self.dtype_real = np.float32
+            self.image_shape = (4, 4)
+            self.volume_shape = (4, 4, 4)
+            self.grid_size = 4
+            self.voxel_size = 1.0
+            self.padding = 0
+            self.premultiplied_ctf = False
+            self.CTF_fun = embedding.core.evaluate_ctf_wrapper
+            self.image_stack = _DummyImageStack()
+            self.noise = _DummyNoise()
+            self.CTF_params = np.zeros((4, 9), dtype=np.float32)
+            self.rotation_matrices = np.zeros((4, 3, 3), dtype=np.float32)
+            self.translations = np.zeros((4, 2), dtype=np.float32)
+
+        def get_dataset_generator(self, batch_size):
+            _ = batch_size
+            # Mixed particles in one image batch: two tilts from particle 0 and two from particle 1
+            batch = np.zeros((4, 16), dtype=np.complex64)
+            particles_ind = np.array([0, 0, 1, 1], dtype=np.int32)
+            batch_image_ind = np.array([0, 1, 2, 3], dtype=np.int32)
+            yield batch, particles_ind, batch_image_ind
+
+    calls = []
+
+    def fake_compute_batch_coords(config, batch_data, model, opts, image_mask, contrast_grid, contrast_mean, contrast_variance, hermitian_weights):
+        _ = (config, model, image_mask, contrast_grid, contrast_mean, contrast_variance, hermitian_weights)
+        local_idx = np.asarray(batch_data.ctf_params)[:, 0].astype(int)
+        # ctf_params are zeros in this fixture, so infer group size from batch length
+        n_local = batch_data.images.shape[0]
+        calls.append((n_local, bool(opts.shared_label)))
+        basis_size = model.eigenvalues.shape[0]
+        # Return one latent row for shared-label solves.
+        xs = np.full((1, basis_size), float(n_local), dtype=np.float32)
+        contrast = np.array([10.0 + n_local], dtype=np.float32)
+        cov = np.eye(basis_size, dtype=np.float32)[None]
+        bias = None
+        _ = local_idx
+        return xs, contrast, cov, bias
+
+    monkeypatch.setattr(embedding, "compute_batch_coords", fake_compute_batch_coords)
+
+    cryo = _DummyTiltCryo()
+    basis_size = 2
+    xs, cov, contrasts, bias = embedding.get_coords_in_basis_and_contrast_3(
+        experiment_dataset=cryo,
+        mean_estimate=np.zeros((4 ** 3,), dtype=np.complex64),
+        basis=np.zeros((basis_size, 4 ** 3), dtype=np.complex64),
+        eigenvalues=np.ones((basis_size,), dtype=np.float32),
+        volume_mask=np.ones((4 ** 3,), dtype=np.float32),
+        contrast_grid=np.array([1.0], dtype=np.float32),
+        batch_size=8,
+        disc_type="linear_interp",
+        compute_covariances=True,
+        compute_bias=False,
+        contrast_shared_across_tilt_series=False,
+    )
+
+    # Two per-particle shared-label solves should occur (one per particle id).
+    assert calls == [(2, True), (2, True)]
+    assert xs.shape == (2, basis_size)
+    np.testing.assert_allclose(xs, np.full((2, basis_size), 2.0, dtype=np.float32))
+    # Per-image contrasts are filled for each tilt belonging to each particle.
+    assert contrasts.shape == (4,)
+    np.testing.assert_allclose(contrasts, np.full((4,), 12.0, dtype=np.float32))
+    assert cov.shape == (2, basis_size, basis_size)
+    assert bias is None
+
+
 # ---------------------------------------------------------------------------
 # Tests for solve_contrast_linear_system
 # ---------------------------------------------------------------------------
