@@ -179,14 +179,27 @@ def adjoint_slice_volume_by_map(slices, rotation_matrices, image_shape, volume_s
             half_image = False
         if not _is_complex(slices):
             slices = slices.astype(jnp.result_type(slices, jnp.complex64))
-        if volume is None:
-            vol_shape = (
-                fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
-                if half_volume else volume_shape
+        if half_volume:
+            # CUDA backproject(half_volume=True) is not numerically validated
+            # (max_err ~75 vs reference).  Use full backproject + VJP of
+            # half_volume_to_full_volume to get the correct adjoint.
+            full_vol_zeros = jnp.zeros(int(np.prod(volume_shape)), dtype=slices.dtype)
+            full_grad = cuda_backproject(
+                full_vol_zeros, slices, rotation_matrices, image_shape, volume_shape, order=order
             )
-            volume = jnp.zeros(int(np.prod(vol_shape)), dtype=slices.dtype)
+            half_vol_size = int(np.prod(
+                fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+            ))
+            _, vjp_expand = vjp(
+                lambda hv: fourier_transform_utils.half_volume_to_full_volume(hv, volume_shape),
+                jnp.zeros(half_vol_size, dtype=slices.dtype),
+            )
+            result = vjp_expand(full_grad)[0]
+            return result if volume is None else result + volume
+        if volume is None:
+            volume = jnp.zeros(int(np.prod(volume_shape)), dtype=slices.dtype)
         return cuda_backproject(volume, slices, rotation_matrices, image_shape, volume_shape,
-                                order=order, half_image=half_image, half_volume=half_volume)
+                                order=order)
     # JAX fallback
     if half_image:
         slices = fourier_transform_utils.half_image_to_full_image(slices, image_shape)
