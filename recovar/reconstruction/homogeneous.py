@@ -76,16 +76,14 @@ def get_mean_conformation_relion(
         combined = (corrected[0] + corrected[1]) / 2
 
     mean_prior = np.array(mean_prior)
-    combined_regularized = (corrected_reg[0] + corrected_reg[1]) / 2
     means = {
-        "combined":            np.array(combined),
-        "combined_regularized": np.array(combined_regularized),
-        "corrected0":          np.array(corrected[0]),
-        "corrected1":          np.array(corrected[1]),
-        "corrected0reg":       np.array(corrected_reg[0]),
-        "corrected1reg":       np.array(corrected_reg[1]),
-        "lhs":                 np.array((ft_ctfs[0] + ft_ctfs[1]) / 2),
-        "prior":               mean_prior,
+        "combined":      np.array(combined),
+        "corrected0":    np.array(corrected[0]),
+        "corrected1":    np.array(corrected[1]),
+        "corrected0reg": np.array(corrected_reg[0]),
+        "corrected1reg": np.array(corrected_reg[1]),
+        "lhs":           np.array((ft_ctfs[0] + ft_ctfs[1]) / 2),
+        "prior":         mean_prior,
     }
 
     logger.info("mean computation completed in %.2fs", time.time() - st_time)

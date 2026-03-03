@@ -13,6 +13,7 @@ from recovar.utils.nvtx_shim import nvtx
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, utils, jax_config
+from recovar.jax_config import _to_cpu
 from recovar.core import cubic_interpolation
 from recovar.core.configs import ForwardModelConfig, BatchData, DataIterator, ModelState, CovarianceOpts, CovColumnOpts
 from recovar.heterogeneity import covariance_core
@@ -199,11 +200,10 @@ def greedy_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_radius 
     radial_distances = fourier_transform_utils.get_grid_of_radial_distances(volume_shape)
     sampling_vec *= radial_distances.reshape(-1) < keep_only_below_freq
 
-    sorted_idx = jnp.argsort(-sampling_vec)
-    sorted_idx = np.array(sorted_idx)
+    sorted_idx = np.asarray(jnp.argsort(-sampling_vec))
     picked_set = set()
     picked = []
-    n_picked =0 
+    n_picked =0
     sorted_frequencies = core.vec_indices_to_frequencies(sorted_idx, volume_shape)
     sorted_frequencies_norm = np.linalg.norm(sorted_frequencies, axis=-1)
 
@@ -224,20 +224,18 @@ def greedy_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_radius 
             # Now take out everything that is close by and their complex conjugates
 
             nearby_freqs = core.find_frequencies_within_grid_dist(picked_frequency, np.ceil(avoid_in_radius).astype(int) )
-            nearby_freqs = np.array(nearby_freqs)
+            nearby_freqs = np.asarray(nearby_freqs)
             nearby_freqs = nearby_freqs[np.linalg.norm(nearby_freqs - picked_frequency, axis=-1) <= avoid_in_radius]
             nearby_freqs_negative = -nearby_freqs
-            nearby_vec_indices = core.frequencies_to_vec_indices(nearby_freqs, volume_shape)
-            nearby_negative_vec_indices = core.frequencies_to_vec_indices(nearby_freqs_negative, volume_shape)
-            nearby_vec_indices = np.array(nearby_vec_indices)
-            nearby_negative_vec_indices = np.array(nearby_negative_vec_indices)
+            nearby_vec_indices = np.asarray(core.frequencies_to_vec_indices(nearby_freqs, volume_shape))
+            nearby_negative_vec_indices = np.asarray(core.frequencies_to_vec_indices(nearby_freqs_negative, volume_shape))
             for k in range(nearby_vec_indices.size):
                 picked_set.add(nearby_vec_indices[k])
                 picked_set.add(nearby_negative_vec_indices[k])
-    
-    picked_frequencies = core.vec_indices_to_frequencies(np.array(picked), volume_shape)
 
-    return np.array(picked), np.array(picked_frequencies)
+    picked_frequencies = core.vec_indices_to_frequencies(np.asarray(picked), volume_shape)
+
+    return np.asarray(picked), np.asarray(picked_frequencies)
 
 @nvtx.annotate("randomized_column_choice", color="orange")
 def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_radius = 1):
@@ -247,24 +245,23 @@ def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_rad
     if n_samples < 1 or n_samples > sampling_vec.size:
         raise ValueError("n_samples should be between 1 and the size of sampling_vec")
 
-    sorted_idx = jnp.argsort(-sampling_vec)
-    sorted_idx = np.array(sorted_idx)
+    sorted_idx = np.asarray(jnp.argsort(-sampling_vec))
     picked_set = set()
     picked = []
-    n_picked =0 
+    n_picked =0
     sorted_frequencies = core.vec_indices_to_frequencies(sorted_idx, volume_shape)
     sorted_frequencies_norm = np.linalg.norm(sorted_frequencies, axis=-1)
-    running_vec = sampling_vec.astype(np.float64)
+    running_vec = np.asarray(sampling_vec).astype(np.float64)
 
     probs = running_vec/np.sum(running_vec)
     draw_size = min(running_vec.size, n_samples * 100)
     random_choices = np.random.choice(running_vec.size, size=draw_size, p=probs, replace=False)
-    test_idx =0 
+    test_idx =0
 
     while n_picked < n_samples:
         if test_idx >= random_choices.size:
             random_choices = np.random.choice(running_vec.size, size=draw_size, p=probs, replace=False)
-            test_idx =0 
+            test_idx =0
 
         idx = random_choices[test_idx]
         picked_frequency = core.vec_indices_to_frequencies(idx[None], volume_shape)
@@ -273,7 +270,7 @@ def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_rad
             picked_frequency = -picked_frequency # Take the complex conjugate instead
             idx = int(core.frequencies_to_vec_indices(picked_frequency, volume_shape)[0])
 
-        test_idx +=1        
+        test_idx +=1
         if idx in picked_set:
             continue
 
@@ -284,20 +281,18 @@ def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_rad
         picked_set.add(idx)
 
         nearby_freqs = core.find_frequencies_within_grid_dist(picked_frequency, np.ceil(avoid_in_radius).astype(int) )
-        nearby_freqs = np.array(nearby_freqs)
+        nearby_freqs = np.asarray(nearby_freqs)
         nearby_freqs = nearby_freqs[np.linalg.norm(nearby_freqs - picked_frequency, axis=-1) <= avoid_in_radius]
         nearby_freqs_negative = -nearby_freqs
-        nearby_vec_indices = core.frequencies_to_vec_indices(nearby_freqs, volume_shape)
-        nearby_negative_vec_indices = core.frequencies_to_vec_indices(nearby_freqs_negative, volume_shape)
-        nearby_vec_indices = np.array(nearby_vec_indices)
-        nearby_negative_vec_indices = np.array(nearby_negative_vec_indices)
+        nearby_vec_indices = np.asarray(core.frequencies_to_vec_indices(nearby_freqs, volume_shape))
+        nearby_negative_vec_indices = np.asarray(core.frequencies_to_vec_indices(nearby_freqs_negative, volume_shape))
         for k in range(nearby_vec_indices.size):
             picked_set.add(nearby_vec_indices[k])
             picked_set.add(nearby_negative_vec_indices[k])
-    
-    picked_frequencies = core.vec_indices_to_frequencies(np.array(picked), volume_shape)
 
-    return np.array(picked), np.array(picked_frequencies)
+    picked_frequencies = core.vec_indices_to_frequencies(np.asarray(picked), volume_shape)
+
+    return np.asarray(picked), np.asarray(picked_frequencies)
 
 
 @nvtx.annotate("compute_regularized_covariance_columns_in_batch", color="purple")
@@ -340,8 +335,8 @@ def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, vo
         covariance_cols.append(covariance_cols_b['est_mask'])
         fscs.append(fscs_b)
 
-    covariance_cols = {'est_mask' : np.concatenate(covariance_cols, axis = -1)}
-    fscs = np.concatenate(fscs, axis = 0)
+    covariance_cols = {'est_mask' : jnp.concatenate(covariance_cols, axis=-1)}
+    fscs = jnp.concatenate(fscs, axis=0)
     return covariance_cols, picked_frequencies, fscs
 
 
@@ -381,7 +376,7 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask
     logger.info("after reg fn")
     utils.report_memory_device(logger=logger)
 
-    return covariance_cols, picked_frequencies, np.asarray(fscs)
+    return covariance_cols, picked_frequencies, jnp.stack(fscs, axis=0) if isinstance(fscs, list) else fscs
 
 
 # ============================================================================
@@ -475,7 +470,7 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, b
         grid_size=int(experiment_dataset.grid_size),
         voxel_size=float(experiment_dataset.voxel_size),
         padding=int(experiment_dataset.padding),
-        disc_type=disc_type,
+        disc_type='linear_interp',  # trilinear kernel only supports linear_interp
         CTF_fun=experiment_dataset.CTF_fun,
         premultiplied_ctf=bool(experiment_dataset.premultiplied_ctf),
         volume_mask_threshold=float(experiment_dataset.volume_mask_threshold),
@@ -525,11 +520,6 @@ def compute_variance(
 ):
     st = time.time()
 
-    if disc_type == 'cubic':
-        mean_estimate = cubic_interpolation.calculate_spline_coefficients(
-            mean_estimate.reshape(cryos.volume_shape)
-        )
-
     # Run variance kernel for each half-set.
     # variance_relion_style_triangular_kernel returns (Ft_ctf, Ft_y, Ft_one, Ft_im):
     #   ctf_w   — CTF^4 accumulator (Wiener denominator)
@@ -572,19 +562,19 @@ def compute_variance(
             variance[f"corrected{i}"] = _safe_div(signal[i], reg_lhs)
 
     variance["combined"] = (variance["corrected0"] + variance["corrected1"]) / 2
-    variance["prior"] = np.array(variance_prior)
+    variance["prior"] = _to_cpu(variance_prior)
     variance["lhs"] = lhs
-    variance = {k: np.array(v).real for k, v in variance.items()}
+    variance = {k: _to_cpu(v).real for k, v in variance.items()}
 
     noise_p_variance_est = _safe_div(noise_s[0] + noise_s[1], noise_w[0] + noise_w[1])
 
     logger.info("time to compute variance: %.1fs", time.time() - st)
     return (
         variance,
-        np.array(variance_prior).real,
-        np.array(fsc).real,
-        np.array(lhs).real,
-        np.array(noise_p_variance_est).real,
+        _to_cpu(variance_prior).real,
+        _to_cpu(fsc).real,
+        _to_cpu(lhs).real,
+        _to_cpu(noise_p_variance_est).real,
     )
 
 
@@ -717,8 +707,8 @@ def _batched_stack_transfer(H, B, H_out, B_out, freq_offset, volume_size, n_item
         B_batch_jax = jnp.stack(B[batch_start:batch_end], axis=1)
         col_start = freq_offset + batch_start
         col_end = freq_offset + batch_end
-        H_out[:, col_start:col_end] = np.asarray(H_batch_jax)
-        B_out[:, col_start:col_end] = np.asarray(B_batch_jax)
+        H_out[:, col_start:col_end] = _to_cpu(H_batch_jax)
+        B_out[:, col_start:col_end] = _to_cpu(B_batch_jax)
         del H_batch_jax, B_batch_jax
 
 
@@ -739,7 +729,7 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
     volume_size = cryo.volume_size
 
     disc_type = 'cubic' if options['disc_type'] == 'cubic' else 'linear_interp'
-    mean_estimate = jnp.array(mean_estimate)
+    mean_estimate = jnp.asarray(mean_estimate)
 
     config = ForwardModelConfig.from_dataset(cryo, disc_type=disc_type)
     opts = CovColumnOpts(
@@ -850,34 +840,33 @@ def compute_covariance_regularization_relion_style(
         )
 
         # Transfer entire batches to CPU at once — avoids per-element DtoH copies.
-        combined_cov_cols[batch_st:batch_end] = list(np.asarray(combined_cov_col))
-        fscs[batch_st:batch_end] = list(np.asarray(fscs_this))
+        combined_cov_cols[batch_st:batch_end] = list(_to_cpu(combined_cov_col))
+        fscs[batch_st:batch_end] = list(_to_cpu(fscs_this))
         del combined_cov_col, fscs_this
 
         if options["prior_n_iterations"] >= 0:
-            fsc_priors[batch_st:batch_end] = list(np.asarray(priors.real))
+            fsc_priors[batch_st:batch_end] = list(_to_cpu(priors).real)
         del priors
 
     if options["prior_n_iterations"] >= 0:
-        fsc_priors = np.stack(fsc_priors, axis=0).real
+        fsc_priors = jnp.stack(fsc_priors, axis=0).real
 
-    combined_cov_cols = np.stack(combined_cov_cols, axis=0)
+    combined_cov_cols = jnp.stack(combined_cov_cols, axis=0)
     return combined_cov_cols, fsc_priors, fscs
 
 from recovar.core import cubic_interpolation
 vmap_calculate_spline_coefficients = jax.vmap(cubic_interpolation.calculate_spline_coefficients, in_axes = 0, out_axes = 0)
 
 @nvtx.annotate("compute_spline_coeffs_in_batch", color="magenta")
-def compute_spline_coeffs_in_batch(basis, volume_shape, gpu_memory= None):
-    gpu_memory = utils.get_gpu_memory_total() if gpu_memory is None else gpu_memory
-    vol_batch_size = utils.get_vol_batch_size(volume_shape[0], gpu_memory=gpu_memory)
-    logger.info("memory used = %s, vol_batch_size in compute_spline_coeffs_in_batch %s", gpu_memory, vol_batch_size)
+def compute_spline_coeffs_in_batch(basis, volume_shape, gpu_memory=None):
     utils.report_memory_device(logger=logger)
-    coeffs = []
-    for k in range(0, basis.shape[0], vol_batch_size):
-        coeffs.append(np.array(vmap_calculate_spline_coefficients(basis[k:k+vol_batch_size].reshape(-1, *volume_shape))))
-    coeffs = np.concatenate(coeffs, axis = 0)
-    return coeffs
+    basis_4d = jnp.asarray(basis).reshape(-1, *volume_shape)
+
+    def _scan_fn(_, vol):
+        return None, cubic_interpolation.calculate_spline_coefficients(vol)
+
+    _, coeffs = jax.lax.scan(_scan_fn, None, basis_4d)
+    return _to_cpu(coeffs)
 
 ## REDUCED COVARIANCE COMPUTATION
 
