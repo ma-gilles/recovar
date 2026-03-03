@@ -604,6 +604,7 @@ def test_compute_batch_coords_p1_half_matches_full_float64(H, W, monkeypatch):
     ~3e-8 relative, which is near the float64 machine epsilon times the number of
     terms in the sum.
     """
+    _prev_x64 = jax.config.read("jax_enable_x64")
     jax.config.update("jax_enable_x64", True)
     try:
         n_images, n_basis = 5, 3
@@ -669,7 +670,7 @@ def test_compute_batch_coords_p1_half_matches_full_float64(H, W, monkeypatch):
                 err_msg=f"{name}: max_err={np.max(np.abs(h_np - f_np.real)):.4g}",
             )
     finally:
-        jax.config.update("jax_enable_x64", False)
+        jax.config.update("jax_enable_x64", _prev_x64)
 
 
 # ---------------------------------------------------------------------------
