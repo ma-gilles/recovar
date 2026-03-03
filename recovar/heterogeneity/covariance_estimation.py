@@ -332,8 +332,8 @@ def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, vo
         covariance_cols.append(covariance_cols_b['est_mask'])
         fscs.append(fscs_b)
 
-    covariance_cols = {'est_mask' : jnp.concatenate(covariance_cols, axis=-1)}
-    fscs = jnp.concatenate(fscs, axis=0)
+    covariance_cols = {'est_mask': np.concatenate(covariance_cols, axis=-1)}
+    fscs = np.concatenate(fscs, axis=0)
     return covariance_cols, picked_frequencies, fscs
 
 
@@ -368,12 +368,12 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask
         Hs, Bs, mean_prior, picked_frequencies, volume_noise_var, mask_final,
         volume_shape, gpu_memory, reg_init_multiplier=jax_config.REG_INIT_MULTIPLIER,
         options=options)
-    covariance_cols["est_mask"] = covariance_cols["est_mask"].T
+    covariance_cols["est_mask"] = np.asarray(covariance_cols["est_mask"].T)
     del Hs, Bs
     logger.info("after reg fn")
     utils.report_memory_device(logger=logger)
 
-    return covariance_cols, picked_frequencies, jnp.stack(fscs, axis=0) if isinstance(fscs, list) else fscs
+    return covariance_cols, picked_frequencies, np.stack(fscs, axis=0) if isinstance(fscs, list) else np.asarray(fscs)
 
 
 # ============================================================================
@@ -853,9 +853,9 @@ def compute_covariance_regularization_relion_style(
         del priors
 
     if options["prior_n_iterations"] >= 0:
-        fsc_priors = jnp.stack(fsc_priors, axis=0).real
+        fsc_priors = np.stack(fsc_priors, axis=0).real
 
-    combined_cov_cols = jnp.stack(combined_cov_cols, axis=0)
+    combined_cov_cols = np.stack(combined_cov_cols, axis=0)
     return combined_cov_cols, fsc_priors, fscs
 
 from recovar.core import cubic_interpolation
