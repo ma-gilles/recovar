@@ -13,6 +13,7 @@ from recovar.utils.nvtx_shim import nvtx
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, utils, jax_config
+from recovar.core import linalg
 from recovar.jax_config import _to_cpu
 from recovar.core import cubic_interpolation
 from recovar.core.configs import ForwardModelConfig, BatchData, DataIterator, ModelState, CovarianceOpts, CovColumnOpts
@@ -909,23 +910,21 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
             shared_label=experiment_dataset.tilt_series_flag,
         )
 
-        data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
-        for batch, _, batch_image_ind in data_generator:
-            noise_variances = experiment_dataset.noise.get(batch_image_ind)
+        hermitian_weights = linalg.rfft2_hermitian_weights(config.image_shape)
 
-            batch_data = BatchData(
-                images=batch,
-                ctf_params=experiment_dataset.CTF_params[batch_image_ind],
-                rotation_matrices=experiment_dataset.rotation_matrices[batch_image_ind],
-                translations=experiment_dataset.translations[batch_image_ind],
-                noise_variance=noise_variances,
-            )
+        for batch_data in DataIterator(
+            experiment_dataset, batch_size,
+            noise_model=experiment_dataset.noise,
+            noise_half=False,
+            apply_process_images=False,
+        ):
             lhs_this, rhs_this = reduce_covariance_inner(
                 config, batch_data, model, opts,
                 experiment_dataset.image_stack.mask,
+                hermitian_weights=hermitian_weights,
             )
             if not jnp.all(jnp.isfinite(lhs_this)) or not jnp.all(jnp.isfinite(rhs_this)):
-                logger.error("NaN/Inf in covariance batch (images %s); zeroing batch contribution", batch_image_ind[:5])
+                logger.error("NaN/Inf in covariance batch; zeroing batch contribution")
                 lhs_this = jnp.where(jnp.isfinite(lhs_this), lhs_this, 0.0)
                 rhs_this = jnp.where(jnp.isfinite(rhs_this), rhs_this, 0.0)
 
@@ -981,6 +980,7 @@ def reduce_covariance_inner(
     model: ModelState,
     opts: CovarianceOpts,
     image_mask: jax.Array,
+    hermitian_weights=None,
 ):
     """Covariance estimation inner loop — Equinox API.
 
@@ -1035,10 +1035,30 @@ def reduce_covariance_inner(
 
     if do_mask_images:
         AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, config.image_shape)
+
+    # --- Half-spectrum conversion ---
+    # All masking and full-spectrum operations are complete.  Convert to the
+    # rfft-packed half-spectrum representation and apply sqrt(w) weights so
+    # that plain (unweighted) half-spectrum inner products equal the correct
+    # full-spectrum inner products for Hermitian cryo-EM data.
+    if hermitian_weights is not None:
+        batch = fourier_transform_utils.full_image_to_half_image(
+            batch, config.image_shape) * hermitian_weights
+        projected_mean = fourier_transform_utils.full_image_to_half_image(
+            projected_mean, config.image_shape) * hermitian_weights
+        # AUs: (n_basis, n_images, H*W) → (n_basis, n_images, H*(W//2+1))
+        n_b, n_i = AUs.shape[0], AUs.shape[1]
+        AUs = fourier_transform_utils.full_image_to_half_image(
+            AUs.reshape(n_b * n_i, -1), config.image_shape,
+        ).reshape(n_b, n_i, -1) * hermitian_weights[None, None, :]
+        noise_variance = fourier_transform_utils.full_image_to_half_image(
+            noise_variance, config.image_shape)
+
     AUs = AUs.transpose(1, 2, 0)
 
     if config.premultiplied_ctf:
-        CTF = config.compute_ctf(ctf_params)
+        CTF = (config.compute_ctf_half(ctf_params) if hermitian_weights is not None
+               else config.compute_ctf(ctf_params))
         batch = batch - projected_mean * CTF
         AU_t_images = batch_x_T_y(AUs, batch)
         AUs = AUs * CTF[..., None]
