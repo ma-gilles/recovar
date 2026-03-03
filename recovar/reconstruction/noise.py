@@ -36,6 +36,10 @@ class RadialNoiseModel():
         self._precompute()
 
     def _precompute(self):
+        if self.noise_variance_radial is None:
+            self._noise_full = None
+            self._noise_half = None
+            return
         # Compute once; keep as JAX arrays (GPU) so callers pay zero transfer cost.
         self._noise_full = make_radial_noise(self.noise_variance_radial, self.image_shape).reshape(1, -1)
         self._noise_half = make_radial_noise_half(self.noise_variance_radial, self.image_shape).reshape(1, -1)
@@ -63,6 +67,10 @@ class VariableRadialNoiseModel():
         self._precompute()
 
     def _precompute(self):
+        if self.noise_variance_radials is None:
+            self._noise_full = None
+            self._noise_half = None
+            return
         # Precompute expanded arrays for every dose-index level as JAX GPU arrays.
         # Per-batch get() / get_half() is a GPU gather (no host transfer).
         self._noise_full = batch_make_radial_noise(self.noise_variance_radials, self.image_shape)
