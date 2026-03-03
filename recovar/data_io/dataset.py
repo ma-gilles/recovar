@@ -1195,7 +1195,7 @@ def figure_out_halfsets(args):
     ind_file = getattr(args, 'ind', None)
     tilt_ind_file = getattr(args, 'tilt_ind', None)
     ntilts = getattr(args, 'ntilts', None)
-    n_images = getattr(args, 'n_images', -1)
+    n_images = getattr(args, 'n_images', None) or -1
 
     if args.halfsets is None:
         # --- Auto-detect from RELION _rlnRandomSubset (SPA only) ---
