@@ -140,6 +140,47 @@ def _slice_half_vol_bwd(image_shape, volume_shape, order, res, g):
 _slice_from_half_volume_cuda.defvjp(_slice_half_vol_fwd, _slice_half_vol_bwd)
 
 
+# ── CUDA full-volume → half-image projection with custom VJP ────────
+@functools.partial(jax.custom_vjp, nondiff_argnums=(2, 3, 4))
+def _slice_volume_by_map_to_half_image_cuda(volume, rotation_matrices, image_shape, volume_shape, order):
+    from recovar.cuda_backproject import project as cuda_project
+    return cuda_project(volume, rotation_matrices, image_shape, volume_shape,
+                        order=order, half_image=True)
+
+
+def _slice_to_half_image_cuda_fwd(volume, rotation_matrices, image_shape, volume_shape, order):
+    result = _slice_volume_by_map_to_half_image_cuda(volume, rotation_matrices, image_shape, volume_shape, order)
+    return result, (rotation_matrices,)
+
+
+def _slice_to_half_image_cuda_bwd(image_shape, volume_shape, order, res, g):
+    from recovar.cuda_backproject import backproject as cuda_backproject
+    (rotation_matrices,) = res
+    volume = jnp.zeros(int(np.prod(volume_shape)), dtype=g.dtype)
+    adj = cuda_backproject(volume, g, rotation_matrices, image_shape, volume_shape,
+                           order=order, half_image=True)
+    return (adj, jnp.zeros_like(rotation_matrices))
+
+
+_slice_volume_by_map_to_half_image_cuda.defvjp(
+    _slice_to_half_image_cuda_fwd, _slice_to_half_image_cuda_bwd
+)
+
+
+def slice_volume_by_map_to_half_image(volume, rotation_matrices, image_shape, volume_shape, disc_type):
+    """Project a full volume directly to half-image (rfft-packed) format.
+
+    On the CUDA path the kernel only computes the non-redundant half of the
+    output frequencies.  On the JAX path the existing
+    :func:`_slice_volume_by_map_to_half_image_jax` samples the half
+    coordinates directly, avoiding a full-image intermediate.
+    """
+    order = decide_order(disc_type)
+    if order <= 1 and _check_cuda() and _is_complex(volume) and not _is_jvp_tracer(volume):
+        return _slice_volume_by_map_to_half_image_cuda(volume, rotation_matrices, image_shape, volume_shape, order)
+    return _slice_volume_by_map_to_half_image_jax(volume, rotation_matrices, image_shape, volume_shape, disc_type)
+
+
 def slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type):
     order = decide_order(disc_type)
     if order <= 1 and _check_cuda() and _is_complex(volume) and not _is_jvp_tracer(volume):
