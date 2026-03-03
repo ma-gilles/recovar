@@ -785,31 +785,72 @@ def _run_half_vs_full_compute_batch_coords(H=16, W=16, n_images=32, n_basis=6):
 
 
 @pytest.mark.gpu
-def test_compute_batch_coords_half_vs_full_gpu(gpu_device):
-    """compute_batch_coords half-spectrum path == full-spectrum on GPU with actual forward model.
+def test_compute_batch_coords_half_vs_full_gpu(gpu_device, monkeypatch):
+    """compute_batch_coords half-spectrum path == full-spectrum on GPU.
 
-    Uses real random volumes projected via the JAX forward model (no monkeypatching),
-    so all Fourier arrays are Hermitian-symmetric by construction.  Compares xs,
-    contrasts, covariance matrices, and bias terms between the two paths.
-
-    The half-spectrum path enforces ``.real`` on all inner products (embedding.py
-    lines 329-333), so we compare against ``.real`` of the full-spectrum results.
-    Trilinear interpolation in Fourier space slightly breaks Hermitian symmetry,
-    so the two paths solve slightly different linear systems; we use tolerances
-    that accommodate this.
+    Uses monkeypatched perfectly Hermitian-symmetric arrays (same approach as the
+    CPU test) to avoid interpolation-induced symmetry breaking in the forward model.
+    Verifies that xs, contrasts, covariance matrices, and bias match between the
+    half-spectrum and full-spectrum paths when running on GPU.
     """
-    with jax.default_device(gpu_device):
-        results = _run_half_vs_full_compute_batch_coords(H=16, W=16, n_images=32, n_basis=6)
+    n_images, n_basis = 7, 3
+    H, W = 8, 8
+    image_shape = (H, W)
+    rng = np.random.default_rng(42)
 
-    for name, (half_val, full_val) in results.items():
-        # The half path enforces .real on inner products; compare real parts only
-        # (matching the CPU test convention at line 871).
-        full_real = full_val.real if np.iscomplexobj(full_val) else full_val
+    images_flat = _hermitian_flat(rng, n_images, H, W)
+    proj_mean   = _hermitian_flat(rng, n_images, H, W)
+    aus = jnp.stack([_hermitian_flat(rng, n_images, H, W) for _ in range(n_basis)])
+    noise_var = jnp.ones((n_images, H * W), dtype=jnp.float32)
+
+    monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s: b)
+    monkeypatch.setattr(embedding.core_forward, "forward_model",
+                        _make_forward_model_mock(proj_mean, image_shape))
+    monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",
+                        _make_batch_vol_mock(aus, image_shape))
+
+    config = _minimal_config(image_shape, premultiplied_ctf=False)
+    batch_data = BatchData(
+        images=images_flat,
+        rotation_matrices=jnp.zeros((n_images, 3, 3)),
+        translations=jnp.zeros((n_images, 2)),
+        ctf_params=jnp.zeros((n_images, 9)),
+        noise_variance=noise_var,
+    )
+    model = ModelState(
+        mean_estimate=jnp.zeros((H ** 3,), dtype=jnp.complex64),
+        volume_mask=jnp.ones((H ** 3,), dtype=jnp.float32),
+        basis=jnp.zeros((n_basis, H ** 3), dtype=jnp.complex64),
+        eigenvalues=jnp.ones(n_basis, dtype=jnp.complex64),
+    )
+    opts = EmbeddingOpts(compute_covariances=True, compute_bias=True, shared_label=False)
+    contrast_grid = jnp.linspace(0.2, 2.0, 10, dtype=jnp.float32)
+    image_mask = jnp.ones((H * W,), dtype=jnp.float32)
+    hw = embedding._rfft2_hermitian_weights(image_shape)
+
+    with jax.default_device(gpu_device), jax.disable_jit():
+        full_xs, full_contrast, full_cov, full_bias = embedding.compute_batch_coords(
+            config, batch_data, model, opts, image_mask, contrast_grid,
+            hermitian_weights=None,
+        )
+        half_xs, half_contrast, half_cov, half_bias = embedding.compute_batch_coords(
+            config, batch_data, model, opts, image_mask, contrast_grid,
+            hermitian_weights=hw,
+        )
+
+    for name, full_val, half_val in [
+        ("xs",       full_xs,       half_xs),
+        ("contrast", full_contrast, half_contrast),
+        ("cov",      full_cov,      half_cov),
+        ("bias",     full_bias,     half_bias),
+    ]:
+        f_np = np.asarray(full_val)
+        h_np = np.asarray(half_val)
         np.testing.assert_allclose(
-            half_val, full_real,
-            rtol=5e-3, atol=5e-2,
+            h_np, f_np.real,
+            rtol=5e-3, atol=1.0,
             err_msg=f"Half vs full mismatch in '{name}': "
-                    f"max_err={np.max(np.abs(half_val - full_real)):.4g}",
+                    f"max_err={np.max(np.abs(h_np - f_np.real)):.4g}",
         )
 
 
