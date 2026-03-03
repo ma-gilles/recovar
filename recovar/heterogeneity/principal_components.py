@@ -23,7 +23,7 @@ NVTX_DOMAIN_PCA = "principal_components"
 @nvtx.annotate("estimate_principal_components", color="purple", domain=NVTX_DOMAIN_PCA)
 def estimate_principal_components(cryos, options,  means, mean_prior, volume_mask,
                                 dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use,
-                                covariance_options = None, variance_estimate = None, use_reg_mean_in_contrast = False, use_multi_gpu = False, n_gpus = None, mean_cubic=None):
+                                covariance_options = None, variance_estimate = None, use_reg_mean_in_contrast = False, use_multi_gpu = False, n_gpus = None):
     """Estimate principal components of the covariance operator.
 
     Computes regularized covariance columns, then extracts their leading
@@ -44,7 +44,6 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         use_reg_mean_in_contrast: Use regularized mean for contrast estimation.
         use_multi_gpu: Distribute across multiple GPUs.
         n_gpus: Number of GPUs (``None`` = auto-detect).
-        mean_cubic: Pre-computed cubic-interpolation coefficients.
 
     Returns:
         Tuple ``(u, s, covariance_cols, picked_frequencies, column_fscs)``
@@ -99,7 +98,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
     else:
         raise NotImplementedError('unrecognized column sampling scheme')
     
-    covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, covariance_options, picked_frequencies, use_multi_gpu = use_multi_gpu, n_gpus = n_gpus, mean_cubic=mean_cubic)
+    covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, covariance_options, picked_frequencies, use_multi_gpu = use_multi_gpu, n_gpus = n_gpus)
     
     # Check for NaN or Inf values in covariance_cols
     for col in covariance_cols.values():
@@ -126,7 +125,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         for key in covariance_cols.keys():
             covariance_cols[key] = None
 
-    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'], mean_cubic=mean_cubic)
+    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means['combined'], dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'])
 
     if not options['keep_intermediate']:
         u['real'] = None
@@ -168,7 +167,7 @@ def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,
 
 
 @nvtx.annotate("pca_by_projected_covariance", color="green", domain=NVTX_DOMAIN_PCA)
-def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, ignore_zero_frequency = False, n_pcs_to_compute = None, mean_cubic=None):
+def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, ignore_zero_frequency = False, n_pcs_to_compute = None):
 
     basis_size = basis.shape[1] if n_pcs_to_compute is None else n_pcs_to_compute
     basis = basis[:,:basis_size]
@@ -179,7 +178,7 @@ def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , dis
 
     logger.info('batch size for covariance computation: ' + str(batch_size))
 
-    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, batch_size,  disc_type, disc_type_u, do_mask_images = use_mask, mean_cubic=mean_cubic)
+    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, batch_size,  disc_type, disc_type_u, do_mask_images = use_mask)
 
     if not np.all(np.isfinite(covariance)):
         n_nan = np.sum(np.isnan(covariance))
