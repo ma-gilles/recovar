@@ -238,14 +238,14 @@ def precompute_kernel_batch(
     XWX_b = XWX_b[..., None] * heterogeneity_bins_this[..., None, None, :]
     XWX_b = XWX_b.reshape(XWX_b.shape[:-2] + (-1,))
 
-    XWX = XWX.at[grid_point_indices.reshape(-1)].add(XWX_b)
+    XWX = XWX.at[grid_point_indices.reshape(-1)].add(XWX_b.reshape(-1, XWX_b.shape[-1]))
 
     images = core.translate_images(batch_data.images, batch_data.translations, config.image_shape)
     F_b = X * (images * CTF / noise_variance)[..., None]
     F_b = F_b[..., None] * heterogeneity_bins_this[..., None, None, :]
     F_b = F_b.reshape(F_b.shape[:-2] + (-1,))
 
-    F = F.at[grid_point_indices.reshape(-1)].add(F_b)
+    F = F.at[grid_point_indices.reshape(-1)].add(F_b.reshape(-1, F_b.shape[-1]))
     return XWX, F
 
 
