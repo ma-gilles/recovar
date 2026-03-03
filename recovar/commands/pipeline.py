@@ -13,7 +13,6 @@ from recovar.core import mask
 from recovar.heterogeneity import embedding, principal_components, covariance_estimation
 from recovar.output.output_paths import ResultPaths
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar.utils import copy_data_to_temp_folder, save_original_paths_info, cleanup_temp_files
 
 
 from recovar.utils.helpers import RobustFileHandler as _RobustFileHandler
@@ -84,11 +83,6 @@ def add_args(parser: argparse.ArgumentParser):
         "--uninvert-data", dest="uninvert_data", default="automatic",
         help="Invert data sign: true, false, automatic (default)",
     )
-    data.add_argument(
-        "--copy-to-folder", dest="copy_to_folder", default=None, type=os.path.abspath,
-        help="Copy input data to this temporary folder before processing",
-    )
-
     # ── Downsampling ───────────────────────────────────────────────────────
     ds = parser.add_argument_group("Downsampling")
     ds.add_argument(
@@ -238,11 +232,6 @@ def add_args(parser: argparse.ArgumentParser):
         "--test-covar-options", dest="test_covar_options", action="store_true",
         help="Test different covariance estimation options (development only)",
     )
-    adv.add_argument(
-        "--no-cleanup", action="store_true",
-        help="Do not clean up temporary files after processing",
-    )
-
     return parser
 
 
@@ -556,8 +545,6 @@ def standard_recovar_pipeline(args):
             logger.info("No --ctf provided; will auto-extract from %s", args.particles)
 
     # --- Setup ---
-    path_mapping = copy_data_to_temp_folder(args)
-
     if args.mask.endswith(".mrc"):
         args.mask = os.path.abspath(args.mask)
 
@@ -568,8 +555,6 @@ def standard_recovar_pipeline(args):
     paths.ensure_dirs()
     with open(paths.command_txt, "w") as text_file:
         text_file.write('python ' + ' '.join(sys.argv))
-
-    save_original_paths_info(path_mapping, args.outdir)
 
     # CTF defaults
     if args.tilt_series_ctf is None:
@@ -925,28 +910,6 @@ def standard_recovar_pipeline(args):
 
     args.halfsets = paths.particles_halfsets
 
-    # Restore original paths before saving args
-    if path_mapping is not None:
-        logger.info("Restoring original paths in input_args before saving...")
-        paths_to_restore = [
-            ('original_particles', 'temp_particles', 'particles'),
-            ('original_poses', 'temp_poses', 'poses'),
-            ('original_ctf', 'temp_ctf', 'ctf'),
-            ('original_mask', 'temp_mask', 'mask'),
-            ('original_focus_mask', 'temp_focus_mask', 'focus_mask'),
-            ('original_ind', 'temp_ind', 'ind'),
-            ('original_tilt_ind', 'temp_particle_ind', 'tilt_ind'),
-            ('original_halfsets', 'temp_halfsets', 'halfsets'),
-        ]
-        for orig_key, temp_key, attr_name in paths_to_restore:
-            if orig_key in path_mapping and temp_key in path_mapping:
-                setattr(args, attr_name, path_mapping[orig_key])
-                logger.info("Restored %s path: %s", attr_name, path_mapping[orig_key])
-            elif orig_key in path_mapping:
-                if attr_name == 'datadir' and path_mapping[orig_key]:
-                    setattr(args, attr_name, path_mapping[orig_key])
-                    logger.info("Restored %s path: %s", attr_name, path_mapping[orig_key])
-
     result = output.build_params_dict(
         volume_shape=volume_shape,
         voxel_size=cryos.voxel_size,
@@ -964,9 +927,6 @@ def standard_recovar_pipeline(args):
         picked_frequencies=picked_frequencies,
         input_args=args,
     )
-
-    if path_mapping is not None:
-        result['original_paths'] = path_mapping
 
     output.save_pipeline_results(
         paths,
@@ -989,10 +949,6 @@ def standard_recovar_pipeline(args):
         )
     else:
         logger.info("Pipeline ran at original image resolution (D=%d).", cryos.grid_size)
-
-    # Clean up temp files
-    if path_mapping is not None and not args.no_cleanup:
-        cleanup_temp_files(path_mapping)
 
     # Generate standard plots
     po = output.PipelineOutput(args.outdir)

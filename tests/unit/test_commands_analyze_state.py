@@ -114,7 +114,7 @@ def test_analyze_runs_centers_and_trajectories_with_density(monkeypatch, tmp_pat
         apply_global_filtering=True,
         fsc_mask_radius=2.0,
         fsc_mask_edgewidth=1.0,
-        args=SimpleNamespace(copy_to_folder=None, no_cleanup=False),
+        args=SimpleNamespace(),
     )
 
     # One for kmeans centers + one per selected trajectory pair (n_paths=2 -> 2 pairs).
@@ -191,7 +191,7 @@ def test_analyze_uses_embedding_component_api_when_available(monkeypatch, tmp_pa
         density_path=None,
         no_z_reg=False,
         lazy=False,
-        args=SimpleNamespace(copy_to_folder=None, no_cleanup=False),
+        args=SimpleNamespace(),
     )
 
     assert component_calls.count("latent_coords") == 1
@@ -200,65 +200,6 @@ def test_analyze_uses_embedding_component_api_when_available(monkeypatch, tmp_pa
     assert captured["contrast_dtype"] == np.float32
     assert captured["reweighted_calls"] == 1
 
-
-def test_analyze_copy_to_folder_cleans_up_on_failure(monkeypatch, tmp_path):
-    cleaned = {"count": 0}
-
-    class _PO:
-        def __init__(self, _path):
-            self.params = {}
-
-        def get_embedding_keys(self, _entry):
-            return [2]
-
-        def get_embedding_component(self, entry, _key):
-            if entry == "latent_coords":
-                return np.zeros((4, 2), dtype=np.float32)
-            if entry == "latent_precision":
-                return np.repeat(np.eye(2, dtype=np.float32)[None, :, :], 4, axis=0)
-            if entry == "contrasts":
-                return np.ones(4, dtype=np.float32)
-            raise KeyError(entry)
-
-        def get(self, key):
-            if key == "dataset":
-                return ["d0"]
-            if key == "particles_halfsets":
-                return [np.array([0, 1], dtype=np.int32), np.array([2, 3], dtype=np.int32)]
-            raise KeyError(key)
-
-    monkeypatch.setattr(analyze_cmd.o, "PipelineOutput", _PO)
-    monkeypatch.setattr(analyze_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(analyze_cmd.dataset, "reorder_to_original_indexing_from_halfsets", lambda arr, _h: np.asarray(arr))
-    monkeypatch.setattr(analyze_cmd.utils, "basic_config_logger", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        analyze_cmd.latent_density,
-        "compute_latent_space_density",
-        lambda *_args, **_kwargs: (np.ones((3, 3), dtype=np.float32), {"x": [-1, 1]}),
-    )
-    monkeypatch.setattr(analyze_cmd.o, "kmeans_analysis", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
-    monkeypatch.setattr(analyze_cmd.o, "mkdir_safe", lambda path: os.makedirs(path, exist_ok=True))
-    monkeypatch.setattr(analyze_cmd, "copy_data_from_pipeline_output", lambda *_args, **_kwargs: {"temp": "/tmp/fake"})
-    monkeypatch.setattr(analyze_cmd, "cleanup_temp_files", lambda _m: cleaned.__setitem__("count", cleaned["count"] + 1))
-    monkeypatch.setattr(plt, "savefig", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(plt, "close", lambda *_args, **_kwargs: None)
-
-    with pytest.raises(RuntimeError, match="boom"):
-        analyze_cmd.analyze(
-            recovar_result_dir=str(tmp_path / "pipeline_out"),
-            output_folder=str(tmp_path / "analysis"),
-            zdim=2,
-            n_clusters=2,
-            n_paths=0,
-            skip_umap=True,
-            skip_centers=False,
-            density_path=None,
-            no_z_reg=False,
-            lazy=False,
-            args=SimpleNamespace(copy_to_folder="auto", no_cleanup=False),
-        )
-
-    assert cleaned["count"] == 1
 
 
 def test_compute_state_reads_txt_and_reweights(monkeypatch, tmp_path):
@@ -292,8 +233,6 @@ def test_compute_state_reads_txt_and_reweights(monkeypatch, tmp_path):
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -352,8 +291,6 @@ def test_compute_state_accepts_pathlike_latent_points(monkeypatch, tmp_path):
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=latent_path,  # Path object, not string.
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -405,8 +342,6 @@ def test_compute_state_accepts_pathlike_result_and_out_dirs(monkeypatch, tmp_pat
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=latent_path,
         outdir=tmp_path / "state_out",  # Path object
         zdim1=False,
@@ -458,8 +393,6 @@ def test_compute_state_reads_pkl_latent_points(monkeypatch, tmp_path):
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -514,8 +447,6 @@ def test_compute_state_uses_noreg_key_when_requested(monkeypatch, tmp_path):
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -591,8 +522,6 @@ def test_compute_state_uses_embedding_component_api_when_available(monkeypatch, 
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -666,8 +595,6 @@ def test_compute_state_casts_embedding_arrays_to_float32(monkeypatch, tmp_path):
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -703,8 +630,6 @@ def test_compute_state_rejects_unknown_latent_extension(monkeypatch, tmp_path):
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(tmp_path / "latent.csv"),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -743,8 +668,6 @@ def test_compute_state_rejects_empty_latent_points_file(monkeypatch, tmp_path):
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -782,8 +705,6 @@ def test_compute_state_rejects_nonfinite_latent_points(monkeypatch, tmp_path):
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -823,8 +744,6 @@ def test_compute_state_rejects_nonnumeric_latent_points(monkeypatch, tmp_path):
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -859,8 +778,6 @@ def test_compute_state_rejects_missing_latent_points_file(monkeypatch, tmp_path)
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(tmp_path / "does_not_exist.txt"),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -900,8 +817,6 @@ def test_compute_state_rejects_missing_zdim_with_clear_error(monkeypatch, tmp_pa
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -952,8 +867,6 @@ def test_compute_state_missing_input_args_ignores_overrides(monkeypatch, tmp_pat
         particles="override_particles",
         datadir="override_datadir",
         strip_prefix="override_prefix",
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=True,
@@ -1004,8 +917,6 @@ def test_compute_state_params_none_ignores_overrides(monkeypatch, tmp_path):
         particles="override_particles",
         datadir="override_datadir",
         strip_prefix="override_prefix",
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=True,
@@ -1054,8 +965,6 @@ def test_compute_state_allows_missing_override_attrs_on_args(monkeypatch, tmp_pa
     # Intentionally omit particles/datadir/strip_prefix attrs.
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=True,
@@ -1163,8 +1072,6 @@ def test_compute_state_apply_global_filtering_without_volume_mask(monkeypatch, t
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -1238,8 +1145,6 @@ def test_compute_state_updates_input_args_from_cli_overrides(monkeypatch, tmp_pa
         particles="new_particles",
         datadir="new_datadir",
         strip_prefix="new_prefix",
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -1259,395 +1164,6 @@ def test_compute_state_updates_input_args_from_cli_overrides(monkeypatch, tmp_pa
     assert base_input_args.particles == "new_particles"
     assert base_input_args.datadir == "new_datadir"
     assert base_input_args.strip_prefix == "new_prefix"
-
-
-def test_compute_state_copy_to_folder_triggers_cleanup_unless_no_cleanup(monkeypatch, tmp_path):
-    latent_points = np.array([[0.0, 1.0], [1.0, 2.0]], dtype=np.float32)
-    latent_path = tmp_path / "latent.txt"
-    np.savetxt(latent_path, latent_points)
-
-    payload = {
-        "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
-        "latent_precision": {2: np.zeros((3, 2, 2), dtype=np.float32)},
-        "contrasts": {2: np.ones(3, dtype=np.float32)},
-        "dataset": ["d0"],
-        "lazy_dataset": ["ld0"],
-        "noise_var_used": np.ones(4, dtype=np.float32),
-        "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
-        "input_args": SimpleNamespace(particles="p", datadir=None, strip_prefix=None),
-    }
-    class _PO:
-        def __init__(self, _path):
-            self.params = {"input_args": payload["input_args"]}
-
-        def get(self, key):
-            return payload[key]
-
-    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _PO)
-    monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(compute_state_cmd.o, "compute_and_save_reweighted", lambda *_args, **_kwargs: None)
-
-    monkeypatch.setattr(compute_state_cmd, "copy_data_from_pipeline_output", lambda *_args, **_kwargs: {"temp_folder": "/tmp/fake"})
-    cleaned = {"count": 0}
-    monkeypatch.setattr(compute_state_cmd, "cleanup_temp_files", lambda _m: cleaned.__setitem__("count", cleaned["count"] + 1))
-
-    args = SimpleNamespace(
-        result_dir=str(tmp_path / "pipeline_out"),
-        particles=None,
-        datadir=None,
-        strip_prefix=None,
-        copy_to_folder=str(tmp_path / "copytmp"),
-        no_cleanup=False,
-        latent_points=str(latent_path),
-        outdir=str(tmp_path / "state_out"),
-        zdim1=False,
-        no_z_regularization=False,
-        lazy=True,
-        n_bins=20,
-        Bfactor=0.0,
-        maskrad_fraction=0.5,
-        n_min_particles=1,
-        save_all_estimates=False,
-        apply_global_filtering=False,
-        fsc_mask_radius=None,
-        fsc_mask_edgewidth=None,
-    )
-    compute_state_cmd.compute_state(args)
-    assert cleaned["count"] == 1
-
-    args.no_cleanup = True
-    compute_state_cmd.compute_state(args)
-    assert cleaned["count"] == 1
-
-
-def test_compute_state_copy_to_folder_cleans_up_on_failure(monkeypatch, tmp_path):
-    latent_points = np.array([[0.0, 1.0]], dtype=np.float32)
-    latent_path = tmp_path / "latent.txt"
-    np.savetxt(latent_path, latent_points)
-
-    payload = {
-        "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
-        "latent_precision": {2: np.zeros((3, 2, 2), dtype=np.float32)},
-        "contrasts": {2: np.ones(3, dtype=np.float32)},
-        "dataset": ["d0"],
-        "lazy_dataset": ["ld0"],
-        "noise_var_used": np.ones(4, dtype=np.float32),
-        "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
-    }
-
-    class _PO:
-        def __init__(self, _path):
-            self.params = {
-                "input_args": SimpleNamespace(particles="p", datadir=None, strip_prefix=None),
-            }
-            self._payload = payload
-
-        def get(self, key):
-            return self._payload[key]
-
-    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _PO)
-    monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        compute_state_cmd.o,
-        "compute_and_save_reweighted",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
-
-    monkeypatch.setattr(
-        compute_state_cmd,
-        "copy_data_from_pipeline_output",
-        lambda *_args, **_kwargs: {"temp_folder": "/tmp/fake_failure"},
-    )
-
-    cleaned = {"count": 0}
-    monkeypatch.setattr(
-        compute_state_cmd,
-        "cleanup_temp_files",
-        lambda _m: cleaned.__setitem__("count", cleaned["count"] + 1),
-    )
-
-    args = SimpleNamespace(
-        result_dir=str(tmp_path / "pipeline_out"),
-        particles=None,
-        datadir=None,
-        strip_prefix=None,
-        copy_to_folder="auto",
-        no_cleanup=False,
-        latent_points=str(latent_path),
-        outdir=str(tmp_path / "state_out"),
-        zdim1=False,
-        no_z_regularization=False,
-        lazy=False,
-        n_bins=20,
-        Bfactor=0.0,
-        maskrad_fraction=0.5,
-        n_min_particles=1,
-        save_all_estimates=False,
-        apply_global_filtering=False,
-        fsc_mask_radius=None,
-        fsc_mask_edgewidth=None,
-    )
-
-    with pytest.raises(RuntimeError, match="boom"):
-        compute_state_cmd.compute_state(args)
-    assert cleaned["count"] == 1
-
-
-def test_compute_state_copy_to_folder_cleans_up_on_early_validation_failure(monkeypatch, tmp_path):
-    latent_path = tmp_path / "latent.badext"
-    latent_path.write_text("0.1 0.2\n")
-
-    payload = {
-        "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
-        "latent_precision": {2: np.zeros((3, 2, 2), dtype=np.float32)},
-        "contrasts": {2: np.ones(3, dtype=np.float32)},
-        "dataset": ["d0"],
-        "lazy_dataset": ["ld0"],
-        "noise_var_used": np.ones(4, dtype=np.float32),
-        "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
-    }
-
-    class _PO:
-        def __init__(self, _path):
-            self.params = {
-                "input_args": SimpleNamespace(particles="p", datadir=None, strip_prefix=None),
-            }
-            self._payload = payload
-
-        def get(self, key):
-            return self._payload[key]
-
-    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _PO)
-    monkeypatch.setattr(
-        compute_state_cmd,
-        "copy_data_from_pipeline_output",
-        lambda *_args, **_kwargs: {"temp_folder": "/tmp/fake_early"},
-    )
-    cleaned = {"count": 0}
-    monkeypatch.setattr(
-        compute_state_cmd,
-        "cleanup_temp_files",
-        lambda _m: cleaned.__setitem__("count", cleaned["count"] + 1),
-    )
-
-    args = SimpleNamespace(
-        result_dir=str(tmp_path / "pipeline_out"),
-        particles=None,
-        datadir=None,
-        strip_prefix=None,
-        copy_to_folder="auto",
-        no_cleanup=False,
-        latent_points=str(latent_path),
-        outdir=str(tmp_path / "state_out"),
-        zdim1=False,
-        no_z_regularization=False,
-        lazy=False,
-        n_bins=20,
-        Bfactor=0.0,
-        maskrad_fraction=0.5,
-        n_min_particles=1,
-        save_all_estimates=False,
-        apply_global_filtering=False,
-        fsc_mask_radius=None,
-        fsc_mask_edgewidth=None,
-    )
-
-    with pytest.raises(ValueError, match="Target zs should be a .txt or .pkl file"):
-        compute_state_cmd.compute_state(args)
-    assert cleaned["count"] == 1
-
-
-def test_compute_state_copy_to_folder_no_cleanup_true_skips_cleanup_on_failure(monkeypatch, tmp_path):
-    latent_path = tmp_path / "latent.badext"
-    latent_path.write_text("0.1 0.2\n")
-
-    payload = {
-        "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
-        "latent_precision": {2: np.zeros((3, 2, 2), dtype=np.float32)},
-        "contrasts": {2: np.ones(3, dtype=np.float32)},
-        "dataset": ["d0"],
-        "lazy_dataset": ["ld0"],
-        "noise_var_used": np.ones(4, dtype=np.float32),
-        "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
-    }
-
-    class _PO:
-        def __init__(self, _path):
-            self.params = {
-                "input_args": SimpleNamespace(particles="p", datadir=None, strip_prefix=None),
-            }
-            self._payload = payload
-
-        def get(self, key):
-            return self._payload[key]
-
-    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _PO)
-    monkeypatch.setattr(
-        compute_state_cmd,
-        "copy_data_from_pipeline_output",
-        lambda *_args, **_kwargs: {"temp_folder": "/tmp/fake_no_cleanup"},
-    )
-    cleaned = {"count": 0}
-    monkeypatch.setattr(
-        compute_state_cmd,
-        "cleanup_temp_files",
-        lambda _m: cleaned.__setitem__("count", cleaned["count"] + 1),
-    )
-
-    args = SimpleNamespace(
-        result_dir=str(tmp_path / "pipeline_out"),
-        particles=None,
-        datadir=None,
-        strip_prefix=None,
-        copy_to_folder="auto",
-        no_cleanup=True,
-        latent_points=str(latent_path),
-        outdir=str(tmp_path / "state_out"),
-        zdim1=False,
-        no_z_regularization=False,
-        lazy=False,
-        n_bins=20,
-        Bfactor=0.0,
-        maskrad_fraction=0.5,
-        n_min_particles=1,
-        save_all_estimates=False,
-        apply_global_filtering=False,
-        fsc_mask_radius=None,
-        fsc_mask_edgewidth=None,
-    )
-
-    with pytest.raises(ValueError, match="Target zs should be a .txt or .pkl file"):
-        compute_state_cmd.compute_state(args)
-    assert cleaned["count"] == 0
-
-
-def test_compute_state_without_copy_to_folder_never_calls_cleanup(monkeypatch, tmp_path):
-    latent_path = tmp_path / "latent.badext"
-    latent_path.write_text("0.1 0.2\n")
-
-    payload = {
-        "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
-        "latent_precision": {2: np.zeros((3, 2, 2), dtype=np.float32)},
-        "contrasts": {2: np.ones(3, dtype=np.float32)},
-        "dataset": ["d0"],
-        "lazy_dataset": ["ld0"],
-        "noise_var_used": np.ones(4, dtype=np.float32),
-        "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
-    }
-
-    class _PO:
-        def __init__(self, _path):
-            self.params = {
-                "input_args": SimpleNamespace(particles="p", datadir=None, strip_prefix=None),
-            }
-            self._payload = payload
-
-        def get(self, key):
-            return self._payload[key]
-
-    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _PO)
-    cleaned = {"count": 0}
-    monkeypatch.setattr(
-        compute_state_cmd,
-        "cleanup_temp_files",
-        lambda _m: cleaned.__setitem__("count", cleaned["count"] + 1),
-    )
-
-    args = SimpleNamespace(
-        result_dir=str(tmp_path / "pipeline_out"),
-        particles=None,
-        datadir=None,
-        strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
-        latent_points=str(latent_path),
-        outdir=str(tmp_path / "state_out"),
-        zdim1=False,
-        no_z_regularization=False,
-        lazy=False,
-        n_bins=20,
-        Bfactor=0.0,
-        maskrad_fraction=0.5,
-        n_min_particles=1,
-        save_all_estimates=False,
-        apply_global_filtering=False,
-        fsc_mask_radius=None,
-        fsc_mask_edgewidth=None,
-    )
-
-    with pytest.raises(ValueError, match="Target zs should be a .txt or .pkl file"):
-        compute_state_cmd.compute_state(args)
-    assert cleaned["count"] == 0
-
-
-def test_compute_state_missing_no_cleanup_attr_defaults_to_cleanup(monkeypatch, tmp_path):
-    latent_points = np.array([[0.0, 1.0]], dtype=np.float32)
-    latent_path = tmp_path / "latent.txt"
-    np.savetxt(latent_path, latent_points)
-
-    payload = {
-        "latent_coords": {2: np.zeros((3, 2), dtype=np.float32)},
-        "latent_precision": {2: np.zeros((3, 2, 2), dtype=np.float32)},
-        "contrasts": {2: np.ones(3, dtype=np.float32)},
-        "dataset": ["d0"],
-        "lazy_dataset": ["ld0"],
-        "noise_var_used": np.ones(4, dtype=np.float32),
-        "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
-    }
-
-    class _PO:
-        def __init__(self, _path):
-            self.params = {
-                "input_args": SimpleNamespace(particles="p", datadir=None, strip_prefix=None),
-            }
-            self._payload = payload
-
-        def get(self, key):
-            return self._payload[key]
-
-    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _PO)
-    monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(compute_state_cmd.o, "compute_and_save_reweighted", lambda *_args, **_kwargs: None)
-
-    monkeypatch.setattr(
-        compute_state_cmd,
-        "copy_data_from_pipeline_output",
-        lambda *_args, **_kwargs: {"temp_folder": "/tmp/fake_missing_no_cleanup"},
-    )
-    cleaned = {"count": 0}
-    monkeypatch.setattr(
-        compute_state_cmd,
-        "cleanup_temp_files",
-        lambda _m: cleaned.__setitem__("count", cleaned["count"] + 1),
-    )
-
-    # Intentionally omit no_cleanup attribute.
-    args = SimpleNamespace(
-        result_dir=str(tmp_path / "pipeline_out"),
-        particles=None,
-        datadir=None,
-        strip_prefix=None,
-        copy_to_folder="auto",
-        latent_points=str(latent_path),
-        outdir=str(tmp_path / "state_out"),
-        zdim1=False,
-        no_z_regularization=False,
-        lazy=False,
-        n_bins=20,
-        Bfactor=0.0,
-        maskrad_fraction=0.5,
-        n_min_particles=1,
-        save_all_estimates=False,
-        apply_global_filtering=False,
-        fsc_mask_radius=None,
-        fsc_mask_edgewidth=None,
-    )
-
-    compute_state_cmd.compute_state(args)
-    assert cleaned["count"] == 1
 
 
 def test_compute_state_zdim1_handles_scalar_txt_latent_point(monkeypatch, tmp_path):
@@ -1680,8 +1196,6 @@ def test_compute_state_zdim1_handles_scalar_txt_latent_point(monkeypatch, tmp_pa
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=True,
@@ -1722,8 +1236,6 @@ def test_compute_state_rejects_missing_contrasts_or_cov_zs_key(monkeypatch, tmp_
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -1764,8 +1276,6 @@ def test_compute_state_rejects_missing_cov_zs_key(monkeypatch, tmp_path):
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -1809,8 +1319,6 @@ def test_compute_state_rejects_missing_zs_key(monkeypatch, tmp_path):
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -1849,8 +1357,6 @@ def test_compute_state_rejects_scalar_without_zdim1(monkeypatch, tmp_path):
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -1890,8 +1396,6 @@ def test_compute_state_rejects_bad_shape_when_zdim1_true(monkeypatch, tmp_path):
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=True,
@@ -1997,8 +1501,6 @@ def test_compute_state_1d_latent_warns_and_reshapes_to_single_point(monkeypatch,
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -2060,8 +1562,6 @@ def test_compute_state_uses_lazy_dataset_when_requested(monkeypatch, tmp_path):
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,
@@ -2122,8 +1622,6 @@ def test_compute_state_uses_nonlazy_dataset_when_lazy_false(monkeypatch, tmp_pat
         particles=None,
         datadir=None,
         strip_prefix=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         latent_points=str(latent_path),
         outdir=str(tmp_path / "state_out"),
         zdim1=False,

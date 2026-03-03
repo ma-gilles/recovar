@@ -8,7 +8,6 @@ import pickle
 import os, argparse
 logger = logging.getLogger(__name__)
 from recovar.utils import parser_args
-from recovar.utils import cleanup_temp_files, copy_data_from_pipeline_output
 
 
 def _auto_remap_paths(input_args, actual_result_dir: str):
@@ -102,111 +101,101 @@ def compute_state(args):
     elif particles_override is not None or datadir_override is not None or strip_prefix_override is not None:
         logger.warning("Pipeline output is missing input_args; ignoring particles/datadir/strip-prefix overrides.")
 
-    # Copy data to temp folder if requested
-    path_mapping = None
-    if hasattr(args, 'copy_to_folder') and args.copy_to_folder is not None:
-        path_mapping = copy_data_from_pipeline_output(po, args.copy_to_folder)
-
+    latent_points_path = os.fspath(args.latent_points)
+    if latent_points_path.endswith('.pkl'):
+        if not os.path.isfile(latent_points_path):
+            raise FileNotFoundError(f"Latent points file not found: {latent_points_path}")
+        with open(latent_points_path, 'rb') as f:
+            target_zs = pickle.load(f)
+    elif latent_points_path.endswith('.txt'):
+        if not os.path.isfile(latent_points_path):
+            raise FileNotFoundError(f"Latent points file not found: {latent_points_path}")
+        with warnings.catch_warnings():
+            # Empty text files produce a UserWarning; we handle emptiness explicitly below.
+            warnings.simplefilter("ignore", category=UserWarning)
+            target_zs = np.loadtxt(latent_points_path)
+    else:
+        raise ValueError("Target zs should be a .txt or .pkl file")
+    target_zs = np.asarray(target_zs)
     try:
-        latent_points_path = os.fspath(args.latent_points)
-        if latent_points_path.endswith('.pkl'):
-            if not os.path.isfile(latent_points_path):
-                raise FileNotFoundError(f"Latent points file not found: {latent_points_path}")
-            with open(latent_points_path, 'rb') as f:
-                target_zs = pickle.load(f)
-        elif latent_points_path.endswith('.txt'):
-            if not os.path.isfile(latent_points_path):
-                raise FileNotFoundError(f"Latent points file not found: {latent_points_path}")
-            with warnings.catch_warnings():
-                # Empty text files produce a UserWarning; we handle emptiness explicitly below.
-                warnings.simplefilter("ignore", category=UserWarning)
-                target_zs = np.loadtxt(latent_points_path)
-        else:
-            raise ValueError("Target zs should be a .txt or .pkl file")
-        target_zs = np.asarray(target_zs)
+        target_zs = target_zs.astype(np.float32, copy=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Target zs must be numeric.") from exc
+    if target_zs.size == 0:
+        raise ValueError("Target zs file is empty.")
+    if not np.all(np.isfinite(target_zs)):
+        raise ValueError("Target zs contains non-finite values (NaN/Inf).")
+
+    output_folder = outdir
+
+    if zdim1:
+        if target_zs.ndim > 1 and target_zs.shape[-1] != 1:
+            raise ValueError(
+                f"--zdim1 expects scalar/1D latent points or Nx1 arrays; got shape {target_zs.shape}"
+            )
+        zdim =1
+        target_zs = np.atleast_1d(target_zs).reshape(-1, 1)
+    else:
+        if target_zs.ndim == 0:
+            raise ValueError("Scalar latent point requires --zdim1.")
+        zdim = target_zs.shape[-1]
+        if target_zs.ndim ==1:
+            logger.warning("Did you mean to use --zdim1?")
+            target_zs = target_zs[None]
+
+    # Select reg vs noreg entry names
+    coords_entry = 'latent_coords_noreg' if no_z_regularization else 'latent_coords'
+    precision_entry = 'latent_precision_noreg' if no_z_regularization else 'latent_precision'
+    contrast_entry = 'contrasts_noreg' if no_z_regularization else 'contrasts'
+
+    if hasattr(po, "get_embedding_keys"):
+        zs_keys = po.get_embedding_keys(coords_entry)
+    else:
+        zs_keys = list(po.get(coords_entry).keys())
+
+    if zdim not in zs_keys:
+        options = ','.join(str(e) for e in zs_keys)
+        raise ValueError(f"zdim {zdim} from provided latent points is not found in embedding results. Options are: {options}")
+
+    if hasattr(po, "get_embedding_component"):
+        contrasts_key = po.get_embedding_component(contrast_entry, zdim)
+        zs_key = po.get_embedding_component(coords_entry, zdim)
+        cov_zs_key = po.get_embedding_component(precision_entry, zdim)
+    else:
+        contrasts_key = po.get(contrast_entry)[zdim]
+        zs_key = po.get(coords_entry)[zdim]
+        cov_zs_key = po.get(precision_entry)[zdim]
+
+    # Keep memory footprint low for downstream JAX kernels.
+    contrasts_key = np.asarray(contrasts_key, dtype=np.float32)
+    zs_key = np.asarray(zs_key, dtype=np.float32)
+    cov_zs_key = np.asarray(cov_zs_key, dtype=np.float32)
+
+    cryos = po.get('lazy_dataset') if lazy else po.get('dataset')
+    embedding.set_contrasts_in_cryos(cryos, contrasts_key)
+    zs = zs_key
+    cov_zs = cov_zs_key
+    o.mkdir_safe(output_folder)
+    logger.info(args)
+
+    # Get the mask from pipeline output for FSC filtering
+    fsc_mask = None
+    if apply_global_filtering:
         try:
-            target_zs = target_zs.astype(np.float32, copy=False)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Target zs must be numeric.") from exc
-        if target_zs.size == 0:
-            raise ValueError("Target zs file is empty.")
-        if not np.all(np.isfinite(target_zs)):
-            raise ValueError("Target zs contains non-finite values (NaN/Inf).")
+            fsc_mask = po.get('volume_mask')
+            logger.info("Using pipeline output volume_mask for FSC filtering")
+        except (KeyError, FileNotFoundError):
+            logger.warning("Could not load volume_mask from pipeline output, proceeding without FSC mask")
 
-        output_folder = outdir
-
-        if zdim1:
-            if target_zs.ndim > 1 and target_zs.shape[-1] != 1:
-                raise ValueError(
-                    f"--zdim1 expects scalar/1D latent points or Nx1 arrays; got shape {target_zs.shape}"
-                )
-            zdim =1
-            target_zs = np.atleast_1d(target_zs).reshape(-1, 1)
-        else:
-            if target_zs.ndim == 0:
-                raise ValueError("Scalar latent point requires --zdim1.")
-            zdim = target_zs.shape[-1]
-            if target_zs.ndim ==1:
-                logger.warning("Did you mean to use --zdim1?")
-                target_zs = target_zs[None]
-
-        # Select reg vs noreg entry names
-        coords_entry = 'latent_coords_noreg' if no_z_regularization else 'latent_coords'
-        precision_entry = 'latent_precision_noreg' if no_z_regularization else 'latent_precision'
-        contrast_entry = 'contrasts_noreg' if no_z_regularization else 'contrasts'
-
-        if hasattr(po, "get_embedding_keys"):
-            zs_keys = po.get_embedding_keys(coords_entry)
-        else:
-            zs_keys = list(po.get(coords_entry).keys())
-
-        if zdim not in zs_keys:
-            options = ','.join(str(e) for e in zs_keys)
-            raise ValueError(f"zdim {zdim} from provided latent points is not found in embedding results. Options are: {options}")
-
-        if hasattr(po, "get_embedding_component"):
-            contrasts_key = po.get_embedding_component(contrast_entry, zdim)
-            zs_key = po.get_embedding_component(coords_entry, zdim)
-            cov_zs_key = po.get_embedding_component(precision_entry, zdim)
-        else:
-            contrasts_key = po.get(contrast_entry)[zdim]
-            zs_key = po.get(coords_entry)[zdim]
-            cov_zs_key = po.get(precision_entry)[zdim]
-
-        # Keep memory footprint low for downstream JAX kernels.
-        contrasts_key = np.asarray(contrasts_key, dtype=np.float32)
-        zs_key = np.asarray(zs_key, dtype=np.float32)
-        cov_zs_key = np.asarray(cov_zs_key, dtype=np.float32)
-
-        cryos = po.get('lazy_dataset') if lazy else po.get('dataset')
-        embedding.set_contrasts_in_cryos(cryos, contrasts_key)
-        zs = zs_key
-        cov_zs = cov_zs_key
-        o.mkdir_safe(output_folder)
-        logger.info(args)
-
-        # Get the mask from pipeline output for FSC filtering
-        fsc_mask = None
-        if apply_global_filtering:
-            try:
-                fsc_mask = po.get('volume_mask')
-                logger.info("Using pipeline output volume_mask for FSC filtering")
-            except (KeyError, FileNotFoundError):
-                logger.warning("Could not load volume_mask from pipeline output, proceeding without FSC mask")
-
-        o.compute_and_save_reweighted(
-            cryos, target_zs, zs, cov_zs, output_folder, bfactor,
-            n_bins=n_bins, maskrad_fraction=maskrad_fraction,
-            n_min_particles=n_min_particles, save_all_estimates=save_all_estimates,
-            apply_global_filtering=apply_global_filtering,
-            fsc_mask=fsc_mask,
-            fsc_mask_radius=fsc_mask_radius,
-            fsc_mask_edgewidth=fsc_mask_edgewidth
-        )
-    finally:
-        # Clean up temp files at the end (including failures).
-        if path_mapping is not None and not getattr(args, "no_cleanup", False):
-            cleanup_temp_files(path_mapping)
+    o.compute_and_save_reweighted(
+        cryos, target_zs, zs, cov_zs, output_folder, bfactor,
+        n_bins=n_bins, maskrad_fraction=maskrad_fraction,
+        n_min_particles=n_min_particles, save_all_estimates=save_all_estimates,
+        apply_global_filtering=apply_global_filtering,
+        fsc_mask=fsc_mask,
+        fsc_mask_radius=fsc_mask_radius,
+        fsc_mask_edgewidth=fsc_mask_edgewidth
+    )
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

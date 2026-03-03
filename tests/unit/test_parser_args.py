@@ -33,8 +33,6 @@ def test_standard_downstream_args_defaults_and_flags():
             "--no-z-regularization",
             "--lazy",
             "--apply-global-filtering",
-            "--copy-to-folder",
-            "/tmp/cache",
         ]
     )
     assert parsed.n_bins == 50
@@ -43,4 +41,3 @@ def test_standard_downstream_args_defaults_and_flags():
     assert parsed.no_z_regularization is True
     assert parsed.lazy is True
     assert parsed.apply_global_filtering is True
-    assert parsed.copy_to_folder == "/tmp/cache"

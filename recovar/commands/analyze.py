@@ -12,7 +12,6 @@ from recovar import utils
 from recovar.data_io import dataset
 from recovar.heterogeneity import latent_density, embedding
 from recovar.output import output as o
-from recovar.utils import cleanup_temp_files, copy_data_from_pipeline_output
 from recovar.utils import parser_args
 
 logger = logging.getLogger(__name__)
@@ -86,183 +85,158 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
                 _input_args.strip_prefix = args.strip_prefix
         _auto_remap_paths(_input_args, recovar_result_dir)
 
-    # Copy data to temp folder if requested
-    path_mapping = None
-    if args is not None and hasattr(args, 'copy_to_folder') and args.copy_to_folder is not None:
-        path_mapping = copy_data_from_pipeline_output(po, args.copy_to_folder)
+    # Select reg vs noreg entry names
+    coords_entry = 'latent_coords_noreg' if no_z_reg else 'latent_coords'
+    precision_entry = 'latent_precision_noreg' if no_z_reg else 'latent_precision'
+    contrast_entry = 'contrasts_noreg' if no_z_reg else 'contrasts'
 
-    try:
-        # Select reg vs noreg entry names
-        coords_entry = 'latent_coords_noreg' if no_z_reg else 'latent_coords'
-        precision_entry = 'latent_precision_noreg' if no_z_reg else 'latent_precision'
-        contrast_entry = 'contrasts_noreg' if no_z_reg else 'contrasts'
+    if hasattr(po, "get_embedding_keys"):
+        zs_keys = list(po.get_embedding_keys(coords_entry))
+    else:
+        zs_keys = list(po.get(coords_entry).keys())
 
-        if hasattr(po, "get_embedding_keys"):
-            zs_keys = list(po.get_embedding_keys(coords_entry))
-        else:
-            zs_keys = list(po.get(coords_entry).keys())
+    if zdim is None and len(zs_keys) > 1:
+        logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --zdim=4")
+        raise Exception("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --z-dim=4")
 
-        if zdim is None and len(zs_keys) > 1:
-            logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --zdim=4")
-            raise Exception("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --z-dim=4")
+    elif zdim is None:
+        zdim = zs_keys[0]
+        logger.info("using zdim=%d", zdim)
 
-        elif zdim is None:
-            zdim = zs_keys[0]
-            logger.info("using zdim=%d", zdim)
+    noreg_suffix = '_noreg' if no_z_reg else ''
+    if output_folder is None:
+        output_folder = recovar_result_dir + f'/analysis_{zdim}{noreg_suffix}/'
 
-        noreg_suffix = '_noreg' if no_z_reg else ''
-        if output_folder is None:
-            output_folder = recovar_result_dir + f'/analysis_{zdim}{noreg_suffix}/'
+    if zdim not in zs_keys:
+        logger.error("z-dim not found in results. Options are: %s", ','.join(str(e) for e in zs_keys))
+        raise ValueError("Requested zdim was not found in embedding outputs.")
 
-        if zdim not in zs_keys:
-            logger.error("z-dim not found in results. Options are: %s", ','.join(str(e) for e in zs_keys))
-            raise ValueError("Requested zdim was not found in embedding outputs.")
+    if hasattr(po, "get_embedding_component"):
+        zs = po.get_embedding_component(coords_entry, zdim)
+        cov_zs = po.get_embedding_component(precision_entry, zdim)
+        contrasts = po.get_embedding_component(contrast_entry, zdim)
+    else:
+        zs = po.get(coords_entry)[zdim]
+        cov_zs = po.get(precision_entry)[zdim]
+        contrasts = po.get(contrast_entry)[zdim]
 
-        if hasattr(po, "get_embedding_component"):
-            zs = po.get_embedding_component(coords_entry, zdim)
-            cov_zs = po.get_embedding_component(precision_entry, zdim)
-            contrasts = po.get_embedding_component(contrast_entry, zdim)
-        else:
-            zs = po.get(coords_entry)[zdim]
-            cov_zs = po.get(precision_entry)[zdim]
-            contrasts = po.get(contrast_entry)[zdim]
+    # Keep memory footprint low for downstream JAX kernels.
+    zs = np.asarray(zs, dtype=np.float32)
+    cov_zs = np.asarray(cov_zs, dtype=np.float32)
+    contrasts = np.asarray(contrasts, dtype=np.float32)
 
-        # Keep memory footprint low for downstream JAX kernels.
-        zs = np.asarray(zs, dtype=np.float32)
-        cov_zs = np.asarray(cov_zs, dtype=np.float32)
-        contrasts = np.asarray(contrasts, dtype=np.float32)
+    if lazy:
+        cryos = po.get('lazy_dataset')
+    else:
+        cryos = po.get('dataset')
+    embedding.set_contrasts_in_cryos(cryos, contrasts)
 
-        if lazy:
-            cryos = po.get('lazy_dataset')
-        else:
-            cryos = po.get('dataset')
-        embedding.set_contrasts_in_cryos(cryos, contrasts)
+    # Get the mask from pipeline output for FSC filtering
+    fsc_mask = None
+    if apply_global_filtering:
+        try:
+            fsc_mask = po.get('volume_mask')
+            logger.info("Using pipeline output volume_mask for FSC filtering")
+        except (KeyError, FileNotFoundError):
+            logger.warning("Could not load volume_mask from pipeline output, proceeding without FSC mask")
 
-        # Get the mask from pipeline output for FSC filtering
-        fsc_mask = None
-        if apply_global_filtering:
-            try:
-                fsc_mask = po.get('volume_mask')
-                logger.info("Using pipeline output volume_mask for FSC filtering")
-            except (KeyError, FileNotFoundError):
-                logger.warning("Could not load volume_mask from pipeline output, proceeding without FSC mask")
+    if density_path is not None:
+        dens_pkl = utils.pickle_load(density_path)
+        input_density = dens_pkl['density']
+        latent_space_bounds = dens_pkl['latent_space_bounds']
+        logger.warning("density dimension is less than zs dimension, truncate zs dimension to match density dimension = %d", input_density.ndim)
+        zdim = input_density.ndim
+        zs = zs[:, :zdim]
+        cov_zs = cov_zs[:, :zdim, :zdim]
+    else:
+        density, latent_space_bounds = latent_density.compute_latent_space_density(
+            zs, cov_zs, pca_dim_max=np.min([4, zs.shape[-1]]), num_points=50, density_option='kde'
+        )
+        po.params['density'] = density
+        input_density = None
+        latent_space_bounds = None
 
-        if density_path is not None:
-            dens_pkl = utils.pickle_load(density_path)
-            input_density = dens_pkl['density']
-            latent_space_bounds = dens_pkl['latent_space_bounds']
-            logger.warning("density dimension is less than zs dimension, truncate zs dimension to match density dimension = %d", input_density.ndim)
-            zdim = input_density.ndim
-            zs = zs[:, :zdim]
-            cov_zs = cov_zs[:, :zdim, :zdim]
-        else:
-            density, latent_space_bounds = latent_density.compute_latent_space_density(
-                zs, cov_zs, pca_dim_max=np.min([4, zs.shape[-1]]), num_points=50, density_option='kde'
-            )
-            po.params['density'] = density
-            input_density = None
-            latent_space_bounds = None
+    def reorder(array):
+        return dataset.reorder_to_original_indexing_from_halfsets(array, po.get('particles_halfsets'))
 
-        def reorder(array):
-            return dataset.reorder_to_original_indexing_from_halfsets(array, po.get('particles_halfsets'))
+    o.mkdir_safe(output_folder)
+    utils.basic_config_logger(output_folder)
 
-        o.mkdir_safe(output_folder)
-        utils.basic_config_logger(output_folder)
+    import matplotlib.pyplot as plt
+    from recovar.output import plot_utils
+    fig, ax = plt.subplots(figsize=(8, 6))
+    plot_utils.plot_contrast_histogram(contrasts, ax=ax, zdim_key=f"{zdim}{noreg_suffix}")
+    plt.savefig(os.path.join(output_folder, 'contrast_histogram.png'), bbox_inches='tight')
+    plt.close()
 
-        import matplotlib.pyplot as plt
-        from recovar.output import plot_utils
-        fig, ax = plt.subplots(figsize=(8, 6))
-        plot_utils.plot_contrast_histogram(contrasts, ax=ax, zdim_key=f"{zdim}{noreg_suffix}")
-        plt.savefig(os.path.join(output_folder, 'contrast_histogram.png'), bbox_inches='tight')
-        plt.close()
+    zs_unsort = zs
+    if normalize_kmeans:
+        std = np.std(zs_unsort, axis=0)
+        centers, labels = o.kmeans_analysis(os.path.join(output_folder, 'PCA/'), zs_unsort / std, n_clusters=n_clusters)
+        centers = centers * std
+    else:
+        centers, labels = o.kmeans_analysis(os.path.join(output_folder, 'PCA/'), zs_unsort, n_clusters=n_clusters)
 
-        zs_unsort = zs
-        if normalize_kmeans:
-            std = np.std(zs_unsort, axis=0)
-            centers, labels = o.kmeans_analysis(os.path.join(output_folder, 'PCA/'), zs_unsort / std, n_clusters=n_clusters)
-            centers = centers * std
-        else:
-            centers, labels = o.kmeans_analysis(os.path.join(output_folder, 'PCA/'), zs_unsort, n_clusters=n_clusters)
+    # Kmeans volumes go into kmeans/ subdirectory
+    kmeans_dir = os.path.join(output_folder, 'kmeans/')
+    o.mkdir_safe(kmeans_dir)
+    kmeans_result = {'centers': centers, 'labels': reorder(labels)}
+    utils.pickle_dump(kmeans_result, os.path.join(output_folder, 'kmeans_result.pkl'))
+    np.savetxt(os.path.join(kmeans_dir, 'centers.txt'), centers)
 
-        # Kmeans volumes go into kmeans/ subdirectory
-        kmeans_dir = os.path.join(output_folder, 'kmeans/')
-        o.mkdir_safe(kmeans_dir)
-        kmeans_result = {'centers': centers, 'labels': reorder(labels)}
-        utils.pickle_dump(kmeans_result, os.path.join(output_folder, 'kmeans_result.pkl'))
-        np.savetxt(os.path.join(kmeans_dir, 'centers.txt'), centers)
+    if density_path is not None:
+        _, z_to_grid = latent_density.get_grid_z_mappings(latent_space_bounds, input_density.shape[0])
+        centers_grid = z_to_grid(centers)
 
-        if density_path is not None:
-            _, z_to_grid = latent_density.get_grid_z_mappings(latent_space_bounds, input_density.shape[0])
-            centers_grid = z_to_grid(centers)
+        o.mkdir_safe(os.path.join(output_folder, 'density_plots/'))
+        o.plot_over_density(input_density, points=centers_grid, annotate=True, plot_folder=os.path.join(output_folder, 'density_plots/'))
 
-            o.mkdir_safe(os.path.join(output_folder, 'density_plots/'))
-            o.plot_over_density(input_density, points=centers_grid, annotate=True, plot_folder=os.path.join(output_folder, 'density_plots/'))
+        o.mkdir_safe(os.path.join(output_folder, 'density_plots_sliced/'))
+        o.plot_over_density(input_density, points=centers_grid, annotate=True, plot_folder=os.path.join(output_folder, 'density_plots_sliced/'), projection_function='slice')
 
-            o.mkdir_safe(os.path.join(output_folder, 'density_plots_sliced/'))
-            o.plot_over_density(input_density, points=centers_grid, annotate=True, plot_folder=os.path.join(output_folder, 'density_plots_sliced/'), projection_function='slice')
+    if (not skip_umap) and (zdim > 1):
+        mapper = o.umap_latent_space(zs_unsort)
+        o.mkdir_safe(os.path.join(output_folder, 'umap/'))
+        utils.pickle_dump(reorder(mapper.embedding_), os.path.join(output_folder, 'umap/umap_embedding.pkl'))
+        from recovar.output import output
+        _, kmeans_ind = output.get_nearest_point(zs_unsort, centers)
 
-        if (not skip_umap) and (zdim > 1):
-            mapper = o.umap_latent_space(zs_unsort)
-            o.mkdir_safe(os.path.join(output_folder, 'umap/'))
-            utils.pickle_dump(reorder(mapper.embedding_), os.path.join(output_folder, 'umap/umap_embedding.pkl'))
-            from recovar.output import output
-            _, kmeans_ind = output.get_nearest_point(zs_unsort, centers)
+        o.plot_umap(os.path.join(output_folder, 'umap/'), mapper.embedding_, mapper.embedding_[kmeans_ind])
 
-            o.plot_umap(os.path.join(output_folder, 'umap/'), mapper.embedding_, mapper.embedding_[kmeans_ind])
+    if not skip_centers:
+        o.compute_and_save_reweighted(
+            cryos, centers, zs, cov_zs, kmeans_dir, B_factor, n_bins,
+            n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
+            apply_global_filtering=apply_global_filtering,
+            fsc_mask=fsc_mask,
+            fsc_mask_radius=fsc_mask_radius,
+            fsc_mask_edgewidth=fsc_mask_edgewidth,
+            vol_prefix="center"
+        )
 
-        if not skip_centers:
-            o.compute_and_save_reweighted(
-                cryos, centers, zs, cov_zs, kmeans_dir, B_factor, n_bins,
-                n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
-                apply_global_filtering=apply_global_filtering,
-                fsc_mask=fsc_mask,
-                fsc_mask_radius=fsc_mask_radius,
-                fsc_mask_edgewidth=fsc_mask_edgewidth,
-                vol_prefix="center"
-            )
+    if zdim > 1:
+        pairs = pick_pairs(centers, n_paths)
+        for pair_idx, pair in enumerate(pairs):
+            z_st = centers[pair[0]]
+            z_end = centers[pair[1]]
 
-        if zdim > 1:
-            pairs = pick_pairs(centers, n_paths)
-            for pair_idx, pair in enumerate(pairs):
-                z_st = centers[pair[0]]
-                z_end = centers[pair[1]]
-
-                traj_folder = os.path.join(output_folder, f'traj{pair_idx:03d}/')
-                o.mkdir_safe(traj_folder)
-                try:
-                    full_path, subsampled_path = o.make_trajectory_plots_from_results(
-                        po, zdim, traj_folder, cryos=cryos, z_st=z_st, z_end=z_end, gt_volumes=None,
-                        n_vols_along_path=n_vols_along_path, plot_llh=False, input_density=input_density,
-                        latent_space_bounds=latent_space_bounds
-                    )
-                except RuntimeError as e:
-                    logger.warning("Trajectory %d (clusters %d→%d) failed: %s. "
-                                   "Skipping this trajectory.", pair_idx, pair[0], pair[1], e)
-                    continue
-
-                logger.info("trajectory %d done", pair_idx)
-                o.compute_and_save_reweighted(
-                    cryos, subsampled_path, zs, cov_zs, traj_folder, B_factor, n_bins,
-                    n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
-                    apply_global_filtering=apply_global_filtering,
-                    fsc_mask=fsc_mask,
-                    fsc_mask_radius=fsc_mask_radius,
-                    fsc_mask_edgewidth=fsc_mask_edgewidth,
-                    vol_prefix="state"
-                )
-
-        else:
-            traj_folder = os.path.join(output_folder, 'traj000/')
+            traj_folder = os.path.join(output_folder, f'traj{pair_idx:03d}/')
             o.mkdir_safe(traj_folder)
-            q = 0.03
-            zs_1d = np.asarray(zs).reshape(-1)
-            pairs = np.percentile(zs_1d, [q, 100 - q])
-            z_st = pairs[0]
-            z_end = pairs[1]
-            subsampled_path = np.linspace(z_st, z_end, n_vols_along_path)[:, None]
+            try:
+                full_path, subsampled_path = o.make_trajectory_plots_from_results(
+                    po, zdim, traj_folder, cryos=cryos, z_st=z_st, z_end=z_end, gt_volumes=None,
+                    n_vols_along_path=n_vols_along_path, plot_llh=False, input_density=input_density,
+                    latent_space_bounds=latent_space_bounds
+                )
+            except RuntimeError as e:
+                logger.warning("Trajectory %d (clusters %d→%d) failed: %s. "
+                               "Skipping this trajectory.", pair_idx, pair[0], pair[1], e)
+                continue
+
+            logger.info("trajectory %d done", pair_idx)
             o.compute_and_save_reweighted(
                 cryos, subsampled_path, zs, cov_zs, traj_folder, B_factor, n_bins,
-                save_all_estimates=False, n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
+                n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
                 apply_global_filtering=apply_global_filtering,
                 fsc_mask=fsc_mask,
                 fsc_mask_radius=fsc_mask_radius,
@@ -270,12 +244,27 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
                 vol_prefix="state"
             )
 
-        kmeans_res = {'centers': centers.tolist(), 'pairs': pairs}
-        utils.pickle_dump(kmeans_res, os.path.join(output_folder, 'trajectory_endpoints.pkl'))
-    finally:
-        # Clean up temp files at the end (including failures).
-        if path_mapping is not None and args is not None and not getattr(args, "no_cleanup", False):
-            cleanup_temp_files(path_mapping)
+    else:
+        traj_folder = os.path.join(output_folder, 'traj000/')
+        o.mkdir_safe(traj_folder)
+        q = 0.03
+        zs_1d = np.asarray(zs).reshape(-1)
+        pairs = np.percentile(zs_1d, [q, 100 - q])
+        z_st = pairs[0]
+        z_end = pairs[1]
+        subsampled_path = np.linspace(z_st, z_end, n_vols_along_path)[:, None]
+        o.compute_and_save_reweighted(
+            cryos, subsampled_path, zs, cov_zs, traj_folder, B_factor, n_bins,
+            save_all_estimates=False, n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
+            apply_global_filtering=apply_global_filtering,
+            fsc_mask=fsc_mask,
+            fsc_mask_radius=fsc_mask_radius,
+            fsc_mask_edgewidth=fsc_mask_edgewidth,
+            vol_prefix="state"
+        )
+
+    kmeans_res = {'centers': centers.tolist(), 'pairs': pairs}
+    utils.pickle_dump(kmeans_res, os.path.join(output_folder, 'trajectory_endpoints.pkl'))
 
 
 def pick_pairs(centers, n_pairs):
