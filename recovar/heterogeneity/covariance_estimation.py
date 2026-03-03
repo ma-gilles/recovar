@@ -429,7 +429,7 @@ def variance_relion_kernel_trilinear(
         ) * CTF
         noise_p_variance_ctf = jnp.ones_like(images)
 
-    # Save pre-masking quantities for Ft_im and Ft_one backprojections.
+    # Save pre-masking image power (full-spectrum, before mask modifies images).
     img_power_full = jnp.abs(images) ** 2
     cov_noise = jnp.zeros_like(images)
 
@@ -439,6 +439,7 @@ def variance_relion_kernel_trilinear(
             config.image_shape, config.volume_shape, config.grid_size, config.padding,
             'linear_interp', soften=soften,
         )
+        # apply_image_masks works in real space (IDFT2 → mask → DFT2), requires full images.
         images = covariance_core.apply_image_masks(images, image_mask, config.image_shape)
         if config.premultiplied_ctf:
             noise_variances = noise_variances * CTF ** 2
@@ -446,14 +447,17 @@ def variance_relion_kernel_trilinear(
             image_mask, noise_variances, config.image_shape
         )
 
-    images_squared = jnp.abs(images) ** 2 - cov_noise.reshape(images.shape)
-    CTF_squared = CTF ** 2
-
-    if not config.premultiplied_ctf:
-        images_squared *= CTF_squared
-
+    # Switch to half-image space for all remaining ops.
     def _half(arr):
         return fourier_transform_utils.full_image_to_half_image(arr, config.image_shape)
+
+    half_images = _half(images)
+    half_ctf = _half(CTF)
+    CTF_squared = half_ctf ** 2
+
+    images_squared = jnp.abs(half_images) ** 2 - _half(cov_noise.reshape(images.shape))
+    if not config.premultiplied_ctf:
+        images_squared = images_squared * CTF_squared
 
     def _backproject(half_imgs, volume):
         return core.adjoint_slice_volume_by_trilinear_from_half_images(
@@ -461,8 +465,8 @@ def variance_relion_kernel_trilinear(
             volume=volume, half_volume=True,
         )
 
-    Ft_y = _backproject(_half(images_squared), Ft_y)
-    Ft_ctf = _backproject(_half(CTF_squared ** 2), Ft_ctf)
+    Ft_y = _backproject(images_squared, Ft_y)
+    Ft_ctf = _backproject(CTF_squared ** 2, Ft_ctf)
     Ft_im = _backproject(_half(img_power_full), Ft_im)
     Ft_one = _backproject(_half(noise_p_variance_ctf), Ft_one)
 
