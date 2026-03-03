@@ -409,33 +409,24 @@ def variance_relion_kernel_trilinear(
     Backprojects into half-volume accumulators (Ft_y, Ft_ctf, Ft_im, Ft_one).
     Pass None to initialise from zero; pass an existing half-volume to accumulate.
     """
-    images = batch_data.images
-    ctf_params = batch_data.ctf_params
     rotation_matrices = batch_data.rotation_matrices
-    translations = batch_data.translations
     noise_variances = batch_data.noise_variance
 
-    def _half(arr):
-        return fourier_transform_utils.full_image_to_half_image(arr, config.image_shape)
+    # batch_data.images is already in half-image (rfft-packed) format.
+    half_images = core.translate_half_images(batch_data.images, batch_data.translations, config.image_shape)
+    half_ctf = config.compute_ctf_half(batch_data.ctf_params)
+    CTF_squared = half_ctf ** 2
 
-    CTF = config.compute_ctf(ctf_params)
-    images = core.translate_images(images, translations, config.image_shape)
+    mean_slice_half = core.slice_volume_by_map_to_half_image(
+        mean_estimate, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
+    )
 
     if config.premultiplied_ctf:
-        images = images - core.slice_volume_by_map(
-            mean_estimate, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
-        ) * CTF ** 2
-        # Scale noise while CTF is still in full space; no full-Fourier refs after _half().
-        noise_variances = noise_variances * CTF ** 2
+        half_images = half_images - mean_slice_half * CTF_squared
+        # CTF² needed in full space for noise scaling; computed from scratch for this case only.
+        noise_variances = noise_variances * config.compute_ctf(batch_data.ctf_params) ** 2
     else:
-        images = images - core.slice_volume_by_map(
-            mean_estimate, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
-        ) * CTF
-
-    # Release full-spectrum arrays — only half-image space from here on.
-    half_images = _half(images)
-    half_ctf = _half(CTF)
-    CTF_squared = half_ctf ** 2
+        half_images = half_images - mean_slice_half * half_ctf
 
     img_power_half = jnp.abs(half_images) ** 2
     noise_p_variance_ctf = CTF_squared if config.premultiplied_ctf else jnp.ones_like(half_images)
@@ -451,11 +442,11 @@ def variance_relion_kernel_trilinear(
         half_images = covariance_core.apply_image_masks(
             half_images, image_mask, config.image_shape, half_images=True
         )
-        # Pipe directly to _half — no named full-Fourier intermediate.
-        cov_noise_half = _half(
+        cov_noise_half = fourier_transform_utils.full_image_to_half_image(
             noise.get_masked_noise_variance_from_noise_variance(
                 image_mask, noise_variances, config.image_shape
-            ).reshape(-1, config.image_size)
+            ).reshape(-1, config.image_size),
+            config.image_shape,
         )
 
     images_squared = jnp.abs(half_images) ** 2 - cov_noise_half
@@ -498,6 +489,7 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, b
         noise_model=experiment_dataset.noise,
         noise_half=False,
         apply_process_images=True,
+        half_images=True,
         index_subset=image_subset,
     ):
         Ft_y, Ft_ctf, Ft_im, Ft_one = variance_relion_kernel_trilinear(

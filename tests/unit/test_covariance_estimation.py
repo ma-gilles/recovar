@@ -497,10 +497,16 @@ def _make_variance_test_fixtures(grid_size=4, n_images=4, seed=42):
     images_gen = cryo.image_stack.get_dataset_generator(batch_size=n_images)
     images_batch, _, indices = next(iter(images_gen))
 
+    # nan_to_num: tiny-grid DFTs can produce NaN at edge frequencies;
+    # NaN in slices propagates through the VJP-based JAX half-volume adjoint.
+    full_images = jnp.nan_to_num(jnp.asarray(images_batch))
+    # The variance kernel expects batch_data.images in half-image (rfft-packed) format,
+    # matching what DataIterator(half_images=True) provides.
+    half_images = fourier_transform_utils.full_image_to_half_image(
+        full_images, config.image_shape
+    )
     batch_data = BatchData(
-        # nan_to_num: tiny-grid DFTs can produce NaN at edge frequencies;
-        # NaN in slices propagates through the VJP-based JAX half-volume adjoint.
-        images=jnp.nan_to_num(jnp.asarray(images_batch)),
+        images=half_images,
         ctf_params=jnp.asarray(cryo.CTF_params[indices]),
         rotation_matrices=jnp.asarray(cryo.rotation_matrices[indices]),
         translations=jnp.asarray(cryo.translations[indices]),
@@ -515,11 +521,15 @@ def _make_variance_test_fixtures(grid_size=4, n_images=4, seed=42):
 
 
 def _reference_variance_kernel(config, batch_data, mean_estimate, volume_mask, image_mask, soften=5):
-    """Old full-volume backprojection logic, for numerical equivalence testing."""
+    """Old full-volume backprojection logic, for numerical equivalence testing.
+
+    batch_data.images is in half-image format; convert to full spectrum before
+    the full-vol reference path.
+    """
     from recovar.heterogeneity import covariance_core
     from recovar.reconstruction import noise as noise_mod
 
-    images = batch_data.images
+    images = fourier_transform_utils.half_image_to_full_image(batch_data.images, config.image_shape)
     noise_variances = batch_data.noise_variance
     CTF = config.compute_ctf(batch_data.ctf_params)
     images = core.translate_images(images, batch_data.translations, config.image_shape)
