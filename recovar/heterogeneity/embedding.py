@@ -288,7 +288,74 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
         if shared_label:
             # Some iterators may return multiple particles in one image batch.
             # Shared-label solves must be computed per particle (tilt series).
-            unique_particles = np.unique(particle_ids)
+            unique_particles, particle_group_ids = np.unique(particle_ids, return_inverse=True)
+
+            # Common case with the current tilt-series loader: one particle per
+            # iterator batch. Skip boolean-mask splitting to avoid extra gathers.
+            if unique_particles.size == 1:
+                particle_ind = np.asarray(unique_particles, dtype=np.int32)
+                batch_data = BatchData(
+                    images=batch,
+                    ctf_params=experiment_dataset.CTF_params[batch_image_ind],
+                    rotation_matrices=experiment_dataset.rotation_matrices[batch_image_ind],
+                    translations=experiment_dataset.translations[batch_image_ind],
+                    noise_variance=_noise_get_half_or_full(noise_model, batch_image_ind),
+                )
+
+                xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
+                    config, batch_data, model, opts,
+                    experiment_dataset.image_stack.mask, contrast_grid,
+                    contrast_mean, contrast_variance,
+                    hermitian_weights,
+                )
+
+                xs[particle_ind] = xs_single
+                if not contrast_shared_across_tilt_series:
+                    estimated_contrasts[batch_image_ind] = contrast_single
+                else:
+                    estimated_contrasts[particle_ind] = contrast_single
+
+                if compute_covariances:
+                    image_latent_precisions[particle_ind] = cov_batch
+                if compute_bias:
+                    image_latent_bias[particle_ind] = bias
+                continue
+
+            # Fast path: when contrast is shared across tilts and a batch contains
+            # multiple particles, solve all particle groups in one batched call.
+            if contrast_shared_across_tilt_series and unique_particles.size > 1:
+                batch_data = BatchData(
+                    images=batch,
+                    ctf_params=experiment_dataset.CTF_params[batch_image_ind],
+                    rotation_matrices=experiment_dataset.rotation_matrices[batch_image_ind],
+                    translations=experiment_dataset.translations[batch_image_ind],
+                    noise_variance=_noise_get_half_or_full(noise_model, batch_image_ind),
+                )
+
+                xs_group, contrast_group, cov_group, bias_group = compute_grouped_shared_batch_coords(
+                    config,
+                    batch_data,
+                    model,
+                    experiment_dataset.image_stack.mask,
+                    contrast_grid,
+                    contrast_mean,
+                    contrast_variance,
+                    jnp.asarray(particle_group_ids, dtype=jnp.int32),
+                    int(unique_particles.size),
+                    compute_covariances,
+                    compute_bias,
+                    hermitian_weights,
+                )
+
+                xs[unique_particles] = np.asarray(xs_group)
+                estimated_contrasts[unique_particles] = np.asarray(contrast_group)
+
+                if compute_covariances:
+                    image_latent_precisions[unique_particles] = np.asarray(cov_group)
+                if compute_bias:
+                    image_latent_bias[unique_particles] = np.asarray(bias_group)
+                continue
+
             for pid in unique_particles:
                 mask = (particle_ids == pid)
                 if not np.any(mask):
@@ -596,6 +663,75 @@ def compute_batch_coords(
             gram = jnp.sum(AU_t_AU_unsummed * contrast_single[:, None, None] ** 2, axis=0, keepdims=True)
         else:
             gram = (contrast_single ** 2)[:, None, None] * AU_t_AU
+        _cov = gram + jnp.diag(1 / eigenvalues)
+        bias = jnp.linalg.pinv(_cov, rcond=1e-6, hermitian=True) @ gram
+    else:
+        bias = None
+
+    return xs_single, contrast_single, cov_batch, bias
+
+
+@eqx.filter_jit
+def compute_grouped_shared_batch_coords(
+    config: ForwardModelConfig,
+    batch_data: BatchData,
+    model: ModelState,
+    image_mask: jax.Array,
+    contrast_grid: jax.Array,
+    contrast_mean: float,
+    contrast_variance: float,
+    group_ids: jax.Array,
+    n_groups: int,
+    compute_covariances: bool,
+    compute_bias: bool,
+    hermitian_weights=None,
+):
+    """Solve shared-label, shared-contrast batches for multiple particles at once.
+
+    This path is used when a single iterator batch contains images from
+    multiple particles. It computes the AU statistics once over all images,
+    then segment-sums by particle id and solves all particles in one batched
+    call. This avoids per-particle Python/JIT dispatch overhead while
+    preserving shared-label semantics.
+    """
+    _ = image_mask  # Kept for API parity with compute_batch_coords.
+    contrast_grid = jnp.asarray(contrast_grid)
+    group_ids = jnp.asarray(group_ids, dtype=jnp.int32)
+    eigenvalues = model.eigenvalues
+
+    AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq = \
+        _compute_batch_coords_p1(config, batch_data, model, hermitian_weights)
+
+    AU_t_images = jax.ops.segment_sum(AU_t_images, group_ids, num_segments=n_groups)
+    AU_t_Amean = jax.ops.segment_sum(AU_t_Amean, group_ids, num_segments=n_groups)
+    AU_t_AU = jax.ops.segment_sum(AU_t_AU, group_ids, num_segments=n_groups)
+    image_norms_sq = jax.ops.segment_sum(image_norms_sq, group_ids, num_segments=n_groups)
+    image_T_A_mean = jax.ops.segment_sum(image_T_A_mean, group_ids, num_segments=n_groups)
+    A_mean_norm_sq = jax.ops.segment_sum(A_mean_norm_sq, group_ids, num_segments=n_groups)
+
+    xs_batch_contrast = batch_over_images_and_contrast_solve_contrast_linear_system(
+        AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, contrast_grid
+    )
+    residuals_fit, residuals_prior = batch_compute_contrast_residual_fast_2(
+        xs_batch_contrast, AU_t_images, image_norms_sq, AU_t_Amean,
+        A_mean_norm_sq, image_T_A_mean, AU_t_AU, eigenvalues, contrast_grid,
+    )
+    contrast_prior = (contrast_grid - contrast_mean) ** 2 / contrast_variance
+    res_sum = residuals_fit + residuals_prior + contrast_prior
+    best_idx = jnp.argmin(res_sum, axis=1).astype(int)
+
+    xs_single = batch_slice_ar(best_idx, xs_batch_contrast)
+    contrast_single = contrast_grid[best_idx]
+
+    if compute_covariances:
+        gram = (contrast_single ** 2)[:, None, None] * AU_t_AU
+        cov_batch = gram + jnp.diag(1 / eigenvalues)
+        cov_batch = cov_batch @ jnp.linalg.pinv(gram, rcond=1e-6, hermitian=True) @ cov_batch
+    else:
+        cov_batch = None
+
+    if compute_bias:
+        gram = (contrast_single ** 2)[:, None, None] * AU_t_AU
         _cov = gram + jnp.diag(1 / eigenvalues)
         bias = jnp.linalg.pinv(_cov, rcond=1e-6, hermitian=True) @ gram
     else:

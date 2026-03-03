@@ -326,6 +326,85 @@ def test_get_coords_shared_label_splits_mixed_particle_batches(monkeypatch):
     assert bias is None
 
 
+def test_get_coords_shared_label_grouped_shared_contrast(monkeypatch):
+    class _DummyNoise:
+        def get_half(self, idx):
+            return np.ones((len(np.asarray(idx).reshape(-1)), 16), dtype=np.float32)
+
+    class _DummyImageStack:
+        def __init__(self):
+            self.mask = np.ones((16,), dtype=np.float32)
+
+        def process_images(self, batch, apply_image_mask=False):
+            _ = apply_image_mask
+            return batch
+
+    class _DummyTiltCryo:
+        def __init__(self):
+            self.tilt_series_flag = True
+            self.n_units = 2
+            self.n_images = 4
+            self.dtype = np.complex64
+            self.dtype_real = np.float32
+            self.image_shape = (4, 4)
+            self.volume_shape = (4, 4, 4)
+            self.grid_size = 4
+            self.voxel_size = 1.0
+            self.padding = 0
+            self.premultiplied_ctf = False
+            self.CTF_fun = embedding.core.evaluate_ctf_wrapper
+            self.image_stack = _DummyImageStack()
+            self.noise = _DummyNoise()
+            self.CTF_params = np.zeros((4, 9), dtype=np.float32)
+            self.rotation_matrices = np.zeros((4, 3, 3), dtype=np.float32)
+            self.translations = np.zeros((4, 2), dtype=np.float32)
+
+        def get_dataset_generator(self, batch_size):
+            _ = batch_size
+            batch = np.zeros((4, 16), dtype=np.complex64)
+            particles_ind = np.array([0, 0, 1, 1], dtype=np.int32)
+            batch_image_ind = np.array([0, 1, 2, 3], dtype=np.int32)
+            yield batch, particles_ind, batch_image_ind
+
+    grouped_calls = []
+
+    def fake_grouped(*args):
+        grouped_calls.append(True)
+        _ = args
+        xs = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+        contrast = np.array([11.0, 12.0], dtype=np.float32)
+        cov = np.stack([np.eye(2, dtype=np.float32), 2 * np.eye(2, dtype=np.float32)], axis=0)
+        return xs, contrast, cov, None
+
+    def fail_per_particle(*args, **kwargs):
+        _ = (args, kwargs)
+        raise AssertionError("Per-particle compute_batch_coords should not be used in grouped shared-contrast path")
+
+    monkeypatch.setattr(embedding, "compute_grouped_shared_batch_coords", fake_grouped)
+    monkeypatch.setattr(embedding, "compute_batch_coords", fail_per_particle)
+
+    cryo = _DummyTiltCryo()
+    xs, cov, contrasts, bias = embedding.get_coords_in_basis_and_contrast_3(
+        experiment_dataset=cryo,
+        mean_estimate=np.zeros((4 ** 3,), dtype=np.complex64),
+        basis=np.zeros((2, 4 ** 3), dtype=np.complex64),
+        eigenvalues=np.ones((2,), dtype=np.float32),
+        volume_mask=np.ones((4 ** 3,), dtype=np.float32),
+        contrast_grid=np.array([1.0], dtype=np.float32),
+        batch_size=8,
+        disc_type="linear_interp",
+        compute_covariances=True,
+        compute_bias=False,
+        contrast_shared_across_tilt_series=True,
+    )
+
+    assert grouped_calls == [True]
+    np.testing.assert_allclose(xs, np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
+    np.testing.assert_allclose(contrasts, np.array([11.0, 12.0], dtype=np.float32))
+    np.testing.assert_allclose(cov, np.stack([np.eye(2), 2 * np.eye(2)], axis=0))
+    assert bias is None
+
+
 # ---------------------------------------------------------------------------
 # Tests for solve_contrast_linear_system
 # ---------------------------------------------------------------------------
