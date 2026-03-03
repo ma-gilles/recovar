@@ -895,17 +895,16 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     if disc_type_u == 'cubic':
         basis = compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)
 
-    # Pre-convert to rfft3 half-volume when masking is off.  This lets the CUDA
-    # kernels operate on the (N0*N1*(N2//2+1)) half-volume directly, avoiding
-    # the Hermitian expand on every batch.  Cubic spline coefficients cannot be
-    # half-volumized (they are not Fourier volumes), so skip for cubic.
-    _pre_half_vol = not do_mask_images
-    if _pre_half_vol and (disc_type != 'cubic'):
+    # Pre-convert to rfft3 half-volume.  This lets the CUDA kernels operate on
+    # the (N0*N1*(N2//2+1)) half-volume directly, avoiding the Hermitian expand
+    # on every batch.  Cubic spline coefficients cannot be half-volumized (they
+    # are not Fourier volumes), so skip for cubic.
+    if disc_type != 'cubic':
         mean_estimate = fourier_transform_utils.full_volume_to_half_volume(
             mean_estimate.reshape(experiment_dataset.volume_shape),
             experiment_dataset.volume_shape,
         ).reshape(-1)
-    if _pre_half_vol and (disc_type_u != 'cubic'):
+    if disc_type_u != 'cubic':
         vol_shape = experiment_dataset.volume_shape
         n_basis = basis.shape[0]
         basis = fourier_transform_utils.full_volume_to_half_volume(
@@ -1036,12 +1035,11 @@ def reduce_covariance_inner(
         batch = config.process_fn(batch)
     batch = core.translate_images(batch, translations, config.image_shape)
 
-    # When masking is off, project directly to half-image format to avoid the
-    # full→half conversion for projected_mean and AUs (the two dominant terms).
-    # Also use half-volumes when available: compute_projected_covariance pre-converts
-    # mean_estimate and basis to rfft3 half-volumes when do_mask_images=False and
-    # disc_type is not cubic (cubic spline coefficients are not Fourier half-volumes).
-    _use_half_proj = (not do_mask_images) and (hermitian_weights is not None)
+    # Always project to half-image format when hermitian weights are available.
+    # Masking functions handle half images via half→real→half round-trip.
+    # compute_projected_covariance pre-converts mean_estimate and basis to
+    # rfft3 half-volumes (cubic spline coefficients excluded — not Fourier data).
+    _use_half_proj = hermitian_weights is not None
     _use_half_vol_mean = _use_half_proj and (config.disc_type != 'cubic')
     _use_half_vol_basis = _use_half_proj and (opts.disc_type_u != 'cubic')
 
@@ -1051,9 +1049,13 @@ def reduce_covariance_inner(
         half_volume=_use_half_vol_mean,
     )
 
+    # Convert batch to half-image early so all masking operates in half format
+    if _use_half_proj:
+        batch = fourier_transform_utils.full_image_to_half_image(batch, config.image_shape)
+
     if do_mask_images:
-        batch = covariance_core.apply_image_masks(batch, image_mask, config.image_shape)
-        projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, config.image_shape)
+        batch = covariance_core.apply_image_masks(batch, image_mask, config.image_shape, half_images=_use_half_proj)
+        projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, config.image_shape, half_images=_use_half_proj)
 
     # Forward model basis vectors — use disc_type_u for eigenvectors
     config_u = config.replace(disc_type=opts.disc_type_u)
@@ -1065,28 +1067,16 @@ def reduce_covariance_inner(
     )
 
     if do_mask_images:
-        AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, config.image_shape)
+        AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, config.image_shape, half_images=_use_half_proj)
 
-    # --- Half-spectrum conversion ---
-    # All masking and full-spectrum operations are complete.  Convert to the
-    # rfft-packed half-spectrum representation and apply sqrt(w) weights so
-    # that plain (unweighted) half-spectrum inner products equal the correct
-    # full-spectrum inner products for Hermitian cryo-EM data.
+    # --- Half-spectrum weighting ---
+    # batch, projected_mean, and AUs are already in half-image format when
+    # _use_half_proj is True.  Apply sqrt(w) Hermitian weights so that plain
+    # inner products equal the correct full-spectrum inner products.
     if hermitian_weights is not None:
-        batch = fourier_transform_utils.full_image_to_half_image(
-            batch, config.image_shape) * hermitian_weights
-        if _use_half_proj:
-            # projected_mean and AUs are already in half-image format.
-            projected_mean = projected_mean * hermitian_weights
-            AUs = AUs * hermitian_weights[None, None, :]
-        else:
-            projected_mean = fourier_transform_utils.full_image_to_half_image(
-                projected_mean, config.image_shape) * hermitian_weights
-            # AUs: (n_basis, n_images, H*W) → (n_basis, n_images, H*(W//2+1))
-            n_b, n_i = AUs.shape[0], AUs.shape[1]
-            AUs = fourier_transform_utils.full_image_to_half_image(
-                AUs.reshape(n_b * n_i, -1), config.image_shape,
-            ).reshape(n_b, n_i, -1) * hermitian_weights[None, None, :]
+        batch = batch * hermitian_weights
+        projected_mean = projected_mean * hermitian_weights
+        AUs = AUs * hermitian_weights[None, None, :]
         noise_variance = fourier_transform_utils.full_image_to_half_image(
             noise_variance, config.image_shape)
 
