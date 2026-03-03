@@ -791,16 +791,25 @@ def test_compute_batch_coords_half_vs_full_gpu(gpu_device):
     Uses real random volumes projected via the JAX forward model (no monkeypatching),
     so all Fourier arrays are Hermitian-symmetric by construction.  Compares xs,
     contrasts, covariance matrices, and bias terms between the two paths.
+
+    The half-spectrum path enforces ``.real`` on all inner products (embedding.py
+    lines 329-333), so we compare against ``.real`` of the full-spectrum results.
+    Trilinear interpolation in Fourier space slightly breaks Hermitian symmetry,
+    so the two paths solve slightly different linear systems; we use tolerances
+    that accommodate this.
     """
     with jax.default_device(gpu_device):
         results = _run_half_vs_full_compute_batch_coords(H=16, W=16, n_images=32, n_basis=6)
 
     for name, (half_val, full_val) in results.items():
+        # The half path enforces .real on inner products; compare real parts only
+        # (matching the CPU test convention at line 871).
+        full_real = full_val.real if np.iscomplexobj(full_val) else full_val
         np.testing.assert_allclose(
-            half_val, full_val,
-            rtol=2e-3, atol=1e-2,
+            half_val, full_real,
+            rtol=5e-3, atol=5e-2,
             err_msg=f"Half vs full mismatch in '{name}': "
-                    f"max_err={np.max(np.abs(half_val - full_val)):.4g}",
+                    f"max_err={np.max(np.abs(half_val - full_real)):.4g}",
         )
 
 
