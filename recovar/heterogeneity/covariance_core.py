@@ -140,6 +140,7 @@ def batch_vol_forward_from_map(
     rotation_matrices: jax.Array,
     skip_ctf: bool = False,
     half_image: bool = False,
+    half_volume: bool = False,
 ) -> jax.Array:
     """Forward-model a batch of volumes via slice_volume_by_map (vmap over volume axis).
 
@@ -151,8 +152,20 @@ def batch_vol_forward_from_map(
         If True, project directly to rfft-packed half-spectrum images and use
         ``config.compute_ctf_half`` for CTF; roughly halves memory and compute
         vs the default full-spectrum path.
+    half_volume : bool
+        If True, *volumes* are rfft-packed half-volumes ``(batch, N0*N1*(N2//2+1))``.
+        Uses :func:`~recovar.core.batch_slice_volume_by_map_from_half_volume` which
+        dispatches to the CUDA half-volume kernel, avoiding the Hermitian expand.
     """
-    if half_image:
+    if half_volume:
+        slices = core.batch_slice_volume_by_map_from_half_volume(
+            volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
+            half_image=half_image,
+        )
+        if not skip_ctf:
+            ctf = config.compute_ctf_half(ctf_params) if half_image else config.compute_ctf(ctf_params)
+            slices = slices * ctf[jnp.newaxis]
+    elif half_image:
         slices = core.batch_slice_volume_by_map_to_half_image(
             volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
         )

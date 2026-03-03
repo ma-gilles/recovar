@@ -895,6 +895,23 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     if disc_type_u == 'cubic':
         basis = compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)
 
+    # Pre-convert to rfft3 half-volume when masking is off.  This lets the CUDA
+    # kernels operate on the (N0*N1*(N2//2+1)) half-volume directly, avoiding
+    # the Hermitian expand on every batch.  Cubic spline coefficients cannot be
+    # half-volumized (they are not Fourier volumes), so skip for cubic.
+    _pre_half_vol = not do_mask_images
+    if _pre_half_vol and (disc_type != 'cubic'):
+        mean_estimate = fourier_transform_utils.full_volume_to_half_volume(
+            mean_estimate.reshape(experiment_dataset.volume_shape),
+            experiment_dataset.volume_shape,
+        ).reshape(-1)
+    if _pre_half_vol and (disc_type_u != 'cubic'):
+        vol_shape = experiment_dataset.volume_shape
+        n_basis = basis.shape[0]
+        basis = fourier_transform_utils.full_volume_to_half_volume(
+            basis.reshape(n_basis, *vol_shape), vol_shape,
+        ).reshape(n_basis, -1)
+
     change_device= False
 
     for experiment_dataset in experiment_datasets:
@@ -1021,11 +1038,17 @@ def reduce_covariance_inner(
 
     # When masking is off, project directly to half-image format to avoid the
     # full→half conversion for projected_mean and AUs (the two dominant terms).
+    # Also use half-volumes when available: compute_projected_covariance pre-converts
+    # mean_estimate and basis to rfft3 half-volumes when do_mask_images=False and
+    # disc_type is not cubic (cubic spline coefficients are not Fourier half-volumes).
     _use_half_proj = (not do_mask_images) and (hermitian_weights is not None)
+    _use_half_vol_mean = _use_half_proj and (config.disc_type != 'cubic')
+    _use_half_vol_basis = _use_half_proj and (opts.disc_type_u != 'cubic')
 
     projected_mean = core_forward.forward_model(
         config, model.mean_estimate, ctf_params, rotation_matrices,
         half_image=_use_half_proj,
+        half_volume=_use_half_vol_mean,
     )
 
     if do_mask_images:
@@ -1038,6 +1061,7 @@ def reduce_covariance_inner(
         config_u, model.basis, ctf_params, rotation_matrices,
         skip_ctf=config.premultiplied_ctf,
         half_image=_use_half_proj,
+        half_volume=_use_half_vol_basis,
     )
 
     if do_mask_images:

@@ -404,6 +404,75 @@ def _random_rotations(rng, n):
     return np.stack(mats, axis=0)
 
 
+def test_slice_volume_by_map_from_half_volume_half_image_jax(monkeypatch):
+    """half_image=True in slice_volume_by_map_from_half_volume matches slice_to_half_image(full_vol)."""
+    import jax.numpy as jnp
+    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+
+    rng = np.random.default_rng(2001)
+    volume_shape = (8, 8, 8)
+    image_shape = (6, 8)
+    rots = np.concatenate(
+        [np.eye(3, dtype=np.float32)[None], _random_rotations(rng, 3)], axis=0
+    )
+    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
+    vol_ft = np.asarray(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
+    half_vol = np.asarray(fourier_transform_utils.full_volume_to_half_volume(vol_ft, volume_shape))
+
+    # Reference: project from full volume directly to half-image
+    ref_half = np.asarray(core_slicing.slice_volume_by_map_to_half_image(
+        vol_ft, rots, image_shape, volume_shape, "linear_interp"
+    ))
+
+    # New path: project from half volume directly to half image
+    out_half = np.asarray(core_slicing.slice_volume_by_map_from_half_volume(
+        half_vol, rots, image_shape, volume_shape, "linear_interp", half_image=True
+    ))
+    np.testing.assert_allclose(out_half, ref_half, atol=1e-5, rtol=1e-5)
+
+
+def test_batch_slice_volume_by_map_from_half_volume_jax(monkeypatch):
+    """batch_slice_volume_by_map_from_half_volume matches vmap of single-volume version."""
+    import jax.numpy as jnp
+    monkeypatch.setattr(core_slicing, "_check_cuda", lambda: False)
+
+    rng = np.random.default_rng(2002)
+    volume_shape = (8, 8, 8)
+    image_shape = (6, 8)
+    n_volumes = 3
+    rots = np.concatenate(
+        [np.eye(3, dtype=np.float32)[None], _random_rotations(rng, 2)], axis=0
+    )
+
+    real_vols = rng.standard_normal((n_volumes,) + volume_shape).astype(np.float32)
+    half_vols = np.stack([
+        np.asarray(fourier_transform_utils.full_volume_to_half_volume(
+            np.asarray(fourier_transform_utils.get_dft3(jnp.array(v))).reshape(-1), volume_shape
+        )).reshape(-1)
+        for v in real_vols
+    ], axis=0)
+
+    # With half_image=False: batch == vmap of single
+    batch_out = np.asarray(core_slicing.batch_slice_volume_by_map_from_half_volume(
+        half_vols, rots, image_shape, volume_shape, "linear_interp", half_image=False
+    ))
+    for i in range(n_volumes):
+        single = np.asarray(core_slicing.slice_volume_by_map_from_half_volume(
+            half_vols[i], rots, image_shape, volume_shape, "linear_interp", half_image=False
+        ))
+        np.testing.assert_allclose(batch_out[i], single, atol=1e-5, rtol=1e-5)
+
+    # With half_image=True: batch == vmap of single
+    batch_out_hi = np.asarray(core_slicing.batch_slice_volume_by_map_from_half_volume(
+        half_vols, rots, image_shape, volume_shape, "linear_interp", half_image=True
+    ))
+    for i in range(n_volumes):
+        single_hi = np.asarray(core_slicing.slice_volume_by_map_from_half_volume(
+            half_vols[i], rots, image_shape, volume_shape, "linear_interp", half_image=True
+        ))
+        np.testing.assert_allclose(batch_out_hi[i], single_hi, atol=1e-5, rtol=1e-5)
+
+
 def test_precompute_cubic_half_coefficients_shape():
     """precompute_cubic_half_coefficients must return full coefficient shape (N0+2, N1+2, N2+2)."""
     rng = np.random.default_rng(600)
@@ -811,14 +880,14 @@ def test_slice_from_half_volume_to_half_image_cuda_vjp_adjointness(gpu_device):
         g = jax.device_put(jnp.array(g_re + 1j * g_im))
         rots_d = jax.device_put(rots)
 
-        # Forward: A(hv) using CUDA custom_vjp function
-        Ahv = core_slicing._slice_from_half_volume_to_half_image_cuda(
-            hv, rots_d, image_shape, volume_shape, 1
+        # Forward: A(hv) via public API (dispatches to CUDA custom_vjp on GPU)
+        Ahv = core_slicing.slice_volume_by_map_from_half_volume(
+            hv, rots_d, image_shape, volume_shape, "linear_interp", half_image=True
         )
 
         # Adjoint via VJP: A^H(g)
-        f = lambda v: core_slicing._slice_from_half_volume_to_half_image_cuda(
-            v, rots_d, image_shape, volume_shape, 1
+        f = lambda v: core_slicing.slice_volume_by_map_from_half_volume(
+            v, rots_d, image_shape, volume_shape, "linear_interp", half_image=True
         )
         _, vjp_fn = jax.vjp(f, hv)
         AHg = vjp_fn(g)[0]
