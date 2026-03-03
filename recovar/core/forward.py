@@ -19,6 +19,7 @@ from recovar.core.slicing import (
     adjoint_slice_volume_by_map,
     adjoint_slice_volume_by_trilinear,
     slice_volume_by_map,
+    slice_volume_by_map_to_half_image,
 )
 
 
@@ -29,13 +30,29 @@ def forward_model(
     ctf_params: jax.Array,
     rotation_matrices: jax.Array,
     skip_ctf: bool = False,
+    half_image: bool = False,
 ) -> jax.Array:
-    """Project volume into images via slice-and-CTF forward model."""
-    slices = slice_volume_by_map(
-        volume, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
-    )
-    if not skip_ctf:
-        slices = slices * config.compute_ctf(ctf_params)
+    """Project volume into images via slice-and-CTF forward model.
+
+    Parameters
+    ----------
+    half_image : bool
+        If True, return rfft-packed half-spectrum images and use
+        ``config.compute_ctf_half`` for CTF, roughly halving memory and compute.
+        For cubic interpolation, falls back to full-slice + half extraction.
+    """
+    if half_image:
+        slices = slice_volume_by_map_to_half_image(
+            volume, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
+        )
+        if not skip_ctf:
+            slices = slices * config.compute_ctf_half(ctf_params)
+    else:
+        slices = slice_volume_by_map(
+            volume, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
+        )
+        if not skip_ctf:
+            slices = slices * config.compute_ctf(ctf_params)
     return slices
 
 
