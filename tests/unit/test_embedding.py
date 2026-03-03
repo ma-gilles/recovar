@@ -854,6 +854,67 @@ def test_compute_batch_coords_half_vs_full_gpu(gpu_device, monkeypatch):
         )
 
 
+@pytest.mark.gpu
+def test_get_per_image_embedding_multi_zdim_matches_per_zdim(gpu_device):
+    """get_per_image_embedding_multi_zdim must produce identical results to
+    calling get_per_image_embedding separately for each n_pcs.
+
+    The multi-zdim path computes statistics once at max(n_pcs) and then solves
+    smaller linear systems; slicing AU_t_AU[:, :k, :k] is numerically identical
+    to a separate k-component forward pass, so results should be bit-exact up
+    to float32 precision.
+    """
+    from recovar.heterogeneity.embedding import (
+        get_per_image_embedding,
+        get_per_image_embedding_multi_zdim,
+    )
+
+    with jax.default_device(gpu_device):
+        # Build a tiny but real dataset
+        cryos, mean_np, volume_mask = _make_multi_zdim_test_fixtures()
+
+        n_basis = 4
+        rng = np.random.default_rng(0)
+        u = rng.standard_normal((cryos.volume_size, n_basis)).astype(np.complex64)
+        s = np.array([4.0, 2.0, 1.0, 0.5], dtype=np.float32)
+        n_pcs_list = [1, 2, 4]
+        gpu_memory = 10.0
+
+        # Reference: separate calls per n_pcs
+        zs_ref, cov_ref = {}, {}
+        for k in n_pcs_list:
+            zs, cov, _, _ = get_per_image_embedding(
+                mean_np, u, s, k, cryos, volume_mask, gpu_memory, contrast_option='none')
+            zs_ref[k] = zs
+            cov_ref[k] = cov
+
+        # New: single-pass multi-zdim
+        zs_reg, _ = get_per_image_embedding_multi_zdim(
+            mean_np, u, s, n_pcs_list, cryos, volume_mask, gpu_memory, contrast_option='none')
+
+        for k in n_pcs_list:
+            xs_m, cov_m, _ = zs_reg[k]
+            np.testing.assert_allclose(
+                xs_m, zs_ref[k], rtol=1e-4, atol=1e-5,
+                err_msg=f"xs mismatch at n_pcs={k}: max_err={np.max(np.abs(xs_m - zs_ref[k])):.3g}",
+            )
+            np.testing.assert_allclose(
+                cov_m, cov_ref[k], rtol=1e-4, atol=1e-5,
+                err_msg=f"cov mismatch at n_pcs={k}: max_err={np.max(np.abs(cov_m - cov_ref[k])):.3g}",
+            )
+
+
+def _make_multi_zdim_test_fixtures():
+    """Create a tiny CryoEMHalfsets with real images for embedding tests."""
+    from helpers import tiny_synthetic
+
+    cryo = tiny_synthetic.make_tiny_cryo_dataset_with_images(grid_size=8, n_images=12, seed=3)
+    cryos = CryoEMHalfsets(cryo, cryo)
+    volume_mask = np.ones(cryo.volume_size, dtype=np.float32)
+    mean_np = np.zeros(cryo.volume_size, dtype=np.complex64)
+    return cryos, mean_np, volume_mask
+
+
 def test_compute_batch_coords_half_vs_full_cpu(monkeypatch):
     """compute_batch_coords: half-spectrum path == full-spectrum on CPU.
 
