@@ -107,16 +107,6 @@ def test_compute_trajectory_main_uses_endpts_with_ind(monkeypatch, tmp_path):
         captured["kwargs"] = kwargs
 
     monkeypatch.setattr(compute_trajectory, "compute_trajectory", fake_compute_trajectory)
-    monkeypatch.setattr(
-        compute_trajectory,
-        "copy_data_from_pipeline_output",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        compute_trajectory,
-        "cleanup_temp_files",
-        lambda *_args, **_kwargs: None,
-    )
     parsed_args = SimpleNamespace(
         result_dir=str(tmp_path / "results"),
         outdir=str(tmp_path / "out"),
@@ -130,8 +120,6 @@ def test_compute_trajectory_main_uses_endpts_with_ind(monkeypatch, tmp_path):
         z_st_file=None,
         z_end_file=None,
         ind=[2, 0],
-        copy_to_folder=None,
-        no_cleanup=False,
         maskrad_fraction=None,
         n_min_particles=10,
     )
@@ -159,8 +147,6 @@ def test_compute_trajectory_main_raises_without_endpoints(monkeypatch, tmp_path)
         z_st_file=None,
         z_end_file=None,
         ind=None,
-        copy_to_folder=None,
-        no_cleanup=False,
         maskrad_fraction=None,
         n_min_particles=10,
     )
@@ -233,8 +219,6 @@ def test_compute_trajectory_uses_embedding_component_api_when_available(monkeypa
         n_bins=20,
         maskrad_fraction=0.5,
         n_min_particles=2,
-        copy_to_folder=None,
-        no_cleanup=False,
     )
     compute_trajectory.compute_trajectory(
         recovar_result_dir=str(tmp_path / "pipeline_out"),
@@ -261,70 +245,6 @@ def test_compute_trajectory_uses_embedding_component_api_when_available(monkeypa
     assert cov_shape == (5, 2, 2)
     assert kwargs["maskrad_fraction"] == 0.5
     assert kwargs["n_min_particles"] == 2
-
-
-def test_compute_trajectory_copy_to_folder_cleans_up_on_failure(monkeypatch, tmp_path):
-    cleaned = {"count": 0}
-
-    class _PO:
-        def __init__(self, _path):
-            self.params = {}
-
-        def get_embedding_keys(self, _entry):
-            return [2]
-
-        def get_embedding_component(self, entry, _key):
-            if entry == "latent_coords":
-                return np.zeros((4, 2), dtype=np.float32)
-            if entry == "latent_precision":
-                return np.repeat(np.eye(2, dtype=np.float32)[None, :, :], 4, axis=0)
-            if entry == "contrasts":
-                return np.ones(4, dtype=np.float32)
-            raise KeyError(entry)
-
-        def get(self, key):
-            if key == "dataset":
-                return ["d0"]
-            raise KeyError(key)
-
-    monkeypatch.setattr(compute_trajectory.o, "PipelineOutput", _PO)
-    monkeypatch.setattr(compute_trajectory.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        compute_trajectory.latent_density,
-        "compute_latent_space_density",
-        lambda *_args, **_kwargs: (np.ones((3, 3), dtype=np.float32), {"x": [-1, 1]}),
-    )
-    monkeypatch.setattr(compute_trajectory.o, "mkdir_safe", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        compute_trajectory.o,
-        "make_trajectory_plots_from_results",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("traj-fail")),
-    )
-    monkeypatch.setattr(compute_trajectory, "copy_data_from_pipeline_output", lambda *_args, **_kwargs: {"temp": "/tmp/fake"})
-    monkeypatch.setattr(compute_trajectory, "cleanup_temp_files", lambda _m: cleaned.__setitem__("count", cleaned["count"] + 1))
-
-    args = SimpleNamespace(
-        Bfactor=0.0,
-        n_bins=20,
-        maskrad_fraction=0.5,
-        n_min_particles=2,
-        copy_to_folder="auto",
-        no_cleanup=False,
-    )
-    with pytest.raises(RuntimeError, match="traj-fail"):
-        compute_trajectory.compute_trajectory(
-            recovar_result_dir=str(tmp_path / "pipeline_out"),
-            output_folder=str(tmp_path / "traj_out"),
-            zdim=2,
-            n_vols_along_path=3,
-            density_path=None,
-            no_z_reg=False,
-            z_st=np.array([0.0, 0.5], dtype=np.float32),
-            z_end=np.array([1.0, -0.5], dtype=np.float32),
-            args=args,
-        )
-
-    assert cleaned["count"] == 1
 
 
 def test_compute_trajectory_uses_lazy_dataset_when_requested(monkeypatch, tmp_path):
@@ -381,8 +301,6 @@ def test_compute_trajectory_uses_lazy_dataset_when_requested(monkeypatch, tmp_pa
         n_bins=20,
         maskrad_fraction=0.5,
         n_min_particles=2,
-        copy_to_folder=None,
-        no_cleanup=False,
         lazy=True,
     )
     compute_trajectory.compute_trajectory(

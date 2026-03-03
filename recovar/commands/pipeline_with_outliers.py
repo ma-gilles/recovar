@@ -13,7 +13,6 @@ from recovar.output import output
 from recovar.commands.pipeline import add_args, standard_recovar_pipeline
 from recovar.utils.helpers import RobustFileHandler as _RobustFileHandler
 from recovar.utils.helpers import RobustStreamHandler as _RobustStreamHandler
-from recovar.utils import cleanup_temp_files
 matplotlib.rcParams["contour.negative_linestyle"] = "solid"
 
 def run_pipeline_with_outlier_removal():
@@ -104,9 +103,6 @@ def run_pipeline_with_outlier_removal():
     # Keep track of directories to delete if cleanup is enabled
     round_dirs = []
 
-    # Keep track of path mapping for cleanup
-    path_mapping = None
-
     for k in range(args.k_rounds):
         round_number = k + 1
         logger.info("Starting round %s/%s", round_number, args.k_rounds)
@@ -135,13 +131,6 @@ def run_pipeline_with_outlier_removal():
         # Run the pipeline
         standard_recovar_pipeline(args)
 
-        # Get path mapping from the pipeline (it will be None if no copy-to-folder was used)
-        # We need to check if copy-to-folder was used in this round
-        if hasattr(args, 'copy_to_folder') and args.copy_to_folder:
-            # The path_mapping would be available from the pipeline call
-            # For now, we'll rely on the cleanup in standard_recovar_pipeline
-            pass
-        
         # Add plot
         po = output.PipelineOutput(args.outdir)
         output.standard_pipeline_plots(po, zdim, os.path.join(args.outdir, 'output', 'plots'))
@@ -314,10 +303,6 @@ def run_pipeline_with_outlier_removal():
     else:
         logger.info("Delete rounds not enabled. Intermediate round results are kept.")
 
-    # Clean up temp files at the very end (in case there were any remaining)
-    if path_mapping is not None and not args.no_cleanup:
-        cleanup_temp_files(path_mapping)
-    
     logger.info("Pipeline with outlier removal completed.")
 
 

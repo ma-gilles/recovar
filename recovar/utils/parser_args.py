@@ -83,12 +83,5 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze= False):
         help="Edge width of FSC mask (in Angstroms). If None, uses 10%% of fsc-mask-radius. Only used if fsc-mask-radius is specified.",
     )
 
-    parser.add_argument(
-        "--copy-to-folder", dest="copy_to_folder", type=os.path.abspath, help="Copy all input data files to this temporary folder before processing. Original paths will be saved in output."
-    )
-    parser.add_argument(
-        "--no-cleanup", action="store_true", help="Do not clean up temporary files after processing (useful for chaining multiple pipeline calls)"
-    )
-
     return parser
 
