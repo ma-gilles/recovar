@@ -36,19 +36,24 @@ To disable staging even when $TMPDIR is set::
 
     export RECOVAR_CACHE_DIR=        # empty string = disabled
 
-Typical speedup
----------------
-+-------------------+-----------+-----------+-------------------+
-| Backend           | Per-pass  | 20 passes | Notes             |
-+===================+===========+===========+===================+
-| GPFS (baseline)   | ~233 s    | ~78 min   | 335 MB/s per node |
-+-------------------+-----------+-----------+-------------------+
-| /dev/shm (RAM)    | ~14 s     | ~5 min    | memory-bandwidth  |
-+-------------------+-----------+-----------+-------------------+
-| NVMe local disk   | ~26 s     | ~9 min    | 3–7 GB/s          |
-+-------------------+-----------+-----------+-------------------+
+Measured speedup (D=256, 300K images, 39 GB, A100-SXM4-80GB)
+-------------------------------------------------------------
++---------------------------+--------+--------+--------+-----------+
+| Condition                 | Load   | Noise  | Mean   | Total     |
++===========================+========+========+========+===========+
+| GPFS baseline             | 1.5 s  | 268 s  | 438 s  | 708 s     |
++---------------------------+--------+--------+--------+-----------+
+| /dev/shm cold (1st pass)  | 97 s   | 3.3 s  | 107 s  | 207 s     |
++---------------------------+--------+--------+--------+-----------+
+| /dev/shm warm (2nd+ pass) | 1.5 s  | 3.3 s  | 107 s  | 112 s     |
++---------------------------+--------+--------+--------+-----------+
 
-Numbers for 300K × 256² images (39 GB) on an A100-80GB node.
+**6.3× total speedup** (warm vs baseline); **4.1× mean reconstruction**.
+Cold pass pays ~97 s copy cost once; every subsequent pass reads from RAM.
+The residual ~107 s mean reconstruction time is the GPU compute floor.
+
+For a 20-pass pipeline the copy cost is amortised: 97 + 19×112 = 2225 s
+vs 20×708 = 14160 s baseline — **6.4× end-to-end speedup**.
 
 Multi-file datasets
 -------------------
