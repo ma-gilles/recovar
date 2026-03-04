@@ -29,30 +29,26 @@ logger = logging.getLogger(__name__)
 
 # ── Dispatch ─────────────────────────────────────────────────────────
 
+@functools.lru_cache(maxsize=None)
 def _on_gpu():
-    # Do not cache: some pipelines may change backend/device context
-    # (e.g. CPU fallback paths), and stale cached values can route host
-    # computations through CUDA-only custom calls.
     return jax.default_backend() == "gpu"
 
 
 def _use_cuda(order):
-    """Return True if CUDA kernels should be used, else fallback to JAX."""
+    """Return True if CUDA should be used.  Error if on GPU but CUDA unavailable."""
     if order > 1 or not _on_gpu():
         return False
     from recovar.cuda_backproject import cuda_available
     if not cuda_available():
-        return False
+        raise RuntimeError(
+            "CUDA backproject/project kernels required on GPU but not available. "
+            "Rebuild the CUDA library or set RECOVAR_DISABLE_CUDA=1 to force JAX fallback."
+        )
     return True
 
 
 def _is_complex(arr):
     return jnp.issubdtype(arr.dtype, jnp.complexfloating)
-
-
-def _is_host_ffi_error(exc):
-    msg = str(exc)
-    return "No FFI handler registered for cuda_" in msg and "platform Host" in msg
 
 
 # ── Interpolation order ──────────────────────────────────────────────
@@ -119,11 +115,8 @@ def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type
         try:
             return cuda_project(volume, rotation_matrices, image_shape, volume_shape,
                                 order, half_volume, half_image)
-        except Exception as exc:
-            # JVP through custom_vjp and mixed host/device traces can trigger
-            # CUDA-FFI host registration errors; fallback to JAX in that case.
-            if not (isinstance(exc, TypeError) or _is_host_ffi_error(exc)):
-                raise
+        except TypeError:
+            pass  # JVP through custom_vjp — fall through to JAX
     # JAX fallback (CPU, cubic, or JVP context)
     if half_volume:
         volume = ftu.half_volume_to_full_volume(volume, volume_shape)
@@ -147,12 +140,8 @@ def batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, di
         if not _is_complex(volumes):
             volumes = volumes.astype(jnp.result_type(volumes, jnp.complex64))
         from recovar.cuda_backproject import batch_project
-        try:
-            return batch_project(volumes, rotation_matrices, image_shape, volume_shape,
-                                 order=order, half_volume=half_volume, half_image=half_image)
-        except Exception as exc:
-            if not _is_host_ffi_error(exc):
-                raise
+        return batch_project(volumes, rotation_matrices, image_shape, volume_shape,
+                             order=order, half_volume=half_volume, half_image=half_image)
     return jax.vmap(
         lambda v: slice_volume(v, rotation_matrices, image_shape, volume_shape,
                                disc_type, half_volume=half_volume, half_image=half_image)
@@ -178,12 +167,8 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
         vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
         if volume is None:
             volume = jnp.zeros(int(np.prod(vol_shape)), dtype=slices.dtype)
-        try:
-            return backproject(volume, slices, rotation_matrices, image_shape, volume_shape,
-                               order=order, half_image=half_image, half_volume=half_volume)
-        except Exception as exc:
-            if not _is_host_ffi_error(exc):
-                raise
+        return backproject(volume, slices, rotation_matrices, image_shape, volume_shape,
+                           order=order, half_image=half_image, half_volume=half_volume)
     # JAX fallback (CPU or cubic)
     if half_image:
         slices = ftu.half_image_to_full_image(slices, image_shape)
