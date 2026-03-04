@@ -155,11 +155,11 @@ def _relion_kernel_batch_half(
     ctf_half = config.compute_ctf_half(ctf_params)
 
     images_weighted = (ctf_half * half_images if not config.premultiplied_ctf else half_images) / noise_half
-    Ft_y = core.adjoint_slice_volume_by_map(
+    Ft_y = core.adjoint_slice_volume(
         images_weighted, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
         volume=Ft_y, half_image=True, half_volume=True,
     )
-    Ft_ctf = core.adjoint_slice_volume_by_map(
+    Ft_ctf = core.adjoint_slice_volume(
         ctf_half ** 2 / noise_half, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
         volume=Ft_ctf, half_image=True, half_volume=True,
     )
@@ -186,19 +186,19 @@ def residual_relion_kernel_trilinear(
     """
     CTF = config.compute_ctf(ctf_params)
     images = core.translate_images(images, translations, config.image_shape)
-    images = images - core.slice_volume_by_map(
+    images = images - core.slice_volume(
         mean_estimate, rotation_matrices, config.image_shape, config.volume_shape, "linear_interp",
     ) * CTF
     images_squared = jnp.abs(images) ** 2 - cov_noise
     CTF_fourth = CTF ** 4
 
     images_squared_half = fourier_transform_utils.full_image_to_half_image(images_squared, config.image_shape)
-    Ft_y = core.adjoint_slice_volume_by_map(
+    Ft_y = core.adjoint_slice_volume(
         images_squared_half, rotation_matrices, config.image_shape, config.volume_shape, "linear_interp",
         volume=Ft_y, half_image=True, half_volume=True,
     )
     CTF_fourth_half = fourier_transform_utils.full_image_to_half_image(CTF_fourth, config.image_shape)
-    Ft_ctf = core.adjoint_slice_volume_by_map(
+    Ft_ctf = core.adjoint_slice_volume(
         CTF_fourth_half, rotation_matrices, config.image_shape, config.volume_shape, "linear_interp",
         volume=Ft_ctf, half_image=True, half_volume=True,
     )

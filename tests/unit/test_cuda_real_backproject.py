@@ -182,8 +182,8 @@ def test_real_batch_backproject_matches_complex(order, half_vol, half_img):
     )
 
 
-def test_real_adjoint_slice_volume_by_map():
-    """adjoint_slice_volume_by_map with real input should return real output."""
+def test_real_adjoint_slice_volume():
+    """adjoint_slice_volume with real input should return real output."""
     _skip_if_no_cuda()
     import recovar.core.slicing as slicing
 
@@ -195,14 +195,14 @@ def test_real_adjoint_slice_volume_by_map():
     # Real slices (e.g. CTF^2)
     real_slices = jnp.array(rng.standard_normal((n_images, N * N)).astype(np.float32))
 
-    result = slicing.adjoint_slice_volume_by_map(
+    result = slicing.adjoint_slice_volume(
         real_slices, rots, (N, N), (N, N, N), "linear_interp"
     )
     assert result.dtype == jnp.float32
 
     # Compare to complex path
     complex_slices = real_slices.astype(jnp.complex64)
-    result_complex = slicing.adjoint_slice_volume_by_map(
+    result_complex = slicing.adjoint_slice_volume(
         complex_slices, rots, (N, N), (N, N, N), "linear_interp"
     )
     np.testing.assert_allclose(

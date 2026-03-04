@@ -41,7 +41,7 @@ def test_compute_residuals_many_poses_fft_branch_uses_translation_indices(monkey
         template = jnp.array([0.0, 1.0, 2.0, 3.0], dtype=jnp.float32)
         return jnp.broadcast_to(template, _projected_volumes.shape)
 
-    monkeypatch.setattr(e_step, "batch_vol_rot_slice_volume_by_map", _fake_slice)
+    monkeypatch.setattr(e_step, "batch_vol_rot_slice_volume", _fake_slice)
     monkeypatch.setattr(e_step, "norm_squared_residuals_from_ft", _fake_norm_squared)
     monkeypatch.setattr(
         e_step,
@@ -86,7 +86,7 @@ def test_compute_residuals_many_poses_fft_branch_uses_translation_indices(monkey
 def test_compute_residuals_many_poses_nofft_branch_uses_translated_images(monkeypatch):
     monkeypatch.setattr(
         e_step,
-        "batch_vol_rot_slice_volume_by_map",
+        "batch_vol_rot_slice_volume",
         lambda *_args, **_kwargs: jnp.zeros((2, 1, 1, 4), dtype=jnp.complex64),
     )
     monkeypatch.setattr(

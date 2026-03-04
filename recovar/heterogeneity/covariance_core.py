@@ -59,7 +59,7 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
     padded_volume_shape = tuple(np.array(volume_shape) + extra_padding)
     padded_grid_size = grid_size + extra_padding
 
-    proj_mask = core.slice_volume_by_map(mask_ft, rotation_matrices, padded_image_shape,
+    proj_mask = core.slice_volume(mask_ft, rotation_matrices, padded_image_shape,
                                padded_volume_shape, disc_type)
     
     proj_mask = fourier_transform_utils.get_idft2(proj_mask.reshape([-1] + list(padded_image_shape)))
@@ -150,7 +150,7 @@ def batch_vol_forward_from_map(
     half_image: bool = False,
     half_volume: bool = False,
 ) -> jax.Array:
-    """Forward-model a batch of volumes via slice_volume_by_map (vmap over volume axis).
+    """Forward-model a batch of volumes via batch_slice_volume (vmap over volume axis).
 
     Uses batched CUDA kernel when available for better performance.
 
@@ -162,19 +162,11 @@ def batch_vol_forward_from_map(
         vs the default full-spectrum path.
     half_volume : bool
         If True, *volumes* are rfft-packed half-volumes ``(batch, N0*N1*(N2//2+1))``.
-        Uses :func:`~recovar.core.batch_slice_volume_by_map_from_half_volume` which
-        dispatches to the CUDA half-volume kernel, avoiding the Hermitian expand.
     """
-    if half_volume:
-        slices = core.batch_slice_volume_by_map_from_half_volume(
-            volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
-            half_image=half_image,
-        )
-    else:
-        slices = core.batch_slice_volume_by_map(
-            volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
-            half_image=half_image,
-        )
+    slices = core.batch_slice_volume(
+        volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
+        half_volume=half_volume, half_image=half_image,
+    )
     if not skip_ctf:
         ctf = config.compute_ctf_half(ctf_params) if half_image else config.compute_ctf(ctf_params)
         slices = slices * ctf[jnp.newaxis]

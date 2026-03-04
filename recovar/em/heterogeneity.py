@@ -9,7 +9,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.reconstruction import relion_functions, noise
 from recovar.heterogeneity import covariance_estimation, principal_components
 from recovar.core.configs import ForwardModelConfig
-from .core import batch_vol_slice_volume_by_map
+from .core import batch_vol_slice_volume
 from recovar.heterogeneity.principal_components import get_cov_svds, pca_by_projected_covariance
 from recovar.heterogeneity.covariance_estimation import compute_both_H_B, compute_covariance_regularization_relion_style
 
@@ -170,14 +170,14 @@ def sum_up_images_fixed_rots_covariance_with_precompute_eqx(config: ForwardModel
     before_adj_B2 -= noise_piece
 
     before_adj_B2_half = fourier_transform_utils.full_image_to_half_image(before_adj_B2, config.image_shape)
-    B = core.adjoint_slice_volume_by_map(before_adj_B2_half, rotations, config.image_shape, config.volume_shape, "linear_interp", volume=B, half_image=True)
+    B = core.adjoint_slice_volume(before_adj_B2_half, rotations, config.image_shape, config.volume_shape, "linear_interp", volume=B, half_image=True)
 
     CTF_squared = CTF**2
     CTF_squared_kernel_vals = kernel_vals @ CTF_squared.T
     gamma_3 = probabilties_summed_over_translations.T * CTF_squared_kernel_vals
     H_before_adj = gamma_3 @ CTF_squared
     H_before_adj_half = fourier_transform_utils.full_image_to_half_image(H_before_adj, config.image_shape)
-    H = core.adjoint_slice_volume_by_map(H_before_adj_half, rotations, config.image_shape, config.volume_shape, "linear_interp", volume=H, half_image=True)
+    H = core.adjoint_slice_volume(H_before_adj_half, rotations, config.image_shape, config.volume_shape, "linear_interp", volume=H, half_image=True)
 
     return H, B
 
@@ -241,7 +241,7 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
 
     mean_projections = np.zeros((rotations.shape[0], image_size), dtype = np.complex64)
     for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
-        mean_projections[rot_indices] = core.slice_volume_by_map(mean, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, mean_disc)
+        mean_projections[rot_indices] = core.slice_volume(mean, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, mean_disc)
 
     picked_freq_coords = core.vec_indices_to_vol_indices(picked_frequency_indices, volume_shape)
 
@@ -331,7 +331,7 @@ def sum_up_images_fixed_rots_covariance_with_precompute(shifted_CTFed_images, me
     before_adj_B2 -= noise_piece
 
     before_adj_B2_half = fourier_transform_utils.full_image_to_half_image(before_adj_B2, image_shape)
-    B = core.adjoint_slice_volume_by_map(before_adj_B2_half, rotations, image_shape, volume_shape, "linear_interp", volume=B, half_image=True)
+    B = core.adjoint_slice_volume(before_adj_B2_half, rotations, image_shape, volume_shape, "linear_interp", volume=B, half_image=True)
 
     CTF_squared = CTF**2
     CTF_squared_kernel_vals = kernel_vals @ CTF_squared.T
@@ -339,7 +339,7 @@ def sum_up_images_fixed_rots_covariance_with_precompute(shifted_CTFed_images, me
     H_before_adj = gamma_3 @ CTF_squared
 
     H_before_adj_half = fourier_transform_utils.full_image_to_half_image(H_before_adj, image_shape)
-    H = core.adjoint_slice_volume_by_map(H_before_adj_half, rotations, image_shape, volume_shape, "linear_interp", volume=H, half_image=True)
+    H = core.adjoint_slice_volume(H_before_adj_half, rotations, image_shape, volume_shape, "linear_interp", volume=H, half_image=True)
     return H, B
 
 
@@ -385,8 +385,8 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
     # Compute all mean and principal component projections
     mean_projections = np.empty((rotations.shape[0], image_size), dtype = np.complex64)
     for rot_indices in utils.index_batch_iter(n_rotations, batch_size): 
-        mean_projections[rot_indices] = core.slice_volume_by_map(mean, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type_mean)
-        u_projections[rot_indices] = batch_vol_slice_volume_by_map(basis, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type_u)
+        mean_projections[rot_indices] = core.slice_volume(mean, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type_mean)
+        u_projections[rot_indices] = batch_vol_slice_volume(basis, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type_u)
 
     
     del basis, mean
