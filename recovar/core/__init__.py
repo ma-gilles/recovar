@@ -61,14 +61,11 @@ from recovar.core.forward import (
 )
 from recovar.core.slicing import (
     adjoint_slice_volume,
-    adjoint_slice_volume_by_trilinear_from_weights,
     batch_slice_volume,
-    batch_slice_volume_by_nearest,
     decide_order,
     precompute_cubic_half_coefficients,
     slice_from_cubic_half_coefficients,
     slice_volume,
-    slice_volume_by_nearest,
 )
 
 __all__ = [
@@ -76,14 +73,12 @@ __all__ = [
     "CTFParamIndex",
     "CTFParams",
     "adjoint_slice_volume",
-    "adjoint_slice_volume_by_trilinear_from_weights",
     "batch_batch_find_frequencies_within_grid_dist",
     "batch_evaluate_ctf",
     "batch_find_frequencies_within_grid_dist",
     "batch_get_gridpoint_coords",
     "batch_get_nearest_gridpoint_indices",
     "batch_slice_volume",
-    "batch_slice_volume_by_nearest",
     "batch_trans_translate_images",
     "batch_translate",
     "batch_translate_images",
@@ -122,7 +117,6 @@ __all__ = [
     "round_to_int",
     "slice_from_cubic_half_coefficients",
     "slice_volume",
-    "slice_volume_by_nearest",
     "translate_half_images",
     "translate_images",
     "translate_single_image",

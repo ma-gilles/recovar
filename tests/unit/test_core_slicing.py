@@ -32,7 +32,6 @@ def _rotation_z(theta):
 
 def test_core_reexports_slicing_api():
     assert core.decide_order is core_slicing.decide_order
-    assert core.slice_volume_by_nearest is core_slicing.slice_volume_by_nearest
     assert core.adjoint_slice_volume is core_slicing.adjoint_slice_volume
 
 
@@ -42,16 +41,6 @@ def test_decide_order_values():
     assert core_slicing.decide_order("cubic") == 3
     with pytest.raises(ValueError):
         core_slicing.decide_order("bad")
-
-
-def test_slice_volume_by_nearest():
-    volume = np.array([10, 20, 30, 40], dtype=np.complex64)
-    idx = np.array([[0, 2], [1, 3]], dtype=np.int32)
-    sliced = np.asarray(core_slicing.slice_volume_by_nearest(volume, idx))
-    np.testing.assert_array_equal(sliced, np.array([[10, 30], [20, 40]], dtype=np.complex64))
-
-
-
 
 
 
@@ -354,20 +343,6 @@ def test_adjoint_slice_volume_half_volume_jax_vjp_consistency(monkeypatch):
     full_from_half = np.asarray(fourier_transform_utils.half_image_to_full_image(half_imgs, image_shape))
     out_half_ref = np.asarray(u_ref(jnp.asarray(full_from_half))[0])
     np.testing.assert_allclose(out_half_direct, out_half_ref, atol=1e-5, rtol=1e-5)
-
-
-def test_batch_slice_volume_by_nearest_matches_loop():
-    """batch_slice_volume_by_nearest (vmapped) should match sequential calls."""
-    rng = np.random.default_rng(55)
-    volume_size = 16
-    volume = rng.standard_normal(volume_size).astype(np.float32)
-    n_images = 3
-    n_pixels = 4
-    idx = rng.integers(0, volume_size, size=(n_images, n_pixels)).astype(np.int32)
-    batch_out = np.asarray(core_slicing.batch_slice_volume_by_nearest(volume, idx))
-    for i in range(n_images):
-        single_out = np.asarray(core_slicing.slice_volume_by_nearest(volume, idx[i]))
-        np.testing.assert_array_equal(batch_out[i], single_out)
 
 
 

@@ -128,7 +128,7 @@ def check_mask(mask):
     return no_mask
 
 batch_forward_model = jax.vmap(
-    lambda v, ctf, gpi: core.slice_volume_by_nearest(v, gpi) * ctf,
+    lambda v, ctf, gpi: v[gpi] * ctf,
     in_axes=(0, None, None),
 )
 

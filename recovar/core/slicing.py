@@ -94,14 +94,6 @@ def _jax_adjoint_slice(slices, rotation_matrices, image_shape, volume_shape, ord
     return u(slices)[0]
 
 
-# ── Nearest-neighbour gather (pre-computed indices) ──────────────────
-
-@jax.jit
-def slice_volume_by_nearest(volume_vec, plane_indices_on_grid):
-    return volume_vec[plane_indices_on_grid]
-
-
-batch_slice_volume_by_nearest = jax.vmap(slice_volume_by_nearest, (None, 0))
 
 
 # ── Public API ───────────────────────────────────────────────────────
@@ -193,17 +185,6 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
     return result if volume is None else result + volume
 
 
-# ── Standalone utilities ─────────────────────────────────────────────
-
-def adjoint_slice_volume_by_trilinear_from_weights(images, grid_vec_indices, weights, volume_shape, volume=None):
-    if volume is None:
-        volume = jnp.zeros(np.prod(volume_shape), dtype=images.dtype)
-    else:
-        volume = jnp.asarray(volume)
-
-    weights *= images.reshape(-1, 1)
-    volume = volume.at[grid_vec_indices.reshape(-1)].add(weights.reshape(-1))
-    return volume
 
 
 # ── Cubic half-volume slicer ─────────────────────────────────────────
@@ -255,12 +236,9 @@ def slice_from_cubic_half_coefficients(coeffs, rotation_matrices, image_shape, v
 
 __all__ = [
     "decide_order",
-    "slice_volume_by_nearest",
-    "batch_slice_volume_by_nearest",
     "slice_volume",
     "batch_slice_volume",
     "adjoint_slice_volume",
-    "adjoint_slice_volume_by_trilinear_from_weights",
     "precompute_cubic_half_coefficients",
     "slice_from_cubic_half_coefficients",
 ]
