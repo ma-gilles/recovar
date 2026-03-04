@@ -19,6 +19,8 @@ import jax.numpy as jnp
 
 import recovar.heterogeneity.adaptive_kernel_discretization as akd
 from recovar.data_io.dataset import CryoEMHalfsets
+from recovar.core.configs import DataIterator, ForwardModelConfig
+from recovar.reconstruction import relion_functions
 from helpers.tiny_synthetic import make_tiny_cryo_dataset_with_images
 
 pytestmark = pytest.mark.unit
@@ -254,6 +256,67 @@ def test_estimate_multiple_disc_relion_style_returns_finite_volume():
 
     assert first_estimates is not None
     assert opt_halfmaps is not None
+
+
+@pytest.mark.gpu
+def test_even_less_naive_matches_reference_bin_loop(gpu_device):
+    """even_less_naive bin accumulation should match explicit per-bin reference."""
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8, seed=11)
+    het_dists = np.array([0.1, 0.2, 0.35, 0.7, 0.75, 1.1, 1.2, 1.8], dtype=np.float32)
+    bins = np.array([0.25, 0.8, 1.3], dtype=np.float32)
+    batch_size = 4
+
+    with jax.default_device(gpu_device):
+        est_new, lhs_new, rhs_new = akd.even_less_naive_heterogeneity_scheme_relion_style(
+            cryo, None, het_dists, bins,
+            batch_size=batch_size, tau=None, grid_correct=False,
+            use_spherical_mask=False, return_lhs_rhs=True,
+            heterogeneity_kernel="square", upsampling_factor=1,
+        )
+
+        inds = np.digitize(het_dists, bins, right=True).astype(np.int32)
+        n_bins = bins.size
+        upsampled_shape = (cryo.grid_size, cryo.grid_size, cryo.grid_size)
+        half_vol_size = int(np.prod(akd.volume_shape_to_half_volume_shape(upsampled_shape)))
+
+        rhs_ref = np.zeros((n_bins, half_vol_size), dtype=np.complex64)
+        lhs_ref = np.zeros((n_bins, half_vol_size), dtype=np.float32)
+
+        cfg = ForwardModelConfig.from_dataset(cryo, disc_type="linear_interp", upsampling_factor=1)
+        for bin_idx in range(n_bins):
+            image_inds = np.sort(np.where(inds == bin_idx)[0])
+            Ft_y_acc = jnp.zeros(half_vol_size, dtype=cryo.dtype)
+            Ft_ctf_acc = jnp.zeros(half_vol_size, dtype=cryo.dtype_real)
+            for batch_data in DataIterator(
+                cryo, batch_size,
+                noise_model=cryo.noise, noise_half=False,
+                apply_process_images=True, half_images=True,
+                index_subset=image_inds,
+            ):
+                Ft_y_acc, Ft_ctf_acc = akd._heterogeneity_kernel_batch_from_fft(
+                    cfg, batch_data, Ft_y=Ft_y_acc, Ft_ctf=Ft_ctf_acc
+                )
+            rhs_ref[bin_idx] = np.asarray(Ft_y_acc)
+            lhs_ref[bin_idx] = np.asarray(Ft_ctf_acc)
+
+        rhs_ref = np.cumsum(rhs_ref, axis=0)
+        lhs_ref = np.cumsum(lhs_ref, axis=0)
+
+        est_ref = []
+        for idx in range(n_bins):
+            est = relion_functions.post_process_from_filter_v2(
+                lhs_ref[idx], rhs_ref[idx],
+                cryo.volume_shape, 1,
+                tau=None, kernel="triangular",
+                use_spherical_mask=False, grid_correct=False,
+                input_half_volume=True,
+            )
+            est_ref.append(np.asarray(est).reshape(-1))
+        est_ref = np.asarray(est_ref)
+
+    np.testing.assert_allclose(lhs_new, lhs_ref, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(rhs_new, rhs_ref, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(est_new, est_ref, atol=1e-4, rtol=1e-4)
 
 
 # ---------------------------------------------------------------------------
