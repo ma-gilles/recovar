@@ -6,7 +6,6 @@ import logging
 import os
 
 import numpy as np
-from scipy.spatial import distance_matrix
 
 from recovar import utils
 from recovar.data_io import dataset
@@ -15,6 +14,37 @@ from recovar.output import output as o
 from recovar.utils import parser_args
 
 logger = logging.getLogger(__name__)
+
+
+def _get_embedding_keys(pipeline_output, coords_entry):
+    """Return available z dimensions for the requested embedding entry."""
+    if hasattr(pipeline_output, "get_embedding_keys"):
+        return list(pipeline_output.get_embedding_keys(coords_entry))
+    return list(pipeline_output.get(coords_entry).keys())
+
+
+def _get_embedding_components(pipeline_output, zdim, coords_entry, precision_entry, contrast_entry):
+    """Fetch embedding arrays for a specific zdim with API fallback support."""
+    if hasattr(pipeline_output, "get_embedding_component"):
+        return (
+            pipeline_output.get_embedding_component(coords_entry, zdim),
+            pipeline_output.get_embedding_component(precision_entry, zdim),
+            pipeline_output.get_embedding_component(contrast_entry, zdim),
+        )
+    return (
+        pipeline_output.get(coords_entry)[zdim],
+        pipeline_output.get(precision_entry)[zdim],
+        pipeline_output.get(contrast_entry)[zdim],
+    )
+
+
+def _pairwise_sqeuclidean(points):
+    """Compute pairwise squared Euclidean distances using a dense Gram form."""
+    points = np.asarray(points)
+    sq_norms = np.sum(points * points, axis=1, keepdims=True)
+    distances = sq_norms + sq_norms.T - 2.0 * (points @ points.T)
+    np.maximum(distances, 0.0, out=distances)
+    return distances
 
 def add_args(parser: argparse.ArgumentParser):
 
@@ -90,10 +120,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     precision_entry = 'latent_precision_noreg' if no_z_reg else 'latent_precision'
     contrast_entry = 'contrasts_noreg' if no_z_reg else 'contrasts'
 
-    if hasattr(po, "get_embedding_keys"):
-        zs_keys = list(po.get_embedding_keys(coords_entry))
-    else:
-        zs_keys = list(po.get(coords_entry).keys())
+    zs_keys = _get_embedding_keys(po, coords_entry)
 
     if zdim is None and len(zs_keys) > 1:
         logger.error("z-dim is not set, and multiple zs are found. You need to specify zdim with e.g. --zdim=4")
@@ -111,14 +138,9 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         logger.error("z-dim not found in results. Options are: %s", ','.join(str(e) for e in zs_keys))
         raise ValueError("Requested zdim was not found in embedding outputs.")
 
-    if hasattr(po, "get_embedding_component"):
-        zs = po.get_embedding_component(coords_entry, zdim)
-        cov_zs = po.get_embedding_component(precision_entry, zdim)
-        contrasts = po.get_embedding_component(contrast_entry, zdim)
-    else:
-        zs = po.get(coords_entry)[zdim]
-        cov_zs = po.get(precision_entry)[zdim]
-        contrasts = po.get(contrast_entry)[zdim]
+    zs, cov_zs, contrasts = _get_embedding_components(
+        po, zdim, coords_entry, precision_entry, contrast_entry
+    )
 
     # Keep memory footprint low for downstream JAX kernels.
     zs = np.asarray(zs, dtype=np.float32)
@@ -156,8 +178,10 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         input_density = None
         latent_space_bounds = None
 
+    particles_halfsets = po.get("particles_halfsets")
+
     def reorder(array):
-        return dataset.reorder_to_original_indexing_from_halfsets(array, po.get('particles_halfsets'))
+        return dataset.reorder_to_original_indexing_from_halfsets(array, particles_halfsets)
 
     o.mkdir_safe(output_folder)
     utils.basic_config_logger(output_folder)
@@ -273,7 +297,7 @@ def pick_pairs(centers, n_pairs):
     #     
     # Pick some pairs that are far away from each other.
     pairs = []
-    X = distance_matrix(centers, centers)
+    X = _pairwise_sqeuclidean(centers)
 
     for _ in range(n_pairs//2):
         i_idx,j_idx = np.unravel_index(np.argmax(X), X.shape)

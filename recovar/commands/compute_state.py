@@ -9,6 +9,16 @@ import os, argparse
 logger = logging.getLogger(__name__)
 from recovar.utils import parser_args
 
+_PATH_REMAP_ATTRS = (
+    "particles",
+    "ctf",
+    "poses",
+    "ind",
+    "halfsets",
+    "focus_mask",
+    "tilt_series_ctf",
+)
+
 
 def _auto_remap_paths(input_args, actual_result_dir: str):
     """Remap stored absolute paths when the data has moved.
@@ -40,14 +50,65 @@ def _auto_remap_paths(input_args, actual_result_dir: str):
     if not old_prefix or not new_prefix or old_prefix == new_prefix:
         return
     logger.info("Auto-remapping data paths: %s -> %s", old_prefix, new_prefix)
-    for attr in ("particles", "ctf", "poses", "ind", "halfsets",
-                 "focus_mask", "tilt_series_ctf"):
+    for attr in _PATH_REMAP_ATTRS:
         val = getattr(input_args, attr, None)
         if isinstance(val, str) and val.startswith(old_prefix):
             new_val = new_prefix + val[len(old_prefix):]
             if os.path.exists(new_val):
                 setattr(input_args, attr, new_val)
                 logger.info("  %s: %s -> %s", attr, val, new_val)
+
+
+def _load_latent_points(latent_points_path):
+    """Load latent points from txt/pkl and validate numeric finite contents."""
+    latent_points_path = os.fspath(latent_points_path)
+    if latent_points_path.endswith(".pkl"):
+        if not os.path.isfile(latent_points_path):
+            raise FileNotFoundError(f"Latent points file not found: {latent_points_path}")
+        with open(latent_points_path, "rb") as f:
+            target_zs = pickle.load(f)
+    elif latent_points_path.endswith(".txt"):
+        if not os.path.isfile(latent_points_path):
+            raise FileNotFoundError(f"Latent points file not found: {latent_points_path}")
+        with warnings.catch_warnings():
+            # Empty text files produce a UserWarning; we handle emptiness explicitly below.
+            warnings.simplefilter("ignore", category=UserWarning)
+            target_zs = np.loadtxt(latent_points_path)
+    else:
+        raise ValueError("Target zs should be a .txt or .pkl file")
+
+    target_zs = np.asarray(target_zs)
+    try:
+        target_zs = target_zs.astype(np.float32, copy=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Target zs must be numeric.") from exc
+    if target_zs.size == 0:
+        raise ValueError("Target zs file is empty.")
+    if not np.all(np.isfinite(target_zs)):
+        raise ValueError("Target zs contains non-finite values (NaN/Inf).")
+    return target_zs
+
+
+def _get_embedding_keys(pipeline_output, coords_entry):
+    """Return available z dimensions for the requested embedding entry."""
+    if hasattr(pipeline_output, "get_embedding_keys"):
+        return pipeline_output.get_embedding_keys(coords_entry)
+    return list(pipeline_output.get(coords_entry).keys())
+
+
+def _get_embedding_components(pipeline_output, zdim, coords_entry, precision_entry, contrast_entry):
+    """Fetch embedding arrays for a specific zdim with API fallback support."""
+    if hasattr(pipeline_output, "get_embedding_component"):
+        return (
+            pipeline_output.get_embedding_component(contrast_entry, zdim),
+            pipeline_output.get_embedding_component(coords_entry, zdim),
+            pipeline_output.get_embedding_component(precision_entry, zdim),
+        )
+    return (
+        pipeline_output.get(contrast_entry)[zdim],
+        pipeline_output.get(coords_entry)[zdim],
+        pipeline_output.get(precision_entry)[zdim],
+    )
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -101,30 +162,7 @@ def compute_state(args):
     elif particles_override is not None or datadir_override is not None or strip_prefix_override is not None:
         logger.warning("Pipeline output is missing input_args; ignoring particles/datadir/strip-prefix overrides.")
 
-    latent_points_path = os.fspath(args.latent_points)
-    if latent_points_path.endswith('.pkl'):
-        if not os.path.isfile(latent_points_path):
-            raise FileNotFoundError(f"Latent points file not found: {latent_points_path}")
-        with open(latent_points_path, 'rb') as f:
-            target_zs = pickle.load(f)
-    elif latent_points_path.endswith('.txt'):
-        if not os.path.isfile(latent_points_path):
-            raise FileNotFoundError(f"Latent points file not found: {latent_points_path}")
-        with warnings.catch_warnings():
-            # Empty text files produce a UserWarning; we handle emptiness explicitly below.
-            warnings.simplefilter("ignore", category=UserWarning)
-            target_zs = np.loadtxt(latent_points_path)
-    else:
-        raise ValueError("Target zs should be a .txt or .pkl file")
-    target_zs = np.asarray(target_zs)
-    try:
-        target_zs = target_zs.astype(np.float32, copy=False)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Target zs must be numeric.") from exc
-    if target_zs.size == 0:
-        raise ValueError("Target zs file is empty.")
-    if not np.all(np.isfinite(target_zs)):
-        raise ValueError("Target zs contains non-finite values (NaN/Inf).")
+    target_zs = _load_latent_points(args.latent_points)
 
     output_folder = outdir
 
@@ -148,23 +186,15 @@ def compute_state(args):
     precision_entry = 'latent_precision_noreg' if no_z_regularization else 'latent_precision'
     contrast_entry = 'contrasts_noreg' if no_z_regularization else 'contrasts'
 
-    if hasattr(po, "get_embedding_keys"):
-        zs_keys = po.get_embedding_keys(coords_entry)
-    else:
-        zs_keys = list(po.get(coords_entry).keys())
+    zs_keys = _get_embedding_keys(po, coords_entry)
 
     if zdim not in zs_keys:
         options = ','.join(str(e) for e in zs_keys)
         raise ValueError(f"zdim {zdim} from provided latent points is not found in embedding results. Options are: {options}")
 
-    if hasattr(po, "get_embedding_component"):
-        contrasts_key = po.get_embedding_component(contrast_entry, zdim)
-        zs_key = po.get_embedding_component(coords_entry, zdim)
-        cov_zs_key = po.get_embedding_component(precision_entry, zdim)
-    else:
-        contrasts_key = po.get(contrast_entry)[zdim]
-        zs_key = po.get(coords_entry)[zdim]
-        cov_zs_key = po.get(precision_entry)[zdim]
+    contrasts_key, zs_key, cov_zs_key = _get_embedding_components(
+        po, zdim, coords_entry, precision_entry, contrast_entry
+    )
 
     # Keep memory footprint low for downstream JAX kernels.
     contrasts_key = np.asarray(contrasts_key, dtype=np.float32)
