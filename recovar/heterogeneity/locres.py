@@ -12,86 +12,169 @@ from recovar import utils
 from recovar.core import mask as mask_fn
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.reconstruction import regularization
-from recovar.simulation import simulator
 logger = logging.getLogger(__name__)
 
 
 ## A copy of the relion local resolution function. See postprocessing.cpp in relion
 
-def integral_fsc(fsc, fourier_pixel_size = 1):
-    last_idx = find_first_zero_in_bool(fsc>=0)
-    include_upto = jnp.where((last_idx == 0) & (fsc[0] >= 0), fsc.size, last_idx)
-    good_idx = jnp.where(jnp.arange(fsc.size) < include_upto, 1, 0)
-    return np.sum(fsc * good_idx) * fourier_pixel_size
+def _infer_full_volume_shape_from_spectrum(ft_shape, volume_shape=None):
+    """Infer full real-space volume shape from a Fourier spectrum shape."""
+    if volume_shape is not None:
+        return tuple(int(s) for s in volume_shape)
 
-integral_fscs = jax.vmap(integral_fsc, in_axes = [0, None])
+    ft_shape = tuple(int(s) for s in ft_shape)
+    if len(ft_shape) != 3:
+        raise ValueError(f"Expected 3D spectrum, got shape {ft_shape}")
+
+    # Heuristic for packed rFFT layout: (N, N, N//2 + 1).
+    if ft_shape[0] == ft_shape[1] and ft_shape[2] == ft_shape[0] // 2 + 1:
+        return (ft_shape[0], ft_shape[1], ft_shape[0])
+    return ft_shape
 
 
-def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = True, filter_edgewidth=2, filter_map1 = False):
+def _spectrum_layout(ft_shape, volume_shape):
+    """Return ``'full'`` or ``'half'`` depending on spectrum layout."""
+    full_shape = tuple(int(s) for s in volume_shape)
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(full_shape)
+    ft_shape = tuple(int(s) for s in ft_shape)
+    if ft_shape == full_shape:
+        return "full"
+    if ft_shape == half_shape:
+        return "half"
+    raise ValueError(
+        f"Spectrum shape {ft_shape} does not match full {full_shape} or half {half_shape}"
+    )
 
 
-    locres_maskrad= 0.5 *locres_sampling if locres_maskrad is None else locres_maskrad
+def _radial_distances_for_spectrum(volume_shape, ft_shape, *, scaled=False, rounded=True):
+    """Radial distance grid matching either full or half-volume spectrum layout."""
+    layout = _spectrum_layout(ft_shape, volume_shape)
+    if layout == "half":
+        return fourier_transform_utils.get_grid_of_radial_distances_real(
+            volume_shape, scaled=scaled, rounded=rounded
+        )
+    return fourier_transform_utils.get_grid_of_radial_distances(
+        volume_shape, scaled=scaled, rounded=rounded
+    )
+
+
+def _b_factor_scaling_for_spectrum(volume_shape, ft_shape, voxel_size, B_factor):
+    """Compute B-factor scaling directly in the current spectrum layout."""
+    radial = _radial_distances_for_spectrum(
+        volume_shape, ft_shape, scaled=True, rounded=False
+    )
+    freq_norm_sq = radial * radial
+    return jnp.exp(-B_factor * freq_norm_sq / 4.0)
+
+
+def _inverse_spectrum_to_real_volume(ft_volume, volume_shape):
+    """Inverse Fourier transform for both full-spectrum and half-spectrum volumes."""
+    layout = _spectrum_layout(ft_volume.shape, volume_shape)
+    if layout == "half":
+        return fourier_transform_utils.get_idft3_real(ft_volume, volume_shape=volume_shape)
+    return fourier_transform_utils.get_idft3(ft_volume).real
+
+
+def _resolve_locres_window(locres_sampling, locres_maskrad, locres_edgwidth):
+    """Resolve optional local-resolution window defaults."""
+    locres_maskrad = 0.5 * locres_sampling if locres_maskrad is None else locres_maskrad
     locres_edgwidth = locres_sampling if locres_edgwidth is None else locres_edgwidth
-    
+    return locres_maskrad, locres_edgwidth
 
-    step_size = np.round(locres_sampling / voxel_size).astype(int)
+
+def integral_fsc(fsc, fourier_pixel_size=1):
+    last_idx = find_first_zero_in_bool(fsc >= 0)
+    include_upto = jnp.where((last_idx == 0) & (fsc[0] >= 0), fsc.size, last_idx)
+    good_idx = jnp.where(jnp.arange(fsc.size) < include_upto, 1.0, 0.0)
+    return jnp.sum(fsc * good_idx) * fourier_pixel_size
+
+
+integral_fscs = jax.vmap(integral_fsc, in_axes=[0, None])
+
+
+def local_resolution(
+    map1,
+    map2,
+    B_factor,
+    voxel_size,
+    locres_sampling=25,
+    locres_maskrad=None,
+    locres_edgwidth=None,
+    locres_minres=50,
+    use_filter=True,
+    fsc_threshold=1 / 7,
+    use_v2=True,
+    filter_edgewidth=2,
+    filter_map1=False,
+):
+    """Estimate local FSC resolution and optionally build locally filtered maps.
+
+    The implementation keeps legacy behavior but stores large real-valued Fourier
+    arrays in packed half-volume layout whenever possible to reduce GPU memory.
+    """
+    locres_maskrad, locres_edgwidth = _resolve_locres_window(
+        locres_sampling, locres_maskrad, locres_edgwidth
+    )
+
     maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
-
     if maskrad_pix < 5:
-        logger.warning("radius of local resolution mask is only %s pixels. Result will probably be nonsense. Should either increase locres_maskrad or do global resolution estimate", maskrad_pix)
-
+        logger.warning(
+            "radius of local resolution mask is only %s pixels. Result will probably be nonsense. "
+            "Should either increase locres_maskrad or do global resolution estimate",
+            maskrad_pix,
+        )
     edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
-    # logger.info("Step size: %s, maskrad_pix: %s, edgewidth_pix: %s", step_size, maskrad_pix, edgewidth_pix)
-    # myrad = map1.shape[0]//2 - 1*maskrad_pix
-    # myrad = 40
-    # myradf = myrad / step_size
-    # sampling_points = []
-
-    # logger.info("Starting...")
-
-    # grid = np.array(fourier_transform_utils.get_1d_frequency_grid(map1.shape[0], 1, scaled = False)[::step_size])
-    # for kk in grid:
-    #     for ii in grid:
-    #         for jj in grid:
-    #             rad = np.sqrt(kk * kk + ii * ii + jj * jj)
-    #             if rad < myrad:
-    #                 sampling_points.append((kk, ii, jj))
-    # sampling_points = jnp.array(sampling_points).astype(int)
-
     sampling_points = get_sampling_points(map1.shape[0], locres_sampling, locres_maskrad, voxel_size)
-
-
-    fourier_pixel_size = 1/(map1.shape[0] * voxel_size)
-    # sampling_points = jnp.array(sampling_points).astype(int)[:1]
-
-
+    fourier_pixel_size = 1 / (map1.shape[0] * voxel_size)
     nr_samplings = sampling_points.shape[0]
 
-    # logger.info("Calculating local resolution in %s sampling points ...", nr_samplings)
-    if filter_map1:
-        ft_sum = fourier_transform_utils.get_dft3(map1)
-    else:
-        ft_sum = 0.5*(fourier_transform_utils.get_dft3(map1) + fourier_transform_utils.get_dft3(map2))
-    # Need to apply B-factor here I guess
-    ft_sum *= simulator.get_B_factor_scaling(map1.shape, voxel_size, -B_factor).reshape(map1.shape).astype(map1.dtype)
-
-    i_ft_sum_orig = fourier_transform_utils.get_idft3(ft_sum).real
-
-
-    # for now will do batch of 1.
-    i_fil = jnp.zeros_like(map1)
-    i_loc_res = 0
-    i_loc_auc = 0
-    i_sum_w = 0 
-    local_resols, fscs = [], []
-    # Put stuff on GPU
+    # Keep maps on device for downstream vmapped kernels.
     map1 = jnp.asarray(map1)
     map2 = jnp.asarray(map2)
+
+    # Filtering source map in real space (map1 or average), then switch to packed
+    # real FFT to avoid allocating full complex (N,N,N) arrays.
+    if filter_map1:
+        map_for_filter = map1
+    else:
+        map_for_filter = 0.5 * (map1 + map2)
+
+    # Half-volume FFT is only valid for real-valued input. Some pipeline paths
+    # pass complex-typed arrays (with negligible imaginary part), so keep a
+    # full-FFT fallback to preserve legacy behavior.
+    use_half_fft = not jnp.issubdtype(map_for_filter.dtype, jnp.complexfloating)
+
+    if use_half_fft:
+        ft_sum_half = fourier_transform_utils.get_dft3_real(map_for_filter)
+        if B_factor != 0:
+            b_scale = _b_factor_scaling_for_spectrum(
+                map1.shape, ft_sum_half.shape, voxel_size, -B_factor
+            )
+            ft_sum_half = ft_sum_half * b_scale.astype(ft_sum_half.dtype)
+        i_ft_sum_orig = fourier_transform_utils.get_idft3_real(
+            ft_sum_half, volume_shape=map1.shape
+        )
+        ft_sum_full = None
+        if not use_v2:
+            ft_sum_full = fourier_transform_utils.half_volume_to_full_volume(
+                ft_sum_half, map1.shape
+            ).reshape(map1.shape)
+    else:
+        ft_sum_full = fourier_transform_utils.get_dft3(map_for_filter)
+        if B_factor != 0:
+            b_scale = _b_factor_scaling_for_spectrum(
+                map1.shape, ft_sum_full.shape, voxel_size, -B_factor
+            )
+            ft_sum_full = ft_sum_full * b_scale.astype(ft_sum_full.dtype)
+        i_ft_sum_orig = fourier_transform_utils.get_idft3(ft_sum_full).real
+
+    i_fil = jnp.zeros_like(map1)
+    local_resols, fscs = [], []
 
     # /2: local resolution holds two maps simultaneously
     vol_batch_size = utils.safe_batch_size(
         utils.get_vol_batch_size(map1.shape[0], utils.get_gpu_memory_total()) / 2)
-    n_batch = utils.get_number_of_index_batch(sampling_points.shape[0], vol_batch_size)
+    n_batch = utils.get_number_of_index_batch(nr_samplings, vol_batch_size)
 
     for k in range(n_batch):
         batch_st, batch_end = utils.get_batch_of_indices(nr_samplings, vol_batch_size, k)
@@ -99,40 +182,85 @@ def local_resolution(map1, map2, B_factor, voxel_size, locres_sampling = 25, loc
 
         if use_v2:
             if use_filter:
-                ift_sum, loc_mask, fsc, local_resol, offset, radius = batch_compute_local_fsc_v2(batch, i_ft_sum_orig, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold, use_filter, filter_edgewidth )
+                ift_sum, loc_mask, fsc, local_resol, offset, radius = batch_compute_local_fsc_v2(
+                    batch,
+                    i_ft_sum_orig,
+                    map1,
+                    map2,
+                    maskrad_pix,
+                    edgewidth_pix,
+                    locres_minres,
+                    voxel_size,
+                    fsc_threshold,
+                    use_filter,
+                    filter_edgewidth,
+                )
                 i_fil = add_subarrays_to_array(i_fil, ift_sum * loc_mask, offset, int(radius[0]))
             else:
-                fsc, local_resol = batch_compute_local_fsc_v2(batch, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold , use_filter, filter_edgewidth)
+                # The second argument is unused in the no-filter path.
+                fsc, local_resol = batch_compute_local_fsc_v2(
+                    batch,
+                    i_ft_sum_orig,
+                    map1,
+                    map2,
+                    maskrad_pix,
+                    edgewidth_pix,
+                    locres_minres,
+                    voxel_size,
+                    fsc_threshold,
+                    use_filter,
+                    filter_edgewidth,
+                )
 
         else:
             if use_filter:
-                ift_sum, loc_mask, fsc, local_resol = batch_compute_local_fsc(batch, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold,  use_filter, filter_edgewidth)
+                ift_sum, loc_mask, fsc, local_resol = batch_compute_local_fsc(
+                    batch,
+                    ft_sum_full,
+                    map1,
+                    map2,
+                    maskrad_pix,
+                    edgewidth_pix,
+                    locres_minres,
+                    voxel_size,
+                    fsc_threshold,
+                    use_filter,
+                    filter_edgewidth,
+                )
                 i_fil += jnp.sum(ift_sum * loc_mask, axis=0)
             else:
-                fsc, local_resol = batch_compute_local_fsc(batch, ft_sum, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_threshold,  use_filter, filter_edgewidth)
+                fsc, local_resol = batch_compute_local_fsc(
+                    batch,
+                    ft_sum_full,
+                    map1,
+                    map2,
+                    maskrad_pix,
+                    edgewidth_pix,
+                    locres_minres,
+                    voxel_size,
+                    fsc_threshold,
+                    use_filter,
+                    filter_edgewidth,
+                )
 
         fscs.append(fsc)
         local_resols.append(local_resol)
 
-        if jnp.isnan(i_fil).any() or jnp.isnan(i_loc_res).any():
+        if jnp.isnan(i_fil).any():
             logger.warning("NaNs encountered in local_resolution accumulation.")
 
     fscs = np.concatenate(fscs)
     local_resols = np.concatenate(local_resols)
-    full_mask = mask_fn.raised_cosine_mask(map1.shape, maskrad_pix, maskrad_pix + edgewidth_pix, -1)    
-    int_fscs = integral_fscs(fscs,fourier_pixel_size)
-    i_loc_res = make_local_resol_map(sampling_points, 1/local_resols, full_mask)
+    full_mask = mask_fn.raised_cosine_mask(map1.shape, maskrad_pix, maskrad_pix + edgewidth_pix, -1)
+    int_fscs = integral_fscs(fscs, fourier_pixel_size)
+    i_loc_res = make_local_resol_map(sampling_points, 1 / local_resols, full_mask)
     i_loc_auc = make_auc_map(sampling_points, int_fscs, full_mask)
 
     if not use_filter:
         return fscs, local_resols, i_loc_res, i_loc_auc
-    
 
-    # i_fil3 = jnp.where( i_sum_w > 0,  i_fil / i_sum_w, 0)
     i_fil = make_i_fil_map(sampling_points, i_fil, full_mask)
-    # logger.info("Done")
-
-    return i_fil, i_loc_res, i_loc_auc, fscs, local_resols#, sampling_points
+    return i_fil, i_loc_res, i_loc_auc, fscs, local_resols
 
 def convolve_mask_at_sampling_points(sampling_pts, local_resols, full_mask):
     # full_array = jnp.zeros(full_mask.shape)
@@ -220,13 +348,9 @@ def add_subarray_to_array(array, subarray, offset, radius):
 def compute_local_fsc_v2(offset, ift_sum_orig, map1, map2, maskrad_pix, edgewidth_pix, locres_minres, voxel_size, fsc_treshold, use_filter, filter_edgewidth):
 
     offset = offset + map1.shape[0]//2
-    # Compute masked fsc
-
     radius = maskrad_pix + edgewidth_pix
-    # l_bounds = offset - radius
-    # u_bounds = offset + radius
     multiplier = 3
-    # smaller_size = multiplier*radius#
+
     map1_sub = subsample_array(map1, offset, multiplier*radius)
     map2_sub = subsample_array(map2, offset, multiplier*radius)
     ift_sum_sub = subsample_array(ift_sum_orig, offset, multiplier*radius)
@@ -234,21 +358,28 @@ def compute_local_fsc_v2(offset, ift_sum_orig, map1, map2, maskrad_pix, edgewidt
     map1_sub = map1_sub * mask
     map2_sub = map2_sub * mask
 
-    fsc = regularization.get_fsc(fourier_transform_utils.get_dft3(map1_sub), fourier_transform_utils.get_dft3(map2_sub), volume_shape = map1_sub.shape)
+    fsc = regularization.get_fsc(
+        fourier_transform_utils.get_dft3(map1_sub),
+        fourier_transform_utils.get_dft3(map2_sub),
+        volume_shape=map1_sub.shape,
+    )
 
-
-    # local_resol = jnp.argmin(fsc >= fsc_treshold)
-    # # If all above threhsold
-    # local_resol = jnp.where(fsc[local_resol] >= fsc_treshold, fsc.size-1 , local_resol)
     local_resol = find_fsc_resol(fsc, fsc_treshold)
     local_resol = jnp.where(local_resol > 0, map1_sub.shape[0] * voxel_size / local_resol, 999)
     local_resol = jnp.where(local_resol < locres_minres, local_resol, locres_minres)
 
-
     if use_filter:
-        ft_sum_sub = fourier_transform_utils.get_dft3(ift_sum_sub)
-        ift_sum = filter_with_local_fsc(ft_sum_sub, fsc, local_resol, voxel_size, filter_edgewidth)
-        # if jnp.isnan(ift_sum).any():
+        # Real-valued subvolumes are filtered in packed half-spectrum layout to
+        # reduce temporary FFT memory by ~2x.
+        ft_sum_sub = fourier_transform_utils.get_dft3_real(ift_sum_sub)
+        ift_sum = filter_with_local_fsc(
+            ft_sum_sub,
+            fsc,
+            local_resol,
+            voxel_size,
+            filter_edgewidth,
+            volume_shape=map1_sub.shape,
+        )
         return ift_sum, mask, fsc, local_resol, offset, multiplier*radius
 
     return fsc, local_resol
@@ -306,37 +437,57 @@ def find_fsc_resol(fsc_curve, threshold = 1/7):
     return ires_interp
 
 
-def apply_fsc_weighting(FT, fsc):
-	#  Find resolution where fsc_true drops below zero for the first time
-	#  Set all weights to zero beyond that resolution
-    distances = fourier_transform_utils.get_grid_of_radial_distances(FT.shape,)
+def apply_fsc_weighting(FT, fsc, volume_shape=None):
+    """Apply FSC-based sharpening weights to full or half-volume spectra."""
+    volume_shape = _infer_full_volume_shape_from_spectrum(FT.shape, volume_shape)
+    distances = _radial_distances_for_spectrum(volume_shape, FT.shape).astype(int)
 
-    # ires_max = jnp.argmin(fsc >= 0.0001)
     ires_max = find_first_zero_in_bool(fsc >= 0.0001)
-    # ires_max = jnp.where(all_ones_flag, fsc.size, ires_max) # If == 0, fsc >= 0.0001 for all ires
-
     fsc = jnp.where( jnp.arange(fsc.size) < ires_max, fsc, 0)
-    # fsc = fsc.at[ires_max:].set(0)
     fsc = jnp.sqrt(jnp.maximum((2 * fsc) / (1 + fsc), 0))
     fsc_mask = fsc[distances]
-    FT = FT * fsc_mask
-    return FT
-
-def filter_with_local_fsc(ft_sum, fsc, local_resol, voxel_size, filter_edgewidth):
-    ft_sum  = apply_fsc_weighting(ft_sum, fsc)
-    ft_sum = low_pass_filter_map(ft_sum, ft_sum.shape[0], local_resol, voxel_size, filter_edgewidth)
-    ift_sum = fourier_transform_utils.get_idft3(ft_sum).real
-    return  ift_sum
+    return FT * fsc_mask
 
 
-def low_pass_filter_map(FT, ori_size, low_pass, voxel_size, filter_edgewidth, do_highpass_instead = False):
+def filter_with_local_fsc(ft_sum, fsc, local_resol, voxel_size, filter_edgewidth, volume_shape=None):
+    """Local FSC filter for either full-spectrum or half-spectrum inputs."""
+    volume_shape = _infer_full_volume_shape_from_spectrum(ft_sum.shape, volume_shape)
+    ft_sum = apply_fsc_weighting(ft_sum, fsc, volume_shape=volume_shape)
+    ft_sum = low_pass_filter_map(
+        ft_sum,
+        volume_shape[0],
+        local_resol,
+        voxel_size,
+        filter_edgewidth,
+        volume_shape=volume_shape,
+    )
+    return _inverse_spectrum_to_real_volume(ft_sum, volume_shape)
+
+
+def low_pass_filter_map(
+    FT,
+    ori_size,
+    low_pass,
+    voxel_size,
+    filter_edgewidth,
+    do_highpass_instead=False,
+    volume_shape=None,
+):
+    """Raised-cosine low-pass/high-pass filter in Fourier space.
+
+    Supports both full complex spectra and packed half-volume spectra.
+    """
+    volume_shape = _infer_full_volume_shape_from_spectrum(FT.shape, volume_shape)
     ires_filter = jnp.round((ori_size * voxel_size) / low_pass)
     filter_edge_halfwidth = filter_edgewidth // 2
 
     edge_low = jnp.maximum(0., (ires_filter - filter_edge_halfwidth) / ori_size)
-    edge_high = jnp.minimum(FT.shape[0], (ires_filter + filter_edge_halfwidth) / ori_size)
+    edge_high = jnp.minimum(volume_shape[0], (ires_filter + filter_edge_halfwidth) / ori_size)
     edge_width = edge_high - edge_low
-    res = fourier_transform_utils.get_grid_of_radial_distances(FT.shape) / ori_size
+    # Avoid division-by-zero when edge width collapses to a single shell.
+    edge_width = jnp.maximum(edge_width, jnp.finfo(jnp.float32).eps)
+    res = _radial_distances_for_spectrum(volume_shape, FT.shape) / ori_size
+
     if do_highpass_instead:
         filter = jnp.where(res <  edge_low , 0, 1)
         filter = jnp.where((res >= edge_low) * (res < edge_high), 0.5 - 0.5 * jnp.cos(jnp.pi * (res - edge_low) / edge_width), filter)
@@ -348,83 +499,91 @@ def low_pass_filter_map(FT, ori_size, low_pass, voxel_size, filter_edgewidth, do
     return FT * filter
 
 
-def local_error(map1, map2, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, low_pass_filter_res = None):
-    locres_maskrad= 0.5 *locres_sampling if locres_maskrad is None else locres_maskrad
-    locres_edgwidth = locres_sampling if locres_edgwidth is None else locres_edgwidth
-    
+def _apply_low_pass_to_real_map(map_real, low_pass_filter_res, voxel_size, filter_edgewidth):
+    """Apply low-pass filter to a real map using packed half-volume FFT."""
+    if low_pass_filter_res is None:
+        return map_real
+    map_ft_half = fourier_transform_utils.get_dft3_real(map_real)
+    map_ft_half = low_pass_filter_map(
+        map_ft_half,
+        map_real.shape[0],
+        low_pass_filter_res,
+        voxel_size,
+        filter_edgewidth,
+        do_highpass_instead=False,
+        volume_shape=map_real.shape,
+    )
+    return fourier_transform_utils.get_idft3_real(map_ft_half, volume_shape=map_real.shape)
 
+
+def _local_error_from_maps(map1, map2, mask):
+    """Compute local L2 error map via convolution in packed half-volume FFT."""
+    volume_shape = map1.shape
+    mask_ft_half = fourier_transform_utils.get_dft3_real(mask)
+    map1_square_ft = fourier_transform_utils.get_dft3_real(map1 * map1)
+    map2_square_ft = fourier_transform_utils.get_dft3_real(map2 * map2)
+    map1map2_ft = fourier_transform_utils.get_dft3_real(map1 * map2)
+
+    local_errors = (
+        fourier_transform_utils.get_idft3_real(
+            map1_square_ft * mask_ft_half, volume_shape=volume_shape
+        )
+        - 2
+        * fourier_transform_utils.get_idft3_real(
+            map1map2_ft * mask_ft_half, volume_shape=volume_shape
+        )
+        + fourier_transform_utils.get_idft3_real(
+            map2_square_ft * mask_ft_half, volume_shape=volume_shape
+        )
+    )
+    return local_errors.real
+
+
+def local_error(map1, map2, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, low_pass_filter_res = None):
+    locres_maskrad, locres_edgwidth = _resolve_locres_window(
+        locres_sampling, locres_maskrad, locres_edgwidth
+    )
     edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
 
-    # mask = mask_fn.raised_cosine_mask(map1.shape, locres_maskrad, locres_maskrad + edgewidth_pix, -1)
+    map1 = jnp.asarray(map1)
+    map2 = jnp.asarray(map2)
 
     mask = mask_fn.raised_cosine_mask(map1.shape, locres_maskrad, locres_maskrad + edgewidth_pix, -1)
     mask /= np.linalg.norm(mask)
-    # Compute error with convolution
-    
-    if low_pass_filter_res is not None:
-        map1_ft = fourier_transform_utils.get_dft3(map1)
-        map1_ft = low_pass_filter_map(map1_ft, map1_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
-        map1 = fourier_transform_utils.get_idft3(map1_ft).real
 
-        map2_ft = fourier_transform_utils.get_dft3(map2)
-        map2_ft = low_pass_filter_map(map2_ft, map2_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
-        map2 = fourier_transform_utils.get_idft3(map2_ft).real
-
-    mask_ft = fourier_transform_utils.get_dft3(mask)
-    map1_square_ft = fourier_transform_utils.get_dft3(map1*map1)
-    map2_square_ft = fourier_transform_utils.get_dft3(map2*map2)
-    map1map2_ft = fourier_transform_utils.get_dft3(map1*map2)
-
-    local_errors = (fourier_transform_utils.get_idft3(map1_square_ft * mask_ft).real ) \
-    - 2 * fourier_transform_utils.get_idft3(map1map2_ft * mask_ft) \
-    + (fourier_transform_utils.get_idft3(map2_square_ft * mask_ft) )
-
-    local_errors = local_errors.real
-
-    return local_errors
+    map1 = _apply_low_pass_to_real_map(map1, low_pass_filter_res, voxel_size, edgewidth_pix)
+    map2 = _apply_low_pass_to_real_map(map2, low_pass_filter_res, voxel_size, edgewidth_pix)
+    return _local_error_from_maps(map1, map2, mask)
 
 
 def local_error_with_cov(map1, map2, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, low_pass_filter_res = None, noise_variance = None):
-    locres_maskrad= 0.5 *locres_sampling if locres_maskrad is None else locres_maskrad
-    locres_edgwidth = locres_sampling if locres_edgwidth is None else locres_edgwidth
-    
-
+    locres_maskrad, locres_edgwidth = _resolve_locres_window(
+        locres_sampling, locres_maskrad, locres_edgwidth
+    )
     edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
 
+    map1 = jnp.asarray(map1)
+    map2 = jnp.asarray(map2)
 
-    # Raised cosine mask for local resolution computation
+    # Raised cosine mask for local error computation.
     mask = mask_fn.raised_cosine_mask(map1.shape, locres_maskrad, locres_maskrad + edgewidth_pix, -1)
 
+    map1 = _apply_low_pass_to_real_map(map1, low_pass_filter_res, voxel_size, edgewidth_pix)
+    map2 = _apply_low_pass_to_real_map(map2, low_pass_filter_res, voxel_size, edgewidth_pix)
 
-    # Compute error with convolution
-    if low_pass_filter_res is not None:
-        map1_ft = fourier_transform_utils.get_dft3(map1)
-        map1_ft = low_pass_filter_map(map1_ft, map1_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
-        map1 = fourier_transform_utils.get_idft3(map1_ft).real
-
-        map2_ft = fourier_transform_utils.get_dft3(map2)
-        map2_ft = low_pass_filter_map(map2_ft, map2_ft.shape[0], low_pass_filter_res, voxel_size, edgewidth_pix, do_highpass_instead = False)
-        map2 = fourier_transform_utils.get_idft3(map2_ft).real
-
-    ## Whiten maps
+    # Whitening keeps legacy full-spectrum behavior because noise_variance is
+    # supplied in full Fourier layout by upstream covariance code.
     if noise_variance is not None:
-        noise_variance = noise_variance.reshape(map1.shape)
-        map1 = fourier_transform_utils.get_idft3(fourier_transform_utils.get_dft3(map1) * jnp.sqrt(noise_variance).reshape(map1.shape)).real
-        map2 = fourier_transform_utils.get_idft3(fourier_transform_utils.get_dft3(map2) * jnp.sqrt(noise_variance).reshape(map1.shape)).real
+        noise_variance = jnp.asarray(noise_variance).reshape(map1.shape)
+        noise_scale = jnp.sqrt(noise_variance).reshape(map1.shape)
+        map1 = fourier_transform_utils.get_idft3(
+            fourier_transform_utils.get_dft3(map1) * noise_scale
+        ).real
+        map2 = fourier_transform_utils.get_idft3(
+            fourier_transform_utils.get_dft3(map2) * noise_scale
+        ).real
 
-    mask_ft = fourier_transform_utils.get_dft3(mask)
-    map1_square_ft = fourier_transform_utils.get_dft3(map1*map1)
-    map2_square_ft = fourier_transform_utils.get_dft3(map2*map2)
-    map1map2_ft = fourier_transform_utils.get_dft3(map1*map2)
-    # map2_ft = fourier_transform_utils.get_dft3(map2)
-
-    local_errors = (fourier_transform_utils.get_idft3(map1_square_ft * mask_ft).real ) \
-    - 2 * fourier_transform_utils.get_idft3(map1map2_ft * mask_ft) \
-    + (fourier_transform_utils.get_idft3(map2_square_ft * mask_ft) )
-        
-    local_errors = local_errors.real
-
-    return local_errors
+    return _local_error_from_maps(map1, map2, mask)
 
 
 def get_local_error_subvolume_rad(locres_maskrad, voxel_size, multiplier=3):
@@ -448,26 +607,6 @@ def expensive_local_error_with_cov(map1, map2, voxel_size, noise_variance, locre
 
     maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
     edgewidth_pix = np.round(locres_edgwidth / voxel_size).astype(int)
-
-    step_size = np.round(locres_sampling / voxel_size).astype(int)
-    # logger.info("Step size: %s, maskrad_pix: %s, edgewidth_pix: %s", step_size, maskrad_pix, edgewidth_pix)
-    # logger.info("Compute CV metric with sampling = %s and radius = %s and edgewidth = %s", locres_sampling, locres_maskrad, locres_edgwidth)
-
-
-    # myrad = 40
-    # myradf = myrad / step_size
-    # sampling_points = []
-
-    # # logger.info("Starting...")
-
-    # grid = np.array(fourier_transform_utils.get_1d_frequency_grid(map1.shape[0], 1, scaled = False)[::step_size])
-    # for kk in grid:
-    #     for ii in grid:
-    #         for jj in grid:
-    #             rad = np.sqrt(kk * kk + ii * ii + jj * jj)
-    #             if rad < myrad:
-    #                 sampling_points.append((kk, ii, jj))
-    # sampling_points = jnp.array(sampling_points).astype(int)
 
     sampling_points = get_sampling_points(map1.shape[0], locres_sampling, locres_maskrad, voxel_size)
 
@@ -740,21 +879,24 @@ def recombine_estimates(estimators, choice, voxel_size, locres_sampling = 25, lo
 
 
 def get_sampling_points(grid_size, locres_sampling, locres_maskrad, voxel_size):
+    """Sampling coordinates for local-resolution windows in centered frequency grid.
+
+    Returned points use the same centered integer-coordinate convention as legacy
+    code (`[-N/2, ..., N/2)` for even sizes), but generation is vectorized to
+    avoid Python triple-loops for large grids.
+    """
     locres_maskrad = 0.5 * locres_sampling if locres_maskrad is None else locres_maskrad
     maskrad_pix = np.round(locres_maskrad / voxel_size).astype(int)
     step_size = np.round(locres_sampling / voxel_size).astype(int)
     myrad = grid_size//2 - maskrad_pix
 
-    sampling_points = []
     grid = np.array(fourier_transform_utils.get_1d_frequency_grid(grid_size, 1, scaled = False)[::step_size])
-    for kk in grid:
-        for ii in grid:
-            for jj in grid:
-                rad = np.sqrt(kk * kk + ii * ii + jj * jj)
-                if rad < myrad:
-                    sampling_points.append((kk, ii, jj))
-    sampling_points = jnp.asarray(sampling_points, dtype=int)
-    return sampling_points
+    # Meshgrid preserves the same point ordering as the previous nested loops:
+    # jj changes fastest, then ii, then kk.
+    coords = np.stack(np.meshgrid(grid, grid, grid, indexing="ij"), axis=-1).reshape(-1, 3)
+    radial = np.linalg.norm(coords, axis=-1)
+    sampling_points = coords[radial < myrad]
+    return jnp.asarray(sampling_points, dtype=jnp.int32)
 
 
 def make_sampling_volume(grid_size, locres_sampling, voxel_size, locres_maskrad):
@@ -772,7 +914,16 @@ def make_sampling_volume(grid_size, locres_sampling, voxel_size, locres_maskrad)
         volume[sampling_points[k,0]-half_step:sampling_points[k,0]+half_step, sampling_points[k,1]-half_step:sampling_points[k,1]+half_step, sampling_points[k,2]-half_step:sampling_points[k,2]+half_step] = k
     return volume
 
-def filter_with_global_fsc(ft_sum, fsc, voxel_size, filter_edgewidth, mask=None, fsc_mask=None, B_factor=None):
+def filter_with_global_fsc(
+    ft_sum,
+    fsc,
+    voxel_size,
+    filter_edgewidth,
+    mask=None,
+    fsc_mask=None,
+    B_factor=None,
+    volume_shape=None,
+):
     """
     Apply global FSC-based filtering to a Fourier transform.
     
@@ -788,23 +939,35 @@ def filter_with_global_fsc(ft_sum, fsc, voxel_size, filter_edgewidth, mask=None,
     Returns:
     - Filtered map in real space
     """
+    del fsc_mask  # Kept for backward-compatible signature; not used here.
+    volume_shape = _infer_full_volume_shape_from_spectrum(ft_sum.shape, volume_shape)
+
     # Apply B-factor sharpening if specified
     if B_factor is not None:
-        B_factor_scaling = simulator.get_B_factor_scaling(ft_sum.shape, voxel_size, -B_factor).reshape(ft_sum.shape)
-        ft_sum = ft_sum * B_factor_scaling.astype(ft_sum.dtype)
+        b_scale = _b_factor_scaling_for_spectrum(
+            volume_shape, ft_sum.shape, voxel_size, -B_factor
+        )
+        ft_sum = ft_sum * b_scale.astype(ft_sum.dtype)
     
     # Apply FSC weighting
-    ft_sum = apply_fsc_weighting(ft_sum, fsc)
+    ft_sum = apply_fsc_weighting(ft_sum, fsc, volume_shape=volume_shape)
     
     # Find global resolution from FSC curve
     global_resol = find_fsc_resol(fsc, 1/7)  # Using 1/7 threshold like in local filtering
-    global_resol = ft_sum.shape[0] * voxel_size / global_resol if global_resol > 0 else 999
+    global_resol = volume_shape[0] * voxel_size / global_resol if global_resol > 0 else 999
     
     # Apply low-pass filter
-    ft_sum = low_pass_filter_map(ft_sum, ft_sum.shape[0], global_resol, voxel_size, filter_edgewidth)
+    ft_sum = low_pass_filter_map(
+        ft_sum,
+        volume_shape[0],
+        global_resol,
+        voxel_size,
+        filter_edgewidth,
+        volume_shape=volume_shape,
+    )
     
     # Convert to real space
-    ift_sum = fourier_transform_utils.get_idft3(ft_sum).real
+    ift_sum = _inverse_spectrum_to_real_volume(ft_sum, volume_shape)
     
     # Apply mask if provided
     if mask is not None:
@@ -813,7 +976,7 @@ def filter_with_global_fsc(ft_sum, fsc, voxel_size, filter_edgewidth, mask=None,
     return ift_sum
 
 
-def filter_with_global_fsc_and_mask(ft_sum, fsc, voxel_size, filter_edgewidth, mask_radius=None, mask_edgewidth=None, fsc_mask_radius=None, fsc_mask_edgewidth=None, B_factor=None, mask=None, fsc_mask=None):
+def filter_with_global_fsc_and_mask(ft_sum, fsc, voxel_size, filter_edgewidth, mask_radius=None, mask_edgewidth=None, fsc_mask_radius=None, fsc_mask_edgewidth=None, B_factor=None, mask=None, fsc_mask=None, volume_shape=None):
     """
     Apply global FSC-based filtering with automatic spherical mask.
     
@@ -833,6 +996,8 @@ def filter_with_global_fsc_and_mask(ft_sum, fsc, voxel_size, filter_edgewidth, m
     Returns:
     - Filtered map in real space with spherical mask applied
     """
+    volume_shape = _infer_full_volume_shape_from_spectrum(ft_sum.shape, volume_shape)
+
     # Create spherical mask for final result if parameters provided and no custom mask
     if mask is None and mask_radius is not None:
         if mask_edgewidth is None:
@@ -843,9 +1008,18 @@ def filter_with_global_fsc_and_mask(ft_sum, fsc, voxel_size, filter_edgewidth, m
         edgewidth_pix = np.round(mask_edgewidth / voxel_size).astype(int)
         
         # Create raised cosine mask
-        mask = mask_fn.raised_cosine_mask(ft_sum.shape, maskrad_pix, maskrad_pix + edgewidth_pix, -1)
+        mask = mask_fn.raised_cosine_mask(volume_shape, maskrad_pix, maskrad_pix + edgewidth_pix, -1)
     
-    return filter_with_global_fsc(ft_sum, fsc, voxel_size, filter_edgewidth, mask, fsc_mask, B_factor)
+    return filter_with_global_fsc(
+        ft_sum,
+        fsc,
+        voxel_size,
+        filter_edgewidth,
+        mask,
+        fsc_mask,
+        B_factor,
+        volume_shape=volume_shape,
+    )
 
 
 def filter_maps_with_global_fsc(map1, map2, voxel_size, filter_edgewidth=2, mask_radius=None, mask_edgewidth=None, fsc_mask_radius=None, fsc_mask_edgewidth=None, B_factor=None, fsc_threshold=1/7, mask=None, fsc_mask=None):
@@ -894,8 +1068,12 @@ def filter_maps_with_global_fsc(map1, map2, voxel_size, filter_edgewidth=2, mask
     global_resol_idx = find_fsc_resol(fsc, fsc_threshold)
     global_resol = map1.shape[0] * voxel_size / global_resol_idx if global_resol_idx > 0 else 999
     
-    # Create combined Fourier transform (average of both maps)
-    ft_sum = 0.5 * (fourier_transform_utils.get_dft3(map1) + fourier_transform_utils.get_dft3(map2))
+    # Create combined Fourier transform (average of both maps) in packed layout
+    # to reduce memory footprint during filtering.
+    ft_sum_half = 0.5 * (
+        fourier_transform_utils.get_dft3_real(map1)
+        + fourier_transform_utils.get_dft3_real(map2)
+    )
     
     # Create final mask if specified and no custom mask provided
     if mask is None and mask_radius is not None:
@@ -907,10 +1085,19 @@ def filter_maps_with_global_fsc(map1, map2, voxel_size, filter_edgewidth=2, mask
         edgewidth_pix = np.round(mask_edgewidth / voxel_size).astype(int)
         
         # Create raised cosine mask
-        mask = mask_fn.raised_cosine_mask(ft_sum.shape, maskrad_pix, maskrad_pix + edgewidth_pix, -1)
+        mask = mask_fn.raised_cosine_mask(map1.shape, maskrad_pix, maskrad_pix + edgewidth_pix, -1)
     
     # Apply global filtering to the combined map
-    filtered_combined = filter_with_global_fsc(ft_sum, fsc, voxel_size, filter_edgewidth, mask, None, B_factor)
+    filtered_combined = filter_with_global_fsc(
+        ft_sum_half,
+        fsc,
+        voxel_size,
+        filter_edgewidth,
+        mask,
+        None,
+        B_factor,
+        volume_shape=map1.shape,
+    )
     
     return filtered_combined, fsc, global_resol
 
@@ -973,8 +1160,17 @@ def filter_single_map_with_global_fsc(map1, map2, voxel_size, filter_edgewidth=2
         # Create raised cosine mask
         mask = mask_fn.raised_cosine_mask(map1.shape, maskrad_pix, maskrad_pix + edgewidth_pix, -1)
     
-    # Apply global filtering to map1
-    ft1 = fourier_transform_utils.get_dft3(map1)
-    filtered_map = filter_with_global_fsc(ft1, fsc, voxel_size, filter_edgewidth, mask, None, B_factor)
+    # Apply global filtering to map1 using packed spectrum for lower memory.
+    ft1_half = fourier_transform_utils.get_dft3_real(map1)
+    filtered_map = filter_with_global_fsc(
+        ft1_half,
+        fsc,
+        voxel_size,
+        filter_edgewidth,
+        mask,
+        None,
+        B_factor,
+        volume_shape=map1.shape,
+    )
     
     return filtered_map, fsc, global_resol
