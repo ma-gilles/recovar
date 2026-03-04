@@ -864,14 +864,27 @@ vmap_calculate_spline_coefficients = jax.vmap(cubic_interpolation.calculate_spli
 
 @nvtx.annotate("compute_spline_coeffs_in_batch", color="magenta")
 def compute_spline_coeffs_in_batch(basis, volume_shape, gpu_memory=None):
+    gpu_memory = utils.get_gpu_memory_total() if gpu_memory is None else gpu_memory
+    vol_batch_size = utils.safe_batch_size(
+        utils.get_vol_batch_size(volume_shape[0], gpu_memory=gpu_memory)
+    )
+    logger.info(
+        "memory used = %s, vol_batch_size in compute_spline_coeffs_in_batch %s",
+        gpu_memory, vol_batch_size,
+    )
     utils.report_memory_device(logger=logger)
+
     basis_4d = jnp.asarray(basis).reshape(-1, *volume_shape)
+    if basis_4d.shape[0] == 0:
+        return np.empty((0, *volume_shape), dtype=np.asarray(basis).dtype)
 
-    def _scan_fn(_, vol):
-        return None, cubic_interpolation.calculate_spline_coefficients(vol)
-
-    _, coeffs = jax.lax.scan(_scan_fn, None, basis_4d)
-    return _to_cpu(coeffs)
+    coeffs = []
+    for k in range(0, basis_4d.shape[0], vol_batch_size):
+        coeffs_block = vmap_calculate_spline_coefficients(
+            basis_4d[k:k + vol_batch_size]
+        )
+        coeffs.append(np.asarray(coeffs_block))
+    return np.concatenate(coeffs, axis=0)
 
 ## REDUCED COVARIANCE COMPUTATION
 

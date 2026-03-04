@@ -1066,14 +1066,25 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
         experiment_dataset, disc_type=disc_type,
         process_fn=experiment_dataset.image_stack.process_images,
     )
-    model = ModelState(
-        mean_estimate=mean_estimate,
-        volume_mask=volume_mask,
-        basis=jnp.asarray(basis.T),
-    )
+    # Keep all dynamic inputs on one JAX device (GPU when available) so
+    # average_residual_square compiles against CUDA kernels, not Host.
+    if utils.jax_has_gpu():
+        target_device = jax.devices("gpu")[0]
+    else:
+        target_device = jax.devices("cpu")[0]
 
-    top_fraction = 0
-    kernel_sq_sum = 0
+    def _to_target(x):
+        return jax.device_put(jnp.asarray(x), target_device)
+
+    model = ModelState(
+        mean_estimate=_to_target(mean_estimate),
+        volume_mask=None if volume_mask is None else _to_target(volume_mask),
+        basis=_to_target(basis.T),
+    )
+    image_mask = _to_target(experiment_dataset.image_stack.mask)
+
+    top_fraction = None
+    kernel_sq_sum = None
 
     for batch, _, batch_image_ind in data_generator:
         if subset_fn is not None:
@@ -1082,19 +1093,26 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
             batch_image_ind = batch_image_ind[idx]
 
         batch_data = BatchData(
-            images=batch,
-            ctf_params=experiment_dataset.CTF_params[batch_image_ind],
-            rotation_matrices=experiment_dataset.rotation_matrices[batch_image_ind],
-            translations=experiment_dataset.translations[batch_image_ind],
+            images=_to_target(batch),
+            ctf_params=_to_target(experiment_dataset.CTF_params[batch_image_ind]),
+            rotation_matrices=_to_target(experiment_dataset.rotation_matrices[batch_image_ind]),
+            translations=_to_target(experiment_dataset.translations[batch_image_ind]),
         )
         top_fraction_this, kernel_sq_sum_this, per_image_est = average_residual_square(
             config, batch_data, model,
-            experiment_dataset.image_stack.mask,
-            contrasts[batch_image_ind], basis_coordinates[batch_image_ind],
+            image_mask,
+            _to_target(contrasts[batch_image_ind]),
+            _to_target(basis_coordinates[batch_image_ind]),
         )
+        if top_fraction is None:
+            top_fraction = top_fraction_this
+            kernel_sq_sum = kernel_sq_sum_this
+        else:
+            top_fraction = top_fraction + top_fraction_this
+            kernel_sq_sum = kernel_sq_sum + kernel_sq_sum_this
 
-        top_fraction += top_fraction_this
-        kernel_sq_sum += kernel_sq_sum_this
+    if top_fraction is None or kernel_sq_sum is None:
+        raise ValueError("No images were processed in get_average_residual_square_v2")
 
     predicted_pixel_variances= top_fraction / kernel_sq_sum
     predicted_pixel_variances = jnp.fft.ifft2( predicted_pixel_variances).real * experiment_dataset.image_size
