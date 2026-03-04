@@ -388,7 +388,7 @@ def test_slice_volume_half_image_jax(monkeypatch):
 
     rng = np.random.default_rng(2001)
     volume_shape = (8, 8, 8)
-    image_shape = (6, 8)
+    image_shape = (8, 8)
     rots = np.concatenate(
         [np.eye(3, dtype=np.float32)[None], _random_rotations(rng, 3)], axis=0
     )
@@ -416,7 +416,7 @@ def test_batch_slice_volume_jax(monkeypatch):
 
     rng = np.random.default_rng(2002)
     volume_shape = (8, 8, 8)
-    image_shape = (6, 8)
+    image_shape = (8, 8)
     n_volumes = 3
     rots = np.concatenate(
         [np.eye(3, dtype=np.float32)[None], _random_rotations(rng, 2)], axis=0
@@ -629,7 +629,7 @@ def test_slice_from_half_volume_to_half_image_multiple_shapes_jax(monkeypatch):
     monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
 
     rng = np.random.default_rng(2010)
-    image_shape = (6, 8)
+    image_shape = (8, 8)
 
     for volume_shape in [(8, 8, 8), (8, 8, 9), (8, 10, 12)]:
         rots = np.concatenate(
@@ -658,7 +658,7 @@ def test_slice_from_half_volume_to_half_image_nearest_jax(monkeypatch):
     monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
 
     rng = np.random.default_rng(2013)
-    image_shape = (6, 8)
+    image_shape = (8, 8)
     volume_shape = (8, 8, 8)
     rots = np.concatenate(
         [np.eye(3, dtype=np.float32)[None], _random_rotations(rng, 3)],
@@ -683,7 +683,7 @@ def test_slice_from_half_volume_to_half_image_vjp_finite_jax(monkeypatch):
 
     rng = np.random.default_rng(2011)
     volume_shape = (8, 8, 8)
-    image_shape = (6, 8)
+    image_shape = (8, 8)
     n_images = 3
     rots = _random_rotations(rng, n_images)
 
@@ -712,7 +712,7 @@ def test_slice_from_half_volume_to_half_image_vjp_vs_reference_jax(monkeypatch):
 
     rng = np.random.default_rng(2012)
     volume_shape = (8, 8, 8)
-    image_shape = (6, 8)
+    image_shape = (8, 8)
     n_images = 3
     rots = _random_rotations(rng, n_images)
 
@@ -749,7 +749,7 @@ def test_batch_slice_from_half_volume_to_half_image_vs_full_vol_batch_jax(monkey
 
     rng = np.random.default_rng(2014)
     volume_shape = (8, 8, 8)
-    image_shape = (6, 8)
+    image_shape = (8, 8)
     n_volumes = 4
     rots = np.concatenate(
         [np.eye(3, dtype=np.float32)[None], _random_rotations(rng, 2)],

@@ -801,7 +801,7 @@ def _legacy_forward_model_from_map(
     disc_type,
     skip_ctf=False,
 ):
-    slices = core.slice_volume_by_map(volume, rotation_matrices, image_shape, volume_shape, disc_type)
+    slices = core.slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type)
     if not skip_ctf:
         slices = slices * ctf_fun(ctf_params, image_shape, voxel_size)
     return slices
