@@ -25,6 +25,12 @@ def test_integral_fsc_uses_prefix_until_first_negative():
     assert out == pytest.approx((0.9 + 0.5) * 2.0)
 
 
+def test_integral_fsc_all_nonnegative_keeps_full_curve():
+    fsc = np.array([0.9, 0.5, 0.1, 0.2], dtype=np.float32)
+    out = float(np.asarray(locres.integral_fsc(fsc, fourier_pixel_size=1.5)))
+    assert out == pytest.approx(float(np.sum(fsc)) * 1.5)
+
+
 def test_local_error_subvolume_size_uses_multiplier():
     s1 = locres.get_local_error_subvolume_size(locres_maskrad=6.0, voxel_size=1.0, multiplier=1)
     s3 = locres.get_local_error_subvolume_size(locres_maskrad=6.0, voxel_size=1.0, multiplier=3)
@@ -84,6 +90,20 @@ def test_apply_fsc_weighting_shape_and_finiteness():
     out = np.asarray(locres.apply_fsc_weighting(vol, fsc))
     assert out.shape == (8, 8, 8)
     assert np.all(np.isfinite(out))
+
+
+def test_apply_fsc_weighting_all_positive_fsc_keeps_last_shell_full_and_half():
+    import jax.numpy as jnp
+
+    fsc = jnp.array([1.0, 1.0, 1.0, 1.0], dtype=jnp.float32)
+
+    full = jnp.ones((4, 4, 4), dtype=jnp.float32)
+    out_full = np.asarray(locres.apply_fsc_weighting(full, fsc))
+    np.testing.assert_allclose(out_full, np.ones_like(out_full), rtol=1e-6, atol=1e-6)
+
+    half = jnp.ones((4, 4, 3), dtype=jnp.float32)
+    out_half = np.asarray(locres.apply_fsc_weighting(half, fsc, volume_shape=(4, 4, 4)))
+    np.testing.assert_allclose(out_half, np.ones_like(out_half), rtol=1e-6, atol=1e-6)
 
 
 def test_low_pass_filter_attenuates_high_freq():

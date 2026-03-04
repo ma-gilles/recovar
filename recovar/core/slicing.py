@@ -163,9 +163,11 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
     Parameters
     ----------
     half_image : if True, *slices* are rfft-packed half-spectrum images.
-        Both CUDA and JAX paths expand via Hermitian conjugation: CUDA
-        scatters each pixel to both primary and conjugate grid positions;
-        JAX expands to full images before backprojecting via VJP.
+        CUDA uses CONJ_MODE to scatter each half-image pixel with doubled
+        weights on interior kz, skipping redundant conjugate work (~2x
+        speedup for HALF_IMG + HALF_VOL).
+        JAX expands half-images to full via Hermitian conjugation before
+        backprojecting via VJP (no compute savings, only input size savings).
     half_volume : if True, output uses rfft-packed half-volume layout.
     volume : optional accumulator to add the result into.
     """
@@ -182,10 +184,8 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
                            order=order, half_image=half_image, half_volume=half_volume)
     # JAX fallback (CPU or cubic)
     # For half_image inputs, expand to full via Hermitian conjugation before
-    # backprojecting.  Real-valued images have conjugate-symmetric Fourier
-    # transforms, so the half-image implicitly represents both the stored
-    # and conjugate frequencies.  The CUDA kernel does this natively by
-    # scattering each pixel to both primary and conjugate positions.
+    # backprojecting via VJP.  Unlike CUDA (which uses CONJ_MODE to avoid
+    # redundant conjugate scatters), JAX must work on full images.
     if half_image:
         slices = ftu.half_image_to_full_image(slices, image_shape)
     # Build the matching forward function and let VJP derive the adjoint.
