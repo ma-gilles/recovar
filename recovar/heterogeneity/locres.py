@@ -82,9 +82,19 @@ def _resolve_locres_window(locres_sampling, locres_maskrad, locres_edgwidth):
     return locres_maskrad, locres_edgwidth
 
 
+def _prefix_length_before_first_false(mask):
+    """Length of leading ``True`` prefix.
+
+    Unlike ``jnp.argmin(mask)``, this returns ``mask.size`` when all entries are
+    ``True``.
+    """
+    mask = jnp.asarray(mask, dtype=bool)
+    first_false = jnp.argmin(mask)
+    return jnp.where(jnp.all(mask), mask.size, first_false)
+
+
 def integral_fsc(fsc, fourier_pixel_size=1):
-    last_idx = find_first_zero_in_bool(fsc >= 0)
-    include_upto = jnp.where((last_idx == 0) & (fsc[0] >= 0), fsc.size, last_idx)
+    include_upto = _prefix_length_before_first_false(fsc >= 0)
     good_idx = jnp.where(jnp.arange(fsc.size) < include_upto, 1.0, 0.0)
     return jnp.sum(fsc * good_idx) * fourier_pixel_size
 
@@ -442,9 +452,12 @@ def apply_fsc_weighting(FT, fsc, volume_shape=None):
     volume_shape = _infer_full_volume_shape_from_spectrum(FT.shape, volume_shape)
     distances = _radial_distances_for_spectrum(volume_shape, FT.shape).astype(int)
 
-    ires_max = find_first_zero_in_bool(fsc >= 0.0001)
-    fsc = jnp.where( jnp.arange(fsc.size) < ires_max, fsc, 0)
+    include_upto = _prefix_length_before_first_false(fsc >= 0.0001)
+    fsc = jnp.where(jnp.arange(fsc.size) < include_upto, fsc, 0)
     fsc = jnp.sqrt(jnp.maximum((2 * fsc) / (1 + fsc), 0))
+    # Radial distances can exceed available FSC shells (e.g. grid corners).
+    # Keep the legacy "highest available shell" behavior explicitly via clipping.
+    distances = jnp.clip(distances, 0, fsc.size - 1)
     fsc_mask = fsc[distances]
     return FT * fsc_mask
 

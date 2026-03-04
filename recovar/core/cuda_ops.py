@@ -6,8 +6,9 @@ via ``half_volume`` and ``half_image`` parameters.
 
 The custom_vjp backward pass calls the CUDA backproject kernel **directly**
 with matching half_volume/half_image flags.  For half-volume outputs, the
-backward uses Hermitian-fold scatter with CONJ_MODE optimization (~2x speedup
-for HALF_IMG + HALF_VOL).
+backward uses Hermitian-fold scatter with CONJ_MODE optimization (~2x scatter
+speedup for HALF_IMG + HALF_VOL: doubles primary weights on interior kz and
+skips redundant conjugate scatters).
 
 IMPORTANT: Do NOT replace the backward with full-volume backproject + contract.
 That would lose half-volume memory savings and the ~2x CONJ_MODE speedup.
