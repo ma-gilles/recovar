@@ -54,6 +54,30 @@ def _is_complex(arr):
     return jnp.issubdtype(arr.dtype, jnp.complexfloating)
 
 
+def _flatten_full_image_slices(slices, image_shape):
+    """Normalize full-image slices to ``(n_images, H*W)`` for VJP cotangents."""
+    slices = jnp.asarray(slices)
+    H, W = image_shape
+    expected_pixels = int(H * W)
+
+    if slices.ndim == 3:
+        if tuple(slices.shape[-2:]) != (H, W):
+            raise ValueError(
+                f"Expected slice grid shape (n_images, {H}, {W}), got {tuple(slices.shape)}"
+            )
+        slices = slices.reshape(slices.shape[0], expected_pixels)
+    elif slices.ndim == 2:
+        if slices.shape[-1] != expected_pixels:
+            raise ValueError(
+                f"Expected flattened slices with {expected_pixels} pixels, got shape {tuple(slices.shape)}"
+            )
+    else:
+        raise ValueError(
+            f"Expected slices with shape (n_images, {expected_pixels}) or (n_images, {H}, {W}), got {tuple(slices.shape)}"
+        )
+    return slices
+
+
 # ── Interpolation order ──────────────────────────────────────────────
 
 def decide_order(disc_type):
@@ -188,6 +212,7 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
     # redundant conjugate scatters), JAX must work on full images.
     if half_image:
         slices = ftu.half_image_to_full_image(slices, image_shape)
+    slices = _flatten_full_image_slices(slices, image_shape)
     # Build the matching forward function and let VJP derive the adjoint.
     if half_volume:
         vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
