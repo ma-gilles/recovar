@@ -2,7 +2,6 @@ import logging
 
 import jax
 import jax.numpy as jnp
-import jaxopt
 import matplotlib.pyplot as plt
 import numpy as np
 from jaxopt import ScipyBoundedMinimize
@@ -10,6 +9,37 @@ from jaxopt import ScipyBoundedMinimize
 from recovar.heterogeneity import latent_density
 
 logger = logging.getLogger(__name__)
+
+
+def _build_centered_pdf_grid(grids_inp):
+    """Construct a centered coordinate grid used to evaluate Gaussian kernels."""
+    grid_axes = tuple(range(grids_inp.ndim - 1))
+    grid_size = jnp.max(grids_inp, axis=grid_axes) - jnp.min(grids_inp, axis=grid_axes)
+    num_points = grids_inp.shape[0]
+
+    coord_pca_1d = []
+    for pca_dim in range(grids_inp.shape[-1]):
+        coord_pca = jnp.flip(
+            jnp.linspace(
+                -grid_size[pca_dim] / 2,
+                grid_size[pca_dim] / 2,
+                num_points,
+                endpoint=False,
+            )
+        )
+        coord_pca_1d.append(coord_pca)
+
+    grids = jnp.meshgrid(*coord_pca_1d, indexing="ij")
+    return jnp.transpose(jnp.vstack([jnp.reshape(g, -1) for g in grids])).astype(jnp.float32)
+
+
+def _compute_normalized_grid_spacing(grids, grid_ndim):
+    """Return per-axis spacing normalized by its mean, matching legacy behavior."""
+    one_index = (1,) * grid_ndim + (slice(None),)
+    zero_index = (0,) * grid_ndim + (slice(None),)
+    dx = grids[one_index] - grids[zero_index]
+    return dx / jnp.mean(dx)
+
 
 def get_raw_density(pipeline_output, zdim=10, noreg=False, pca_dim_max=5, percentile_reject=10, num_points=50, percentile_bound=0.1):
     coords_entry = 'latent_coords_noreg' if noreg else 'latent_coords'
@@ -48,46 +78,49 @@ def get_deconvolved_density(pipeline_output, zdim=4, noreg=True, pca_dim_max=4, 
     return lbfgsb_sols, alphas, cost, reg_cost, density, total_covar, grids, bounds
 
 
-def estimate_kernel_by_sampling(grids_inp, cov_zs, gauss_kde_covariance,  num_samples = 5000):
-
-    grid_size = jnp.max(grids_inp, axis = np.arange(grids_inp.ndim-1))  - jnp.min(grids_inp, axis = np.arange(grids_inp.ndim-1)) 
-    coord_pca_1D = []
-    num_points = grids_inp.shape[0]
-    
-    pca_dim_max = grids_inp.shape[-1]
-    for pca_dim in range(pca_dim_max):
-        coord_pca = jnp.flip(jnp.linspace(- grid_size[pca_dim]/2, grid_size[pca_dim]/2, num_points, endpoint = False))
-        coord_pca_1D.append(coord_pca)
-    grids = jnp.meshgrid(*coord_pca_1D, indexing="ij")
-    grids_flat = jnp.transpose(jnp.vstack([jnp.reshape(g, -1) for g in grids])).astype(np.float32) 
-
+def estimate_kernel_by_sampling(
+    grids_inp,
+    cov_zs,
+    gauss_kde_covariance,
+    num_samples=5000,
+    batch_size=32,
+):
+    """Estimate the effective kernel by Monte-Carlo sampling latent covariances."""
+    grids_flat = _build_centered_pdf_grid(grids_inp)
     kernel_on_grid = jnp.zeros((grids_flat.shape[0],), dtype=jnp.float32)
     sampled_indices = np.random.randint(0, cov_zs.shape[0], size=num_samples)
-    for idx in sampled_indices:
-        covar_data = jnp.linalg.pinv(cov_zs[idx])
+    sampled_unique, sampled_counts = np.unique(sampled_indices, return_counts=True)
+    zero_mean = jnp.zeros(grids_flat.shape[-1], dtype=jnp.float32)
+
+    # Batch Gaussian evaluations to balance speed and device memory pressure.
+    for start_idx in range(0, sampled_unique.shape[0], batch_size):
+        stop_idx = start_idx + batch_size
+        batch_indices = sampled_unique[start_idx:stop_idx]
+        batch_counts = jnp.asarray(sampled_counts[start_idx:stop_idx], dtype=jnp.float32)
+        covar_data = jnp.linalg.pinv(cov_zs[batch_indices])
         total_covar = covar_data + gauss_kde_covariance
-        kernel_on_grid += jax.scipy.stats.multivariate_normal.pdf(grids_flat, np.zeros(total_covar.shape[0]), total_covar)
+        batch_kernel = jax.vmap(
+            lambda cov: jax.scipy.stats.multivariate_normal.pdf(grids_flat, zero_mean, cov)
+        )(total_covar)
+        kernel_on_grid += jnp.sum(batch_kernel * batch_counts[:, None], axis=0)
 
-    kernel_on_grid = kernel_on_grid/jnp.sum(kernel_on_grid)
-
+    kernel_on_grid = kernel_on_grid / jnp.sum(kernel_on_grid)
     return kernel_on_grid.reshape(grids_inp.shape[:-1])
 
-def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_option = 'sampling', alphas = None):
+
+def compute_deconvolved_density(
+    density,
+    kernel,
+    total_covar,
+    grids,
+    kernel_option='sampling',
+    alphas=None,
+    maxiter=500,
+):
     alphas = np.flip(np.logspace(-3, 2, 5)) if alphas is None else alphas
 
     def compute_kernel_on_grid_nd(grids_inp):
-        grid_size = jnp.max(grids_inp, axis = np.arange(grids_inp.ndim-1))  - jnp.min(grids_inp, axis = np.arange(grids_inp.ndim-1)) 
-        coord_pca_1D = []
-        num_points = grids_inp.shape[0]
-        # FIND BOUNDS ON SPACE TO DISCRETIZE
-        
-        pca_dim_max = grids_inp.shape[-1]
-        for pca_dim in range(pca_dim_max):
-            coord_pca = jnp.flip(jnp.linspace(- grid_size[pca_dim]/2, grid_size[pca_dim]/2, num_points, endpoint = False))
-            # coord_pca = np.linspace(latent_space_bounds[pca_dim][0], latent_space_bounds[pca_dim][1], num_points)
-            coord_pca_1D.append(coord_pca)
-        grids = jnp.meshgrid(*coord_pca_1D, indexing="ij")
-        grids_flat = jnp.transpose(jnp.vstack([jnp.reshape(g, -1) for g in grids])).astype(np.float32) 
+        grids_flat = _build_centered_pdf_grid(grids_inp)
         kernel_on_grid = jax.scipy.stats.multivariate_normal.pdf(grids_flat, np.zeros(total_covar.shape[0]), total_covar)
         kernel_on_grid = kernel_on_grid/jnp.sum(kernel_on_grid)
         return kernel_on_grid.reshape(grids_inp.shape[:-1])
@@ -99,64 +132,33 @@ def compute_deconvolved_density( density, kernel, total_covar, grids, kernel_opt
     else:
         raise NotImplementedError(f"Unknown kernel_option={kernel_option}")
 
-    density = density.astype(np.float32) / np.mean(density)
-
-    density = jnp.array(density)
+    density = jnp.array(density.astype(np.float32) / np.mean(density))
     kernel_on_grid = jnp.array(kernel_on_grid)
-    def forward_model_grid(fun_on_grid):
-        convolve_fun = convolve_with_pad_nd(fun_on_grid, kernel_on_grid)
-        return convolve_fun
+    normalized_dx = _compute_normalized_grid_spacing(grids, density.ndim)
     
     @jax.jit
     def ridge_reg_objective_grid(fun_on_grid, alpha = 0.0):
-        # fun_on_grid = circ_mask * fun_on_grid
-        residuals = forward_model_grid(fun_on_grid) - density #/ jnp.sum(y)
-        ## YIKES
-        if fun_on_grid.ndim ==1:
-            dx = grids[1,:] - grids[0,:] 
-        elif fun_on_grid.ndim ==2:
-            dx = grids[1,1,:] - grids[0,0,:] 
-        elif fun_on_grid.ndim ==3:
-            dx = grids[1,1,1,:] - grids[0,0,0,:] 
-        elif fun_on_grid.ndim ==4:
-            dx = grids[1,1,1,1,:] - grids[0,0,0,0,:] 
-        elif fun_on_grid.ndim ==5:
-            dx = grids[1,1,1,1,1,:] - grids[0,0,0,0,0,:] 
-        else:
-            raise ValueError(f"Unsupported grid dimensionality: {fun_on_grid.ndim}")
-
-        dx/= jnp.mean(dx)
-
-        return 1e8 * (jnp.mean((residuals * 1e0) ** 2)  +  alpha * jnp.mean(jnp.array(jnp.gradient(fun_on_grid, *dx))**2 ))
+        residuals = convolve_with_pad_nd(fun_on_grid, kernel_on_grid) - density
+        gradients = jnp.array(jnp.gradient(fun_on_grid, *normalized_dx))
+        return 1e8 * (jnp.mean((residuals * 1e0) ** 2) + alpha * jnp.mean(gradients ** 2))
 
     cost = np.zeros_like(alphas)
     reg_cost = np.zeros_like(alphas)
     lbfgsb_sols = []
     logger.info("Deconvolving density: %d regularization alphas, kernel=%s", len(alphas), kernel_option)
+
+    w_init = jnp.array(density)
+    lower_bounds = jnp.zeros_like(w_init)
+    upper_bounds = jnp.ones_like(w_init) * jnp.inf
+    bounds = (lower_bounds, upper_bounds)
+    lbfgsb = ScipyBoundedMinimize(fun=ridge_reg_objective_grid, method="l-bfgs-b", maxiter=maxiter)
+    baseline_cost = ridge_reg_objective_grid(jnp.zeros_like(w_init), alpha=0)
+
     for alpha_idx, alpha in enumerate(alphas):
-        # w_init = density# * 0 +1
-        w_init = jnp.array(density)# * 0 +1
-        use_scipy = True
-        if use_scipy:
-            lbfgsb = ScipyBoundedMinimize(fun=ridge_reg_objective_grid, method="l-bfgs-b", maxiter = 500)
-        else:   
-            lbfgsb = jaxopt.LBFGSB(fun=ridge_reg_objective_grid, maxiter = 500)
-        # # lbfgsb = ScipyBoundedMinimize(fun=ridge_reg_objective_grid, method="l-bfgs-b", maxiter = 500)
-
-        # lbfgsb = jaxopt.LBFGSB(fun=ridge_reg_objective_grid, maxiter = 500)
-        lower_bounds = jnp.zeros_like(w_init)
-        upper_bounds = jnp.ones_like(w_init) * jnp.inf
-        bounds = (lower_bounds, upper_bounds)
-
-        # lbfgsb.init_state(init_params=w_init, bounds=bounds, alpha = alpha)
-        # lbfgsb_sol_p = lbfgsb.run(w_init, alpha = alpha, LB = lower_bounds, UB = upper_bounds)
-
-        lbfgsb_sol_p = lbfgsb.run(init_params=w_init,bounds=bounds, alpha = alpha )#, bounds=bounds)
-        # lbfgsb_sol_p = lbfgsb.run(w_init, alpha = alpha, bounds=bounds )
-
+        lbfgsb_sol_p = lbfgsb.run(init_params=w_init, bounds=bounds, alpha=alpha)
         lbfgsb_sol = lbfgsb_sol_p.params
-        cost[alpha_idx] = ridge_reg_objective_grid(lbfgsb_sol, alpha = 0) / ridge_reg_objective_grid(lbfgsb_sol * 0, alpha = 0) 
-        reg_cost[alpha_idx] = ridge_reg_objective_grid(lbfgsb_sol, alpha = alpha) / ridge_reg_objective_grid(lbfgsb_sol * 0, alpha = 0)
+        cost[alpha_idx] = ridge_reg_objective_grid(lbfgsb_sol, alpha=0) / baseline_cost
+        reg_cost[alpha_idx] = ridge_reg_objective_grid(lbfgsb_sol, alpha=alpha) / baseline_cost
         lbfgsb_sols.append(np.array(lbfgsb_sol))
         logger.debug("  alpha[%d]=%.2e: cost=%.4e, reg_cost=%.4e",
                      alpha_idx, alpha, cost[alpha_idx], reg_cost[alpha_idx])
