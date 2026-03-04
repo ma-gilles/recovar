@@ -9,8 +9,8 @@ import equinox as eqx
 from recovar import core, utils
 from recovar.core.configs import ForwardModelConfig
 from .core import (
-    batch_vol_slice_volume_by_map,
-    batch_vol_rot_slice_volume_by_map,
+    batch_vol_slice_volume,
+    batch_vol_rot_slice_volume,
     compute_dot_products,
     compute_dot_products_eqx,
     compute_CTFed_proj_norms,
@@ -46,7 +46,7 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
 
     projections = np.zeros((rotations.shape[0], image_size), dtype = np.complex64)
     for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
-        projections[rot_indices] = core.slice_volume_by_map(volume, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type)
+        projections[rot_indices] = core.slice_volume(volume, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type)
 
     logger.info("done with precomp proj, batch size %s", batch_size)
     projections = jnp.asarray(projections)
@@ -76,7 +76,7 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
         u_projections = np.empty((rotations.shape[0], n_principal_components, image_size), dtype = np.complex64)
         # Compute all mean and principal component projections
         for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
-            u_projections[rot_indices] = batch_vol_slice_volume_by_map(u, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type)
+            u_projections[rot_indices] = batch_vol_slice_volume(u, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type)
 
         logger.info("done with u_proj %s", batch_size)
         data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=dot_product_batch_size, subset_indices = image_indices)
@@ -150,7 +150,7 @@ compute_probability_from_residual_normal_squared = jax.vmap(compute_probability_
 @eqx.filter_jit
 def compute_residuals_many_poses_eqx(config: ForwardModelConfig, volumes, images, rotation_matrices, translations, ctf_params, noise_variance, translation_fn="fft"):
     """Equinox version of compute_residuals_many_poses (12 → 8 params)."""
-    projected_volumes = batch_vol_rot_slice_volume_by_map(volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type)
+    projected_volumes = batch_vol_rot_slice_volume(volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type)
     projected_volumes = (projected_volumes * config.compute_ctf(ctf_params)[:,None,None,:])
 
     images /= jnp.sqrt(noise_variance)
@@ -181,7 +181,7 @@ def compute_residuals_many_poses_eqx(config: ForwardModelConfig, volumes, images
 @functools.partial(jax.jit, static_argnums=[6,7,8,9,10,11])
 def compute_residuals_many_poses(volumes, images, rotation_matrices, translations, CTF_params, noise_variance, voxel_size, volume_shape, image_shape, disc_type, CTF_fun, translation_fn = "fft" ):
     # n_vols x rotations x image_size
-    projected_volumes = batch_vol_rot_slice_volume_by_map(volumes, rotation_matrices, image_shape, volume_shape, disc_type)
+    projected_volumes = batch_vol_rot_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, disc_type)
 
     # Broadcast CTF in volumes x rotations
     projected_volumes = (projected_volumes * CTF_fun( CTF_params, image_shape, voxel_size)[:,None,None,:])

@@ -53,12 +53,12 @@ def backproject_one_image(probabilities, images_i, rotation_matrices, translatio
 
 batch_vol_adjoint_slice_volume = jax.vmap(
     lambda images, rots, image_shape, volume_shape, volume:
-        core.adjoint_slice_volume_by_map(images, rots, image_shape, volume_shape, "linear_interp", volume=volume),
+        core.adjoint_slice_volume(images, rots, image_shape, volume_shape, "linear_interp", volume=volume),
     in_axes=(VOL_AXIS, VOL_AXIS, None, None, None), out_axes=0,
 )
 batch_vol_adjoint_slice_volume_half = jax.vmap(
     lambda images, rots, image_shape, volume_shape, volume:
-        core.adjoint_slice_volume_by_map(images, rots, image_shape, volume_shape, "linear_interp", volume=volume, half_image=True),
+        core.adjoint_slice_volume(images, rots, image_shape, volume_shape, "linear_interp", volume=volume, half_image=True),
     in_axes=(VOL_AXIS, VOL_AXIS, None, None, None), out_axes=0,
 )
 
@@ -101,12 +101,12 @@ def sum_up_images_fixed_rots_eqx(config: ForwardModelConfig, batch, probabilitie
     P = probabilities.swapaxes(0,1).reshape(n_rotations, n_shifted_images)
     summed_images = P @ shifted_images
     summed_half = fourier_transform_utils.full_image_to_half_image(summed_images, config.image_shape)
-    Ft_y = core.adjoint_slice_volume_by_map(summed_half, rotations, config.image_shape, config.volume_shape, "linear_interp", volume=Ft_y, half_image=True)
+    Ft_y = core.adjoint_slice_volume(summed_half, rotations, config.image_shape, config.volume_shape, "linear_interp", volume=Ft_y, half_image=True)
 
     probabilites_summed_over_translations = jnp.sum(probabilities, axis=-1)
     CTF_probs = probabilites_summed_over_translations.T @ (CTF**2 / noise_variance)
     CTF_probs_half = fourier_transform_utils.full_image_to_half_image(CTF_probs, config.image_shape)
-    Ft_ctf = core.adjoint_slice_volume_by_map(CTF_probs_half, rotations, config.image_shape, config.volume_shape, "linear_interp", volume=Ft_ctf, half_image=True)
+    Ft_ctf = core.adjoint_slice_volume(CTF_probs_half, rotations, config.image_shape, config.volume_shape, "linear_interp", volume=Ft_ctf, half_image=True)
 
     return Ft_y, Ft_ctf
 
@@ -135,13 +135,13 @@ def sum_up_images_fixed_rots(batch, probabilities, translations, rotations, CTF_
     summed_images = P @ shifted_images
 
     summed_half = fourier_transform_utils.full_image_to_half_image(summed_images, image_shape)
-    Ft_y = core.adjoint_slice_volume_by_map(summed_half, rotations, image_shape, volume_shape, "linear_interp", volume=Ft_y, half_image=True)
+    Ft_y = core.adjoint_slice_volume(summed_half, rotations, image_shape, volume_shape, "linear_interp", volume=Ft_y, half_image=True)
 
     probabilites_summed_over_translations = jnp.sum(probabilities, axis = -1)
 
     CTF_probs =  probabilites_summed_over_translations.T @ (CTF**2 / noise_variance)
     CTF_probs_half = fourier_transform_utils.full_image_to_half_image(CTF_probs, image_shape)
-    Ft_ctf = core.adjoint_slice_volume_by_map(CTF_probs_half, rotations, image_shape, volume_shape, "linear_interp", volume=Ft_ctf, half_image=True)
+    Ft_ctf = core.adjoint_slice_volume(CTF_probs_half, rotations, image_shape, volume_shape, "linear_interp", volume=Ft_ctf, half_image=True)
 
     return Ft_y, Ft_ctf
 

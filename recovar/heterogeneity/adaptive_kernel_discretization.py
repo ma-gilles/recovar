@@ -333,7 +333,7 @@ def compute_residuals_batch(
         X_mat = jnp.repeat(X_mat[..., None, :], axis=-2, repeats=weights_on_grid.shape[-2])
         predicted_phi = linalg.broadcast_dot(X_mat, weights_on_grid)
     else:
-        predicted_phi = core.slice_volume_by_map(
+        predicted_phi = core.slice_volume(
             weights_on_grid[..., 0], batch_data.rotation_matrices,
             config.image_shape, config.volume_shape, 'linear_interp',
         )

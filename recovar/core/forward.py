@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 from recovar.core.configs import ForwardModelConfig
 from recovar.core.geometry import translate_images
 from recovar.core.slicing import (
-    adjoint_slice_volume_by_map,
-    slice_volume_by_map,
+    adjoint_slice_volume,
+    slice_volume,
 )
 
 
@@ -41,7 +41,7 @@ def forward_model(
     half_volume : bool
         If True, *volume* is an rfft-packed half-volume ``(N0*N1*(N2//2+1),)``.
     """
-    slices = slice_volume_by_map(
+    slices = slice_volume(
         volume, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
         half_volume=half_volume, half_image=half_image,
     )
@@ -78,7 +78,7 @@ def adjoint_forward_model(
 ) -> jax.Array:
     """Adjoint of the forward model (direct back-projection).
 
-    Uses :func:`adjoint_slice_volume_by_map` which dispatches to CUDA
+    Uses :func:`adjoint_slice_volume` which dispatches to CUDA
     when available, avoiding the VJP-through-FFI overhead.
 
     Parameters
@@ -92,7 +92,7 @@ def adjoint_forward_model(
     if not skip_ctf:
         ctf = config.compute_ctf_half(ctf_params) if half_image else config.compute_ctf(ctf_params)
         slices = slices * ctf
-    return adjoint_slice_volume_by_map(
+    return adjoint_slice_volume(
         slices, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
         volume=volume, half_image=half_image, half_volume=half_volume,
     )

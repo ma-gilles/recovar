@@ -23,8 +23,8 @@ TRANS_AXIS=3
 NORM_FFT = "backward"
 
 # batch volumes
-batch_vol_rot_slice_volume_by_map = jax.vmap(core.slice_volume_by_map, in_axes = (0, VOL_AXIS, None, None, None), out_axes=1 )
-batch_vol_slice_volume_by_map = jax.vmap(core.slice_volume_by_map, in_axes = (0, None, None, None, None), out_axes=1 )
+batch_vol_rot_slice_volume = jax.vmap(core.slice_volume, in_axes = (0, VOL_AXIS, None, None, None), out_axes=1 )
+batch_vol_slice_volume = jax.vmap(core.slice_volume, in_axes = (0, None, None, None, None), out_axes=1 )
 
 
 

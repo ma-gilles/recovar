@@ -233,12 +233,12 @@ def test_group_sum_by_labels_and_preprocess_labels():
 
 
 def test_adjoint_kernel_slice_dispatch(monkeypatch):
-    monkeypatch.setattr(cov_est.core, "adjoint_slice_volume_by_map", lambda images, *_, **__: images + 1)
+    monkeypatch.setattr(cov_est.core, "adjoint_slice_volume", lambda images, *_, **__: images + 1)
 
     images = jnp.ones((2, 4), dtype=jnp.complex64)
     out_tri = cov_est.adjoint_kernel_slice(images, None, (2, 2), (2, 2, 1), kernel="triangular")
     out_sq = cov_est.adjoint_kernel_slice(images, None, (2, 2), (2, 2, 1), kernel="square")
-    # Both kernels now dispatch to adjoint_slice_volume_by_map with disc_type
+    # Both kernels now dispatch to adjoint_slice_volume with disc_type
     np.testing.assert_allclose(np.asarray(out_tri), np.asarray(images + 1))
     np.testing.assert_allclose(np.asarray(out_sq), np.asarray(images + 1))
     with pytest.raises(ValueError):
@@ -593,12 +593,12 @@ def _reference_variance_kernel(config, batch_data, mean_estimate, volume_mask, i
     images = core.translate_images(images, batch_data.translations, config.image_shape)
 
     if config.premultiplied_ctf:
-        images = images - core.slice_volume_by_map(
+        images = images - core.slice_volume(
             mean_estimate, batch_data.rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
         ) * CTF ** 2
         noise_p_variance_ctf = CTF ** 2
     else:
-        images = images - core.slice_volume_by_map(
+        images = images - core.slice_volume(
             mean_estimate, batch_data.rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
         ) * CTF
         noise_p_variance_ctf = jnp.ones_like(images)
@@ -625,7 +625,7 @@ def _reference_variance_kernel(config, batch_data, mean_estimate, volume_mask, i
         images_squared *= CTF_squared
 
     def _bp(arr):
-        return core.adjoint_slice_volume_by_map(
+        return core.adjoint_slice_volume(
             arr, batch_data.rotation_matrices, config.image_shape, config.volume_shape, "linear_interp"
         )
 

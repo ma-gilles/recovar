@@ -408,8 +408,9 @@ def variance_relion_kernel_trilinear(
     half_ctf = config.compute_ctf_half(batch_data.ctf_params)
     CTF_squared = half_ctf ** 2
 
-    mean_slice_half = core.slice_volume_by_map_to_half_image(
-        mean_estimate, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
+    mean_slice_half = core.slice_volume(
+        mean_estimate, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
+        half_image=True,
     )
 
     if config.premultiplied_ctf:
@@ -445,7 +446,7 @@ def variance_relion_kernel_trilinear(
         images_squared = images_squared * CTF_squared
 
     def _backproject(half_imgs, volume):
-        return core.adjoint_slice_volume_by_map(
+        return core.adjoint_slice_volume(
             half_imgs, rotation_matrices, config.image_shape, config.volume_shape,
             "linear_interp", volume=volume, half_image=True, half_volume=True,
         )
@@ -1179,10 +1180,10 @@ def adjoint_kernel_slice(images, rotation_matrices, image_shape, volume_shape, k
         if volumes is None:
             volumes = jnp.zeros((images.shape[0], int(np.prod(volume_shape))), dtype=images.dtype)
         return jax.vmap(
-            lambda im, vol: core.adjoint_slice_volume_by_map(
+            lambda im, vol: core.adjoint_slice_volume(
                 im, rotation_matrices, image_shape, volume_shape, disc_type, volume=vol)
         )(images, volumes)
-    return core.adjoint_slice_volume_by_map(
+    return core.adjoint_slice_volume(
         images, rotation_matrices, image_shape, volume_shape, disc_type, volume=volumes)
 
 

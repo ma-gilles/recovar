@@ -897,7 +897,7 @@ def simulate_batch(
     Simulate a batch of cryo-EM images from a volume using the Equinox API.
     """
     CTF = config.compute_ctf(ctf_params)
-    slices = core.slice_volume_by_map(
+    slices = core.slice_volume(
         volume, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
     )
     if not skip_ctf:
