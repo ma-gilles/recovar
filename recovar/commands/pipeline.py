@@ -221,6 +221,11 @@ def add_args(parser: argparse.ArgumentParser):
         "--very-low-memory-option", dest="very_low_memory_option", action="store_true",
         help="Use lowest memory options for covariance estimation",
     )
+    perf.add_argument(
+        "--multi-zdim-embedding", dest="multi_zdim_embedding",
+        action=argparse.BooleanOptionalAction, default=False,
+        help="Use experimental single-pass embedding for all zdims (can be slower on some datasets)",
+    )
 
     # ── Debugging / advanced ───────────────────────────────────────────────
     adv = parser.add_argument_group("Advanced")
@@ -484,9 +489,9 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
                         focus_masks, zdim_for_rest, args):
     """Compute per-image embeddings for all requested zdim values.
 
-    For non-tilt-series data uses :func:`embedding.get_per_image_embedding_multi_zdim`
-    which performs a single forward-model pass at max(n_pcs) and solves lightweight
-    linear systems for each (zdim, reg/noreg) pair — typically 5–10× faster.
+    By default uses the legacy per-zdim embedding loops (reg + noreg), which are
+    currently more robust performance-wise across datasets. The experimental
+    single-pass multi-zdim path can be enabled with ``--multi-zdim-embedding``.
 
     Returns six dicts, all keyed by zdim (int):
         (latent_coords, latent_coords_noreg,
@@ -499,7 +504,9 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
 
     emb_time = time.time()
 
-    if not args.tilt_series:
+    use_multi_zdim = (not args.tilt_series) and bool(getattr(args, "multi_zdim_embedding", False))
+    if use_multi_zdim:
+        logger.info("Embedding mode: single-pass multi-zdim (experimental)")
         # Fast path: single data pass for all zdims
         zs_reg, zs_noreg = embedding.get_per_image_embedding_multi_zdim(
             means['combined'], u['rescaled'], s['rescaled'], n_pcs_list,
@@ -514,7 +521,10 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
         latent_precision_noreg= {zdim: zs_noreg[n_pcs][1] for zdim, n_pcs in zip(options['zs_dim_to_test'], n_pcs_list)}
         contrasts_noreg       = {zdim: zs_noreg[n_pcs][2] for zdim, n_pcs in zip(options['zs_dim_to_test'], n_pcs_list)}
     else:
-        # Tilt-series: fall back to per-zdim calls (multi-zdim not yet supported)
+        if args.tilt_series:
+            logger.info("Embedding mode: per-zdim loops (tilt-series)")
+        else:
+            logger.info("Embedding mode: per-zdim loops (default)")
         latent_coords = {}
         latent_coords_noreg = {}
         latent_precision = {}
