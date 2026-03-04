@@ -21,6 +21,7 @@ import ctypes
 import functools
 import logging
 import pathlib
+import subprocess
 import threading
 from typing import Tuple
 
@@ -42,9 +43,12 @@ _lib_handle = None  # ctypes CDLL
 def _build_lib():
     if _LIB_PATH.exists():
         return
-    import subprocess
+    import sys
     logger.info("Building %s …", _LIB_PATH)
-    subprocess.check_call(["make", "-C", str(_LIB_DIR)])
+    # Pass the current Python so the Makefile finds JAX headers correctly.
+    subprocess.check_call(
+        ["make", "-C", str(_LIB_DIR), f"PYTHON={sys.executable}"]
+    )
     if not _LIB_PATH.exists():
         raise RuntimeError(f"Build failed — {_LIB_PATH} not found")
 
@@ -118,7 +122,8 @@ def cuda_available() -> bool:
             _ensure_ffi()
             _cuda_ok = True
             logger.info("CUDA backproject/project kernels enabled")
-    except (ImportError, OSError, RuntimeError, AttributeError) as e:
+    except (ImportError, OSError, RuntimeError, AttributeError,
+            subprocess.SubprocessError) as e:
         _cuda_ok = False
         logger.debug("CUDA backproject not available: %s", e)
     return _cuda_ok
