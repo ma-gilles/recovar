@@ -1084,3 +1084,243 @@ def test_batch_adjoint_slice_volume_cuda_half_image(gpu_device):
                 half_image=True,
             ))
             np.testing.assert_allclose(batch_out[i], single, atol=1e-4, rtol=1e-4)
+
+
+# ── Helpers for new tests ──────────────────────────────────────────────
+
+def _random_rotations(rng, n):
+    from scipy.spatial.transform import Rotation
+    return Rotation.random(n, random_state=rng.integers(2**31)).as_matrix().astype(np.float32)
+
+
+def _make_hermitian_volume(rng, volume_shape):
+    """Create a volume with Hermitian symmetry (DFT of real data)."""
+    real_data = rng.standard_normal(volume_shape).astype(np.float32)
+    return np.asarray(fourier_transform_utils.get_dft3(real_data)).ravel()
+
+
+def _random_complex_images(rng, n_images, image_shape):
+    n_pix = image_shape[0] * image_shape[1]
+    return (rng.standard_normal((n_images, n_pix)) +
+            1j * rng.standard_normal((n_images, n_pix))).astype(np.complex64)
+
+
+# ── Half-image forward: efficient path == old expand path ──────────────
+
+@pytest.mark.parametrize("order", [0, 1])
+def test_jax_half_image_forward_matches_full_then_extract(monkeypatch, order):
+    """_jax_slice_half_image matches _jax_slice + full_image_to_half_image."""
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
+
+    rng = np.random.default_rng(5001)
+    volume_shape = (8, 8, 8)
+    image_shape = (8, 8)
+    n_images = 3
+    rots = jnp.array(_random_rotations(rng, n_images))
+    vol = jnp.array(_make_hermitian_volume(rng, volume_shape))
+
+    full = np.asarray(core_slicing._jax_slice(vol, rots, image_shape, volume_shape, order))
+    half_ref = np.asarray(fourier_transform_utils.full_image_to_half_image(jnp.array(full), image_shape))
+    half_new = np.asarray(core_slicing._jax_slice_half_image(vol, rots, image_shape, volume_shape, order))
+
+    np.testing.assert_allclose(half_new, half_ref, atol=1e-5, rtol=1e-5)
+
+
+def test_jax_half_image_forward_cubic_matches_full_then_extract(monkeypatch):
+    """Cubic: _jax_slice_half_image with precomputed coeffs matches extract from full."""
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
+    from recovar.core import cubic_interpolation
+
+    rng = np.random.default_rng(5002)
+    volume_shape = (8, 8, 8)
+    image_shape = (8, 8)
+    n_images = 3
+    rots = jnp.array(_random_rotations(rng, n_images))
+    vol = jnp.array(_make_hermitian_volume(rng, volume_shape))
+    coeffs = cubic_interpolation.calculate_spline_coefficients(vol.reshape(volume_shape))
+
+    full = np.asarray(core_slicing._jax_slice(coeffs, rots, image_shape, volume_shape, 3))
+    half_ref = np.asarray(fourier_transform_utils.full_image_to_half_image(jnp.array(full), image_shape))
+    half_new = np.asarray(core_slicing._jax_slice_half_image(coeffs, rots, image_shape, volume_shape, 3))
+
+    np.testing.assert_allclose(half_new, half_ref, atol=1e-5, rtol=1e-5)
+
+
+# ── slice_volume forward: half_image flag ──────────────────────────────
+
+@pytest.mark.parametrize("disc_type", ["nearest", "linear_interp"])
+@pytest.mark.parametrize("half_image", [False, True])
+def test_slice_volume_jax_half_image_flag(monkeypatch, disc_type, half_image):
+    """slice_volume(half_image=True) matches extract from slice_volume(half_image=False)."""
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
+
+    rng = np.random.default_rng(5003)
+    volume_shape = (8, 8, 8)
+    image_shape = (8, 8)
+    n_images = 3
+    rots = jnp.array(_random_rotations(rng, n_images))
+    vol = jnp.array(_make_hermitian_volume(rng, volume_shape))
+
+    result = np.asarray(core_slicing.slice_volume(
+        vol, rots, image_shape, volume_shape, disc_type, half_image=half_image,
+    ))
+    ref_full = np.asarray(core_slicing.slice_volume(
+        vol, rots, image_shape, volume_shape, disc_type, half_image=False,
+    ))
+
+    if half_image:
+        ref = np.asarray(fourier_transform_utils.full_image_to_half_image(jnp.array(ref_full), image_shape))
+        np.testing.assert_allclose(result, ref, atol=1e-5, rtol=1e-5)
+    else:
+        np.testing.assert_allclose(result, ref_full, atol=1e-5, rtol=1e-5)
+
+
+# ── Adjoint: half_image consistency (JAX expand == CUDA native) ────────
+
+@pytest.mark.parametrize("disc_type", ["nearest", "linear_interp"])
+def test_adjoint_jax_half_image_matches_expand(monkeypatch, disc_type):
+    """JAX adjoint(half_image=True) == adjoint(expand(half_imgs), half_image=False)."""
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
+
+    rng = np.random.default_rng(5004)
+    volume_shape = (8, 8, 8)
+    image_shape = (8, 8)
+    n_images = 3
+    rots = jnp.array(_random_rotations(rng, n_images))
+
+    full_imgs = jnp.array(_random_complex_images(rng, n_images, image_shape))
+    half_imgs = jnp.array(np.asarray(
+        fourier_transform_utils.full_image_to_half_image(full_imgs, image_shape)
+    ))
+    expanded = jnp.array(np.asarray(
+        fourier_transform_utils.half_image_to_full_image(half_imgs, image_shape)
+    ))
+
+    result = np.asarray(core_slicing.adjoint_slice_volume(
+        half_imgs, rots, image_shape, volume_shape, disc_type, half_image=True,
+    ))
+    ref = np.asarray(core_slicing.adjoint_slice_volume(
+        expanded, rots, image_shape, volume_shape, disc_type, half_image=False,
+    ))
+
+    np.testing.assert_allclose(result, ref, atol=1e-5, rtol=1e-5)
+
+
+# ── Adjoint: dot-product test for all flag combos ──────────────────────
+
+@pytest.mark.parametrize("disc_type", ["nearest", "linear_interp"])
+@pytest.mark.parametrize("half_volume", [False, True])
+def test_adjoint_dot_product_consistency(monkeypatch, disc_type, half_volume):
+    """Adjoint dot-product test: <A*y, x> == <y, Ax> for full-image paths."""
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
+
+    rng = np.random.default_rng(5005)
+    volume_shape = (8, 8, 8)
+    image_shape = (8, 8)
+    n_images = 3
+    rots = jnp.array(_random_rotations(rng, n_images))
+
+    vol_full = _make_hermitian_volume(rng, volume_shape)
+    if half_volume:
+        vol_in = jnp.array(np.asarray(fourier_transform_utils.full_volume_to_half_volume(
+            jnp.array(vol_full), volume_shape
+        )))
+    else:
+        vol_in = jnp.array(vol_full)
+
+    # Forward: Ax
+    fwd = np.asarray(core_slicing.slice_volume(
+        vol_in, rots, image_shape, volume_shape, disc_type,
+        half_volume=half_volume, half_image=False,
+    ))
+
+    img_in = jnp.array(_random_complex_images(rng, n_images, image_shape))
+
+    # Adjoint: A*y
+    adj = np.asarray(core_slicing.adjoint_slice_volume(
+        img_in, rots, image_shape, volume_shape, disc_type,
+        half_image=False, half_volume=half_volume,
+    ))
+
+    lhs = np.sum(adj.conj() * np.asarray(vol_in)).real
+    rhs = np.sum(np.asarray(img_in).conj() * fwd).real
+
+    np.testing.assert_allclose(lhs, rhs, atol=1e-3, rtol=1e-3,
+                               err_msg=f"disc_type={disc_type}, half_volume={half_volume}")
+
+
+# ── Cubic adjoint with half_volume bug fix ─────────────────────────────
+
+def test_adjoint_cubic_half_volume_includes_spline_coefficients(monkeypatch):
+    """Cubic adjoint with half_volume=True uses spline coefficients in VJP.
+
+    Regression test for a bug where the half_volume VJP forward function
+    passed raw volume data to _jax_slice(..., order=3), which expects
+    precomputed spline coefficients.
+    """
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
+
+    rng = np.random.default_rng(5006)
+    volume_shape = (8, 8, 8)
+    image_shape = (8, 8)
+    n_images = 2
+    rots = jnp.array(_random_rotations(rng, n_images))
+
+    vol_full = jnp.array(_make_hermitian_volume(rng, volume_shape))
+    half_vol = jnp.array(np.asarray(fourier_transform_utils.full_volume_to_half_volume(
+        vol_full, volume_shape
+    )))
+    imgs = jnp.array(_random_complex_images(rng, n_images, image_shape))
+
+    # This should not crash and should produce finite values.
+    result = np.asarray(core_slicing.adjoint_slice_volume(
+        imgs, rots, image_shape, volume_shape, "cubic",
+        half_volume=True,
+    ))
+
+    assert np.isfinite(result).all(), "Cubic adjoint with half_volume produced non-finite values"
+    assert np.any(np.abs(result) > 1e-8), "Cubic adjoint with half_volume returned all zeros"
+
+
+# ── Cubic precompute from half-volume ──────────────────────────────────
+
+def test_cubic_precompute_from_half_volume(monkeypatch):
+    """precompute_cubic_half_coefficients(half_volume=True) matches full-volume precompute."""
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
+
+    rng = np.random.default_rng(5007)
+    volume_shape = (8, 8, 8)
+    vol_ft = jnp.array(_make_hermitian_volume(rng, volume_shape))
+    half_vol = jnp.array(np.asarray(fourier_transform_utils.full_volume_to_half_volume(vol_ft, volume_shape)))
+
+    coeffs_full = np.asarray(core_slicing.precompute_cubic_half_coefficients(vol_ft, volume_shape))
+    coeffs_half = np.asarray(core_slicing.precompute_cubic_half_coefficients(
+        half_vol, volume_shape, half_volume=True
+    ))
+
+    np.testing.assert_allclose(coeffs_half, coeffs_full, atol=1e-5, rtol=1e-5)
+
+
+# ── Cubic slice from coefficients: half_image flag ─────────────────────
+
+def test_cubic_slice_from_coeffs_half_image(monkeypatch):
+    """slice_from_cubic_half_coefficients(half_image=True) matches extract from full."""
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
+
+    rng = np.random.default_rng(5008)
+    volume_shape = (8, 8, 8)
+    image_shape = (8, 8)
+    n_images = 3
+    rots = jnp.array(_random_rotations(rng, n_images))
+    vol = jnp.array(_make_hermitian_volume(rng, volume_shape))
+    coeffs = core_slicing.precompute_cubic_half_coefficients(vol, volume_shape)
+
+    full = np.asarray(core_slicing.slice_from_cubic_half_coefficients(
+        coeffs, rots, image_shape, volume_shape, half_image=False
+    ))
+    half = np.asarray(core_slicing.slice_from_cubic_half_coefficients(
+        coeffs, rots, image_shape, volume_shape, half_image=True
+    ))
+
+    ref = np.asarray(fourier_transform_utils.full_image_to_half_image(jnp.array(full), image_shape))
+    np.testing.assert_allclose(half, ref, atol=1e-5, rtol=1e-5)

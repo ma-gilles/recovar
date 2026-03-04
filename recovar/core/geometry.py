@@ -97,6 +97,30 @@ def rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
     return batch_grid_pt_vec_ind_of_images, batch_grid_pt_vec_ind_of_images_og_shape
 
 
+def _half_image_rotations_to_coords(rotation_matrices, image_shape, volume_shape):
+    """Like rotations_to_grid_point_coords but for half-image pixels only.
+
+    Generates 3-D grid coordinates for only the H*(W//2+1) non-redundant
+    rfft-packed pixels, saving ~50% computation vs full-image coordinates.
+
+    Returns ``(coords, og_shape)`` where *coords* has shape
+    ``(3, n_images * n_half_pixels)`` and *og_shape* is
+    ``(n_images, n_half_pixels, 3)``.
+    """
+    three_d_upsampling_factor = volume_shape[0] // image_shape[0]
+    full_plane = get_unrotated_plane_grid_points(image_shape, three_d_upsampling_factor)
+    half_idx = fourier_transform_utils._half_image_pixel_indices(image_shape)
+    half_plane = full_plane[half_idx]  # (H*(W//2+1), 3)
+
+    def rotate_one(rot):
+        rotated = jnp.matmul(half_plane, rot, precision=jax.lax.Precision.HIGHEST)
+        return rotated + (volume_shape[0] // 2)
+
+    batch_coords = jax.vmap(rotate_one)(rotation_matrices)  # (n_images, n_half_pix, 3)
+    og_shape = batch_coords.shape
+    return batch_coords.reshape(-1, 3).T, og_shape
+
+
 _STENCIL_2D = jnp.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=jnp.int32)
 _STENCIL_3D = jnp.array(
     [[0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 1, 1], [1, 0, 0], [1, 0, 1], [1, 1, 0], [1, 1, 1]],
