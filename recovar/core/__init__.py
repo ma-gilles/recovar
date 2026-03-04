@@ -64,8 +64,8 @@ from recovar.core.slicing import (
     batch_adjoint_slice_volume,
     batch_slice_volume,
     decide_order,
-    precompute_cubic_half_coefficients,
-    slice_from_cubic_half_coefficients,
+    precompute_cubic_coefficients,
+    slice_from_cubic_coefficients,
     slice_volume,
 )
 
@@ -114,10 +114,10 @@ __all__ = [
     "get_stencil",
     "get_unrotated_plane_coords",
     "get_unrotated_plane_grid_points",
-    "precompute_cubic_half_coefficients",
+    "precompute_cubic_coefficients",
     "rotations_to_grid_point_coords",
     "round_to_int",
-    "slice_from_cubic_half_coefficients",
+    "slice_from_cubic_coefficients",
     "slice_volume",
     "translate_half_images",
     "translate_images",

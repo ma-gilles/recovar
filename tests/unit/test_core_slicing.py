@@ -455,14 +455,14 @@ def test_batch_slice_volume_jax(monkeypatch):
         np.testing.assert_allclose(batch_out_hi[i], single_hi, atol=1e-5, rtol=1e-5)
 
 
-def test_precompute_cubic_half_coefficients_shape():
-    """precompute_cubic_half_coefficients must return full coefficient shape (N0+2, N1+2, N2+2)."""
+def test_precompute_cubic_coefficients_shape():
+    """precompute_cubic_coefficients must return full coefficient shape (N0+2, N1+2, N2+2)."""
     rng = np.random.default_rng(600)
     for volume_shape in [(8, 8, 8), (6, 8, 10), (7, 9, 11)]:
         N0, N1, N2 = volume_shape
         real_vol = rng.standard_normal(volume_shape).astype(np.float32)
         vol_ft = np.asarray(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
-        coeffs = core_slicing.precompute_cubic_half_coefficients(vol_ft, volume_shape)
+        coeffs = core_slicing.precompute_cubic_coefficients(vol_ft, volume_shape)
         expected = (N0 + 2, N1 + 2, N2 + 2)
         assert coeffs.shape == expected, (
             f"volume_shape={volume_shape}: got {coeffs.shape}, expected {expected}"
@@ -470,7 +470,7 @@ def test_precompute_cubic_half_coefficients_shape():
 
 
 def test_cubic_half_coefficients_slice_matches_full_cubic():
-    """slice_from_cubic_half_coefficients must give identical results to map_coordinates_on_slices."""
+    """slice_from_cubic_coefficients must give identical results to map_coordinates_on_slices."""
     import recovar.core.cubic_interpolation as cubic_interpolation
 
     rng = np.random.default_rng(601)
@@ -499,10 +499,10 @@ def test_cubic_half_coefficients_slice_matches_full_cubic():
 
         # New path: precompute coefficients, then slice
         coeffs = np.asarray(
-            core_slicing.precompute_cubic_half_coefficients(vol_ft, volume_shape)
+            core_slicing.precompute_cubic_coefficients(vol_ft, volume_shape)
         )
         slices_half = np.asarray(
-            core_slicing.slice_from_cubic_half_coefficients(
+            core_slicing.slice_from_cubic_coefficients(
                 coeffs, rots, image_shape, volume_shape
             )
         )
@@ -542,10 +542,10 @@ def test_cubic_half_coefficients_slice_matches_full_cubic_odd_dims():
     )
 
     coeffs = np.asarray(
-        core_slicing.precompute_cubic_half_coefficients(vol_ft, volume_shape)
+        core_slicing.precompute_cubic_coefficients(vol_ft, volume_shape)
     )
     slices_half = np.asarray(
-        core_slicing.slice_from_cubic_half_coefficients(
+        core_slicing.slice_from_cubic_coefficients(
             coeffs, rots, image_shape, volume_shape
         )
     )
@@ -554,7 +554,7 @@ def test_cubic_half_coefficients_slice_matches_full_cubic_odd_dims():
 
 
 def test_cubic_half_coefficients_slice_vjp_finite():
-    """VJP through slice_from_cubic_half_coefficients must be finite and non-zero."""
+    """VJP through slice_from_cubic_coefficients must be finite and non-zero."""
     rng = np.random.default_rng(603)
     image_shape = (4, 8)
     volume_shape = (8, 8, 8)
@@ -567,13 +567,13 @@ def test_cubic_half_coefficients_slice_vjp_finite():
     real_vol = rng.standard_normal(volume_shape).astype(np.float32)
     vol_ft = jnp.array(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
 
-    coeffs = core_slicing.precompute_cubic_half_coefficients(vol_ft, volume_shape)
+    coeffs = core_slicing.precompute_cubic_coefficients(vol_ft, volume_shape)
 
     n_images = rots.shape[0]
     H, W = image_shape
     g = jnp.ones((n_images, H * W), dtype=jnp.complex64)
 
-    f = lambda c: core_slicing._slice_from_half_cubic_coeffs_jax(
+    f = lambda c: core_slicing._slice_from_cubic_coeffs_jax(
         c, rots, image_shape, volume_shape
     )
     _, vjp_fn = jax.vjp(f, jnp.asarray(coeffs))
@@ -1282,29 +1282,10 @@ def test_adjoint_cubic_half_volume_includes_spline_coefficients(monkeypatch):
     assert np.any(np.abs(result) > 1e-8), "Cubic adjoint with half_volume returned all zeros"
 
 
-# ── Cubic precompute from half-volume ──────────────────────────────────
-
-def test_cubic_precompute_from_half_volume(monkeypatch):
-    """precompute_cubic_half_coefficients(half_volume=True) matches full-volume precompute."""
-    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
-
-    rng = np.random.default_rng(5007)
-    volume_shape = (8, 8, 8)
-    vol_ft = jnp.array(_make_hermitian_volume(rng, volume_shape))
-    half_vol = jnp.array(np.asarray(fourier_transform_utils.full_volume_to_half_volume(vol_ft, volume_shape)))
-
-    coeffs_full = np.asarray(core_slicing.precompute_cubic_half_coefficients(vol_ft, volume_shape))
-    coeffs_half = np.asarray(core_slicing.precompute_cubic_half_coefficients(
-        half_vol, volume_shape, half_volume=True
-    ))
-
-    np.testing.assert_allclose(coeffs_half, coeffs_full, atol=1e-5, rtol=1e-5)
-
-
 # ── Cubic slice from coefficients: half_image flag ─────────────────────
 
 def test_cubic_slice_from_coeffs_half_image(monkeypatch):
-    """slice_from_cubic_half_coefficients(half_image=True) matches extract from full."""
+    """slice_from_cubic_coefficients(half_image=True) matches extract from full."""
     monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
 
     rng = np.random.default_rng(5008)
@@ -1313,12 +1294,12 @@ def test_cubic_slice_from_coeffs_half_image(monkeypatch):
     n_images = 3
     rots = jnp.array(_random_rotations(rng, n_images))
     vol = jnp.array(_make_hermitian_volume(rng, volume_shape))
-    coeffs = core_slicing.precompute_cubic_half_coefficients(vol, volume_shape)
+    coeffs = core_slicing.precompute_cubic_coefficients(vol, volume_shape)
 
-    full = np.asarray(core_slicing.slice_from_cubic_half_coefficients(
+    full = np.asarray(core_slicing.slice_from_cubic_coefficients(
         coeffs, rots, image_shape, volume_shape, half_image=False
     ))
-    half = np.asarray(core_slicing.slice_from_cubic_half_coefficients(
+    half = np.asarray(core_slicing.slice_from_cubic_coefficients(
         coeffs, rots, image_shape, volume_shape, half_image=True
     ))
 
