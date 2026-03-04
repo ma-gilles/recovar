@@ -397,3 +397,182 @@ def test_to_batched_half_pixel_noise_full_converts():
     assert out.shape == (1, half_pixel_count)
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full_input, image_shape))
     np.testing.assert_allclose(out, expected, atol=1e-6)
+
+
+class _MockImageStack:
+    def __init__(self, image_shape, scale=1.0):
+        self.mask = np.ones(image_shape, dtype=np.float32)
+        self._scale = np.float32(scale)
+
+    def process_images(self, images):
+        return jnp.asarray(images) * self._scale
+
+
+class _MockNoiseDataset:
+    """Minimal dataset stub to compare legacy loops vs DataIterator code paths."""
+
+    def __init__(self, images, image_shape):
+        self._images = jnp.asarray(images)
+        self.n_images = int(images.shape[0])
+        self.image_shape = tuple(image_shape)
+        self.grid_size = int(image_shape[0])
+        self.image_size = int(np.prod(image_shape))
+        self.volume_shape = (self.grid_size, self.grid_size, self.grid_size)
+        self.volume_mask_threshold = 0.0
+        self.padding = 0
+        self.voxel_size = 1.0
+        self.dtype_real = np.float32
+        self.premultiplied_ctf = False
+
+        self.image_stack = _MockImageStack(image_shape, scale=1.25)
+        self.translations = jnp.zeros((self.n_images, 2), dtype=jnp.float32)
+        self.rotation_matrices = jnp.tile(jnp.eye(3, dtype=jnp.float32), (self.n_images, 1, 1))
+        self.CTF_params = jnp.zeros((self.n_images, 1), dtype=jnp.float32)
+
+    def CTF_fun(self, ctf_params, image_shape, voxel_size):
+        del voxel_size
+        return jnp.ones((ctf_params.shape[0], int(np.prod(image_shape))), dtype=jnp.float32)
+
+    def _iter_indices(self, indices, batch_size):
+        idx = np.asarray(indices, dtype=np.int32)
+        for start in range(0, idx.size, batch_size):
+            batch_ind = idx[start:start + batch_size]
+            yield self._images[batch_ind], batch_ind, batch_ind
+
+    def get_image_generator(self, batch_size):
+        return self._iter_indices(np.arange(self.n_images, dtype=np.int32), batch_size)
+
+    def get_image_subset_generator(self, batch_size, subset_indices):
+        return self._iter_indices(np.asarray(subset_indices, dtype=np.int32), batch_size)
+
+
+def _legacy_estimate_noise_variance(dataset, batch_size, max_images=10000):
+    from recovar.reconstruction import regularization
+
+    sum_sq = 0
+    if dataset.n_images > max_images:
+        subset_indices = np.random.choice(dataset.n_images, size=max_images, replace=False)
+        data_generator = dataset.get_image_subset_generator(batch_size=batch_size, subset_indices=subset_indices)
+        n_images_used = max_images
+    else:
+        data_generator = dataset.get_image_generator(batch_size=batch_size)
+        n_images_used = dataset.n_images
+
+    for batch, _, _ in data_generator:
+        batch = dataset.image_stack.process_images(batch)
+        sum_sq += jnp.sum(jnp.abs(batch) ** 2, axis=0)
+
+    mean_ps = sum_sq / n_images_used
+    cov_noise_mask = jnp.median(mean_ps)
+    average_image_ps = regularization.average_over_shells(mean_ps, dataset.image_shape)
+    return np.asarray(cov_noise_mask, dtype=dataset.dtype_real), np.asarray(average_image_ps, dtype=dataset.dtype_real)
+
+
+def _legacy_estimate_noise_level_no_masks(dataset, image_subset, mean_estimate, batch_size, disc_type="linear_interp"):
+    from recovar import core
+    from recovar.core.configs import ForwardModelConfig
+    from recovar.reconstruction import regularization
+
+    lhs = 0
+    rhs = 0
+    config = ForwardModelConfig.from_dataset(dataset, disc_type=disc_type)
+    data_generator = dataset.get_image_subset_generator(batch_size=batch_size, subset_indices=image_subset)
+
+    for batch, _, batch_ind in data_generator:
+        batch = dataset.image_stack.process_images(batch)
+        batch = core.translate_images(batch, dataset.translations[batch_ind], dataset.image_shape)
+        ctf = dataset.CTF_fun(dataset.CTF_params[batch_ind], dataset.image_shape, dataset.voxel_size)
+
+        if mean_estimate is not None:
+            projected_mean = noise.core_forward.forward_model(
+                config,
+                mean_estimate,
+                dataset.CTF_params[batch_ind],
+                dataset.rotation_matrices[batch_ind],
+            )
+            if dataset.premultiplied_ctf:
+                batch = batch - projected_mean * ctf
+            else:
+                batch = batch - projected_mean
+
+        averaged_ps = regularization.batch_average_over_shells(jnp.abs(batch) ** 2, dataset.image_shape, 0)
+        lhs += jnp.sum(averaged_ps, axis=0)
+        rhs += batch.shape[0] if not dataset.premultiplied_ctf else jnp.sum(
+            regularization.batch_average_over_shells(jnp.abs(ctf) ** 2, dataset.image_shape, 0),
+            axis=0,
+        )
+
+    estimated_noise = lhs / rhs
+    valid_mask = jnp.isfinite(estimated_noise)
+    if not jnp.all(valid_mask):
+        valid_indices = jnp.where(valid_mask)[0]
+        last_valid_value = estimated_noise[valid_indices[-1]] if valid_indices.size > 0 else 1.0
+        estimated_noise = jnp.where(valid_mask, estimated_noise, last_valid_value)
+    return estimated_noise
+
+
+def test_estimate_noise_variance_matches_legacy_loop():
+    rng = np.random.default_rng(7)
+    image_shape = (4, 4)
+    images = (
+        rng.normal(size=(9, np.prod(image_shape))).astype(np.float32)
+        + 1j * rng.normal(size=(9, np.prod(image_shape))).astype(np.float32)
+    ).astype(np.complex64)
+    ds = _MockNoiseDataset(images, image_shape=image_shape)
+
+    expected_cov, expected_radial = _legacy_estimate_noise_variance(ds, batch_size=3, max_images=100)
+    cov, radial = noise.estimate_noise_variance(ds, batch_size=3, max_images=100)
+
+    np.testing.assert_allclose(cov, expected_cov, atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(radial, expected_radial, atol=1e-6, rtol=1e-6)
+
+
+def test_estimate_noise_variance_matches_legacy_subset_sampling(monkeypatch):
+    rng = np.random.default_rng(11)
+    image_shape = (4, 4)
+    images = (
+        rng.normal(size=(10, np.prod(image_shape))).astype(np.float32)
+        + 1j * rng.normal(size=(10, np.prod(image_shape))).astype(np.float32)
+    ).astype(np.complex64)
+    ds = _MockNoiseDataset(images, image_shape=image_shape)
+    chosen = np.array([0, 2, 4, 8], dtype=np.int32)
+
+    def _fixed_choice(n_images, size, replace=False):
+        assert n_images == ds.n_images
+        assert size == chosen.size
+        assert replace is False
+        return chosen
+
+    monkeypatch.setattr(np.random, "choice", _fixed_choice)
+
+    expected_cov, expected_radial = _legacy_estimate_noise_variance(ds, batch_size=2, max_images=chosen.size)
+    cov, radial = noise.estimate_noise_variance(ds, batch_size=2, max_images=chosen.size)
+
+    np.testing.assert_allclose(cov, expected_cov, atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(radial, expected_radial, atol=1e-6, rtol=1e-6)
+
+
+def test_estimate_noise_level_no_masks_matches_legacy_loop():
+    rng = np.random.default_rng(19)
+    image_shape = (4, 4)
+    images = (
+        rng.normal(size=(8, np.prod(image_shape))).astype(np.float32)
+        + 1j * rng.normal(size=(8, np.prod(image_shape))).astype(np.float32)
+    ).astype(np.complex64)
+    ds = _MockNoiseDataset(images, image_shape=image_shape)
+    subset = np.arange(ds.n_images, dtype=np.int32)
+
+    expected = _legacy_estimate_noise_level_no_masks(
+        ds,
+        image_subset=subset,
+        mean_estimate=None,
+        batch_size=3,
+    )
+    got = noise.estimate_noise_level_no_masks(
+        ds,
+        image_subset=subset,
+        mean_estimate=None,
+        batch_size=3,
+    )
+
+    np.testing.assert_allclose(np.asarray(got), np.asarray(expected), atol=1e-6, rtol=1e-6)

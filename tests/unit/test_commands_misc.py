@@ -57,11 +57,38 @@ def test_make_test_dataset_tilt_series_passes_tilt_kwargs(monkeypatch, tmp_path)
     assert calls["kwargs"]["percent_tilt_series_outliers"] == 0.3
 
 
+def test_make_test_dataset_tilt_series_respects_explicit_n_tilts_and_volume_input(monkeypatch, tmp_path):
+    calls = {}
+
+    def fake_generate_synthetic_dataset(*args, **kwargs):
+        calls["args"] = args
+        calls["kwargs"] = kwargs
+        return object(), {"ok": True}
+
+    monkeypatch.setattr(make_test_dataset.simulator, "generate_synthetic_dataset", fake_generate_synthetic_dataset)
+
+    make_test_dataset.make_test_dataset(
+        str(tmp_path / "out"),
+        image_size=64,
+        grid_size=32,
+        noise_level=0.1,
+        n_images=320,
+        tilt_series=True,
+        n_tilts=5,
+        volume_input=str(tmp_path / "vol"),
+    )
+
+    assert calls["args"][2] == str(tmp_path / "vol")
+    assert calls["kwargs"]["grid_size"] == 32
+    assert calls["kwargs"]["n_tilts"] == 5
+
+
 def test_make_test_dataset_main_parses_and_forwards(monkeypatch, tmp_path):
     captured = {}
 
     def fake_make_test_dataset(*args, **kwargs):
         captured["args"] = args
+        captured["kwargs"] = kwargs
 
     monkeypatch.setattr(make_test_dataset, "make_test_dataset", fake_make_test_dataset)
     monkeypatch.setattr(
@@ -88,6 +115,39 @@ def test_make_test_dataset_main_parses_and_forwards(monkeypatch, tmp_path):
     assert args[2] == 0.4
     assert args[3] == 77
     assert args[6] is True
+    assert captured["kwargs"]["grid_size"] is None
+    assert captured["kwargs"]["volume_input"] is None
+    assert captured["kwargs"]["n_tilts"] is None
+
+
+def test_make_test_dataset_main_parses_grid_volume_and_n_tilts(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_make_test_dataset(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(make_test_dataset, "make_test_dataset", fake_make_test_dataset)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "make_test_dataset",
+            str(tmp_path),
+            "--grid-size",
+            "40",
+            "--volume-input",
+            str(tmp_path / "vol"),
+            "--tilt-series",
+            "--n-tilts",
+            "9",
+        ],
+    )
+
+    make_test_dataset.main()
+    assert captured["kwargs"]["grid_size"] == 40
+    assert captured["kwargs"]["volume_input"] == str(tmp_path / "vol")
+    assert captured["kwargs"]["n_tilts"] == 9
 
 
 def test_compute_trajectory_add_args_parses_ind_list():

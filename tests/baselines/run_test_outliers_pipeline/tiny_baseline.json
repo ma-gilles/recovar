@@ -1,8 +1,8 @@
 {
-  "inlier_count_round_1": 393.0,
-  "outlier_count_round_1": 107.0,
-  "outlier_f1_round_1": 0.966183574879227,
-  "outlier_precision_round_1": 0.9345794392523364,
+  "inlier_count_round_1": 27.0,
+  "outlier_count_round_1": 473.0,
+  "outlier_f1_round_1": 0.34904013961605584,
+  "outlier_precision_round_1": 0.21141649048625794,
   "outlier_recall_round_1": 1.0,
   "total_images": 500.0,
   "true_outlier_count": 100.0
