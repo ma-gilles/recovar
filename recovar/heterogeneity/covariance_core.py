@@ -38,9 +38,9 @@ def get_picked_frequencies(volume_shape, radius = 2, use_half = True):
     picked_frequency_indices = core.frequencies_to_vec_indices(picked_three_d_freqs, volume_shape)
     return picked_frequency_indices
 
-@functools.partial(jax.jit, static_argnums = [4,5,6,7,8,9,10,11])    
+@functools.partial(jax.jit, static_argnums = [4,5,6,7,8,9,10])    
 @nvtx.annotate("get_per_image_tight_mask", color="green", domain=NVTX_DOMAIN_COV_CORE)
-def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_threshold, image_shape, volume_shape, grid_size, padding, disc_type, binary = True, soften = -1, use_cuda = True):
+def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_threshold, image_shape, volume_shape, grid_size, padding, disc_type, binary = True, soften = -1):
     
     disc_type = 'linear_interp'
     
@@ -59,14 +59,8 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
     padded_volume_shape = tuple(np.array(volume_shape) + extra_padding)
     padded_grid_size = grid_size + extra_padding
 
-    proj_mask = core.slice_volume(
-        mask_ft,
-        rotation_matrices,
-        padded_image_shape,
-        padded_volume_shape,
-        disc_type,
-        use_cuda=use_cuda,
-    )
+    proj_mask = core.slice_volume(mask_ft, rotation_matrices, padded_image_shape,
+                               padded_volume_shape, disc_type)
     
     proj_mask = fourier_transform_utils.get_idft2(proj_mask.reshape([-1] + list(padded_image_shape)))
                              
@@ -256,5 +250,6 @@ def evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel = "triangular",
     else:
         raise ValueError("Kernel function not recognized")
     return kernel_vals
+
 
 
