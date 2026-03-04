@@ -30,6 +30,7 @@ def forward_model(
     skip_ctf: bool = False,
     half_image: bool = False,
     half_volume: bool = False,
+    use_cuda: bool = True,
 ) -> jax.Array:
     """Project volume into images via slice-and-CTF forward model.
 
@@ -40,10 +41,12 @@ def forward_model(
         ``config.compute_ctf_half`` for CTF, roughly halving memory and compute.
     half_volume : bool
         If True, *volume* is an rfft-packed half-volume ``(N0*N1*(N2//2+1),)``.
+    use_cuda : bool
+        If False, bypass CUDA custom-call projection and always use the JAX path.
     """
     slices = slice_volume(
         volume, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
-        half_volume=half_volume, half_image=half_image,
+        half_volume=half_volume, half_image=half_image, use_cuda=use_cuda,
     )
     if not skip_ctf:
         ctf = config.compute_ctf_half(ctf_params) if half_image else config.compute_ctf(ctf_params)

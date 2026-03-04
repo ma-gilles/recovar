@@ -25,6 +25,12 @@ def test_integral_fsc_uses_prefix_until_first_negative():
     assert out == pytest.approx((0.9 + 0.5) * 2.0)
 
 
+def test_integral_fsc_all_nonnegative_keeps_full_curve():
+    fsc = np.array([0.9, 0.8, 0.6, 0.4], dtype=np.float32)
+    out = float(np.asarray(locres.integral_fsc(fsc, fourier_pixel_size=1.5)))
+    assert out == pytest.approx(np.sum(fsc) * 1.5)
+
+
 def test_local_error_subvolume_size_uses_multiplier():
     s1 = locres.get_local_error_subvolume_size(locres_maskrad=6.0, voxel_size=1.0, multiplier=1)
     s3 = locres.get_local_error_subvolume_size(locres_maskrad=6.0, voxel_size=1.0, multiplier=3)
@@ -84,6 +90,17 @@ def test_apply_fsc_weighting_shape_and_finiteness():
     out = np.asarray(locres.apply_fsc_weighting(vol, fsc))
     assert out.shape == (8, 8, 8)
     assert np.all(np.isfinite(out))
+
+
+def test_apply_fsc_weighting_all_positive_fsc_keeps_nonzero_weights():
+    """All-positive FSC should not zero highest shell weights."""
+    import jax.numpy as jnp
+
+    vol = jnp.ones((8, 8, 8), dtype=jnp.float32)
+    fsc = jnp.ones(4, dtype=jnp.float32)
+
+    out = np.asarray(locres.apply_fsc_weighting(vol, fsc))
+    np.testing.assert_allclose(out, np.ones_like(out), rtol=1e-6, atol=1e-6)
 
 
 def test_low_pass_filter_attenuates_high_freq():
