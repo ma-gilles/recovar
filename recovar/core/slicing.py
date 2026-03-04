@@ -185,6 +185,36 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
     return result if volume is None else result + volume
 
 
+def batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, disc_type,
+                               volumes=None, half_image=False, half_volume=False):
+    """Batch backprojection: per-volume image sets to batch of volumes.
+
+    Parameters
+    ----------
+    slices : shape ``(batch, n_images, n_pixels)``
+    rotation_matrices : shape ``(n_images, 3, 3)`` — shared across batch.
+    volumes : optional ``(batch, vol_flat_size)`` accumulators.
+    half_image, half_volume : same semantics as ``adjoint_slice_volume``.
+    """
+    order = decide_order(disc_type)
+    vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
+    vol_flat = int(np.prod(vol_shape))
+    batch = slices.shape[0]
+    if volumes is None:
+        volumes = jnp.zeros((batch, vol_flat), dtype=slices.dtype)
+    if _use_cuda(order):
+        from recovar.cuda_backproject import batch_backproject
+        if not _is_complex(slices) and _is_complex(volumes):
+            slices = slices.astype(jnp.result_type(slices, jnp.complex64))
+        return batch_backproject(volumes, slices, rotation_matrices, image_shape, volume_shape,
+                                order=order, half_volume=half_volume, half_image=half_image)
+    # JAX fallback: vmap single adjoint
+    return jax.vmap(
+        lambda sl, vol: adjoint_slice_volume(sl, rotation_matrices, image_shape, volume_shape,
+                                             disc_type, volume=vol, half_image=half_image,
+                                             half_volume=half_volume)
+    )(slices, volumes)
+
 
 
 # ── Cubic half-volume slicer ─────────────────────────────────────────
@@ -239,6 +269,7 @@ __all__ = [
     "slice_volume",
     "batch_slice_volume",
     "adjoint_slice_volume",
+    "batch_adjoint_slice_volume",
     "precompute_cubic_half_coefficients",
     "slice_from_cubic_half_coefficients",
 ]

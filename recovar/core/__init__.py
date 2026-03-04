@@ -61,6 +61,7 @@ from recovar.core.forward import (
 )
 from recovar.core.slicing import (
     adjoint_slice_volume,
+    batch_adjoint_slice_volume,
     batch_slice_volume,
     decide_order,
     precompute_cubic_half_coefficients,
@@ -78,6 +79,7 @@ __all__ = [
     "batch_find_frequencies_within_grid_dist",
     "batch_get_gridpoint_coords",
     "batch_get_nearest_gridpoint_indices",
+    "batch_adjoint_slice_volume",
     "batch_slice_volume",
     "batch_trans_translate_images",
     "batch_translate",

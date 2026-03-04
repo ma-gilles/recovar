@@ -481,9 +481,9 @@ def test_batch_backproject(N, n_images, batch):
 
     from recovar.core.slicing import adjoint_slice_volume
 
-    batch_result = jax.vmap(
-        lambda im: adjoint_slice_volume(im, rots, image_shape, volume_shape, "linear_interp")
-    )(images)
+    from recovar.core.slicing import batch_adjoint_slice_volume
+
+    batch_result = batch_adjoint_slice_volume(images, rots, image_shape, volume_shape, "linear_interp")
     assert batch_result.shape == (batch, vol_size)
 
     for b in range(batch):
@@ -515,11 +515,11 @@ def test_batch_backproject_with_seed(N, n_images):
         + 1j * rng.standard_normal((batch, vol_size)).astype(np.float32)
     )
 
-    from recovar.core.slicing import adjoint_slice_volume
+    from recovar.core.slicing import adjoint_slice_volume, batch_adjoint_slice_volume
 
-    batch_result = jax.vmap(
-        lambda im, v: adjoint_slice_volume(im, rots, image_shape, volume_shape, "linear_interp", volume=v)
-    )(images, seed_vols)
+    batch_result = batch_adjoint_slice_volume(
+        images, rots, image_shape, volume_shape, "linear_interp", volumes=seed_vols
+    )
 
     for b in range(batch):
         ref = adjoint_slice_volume(
