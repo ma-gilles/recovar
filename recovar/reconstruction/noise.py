@@ -1169,6 +1169,7 @@ def average_residual_square(
             model.volume_mask, rotation_matrices, image_mask,
             config.volume_mask_threshold, config.image_shape, config.volume_shape,
             config.grid_size, config.padding, config.disc_type, soften=5,
+            use_cuda=False,
         )
     else:
         image_mask = jnp.ones_like(batch).real
@@ -1182,10 +1183,12 @@ def average_residual_square(
             (contrasts.shape[0], *np.ones(model.mean_estimate.ndim, dtype=int))
         ) * (batch_basis_times_coords2(model.basis, basis_coordinates) + model.mean_estimate[None])
 
-    # Per-image forward model: project volume[i] with CTF[i] and rotation[i]
+    # Use the pure-JAX projection path here. This function is nested inside an
+    # Equinox-jitted wrapper; forcing CUDA custom calls in that context can
+    # trigger backend-mismatch failures ("cuda_project for Host").
     projected_vols = jax.vmap(
         lambda vol, ctf, rot: core_forward.forward_model(
-            config, vol, ctf[None], rot[None]
+            config, vol, ctf[None], rot[None], use_cuda=False
         )[0],
     )(predicted_vols, ctf_params, rotation_matrices)
 
