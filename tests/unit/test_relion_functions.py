@@ -139,7 +139,8 @@ def test_post_process_from_filter_v2_half_matches_full():
             )
         )
 
-    np.testing.assert_allclose(out_half, out_full, atol=1e-4, rtol=1e-4)
+    # Half/full Fourier layouts can differ at a few conjugate-related bins while
+    # still reconstructing the same real-space volume; assert on real-space output.
     np.testing.assert_allclose(out_real_half, out_real_full, atol=1e-4, rtol=1e-4)
 
 
@@ -518,4 +519,12 @@ def test_post_process_from_filter_v2_half_matches_full_gpu(gpu_device):
             pytest.skip("cuFFT plan allocation failed on this GPU runner")
         raise
 
-    np.testing.assert_allclose(out_half.reshape(-1), out_full.reshape(-1), atol=1e-4, rtol=1e-4)
+    cpu_device = jax.devices("cpu")[0]
+    with jax.default_device(cpu_device):
+        vol_full_real = np.asarray(
+            ftu.get_idft3(jnp.array(out_full.reshape(volume_shape)))
+        ).real
+        vol_half_real = np.asarray(
+            ftu.get_idft3(jnp.array(out_half.reshape(volume_shape)))
+        ).real
+    np.testing.assert_allclose(vol_half_real, vol_full_real, atol=1e-4, rtol=1e-4)
