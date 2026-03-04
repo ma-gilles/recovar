@@ -945,3 +945,142 @@ def test_batch_slice_from_half_volume_to_half_image_cuda_vs_jax(gpu_device):
         ))
 
     np.testing.assert_allclose(out_cuda, ref_cuda, atol=1e-4, rtol=1e-4)
+
+
+# ── batch_adjoint_slice_volume tests ──────────────────────────────────
+
+def _random_complex_images(rng, n_images, image_shape):
+    """Generate random complex images (Hermitian-symmetric not enforced)."""
+    size = int(np.prod(image_shape))
+    return (rng.standard_normal((n_images, size)) + 1j * rng.standard_normal((n_images, size))).astype(np.complex64)
+
+
+def test_batch_adjoint_slice_volume_jax(monkeypatch):
+    """batch_adjoint matches per-volume loop on JAX path."""
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
+
+    rng = np.random.default_rng(3001)
+    volume_shape = (8, 8, 8)
+    image_shape = (6, 8)
+    n_batch = 3
+    n_images = 4
+    rots = np.concatenate([np.eye(3, dtype=np.float32)[None], _random_rotations(rng, n_images - 1)], axis=0)
+
+    images = np.stack([_random_complex_images(rng, n_images, image_shape) for _ in range(n_batch)])
+
+    batch_out = np.asarray(core_slicing.batch_adjoint_slice_volume(
+        jnp.array(images), jnp.array(rots), image_shape, volume_shape, "linear_interp",
+    ))
+
+    for i in range(n_batch):
+        single = np.asarray(core_slicing.adjoint_slice_volume(
+            jnp.array(images[i]), jnp.array(rots), image_shape, volume_shape, "linear_interp",
+        ))
+        np.testing.assert_allclose(batch_out[i], single, atol=1e-5, rtol=1e-5)
+
+
+def test_batch_adjoint_slice_volume_with_accumulator_jax(monkeypatch):
+    """batch_adjoint adds into a pre-existing accumulator."""
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
+
+    rng = np.random.default_rng(3002)
+    volume_shape = (8, 8, 8)
+    image_shape = (8, 8)
+    n_batch = 2
+    n_images = 3
+    rots = _random_rotations(rng, n_images).astype(np.float32)
+    images = np.stack([_random_complex_images(rng, n_images, image_shape) for _ in range(n_batch)])
+
+    vol_size = int(np.prod(volume_shape))
+    seed_vols = (rng.standard_normal((n_batch, vol_size)) + 1j * rng.standard_normal((n_batch, vol_size))).astype(np.complex64)
+
+    batch_out = np.asarray(core_slicing.batch_adjoint_slice_volume(
+        jnp.array(images), jnp.array(rots), image_shape, volume_shape, "linear_interp",
+        volumes=jnp.array(seed_vols),
+    ))
+
+    for i in range(n_batch):
+        single = np.asarray(core_slicing.adjoint_slice_volume(
+            jnp.array(images[i]), jnp.array(rots), image_shape, volume_shape, "linear_interp",
+            volume=jnp.array(seed_vols[i]),
+        ))
+        np.testing.assert_allclose(batch_out[i], single, atol=1e-5, rtol=1e-5)
+
+
+def test_batch_adjoint_slice_volume_half_image_jax(monkeypatch):
+    """batch_adjoint with half_image=True matches per-volume loop."""
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
+
+    rng = np.random.default_rng(3003)
+    volume_shape = (8, 8, 8)
+    image_shape = (8, 8)
+    n_batch = 2
+    n_images = 3
+    rots = _random_rotations(rng, n_images).astype(np.float32)
+
+    # Generate full images then convert to half
+    full_images = np.stack([_random_complex_images(rng, n_images, image_shape) for _ in range(n_batch)])
+    half_images = np.asarray(fourier_transform_utils.full_image_to_half_image(jnp.array(full_images), image_shape))
+
+    batch_out = np.asarray(core_slicing.batch_adjoint_slice_volume(
+        jnp.array(half_images), jnp.array(rots), image_shape, volume_shape, "linear_interp",
+        half_image=True,
+    ))
+
+    for i in range(n_batch):
+        single = np.asarray(core_slicing.adjoint_slice_volume(
+            jnp.array(half_images[i]), jnp.array(rots), image_shape, volume_shape, "linear_interp",
+            half_image=True,
+        ))
+        np.testing.assert_allclose(batch_out[i], single, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_batch_adjoint_slice_volume_cuda(gpu_device):
+    """batch_adjoint CUDA path matches per-volume loop."""
+    rng = np.random.default_rng(3004)
+    volume_shape = (8, 8, 8)
+    image_shape = (8, 8)
+    n_batch = 3
+    n_images = 4
+    rots = _random_rotations(rng, n_images).astype(np.float32)
+
+    images = np.stack([_random_complex_images(rng, n_images, image_shape) for _ in range(n_batch)])
+
+    with jax.default_device(gpu_device):
+        batch_out = np.asarray(core_slicing.batch_adjoint_slice_volume(
+            jnp.array(images), jnp.array(rots), image_shape, volume_shape, "linear_interp",
+        ))
+        for i in range(n_batch):
+            single = np.asarray(core_slicing.adjoint_slice_volume(
+                jnp.array(images[i]), jnp.array(rots), image_shape, volume_shape, "linear_interp",
+            ))
+            np.testing.assert_allclose(batch_out[i], single, atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.gpu
+def test_batch_adjoint_slice_volume_cuda_half_image(gpu_device):
+    """batch_adjoint CUDA path with half_image matches per-volume loop."""
+    rng = np.random.default_rng(3005)
+    volume_shape = (8, 8, 8)
+    image_shape = (8, 8)
+    n_batch = 3
+    n_images = 4
+    rots = _random_rotations(rng, n_images).astype(np.float32)
+
+    full_images = np.stack([_random_complex_images(rng, n_images, image_shape) for _ in range(n_batch)])
+
+    with jax.default_device(gpu_device):
+        half_images = jnp.array(np.asarray(
+            fourier_transform_utils.full_image_to_half_image(jnp.array(full_images), image_shape)
+        ))
+        batch_out = np.asarray(core_slicing.batch_adjoint_slice_volume(
+            half_images, jnp.array(rots), image_shape, volume_shape, "linear_interp",
+            half_image=True,
+        ))
+        for i in range(n_batch):
+            single = np.asarray(core_slicing.adjoint_slice_volume(
+                half_images[i], jnp.array(rots), image_shape, volume_shape, "linear_interp",
+                half_image=True,
+            ))
+            np.testing.assert_allclose(batch_out[i], single, atol=1e-4, rtol=1e-4)

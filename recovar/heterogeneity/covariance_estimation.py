@@ -1177,12 +1177,8 @@ def adjoint_kernel_slice(images, rotation_matrices, image_shape, volume_shape, k
     if kernel not in ("triangular", "square"):
         raise ValueError("Kernel not implemented")
     if images.ndim == 3:
-        if volumes is None:
-            volumes = jnp.zeros((images.shape[0], int(np.prod(volume_shape))), dtype=images.dtype)
-        return jax.vmap(
-            lambda im, vol: core.adjoint_slice_volume(
-                im, rotation_matrices, image_shape, volume_shape, disc_type, volume=vol)
-        )(images, volumes)
+        return core.batch_adjoint_slice_volume(
+            images, rotation_matrices, image_shape, volume_shape, disc_type, volumes=volumes)
     return core.adjoint_slice_volume(
         images, rotation_matrices, image_shape, volume_shape, disc_type, volume=volumes)
 
