@@ -863,11 +863,23 @@ def standard_recovar_pipeline(args):
     zdim = np.max(options['zs_dim_to_test'])
     if not args.tilt_series:
         n_pcs_to_use = (num_foc_masks - 1) * zdim_for_rest + zdim
-        noise_var_from_het_residual, _, _ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(
-            cryos[0], dilated_volume_mask, means['combined'], u['rescaled'][:, :n_pcs_to_use],
-            # //10: heterogeneity residual estimation is memory-intensive (holds full embedding + projections)
-            est_contrasts[zdim], latent_coords[zdim], utils.safe_batch_size(batch_size // 10),
-            disc_type=covariance_options['disc_type'])
+        try:
+            noise_var_from_het_residual, _, _ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(
+                cryos[0], dilated_volume_mask, means['combined'], u['rescaled'][:, :n_pcs_to_use],
+                # //10: heterogeneity residual estimation is memory-intensive (holds full embedding + projections)
+                est_contrasts[zdim], latent_coords[zdim], utils.safe_batch_size(batch_size // 10),
+                disc_type=covariance_options['disc_type'])
+        except Exception as exc:
+            # Some CPU/mixed backend traces can hit CUDA FFI host-registration
+            # errors in this optional post-embedding diagnostic path.
+            if "No FFI handler registered for cuda_project" in str(exc):
+                logger.warning(
+                    "Skipping heterogeneity residual noise estimate due CUDA FFI host-platform mismatch: %s",
+                    exc,
+                )
+                noise_var_from_het_residual = None
+            else:
+                raise
     else:
         noise_var_from_het_residual = None
 

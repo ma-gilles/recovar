@@ -973,16 +973,16 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     logger.info("Total particles: %s", len(zs))
     logger.info("")
     logger.info("Half-map FSC based detection:")
-    logger.info("  - Junk clusters: %s (%.1f%)", len(halfmap_junk_clusters), len(halfmap_junk_clusters)/len(cluster_centers)*100)
-    logger.info("  - Junk particles: %s (%.1f%)", len(halfmap_junk_particle_indices), len(halfmap_junk_particle_indices)/len(zs)*100)
+    logger.info("  - Junk clusters: %s (%.1f%%)", len(halfmap_junk_clusters), len(halfmap_junk_clusters)/len(cluster_centers)*100)
+    logger.info("  - Junk particles: %s (%.1f%%)", len(halfmap_junk_particle_indices), len(halfmap_junk_particle_indices)/len(zs)*100)
     logger.info("")
     logger.info("vs-Mean FSC based detection:")
-    logger.info("  - Junk clusters: %s (%.1f%)", len(vs_mean_junk_clusters), len(vs_mean_junk_clusters)/len(cluster_centers)*100)
-    logger.info("  - Junk particles: %s (%.1f%)", len(vs_mean_junk_particle_indices), len(vs_mean_junk_particle_indices)/len(zs)*100)
+    logger.info("  - Junk clusters: %s (%.1f%%)", len(vs_mean_junk_clusters), len(vs_mean_junk_clusters)/len(cluster_centers)*100)
+    logger.info("  - Junk particles: %s (%.1f%%)", len(vs_mean_junk_particle_indices), len(vs_mean_junk_particle_indices)/len(zs)*100)
     logger.info("")
     logger.info("Combined detection:")
-    logger.info("  - Junk clusters: %s (%.1f%)", len(combined_junk_clusters), len(combined_junk_clusters)/len(cluster_centers)*100)
-    logger.info("  - Junk particles: %s (%.1f%)", len(combined_junk_particle_indices), len(combined_junk_particle_indices)/len(zs)*100)
+    logger.info("  - Junk clusters: %s (%.1f%%)", len(combined_junk_clusters), len(combined_junk_clusters)/len(cluster_centers)*100)
+    logger.info("  - Junk particles: %s (%.1f%%)", len(combined_junk_particle_indices), len(combined_junk_particle_indices)/len(zs)*100)
     
     return junk_info
 
@@ -2183,8 +2183,8 @@ def map_clusters_to_particles(junk_clusters, cluster_indices, output_folder, zdi
     
     logger.info("Particle mapping complete:")
     logger.info("  Total particles: %s", total_particles)
-    logger.info("  Junk particles: %s (%.1f%)", n_junk_particles, junk_fraction*100)
-    logger.info("  Good particles: %s (%.1f%)", n_good_particles, (1-junk_fraction)*100)
+    logger.info("  Junk particles: %s (%.1f%%)", n_junk_particles, junk_fraction*100)
+    logger.info("  Good particles: %s (%.1f%%)", n_good_particles, (1-junk_fraction)*100)
     
     return junk_particles, good_particles, particle_stats
 

@@ -13,7 +13,7 @@ from recovar.utils.nvtx_shim import nvtx
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, utils, jax_config
-from recovar.core.configs import ForwardModelConfig, BatchData, ModelState
+from recovar.core.configs import ForwardModelConfig, BatchData, DataIterator, ModelState
 from recovar.heterogeneity import covariance_core
 from recovar.reconstruction import regularization
 
@@ -27,61 +27,100 @@ NVTX_DOMAIN_NOISE = "noise"
 # Neither solution implemented here are very satisfying. Guessing noise in presence of heterogeneity is not trivial, since the residual doesn't seem like the correct way to do it.
 # It makes me think we should have "noise pickers".
 
-# 
+#
 
-class RadialNoiseModel():
-    def __init__(self, noise_variance_radial, image_shape = None):
+
+def _default_image_shape_from_radial(radial_noise):
+    side = 2 * (len(radial_noise) + 1)
+    return (side, side)
+
+
+class RadialNoiseModel:
+    """Per-dataset radial noise profile with lazy full/half expansions.
+
+    The previous implementation eagerly materialized both full-spectrum and
+    half-spectrum arrays during construction. Most call sites consume only one
+    layout, so we now build each cached representation on first use to reduce
+    peak GPU memory without changing outputs.
+    """
+
+    def __init__(self, noise_variance_radial, image_shape=None):
         self.noise_variance_radial = noise_variance_radial
-        self.image_shape = image_shape if image_shape is not None else (2 * (len(noise_variance_radial)+1) , 2 * (len(noise_variance_radial)+1) )
-        self._precompute()
+        self.image_shape = image_shape if image_shape is not None else _default_image_shape_from_radial(noise_variance_radial)
+        self._invalidate_cache()
 
-    def _precompute(self):
+    def _invalidate_cache(self):
+        self._noise_full = None
+        self._noise_half = None
+
+    def _ensure_full(self):
         if self.noise_variance_radial is None:
-            self._noise_full = None
-            self._noise_half = None
-            return
-        # Compute once; keep as JAX arrays (GPU) so callers pay zero transfer cost.
-        self._noise_full = make_radial_noise(self.noise_variance_radial, self.image_shape).reshape(1, -1)
-        self._noise_half = make_radial_noise_half(self.noise_variance_radial, self.image_shape).reshape(1, -1)
+            return None
+        if self._noise_full is None:
+            self._noise_full = make_radial_noise(self.noise_variance_radial, self.image_shape).reshape(1, -1)
+        return self._noise_full
+
+    def _ensure_half(self):
+        if self.noise_variance_radial is None:
+            return None
+        if self._noise_half is None:
+            self._noise_half = make_radial_noise_half(self.noise_variance_radial, self.image_shape).reshape(1, -1)
+        return self._noise_half
 
     def get(self, *args, **kwargs):
-        return self._noise_full
+        return self._ensure_full()
 
     def get_half(self, *args, **kwargs):
         """Return noise in half-spectrum (rfft-packed) layout ``(1, H*(W//2+1))``."""
-        return self._noise_half
+        return self._ensure_half()
 
     def set_variance(self, noise_variance_radial):
         self.noise_variance_radial = noise_variance_radial
-        self._precompute()
+        self._invalidate_cache()
 
     def get_average_radial_noise(self, *args, **kwargs):
         return self.noise_variance_radial
 
 
-class VariableRadialNoiseModel():
-    def __init__(self, noise_variance_radials, dose_indices, image_shape = None):
+class VariableRadialNoiseModel:
+    """Radial noise profile indexed by dose/tilt level with lazy expansions."""
+
+    def __init__(self, noise_variance_radials, dose_indices, image_shape=None):
         self.noise_variance_radials = noise_variance_radials
         self.dose_indices = jnp.asarray(dose_indices)
-        self.image_shape = image_shape if image_shape is not None else (2 * (len(noise_variance_radials[0])+1) , 2 * (len(noise_variance_radials[0])+1) )
-        self._precompute()
+        self.image_shape = image_shape if image_shape is not None else _default_image_shape_from_radial(noise_variance_radials[0])
+        self._invalidate_cache()
 
-    def _precompute(self):
+    def _invalidate_cache(self):
+        self._noise_full = None
+        self._noise_half = None
+
+    def _ensure_full(self):
         if self.noise_variance_radials is None:
-            self._noise_full = None
-            self._noise_half = None
-            return
-        # Precompute expanded arrays for every dose-index level as JAX GPU arrays.
-        # Per-batch get() / get_half() is a GPU gather (no host transfer).
-        self._noise_full = batch_make_radial_noise(self.noise_variance_radials, self.image_shape)
-        self._noise_half = batch_make_radial_noise_half(self.noise_variance_radials, self.image_shape)
+            return None
+        if self._noise_full is None:
+            self._noise_full = batch_make_radial_noise(self.noise_variance_radials, self.image_shape)
+        return self._noise_full
+
+    def _ensure_half(self):
+        if self.noise_variance_radials is None:
+            return None
+        if self._noise_half is None:
+            self._noise_half = batch_make_radial_noise_half(self.noise_variance_radials, self.image_shape)
+        return self._noise_half
 
     def get(self, indices, *args, **kwargs):
-        return self._noise_full[self.dose_indices[jnp.asarray(indices)]]
+        noise_full = self._ensure_full()
+        if noise_full is None:
+            return None
+        return noise_full[self.dose_indices[jnp.asarray(indices)]]
 
     def get_half(self, indices, *args, **kwargs):
         """Return noise in half-spectrum (rfft-packed) layout ``(B, H*(W//2+1))``."""
-        return self._noise_half[self.dose_indices[jnp.asarray(indices)]]
+        noise_half = self._ensure_half()
+        if noise_half is None:
+            return None
+        return noise_half[self.dose_indices[jnp.asarray(indices)]]
 
     def get_average_radial_noise(self, *args, **kwargs):
         counts = jnp.bincount(self.dose_indices) / self.dose_indices.size
@@ -89,7 +128,7 @@ class VariableRadialNoiseModel():
 
     def set_variance(self, noise_variance_radials):
         self.noise_variance_radials = noise_variance_radials
-        self._precompute()
+        self._invalidate_cache()
 
 
 class ConstantNoiseModel:
@@ -611,22 +650,23 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
     
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
 
-    data_generator = experiment_dataset.get_image_subset_generator(
+    batch_iter = DataIterator(
+        experiment_dataset,
         batch_size=batch_size,
-        subset_indices=image_subset
+        index_subset=image_subset,
     )
 
     n_images = (image_subset.size if image_subset is not None else experiment_dataset.n_images)
-    for batch, _, batch_ind in data_generator:
-        batch = experiment_dataset.image_stack.process_images(batch)
-        batch = core.translate_images(batch, experiment_dataset.translations[batch_ind], experiment_dataset.image_shape)
-        CTF = experiment_dataset.CTF_fun(experiment_dataset.CTF_params[batch_ind], experiment_dataset.image_shape, experiment_dataset.voxel_size)
+    for batch_data in batch_iter:
+        batch = experiment_dataset.image_stack.process_images(batch_data.images)
+        batch = core.translate_images(batch, batch_data.translations, experiment_dataset.image_shape)
+        CTF = experiment_dataset.CTF_fun(batch_data.ctf_params, experiment_dataset.image_shape, experiment_dataset.voxel_size)
 
         if mean_estimate is not None:
             projected_mean = core_forward.forward_model(
                 config, mean_estimate,
-                experiment_dataset.CTF_params[batch_ind],
-                experiment_dataset.rotation_matrices[batch_ind],
+                batch_data.ctf_params,
+                batch_data.rotation_matrices,
             )
             if experiment_dataset.premultiplied_ctf:
                 batch = batch - projected_mean * CTF
@@ -684,6 +724,7 @@ def estimate_noise_variance(experiment_dataset, batch_size, max_images = 10000):
     sum_sq = 0
 
     # Subsample at most 10000 images
+    subset_indices = None
     if experiment_dataset.n_images > max_images:
         # Create subset indices for subsampling
         subset_indices = np.random.choice(
@@ -691,18 +732,18 @@ def estimate_noise_variance(experiment_dataset, batch_size, max_images = 10000):
             size=max_images, 
             replace=False
         )
-        data_generator = experiment_dataset.get_image_subset_generator(
-            batch_size=batch_size, 
-            subset_indices=subset_indices
-        )
         n_images_used = max_images
     else:
-        data_generator = experiment_dataset.get_image_generator(batch_size=batch_size)
         n_images_used = experiment_dataset.n_images
-    
 
-    for batch, _, _ in data_generator:
-        batch = experiment_dataset.image_stack.process_images(batch)
+    batch_iter = DataIterator(
+        experiment_dataset,
+        batch_size=batch_size,
+        index_subset=subset_indices,
+    )
+
+    for batch_data in batch_iter:
+        batch = experiment_dataset.image_stack.process_images(batch_data.images)
         sum_sq += jnp.sum(jnp.abs(batch)**2, axis =0)
 
     mean_PS =  sum_sq / n_images_used
@@ -720,16 +761,17 @@ def estimate_white_noise_variance_from_mask(experiment_dataset, volume_mask, bat
 
 def estimate_noise_variance_from_outside_mask(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp'):
 
-    data_generator = experiment_dataset.get_image_generator(batch_size=batch_size) 
+    batch_iter = DataIterator(experiment_dataset, batch_size=batch_size)
     image_PSs = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
 
     masked_image_PSs = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
 
     image_mask = jnp.ones_like(experiment_dataset.image_stack.mask)
-    for batch, particles_ind, batch_ind in data_generator:
-        masked_image_PS, image_PS = estimate_noise_variance_from_outside_mask_inner(batch, 
-                    volume_mask, experiment_dataset.rotation_matrices[batch_ind], 
-                    experiment_dataset.translations[batch_ind], 
+    for batch_data in batch_iter:
+        batch_ind = batch_data.image_indices
+        masked_image_PS, image_PS = estimate_noise_variance_from_outside_mask_inner(batch_data.images,
+                    volume_mask, batch_data.rotation_matrices,
+                    batch_data.translations,
                     image_mask, 
                     experiment_dataset.volume_mask_threshold, 
                     experiment_dataset.image_shape, 
@@ -746,15 +788,16 @@ def estimate_noise_variance_from_outside_mask(experiment_dataset, volume_mask, b
 
 def estimate_noise_variance_from_outside_mask_v2(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp'):
 
-    data_generator = experiment_dataset.get_image_generator(batch_size=batch_size) 
+    batch_iter = DataIterator(experiment_dataset, batch_size=batch_size)
 
     image_mask = jnp.ones_like(experiment_dataset.image_stack.mask)
     top_fraction = 0
-    kernel_sq_sum =0 
-    for batch, particles_ind, batch_ind in data_generator:
-        top_fraction_this, kernel_sq_sum_this, per_image_est = estimate_noise_variance_from_outside_mask_inner_v2(batch, 
-                    volume_mask, experiment_dataset.rotation_matrices[batch_ind], 
-                    experiment_dataset.translations[batch_ind], 
+    kernel_sq_sum =0
+    per_image_est = None
+    for batch_data in batch_iter:
+        top_fraction_this, kernel_sq_sum_this, per_image_est = estimate_noise_variance_from_outside_mask_inner_v2(batch_data.images,
+                    volume_mask, batch_data.rotation_matrices,
+                    batch_data.translations,
                     image_mask, 
                     experiment_dataset.volume_mask_threshold, 
                     experiment_dataset.image_shape, 

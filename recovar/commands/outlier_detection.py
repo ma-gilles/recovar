@@ -1349,11 +1349,18 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
         """Map particle indices to image indices for contrast plotting."""
         if contrast_values is None:
             return None
+        particle_indices = np.asarray(particle_indices, dtype=np.int64)
+        if particle_indices.size == 0:
+            return np.array([], dtype=original_image_indices.dtype)
         
         if is_tilt_series:
             # For tilt series, map particle indices to image indices
             particle_to_tilts, _ = tilt_dataset.TiltSeriesData.parse_particle_tilt(starfile)
-            image_indices = np.concatenate([particle_to_tilts[particle_index] for particle_index in particle_indices])
+            n_particles = len(particle_to_tilts)
+            valid_particle_indices = particle_indices[(particle_indices >= 0) & (particle_indices < n_particles)]
+            if valid_particle_indices.size == 0:
+                return np.array([], dtype=original_image_indices.dtype)
+            image_indices = np.concatenate([particle_to_tilts[particle_index] for particle_index in valid_particle_indices])
             # Only include images that are in the original image subset
             return np.intersect1d(image_indices, original_image_indices)
         else:

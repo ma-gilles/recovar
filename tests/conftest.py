@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -11,6 +12,37 @@ if str(ROOT) not in sys.path:
 TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
+
+
+def _pick_most_free_gpu_index():
+    """Best-effort selection of the GPU with the most free memory."""
+    try:
+        out = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,memory.free",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True,
+        )
+    except Exception:
+        return None
+
+    best_idx = None
+    best_free = -1
+    for line in out.strip().splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) != 2:
+            continue
+        try:
+            idx = int(parts[0])
+            free_mb = int(parts[1])
+        except ValueError:
+            continue
+        if free_mb > best_free:
+            best_free = free_mb
+            best_idx = idx
+    return best_idx
 
 
 def gpu_subprocess_env():
@@ -26,7 +58,14 @@ def gpu_subprocess_env():
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = str(ROOT) + (os.pathsep + existing if existing else "")
     env["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+    env["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
+    # Ensure subprocesses prefer CUDA backend for custom-call kernels.
+    env["JAX_PLATFORMS"] = "cuda,cpu"
+    env["JAX_PLATFORM_NAME"] = "gpu"
     env["PYTHONNOUSERSITE"] = "1"
+    gpu_idx = _pick_most_free_gpu_index()
+    if gpu_idx is not None:
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
     return env
 
 
