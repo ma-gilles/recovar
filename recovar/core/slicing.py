@@ -195,9 +195,10 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
         return backproject(volume, slices, rotation_matrices, image_shape, volume_shape,
                            order=order, half_image=half_image, half_volume=half_volume)
     # JAX fallback (CPU or cubic)
-    # Expand half-images to full via Hermitian conjugation before backprojecting.
-    # This matches the CUDA kernel which natively scatters both primary and
-    # conjugate contributions from half-image inputs.
+    # JAX path expands half-images to full before backprojecting because the VJP
+    # of map_coordinates operates on the full H*W pixel set.  A direct half-image
+    # scatter would require a custom JAX implementation; the CUDA kernel handles
+    # this natively.  Results are identical; only efficiency differs.
     if half_image:
         slices = ftu.half_image_to_full_image(slices, image_shape)
     if half_volume:
