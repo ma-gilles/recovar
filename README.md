@@ -55,6 +55,32 @@ Full documentation is available at **[ma-gilles.github.io/recovar](https://ma-gi
 - [CLI Reference](https://ma-gilles.github.io/recovar/reference/cli/) — all commands and flags
 - [Troubleshooting](https://ma-gilles.github.io/recovar/troubleshooting/) — common issues and fixes
 
+## Development setup (pixi)
+
+For development and running tests, use [pixi](https://pixi.sh) (not the conda/pip install above):
+
+```bash
+git clone git@github.com:ma-gilles/recovar.git && cd recovar
+pixi install                      # creates .pixi/envs/default with all deps
+pixi run install-recovar          # editable install of recovar into the env
+pixi run smoke-import-recovar     # quick check
+```
+
+Run tests (requires a GPU node on HPC):
+
+```bash
+# Unit tests
+.pixi/envs/default/bin/python -m pytest tests/unit/ -v --ignore=tests/unit/test_gui_app.py
+
+# Or via pixi tasks
+pixi run test-fast                # unit + smoke
+pixi run test-full                # all tests including GPU and integration
+```
+
+The CUDA kernels (`recovar/cuda/libcuda_backproject.so`) are auto-compiled on first use via `make`. The Makefile uses the running Python to locate JAX FFI headers, so always run tests through the pixi environment.
+
+**HPC/SLURM notes:** Set `PYTHONNOUSERSITE=1` and `XLA_PYTHON_CLIENT_PREALLOCATE=false` in SBATCH scripts. Use `--exclusive` or verify the GPU is free to avoid OOM from shared GPU memory.
+
 ## Using the source code
 
 If you'd like to use RECOVAR functions directly in Python (e.g., for custom analysis or integration with other tools), the key modules are:
