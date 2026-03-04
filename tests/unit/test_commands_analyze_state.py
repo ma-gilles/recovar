@@ -40,6 +40,115 @@ def test_pick_pairs_returns_requested_number_and_valid_indices():
         assert i != j
 
 
+def _legacy_pick_pairs(centers, n_pairs):
+    pairs = []
+    xmat = np.linalg.norm(centers[:, None, :] - centers[None, :, :], axis=-1)
+
+    for _ in range(n_pairs // 2):
+        i_idx, j_idx = np.unravel_index(np.argmax(xmat), xmat.shape)
+        xmat[i_idx, :] = 0
+        xmat[:, i_idx] = 0
+        xmat[j_idx, :] = 0
+        xmat[:, j_idx] = 0
+        pairs.append([int(i_idx), int(j_idx)])
+
+    zdim = centers.shape[-1]
+    max_k = np.min([(n_pairs - n_pairs // 2), zdim])
+    for k in range(max_k):
+        i_idx = np.argmax(centers[:, k])
+        j_idx = np.argmin(centers[:, k])
+        pairs.append([int(i_idx), int(j_idx)])
+    return pairs
+
+
+@pytest.mark.parametrize(
+    "shape,n_pairs",
+    [
+        ((8, 2), 4),
+        ((11, 3), 7),
+        ((16, 5), 10),
+    ],
+)
+def test_pick_pairs_matches_legacy(shape, n_pairs):
+    rng = np.random.default_rng(123)
+    centers = rng.standard_normal(shape).astype(np.float32)
+
+    expected = _legacy_pick_pairs(centers.copy(), n_pairs=n_pairs)
+    got = analyze_cmd.pick_pairs(centers.copy(), n_pairs=n_pairs)
+    assert got == expected
+
+
+def test_analyze_reads_particles_halfsets_once(monkeypatch, tmp_path):
+    n_images = 8
+    zs2 = np.arange(n_images * 2, dtype=np.float32).reshape(n_images, 2)
+    cov2 = np.repeat(np.eye(2, dtype=np.float32)[None, :, :], n_images, axis=0)
+
+    class _PO:
+        def __init__(self, _path):
+            self.params = {}
+            self._halfset_calls = 0
+            self._payload = {
+                "latent_coords": {2: zs2},
+                "latent_precision": {2: cov2},
+                "dataset": ["cryo0"],
+                "contrasts": {2: np.ones(n_images, dtype=np.float32)},
+                "particles_halfsets": np.array([0, 1, 0, 1, 0, 1, 0, 1], dtype=np.int32),
+            }
+
+        def get(self, key):
+            if key == "particles_halfsets":
+                self._halfset_calls += 1
+            return self._payload[key]
+
+    po_instance = None
+
+    def _make_po(path):
+        nonlocal po_instance
+        po_instance = _PO(path)
+        return po_instance
+
+    monkeypatch.setattr(analyze_cmd.o, "PipelineOutput", _make_po)
+    monkeypatch.setattr(analyze_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(analyze_cmd.dataset, "reorder_to_original_indexing_from_halfsets", lambda arr, _h: np.asarray(arr))
+    monkeypatch.setattr(analyze_cmd.utils, "basic_config_logger", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        analyze_cmd.latent_density,
+        "compute_latent_space_density",
+        lambda *_args, **_kwargs: (np.ones((4, 4), dtype=np.float32), {"x": [-1, 1]}),
+    )
+    monkeypatch.setattr(
+        analyze_cmd.o,
+        "kmeans_analysis",
+        lambda *_args, **_kwargs: (
+            np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32),
+            np.array([0, 1, 0, 1, 0, 1, 0, 1], dtype=np.int32),
+        ),
+    )
+    monkeypatch.setattr(analyze_cmd.o, "mkdir_safe", lambda path: os.makedirs(path, exist_ok=True))
+    monkeypatch.setattr(analyze_cmd.o, "compute_and_save_reweighted", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(analyze_cmd.o, "umap_latent_space", lambda *_args, **_kwargs: SimpleNamespace(embedding_=np.zeros((n_images, 2), dtype=np.float32)))
+    monkeypatch.setattr(analyze_cmd.o, "plot_umap", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(plt, "savefig", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(plt, "close", lambda *_args, **_kwargs: None)
+
+    analyze_cmd.analyze(
+        recovar_result_dir=str(tmp_path / "pipeline_out"),
+        output_folder=str(tmp_path / "analysis"),
+        zdim=2,
+        n_clusters=2,
+        n_paths=0,
+        skip_umap=False,
+        skip_centers=True,
+        density_path=None,
+        no_z_reg=False,
+        lazy=False,
+        args=SimpleNamespace(),
+    )
+
+    assert po_instance is not None
+    assert po_instance._halfset_calls == 1
+
+
 def test_analyze_runs_centers_and_trajectories_with_density(monkeypatch, tmp_path):
     n_images = 6
     zs3 = np.arange(n_images * 3, dtype=np.float32).reshape(n_images, 3)
