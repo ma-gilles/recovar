@@ -101,7 +101,8 @@ def get_unrotated_half_plane_grid_points(image_shape, three_d_upsampling_factor=
     """Unrotated 2-D frequency grid for only the H*(W//2+1) half-image pixels.
 
     Like :func:`get_unrotated_plane_grid_points` but generates coordinates
-    directly for only the non-redundant rfft-packed pixels.
+    directly for only the non-redundant rfft-packed pixels, avoiding full-plane
+    materialization when `H` and `W` are large.
 
     Pixel ordering matches :func:`~recovar.core.fourier_transform_utils.full_image_to_half_image`:
     uses ``_half_image_pixel_indices`` to select the same packed indices as
@@ -109,9 +110,13 @@ def get_unrotated_half_plane_grid_points(image_shape, three_d_upsampling_factor=
     frequency grids.
     """
     H, W = image_shape
-    full_plane = get_unrotated_plane_grid_points(image_shape, three_d_upsampling_factor)
-    half_idx = fourier_transform_utils._half_image_pixel_indices((H, W))
-    return full_plane[half_idx]
+    kx_grid = fourier_transform_utils.get_1d_frequency_grid(H, scaled=False)
+    packed_cols = fourier_transform_utils.get_real_fft_packed_last_axis_indices(W)
+    ky_grid = fourier_transform_utils.get_1d_frequency_grid(W, scaled=False)[packed_cols]
+
+    kx, ky = jnp.meshgrid(kx_grid, ky_grid, indexing="ij")
+    half_plane = jnp.stack([kx, ky], axis=-1)
+    return half_plane.reshape(-1, 2) * three_d_upsampling_factor
 
 
 def _half_image_rotations_to_coords(rotation_matrices, image_shape, volume_shape):
