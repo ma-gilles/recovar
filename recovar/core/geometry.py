@@ -110,13 +110,17 @@ def get_unrotated_half_plane_grid_points(image_shape, three_d_upsampling_factor=
     frequency grids.
     """
     H, W = image_shape
-    kx_grid = fourier_transform_utils.get_1d_frequency_grid(H, scaled=False)
+    ky_grid = fourier_transform_utils.get_1d_frequency_grid(H, scaled=False)
     packed_cols = fourier_transform_utils.get_real_fft_packed_last_axis_indices(W)
-    ky_grid = fourier_transform_utils.get_1d_frequency_grid(W, scaled=False)[packed_cols]
+    kx_grid = fourier_transform_utils.get_1d_frequency_grid(W, scaled=False)
 
-    kx, ky = jnp.meshgrid(kx_grid, ky_grid, indexing="ij")
-    half_plane = jnp.stack([kx, ky], axis=-1)
-    return half_plane.reshape(-1, 2) * three_d_upsampling_factor
+    row_idx = jnp.arange(H)[:, None]
+    full_indices = row_idx * W + packed_cols[None, :]
+    kx = ky_grid[full_indices % H]
+    ky = kx_grid[full_indices // H]
+
+    half_plane = jnp.stack([kx, ky, jnp.zeros_like(kx)], axis=-1).reshape(-1, 3)
+    return half_plane * three_d_upsampling_factor
 
 
 def _half_image_rotations_to_coords(rotation_matrices, image_shape, volume_shape):
