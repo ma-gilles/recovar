@@ -408,6 +408,20 @@ def variance_relion_kernel_trilinear(
     half_ctf = config.compute_ctf_half(batch_data.ctf_params)
     CTF_squared = half_ctf ** 2
 
+    def _as_full_noise(noise_vals):
+        if noise_vals is None:
+            return None
+        if noise_vals.ndim == 0:
+            return jnp.full((1, config.image_size), noise_vals)
+        if noise_vals.shape[-1] == config.image_size:
+            return noise_vals.reshape(-1, config.image_size)
+
+        half_image_size = int(np.prod(fourier_transform_utils.image_shape_to_half_image_shape(config.image_shape)))
+        if noise_vals.shape[-1] == half_image_size:
+            return fourier_transform_utils.half_image_to_full_image(noise_vals, config.image_shape).reshape(-1, config.image_size)
+
+        return noise_vals.reshape(-1, config.image_size)
+
     mean_slice_half = core.slice_volume(
         mean_estimate, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
         half_image=True,
@@ -415,14 +429,15 @@ def variance_relion_kernel_trilinear(
 
     if config.premultiplied_ctf:
         half_images = half_images - mean_slice_half * CTF_squared
-        # CTF² needed in full space for noise scaling; computed from scratch for this case only.
-        noise_variances = noise_variances * config.compute_ctf(batch_data.ctf_params) ** 2
+        if volume_mask is not None:
+            # CTF² needed in full space for masked noise variance only when masking is on.
+            full_ctf_squared = config.compute_ctf(batch_data.ctf_params) ** 2
+            noise_variances = _as_full_noise(noise_variances) * full_ctf_squared
     else:
         half_images = half_images - mean_slice_half * half_ctf
 
     img_power_half = jnp.abs(half_images) ** 2
     noise_p_variance_ctf = CTF_squared if config.premultiplied_ctf else jnp.ones_like(half_images)
-    cov_noise_half = jnp.zeros_like(img_power_half)
 
     if volume_mask is not None:
         image_mask = covariance_core.get_per_image_tight_mask(
@@ -436,12 +451,15 @@ def variance_relion_kernel_trilinear(
         )
         cov_noise_half = fourier_transform_utils.full_image_to_half_image(
             noise.get_masked_noise_variance_from_noise_variance(
-                image_mask, noise_variances, config.image_shape
+                image_mask, _as_full_noise(noise_variances), config.image_shape
             ).reshape(-1, config.image_size),
             config.image_shape,
         )
+        images_squared = jnp.abs(half_images) ** 2 - cov_noise_half
+    else:
+        # No masking: reuse pre-mask power and avoid an extra large temporary.
+        images_squared = img_power_half
 
-    images_squared = jnp.abs(half_images) ** 2 - cov_noise_half
     if not config.premultiplied_ctf:
         images_squared = images_squared * CTF_squared
 
@@ -474,12 +492,12 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, b
         volume_mask_threshold=float(experiment_dataset.volume_mask_threshold),
     )
 
-    # Full-spectrum noise needed for masked noise variance inside the kernel.
+    # Keep noise in half-spectrum by default; convert to full only in the masked path.
     Ft_y, Ft_ctf, Ft_im, Ft_one = None, None, None, None
     for batch_data in DataIterator(
         experiment_dataset, batch_size,
         noise_model=experiment_dataset.noise,
-        noise_half=False,
+        noise_half=True,
         apply_process_images=True,
         half_images=True,
         index_subset=image_subset,
