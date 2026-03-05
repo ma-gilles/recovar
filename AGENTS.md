@@ -22,6 +22,19 @@
   - `pixi run install-recovar`  (editable install)
   - run everything via `pixi run ...` or `.pixi/envs/default/bin/python ...`
 - Only use conda/pip install when explicitly asked for the packaged `recovar` (not dev work in heterogeneity_dev), and then create a fresh env with a new name.
+- Strict isolation is mandatory:
+  - Generate a unique `AGENT_ID` per run and use a unique clone path.
+  - `unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV` and `export PYTHONNOUSERSITE=1`.
+  - Set unique scratch roots per run: `TMPDIR`, `PIXI_HOME`, `RATTLER_CACHE_DIR`.
+  - Bind imports to current checkout:
+    - `pixi install`
+    - `PIXI_PY="$(pixi run which python)"`
+    - `"$PIXI_PY" -m pip uninstall -y recovar || true`
+    - `"$PIXI_PY" -m pip install -e . --no-deps --no-build-isolation --ignore-installed`
+    - `PYTHON="$PIXI_PY" make -C recovar/cuda clean all`
+  - Run a provenance gate before tests/runs:
+    - assert `recovar.__file__` is inside `pwd`
+    - assert `jax.__file__` is from `.pixi/envs/default`
 
 ## When asked to work with a GitHub repo
 
@@ -32,8 +45,7 @@
 
 ### Clone a clean working copy
 1) Workdir:
-   - default: ~/myscratch/heterogeneity_dev_codex
-   - if exists and not clean: ~/myscratch/heterogeneity_dev_codex_<YYYYMMDD_HHMMSS>
+   - default: `~/myscratch/heterogeneity_dev_codex_<YYYYMMDD_HHMMSS>_<RANDOM>`
 2) Clone:
    - `git clone git@github.com:ma-gilles/heterogeneity_dev.git <workdir>`
 3) Confirm clean:
@@ -74,6 +86,10 @@
 - In every sbatch script used for tests/runs, include:
   - `export PYTHONNOUSERSITE=1`
   - `export XLA_PYTHON_CLIENT_PREALLOCATE=false`
+  - `export TMPDIR=/scratch/gpfs/GILLES/mg6942/tmp/<agent_or_job_id>`
+  - `export PIXI_HOME=/scratch/gpfs/GILLES/mg6942/pixi_home/<agent_or_job_id>`
+  - `export RATTLER_CACHE_DIR=/scratch/gpfs/GILLES/mg6942/rattler_cache/<agent_or_job_id>`
+  - `mkdir -p "$TMPDIR" "$PIXI_HOME" "$RATTLER_CACHE_DIR"`
 
 ### Reference sbatch settings (do not format as a code block)
 - job-name: recovar-test
@@ -93,8 +109,13 @@
 
 ### Development setup (pixi)
 - `pixi install`
-- `pixi run install-recovar`
+- `PIXI_PY="$(pixi run which python)"`
+- `"$PIXI_PY" -m pip uninstall -y recovar || true`
+- `"$PIXI_PY" -m pip install -e . --no-deps --no-build-isolation --ignore-installed`
+- `PYTHON="$PIXI_PY" make -C recovar/cuda clean all`
 - `pixi run smoke-import-recovar`
+- provenance gate:
+  - `"$PIXI_PY" -c "import pathlib,recovar,jax; repo=pathlib.Path.cwd().resolve(); assert str(pathlib.Path(recovar.__file__).resolve()).startswith(str(repo)+'/'); assert '.pixi/envs/default/' in str(pathlib.Path(jax.__file__).resolve())"`
 
 Important:
 - CUDA kernels are auto-compiled on first use via make.
