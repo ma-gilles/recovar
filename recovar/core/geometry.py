@@ -101,29 +101,17 @@ def get_unrotated_half_plane_grid_points(image_shape, three_d_upsampling_factor=
     """Unrotated 2-D frequency grid for only the H*(W//2+1) half-image pixels.
 
     Like :func:`get_unrotated_plane_grid_points` but generates coordinates
-    directly for only the non-redundant rfft-packed pixels, without
-    allocating the full H*W grid first.
+    directly for only the non-redundant rfft-packed pixels.
 
     Pixel ordering matches :func:`~recovar.core.fourier_transform_utils.full_image_to_half_image`:
-    ``get_k_coordinate_of_each_pixel`` uses ``meshgrid(h, w, indexing="xy")``
-    producing shape ``(W, H)``.  When ``full_image_to_half_image`` reshapes the
-    flat array to ``(H, W)`` and selects packed columns, those columns correspond
-    to the h-freq axis (first meshgrid arg).  For square images (``H == W``),
-    the packed column indices are valid on either axis.
+    uses ``_half_image_pixel_indices`` to select the same packed indices as
+    ``full_image_to_half_image``. This keeps behavior correct for non-square
+    frequency grids.
     """
     H, W = image_shape
-    W_half = W // 2 + 1
-    h_freqs = fourier_transform_utils.get_1d_frequency_grid(H, voxel_size=1, scaled=False)
-    w_freqs = fourier_transform_utils.get_1d_frequency_grid(W, voxel_size=1, scaled=False)
-    # Packed column indices select from the h-freq axis (first meshgrid arg).
-    packed_col_idx = fourier_transform_utils.get_real_fft_packed_last_axis_indices(W)
-    h_freqs_half = h_freqs[packed_col_idx]  # (W_half,) — relies on H == W
-    # meshgrid(packed_h, w, "xy") → shape (W, W_half); ravel iterates
-    # "for each w, packed h" matching full_image_to_half_image column selection.
-    grids = jnp.meshgrid(h_freqs_half, w_freqs, indexing="xy")
-    half_plane = jnp.stack([grids[0].ravel(), grids[1].ravel(),
-                            jnp.zeros(H * W_half)], axis=-1)
-    return half_plane * three_d_upsampling_factor
+    full_plane = get_unrotated_plane_grid_points(image_shape, three_d_upsampling_factor)
+    half_idx = fourier_transform_utils._half_image_pixel_indices((H, W))
+    return full_plane[half_idx]
 
 
 def _half_image_rotations_to_coords(rotation_matrices, image_shape, volume_shape):

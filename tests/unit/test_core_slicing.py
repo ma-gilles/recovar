@@ -1126,6 +1126,25 @@ def test_jax_half_image_forward_matches_full_then_extract(monkeypatch, order):
     np.testing.assert_allclose(half_new, half_ref, atol=1e-5, rtol=1e-5)
 
 
+@pytest.mark.parametrize("order", [0, 1])
+@pytest.mark.parametrize("image_shape", [(6, 8), (8, 6), (5, 7)])
+def test_jax_half_image_forward_matches_full_then_extract_rectangular(monkeypatch, order, image_shape):
+    """Regression: non-square images must match full->half-image extraction."""
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
+
+    rng = np.random.default_rng(5001)
+    volume_shape = (8, 8, 8)
+    n_images = 3
+    rots = jnp.array(_random_rotations(rng, n_images))
+    vol = jnp.array(_make_hermitian_volume(rng, volume_shape))
+
+    full = np.asarray(core_slicing._jax_slice(vol, rots, image_shape, volume_shape, order))
+    half_ref = np.asarray(fourier_transform_utils.full_image_to_half_image(jnp.array(full), image_shape))
+    half_new = np.asarray(core_slicing._jax_slice_half_image(vol, rots, image_shape, volume_shape, order))
+
+    np.testing.assert_allclose(half_new, half_ref, atol=1e-5, rtol=1e-5)
+
+
 def test_jax_half_image_forward_cubic_matches_full_then_extract(monkeypatch):
     """Cubic: _jax_slice_half_image with precomputed coeffs matches extract from full."""
     monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
