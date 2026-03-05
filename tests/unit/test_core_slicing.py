@@ -98,6 +98,36 @@ def test_adjoint_slice_volume_half_image_matches_full_flat_input():
     np.testing.assert_allclose(out_half, out_full, atol=1e-5, rtol=1e-5)
 
 
+def test_adjoint_slice_volume_single_image_inputs():
+    """Single unbatched images should be accepted for both half-image and full-image adjoint."""
+    rng = np.random.default_rng(13)
+    image_shape = (4, 8)
+    volume_shape = (8, 8, 8)
+    rot = np.eye(3, dtype=np.float32)[None, ...]
+
+    real_image = rng.standard_normal(image_shape).astype(np.float32)
+    full_image = np.asarray(fourier_transform_utils.get_dft2(real_image))
+    half_image = np.asarray(fourier_transform_utils.get_dft2_real(real_image))
+
+    out_full = np.asarray(
+        core_slicing.adjoint_slice_volume(
+            full_image, rot, image_shape=image_shape, volume_shape=volume_shape, disc_type="linear_interp"
+        )
+    )
+    out_half = np.asarray(
+        core_slicing.adjoint_slice_volume(
+            half_image, rot, image_shape=image_shape, volume_shape=volume_shape, disc_type="linear_interp", half_image=True
+        )
+    )
+    np.testing.assert_allclose(out_half, out_full, atol=1e-5, rtol=1e-5)
+
+    out_half_flat = np.asarray(
+        core_slicing.adjoint_slice_volume(
+            half_image.ravel(), rot, image_shape=image_shape, volume_shape=volume_shape, disc_type="linear_interp", half_image=True
+        )
+    )
+    np.testing.assert_allclose(out_half_flat, out_full, atol=1e-5, rtol=1e-5)
+
 
 
 
