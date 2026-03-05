@@ -60,7 +60,7 @@ Full documentation is available at **[ma-gilles.github.io/recovar](https://ma-gi
 For development and running tests, use [pixi](https://pixi.sh) (not the conda/pip install above):
 
 ```bash
-git clone git@github.com:ma-gilles/recovar.git && cd recovar
+git clone git@github.com:ma-gilles/heterogeneity_dev.git && cd heterogeneity_dev
 pixi install                      # creates .pixi/envs/default with all deps
 pixi run install-recovar          # editable install of recovar into the env
 pixi run smoke-import-recovar     # quick check
@@ -80,6 +80,31 @@ pixi run test-full                # all tests including GPU and integration
 The CUDA kernels (`recovar/cuda/libcuda_backproject.so`) are auto-compiled on first use via `make`. The Makefile uses the running Python to locate JAX FFI headers, so always run tests through the pixi environment.
 
 **HPC/SLURM notes:** Set `PYTHONNOUSERSITE=1` and `XLA_PYTHON_CLIENT_PREALLOCATE=false` in SBATCH scripts. Use `--exclusive` or verify the GPU is free to avoid OOM from shared GPU memory.
+
+### Clean clone + GPU queue run (recommended)
+
+Use this flow when you want a fresh checkout and a reproducible GPU test job:
+
+```bash
+git clone git@github.com:ma-gilles/heterogeneity_dev.git ~/myscratch/heterogeneity_dev_codex
+cd ~/myscratch/heterogeneity_dev_codex
+pixi install --locked || pixi install
+pixi run install-recovar
+
+# Submit GPU tests against the exact current commit
+sbatch --export=ALL,RECOVAR_REPO_ROOT="$(pwd)",RECOVAR_EXPECT_COMMIT="$(git rev-parse HEAD)",RECOVAR_FORCE_CUDA_REBUILD=1,RECOVAR_REQUIRE_CUDA=1 scripts/run_gpu_tests.slurm
+```
+
+Alternative helper (clone/refresh + setup + submit in one step):
+
+```bash
+GIT_REF=main bash scripts/download_recovar_dev_and_run_test.sh
+```
+
+This avoids common CUDA mismatch issues by:
+- pinning the commit used by the queued job (`RECOVAR_EXPECT_COMMIT`)
+- forcing a clean CUDA extension rebuild on the node (`RECOVAR_FORCE_CUDA_REBUILD=1`)
+- failing fast if CUDA kernels are unavailable (`RECOVAR_REQUIRE_CUDA=1`)
 
 ## Using the source code
 
