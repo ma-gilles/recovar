@@ -67,20 +67,10 @@ def _flatten_full_image_slices(slices, image_shape):
             )
         slices = slices.reshape(slices.shape[0], expected_pixels)
     elif slices.ndim == 2:
-        if tuple(slices.shape) == (H, W):
-            slices = slices.reshape(1, expected_pixels)
-        elif slices.shape[-1] == expected_pixels:
-            pass
-        else:
+        if slices.shape[-1] != expected_pixels:
             raise ValueError(
                 f"Expected flattened slices with {expected_pixels} pixels, got shape {tuple(slices.shape)}"
             )
-    elif slices.ndim == 1:
-        if slices.shape[0] != expected_pixels:
-            raise ValueError(
-                f"Expected flattened slices with {expected_pixels} pixels, got shape {tuple(slices.shape)}"
-            )
-        slices = slices.reshape(1, expected_pixels)
     else:
         raise ValueError(
             f"Expected slices with shape (n_images, {expected_pixels}) or (n_images, {H}, {W}), got {tuple(slices.shape)}"

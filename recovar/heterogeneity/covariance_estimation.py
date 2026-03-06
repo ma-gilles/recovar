@@ -767,7 +767,7 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
         no_mask = not opts.mask_images
 
         # Accumulators: backprojection adds into these via volumes= parameter
-        H_accum = jnp.zeros((n_freq_batch, volume_size), dtype=jnp.float32)
+        H_accum = jnp.zeros((n_freq_batch, volume_size), dtype=jnp.complex64)
         B_accum = jnp.zeros((n_freq_batch, volume_size), dtype=jnp.complex64)
 
         # Inner loop: image batches via DataIterator
@@ -898,10 +898,8 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     volume_mask = jnp.asarray(volume_mask, dtype=experiment_dataset.dtype_real)
     mean_estimate = jnp.asarray(mean_estimate, dtype=experiment_dataset.dtype)
 
-    n_basis = basis.shape[0]
-    lhs_size = n_basis * n_basis
-    lhs = jnp.zeros((lhs_size * (lhs_size + 1) // 2,), dtype=experiment_dataset.dtype_real)
-    rhs = jnp.zeros((n_basis, n_basis), dtype=experiment_dataset.dtype_real)
+    lhs = 0
+    rhs = 0
     logger.info("batch size in compute_projected_covariance %s", batch_size)
 
     if disc_type == 'cubic':
@@ -922,6 +920,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
         ).reshape(-1)
     if disc_type_u != 'cubic':
         vol_shape = experiment_dataset.volume_shape
+        n_basis = basis.shape[0]
         basis = fourier_transform_utils.full_volume_to_half_volume(
             basis.reshape(n_basis, *vol_shape), vol_shape,
         ).reshape(n_basis, -1)
@@ -931,7 +930,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     for experiment_dataset in experiment_datasets:
         config = ForwardModelConfig.from_dataset(
             experiment_dataset, disc_type=disc_type,
-            process_fn=None,
+            process_fn=experiment_dataset.image_stack.process_images,
         )
         model = ModelState(
             mean_estimate=mean_estimate,
@@ -945,40 +944,12 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
         )
 
         hermitian_weights = linalg.rfft2_hermitian_weights(config.image_shape)
-        use_half_proj = hermitian_weights is not None
-        full_image_size = int(np.prod(config.image_shape))
-        half_shape = fourier_transform_utils.image_shape_to_half_image_shape(config.image_shape)
-        half_image_size = int(np.prod(half_shape))
-
-        def _process_batch_for_covariance(images, apply_image_mask: bool = False):
-            images = experiment_dataset.image_stack.process_images(images, apply_image_mask=apply_image_mask)
-            if images.ndim == 3:
-                flat_size = int(images.shape[1] * images.shape[2])
-                if flat_size in (full_image_size, half_image_size):
-                    images = images.reshape(images.shape[0], flat_size)
-            if not use_half_proj:
-                return images
-            if images.shape[-1] == half_image_size:
-                return images
-            if images.shape[-1] == full_image_size:
-                if jnp.issubdtype(images.dtype, jnp.complexfloating):
-                    return fourier_transform_utils.full_image_to_half_image(images, config.image_shape)
-                return fourier_transform_utils.get_dft2_real(
-                    images.reshape(images.shape[0], *config.image_shape),
-                    norm=fourier_transform_utils.DEFAULT_FFT_NORM,
-                ).reshape((-1, half_image_size))
-            raise ValueError(
-                f"Expected image batch size {full_image_size} (full) or {half_image_size} (half), got {images.shape[-1]}"
-            )
-
-        config = config.replace(process_fn=_process_batch_for_covariance)
 
         for batch_data in DataIterator(
             experiment_dataset, batch_size,
             noise_model=experiment_dataset.noise,
             noise_half=False,
             apply_process_images=False,
-            half_images=False,
         ):
             lhs, rhs = reduce_covariance_inner(
                 config, batch_data, model, opts,
@@ -1005,10 +976,6 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     if change_device:
         rhs = jax.device_put(rhs, jax.devices("gpu")[0])
         lhs = jax.device_put(lhs, jax.devices("gpu")[0])
-
-    # Reconstruct only now that accumulation is complete to avoid keeping a dense
-    # LHS matrix in memory throughout batching.
-    lhs = unpack_lower_triangle_to_full(lhs, lhs_size)
 
     # Tikhonov regularization: prevents NaN from near-singular LHS
     # (can happen when n_images is small relative to basis_size)
@@ -1072,30 +1039,16 @@ def reduce_covariance_inner(
             config.grid_size, config.padding, 'linear_interp',
         )
     # (no else — image_mask is unused when do_mask_images=False)
-    _use_half_proj = hermitian_weights is not None
+
     if config.process_fn is not None:
         batch = config.process_fn(batch)
-
-    if _use_half_proj:
-        full_image_size = int(np.prod(config.image_shape))
-        half_image_size = int(np.prod(fourier_transform_utils.image_shape_to_half_image_shape(config.image_shape)))
-        if batch.shape[-1] == half_image_size:
-            batch = core.translate_half_images(batch, translations, config.image_shape)
-        else:
-            batch = core.translate_images(batch, translations, config.image_shape)
-            if batch.shape[-1] == full_image_size:
-                batch = fourier_transform_utils.full_image_to_half_image(batch, config.image_shape)
-            else:
-                raise ValueError(
-                    f"Expected image batch size {full_image_size} (full) or {half_image_size} (half), got {batch.shape[-1]}"
-                )
-    else:
-        batch = core.translate_images(batch, translations, config.image_shape)
+    batch = core.translate_images(batch, translations, config.image_shape)
 
     # Always project to half-image format when hermitian weights are available.
     # Masking functions handle half images via half→real→half round-trip.
     # compute_projected_covariance pre-converts mean_estimate and basis to
     # rfft3 half-volumes (cubic spline coefficients excluded — not Fourier data).
+    _use_half_proj = hermitian_weights is not None
     _use_half_vol_mean = _use_half_proj and (config.disc_type != 'cubic')
     _use_half_vol_basis = _use_half_proj and (opts.disc_type_u != 'cubic')
 
@@ -1104,6 +1057,10 @@ def reduce_covariance_inner(
         half_image=_use_half_proj,
         half_volume=_use_half_vol_mean,
     )
+
+    # Convert batch to half-image early so all masking operates in half format
+    if _use_half_proj:
+        batch = fourier_transform_utils.full_image_to_half_image(batch, config.image_shape)
 
     if do_mask_images:
         batch = covariance_core.apply_image_masks(batch, image_mask, config.image_shape, half_images=_use_half_proj)
@@ -1148,16 +1105,7 @@ def reduce_covariance_inner(
         if config.premultiplied_ctf:
             raise NotImplementedError("Masking with premultiplied CTF is not implemented yet")
 
-    if lhs is None:
-        packed_len = model.basis.shape[0] ** 2
-        packed_len = packed_len * (packed_len + 1) // 2
-        lhs = jnp.zeros((packed_len,), dtype=model.basis.real.dtype)
-    if rhs is None:
-        rhs = jnp.zeros((model.basis.shape[0], model.basis.shape[0]), dtype=model.basis.real.dtype)
-    rhs_dtype = rhs.dtype
-    lhs_dtype = lhs.dtype
-
-    AU_t_AU = batch_x_T_y(AUs, AUs).real.astype(lhs_dtype)
+    AU_t_AU = batch_x_T_y(AUs, AUs).real.astype(ctf_params.dtype)
 
     AUs *= jnp.sqrt(noise_variance)[..., None]
     # Single cuBLAS GEMM instead of vmap over n_images batches.
@@ -1170,19 +1118,15 @@ def reduce_covariance_inner(
         AU_t_AU = jnp.sum(AU_t_AU, axis=0, keepdims=True)
 
     outer_products = summed_outer_products(AU_t_images)
-    rhs_batch = (outer_products - UALambdaAUs).real.astype(rhs_dtype)
+    rhs_batch = (outer_products - UALambdaAUs).real.astype(ctf_params.dtype)
 
-    # Kron product / Gram accumulation in packed lower-triangle storage.
-    # Pack only (i,j), i >= j entries directly to avoid materializing the
-    # full dense matrix at this stage.
+    # Kron product via einsum — avoids materialising (n_images, n²,n²) tensor.
     _n = AU_t_AU.shape[-1]
-    _au_flat = AU_t_AU.reshape(-1, _n * _n)
-    tril_i, tril_j = jnp.tril_indices(_n * _n)
-    lhs_batch = lhs + jnp.sum(
-        _au_flat[:, tril_i] * _au_flat[:, tril_j],
-        axis=0,
-    )
-    rhs_batch = rhs_batch + rhs
+    lhs_batch = jnp.einsum('bik,bjl->ijkl', AU_t_AU, AU_t_AU).reshape(_n * _n, _n * _n)
+    if lhs is not None:
+        lhs_batch += lhs
+    if rhs is not None:
+        rhs_batch += rhs
     return lhs_batch, rhs_batch
 
 
@@ -1200,13 +1144,6 @@ def summed_batch_kron_scan(X):
     summed_kron = jax.lax.fori_loop(0, X.shape[0], fori_loop_body, init)
     return summed_kron
 
-def unpack_lower_triangle_to_full(packed, size):
-    """Reconstruct a full symmetric matrix from lower-triangle packed storage."""
-    tril_i, tril_j = jnp.tril_indices(size)
-    full = jnp.zeros((size, size), dtype=packed.dtype)
-    full = full.at[tril_i, tril_j].set(packed)
-    tril_off_i, tril_off_j = jnp.tril_indices(size, -1)
-    return full.at[tril_off_j, tril_off_i].set(full[tril_off_i, tril_off_j])
 
 batch_x_T_y = jax.vmap(  lambda x,y : jnp.conj(x).T @ y, in_axes = (0,0))
 

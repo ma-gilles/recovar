@@ -965,118 +965,6 @@ def _reduce_covariance_inner_reference(config, batch_data, model, opts, image_ma
     return lhs, rhs
 
 
-def _reduce_covariance_inner_legacy_copy(config, batch_data, model, opts, image_mask, hermitian_weights):
-    """Legacy in-place copy of reduce_covariance_inner before packed-LHS refactor."""
-    batch = batch_data.images
-    ctf_params = batch_data.ctf_params
-    rotation_matrices = batch_data.rotation_matrices
-    translations = batch_data.translations
-    noise_variance = batch_data.noise_variance
-
-    do_mask_images = opts.do_mask_images
-    if config.premultiplied_ctf and do_mask_images:
-        do_mask_images = False
-
-    if do_mask_images:
-        image_mask = covariance_core.get_per_image_tight_mask(
-            model.volume_mask, rotation_matrices, image_mask,
-            config.volume_mask_threshold, config.image_shape, config.volume_shape,
-            config.grid_size, config.padding, 'linear_interp',
-        )
-
-    if config.process_fn is not None:
-        batch = config.process_fn(batch)
-    batch = core.translate_images(batch, translations, config.image_shape)
-
-    projected_mean = core_forward.forward_model(
-        config, model.mean_estimate, ctf_params, rotation_matrices,
-        half_image=False, half_volume=False,
-    )
-
-    if do_mask_images:
-        batch = covariance_core.apply_image_masks(batch, image_mask, config.image_shape, half_images=False)
-        projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, config.image_shape, half_images=False)
-
-    config_u = config.replace(disc_type=opts.disc_type_u)
-    AUs = covariance_core.batch_vol_forward_from_map(
-        config_u, model.basis, ctf_params, rotation_matrices,
-        skip_ctf=config.premultiplied_ctf,
-        half_image=False, half_volume=False,
-    )
-
-    if do_mask_images:
-        AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, config.image_shape, half_images=False)
-
-    if hermitian_weights is not None:
-        batch = fourier_transform_utils.full_image_to_half_image(batch, config.image_shape) * hermitian_weights
-        projected_mean = fourier_transform_utils.full_image_to_half_image(
-            projected_mean, config.image_shape
-        ) * hermitian_weights
-        n_b, n_i = AUs.shape[0], AUs.shape[1]
-        AUs = fourier_transform_utils.full_image_to_half_image(
-            AUs.reshape(n_b * n_i, -1), config.image_shape,
-        ).reshape(n_b, n_i, -1) * hermitian_weights[None, None, :]
-        noise_variance = fourier_transform_utils.full_image_to_half_image(noise_variance, config.image_shape)
-
-    AUs = AUs.transpose(1, 2, 0)
-
-    if config.premultiplied_ctf:
-        CTF = (config.compute_ctf_half(ctf_params) if hermitian_weights is not None
-               else config.compute_ctf(ctf_params))
-        batch = batch - projected_mean * CTF
-        AU_t_images = cov_est.batch_x_T_y(AUs, batch)
-        AUs = AUs * CTF[..., None]
-    else:
-        batch = batch - projected_mean
-        AU_t_images = cov_est.batch_x_T_y(AUs, batch)
-
-    if do_mask_images and config.premultiplied_ctf:
-        raise NotImplementedError("Masking with premultiplied CTF is not implemented yet")
-
-    AU_t_AU = cov_est.batch_x_T_y(AUs, AUs).real.astype(ctf_params.dtype)
-
-    AUs *= jnp.sqrt(noise_variance)[..., None]
-    _n_basis = AUs.shape[-1]
-    _AUs_flat = AUs.reshape(-1, _n_basis)
-    UALambdaAUs = jnp.conj(_AUs_flat).T @ _AUs_flat
-
-    if opts.shared_label:
-        AU_t_images = jnp.sum(AU_t_images, axis=0, keepdims=True)
-        AU_t_AU = jnp.sum(AU_t_AU, axis=0, keepdims=True)
-
-    outer_products = cov_est.summed_outer_products(AU_t_images)
-    rhs_batch = (outer_products - UALambdaAUs).real.astype(ctf_params.dtype)
-
-    _n = AU_t_AU.shape[-1]
-    lhs_batch = jnp.einsum('bik,bjl->ijkl', AU_t_AU, AU_t_AU).reshape(_n * _n, _n * _n)
-    return lhs_batch, rhs_batch
-
-
-def test_reduce_covariance_inner_matches_legacy_reference_copy():
-    """Exact algebraic comparison against an inline legacy copy of this function."""
-    config, batch_data, _, model_full, hermitian_weights, image_mask = _make_reduce_cov_fixtures()
-    opts = CovarianceOpts(disc_type_u="linear_interp", do_mask_images=False)
-    hermitian_weights = None
-    lhs_dim = model_full.basis.shape[0] ** 2
-    lhs_init = np.zeros((lhs_dim * (lhs_dim + 1) // 2,), dtype=np.float32)
-    rhs_init = np.zeros((model_full.basis.shape[0],) * 2, dtype=np.float32)
-
-    lhs_new, rhs_new = cov_est.reduce_covariance_inner(
-        config, batch_data, model_full, opts, image_mask,
-        hermitian_weights=hermitian_weights,
-        lhs=lhs_init,
-        rhs=rhs_init,
-    )
-    lhs_new = np.asarray(cov_est.unpack_lower_triangle_to_full(lhs_new, model_full.basis.shape[0] * model_full.basis.shape[0]))
-
-    lhs_old, rhs_old = _reduce_covariance_inner_legacy_copy(
-        config, batch_data, model_full, opts, image_mask, hermitian_weights=hermitian_weights,
-    )
-
-    np.testing.assert_allclose(lhs_new, np.asarray(lhs_old), atol=1e-4, rtol=1e-4)
-    np.testing.assert_allclose(np.asarray(rhs_new), np.asarray(rhs_old), atol=1e-4, rtol=1e-4)
-
-
 def test_reduce_covariance_inner_masked_half_matches_full():
     """reduce_covariance_inner with do_mask_images=True uses half-image masking and matches full-image reference."""
     config, batch_data, model_half, model_full, hermitian_weights, image_mask = _make_reduce_cov_fixtures()
@@ -1094,7 +982,7 @@ def test_reduce_covariance_inner_masked_half_matches_full():
         config, batch_data, model_full, opts, image_mask, hermitian_weights,
     )
 
-    lhs_new_np = np.asarray(cov_est.unpack_lower_triangle_to_full(lhs_new, lhs_ref.shape[0]))
+    lhs_new_np = np.asarray(lhs_new)
     lhs_ref_np = np.asarray(lhs_ref)
     rhs_new_np = np.asarray(rhs_new)
     rhs_ref_np = np.asarray(rhs_ref)
@@ -1123,9 +1011,7 @@ def test_reduce_covariance_inner_unmasked_still_works():
         hermitian_weights=hermitian_weights,
     )
 
-    rhs_dim = rhs.shape[0]
-    lhs_expected = rhs_dim * rhs_dim
-    assert lhs.size == lhs_expected * (lhs_expected + 1) // 2
+    assert lhs.shape[0] == lhs.shape[1]
     assert rhs.shape[0] == rhs.shape[1]
     assert np.all(np.isfinite(np.asarray(lhs)))
     assert np.all(np.isfinite(np.asarray(rhs)))
@@ -1154,44 +1040,6 @@ def test_reduce_covariance_inner_masked_vs_unmasked_differ():
     assert np.all(np.isfinite(np.asarray(rhs_mask)))
     assert np.all(np.isfinite(np.asarray(lhs_no)))
     assert np.all(np.isfinite(np.asarray(rhs_no)))
-
-
-def _packed_lhs_from_au_t_au(AU_t_AU):
-    """Packed-LHS update currently used by the reduced accumulation."""
-    _n = AU_t_AU.shape[-1]
-    _au_flat = AU_t_AU.reshape(-1, _n * _n)
-    tril_i, tril_j = jnp.tril_indices(_n * _n)
-    lhs_packed = jnp.sum(_au_flat[:, tril_i] * _au_flat[:, tril_j], axis=0)
-    return lhs_packed
-
-
-def test_reduce_covariance_inner_packed_lhs_matches_dense_formula():
-    """Packed LHS accumulation is algebraically identical to the dense Gram accumulation."""
-    rng = np.random.default_rng(7)
-    n_images = 4
-    n_basis = 3
-
-    AU_t_AU = (rng.normal(size=(n_images, n_basis, n_basis))
-               + 1j * rng.normal(size=(n_images, n_basis, n_basis))).astype(np.complex64)
-
-    lhs_packed = _packed_lhs_from_au_t_au(AU_t_AU)
-    au_flat = np.asarray(AU_t_AU).reshape(n_images, n_basis * n_basis)
-    lhs_dense = au_flat.T @ au_flat
-    lhs_dense_packed = lhs_dense[np.tril_indices(n_basis * n_basis)]
-
-    np.testing.assert_allclose(np.asarray(lhs_packed), lhs_dense_packed, atol=1e-6, rtol=1e-6)
-
-
-def test_unpack_lower_triangle_to_full_restores_symmetry():
-    """Unpacking from packed lower triangle recovers symmetric matrix entries exactly."""
-    packed = jnp.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], dtype=jnp.float32)
-    full = np.asarray(cov_est.unpack_lower_triangle_to_full(packed, size=3))
-
-    n = 3
-    ref = np.array([[1.0, 2.0, 4.0],
-                    [2.0, 3.0, 5.0],
-                    [4.0, 5.0, 6.0]], dtype=np.float32)
-    np.testing.assert_allclose(full, ref, atol=1e-6, rtol=1e-6)
 
 
 def test_compute_projected_covariance_masked():
