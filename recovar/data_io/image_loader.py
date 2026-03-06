@@ -108,6 +108,9 @@ def _resolve_mrc_path(candidate: str) -> str:
     return candidate
 
 
+_SEARCH_TIMEOUT = 10  # seconds
+
+
 def _search_for_basename(missing_path: str):
     """Search the missing path's immediate parent for its basename.
 
@@ -117,7 +120,9 @@ def _search_for_basename(missing_path: str):
     *searched_dir* is the root that was walked (or None if the parent
     doesn't exist).  Does not climb to ancestor directories to avoid
     accidentally walking huge directory trees on HPC filesystems.
+    Gives up after ``_SEARCH_TIMEOUT`` seconds.
     """
+    import time
     basename = os.path.basename(missing_path)
     alt_basename = None
     swapped = _swap_mrc_ext(basename)
@@ -128,7 +133,13 @@ def _search_for_basename(missing_path: str):
     if not search_root or not os.path.isdir(search_root):
         return None, None
 
+    deadline = time.monotonic() + _SEARCH_TIMEOUT
     for dirpath, dirnames, filenames in os.walk(search_root):
+        if time.monotonic() > deadline:
+            logger.warning("_search_for_basename timed out after %ds under %s",
+                           _SEARCH_TIMEOUT, search_root)
+            dirnames.clear()
+            break
         depth = dirpath[len(search_root):].count(os.sep)
         if depth > 2:
             dirnames.clear()
