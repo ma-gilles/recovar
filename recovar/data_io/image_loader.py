@@ -109,11 +109,14 @@ def _resolve_mrc_path(candidate: str) -> str:
 
 
 def _search_for_basename(missing_path: str):
-    """Search up to 3 levels above the missing path's parent for its basename.
+    """Search the missing path's immediate parent for its basename.
 
-    Walks up to 3 directories above the deepest existing ancestor, then
-    walks down up to 3 levels looking for the file.  Returns the directory
-    containing the file, or None.
+    Only walks from the direct parent directory of *missing_path* (if it
+    exists) down up to 2 levels.  Returns ``(found_dir, searched_dir)``
+    where *found_dir* is the directory containing the file (or None) and
+    *searched_dir* is the root that was walked (or None if the parent
+    doesn't exist).  Does not climb to ancestor directories to avoid
+    accidentally walking huge directory trees on HPC filesystems.
     """
     basename = os.path.basename(missing_path)
     alt_basename = None
@@ -121,26 +124,19 @@ def _search_for_basename(missing_path: str):
     if swapped:
         alt_basename = os.path.basename(swapped)
 
-    # Find deepest existing ancestor, going up to 3 levels
     search_root = os.path.dirname(missing_path)
-    for _ in range(3):
-        parent = os.path.dirname(search_root)
-        if parent == search_root:
-            break
-        search_root = parent
-
-    if not os.path.isdir(search_root):
-        return None
+    if not search_root or not os.path.isdir(search_root):
+        return None, None
 
     for dirpath, dirnames, filenames in os.walk(search_root):
         depth = dirpath[len(search_root):].count(os.sep)
-        if depth > 3:
+        if depth > 2:
             dirnames.clear()
             continue
         if basename in filenames or (alt_basename and alt_basename in filenames):
-            return dirpath
+            return dirpath, search_root
 
-    return None
+    return None, search_root
 
 
 # ---------------------------------------------------------------------------
@@ -545,7 +541,7 @@ class MultiMRCLoader(ImageLoader):
             basename = os.path.basename(samples[0])
 
             # Try to locate the basename on disk for a concrete suggestion
-            found_dir = _search_for_basename(samples[0])
+            found_dir, searched_dir = _search_for_basename(samples[0])
 
             lines = [
                 f"Cannot find {n_missing} MRC file(s) referenced in the metadata.",
@@ -563,6 +559,8 @@ class MultiMRCLoader(ImageLoader):
                 lines.append(f"  --datadir {found_dir}")
             else:
                 lines.append(f"  --datadir /path/to/directory/containing/{basename}")
+            if not found_dir and searched_dir:
+                lines.append(f"  (not found under {searched_dir})")
             # Use raw metadata path for strip-prefix hint (before datadir was joined)
             if self._raw_paths:
                 raw_sample = self._raw_paths[0]
