@@ -1009,8 +1009,6 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     # Reconstruct only now that accumulation is complete to avoid keeping a dense
     # LHS matrix in memory throughout batching.
     lhs = unpack_lower_triangle_to_full(lhs, lhs_size)
-    lhs = jnp.nan_to_num(lhs, nan=0.0, posinf=0.0, neginf=0.0)
-    rhs = jnp.nan_to_num(rhs, nan=0.0, posinf=0.0, neginf=0.0)
 
     # Tikhonov regularization: prevents NaN from near-singular LHS
     # (can happen when n_images is small relative to basis_size)
@@ -1021,15 +1019,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     diag_idx = jnp.arange(lhs.shape[0])
     lhs = lhs.at[diag_idx, diag_idx].add(reg)
 
-    covar = jax.scipy.linalg.solve(lhs, rhs, assume_a='pos')
-    if not np.all(np.isfinite(np.asarray(covar))):
-        logger.warning(
-            "compute_projected_covariance: non-finite solve result, retrying with stronger diagonal regularization"
-        )
-        retry_reg = jnp.maximum(reg * jnp.float32(1e3), jnp.float32(1e-5))
-        lhs_retry = lhs + retry_reg * jnp.eye(lhs.shape[0], dtype=lhs.dtype)
-        covar = jax.scipy.linalg.solve(lhs_retry, rhs, assume_a='sym')
-        covar = jnp.nan_to_num(covar, nan=0.0, posinf=0.0, neginf=0.0)
+    covar = jax.scipy.linalg.solve( lhs ,rhs, assume_a='pos')
     covar = unvec(covar)
     logger.info("end of solve")
 
@@ -1141,14 +1131,6 @@ def reduce_covariance_inner(
         AUs = AUs * hermitian_weights[None, None, :]
         noise_variance = fourier_transform_utils.full_image_to_half_image(
             noise_variance, config.image_shape)
-
-    # Keep whitening numerically stable when noise estimation emits bad values.
-    noise_variance = jnp.real(noise_variance)
-    nv_eps = jnp.asarray(jax_config.EPSILON, dtype=noise_variance.dtype)
-    noise_variance = jnp.nan_to_num(
-        noise_variance, nan=nv_eps, posinf=nv_eps, neginf=nv_eps
-    )
-    noise_variance = jnp.maximum(noise_variance, nv_eps)
 
     AUs = AUs.transpose(1, 2, 0)
 
