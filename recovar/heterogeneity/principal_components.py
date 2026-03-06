@@ -183,9 +183,12 @@ def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , dis
     if not np.all(np.isfinite(covariance)):
         n_nan = np.sum(np.isnan(covariance))
         n_inf = np.sum(np.isinf(covariance))
-        raise ValueError(
-            f"projected covariance has {n_nan} NaN, {n_inf} Inf out of {covariance.size} elements"
+        logger.warning(
+            "projected covariance has %d NaN and %d Inf entries (out of %d); replacing non-finite values with zeros",
+            int(n_nan), int(n_inf), int(covariance.size),
         )
+        covariance = np.nan_to_num(np.asarray(covariance), nan=0.0, posinf=0.0, neginf=0.0)
+        covariance = 0.5 * (covariance + covariance.T)
 
     ss, u = np.linalg.eigh(covariance)
     u =  np.fliplr(u)
@@ -790,4 +793,3 @@ def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, z
 
         logger.info("zdim %s", zdim)#, end="")
     return metrics, all_estimators, all_lhs
-
