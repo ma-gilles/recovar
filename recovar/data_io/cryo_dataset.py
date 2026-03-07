@@ -640,7 +640,6 @@ def simple_dataloader(dataset, batch_size: int = 1, num_workers: int = 0, **kwar
 # ---------------------------------------------------------------------------
 # ImageCountBatchLoader
 # ---------------------------------------------------------------------------
-
 def _resolve_particle_tilts(dataset, effective_num_tilts):
     """Walk dataset/subset chain to find ``_particle_tilts`` on the root."""
     cursor = dataset
@@ -670,7 +669,7 @@ def _resolve_particle_tilts(dataset, effective_num_tilts):
 
     return None, effective_num_tilts
 
-
+## TODO Why are these things here? is there some we could delete
 class ImageCountBatchLoader:
     """DataLoader that batches by total image count across tilt series.
 
@@ -898,6 +897,7 @@ def get_canonical_group_names(df, group_column: str = '_rlnGroupName') -> List[s
 # Compatibility aliases
 # ---------------------------------------------------------------------------
 
+##TODO remove aliases, just pip new names over.
 ImageDataset = ParticleImageDataset
 TiltSeriesData = TiltSeriesDataset
 NumpyLoader = JAXDataLoader

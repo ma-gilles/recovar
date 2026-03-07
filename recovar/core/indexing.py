@@ -6,7 +6,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-
+##TODO: These are very core functions for handling grid.
+## It is likely that these coudl be sped up a lot but should be heavily heavily test for corner cases if so
 @functools.partial(jax.jit, static_argnums=[1])
 def vol_indices_to_vec_indices(vol_indices, vol_shape):
     og_shape = vol_indices.shape

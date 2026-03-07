@@ -16,7 +16,10 @@ def get_log_likelihood_threshold(k = 4, q=0.954499736104):
     return chi2.ppf(q,df=k)
 
 # Handling change between latent space and the grid
-
+## TODO refactoring this handling of grids, it's pretty messy but put a lot of test
+## with before/after because this is brittle
+## Also remove unused functions. Which may be a lot of them.
+## Most of these functoins ar eonly accessed by estiamte_conformational_density.py / compute_Trajectory.py if its not called from there, delete
 def pca_coord_to_grid(x, bounds, num_points, to_int = False):
     v =  (x - bounds[:,0] ) / ( bounds[:,1]  - bounds[:,0] ) * (num_points - 1)    
     if to_int:

@@ -23,6 +23,7 @@ except Exception as e:
 # CPU device helper — use instead of np.array(jax_arr) to stay in JAX
 _CPU_DEVICE = jax.devices('cpu')[0]
 
+## TODO remove? this should probably be elsewhere
 def _to_cpu(x):
     """Transfer a JAX array to the CPU device, returning a JAX CPU array."""
     return jax.device_put(x, _CPU_DEVICE)

@@ -50,6 +50,39 @@ def setup_logging(output_dir):
     return logging.getLogger(__name__)
 
 
+## TODO: Move things elsewhere? IT should be used to generate dataset that are syntehtic
+## Whenever resolution is higher than the small ones stored in data
+## TODO: more complicated. Do a better way. One nicer would would be: store a .pdb type file
+## inside the repo and use that to generate a sequence of volumes as follow:
+## Take one subcomplex, and apply a rigid mottion to it, say 50 along the trajectory
+## Then make 50 .pdbs from that, then use simulate_scattering_potential to generate voluems (with Bfactor 80, say)
+## Then call simulator on these volumes.
+## This is partly implemented in make_spike_dataset for example.
+## There is also a .ipynb file that does exactly this for the data I used to simulate data in my paper
+## This is a good one to use, since the rotation/grouping that is reasonable as already be figured out.
+## It should be findable in ~/recovar/<some file like ... make_trajectories....iynb> or something on those lines
+## It actually as two multiple trajecotires defined but we only need one 
+## The file could also be in ~/covariance_est/
+##
+## TODO: Then in the future, I want run_Test_all_metrics to always be run, 
+## always on teh same dataset with the same setting and same volumes as done above
+## For now, we want to keep the one that has a hardcoded path too, so we can make sure nothign is messed up
+## I would like more tests like run-Test_all_metrics run by default in the long_test
+## They could take up to 2-3h each e.g., and run through the full pipeline and make sure
+## that no performance degrades in anything meaningful, so we can tell if something broke
+## Right now, this is done very poorly, with poor coverage.
+## Also, these should keep track of how long functions are and how much gpu/cpu memory they allocate, as this is somethign I also want to optimize.
+## Note that this will depend also on what hardware it is run, so that they should be included with the information.
+## If it's different hardware (specifically different gpu) then it shouldnt necessary be a fail but it should eb a warning
+## If we use same hardware and tehre is a slow down/more memory allocated than before, it should be a fail. 
+##
+## TO start off, we should make the initial stats from the "old" recovar code.
+## To do this: you should use this commit to generate the dataset, then the old recovar code to run pipeline (With appropriate params)
+## Then use the code from this commit to generate stats.
+# 
+## 
+## TODO: There should be such test for all outward facing functions (from command line)
+## so compute_state, compute_trajectory analyze pipeline, extra_iamge_subset, estimate_conformational_density, estaimte_stable state, etc
 def generate_compact_support_test_volumes(
     output_dir,
     grid_size=128,
@@ -144,7 +177,7 @@ def generate_compact_support_test_volumes(
 
     return volume_prefix
 
-
+##TODO use TMP_RECOVAR_DIR if set? (see staging.py)
 def validate_storage_args_for_generated_volumes(args, argv):
     """
     Enforce explicit output location when auto-generating volumes.

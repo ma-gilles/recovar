@@ -199,7 +199,9 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
         from recovar.heterogeneity import covariance_estimation
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, cryos.volume_shape, gpu_memory= None)
 
-
+    ## TODO: I don't love the way this is handled either. Perhaps should be stored in a more clever consistent way
+    ## E.g. instantly resort to the right order, when CryoDataset also gets cleaned up
+    ## Perhaps 
     n_cryos = len(cryos)
     zs = [None] * n_cryos
     cov_zs = [None] * n_cryos
@@ -232,7 +234,9 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
     
     return zs, cov_zs, est_contrasts, bias
     
-
+## TODO: a lot of implementations of same thing. It shoudl be refactored better and the names as well.
+## Also it should be benchmarked. Is my whole "precompute matrices, then do fast contrast with precompute" make sense
+## Also these functoins have too many inputs
 @nvtx.annotate("get_coords_in_basis_and_contrast", color="blue", domain=NVTX_DOMAIN_EMBED)
 def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis, eigenvalues, volume_mask, contrast_grid, batch_size, disc_type, compute_covariances = True, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None, force_not_shared_label = False, contrast_shared_across_tilt_series = False):
 
@@ -480,7 +484,7 @@ batch_x_T_y = jax.vmap(  lambda x,y : jnp.conj(x).T @ y, in_axes = (0,0))
 # New Equinox-based embedding API
 # ============================================================================
 
-
+## 
 def _compute_batch_coords_p1(
     config: ForwardModelConfig,
     batch_data: BatchData,

@@ -10,6 +10,10 @@ import matplotlib.pyplot as plt
 from recovar.heterogeneity import latent_density
 logger = logging.getLogger(__name__)
 
+##TODO clean this up. Also skfmm is a pain, so I may way jsut a clean efficient implementation of FMM
+## that doesn't require skfmm since it tends to break, is awkward to isntall etc.
+## Or find a better supported/updated implementation. FMM might be very slow in python
+## so might need a C++ implementation which might make it more painful to build recovar
 
 
 def subsample_path(path, n_pts):

@@ -76,6 +76,13 @@ sequential, seek+fromfile random access, and ``load_all`` eager load) follow
 the redirect transparently.
 """
 
+## TODO: make it more clear what is the default behavior. How is export RECOVAR_CACHE_DIR set by default?
+## Also, Does that mean no caching gets done? 
+## A,sl What happens I run pipeline, job ends, then later I spawn a new job (possibly on a new node), does staging happen again?
+## Is everythign figure out automatically
+## TODO: Should anything else be staged besides MRC? I suppose right nor MRC are the only thing which are not kept in memory
+## Perhaps this should change and starfiles/mrc should be read in stream or something
+
 from __future__ import annotations
 
 import hashlib

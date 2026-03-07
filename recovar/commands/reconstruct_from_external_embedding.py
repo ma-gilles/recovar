@@ -159,7 +159,9 @@ def add_args(parser: argparse.ArgumentParser):
 
     return parser
 
-
+##TODO: I would like to make this function much easier to use. There should be a "basic interface"
+## That any problem cna use, but I also would like a few specialized ones to make it easy to run on the output of
+## cryodrgn, cryosparc + 3DVA, cryosparc + 3DFLex, RELION + (whatever their 3Dflex is called)
 def generate(args):
     st_time = time.time()
 

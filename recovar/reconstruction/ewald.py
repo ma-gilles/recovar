@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 PART 1: Coordinate/Ewald Sphere Functions
 '''
 
+## TODO: This is somewhat stale/unsupported now. I will leave it as is for now.
+
 PLANE_MODE = False # For debugging only.
 
 if PLANE_MODE:

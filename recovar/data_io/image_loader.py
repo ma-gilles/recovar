@@ -841,7 +841,7 @@ class DownsamplingImageLoader(ImageLoader):
 # ---------------------------------------------------------------------------
 # Compatibility aliases
 # ---------------------------------------------------------------------------
-
+## TODO Remove these, just pipe right names to places 
 ImageSource = ImageLoader
 MRCFileSource = MRCLoader
 StarfileSource = StarLoader

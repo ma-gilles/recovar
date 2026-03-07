@@ -27,7 +27,14 @@ NVTX_DOMAIN_NOISE = "noise"
 # Neither solution implemented here are very satisfying. Guessing noise in presence of heterogeneity is not trivial, since the residual doesn't seem like the correct way to do it.
 # It makes me think we should have "noise pickers".
 
-#
+## TODO: I think there are a lot of old/unusred noise estimators in here that should be deleted.
+## See whats used by pipelien (only place where noise is estiamted)
+
+## TODO: I would like a new noise estimator, which is going to regress
+## (pixel - CTF * mean)^2 against CTF_^2
+## The idea is that Expected value of that is going to be somethign like noise_var^2 + CTF^2 signal_variance (over frequency shells)
+## I probably need to be involved in this one, rather than just AI, so remind me to do it.
+## Or write some initial implementation and ask me to look at it/results.
 
 
 def _default_image_shape_from_radial(radial_noise):

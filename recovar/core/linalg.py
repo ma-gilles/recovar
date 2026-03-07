@@ -158,6 +158,10 @@ def idft3(x, vec_shape ):
     x = x.reshape([-1, x.shape[-1]])
     return x
 
+## TODO could the batched ones be replaced with jax.numpy cpu  code rather than numpy?
+# Would that be faster?
+# I.e. still send data back and forth between cpu/gpu but use jax.numpy as the cpu backend as well
+# .e.g batch_idft3 is allocated on numpy
 @functools.partial(jax.jit, static_argnums = [1])
 def dft3(x, vec_shape):
     x = x.reshape([*vec_shape, x.shape[-1]])
@@ -189,7 +193,8 @@ def batch_dft3(x, vec_shape, batch_size):
         )
     return x_out
 
-
+## TODO: are these two functions re-implemented several times in the codebase in different places? Probably should be streamline
+## Also is this the most efficient way to implement this?
 def broadcast_dot(x,y):
     return jax.lax.batch_matmul(jnp.conj(x[...,None,:]),y[...,:,None])[...,0,0]
 
@@ -222,6 +227,7 @@ def batch_inner_product(x, y):
     return jnp.sum(jnp.conj(x_flat) * y_flat, axis=-1)
 
 
+## TODO similarly, similar functions are implemented elsewher ein codes I think. It should be cleaned up.
 def _half_spectrum_to_full_spectrum(x_half, full_shape):
     full_shape = tuple(int(s) for s in full_shape)
     if len(full_shape) == 2:
@@ -246,7 +252,7 @@ def half_spectrum_last_axis_weights(last_axis_size, dtype=jnp.float32):
             w = w.at[1:].set(2)
     return w
 
-
+## TODO this is also reimplemented elsewher eI believe
 def rfft2_hermitian_weights(image_shape, dtype=jnp.float32):
     """Precompute ``sqrt(w)`` weights for 2-D half-spectrum (rfft2) inner products.
 

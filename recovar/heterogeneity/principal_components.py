@@ -157,6 +157,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
     return u, s, covariance_cols, picked_frequencies, column_fscs
 
 
+# TODO: seems like a useless function, just move the inner one to other fn
 @nvtx.annotate("get_cov_svds", color="blue", domain=NVTX_DOMAIN_PCA)
 def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,  vol_batch_size, gpu_memory_to_use, ignore_zero_frequency, randomized_sketch_size ):
     u = {}; s = {}    
@@ -173,6 +174,7 @@ def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , dis
     basis = basis[:,:basis_size]
 
     ####
+    # TODO: Clean up this batch size computation, move elsewhere with other batch size comp. Also does the algebra make sense?
     memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() -  2*basis_size**4*8/1e9
     batch_size = utils.get_embedding_batch_size(basis, cryos[0].image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate )
 
@@ -265,7 +267,7 @@ def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_s
 # A lot of implementation of the same things, having to do with taking the real SVD of
 # the columns of Sigma_col
 # - Third does a randomized SVD in the spatial domain.
-
+# TODO: unsured functions (if they can't be called by pipeline.py) should be cleaned out here. There are too many useless ones
 def flip_vec(column, volume_shape):
     column = column.reshape(volume_shape)
     column_flipped = jnp.zeros_like(column)
@@ -336,7 +338,7 @@ def get_all_copied_columns(columns, picked_frequencies, volume_shape):
 
 
 # IMPLEMENTS THE TWO MATVECS WE NEED TO RUN THE RANDOMIZED SVD.
-
+## TODO: which veriosn is used? Should it be the other? Figure it out. Dlete the other ones
 @nvtx.annotate("right_matvec_with_spatial_Sigma", color="orange", domain=NVTX_DOMAIN_PCA)
 def right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40, precomputed_symmetric=None):
     st_time = time.time()
@@ -648,6 +650,7 @@ def test_different_embeddings(cryos, volume_mask, mean_estimate, basis, eigenval
     return residuals, residuals_flipped
 
 
+## TODO: move this elsewhere. This is a failed attempt at trying to predict which zs are the best. It's an interesting one but not used because it doesn't work
 def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zdims= None, n_images = 1000, volume_mask= None):
     
     # noise.get_average_residual_square_v2(cryos[0], volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp')
@@ -724,7 +727,7 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
         logger.info("zdim %s", zdim)#, end="")
     return global_likely_choice1, metrics, all_estimators, all_lhs
 
-
+## TODO Similar to function above
 def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, zdims= None, n_images = 1000, tau = None):
     
     from recovar.heterogeneity import latent_density

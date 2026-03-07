@@ -11,7 +11,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
 
 logger = logging.getLogger(__name__)
-
+## TODO: This should be heavily refactored, as most of this file
 def masking_options(volume_mask_option, means, volume_shape, dtype_real = np.float32, mask_dilation_iter = 0, keep_input_mask = False, dilated_mask_dilations_iter = None):
     dilated_mask_dilations_iter = np.ceil(6 * volume_shape[0] / 128).astype(int) if dilated_mask_dilations_iter is None else dilated_mask_dilations_iter
     input_mask = volume_mask_option
@@ -134,7 +134,7 @@ def get_radial_mask(shape, radius = None):
     return zero_out_outside_sphere_small
 
 
-
+## TODO: I think window mask/standard_mask is defined in many places. REfactor/delete
 # Standard image masking (Other masking are used, too)
 def window_mask(D, in_rad, out_rad):
     if D % 2 != 0:

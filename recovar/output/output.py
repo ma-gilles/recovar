@@ -22,6 +22,10 @@ from recovar.reconstruction import regularization
 
 logger = logging.getLogger(__name__)
 
+## TODO: this file needs some major refactoring, splitting functions etc, and removing the stales ones
+
+## TODO: These should probably be elsewhere or delelted. This are use for trajectories
+## Probably that trajectories stuff should have its own directory, along with estiamte conformational density stuff
 def get_resampled_distances(gt_vols):
     return trajectory.get_cum_curvelength(gt_vols)
 
@@ -597,6 +601,7 @@ def plot_umap(output_folder, zs, centers):
 
 
 
+## TODO this hsould move elsewhere
 
 def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state"):
     """Compute reweighted volume estimates and save with RELION-style organization.
@@ -657,6 +662,9 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
         logger.info("Mask radius fraction = %s. Setting locres_maskrad = locres_sampling = box_size * voxel_size / %s = %.1f Angstroms. Using %d particles for template.", maskrad_fraction, maskrad_fraction, locres_maskrad, n_min_particles)
         heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, diag_dir, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely')
 
+        ## TODO: this is really ugly logic and organization. Just have them pass a folder or something so we dont have to move, 
+        ## And come up with better way to organize results for this
+        ## Probably use RELION has a pattern for how to store stuff in subdir
         # Move primary files from diagnostics to flat output
         primary_stem = os.path.join(output_folder, vol_stem)
         os.rename(os.path.join(diag_dir, "filtered.mrc"), primary_stem + ".mrc")
@@ -714,6 +722,7 @@ def load_results_new(datadir):
     return results
 
 
+## TODO: I am happy havin this thing have  alot of backward compatibility funcitons, but it should be nowhere else, i.e. functions that call pipelineoutput shouldnt have if statements in front of them checking the verison, it all should be figured out in here
 class PipelineOutput:
     def __init__(self, result_path):
         # Normalize trailing slash for backward compat
@@ -983,7 +992,7 @@ def add_noise_to_loaded_dataset(cryos, noise_variance):
         else:
             cryo.set_variable_radial_noise_model(noise_variance)
 
-
+## TODO these need to move as well
 def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False,  input_density = None, latent_space_bounds = None):
     """Compute minimum-energy trajectories and generate volume/density plots.
 
@@ -1400,7 +1409,7 @@ def scatter_annotate(
     ax.set_facecolor("white")
     return fig, ax
 
-
+## TODO implement a better one for this? data could be huge so if query is medium this will be a problem. Not sure, depends where it's called. perhaps hsould use one of those clever 
 def get_nearest_point(
     data: np.ndarray, query: np.ndarray
 ) -> Tuple[npt.NDArray[np.float32], np.ndarray]:

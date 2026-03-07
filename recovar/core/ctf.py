@@ -240,7 +240,7 @@ def evaluate_ctf_wrapper_half(CTF_params, image_shape, voxel_size, antialiasing=
     full = evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, antialiasing=True)
     return fourier_transform_utils.full_image_to_half_image(full, image_shape)
 
-
+## TODO: Is this used anywhere? If not should it be? Otherwise, delete.
 class CTFParams:
     """Class to handle CTF parameters in a more structured way."""
 

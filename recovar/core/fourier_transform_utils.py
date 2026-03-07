@@ -3,6 +3,7 @@ import numpy as np
 
 DEFAULT_FFT_NORM = "backward"
 
+# TODO: some of these functions are built-in numpy/jnp. These should be used instead, or optimized otherwise
 
 def get_1d_frequency_grid(n, voxel_size=1, scaled=False):
     # Equivalent to the old even/odd linspace logic, but cheaper and exact on integer steps.

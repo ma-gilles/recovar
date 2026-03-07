@@ -22,6 +22,8 @@ from recovar.reconstruction import regularization, relion_functions, noise
 
 logger = logging.getLogger(__name__)
 
+## TODO there is code like this in several places. It should be written somewhere as a fn and run instead.
+
 # CUDA Profiler for selective profiling with nsys
 # Uses ctypes to call CUDA runtime API directly (no PyTorch needed)
 try:
@@ -80,6 +82,7 @@ except (ImportError, OSError, AttributeError) as e:
 # Domain name for compute_H_B profiling (use as string in decorators)
 NVTX_DOMAIN_H_B = "compute_H_B"
 
+## TODO: not a big fan of the way options are handled, perhaps refactor this part.
 @nvtx.annotate("get_default_covariance_computation_options", color="red")
 def get_default_covariance_computation_options(grid_size=None):
     """Return default options dict for covariance computation.
@@ -380,7 +383,8 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask
 # New Equinox-based variance estimation
 # ============================================================================
 
-
+## TODO there is clean up to be done here so that all functions use half images/half noise/half ctf etc, 
+## but another branch is already working on it so perhaps check with that
 @eqx.filter_jit
 @nvtx.annotate("variance_relion_kernel_trilinear", color="yellow")
 def variance_relion_kernel_trilinear(
@@ -401,6 +405,7 @@ def variance_relion_kernel_trilinear(
     Pass None to initialise from zero; pass an existing half-volume to accumulate.
     """
     rotation_matrices = batch_data.rotation_matrices
+
     noise_variances = batch_data.noise_variance
 
     # batch_data.images is already in half-image (rfft-packed) format.
@@ -575,7 +580,8 @@ def compute_variance(
         _to_cpu(noise_p_variance_est).real,
     )
 
-
+## TODO: The way H_B is computed needs to be refactored, there is a stack of 3-4 functions before we hit one 
+## that does something, others are just splitting the dataset/ columns etc
 @nvtx.annotate("compute_both_H_B", color="blue")
 def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies,
                      gpu_memory, options, use_multi_gpu=False, n_gpus=None):
@@ -637,7 +643,6 @@ def _compute_H_B_multi_gpu(cryo, mean, dilated_volume_mask, picked_frequencies,
 
     return H, B
 
-
 def preprocess_covariance_batch(config, batch_data, mean_estimate, volume_mask,
                                 image_stack_mask, opts):
     """Preprocess one image batch for covariance column computation.
@@ -656,6 +661,9 @@ def preprocess_covariance_batch(config, batch_data, mean_estimate, volume_mask,
 
     # 1. Per-image tight mask (skip expensive 3D FFT + projection when not masking)
     if opts.mask_images:
+        ## TODO a big one: image_tight_mask and similar probably be using cubic discretization for the mask
+        ## I think currently it is using linear_interp + upsampled grid. I think that there is no need for upsampled grid
+        ## if using cubic. Also make sure inside of it it uses half-images when in fourier domain.
         image_mask = covariance_core.get_per_image_tight_mask(
             volume_mask, rotation_matrices, image_stack_mask,
             config.volume_mask_threshold,
@@ -756,7 +764,9 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
     H_out = np.empty([volume_size, n_picked], dtype=cryo.dtype)
     B_out = np.empty([volume_size, n_picked], dtype=cryo.dtype)
 
-    # Outer loop: frequency batches (for GPU memory)
+    ## TODO: is there a cleaner way to implement these next few lines? justhe batching logic for columns.
+    ## Also is it still necessary? I thought that by default this function would acutlaly do a single batch (to save CPU memory), since might as well compute teh columns right away
+    ## If so, remove this forloop altogether
     for freq_k in range(0, int(np.ceil(n_picked / column_batch_size))):
         freq_st = int(freq_k * column_batch_size)
         freq_end = int(np.min([(freq_k + 1) * column_batch_size, n_picked]))
@@ -802,7 +812,7 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
 
     return H_out, B_out
 
-
+##TODO I would like the functions to be reorganized, perhaps in different files. Right now the H/B and regularization are intertwined which makes it hard to read
 @nvtx.annotate("compute_covariance_regularization_relion_style", color="cyan")
 def compute_covariance_regularization_relion_style(
     Hs, Bs, mean_prior, picked_frequencies, cov_noise,
@@ -827,10 +837,12 @@ def compute_covariance_regularization_relion_style(
     fscs = [None] * n_freqs
     combined_cov_cols = [None] * n_freqs
 
+    ## TODO: clean up loop syntax (just next 3 lines)
     for batch_st in range(0, n_freqs, batch_size):
         batch_end = min(batch_st + batch_size, n_freqs)
         indices = np.arange(batch_st, batch_end)
 
+        ## TODO: better way to implement this whole Hs[0][:, batch_st:batch_end].T, business perhaps?
         combined_cov_col, priors, fscs_this = regularization.prior_iteration_relion_style_batch(
             Hs[0][:, batch_st:batch_end].T,
             Hs[1][:, batch_st:batch_end].T,
@@ -859,9 +871,11 @@ def compute_covariance_regularization_relion_style(
     combined_cov_cols = np.stack(combined_cov_cols, axis=0)
     return combined_cov_cols, fsc_priors, fscs
 
+# TODO: is this implemented multiple times in teh code? if so, remove. Perhap smove this function to a more reasonable file, too
 from recovar.core import cubic_interpolation
 vmap_calculate_spline_coefficients = jax.vmap(cubic_interpolation.calculate_spline_coefficients, in_axes = 0, out_axes = 0)
 
+# TODO: Perhaps this one too
 @nvtx.annotate("compute_spline_coeffs_in_batch", color="magenta")
 def compute_spline_coeffs_in_batch(basis, volume_shape, gpu_memory=None):
     gpu_memory = utils.get_gpu_memory_total() if gpu_memory is None else gpu_memory
@@ -960,6 +974,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     del basis
     # Deallocate some memory?
 
+    ## TODO there is a few of these vec/unvec as well. Move somewhere and import, and also clean up a bit.
     # Solve dense least squares?
     def vec(X):
         return X.T.reshape(-1)
@@ -973,6 +988,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     utils.report_memory_device(logger=logger)
     rhs = vec(rhs)
 
+    #TODO: is this cpu safe?
     if change_device:
         rhs = jax.device_put(rhs, jax.devices("gpu")[0])
         lhs = jax.device_put(lhs, jax.devices("gpu")[0])
@@ -980,6 +996,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     # Tikhonov regularization: prevents NaN from near-singular LHS
     # (can happen when n_images is small relative to basis_size)
     trace_val = jnp.trace(lhs)
+    ## TODO remove the Nan check. It should just fail if nan is returned, otherwise it will hide bugs.
     # Guard against zero/NaN trace (e.g., all batches produced NaN)
     trace_val = jnp.where(jnp.isfinite(trace_val) & (trace_val > 0), trace_val, jnp.float32(1.0))
     reg = jnp.float32(1e-6) * trace_val / lhs.shape[0]
@@ -1131,7 +1148,7 @@ def reduce_covariance_inner(
 
 
 batch_kron = jax.vmap(jnp.kron, in_axes=(0,0))
-
+## TODO: remove these functions if not used. I think they are not.
 @nvtx.annotate("summed_batch_kron", color="gray")
 def summed_batch_kron(X):
     return jnp.sum(batch_kron(X,X), axis=0)
@@ -1144,7 +1161,7 @@ def summed_batch_kron_scan(X):
     summed_kron = jax.lax.fori_loop(0, X.shape[0], fori_loop_body, init)
     return summed_kron
 
-
+## TODO this is same implementaiton as others, move or call from elsewhere or something
 batch_x_T_y = jax.vmap(  lambda x,y : jnp.conj(x).T @ y, in_axes = (0,0))
 
 @nvtx.annotate("summed_outer_products", color="gray")
@@ -1189,6 +1206,7 @@ def adjoint_kernel_slice(images, rotation_matrices, image_shape, volume_shape, k
     disc_type = "linear_interp" if kernel == "triangular" else "nearest"
     if kernel not in ("triangular", "square"):
         raise ValueError("Kernel not implemented")
+    ## TODO: why is there an if statements here? why would htis ever be ndim2? clean
     if images.ndim == 3:
         return core.batch_adjoint_slice_volume(
             images, rotation_matrices, image_shape, volume_shape, disc_type, volumes=volumes)
@@ -1256,10 +1274,12 @@ def compute_freq_batch(
     ctf_squared = ctf_on_grid * jnp.conj(ctf_on_grid)
 
     # Pre-process tilt labels ONCE (not per-frequency)
+    ## TODO: this says should be called outside of jit in doc.. move?
     if shared_label and tilt_labels is not None:
         tilt_labels = preprocess_tilt_labels_for_batch(tilt_labels)
 
     max_groups = images.shape[0]
+
 
     if H_accum is None:
         H_accum = jnp.zeros((n_freq, config.volume_size), dtype=images.dtype)

@@ -9,7 +9,7 @@ from recovar.core.configs import DataIterator, ForwardModelConfig
 import recovar.core.forward as core_forward
 
 logger = logging.getLogger(__name__)
-
+## TODO: clean this up, document it (should be very non probably since no one has asked for this, but nevertheless an interesting feature)
 
 def compute_residual(batch_data, mean_estimate, config, noise_variance):
     images = core.translate_images(batch_data.images, batch_data.translations, config.image_shape)

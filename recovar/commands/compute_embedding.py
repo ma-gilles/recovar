@@ -12,7 +12,7 @@ from recovar.data_io import dataset
 from recovar.heterogeneity import embedding
 
 logger = logging.getLogger(__name__)
-
+## TODO: this is very out of date code. Fix? Delete?
 
 def add_args(parser: argparse.ArgumentParser):
     parser.add_argument(

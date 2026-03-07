@@ -17,7 +17,8 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-
+## TODO this should be optimized to be able to run on gpu or with multithread or something
+## It should be nearly instant (besides read/write time).
 def downsample_images(
     images: np.ndarray,
     target_D: int,
@@ -70,7 +71,8 @@ def downsample_images(
 
     return result.astype(images.dtype)
 
-
+## TODO: This seems like a bad implementation? needs all images loaded on numpy? That could be terrabytes?
+## IF not used, remove otherwise fix
 def downsample_images_batch(
     images: np.ndarray,
     target_D: int,

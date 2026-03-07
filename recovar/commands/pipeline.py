@@ -126,10 +126,14 @@ def add_args(parser: argparse.ArgumentParser):
         '--zdim', type=list_of_ints, default=[1, 2, 4, 10, 20],
         help="Dimensions of latent variable (comma-separated). Default=1,2,4,10,20",
     )
+
+    ## TODO move to advanced
     algo.add_argument(
         "--noise-model", dest="noise_model", default="radial",
         help="Noise model: radial (default) or white",
     )
+
+    ## TODO: there should be a new section of params perhaps, "debug or dev or advanced."I'll call it advanced. This hsould be one of them
     algo.add_argument(
         "--mean-fn", dest="mean_fn", default="triangular",
         help="Mean function: triangular (default), old, triangular_reg",
@@ -139,15 +143,22 @@ def add_args(parser: argparse.ArgumentParser):
         action=argparse.BooleanOptionalAction, default=False,
         help="Estimate and correct for amplitude scaling variation across images",
     )
+
+    ## TODO move to advanced
+
     algo.add_argument(
         "--do-over-with-contrast", dest="do_over_with_contrast",
         action=argparse.BooleanOptionalAction, default=None,
         help="Re-run once contrast is estimated. Default = same as --correct-contrast",
     )
+    ## TODO move to advanced
+
     algo.add_argument(
         "--ignore-zero-frequency", dest="ignore_zero_frequency", action="store_true",
         help="Ignore zero frequency (useful when images are normalized to 0 mean)",
     )
+    ## TODO move to advanced
+
     algo.add_argument(
         "--padding", type=int, default=0,
         help="Real-space padding",
@@ -160,6 +171,8 @@ def add_args(parser: argparse.ArgumentParser):
         "--new-noise-est", dest='new_noise_est', action="store_true",
         help="Use new noise estimation",
     )
+    ## TODO move to advanced
+
     algo.add_argument(
         '--use_reg_mean_in_contrast', action=argparse.BooleanOptionalAction, default=True,
     )
@@ -221,6 +234,9 @@ def add_args(parser: argparse.ArgumentParser):
         "--very-low-memory-option", dest="very_low_memory_option", action="store_true",
         help="Use lowest memory options for covariance estimation",
     )
+
+    ## TODO move to advanced
+    ## TODO: also debug this and decide if it should be there
     perf.add_argument(
         "--multi-zdim-embedding", dest="multi_zdim_embedding",
         action=argparse.BooleanOptionalAction, default=False,
@@ -243,6 +259,7 @@ def add_args(parser: argparse.ArgumentParser):
 # ---------------------------------------------------------------------------
 # Helper functions — extracted from standard_recovar_pipeline for clarity
 # ---------------------------------------------------------------------------
+## TODO move to this to somewhere that makes more sense, perhaps data_io or something
 
 def _peek_image_size(particles_file: str, datadir: str = '', strip_prefix=None) -> int:
     """Get the image box size D without constructing a full ImageLoader.
@@ -320,6 +337,7 @@ def _peek_image_size(particles_file: str, datadir: str = '', strip_prefix=None) 
                          datadir=datadir or '', strip_prefix=strip_prefix)
     return loader.image_size
 
+## TODO Also should be moved elsewhere. Also there should be an option to specify where to downsample?
 
 def _resolve_downsample(args):
     """Decide whether downsampling is actually needed.
@@ -385,14 +403,14 @@ def _check_uninvert_data(means, cryos, args):
             for cryo in cryos:
                 cryo.image_stack.mult = -1 * cryo.image_stack.mult
             args.uninvert_data = "true"
-            logger.warning('sum(mean) < 0! Swapping sign of data (uninvert-data = true)')
+            logger.warning('sum(mean) < 0! Swapping sign of data (uninvert-data = true). If this is not what you want, explicitely set uninvert-data=False ')
         else:
             logger.info('setting (uninvert-data = false)')
             args.uninvert_data = "false"
     elif uninvert_check:
         logger.warning('sum(mean) < 0! Data probably needs to be inverted! set --uninvert-data=true (or automatic)')
 
-
+## TODO I'd like to simplify the logic here in this function, seems confusing
 def _estimate_noise(cryos, means, dilated_volume_mask, batch_size, args, noise_model):
     """Estimate radial noise variance from outside-mask and upper-bound methods.
 
@@ -465,7 +483,9 @@ def _estimate_noise(cryos, means, dilated_volume_mask, batch_size, args, noise_m
         'masked_image_PS': masked_image_PS,
     }
 
-
+## TODO perhaps should move, and complement mask should be better documented in the parse args/documentation
+## The principal goes is to have "two embeddings", to "factor" out the heterogeneity in a part of molecule we don't care about
+## Rather than ignoring it which may cause interference with the one we care about
 def _build_focus_masks(args, means, volume_mask, volume_shape, cryos):
     """Build focus masks and optional complement mask."""
     if args.focus_mask is not None:
@@ -649,6 +669,9 @@ def standard_recovar_pipeline(args):
             args.strip_prefix = None
 
     # --- Load dataset ---
+    ## TODO clean up this logic of loading in dicts, passing them, etc. This is quite messy.
+    ## Though I would still like a way to load halfsetes in a reasonable way even outside pipelien
+    ## E.g. to do some simple scripts like the ones you can find in EM folder or PPCA one.
     ind_split = dataset.figure_out_halfsets(args)
     dataset_loader_dict = dataset.make_dataset_loader_dict(args)
     logger.info("Data loading configuration:")
@@ -661,13 +684,24 @@ def standard_recovar_pipeline(args):
         logger.info("  Datadir: %s", dataset_loader_dict['datadir'])
 
     options = utils.make_algorithm_options(args)
+
+    ## TODO this is a big one, so do with care. I wonder if there is a better way to handle this logic.
+    ## Could we instead store 'one' dataset and the indices instead of two different objects, then do a clevery use of iterators
+    ## The current way to just have two of these objects around which is not great.
     cryos = dataset.get_split_datasets_from_dict(dataset_loader_dict, ind_split, args.lazy)
 
+    ## TODO: log this. Also document it better. Also I'd like a warning or something if I say "allocate this much" and peak gpu memory ends up being more than that
+    ## So that it can be fixed in the future 
     if args.gpu_memory is not None:
         utils.set_gpu_memory_limit(args.gpu_memory)
     gpu_memory = utils.get_gpu_memory_total()
     volume_shape = cryos.volume_shape
 
+    ## TODO: a big one: I want batch size logic to be separated from rest of utils, 
+    # and have a better/more transparent way this is done, to make future development easier
+    ## Right now, all these numbers were basically found "by hand" by trying to maximize gpu memory, without 
+    ## breaking, but it is  not robust
+    ## Also, I would like some slightly better formatting/more informational logging here
     batch_size = utils.get_image_batch_size(cryos.grid_size, gpu_memory)
     logger.info("image batch size: %s", batch_size)
     logger.info("volume batch size: %s", utils.get_vol_batch_size(cryos.grid_size, gpu_memory))
@@ -686,8 +720,13 @@ def standard_recovar_pipeline(args):
     if args.do_over_with_contrast and not args.correct_contrast:
         logger.warning("Do over with contrast, but contrast correction is off. Setting contrast correction to on")
         args.correct_contrast = True
+        ## TODO the whole options dict is mesy and should be removed. Also the contrast_qr should be better documented and named
+        ## Currently, the _qr just refers to teh fact that the covariance cols are made orthogonal to mean if contrast is on, as detailed in paper
         options["contrast"] = "contrast_qr"
 
+    ## TODO: better documentation for what this is doing. Also "contrast" is not a good name for this in general,
+    ## So perhaps I should swap the (outward facing) name to something else, like per_image_scale following csparc's convention.
+    ## Either wya, it should be better explained in args
     if args.shared_contrast_across_tilts:
         options['contrast'] += '_shared'
         logger.info("Setting contrast to shared")
@@ -714,6 +753,12 @@ def standard_recovar_pipeline(args):
             embedding.set_contrasts_in_cryos(cryos, contrasts_for_second)
             options["contrast"] = "contrast"
 
+        ##TODO: mean functions return a dict with volume sized arrays.
+        ## I think none of them are on gpu which is good (nothing should be on gpu that absolutely has to be)
+        ## But still can build on cpu memory. I would like any ararys which is not used downstream to be 
+        ## deallocated right away, or after they're saved to disk.
+        ## Also I don't like the use of dicts, to return arguments, this should probably be removed
+
         # --- Compute mean ---
         if args.mean_fn == 'triangular':
             means, mean_prior, _ = homogeneous.get_mean_conformation_relion(
@@ -724,6 +769,11 @@ def standard_recovar_pipeline(args):
         else:
             raise ValueError(f"mean function {args.mean_fn} not recognized")
         utils.report_memory_device(logger=logger)
+
+        ## TODO: after this the mean is used (almost exclusively not but quite) from its cubic interpolant
+        ## So this should be compute here and passed around isntead of recomputed in downstream functions.
+        ## In some cases though, the mean on teh original grid needs to be used, so it needs to be kept aroudn as 
+        ## well I think (on cpu).
 
         # --- Check sign and uninvert if needed ---
         _check_uninvert_data(means, cryos, args)
@@ -752,6 +802,7 @@ def standard_recovar_pipeline(args):
         output.save_volume(volume_mask, os.path.splitext(paths.mask_volume)[0], volume_shape,
                       from_ft=False, voxel_size=cryos.voxel_size)
 
+        ## TODO: deallocate when done withthis
         # Filter and save mean
         from recovar.heterogeneity import locres
         half1 = fourier_transform_utils.get_idft3(means['corrected0'].reshape(volume_shape))
@@ -786,12 +837,16 @@ def standard_recovar_pipeline(args):
 
         # --- Covariance options ---
         covariance_options = covariance_estimation.get_default_covariance_computation_options(cryos.grid_size)
+
+        ## TODO: make sure these make sense and can be used/dont crash, and I didn't forget to adjust another relevant paramter
         if args.low_memory_option:
             covariance_options['sampling_n_cols'] = 50
             covariance_options['randomized_sketch_size'] = 100
             covariance_options['n_pcs_to_compute'] = 100
             covariance_options['sampling_avoid_in_radius'] = 3
 
+        ## TODO: This would probably result in a very degraded results so it should throw a warning for users
+        ## Nevertheless, it should probably be used for fast CPU tests, so add these options for cpu, e.g. with outliers and so now that I deleted with tiny datasets.
         if args.very_low_memory_option:
             covariance_options['sampling_n_cols'] = 25
             covariance_options['randomized_sketch_size'] = 35
@@ -811,6 +866,7 @@ def standard_recovar_pipeline(args):
 
         ignore_zero_frequency = options['ignore_zero_frequency']
         for idx, focus_mask in enumerate(focus_masks):
+            ## TODO: remove the use dicts in returns again
             u_this, s_this, covariance_cols, picked_frequencies, column_fscs = \
                 principal_components.estimate_principal_components(
                     cryos, options, means, mean_prior, focus_mask, dilated_volume_mask,
@@ -832,6 +888,7 @@ def standard_recovar_pipeline(args):
         s = {'rescaled': np.concatenate(s, axis=0), 'real': None}
         options['ignore_zero_frequency'] = ignore_zero_frequency
 
+
         # Validate PCA results
         if not np.all(np.isfinite(u['rescaled'])):
             raise ValueError("u contains non-finite values")
@@ -846,6 +903,8 @@ def standard_recovar_pipeline(args):
         if volume_mask.dtype != np.float32:
             raise TypeError(f"volume_mask is not of dtype float32, but {volume_mask.dtype}")
 
+        ##TODO: Should this option just be deleted all together? At least there should be big warnings in 
+        ## the parse args 
         if options['ignore_zero_frequency']:
             logger.info('ignoring zero frequency')
             noise_var_used[0] *= 1e16
@@ -862,7 +921,8 @@ def standard_recovar_pipeline(args):
          est_contrasts, est_contrasts_noreg) = _compute_embeddings(
             means, u, s, cryos, volume_mask, options, gpu_memory,
             focus_masks, zdim_for_rest, args)
-
+        
+        ## Make sure this makes sense
         if repeat == 1:
             for key in est_contrasts:
                 est_contrasts[key] = est_contrasts[key] * contrasts_for_second

@@ -26,6 +26,6 @@ def load_3dva_results(root, dft=False):
 
     return fourier_transform_utils.get_dft3(mean).reshape(-1), dft, zs.T * np.sqrt(dft.shape[0])
 
-
+## TODO remove this kidn of stuff
 # Alias: 3D Flex results use the same file format as 3D VA.
 load_3dflex_results = load_3dva_results

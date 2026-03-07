@@ -88,7 +88,7 @@ def make_tiny_cryo_dataset(grid_size=4, n_images=8, seed=0):
     )
     return cryo
 
-
+##TODO why would this be useful when the real ones only store in real space. Delete?
 class TinyFTImageStack:
     """In-memory Fourier-domain image stack for tiny end-to-end unit tests."""
 

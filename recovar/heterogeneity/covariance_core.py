@@ -120,7 +120,8 @@ def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape, half_images
         proj_eigen = fourier_transform_utils.get_dft2(proj_eigen).reshape([*proj_eigen.shape[0:2], -1])
     return proj_eigen
 
-
+## TODO: This is not ideal. The correct way to pass no mask should be to use mask = None
+## not an all ones mask but it might be happening because I was lazy. Fix this whereever
 def check_mask(mask):
     no_mask = np.all(np.isclose(mask,1))
     if no_mask:
@@ -177,7 +178,7 @@ def batch_vol_forward_from_map(
 # Equinox-based API
 # ============================================================================
 
-
+## TODO: rename this function. centered would be understood as "translated" back to origin by most people, rather than mean subtracted
 @eqx.filter_jit
 @nvtx.annotate("centered_images", color="yellow", domain=NVTX_DOMAIN_COV_CORE)
 def centered_images(
@@ -206,7 +207,7 @@ def centered_images(
         centered = translated - projected
     return centered
 
-
+## TODO: are there multiple implementations of this? if so delete
 @eqx.filter_jit
 @nvtx.annotate("batch_vol_forward", color="blue", domain=NVTX_DOMAIN_COV_CORE)
 def batch_vol_forward(

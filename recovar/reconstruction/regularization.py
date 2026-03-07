@@ -134,6 +134,7 @@ def jax_scipy_nd_image_mean(input, labels=None, index=None):
     return jax_scipy_nd_image_mean_inner(input, labels = labels, index = index)
 
 def jax_scipy_nd_image_mean_inner(input, labels=None, index=None):
+    ## TODO fix this stuff
     numpy = jnp
     unique_labels = index
     new_labels = labels
