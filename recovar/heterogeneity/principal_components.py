@@ -303,13 +303,28 @@ make_symmetric_columns_cpu = jax.jit(make_symmetric_columns, static_argnums = (2
 
 def make_symmetric_columns_np(columns, picked_frequencies, volume_shape):
     freqs = np.array(core.vec_indices_to_frequencies(picked_frequencies, volume_shape))
-    
+
     good_idx = freqs[:,0] > 0
     minus_freqs = -freqs
     minus_indices = np.array(core.frequencies_to_vec_indices(minus_freqs, volume_shape))
-    columns_flipped = batch_flip_vec2(columns, volume_shape)
-    return columns_flipped.T, minus_indices, good_idx
- 
+    columns_flipped = flip_columns_structured(columns, volume_shape)
+    return columns_flipped, minus_indices, good_idx
+
+
+def flip_columns_structured(columns, volume_shape):
+    """Hermitian conjugate flip using structured numpy ops instead of fancy indexing.
+
+    For frequency index (x,y,z), the negated frequency maps to ((N-x)%N, (N-y)%N, (N-z)%N).
+    Boundary voxels (where any coordinate is 0) are zeroed because the mapping
+    is degenerate there (clipping artifact). This is equivalent to the old
+    batch_flip_vec2 but avoids the random-access pattern of fancy indexing,
+    giving better cache behavior on large arrays.
+    """
+    vol = columns.reshape(*volume_shape, -1)
+    result = np.zeros_like(vol)
+    result[1:, 1:, 1:] = np.conj(np.flip(vol[1:, 1:, 1:], axis=(0, 1, 2)))
+    return result.reshape(columns.shape[0], -1)
+
 
 def batch_flip_vec2(columns,volume_shape):
     mapped_idx = np.array(get_minus_vec_index(np.arange(np.prod(volume_shape)),volume_shape))
@@ -340,16 +355,12 @@ def get_all_copied_columns(columns, picked_frequencies, volume_shape):
 # IMPLEMENTS THE TWO MATVECS WE NEED TO RUN THE RANDOMIZED SVD.
 ## TODO: which veriosn is used? Should it be the other? Figure it out. Dlete the other ones
 @nvtx.annotate("right_matvec_with_spatial_Sigma", color="orange", domain=NVTX_DOMAIN_PCA)
-def right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40, precomputed_symmetric=None):
+def right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40):
     st_time = time.time()
     # Some precompute
-    if precomputed_symmetric is None:
-        columns_flipped, minus_frequency_indices, good_idx = make_symmetric_columns_np(columns, picked_frequency_indices, volume_shape)
-        columns_flipped = columns_flipped[:,good_idx]
-        minus_frequency_indices = minus_frequency_indices[good_idx]
-    else:
-        # Pre-sliced 2-tuple: (columns_flipped_good, minus_indices_good)
-        columns_flipped, minus_frequency_indices = precomputed_symmetric
+    columns_flipped, minus_frequency_indices, good_idx = make_symmetric_columns_np(columns, picked_frequency_indices, volume_shape)
+    columns_flipped = columns_flipped[:,good_idx]
+    minus_frequency_indices = minus_frequency_indices[good_idx]
     logger.info("make big mat 1 %s", time.time() - st_time)
     utils.report_memory_device(logger=logger)
 
@@ -439,16 +450,12 @@ def right_matvec_with_spatial_Sigma_v2(test_mat, columns, picked_frequency_indic
 
 
 @nvtx.annotate("left_matvec_with_spatial_Sigma", color="yellow", domain=NVTX_DOMAIN_PCA)
-def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40, precomputed_symmetric=None):
+def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40):
     st_time =time.time()
     # Some precompute
-    if precomputed_symmetric is None:
-        columns_flipped, minus_frequency_indices, good_idx = make_symmetric_columns_np(columns, picked_frequency_indices, volume_shape)
-        columns_flipped = columns_flipped[:,good_idx]
-        minus_frequency_indices = minus_frequency_indices[good_idx]
-    else:
-        # Pre-sliced 2-tuple: (columns_flipped_good, minus_indices_good)
-        columns_flipped, minus_frequency_indices = precomputed_symmetric
+    columns_flipped, minus_frequency_indices, good_idx = make_symmetric_columns_np(columns, picked_frequency_indices, volume_shape)
+    columns_flipped = columns_flipped[:,good_idx]
+    minus_frequency_indices = minus_frequency_indices[good_idx]
 
     # Compute frequencies and all that stuff...
     all_frequency_indices = np.concatenate([picked_frequency_indices, minus_frequency_indices])
@@ -572,17 +579,10 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     test_mat = np.random.randn(smaller_vol_size, test_size).real.astype(np.float32)
 
     st_time = time.time()
-    # Precompute symmetric columns once — reused by both right and left matvec (~459s saved at N=256/300k)
-    # Pre-slice to good_idx subset to avoid keeping full columns_flipped in memory
-    columns_flipped_full, minus_indices, good_idx = make_symmetric_columns_np(columns, picked_frequency_indices, volume_shape)
-    precomputed_symmetric = (columns_flipped_full[:, good_idx], minus_indices[good_idx])
-    del columns_flipped_full, minus_indices, good_idx  # Free full-size arrays
-    logger.info("make_symmetric_columns_np: %s", time.time() - st_time)
-
     if use_v2_fn:
         Q = right_matvec_with_spatial_Sigma_v2(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
     else:
-        Q = right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use, precomputed_symmetric=precomputed_symmetric).real.astype(np.float32)
+        Q = right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
     del test_mat
 
     ## Do masking here ?
@@ -601,8 +601,7 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     if use_v2_fn:
         C_F_t_2 = left_matvec_with_spatial_Sigma_v2(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
     else:
-        C_F_t_2 = left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use, precomputed_symmetric=precomputed_symmetric).real.astype(np.float32)
-    del precomputed_symmetric  # Free cached symmetric columns — no longer needed
+        C_F_t_2 = left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
     utils.report_memory_device(logger=logger)
     logger.info("left matvec %s", time.time() - st_time)
 
