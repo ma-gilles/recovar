@@ -317,8 +317,9 @@ def flip_columns_structured(columns, volume_shape):
     For frequency index (x,y,z), the negated frequency maps to ((N-x)%N, (N-y)%N, (N-z)%N).
     Boundary voxels (where any coordinate is 0) are zeroed because the mapping
     is degenerate there (clipping artifact). This is equivalent to the old
-    batch_flip_vec2 but avoids the random-access pattern of fancy indexing,
-    giving better cache behavior on large arrays.
+    batch_flip_vec2 but uses np.flip (a zero-copy view) instead of random-access
+    fancy indexing (columns[mapped_idx,:]), giving better cache behavior and
+    lower peak memory on large arrays.
     """
     vol = columns.reshape(*volume_shape, -1)
     result = np.zeros_like(vol)

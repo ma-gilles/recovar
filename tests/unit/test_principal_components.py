@@ -60,6 +60,25 @@ def test_flip_vec_and_batch_flip_vec2_shapes():
     assert out.shape == (2, vol_size)
 
 
+@pytest.mark.parametrize("grid_size", [4, 8, 16, 32])
+def test_flip_columns_structured_matches_batch_flip_vec2(grid_size):
+    """flip_columns_structured (JAX CPU flip+conj) must return the same result
+    as the legacy batch_flip_vec2 (fancy-indexed flip) for all grid sizes."""
+    volume_shape = (grid_size, grid_size, grid_size)
+    vol_size = int(np.prod(volume_shape))
+    n_cols = 5
+
+    rng = np.random.default_rng(42)
+    columns = (rng.standard_normal((vol_size, n_cols)) +
+               1j * rng.standard_normal((vol_size, n_cols))).astype(np.complex64)
+
+    old_result = pc.batch_flip_vec2(columns, volume_shape).T  # (vol_size, n_cols)
+    new_result = pc.flip_columns_structured(columns, volume_shape)  # (vol_size, n_cols)
+
+    assert old_result.shape == new_result.shape
+    np.testing.assert_allclose(new_result, old_result, rtol=1e-6, atol=1e-7)
+
+
 def test_idft_from_both_sides_calls_batch_idft3(monkeypatch):
     calls = {"n": 0}
 
