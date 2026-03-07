@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import pickle
 import argparse
 import math
 from pathlib import Path
@@ -674,6 +675,9 @@ def main():
                         help='Do not fail the run when baseline comparison detects regressions.')
     parser.add_argument('--overwrite-metrics-baseline', action='store_true',
                         help='Overwrite baseline JSON with current scores after this run.')
+    parser.add_argument('--reuse-dataset', action='store_true',
+                        help='Skip dataset generation if test_dataset/ already exists in output-dir. '
+                             'Useful for regression tests that reuse a saved dataset.')
 
     args = parser.parse_args()
     if args.grid_size <= 0:
@@ -698,38 +702,43 @@ def main():
     output.mkdir_safe(args.output_dir)
     logger = setup_logging(args.output_dir)
 
-    if args.volume_input is None:
-        args.generate_volumes = True
+    dataset_dir = os.path.join(args.output_dir, 'test_dataset')
+    grid_size = args.grid_size
+    n_images = args.n_images
+    tilt_series = args.tomo_tilts > 0
+    sim_info_path = os.path.join(dataset_dir, 'simulation_info.pkl')
 
-    if args.generate_volumes:
-        gen_prefix = args.generated_volumes_prefix
-        if gen_prefix is None:
-            gen_prefix = str(Path(args.output_dir) / "generated_volumes" / "vol")
-        logger.info(
-            f"Generating compact-support test volumes at prefix {gen_prefix} "
-            f"(n={args.generated_n_volumes}, grid_size={args.grid_size})"
-        )
-        args.volume_input = generate_compact_support_test_volumes(
-            output_dir=args.output_dir,
-            grid_size=args.grid_size,
-            n_volumes=args.generated_n_volumes,
-            voxel_size=4.25 * 128 / args.grid_size,
-            prefix_name=Path(gen_prefix).name,
-            output_prefix=gen_prefix,
-        )
-        logger.info("Using generated volume input prefix: %s", args.volume_input)
+    # --reuse-dataset: skip volume + dataset generation when the dataset exists.
+    _reuse = args.reuse_dataset and os.path.exists(sim_info_path)
+
+    if not _reuse:
+        if args.volume_input is None:
+            args.generate_volumes = True
+
+        if args.generate_volumes:
+            gen_prefix = args.generated_volumes_prefix
+            if gen_prefix is None:
+                gen_prefix = str(Path(args.output_dir) / "generated_volumes" / "vol")
+            logger.info(
+                f"Generating compact-support test volumes at prefix {gen_prefix} "
+                f"(n={args.generated_n_volumes}, grid_size={args.grid_size})"
+            )
+            args.volume_input = generate_compact_support_test_volumes(
+                output_dir=args.output_dir,
+                grid_size=args.grid_size,
+                n_volumes=args.generated_n_volumes,
+                voxel_size=4.25 * 128 / args.grid_size,
+                prefix_name=Path(gen_prefix).name,
+                output_prefix=gen_prefix,
+            )
+            logger.info("Using generated volume input prefix: %s", args.volume_input)
 
     # Dump parser arguments to a JSON file.
     dump_json_path = os.path.join(args.output_dir, "parser_args.json")
     with open(dump_json_path, "w") as f:
         json.dump(vars(args), f, indent=2)
 
-    dataset_dir = os.path.join(args.output_dir, 'test_dataset')
-    grid_size = args.grid_size
-    n_images = args.n_images
-    tilt_series = args.tomo_tilts > 0
 
-    
     def error_message(msg="An error occurred"):
         logger.error(msg)
         sys.exit(1)
@@ -747,14 +756,19 @@ def main():
     if not args.cpu:
         check_gpu()
 
-    # Generate synthetic test dataset
-    sim_info = make_big_test_dataset(
-        args.volume_input, args.output_dir, noise_level=args.noise_level,
-        grid_size=grid_size, n_images=n_images,
-        contrast_std=args.contrast_std, n_tilts=args.tomo_tilts,
-        premultiplied_ctf=args.premultiplied_ctf,
-        noise_increase_per_tilt=args.noise_increase_per_tilt
-    )
+    if _reuse:
+        logger.info("Reusing existing dataset at %s (--reuse-dataset)", dataset_dir)
+        with open(sim_info_path, 'rb') as f:
+            sim_info = pickle.load(f)
+    else:
+        # Generate synthetic test dataset
+        sim_info = make_big_test_dataset(
+            args.volume_input, args.output_dir, noise_level=args.noise_level,
+            grid_size=grid_size, n_images=n_images,
+            contrast_std=args.contrast_std, n_tilts=args.tomo_tilts,
+            premultiplied_ctf=args.premultiplied_ctf,
+            noise_increase_per_tilt=args.noise_increase_per_tilt
+        )
 
     # Compute average noise radial by counting dose indices
     if 'dose_indices' in sim_info and sim_info['dose_indices'] is not None:

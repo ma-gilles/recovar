@@ -51,6 +51,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import pickle
 import shlex
@@ -64,6 +65,8 @@ import pytest
 
 from conftest import gpu_subprocess_env
 from helpers.metrics_regression import compare_metric, metric_direction
+
+logger = logging.getLogger(__name__)
 
 pytestmark = [
     pytest.mark.integration,
@@ -137,6 +140,18 @@ def _compare_against_baseline(
 
     assert checked > 0, "no numeric metrics were compared; check baseline/current dicts"
     assert not failures, "pipeline-with-ind metric regressions:\n" + "\n".join(failures)
+
+
+def _dataset_exists(output_dir: Path, grid_size: int, is_tilt: bool = False) -> bool:
+    """Check if a previously generated dataset exists at output_dir/test_dataset/."""
+    dataset_dir = output_dir / "test_dataset"
+    particles = dataset_dir / "particles.star" if is_tilt else dataset_dir / f"particles.{grid_size}.mrcs"
+    return (
+        particles.exists()
+        and (dataset_dir / "poses.pkl").exists()
+        and (dataset_dir / "ctf.pkl").exists()
+        and (dataset_dir / "simulation_info.pkl").exists()
+    )
 
 
 def _make_dataset(
@@ -455,14 +470,18 @@ def test_pipeline_spa_with_ind_regression(tmp_path):
 
     output_dir = _resolve_output_dir(tmp_path, "pipeline_spa_with_ind")
 
-    # Generate full dataset (synthetically when no volumes_prefix provided)
-    dataset_dir = _make_dataset(
-        output_dir=output_dir,
-        grid_size=grid_size,
-        n_images=n_images,
-        percent_outliers=pct_out,
-        volumes_prefix=volumes_prefix,
-    )
+    # Reuse saved dataset from a previous baseline-writing run if available.
+    if not write_baseline and _dataset_exists(output_dir, grid_size, is_tilt=False):
+        logger.info("Reusing existing SPA dataset at %s", output_dir / "test_dataset")
+        dataset_dir = output_dir / "test_dataset"
+    else:
+        dataset_dir = _make_dataset(
+            output_dir=output_dir,
+            grid_size=grid_size,
+            n_images=n_images,
+            percent_outliers=pct_out,
+            volumes_prefix=volumes_prefix,
+        )
 
     # Build ind_file: first ind_frac fraction of images (sequential, no randomness
     # needed since we compare against our own baseline)
@@ -472,8 +491,9 @@ def test_pipeline_spa_with_ind_regression(tmp_path):
     with open(ind_path, "wb") as f:
         pickle.dump(ind, f)
 
-    # Run pipeline_with_outliers with the ind file
-    pipeline_out = dataset_dir / "pipeline_outliers_with_ind_output"
+    # Run pipeline_with_outliers with the ind file (output outside dataset_dir
+    # so reused datasets are not polluted).
+    pipeline_out = output_dir / "pipeline_outliers_with_ind_output"
     _run_pipeline_with_ind(
         dataset_dir=dataset_dir,
         pipeline_out=pipeline_out,
@@ -562,16 +582,20 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
 
     output_dir = _resolve_output_dir(tmp_path, "pipeline_cryo_et_with_particle_ind")
 
-    # Generate full tilt-series dataset (synthetically when no volumes_prefix provided)
-    dataset_dir = _make_tilt_dataset(
-        output_dir=output_dir,
-        grid_size=grid_size,
-        n_images=n_images,
-        percent_outliers=pct_out,
-        volumes_prefix=volumes_prefix,
-        n_tilts=n_tilts,
-        pct_tilt_outliers=pct_tilt_out,
-    )
+    # Reuse saved dataset from a previous baseline-writing run if available.
+    if not write_baseline and _dataset_exists(output_dir, grid_size, is_tilt=True):
+        logger.info("Reusing existing cryo-ET dataset at %s", output_dir / "test_dataset")
+        dataset_dir = output_dir / "test_dataset"
+    else:
+        dataset_dir = _make_tilt_dataset(
+            output_dir=output_dir,
+            grid_size=grid_size,
+            n_images=n_images,
+            percent_outliers=pct_out,
+            volumes_prefix=volumes_prefix,
+            n_tilts=n_tilts,
+            pct_tilt_outliers=pct_tilt_out,
+        )
 
     sim_info_path = dataset_dir / "simulation_info.pkl"
     assert sim_info_path.exists(), f"simulation_info.pkl missing: {sim_info_path}"
@@ -591,8 +615,9 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
     with open(particle_ind_path, "wb") as f:
         pickle.dump(particle_ind, f)
 
-    # Run pipeline_with_outliers with the particle_ind file
-    pipeline_out = dataset_dir / "pipeline_outliers_cryo_et_with_particle_ind_output"
+    # Run pipeline_with_outliers with the particle_ind file (output outside
+    # dataset_dir so reused datasets are not polluted).
+    pipeline_out = output_dir / "pipeline_outliers_cryo_et_with_particle_ind_output"
     _run_pipeline_with_particle_ind(
         dataset_dir=dataset_dir,
         pipeline_out=pipeline_out,

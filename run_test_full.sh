@@ -13,7 +13,9 @@
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export TMPDIR=/scratch/gpfs/GILLES/mg6942/tmp
+export LONG_METRICS_OUTPUT_BASE=/scratch/gpfs/GILLES/mg6942/recovar_test_outputs
 mkdir -p "$TMPDIR"
+mkdir -p "$LONG_METRICS_OUTPUT_BASE"
 
 cd /scratch/gpfs/GILLES/mg6942/heterogeneity_dev
 

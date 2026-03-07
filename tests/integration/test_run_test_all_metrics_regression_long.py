@@ -28,7 +28,7 @@ def _load_json(path):
         return json.load(f)
 
 
-def _run_metrics(output_dir, run_args, volumes_prefix=None):
+def _run_metrics(output_dir, run_args, volumes_prefix=None, reuse_dataset=False):
     """Run run_test_all_metrics; generate volumes synthetically when volumes_prefix is None."""
     cmd = [
         sys.executable,
@@ -37,6 +37,8 @@ def _run_metrics(output_dir, run_args, volumes_prefix=None):
         "--output-dir",
         str(output_dir),
     ]
+    if reuse_dataset:
+        cmd += ["--reuse-dataset"]
     if volumes_prefix is not None:
         cmd += ["--volume-input", volumes_prefix]
     else:
@@ -153,7 +155,11 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
     tol_frac = float(os.environ.get("LONG_METRICS_TOL_FRAC", "0.10"))
     write_baseline = os.environ.get("LONG_METRICS_WRITE_BASELINE", "0") == "1"
 
-    current = _run_metrics(_resolve_output_dir(tmp_path, "current"), run_args, volumes_prefix=volumes_prefix)
+    output_dir = _resolve_output_dir(tmp_path, "current")
+    # Reuse dataset from a previous baseline-writing run when available (same
+    # output_dir path when LONG_METRICS_OUTPUT_BASE is set).
+    reuse = not write_baseline and (output_dir / "test_dataset" / "simulation_info.pkl").exists()
+    current = _run_metrics(output_dir, run_args, volumes_prefix=volumes_prefix, reuse_dataset=reuse)
 
     if write_baseline or (not baseline_json.exists()):
         baseline_json.parent.mkdir(parents=True, exist_ok=True)
@@ -216,7 +222,8 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
     )
 
     output_dir = _resolve_output_dir(tmp_path, "current_cryo_et")
-    current = _run_metrics(output_dir, run_args, volumes_prefix=volumes_prefix)
+    reuse = not write_baseline and (output_dir / "test_dataset" / "simulation_info.pkl").exists()
+    current = _run_metrics(output_dir, run_args, volumes_prefix=volumes_prefix, reuse_dataset=reuse)
 
     particles_star = output_dir / "test_dataset" / "particles.star"
     assert particles_star.exists(), f"expected cryo-ET particles.star at {particles_star}"

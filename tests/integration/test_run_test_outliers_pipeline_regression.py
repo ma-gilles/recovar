@@ -141,6 +141,28 @@ def _resolve_output_dir(tmp_path: Path, name: str) -> Path:
     return out
 
 
+def _dataset_exists_spa(output_dir: Path, grid_size: int) -> bool:
+    """Check if a SPA dataset already exists at output_dir/test_dataset/."""
+    d = output_dir / "test_dataset"
+    return (
+        (d / f"particles.{grid_size}.mrcs").exists()
+        and (d / "poses.pkl").exists()
+        and (d / "ctf.pkl").exists()
+        and (d / "simulation_info.pkl").exists()
+    )
+
+
+def _dataset_exists_et(output_dir: Path) -> bool:
+    """Check if a cryo-ET dataset already exists at output_dir/test_dataset/."""
+    d = output_dir / "test_dataset"
+    return (
+        (d / "particles.star").exists()
+        and (d / "poses.pkl").exists()
+        and (d / "ctf.pkl").exists()
+        and (d / "simulation_info.pkl").exists()
+    )
+
+
 def _run_outliers_pipeline(
     output_dir: Path,
     volumes_prefix: Optional[str] = None,
@@ -150,41 +172,45 @@ def _run_outliers_pipeline(
     k_rounds: int = 2,
     extra_args: str = "",
     accept_cpu: bool = False,
+    reuse_dataset: bool = False,
 ) -> Path:
     """
     Generate a test dataset and run pipeline_with_outliers; return the
     pipeline output directory (round-level outputs live there).
 
-    If *volumes_prefix* is None, generate_synthetic_dataset is called
-    internally to create volumes on the fly.
+    If *reuse_dataset* is True and the dataset already exists, skip
+    dataset generation and reuse the existing one.
     """
     dataset_dir = output_dir / "test_dataset"
-    dataset_dir.mkdir(parents=True, exist_ok=True)
 
-    # -- create outlier volume ------------------------------------------------
-    import mrcfile
-    from recovar.commands.run_test_outliers_pipeline import create_outlier_volume
+    if reuse_dataset and _dataset_exists_spa(output_dir, grid_size):
+        pass  # skip dataset generation
+    else:
+        dataset_dir.mkdir(parents=True, exist_ok=True)
 
-    outlier_vol = output_dir / "outlier_volume.mrc"
-    create_outlier_volume(str(outlier_vol), grid_size=grid_size)
+        # -- create outlier volume --------------------------------------------
+        from recovar.commands.run_test_outliers_pipeline import create_outlier_volume
 
-    # -- generate synthetic dataset ------------------------------------------
-    make_cmd = [
-        sys.executable, "-m", "recovar.command_line", "make_test_dataset",
-        str(output_dir),
-        "--n-images", str(n_images),
-        "--outlier-file-input", str(outlier_vol),
-        "--percent-outliers", str(percent_outliers),
-        "--image-size", str(grid_size),
-        "--seed", "42",
-    ]
-    if extra_args:
-        make_cmd.extend(shlex.split(extra_args))
-    env = gpu_subprocess_env()
-    subprocess.run(make_cmd, check=True, env=env)
+        outlier_vol = output_dir / "outlier_volume.mrc"
+        create_outlier_volume(str(outlier_vol), grid_size=grid_size)
+
+        # -- generate synthetic dataset ---------------------------------------
+        make_cmd = [
+            sys.executable, "-m", "recovar.command_line", "make_test_dataset",
+            str(output_dir),
+            "--n-images", str(n_images),
+            "--outlier-file-input", str(outlier_vol),
+            "--percent-outliers", str(percent_outliers),
+            "--image-size", str(grid_size),
+            "--seed", "42",
+        ]
+        if extra_args:
+            make_cmd.extend(shlex.split(extra_args))
+        env = gpu_subprocess_env()
+        subprocess.run(make_cmd, check=True, env=env)
 
     # -- run pipeline_with_outliers ------------------------------------------
-    pipeline_out = dataset_dir / "pipeline_outliers_output"
+    pipeline_out = output_dir / "pipeline_outliers_output"
     mrcs = dataset_dir / f"particles.{grid_size}.mrcs"
     poses = dataset_dir / "poses.pkl"
     ctf = dataset_dir / "ctf.pkl"
@@ -206,7 +232,7 @@ def _run_outliers_pipeline(
     ]
     if accept_cpu:
         pipe_cmd.append("--accept-cpu")
-    subprocess.run(pipe_cmd, check=True, env=env)
+    subprocess.run(pipe_cmd, check=True, env=gpu_subprocess_env())
 
     return pipeline_out
 
@@ -499,6 +525,7 @@ def test_outliers_pipeline_regression_against_baseline(tmp_path):
     write_baseline = os.environ.get("OUTLIERS_WRITE_BASELINE", "0") == "1"
 
     output_dir = _resolve_output_dir(tmp_path, "outliers_long")
+    reuse = not write_baseline and _dataset_exists_spa(output_dir, grid_size)
     pipeline_out = _run_outliers_pipeline(
         output_dir=output_dir,
         volumes_prefix=volumes_prefix,
@@ -507,6 +534,7 @@ def test_outliers_pipeline_regression_against_baseline(tmp_path):
         percent_outliers=pct_out,
         k_rounds=k_rounds,
         accept_cpu=False,
+        reuse_dataset=reuse,
     )
 
     sim_info_path = output_dir / "test_dataset" / "simulation_info.pkl"
@@ -570,30 +598,32 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
 
     output_dir = _resolve_output_dir(tmp_path, "outliers_cryo_et")
     dataset_dir = output_dir / "test_dataset"
-    dataset_dir.mkdir(parents=True, exist_ok=True)
+    reuse = not write_baseline and _dataset_exists_et(output_dir)
 
-    # Create outlier volume
-    from recovar.commands.run_test_outliers_pipeline import create_outlier_volume
-    outlier_vol = output_dir / "outlier_volume.mrc"
-    create_outlier_volume(str(outlier_vol), grid_size=grid_size)
+    if not reuse:
+        dataset_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate tilt series dataset with both particle and tilt outliers
-    make_cmd = [
-        sys.executable, "-m", "recovar.command_line", "make_test_dataset",
-        str(output_dir),
-        "--n-images", str(n_images),
-        "--outlier-file-input", str(outlier_vol),
-        "--percent-outliers", str(pct_out),
-        "--percent-tilt-series-outliers", str(pct_tilt_out),
-        "--tilt-series",
-        "--image-size", str(grid_size),
-        "--seed", "42",
-    ]
-    env = gpu_subprocess_env()
-    subprocess.run(make_cmd, check=True, env=env)
+        # Create outlier volume
+        from recovar.commands.run_test_outliers_pipeline import create_outlier_volume
+        outlier_vol = output_dir / "outlier_volume.mrc"
+        create_outlier_volume(str(outlier_vol), grid_size=grid_size)
+
+        # Generate tilt series dataset with both particle and tilt outliers
+        make_cmd = [
+            sys.executable, "-m", "recovar.command_line", "make_test_dataset",
+            str(output_dir),
+            "--n-images", str(n_images),
+            "--outlier-file-input", str(outlier_vol),
+            "--percent-outliers", str(pct_out),
+            "--percent-tilt-series-outliers", str(pct_tilt_out),
+            "--tilt-series",
+            "--image-size", str(grid_size),
+            "--seed", "42",
+        ]
+        subprocess.run(make_cmd, check=True, env=gpu_subprocess_env())
 
     # Run pipeline_with_outliers for tilt series
-    pipeline_out = dataset_dir / "pipeline_outliers_output"
+    pipeline_out = output_dir / "pipeline_outliers_output"
     star = dataset_dir / "particles.star"
     poses = dataset_dir / "poses.pkl"
     ctf = dataset_dir / "ctf.pkl"
@@ -615,7 +645,7 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         "--use-junk-detection",
         "--save-pipeline-indices",
     ]
-    subprocess.run(pipe_cmd, check=True, env=env)
+    subprocess.run(pipe_cmd, check=True, env=gpu_subprocess_env())
 
     sim_info_path = dataset_dir / "simulation_info.pkl"
     assert sim_info_path.exists()
