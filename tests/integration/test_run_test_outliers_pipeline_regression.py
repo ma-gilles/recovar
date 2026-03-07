@@ -339,6 +339,7 @@ def _compare_against_baseline(
 
 @pytest.mark.integration
 @pytest.mark.slow
+@pytest.mark.gpu
 def test_outliers_pipeline_tiny_regression(tmp_path):
     """
     Tiny end-to-end outlier detection regression.
@@ -354,7 +355,6 @@ def test_outliers_pipeline_tiny_regression(tmp_path):
     Set OUTLIERS_WRITE_TINY_BASELINE=1 to regenerate the tiny baseline.
     """
     write_baseline = os.environ.get("OUTLIERS_WRITE_TINY_BASELINE", "0") == "1"
-    accept_cpu = not bool(os.environ.get("OUTLIERS_USE_GPU", ""))
 
     output_dir = _resolve_output_dir(tmp_path, "outliers_tiny")
 
@@ -364,7 +364,6 @@ def test_outliers_pipeline_tiny_regression(tmp_path):
         n_images=TINY_N_IMAGES,
         percent_outliers=TINY_PERCENT_OUTLIERS,
         k_rounds=TINY_K_ROUNDS,
-        accept_cpu=accept_cpu,
     )
 
     sim_info_path = output_dir / "test_dataset" / "simulation_info.pkl"
@@ -409,6 +408,7 @@ def test_outliers_pipeline_tiny_regression(tmp_path):
 
 
 @pytest.mark.tiny_metrics
+@pytest.mark.gpu
 def test_outliers_pipeline_fast_smoke(tmp_path):
     """
     Fast outlier detection smoke test with high SNR.
@@ -429,7 +429,6 @@ def test_outliers_pipeline_fast_smoke(tmp_path):
         percent_outliers=FAST_PERCENT_OUTLIERS,
         k_rounds=FAST_K_ROUNDS,
         extra_args=f"--noise-level {FAST_NOISE_LEVEL}",
-        accept_cpu=True,
     )
 
     sim_info_path = output_dir / "test_dataset" / "simulation_info.pkl"

@@ -10,10 +10,10 @@ check during development (< 2 min on CPU).
 SPA and cryo-ET variants are both covered.
 
 Env vars (optional):
-  SMOKE_N_IMAGES      – number of images for SPA test (default: 100)
-  SMOKE_N_IMAGES_ET   – number of images for cryo-ET test (default: 300;
-                        make_test_dataset hard-codes n_tilts=27, so 300 → ~11 particles)
-  SMOKE_GRID_SIZE     – grid size (default: 32)
+  SMOKE_N_IMAGES      – number of images for SPA test (default: 50)
+  SMOKE_N_IMAGES_ET   – number of images for cryo-ET test (default: 270;
+                        make_test_dataset hard-codes n_tilts=27, so 270 → 10 particles)
+  SMOKE_GRID_SIZE     – grid size (default: 16)
   SMOKE_ZDIM          – latent dimensionality (default: 4)
   SMOKE_K_ROUNDS      – outlier-removal rounds (default: 1)
   SMOKE_PCT_OUTLIERS  – outlier fraction (default: 0.20)
@@ -54,11 +54,11 @@ def _run(cmd, **kwargs):
             f"--- stderr (last 80 lines) ---\n{tail}"
         )
 
-_SMOKE_N_IMAGES = int(os.environ.get("SMOKE_N_IMAGES", "100"))
+_SMOKE_N_IMAGES = int(os.environ.get("SMOKE_N_IMAGES", "50"))
 # For cryo-ET, make_test_dataset hard-codes n_tilts=27, so we need more
-# images to get a useful number of particles (300 // 27 ≈ 11 particles).
-_SMOKE_N_IMAGES_ET = int(os.environ.get("SMOKE_N_IMAGES_ET", "300"))
-_SMOKE_GRID = int(os.environ.get("SMOKE_GRID_SIZE", "32"))
+# images to get a useful number of particles (270 // 27 = 10 particles).
+_SMOKE_N_IMAGES_ET = int(os.environ.get("SMOKE_N_IMAGES_ET", "270"))
+_SMOKE_GRID = int(os.environ.get("SMOKE_GRID_SIZE", "16"))
 _SMOKE_ZDIM = int(os.environ.get("SMOKE_ZDIM", "4"))
 _SMOKE_K_ROUNDS = int(os.environ.get("SMOKE_K_ROUNDS", "1"))
 _SMOKE_PCT_OUTLIERS = float(os.environ.get("SMOKE_PCT_OUTLIERS", "0.20"))
@@ -398,4 +398,130 @@ def test_pipeline_spa_radial_noise_smoke(tmp_path):
 
     assert (pipeline_out / f"inliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
     assert (pipeline_out / f"outliers_round_{_SMOKE_K_ROUNDS}.pkl").exists()
+    assert (pipeline_out / "all_rounds_inliers.pkl").exists()
+
+
+# ---------------------------------------------------------------------------
+# GPU pipeline tests — larger datasets, require --run-gpu
+# ---------------------------------------------------------------------------
+
+_GPU_N_IMAGES = 500
+_GPU_N_IMAGES_ET = 270  # 27 tilts × 10 particles
+_GPU_GRID = 64
+_GPU_ZDIM = 4
+_GPU_K_ROUNDS = 1
+_GPU_PCT_OUTLIERS = 0.20
+
+
+def _gpu_env():
+    """Env for GPU subprocesses: inherit CUDA_VISIBLE_DEVICES, disable preallocate."""
+    return dict(os.environ, PYTHONNOUSERSITE="1",
+                XLA_PYTHON_CLIENT_PREALLOCATE="false")
+
+
+def _generate_gpu_dataset(
+    output_dir: Path,
+    outlier_vol: Path,
+    tilt_series: bool = False,
+) -> Path:
+    dataset_dir = output_dir / "test_dataset"
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    n_images = _GPU_N_IMAGES_ET if tilt_series else _GPU_N_IMAGES
+    make_cmd = [
+        sys.executable, "-m", "recovar.command_line", "make_test_dataset",
+        str(output_dir),
+        "--n-images", str(n_images),
+        "--outlier-file-input", str(outlier_vol),
+        "--percent-outliers", str(_GPU_PCT_OUTLIERS),
+        "--image-size", str(_GPU_GRID),
+        "--seed", "42",
+    ]
+    if tilt_series:
+        make_cmd += ["--tilt-series"]
+    _run(make_cmd, env=_gpu_env())
+    return dataset_dir
+
+
+def _make_gpu_outlier_vol(output_dir: Path) -> Path:
+    from recovar.commands.run_test_outliers_pipeline import create_outlier_volume
+    vol = output_dir / "outlier_volume.mrc"
+    create_outlier_volume(str(vol), grid_size=_GPU_GRID)
+    return vol
+
+
+@pytest.mark.gpu
+def test_pipeline_spa_gpu(tmp_path):
+    """SPA pipeline on GPU with a reasonably sized dataset (500 images, grid=64)."""
+    output_dir = _smoke_output_dir(tmp_path, "gpu_spa")
+    outlier_vol = _make_gpu_outlier_vol(output_dir)
+    dataset_dir = _generate_gpu_dataset(output_dir, outlier_vol)
+
+    mrcs = dataset_dir / f"particles.{_GPU_GRID}.mrcs"
+    poses = dataset_dir / "poses.pkl"
+    ctf = dataset_dir / "ctf.pkl"
+    pipeline_out = dataset_dir / "pipeline_gpu_spa_output"
+
+    cmd = [
+        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        str(mrcs),
+        "--poses", str(poses),
+        "--ctf", str(ctf),
+        "--correct-contrast",
+        "-o", str(pipeline_out),
+        "--mask", "from_halfmaps",
+        "--lazy",
+        "--zdim", str(_GPU_ZDIM),
+        "--k-rounds", str(_GPU_K_ROUNDS),
+        "--use-contrast-detection",
+        "--use-junk-detection",
+        "--save-pipeline-indices",
+    ]
+    _run(cmd, env=_gpu_env())
+
+    assert (pipeline_out / f"inliers_round_{_GPU_K_ROUNDS}.pkl").exists()
+    assert (pipeline_out / f"outliers_round_{_GPU_K_ROUNDS}.pkl").exists()
+    assert (pipeline_out / "all_rounds_inliers.pkl").exists()
+
+    with open(pipeline_out / "inliers_round_1.pkl", "rb") as f:
+        inliers = np.asarray(pickle.load(f))
+    with open(pipeline_out / "outliers_round_1.pkl", "rb") as f:
+        outliers = np.asarray(pickle.load(f))
+    assert inliers.size + outliers.size == _GPU_N_IMAGES
+
+
+@pytest.mark.gpu
+def test_pipeline_cryo_et_gpu(tmp_path):
+    """Cryo-ET pipeline on GPU with a reasonably sized dataset (270 images, grid=64)."""
+    output_dir = _smoke_output_dir(tmp_path, "gpu_cryo_et")
+    outlier_vol = _make_gpu_outlier_vol(output_dir)
+    dataset_dir = _generate_gpu_dataset(output_dir, outlier_vol, tilt_series=True)
+
+    star = dataset_dir / "particles.star"
+    poses = dataset_dir / "poses.pkl"
+    ctf = dataset_dir / "ctf.pkl"
+    pipeline_out = dataset_dir / "pipeline_gpu_et_output"
+
+    cmd = [
+        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        str(star),
+        "--poses", str(poses),
+        "--ctf", str(ctf),
+        "--tilt-series",
+        "--tilt-series-ctf", "relion5",
+        "--noise-model", "radial_per_tilt",
+        "--premultiplied-ctf",
+        "--correct-contrast",
+        "-o", str(pipeline_out),
+        "--mask", "from_halfmaps",
+        "--lazy",
+        "--zdim", str(_GPU_ZDIM),
+        "--k-rounds", str(_GPU_K_ROUNDS),
+        "--use-contrast-detection",
+        "--use-junk-detection",
+        "--save-pipeline-indices",
+    ]
+    _run(cmd, env=_gpu_env())
+
+    assert (pipeline_out / f"inliers_round_{_GPU_K_ROUNDS}.pkl").exists()
+    assert (pipeline_out / f"outliers_round_{_GPU_K_ROUNDS}.pkl").exists()
     assert (pipeline_out / "all_rounds_inliers.pkl").exists()
