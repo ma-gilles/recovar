@@ -1,0 +1,14 @@
+{
+  "inlier_count_round_1": 7435.0,
+  "inlier_count_round_2": 2289.0,
+  "outlier_count_round_1": 2565.0,
+  "outlier_count_round_2": 7711.0,
+  "outlier_f1_round_1": 0.4265682656826568,
+  "outlier_f1_round_2": 0.3094126587775486,
+  "outlier_precision_round_1": 0.33801169590643276,
+  "outlier_precision_round_2": 0.1848009337310336,
+  "outlier_recall_round_1": 0.578,
+  "outlier_recall_round_2": 0.95,
+  "total_images": 10000.0,
+  "true_outlier_count": 1500.0
+}
