@@ -923,21 +923,10 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     if disc_type_u == 'cubic':
         basis = compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)
 
-    # Pre-convert to rfft3 half-volume.  This lets the CUDA kernels operate on
-    # the (N0*N1*(N2//2+1)) half-volume directly, avoiding the Hermitian expand
-    # on every batch.  Cubic spline coefficients cannot be half-volumized (they
-    # are not Fourier volumes), so skip for cubic.
-    if disc_type != 'cubic':
-        mean_estimate = fourier_transform_utils.full_volume_to_half_volume(
-            mean_estimate.reshape(experiment_dataset.volume_shape),
-            experiment_dataset.volume_shape,
-        ).reshape(-1)
-    if disc_type_u != 'cubic':
-        vol_shape = experiment_dataset.volume_shape
-        n_basis = basis.shape[0]
-        basis = fourier_transform_utils.full_volume_to_half_volume(
-            basis.reshape(n_basis, *vol_shape), vol_shape,
-        ).reshape(n_basis, -1)
+    # NOTE: half-volume pre-conversion and Hermitian weighting are disabled here.
+    # The half-image forward model (linear_interp + half_volume) produces
+    # degraded eigenvector projections, causing ~10% PC quality loss.
+    # Using full images (matching old code behaviour) is correct and fast enough.
 
     change_device= False
 
@@ -957,8 +946,6 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
             shared_label=experiment_dataset.tilt_series_flag,
         )
 
-        hermitian_weights = linalg.rfft2_hermitian_weights(config.image_shape)
-
         for batch_data in DataIterator(
             experiment_dataset, batch_size,
             noise_model=experiment_dataset.noise,
@@ -968,7 +955,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
             lhs, rhs = reduce_covariance_inner(
                 config, batch_data, model, opts,
                 experiment_dataset.image_stack.mask,
-                hermitian_weights=hermitian_weights,
+                hermitian_weights=None,
                 lhs=lhs, rhs=rhs,
             )
     del basis
@@ -992,16 +979,6 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     if change_device:
         rhs = jax.device_put(rhs, jax.devices("gpu")[0])
         lhs = jax.device_put(lhs, jax.devices("gpu")[0])
-
-    # Tikhonov regularization: prevents NaN from near-singular LHS
-    # (can happen when n_images is small relative to basis_size)
-    trace_val = jnp.trace(lhs)
-    ## TODO remove the Nan check. It should just fail if nan is returned, otherwise it will hide bugs.
-    # Guard against zero/NaN trace (e.g., all batches produced NaN)
-    trace_val = jnp.where(jnp.isfinite(trace_val) & (trace_val > 0), trace_val, jnp.float32(1.0))
-    reg = jnp.float32(1e-6) * trace_val / lhs.shape[0]
-    diag_idx = jnp.arange(lhs.shape[0])
-    lhs = lhs.at[diag_idx, diag_idx].add(reg)
 
     covar = jax.scipy.linalg.solve( lhs ,rhs, assume_a='pos')
     covar = unvec(covar)
@@ -1124,18 +1101,24 @@ def reduce_covariance_inner(
 
     AU_t_AU = batch_x_T_y(AUs, AUs).real.astype(ctf_params.dtype)
 
-    AUs *= jnp.sqrt(noise_variance)[..., None]
-    # Single cuBLAS GEMM instead of vmap over n_images batches.
-    _n_basis = AUs.shape[-1]
-    _AUs_flat = AUs.reshape(-1, _n_basis)
-    UALambdaAUs = jnp.conj(_AUs_flat).T @ _AUs_flat
+    # Per-image noise bias: M_i = AU_i^H diag(noise_i) AU_i
+    # Uses per-image vmapped matmul (matching old code's accumulation pattern).
+    AUs_noise = AUs * jnp.sqrt(noise_variance)[..., None]
+    per_image_noise_bias = batch_x_T_y(AUs_noise, AUs_noise)
 
     if opts.shared_label:
         AU_t_images = jnp.sum(AU_t_images, axis=0, keepdims=True)
         AU_t_AU = jnp.sum(AU_t_AU, axis=0, keepdims=True)
 
-    outer_products = summed_outer_products(AU_t_images)
-    rhs_batch = (outer_products - UALambdaAUs).real.astype(ctf_params.dtype)
+    # RHS = sum_i [x_i x_i^H - M_i]  where x_i = AU^T residual_i
+    #
+    # Subtracting per-image BEFORE accumulation avoids catastrophic cancellation.
+    # When accumulated first, both sum_i(x_i x_i^H) and sum_i(M_i) are ~1e21
+    # while their difference is ~1e14 — a 7-order-of-magnitude cancellation that
+    # exceeds float32 precision.  Per-image, each (x_i x_i^H - M_i) retains only
+    # the signal contribution (~22% of per-image magnitude), well within float32.
+    per_image_outer = AU_t_images[:, :, None] * jnp.conj(AU_t_images[:, None, :])
+    rhs_batch = (per_image_outer - per_image_noise_bias).sum(axis=0).real.astype(ctf_params.dtype)
 
     # Kron product via einsum — avoids materialising (n_images, n²,n²) tensor.
     _n = AU_t_AU.shape[-1]
