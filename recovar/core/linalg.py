@@ -136,7 +136,8 @@ _svd_full_jit = jax.jit(lambda X: jnp.linalg.svd(X, full_matrices=True))
 def randomized_svd(A, n_pcs=200):
     """Randomized SVD for large matrices that don't fit on GPU."""
     n_pcs = n_pcs if n_pcs < A.shape[1] else A.shape[1]
-    gauss = np.random.randn(A.shape[1], n_pcs)
+    rng = np.random.default_rng(0)
+    gauss = rng.standard_normal((A.shape[1], n_pcs))
     Agauss = blockwise_A_X(A, gauss, memory_to_use=utils.get_gpu_memory_total() // 3)
     Q, _ = _qr_jit(Agauss)
     logger.info("QR done")

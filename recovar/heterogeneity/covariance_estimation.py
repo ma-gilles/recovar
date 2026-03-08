@@ -245,6 +245,7 @@ def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_rad
     if n_samples < 1 or n_samples > sampling_vec.size:
         raise ValueError("n_samples should be between 1 and the size of sampling_vec")
 
+    rng = np.random.default_rng(0)
     sorted_idx = np.asarray(jnp.argsort(-sampling_vec))
     picked_set = set()
     picked = []
@@ -255,12 +256,12 @@ def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_rad
 
     probs = running_vec/np.sum(running_vec)
     draw_size = min(running_vec.size, n_samples * 100)
-    random_choices = np.random.choice(running_vec.size, size=draw_size, p=probs, replace=False)
+    random_choices = rng.choice(running_vec.size, size=draw_size, p=probs, replace=False)
     test_idx =0
 
     while n_picked < n_samples:
         if test_idx >= random_choices.size:
-            random_choices = np.random.choice(running_vec.size, size=draw_size, p=probs, replace=False)
+            random_choices = rng.choice(running_vec.size, size=draw_size, p=probs, replace=False)
             test_idx =0
 
         idx = random_choices[test_idx]

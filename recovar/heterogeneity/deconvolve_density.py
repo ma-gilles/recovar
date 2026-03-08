@@ -88,7 +88,8 @@ def estimate_kernel_by_sampling(
     """Estimate the effective kernel by Monte-Carlo sampling latent covariances."""
     grids_flat = _build_centered_pdf_grid(grids_inp)
     kernel_on_grid = jnp.zeros((grids_flat.shape[0],), dtype=jnp.float32)
-    sampled_indices = np.random.randint(0, cov_zs.shape[0], size=num_samples)
+    rng = np.random.default_rng(0)
+    sampled_indices = rng.integers(0, cov_zs.shape[0], size=num_samples)
     sampled_unique, sampled_counts = np.unique(sampled_indices, return_counts=True)
     zero_mean = jnp.zeros(grids_flat.shape[-1], dtype=jnp.float32)
 
