@@ -596,7 +596,7 @@ def normalize_scores_for_json(scores_dict):
 def resolve_metrics_baseline_path(args):
     if args.metrics_baseline_json is not None:
         return Path(args.metrics_baseline_json)
-    if args.generate_pdb_volumes:
+    if getattr(args, 'generate_pdb_volumes', False):
         return Path(args.output_dir) / "generated_volumes" / (
             f"metrics_baseline_pdb_grid{args.grid_size}_nvol{args.generated_n_volumes}.json"
         )
