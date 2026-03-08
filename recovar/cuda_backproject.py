@@ -134,9 +134,19 @@ def cuda_available() -> bool:
 # ──────────────────────────────────────────────────────────────────────
 
 def _rot_to_compact(rotation_matrices: jax.Array) -> jax.Array:
-    """Extract first two rows of each 3×3 rotation matrix → (n, 6)."""
+    """Extract first two rows of each 3×3 rotation matrix → (n, 6).
+
+    Rows are swapped so that the CUDA kernel's row-major pixel loop
+    (k0=row, k1=col) matches the JAX coordinate convention established by
+    ``get_k_coordinate_of_each_pixel(..., indexing="xy")`` where
+    coord[0]=col_freq and coord[1]=row_freq.
+
+    Without the swap, CUDA computes  rk = k0*R[0,:] + k1*R[1,:]
+    = row_freq*R[0,:] + col_freq*R[1,:], but JAX expects
+    col_freq*R[0,:] + row_freq*R[1,:].  Swapping the two rows fixes this.
+    """
     n = rotation_matrices.shape[0]
-    return rotation_matrices[:, :2, :].reshape(n, 6)
+    return rotation_matrices[:, [1, 0], :].reshape(n, 6)
 
 
 def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image):
