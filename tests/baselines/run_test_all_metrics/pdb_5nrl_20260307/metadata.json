@@ -1,0 +1,9 @@
+{
+  "captured_at_utc": "2026-03-07T21:24:08+00:00",
+  "git_commit": "b0bbdfcc0fe6889b827d83c536cdcc95f349d7a9",
+  "notes": "First PDB-based baseline using 5nrl spliceosome rigid-body trajectory (3 subcomplexes, symmetric rotation). Replaces compact-support volumes as the default test.",
+  "run_args": "--grid-size 64 --n-images 50000 --noise-level 1.0 --contrast-std 0.1 --generate-pdb-volumes --overwrite-metrics-baseline --skip-metrics-regression-check --no-delete",
+  "source_scores_json": "/scratch/gpfs/GILLES/mg6942/tmp/pdb_metrics_full_5486162/test_dataset/metrics_plot/all_scores.json",
+  "volumes_source": "5nrl spliceosome (PDB), 50 volumes, grid_size=64, voxel_size=8.5A, Bfactor=80, max_rotation=10deg, path=path_symmetric",
+  "slurm_job_id": 5486162
+}

@@ -142,10 +142,8 @@ def _stage_perf(before, after):
     wall = after["wall_time"] - before["wall_time"]
     cpu_peak_bytes = max(before["cpu_rss_bytes"], after["cpu_rss_bytes"])
     if after["gpu_peak_bytes"] > before["gpu_peak_bytes"]:
-        # Global peak was set during this stage — use the actual value.
         gpu_stage_peak = after["gpu_peak_bytes"]
     else:
-        # Peak was set by a previous stage; best estimate from endpoints.
         gpu_stage_peak = max(before["gpu_bytes_in_use"], after["gpu_bytes_in_use"])
     return {
         "wall_seconds": round(wall, 2),
@@ -154,39 +152,14 @@ def _stage_perf(before, after):
     }
 
 
-## TODO: Move things elsewhere? IT should be used to generate dataset that are syntehtic
-## Whenever resolution is higher than the small ones stored in data
-## TODO: more complicated. Do a better way. One nicer would would be: store a .pdb type file
-## inside the repo and use that to generate a sequence of volumes as follow:
-## Take one subcomplex, and apply a rigid mottion to it, say 50 along the trajectory
-## Then make 50 .pdbs from that, then use simulate_scattering_potential to generate voluems (with Bfactor 80, say)
-## Then call simulator on these volumes.
-## This is partly implemented in make_spike_dataset for example.
-## There is also a .ipynb file that does exactly this for the data I used to simulate data in my paper
-## This is a good one to use, since the rotation/grouping that is reasonable as already be figured out.
-## It should be findable in ~/recovar/<some file like ... make_trajectories....iynb> or something on those lines
-## It actually as two multiple trajecotires defined but we only need one 
-## The file could also be in ~/covariance_est/
-##
-## TODO: Then in the future, I want run_Test_all_metrics to always be run, 
-## always on teh same dataset with the same setting and same volumes as done above
-## For now, we want to keep the one that has a hardcoded path too, so we can make sure nothign is messed up
-## I would like more tests like run-Test_all_metrics run by default in the long_test
-## They could take up to 2-3h each e.g., and run through the full pipeline and make sure
-## that no performance degrades in anything meaningful, so we can tell if something broke
-## Right now, this is done very poorly, with poor coverage.
-## Also, these should keep track of how long functions are and how much gpu/cpu memory they allocate, as this is somethign I also want to optimize.
-## Note that this will depend also on what hardware it is run, so that they should be included with the information.
-## If it's different hardware (specifically different gpu) then it shouldnt necessary be a fail but it should eb a warning
-## If we use same hardware and tehre is a slow down/more memory allocated than before, it should be a fail. 
-##
-## TO start off, we should make the initial stats from the "old" recovar code.
-## To do this: you should use this commit to generate the dataset, then the old recovar code to run pipeline (With appropriate params)
-## Then use the code from this commit to generate stats.
-# 
-## 
-## TODO: There should be such test for all outward facing functions (from command line)
-## so compute_state, compute_trajectory analyze pipeline, extra_iamge_subset, estimate_conformational_density, estaimte_stable state, etc
+# ---------------------------------------------------------------------------
+# PDB-based trajectory volume generation
+# ---------------------------------------------------------------------------
+from recovar.simulation.trajectory_generation import (
+    CHAIN_GROUPS_5NRL as _5NRL_CHAIN_GROUPS,
+    split_atom_group_by_chains as _split_atom_group_by_chains,
+    generate_trajectory_volumes as generate_pdb_trajectory_volumes,
+)
 def generate_compact_support_test_volumes(
     output_dir,
     grid_size=128,
@@ -623,6 +596,10 @@ def normalize_scores_for_json(scores_dict):
 def resolve_metrics_baseline_path(args):
     if args.metrics_baseline_json is not None:
         return Path(args.metrics_baseline_json)
+    if args.generate_pdb_volumes:
+        return Path(args.output_dir) / "generated_volumes" / (
+            f"metrics_baseline_pdb_grid{args.grid_size}_nvol{args.generated_n_volumes}.json"
+        )
     if args.generate_volumes:
         return Path(args.output_dir) / "generated_volumes" / (
             f"metrics_baseline_grid{args.grid_size}_nvol{args.generated_n_volumes}.json"
@@ -798,7 +775,7 @@ def main():
                         help='Do not delete the test dataset directory after successful tests')
     parser.add_argument('--cpu', action='store_true', help='Run on CPU only (skip GPU check)')
     parser.add_argument('--n-images', type=float, default=5e4, help='Number of images in the test dataset')
-    parser.add_argument('--grid-size', type=int, default=128, help='Grid size for the test dataset')
+    parser.add_argument('--grid-size', type=int, default=64, help='Grid size for the test dataset (default: 64, matching 5nrl notebook)')
     parser.add_argument('--tomo-tilts', type=int, default=-1,
                         help='Number of tilts in tomography (default: -1 for no tilts for cryo-EM)')
     parser.add_argument('--contrast-std', type=float, default=0.1,
@@ -815,6 +792,15 @@ def main():
                         help='Use new noise estimation method')
     parser.add_argument('--generate-volumes', action='store_true',
                         help='Generate synthetic compact-support test volumes if you do not want to provide --volume-input.')
+    parser.add_argument('--generate-pdb-volumes', action='store_true',
+                        help='Generate test volumes from PDB 5nrl (spliceosome) with rigid-body motion '
+                             'trajectory (subcomplexes rotated). More realistic than --generate-volumes.')
+    parser.add_argument('--pdb-path', type=str, default=None,
+                        help='Path to PDB/CIF file for --generate-pdb-volumes. Default: assets/5nrl.cif.')
+    parser.add_argument('--pdb-bfactor', type=float, default=80.0,
+                        help='B-factor for PDB volume generation (default: 80).')
+    parser.add_argument('--pdb-max-rotation', type=float, default=10.0,
+                        help='Maximum rotation angle in degrees for PDB trajectory (default: 10).')
     parser.add_argument('--generated-n-volumes', type=int, default=50,
                         help='Number of generated test volumes when --generate-volumes is used (default: 50).')
     parser.add_argument('--generated-volumes-prefix', type=str, default=None,
@@ -844,7 +830,7 @@ def main():
         raise ValueError(
             f"--metrics-regression-tol-frac must be non-negative, got {args.metrics_regression_tol_frac}"
         )
-    if args.generate_volumes or args.volume_input is None:
+    if args.generate_volumes or args.generate_pdb_volumes or args.volume_input is None:
         if args.generated_n_volumes <= 0:
             raise ValueError(
                 f"--generated-n-volumes must be positive when generating volumes, got {args.generated_n_volumes}"
@@ -864,10 +850,32 @@ def main():
     _reuse = args.reuse_dataset and os.path.exists(sim_info_path)
 
     if not _reuse:
-        if args.volume_input is None:
-            args.generate_volumes = True
+        # Default: use PDB-based 5nrl trajectory volumes when no input is given.
+        if args.volume_input is None and not args.generate_volumes:
+            args.generate_pdb_volumes = True
 
-        if args.generate_volumes:
+        if args.generate_pdb_volumes:
+            gen_prefix = args.generated_volumes_prefix
+            if gen_prefix is None:
+                gen_prefix = str(Path(args.output_dir) / "generated_volumes" / "vol")
+            logger.info(
+                f"Generating PDB trajectory volumes at prefix {gen_prefix} "
+                f"(n={args.generated_n_volumes}, grid_size={args.grid_size}, "
+                f"Bfactor={args.pdb_bfactor}, max_rot={args.pdb_max_rotation} deg)"
+            )
+            args.volume_input = generate_pdb_trajectory_volumes(
+                output_dir=args.output_dir,
+                grid_size=args.grid_size,
+                n_volumes=args.generated_n_volumes,
+                voxel_size=4.25 * 128 / args.grid_size,
+                Bfactor=args.pdb_bfactor,
+                max_rotation_degrees=args.pdb_max_rotation,
+                pdb_path=args.pdb_path,
+                prefix_name=Path(gen_prefix).name,
+                output_prefix=gen_prefix,
+            )
+            logger.info("Using PDB-generated volume input prefix: %s", args.volume_input)
+        elif args.generate_volumes:
             gen_prefix = args.generated_volumes_prefix
             if gen_prefix is None:
                 gen_prefix = str(Path(args.output_dir) / "generated_volumes" / "vol")
@@ -1045,20 +1053,53 @@ def main():
     )
     all_scores['mean_fsc'] = score
 
-    # FSC for variance maps
-    variance_fsc_filepath = os.path.join(plots_dir, 'fsc_variance.png')
-    gt_variance = gt_thing.get_spatial_variances(contrasted=False)
-    estimated_variance = pipeline_output.get('variance')
-    ax, score = plot_utils.plot_fsc_new(
-        gt_variance, estimated_variance,
-        np.array(cryos[0].volume_shape),
+    # FSC for variance maps — two metrics:
+    #   variance_spatial_fsc: spatial variance from eigendecomposition vs GT, DFT both, FSC
+    #   variance_fourier_fsc: Fourier-space per-voxel power vs GT Fourier variance
+    volume_shape = cryos[0].volume_shape
+    gt_spatial_variance = gt_thing.get_spatial_variances(contrasted=False)
+    estimated_spatial_variance = pipeline_output.get('variance')
+
+    # Spatial variance FSC: DFT both spatial variance maps, then FSC
+    gt_sp_dft = fourier_transform_utils.get_dft3(
+        gt_spatial_variance.reshape(volume_shape)
+    ).reshape(-1)
+    est_sp_dft = fourier_transform_utils.get_dft3(
+        estimated_spatial_variance.reshape(volume_shape)
+    ).reshape(-1)
+    ax, score_spatial = plot_utils.plot_fsc_new(
+        gt_sp_dft, est_sp_dft,
+        np.array(volume_shape),
         cryos[0].voxel_size,
         threshold=0.5,
-        filename=variance_fsc_filepath,
-        name="Variance FSC",
+        filename=os.path.join(plots_dir, 'fsc_variance_spatial.png'),
+        name="Variance Spatial FSC",
         fmat=""
     )
-    all_scores['variance_fsc'] = score
+    all_scores['variance_spatial_fsc'] = score_spatial
+    # Keep legacy key for backward compatibility
+    all_scores['variance_fsc'] = score_spatial
+
+    # Fourier variance FSC: GT Fourier variance vs estimated from eigendecomposition
+    cov_sqrt_fourier = gt_thing.get_covariance_square_root(contrasted=False)
+    gt_fourier_variance = np.sum(np.abs(cov_sqrt_fourier) ** 2, axis=-1)
+    # Estimated Fourier variance from eigenvectors: sum_i s_i |U_i(k)|^2
+    u_fourier_all = np.asarray(pipeline_output.get('u'))
+    s_all_var = np.asarray(pipeline_output.get('s'))
+    n_pcs_var = min(20, u_fourier_all.shape[1])
+    est_fourier_variance = utils.estimate_variance(
+        u_fourier_all[:, :n_pcs_var].T, s_all_var[:n_pcs_var]
+    )
+    ax, score_fourier = plot_utils.plot_fsc_new(
+        gt_fourier_variance, est_fourier_variance,
+        np.array(volume_shape),
+        cryos[0].voxel_size,
+        threshold=0.5,
+        filename=os.path.join(plots_dir, 'fsc_variance_fourier.png'),
+        name="Variance Fourier FSC",
+        fmat=""
+    )
+    all_scores['variance_fourier_fsc'] = score_fourier
 
     # SVD metrics
     synt = gt_thing
@@ -1289,7 +1330,8 @@ def main():
     
     # Plot 9: FSC scores
     plt.subplot(3, 3, 9)
-    plt.bar(['Mean FSC', 'Variance FSC'], [all_scores['mean_fsc'], all_scores['variance_fsc']])
+    plt.bar(['Mean FSC', 'Var Spatial', 'Var Fourier'],
+            [all_scores['mean_fsc'], all_scores['variance_spatial_fsc'], all_scores['variance_fourier_fsc']])
     plt.ylim(0, 1)
     plt.title('FSC Scores')
     
