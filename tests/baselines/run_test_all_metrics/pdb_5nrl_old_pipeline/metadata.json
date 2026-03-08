@@ -1,0 +1,9 @@
+{
+  "captured_at_utc": "2026-03-08T22:49:21.204151+00:00",
+  "git_commit_old": "911604e",
+  "git_commit_new": "fe5e708627fcb3d9a6a8005fcb9e961f11816e1c",
+  "notes": "OLD pipeline (commit 911604e) baseline on PDB 5nrl dataset at grid=128.",
+  "dataset_generation_args": "--grid-size 128 --n-images 50000 --noise-level 1.0 --contrast-std 0.1 --generate-pdb-volumes --generated-n-volumes 50 --pdb-bfactor 80.0 --pdb-max-rotation 10.0",
+  "canonical_dataset_path": "/scratch/gpfs/GILLES/mg6942/pdb_regression_baseline/test_dataset",
+  "volumes_source": "5nrl spliceosome, 50 volumes, grid=128, voxel=4.25A, B=80, rot=10deg, path_symmetric"
+}

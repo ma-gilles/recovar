@@ -10,6 +10,8 @@ def test_metric_direction_classification():
     assert metric_direction("state_0_ninety_pc_locres") == "lower"
     assert metric_direction("mean_fsc") == "higher"
     assert metric_direction("noise_correlation") == "higher"
+    assert metric_direction("pcs_relative_variance_4") == "higher"
+    assert metric_direction("pcs_relative_variance_10") == "higher"
     assert metric_direction("some_unknown_metric") == "ignore"
 
 
