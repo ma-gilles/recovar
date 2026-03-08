@@ -597,7 +597,7 @@ class JAXDataLoader:
             )
         ds = grain.MapDataset.source(self.dataset)
         if self.shuffle:
-            ds = ds.shuffle(seed=np.random.randint(0, 2**31))
+            ds = ds.shuffle(seed=42)
         # Don't use Grain's .batch() — it uses np.stack which adds an extra
         # dimension.  Our __getitem__ returns images as (1, D, D) so stacking
         # would give (batch, 1, D, D) instead of (batch, D, D).
