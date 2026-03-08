@@ -303,13 +303,29 @@ make_symmetric_columns_cpu = jax.jit(make_symmetric_columns, static_argnums = (2
 
 def make_symmetric_columns_np(columns, picked_frequencies, volume_shape):
     freqs = np.array(core.vec_indices_to_frequencies(picked_frequencies, volume_shape))
-    
+
     good_idx = freqs[:,0] > 0
     minus_freqs = -freqs
     minus_indices = np.array(core.frequencies_to_vec_indices(minus_freqs, volume_shape))
-    columns_flipped = batch_flip_vec2(columns, volume_shape)
-    return columns_flipped.T, minus_indices, good_idx
- 
+    columns_flipped = flip_columns_structured(columns, volume_shape)
+    return columns_flipped, minus_indices, good_idx
+
+
+def flip_columns_structured(columns, volume_shape):
+    """Hermitian conjugate flip using structured numpy ops instead of fancy indexing.
+
+    For frequency index (x,y,z), the negated frequency maps to ((N-x)%N, (N-y)%N, (N-z)%N).
+    Boundary voxels (where any coordinate is 0) are zeroed because the mapping
+    is degenerate there (clipping artifact). This is equivalent to the old
+    batch_flip_vec2 but uses np.flip (a zero-copy view) instead of random-access
+    fancy indexing (columns[mapped_idx,:]), giving better cache behavior and
+    lower peak memory on large arrays.
+    """
+    vol = columns.reshape(*volume_shape, -1)
+    result = np.zeros_like(vol)
+    result[1:, 1:, 1:] = np.conj(np.flip(vol[1:, 1:, 1:], axis=(0, 1, 2)))
+    return result.reshape(columns.shape[0], -1)
+
 
 def batch_flip_vec2(columns,volume_shape):
     mapped_idx = np.array(get_minus_vec_index(np.arange(np.prod(volume_shape)),volume_shape))
@@ -340,31 +356,29 @@ def get_all_copied_columns(columns, picked_frequencies, volume_shape):
 # IMPLEMENTS THE TWO MATVECS WE NEED TO RUN THE RANDOMIZED SVD.
 ## TODO: which veriosn is used? Should it be the other? Figure it out. Dlete the other ones
 @nvtx.annotate("right_matvec_with_spatial_Sigma", color="orange", domain=NVTX_DOMAIN_PCA)
-def right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40, precomputed_symmetric=None):
+def right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40):
     st_time = time.time()
     # Some precompute
-    if precomputed_symmetric is None:
-        columns_flipped, minus_frequency_indices, good_idx = make_symmetric_columns_np(columns, picked_frequency_indices, volume_shape)
-    else:
-        columns_flipped, minus_frequency_indices, good_idx = precomputed_symmetric
+    columns_flipped, minus_frequency_indices, good_idx = make_symmetric_columns_np(columns, picked_frequency_indices, volume_shape)
+    columns_flipped = columns_flipped[:,good_idx]
+    minus_frequency_indices = minus_frequency_indices[good_idx]
     logger.info("make big mat 1 %s", time.time() - st_time)
-    # columns_flipped = np.array(columns_flipped)
     utils.report_memory_device(logger=logger)
 
     # Compute frequencies and all that stuff...
-    all_frequency_indices = np.concatenate([picked_frequency_indices, minus_frequency_indices[good_idx]])
+    all_frequency_indices = np.concatenate([picked_frequency_indices, minus_frequency_indices])
     all_frequencies = core.vec_indices_to_frequencies(all_frequency_indices, volume_shape)
-    
+
     # Size of smaller grid.
     smaller_size = int(2 * (np.max(np.abs(all_frequencies)) + 1))
     smaller_vol_shape = tuple(3*[smaller_size])
     smaller_vol_size = np.prod(smaller_vol_shape)
-    
+
     # F_2r^* test_mat
     F_t = linalg.batch_dft3(test_mat, smaller_vol_shape, vol_batch_size) / smaller_vol_size
     logger.info("DFT time 1 %s", time.time() - st_time)
 
-    
+
     original_frequencies = core.vec_indices_to_frequencies(picked_frequency_indices, volume_shape)
     original_frequencies_indices_in_smaller = core.frequencies_to_vec_indices(original_frequencies, smaller_vol_shape)
     utils.report_memory_device(logger=logger)
@@ -372,17 +386,20 @@ def right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices,
     C_F_t = linalg.blockwise_A_X(columns, F_t[original_frequencies_indices_in_smaller,:], memory_to_use = memory_to_use)
     logger.info("AX 1: %s", time.time() - st_time)
 
-    flipped_frequencies = core.vec_indices_to_frequencies(minus_frequency_indices[good_idx], volume_shape)
+    flipped_frequencies = core.vec_indices_to_frequencies(minus_frequency_indices, volume_shape)
     flipped_frequencies_indices_in_smaller = np.array(core.frequencies_to_vec_indices(flipped_frequencies, smaller_vol_shape))
 
-    columns_flipped = columns_flipped[:,good_idx]
     F_t2 = F_t[flipped_frequencies_indices_in_smaller,:].copy()
-    C_F_t_2 = linalg.blockwise_A_X(columns_flipped , F_t2, memory_to_use = memory_to_use) 
-    C_F_t += C_F_t_2 
+    del F_t  # Free DFT of test_mat — no longer needed
+    C_F_t_2 = linalg.blockwise_A_X(columns_flipped, F_t2, memory_to_use = memory_to_use)
+    del F_t2, columns_flipped  # Free before accumulation
+    C_F_t += C_F_t_2
+    del C_F_t_2  # Free — result accumulated into C_F_t
     logger.info("AX 2: %s", time.time() - st_time)
 
 
     F_C_F_t = linalg.batch_idft3(C_F_t, volume_shape, vol_batch_size)
+    del C_F_t  # Free — IDFT result replaces it
     logger.info("IDFT: %s", time.time() - st_time)
 
     return F_C_F_t
@@ -434,52 +451,50 @@ def right_matvec_with_spatial_Sigma_v2(test_mat, columns, picked_frequency_indic
 
 
 @nvtx.annotate("left_matvec_with_spatial_Sigma", color="yellow", domain=NVTX_DOMAIN_PCA)
-def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40, precomputed_symmetric=None):
+def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40):
     st_time =time.time()
     # Some precompute
-    if precomputed_symmetric is None:
-        columns_flipped, minus_frequency_indices, good_idx = make_symmetric_columns_np(columns, picked_frequency_indices, volume_shape)
-    else:
-        columns_flipped, minus_frequency_indices, good_idx = precomputed_symmetric
+    columns_flipped, minus_frequency_indices, good_idx = make_symmetric_columns_np(columns, picked_frequency_indices, volume_shape)
     columns_flipped = columns_flipped[:,good_idx]
+    minus_frequency_indices = minus_frequency_indices[good_idx]
 
     # Compute frequencies and all that stuff...
-    all_frequency_indices = np.concatenate([picked_frequency_indices, minus_frequency_indices[good_idx]])
+    all_frequency_indices = np.concatenate([picked_frequency_indices, minus_frequency_indices])
     all_frequencies = core.vec_indices_to_frequencies(all_frequency_indices, volume_shape)
-    
+
     # Compute smallest grid that contains all picked frequencies
     smaller_size = int(2 * (np.max(np.abs(all_frequencies)) + 1))
     smaller_vol_shape = tuple(3*[smaller_size])
     smaller_vol_size = np.prod(smaller_vol_shape)
-    
+
     # Now do compute:
     # F = IDFT here
     # so F^* = DFT
-    
+
     # Q should be real I think?
-    F_star_Q_star = linalg.batch_dft3( np.conj(Q), volume_shape, vol_batch_size) / np.prod(volume_shape)
-    Q_F = F_star_Q_star
+    Q_F = linalg.batch_dft3( np.conj(Q), volume_shape, vol_batch_size) / np.prod(volume_shape)
     logger.info("DFT: %s", time.time() - st_time)
 
     # Frequencies in new grid
     original_frequencies = core.vec_indices_to_frequencies(picked_frequency_indices, volume_shape)
     original_frequencies_indices_in_smaller = core.frequencies_to_vec_indices(original_frequencies, smaller_vol_shape)
-        
+
     Q_F_C = np.zeros((Q.shape[-1], smaller_vol_size), dtype = columns.dtype)
     Q_F_C[:,original_frequencies_indices_in_smaller] = linalg.blockwise_Y_T_X(Q_F, columns, memory_to_use = memory_to_use)
     logger.info("Y^T @ X: %s", time.time() - st_time)
 
     # Flipped Frequencies in new grid
-    flipped_frequencies = core.vec_indices_to_frequencies(minus_frequency_indices[good_idx], volume_shape)
-    flipped_frequencies_indices_in_smaller = core.frequencies_to_vec_indices(flipped_frequencies, smaller_vol_shape)
-    flipped_frequencies_indices_in_smaller = np.array(flipped_frequencies_indices_in_smaller)
+    flipped_frequencies = core.vec_indices_to_frequencies(minus_frequency_indices, volume_shape)
+    flipped_frequencies_indices_in_smaller = np.array(core.frequencies_to_vec_indices(flipped_frequencies, smaller_vol_shape))
 
     Q_F_C[:,flipped_frequencies_indices_in_smaller] = linalg.blockwise_Y_T_X(Q_F, columns_flipped, memory_to_use = memory_to_use)
+    del Q_F, columns_flipped  # Free — no longer needed after both Y^T @ X calls
     logger.info("Y^T @ X: %s", time.time() - st_time)
-    
+
     # DFT back
     # X F^* = (F X^*)^*
     Q_F_C_F = np.conj(linalg.batch_idft3(np.conj(Q_F_C).T, smaller_vol_shape, vol_batch_size)).T
+    del Q_F_C  # Free — transformed result replaces it
     logger.info("DFT2: %s", time.time() - st_time)
 
     return Q_F_C_F
@@ -565,14 +580,10 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     test_mat = np.random.randn(smaller_vol_size, test_size).real.astype(np.float32)
 
     st_time = time.time()
-    # Precompute symmetric columns once — reused by both right and left matvec (~459s saved at N=256/300k)
-    precomputed_symmetric = make_symmetric_columns_np(columns, picked_frequency_indices, volume_shape)
-    logger.info("make_symmetric_columns_np: %s", time.time() - st_time)
-
     if use_v2_fn:
         Q = right_matvec_with_spatial_Sigma_v2(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
     else:
-        Q = right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use, precomputed_symmetric=precomputed_symmetric).real.astype(np.float32)
+        Q = right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
     del test_mat
 
     ## Do masking here ?
@@ -591,7 +602,7 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     if use_v2_fn:
         C_F_t_2 = left_matvec_with_spatial_Sigma_v2(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
     else:
-        C_F_t_2 = left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use, precomputed_symmetric=precomputed_symmetric).real.astype(np.float32)
+        C_F_t_2 = left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
     utils.report_memory_device(logger=logger)
     logger.info("left matvec %s", time.time() - st_time)
 
