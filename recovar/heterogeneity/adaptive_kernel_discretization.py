@@ -325,18 +325,15 @@ def compute_residuals_batch(
     use_linear_interp: bool = False,
 ):
     """Compute residuals for many weights — Equinox API."""
+    X_mat, gridpoint_indices = make_X_mat(
+        batch_data.rotation_matrices, config.volume_shape, config.image_shape, pol_degree=pol_degree
+    )
+    weights_on_grid = weights[gridpoint_indices]
     if use_linear_interp:
-        X_mat, gridpoint_indices = make_X_mat(
-            batch_data.rotation_matrices, config.volume_shape, config.image_shape, pol_degree=pol_degree
-        )
-        weights_on_grid = weights[gridpoint_indices]
         X_mat = jnp.repeat(X_mat[..., None, :], axis=-2, repeats=weights_on_grid.shape[-2])
         predicted_phi = linalg.broadcast_dot(X_mat, weights_on_grid)
     else:
-        predicted_phi = core.slice_volume(
-            weights_on_grid[..., 0], batch_data.rotation_matrices,
-            config.image_shape, config.volume_shape, 'linear_interp',
-        )
+        predicted_phi = weights_on_grid[..., 0]
 
     CTF = config.compute_ctf(batch_data.ctf_params)
     translated_images = core.translate_images(batch_data.images, batch_data.translations, config.image_shape)
@@ -1065,12 +1062,15 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
         config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, use_upsampled=True)
 
     image_inds_by_bin = [np.flatnonzero(inds == bin_idx).astype(np.int32) for bin_idx in range(n_bins)]
+    # Pre-allocate accumulators once (reused across bins)
+    Ft_y_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
+    Ft_ctf_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype_real)
     for bin_idx, image_inds in enumerate(image_inds_by_bin):
         if image_inds.size == 0:
             continue
 
-        Ft_y_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
-        Ft_ctf_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype_real)
+        Ft_y_acc = jnp.zeros_like(Ft_y_acc)
+        Ft_ctf_acc = jnp.zeros_like(Ft_ctf_acc)
         for batch_data in DataIterator(
             experiment_dataset, batch_size,
             noise_model=experiment_dataset.noise, noise_half=False,
