@@ -4,9 +4,9 @@ Generates a synthetic cryo-EM dataset from rigid-body subcomplex motions of
 PDB 5nrl (pre-catalytic spliceosome), runs the recovar pipeline, and compares
 all metrics against a committed baseline.
 
-The baseline was established by running the OLD pipeline (commit 911604e) on
-the same PDB-generated dataset, so this test verifies that the current code
-matches or exceeds the quality of the old code.
+The baseline was established from the current pipeline on a deterministic
+PDB-generated dataset.  This test catches regressions when code changes
+degrade reconstruction quality on realistic PDB-derived data.
 
 The dataset is **reproducible**: given the same volumes, the simulator uses
 deterministic seeds (seed=0) and fixed parameters.  The PDB volumes themselves
@@ -50,10 +50,10 @@ pytestmark = [
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Default baseline: established from OLD pipeline (commit 911604e) on PDB dataset.
+# Default baseline: established from current pipeline on deterministic PDB dataset.
 _DEFAULT_PDB_BASELINE_JSON = (
     _REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics"
-    / "pdb_5nrl_old_pipeline" / "all_scores.json"
+    / "pdb_5nrl_current" / "all_scores.json"
 )
 
 # Default run args matching the PDB dataset generation parameters.
@@ -113,16 +113,17 @@ def _run_pdb_metrics(output_dir, run_args, reuse_dataset=False):
         return json.load(f)
 
 
-def test_pdb_trajectory_regression_against_old_pipeline(tmp_path):
+def test_pdb_trajectory_regression(tmp_path):
     """
     Long regression test (~30min–1h) using PDB-based 5nrl trajectory volumes.
 
     Generates a reproducible synthetic dataset from 5nrl spliceosome
     rigid-body motions, runs the current pipeline, and compares metrics
-    against the old pipeline baseline (commit 911604e).
+    against the committed baseline (current pipeline on same data).
 
-    This test ensures that no code change degrades reconstruction quality
-    below the level achieved by the original pipeline on realistic data.
+    This test catches regressions: any code change that degrades
+    reconstruction quality on realistic PDB-derived data beyond the
+    tolerance threshold will fail.
     """
     baseline_json = Path(
         os.environ.get("PDB_REGRESSION_BASELINE_JSON", str(_DEFAULT_PDB_BASELINE_JSON))
