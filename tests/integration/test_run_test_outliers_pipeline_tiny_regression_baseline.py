@@ -35,7 +35,7 @@ import pytest
 
 from helpers.metrics_regression import compare_metric, metric_direction
 
-pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io]
+pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io, pytest.mark.tiny_metrics]
 
 _GRID = int(os.environ.get("TINY_OUTLIERS_GRID_SIZE", "32"))
 _N_IMAGES = int(os.environ.get("TINY_OUTLIERS_N_IMAGES", "800"))
@@ -214,9 +214,6 @@ def test_run_test_outliers_pipeline_tiny_regression_uses_saved_baseline(tmp_path
     pipeline is the only source of difference.  Failures indicate genuine
     accuracy regressions.
     """
-    if os.environ.get("RUN_TINY_METRICS_INTEGRATION", "0") != "1":
-        pytest.skip("set RUN_TINY_METRICS_INTEGRATION=1 to run")
-
     tol_frac = float(os.environ.get("TINY_OUTLIERS_TOL_FRAC", str(_TOL)))
 
     vols_prefix = tmp_path / "vol"

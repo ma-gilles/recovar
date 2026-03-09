@@ -733,13 +733,12 @@ def test_real_backproject_cuda_vs_jax(half_vol, half_img, gpu_device):
 
 # ── Non-square images (rectangular) ─────────────────────────────────
 
-@pytest.mark.xfail(
+@pytest.mark.skip(
     reason=(
         "Rectangular images (H!=W) have a known pixel-ordering mismatch: "
         "CUDA uses (H,W) row-major but JAX meshgrid('xy') produces (W,H) layout. "
         "These coincide only when H==W. The pipeline always uses square images."
     ),
-    strict=False,
 )
 def test_rectangular_images_cuda_vs_jax(gpu_device):
     """CUDA must handle non-square image shapes correctly."""

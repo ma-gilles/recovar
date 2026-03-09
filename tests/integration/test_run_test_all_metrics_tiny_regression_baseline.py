@@ -11,7 +11,7 @@ import pytest
 from helpers.metrics_regression import metric_direction
 
 
-pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io]
+pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io, pytest.mark.tiny_metrics]
 
 
 def _make_real_volume(idx, n_vols, grid):
@@ -90,9 +90,6 @@ def test_run_test_all_metrics_tiny_regression_uses_saved_baseline(tmp_path):
     1) full tiny sweep writes a saved baseline JSON
     2) second full tiny sweep must be at least as good (within tolerance)
     """
-    if os.environ.get("RUN_TINY_METRICS_INTEGRATION", "0") != "1":
-        pytest.skip("set RUN_TINY_METRICS_INTEGRATION=1 to run")
-
     tol_frac = float(os.environ.get("RUN_TINY_METRICS_TOL_FRAC", "0.10"))
 
     vols_prefix = tmp_path / "vol"
