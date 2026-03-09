@@ -29,3 +29,13 @@ def test_compare_metric_non_finite_fails():
     ok, msg = compare_metric(current=float("nan"), baseline=1.0, direction="lower", tol_frac=0.1)
     assert not ok
     assert "non-finite" in msg
+
+
+def test_metric_direction_for_canonical_key_names():
+    """Verify that renamed canonical keys are classified correctly."""
+    assert metric_direction("svd_relative_variance_4") == "higher"
+    assert metric_direction("svd_relative_variance_10") == "higher"
+    assert metric_direction("contrast_abs_error_4") == "lower"
+    assert metric_direction("contrast_abs_error_4_noreg") == "lower"
+    assert metric_direction("state_0_locres_90pct") == "lower"
+    assert metric_direction("state_1_locres_median") == "lower"

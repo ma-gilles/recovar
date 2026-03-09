@@ -4,11 +4,13 @@ import json
 import pickle
 import argparse
 import math
+import time
 from pathlib import Path
 import logging
 import numpy as np
 import matplotlib.pyplot as plt
 import jax
+import psutil
 
 from recovar import utils
 from recovar.simulation import simulator, synthetic_dataset
@@ -35,6 +37,37 @@ HIGHER_IS_BETTER_TOKENS = (
     "relative_variance",
 )
 
+# Canonical key renames: old_key -> new_key.
+# Both old and new keys are emitted for backward compatibility; regression
+# comparison deduplicates so each metric is only checked once.
+CANONICAL_KEY_ALIASES = {
+    "pcs_relative_variance_4": "svd_relative_variance_4",
+    "pcs_relative_variance_10": "svd_relative_variance_10",
+    "contrasts_4": "contrast_abs_error_4",
+    "contrasts_4_noreg": "contrast_abs_error_4_noreg",
+    "contrasts_10": "contrast_abs_error_10",
+    "contrasts_10_noreg": "contrast_abs_error_10_noreg",
+    "constrasts_4": "contrast_abs_error_4",
+    "constrasts_4_noreg": "contrast_abs_error_4_noreg",
+    "constrasts_10": "contrast_abs_error_10",
+    "constrasts_10_noreg": "contrast_abs_error_10_noreg",
+}
+
+def _resolve_canonical_key(key):
+    """Map a key to its canonical name (handles both static aliases and dynamic locres patterns)."""
+    if key in CANONICAL_KEY_ALIASES:
+        return CANONICAL_KEY_ALIASES[key]
+    # Dynamic locres renames: state_N_ninety_pc_locres -> state_N_locres_90pct
+    #                         state_N_median_locres   -> state_N_locres_median
+    import re
+    m = re.match(r"^(state_\d+)_ninety_pc_locres$", key)
+    if m:
+        return f"{m.group(1)}_locres_90pct"
+    m = re.match(r"^(state_\d+)_median_locres$", key)
+    if m:
+        return f"{m.group(1)}_locres_median"
+    return key
+
 
 # Set up logging configuration
 def setup_logging(output_dir):
@@ -49,6 +82,76 @@ def setup_logging(output_dir):
         ]
     )
     return logging.getLogger(__name__)
+
+
+# ── Performance tracking helpers ──────────────────────────────────────
+
+def _gpu_name():
+    """Return GPU device name or 'cpu'."""
+    try:
+        devs = jax.devices("gpu")
+        if devs:
+            return str(devs[0].device_kind)
+    except Exception:
+        pass
+    return "cpu"
+
+
+def _perf_snapshot():
+    """Capture a wall-clock + memory snapshot.
+
+    Returns a dict with:
+    - wall_time: time.monotonic() value
+    - cpu_rss_bytes: current process RSS
+    - gpu_bytes_in_use: JAX bytes currently allocated (or 0)
+    - gpu_peak_bytes: JAX peak_bytes_in_use (cumulative, or 0)
+    """
+    snap = {
+        "wall_time": time.monotonic(),
+        "cpu_rss_bytes": psutil.Process(os.getpid()).memory_info().rss,
+        "gpu_bytes_in_use": 0,
+        "gpu_peak_bytes": 0,
+    }
+    try:
+        stats = jax.local_devices()[0].memory_stats()
+        if stats:
+            snap["gpu_bytes_in_use"] = stats.get("bytes_in_use", 0)
+            snap["gpu_peak_bytes"] = stats.get("peak_bytes_in_use", 0)
+    except Exception:
+        pass
+    return snap
+
+
+def _stage_perf(before, after):
+    """Compute per-stage performance from two snapshots.
+
+    GPU peak during stage: JAX's ``peak_bytes_in_use`` is cumulative and
+    cannot be reset.  We use the following heuristic:
+
+    - If the global peak *increased* during this stage
+      (``after.gpu_peak > before.gpu_peak``), the new peak happened during
+      this stage: ``stage_peak = after.gpu_peak``.
+    - Otherwise the peak was set by an earlier stage, so our best estimate
+      is ``max(before.gpu_in_use, after.gpu_in_use)`` — the higher of the
+      two endpoint measurements.
+
+    This gives the absolute peak GPU allocation (not delta) attributable
+    to the stage.  ``peak_gpu_memory_gb`` is therefore comparable across
+    stages and across runs.
+    """
+    wall = after["wall_time"] - before["wall_time"]
+    cpu_peak_bytes = max(before["cpu_rss_bytes"], after["cpu_rss_bytes"])
+    if after["gpu_peak_bytes"] > before["gpu_peak_bytes"]:
+        # Global peak was set during this stage — use the actual value.
+        gpu_stage_peak = after["gpu_peak_bytes"]
+    else:
+        # Peak was set by a previous stage; best estimate from endpoints.
+        gpu_stage_peak = max(before["gpu_bytes_in_use"], after["gpu_bytes_in_use"])
+    return {
+        "wall_seconds": round(wall, 2),
+        "peak_cpu_memory_gb": round(cpu_peak_bytes / 1e9, 3),
+        "peak_gpu_memory_gb": round(gpu_stage_peak / 1e9, 3),
+    }
 
 
 ## TODO: Move things elsewhere? IT should be used to generate dataset that are syntehtic
@@ -494,7 +597,9 @@ def _sanitize_json_value(val):
 def normalize_scores_for_json(scores_dict):
     normalized = {}
     for key, val in scores_dict.items():
-        if isinstance(val, (bool, np.bool_)):
+        if isinstance(val, dict):
+            normalized[key] = normalize_scores_for_json(val)
+        elif isinstance(val, (bool, np.bool_)):
             normalized[key] = bool(val)
         elif isinstance(val, np.ndarray):
             normalized[key] = _sanitize_json_value(np.asarray(val).tolist())
@@ -502,6 +607,8 @@ def normalize_scores_for_json(scores_dict):
             normalized[key] = _sanitize_json_value(float(val))
         elif isinstance(val, (float, int)):
             normalized[key] = _sanitize_json_value(float(val))
+        elif isinstance(val, str):
+            normalized[key] = val
         else:
             # Handle JAX ArrayImpl and other array-like objects
             try:
@@ -527,10 +634,15 @@ def compare_scores_against_baseline(current_scores, baseline_scores, tol_frac):
     checked = 0
     failures = []
     details = {}
+    # Track which canonical keys have already been checked so we don't
+    # double-count a metric that appears under both its old and new name.
+    seen_canonical = set()
     for key in sorted(set(current_scores.keys()) & set(baseline_scores.keys())):
         cur = current_scores[key]
         base = baseline_scores[key]
         if isinstance(cur, (bool, np.bool_)) or isinstance(base, (bool, np.bool_)):
+            continue
+        if isinstance(cur, dict) or isinstance(base, dict):
             continue
         if not isinstance(cur, (int, float, np.floating, np.integer)):
             continue
@@ -539,6 +651,12 @@ def compare_scores_against_baseline(current_scores, baseline_scores, tol_frac):
         direction = metric_direction(key)
         if direction == "ignore":
             continue
+        # Deduplicate: if this key is a legacy alias for a canonical key
+        # that was already checked, skip it.
+        canonical = _resolve_canonical_key(key)
+        if canonical in seen_canonical:
+            continue
+        seen_canonical.add(canonical)
         checked += 1
         ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac)
         details[key] = {
@@ -790,6 +908,9 @@ def main():
     if not args.cpu:
         check_gpu()
 
+    perf = {"gpu_name": _gpu_name()}
+
+    _snap_before_dataset = _perf_snapshot()
     if _reuse:
         logger.info("Reusing existing dataset at %s (--reuse-dataset)", dataset_dir)
         with open(sim_info_path, 'rb') as f:
@@ -803,6 +924,7 @@ def main():
             premultiplied_ctf=args.premultiplied_ctf,
             noise_increase_per_tilt=args.noise_increase_per_tilt
         )
+    perf["dataset_generation"] = _stage_perf(_snap_before_dataset, _perf_snapshot())
 
     # Compute average noise radial by counting dose indices
     if 'dose_indices' in sim_info and sim_info['dose_indices'] is not None:
@@ -850,10 +972,11 @@ def main():
     pipeline_args = pipeline_parser.parse_args(cmd)
     logger.info("\nRunning pipeline, as if:")
     logger.info("recovar %s", " ".join(cmd))
+    _snap_before_pipeline = _perf_snapshot()
     pipeline.standard_recovar_pipeline(pipeline_args)
+    perf["pipeline"] = _stage_perf(_snap_before_pipeline, _perf_snapshot())
 
 
-    
 
     pipeline_output_dir = os.path.join(dataset_dir, 'pipeline_output')
     sim_info_path = os.path.join(dataset_dir, 'simulation_info.pkl')
@@ -897,10 +1020,12 @@ def main():
 
     logger.info("\nRunning compute_state, as if:")
     logger.info("recovar compute_state %s", " ".join(cmd))
-
+    _snap_before_cs = _perf_snapshot()
     compute_state.compute_state(cs_args)
+    perf["compute_state"] = _stage_perf(_snap_before_cs, _perf_snapshot())
 
     # Metrics and plots
+    _snap_before_metrics = _perf_snapshot()
     all_scores = {}
     cryos = pipeline_output.get('lazy_dataset')
     mean = pipeline_output.get('mean')
@@ -959,8 +1084,13 @@ def main():
         if key == 'gt':
             continue
         variance, rel_var[key], norm_var[key] = metrics.get_all_variance_scores(u[key], u_gt, s_gt)
-        all_scores['pcs_relative_variance_4'] = rel_var[key][4] if rel_var[key].size > 4 else np.nan
-        all_scores['pcs_relative_variance_10'] = rel_var[key][10] if rel_var[key].size > 10 else np.nan
+        rv4 = rel_var[key][4] if rel_var[key].size > 4 else np.nan
+        rv10 = rel_var[key][10] if rel_var[key].size > 10 else np.nan
+        all_scores['svd_relative_variance_4'] = rv4
+        all_scores['svd_relative_variance_10'] = rv10
+        # Legacy aliases for backward compatibility with old baselines.
+        all_scores['pcs_relative_variance_4'] = rv4
+        all_scores['pcs_relative_variance_10'] = rv10
 
     angles = {}
     for key in u:
@@ -1016,8 +1146,9 @@ def main():
                 pipeline_output, entry, zdim_val, legacy_cache=legacy_embedding_cache
             )
             contrast_abs_error = np.mean(np.abs(gt_contrasts - unsorted_contrast))
+            all_scores[f'contrast_abs_error_{label}'] = contrast_abs_error
+            # Legacy aliases for backward compatibility with old baselines.
             all_scores[f'contrasts_{label}'] = contrast_abs_error
-            # Backward-compatible key for existing comparison scripts.
             all_scores[f'constrasts_{label}'] = contrast_abs_error
 
             # Create contrast comparison plot
@@ -1051,6 +1182,9 @@ def main():
             gt_map, estimate_map, cryos[0].voxel_size, None, partial_mask=None,
             normalize_by_map1=True
         )
+        all_scores[f'state_{l_idx}_locres_90pct'] = errors_metrics.get('ninety_pc_locres')
+        all_scores[f'state_{l_idx}_locres_median'] = errors_metrics.get('median_locres')
+        # Legacy aliases for backward compatibility with old baselines.
         all_scores[f'state_{l_idx}_ninety_pc_locres'] = errors_metrics.get('ninety_pc_locres')
         all_scores[f'state_{l_idx}_median_locres'] = errors_metrics.get('median_locres')
 
@@ -1201,6 +1335,9 @@ def main():
         plt.savefig(comparison_plot_path)
         plt.close()
         logger.info("Score comparison plot saved at: %s", comparison_plot_path)
+
+    perf["metrics"] = _stage_perf(_snap_before_metrics, _perf_snapshot())
+    all_scores["perf"] = perf
 
     all_scores = normalize_scores_for_json(all_scores)
 

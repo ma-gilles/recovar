@@ -365,6 +365,59 @@ def test_main_explicit_volume_without_baseline_skips_regression_report(monkeypat
     assert not report_path.exists()
 
 
+def test_main_emits_canonical_keys_and_legacy_aliases_and_perf(monkeypatch, tmp_path):
+    """Check that a run emits both new canonical keys and legacy aliases, plus perf."""
+    _install_main_runtime_stubs(monkeypatch, tmp_path, mean_fsc=0.55, variance_fsc=0.45)
+    monkeypatch.setattr(
+        rtam.sys,
+        "argv",
+        [
+            "run_test_all_metrics",
+            "--output-dir",
+            str(tmp_path),
+            "--cpu",
+            "--volume-input",
+            str(tmp_path / "fixed_vol_prefix_"),
+        ],
+    )
+
+    rtam.main()
+
+    scores_path = tmp_path / "test_dataset" / "metrics_plot" / "all_scores.json"
+    with open(scores_path, "r") as f:
+        scores = json.load(f)
+
+    # Canonical keys present
+    assert "svd_relative_variance_4" in scores
+    assert "svd_relative_variance_10" in scores
+    assert "contrast_abs_error_4" in scores
+    assert "contrast_abs_error_4_noreg" in scores
+    assert "state_0_locres_90pct" in scores
+    assert "state_0_locres_median" in scores
+
+    # Legacy aliases also present
+    assert "pcs_relative_variance_4" in scores
+    assert "contrasts_4" in scores
+    assert "constrasts_4" in scores
+    assert "state_0_ninety_pc_locres" in scores
+    assert "state_0_median_locres" in scores
+
+    # Canonical and legacy have same values
+    assert scores["svd_relative_variance_4"] == scores["pcs_relative_variance_4"]
+    assert scores["contrast_abs_error_4"] == scores["contrasts_4"]
+    assert scores["state_0_locres_90pct"] == scores["state_0_ninety_pc_locres"]
+
+    # Perf dict present with expected structure
+    perf = scores.get("perf")
+    assert isinstance(perf, dict)
+    assert "gpu_name" in perf
+    for stage in ["dataset_generation", "pipeline", "compute_state", "metrics"]:
+        assert stage in perf, f"missing perf stage: {stage}"
+        assert "wall_seconds" in perf[stage]
+        assert "peak_gpu_memory_gb" in perf[stage]
+        assert "peak_cpu_memory_gb" in perf[stage]
+
+
 def test_main_regression_with_zero_comparable_metrics_writes_checked_report(monkeypatch, tmp_path):
     _install_main_runtime_stubs(monkeypatch, tmp_path, mean_fsc=0.55, variance_fsc=0.45)
     baseline_path = tmp_path / "baseline.json"
@@ -647,6 +700,24 @@ def test_normalize_scores_for_json_handles_numpy_scalars_and_arrays():
     assert out["flag_np"] is False
 
 
+def test_normalize_scores_for_json_handles_nested_dicts():
+    inp = {
+        "mean_fsc": np.float32(0.5),
+        "perf": {
+            "gpu_name": "NVIDIA H100",
+            "pipeline": {
+                "wall_seconds": np.float64(123.4),
+                "peak_gpu_memory_gb": 5.2,
+            },
+        },
+    }
+    out = rtam.normalize_scores_for_json(inp)
+    assert out["mean_fsc"] == pytest.approx(0.5)
+    assert out["perf"]["gpu_name"] == "NVIDIA H100"
+    assert out["perf"]["pipeline"]["wall_seconds"] == pytest.approx(123.4)
+    assert out["perf"]["pipeline"]["peak_gpu_memory_gb"] == pytest.approx(5.2)
+
+
 def test_compare_scores_against_baseline_applies_direction_and_tolerance():
     baseline = {
         "mean_fsc": 0.80,  # higher is better
@@ -697,6 +768,11 @@ def test_metric_direction_recognizes_known_tokens_and_defaults_to_ignore():
     # Keep backward compatibility for existing typo-ed keys.
     assert rtam.metric_direction("constrasts_4") == "lower"
     assert rtam.metric_direction("unclassified_metric_name") == "ignore"
+    # Canonical renamed keys
+    assert rtam.metric_direction("svd_relative_variance_4") == "higher"
+    assert rtam.metric_direction("contrast_abs_error_10_noreg") == "lower"
+    assert rtam.metric_direction("state_0_locres_90pct") == "lower"
+    assert rtam.metric_direction("state_1_locres_median") == "lower"
 
 
 def test_load_u_real_for_metrics_prefers_selective_api():
@@ -915,6 +991,37 @@ def test_generate_compact_support_test_volumes_default_prefix_and_count(tmp_path
     assert Path(prefix).name == "vol"
     for i in range(6):
         assert Path(f"{prefix}{i:04d}.mrc").exists()
+
+
+def test_compare_scores_against_baseline_deduplicates_aliased_keys():
+    """Aliased metric keys (e.g. pcs_relative_variance_4 / svd_relative_variance_4)
+    should only be checked once, not counted twice."""
+    current = {
+        "svd_relative_variance_4": 0.90,
+        "pcs_relative_variance_4": 0.90,  # legacy alias for same metric
+        "mean_fsc": 0.80,
+    }
+    baseline = {
+        "svd_relative_variance_4": 0.89,
+        "pcs_relative_variance_4": 0.89,
+        "mean_fsc": 0.79,
+    }
+    checked, failures, details = rtam.compare_scores_against_baseline(current, baseline, tol_frac=0.05)
+    # svd_relative_variance_4 should be checked once (not twice counting the alias)
+    assert checked == 2  # mean_fsc + one of the variance keys
+    assert failures == []
+
+
+def test_compare_scores_against_baseline_deduplicates_dynamic_locres_aliases():
+    current = {
+        "state_0_locres_90pct": 5.0,
+        "state_0_ninety_pc_locres": 5.0,
+        "state_0_locres_median": 4.0,
+        "state_0_median_locres": 4.0,
+    }
+    baseline = dict(current)
+    checked, failures, details = rtam.compare_scores_against_baseline(current, baseline, tol_frac=0.01)
+    assert checked == 2  # one for each unique locres metric
 
 
 def test_compare_scores_against_baseline_skips_non_numeric_values():
