@@ -32,6 +32,7 @@ HIGHER_IS_BETTER_TOKENS = (
     "fsc",
     "correlation",
     "variance_explained",
+    "relative_variance",
 )
 
 

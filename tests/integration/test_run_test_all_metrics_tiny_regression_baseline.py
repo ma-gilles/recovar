@@ -90,7 +90,7 @@ def test_run_test_all_metrics_tiny_regression_uses_saved_baseline(tmp_path):
     1) full tiny sweep writes a saved baseline JSON
     2) second full tiny sweep must be at least as good (within tolerance)
     """
-    tol_frac = float(os.environ.get("RUN_TINY_METRICS_TOL_FRAC", "0.10"))
+    tol_frac = float(os.environ.get("RUN_TINY_METRICS_TOL_FRAC", "0.01"))
 
     vols_prefix = tmp_path / "vol"
     _write_volumes(vols_prefix, n_vols=12, grid=32, voxel_size=4.25)
