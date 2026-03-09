@@ -324,7 +324,7 @@ def batch_project(
     half_volume: bool = False,
     half_image: bool = False,
 ) -> jax.Array:
-    """Project a batch of volumes to 2D images in a single kernel launch.
+    """Project a batch of volumes to 2D images via vmap over single-volume project.
 
     Parameters
     ----------
@@ -336,20 +336,25 @@ def batch_project(
     -------
     complex array, shape ``(batch, n_images, n_pixels)``.
     """
-    _ensure_ffi()
-    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
-    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image)
-    n_images = rotation_matrices.shape[0]
-    batch = volumes.shape[0]
-    n_pixels = ih * iw_eff
-    rot6 = _rot_to_compact(rotation_matrices)
-    out_type = jax.ShapeDtypeStruct((batch, n_images, n_pixels), volumes.dtype)
-
-    return jax.ffi.ffi_call(
-        _TARGET_BATCH_PROJECT,
-        out_type,
-        vmap_method="sequential",
-    )(volumes, rot6, **kw)
+    # TODO: The underlying CUDA batch_project_kernel loops over volumes
+    # sequentially per-thread (`for b in 0..batch_size`), causing L2 cache
+    # thrashing when batch is large (e.g. 161 basis vectors × 256³ volumes).
+    # Each thread jumps 128 MB between volumes, far exceeding L2 capacity
+    # (40 MB on A100), so every read is a cache miss.
+    #
+    # Fix options for the CUDA kernel:
+    #   1. Parallelize over volumes in the grid dimension (one thread-block
+    #      per volume×image×pixel-tile) so all threads in a block read from
+    #      the same volume → cache-friendly.
+    #   2. Tile the volume batch loop with shared memory staging.
+    #
+    # For now, vmap over single-volume `project` is ~30-40x faster for large
+    # batches because each kernel launch processes one volume that stays
+    # cache-hot for all images.
+    return jax.vmap(
+        lambda v: project(v, rotation_matrices, image_shape, volume_shape,
+                          order=order, half_volume=half_volume, half_image=half_image)
+    )(volumes)
 
 
 # ──────────────────────────────────────────────────────────────────────
