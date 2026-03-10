@@ -181,7 +181,17 @@ def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image):
         )
 
 
-def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image):
+def _encode_max_r(max_r):
+    """Encode max_r as int64 max_r2_x4 for FFI (quarter-pixel² precision).
+
+    -1 means disabled (no sphere clipping).
+    """
+    if max_r is None:
+        return np.int64(-1)
+    return np.int64(int(round(float(max_r) * float(max_r) * 4)))
+
+
+def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r=None):
     """Compute the shared FFI scalar keyword arguments (used by all 4 targets)."""
     ih, iw_full = image_shape
     N0, N1, N2 = volume_shape
@@ -198,10 +208,11 @@ def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image):
         half_volume=np.int64(int(half_volume)),
         half_image=np.int64(int(half_image)),
         full_image_w=np.int64(iw_full),
+        max_r2_x4=_encode_max_r(max_r),
     ), ih, iw_eff
 
 
-@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7))
+@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))
 def backproject(
     volume: jax.Array,
     images: jax.Array,
@@ -211,6 +222,7 @@ def backproject(
     order: int = 1,
     half_volume: bool = False,
     half_image: bool = False,
+    max_r: float | None = None,
 ) -> jax.Array:
     """Back-project *images* into *volume* (accumulate in-place via aliasing).
 
@@ -229,6 +241,8 @@ def backproject(
     half_volume : if True, volume is rfft-packed ``(N0*N1*(N2//2+1),)``.
     half_image : if True, images are rfft-packed ``(n, H*(W//2+1))``.
         Hermitian conjugates are scattered automatically.
+    max_r : if not None, skip pixels whose rotated frequency radius
+        exceeds this value (RELION-style sphere clipping).
 
     Returns
     -------
@@ -236,7 +250,7 @@ def backproject(
     """
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
-    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image)
+    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
 
@@ -248,7 +262,7 @@ def backproject(
     )(images, rot6, volume, **kw)
 
 
-@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
+@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
 def project(
     volume: jax.Array,
     rotation_matrices: jax.Array,
@@ -257,12 +271,15 @@ def project(
     order: int = 1,
     half_volume: bool = False,
     half_image: bool = False,
+    max_r: float | None = None,
 ) -> jax.Array:
     """Project *volume* to 2D images.
 
     Parameters
     ----------
     half_image : if True, output images are rfft-packed ``(n, H*(W//2+1))``.
+    max_r : if not None, zero pixels whose rotated frequency radius
+        exceeds this value (RELION-style sphere clipping).
 
     Returns
     -------
@@ -270,7 +287,7 @@ def project(
     """
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
-    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image)
+    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     n_images = rotation_matrices.shape[0]
     n_pixels = ih * iw_eff
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
@@ -287,7 +304,7 @@ def project(
 # Batched API  (multiple volumes, shared rotations)
 # ──────────────────────────────────────────────────────────────────────
 
-@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7))
+@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))
 def batch_backproject(
     volumes: jax.Array,
     images: jax.Array,
@@ -297,6 +314,7 @@ def batch_backproject(
     order: int = 1,
     half_volume: bool = False,
     half_image: bool = False,
+    max_r: float | None = None,
 ) -> jax.Array:
     """Back-project images into a batch of volumes in a single kernel launch.
 
@@ -311,6 +329,8 @@ def batch_backproject(
         Shared across all volumes in the batch.
     image_shape, volume_shape, order, half_volume, half_image :
         Same semantics as ``backproject()``.
+    max_r : if not None, skip pixels whose rotated frequency radius
+        exceeds this value (RELION-style sphere clipping).
 
     Returns
     -------
@@ -318,7 +338,7 @@ def batch_backproject(
     """
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
-    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image)
+    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volumes))
     out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
 
@@ -330,7 +350,7 @@ def batch_backproject(
     )(images, rot6, volumes, **kw)
 
 
-@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
+@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
 def batch_project(
     volumes: jax.Array,
     rotation_matrices: jax.Array,
@@ -339,6 +359,7 @@ def batch_project(
     order: int = 1,
     half_volume: bool = False,
     half_image: bool = False,
+    max_r: float | None = None,
 ) -> jax.Array:
     """Project a batch of volumes to 2D images via vmap over single-volume project.
 
@@ -347,6 +368,8 @@ def batch_project(
     volumes : complex, shape ``(batch, vol_flat_size)``
     rotation_matrices : real, shape ``(n_images, 3, 3)``
         Shared across all volumes in the batch.
+    max_r : if not None, zero pixels whose rotated frequency radius
+        exceeds this value (RELION-style sphere clipping).
 
     Returns
     -------
@@ -369,7 +392,8 @@ def batch_project(
     # cache-hot for all images.
     return jax.vmap(
         lambda v: project(v, rotation_matrices, image_shape, volume_shape,
-                          order=order, half_volume=half_volume, half_image=half_image)
+                          order=order, half_volume=half_volume, half_image=half_image,
+                          max_r=max_r)
     )(volumes)
 
 

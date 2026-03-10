@@ -132,13 +132,15 @@ def _jax_slice_half_image(volume, rotation_matrices, image_shape, volume_shape, 
 # ── Public API ───────────────────────────────────────────────────────
 
 def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type,
-                 half_volume=False, half_image=False):
+                 half_volume=False, half_image=False, max_r=None):
     """Project volume to images via interpolation.
 
     Parameters
     ----------
     half_volume : if True, *volume* is rfft-packed ``(N0*N1*(N2//2+1),)``.
     half_image : if True, output images are rfft-packed ``(n, H*(W//2+1))``.
+    max_r : if not None, zero pixels whose rotated frequency radius
+        exceeds this value (RELION-style sphere clipping).
     """
     order = decide_order(disc_type)
     if _use_cuda(order):
@@ -148,7 +150,7 @@ def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type
         from recovar.core.cuda_ops import cuda_project
         try:
             return cuda_project(volume, rotation_matrices, image_shape, volume_shape,
-                                order, half_volume, half_image)
+                                order, half_volume, half_image, max_r)
         except TypeError:
             pass  # JVP through custom_vjp — fall through to JAX
     # JAX fallback (CPU, cubic, or JVP context)
@@ -157,6 +159,7 @@ def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type
         return relion_interp.project(
             volume, rotation_matrices, image_shape, volume_shape,
             order=order, half_volume=half_volume, half_image=half_image,
+            max_r=max_r,
         )
     # Cubic: expand half-volume, use map_coordinates
     if half_volume:
@@ -167,13 +170,15 @@ def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type
 
 
 def batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, disc_type,
-                       half_volume=False, half_image=False):
+                       half_volume=False, half_image=False, max_r=None):
     """Project a batch of volumes to images.
 
     Parameters
     ----------
     half_volume : if True, *volumes* are rfft-packed half-volumes.
     half_image : if True, output images are rfft-packed.
+    max_r : if not None, zero pixels whose rotated frequency radius
+        exceeds this value (RELION-style sphere clipping).
     """
     order = decide_order(disc_type)
     if _use_cuda(order):
@@ -182,15 +187,17 @@ def batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, di
             volumes = volumes.astype(jnp.result_type(volumes, jnp.complex64))
         from recovar.cuda_backproject import batch_project
         return batch_project(volumes, rotation_matrices, image_shape, volume_shape,
-                             order=order, half_volume=half_volume, half_image=half_image)
+                             order=order, half_volume=half_volume, half_image=half_image,
+                             max_r=max_r)
     return jax.vmap(
         lambda v: slice_volume(v, rotation_matrices, image_shape, volume_shape,
-                               disc_type, half_volume=half_volume, half_image=half_image)
+                               disc_type, half_volume=half_volume, half_image=half_image,
+                               max_r=max_r)
     )(volumes)
 
 
 def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, disc_type,
-                         volume=None, half_image=False, half_volume=False):
+                         volume=None, half_image=False, half_volume=False, max_r=None):
     """Adjoint slice extraction (backprojection).
 
     Parameters
@@ -203,6 +210,8 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
         backprojecting via VJP (no compute savings, only input size savings).
     half_volume : if True, output uses rfft-packed half-volume layout.
     volume : optional accumulator to add the result into.
+    max_r : if not None, skip pixels whose rotated frequency radius
+        exceeds this value (RELION-style sphere clipping).
     """
     order = decide_order(disc_type)
     if _use_cuda(order):
@@ -214,7 +223,8 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
         if volume is None:
             volume = jnp.zeros(int(np.prod(vol_shape)), dtype=slices.dtype)
         return backproject(volume, slices, rotation_matrices, image_shape, volume_shape,
-                           order=order, half_image=half_image, half_volume=half_volume)
+                           order=order, half_image=half_image, half_volume=half_volume,
+                           max_r=max_r)
     # JAX fallback (CPU or cubic)
     if order <= 1:
         # RELION-style explicit scatter — ~10x faster than VJP for order 0/1.
@@ -224,6 +234,7 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
         result = relion_interp.backproject(
             slices, rotation_matrices, image_shape, volume_shape,
             order=order, half_volume=half_volume, half_image=half_image,
+            max_r=max_r,
         )
         return result if volume is None else result + volume
     # Cubic: VJP-based backprojection
@@ -251,7 +262,7 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
 
 
 def batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, disc_type,
-                               volumes=None, half_image=False, half_volume=False):
+                               volumes=None, half_image=False, half_volume=False, max_r=None):
     """Batch backprojection: per-volume image sets to batch of volumes.
 
     Parameters
@@ -260,6 +271,8 @@ def batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_sh
     rotation_matrices : shape ``(n_images, 3, 3)`` — shared across batch.
     volumes : optional ``(batch, vol_flat_size)`` accumulators.
     half_image, half_volume : same semantics as ``adjoint_slice_volume``.
+    max_r : if not None, skip pixels whose rotated frequency radius
+        exceeds this value (RELION-style sphere clipping).
     """
     order = decide_order(disc_type)
     vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
@@ -272,12 +285,13 @@ def batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_sh
         if not _is_complex(slices) and _is_complex(volumes):
             slices = slices.astype(jnp.result_type(slices, jnp.complex64))
         return batch_backproject(volumes, slices, rotation_matrices, image_shape, volume_shape,
-                                order=order, half_volume=half_volume, half_image=half_image)
+                                order=order, half_volume=half_volume, half_image=half_image,
+                                max_r=max_r)
     # JAX fallback: vmap single adjoint
     return jax.vmap(
         lambda sl, vol: adjoint_slice_volume(sl, rotation_matrices, image_shape, volume_shape,
                                              disc_type, volume=vol, half_image=half_image,
-                                             half_volume=half_volume)
+                                             half_volume=half_volume, max_r=max_r)
     )(slices, volumes)
 
 
