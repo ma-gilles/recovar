@@ -4,9 +4,10 @@ Generates a synthetic cryo-EM dataset from rigid-body subcomplex motions of
 PDB 5nrl (pre-catalytic spliceosome), runs the recovar pipeline, and compares
 all metrics against a committed baseline.
 
-The baseline was established from the current pipeline on a deterministic
-PDB-generated dataset.  This test catches regressions when code changes
-degrade reconstruction quality on realistic PDB-derived data.
+The baseline was established by running the old pipeline (commit 911604e,
+~/recovar) on a PDB-generated dataset with noise_level=0.1 (high SNR).
+This test verifies that the current code matches or exceeds the old
+pipeline's quality on realistic PDB-derived data.
 
 The dataset is **reproducible**: given the same volumes, the simulator uses
 deterministic seeds (seed=0) and fixed parameters.  The PDB volumes themselves
@@ -50,15 +51,16 @@ pytestmark = [
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Default baseline: established from current pipeline on deterministic PDB dataset.
+# Default baseline: established from old pipeline (commit 911604e) on PDB dataset
+# with noise_level=0.1 (high SNR).
 _DEFAULT_PDB_BASELINE_JSON = (
     _REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics"
-    / "pdb_5nrl_current" / "all_scores.json"
+    / "pdb_5nrl_old_pipeline" / "all_scores.json"
 )
 
 # Default run args matching the PDB dataset generation parameters.
 _DEFAULT_RUN_ARGS = (
-    "--grid-size 128 --n-images 50000 --noise-level 1.0 --contrast-std 0.1 "
+    "--grid-size 128 --n-images 50000 --noise-level 0.1 --contrast-std 0.1 "
     "--generate-pdb-volumes --generated-n-volumes 50 "
     "--pdb-bfactor 80.0 --pdb-max-rotation 10.0"
 )
@@ -67,7 +69,7 @@ _DEFAULT_RUN_ARGS = (
 # To regenerate the canonical dataset from scratch:
 #   python -m recovar.commands.run_test_all_metrics \
 #       --output-dir <OUT> \
-#       --grid-size 128 --n-images 50000 --noise-level 1.0 --contrast-std 0.1 \
+#       --grid-size 128 --n-images 50000 --noise-level 0.1 --contrast-std 0.1 \
 #       --generate-pdb-volumes --generated-n-volumes 50 \
 #       --pdb-bfactor 80.0 --pdb-max-rotation 10.0 --no-delete
 #

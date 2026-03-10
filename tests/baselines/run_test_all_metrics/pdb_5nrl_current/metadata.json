@@ -1,9 +1,0 @@
-{
-  "captured_at_utc": "2026-03-09T10:23:00+00:00",
-  "git_branch": "claude/pdb-trajectory-volumes",
-  "git_base": "5b7cc55 (main)",
-  "notes": "Current pipeline baseline on PDB 5nrl dataset at grid=128. Replaces old pipeline (911604e) baseline which used non-deterministic column selection and had half-image covariance bugs. PCS metrics are lower than old pipeline due to deterministic seeding of randomized_column_choice and removal of half-image path, but other metrics (FSC, embedding, contrasts, noise) are comparable or better.",
-  "dataset_generation_args": "--grid-size 128 --n-images 50000 --noise-level 1.0 --contrast-std 0.1 --generate-pdb-volumes --generated-n-volumes 50 --pdb-bfactor 80.0 --pdb-max-rotation 10.0",
-  "slurm_job_id": 5544102,
-  "volumes_source": "5nrl spliceosome, 50 volumes, grid=128, voxel=4.25A, B=80, rot=10deg, path_symmetric"
-}
