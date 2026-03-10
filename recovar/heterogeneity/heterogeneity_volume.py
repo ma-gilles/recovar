@@ -10,6 +10,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.heterogeneity.latent_density
 import recovar.jax_config
 from recovar import utils
+from recovar.core import mask
 from recovar.data_io import dataset
 from recovar.heterogeneity import adaptive_kernel_discretization, locres
 from recovar.output import output as output_mod
@@ -31,7 +32,6 @@ def pick_minimum_discretization_size(ndim, log_likelihoods, q = 0.5, min_images 
 def pick_heterogeneity_bins2(ndim, log_likelihoods, q = 0.5, min_images = 50, n_bins = 11):
     disc_latent_dist = pick_minimum_discretization_size(ndim, log_likelihoods, q , min_images )
     max_latent_dist = np.percentile(log_likelihoods, 95)
-    # dist = np.linspace(np.sqrt(disc_latent_dist), np.sqrt(max_latent_dist), 11 ) **2
     return np.linspace(np.sqrt(disc_latent_dist), np.sqrt(max_latent_dist), n_bins ) **2
 
 
@@ -103,7 +103,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         heterogeneity_kernel: Kernel shape (``'parabola'`` or ``'flat'``).
     """
 
-    if type(bins) == int:
+    if isinstance(bins, int):
         logger.warning("Picking bins based on number of particles only. n_min_particles = %s", n_min_particles) 
         heterogeneity_bins = pick_heterogeneity_bins2(-1, heterogeneity_distances[1], 0.5, n_min_particles, n_bins = bins)
     else:
@@ -141,8 +141,6 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
 
     logger.info("Computing estimates done")
 
-    from_ft = False
-
     do_smooth_error = "smooth" in metric_used
     if metric_used == "locmost_likely":
         ml_choice, ml_errors = choice_most_likely(estimates[0], estimates[1], cross_validation_estimators[0], cross_validation_estimators[1], lhs[0], lhs[1], cryos.voxel_size, locres_sampling=locres_sampling, locres_maskrad=locres_maskrad, locres_edgwidth=locres_edgwidth)
@@ -151,9 +149,6 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
     else:
         raise ValueError("Metric used not recognized")
 
-    # locres_choice, locres_score, auc_choice, auc_score = choice_best_locres(estimates[0], estimates[1][0], cryos.voxel_size)
-    
-    # estimates = np.asarray(estimates)
     estimates = [None, None]
 
     for k in range(2):
@@ -225,19 +220,13 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
             elif "locshellmost_likely" in metric_used:
                 opt_filtered_before = locres.recombine_estimates(loc_filtered_estimates , choice, cryos.voxel_size, locres_sampling = locres_sampling, locres_maskrad= locres_maskrad, locres_edgwidth= locres_edgwidth)
 
-            # opt_filtered_before = jnp.take_along_axis(loc_filtered_estimates , choice[None], axis=0)[0]
-            
             recovar.utils.write_mrc(output_folder + name + prefix + "filtered_before.mrc", opt_filtered_before, voxel_size = cryos.voxel_size)
 
             if metric_used == "locmost_likely":
                 opt_filtered_before, smoothed_choice = smoothed_best_choice(loc_filtered_estimates , choice, kernel_rad=kernel_rad)
                 recovar.utils.write_mrc(output_folder + name + prefix + "filtered_before_smooth.mrc", opt_filtered_before, voxel_size = cryos.voxel_size)
 
-            output_mod.save_volumes(loc_filtered_estimates, output_folder + "estimates_filt", cryos.volume_shape, voxel_size = cryos.voxel_size, from_ft = from_ft)
-
-            # recovar.utils.write_mrc(output_folder + name + "est_filtered.mrc", loc_filtered_estimates, voxel_size = cryos.voxel_size)
-
-            # Note: local filtering applied after combining halfsets
+            output_mod.save_volumes(loc_filtered_estimates, output_folder + "estimates_filt", cryos.volume_shape, voxel_size = cryos.voxel_size, from_ft = False)
 
         if "locshellmost_likely" in metric_used:
             recovar.utils.pickle_dump( { "split_choice" : ml_choice, "ml_errors" :ml_errors } ,  output_folder  + "split_choice.pkl")
@@ -254,13 +243,10 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
     np.savetxt(output_folder + "heterogeneity_distances.txt", distances_reordered)
     use_choice_and_filter(ml_choice, "")
 
-    # use_choice_and_filter(locres_choice, "locres_")
-    # use_choice_and_filter(auc_choice, "auc_")
-
     if save_all_estimates:
         # For debugging
-        output_mod.save_volumes(estimates[0], output_folder + "estimates_half1_unfil", cryos.volume_shape, voxel_size = cryos.voxel_size, from_ft = from_ft)
-        output_mod.save_volumes(estimates[1], output_folder + "estimates_half2_unfil", cryos.volume_shape, voxel_size = cryos.voxel_size, from_ft = from_ft)
+        output_mod.save_volumes(estimates[0], output_folder + "estimates_half1_unfil", cryos.volume_shape, voxel_size = cryos.voxel_size, from_ft = False)
+        output_mod.save_volumes(estimates[1], output_folder + "estimates_half2_unfil", cryos.volume_shape, voxel_size = cryos.voxel_size, from_ft = False)
 
         recovar.utils.write_mrc(output_folder + "CV_estimates_half1_unfil.mrc", cross_validation_estimators[0], voxel_size = cryos.voxel_size)
         recovar.utils.write_mrc(output_folder + "CV_noise_half1.mrc", lhs[0], voxel_size = cryos.voxel_size)
@@ -284,9 +270,7 @@ def choice_most_likely(estimates0, estimates1, target0, target1, noise_variances
 
 
 def smooth_shell_error(shell_error, voxel_size, subarray_size, sum_up_up_to_res = 50, smooth_mean_filter = 3):
-    # Smooth out the shell error
     kernel = jnp.ones( smooth_mean_filter, dtype = jnp.float32)
-    # kernel = kernel / jnp.sum(kernel)
     vmapped_convolve = jax.vmap(jax.scipy.signal.convolve, in_axes = (0, None, None))
     shell_choice_new = vmapped_convolve(shell_error, kernel, 'same')
 
@@ -298,18 +282,12 @@ def smooth_shell_error(shell_error, voxel_size, subarray_size, sum_up_up_to_res 
     low_res_indices = grids <= 1/ sum_up_up_to_res
     logger.info("Averaging first %s shells out of %s until resolution %s. Smoothing shells with kernel size %s", jnp.sum(low_res_indices), shell_error.shape[-1], sum_up_up_to_res, smooth_mean_filter)
     shell_choice_new = jnp.where(grids <= 1/ sum_up_up_to_res, jnp.sum(shell_error * low_res_indices ), shell_choice_new)
-    # shell_choice_new = shell_choice_new.at[low_res_indices].set(jnp.sum(shell_error * low_res_indices ))
     return shell_choice_new
 
 batch_smooth_shell_error = jax.vmap(smooth_shell_error, in_axes = (0, None, None, None, None))
 
 
 def choice_most_likely_split(estimates0, estimates1, target0, target1, noise_variances_target0, noise_variances_target1, voxel_size, locres_sampling, locres_maskrad, locres_edgwidth, smooth_error = False):
-
-    dup_filter = utils.DuplicateFilter()
-    logger.addFilter(dup_filter)
-    logger.removeFilter(dup_filter)
-
 
     n_estimators = estimates0.shape[0]
     errors = n_estimators * [None]
@@ -327,31 +305,10 @@ def choice_most_likely_split(estimates0, estimates1, target0, target1, noise_var
         logger.info("Grouping first %s shells together, and smoothing with kernel size %s", sum_up_up_to_res, smooth_mean_filter)
         errors = batch_smooth_shell_error(errors, voxel_size, subarray_size, sum_up_up_to_res, smooth_mean_filter)
 
-    logger.removeFilter(dup_filter)
-
-    choice = np.argmin(errors, axis=0 ) 
+    choice = np.argmin(errors, axis=0 )
     return choice, errors
 
 
-# def choice_best_locres(estimates0, estimates1, target_idx, voxel_size):
-def choice_best_locres( estimates1, target0, voxel_size):
-
-    from recovar.heterogeneity import locres
-
-    n_estimators = estimates1.shape[0]
-    locressol = np.zeros_like(estimates1)
-    auc_score = np.zeros_like(estimates1)
-
-    for k in range(n_estimators):
-        # _, locressol[k], auc_score[k] , _, _ = locres.local_resolution(estimates0[target_idx], estimates1[k], 0, voxel_size, locres_sampling = 25, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True)
-        _, _, locressol[k], auc_score[k] = locres.local_resolution(target0, estimates1[k], 0, voxel_size, locres_sampling = 15, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = False, use_v2=True)
-
-    choice = np.argmin(locressol, axis=0)
-    choice2 = np.argmax(auc_score, axis=0)
-
-    return choice, locressol, choice2, auc_score
-
-from recovar.core import mask
 def smoothed_best_choice(estimates, choice, kernel_rad = 4):
     smoothed_choice = mask.soften_volume_mask(choice, kernel_rad)
     bot_boundary = jnp.floor(smoothed_choice).astype(int)
@@ -381,7 +338,6 @@ def get_inds_for_subvolume(path_to_vol_folder, subvolume_idx):
 
     locres_ar = recovar.utils.load_mrc(path_to_vol_folder + "/local_resolution.mrc")
     grid_size = locres_ar.shape[0]
-    # maskrad_pix = np.round(params['locres_maskrad'] / params['voxel_size']).astype(int)
     sampling_points = locres.get_sampling_points(grid_size, params['locres_sampling'], params['locres_maskrad'], params['voxel_size'])
 
     point = sampling_points[subvolume_idx].astype(int) + grid_size // 2
@@ -390,7 +346,6 @@ def get_inds_for_subvolume(path_to_vol_folder, subvolume_idx):
     # Now need to change into which shell this corresponds to...
 
     locres_maskrad= 0.5 * params['locres_sampling'] if params['locres_maskrad'] is None else params['locres_maskrad']
-    # maskrad_pix = np.round(locres_maskrad / params['voxel_size']).astype(int)
     subvolume_size = locres.get_local_error_subvolume_size(locres_maskrad, params['voxel_size'])
     # Find the shell where the locres is...
     frequency_shells = fourier_transform_utils.get_1d_frequency_grid(subvolume_size, params['voxel_size'], scaled = True)
@@ -412,11 +367,5 @@ def get_inds_for_subvolume(path_to_vol_folder, subvolume_idx):
     logger.info("Which contains %d images", params['n_images_per_bin'][ml_choice_idx_shell])
 
     heterogeneity_distances = np.loadtxt(path_to_vol_folder + "/heterogeneity_distances.txt")
-    good_indices = heterogeneity_distances < upper_bound
-    good_indices = np.where(good_indices)[0]
-    # Probably should reorder the heterogeneity distances to match the order of the images
-    # Get all the indices
+    good_indices = np.where(heterogeneity_distances < upper_bound)[0]
     return good_indices
-
-
-## To figure out which point to sample
