@@ -133,7 +133,7 @@ def cuda_available() -> bool:
 # Public JAX API  (JIT-compatible)
 # ──────────────────────────────────────────────────────────────────────
 
-def _rot_to_compact(rotation_matrices: jax.Array) -> jax.Array:
+def _rot_to_compact(rotation_matrices: jax.Array, real_dtype=None) -> jax.Array:
     """Extract first two rows of each 3×3 rotation matrix → (n, 6).
 
     Rows are swapped so that the CUDA kernel's row-major pixel loop
@@ -144,9 +144,25 @@ def _rot_to_compact(rotation_matrices: jax.Array) -> jax.Array:
     Without the swap, CUDA computes  rk = k0*R[0,:] + k1*R[1,:]
     = row_freq*R[0,:] + col_freq*R[1,:], but JAX expects
     col_freq*R[0,:] + row_freq*R[1,:].  Swapping the two rows fixes this.
+
+    Parameters
+    ----------
+    real_dtype : optional dtype to cast the result to.  The CUDA kernel
+        reads these as ``T*`` where ``T`` matches the volume's real component
+        (float32 for C64, float64 for C128).  If the rotation matrices have a
+        different dtype (e.g. float64 rotations with a complex64 volume), the
+        kernel will reinterpret the bytes incorrectly.
     """
     n = rotation_matrices.shape[0]
-    return rotation_matrices[:, [1, 0], :].reshape(n, 6)
+    compact = rotation_matrices[:, [1, 0], :].reshape(n, 6)
+    if real_dtype is not None:
+        compact = compact.astype(real_dtype)
+    return compact
+
+
+def _volume_real_dtype(volume: jax.Array):
+    """Return the real component dtype of a volume (float32 for complex64, etc.)."""
+    return jnp.finfo(volume.dtype).dtype if jnp.issubdtype(volume.dtype, jnp.complexfloating) else volume.dtype
 
 
 def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image):
@@ -221,7 +237,7 @@ def backproject(
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
     kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image)
-    rot6 = _rot_to_compact(rotation_matrices)
+    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
 
     return jax.ffi.ffi_call(
@@ -257,7 +273,7 @@ def project(
     kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image)
     n_images = rotation_matrices.shape[0]
     n_pixels = ih * iw_eff
-    rot6 = _rot_to_compact(rotation_matrices)
+    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     out_type = jax.ShapeDtypeStruct((n_images, n_pixels), volume.dtype)
 
     return jax.ffi.ffi_call(
@@ -303,7 +319,7 @@ def batch_backproject(
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
     kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image)
-    rot6 = _rot_to_compact(rotation_matrices)
+    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volumes))
     out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
 
     return jax.ffi.ffi_call(

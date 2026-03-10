@@ -2,7 +2,8 @@
 
 Dispatch rules:
   - GPU + order <= 1 → CUDA kernels (mandatory; error if unavailable)
-  - CPU or cubic     → JAX ``map_coordinates`` fallback
+  - CPU + order <= 1 → RELION-style JAX fallback (explicit scatter backproject)
+  - cubic (order 3)  → JAX ``map_coordinates`` with VJP backproject
 
 Three core public functions handle all volume/image format combinations via
 ``half_volume`` and ``half_image`` parameters:
@@ -11,6 +12,7 @@ Three core public functions handle all volume/image format combinations via
   - :func:`adjoint_slice_volume`  (backprojection)
 
 CUDA custom-VJP wrappers live in :mod:`recovar.core.cuda_ops`.
+RELION-style JAX reference: :mod:`recovar.core.relion_interp`.
 """
 
 import functools
@@ -150,6 +152,13 @@ def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type
         except TypeError:
             pass  # JVP through custom_vjp — fall through to JAX
     # JAX fallback (CPU, cubic, or JVP context)
+    if order <= 1:
+        from recovar.core import relion_interp
+        return relion_interp.project(
+            volume, rotation_matrices, image_shape, volume_shape,
+            order=order, half_volume=half_volume, half_image=half_image,
+        )
+    # Cubic: expand half-volume, use map_coordinates
     if half_volume:
         volume = ftu.half_volume_to_full_volume(volume, volume_shape)
     if half_image:
@@ -207,32 +216,34 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
         return backproject(volume, slices, rotation_matrices, image_shape, volume_shape,
                            order=order, half_image=half_image, half_volume=half_volume)
     # JAX fallback (CPU or cubic)
-    # For half_image inputs, expand to full via Hermitian conjugation before
-    # backprojecting via VJP.  Unlike CUDA (which uses CONJ_MODE to avoid
-    # redundant conjugate scatters), JAX must work on full images.
+    if order <= 1:
+        # RELION-style explicit scatter — ~10x faster than VJP for order 0/1.
+        from recovar.core import relion_interp
+        if not half_image:
+            slices = _flatten_full_image_slices(slices, image_shape)
+        result = relion_interp.backproject(
+            slices, rotation_matrices, image_shape, volume_shape,
+            order=order, half_volume=half_volume, half_image=half_image,
+        )
+        return result if volume is None else result + volume
+    # Cubic: VJP-based backprojection
     if half_image:
         slices = ftu.half_image_to_full_image(slices, image_shape)
     slices = _flatten_full_image_slices(slices, image_shape)
-    # Build the matching forward function and let VJP derive the adjoint.
     if half_volume:
         vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
         vol_size = int(np.prod(vol_shape))
         def f(v):
             full_v = ftu.half_volume_to_full_volume(v, volume_shape)
-            if order == 3:
-                from recovar.core import cubic_interpolation
-                coeffs = cubic_interpolation.calculate_spline_coefficients(full_v.reshape(volume_shape))
-                return _jax_slice(coeffs, rotation_matrices, image_shape, volume_shape, 3)
-            return _jax_slice(full_v, rotation_matrices, image_shape, volume_shape, order)
+            from recovar.core import cubic_interpolation
+            coeffs = cubic_interpolation.calculate_spline_coefficients(full_v.reshape(volume_shape))
+            return _jax_slice(coeffs, rotation_matrices, image_shape, volume_shape, 3)
     else:
         vol_size = int(np.prod(volume_shape))
-        if order == 3:
-            from recovar.core import cubic_interpolation
-            def f(v):
-                coeffs = cubic_interpolation.calculate_spline_coefficients(v.reshape(volume_shape))
-                return _jax_slice(coeffs, rotation_matrices, image_shape, volume_shape, 3)
-        else:
-            f = lambda v: _jax_slice(v, rotation_matrices, image_shape, volume_shape, order)
+        from recovar.core import cubic_interpolation
+        def f(v):
+            coeffs = cubic_interpolation.calculate_spline_coefficients(v.reshape(volume_shape))
+            return _jax_slice(coeffs, rotation_matrices, image_shape, volume_shape, 3)
 
     _, u = vjp(f, jnp.zeros(vol_size, dtype=slices.dtype))
     result = u(slices)[0]
