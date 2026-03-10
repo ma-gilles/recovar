@@ -53,9 +53,14 @@ def _heterogeneity_kernel_batch_from_fft(
     )
     half_images = half_images / noise_half
 
+    # Pre-compute CTF once (reused for both image and weight backprojections)
+    ctf = config.compute_ctf_half(batch.ctf_params)
+    if not config.premultiplied_ctf:
+        half_images = half_images * ctf
+
     Ft_y = core_forward.adjoint_forward_model(
         config, half_images, batch.ctf_params, batch.rotation_matrices,
-        skip_ctf=config.premultiplied_ctf,
+        skip_ctf=True,
         volume=Ft_y, half_image=True, half_volume=True,
     )
 
@@ -76,7 +81,7 @@ def _heterogeneity_kernel_batch_from_fft(
             ctf_up.reshape(bsz, -1), config.image_shape
         ) / noise_half
     else:
-        ctf_half = config.compute_ctf_half(batch.ctf_params) ** 2 / noise_half
+        ctf_half = ctf ** 2 / noise_half
 
     Ft_ctf = core_forward.adjoint_forward_model(
         config, ctf_half, batch.ctf_params, batch.rotation_matrices,
@@ -1039,7 +1044,7 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
 
     return estimates
 
-def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola", upsampling_factor=None, return_real_space=False):
+def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = None, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola", upsampling_factor=None, return_real_space=False):
     bins = heterogeneity_bins
     inds = np.digitize(heterogeneity_distances, bins, right = True).astype(np.int32)
     n_bins = bins.size
@@ -1055,6 +1060,13 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
     # Transferred to GPU only for the final matmul below.
     rhs_all = np.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype)
     lhs_all = np.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype_real)
+
+    # Auto-compute batch size based on GPU memory if not specified
+    if batch_size is None:
+        accum_gb = utils.get_size_in_gb(rhs_all) + utils.get_size_in_gb(lhs_all)
+        avail_gb = max(1.0, utils.get_gpu_memory_total() - accum_gb)
+        batch_size = int(utils.get_image_batch_size(experiment_dataset.grid_size, avail_gb))
+    logger.info("batch size in heterogeneity kernel: %s", batch_size)
 
     if upsampling_factor is not None:
         config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, upsampling_factor=upsampling_factor)
