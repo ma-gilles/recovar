@@ -86,7 +86,7 @@ class TestProjectionAgreement:
         with _force_jax_path():
             existing = slicing.slice_volume(
                 vol, rots, image_shape, volume_shape, disc_type,
-                half_volume=False, half_image=False,
+                half_volume=False, half_image=False, max_r=None,
             )
 
         relion = relion_interp.project(
@@ -119,7 +119,7 @@ class TestProjectionAgreement:
         with _force_jax_path():
             existing = slicing.slice_volume(
                 vol_half, rots, image_shape, volume_shape, disc_type,
-                half_volume=True, half_image=False,
+                half_volume=True, half_image=False, max_r=None,
             )
 
         relion = relion_interp.project(
@@ -149,7 +149,7 @@ class TestProjectionAgreement:
         with _force_jax_path():
             existing = slicing.slice_volume(
                 vol, rots, image_shape, volume_shape, disc_type,
-                half_volume=False, half_image=True,
+                half_volume=False, half_image=True, max_r=None,
             )
 
         relion = relion_interp.project(
@@ -182,7 +182,7 @@ class TestProjectionAgreement:
         with _force_jax_path():
             existing = slicing.slice_volume(
                 vol_half, rots, image_shape, volume_shape, disc_type,
-                half_volume=True, half_image=True,
+                half_volume=True, half_image=True, max_r=None,
             )
 
         relion = relion_interp.project(
@@ -219,7 +219,7 @@ class TestBackprojectionAgreement:
         with _force_jax_path():
             existing = slicing.adjoint_slice_volume(
                 imgs, rots, image_shape, volume_shape, disc_type,
-                half_image=False, half_volume=False,
+                half_image=False, half_volume=False, max_r=None,
             )
 
         relion = relion_interp.backproject(
@@ -248,7 +248,7 @@ class TestBackprojectionAgreement:
         with _force_jax_path():
             existing = slicing.adjoint_slice_volume(
                 imgs, rots, image_shape, volume_shape, disc_type,
-                half_image=False, half_volume=True,
+                half_image=False, half_volume=True, max_r=None,
             )
 
         relion = relion_interp.backproject(
@@ -401,7 +401,7 @@ class TestIdentityRotation:
         with _force_jax_path():
             existing = slicing.slice_volume(
                 vol.ravel(), rots, image_shape, volume_shape, "nearest",
-                half_volume=False, half_image=False,
+                half_volume=False, half_image=False, max_r=None,
             )
 
         np.testing.assert_allclose(
@@ -614,7 +614,7 @@ class TestCUDAMatch:
         # CUDA path (through slicing which calls cuda_project)
         cuda_result = slicing.slice_volume(
             vol, rots, image_shape, volume_shape, disc_type,
-            half_volume=half_volume, half_image=half_image,
+            half_volume=half_volume, half_image=half_image, max_r=None,
         )
 
         # relion_interp
@@ -702,7 +702,7 @@ class TestLargerVolume:
             existing = slicing.slice_volume(
                 vol, rots, image_shape, volume_shape,
                 "nearest" if order == 0 else "linear_interp",
-                half_volume=False, half_image=False,
+                half_volume=False, half_image=False, max_r=None,
             )
 
         relion = relion_interp.project(
@@ -749,7 +749,7 @@ class TestSlicingDispatch:
         with _force_jax_path():
             dispatch_result = slicing.slice_volume(
                 vol, rots, image_shape, volume_shape, disc_type,
-                half_volume=half_volume, half_image=half_image,
+                half_volume=half_volume, half_image=half_image, max_r=None,
             )
 
         relion_result = relion_interp.project(

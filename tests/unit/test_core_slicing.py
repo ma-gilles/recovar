@@ -308,6 +308,7 @@ def test_adjoint_slice_volume_half_volume_jax_vjp_consistency(monkeypatch):
     full_imgs = np.asarray(fourier_transform_utils.get_dft2(real_imgs)).reshape(2, -1)
     half_imgs = np.asarray(fourier_transform_utils.get_dft2_real(real_imgs)).reshape(2, -1)
 
+    # Use max_r=None to test VJP consistency without clipping interference.
     out_full_direct = np.asarray(
         core_slicing.adjoint_slice_volume(
             full_imgs,
@@ -316,6 +317,7 @@ def test_adjoint_slice_volume_half_volume_jax_vjp_consistency(monkeypatch):
             volume_shape=volume_shape,
             disc_type="linear_interp",
             half_volume=True,
+            max_r=None,
         )
     )
     f_ref = lambda hv: core_slicing.slice_volume(
@@ -324,6 +326,7 @@ def test_adjoint_slice_volume_half_volume_jax_vjp_consistency(monkeypatch):
         image_shape,
         volume_shape,
         "linear_interp",
+        max_r=None,
     )
     _, u_ref = jax.vjp(f_ref, jnp.zeros(half_size, dtype=jnp.complex64))
     out_full_ref = np.asarray(u_ref(jnp.asarray(full_imgs))[0])
@@ -338,6 +341,7 @@ def test_adjoint_slice_volume_half_volume_jax_vjp_consistency(monkeypatch):
             disc_type="linear_interp",
             half_image=True,
             half_volume=True,
+            max_r=None,
         )
     )
     full_from_half = np.asarray(fourier_transform_utils.half_image_to_full_image(half_imgs, image_shape))

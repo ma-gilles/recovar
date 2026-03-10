@@ -60,6 +60,8 @@ from recovar.core.forward import (
     batch_translate_images,
 )
 from recovar.core.slicing import (
+    _AUTO,
+    _default_max_r,
     adjoint_slice_volume,
     batch_adjoint_slice_volume,
     batch_slice_volume,

@@ -339,13 +339,14 @@ backproject_kernel(
         k1 = (T)(k1_idx - image_w / 2) * upsampling;  /* full: centered */
     }
 
+    /* Pre-rotation disk check: rotation preserves ||k||, so
+     * k0² + k1² == rk0² + rk1² + rk2².  Skip before loading R. */
+    if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) return;
+
     /* Rotate  (cz=0  →  only 6 elements) */
     const T rk0 = k0 * R[0] + k1 * R[3];
     const T rk1 = k0 * R[1] + k1 * R[4];
     const T rk2 = k0 * R[2] + k1 * R[5];
-
-    /* Sphere clipping (RELION max_r²) */
-    if (max_r2 >= (T)0 && rk0*rk0 + rk1*rk1 + rk2*rk2 > max_r2) return;
 
     /* Load pixel — scalar for REAL_DATA, complex pair otherwise */
     T val_re, val_im;
@@ -543,22 +544,22 @@ project_kernel(
         k1 = (T)(k1_idx - image_w / 2) * upsampling;
     }
 
+    using V2 = vec2_t<T>;
+    V2* img2 = reinterpret_cast<V2*>(img);
+    const int img_off = img_idx * n_pixels + pix;
+
+    /* Pre-rotation disk check: rotation preserves ||k||. */
+    if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) {
+        img2[img_off] = make_v2((T)0, (T)0);
+        return;
+    }
+
     T rk0 = k0 * R[0] + k1 * R[3];
     T rk1 = k0 * R[1] + k1 * R[4];
     T rk2 = k0 * R[2] + k1 * R[5];
 
     const int stride1 = N2_eff;
     const int stride0 = N1 * N2_eff;
-
-    using V2 = vec2_t<T>;
-    V2* img2 = reinterpret_cast<V2*>(img);
-    const int img_off = img_idx * n_pixels + pix;
-
-    /* Sphere clipping (RELION max_r²) */
-    if (max_r2 >= (T)0 && rk0*rk0 + rk1*rk1 + rk2*rk2 > max_r2) {
-        img2[img_off] = make_v2((T)0, (T)0);
-        return;
-    }
 
     /* ── HALF_VOL: per-neighbor Hermitian read from half-volume ──────
      *
@@ -980,12 +981,12 @@ batch_backproject_kernel(
         k1 = (T)(k1_idx - image_w / 2) * upsampling;
     }
 
+    /* Pre-rotation disk check: rotation preserves ||k||. */
+    if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) return;
+
     const T rk0 = k0 * R[0] + k1 * R[3];
     const T rk1 = k0 * R[1] + k1 * R[4];
     const T rk2 = k0 * R[2] + k1 * R[5];
-
-    /* Sphere clipping (RELION max_r²) */
-    if (max_r2 >= (T)0 && rk0*rk0 + rk1*rk1 + rk2*rk2 > max_r2) return;
 
     const int stride1 = N2_eff;
     const int stride0 = N1 * N2_eff;
@@ -1146,23 +1147,24 @@ batch_project_kernel(
         k1 = (T)(k1_idx - image_w / 2) * upsampling;
     }
 
-    T rk0 = k0 * R[0] + k1 * R[3];
-    T rk1 = k0 * R[1] + k1 * R[4];
-    T rk2 = k0 * R[2] + k1 * R[5];
-
-    const int stride1 = N2_eff;
-    const int stride0 = N1 * N2_eff;
-    const int img_stride = n_images * n_pixels;
     using V2 = vec2_t<T>;
+    const int img_stride = n_images * n_pixels;
 
-    /* Sphere clipping (RELION max_r²) */
-    if (max_r2 >= (T)0 && rk0*rk0 + rk1*rk1 + rk2*rk2 > max_r2) {
+    /* Pre-rotation disk check: rotation preserves ||k||. */
+    if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) {
         for (int b = 0; b < batch_size; b++) {
             V2* out = reinterpret_cast<V2*>(imgs) + b * img_stride + img_idx * n_pixels;
             out[pix] = make_v2((T)0, (T)0);
         }
         return;
     }
+
+    T rk0 = k0 * R[0] + k1 * R[3];
+    T rk1 = k0 * R[1] + k1 * R[4];
+    T rk2 = k0 * R[2] + k1 * R[5];
+
+    const int stride1 = N2_eff;
+    const int stride0 = N1 * N2_eff;
 
     /* ── HALF_VOL: per-neighbor Hermitian read (precompute once, reuse) ── */
     if (HALF_VOL) {

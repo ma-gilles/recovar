@@ -32,6 +32,32 @@ from recovar.core.geometry import (
 logger = logging.getLogger(__name__)
 
 
+# ── Default max_r ────────────────────────────────────────────────────
+
+# Sentinel: means "use the default max_r = image_shape[0]//2 - 1".
+# Pass ``max_r=None`` explicitly to disable sphere clipping (old behavior).
+_AUTO = object()
+
+
+def _default_max_r(image_shape):
+    """Default sphere-clipping radius: ``image_shape[0] // 2 - 1``.
+
+    RELION clips at ``N // 2`` (Nyquist).  For recovar's full-image
+    representation the N//2 frequency bin has no Hermitian conjugate
+    partner, so we use ``N // 2 - 1`` to guarantee that half-image and
+    full-image results are exactly equivalent and that the Nyquist edge
+    is excluded.
+    """
+    return image_shape[0] // 2 - 1
+
+
+def _resolve_max_r(max_r, image_shape):
+    """Resolve max_r: _AUTO → default, None → None (no clip), number → number."""
+    if max_r is _AUTO:
+        return _default_max_r(image_shape)
+    return max_r
+
+
 # ── Dispatch ─────────────────────────────────────────────────────────
 
 @functools.lru_cache(maxsize=None)
@@ -132,16 +158,17 @@ def _jax_slice_half_image(volume, rotation_matrices, image_shape, volume_shape, 
 # ── Public API ───────────────────────────────────────────────────────
 
 def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type,
-                 half_volume=False, half_image=False, max_r=None):
+                 half_volume=False, half_image=False, max_r=_AUTO):
     """Project volume to images via interpolation.
 
     Parameters
     ----------
     half_volume : if True, *volume* is rfft-packed ``(N0*N1*(N2//2+1),)``.
     half_image : if True, output images are rfft-packed ``(n, H*(W//2+1))``.
-    max_r : if not None, zero pixels whose rotated frequency radius
-        exceeds this value (RELION-style sphere clipping).
+    max_r : sphere clipping radius.  Default (``_AUTO``) uses
+        ``image_shape[0]//2 - 1``.  Pass ``None`` to disable clipping.
     """
+    max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
     if _use_cuda(order):
         # CUDA project kernel requires complex input.
@@ -170,16 +197,17 @@ def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type
 
 
 def batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, disc_type,
-                       half_volume=False, half_image=False, max_r=None):
+                       half_volume=False, half_image=False, max_r=_AUTO):
     """Project a batch of volumes to images.
 
     Parameters
     ----------
     half_volume : if True, *volumes* are rfft-packed half-volumes.
     half_image : if True, output images are rfft-packed.
-    max_r : if not None, zero pixels whose rotated frequency radius
-        exceeds this value (RELION-style sphere clipping).
+    max_r : sphere clipping radius.  Default uses
+        ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
     """
+    max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
     if _use_cuda(order):
         # CUDA project kernel requires complex input.
@@ -197,7 +225,7 @@ def batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, di
 
 
 def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, disc_type,
-                         volume=None, half_image=False, half_volume=False, max_r=None):
+                         volume=None, half_image=False, half_volume=False, max_r=_AUTO):
     """Adjoint slice extraction (backprojection).
 
     Parameters
@@ -210,9 +238,10 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
         backprojecting via VJP (no compute savings, only input size savings).
     half_volume : if True, output uses rfft-packed half-volume layout.
     volume : optional accumulator to add the result into.
-    max_r : if not None, skip pixels whose rotated frequency radius
-        exceeds this value (RELION-style sphere clipping).
+    max_r : sphere clipping radius.  Default uses
+        ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
     """
+    max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
     if _use_cuda(order):
         from recovar.cuda_backproject import backproject
@@ -262,7 +291,7 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
 
 
 def batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, disc_type,
-                               volumes=None, half_image=False, half_volume=False, max_r=None):
+                               volumes=None, half_image=False, half_volume=False, max_r=_AUTO):
     """Batch backprojection: per-volume image sets to batch of volumes.
 
     Parameters
@@ -271,9 +300,10 @@ def batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_sh
     rotation_matrices : shape ``(n_images, 3, 3)`` — shared across batch.
     volumes : optional ``(batch, vol_flat_size)`` accumulators.
     half_image, half_volume : same semantics as ``adjoint_slice_volume``.
-    max_r : if not None, skip pixels whose rotated frequency radius
-        exceeds this value (RELION-style sphere clipping).
+    max_r : sphere clipping radius.  Default uses
+        ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
     """
+    max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
     vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
     vol_flat = int(np.prod(vol_shape))
@@ -379,4 +409,6 @@ __all__ = [
     "batch_adjoint_slice_volume",
     "precompute_cubic_coefficients",
     "slice_from_cubic_coefficients",
+    "_AUTO",
+    "_default_max_r",
 ]
