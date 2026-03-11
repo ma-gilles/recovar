@@ -86,6 +86,24 @@ class TestDefaultMaxR:
     def test_resolve_explicit(self):
         assert slicing._resolve_max_r(5.0, (128, 128)) == 5.0
 
+    def test_cuda_max_r_no_upsampling(self):
+        """With upsampling=1, _cuda_max_r returns the same value."""
+        assert slicing._cuda_max_r(63, (128, 128), (128, 128, 128)) == 63
+        assert slicing._cuda_max_r(31, (64, 64), (64, 64, 64)) == 31
+
+    def test_cuda_max_r_upsampling_2x(self):
+        """With upsampling=2, _cuda_max_r doubles the radius."""
+        assert slicing._cuda_max_r(63, (128, 128), (256, 256, 256)) == 126
+        assert slicing._cuda_max_r(31, (64, 64), (128, 128, 128)) == 62
+
+    def test_cuda_max_r_upsampling_4x(self):
+        """With upsampling=4, _cuda_max_r quadruples the radius."""
+        assert slicing._cuda_max_r(15, (32, 32), (128, 128, 128)) == 60
+
+    def test_cuda_max_r_none(self):
+        """_cuda_max_r(None, ...) returns None."""
+        assert slicing._cuda_max_r(None, (128, 128), (256, 256, 256)) is None
+
     def test_default_clips_more_than_none(self):
         """Default max_r should produce more zeros than max_r=None."""
         N = 16
@@ -357,6 +375,31 @@ class TestUpsamplingMaxR:
             err_msg="Upsampled backproject half_img should match full_img"
         )
 
+    def test_upsampled_default_max_r_preserves_most_pixels(self, shapes):
+        """Default max_r with upsampling should clip ~same fraction as without upsampling.
+
+        Before the fix, CUDA clipped at radius 31.5 in image coords instead of
+        63 (due to unscaled max_r in volume-coord space), zeroing ~75% of pixels.
+        """
+        image_shape, volume_shape = shapes
+        N = image_shape[0]
+        vol = _hermitian_volume_rect(volume_shape)
+        rots = _random_rotations(3, seed=105)
+
+        out = np.asarray(slicing.slice_volume(
+            vol, rots, image_shape, volume_shape, "linear_interp"))
+        n_nonzero = np.sum(np.abs(out) > 1e-30)
+        total = out.size
+        # The inscribed circle of an N×N image at radius N//2-1 has area
+        # ~π*(N//2-1)² / N² ≈ 60% for N=16, 69% for N=32.
+        # The old bug (unscaled max_r) clipped at radius (N//2-1)/ups in image
+        # coords, giving ~15% for N=16 with ups=2.  Threshold at 50% catches it.
+        frac = n_nonzero / total
+        assert frac > 0.50, (
+            f"Upsampled projection preserved only {frac:.1%} of pixels — "
+            f"max_r likely not scaled to volume coordinates"
+        )
+
     def test_max_r_clips_correctly_with_upsampling(self, shapes):
         """With upsampling, max_r should still zero out high frequencies."""
         image_shape, volume_shape = shapes
@@ -410,6 +453,28 @@ class TestAdjointnessWithMaxR:
 
         rel_err = abs(lhs - rhs) / (abs(lhs) + abs(rhs) + 1e-30)
         assert rel_err < 1e-4, f"Adjointness failed: lhs={lhs}, rhs={rhs}, rel_err={rel_err}"
+
+    def test_adjointness_upsampled_default_max_r(self, N):
+        """Adjointness holds with upsampling_factor=2 and default max_r."""
+        image_shape = (N, N)
+        volume_shape = (2 * N, 2 * N, 2 * N)
+        n_images = 5
+        rots = _random_rotations(n_images, seed=120)
+
+        rng = np.random.default_rng(120)
+        vol = jnp.array((rng.standard_normal((2*N)**3) + 1j * rng.standard_normal((2*N)**3)).astype(np.complex64))
+        imgs = jnp.array((rng.standard_normal((n_images, N*N)) + 1j * rng.standard_normal((n_images, N*N))).astype(np.complex64))
+
+        Ax = slicing.slice_volume(
+            vol, rots, image_shape, volume_shape, "linear_interp")
+        ATy = slicing.adjoint_slice_volume(
+            imgs, rots, image_shape, volume_shape, "linear_interp")
+
+        lhs = float(jnp.real(jnp.vdot(Ax, imgs)))
+        rhs = float(jnp.real(jnp.vdot(vol, ATy)))
+
+        rel_err = abs(lhs - rhs) / (abs(lhs) + abs(rhs) + 1e-30)
+        assert rel_err < 1e-4, f"Upsampled adjointness failed: lhs={lhs}, rhs={rhs}, rel_err={rel_err}"
 
     def test_adjointness_explicit_max_r(self, N):
         """Adjointness with explicit max_r value."""

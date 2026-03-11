@@ -58,6 +58,20 @@ def _resolve_max_r(max_r, image_shape):
     return max_r
 
 
+def _cuda_max_r(max_r, image_shape, volume_shape):
+    """Scale max_r from image coordinates to volume coordinates for CUDA.
+
+    The CUDA kernel computes pixel frequencies in volume-space coordinates
+    (scaled by ``upsampling = volume_shape[0] // image_shape[0]``), so
+    ``max_r`` must be scaled to match.  The JAX ``relion_interp`` path
+    uses image-space coordinates and needs no scaling.
+    """
+    if max_r is None:
+        return None
+    upsampling = volume_shape[0] // image_shape[0]
+    return max_r * upsampling
+
+
 # ── Dispatch ─────────────────────────────────────────────────────────
 
 @functools.lru_cache(maxsize=None)
@@ -177,7 +191,8 @@ def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type
         from recovar.core.cuda_ops import cuda_project
         try:
             return cuda_project(volume, rotation_matrices, image_shape, volume_shape,
-                                order, half_volume, half_image, max_r)
+                                order, half_volume, half_image,
+                                _cuda_max_r(max_r, image_shape, volume_shape))
         except TypeError:
             pass  # JVP through custom_vjp — fall through to JAX
     # JAX fallback (CPU, cubic, or JVP context)
@@ -216,7 +231,7 @@ def batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, di
         from recovar.cuda_backproject import batch_project
         return batch_project(volumes, rotation_matrices, image_shape, volume_shape,
                              order=order, half_volume=half_volume, half_image=half_image,
-                             max_r=max_r)
+                             max_r=_cuda_max_r(max_r, image_shape, volume_shape))
     return jax.vmap(
         lambda v: slice_volume(v, rotation_matrices, image_shape, volume_shape,
                                disc_type, half_volume=half_volume, half_image=half_image,
@@ -253,7 +268,7 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
             volume = jnp.zeros(int(np.prod(vol_shape)), dtype=slices.dtype)
         return backproject(volume, slices, rotation_matrices, image_shape, volume_shape,
                            order=order, half_image=half_image, half_volume=half_volume,
-                           max_r=max_r)
+                           max_r=_cuda_max_r(max_r, image_shape, volume_shape))
     # JAX fallback (CPU or cubic)
     if order <= 1:
         # RELION-style explicit scatter — ~10x faster than VJP for order 0/1.
@@ -316,7 +331,7 @@ def batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_sh
             slices = slices.astype(jnp.result_type(slices, jnp.complex64))
         return batch_backproject(volumes, slices, rotation_matrices, image_shape, volume_shape,
                                 order=order, half_volume=half_volume, half_image=half_image,
-                                max_r=max_r)
+                                max_r=_cuda_max_r(max_r, image_shape, volume_shape))
     # JAX fallback: vmap single adjoint
     return jax.vmap(
         lambda sl, vol: adjoint_slice_volume(sl, rotation_matrices, image_shape, volume_shape,
