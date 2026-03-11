@@ -303,9 +303,8 @@ def test_compute_variance(cryos, gt_data, intermediates, baseline_scores, tol_fr
     Two metrics:
         variance_fourier_fsc: GT Fourier variance vs estimated Fourier variance.
             Both are per-Fourier-voxel power: sum_i |V_i(k)|^2.
-        variance_spatial_fsc: DFT(GT spatial variance) vs estimated Fourier
-            variance.  Tests consistency between the spatial variance map
-            and the Fourier-domain estimate.
+        variance_spatial_fsc: Estimated spatial variance (IDFT of Fourier
+            estimate) vs GT spatial variance, both DFT'd then FSC.
 
     NOTE: compute_variance was refactored (safe_div, half-image processing),
     so baseline scores reflect the current code, not ~/recovar.
@@ -342,13 +341,19 @@ def test_compute_variance(cryos, gt_data, intermediates, baseline_scores, tol_fr
     )
 
     # Metric 2: Spatial variance FSC
-    # DFT(GT spatial variance) vs estimated Fourier variance
+    # IDFT estimated Fourier variance → spatial estimate; DFT both → FSC
     gt_spatial_var = gt_data["gt_spatial_variance"]
-    gt_spatial_ft = fourier_transform_utils.get_dft3(
+    est_spatial_var = fourier_transform_utils.get_idft3(
+        est_fourier_var.reshape(volume_shape)
+    ).real.reshape(-1)
+    gt_spatial_dft = fourier_transform_utils.get_dft3(
         gt_spatial_var.reshape(volume_shape)
     ).reshape(-1)
+    est_spatial_dft = fourier_transform_utils.get_dft3(
+        est_spatial_var.reshape(volume_shape)
+    ).reshape(-1)
     _, spatial_var_fsc = plot_utils.plot_fsc_new(
-        gt_spatial_ft, est_fourier_var,
+        gt_spatial_dft, est_spatial_dft,
         np.array(volume_shape), gt_data["voxel_size"],
         threshold=0.5, name="Variance Spatial FSC"
     )
@@ -473,6 +478,19 @@ def test_projected_covariance(cryos, gt_data, intermediates, baseline_scores, to
             np.linalg.norm(proj_cov - baseline_proj_cov)
             / (np.linalg.norm(baseline_proj_cov) + 1e-12)
         )
+
+        # Also compare against GT theoretical projected covariance = diag(s^2)
+        gt_proj_cov = np.diag(gt_data["s_gt_fourier"][:n_gt_pcs] ** 2)
+        frob_err_vs_gt = float(
+            np.linalg.norm(proj_cov - gt_proj_cov)
+            / (np.linalg.norm(gt_proj_cov) + 1e-12)
+        )
+
+        print(f"  projected_covariance_relative_frobenius_error (vs old code) = {frob_err:.6f}")
+        print(f"  projected_covariance_relative_frobenius_error (vs GT diag) = {frob_err_vs_gt:.6f}")
+        print(f"  proj_cov diagonal: {np.diag(proj_cov)}")
+        print(f"  GT diag(s^2):      {np.diag(gt_proj_cov)}")
+
         results = {"projected_covariance_relative_frobenius_error": frob_err}
         _assert_metrics(results, baseline_scores, tol_frac)
     else:
