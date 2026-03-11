@@ -13,7 +13,11 @@
   "noise_correlation": 0.9799963704128704,
   "noise_mean_relative_error": 0.0490279383957386,
   "noise_median_relative_error": 0.0056493403390049934,
-  "pcs_relative_variance_10": 0.3411855938634159,
-  "pcs_relative_variance_4": 0.34007084567937323,
-  "projected_covariance_relative_frobenius_error": 0.27
+  "pcs_relative_variance_2": 0.4418,
+  "pcs_relative_variance_4": 0.4426,
+  "pcs_relative_variance_5": 0.4428,
+  "pcs_relative_variance_10": 0.4439,
+  "projected_covariance_relative_frobenius_error": 0.27,
+  "variance_fourier_fsc": 0.1108,
+  "variance_spatial_fsc": 0.0027
 }
