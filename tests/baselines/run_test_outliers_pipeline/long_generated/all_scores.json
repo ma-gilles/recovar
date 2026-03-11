@@ -1,14 +1,14 @@
 {
-  "inlier_count_round_1": 8035.0,
-  "inlier_count_round_2": 5475.0,
-  "outlier_count_round_1": 1965.0,
-  "outlier_count_round_2": 4525.0,
-  "outlier_f1_round_1": 0.8542568542568542,
-  "outlier_f1_round_2": 0.49626556016597506,
-  "outlier_precision_round_1": 0.7531806615776081,
-  "outlier_precision_round_2": 0.33038674033149174,
+  "inlier_count_round_1": 8118.0,
+  "inlier_count_round_2": 6498.0,
+  "outlier_count_round_1": 1882.0,
+  "outlier_count_round_2": 3502.0,
+  "outlier_f1_round_1": 0.8752217622708458,
+  "outlier_f1_round_2": 0.5929628148740503,
+  "outlier_precision_round_1": 0.7863974495217854,
+  "outlier_precision_round_2": 0.423472301541976,
   "outlier_recall_round_1": 0.9866666666666667,
-  "outlier_recall_round_2": 0.9966666666666667,
+  "outlier_recall_round_2": 0.9886666666666667,
   "total_images": 10000.0,
   "true_outlier_count": 1500.0
 }
