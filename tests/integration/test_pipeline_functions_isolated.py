@@ -300,11 +300,11 @@ def test_compute_variance(cryos, gt_data, intermediates, baseline_scores, tol_fr
 
     Uses ~/recovar's mean and noise as standardized inputs.
 
-    Two metrics:
-        variance_fourier_fsc: GT Fourier variance vs estimated Fourier variance.
-            Both are per-Fourier-voxel power: sum_i |V_i(k)|^2.
-        variance_spatial_fsc: Estimated spatial variance (IDFT of Fourier
-            estimate) vs GT spatial variance, both DFT'd then FSC.
+    Metric: variance_fourier_fsc — GT Fourier variance vs estimated Fourier
+    variance, both per-Fourier-voxel power: sum_i |V_i(k)|^2.
+
+    The spatial variance metric (from eigendecomposition) is in
+    test_principal_components, where the eigenvectors are available.
 
     NOTE: compute_variance was refactored (safe_div, half-image processing),
     so baseline scores reflect the current code, not ~/recovar.
@@ -312,7 +312,6 @@ def test_compute_variance(cryos, gt_data, intermediates, baseline_scores, tol_fr
     from recovar.heterogeneity import covariance_estimation
     from recovar.reconstruction import noise
     from recovar.output import plot_utils
-    from recovar.core import fourier_transform_utils
     from recovar import utils
 
     batch_size = 512
@@ -331,8 +330,7 @@ def test_compute_variance(cryos, gt_data, intermediates, baseline_scores, tol_fr
 
     est_fourier_var = variance_est["combined"]  # per-Fourier-voxel variance
 
-    # Metric 1: Fourier variance FSC
-    # GT Fourier variance (per-voxel power in Fourier space) vs estimated
+    # Fourier variance FSC: GT vs estimated, both per-voxel power in Fourier space
     gt_fourier_var = gt_data["gt_fourier_variance"]
     _, fourier_var_fsc = plot_utils.plot_fsc_new(
         gt_fourier_var, est_fourier_var,
@@ -340,31 +338,9 @@ def test_compute_variance(cryos, gt_data, intermediates, baseline_scores, tol_fr
         threshold=0.5, name="Variance Fourier FSC"
     )
 
-    # Metric 2: Spatial variance FSC
-    # IDFT estimated Fourier variance → spatial estimate; DFT both → FSC
-    gt_spatial_var = gt_data["gt_spatial_variance"]
-    est_spatial_var = fourier_transform_utils.get_idft3(
-        est_fourier_var.reshape(volume_shape)
-    ).real.reshape(-1)
-    gt_spatial_dft = fourier_transform_utils.get_dft3(
-        gt_spatial_var.reshape(volume_shape)
-    ).reshape(-1)
-    est_spatial_dft = fourier_transform_utils.get_dft3(
-        est_spatial_var.reshape(volume_shape)
-    ).reshape(-1)
-    _, spatial_var_fsc = plot_utils.plot_fsc_new(
-        gt_spatial_dft, est_spatial_dft,
-        np.array(volume_shape), gt_data["voxel_size"],
-        threshold=0.5, name="Variance Spatial FSC"
-    )
-
     print(f"  variance_fourier_fsc = {fourier_var_fsc:.6f}")
-    print(f"  variance_spatial_fsc = {spatial_var_fsc:.6f}")
 
-    results = {
-        "variance_fourier_fsc": float(fourier_var_fsc),
-        "variance_spatial_fsc": float(spatial_var_fsc),
-    }
+    results = {"variance_fourier_fsc": float(fourier_var_fsc)}
     _assert_metrics(results, baseline_scores, tol_frac)
 
 
@@ -486,12 +462,21 @@ def test_projected_covariance(cryos, gt_data, intermediates, baseline_scores, to
             / (np.linalg.norm(gt_proj_cov) + 1e-12)
         )
 
-        print(f"  projected_covariance_relative_frobenius_error (vs old code) = {frob_err:.6f}")
-        print(f"  projected_covariance_relative_frobenius_error (vs GT diag) = {frob_err_vs_gt:.6f}")
+        # Off-diagonal norm (GT is diagonal, so off-diagonal = noise leakage)
+        off_diag_norm = float(np.linalg.norm(proj_cov - np.diag(np.diag(proj_cov))))
+        off_diag_rel = off_diag_norm / (np.linalg.norm(proj_cov) + 1e-12)
+
+        print(f"  proj_cov_frobenius_error_vs_old = {frob_err:.6f}")
+        print(f"  proj_cov_frobenius_error_vs_gt = {frob_err_vs_gt:.6f}")
+        print(f"  proj_cov_off_diagonal_relative = {off_diag_rel:.6f}")
         print(f"  proj_cov diagonal: {np.diag(proj_cov)}")
         print(f"  GT diag(s^2):      {np.diag(gt_proj_cov)}")
 
-        results = {"projected_covariance_relative_frobenius_error": frob_err}
+        results = {
+            "projected_covariance_relative_frobenius_error": frob_err,
+            "proj_cov_frobenius_error_vs_gt": frob_err_vs_gt,
+            "proj_cov_off_diagonal_relative_error": off_diag_rel,
+        }
         _assert_metrics(results, baseline_scores, tol_frac)
     else:
         pytest.skip("No baseline projected covariance available")
@@ -569,7 +554,30 @@ def test_principal_components(cryos, gt_data, intermediates, baseline_scores, to
         if rel_var.size > k:
             results[f"pcs_relative_variance_{k}"] = float(rel_var[k])
 
-    print("  PCS relative variance:", {k: f"{v:.6f}" for k, v in results.items()})
+    # Spatial variance FSC: estimate_variance(u_real, s) vs GT spatial variance
+    # This is what po.get('variance') computes in the pipeline
+    from recovar import utils
+    from recovar.output import plot_utils
+    from recovar.core import fourier_transform_utils
+    est_spatial_var = utils.estimate_variance(u_real.T, s["rescaled"][:n_pcs])
+    gt_spatial_var = gt_data["gt_spatial_variance"]
+    # DFT both, then FSC
+    est_spatial_dft = fourier_transform_utils.get_dft3(
+        est_spatial_var.reshape(volume_shape)
+    ).reshape(-1)
+    gt_spatial_dft = fourier_transform_utils.get_dft3(
+        gt_spatial_var.reshape(volume_shape)
+    ).reshape(-1)
+    _, spatial_var_fsc = plot_utils.plot_fsc_new(
+        gt_spatial_dft, est_spatial_dft,
+        np.array(volume_shape), gt_data["voxel_size"],
+        threshold=0.5, name="Variance Spatial FSC"
+    )
+    results["variance_spatial_fsc"] = float(spatial_var_fsc)
+
+    print("  PCS relative variance:", {k: f"{v:.6f}" for k, v in results.items()
+                                        if k.startswith("pcs_")})
+    print(f"  variance_spatial_fsc = {spatial_var_fsc:.6f}")
     assert results, "No PCS metrics computed"
     _assert_metrics(results, baseline_scores, tol_frac)
 

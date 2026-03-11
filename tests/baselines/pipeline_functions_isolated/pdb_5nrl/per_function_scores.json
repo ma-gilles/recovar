@@ -17,7 +17,7 @@
   "pcs_relative_variance_4": 0.4426,
   "pcs_relative_variance_5": 0.4428,
   "pcs_relative_variance_10": 0.4439,
+  "proj_cov_frobenius_error_vs_gt": 0.478,
   "projected_covariance_relative_frobenius_error": 0.27,
-  "variance_fourier_fsc": 0.1108,
-  "variance_spatial_fsc": 0.0027
+  "variance_fourier_fsc": 0.1108
 }
