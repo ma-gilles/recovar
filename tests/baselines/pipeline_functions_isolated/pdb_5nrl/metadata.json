@@ -1,0 +1,8 @@
+{
+  "captured_at_utc": "2026-03-11T00:10:00+00:00",
+  "git_base": "~/recovar (published recovar, ma-gilles/recovar.git @ 20547a0)",
+  "dataset": "PDB 5nrl spliceosome, 50 volumes, grid=128, voxel=4.25A, B=80, rot=10deg, noise_level=0.1",
+  "dataset_dir": "/scratch/gpfs/GILLES/mg6942/pdb_baseline_snr01/test_dataset",
+  "intermediates_dir": "/scratch/gpfs/GILLES/mg6942/pdb_baseline_snr01/function_baselines/intermediates",
+  "notes": "Per-function baseline for isolated pipeline function regression tests. Each function was run step-by-step using ~/recovar (conda env 'recovar'). Intermediates from each step are saved as .npy files for use as standardized inputs in subsequent tests."
+}
