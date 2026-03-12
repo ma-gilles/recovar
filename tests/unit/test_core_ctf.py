@@ -13,7 +13,6 @@ def test_core_reexports_ctf_api():
     assert core.CTFParamIndex is core_ctf.CTFParamIndex
     assert core.evaluate_ctf is core_ctf.evaluate_ctf
     assert core.cryodrgn_CTF is core_ctf.cryodrgn_CTF
-    assert core.cryodrgn_CTF_half is core_ctf.cryodrgn_CTF_half
 
 
 def test_evaluate_ctf_shape():
@@ -79,7 +78,7 @@ def test_get_dose_filters_shape_for_non_square_image():
 def test_evaluate_ctf_wrapper_tilt_series_uses_voltage(monkeypatch):
     captured = {}
 
-    def fake_dose_filters(Apix, image_shape, dose_per_tilt, angle_per_tilt, tilt_numbers, voltage):
+    def fake_dose_filters(Apix, image_shape, dose_per_tilt, angle_per_tilt, tilt_numbers, voltage, *, half_image=False):
         captured["voltage"] = voltage
         return np.ones((len(tilt_numbers), image_shape[0] * image_shape[1]), dtype=np.float32)
 
@@ -87,7 +86,7 @@ def test_evaluate_ctf_wrapper_tilt_series_uses_voltage(monkeypatch):
     monkeypatch.setattr(
         core_ctf,
         "cryodrgn_CTF",
-        lambda CTF_params, image_shape, voxel_size: np.ones(
+        lambda CTF_params, image_shape, voxel_size, **kw: np.ones(
             (CTF_params.shape[0], image_shape[0] * image_shape[1]), dtype=np.float32
         ),
     )
@@ -151,7 +150,7 @@ def _make_standard_ctf_params(n_images):
 def test_cryodrgn_ctf_half_matches_full_mapping(image_shape):
     ctf_params = _make_standard_ctf_params(3)[:, :9]
     full = np.asarray(core_ctf.cryodrgn_CTF(ctf_params, image_shape=image_shape, voxel_size=1.0))
-    half = np.asarray(core_ctf.cryodrgn_CTF_half(ctf_params, image_shape=image_shape, voxel_size=1.0))
+    half = np.asarray(core_ctf.cryodrgn_CTF(ctf_params, image_shape=image_shape, voxel_size=1.0, half_image=True))
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half, expected, atol=1e-6, rtol=1e-6)
 
@@ -166,8 +165,8 @@ def test_evaluate_ctf_wrapper_half_matches_full_mapping(antialiasing):
         )
     )
     half = np.asarray(
-        core_ctf.evaluate_ctf_wrapper_half(
-            ctf_params, image_shape=image_shape, voxel_size=1.0, antialiasing=antialiasing
+        core_ctf.evaluate_ctf_wrapper(
+            ctf_params, image_shape=image_shape, voxel_size=1.0, antialiasing=antialiasing, half_image=True
         )
     )
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
@@ -188,19 +187,20 @@ def test_tilt_series_half_wrappers_match_full_mapping():
         )
     )
     half = np.asarray(
-        core_ctf.evaluate_ctf_wrapper_tilt_series_half(
+        core_ctf.evaluate_ctf_wrapper_tilt_series(
             ctf_params,
             image_shape=image_shape,
             voxel_size=1.0,
             dose_per_tilt=2.9,
             angle_per_tilt=3.0,
+            half_image=True,
         )
     )
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half, expected, atol=1e-6, rtol=1e-6)
 
     full_v2 = np.asarray(core_ctf.evaluate_ctf_wrapper_tilt_series_v2(ctf_params, image_shape=image_shape, voxel_size=1.0))
-    half_v2 = np.asarray(core_ctf.evaluate_ctf_wrapper_tilt_series_v2_half(ctf_params, image_shape=image_shape, voxel_size=1.0))
+    half_v2 = np.asarray(core_ctf.evaluate_ctf_wrapper_tilt_series_v2(ctf_params, image_shape=image_shape, voxel_size=1.0, half_image=True))
     expected_v2 = np.asarray(fourier_transform_utils.full_image_to_half_image(full_v2, image_shape))
     np.testing.assert_allclose(half_v2, expected_v2, atol=1e-6, rtol=1e-6)
 
@@ -208,15 +208,16 @@ def test_tilt_series_half_wrappers_match_full_mapping():
 def test_get_cryo_et_ctf_fun_half_matches_tilt_series_half_wrapper():
     ctf_params = _make_standard_ctf_params(3)
     image_shape = (4, 8)
-    ctf_fun = core_ctf.get_cryo_ET_CTF_fun_half(dose_per_tilt=2.9, angle_per_tilt=3.0)
-    out_fun = np.asarray(ctf_fun(ctf_params, image_shape, 1.0))
+    ctf_fun = core_ctf.get_cryo_ET_CTF_fun(dose_per_tilt=2.9, angle_per_tilt=3.0)
+    out_fun = np.asarray(ctf_fun(ctf_params, image_shape, 1.0, half_image=True))
     out_ref = np.asarray(
-        core_ctf.evaluate_ctf_wrapper_tilt_series_half(
+        core_ctf.evaluate_ctf_wrapper_tilt_series(
             ctf_params,
             image_shape=image_shape,
             voxel_size=1.0,
             dose_per_tilt=2.9,
             angle_per_tilt=3.0,
+            half_image=True,
         )
     )
     np.testing.assert_allclose(out_fun, out_ref, atol=1e-6, rtol=1e-6)
@@ -229,7 +230,7 @@ def test_ctf_half_pointwise_application_matches_full_mapping():
     ctf_params = _make_standard_ctf_params(n_images)[:, :9]
 
     ctf_full = np.asarray(core_ctf.evaluate_ctf_wrapper(ctf_params, image_shape=image_shape, voxel_size=1.0))
-    ctf_half = np.asarray(core_ctf.evaluate_ctf_wrapper_half(ctf_params, image_shape=image_shape, voxel_size=1.0))
+    ctf_half = np.asarray(core_ctf.evaluate_ctf_wrapper(ctf_params, image_shape=image_shape, voxel_size=1.0, half_image=True))
 
     real_images = rng.standard_normal((n_images,) + image_shape).astype(np.float32)
     images_full = np.asarray(fourier_transform_utils.get_dft2(real_images)).reshape(n_images, -1)
@@ -316,7 +317,7 @@ def test_cryodrgn_CTF_half_matches_full_on_gpu(gpu_device):
     image_shape = (4, 8)
     with jax.default_device(gpu_device):
         full = np.asarray(core_ctf.cryodrgn_CTF(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
-        half = np.asarray(core_ctf.cryodrgn_CTF_half(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
+        half = np.asarray(core_ctf.cryodrgn_CTF(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True))
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)
 
@@ -347,7 +348,7 @@ def test_evaluate_ctf_wrapper_half_matches_full_on_gpu(gpu_device):
             core_ctf.evaluate_ctf_wrapper(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0)
         )
         half = np.asarray(
-            core_ctf.evaluate_ctf_wrapper_half(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0)
+            core_ctf.evaluate_ctf_wrapper(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True)
         )
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)
@@ -379,9 +380,9 @@ def test_tilt_series_half_matches_full_on_gpu(gpu_device):
             )
         )
         half = np.asarray(
-            core_ctf.evaluate_ctf_wrapper_tilt_series_half(
+            core_ctf.evaluate_ctf_wrapper_tilt_series(
                 jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0,
-                dose_per_tilt=2.9, angle_per_tilt=3.0,
+                dose_per_tilt=2.9, angle_per_tilt=3.0, half_image=True,
             )
         )
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
@@ -397,7 +398,7 @@ def test_tilt_series_v2_half_matches_full_on_gpu(gpu_device):
             core_ctf.evaluate_ctf_wrapper_tilt_series_v2(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0)
         )
         half = np.asarray(
-            core_ctf.evaluate_ctf_wrapper_tilt_series_v2_half(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0)
+            core_ctf.evaluate_ctf_wrapper_tilt_series_v2(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True)
         )
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)

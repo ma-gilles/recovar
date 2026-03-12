@@ -489,7 +489,7 @@ def _compute_batch_coords_p1(
             raise ValueError(
                 f"Expected batch image size {full_image_size} (full) or {half_image_size} (half), got {batch.shape[-1]}"
             )
-        batch = core.translate_half_images(batch, translations, config.image_shape)
+        batch = core.translate_images(batch, translations, config.image_shape, half_image=True)
     else:
         if batch.shape[-1] == half_image_size:
             batch = ftu.half_image_to_full_image(batch, config.image_shape)

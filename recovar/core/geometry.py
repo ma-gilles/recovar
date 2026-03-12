@@ -165,8 +165,8 @@ def translate_single_image(image, translation, lattice):
 batch_translate = jax.vmap(translate_single_image, in_axes=(0, 0, None))
 
 
-@functools.partial(jax.jit, static_argnums=2)
-def translate_images(image, translation, image_shape):
+@functools.partial(jax.jit, static_argnums=2, static_argnames=['half_image'])
+def translate_images(image, translation, image_shape, *, half_image=False):
     """Apply in-plane translations to Fourier-space images via phase shifts.
 
     Args:
@@ -175,33 +175,21 @@ def translate_images(image, translation, image_shape):
         translation: Shift(s) in fractional pixel units, shape
             ``(batch, 2)`` or ``(2,)``.
         image_shape: Image side length (static).
+        half_image: If True, use rfft-packed half-spectrum frequency grid.
 
     Returns:
         Translated image(s) with the same shape as *image*.
     """
-    twod_lattice = get_unrotated_plane_coords(image_shape, voxel_size=1, scaled=True)[:, :2]
+    if half_image:
+        twod_lattice = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+            image_shape, voxel_size=1, scaled=True
+        )
+    else:
+        twod_lattice = get_unrotated_plane_coords(image_shape, voxel_size=1, scaled=True)[:, :2]
     return batch_translate(image, translation, twod_lattice)
 
 
 batch_trans_translate_images = jax.vmap(translate_images, in_axes=(None, -2, None), out_axes=-2)
-
-
-@functools.partial(jax.jit, static_argnums=2)
-def translate_half_images(image, translation, image_shape):
-    """Apply in-plane translations to half-spectrum Fourier images.
-
-    Like :func:`translate_images` but for rfft-packed half-spectrum images
-    with shape ``(batch, H * (W // 2 + 1))``.
-
-    Args:
-        image: Half-spectrum Fourier image(s).
-        translation: Shift(s) in fractional pixel units, shape ``(batch, 2)``.
-        image_shape: Full real-space image shape ``(H, W)`` (static).
-    """
-    twod_lattice = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
-        image_shape, voxel_size=1, scaled=True
-    )
-    return batch_translate(image, translation, twod_lattice)
 
 
 __all__ = [
@@ -220,6 +208,5 @@ __all__ = [
     "translate_single_image",
     "batch_translate",
     "translate_images",
-    "translate_half_images",
     "batch_trans_translate_images",
 ]

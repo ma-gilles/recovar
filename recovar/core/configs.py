@@ -27,28 +27,6 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-def _resolve_ctf_half(ctf_fun):
-    """Resolve the native half-grid CTF function for a given full CTF function.
-
-    Checks for a ``_half_variant`` attribute (set by closure factories like
-    ``get_cryo_ET_CTF_fun``), then falls back to a lookup table of known
-    module-level CTF functions.  Returns ``None`` if no half variant is found
-    (caller should fall back to full → half extraction).
-    """
-    half = getattr(ctf_fun, '_half_variant', None)
-    if half is not None:
-        return half
-
-    from recovar.core import ctf as ctf_mod
-    _KNOWN_HALF_MAP = {
-        ctf_mod.cryodrgn_CTF: ctf_mod.cryodrgn_CTF_half,
-        ctf_mod.evaluate_ctf_wrapper: ctf_mod.evaluate_ctf_wrapper_half,
-        ctf_mod.evaluate_ctf_wrapper_tilt_series_v2: ctf_mod.evaluate_ctf_wrapper_tilt_series_v2_half,
-        ctf_mod.evaluate_ctf_wrapper_tilt_series: ctf_mod.evaluate_ctf_wrapper_tilt_series_half,
-    }
-    return _KNOWN_HALF_MAP.get(ctf_fun, None)
-
-
 # ---------------------------------------------------------------------------
 # ForwardModelConfig — static compile-time constants for the forward model
 # ---------------------------------------------------------------------------
@@ -68,7 +46,6 @@ class ForwardModelConfig(eqx.Module):
     padding: int = eqx.field(static=True)
     disc_type: str = eqx.field(static=True)
     CTF_fun: Callable = eqx.field(static=True)
-    CTF_fun_half: Optional[Callable] = eqx.field(static=True, default=None)
     premultiplied_ctf: bool = eqx.field(static=True, default=False)
     volume_mask_threshold: float = eqx.field(static=True, default=0.0)
     volume_upsampling_factor: int = eqx.field(static=True, default=1)
@@ -80,16 +57,13 @@ class ForwardModelConfig(eqx.Module):
         return self.CTF_fun(ctf_params, self.image_shape, self.voxel_size)
 
     def compute_ctf_half(self, ctf_params: jax.Array) -> jax.Array:
-        """Compute CTF at half-spectrum (rfft-packed) frequencies.
-
-        Uses the native half-grid CTF function when available, otherwise
-        falls back to computing full CTF then extracting the half-spectrum.
-        """
-        if self.CTF_fun_half is not None:
-            return self.CTF_fun_half(ctf_params, self.image_shape, self.voxel_size)
-        import recovar.core.fourier_transform_utils as ftu
-        full_ctf = self.CTF_fun(ctf_params, self.image_shape, self.voxel_size)
-        return ftu.full_image_to_half_image(full_ctf, self.image_shape)
+        """Compute CTF at half-spectrum (rfft-packed) frequencies."""
+        try:
+            return self.CTF_fun(ctf_params, self.image_shape, self.voxel_size, half_image=True)
+        except TypeError:
+            import recovar.core.fourier_transform_utils as ftu
+            full_ctf = self.CTF_fun(ctf_params, self.image_shape, self.voxel_size)
+            return ftu.full_image_to_half_image(full_ctf, self.image_shape)
 
     @property
     def base_volume_shape(self) -> Tuple[int, int, int]:
@@ -107,7 +81,7 @@ class ForwardModelConfig(eqx.Module):
             image_shape=self.image_shape, volume_shape=self.volume_shape,
             grid_size=self.grid_size, voxel_size=self.voxel_size,
             padding=self.padding, disc_type=self.disc_type,
-            CTF_fun=self.CTF_fun, CTF_fun_half=self.CTF_fun_half,
+            CTF_fun=self.CTF_fun,
             premultiplied_ctf=self.premultiplied_ctf,
             volume_mask_threshold=self.volume_mask_threshold,
             volume_upsampling_factor=self.volume_upsampling_factor,
@@ -187,9 +161,6 @@ class ForwardModelConfig(eqx.Module):
             grid_size = base_grid_size
             volume_upsampling = 1
 
-        # Resolve native half-grid CTF function
-        ctf_fun_half = _resolve_ctf_half(ctf_fun)
-
         config = cls(
             image_shape=tuple(int(x) for x in cryo.image_shape),
             volume_shape=volume_shape,
@@ -198,7 +169,6 @@ class ForwardModelConfig(eqx.Module):
             padding=int(getattr(cryo, 'padding', 0)),
             disc_type=disc_type,
             CTF_fun=ctf_fun,
-            CTF_fun_half=ctf_fun_half,
             premultiplied_ctf=bool(getattr(cryo, 'premultiplied_ctf', False)),
             volume_mask_threshold=float(getattr(cryo, 'volume_mask_threshold', 0.0)),
             volume_upsampling_factor=volume_upsampling,

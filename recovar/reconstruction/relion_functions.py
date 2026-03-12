@@ -148,7 +148,7 @@ def _relion_kernel_batch_half(
     config, half_images, ctf_params, rotation_matrices, translations, noise_variances, Ft_y, Ft_ctf,
 ):
     """Backproject half-spectrum images into half-volume accumulators."""
-    half_images = core.translate_half_images(half_images, translations, config.image_shape)
+    half_images = core.translate_images(half_images, translations, config.image_shape, half_image=True)
     noise_half = noise.to_batched_half_pixel_noise(
         noise_variances, config.image_shape, batch_size=half_images.shape[0]
     )

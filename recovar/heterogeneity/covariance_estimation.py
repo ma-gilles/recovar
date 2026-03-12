@@ -410,7 +410,7 @@ def variance_relion_kernel_trilinear(
     noise_variances = batch_data.noise_variance
 
     # batch_data.images is already in half-image (rfft-packed) format.
-    half_images = core.translate_half_images(batch_data.images, batch_data.translations, config.image_shape)
+    half_images = core.translate_images(batch_data.images, batch_data.translations, config.image_shape, half_image=True)
     half_ctf = config.compute_ctf_half(batch_data.ctf_params)
     CTF_squared = half_ctf ** 2
 
@@ -1060,7 +1060,7 @@ def reduce_covariance_inner(
     # Convert batch to half-image early and translate in half format.
     if _use_half_proj:
         batch = fourier_transform_utils.full_image_to_half_image(batch, config.image_shape)
-        batch = core.translate_half_images(batch, translations, config.image_shape)
+        batch = core.translate_images(batch, translations, config.image_shape, half_image=True)
     else:
         batch = core.translate_images(batch, translations, config.image_shape)
 

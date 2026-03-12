@@ -44,10 +44,10 @@ def _heterogeneity_kernel_batch_from_fft(
         native resolution before backprojecting.  Reduces aliasing in the CTF
         weight accumulator but is more expensive.  Default False.
     """
-    from recovar.core.geometry import translate_half_images
+    from recovar.core.geometry import translate_images
     from recovar.reconstruction import noise as noise_mod
 
-    half_images = translate_half_images(batch.images, batch.translations, config.image_shape)
+    half_images = translate_images(batch.images, batch.translations, config.image_shape, half_image=True)
     noise_half = noise_mod.to_batched_half_pixel_noise(
         batch.noise_variance, config.image_shape, batch_size=half_images.shape[0]
     )
@@ -289,7 +289,7 @@ def precompute_triangular_kernel_batch(
         heterogeneity_bins_this = jnp.ones((batch_data.images.shape[0], 1), dtype=np.bool_)
         n_bins = 1
 
-    half_images = core.translate_half_images(batch_data.images, batch_data.translations, config.image_shape)
+    half_images = core.translate_images(batch_data.images, batch_data.translations, config.image_shape, half_image=True)
     noise_half = noise_mod.to_batched_half_pixel_noise(
         batch_data.noise_variance, config.image_shape, batch_size=half_images.shape[0]
     )
