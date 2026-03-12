@@ -173,8 +173,8 @@ def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image):
         raise ValueError(f"image_shape must be positive, got {image_shape}")
     if N0 <= 0 or N1 <= 0 or N2 <= 0:
         raise ValueError(f"volume_shape must be positive, got {volume_shape}")
-    if order not in (0, 1):
-        raise ValueError(f"order must be 0 or 1, got {order}")
+    if order not in (0, 1, 3):
+        raise ValueError(f"order must be 0, 1, or 3, got {order}")
     if N0 % ih != 0:
         raise ValueError(
             f"volume_shape[0] ({N0}) must be divisible by image_shape[0] ({ih})"

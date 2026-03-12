@@ -44,8 +44,16 @@ def _cuda_project_fwd(volume, rotation_matrices, image_shape, volume_shape, orde
 
 
 def _cuda_project_bwd(image_shape, volume_shape, order, half_volume, half_image, max_r, res, g):
-    from recovar.cuda_backproject import backproject
     (rotation_matrices,) = res
+    if order == 3:
+        # Cubic backproject not supported in CUDA (64 atomic ops per pixel).
+        # Fall through to JAX VJP of the forward slice.
+        from recovar.core import slicing
+        grad_vol = slicing._jax_adjoint_slice_volume(
+            g, rotation_matrices, image_shape, volume_shape, order,
+            half_volume=half_volume, half_image=half_image, max_r=max_r)
+        return grad_vol, jnp.zeros_like(rotation_matrices)
+    from recovar.cuda_backproject import backproject
     if half_volume:
         vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
     else:

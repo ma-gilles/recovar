@@ -81,7 +81,7 @@ def _on_gpu():
 
 def _use_cuda(order):
     """Return True if CUDA should be used.  Error if on GPU but CUDA unavailable."""
-    if order > 1 or not _on_gpu():
+    if order not in (0, 1, 3) or not _on_gpu():
         return False
     from recovar.cuda_backproject import cuda_available
     if not cuda_available():
@@ -90,6 +90,13 @@ def _use_cuda(order):
             "Rebuild the CUDA library or set RECOVAR_DISABLE_CUDA=1 to force JAX fallback."
         )
     return True
+
+
+def _use_cuda_backproject(order):
+    """Return True if CUDA backproject should be used (order 0 or 1 only)."""
+    if order > 1:
+        return False
+    return _use_cuda(order)
 
 
 def _is_complex(arr):
@@ -264,7 +271,7 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
     """
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
-    if _use_cuda(order):
+    if _use_cuda_backproject(order):
         from recovar.cuda_backproject import backproject
         # Real inputs stay real for 2x efficiency; promote only if accumulator is complex.
         if not _is_complex(slices) and volume is not None and _is_complex(volume):
@@ -311,6 +318,31 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
     return result if volume is None else result + volume
 
 
+def _jax_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, order,
+                              half_volume=False, half_image=False, max_r=None):
+    """JAX VJP-based adjoint for cubic slice (used by CUDA VJP backward)."""
+    max_r = _resolve_max_r(max_r, image_shape)
+    if half_image:
+        slices = ftu.half_image_to_full_image(slices, image_shape)
+    slices = _flatten_full_image_slices(slices, image_shape)
+    if half_volume:
+        vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+        vol_size = int(np.prod(vol_shape))
+        def f(v):
+            full_v = ftu.half_volume_to_full_volume(v, volume_shape)
+            from recovar.core import cubic_interpolation
+            coeffs = cubic_interpolation.calculate_spline_coefficients(full_v.reshape(volume_shape))
+            return _jax_slice(coeffs, rotation_matrices, image_shape, volume_shape, order)
+    else:
+        vol_size = int(np.prod(volume_shape))
+        from recovar.core import cubic_interpolation
+        def f(v):
+            coeffs = cubic_interpolation.calculate_spline_coefficients(v.reshape(volume_shape))
+            return _jax_slice(coeffs, rotation_matrices, image_shape, volume_shape, order)
+    _, u = vjp(f, jnp.zeros(vol_size, dtype=slices.dtype))
+    return u(slices)[0]
+
+
 def batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, disc_type,
                                volumes=None, half_image=False, half_volume=False, max_r=_AUTO):
     """Batch backprojection: per-volume image sets to batch of volumes.
@@ -331,7 +363,7 @@ def batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_sh
     batch = slices.shape[0]
     if volumes is None:
         volumes = jnp.zeros((batch, vol_flat), dtype=slices.dtype)
-    if _use_cuda(order):
+    if _use_cuda_backproject(order):
         from recovar.cuda_backproject import batch_backproject
         if not _is_complex(slices) and _is_complex(volumes):
             slices = slices.astype(jnp.result_type(slices, jnp.complex64))
