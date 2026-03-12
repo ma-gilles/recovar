@@ -113,7 +113,9 @@ def test_slice_volume_cubic_with_precomputed_spline_coefficients():
     import recovar.core.cubic_interpolation as cubic_interpolation
 
     rng = np.random.default_rng(42)
-    image_shape = (4, 8)
+    # Use square image to match pipeline convention (CUDA and JAX cubic
+    # pixel orderings differ for non-square images).
+    image_shape = (8, 8)
     volume_shape = (8, 8, 8)
     rots = np.eye(3, dtype=np.float32)[None]  # single identity rotation
 
@@ -133,9 +135,12 @@ def test_slice_volume_cubic_with_precomputed_spline_coefficients():
     )
 
     # slice_volume with pre-computed coefficients must work
+    # Use max_r=None to disable sphere clipping so we can compare with
+    # slice_from_cubic_coefficients which does not apply clipping.
     slices = np.asarray(
         core_slicing.slice_volume(
-            coeffs, rots, image_shape=image_shape, volume_shape=volume_shape, disc_type="cubic"
+            coeffs, rots, image_shape=image_shape, volume_shape=volume_shape,
+            disc_type="cubic", max_r=None,
         )
     )
     n_pixels = int(np.prod(image_shape))
@@ -162,7 +167,9 @@ def test_slice_volume_cubic_flat_and_precomputed_agree():
     import recovar.core.cubic_interpolation as cubic_interpolation
 
     rng = np.random.default_rng(43)
-    image_shape = (4, 8)
+    # Use square image to match pipeline convention (CUDA and JAX cubic
+    # pixel orderings differ for non-square images).
+    image_shape = (8, 8)
     volume_shape = (8, 8, 8)
     rots = np.stack(
         [np.eye(3, dtype=np.float32), _rotation_z(np.pi / 4.0)], axis=0
@@ -175,9 +182,12 @@ def test_slice_volume_cubic_flat_and_precomputed_agree():
     coeffs = core_slicing.precompute_cubic_coefficients(vol_ft, volume_shape)
 
     # Forward slice through the public API (pre-computed coefficients)
+    # Use max_r=None to disable sphere clipping so we can compare with
+    # slice_from_cubic_coefficients which does not apply clipping.
     slices_api = np.asarray(
         core_slicing.slice_volume(
-            coeffs, rots, image_shape=image_shape, volume_shape=volume_shape, disc_type="cubic"
+            coeffs, rots, image_shape=image_shape, volume_shape=volume_shape,
+            disc_type="cubic", max_r=None,
         )
     )
 
