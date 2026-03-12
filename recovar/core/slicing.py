@@ -172,7 +172,7 @@ def _jax_slice_half_image(volume, rotation_matrices, image_shape, volume_shape, 
 # ── Public API ───────────────────────────────────────────────────────
 
 def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type,
-                 half_volume=False, half_image=False, max_r=_AUTO):
+                 half_volume=False, half_image=False, max_r=None):
     """Project volume to images via interpolation.
 
     Parameters
@@ -212,7 +212,7 @@ def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type
 
 
 def batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, disc_type,
-                       half_volume=False, half_image=False, max_r=_AUTO):
+                       half_volume=False, half_image=False, max_r=None):
     """Project a batch of volumes to images.
 
     Parameters
@@ -240,7 +240,7 @@ def batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, di
 
 
 def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, disc_type,
-                         volume=None, half_image=False, half_volume=False, max_r=_AUTO):
+                         volume=None, half_image=False, half_volume=False, max_r=None):
     """Adjoint slice extraction (backprojection).
 
     Parameters
@@ -306,7 +306,7 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
 
 
 def batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, disc_type,
-                               volumes=None, half_image=False, half_volume=False, max_r=_AUTO):
+                               volumes=None, half_image=False, half_volume=False, max_r=None):
     """Batch backprojection: per-volume image sets to batch of volumes.
 
     Parameters
