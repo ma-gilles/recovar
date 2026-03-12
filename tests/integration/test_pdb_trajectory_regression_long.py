@@ -142,12 +142,7 @@ def test_pdb_trajectory_regression(tmp_path):
     )
     current = _run_pdb_metrics(output_dir, run_args, reuse_dataset=reuse)
 
-    if write_baseline or (not baseline_json.exists()):
-        baseline_json.parent.mkdir(parents=True, exist_ok=True)
-        with open(baseline_json, "w") as f:
-            json.dump(current, f, indent=2, sort_keys=True)
-        pytest.skip(f"PDB baseline written to {baseline_json}")
-
+    assert baseline_json.exists(), f"PDB baseline not found: {baseline_json}"
     baseline = _load_json(baseline_json)
 
     failures = []
@@ -168,6 +163,10 @@ def test_pdb_trajectory_regression(tmp_path):
 
     assert checked > 0, "no numeric metrics were checked; verify baseline/current score files"
     assert not failures, "PDB trajectory metric regressions:\n" + "\n".join(failures)
+
+    if write_baseline:
+        with open(baseline_json, "w") as f:
+            json.dump(current, f, indent=2, sort_keys=True)
 
 
 def _load_json(path):

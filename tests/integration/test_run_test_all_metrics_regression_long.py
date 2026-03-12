@@ -161,12 +161,7 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
     reuse = not write_baseline and (output_dir / "test_dataset" / "simulation_info.pkl").exists()
     current = _run_metrics(output_dir, run_args, volumes_prefix=volumes_prefix, reuse_dataset=reuse)
 
-    if write_baseline or (not baseline_json.exists()):
-        baseline_json.parent.mkdir(parents=True, exist_ok=True)
-        with open(baseline_json, "w") as f:
-            json.dump(current, f, indent=2, sort_keys=True)
-        pytest.skip(f"baseline written to {baseline_json}")
-
+    assert baseline_json.exists(), f"baseline not found: {baseline_json}"
     baseline = _load_json(baseline_json)
 
     failures = []
@@ -187,6 +182,10 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
 
     assert checked > 0, "no numeric metrics were checked; verify baseline/current score files"
     assert not failures, "metric regressions:\n" + "\n".join(failures)
+
+    if write_baseline:
+        with open(baseline_json, "w") as f:
+            json.dump(current, f, indent=2, sort_keys=True)
 
 
 def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tmp_path):
@@ -229,12 +228,7 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
     assert particles_star.exists(), f"expected cryo-ET particles.star at {particles_star}"
     _assert_cryo_et_subsampling_consistency(particles_star)
 
-    if write_baseline or (not baseline_json.exists()):
-        baseline_json.parent.mkdir(parents=True, exist_ok=True)
-        with open(baseline_json, "w") as f:
-            json.dump(current, f, indent=2, sort_keys=True)
-        pytest.skip(f"ET baseline written to {baseline_json}")
-
+    assert baseline_json.exists(), f"ET baseline not found: {baseline_json}"
     baseline = _load_json(baseline_json)
 
     failures = []
@@ -255,3 +249,7 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
 
     assert checked > 0, "no numeric ET metrics were checked; verify ET baseline/current score files"
     assert not failures, "ET metric regressions:\n" + "\n".join(failures)
+
+    if write_baseline:
+        with open(baseline_json, "w") as f:
+            json.dump(current, f, indent=2, sort_keys=True)

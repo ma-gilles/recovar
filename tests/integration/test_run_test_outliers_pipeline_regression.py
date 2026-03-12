@@ -325,15 +325,10 @@ def _compare_against_baseline(
     write: bool,
 ) -> None:
     """
-    If write=True, dump current metrics to baseline_path and skip the test.
-    Otherwise compare current against the stored baseline.
+    Compare current metrics against the stored baseline.
+    If write=True, overwrite the baseline file *after* the comparison passes.
     """
-    if write or not baseline_path.exists():
-        baseline_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(baseline_path, "w") as f:
-            json.dump(current, f, indent=2, sort_keys=True)
-        pytest.skip(f"outlier baseline written to {baseline_path}")
-
+    assert baseline_path.exists(), f"baseline not found: {baseline_path}"
     baseline = _load_json(baseline_path)
     failures: List[str] = []
     checked = 0
@@ -356,6 +351,10 @@ def _compare_against_baseline(
 
     assert checked > 0, "no numeric metrics were compared; check baseline/current dicts"
     assert not failures, "outlier metric regressions:\n" + "\n".join(failures)
+
+    if write:
+        with open(baseline_path, "w") as f:
+            json.dump(current, f, indent=2, sort_keys=True)
 
 
 # ---------------------------------------------------------------------------

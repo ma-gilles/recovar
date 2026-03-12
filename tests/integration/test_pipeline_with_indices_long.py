@@ -113,12 +113,9 @@ def _compare_against_baseline(
     tol_frac: float,
     write: bool,
 ) -> None:
-    if write or not baseline_path.exists():
-        baseline_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(baseline_path, "w") as f:
-            json.dump(current, f, indent=2, sort_keys=True)
-        pytest.skip(f"pipeline-with-ind baseline written to {baseline_path}")
-
+    """Compare current metrics against the stored baseline.
+    If write=True, overwrite the baseline file *after* the comparison passes."""
+    assert baseline_path.exists(), f"baseline not found: {baseline_path}"
     baseline = _load_json(baseline_path)
     failures: List[str] = []
     checked = 0
@@ -140,6 +137,10 @@ def _compare_against_baseline(
 
     assert checked > 0, "no numeric metrics were compared; check baseline/current dicts"
     assert not failures, "pipeline-with-ind metric regressions:\n" + "\n".join(failures)
+
+    if write:
+        with open(baseline_path, "w") as f:
+            json.dump(current, f, indent=2, sort_keys=True)
 
 
 def _dataset_exists(output_dir: Path, grid_size: int, is_tilt: bool = False) -> bool:
