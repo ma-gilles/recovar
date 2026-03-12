@@ -15,8 +15,6 @@ test_run_test_all_metrics_regression_long.py):
        OUTLIERS_BASELINE_JSON    – path to stored baseline metrics JSON
 
      Optional env vars:
-       OUTLIERS_WRITE_BASELINE   – set to "1" to (re)write baseline from
-                                   current run and then skip the test
        OUTLIERS_N_IMAGES         – number of images to simulate (default 10000)
        OUTLIERS_GRID_SIZE        – grid size (default 128)
        OUTLIERS_PERCENT_OUTLIERS – outlier fraction (default 0.15)
@@ -322,12 +320,8 @@ def _compare_against_baseline(
     current: Dict[str, float],
     baseline_path: Path,
     tol_frac: float,
-    write: bool,
 ) -> None:
-    """
-    Compare current metrics against the stored baseline.
-    If write=True, overwrite the baseline file *after* the comparison passes.
-    """
+    """Compare current metrics against the stored baseline."""
     assert baseline_path.exists(), f"baseline not found: {baseline_path}"
     baseline = _load_json(baseline_path)
     failures: List[str] = []
@@ -352,10 +346,6 @@ def _compare_against_baseline(
     assert checked > 0, "no numeric metrics were compared; check baseline/current dicts"
     assert not failures, "outlier metric regressions:\n" + "\n".join(failures)
 
-    if write:
-        with open(baseline_path, "w") as f:
-            json.dump(current, f, indent=2, sort_keys=True)
-
 
 # ---------------------------------------------------------------------------
 # Test 1: tiny self-contained regression (integration + slow, no GPU required)
@@ -377,10 +367,7 @@ def test_outliers_pipeline_tiny_regression(tmp_path):
       • precision ≥ MIN_PRECISION_TINY
       • metrics consistent with committed tiny_baseline.json (if present)
 
-    Set OUTLIERS_WRITE_TINY_BASELINE=1 to regenerate the tiny baseline.
     """
-    write_baseline = os.environ.get("OUTLIERS_WRITE_TINY_BASELINE", "0") == "1"
-
     output_dir = _resolve_output_dir(tmp_path, "outliers_tiny")
 
     pipeline_out = _run_outliers_pipeline(
@@ -423,7 +410,6 @@ def test_outliers_pipeline_tiny_regression(tmp_path):
         current=metrics,
         baseline_path=_TINY_BASELINE_JSON,
         tol_frac=0.25,  # allow 25 % degradation from tiny-dataset noise
-        write=write_baseline,
     )
 
 
@@ -504,7 +490,6 @@ def test_outliers_pipeline_regression_against_baseline(tmp_path):
       OUTLIERS_VOLUMES_DIR     – if set, use real volumes instead of synthetic ones
       OUTLIERS_BASELINE_JSON   – baseline path; defaults to in-repo
                                  tests/baselines/run_test_outliers_pipeline/long_generated/all_scores.json
-      OUTLIERS_WRITE_BASELINE  – "1" to regenerate baseline and skip
       OUTLIERS_N_IMAGES        – (default 10000)
       OUTLIERS_GRID_SIZE       – (default 128)
       OUTLIERS_PERCENT_OUTLIERS – (default 0.15)
@@ -521,10 +506,9 @@ def test_outliers_pipeline_regression_against_baseline(tmp_path):
     pct_out = float(os.environ.get("OUTLIERS_PERCENT_OUTLIERS", "0.15"))
     k_rounds = int(os.environ.get("OUTLIERS_K_ROUNDS", "2"))
     tol_frac = float(os.environ.get("OUTLIERS_TOL_FRAC", "0.15"))
-    write_baseline = os.environ.get("OUTLIERS_WRITE_BASELINE", "0") == "1"
 
     output_dir = _resolve_output_dir(tmp_path, "outliers_long")
-    reuse = not write_baseline and _dataset_exists_spa(output_dir, grid_size)
+    reuse = _dataset_exists_spa(output_dir, grid_size)
     pipeline_out = _run_outliers_pipeline(
         output_dir=output_dir,
         volumes_prefix=volumes_prefix,
@@ -551,7 +535,6 @@ def test_outliers_pipeline_regression_against_baseline(tmp_path):
         current=metrics,
         baseline_path=baseline_json,
         tol_frac=tol_frac,
-        write=write_baseline,
     )
 
 
@@ -590,14 +573,10 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
     n_tilts = int(os.environ.get("OUTLIERS_N_TILTS", "7"))
     k_rounds = int(os.environ.get("OUTLIERS_K_ROUNDS", "2"))
     tol_frac = float(os.environ.get("OUTLIERS_TOL_FRAC", "0.15"))
-    write_baseline = (
-        os.environ.get("OUTLIERS_WRITE_BASELINE", "0") == "1"
-        or os.environ.get("OUTLIERS_ET_WRITE_BASELINE", "0") == "1"
-    )
 
     output_dir = _resolve_output_dir(tmp_path, "outliers_cryo_et")
     dataset_dir = output_dir / "test_dataset"
-    reuse = not write_baseline and _dataset_exists_et(output_dir)
+    reuse = _dataset_exists_et(output_dir)
 
     if not reuse:
         dataset_dir.mkdir(parents=True, exist_ok=True)
@@ -669,7 +648,6 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         current=all_metrics,
         baseline_path=baseline_json,
         tol_frac=tol_frac,
-        write=write_baseline,
     )
 
 

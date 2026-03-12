@@ -1,59 +1,59 @@
 {
-  "constrasts_10": 0.16347333426482233,
-  "constrasts_10_noreg": 0.16365619567058345,
-  "constrasts_4": 0.16391410333470383,
-  "constrasts_4_noreg": 0.16397544535717817,
-  "contrast_abs_error_10": 0.16347333426482233,
-  "contrast_abs_error_10_noreg": 0.16365619567058345,
-  "contrast_abs_error_4": 0.16391410333470383,
-  "contrast_abs_error_4_noreg": 0.16397544535717817,
-  "contrasts_10": 0.16347333426482233,
-  "contrasts_10_noreg": 0.16365619567058345,
-  "contrasts_4": 0.16391410333470383,
-  "contrasts_4_noreg": 0.16397544535717817,
-  "embedding_squared_error_10": 9.92189551021122,
-  "embedding_squared_error_4": 3.972132790057415,
-  "mean_fsc": 0.08007883378849241,
-  "noise_correlation": 0.9941972823122252,
-  "noise_max_relative_error": 1.5997896194458008,
-  "noise_mean_relative_error": 0.33492064476013184,
-  "noise_median_relative_error": 0.32994136214256287,
-  "pcs_relative_variance_10": 0.46752470252815254,
-  "pcs_relative_variance_4": 0.4142158954629059,
+  "mean_fsc": 0.08008360749513996,
+  "variance_spatial_fsc": 0.017677827173093068,
+  "variance_fsc": 0.017677827173093068,
+  "variance_fourier_fsc": 0.04354289573691755,
+  "svd_relative_variance_4": 0.41425210716266253,
+  "svd_relative_variance_10": 0.4662891029424585,
+  "pcs_relative_variance_4": 0.41425210716266253,
+  "pcs_relative_variance_10": 0.4662891029424585,
+  "embedding_squared_error_4": 3.972147264803476,
+  "embedding_squared_error_10": 9.921802047543055,
+  "contrast_abs_error_4": 0.16556547350802703,
+  "contrasts_4": 0.16556547350802703,
+  "constrasts_4": 0.16556547350802703,
+  "contrast_abs_error_4_noreg": 0.1655809772712851,
+  "contrasts_4_noreg": 0.1655809772712851,
+  "constrasts_4_noreg": 0.1655809772712851,
+  "contrast_abs_error_10": 0.1652697434913296,
+  "contrasts_10": 0.1652697434913296,
+  "constrasts_10": 0.1652697434913296,
+  "contrast_abs_error_10_noreg": 0.16527291968751,
+  "contrasts_10_noreg": 0.16527291968751,
+  "constrasts_10_noreg": 0.16527291968751,
+  "state_0_locres_90pct": 47.38439178466797,
+  "state_0_locres_median": 11.568902969360352,
+  "state_0_ninety_pc_locres": 47.38439178466797,
+  "state_0_median_locres": 11.568902969360352,
+  "state_1_locres_90pct": 28.978158950805664,
+  "state_1_locres_median": 11.27916145324707,
+  "state_1_ninety_pc_locres": 28.978158950805664,
+  "state_1_median_locres": 11.27916145324707,
+  "noise_mean_relative_error": 0.3349438011646271,
+  "noise_median_relative_error": 0.32992321252822876,
+  "noise_max_relative_error": 1.6018894910812378,
+  "noise_correlation": 0.9941845716251713,
   "perf": {
-    "compute_state": {
-      "peak_cpu_memory_gb": 38.118,
-      "peak_gpu_memory_gb": 0.227,
-      "wall_seconds": 252.05
-    },
-    "dataset_generation": {
-      "peak_cpu_memory_gb": 6.703,
-      "peak_gpu_memory_gb": 19.85,
-      "wall_seconds": 179.82
-    },
     "gpu_name": "NVIDIA H100 80GB HBM3",
-    "metrics": {
-      "peak_cpu_memory_gb": 42.985,
-      "peak_gpu_memory_gb": 0.127,
-      "wall_seconds": 25.68
+    "dataset_generation": {
+      "wall_seconds": 181.52,
+      "peak_cpu_memory_gb": 6.705,
+      "peak_gpu_memory_gb": 19.85
     },
     "pipeline": {
-      "peak_cpu_memory_gb": 37.677,
-      "peak_gpu_memory_gb": 57.224,
-      "wall_seconds": 2250.99
+      "wall_seconds": 2404.56,
+      "peak_cpu_memory_gb": 36.391,
+      "peak_gpu_memory_gb": 57.224
+    },
+    "compute_state": {
+      "wall_seconds": 272.64,
+      "peak_cpu_memory_gb": 36.83,
+      "peak_gpu_memory_gb": 0.227
+    },
+    "metrics": {
+      "wall_seconds": 27.29,
+      "peak_cpu_memory_gb": 41.724,
+      "peak_gpu_memory_gb": 0.127
     }
-  },
-  "state_0_locres_90pct": 48.25730895996094,
-  "state_0_locres_median": 11.2080717086792,
-  "state_0_median_locres": 11.2080717086792,
-  "state_0_ninety_pc_locres": 48.25730895996094,
-  "state_1_locres_90pct": 27.867494583129883,
-  "state_1_locres_median": 11.038873672485352,
-  "state_1_median_locres": 11.038873672485352,
-  "state_1_ninety_pc_locres": 27.867494583129883,
-  "svd_relative_variance_10": 0.46752470252815254,
-  "svd_relative_variance_4": 0.4142158954629059,
-  "variance_fourier_fsc": 0.04354095990300564,
-  "variance_fsc": 0.017689509729304814,
-  "variance_spatial_fsc": 0.017689509729304814
+  }
 }
