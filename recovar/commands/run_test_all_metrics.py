@@ -939,7 +939,7 @@ def main():
         unique_doses, dose_counts = np.unique(sim_info['dose_indices'], return_counts=True)
         logger.info("\nDose index distribution:")
         for dose, count in zip(unique_doses, dose_counts):
-            logger.info("Dose index %s: %s images (%.1f%)", dose, count, count/len(sim_info['dose_indices'])*100)
+            logger.info("Dose index %s: %s images (%.1f%%)", dose, count, count/len(sim_info['dose_indices'])*100)
         
         # Save dose distribution to a file
         dose_dist_path = os.path.join(dataset_dir, 'dose_distribution.txt')
@@ -1087,9 +1087,9 @@ def main():
         # Estimated Fourier variance from eigenvectors: sum_i s_i |U_i(k)|^2
         u_fourier_all = np.asarray(pipeline_output.get('u'))
         s_all_var = np.asarray(pipeline_output.get('s'))
-        n_pcs_var = min(20, u_fourier_all.shape[1])
+        n_pcs_var = min(20, u_fourier_all.shape[0])
         est_fourier_variance = utils.estimate_variance(
-            u_fourier_all[:, :n_pcs_var].T, s_all_var[:n_pcs_var]
+            u_fourier_all[:n_pcs_var, :], s_all_var[:n_pcs_var]
         )
         ax, score_fourier = plot_utils.plot_fsc_new(
             gt_fourier_variance, est_fourier_variance,
