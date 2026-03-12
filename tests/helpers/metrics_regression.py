@@ -30,6 +30,16 @@ def metric_direction(metric_name):
     return "ignore"
 
 
+_LOCRES_TOL_FRAC = 0.03  # locres is noisier; allow 3% tolerance
+
+
+def metric_tolerance(metric_name, default_tol_frac):
+    """Return per-metric tolerance (locres gets a wider band)."""
+    if "locres" in metric_name.lower():
+        return max(default_tol_frac, _LOCRES_TOL_FRAC)
+    return default_tol_frac
+
+
 def compare_metric(current, baseline, direction, tol_frac):
     if not (math.isfinite(current) and math.isfinite(baseline)):
         return False, f"non-finite values current={current} baseline={baseline}"

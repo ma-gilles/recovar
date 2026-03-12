@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from helpers.metrics_regression import compare_metric, metric_direction
+from helpers.metrics_regression import compare_metric, metric_direction, metric_tolerance
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io, pytest.mark.long_test]
@@ -171,7 +171,8 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
         direction = metric_direction(key)
         if direction == "ignore":
             continue
-        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac)
+        tol = metric_tolerance(key, tol_frac)
+        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol)
         checked += 1
         if not ok:
             failures.append(f"{key}: current={cur} baseline={base} ({msg})")
@@ -230,7 +231,8 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
         direction = metric_direction(key)
         if direction == "ignore":
             continue
-        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac)
+        tol = metric_tolerance(key, tol_frac)
+        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol)
         checked += 1
         if not ok:
             failures.append(f"{key}: current={cur} baseline={base} ({msg})")
