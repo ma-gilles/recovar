@@ -2,7 +2,6 @@ import numpy as np
 import pytest
 
 pytest.importorskip("jax")
-pytest.importorskip("lineax")
 
 from recovar.core import cubic_interpolation as ci
 
@@ -13,8 +12,8 @@ def test_calculate_spline_coefficients_shape_preserved():
     x = np.linspace(0.0, 1.0, 8, dtype=np.float32)
     coeff = ci.calculate_spline_coefficients(x)
     coeff = np.asarray(coeff)
-    # Current solver constructs two extrapolated boundary coefficients in 1D.
-    assert coeff.shape == (x.shape[0] + 2,)
+    # Periodic solver: output shape == input shape (no boundary padding).
+    assert coeff.shape == x.shape
     assert np.all(np.isfinite(coeff))
 
 

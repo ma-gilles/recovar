@@ -105,12 +105,10 @@ def test_adjoint_slice_volume_half_image_matches_full_flat_input():
 
 
 def test_slice_volume_cubic_with_precomputed_spline_coefficients():
-    """Regression test: slice_volume with cubic must accept pre-computed spline
-    coefficients (shape N+2 per dim, not N), as produced by calculate_spline_coefficients.
+    """Periodic cubic: coefficients have same shape as volume (N^3, no padding).
 
-    The rfft refactoring commits broke this by adding volume.reshape(volume_shape) inside
-    map_coordinates_on_slices for order=3, which crashed when the volume was already the
-    (N+2)^3 coefficient array (size mismatch with the N^3 volume_shape).
+    slice_volume accepts raw volumes and precomputes coefficients internally.
+    For pre-computed coefficients, use slice_from_cubic_coefficients.
     """
     import recovar.core.cubic_interpolation as cubic_interpolation
 
@@ -123,19 +121,18 @@ def test_slice_volume_cubic_with_precomputed_spline_coefficients():
     real_vol = rng.standard_normal(volume_shape).astype(np.float32)
     vol_flat = np.asarray(fourier_transform_utils.get_dft3(real_vol)).reshape(-1)
 
-    # Pre-compute spline coefficients the same way the production code does
-    # (covariance_estimation.py, embedding.py, noise.py, simulator.py all do this).
-    # The result has shape (N+2, N+2, N+2), NOT (N, N, N).
+    # Pre-compute spline coefficients — periodic BC: shape == volume_shape
     coeffs = np.asarray(
-        cubic_interpolation.calculate_spline_coefficients(vol_flat.reshape(volume_shape))
+        cubic_interpolation.calculate_spline_coefficients(
+            jnp.asarray(vol_flat).reshape(volume_shape)
+        )
     )
     coeff_shape = tuple(coeffs.shape)
-    expected_coeff_shape = tuple(s + 2 for s in volume_shape)
-    assert coeff_shape == expected_coeff_shape, (
-        f"calculate_spline_coefficients returned shape {coeff_shape}, expected {expected_coeff_shape}"
+    assert coeff_shape == volume_shape, (
+        f"calculate_spline_coefficients returned shape {coeff_shape}, expected {volume_shape}"
     )
 
-    # This call must NOT crash with a reshape error.
+    # slice_volume with pre-computed coefficients must work
     slices = np.asarray(
         core_slicing.slice_volume(
             coeffs, rots, image_shape=image_shape, volume_shape=volume_shape, disc_type="cubic"
@@ -144,14 +141,25 @@ def test_slice_volume_cubic_with_precomputed_spline_coefficients():
     n_pixels = int(np.prod(image_shape))
     assert slices.shape == (1, n_pixels)
 
+    # slice_from_cubic_coefficients with pre-computed coefficients must give same result
+    slices_precomp = np.asarray(
+        core_slicing.slice_from_cubic_coefficients(
+            coeffs, rots, image_shape, volume_shape
+        )
+    )
+    np.testing.assert_allclose(slices_precomp, slices, atol=1e-5, rtol=1e-5)
+
 
 def test_slice_volume_cubic_flat_and_precomputed_agree():
-    """slice_volume with cubic and pre-computed coefficients must give the same
-    result as calling map_coordinates directly with those coefficients.
-    The slice values should be finite and non-trivially zero for a non-zero volume.
+    """slice_volume with raw volume must give same result as precomputed path.
+
+    The periodic cubic pipeline:
+    1. slice_volume(raw_vol, ...) → precomputes coefficients internally
+    2. precompute_cubic_coefficients + slice_from_cubic_coefficients → explicit path
+
+    Both must agree.
     """
     import recovar.core.cubic_interpolation as cubic_interpolation
-    from recovar.core.geometry import rotations_to_grid_point_coords
 
     rng = np.random.default_rng(43)
     image_shape = (4, 8)
@@ -163,31 +171,24 @@ def test_slice_volume_cubic_flat_and_precomputed_agree():
     real_vol = rng.standard_normal(volume_shape).astype(np.float32)
     vol_ft = np.asarray(fourier_transform_utils.get_dft3(real_vol)).reshape(-1)
 
-    # Pre-compute coefficients as the production callers do
-    coeffs = np.asarray(
-        cubic_interpolation.calculate_spline_coefficients(
-            np.asarray(vol_ft).reshape(volume_shape)
-        )
-    )
+    # Precompute coefficients (callers always do this for cubic)
+    coeffs = core_slicing.precompute_cubic_coefficients(vol_ft, volume_shape)
 
-    # Forward slice through the public API (must accept N+2 coefficients)
+    # Forward slice through the public API (pre-computed coefficients)
     slices_api = np.asarray(
         core_slicing.slice_volume(
             coeffs, rots, image_shape=image_shape, volume_shape=volume_shape, disc_type="cubic"
         )
     )
 
-    # Cross-check: manually call the interpolation with the same coordinates
-    coords, coords_og_shape = rotations_to_grid_point_coords(
-        np.asarray(rots), image_shape, volume_shape
-    )
-    slices_direct = np.asarray(
-        cubic_interpolation.map_coordinates_with_cubic_spline(
-            np.asarray(coeffs), coords, mode="fill", cval=0.0
-        ).reshape(coords_og_shape[:-1])
+    # Cross-check: explicit precompute + slicer must agree
+    slices_precomp = np.asarray(
+        core_slicing.slice_from_cubic_coefficients(
+            coeffs, rots, image_shape, volume_shape
+        )
     )
 
-    np.testing.assert_allclose(slices_api, slices_direct, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(slices_api, slices_precomp, atol=1e-5, rtol=1e-5)
     # Ensure the slices are not all zero (non-trivial check)
     assert np.any(np.abs(slices_api) > 1e-6), "Cubic slices are unexpectedly all zero"
 
@@ -217,11 +218,7 @@ def test_adjoint_slice_volume_cubic_adjointness():
     # Build random volume (flat) and compute spline coefficients
     real_vol = rng.standard_normal(volume_shape).astype(np.float32)
     vol_flat = np.asarray(fourier_transform_utils.get_dft3(real_vol)).reshape(-1)
-    coeffs = np.asarray(
-        cubic_interpolation.calculate_spline_coefficients(
-            np.asarray(vol_flat).reshape(volume_shape)
-        )
-    )
+    coeffs = core_slicing.precompute_cubic_coefficients(vol_flat, volume_shape)
 
     # Random images w
     real_imgs = rng.standard_normal((n_images,) + image_shape).astype(np.float32)
@@ -460,14 +457,14 @@ def test_batch_slice_volume_jax(monkeypatch):
 
 
 def test_precompute_cubic_coefficients_shape():
-    """precompute_cubic_coefficients must return full coefficient shape (N0+2, N1+2, N2+2)."""
+    """precompute_cubic_coefficients must return periodic coefficient shape (N0, N1, N2)."""
     rng = np.random.default_rng(600)
     for volume_shape in [(8, 8, 8), (6, 8, 10), (7, 9, 11)]:
         N0, N1, N2 = volume_shape
         real_vol = rng.standard_normal(volume_shape).astype(np.float32)
         vol_ft = np.asarray(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
         coeffs = core_slicing.precompute_cubic_coefficients(vol_ft, volume_shape)
-        expected = (N0 + 2, N1 + 2, N2 + 2)
+        expected = (N0, N1, N2)
         assert coeffs.shape == expected, (
             f"volume_shape={volume_shape}: got {coeffs.shape}, expected {expected}"
         )
