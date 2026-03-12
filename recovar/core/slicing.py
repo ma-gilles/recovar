@@ -83,6 +83,9 @@ def _use_cuda(order):
     """Return True if CUDA should be used.  Error if on GPU but CUDA unavailable."""
     if order not in (0, 1, 3) or not _on_gpu():
         return False
+    import os
+    if os.environ.get("RECOVAR_DISABLE_CUDA", "0") == "1":
+        return False
     from recovar.cuda_backproject import cuda_available
     if not cuda_available():
         raise RuntimeError(
@@ -341,6 +344,37 @@ def _jax_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_sha
             return _jax_slice(coeffs, rotation_matrices, image_shape, volume_shape, order)
     _, u = vjp(f, jnp.zeros(vol_size, dtype=slices.dtype))
     return u(slices)[0]
+
+
+def _jax_adjoint_slice_from_coefficients(slices, rotation_matrices, image_shape, volume_shape,
+                                          half_volume=False, half_image=False, max_r=None):
+    """VJP of _jax_slice w.r.t. already-computed spline coefficients.
+
+    Unlike _jax_adjoint_slice_volume (which differentiates through coefficient
+    computation), this computes the gradient w.r.t. the coefficients directly.
+    Used by the CUDA VJP backward where the forward input is coefficients.
+    """
+    if half_image:
+        slices = ftu.half_image_to_full_image(slices, image_shape)
+    slices = _flatten_full_image_slices(slices, image_shape)
+
+    if half_volume:
+        # Input was half-volume coefficients; differentiate through
+        # half→full expansion + slice.
+        half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+        half_size = int(np.prod(half_shape))
+        def f(half_coeffs_flat):
+            full_coeffs = ftu.half_volume_to_full_volume(
+                half_coeffs_flat.reshape(half_shape), volume_shape)
+            return _jax_slice(full_coeffs, rotation_matrices, image_shape, volume_shape, 3)
+        _, u = vjp(f, jnp.zeros(half_size, dtype=slices.dtype))
+        return u(slices)[0].reshape(half_shape)
+    else:
+        vol_size = int(np.prod(volume_shape))
+        def f(coeffs_flat):
+            return _jax_slice(coeffs_flat, rotation_matrices, image_shape, volume_shape, 3)
+        _, u = vjp(f, jnp.zeros(vol_size, dtype=slices.dtype))
+        return u(slices)[0].reshape(volume_shape)
 
 
 def batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, disc_type,
