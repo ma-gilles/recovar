@@ -54,7 +54,7 @@ def _install_main_runtime_stubs(monkeypatch, tmp_path, *, mean_fsc=0.5, variance
         name = kwargs.get("name", "")
         if name == "Mean FSC":
             return None, float(mean_fsc)
-        if name == "Variance FSC":
+        if name in ("Variance FSC", "Variance Spatial FSC"):
             return None, float(variance_fsc)
         return None, 0.0
 

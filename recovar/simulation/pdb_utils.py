@@ -43,6 +43,7 @@ class AtomGroup:
     coords: np.ndarray = field(default_factory=lambda: np.empty((0, 3), dtype=np.float64))
     names: np.ndarray = field(default_factory=lambda: np.empty(0, dtype="<U6"))
     elements: np.ndarray = field(default_factory=lambda: np.empty(0, dtype="<U6"))
+    chain_ids: np.ndarray = field(default_factory=lambda: np.empty(0, dtype="<U4"))
 
     # ── ProDy-compatible accessors ────────────────────────────────────────
 
@@ -64,11 +65,19 @@ class AtomGroup:
     def setElements(self, elements: np.ndarray):
         self.elements = np.asarray(elements)
 
+    def getChids(self) -> np.ndarray:
+        return self.chain_ids
+
+    def setChids(self, chain_ids: np.ndarray):
+        self.chain_ids = np.asarray(chain_ids, dtype="<U4")
+
     def getData(self, key: str) -> np.ndarray:
         if key == "element":
             return self.elements
         if key == "name":
             return self.names
+        if key == "chain":
+            return self.chain_ids
         raise KeyError(f"Unknown data key: {key!r}")
 
     def numAtoms(self) -> int:
@@ -76,13 +85,14 @@ class AtomGroup:
 
 
 # ---------------------------------------------------------------------------
-# PDB file parser
+# PDB / mmCIF file parser
 # ---------------------------------------------------------------------------
 
 def parse_pdb(path_or_id: str) -> AtomGroup:
-    """Parse a PDB file or fetch by 4-character PDB ID from RCSB.
+    """Parse a PDB or mmCIF file, or fetch by 4-character PDB ID from RCSB.
 
-    If *path_or_id* is an existing file path, reads it directly.
+    If *path_or_id* is an existing file path, reads it directly (detecting
+    format from the extension: ``.cif`` for mmCIF, otherwise PDB).
     Otherwise, if it looks like a PDB ID (4 alphanumeric characters),
     fetches it from RCSB and parses the result.
 
@@ -93,6 +103,8 @@ def parse_pdb(path_or_id: str) -> AtomGroup:
         AtomGroup with coordinates and element types.
     """
     if os.path.isfile(path_or_id):
+        if path_or_id.lower().endswith('.cif'):
+            return _parse_cif_file(path_or_id)
         return _parse_pdb_file(path_or_id)
 
     # Try as PDB ID
@@ -111,6 +123,7 @@ def _parse_pdb_file(filepath: str) -> AtomGroup:
     coords_list = []
     names_list = []
     elements_list = []
+    chain_ids_list = []
 
     with open(filepath) as f:
         for line in f:
@@ -126,6 +139,10 @@ def _parse_pdb_file(filepath: str) -> AtomGroup:
 
             atom_name = line[12:16].strip()
             names_list.append(atom_name)
+
+            # Chain ID: column 22 (0-indexed: position 21)
+            chain_id = line[21] if len(line) > 21 else " "
+            chain_ids_list.append(chain_id.strip())
 
             # Element symbol: columns 77-78 (may be blank in old files)
             element = line[76:78].strip() if len(line) > 76 else ""
@@ -143,6 +160,99 @@ def _parse_pdb_file(filepath: str) -> AtomGroup:
         coords=np.array(coords_list, dtype=np.float64),
         names=np.array(names_list, dtype="<U6"),
         elements=np.array(elements_list, dtype="<U6"),
+        chain_ids=np.array(chain_ids_list, dtype="<U4"),
+    )
+
+
+def _parse_cif_file(filepath: str) -> AtomGroup:
+    """Parse ATOM/HETATM records from an mmCIF file.
+
+    Reads the ``_atom_site`` loop and extracts coordinates, element types,
+    atom names, and author chain IDs (``auth_asym_id``).  Only the first
+    model (``pdbx_PDB_model_num == '1'``) is kept when multiple models exist.
+    """
+    # 1. Read _atom_site column names in order
+    col_names = []
+    in_atom_site_header = False
+    atom_lines = []
+    with open(filepath) as f:
+        for line in f:
+            stripped = line.strip()
+            # Detect the start of the _atom_site loop
+            if stripped.startswith("_atom_site."):
+                in_atom_site_header = True
+                col_names.append(stripped.split(".")[1])
+                continue
+            if in_atom_site_header:
+                if stripped.startswith("_atom_site."):
+                    col_names.append(stripped.split(".")[1])
+                    continue
+                # No longer reading column headers
+                in_atom_site_header = False
+            # After the header, collect data lines that start with ATOM/HETATM
+            if col_names and (stripped.startswith("ATOM") or stripped.startswith("HETATM")):
+                atom_lines.append(stripped)
+            # Stop at the next loop_ or data_ block after we started collecting
+            elif atom_lines and (stripped.startswith("loop_") or stripped.startswith("data_") or stripped == "#"):
+                break
+
+    if not col_names or not atom_lines:
+        raise ValueError(f"No _atom_site ATOM/HETATM records found in {filepath}")
+
+    # 2. Build column-name → index mapping
+    col_idx = {name: i for i, name in enumerate(col_names)}
+    _required = {"Cartn_x", "Cartn_y", "Cartn_z", "type_symbol"}
+    missing = _required - set(col_idx)
+    if missing:
+        raise ValueError(f"mmCIF file missing required _atom_site fields: {missing}")
+
+    ix = col_idx["Cartn_x"]
+    iy = col_idx["Cartn_y"]
+    iz = col_idx["Cartn_z"]
+    i_elem = col_idx["type_symbol"]
+    i_name = col_idx.get("label_atom_id")  # may be None
+    i_chain = col_idx.get("auth_asym_id")  # author chain ID
+    i_model = col_idx.get("pdbx_PDB_model_num")
+
+    coords_list = []
+    names_list = []
+    elements_list = []
+    chain_ids_list = []
+
+    for line in atom_lines:
+        fields = line.split()
+        if len(fields) < len(col_names):
+            continue
+
+        # Only keep model 1 if the column is present
+        if i_model is not None and fields[i_model] != "1":
+            continue
+
+        x = float(fields[ix])
+        y = float(fields[iy])
+        z = float(fields[iz])
+        coords_list.append([x, y, z])
+
+        elem = fields[i_elem].strip().strip('"').strip("'")
+        elements_list.append(elem.upper())
+
+        atom_name = fields[i_name].strip().strip('"').strip("'") if i_name is not None else elem
+        names_list.append(atom_name)
+
+        chain_id = fields[i_chain].strip().strip('"').strip("'") if i_chain is not None else " "
+        chain_ids_list.append(chain_id)
+
+    if not coords_list:
+        raise ValueError(f"No model-1 ATOM/HETATM records found in {filepath}")
+
+    logger.info("Parsed mmCIF %s: %d atoms, %d unique chains",
+                filepath, len(coords_list), len(set(chain_ids_list)))
+
+    return AtomGroup(
+        coords=np.array(coords_list, dtype=np.float64),
+        names=np.array(names_list, dtype="<U6"),
+        elements=np.array(elements_list, dtype="<U6"),
+        chain_ids=np.array(chain_ids_list, dtype="<U4"),
     )
 
 
