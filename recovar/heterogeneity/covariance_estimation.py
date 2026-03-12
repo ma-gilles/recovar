@@ -758,7 +758,7 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
 
     # Batch sizes
     image_batch_size = utils.safe_batch_size(
-        utils.get_image_batch_size(cryo.grid_size, gpu_memory) // (2 if disc_type == 'cubic' else 1))
+        utils.get_image_batch_size(cryo.grid_size, gpu_memory))
     column_batch_size = utils.get_column_batch_size(cryo.grid_size, gpu_memory)
 
     n_picked = picked_frequencies.size
