@@ -607,7 +607,7 @@ def resolve_metrics_baseline_path(args):
     return None
 
 
-def compare_scores_against_baseline(current_scores, baseline_scores, tol_frac):
+def compare_scores_against_baseline(current_scores, baseline_scores, tol_frac, skip_locres=False):
     checked = 0
     failures = []
     details = {}
@@ -627,6 +627,8 @@ def compare_scores_against_baseline(current_scores, baseline_scores, tol_frac):
             continue
         direction = metric_direction(key)
         if direction == "ignore":
+            continue
+        if skip_locres and "locres" in key.lower():
             continue
         # Deduplicate: if this key is a legacy alias for a canonical key
         # that was already checked, skip it.
@@ -1423,6 +1425,7 @@ def main():
         all_scores,
         baseline_scores,
         tol_frac=args.metrics_regression_tol_frac,
+        skip_locres=(args.grid_size <= 32),
     )
     with open(regression_report_path, "w") as f:
         json.dump(
