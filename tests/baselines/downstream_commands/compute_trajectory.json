@@ -1,0 +1,11 @@
+{
+  "traj_vol_0_std": 0.09892193973064423,
+  "traj_vol_1_std": 0.10063201934099197,
+  "traj_vol_2_std": 0.10135133564472198,
+  "traj_vol_3_std": 0.1022276058793068,
+  "traj_consecutive_diff_0": 6.232363224029541,
+  "traj_consecutive_diff_1": 5.039170742034912,
+  "traj_consecutive_diff_2": 5.352662563323975,
+  "traj_mean_consecutive_diff": 5.541398843129476,
+  "traj_end_to_end_diff": 8.36269760131836
+}

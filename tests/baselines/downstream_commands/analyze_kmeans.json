@@ -1,0 +1,8 @@
+{
+  "n_clusters": 5,
+  "centers_mean_norm": 13437.46875,
+  "centers_std_norm": 5021.36572265625,
+  "label_coverage": 1.0,
+  "n_unique_labels": 5,
+  "centers_max_pairwise_dist": 30429.263671875
+}
