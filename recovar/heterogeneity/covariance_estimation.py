@@ -919,14 +919,6 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     rhs = jnp.zeros((n_basis, n_basis), dtype=experiment_dataset.dtype_real)
     logger.info("batch size in compute_projected_covariance %s", batch_size)
 
-    # Zero volume Nyquist planes before any forward projection.
-    # For even N, the -N/2 frequency has no symmetric partner, causing
-    # anti-Hermitian interpolation artifacts at high |k|.
-    vol_nyq_mask = linalg.nyquist_mask(experiment_dataset.volume_shape,
-                                       dtype=experiment_dataset.dtype_real)
-    mean_estimate = mean_estimate.ravel() * vol_nyq_mask
-    basis = basis * vol_nyq_mask[None, :]  # basis is (n_pcs, vol_size) after .T
-
     if disc_type == 'cubic':
         mean_estimate = cubic_interpolation.calculate_spline_coefficients(
             mean_estimate.reshape(experiment_dataset.volume_shape))
@@ -1085,17 +1077,6 @@ def reduce_covariance_inner(
 
     if do_mask_images:
         AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, config.image_shape, half_images=_use_half_proj)
-
-    # --- Nyquist zeroing ---
-    # For even N, the -N/2 frequency has no symmetric partner in the DFT grid,
-    # so interpolated slices are not Hermitian there.  Zeroing these frequencies
-    # in all arrays ensures consistent inner products between full and half paths
-    # (costs ~2% of pixels for 128×128).
-    nyq_mask = linalg.nyquist_mask(config.image_shape, half=_use_half_proj,
-                                   dtype=batch.real.dtype)
-    batch = batch * nyq_mask
-    projected_mean = projected_mean * nyq_mask
-    AUs = AUs * nyq_mask[None, None, :]
 
     # --- Half-spectrum weighting ---
     # batch, projected_mean, and AUs are already in half-image format when

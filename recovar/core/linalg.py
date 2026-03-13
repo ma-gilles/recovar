@@ -253,57 +253,6 @@ def half_spectrum_last_axis_weights(last_axis_size, dtype=jnp.float32):
             w = w.at[1:].set(2)
     return w
 
-def nyquist_mask(shape, half=False, dtype=jnp.float32):
-    """Binary mask that zeros Nyquist frequencies (-N/2) in a spectrum.
-
-    For even-sized axes, the Nyquist frequency has no symmetric partner,
-    breaking Hermitian symmetry of interpolated slices.  Zeroing these
-    frequencies restores exact symmetry for interior pixels.
-
-    Works for 2-D images (``shape = (H, W)``) and 3-D volumes
-    (``shape = (N0, N1, N2)``).
-
-    Args:
-        shape: ``(H, W)`` or ``(N0, N1, N2)`` tuple.
-        half: If True, return the mask for the packed rfft layout (last axis
-              has size ``N//2+1``).  If False, return the full centered-FFT mask.
-        dtype: dtype for the returned array (default float32).
-
-    Returns:
-        Flattened JAX array with values in ``{0, 1}``.
-    """
-    shape = tuple(int(s) for s in shape)
-    ndim = len(shape)
-
-    if half:
-        out_shape = shape[:-1] + (shape[-1] // 2 + 1,)
-    else:
-        out_shape = shape
-
-    mask = jnp.ones(out_shape, dtype=dtype)
-    for ax in range(ndim):
-        if shape[ax] % 2 == 0:
-            if half and ax == ndim - 1:
-                # Last axis in half format: Nyquist is the last element
-                idx = [slice(None)] * ndim
-                idx[ax] = -1
-                mask = mask.at[tuple(idx)].set(0)
-            else:
-                # Centered FFT: Nyquist is index 0
-                idx = [slice(None)] * ndim
-                idx[ax] = 0
-                mask = mask.at[tuple(idx)].set(0)
-    return mask.ravel()
-
-
-def rfft2_nyquist_mask(image_shape, dtype=jnp.float32):
-    """Binary mask that zeros Nyquist frequencies in a 2-D half-spectrum.
-
-    Convenience wrapper around :func:`nyquist_mask` for 2-D half-images.
-    """
-    return nyquist_mask(image_shape, half=True, dtype=dtype)
-
-
 ## TODO this is also reimplemented elsewher eI believe
 def rfft2_hermitian_weights(image_shape, dtype=jnp.float32):
     """Precompute ``sqrt(w)`` weights for 2-D half-spectrum (rfft2) inner products.
