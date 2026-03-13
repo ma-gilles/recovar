@@ -584,8 +584,8 @@ def test_cubic_half_coefficients_slice_vjp_finite():
     H, W = image_shape
     g = jnp.ones((n_images, H * W), dtype=jnp.complex64)
 
-    f = lambda c: core_slicing._slice_from_cubic_coeffs_jax(
-        c, rots, image_shape, volume_shape
+    f = lambda c: core_slicing.slice_from_cubic_coefficients(
+        c, rots, image_shape, volume_shape, half_image=False
     )
     _, vjp_fn = jax.vjp(f, jnp.asarray(coeffs))
     grad = np.asarray(vjp_fn(g)[0])
