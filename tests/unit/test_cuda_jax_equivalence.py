@@ -349,12 +349,14 @@ def test_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkeypatch):
         )
         vol = vol_full
 
-    # GPU path (CUDA)
+    # GPU path (CUDA) — use max_r=None so CUDA vs JAX comparison isn't
+    # affected by FP boundary differences between pre-rotation and
+    # post-rotation clipping checks.
     with jax.default_device(gpu_device):
         gpu_result = core_slicing.slice_volume(
             jax.device_put(vol), jax.device_put(rots),
             image_shape, volume_shape, "linear_interp",
-            half_volume=half_vol, half_image=half_img,
+            half_volume=half_vol, half_image=half_img, max_r=None,
         )
 
     # CPU path (force JAX by monkeypatching _on_gpu)
@@ -365,7 +367,7 @@ def test_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkeypatch):
     cpu_result = core_slicing.slice_volume(
         vol, rots,
         image_shape, volume_shape, "linear_interp",
-        half_volume=half_vol, half_image=half_img,
+        half_volume=half_vol, half_image=half_img, max_r=None,
     )
 
     np.testing.assert_allclose(
@@ -400,12 +402,12 @@ def test_adjoint_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkey
     else:
         imgs = full_imgs
 
-    # GPU path (CUDA)
+    # GPU path (CUDA) — use max_r=None to avoid FP boundary clipping differences.
     with jax.default_device(gpu_device):
         gpu_result = core_slicing.adjoint_slice_volume(
             jax.device_put(imgs), jax.device_put(rots),
             image_shape, volume_shape, "linear_interp",
-            half_image=half_img, half_volume=half_vol,
+            half_image=half_img, half_volume=half_vol, max_r=None,
         )
 
     # CPU path (force JAX)
@@ -415,7 +417,7 @@ def test_adjoint_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkey
     cpu_result = core_slicing.adjoint_slice_volume(
         imgs, rots,
         image_shape, volume_shape, "linear_interp",
-        half_image=half_img, half_volume=half_vol,
+        half_image=half_img, half_volume=half_vol, max_r=None,
     )
 
     np.testing.assert_allclose(

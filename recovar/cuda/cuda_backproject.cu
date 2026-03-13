@@ -311,7 +311,8 @@ backproject_kernel(
     int n_pixels, int image_h, int image_w,
     int N0, int N1, int N2_eff,
     T c0, T c1, T c2,
-    int upsampling, int full_image_w)
+    int upsampling, int full_image_w,
+    T max_r2)
 {
     __shared__ T R[6];
 
@@ -337,6 +338,10 @@ backproject_kernel(
     } else {
         k1 = (T)(k1_idx - image_w / 2) * upsampling;  /* full: centered */
     }
+
+    /* Pre-rotation disk check: rotation preserves ||k||, so
+     * k0² + k1² == rk0² + rk1² + rk2².  Skip before loading R. */
+    if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) return;
 
     /* Rotate  (cz=0  →  only 6 elements) */
     const T rk0 = k0 * R[0] + k1 * R[3];
@@ -514,7 +519,8 @@ project_kernel(
     int n_pixels, int image_h, int image_w,
     int N0, int N1, int N2_eff,
     T c0, T c1, T c2,
-    int upsampling, int full_image_w)
+    int upsampling, int full_image_w,
+    T max_r2)
 {
     __shared__ T R[6];
 
@@ -538,16 +544,22 @@ project_kernel(
         k1 = (T)(k1_idx - image_w / 2) * upsampling;
     }
 
+    using V2 = vec2_t<T>;
+    V2* img2 = reinterpret_cast<V2*>(img);
+    const int img_off = img_idx * n_pixels + pix;
+
+    /* Pre-rotation disk check: rotation preserves ||k||. */
+    if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) {
+        img2[img_off] = make_v2((T)0, (T)0);
+        return;
+    }
+
     T rk0 = k0 * R[0] + k1 * R[3];
     T rk1 = k0 * R[1] + k1 * R[4];
     T rk2 = k0 * R[2] + k1 * R[5];
 
     const int stride1 = N2_eff;
     const int stride0 = N1 * N2_eff;
-
-    using V2 = vec2_t<T>;
-    V2* img2 = reinterpret_cast<V2*>(img);
-    const int img_off = img_idx * n_pixels + pix;
 
     /* ── HALF_VOL: per-neighbor Hermitian read from half-volume ──────
      *
@@ -832,19 +844,20 @@ cudaError_t launch_backproject(
     int64_t ih, int64_t iw,
     int64_t N0, int64_t N1, int64_t N2,
     int64_t ups, int64_t order, int64_t half_vol, int64_t half_img,
-    int64_t full_iw, int64_t real_data = 0)
+    int64_t full_iw, int64_t real_data = 0, int64_t max_r2_x4 = -1)
 {
     const int N2_eff = half_vol ? (int)(N2 / 2 + 1) : (int)N2;
     const T c0 = (T)(N0 / 2);
     const T c1 = (T)(N1 / 2);
     const T c2 = (T)(N2 / 2);
+    const T max_r2 = max_r2_x4 < 0 ? (T)-1 : (T)max_r2_x4 / (T)4;
     dim3 grid((int)n_images, ((int)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
     dim3 block(BLOCK_SIZE);
 
     #define BP(O, HV, HI, RD) \
         backproject_kernel<T, O, HV, HI, RD><<<grid, block, 0, s>>>( \
             vol, img, rot, (int)n_pixels, (int)ih, (int)iw, \
-            (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw)
+            (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, max_r2)
 
     int key = (real_data ? 8 : 0) | (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
     switch (key) {
@@ -878,19 +891,20 @@ cudaError_t launch_project(
     int64_t ih, int64_t iw,
     int64_t N0, int64_t N1, int64_t N2,
     int64_t ups, int64_t order, int64_t half_vol, int64_t half_img,
-    int64_t full_iw)
+    int64_t full_iw, int64_t max_r2_x4 = -1)
 {
     const int N2_eff = half_vol ? (int)(N2 / 2 + 1) : (int)N2;
     const T c0 = (T)(N0 / 2);
     const T c1 = (T)(N1 / 2);
     const T c2 = (T)(N2 / 2);
+    const T max_r2 = max_r2_x4 < 0 ? (T)-1 : (T)max_r2_x4 / (T)4;
     dim3 grid((int)n_images, ((int)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
     dim3 block(BLOCK_SIZE);
 
     #define PJ(O, HV, HI) \
         project_kernel<T, O, HV, HI><<<grid, block, 0, s>>>( \
             vol, img, rot, (int)n_pixels, (int)ih, (int)iw, \
-            (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw)
+            (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, max_r2)
 
     int key = (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
     switch (key) {
@@ -942,7 +956,8 @@ batch_backproject_kernel(
     int upsampling, int full_image_w,
     int vol_stride,    /* N0*N1*N2_eff (complex elements for complex, real for REAL_DATA) */
     int n_images,
-    int batch_size)
+    int batch_size,
+    T max_r2)
 {
     __shared__ T R[6];
 
@@ -965,6 +980,9 @@ batch_backproject_kernel(
     } else {
         k1 = (T)(k1_idx - image_w / 2) * upsampling;
     }
+
+    /* Pre-rotation disk check: rotation preserves ||k||. */
+    if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) return;
 
     const T rk0 = k0 * R[0] + k1 * R[3];
     const T rk1 = k0 * R[1] + k1 * R[4];
@@ -1104,7 +1122,8 @@ batch_project_kernel(
     int upsampling, int full_image_w,
     int vol_stride,
     int n_images,
-    int batch_size)
+    int batch_size,
+    T max_r2)
 {
     __shared__ T R[6];
 
@@ -1128,14 +1147,24 @@ batch_project_kernel(
         k1 = (T)(k1_idx - image_w / 2) * upsampling;
     }
 
+    using V2 = vec2_t<T>;
+    const int img_stride = n_images * n_pixels;
+
+    /* Pre-rotation disk check: rotation preserves ||k||. */
+    if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) {
+        for (int b = 0; b < batch_size; b++) {
+            V2* out = reinterpret_cast<V2*>(imgs) + b * img_stride + img_idx * n_pixels;
+            out[pix] = make_v2((T)0, (T)0);
+        }
+        return;
+    }
+
     T rk0 = k0 * R[0] + k1 * R[3];
     T rk1 = k0 * R[1] + k1 * R[4];
     T rk2 = k0 * R[2] + k1 * R[5];
 
     const int stride1 = N2_eff;
     const int stride0 = N1 * N2_eff;
-    const int img_stride = n_images * n_pixels;
-    using V2 = vec2_t<T>;
 
     /* ── HALF_VOL: per-neighbor Hermitian read (precompute once, reuse) ── */
     if (HALF_VOL) {
@@ -1422,13 +1451,14 @@ cudaError_t launch_batch_backproject(
     int64_t ih, int64_t iw,
     int64_t N0, int64_t N1, int64_t N2,
     int64_t ups, int64_t order, int64_t half_vol, int64_t half_img,
-    int64_t full_iw, int64_t real_data = 0)
+    int64_t full_iw, int64_t real_data = 0, int64_t max_r2_x4 = -1)
 {
     const int N2_eff = half_vol ? (int)(N2 / 2 + 1) : (int)N2;
     const int vol_stride = (int)N0 * (int)N1 * N2_eff;
     const T c0 = (T)(N0 / 2);
     const T c1 = (T)(N1 / 2);
     const T c2 = (T)(N2 / 2);
+    const T max_r2 = max_r2_x4 < 0 ? (T)-1 : (T)max_r2_x4 / (T)4;
     dim3 grid((int)n_images, ((int)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
     dim3 block(BLOCK_SIZE);
 
@@ -1436,7 +1466,7 @@ cudaError_t launch_batch_backproject(
         batch_backproject_kernel<T, O, HV, HI, RD><<<grid, block, 0, s>>>( \
             vols, imgs, rot, (int)n_pixels, (int)ih, (int)iw, \
             (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, \
-            vol_stride, (int)n_images, (int)batch_size)
+            vol_stride, (int)n_images, (int)batch_size, max_r2)
 
     int key = (real_data ? 8 : 0) | (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
     switch (key) {
@@ -1470,13 +1500,14 @@ cudaError_t launch_batch_project(
     int64_t ih, int64_t iw,
     int64_t N0, int64_t N1, int64_t N2,
     int64_t ups, int64_t order, int64_t half_vol, int64_t half_img,
-    int64_t full_iw)
+    int64_t full_iw, int64_t max_r2_x4 = -1)
 {
     const int N2_eff = half_vol ? (int)(N2 / 2 + 1) : (int)N2;
     const int vol_stride = (int)N0 * (int)N1 * N2_eff;
     const T c0 = (T)(N0 / 2);
     const T c1 = (T)(N1 / 2);
     const T c2 = (T)(N2 / 2);
+    const T max_r2 = max_r2_x4 < 0 ? (T)-1 : (T)max_r2_x4 / (T)4;
     dim3 grid((int)n_images, ((int)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
     dim3 block(BLOCK_SIZE);
 
@@ -1484,7 +1515,7 @@ cudaError_t launch_batch_project(
         batch_project_kernel<T, O, HV, HI><<<grid, block, 0, s>>>( \
             vols, imgs, rot, (int)n_pixels, (int)ih, (int)iw, \
             (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, \
-            vol_stride, (int)n_images, (int)batch_size)
+            vol_stride, (int)n_images, (int)batch_size, max_r2)
 
     int key = (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
     switch (key) {
@@ -1512,6 +1543,7 @@ ffi::Error BackprojectImpl(
     int64_t N0, int64_t N1, int64_t N2,
     int64_t upsampling, int64_t order,
     int64_t half_volume, int64_t half_image, int64_t full_image_w,
+    int64_t max_r2_x4,
     ffi::AnyBuffer img,
     ffi::AnyBuffer rot,
     ffi::AnyBuffer /*vol_in*/,
@@ -1529,25 +1561,25 @@ ffi::Error BackprojectImpl(
         err = launch_backproject<float>(
             stream, (float*)vol_ptr, (const float*)img_ptr, (const float*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w, /*real_data=*/0);
+            order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4);
         break;
     case ffi::DataType::C128:
         err = launch_backproject<double>(
             stream, (double*)vol_ptr, (const double*)img_ptr, (const double*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w, /*real_data=*/0);
+            order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4);
         break;
     case ffi::DataType::F32:
         err = launch_backproject<float>(
             stream, (float*)vol_ptr, (const float*)img_ptr, (const float*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w, /*real_data=*/1);
+            order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4);
         break;
     case ffi::DataType::F64:
         err = launch_backproject<double>(
             stream, (double*)vol_ptr, (const double*)img_ptr, (const double*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w, /*real_data=*/1);
+            order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4);
         break;
     default:
         return ffi::Error::InvalidArgument("backproject: images must be C64, C128, F32, or F64");
@@ -1571,6 +1603,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("half_volume")
         .Attr<int64_t>("half_image")
         .Attr<int64_t>("full_image_w")
+        .Attr<int64_t>("max_r2_x4")
         .Arg<ffi::AnyBuffer>()           /* img    */
         .Arg<ffi::AnyBuffer>()           /* rot    */
         .Arg<ffi::AnyBuffer>()           /* vol_in */
@@ -1583,6 +1616,7 @@ ffi::Error ProjectImpl(
     int64_t N0, int64_t N1, int64_t N2,
     int64_t upsampling, int64_t order,
     int64_t half_volume, int64_t half_image, int64_t full_image_w,
+    int64_t max_r2_x4,
     ffi::AnyBuffer vol,
     ffi::AnyBuffer rot,
     ffi::Result<ffi::AnyBuffer> img_out)
@@ -1599,13 +1633,13 @@ ffi::Error ProjectImpl(
         err = launch_project<float>(
             stream, (const float*)vol_ptr, (float*)img_ptr, (const float*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w);
+            order, half_volume, half_image, full_image_w, max_r2_x4);
         break;
     case ffi::DataType::C128:
         err = launch_project<double>(
             stream, (const double*)vol_ptr, (double*)img_ptr, (const double*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w);
+            order, half_volume, half_image, full_image_w, max_r2_x4);
         break;
     default:
         return ffi::Error::InvalidArgument("project: volume must be C64 or C128");
@@ -1629,6 +1663,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("half_volume")
         .Attr<int64_t>("half_image")
         .Attr<int64_t>("full_image_w")
+        .Attr<int64_t>("max_r2_x4")
         .Arg<ffi::AnyBuffer>()           /* vol     */
         .Arg<ffi::AnyBuffer>()           /* rot     */
         .Ret<ffi::AnyBuffer>()           /* img_out */
@@ -1643,6 +1678,7 @@ ffi::Error BatchBackprojectImpl(
     int64_t N0, int64_t N1, int64_t N2,
     int64_t upsampling, int64_t order,
     int64_t half_volume, int64_t half_image, int64_t full_image_w,
+    int64_t max_r2_x4,
     ffi::AnyBuffer imgs,       /* (batch, n_images, n_pixels) */
     ffi::AnyBuffer rot,        /* (n_images, 6) */
     ffi::AnyBuffer /*vols_in*/,
@@ -1662,25 +1698,25 @@ ffi::Error BatchBackprojectImpl(
         err = launch_batch_backproject<float>(
             stream, (float*)vol_ptr, (const float*)img_ptr, (const float*)rot_ptr,
             batch_size, n_images, n_pixels, image_h, image_w, N0, N1, N2,
-            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/0);
+            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4);
         break;
     case ffi::DataType::C128:
         err = launch_batch_backproject<double>(
             stream, (double*)vol_ptr, (const double*)img_ptr, (const double*)rot_ptr,
             batch_size, n_images, n_pixels, image_h, image_w, N0, N1, N2,
-            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/0);
+            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4);
         break;
     case ffi::DataType::F32:
         err = launch_batch_backproject<float>(
             stream, (float*)vol_ptr, (const float*)img_ptr, (const float*)rot_ptr,
             batch_size, n_images, n_pixels, image_h, image_w, N0, N1, N2,
-            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/1);
+            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4);
         break;
     case ffi::DataType::F64:
         err = launch_batch_backproject<double>(
             stream, (double*)vol_ptr, (const double*)img_ptr, (const double*)rot_ptr,
             batch_size, n_images, n_pixels, image_h, image_w, N0, N1, N2,
-            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/1);
+            upsampling, order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4);
         break;
     default:
         return ffi::Error::InvalidArgument("batch_backproject: images must be C64, C128, F32, or F64");
@@ -1704,6 +1740,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("half_volume")
         .Attr<int64_t>("half_image")
         .Attr<int64_t>("full_image_w")
+        .Attr<int64_t>("max_r2_x4")
         .Arg<ffi::AnyBuffer>()           /* imgs     */
         .Arg<ffi::AnyBuffer>()           /* rot      */
         .Arg<ffi::AnyBuffer>()           /* vols_in  */
@@ -1716,6 +1753,7 @@ ffi::Error BatchProjectImpl(
     int64_t N0, int64_t N1, int64_t N2,
     int64_t upsampling, int64_t order,
     int64_t half_volume, int64_t half_image, int64_t full_image_w,
+    int64_t max_r2_x4,
     ffi::AnyBuffer vols,
     ffi::AnyBuffer rot,
     ffi::Result<ffi::AnyBuffer> imgs_out)
@@ -1733,13 +1771,13 @@ ffi::Error BatchProjectImpl(
         err = launch_batch_project<float>(
             stream, (const float*)vol_ptr, (float*)img_ptr, (const float*)rot_ptr,
             batch_size, n_images, n_pixels, image_h, image_w, N0, N1, N2,
-            upsampling, order, half_volume, half_image, full_image_w);
+            upsampling, order, half_volume, half_image, full_image_w, max_r2_x4);
         break;
     case ffi::DataType::C128:
         err = launch_batch_project<double>(
             stream, (const double*)vol_ptr, (double*)img_ptr, (const double*)rot_ptr,
             batch_size, n_images, n_pixels, image_h, image_w, N0, N1, N2,
-            upsampling, order, half_volume, half_image, full_image_w);
+            upsampling, order, half_volume, half_image, full_image_w, max_r2_x4);
         break;
     default:
         return ffi::Error::InvalidArgument("batch_project: volumes must be C64 or C128");
@@ -1763,6 +1801,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("half_volume")
         .Attr<int64_t>("half_image")
         .Attr<int64_t>("full_image_w")
+        .Attr<int64_t>("max_r2_x4")
         .Arg<ffi::AnyBuffer>()           /* vols     */
         .Arg<ffi::AnyBuffer>()           /* rot      */
         .Ret<ffi::AnyBuffer>()           /* imgs_out */

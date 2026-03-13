@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from helpers.metrics_regression import compare_metric, metric_direction
+from helpers.metrics_regression import compare_metric, metric_direction, metric_tolerance
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io, pytest.mark.long_test]
@@ -144,8 +144,7 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
     - LONG_METRICS_BASELINE_JSON: baseline path; defaults to in-repo
       tests/baselines/run_test_all_metrics/long_generated/all_scores.json
     - LONG_METRICS_RUN_ARGS: extra args for run_test_all_metrics
-    - LONG_METRICS_TOL_FRAC: tolerated relative degradation (default 0.10)
-    - LONG_METRICS_WRITE_BASELINE: set to 1 to (re)write baseline from current run
+    - LONG_METRICS_TOL_FRAC: tolerated relative degradation (default 0.01)
     """
     volumes_prefix = os.environ.get("LONG_METRICS_VOLUMES_DIR") or None
     if volumes_prefix and not Path(f"{volumes_prefix}0000.mrc").exists():
@@ -153,20 +152,12 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
     baseline_json = Path(os.environ.get("LONG_METRICS_BASELINE_JSON", str(_DEFAULT_LONG_METRICS_BASELINE_JSON)))
     run_args = os.environ.get("LONG_METRICS_RUN_ARGS", "--grid-size 128 --n-images 50000 --noise-level 1.0 --contrast-std 0.1")
     tol_frac = float(os.environ.get("LONG_METRICS_TOL_FRAC", "0.01"))
-    write_baseline = os.environ.get("LONG_METRICS_WRITE_BASELINE", "0") == "1"
 
     output_dir = _resolve_output_dir(tmp_path, "current")
-    # Reuse dataset from a previous baseline-writing run when available (same
-    # output_dir path when LONG_METRICS_OUTPUT_BASE is set).
-    reuse = not write_baseline and (output_dir / "test_dataset" / "simulation_info.pkl").exists()
+    reuse = (output_dir / "test_dataset" / "simulation_info.pkl").exists()
     current = _run_metrics(output_dir, run_args, volumes_prefix=volumes_prefix, reuse_dataset=reuse)
 
-    if write_baseline or (not baseline_json.exists()):
-        baseline_json.parent.mkdir(parents=True, exist_ok=True)
-        with open(baseline_json, "w") as f:
-            json.dump(current, f, indent=2, sort_keys=True)
-        pytest.skip(f"baseline written to {baseline_json}")
-
+    assert baseline_json.exists(), f"baseline not found: {baseline_json}"
     baseline = _load_json(baseline_json)
 
     failures = []
@@ -180,7 +171,8 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
         direction = metric_direction(key)
         if direction == "ignore":
             continue
-        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac)
+        tol = metric_tolerance(key, tol_frac)
+        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol)
         checked += 1
         if not ok:
             failures.append(f"{key}: current={cur} baseline={base} ({msg})")
@@ -202,8 +194,7 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
     - LONG_METRICS_VOLUMES_DIR: if set, use real volumes instead of synthetic ones
     - LONG_METRICS_ET_BASELINE_JSON: baseline path; defaults to in-repo
       tests/baselines/run_test_all_metrics/long_generated/all_scores_cryo_et.json
-    - LONG_METRICS_ET_RUN_ARGS / LONG_METRICS_ET_TOL_FRAC / LONG_METRICS_WRITE_BASELINE /
-      LONG_METRICS_ET_WRITE_BASELINE: see SPA test above
+    - LONG_METRICS_ET_RUN_ARGS / LONG_METRICS_ET_TOL_FRAC: see SPA test above
     """
     volumes_prefix = os.environ.get("LONG_METRICS_VOLUMES_DIR") or None
     if volumes_prefix and not Path(f"{volumes_prefix}0000.mrc").exists():
@@ -217,24 +208,16 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
         "--tomo-tilts 7 --noise-model radial_per_tilt --noise-increase-per-tilt 0.05",
     )
     tol_frac = float(os.environ.get("LONG_METRICS_ET_TOL_FRAC", os.environ.get("LONG_METRICS_TOL_FRAC", "0.01")))
-    write_baseline = os.environ.get("LONG_METRICS_WRITE_BASELINE", "0") == "1" or (
-        os.environ.get("LONG_METRICS_ET_WRITE_BASELINE", "0") == "1"
-    )
 
     output_dir = _resolve_output_dir(tmp_path, "current_cryo_et")
-    reuse = not write_baseline and (output_dir / "test_dataset" / "simulation_info.pkl").exists()
+    reuse = (output_dir / "test_dataset" / "simulation_info.pkl").exists()
     current = _run_metrics(output_dir, run_args, volumes_prefix=volumes_prefix, reuse_dataset=reuse)
 
     particles_star = output_dir / "test_dataset" / "particles.star"
     assert particles_star.exists(), f"expected cryo-ET particles.star at {particles_star}"
     _assert_cryo_et_subsampling_consistency(particles_star)
 
-    if write_baseline or (not baseline_json.exists()):
-        baseline_json.parent.mkdir(parents=True, exist_ok=True)
-        with open(baseline_json, "w") as f:
-            json.dump(current, f, indent=2, sort_keys=True)
-        pytest.skip(f"ET baseline written to {baseline_json}")
-
+    assert baseline_json.exists(), f"ET baseline not found: {baseline_json}"
     baseline = _load_json(baseline_json)
 
     failures = []
@@ -248,7 +231,8 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
         direction = metric_direction(key)
         if direction == "ignore":
             continue
-        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac)
+        tol = metric_tolerance(key, tol_frac)
+        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol)
         checked += 1
         if not ok:
             failures.append(f"{key}: current={cur} baseline={base} ({msg})")

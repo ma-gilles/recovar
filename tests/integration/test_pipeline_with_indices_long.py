@@ -23,29 +23,13 @@ Optional env vars:
   PIPELINE_IND_TOL_FRAC        – allowed relative metric degradation (default: 0.20)
 
 Baseline env vars (SPA):
-  PIPELINE_IND_BASELINE_JSON   – path to read/write baseline metrics JSON
-  PIPELINE_IND_WRITE_BASELINE  – set to "1" to (re)write baseline and skip check
+  PIPELINE_IND_BASELINE_JSON   – path to baseline metrics JSON
 
 Baseline env vars (cryo-ET):
-  PIPELINE_IND_ET_BASELINE_JSON   – path to read/write ET baseline JSON
+  PIPELINE_IND_ET_BASELINE_JSON   – path to ET baseline JSON
                                     (defaults to PIPELINE_IND_BASELINE_JSON stem + _cryo_et.json)
-  PIPELINE_IND_ET_WRITE_BASELINE  – set to "1" to (re)write ET baseline
   PIPELINE_IND_N_TILTS            – tilts per particle for ET test (default: 7)
   PIPELINE_IND_PCT_TILT_OUTLIERS  – fraction of tilt-level outliers (default: 0.10)
-
-Usage:
-  # Write baseline (first run or after algorithm change):
-  LONG_METRICS_VOLUMES_DIR=/path/to/vols/vol \\
-  LONG_METRICS_OUTPUT_BASE=/scratch/recovar_tests \\
-  PIPELINE_IND_BASELINE_JSON=tests/baselines/pipeline_with_indices/spa_baseline.json \\
-  PIPELINE_IND_WRITE_BASELINE=1 \\
-  pytest tests/integration/test_pipeline_with_indices_long.py \\
-      --long-test -v -k test_pipeline_spa_with_ind_regression
-
-  # Compare against baseline:
-  LONG_METRICS_VOLUMES_DIR=... LONG_METRICS_OUTPUT_BASE=... \\
-  PIPELINE_IND_BASELINE_JSON=tests/baselines/pipeline_with_indices/spa_baseline.json \\
-  pytest tests/integration/test_pipeline_with_indices_long.py --long-test -v
 """
 
 from __future__ import annotations
@@ -111,14 +95,9 @@ def _compare_against_baseline(
     current: Dict[str, float],
     baseline_path: Path,
     tol_frac: float,
-    write: bool,
 ) -> None:
-    if write or not baseline_path.exists():
-        baseline_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(baseline_path, "w") as f:
-            json.dump(current, f, indent=2, sort_keys=True)
-        pytest.skip(f"pipeline-with-ind baseline written to {baseline_path}")
-
+    """Compare current metrics against the stored baseline."""
+    assert baseline_path.exists(), f"baseline not found: {baseline_path}"
     baseline = _load_json(baseline_path)
     failures: List[str] = []
     checked = 0
@@ -445,7 +424,6 @@ def test_pipeline_spa_with_ind_regression(tmp_path):
       PIPELINE_IND_BASELINE_JSON    – path to read/write baseline metrics
 
     Optional:
-      PIPELINE_IND_WRITE_BASELINE   – "1" to regenerate baseline
       PIPELINE_IND_FRAC             – fraction of images to keep (default: 0.80)
       PIPELINE_IND_N_IMAGES         – total images to generate (default: 10000)
       PIPELINE_IND_GRID_SIZE        – grid size (default: 128)
@@ -466,12 +444,11 @@ def test_pipeline_spa_with_ind_regression(tmp_path):
     pct_out = float(os.environ.get("PIPELINE_IND_PCT_OUTLIERS", "0.15"))
     k_rounds = int(os.environ.get("PIPELINE_IND_K_ROUNDS", "2"))
     tol_frac = float(os.environ.get("PIPELINE_IND_TOL_FRAC", "0.20"))
-    write_baseline = os.environ.get("PIPELINE_IND_WRITE_BASELINE", "0") == "1"
 
     output_dir = _resolve_output_dir(tmp_path, "pipeline_spa_with_ind")
 
-    # Reuse saved dataset from a previous baseline-writing run if available.
-    if not write_baseline and _dataset_exists(output_dir, grid_size, is_tilt=False):
+    # Reuse saved dataset from a previous run if available.
+    if _dataset_exists(output_dir, grid_size, is_tilt=False):
         logger.info("Reusing existing SPA dataset at %s", output_dir / "test_dataset")
         dataset_dir = output_dir / "test_dataset"
     else:
@@ -522,7 +499,6 @@ def test_pipeline_spa_with_ind_regression(tmp_path):
         current=metrics,
         baseline_path=baseline_json,
         tol_frac=tol_frac,
-        write=write_baseline,
     )
 
 
@@ -550,7 +526,6 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
 
     Optional:
       PIPELINE_IND_ET_BASELINE_JSON     – explicit path for ET baseline
-      PIPELINE_IND_ET_WRITE_BASELINE    – "1" to write ET baseline
       PIPELINE_IND_FRAC                 – fraction of particles to keep (default: 0.80)
       PIPELINE_IND_N_IMAGES             – total images (default: 10000)
       PIPELINE_IND_GRID_SIZE            – grid size (default: 128)
@@ -575,15 +550,11 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
     pct_tilt_out = float(os.environ.get("PIPELINE_IND_PCT_TILT_OUTLIERS", "0.10"))
     k_rounds = int(os.environ.get("PIPELINE_IND_K_ROUNDS", "2"))
     tol_frac = float(os.environ.get("PIPELINE_IND_TOL_FRAC", "0.20"))
-    write_baseline = (
-        os.environ.get("PIPELINE_IND_WRITE_BASELINE", "0") == "1"
-        or os.environ.get("PIPELINE_IND_ET_WRITE_BASELINE", "0") == "1"
-    )
 
     output_dir = _resolve_output_dir(tmp_path, "pipeline_cryo_et_with_particle_ind")
 
-    # Reuse saved dataset from a previous baseline-writing run if available.
-    if not write_baseline and _dataset_exists(output_dir, grid_size, is_tilt=True):
+    # Reuse saved dataset from a previous run if available.
+    if _dataset_exists(output_dir, grid_size, is_tilt=True):
         logger.info("Reusing existing cryo-ET dataset at %s", output_dir / "test_dataset")
         dataset_dir = output_dir / "test_dataset"
     else:
@@ -660,5 +631,4 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
         current=all_metrics,
         baseline_path=baseline_json,
         tol_frac=tol_frac,
-        write=write_baseline,
     )

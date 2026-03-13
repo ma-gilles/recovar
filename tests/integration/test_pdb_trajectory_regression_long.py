@@ -21,8 +21,6 @@ Environment variables:
         Path to baseline JSON.  Defaults to in-repo baseline.
     PDB_REGRESSION_TOL_FRAC : float
         Tolerated relative degradation (default 0.10 = 10%).
-    PDB_REGRESSION_WRITE_BASELINE : str
-        Set to "1" to (re)write baseline from current run.
     PDB_REGRESSION_REUSE_DATASET : str
         Set to "1" to reuse an existing dataset in the output dir.
     PDB_REGRESSION_RUN_ARGS : str
@@ -132,22 +130,15 @@ def test_pdb_trajectory_regression(tmp_path):
     )
     run_args = os.environ.get("PDB_REGRESSION_RUN_ARGS", _DEFAULT_RUN_ARGS)
     tol_frac = float(os.environ.get("PDB_REGRESSION_TOL_FRAC", "0.10"))
-    write_baseline = os.environ.get("PDB_REGRESSION_WRITE_BASELINE", "0") == "1"
 
     output_dir = _resolve_output_dir(tmp_path, "pdb_current")
     reuse = (
-        not write_baseline
-        and os.environ.get("PDB_REGRESSION_REUSE_DATASET", "0") == "1"
+        os.environ.get("PDB_REGRESSION_REUSE_DATASET", "0") == "1"
         and (output_dir / "test_dataset" / "simulation_info.pkl").exists()
     )
     current = _run_pdb_metrics(output_dir, run_args, reuse_dataset=reuse)
 
-    if write_baseline or (not baseline_json.exists()):
-        baseline_json.parent.mkdir(parents=True, exist_ok=True)
-        with open(baseline_json, "w") as f:
-            json.dump(current, f, indent=2, sort_keys=True)
-        pytest.skip(f"PDB baseline written to {baseline_json}")
-
+    assert baseline_json.exists(), f"PDB baseline not found: {baseline_json}"
     baseline = _load_json(baseline_json)
 
     failures = []
