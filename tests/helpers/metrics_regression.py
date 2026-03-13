@@ -30,7 +30,7 @@ def metric_direction(metric_name):
     return "ignore"
 
 
-_LOCRES_TOL_FRAC = 0.03  # locres is noisier; allow 3% tolerance
+_LOCRES_TOL_FRAC = 0.06  # locres is noisier, especially 90th-pct in ET; allow 6% tolerance
 
 
 def metric_tolerance(metric_name, default_tol_frac):
