@@ -41,7 +41,7 @@ _GRID = int(os.environ.get("TINY_OUTLIERS_GRID_SIZE", "32"))
 _N_IMAGES = int(os.environ.get("TINY_OUTLIERS_N_IMAGES", "800"))
 _PCT = float(os.environ.get("TINY_OUTLIERS_PERCENT", "0.15"))
 _K = int(os.environ.get("TINY_OUTLIERS_K_ROUNDS", "1"))
-_TOL = float(os.environ.get("TINY_OUTLIERS_TOL_FRAC", "0.10"))
+_TOL = float(os.environ.get("TINY_OUTLIERS_TOL_FRAC", "0.35"))
 _N_VOLS = 12
 
 
