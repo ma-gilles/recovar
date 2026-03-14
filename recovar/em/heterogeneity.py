@@ -39,7 +39,7 @@ def compute_UPLambdainvPU(u_projections, CTF, noise_variance):
     H = u_outer_projections.transpose(0, 3, 1, 2)
     return H
 
-def compute_little_H_b(mean_projections, u_projections, s, batch, translations, CTF_params, CTF_fun, noise_variance, voxel_size, image_shape, process_images):
+def compute_little_H_b(mean_projections, u_projections, s, batch, translations, CTF_params, ctf, noise_variance, voxel_size, image_shape, process_images):
 
     # u_projections is n_rotations x n_principal_components  x image_size
 
@@ -50,12 +50,12 @@ def compute_little_H_b(mean_projections, u_projections, s, batch, translations, 
     n_images = batch.shape[0]
     n_translations = translations.shape[0]
 
-    CTF = CTF_fun(CTF_params, image_shape, voxel_size)
+    CTF = ctf(CTF_params, image_shape, voxel_size)
     H = compute_UPLambdainvPU(u_projections, CTF, noise_variance)
     H += jnp.diag(1/s)
 
     batch = process_images(batch, apply_image_mask = False)
-    batch *= CTF_fun( CTF_params, image_shape, voxel_size) / noise_variance
+    batch *= ctf( CTF_params, image_shape, voxel_size) / noise_variance
 
     b = compute_bLambdainvPU_terms(mean_projections, u_projections, batch, translations, CTF, noise_variance, image_shape)
 
@@ -64,9 +64,9 @@ def compute_little_H_b(mean_projections, u_projections, s, batch, translations, 
 batch_batch_diag = jax.vmap(jax.vmap(jnp.diag, in_axes = 0, out_axes = 0), in_axes = 0, out_axes = 0)
 
 @functools.partial(jax.jit, static_argnums=[6,9,10])
-def compute_bHb_terms(mean_projections, u_projections, s, batch, translations, CTF_params, CTF_fun, noise_variance, voxel_size, image_shape, process_images):
+def compute_bHb_terms(mean_projections, u_projections, s, batch, translations, CTF_params, ctf, noise_variance, voxel_size, image_shape, process_images):
 
-    H,b = compute_little_H_b(mean_projections, u_projections, s, batch, translations, CTF_params, CTF_fun, noise_variance, voxel_size, image_shape, process_images)
+    H,b = compute_little_H_b(mean_projections, u_projections, s, batch, translations, CTF_params, ctf, noise_variance, voxel_size, image_shape, process_images)
 
     # Compute bHb
     # Hinvb = jax.scipy.linalg.solve(H, b, assume_a = 'pos')
@@ -113,7 +113,7 @@ def compute_bHb_terms_eqx(config: ForwardModelConfig, mean_projections, u_projec
     """Equinox version of compute_bHb_terms (11 → 8 params)."""
     H, b = compute_little_H_b(
         mean_projections, u_projections, s, batch, translations,
-        ctf_params, config.CTF_fun, noise_variance, config.voxel_size,
+        ctf_params, config.ctf, noise_variance, config.voxel_size,
         config.image_shape, config.process_fn,
     )
     H_chol, low = jax.scipy.linalg.cho_factor(H, lower=True)
@@ -288,9 +288,9 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
 
 
 @functools.partial(jax.jit, static_argnums=[3,5,6])
-def sum_up_images_fixed_rots_covariance_precompute(batch, translations, CTF_params, CTF_fun, voxel_size, image_shape, process_images):
+def sum_up_images_fixed_rots_covariance_precompute(batch, translations, CTF_params, ctf, voxel_size, image_shape, process_images):
 
-    CTF = CTF_fun(CTF_params, image_shape, voxel_size)
+    CTF = ctf(CTF_params, image_shape, voxel_size)
     batch = process_images(batch, apply_image_mask = False) * CTF
     shifted_CTFed_images = core.batch_trans_translate_images(batch, jnp.repeat(translations[None], batch.shape[0], axis=0), image_shape)
 
@@ -451,12 +451,12 @@ def solve_covariance(lhs, rhs):
 
 
 @functools.partial(jax.jit, static_argnums = [6,9,10])    
-def reduce_covariance_est_inner(mean_projections, u_projections, probabilities, batch, translations, CTF_params, CTF_fun, noise_variance, voxel_size, image_shape, process_images):
+def reduce_covariance_est_inner(mean_projections, u_projections, probabilities, batch, translations, CTF_params, ctf, noise_variance, voxel_size, image_shape, process_images):
 
-    CTF = CTF_fun(CTF_params, image_shape, voxel_size)
+    CTF = ctf(CTF_params, image_shape, voxel_size)
 
     batch = process_images(batch, apply_image_mask = False)
-    batch *= CTF_fun( CTF_params, image_shape, voxel_size)
+    batch *= ctf( CTF_params, image_shape, voxel_size)
 
     probabilities = probabilities.swapaxes(0,1)
 

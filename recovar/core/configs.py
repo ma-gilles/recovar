@@ -54,11 +54,6 @@ class ForwardModelConfig(eqx.Module):
     data_multiplier: float = eqx.field(static=True, default=1.0)
     process_fn: Optional[Callable] = eqx.field(static=True, default=None)
 
-    @property
-    def CTF_fun(self):
-        """Backward compatibility alias for :attr:`ctf`."""
-        return self.ctf
-
     def compute_ctf(self, ctf_params: jax.Array) -> jax.Array:
         """Compute CTF values for a batch of images (full spectrum)."""
         return self.ctf(ctf_params, self.image_shape, self.voxel_size)
@@ -83,9 +78,6 @@ class ForwardModelConfig(eqx.Module):
         Useful for changing static fields (e.g. ``disc_type``) which cannot
         be modified via ``eqx.tree_at``.
         """
-        # Support old kwarg name for backward compat
-        if 'CTF_fun' in kwargs:
-            kwargs['ctf'] = as_ctf_evaluator(kwargs.pop('CTF_fun'))
         fields = dict(
             image_shape=self.image_shape, volume_shape=self.volume_shape,
             grid_size=self.grid_size, voxel_size=self.voxel_size,
@@ -151,10 +143,8 @@ class ForwardModelConfig(eqx.Module):
         elif isinstance(cryo, CryoEMDataset):
             ctf_eval = cryo.ctf_evaluator
         else:
-            # Duck-type: try ctf_evaluator, fall back to CTF_fun
-            ctf_eval = as_ctf_evaluator(
-                getattr(cryo, 'ctf_evaluator', None) or cryo.CTF_fun
-            )
+            # Duck-type fallback
+            ctf_eval = as_ctf_evaluator(cryo.ctf_evaluator)
 
         base_grid_size = int(cryo.grid_size)
 

@@ -106,12 +106,12 @@ def test_generate_simulated_dataset_tilt_branch_wires_ctf_and_metadata(monkeypat
 
     created = []
 
-    def _fake_cryo_dataset(image_stack, voxel_size, rots, trans, ctf_params, CTF_fun=None, dataset_indices=None, grid_size=None, **kwargs):
+    def _fake_cryo_dataset(image_stack, voxel_size, rots, trans, ctf_params, ctf_evaluator=None, dataset_indices=None, grid_size=None, **kwargs):
         obj = type("FakeDataset", (), {})()
         obj.n_images = rots.shape[0]
         obj.image_shape = (grid_size, grid_size)
         obj.CTF_params = ctf_params
-        obj.CTF_fun = CTF_fun
+        obj.ctf_evaluator = ctf_evaluator
         obj.grid_size = grid_size
         obj.voxel_size = voxel_size
         obj.volume_shape = (grid_size, grid_size, grid_size)
@@ -157,7 +157,7 @@ def test_generate_simulated_dataset_tilt_branch_wires_ctf_and_metadata(monkeypat
     )
     assert simulation_info["n_tilts"] == n_tilts
     np.testing.assert_array_equal(simulation_info["tilt_groups"], tilt_groups)
-    assert created[0].CTF_fun.mode == core.CTFMode.CRYO_ET
+    assert created[0].ctf_evaluator.mode == core.CTFMode.CRYO_ET
 
 
 def test_generate_simulated_dataset_extra_particles_and_outliers(monkeypatch):
@@ -170,10 +170,10 @@ def test_generate_simulated_dataset_extra_particles_and_outliers(monkeypatch):
     outlier_volume = np.ones((4**3,), dtype=np.complex64)
 
     class _FakeDatasetObj:
-        def __init__(self, n_images, grid_size, ctf_fun, ctf_params, rots, trans):
+        def __init__(self, n_images, grid_size, ctf_eval, ctf_params, rots, trans):
             self.n_images = n_images
             self.image_shape = (grid_size, grid_size)
-            self.CTF_fun = ctf_fun
+            self.ctf_evaluator = ctf_eval
             self.CTF_params = ctf_params
             self.rotation_matrices = rots
             self.translations = trans
@@ -181,8 +181,8 @@ def test_generate_simulated_dataset_extra_particles_and_outliers(monkeypatch):
             self.voxel_size = voxel_size
             self.volume_shape = (grid_size, grid_size, grid_size)
 
-    def _fake_cryo_dataset(image_stack, voxel_size, rots, trans, ctf_params, CTF_fun=None, dataset_indices=None, grid_size=None, **kwargs):
-        return _FakeDatasetObj(rots.shape[0], grid_size, CTF_fun, ctf_params, rots, trans)
+    def _fake_cryo_dataset(image_stack, voxel_size, rots, trans, ctf_params, ctf_evaluator=None, dataset_indices=None, grid_size=None, **kwargs):
+        return _FakeDatasetObj(rots.shape[0], grid_size, ctf_evaluator, ctf_params, rots, trans)
 
     monkeypatch.setattr(simulator.dataset, "CryoEMDataset", _fake_cryo_dataset)
     monkeypatch.setattr(simulator.utils, "get_gpu_memory_total", lambda: 10)

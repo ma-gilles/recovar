@@ -13,10 +13,10 @@ from recovar.heterogeneity import embedding
 
 logger = logging.getLogger(__name__)
 
-def M_step_batch(images, lhs_summed, rhs_summed, mean_batch, covariance_batch, CTF_params, rotation_matrices, translations, image_shape, volume_shape, grid_size, voxel_size, noise_variance,  CTF_fun):
+def M_step_batch(images, lhs_summed, rhs_summed, mean_batch, covariance_batch, CTF_params, rotation_matrices, translations, image_shape, volume_shape, grid_size, voxel_size, noise_variance,  ctf):
 
     # Precomp piece
-    CTF = CTF_fun( CTF_params, image_shape, voxel_size)
+    CTF = ctf( CTF_params, image_shape, voxel_size)
     ctf_over_noise_variance = CTF**2 / noise_variance
 
     grid_point_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape)
@@ -57,7 +57,7 @@ def M_step(experiment_dataset, latent_means, latent_covariances, noise_variance,
                                             experiment_dataset.grid_size,
                                             experiment_dataset.voxel_size,
                                             noise_variance,
-                                            experiment_dataset.CTF_fun)
+                                            experiment_dataset.ctf_evaluator)
         
     # Solve least squares
     lhs_summed = lhs_summed.reshape(experiment_dataset.volume_size, basis_size, basis_size)

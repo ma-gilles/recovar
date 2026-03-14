@@ -83,7 +83,7 @@ class TestForwardModelConfig:
             premultiplied_ctf = False
             volume_mask_threshold = 0.25
 
-            def CTF_fun(self, *args):
+            def ctf_evaluator(self, *args):
                 return _ones_ctf(*args)
 
         config = ForwardModelConfig.from_dataset(MockDataset(), disc_type="nearest")

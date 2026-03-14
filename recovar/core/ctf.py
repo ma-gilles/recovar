@@ -1,9 +1,8 @@
 """CTF evaluation and parameter handling for cryo-EM images.
 
-Provides :class:`CTFEvaluator`, a unified equinox module that replaces the
-previous collection of standalone wrapper functions (``evaluate_ctf_wrapper``,
-``cryodrgn_CTF``, ``get_cryo_ET_CTF_fun``, etc.) with a single callable class
-dispatched by :class:`CTFMode`.
+Provides :class:`CTFEvaluator`, a unified equinox module dispatched by
+:class:`CTFMode` that evaluates the Contrast Transfer Function for all
+supported cryo-EM/ET imaging modes.
 """
 
 import functools
@@ -302,29 +301,6 @@ def _compute_tilt_series_ctf(CTF_params, image_shape, voxel_size, dose_per_tilt=
     return dose_filter * _compute_spa_ctf(CTF_params[:, :9], image_shape, voxel_size, half_image=half_image)
 
 
-# ---------------------------------------------------------------------------
-# Backward compatibility aliases (deprecated — use CTFEvaluator instead)
-# ---------------------------------------------------------------------------
-
-# These are kept so that old code referencing core.cryodrgn_CTF etc. still
-# works, but they should not be used in new code.
-cryodrgn_CTF = _compute_spa_ctf
-evaluate_ctf_wrapper_tilt_series_v2 = _compute_cryo_et_ctf
-evaluate_ctf_wrapper_tilt_series = _compute_tilt_series_ctf
-
-
-def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, antialiasing=False, *, half_image=False):
-    """Backward compatibility wrapper. Use :class:`CTFEvaluator` instead."""
-    if antialiasing:
-        return _compute_spa_ctf_antialiased(CTF_params, image_shape, voxel_size, half_image=half_image)
-    return _compute_spa_ctf(CTF_params, image_shape, voxel_size, half_image=half_image)
-
-
-def get_cryo_ET_CTF_fun(dose_per_tilt=2.9, angle_per_tilt=3):
-    """Backward compatibility factory. Use ``CTFEvaluator(mode=CTFMode.TILT_SERIES, ...)`` instead."""
-    return CTFEvaluator(mode=CTFMode.TILT_SERIES, dose_per_tilt=dose_per_tilt, angle_per_tilt=angle_per_tilt)
-
-
 __all__ = [
     # New API
     "CTFMode",
@@ -340,10 +316,4 @@ __all__ = [
     "critical_exposure",
     "get_dose_filters",
     "get_dose_filters_from_tilt_number",
-    # Backward compatibility (deprecated)
-    "cryodrgn_CTF",
-    "evaluate_ctf_wrapper",
-    "evaluate_ctf_wrapper_tilt_series",
-    "evaluate_ctf_wrapper_tilt_series_v2",
-    "get_cryo_ET_CTF_fun",
 ]

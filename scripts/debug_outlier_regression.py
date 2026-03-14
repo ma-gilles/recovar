@@ -60,7 +60,7 @@ voxel_size = 1.0
 padding = 0
 disc_type = 'linear_interp'
 premultiplied_ctf = False
-CTF_fun = core.evaluate_ctf_wrapper
+ctf = core.CTFEvaluator()
 
 # Identity process function
 def process_fn(x):
@@ -74,7 +74,7 @@ old_result = embedding.compute_single_batch_coords_p1(
     CTF_params, rotation_matrices, translations, image_mask,
     4.0,  # volume_mask_threshold
     image_shape, volume_shape, grid_size, voxel_size, padding,
-    disc_type, noise_variance, process_fn, CTF_fun, premultiplied_ctf
+    disc_type, noise_variance, process_fn, ctf, premultiplied_ctf
 )
 print(f"Old P1 AU_t_images shape: {old_result[0].shape}, dtype: {old_result[0].dtype}")
 print(f"Old P1 AU_t_images[:2,:2]:\n{old_result[0][:2,:2]}")
@@ -87,7 +87,7 @@ config = ForwardModelConfig(
     voxel_size=voxel_size,
     padding=padding,
     disc_type=disc_type,
-    CTF_fun=CTF_fun,
+    ctf=ctf,
     premultiplied_ctf=premultiplied_ctf,
     volume_mask_threshold=4.0,
     process_fn=process_fn,
@@ -136,7 +136,7 @@ old_xs, old_contrast, old_cov, old_bias = embedding.compute_single_batch_coords_
     batch, mean_estimate, volume_mask, basis, eigenvalues,
     CTF_params, rotation_matrices, translations, image_mask,
     4.0, image_shape, volume_shape, grid_size, voxel_size, padding,
-    disc_type, True, noise_variance, process_fn, CTF_fun,
+    disc_type, True, noise_variance, process_fn, ctf,
     contrast_grid, 1.0, np.inf, False,
     shared_label=False, contrast_shared_across_tilt_series=True,
     premultiplied_ctf=premultiplied_ctf
@@ -186,7 +186,7 @@ from recovar.heterogeneity.covariance_estimation import (
 
 old_var = variance_relion_style_triangular_kernel_batch_trilinear(
     mean_estimate, batch, CTF_params, rotation_matrices, translations,
-    image_shape, volume_shape, voxel_size, CTF_fun, noise_variance,
+    image_shape, volume_shape, voxel_size, ctf, noise_variance,
     volume_mask, image_mask, 4.0, grid_size, padding,
     soften=5, disc_type=disc_type, premultiplied_ctf=premultiplied_ctf,
 )

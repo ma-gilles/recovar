@@ -205,7 +205,7 @@ def test_M_with_precompute_handles_small_rotation_count_without_zero_batch(monke
         volume_size = 5
         dtype = jnp.float32
         CTF_params = np.zeros((1, 9), dtype=np.float32)
-        CTF_fun = staticmethod(lambda params, _shape, _voxel: jnp.ones((params.shape[0], 4), dtype=jnp.float32))
+        ctf_evaluator = staticmethod(lambda params, _shape, _voxel: jnp.ones((params.shape[0], 4), dtype=jnp.float32))
         voxel_size = 1.0
         volume_shape = (2, 2, 2)
 

@@ -30,7 +30,7 @@ class _TinyDataset:
     image_stack = _TinyImageStack()
 
     @staticmethod
-    def CTF_fun(params, _image_shape, _voxel_size):
+    def ctf_evaluator(params, _image_shape, _voxel_size):
         return jnp.ones((params.shape[0], 4), dtype=jnp.float32)
 
     @staticmethod

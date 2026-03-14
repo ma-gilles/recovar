@@ -135,9 +135,9 @@ batch_forward_model = jax.vmap(
 
 @functools.partial(jax.jit, static_argnums = [3,4,5,6,7])
 @nvtx.annotate("batch_over_vol_forward_model", color="blue", domain=NVTX_DOMAIN_COV_CORE)
-def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, CTF_fun, disc_type):
+def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, ctf, disc_type):
     batch_grid_pt_vec_ind_of_images = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape )
-    batch_CTF = CTF_fun( CTF_params, image_shape, voxel_size)
+    batch_CTF = ctf( CTF_params, image_shape, voxel_size)
     projected_mean =  batch_forward_model(mean, batch_CTF, batch_grid_pt_vec_ind_of_images)
     return projected_mean
 

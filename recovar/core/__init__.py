@@ -45,12 +45,6 @@ from recovar.core.ctf import (
     evaluate_ctf_packed,
     get_dose_filters,
     get_dose_filters_from_tilt_number,
-    # Backward compatibility aliases (deprecated)
-    cryodrgn_CTF,
-    evaluate_ctf_wrapper,
-    evaluate_ctf_wrapper_tilt_series,
-    evaluate_ctf_wrapper_tilt_series_v2,
-    get_cryo_ET_CTF_fun,
 )
 from recovar.core.configs import BatchData, DataIterator, ForwardModelConfig
 from recovar.core.forward import (
@@ -90,20 +84,15 @@ __all__ = [
     "check_vec_indices_in_bound",
     "check_vol_indices_in_bound",
     "critical_exposure",
-    "cryodrgn_CTF",
     "DataIterator",
     "decide_order",
     "distance_to_max_grid_dist",
     "evaluate_ctf",
     "evaluate_ctf_packed",
-    "evaluate_ctf_wrapper",
-    "evaluate_ctf_wrapper_tilt_series",
-    "evaluate_ctf_wrapper_tilt_series_v2",
     "find_frequencies_within_grid_dist",
     "ForwardModelConfig",
     "frequencies_to_vec_indices",
     "frequencies_to_vol_indices",
-    "get_cryo_ET_CTF_fun",
     "get_dose_filters",
     "get_dose_filters_from_tilt_number",
     "get_gridpoint_coords",

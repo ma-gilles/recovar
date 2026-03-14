@@ -97,7 +97,7 @@ def test_single_batch_equivalence():
                         (batch_size, 1),
                     )
                 )
-                CTF_fun = core_ctf.evaluate_ctf_wrapper
+                ctf = core_ctf.CTFEvaluator()
 
                 # --- Old function (jax.jit) ---
                 reset_gpu_peak()
@@ -106,7 +106,7 @@ def test_single_batch_equivalence():
                     old_result = simulator.simulate_data_batch(
                         volume, rot_matrices, translations, ctf_params,
                         voxel_size, volume_shape, image_shape, grid_size,
-                        disc_type, CTF_fun, skip_ctf=True,
+                        disc_type, ctf, skip_ctf=True,
                     )
                     old_result.block_until_ready()
                     old_time = time.time() - t0
@@ -127,7 +127,7 @@ def test_single_batch_equivalence():
                     voxel_size=voxel_size,
                     padding=0,
                     disc_type=disc_type,
-                    CTF_fun=CTF_fun,
+                    ctf=ctf,
                     premultiplied_ctf=False,
                     volume_mask_threshold=0.0,
                 )
@@ -246,7 +246,7 @@ def test_oom_scenario():
             (batch_size, 1),
         )
     )
-    CTF_fun = core_ctf.evaluate_ctf_wrapper
+    ctf = core_ctf.CTFEvaluator()
 
     gpu_mem = utils.get_gpu_memory_total()
     print(f"  GPU memory: {gpu_mem} GB")
@@ -261,7 +261,7 @@ def test_oom_scenario():
         old_result = simulator.simulate_data_batch(
             volume, rot_matrices, translations, ctf_params,
             voxel_size, volume_shape, image_shape, grid_size,
-            "cubic", CTF_fun, skip_ctf=True,
+            "cubic", ctf, skip_ctf=True,
         )
         old_result.block_until_ready()
         old_time = time.time() - t0
@@ -280,7 +280,7 @@ def test_oom_scenario():
         voxel_size=voxel_size,
         padding=0,
         disc_type="cubic",
-        CTF_fun=CTF_fun,
+        ctf=ctf,
         premultiplied_ctf=False,
         volume_mask_threshold=0.0,
     )
@@ -350,7 +350,7 @@ def test_pipeline_functions():
             (n_images, 1),
         )
     )
-    CTF_fun = core_ctf.evaluate_ctf_wrapper
+    ctf = core_ctf.CTFEvaluator()
 
     config = ForwardModelConfig(
         image_shape=image_shape,
@@ -359,7 +359,7 @@ def test_pipeline_functions():
         voxel_size=voxel_size,
         padding=0,
         disc_type="linear_interp",
-        CTF_fun=CTF_fun,
+        ctf=ctf,
         premultiplied_ctf=False,
         volume_mask_threshold=0.0,
     )
@@ -368,7 +368,7 @@ def test_pipeline_functions():
     print("\n  forward_model_from_map:")
     old_fm = core_forward.forward_model_from_map(
         volume, ctf_params, rot_matrices,
-        image_shape, volume_shape, voxel_size, CTF_fun, "linear_interp",
+        image_shape, volume_shape, voxel_size, ctf, "linear_interp",
     )
     new_fm = core_forward.forward_model(config, volume, ctf_params, rot_matrices)
 
@@ -379,7 +379,7 @@ def test_pipeline_functions():
     print("  adjoint_forward_model_from_map:")
     old_adj = core_forward.adjoint_forward_model_from_map(
         old_fm, ctf_params, rot_matrices,
-        image_shape, volume_shape, voxel_size, CTF_fun, "linear_interp",
+        image_shape, volume_shape, voxel_size, ctf, "linear_interp",
     )
     new_adj = core_forward.adjoint_forward_model(config, old_fm, ctf_params, rot_matrices)
     max_diff = float(jnp.max(jnp.abs(old_adj - new_adj)))

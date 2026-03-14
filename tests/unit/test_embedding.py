@@ -265,8 +265,8 @@ def test_get_coords_shared_label_splits_mixed_particle_batches(monkeypatch):
             self.voxel_size = 1.0
             self.padding = 0
             self.premultiplied_ctf = False
-            self.CTF_fun_inp = embedding.core.CTFEvaluator()
-            self.ctf_evaluator = self.CTF_fun_inp
+            self._ctf_evaluator = embedding.core.CTFEvaluator()
+            self.ctf_evaluator = self._ctf_evaluator
             self.image_stack = _DummyImageStack()
             self.noise = _DummyNoise()
             self.CTF_params = np.zeros((4, 9), dtype=np.float32)
@@ -353,8 +353,8 @@ def test_get_coords_shared_label_grouped_shared_contrast(monkeypatch):
             self.voxel_size = 1.0
             self.padding = 0
             self.premultiplied_ctf = False
-            self.CTF_fun_inp = embedding.core.CTFEvaluator()
-            self.ctf_evaluator = self.CTF_fun_inp
+            self._ctf_evaluator = embedding.core.CTFEvaluator()
+            self.ctf_evaluator = self._ctf_evaluator
             self.image_stack = _DummyImageStack()
             self.noise = _DummyNoise()
             self.CTF_params = np.zeros((4, 9), dtype=np.float32)

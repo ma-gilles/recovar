@@ -121,7 +121,7 @@ class CryoEMDataset:
         'image_stack', 'image_shape', 'image_size', 'n_images', 'padding',
         # Processing flags
         'tilt_series_flag', 'premultiplied_ctf', 'n_units',
-        'CTF_fun_inp', 'hpad', 'volume_mask_threshold',
+        '_ctf_evaluator', 'hpad', 'volume_mask_threshold',
         # Data types
         'dtype', 'dtype_real', 'CTF_dtype', 'rotation_dtype',
         # Per-image arrays
@@ -137,7 +137,7 @@ class CryoEMDataset:
         rotation_matrices: NDArray[np.floating],
         translations: NDArray[np.floating],
         CTF_params: NDArray[np.floating],
-        CTF_fun=None,
+        ctf_evaluator=None,
         dtype: type = np.complex64,
         rotation_dtype: type = np.float32,
         dataset_indices: Optional[NDArray[np.integer]] = None,
@@ -180,10 +180,10 @@ class CryoEMDataset:
         self.premultiplied_ctf = premultiplied_ctf
         # For SPA n_units == n_images; for tilt series n_units == n_particles
         self.n_units = self.image_stack.Np if self.tilt_series_flag else self.n_images
-        if CTF_fun is None:
-            self.CTF_fun_inp = core.CTFEvaluator()
+        if ctf_evaluator is None:
+            self._ctf_evaluator = core.CTFEvaluator()
         else:
-            self.CTF_fun_inp = core.as_ctf_evaluator(CTF_fun)
+            self._ctf_evaluator = core.as_ctf_evaluator(ctf_evaluator)
         self.hpad = self.padding // 2
         # Heuristic mask threshold scaled by grid size
         self.volume_mask_threshold = 4 * self.grid_size / 128
@@ -262,11 +262,7 @@ class CryoEMDataset:
     @property
     def ctf_evaluator(self):
         """The :class:`~recovar.core.ctf.CTFEvaluator` for this dataset."""
-        return self.CTF_fun_inp
-
-    def CTF_fun(self, *args, **kwargs):
-        """Evaluate CTF with dtype casting. Prefer :attr:`ctf_evaluator` for new code."""
-        return self.CTF_fun_inp(*args, **kwargs).astype(self.CTF_dtype, copy=False)
+        return self._ctf_evaluator
 
     def get_valid_frequency_indices(self,rad = None):
         rad = self.grid_size//2 -1 if rad is None else rad
@@ -280,7 +276,7 @@ class CryoEMDataset:
     #### All functions below are only just for plotting/debugging
 
     def compute_CTF(self, CTF_params):
-        return self.CTF_fun(CTF_params, self.image_shape, self.voxel_size)
+        return self.ctf_evaluator(CTF_params, self.image_shape, self.voxel_size)
 
     def get_CTF(self, indices):
         return self.compute_CTF(self.CTF_params[indices])
@@ -346,10 +342,10 @@ class CryoEMDataset:
         if tilt_idx is not None:
             images, _, image_ind = self.image_stack.__getitem__(i)
             images = images[tilt_idx][None]
-            CTFs = self.CTF_fun(self.CTF_params[image_ind[tilt_idx]][None], self.image_shape, self.voxel_size) # Compute CTF
+            CTFs = self.ctf_evaluator(self.CTF_params[image_ind[tilt_idx]][None], self.image_shape, self.voxel_size) # Compute CTF
         else:
             images, _, _ = self.image_stack.__getitem__(i)
-            CTFs = self.CTF_fun(self.CTF_params[i][None], self.image_shape, self.voxel_size) # Compute CTF
+            CTFs = self.ctf_evaluator(self.CTF_params[i][None], self.image_shape, self.voxel_size) # Compute CTF
         images = self.image_stack.process_images(images) # Compute DFT, masking
         images = (CTFs / (CTFs**2 + weiner_param)) * images  # CTF correction
         images = images.reshape(self.image_shape)
@@ -532,9 +528,6 @@ class CryoEMHalfsets:
         """The :class:`~recovar.core.ctf.CTFEvaluator` for this dataset."""
         return self._halves[0].ctf_evaluator
 
-    def CTF_fun(self, *args, **kwargs):
-        return self._halves[0].CTF_fun(*args, **kwargs)
-
     # --- Aggregate properties ---
 
     @property
@@ -711,7 +704,7 @@ def load_dataset(
     # Initialize contrast == 1
     ctf_params = np.concatenate([ctf_params, np.ones_like(ctf_params[:, 0][..., None])], axis=-1)
     
-    CTF_fun = core.CTFEvaluator()
+    ctf_eval = core.CTFEvaluator()
 
     # This is an option used to treat a cryo-ET dataset as a cryo-EM dataset, but still use the right CTF.
     # It means, that it will use the cryo-EM pipeline but the cryoET CTF.
@@ -734,7 +727,7 @@ def load_dataset(
             dose = tilt_dataset_this.dose
             angles = np.zeros_like(dose) # Set angles to 0 - the np.cos factor is included already?
             ctf_params = np.concatenate( [ctf_params, dose[...,None], angles[...,None]], axis =-1)
-            CTF_fun = core.CTFEvaluator(mode=core.CTFMode.CRYO_ET)
+            ctf_eval = core.CTFEvaluator(mode=core.CTFMode.CRYO_ET)
 
 
         # The angles are used to compute a scale factor cos(angles). If scale from star, then the scale factor is already in the star file, so set angle to 0
@@ -756,7 +749,7 @@ def load_dataset(
 
             if not (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)):
                 raise ValueError("Critical exposure calculation requires 200kV or 300kV imaging")
-            CTF_fun = core.CTFEvaluator(mode=core.CTFMode.TILT_SERIES, dose_per_tilt=dose_per_tilt, angle_per_tilt=angle_per_tilt)
+            ctf_eval = core.CTFEvaluator(mode=core.CTFMode.TILT_SERIES, dose_per_tilt=dose_per_tilt, angle_per_tilt=angle_per_tilt)
             logger.info('CTF from dose weighting')
         elif "v2" in tilt_series_ctf:
             tilt_numbers = tilt_dataset_this.tilt_numbers
@@ -775,7 +768,7 @@ def load_dataset(
                 logger.warning("Using dose from star file (- Bfactor/4)")
 
 
-            CTF_fun = core.CTFEvaluator(mode=core.CTFMode.CRYO_ET)
+            ctf_eval = core.CTFEvaluator(mode=core.CTFMode.CRYO_ET)
             ctf_params = np.concatenate( [ctf_params, dose[...,None], angles[...,None]], axis =-1)
             if not (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)):
                 raise ValueError("Critical exposure calculation requires 200kV or 300kV imaging") 
@@ -828,7 +821,7 @@ def load_dataset(
 
     return CryoEMDataset(dataset, voxel_size,
                          rots, translations, ctf_params[:, 1:],
-                         CTF_fun=CTF_fun,
+                         ctf_evaluator=ctf_eval,
                          dataset_indices=dataset_indices,
                          tilt_series_flag=tilt_series,
                          premultiplied_ctf=premultiplied_ctf)
@@ -1458,7 +1451,7 @@ def subsample_cryoem_dataset(cryo, good_indices):
         rotation_matrices=cryo.rotation_matrices[good_indices],
         translations=cryo.translations[good_indices],
         CTF_params=cryo.CTF_params[good_indices],
-        CTF_fun=cryo.CTF_fun_inp,
+        ctf_evaluator=cryo.ctf_evaluator,
         grid_size=cryo.grid_size,
         volume_upsampling_factor=cryo.volume_upsampling_factor,
         tilt_series_flag=cryo.tilt_series_flag,

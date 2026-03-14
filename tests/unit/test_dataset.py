@@ -176,7 +176,7 @@ def test_cryoemdataset_minimal_and_noise_access():
     trans = np.zeros((3, 2), dtype=np.float32)
 
     def ctf_fun(params, image_shape, voxel_size, **kwargs):
-        return np.ones((params.shape[0], image_shape[0] * image_shape[1]), dtype=np.float64)
+        return np.ones((params.shape[0], image_shape[0] * image_shape[1]), dtype=np.float32)
 
     ds = dataset.CryoEMDataset(
         image_stack=None,
@@ -184,7 +184,7 @@ def test_cryoemdataset_minimal_and_noise_access():
         rotation_matrices=rots,
         translations=trans,
         CTF_params=ctf_params,
-        CTF_fun=ctf_fun,
+        ctf_evaluator=ctf_fun,
         grid_size=4,
     )
     assert ds.n_images == 3
@@ -199,7 +199,7 @@ def test_cryoemdataset_minimal_and_noise_access():
     ds.noise = _Noise()
     np.testing.assert_array_equal(ds.get_noise_variance(np.array([0, 2])), np.array([1, 3]))
 
-    ctf = ds.CTF_fun(ds.CTF_params[:1], ds.image_shape, ds.voxel_size)
+    ctf = ds.ctf_evaluator(ds.CTF_params[:1], ds.image_shape, ds.voxel_size)
     assert ctf.dtype == ds.CTF_dtype
 
 

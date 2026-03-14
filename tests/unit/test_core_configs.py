@@ -80,10 +80,17 @@ class TestForwardModelConfig:
         assert called_with["vs"] == 1.5
         assert result.shape == (10,)
 
-    def test_ctf_backward_compat_property(self):
-        """config.CTF_fun should return the ctf evaluator for backward compat."""
+    def test_compute_ctf_half(self):
+        """config.compute_ctf_half should return half-spectrum CTF."""
         cfg = _make_config(ctf=CTFEvaluator(mode=CTFMode.SPA))
-        assert cfg.CTF_fun is cfg.ctf
+        import jax.numpy as jnp
+        params = jnp.zeros((1, 9), dtype=jnp.float32)
+        params = params.at[:, 3].set(300.0)
+        params = params.at[:, 4].set(2.7)
+        params = params.at[:, 5].set(0.1)
+        params = params.at[:, 8].set(1.0)
+        half = cfg.compute_ctf_half(params)
+        assert half.shape[1] == cfg.image_shape[0] * (cfg.image_shape[1] // 2 + 1)
 
     def test_compute_ctf_at_shape(self):
         called_with = {}

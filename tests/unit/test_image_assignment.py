@@ -54,7 +54,7 @@ class _MockDS:
     image_stack = SimpleNamespace(
         process_images=lambda x, apply_image_mask=False: x,
     )
-    CTF_fun = staticmethod(lambda *_args, **_kwargs: None)
+    ctf_evaluator = staticmethod(lambda *_args, **_kwargs: None)
 
     def get_image_generator(self, batch_size):
         _ = batch_size

@@ -550,12 +550,12 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         tilt_series_assignment = None
 
     if n_tilts >0:
-        CTF_fun = core.CTFEvaluator(mode=core.CTFMode.CRYO_ET)
+        ctf_evaluator = core.CTFEvaluator(mode=core.CTFMode.CRYO_ET)
     else:
-        CTF_fun = core.CTFEvaluator()
+        ctf_evaluator = core.CTFEvaluator()
 
     main_dataset = dataset.CryoEMDataset( None, voxel_size,
-                              rots, trans, ctf_params, CTF_fun = CTF_fun, dataset_indices = None, grid_size = grid_size)
+                              rots, trans, ctf_params, ctf_evaluator = ctf_evaluator, dataset_indices = None, grid_size = grid_size)
     
     # cubic interpolation uses ~4x more GPU memory per image than linear
     mult = 0.5 if 'cubic' in disc_type else 5
@@ -582,7 +582,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         # Move the center by around twice the radius
         trans_2 *= 2 * volume_radius * volume_shape[0] / 2
         other_particles_dataset = dataset.CryoEMDataset( None, voxel_size,
-                                rots_2, trans_2, ctf_params, CTF_fun = CTF_fun, dataset_indices = None, grid_size = grid_size)
+                                rots_2, trans_2, ctf_params, ctf_evaluator = ctf_evaluator, dataset_indices = None, grid_size = grid_size)
         # No noise in this stack.
         extra_particles_image_stack = simulate_data(other_particles_dataset, volumes,  noise_variance * 0 ,  batch_size, image_assignments, per_image_noise_scale_2, per_image_noise_scale, seed =0, disc_type = disc_type, mrc_file = None, pad_before_translate= True, premultiplied_ctf=premultiplied_ctf )
 
@@ -601,7 +601,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         outlier_contrast, outlier_noise_scale = generate_contrast_params(n_outlier_images, noise_scale_std, contrast_std )
 
         outlier_particle_dataset = dataset.CryoEMDataset( None, voxel_size,
-                                rots_3, trans_3, ctf_params_3, CTF_fun = CTF_fun, dataset_indices = None, grid_size = grid_size)
+                                rots_3, trans_3, ctf_params_3, ctf_evaluator = ctf_evaluator, dataset_indices = None, grid_size = grid_size)
         
         outlier_particle_image_stack = simulate_data(outlier_particle_dataset, outlier_volume[None],  noise_variance ,  batch_size, np.zeros(n_outlier_images, dtype = int), outlier_noise_scale, outlier_contrast, seed =1, disc_type = disc_type, mrc_file = None , premultiplied_ctf=premultiplied_ctf)
 
@@ -631,8 +631,8 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         
         # Create dataset for tilt outliers
         tilt_outlier_dataset = dataset.CryoEMDataset(None, voxel_size,
-                                                    rots_tilt_outliers, trans_tilt_outliers, ctf_params_tilt_outliers, 
-                                                    CTF_fun=CTF_fun, dataset_indices=None, grid_size=grid_size)
+                                                    rots_tilt_outliers, trans_tilt_outliers, ctf_params_tilt_outliers,
+                                                    ctf_evaluator=ctf_evaluator, dataset_indices=None, grid_size=grid_size)
         
         # Generate tilt outlier images
         tilt_outlier_image_stack = simulate_data(tilt_outlier_dataset, outlier_volume[None], noise_variance, 
@@ -734,19 +734,19 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                                                  experiment_dataset.image_shape, 
                                                  experiment_dataset.grid_size, 
                                                  disc_type,
-                                                 experiment_dataset.CTF_fun,
+                                                 experiment_dataset.ctf_evaluator,
                                                  skip_ctf = pad_before_ctf)
             elif disc_type == "pdb":
                 images_batch = simulate_nufft_data_batch_from_pdb(volumes[vol_idx],
-                                                 experiment_dataset.rotation_matrices[indices], 
-                                                 translations, 
-                                                 experiment_dataset.CTF_params[indices], 
-                                                 experiment_dataset.voxel_size, 
-                                                 experiment_dataset.volume_shape, 
-                                                 experiment_dataset.image_shape, 
-                                                 experiment_dataset.grid_size, 
+                                                 experiment_dataset.rotation_matrices[indices],
+                                                 translations,
+                                                 experiment_dataset.CTF_params[indices],
+                                                 experiment_dataset.voxel_size,
+                                                 experiment_dataset.volume_shape,
+                                                 experiment_dataset.image_shape,
+                                                 experiment_dataset.grid_size,
                                                  disc_type,
-                                                 experiment_dataset.CTF_fun,
+                                                 experiment_dataset.ctf_evaluator,
                                                   skip_ctf = pad_before_ctf) / gt_vols_norm
                 
 
@@ -793,7 +793,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 # IF this is on, we did not apply CTF above.
                 upsample_factor=2
                 upsampled_shape = tuple(np.array(experiment_dataset.image_shape) * upsample_factor)
-                upsampled_CTF = experiment_dataset.CTF_fun(experiment_dataset.CTF_params[indices],  upsampled_shape, experiment_dataset.voxel_size)
+                upsampled_CTF = experiment_dataset.ctf_evaluator(experiment_dataset.CTF_params[indices],  upsampled_shape, experiment_dataset.voxel_size)
 
                 images_batch = padding.pad_images_fourier_domain(images_batch,  experiment_dataset.image_shape, experiment_dataset.grid_size * (upsample_factor-1))
                 images_batch = images_batch * upsampled_CTF
@@ -904,9 +904,9 @@ def simulate_batch(
     return core.translate_images(slices, -translations, config.image_shape)
 
 
-def simulate_nufft_data_batch(volume, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun, skip_ctf = False ):
+def simulate_nufft_data_batch(volume, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, ctf, skip_ctf = False ):
     
-    CTF = CTF_fun( CTF_params, image_shape, voxel_size)
+    CTF = ctf( CTF_params, image_shape, voxel_size)
     corrected_images = get_nufft_slices(volume, rotation_matrices, image_shape, volume_shape, grid_size, voxel_size) 
 
     if not skip_ctf:
@@ -927,9 +927,9 @@ def get_rotated_plane_coords(rotation_matrix, image_shape, voxel_size, scaled = 
 batch_get_rotated_plane_coords = jax.vmap(get_rotated_plane_coords, in_axes = (0, None, None, None))
 
 
-def simulate_nufft_data_batch_from_pdb(atom_group, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, CTF_fun, Bfactor=0, skip_ctf = False ):
+def simulate_nufft_data_batch_from_pdb(atom_group, rotation_matrices, translations, CTF_params, voxel_size, volume_shape, image_shape, grid_size, disc_type, ctf, Bfactor=0, skip_ctf = False ):
     
-    CTF = CTF_fun( CTF_params, image_shape, voxel_size)    
+    CTF = ctf( CTF_params, image_shape, voxel_size)
     plane_coords_mol = batch_get_rotated_plane_coords(rotation_matrices, image_shape, voxel_size, True) 
     slices = compute_projections_with_nufft(atom_group, plane_coords_mol, voxel_size)
 

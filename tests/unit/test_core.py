@@ -148,7 +148,7 @@ def test_ctf_param_index_values_are_stable():
 
 
 def test_core_exports_include_expected_symbols():
-    assert "evaluate_ctf_wrapper" in core.__all__
+    assert "CTFEvaluator" in core.__all__
     assert "vol_indices_to_vec_indices" in core.__all__
     assert "batch_translate_images" in core.__all__
 

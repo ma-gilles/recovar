@@ -75,7 +75,7 @@ def test_M_step_batch_runs_and_accumulates():
         latent_means, latent_covs,
         CTF_params, rotation_matrices, translations,
         image_shape, volume_shape, grid_size, voxel_size,
-        noise_variance, core.evaluate_ctf_wrapper,
+        noise_variance, core.CTFEvaluator(),
     )
 
     assert lhs_out.shape == (volume_size, basis_size * basis_size)
