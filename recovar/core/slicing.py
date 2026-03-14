@@ -341,9 +341,8 @@ def _vjp_adjoint_cubic(slices, rotation_matrices, image_shape, volume_shape,
     """VJP-based cubic backprojection: gradient of original volume through
     coefficient computation + slice.
     """
-    if half_image:
-        slices = ftu.half_image_to_full_image(slices, image_shape)
-    slices = _normalize_slices(slices, image_shape, half_image=False)
+    slices = _normalize_slices(slices, image_shape, half_image)
+    _slice_fn = _jax_slice_half_image if half_image else _jax_slice
 
     # Cubic's 4×4×4 stencil reads from both Hermitian halves, so the
     # forward function must expand half→full before interpolating.
@@ -354,13 +353,13 @@ def _vjp_adjoint_cubic(slices, rotation_matrices, image_shape, volume_shape,
             full_v = ftu.half_volume_to_full_volume(v, volume_shape)
             from recovar.core import cubic_interpolation
             coeffs = cubic_interpolation.calculate_spline_coefficients(full_v.reshape(volume_shape))
-            return _jax_slice(coeffs, rotation_matrices, image_shape, volume_shape, 3)
+            return _slice_fn(coeffs, rotation_matrices, image_shape, volume_shape, 3)
     else:
         vol_size = int(np.prod(volume_shape))
         def f(v):
             from recovar.core import cubic_interpolation
             coeffs = cubic_interpolation.calculate_spline_coefficients(v.reshape(volume_shape))
-            return _jax_slice(coeffs, rotation_matrices, image_shape, volume_shape, 3)
+            return _slice_fn(coeffs, rotation_matrices, image_shape, volume_shape, 3)
 
     _, u = vjp(f, jnp.zeros(vol_size, dtype=slices.dtype))
     return u(slices)[0]
@@ -378,9 +377,8 @@ def _jax_adjoint_slice_from_coefficients(slices, rotation_matrices, image_shape,
        ``cuda_ops._cuda_project_bwd`` for the order=3 (cubic) CUDA
        backward pass.  Do not remove.
     """
-    if half_image:
-        slices = ftu.half_image_to_full_image(slices, image_shape)
-    slices = _normalize_slices(slices, image_shape, half_image=False)
+    slices = _normalize_slices(slices, image_shape, half_image)
+    _slice_fn = _jax_slice_half_image if half_image else _jax_slice
 
     if half_volume:
         half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
@@ -388,13 +386,13 @@ def _jax_adjoint_slice_from_coefficients(slices, rotation_matrices, image_shape,
         def f(half_coeffs_flat):
             full_coeffs = ftu.half_volume_to_full_volume(
                 half_coeffs_flat.reshape(half_shape), volume_shape)
-            return _jax_slice(full_coeffs, rotation_matrices, image_shape, volume_shape, 3)
+            return _slice_fn(full_coeffs, rotation_matrices, image_shape, volume_shape, 3)
         _, u = vjp(f, jnp.zeros(half_size, dtype=slices.dtype))
         return u(slices)[0].reshape(half_shape)
     else:
         vol_size = int(np.prod(volume_shape))
         def f(coeffs_flat):
-            return _jax_slice(coeffs_flat, rotation_matrices, image_shape, volume_shape, 3)
+            return _slice_fn(coeffs_flat, rotation_matrices, image_shape, volume_shape, 3)
         _, u = vjp(f, jnp.zeros(vol_size, dtype=slices.dtype))
         return u(slices)[0].reshape(volume_shape)
 
