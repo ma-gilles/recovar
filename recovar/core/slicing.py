@@ -214,9 +214,8 @@ def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type
 
     Parameters
     ----------
-    volume : complex array, flat ``(vol_size,)`` or grid-shaped.
-        Must be complex (Fourier-space).  A ``TypeError`` is raised for
-        real input — pass through an FFT first.
+    volume : array, flat ``(vol_size,)`` or grid-shaped.
+        Real or complex.  Promoted to complex for the CUDA kernel.
     half_volume : if True, *volume* is rfft-packed ``(N0*N1*(N2//2+1),)``.
     half_image : if True, output images are rfft-packed ``(n, H*(W//2+1))``.
     max_r : sphere clipping radius.  Default (``_AUTO``) uses
@@ -263,8 +262,8 @@ def batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, di
 
     Parameters
     ----------
-    volumes : complex array ``(batch, vol_size)``.
-        Must be complex (Fourier-space).
+    volumes : array ``(batch, vol_size)``.
+        Real or complex.  Promoted to complex for the CUDA kernel.
     half_volume : if True, *volumes* are rfft-packed half-volumes.
     half_image : if True, output images are rfft-packed.
     max_r : sphere clipping radius.  Default uses
@@ -295,8 +294,8 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
     Parameters
     ----------
     slices : array ``(n_images, n_pixels)``.
-        May be real (e.g. ``ctf**2 / noise``) — promoted to complex when
-        the accumulator *volume* is complex.
+        Real or complex.  If *volume* is complex, slices are promoted
+        to match (and vice versa).
     half_image : if True, *slices* are rfft-packed half-spectrum images.
     half_volume : if True, output uses rfft-packed half-volume layout.
     volume : optional accumulator to add the result into.
@@ -310,13 +309,13 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
     # CUDA backproject (order 0/1 only)
     if _use_cuda_backproject(order):
         from recovar.cuda_backproject import backproject
-        # Slices can be real (e.g. ctf**2/noise for Wiener weights).
-        # Promote to complex only when accumulating into a complex volume.
-        if not _is_complex(slices) and volume is not None and _is_complex(volume):
-            slices = slices.astype(jnp.result_type(slices, jnp.complex64))
         vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
         if volume is None:
             volume = jnp.zeros(int(np.prod(vol_shape)), dtype=slices.dtype)
+        # CUDA needs matching dtypes: if either is complex, promote both.
+        out_dtype = jnp.result_type(slices, volume)
+        slices = slices.astype(out_dtype)
+        volume = volume.astype(out_dtype)
         return backproject(volume, slices, rotation_matrices, image_shape, volume_shape,
                            order=order, half_image=half_image, half_volume=half_volume,
                            max_r=_cuda_max_r(max_r, image_shape, volume_shape))
@@ -407,7 +406,7 @@ def batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_sh
     Parameters
     ----------
     slices : shape ``(batch, n_images, n_pixels)``.
-        May be real — promoted to complex when accumulators are complex.
+        Real or complex.  Promoted to match *volumes* dtype (and vice versa).
     rotation_matrices : shape ``(n_images, 3, 3)`` — shared across batch.
     volumes : optional ``(batch, vol_flat_size)`` accumulators.
     half_image, half_volume : same semantics as ``adjoint_slice_volume``.
@@ -424,10 +423,10 @@ def batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_sh
         volumes = jnp.zeros((batch, vol_flat), dtype=slices.dtype)
     if _use_cuda_backproject(order):
         from recovar.cuda_backproject import batch_backproject
-        # Real slices are legitimate (e.g. ctf**2/noise); promote when
-        # accumulating into a complex volume.
-        if not _is_complex(slices) and _is_complex(volumes):
-            slices = slices.astype(jnp.result_type(slices, jnp.complex64))
+        # CUDA needs matching dtypes: if either is complex, promote both.
+        out_dtype = jnp.result_type(slices, volumes)
+        slices = slices.astype(out_dtype)
+        volumes = volumes.astype(out_dtype)
         return batch_backproject(volumes, slices, rotation_matrices, image_shape, volume_shape,
                                 order=order, half_volume=half_volume, half_image=half_image,
                                 max_r=_cuda_max_r(max_r, image_shape, volume_shape))
