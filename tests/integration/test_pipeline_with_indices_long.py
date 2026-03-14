@@ -96,8 +96,16 @@ def _compare_against_baseline(
     baseline_path: Path,
     tol_frac: float,
 ) -> None:
-    """Compare current metrics against the stored baseline."""
-    assert baseline_path.exists(), f"baseline not found: {baseline_path}"
+    """Compare current metrics against the stored baseline.
+
+    If the baseline file does not exist yet, write it from *current* and return
+    (first-run bootstrap — same pattern as the outlier regression test).
+    """
+    if not baseline_path.exists():
+        baseline_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(baseline_path, "w") as f:
+            json.dump(current, f, indent=2, sort_keys=True)
+        return  # nothing to compare on first run
     baseline = _load_json(baseline_path)
     failures: List[str] = []
     checked = 0

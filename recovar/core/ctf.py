@@ -1,9 +1,16 @@
-"""CTF evaluation and parameter handling for cryo-EM images."""
+"""CTF evaluation and parameter handling for cryo-EM images.
+
+Provides :class:`CTFEvaluator`, a unified equinox module dispatched by
+:class:`CTFMode` that evaluates the Contrast Transfer Function for all
+supported cryo-EM/ET imaging modes.
+"""
 
 import functools
 import logging
 from enum import IntEnum
+from typing import Callable
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -12,6 +19,10 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# CTF parameter indexing
+# ---------------------------------------------------------------------------
 
 class CTFParamIndex(IntEnum):
     """Enum for CTF parameter indices to avoid magic numbers."""
@@ -29,6 +40,109 @@ class CTFParamIndex(IntEnum):
     TILT_ANGLE = 10
 
 
+# ---------------------------------------------------------------------------
+# CTF mode and evaluator
+# ---------------------------------------------------------------------------
+
+class CTFMode(IntEnum):
+    """CTF evaluation mode, determined by the imaging modality.
+
+    Attributes:
+        SPA: Standard single-particle analysis CTF.
+        SPA_ANTIALIASED: SPA with 2x-upsampled antialiasing filter.
+        TILT_SERIES: Parametric dose weighting from ``dose_per_tilt``
+            and ``angle_per_tilt`` constants.
+        CRYO_ET: Per-image dose and tilt-angle columns already present
+            in the CTF parameter array.
+    """
+    SPA = 0
+    SPA_ANTIALIASED = 1
+    TILT_SERIES = 2
+    CRYO_ET = 3
+
+
+class CTFEvaluator(eqx.Module):
+    """Unified CTF evaluator for all cryo-EM/ET imaging modes.
+
+    An equinox module that is callable with the standard CTF signature::
+
+        evaluator(ctf_params, image_shape, voxel_size, *, half_image=False)
+
+    All fields are static (compile-time constants).  Changing ``mode`` or
+    dose parameters triggers JAX recompilation, which is the correct
+    behaviour since these are fixed per dataset.
+
+    Parameters
+    ----------
+    mode : CTFMode
+        Imaging modality.  Defaults to :attr:`CTFMode.SPA`.
+    dose_per_tilt : float
+        Dose per tilt in e-/A^2.  Only used when ``mode == TILT_SERIES``.
+    angle_per_tilt : float
+        Tilt-angle increment in degrees.  Only used when ``mode == TILT_SERIES``.
+    """
+
+    mode: CTFMode = eqx.field(static=True, default=CTFMode.SPA)
+    dose_per_tilt: float = eqx.field(static=True, default=0.0)
+    angle_per_tilt: float = eqx.field(static=True, default=0.0)
+
+    def __call__(self, ctf_params, image_shape, voxel_size, *, half_image=False):
+        """Evaluate the CTF for a batch of images.
+
+        Parameters
+        ----------
+        ctf_params : jax.Array
+            Per-image CTF parameters, shape ``(N, K)``.
+        image_shape : tuple[int, int]
+            Image dimensions in pixels.
+        voxel_size : float
+            Pixel size in Angstroms.
+        half_image : bool
+            If *True*, evaluate on the rfft-packed half-spectrum grid.
+        """
+        if self.mode == CTFMode.SPA:
+            return _compute_spa_ctf(ctf_params, image_shape, voxel_size, half_image=half_image)
+        elif self.mode == CTFMode.SPA_ANTIALIASED:
+            return _compute_spa_ctf_antialiased(ctf_params, image_shape, voxel_size, half_image=half_image)
+        elif self.mode == CTFMode.TILT_SERIES:
+            return _compute_tilt_series_ctf(
+                ctf_params, image_shape, voxel_size,
+                self.dose_per_tilt, self.angle_per_tilt, half_image=half_image,
+            )
+        elif self.mode == CTFMode.CRYO_ET:
+            return _compute_cryo_et_ctf(ctf_params, image_shape, voxel_size, half_image=half_image)
+        raise ValueError(f"Unknown CTF mode: {self.mode}")
+
+
+class _LegacyCTFAdapter(eqx.Module):
+    """Wraps an arbitrary callable as a CTFEvaluator-compatible module.
+
+    The callable must accept ``(ctf_params, image_shape, voxel_size, *,
+    half_image=False)`` or use ``**kwargs`` to absorb the keyword argument.
+    """
+
+    _fn: Callable = eqx.field(static=True)
+
+    def __call__(self, ctf_params, image_shape, voxel_size, *, half_image=False, **kwargs):
+        return self._fn(ctf_params, image_shape, voxel_size, half_image=half_image, **kwargs)
+
+
+def as_ctf_evaluator(fn_or_evaluator):
+    """Coerce a callable into a CTFEvaluator-compatible eqx.Module.
+
+    If *fn_or_evaluator* is already a :class:`CTFEvaluator` or
+    :class:`_LegacyCTFAdapter`, return it unchanged.  Otherwise wrap it
+    in a :class:`_LegacyCTFAdapter`.
+    """
+    if isinstance(fn_or_evaluator, (CTFEvaluator, _LegacyCTFAdapter)):
+        return fn_or_evaluator
+    return _LegacyCTFAdapter(fn_or_evaluator)
+
+
+# ---------------------------------------------------------------------------
+# Low-level CTF physics (unchanged)
+# ---------------------------------------------------------------------------
+
 @jax.jit
 def evaluate_ctf(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfactor):
     """Evaluate the Contrast Transfer Function at given frequencies.
@@ -40,7 +154,7 @@ def evaluate_ctf(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfactor):
         dfang: Astigmatism angle in degrees.
         volt: Accelerating voltage in kV.
         cs: Spherical aberration in mm.
-        w: Amplitude contrast fraction (0–1).
+        w: Amplitude contrast fraction (0-1).
         phase_shift: Phase shift in degrees.
         bfactor: B-factor for envelope decay in Angstroms squared.
 
@@ -76,24 +190,15 @@ def evaluate_ctf_packed(freqs, ctf):
 batch_evaluate_ctf = jax.vmap(evaluate_ctf_packed, in_axes=(None, 0))
 
 
+# ---------------------------------------------------------------------------
+# Dose-filter helpers
+# ---------------------------------------------------------------------------
+
 def critical_exposure(freq, voltage):
     scale_factor = jnp.where(jnp.isclose(voltage, 200), 0.75, 1)
     critical_exp = freq ** (-1.665)
     critical_exp = critical_exp * scale_factor * 0.245
     return critical_exp + 2.81
-
-
-def get_dose_filters_from_tilt_number(Apix, image_shape, dose_per_tilt, angle_per_tilt, tilt_numbers, voltage):
-    cumulative_dose = tilt_numbers * dose_per_tilt
-    tilt_angles = angle_per_tilt * jnp.ceil(tilt_numbers / 2)
-    return get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage)
-
-
-def get_dose_filters_from_tilt_number_half(Apix, image_shape, dose_per_tilt, angle_per_tilt, tilt_numbers, voltage):
-    """Half-spectrum dose filters from tilt number."""
-    cumulative_dose = tilt_numbers * dose_per_tilt
-    tilt_angles = angle_per_tilt * jnp.ceil(tilt_numbers / 2)
-    return get_dose_filters_half(Apix, image_shape, cumulative_dose, tilt_angles, voltage)
 
 
 def _dose_filter_from_freqs(freqs, cumulative_dose, tilt_angles, voltage):
@@ -103,118 +208,55 @@ def _dose_filter_from_freqs(freqs, cumulative_dose, tilt_angles, voltage):
 
     cd = cumulative_dose[:, None]                        # (n, 1)
     ce = critical_exposure(s, voltage)[None, :]          # (1, n_pixels)
-    oe_mask = cd < ce * 2.51284                          # implicit broadcast → (n, n_pixels)
+    oe_mask = cd < ce * 2.51284                          # implicit broadcast -> (n, n_pixels)
     freq_correction = jnp.exp(-0.5 * cd / ce) * oe_mask
 
     angle_correction = jnp.cos(tilt_angles * jnp.pi / 180)
     return freq_correction * angle_correction[:, None]
 
 
-def get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage):
-    freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, Apix, scaled=True)
+def get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage, *, half_image=False):
+    if half_image:
+        freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(image_shape, Apix, scaled=True)
+    else:
+        freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, Apix, scaled=True)
     return _dose_filter_from_freqs(freqs, cumulative_dose, tilt_angles, voltage)
 
 
-def get_dose_filters_half(Apix, image_shape, cumulative_dose, tilt_angles, voltage):
-    """Dose filters on half-spectrum pixels (consistent with full_image_to_half_image)."""
-    freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(image_shape, Apix, scaled=True)
-    return _dose_filter_from_freqs(freqs, cumulative_dose, tilt_angles, voltage)
+def get_dose_filters_from_tilt_number(Apix, image_shape, dose_per_tilt, angle_per_tilt, tilt_numbers, voltage, *, half_image=False):
+    cumulative_dose = tilt_numbers * dose_per_tilt
+    tilt_angles = angle_per_tilt * jnp.ceil(tilt_numbers / 2)
+    return get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage, half_image=half_image)
 
 
-def cryodrgn_CTF(CTF_params, image_shape, voxel_size):
-    psi = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=True)
+# ---------------------------------------------------------------------------
+# Private CTF computation functions
+# ---------------------------------------------------------------------------
+
+def _compute_spa_ctf(CTF_params, image_shape, voxel_size, *, half_image=False):
+    """Standard single-particle CTF evaluation on a frequency grid."""
+    if half_image:
+        psi = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size, scaled=True)
+    else:
+        psi = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=True)
     return batch_evaluate_ctf(psi, CTF_params)
 
 
-@functools.partial(jax.jit, static_argnums=[1])
-def cryodrgn_CTF_half(CTF_params, image_shape, voxel_size):
-    """Half-spectrum CTF (consistent with full_image_to_half_image pixel ordering)."""
-    psi = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size, scaled=True)
-    return batch_evaluate_ctf(psi, CTF_params)
-
-
-@functools.partial(jax.jit, static_argnums=[1])
-def evaluate_ctf_wrapper_tilt_series_v2(CTF_params, image_shape, voxel_size):
-    dose_filter = get_dose_filters(
-        voxel_size,
-        image_shape,
-        CTF_params[:, CTFParamIndex.DOSE],
-        CTF_params[:, CTFParamIndex.TILT_ANGLE],
-        CTF_params[0, CTFParamIndex.VOLT],
-    )
-    return dose_filter * cryodrgn_CTF(CTF_params[:, :9], image_shape, voxel_size)
-
-
-@functools.partial(jax.jit, static_argnums=[1])
-def evaluate_ctf_wrapper_tilt_series_v2_half(CTF_params, image_shape, voxel_size):
-    """Half-spectrum tilt-series CTF computed directly on rfft-packed frequencies."""
-    dose_filter = get_dose_filters_half(
-        voxel_size,
-        image_shape,
-        CTF_params[:, CTFParamIndex.DOSE],
-        CTF_params[:, CTFParamIndex.TILT_ANGLE],
-        CTF_params[0, CTFParamIndex.VOLT],
-    )
-    return dose_filter * cryodrgn_CTF_half(CTF_params[:, :9], image_shape, voxel_size)
-
-
-@functools.partial(jax.jit, static_argnums=[1])
-def evaluate_ctf_wrapper_tilt_series(CTF_params, image_shape, voxel_size, dose_per_tilt=None, angle_per_tilt=None):
-    dose_filter = get_dose_filters_from_tilt_number(
-        voxel_size,
-        image_shape,
-        dose_per_tilt,
-        angle_per_tilt,
-        CTF_params[:, CTFParamIndex.DOSE],
-        CTF_params[0, CTFParamIndex.VOLT],
-    )
-    return dose_filter * cryodrgn_CTF(CTF_params[:, :9], image_shape, voxel_size)
-
-
-@functools.partial(jax.jit, static_argnums=[1])
-def evaluate_ctf_wrapper_tilt_series_half(CTF_params, image_shape, voxel_size, dose_per_tilt=None, angle_per_tilt=None):
-    """Half-spectrum tilt-series CTF computed directly on rfft-packed frequencies."""
-    dose_filter = get_dose_filters_from_tilt_number_half(
-        voxel_size,
-        image_shape,
-        dose_per_tilt,
-        angle_per_tilt,
-        CTF_params[:, CTFParamIndex.DOSE],
-        CTF_params[0, CTFParamIndex.VOLT],
-    )
-    return dose_filter * cryodrgn_CTF_half(CTF_params[:, :9], image_shape, voxel_size)
-
-
-def get_cryo_ET_CTF_fun(dose_per_tilt=2.9, angle_per_tilt=3):
-    def CTF_ET_fun(*args):
-        return evaluate_ctf_wrapper_tilt_series(*args, dose_per_tilt=dose_per_tilt, angle_per_tilt=angle_per_tilt)
-
-    CTF_ET_fun._half_variant = get_cryo_ET_CTF_fun_half(dose_per_tilt, angle_per_tilt)
-    return CTF_ET_fun
-
-
-def get_cryo_ET_CTF_fun_half(dose_per_tilt=2.9, angle_per_tilt=3):
-    def CTF_ET_fun(*args):
-        return evaluate_ctf_wrapper_tilt_series_half(
-            *args, dose_per_tilt=dose_per_tilt, angle_per_tilt=angle_per_tilt
-        )
-
-    return CTF_ET_fun
-
-
-def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, antialiasing=False):
-    if not antialiasing:
-        return cryodrgn_CTF(CTF_params, image_shape, voxel_size)
+def _compute_spa_ctf_antialiased(CTF_params, image_shape, voxel_size, *, half_image=False):
+    """SPA CTF with 2x-upsampled antialiasing filter."""
+    if half_image:
+        full = _compute_spa_ctf_antialiased(CTF_params, image_shape, voxel_size)
+        return fourier_transform_utils.full_image_to_half_image(full, image_shape)
 
     upsample_factor = 2
     upsampled_shape = tuple(s * upsample_factor for s in image_shape)
-    upsampled_CTF_squared = cryodrgn_CTF(CTF_params, upsampled_shape, voxel_size)
+    upsampled_ctf = _compute_spa_ctf(CTF_params, upsampled_shape, voxel_size)
 
-    batch_size = upsampled_CTF_squared.shape[0]
-    ctf = upsampled_CTF_squared.reshape(batch_size, *upsampled_shape)
+    batch_size = upsampled_ctf.shape[0]
+    ctf = upsampled_ctf.reshape(batch_size, *upsampled_shape)
 
     kernel_size = upsample_factor + upsample_factor // 2
-    kernel = jnp.ones((kernel_size, kernel_size), dtype=upsampled_CTF_squared.dtype) / (kernel_size * kernel_size)
+    kernel = jnp.ones((kernel_size, kernel_size), dtype=upsampled_ctf.dtype) / (kernel_size * kernel_size)
 
     ctf = jnp.expand_dims(ctf, 1)
     kernel = kernel.reshape(1, 1, kernel_size, kernel_size)
@@ -230,101 +272,48 @@ def evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, antialiasing=False
     return ctf.reshape(ctf.shape[0], -1)
 
 
-def evaluate_ctf_wrapper_half(CTF_params, image_shape, voxel_size, antialiasing=False):
-    """Half-spectrum CTF computed directly on rfft-packed frequencies.
+@functools.partial(jax.jit, static_argnames=['image_shape', 'half_image'])
+def _compute_cryo_et_ctf(CTF_params, image_shape, voxel_size, *, half_image=False):
+    """CTF with per-image dose and tilt-angle columns in CTF params."""
+    dose_filter = get_dose_filters(
+        voxel_size,
+        image_shape,
+        CTF_params[:, CTFParamIndex.DOSE],
+        CTF_params[:, CTFParamIndex.TILT_ANGLE],
+        CTF_params[0, CTFParamIndex.VOLT],
+        half_image=half_image,
+    )
+    return dose_filter * _compute_spa_ctf(CTF_params[:, :9], image_shape, voxel_size, half_image=half_image)
 
-    Falls back to full→half for antialiasing path (involves convolution).
-    """
-    if not antialiasing:
-        return cryodrgn_CTF_half(CTF_params, image_shape, voxel_size)
-    full = evaluate_ctf_wrapper(CTF_params, image_shape, voxel_size, antialiasing=True)
-    return fourier_transform_utils.full_image_to_half_image(full, image_shape)
 
-## TODO: Is this used anywhere? If not should it be? Otherwise, delete.
-class CTFParams:
-    """Class to handle CTF parameters in a more structured way."""
-
-    def __init__(self, params_array):
-        self.params = np.asarray(params_array)
-        self.n_images = self.params.shape[0]
-        self.n_params = self.params.shape[1]
-
-    @classmethod
-    def create_standard_params(
-        cls, n_images, dfu=0, dfv=0, dfang=0, volt=300, cs=2.7, w=0.1, phase_shift=0, bfactor=0, contrast=1.0
-    ):
-        params = np.zeros((n_images, len(CTFParamIndex)))
-        params[:, CTFParamIndex.DFU] = dfu
-        params[:, CTFParamIndex.DFV] = dfv
-        params[:, CTFParamIndex.DFANG] = dfang
-        params[:, CTFParamIndex.VOLT] = volt
-        params[:, CTFParamIndex.CS] = cs
-        params[:, CTFParamIndex.W] = w
-        params[:, CTFParamIndex.PHASE_SHIFT] = phase_shift
-        params[:, CTFParamIndex.BFACTOR] = bfactor
-        params[:, CTFParamIndex.CONTRAST] = contrast
-        return cls(params)
-
-    def get_param(self, param_index):
-        return self.params[:, param_index]
-
-    def set_param(self, param_index, values):
-        self.params[:, param_index] = values
-
-    def get_image_params(self, image_idx):
-        return self.params[image_idx, :]
-
-    def add_tilt_series_params(self, dose_values, tilt_angles):
-        if self.n_params < len(CTFParamIndex):
-            extended_params = np.zeros((self.n_images, len(CTFParamIndex)))
-            extended_params[:, : self.n_params] = self.params
-            self.params = extended_params
-            self.n_params = len(CTFParamIndex)
-        self.params[:, CTFParamIndex.DOSE] = dose_values
-        self.params[:, CTFParamIndex.TILT_ANGLE] = tilt_angles
-
-    def validate(self):
-        if self.n_images == 0:
-            raise ValueError("No images in CTF parameters")
-        if np.any(self.params[:, CTFParamIndex.VOLT] <= 0):
-            raise ValueError("Voltage must be positive")
-        if np.any(self.params[:, CTFParamIndex.CONTRAST] <= 0):
-            raise ValueError("Contrast must be positive")
-        return True
-
-    def __getitem__(self, key):
-        return self.params[key]
-
-    def __setitem__(self, key, value):
-        self.params[key] = value
-
-    @property
-    def shape(self):
-        return self.params.shape
-
-    def astype(self, dtype):
-        return CTFParams(self.params.astype(dtype))
+@functools.partial(jax.jit, static_argnames=['image_shape', 'half_image'])
+def _compute_tilt_series_ctf(CTF_params, image_shape, voxel_size, dose_per_tilt=None, angle_per_tilt=None, *, half_image=False):
+    """CTF with parametric dose weighting from tilt numbers."""
+    dose_filter = get_dose_filters_from_tilt_number(
+        voxel_size,
+        image_shape,
+        dose_per_tilt,
+        angle_per_tilt,
+        CTF_params[:, CTFParamIndex.DOSE],
+        CTF_params[0, CTFParamIndex.VOLT],
+        half_image=half_image,
+    )
+    return dose_filter * _compute_spa_ctf(CTF_params[:, :9], image_shape, voxel_size, half_image=half_image)
 
 
 __all__ = [
+    # New API
+    "CTFMode",
+    "CTFEvaluator",
+    "as_ctf_evaluator",
+    # Parameter indexing
     "CTFParamIndex",
+    # Low-level physics
     "evaluate_ctf",
     "evaluate_ctf_packed",
     "batch_evaluate_ctf",
-    "evaluate_ctf_wrapper_tilt_series_v2",
-    "evaluate_ctf_wrapper_tilt_series",
-    "get_cryo_ET_CTF_fun",
-    "get_cryo_ET_CTF_fun_half",
+    # Dose filters
     "critical_exposure",
-    "get_dose_filters_from_tilt_number",
     "get_dose_filters",
-    "get_dose_filters_half",
-    "get_dose_filters_from_tilt_number_half",
-    "evaluate_ctf_wrapper",
-    "cryodrgn_CTF",
-    "evaluate_ctf_wrapper_half",
-    "evaluate_ctf_wrapper_tilt_series_half",
-    "evaluate_ctf_wrapper_tilt_series_v2_half",
-    "cryodrgn_CTF_half",
-    "CTFParams",
+    "get_dose_filters_from_tilt_number",
 ]

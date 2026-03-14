@@ -255,14 +255,14 @@ def get_image_masks(volume_mask, rotation_matrices, volume_mask_threshold, volum
 
 
 # From a given noise variance model, predict the observed noise variance in a possibly CTFed + masked image
-def predict_noise_variance(noise_variance, CTF_params, voxel_size, CTF_fun, image_masks, image_shape, radial=True, premultiplied_ctf=False, upsample_factor=1):
+def predict_noise_variance(noise_variance, CTF_params, voxel_size, ctf, image_masks, image_shape, radial=True, premultiplied_ctf=False, upsample_factor=1):
     """Predict noise variance in images, optionally handling upsampling.
-    
+
     Args:
         noise_variance: Base noise variance (radial or scalar)
         CTF_params: CTF parameters
         voxel_size: Voxel size
-        CTF_fun: Function to compute CTF
+        ctf: Function to compute CTF
         image_masks: Image masks
         image_shape: Image shape
         radial: Whether noise is radial
@@ -290,12 +290,12 @@ def predict_noise_variance(noise_variance, CTF_params, voxel_size, CTF_fun, imag
 
         # Apply CTF on upsampled grid if needed
         if premultiplied_ctf:
-            upsampled_CTF = CTF_fun(CTF_params, upsampled_shape, voxel_size)
+            upsampled_CTF = ctf(CTF_params, upsampled_shape, voxel_size)
             noise_variance = noise_variance * upsampled_CTF**2
     else:
         noise_variance = make_radial_noise(noise_variance, image_shape)
         if premultiplied_ctf:
-            CTF = CTF_fun(CTF_params, image_shape, voxel_size)
+            CTF = ctf(CTF_params, image_shape, voxel_size)
             noise_variance = noise_variance * CTF**2
 
     predicted_noise_variance = get_masked_noise_variance_from_noise_variance(image_masks, noise_variance, image_shape)
@@ -303,13 +303,13 @@ def predict_noise_variance(noise_variance, CTF_params, voxel_size, CTF_fun, imag
     return predicted_noise_variance
 
 
-def noise_variance_loss(images, noise_variance, translations, CTF_params, voxel_size, CTF_fun, image_masks, image_shape, radial , premultiplied_ctf):
+def noise_variance_loss(images, noise_variance, translations, CTF_params, voxel_size, ctf, image_masks, image_shape, radial , premultiplied_ctf):
     # Compute the predicted noise variance
 
     images = core.translate_images(images, translations , image_shape)
 
     masked_images = covariance_core.apply_image_masks(images, image_masks, image_shape).reshape(-1, *image_shape)
-    predicted_noise_variance = predict_noise_variance(noise_variance, CTF_params, voxel_size, CTF_fun, image_masks, image_shape, radial, premultiplied_ctf)
+    predicted_noise_variance = predict_noise_variance(noise_variance, CTF_params, voxel_size, ctf, image_masks, image_shape, radial, premultiplied_ctf)
 
     loss = jnp.sum( jnp.abs( jnp.abs(masked_images)**2 - predicted_noise_variance )**2  ) / np.prod(image_shape)
 
@@ -441,7 +441,7 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
                 trans,
                 ctf_p,
                 experiment_dataset.voxel_size,
-                experiment_dataset.CTF_fun,
+                experiment_dataset.ctf_evaluator,
                 img_masks,
                 experiment_dataset.image_shape,
                 True,
@@ -518,7 +518,7 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
                     experiment_dataset.translations[batch_ind],
                     experiment_dataset.CTF_params[batch_ind],
                     experiment_dataset.voxel_size,
-                    experiment_dataset.CTF_fun,
+                    experiment_dataset.ctf_evaluator,
                     image_masks,
                     experiment_dataset.image_shape,
                     True,
@@ -667,7 +667,7 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
     for batch_data in batch_iter:
         batch = experiment_dataset.image_stack.process_images(batch_data.images)
         batch = core.translate_images(batch, batch_data.translations, experiment_dataset.image_shape)
-        CTF = experiment_dataset.CTF_fun(batch_data.ctf_params, experiment_dataset.image_shape, experiment_dataset.voxel_size)
+        CTF = experiment_dataset.ctf_evaluator(batch_data.ctf_params, experiment_dataset.image_shape, experiment_dataset.voxel_size)
 
         if mean_estimate is not None:
             projected_mean = core_forward.forward_model(
@@ -978,14 +978,14 @@ def get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, 
                                                                         experiment_dataset.padding, 
                                                                         disc_type, 
                                                                         experiment_dataset.image_stack.process_images,
-                                                                        experiment_dataset.CTF_fun, 
+                                                                        experiment_dataset.ctf_evaluator,
                                                                         contrasts[batch_image_ind], basis_coordinates[batch_image_ind])
         all_averaged_residual_squared[batch_image_ind] = np.array(averaged_residual_squared)
 
     return all_averaged_residual_squared
 
 
-def get_average_residual_square_inner(batch, mean_estimate, volume_mask, basis, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, process_fn, CTF_fun, contrasts,basis_coordinates):
+def get_average_residual_square_inner(batch, mean_estimate, volume_mask, basis, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, process_fn, ctf, contrasts,basis_coordinates):
     
     # Memory to do this is ~ size(volume_mask) * batch_size
     image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
@@ -1004,7 +1004,7 @@ def get_average_residual_square_inner(batch, mean_estimate, volume_mask, basis, 
     config = ForwardModelConfig(
         image_shape=image_shape, volume_shape=volume_shape,
         grid_size=grid_size, voxel_size=voxel_size,
-        padding=padding, disc_type=disc_type, CTF_fun=CTF_fun,
+        padding=padding, disc_type=disc_type, ctf=core.as_ctf_evaluator(ctf),
         premultiplied_ctf=False, volume_mask_threshold=volume_mask_threshold,
     )
 

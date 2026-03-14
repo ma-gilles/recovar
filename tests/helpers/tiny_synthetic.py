@@ -82,7 +82,7 @@ def make_tiny_cryo_dataset(grid_size=4, n_images=8, seed=0):
         rotation_matrices=rots,
         translations=trans,
         CTF_params=ctf_params,
-        CTF_fun=core.evaluate_ctf_wrapper,
+        ctf_evaluator=core.CTFEvaluator(),
         dataset_indices=None,
         grid_size=grid_size,
     )
@@ -146,7 +146,7 @@ def make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8, seed=0):
         rotation_matrices=rots,
         translations=trans,
         CTF_params=ctf_params,
-        CTF_fun=core.evaluate_ctf_wrapper,
+        ctf_evaluator=core.CTFEvaluator(),
         dataset_indices=np.arange(image_stack.n_images, dtype=np.int32),
         grid_size=grid_size,
     )

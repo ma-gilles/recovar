@@ -429,7 +429,7 @@ class _MockNoiseDataset:
         self.rotation_matrices = jnp.tile(jnp.eye(3, dtype=jnp.float32), (self.n_images, 1, 1))
         self.CTF_params = jnp.zeros((self.n_images, 1), dtype=jnp.float32)
 
-    def CTF_fun(self, ctf_params, image_shape, voxel_size):
+    def ctf_evaluator(self, ctf_params, image_shape, voxel_size):
         del voxel_size
         return jnp.ones((ctf_params.shape[0], int(np.prod(image_shape))), dtype=jnp.float32)
 
@@ -481,7 +481,7 @@ def _legacy_estimate_noise_level_no_masks(dataset, image_subset, mean_estimate, 
     for batch, _, batch_ind in data_generator:
         batch = dataset.image_stack.process_images(batch)
         batch = core.translate_images(batch, dataset.translations[batch_ind], dataset.image_shape)
-        ctf = dataset.CTF_fun(dataset.CTF_params[batch_ind], dataset.image_shape, dataset.voxel_size)
+        ctf = dataset.ctf_evaluator(dataset.CTF_params[batch_ind], dataset.image_shape, dataset.voxel_size)
 
         if mean_estimate is not None:
             projected_mean = noise.core_forward.forward_model(

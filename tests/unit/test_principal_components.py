@@ -301,7 +301,7 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
         rotation_matrices=rots,
         translations=trans,
         CTF_params=ctf_params,
-        CTF_fun=core.evaluate_ctf_wrapper,
+        ctf_evaluator=core.CTFEvaluator(),
         dataset_indices=None,
         grid_size=4,
     )

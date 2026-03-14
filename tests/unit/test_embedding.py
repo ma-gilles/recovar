@@ -265,7 +265,8 @@ def test_get_coords_shared_label_splits_mixed_particle_batches(monkeypatch):
             self.voxel_size = 1.0
             self.padding = 0
             self.premultiplied_ctf = False
-            self.CTF_fun = embedding.core.evaluate_ctf_wrapper
+            self._ctf_evaluator = embedding.core.CTFEvaluator()
+            self.ctf_evaluator = self._ctf_evaluator
             self.image_stack = _DummyImageStack()
             self.noise = _DummyNoise()
             self.CTF_params = np.zeros((4, 9), dtype=np.float32)
@@ -352,7 +353,8 @@ def test_get_coords_shared_label_grouped_shared_contrast(monkeypatch):
             self.voxel_size = 1.0
             self.padding = 0
             self.premultiplied_ctf = False
-            self.CTF_fun = embedding.core.evaluate_ctf_wrapper
+            self._ctf_evaluator = embedding.core.CTFEvaluator()
+            self.ctf_evaluator = self._ctf_evaluator
             self.image_stack = _DummyImageStack()
             self.noise = _DummyNoise()
             self.CTF_params = np.zeros((4, 9), dtype=np.float32)
@@ -607,8 +609,8 @@ def _minimal_config(image_shape, premultiplied_ctf=False):
         voxel_size=1.0,
         padding=0,
         disc_type="linear_interp",
-        CTF_fun=ctf_mod.cryodrgn_CTF,
-        CTF_fun_half=ctf_mod.cryodrgn_CTF_half,
+        ctf=ctf_mod.CTFEvaluator(),
+
         premultiplied_ctf=premultiplied_ctf,
         process_fn=None,
     )
@@ -644,7 +646,7 @@ def test_compute_batch_coords_p1_half_matches_full(H, W, noise_type, monkeypatch
     )
 
     # Inject controlled Hermitian data; bypass translate (zero translations = identity anyway)
-    monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s: b)
+    monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s, **kw: b)
     monkeypatch.setattr(embedding.core_forward, "forward_model",
                         _make_forward_model_mock(proj_mean, image_shape))
     monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",
@@ -718,7 +720,7 @@ def test_compute_batch_coords_p1_premult_ctf_half_matches_full(H, W, monkeypatch
     aus = jnp.stack([_hermitian_flat(rng, n_images, H, W) for _ in range(n_basis)])
     noise_var   = jnp.ones((n_images, H * W), dtype=jnp.float32)
 
-    monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s: b)
+    monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s, **kw: b)
     monkeypatch.setattr(embedding.core_forward, "forward_model",
                         _make_forward_model_mock(proj_mean, image_shape))
     monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",
@@ -787,7 +789,7 @@ def test_compute_batch_coords_p1_half_matches_full_float64(H, W, monkeypatch):
         aus = jnp.stack([hermitian_flat64(n_images, H, W) for _ in range(n_basis)])
         noise_var   = jnp.ones((n_images, H * W), dtype=jnp.float64)
 
-        monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s: b)
+        monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s, **kw: b)
         monkeypatch.setattr(embedding.core_forward, "forward_model",
                             _make_forward_model_mock(proj_mean, image_shape))
         monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",
@@ -801,8 +803,8 @@ def test_compute_batch_coords_p1_half_matches_full_float64(H, W, monkeypatch):
             voxel_size=1.0,
             padding=0,
             disc_type="linear_interp",
-            CTF_fun=ctf_mod.cryodrgn_CTF,
-            CTF_fun_half=ctf_mod.cryodrgn_CTF_half,
+            ctf=ctf_mod.CTFEvaluator(),
+    
             premultiplied_ctf=False,
             process_fn=None,
         )
@@ -904,8 +906,8 @@ def _run_half_vs_full_compute_batch_coords(H=16, W=16, n_images=32, n_basis=6):
         voxel_size=4.0,   # 4 Å/pix — physically reasonable
         padding=0,
         disc_type="linear_interp",
-        CTF_fun=ctf_mod.cryodrgn_CTF,
-        CTF_fun_half=ctf_mod.cryodrgn_CTF_half,
+        ctf=ctf_mod.CTFEvaluator(),
+
         premultiplied_ctf=False,
         process_fn=None,
     )
@@ -978,7 +980,7 @@ def test_compute_batch_coords_half_vs_full_gpu(gpu_device, monkeypatch):
         aus = jnp.stack([_hermitian_flat(rng, n_images, H, W) for _ in range(n_basis)])
         noise_var   = jnp.ones((n_images, H * W), dtype=jnp.float32)
 
-        monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s: b)
+        monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s, **kw: b)
         monkeypatch.setattr(embedding.core_forward, "forward_model",
                             _make_forward_model_mock(proj_mean, image_shape))
         monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",
@@ -1111,7 +1113,7 @@ def test_compute_batch_coords_half_vs_full_cpu(monkeypatch):
     aus = jnp.stack([_hermitian_flat(rng, n_images, H, W) for _ in range(n_basis)])
     noise_var = jnp.ones((n_images, H * W), dtype=jnp.float32)
 
-    monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s: b)
+    monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s, **kw: b)
     monkeypatch.setattr(embedding.core_forward, "forward_model",
                         _make_forward_model_mock(proj_mean, image_shape))
     monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",

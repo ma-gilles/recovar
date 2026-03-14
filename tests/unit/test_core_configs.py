@@ -7,6 +7,7 @@ pytest.importorskip("jax")
 import jax.numpy as jnp
 
 import recovar.core.configs as configs
+from recovar.core.ctf import CTFEvaluator, CTFMode, as_ctf_evaluator
 
 pytestmark = pytest.mark.unit
 
@@ -24,7 +25,7 @@ def _make_config(**overrides):
         voxel_size=1.0,
         padding=0,
         disc_type="linear_interp",
-        CTF_fun=lambda params, shape, vs: jnp.ones(shape),
+        ctf=as_ctf_evaluator(lambda params, shape, vs, **kw: jnp.ones(shape)),
         premultiplied_ctf=False,
         volume_mask_threshold=0.0,
     )
@@ -63,14 +64,14 @@ class TestForwardModelConfig:
     def test_compute_ctf(self):
         called_with = {}
 
-        def mock_ctf(params, shape, vs):
+        def mock_ctf(params, shape, vs, **kw):
             called_with["params"] = params
             called_with["shape"] = shape
             called_with["vs"] = vs
             return jnp.ones(10)
 
         cfg = _make_config(
-            CTF_fun=mock_ctf,
+            ctf=as_ctf_evaluator(mock_ctf),
             image_shape=(32, 32),
             voxel_size=1.5,
         )
@@ -78,6 +79,32 @@ class TestForwardModelConfig:
         assert called_with["shape"] == (32, 32)
         assert called_with["vs"] == 1.5
         assert result.shape == (10,)
+
+    def test_compute_ctf_half(self):
+        """config.compute_ctf_half should return half-spectrum CTF."""
+        cfg = _make_config(ctf=CTFEvaluator(mode=CTFMode.SPA))
+        import jax.numpy as jnp
+        params = jnp.zeros((1, 9), dtype=jnp.float32)
+        params = params.at[:, 3].set(300.0)
+        params = params.at[:, 4].set(2.7)
+        params = params.at[:, 5].set(0.1)
+        params = params.at[:, 8].set(1.0)
+        half = cfg.compute_ctf_half(params)
+        assert half.shape[1] == cfg.image_shape[0] * (cfg.image_shape[1] // 2 + 1)
+
+    def test_compute_ctf_at_shape(self):
+        called_with = {}
+
+        def mock_ctf(params, shape, vs, **kw):
+            called_with["shape"] = shape
+            return jnp.ones(10)
+
+        cfg = _make_config(
+            ctf=as_ctf_evaluator(mock_ctf),
+            image_shape=(32, 32),
+        )
+        cfg.compute_ctf_at_shape(jnp.array([1.0, 2.0]), (64, 64))
+        assert called_with["shape"] == (64, 64)
 
     def test_process_fn_default_none(self):
         cfg = _make_config()

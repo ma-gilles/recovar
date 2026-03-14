@@ -172,12 +172,12 @@ def main():
         )
 
         t_cubic_full, _ = bench(
-            core_slicing._slice_from_cubic_coeffs_jax,
-            coeffs, rots, image_shape, volume_shape,
+            core_slicing.slice_from_cubic_coefficients,
+            coeffs, rots, image_shape, volume_shape, half_image=False,
         )
         t_cubic_half, _ = bench(
-            core_slicing._slice_from_cubic_coeffs_half_image_jax,
-            coeffs, rots, image_shape, volume_shape,
+            core_slicing.slice_from_cubic_coefficients,
+            coeffs, rots, image_shape, volume_shape, half_image=True,
         )
         print(f"    FORWARD (from precomputed coeffs):")
         print(f"      coeffs → full_img:    {t_cubic_full:8.2f} ms")

@@ -1,9 +1,10 @@
 """Fourier slice extraction and adjoint (backprojection) operations.
 
 Dispatch rules:
-  - GPU + order <= 1 → CUDA kernels (mandatory; error if unavailable)
-  - CPU + order <= 1 → RELION-style JAX fallback (explicit scatter backproject)
-  - cubic (order 3)  → JAX ``map_coordinates`` with VJP backproject
+  - GPU + order 0/1 → CUDA project + CUDA backproject
+  - GPU + order 3   → CUDA project + JAX VJP backproject (cubic)
+  - CPU + order 0/1 → RELION-style JAX (explicit scatter backproject)
+  - CPU + order 3   → JAX ``map_coordinates`` + VJP backproject
 
 Three core public functions handle all volume/image format combinations via
 ``half_volume`` and ``half_image`` parameters:
@@ -17,6 +18,7 @@ RELION-style JAX reference: :mod:`recovar.core.relion_interp`.
 
 import functools
 import logging
+import os
 
 import jax
 import jax.numpy as jnp
@@ -80,8 +82,10 @@ def _on_gpu():
 
 
 def _use_cuda(order):
-    """Return True if CUDA should be used.  Error if on GPU but CUDA unavailable."""
-    if order > 1 or not _on_gpu():
+    """Return True if CUDA project should be used for forward projection."""
+    if order not in (0, 1, 3) or not _on_gpu():
+        return False
+    if os.environ.get("RECOVAR_DISABLE_CUDA", "0") == "1":
         return False
     from recovar.cuda_backproject import cuda_available
     if not cuda_available():
@@ -90,6 +94,17 @@ def _use_cuda(order):
             "Rebuild the CUDA library or set RECOVAR_DISABLE_CUDA=1 to force JAX fallback."
         )
     return True
+
+
+def _use_cuda_backproject(order):
+    """Return True if CUDA backproject should be used (order 0 or 1 only).
+
+    Cubic (order 3) backproject stays on JAX because the 64 atomic scatter
+    ops per pixel make the CUDA kernel impractical.
+    """
+    if order > 1:
+        return False
+    return _use_cuda(order)
 
 
 def _is_complex(arr):
@@ -132,7 +147,7 @@ def decide_order(disc_type):
     raise ValueError("disc_type must be 'linear_interp', 'nearest', or 'cubic'")
 
 
-# ── JAX fallback engine (CPU or cubic) ───────────────────────────────
+# ── JAX interpolation engine ────────────────────────────────────────
 
 @functools.partial(jax.jit, static_argnums=[2, 3, 4])
 def _jax_slice(volume, rotation_matrices, image_shape, volume_shape, order):
@@ -140,13 +155,13 @@ def _jax_slice(volume, rotation_matrices, image_shape, volume_shape, order):
     coords, og_shape = rotations_to_grid_point_coords(rotation_matrices, image_shape, volume_shape)
     if order == 3:
         from recovar.core import cubic_interpolation
+        vol_3d = volume.reshape(volume_shape)
         return cubic_interpolation.map_coordinates_with_cubic_spline(
-            volume, coords, mode="fill", cval=0.0
+            vol_3d, coords, mode="wrap", cval=0.0
         ).reshape(og_shape[:-1]).astype(volume.dtype)
     return jax.scipy.ndimage.map_coordinates(
         volume.reshape(volume_shape), coords, order=order, mode="constant", cval=0.0,
     ).reshape(og_shape[:-1]).astype(volume.dtype)
-
 
 
 @functools.partial(jax.jit, static_argnums=[2, 3, 4])
@@ -161,8 +176,9 @@ def _jax_slice_half_image(volume, rotation_matrices, image_shape, volume_shape, 
     )
     if order == 3:
         from recovar.core import cubic_interpolation
+        vol_3d = volume.reshape(volume_shape)
         return cubic_interpolation.map_coordinates_with_cubic_spline(
-            volume, coords, mode="fill", cval=0.0
+            vol_3d, coords, mode="wrap", cval=0.0
         ).reshape(og_shape[:-1]).astype(volume.dtype)
     return jax.scipy.ndimage.map_coordinates(
         volume.reshape(volume_shape), coords, order=order, mode="constant", cval=0.0,
@@ -185,7 +201,6 @@ def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
     if _use_cuda(order):
-        # CUDA project kernel requires complex input.
         if not _is_complex(volume):
             volume = volume.astype(jnp.result_type(volume, jnp.complex64))
         from recovar.core.cuda_ops import cuda_project
@@ -195,7 +210,7 @@ def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type
                                 _cuda_max_r(max_r, image_shape, volume_shape))
         except TypeError:
             pass  # JVP through custom_vjp — fall through to JAX
-    # JAX fallback (CPU, cubic, or JVP context)
+    # JAX path
     if order <= 1:
         from recovar.core import relion_interp
         return relion_interp.project(
@@ -203,7 +218,7 @@ def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type
             order=order, half_volume=half_volume, half_image=half_image,
             max_r=max_r,
         )
-    # Cubic: expand half-volume, use map_coordinates
+    # Cubic: expand half-volume if needed, then interpolate
     if half_volume:
         volume = ftu.half_volume_to_full_volume(volume, volume_shape)
     if half_image:
@@ -225,7 +240,6 @@ def batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, di
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
     if _use_cuda(order):
-        # CUDA project kernel requires complex input.
         if not _is_complex(volumes):
             volumes = volumes.astype(jnp.result_type(volumes, jnp.complex64))
         from recovar.cuda_backproject import batch_project
@@ -246,11 +260,6 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
     Parameters
     ----------
     half_image : if True, *slices* are rfft-packed half-spectrum images.
-        CUDA uses CONJ_MODE to scatter each half-image pixel with doubled
-        weights on interior kz, skipping redundant conjugate work (~2x
-        speedup for HALF_IMG + HALF_VOL).
-        JAX expands half-images to full via Hermitian conjugation before
-        backprojecting via VJP (no compute savings, only input size savings).
     half_volume : if True, output uses rfft-packed half-volume layout.
     volume : optional accumulator to add the result into.
     max_r : sphere clipping radius.  Default uses
@@ -258,9 +267,10 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
     """
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
-    if _use_cuda(order):
+
+    # CUDA backproject (order 0/1 only)
+    if _use_cuda_backproject(order):
         from recovar.cuda_backproject import backproject
-        # Real inputs stay real for 2x efficiency; promote only if accumulator is complex.
         if not _is_complex(slices) and volume is not None and _is_complex(volume):
             slices = slices.astype(jnp.result_type(slices, jnp.complex64))
         vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
@@ -269,9 +279,9 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
         return backproject(volume, slices, rotation_matrices, image_shape, volume_shape,
                            order=order, half_image=half_image, half_volume=half_volume,
                            max_r=_cuda_max_r(max_r, image_shape, volume_shape))
-    # JAX fallback (CPU or cubic)
+
+    # JAX order 0/1: RELION-style explicit scatter
     if order <= 1:
-        # RELION-style explicit scatter — ~10x faster than VJP for order 0/1.
         from recovar.core import relion_interp
         if not half_image:
             slices = _flatten_full_image_slices(slices, image_shape)
@@ -281,10 +291,22 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
             max_r=max_r,
         )
         return result if volume is None else result + volume
-    # Cubic: VJP-based backprojection
+
+    # Cubic: VJP-based backprojection (differentiates through coeff computation)
+    result = _vjp_adjoint_cubic(slices, rotation_matrices, image_shape, volume_shape,
+                                half_image=half_image, half_volume=half_volume)
+    return result if volume is None else result + volume
+
+
+def _vjp_adjoint_cubic(slices, rotation_matrices, image_shape, volume_shape,
+                       half_image=False, half_volume=False):
+    """VJP-based cubic backprojection: gradient of original volume through
+    coefficient computation + slice.
+    """
     if half_image:
         slices = ftu.half_image_to_full_image(slices, image_shape)
     slices = _flatten_full_image_slices(slices, image_shape)
+
     if half_volume:
         vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
         vol_size = int(np.prod(vol_shape))
@@ -295,14 +317,42 @@ def adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, d
             return _jax_slice(coeffs, rotation_matrices, image_shape, volume_shape, 3)
     else:
         vol_size = int(np.prod(volume_shape))
-        from recovar.core import cubic_interpolation
         def f(v):
+            from recovar.core import cubic_interpolation
             coeffs = cubic_interpolation.calculate_spline_coefficients(v.reshape(volume_shape))
             return _jax_slice(coeffs, rotation_matrices, image_shape, volume_shape, 3)
 
     _, u = vjp(f, jnp.zeros(vol_size, dtype=slices.dtype))
-    result = u(slices)[0]
-    return result if volume is None else result + volume
+    return u(slices)[0]
+
+
+def _jax_adjoint_slice_from_coefficients(slices, rotation_matrices, image_shape, volume_shape,
+                                          half_volume=False, half_image=False, max_r=None):
+    """VJP of _jax_slice w.r.t. already-computed spline coefficients.
+
+    Unlike _vjp_adjoint_cubic (which differentiates through coefficient
+    computation), this computes the gradient w.r.t. the coefficients directly.
+    Used by the CUDA VJP backward where the forward input is coefficients.
+    """
+    if half_image:
+        slices = ftu.half_image_to_full_image(slices, image_shape)
+    slices = _flatten_full_image_slices(slices, image_shape)
+
+    if half_volume:
+        half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+        half_size = int(np.prod(half_shape))
+        def f(half_coeffs_flat):
+            full_coeffs = ftu.half_volume_to_full_volume(
+                half_coeffs_flat.reshape(half_shape), volume_shape)
+            return _jax_slice(full_coeffs, rotation_matrices, image_shape, volume_shape, 3)
+        _, u = vjp(f, jnp.zeros(half_size, dtype=slices.dtype))
+        return u(slices)[0].reshape(half_shape)
+    else:
+        vol_size = int(np.prod(volume_shape))
+        def f(coeffs_flat):
+            return _jax_slice(coeffs_flat, rotation_matrices, image_shape, volume_shape, 3)
+        _, u = vjp(f, jnp.zeros(vol_size, dtype=slices.dtype))
+        return u(slices)[0].reshape(volume_shape)
 
 
 def batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, disc_type,
@@ -325,7 +375,7 @@ def batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_sh
     batch = slices.shape[0]
     if volumes is None:
         volumes = jnp.zeros((batch, vol_flat), dtype=slices.dtype)
-    if _use_cuda(order):
+    if _use_cuda_backproject(order):
         from recovar.cuda_backproject import batch_backproject
         if not _is_complex(slices) and _is_complex(volumes):
             slices = slices.astype(jnp.result_type(slices, jnp.complex64))
@@ -340,19 +390,13 @@ def batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_sh
     )(slices, volumes)
 
 
-# ── Cubic coefficient precompute + slicer ─────────────────────────────
+# ── Cubic coefficient precompute + direct slicer ─────────────────────
 
 def precompute_cubic_coefficients(volume, volume_shape):
-    """Precompute cubic B-spline coefficients for a full volume.
+    """Precompute periodic cubic B-spline coefficients for a full volume.
 
-    Parameters
-    ----------
-    volume : complex array, shape ``(N0, N1, N2)`` or ``(N0*N1*N2,)``.
-    volume_shape : ``(N0, N1, N2)`` — full volume dimensions.
-
-    Returns
-    -------
-    complex array, shape ``(N0+2, N1+2, N2+2)``
+    Uses periodic boundary conditions (FFT-based circulant solve).
+    Output has the same shape as input (no boundary padding).
     """
     from recovar.core import cubic_interpolation
     N0, N1, N2 = tuple(int(s) for s in volume_shape)
@@ -360,60 +404,57 @@ def precompute_cubic_coefficients(volume, volume_shape):
     return cubic_interpolation.calculate_spline_coefficients(volume_grid)
 
 
-@functools.partial(jax.jit, static_argnums=[2, 3])
-def _slice_from_cubic_coeffs_jax(coeffs, rotation_matrices, image_shape, volume_shape):
-    """Sample rotated central slices from precomputed cubic coefficients."""
-    from recovar.core import cubic_interpolation
+def precompute_cubic_coefficients_half(volume, volume_shape):
+    """Precompute periodic cubic coefficients, stored as half-volume.
 
-    coords, coords_og_shape = rotations_to_grid_point_coords(
-        rotation_matrices, image_shape, volume_shape
-    )
-    vals = cubic_interpolation.map_coordinates_with_cubic_spline(
-        coeffs, coords, mode="fill", cval=0.0
-    )
-    n_images = rotation_matrices.shape[0]
-    H, W = image_shape
-    return vals.reshape(n_images, H * W).astype(coeffs.dtype)
-
-
-@functools.partial(jax.jit, static_argnums=[2, 3])
-def _slice_from_cubic_coeffs_half_image_jax(coeffs, rotation_matrices, image_shape, volume_shape):
-    """Sample half-image slices from precomputed cubic coefficients.
-
-    Generates coordinates for only the H*(W//2+1) non-redundant pixels,
-    halving the interpolation work compared to full-image slicing.
+    Since periodic coefficients preserve Hermitian symmetry, this is lossless.
     """
-    from recovar.core import cubic_interpolation
-
-    coords, coords_og_shape = _half_image_rotations_to_coords(
-        rotation_matrices, image_shape, volume_shape
-    )
-    vals = cubic_interpolation.map_coordinates_with_cubic_spline(
-        coeffs, coords, mode="fill", cval=0.0
-    )
-    n_images = rotation_matrices.shape[0]
-    H, W = image_shape
-    return vals.reshape(n_images, H * (W // 2 + 1)).astype(coeffs.dtype)
+    coeffs = precompute_cubic_coefficients(volume, volume_shape)
+    return ftu.full_volume_to_half_volume(coeffs, volume_shape).reshape(-1)
 
 
 def slice_from_cubic_coefficients(coeffs, rotation_matrices, image_shape, volume_shape,
                                    half_image=False):
-    """Project from precomputed cubic coefficients to images.
+    """Project from precomputed periodic cubic coefficients to images.
 
     Parameters
     ----------
     coeffs : precomputed spline coefficients from :func:`precompute_cubic_coefficients`.
-    half_image : if True, output images are rfft-packed ``(n, H*(W//2+1))``,
-        generating only the non-redundant half of the pixel coordinates.
+        Can be full-volume (N0,N1,N2) or half-volume (N0*N1*(N2//2+1),) layout.
+    half_image : if True, output images are rfft-packed ``(n, H*(W//2+1))``.
     """
+    from recovar.core import cubic_interpolation
     coeffs = jnp.asarray(coeffs)
+
+    # Detect half-volume layout by size
+    half_vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+    half_vol_size = int(np.prod(half_vol_shape))
+    full_vol_size = int(np.prod(volume_shape))
+    is_half = (coeffs.size == half_vol_size and coeffs.size != full_vol_size)
+
+    # Expand half → full if needed
+    if is_half:
+        coeffs = ftu.half_volume_to_full_volume(coeffs, volume_shape).reshape(volume_shape)
+    else:
+        coeffs = coeffs.reshape(volume_shape)
+
+    # Choose coordinate grid
     if half_image:
-        return _slice_from_cubic_coeffs_half_image_jax(
-            coeffs, rotation_matrices, image_shape, volume_shape
+        coords, og_shape = _half_image_rotations_to_coords(
+            rotation_matrices, image_shape, volume_shape
         )
-    return _slice_from_cubic_coeffs_jax(
-        coeffs, rotation_matrices, image_shape, volume_shape
+        n_pixels = image_shape[0] * (image_shape[1] // 2 + 1)
+    else:
+        coords, og_shape = rotations_to_grid_point_coords(
+            rotation_matrices, image_shape, volume_shape
+        )
+        n_pixels = image_shape[0] * image_shape[1]
+
+    vals = cubic_interpolation.map_coordinates_with_cubic_spline(
+        coeffs, coords, mode="wrap", cval=0.0
     )
+    n_images = rotation_matrices.shape[0]
+    return vals.reshape(n_images, n_pixels).astype(coeffs.dtype)
 
 
 __all__ = [
@@ -423,6 +464,7 @@ __all__ = [
     "adjoint_slice_volume",
     "batch_adjoint_slice_volume",
     "precompute_cubic_coefficients",
+    "precompute_cubic_coefficients_half",
     "slice_from_cubic_coefficients",
     "_AUTO",
     "_default_max_r",

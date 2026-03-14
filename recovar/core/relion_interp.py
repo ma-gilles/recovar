@@ -297,9 +297,10 @@ def _project_one_image(vol, rotation_matrix, pixel_freqs, center, N0, N1, N2,
     rk = _rotate_plane_coords(pixel_freqs, rotation_matrix)  # (n_pix, 3)
     rk0, rk1, rk2 = rk[:, 0], rk[:, 1], rk[:, 2]
 
-    # Radius clipping (RELION's max_r2 check)
+    # Radius clipping — use pre-rotation 2D norm (exact for integer freqs).
+    # Must match backproject's clipping to preserve the adjoint relationship.
     if max_r2 is not None:
-        r2 = rk0 * rk0 + rk1 * rk1 + rk2 * rk2
+        r2 = jnp.sum(pixel_freqs ** 2, axis=-1)
         in_radius = r2 <= max_r2
     else:
         in_radius = None
@@ -564,9 +565,13 @@ def _backproject_one_image(pixel_freqs, rotation_matrix, img_vals, center,
     rk = _rotate_plane_coords(pixel_freqs, rotation_matrix)
     rk0, rk1, rk2 = rk[:, 0], rk[:, 1], rk[:, 2]
 
-    # Radius clipping
+    # Radius clipping — use pre-rotation 2D norm (exact for integer freqs).
+    # Rotation preserves norms, so |rot @ k|² = |k|².  Using the 2D norm
+    # avoids float32 rounding in the post-rotation sum, which can differ
+    # by ~1 ULP and cause conjugate pairs to be clipped asymmetrically
+    # in the half-image path.
     if max_r2 is not None:
-        r2 = rk0 * rk0 + rk1 * rk1 + rk2 * rk2
+        r2 = jnp.sum(pixel_freqs ** 2, axis=-1)
         in_radius = r2 <= max_r2
         img_vals = jnp.where(in_radius, img_vals, jnp.zeros_like(img_vals))
 
@@ -668,7 +673,9 @@ def backproject(imgs, rotations, image_shape, volume_shape,
             conj_rk = _rotate_plane_coords(conj_freqs, rot)
 
             if max_r2 is not None:
-                conj_r2 = jnp.sum(conj_rk ** 2, axis=-1)
+                # Use pre-rotation 2D norm to match the primary scatter's
+                # radius check and avoid float32 boundary asymmetry.
+                conj_r2 = jnp.sum(conj_freqs ** 2, axis=-1)
                 conj_vals = jnp.where(conj_r2 <= max_r2, conj_vals, jnp.zeros_like(conj_vals))
 
             cg0 = conj_rk[:, 0] + center[0]

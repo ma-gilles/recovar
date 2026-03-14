@@ -44,7 +44,7 @@ norm_squared_residuals_from_ft = jax.vmap(norm_squared_residuals_from_ft_one_ima
 
 
 @functools.partial(jax.jit, static_argnums=[4,6,8])
-def compute_dot_products(projections, batch, translations, CTF_params, CTF_fun, noise_variance, process_images, voxel_size, image_shape):
+def compute_dot_products(projections, batch, translations, CTF_params, ctf, noise_variance, process_images, voxel_size, image_shape):
     '''
     Computes -2 * y_i.T @ (S_s C_i * Proj_j) for i,j,s
     where C_i is CTF, S_s are shifts, and Proj_j are projections, y_i are batch (unprocessed)
@@ -52,7 +52,7 @@ def compute_dot_products(projections, batch, translations, CTF_params, CTF_fun, 
     batch = process_images(batch, apply_image_mask = False)
     batch_norm = jnp.linalg.norm(batch / jnp.sqrt(noise_variance), axis = (-1), keepdims = True)**2
 
-    batch *= CTF_fun( CTF_params, image_shape, voxel_size) / noise_variance
+    batch *= ctf( CTF_params, image_shape, voxel_size) / noise_variance
     result = jnp.empty((batch.shape[0], projections.shape[0], translations.shape[0]), dtype = jnp.float32)
 
     # Compute IP for each shift (memory-efficient over computing all shifted images at once).
@@ -95,12 +95,12 @@ def compute_CTFed_proj_norms_eqx(config: ForwardModelConfig, projections, ctf_pa
 # ============================================================================
 
 @functools.partial(jax.jit, static_argnums=[2,5])
-def compute_CTFed_proj_norms(projections, CTF_params, CTF_fun, noise_variance, voxel_size, image_shape):
+def compute_CTFed_proj_norms(projections, CTF_params, ctf, noise_variance, voxel_size, image_shape):
     '''
     Computes  |C_i Proj_j|^2 for i,j by writing it as a mat-mat
     where C_i is CTF, S_s are shifts, and Proj_j are projections
     '''
-    CTFs = CTF_fun( CTF_params, image_shape, voxel_size)**2 / noise_variance
+    CTFs = ctf( CTF_params, image_shape, voxel_size)**2 / noise_variance
 
     result = CTFs @ projections.T
 

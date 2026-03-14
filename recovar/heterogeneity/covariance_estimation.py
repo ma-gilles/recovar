@@ -410,7 +410,7 @@ def variance_relion_kernel_trilinear(
     noise_variances = batch_data.noise_variance
 
     # batch_data.images is already in half-image (rfft-packed) format.
-    half_images = core.translate_half_images(batch_data.images, batch_data.translations, config.image_shape)
+    half_images = core.translate_images(batch_data.images, batch_data.translations, config.image_shape, half_image=True)
     half_ctf = config.compute_ctf_half(batch_data.ctf_params)
     CTF_squared = half_ctf ** 2
 
@@ -475,7 +475,7 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, b
         voxel_size=float(experiment_dataset.voxel_size),
         padding=int(experiment_dataset.padding),
         disc_type='linear_interp',  # trilinear kernel only supports linear_interp
-        CTF_fun=experiment_dataset.CTF_fun,
+        ctf=experiment_dataset.ctf_evaluator,
         premultiplied_ctf=bool(experiment_dataset.premultiplied_ctf),
         volume_mask_threshold=float(experiment_dataset.volume_mask_threshold),
     )
@@ -758,7 +758,7 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
 
     # Batch sizes
     image_batch_size = utils.safe_batch_size(
-        utils.get_image_batch_size(cryo.grid_size, gpu_memory) // (2 if disc_type == 'cubic' else 1))
+        utils.get_image_batch_size(cryo.grid_size, gpu_memory))
     column_batch_size = utils.get_column_batch_size(cryo.grid_size, gpu_memory)
 
     n_picked = picked_frequencies.size
@@ -913,8 +913,10 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     volume_mask = jnp.asarray(volume_mask, dtype=experiment_dataset.dtype_real)
     mean_estimate = jnp.asarray(mean_estimate, dtype=experiment_dataset.dtype)
 
-    lhs = 0
-    rhs = 0
+    n_basis = basis.shape[0]  # basis is (n_pcs, vol_size) after .T
+    lhs_size = n_basis * n_basis
+    lhs = jnp.zeros((lhs_size, lhs_size), dtype=experiment_dataset.dtype_real)
+    rhs = jnp.zeros((n_basis, n_basis), dtype=experiment_dataset.dtype_real)
     logger.info("batch size in compute_projected_covariance %s", batch_size)
 
     if disc_type == 'cubic':
@@ -923,11 +925,6 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
 
     if disc_type_u == 'cubic':
         basis = compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)
-
-    # NOTE: half-volume pre-conversion and Hermitian weighting are disabled here.
-    # The half-image forward model (linear_interp + half_volume) produces
-    # degraded eigenvector projections, causing ~10% PC quality loss.
-    # Using full images (matching old code behaviour) is correct and fast enough.
 
     change_device= False
 
@@ -947,6 +944,9 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
             shared_label=experiment_dataset.tilt_series_flag,
         )
 
+        hermitian_weights = linalg.rfft2_hermitian_weights(
+            config.image_shape, dtype=experiment_dataset.dtype_real)
+
         for batch_data in DataIterator(
             experiment_dataset, batch_size,
             noise_model=experiment_dataset.noise,
@@ -956,7 +956,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
             lhs, rhs = reduce_covariance_inner(
                 config, batch_data, model, opts,
                 experiment_dataset.image_stack.mask,
-                hermitian_weights=None,
+                hermitian_weights=hermitian_weights,
                 lhs=lhs, rhs=rhs,
             )
     del basis
@@ -1045,25 +1045,22 @@ def reduce_covariance_inner(
 
     if config.process_fn is not None:
         batch = config.process_fn(batch)
-    batch = core.translate_images(batch, translations, config.image_shape)
 
     # Always project to half-image format when hermitian weights are available.
-    # Masking functions handle half images via half→real→half round-trip.
-    # compute_projected_covariance pre-converts mean_estimate and basis to
-    # rfft3 half-volumes (cubic spline coefficients excluded — not Fourier data).
     _use_half_proj = hermitian_weights is not None
-    _use_half_vol_mean = _use_half_proj and (config.disc_type != 'cubic')
-    _use_half_vol_basis = _use_half_proj and (opts.disc_type_u != 'cubic')
+
+    # Convert batch to half-image early and translate in half format.
+    if _use_half_proj:
+        batch = fourier_transform_utils.full_image_to_half_image(batch, config.image_shape)
+        batch = core.translate_images(batch, translations, config.image_shape, half_image=True)
+    else:
+        batch = core.translate_images(batch, translations, config.image_shape)
 
     projected_mean = core_forward.forward_model(
         config, model.mean_estimate, ctf_params, rotation_matrices,
         half_image=_use_half_proj,
-        half_volume=_use_half_vol_mean,
+        half_volume=False,
     )
-
-    # Convert batch to half-image early so all masking operates in half format
-    if _use_half_proj:
-        batch = fourier_transform_utils.full_image_to_half_image(batch, config.image_shape)
 
     if do_mask_images:
         batch = covariance_core.apply_image_masks(batch, image_mask, config.image_shape, half_images=_use_half_proj)
@@ -1075,7 +1072,7 @@ def reduce_covariance_inner(
         config_u, model.basis, ctf_params, rotation_matrices,
         skip_ctf=config.premultiplied_ctf,
         half_image=_use_half_proj,
-        half_volume=_use_half_vol_basis,
+        half_volume=False,
     )
 
     if do_mask_images:
@@ -1103,6 +1100,14 @@ def reduce_covariance_inner(
     else:
         batch = batch - projected_mean
         AU_t_images = batch_x_T_y(AUs, batch)
+
+    # When using half-spectrum weights, the inner product sum_k w*conj(a)*b
+    # has the correct real part but spurious imaginary part (interior pixels
+    # contribute 2*conj(a)*b instead of 2*Re(conj(a)*b)).  Taking .real here
+    # eliminates the imaginary bias that would otherwise inflate the outer
+    # product x*conj(x)^T by |Im(x)|^2.
+    if hermitian_weights is not None:
+        AU_t_images = AU_t_images.real
 
     if do_mask_images:
         if config.premultiplied_ctf:
@@ -1133,9 +1138,9 @@ def reduce_covariance_inner(
     _n = AU_t_AU.shape[-1]
     lhs_batch = jnp.einsum('bik,bjl->ijkl', AU_t_AU, AU_t_AU).reshape(_n * _n, _n * _n)
     if lhs is not None:
-        lhs_batch += lhs
+        lhs_batch = lhs_batch + lhs
     if rhs is not None:
-        rhs_batch += rhs
+        rhs_batch = rhs_batch + rhs
     return lhs_batch, rhs_batch
 
 

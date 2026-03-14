@@ -43,6 +43,9 @@ def _run_metrics(output_dir, run_args, volumes_prefix=None, reuse_dataset=False)
         cmd += ["--volume-input", volumes_prefix]
     else:
         cmd += ["--generate-volumes"]
+    # Let the test itself handle regression comparison; disable the
+    # subprocess's internal check so it doesn't exit(1) on its own.
+    cmd += ["--skip-metrics-regression-check"]
     if run_args:
         cmd.extend(shlex.split(run_args))
     from conftest import gpu_subprocess_env

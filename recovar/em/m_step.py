@@ -35,9 +35,9 @@ sum_up_translations_shared_translations = jax.vmap(sum_up_translate_one_image, i
 
 
 @functools.partial(jax.jit, static_argnums=[7,8,9,10,11])
-def backproject_one_image(probabilities, images_i, rotation_matrices, translations, CTF_params, noise_variance, voxel_size, volume_shape, image_shape, disc_type, CTF_fun, translation_fn = "fft" ):
+def backproject_one_image(probabilities, images_i, rotation_matrices, translations, CTF_params, noise_variance, voxel_size, volume_shape, image_shape, disc_type, ctf, translation_fn = "fft" ):
     images = sum_up_translations(images_i, probabilities, translations, image_shape, translation_fn)
-    CTF = CTF_fun(CTF_params, image_shape, voxel_size)
+    CTF = ctf(CTF_params, image_shape, voxel_size)
     images *= (CTF[:,None,None] / noise_variance)
 
     images_half = fourier_transform_utils.full_image_to_half_image(images, image_shape)
@@ -116,7 +116,7 @@ def sum_up_images_fixed_rots_eqx(config: ForwardModelConfig, batch, probabilitie
 # ============================================================================
 
 @functools.partial(jax.jit, static_argnums=[5,8,9,10])
-def sum_up_images_fixed_rots(batch, probabilities, translations, rotations, CTF_params, CTF_fun, noise_variance, voxel_size, image_shape, volume_shape, process_images, Ft_y = 0, Ft_ctf = 0):
+def sum_up_images_fixed_rots(batch, probabilities, translations, rotations, CTF_params, ctf, noise_variance, voxel_size, image_shape, volume_shape, process_images, Ft_y = 0, Ft_ctf = 0):
 
     assert(probabilities.shape[0] == batch.shape[0])
     assert(probabilities.shape[1] == rotations.shape[0])
@@ -126,7 +126,7 @@ def sum_up_images_fixed_rots(batch, probabilities, translations, rotations, CTF_
     n_images = batch.shape[0]
     n_shifted_images = n_images * n_translations
 
-    CTF = CTF_fun(CTF_params, image_shape, voxel_size)
+    CTF = ctf(CTF_params, image_shape, voxel_size)
     batch = process_images(batch, apply_image_mask = False) * CTF / noise_variance
     shifted_images = core.batch_trans_translate_images(batch, jnp.repeat(translations[None], batch.shape[0], axis=0), image_shape)
     shifted_images = shifted_images.reshape(n_shifted_images, shifted_images.shape[-1])

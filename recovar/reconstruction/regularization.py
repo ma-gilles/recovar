@@ -18,10 +18,10 @@ NVTX_DOMAIN_REG = "regularization"
 
 ## Mean prior computation
 
-def compute_batch_prior_quantities(rotation_matrices, translations, CTF_params, noise_variance, voxel_size, dtype, volume_shape, image_shape, grid_size, CTF_fun , for_whitening = False):
+def compute_batch_prior_quantities(rotation_matrices, translations, CTF_params, noise_variance, voxel_size, dtype, volume_shape, image_shape, grid_size, ctf , for_whitening = False):
     volume_size = np.prod(np.array(volume_shape))
     grid_point_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape)
-    CTF = CTF_fun(CTF_params, image_shape, voxel_size)
+    CTF = ctf(CTF_params, image_shape, voxel_size)
     ctf_sq_over_noise = (CTF ** 2 / noise_variance[None]).reshape(-1)
     diag_mean = jnp.zeros(volume_size, dtype=dtype).at[grid_point_indices.reshape(-1)].add(ctf_sq_over_noise)
     
@@ -46,7 +46,7 @@ def compute_prior_quantites(experiment_datasets, cov_noise, batch_size, for_whit
                                              experiment_dataset.volume_shape, 
                                              experiment_dataset.image_shape, 
                                              experiment_dataset.grid_size, 
-                                             experiment_dataset.CTF_fun, 
+                                             experiment_dataset.ctf_evaluator,
                                              for_whitening)
             
             bottom_of_fraction += bottom_of_fraction_this

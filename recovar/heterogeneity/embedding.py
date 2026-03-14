@@ -61,9 +61,6 @@ def _basis_is_half_volume(basis, volume_shape):
 
 def _prepare_model_half_volumes(config, mean_estimate, basis):
     """Convert full Fourier volumes to half-volume layout when supported."""
-    if config.disc_type == "cubic":
-        return mean_estimate, basis
-
     full_size, half_size = _volume_layout_sizes(config.volume_shape)
 
     mean_size = int(np.prod(mean_estimate.shape))
@@ -104,14 +101,7 @@ def _noise_get_half_or_full(noise_model, image_indices, prefer_half=True):
 
 
 def _embedding_hermitian_weights(config: ForwardModelConfig):
-    """Half-spectrum weights for embedding inner products, or ``None``.
-
-    For cubic interpolation we keep embedding in full-spectrum space because the
-    cubic forward path still projects in full space and half conversion adds
-    substantial overhead.
-    """
-    if config.disc_type == "cubic":
-        return None
+    """Half-spectrum weights for embedding inner products, or ``None``."""
     return _rfft2_hermitian_weights(config.image_shape)
 
 
@@ -410,51 +400,20 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
                     image_latent_bias[local_particle_ind] = bias
             continue
 
-        use_legacy_fast = (not shared_label) and (config.disc_type == "cubic")
-        if use_legacy_fast:
-            noise_variances = np.asarray(
-                _noise_get_half_or_full(noise_model, batch_image_ind, prefer_half=False)
-            )
-            xs_single, contrast_single, cov_batch, bias = _compute_single_batch_coords_split_legacy(
-                batch, model.mean_estimate, model.volume_mask, model.basis, model.eigenvalues,
-                experiment_dataset.CTF_params[batch_image_ind],
-                experiment_dataset.rotation_matrices[batch_image_ind],
-                experiment_dataset.translations[batch_image_ind],
-                experiment_dataset.image_stack.mask,
-                config.volume_mask_threshold,
-                config.image_shape,
-                config.volume_shape,
-                config.grid_size,
-                config.voxel_size,
-                config.padding,
-                config.disc_type,
-                compute_covariances,
-                noise_variances,
-                config.process_fn,
-                config.CTF_fun,
-                contrast_grid,
-                contrast_mean,
-                contrast_variance,
-                compute_bias,
-                False,
-                contrast_shared_across_tilt_series,
-                config.premultiplied_ctf,
-            )
-        else:
-            batch_data = BatchData(
-                images=batch,
-                ctf_params=experiment_dataset.CTF_params[batch_image_ind],
-                rotation_matrices=experiment_dataset.rotation_matrices[batch_image_ind],
-                translations=experiment_dataset.translations[batch_image_ind],
-                noise_variance=_noise_get_half_or_full(noise_model, batch_image_ind, prefer_half=prefer_half_noise),
-            )
+        batch_data = BatchData(
+            images=batch,
+            ctf_params=experiment_dataset.CTF_params[batch_image_ind],
+            rotation_matrices=experiment_dataset.rotation_matrices[batch_image_ind],
+            translations=experiment_dataset.translations[batch_image_ind],
+            noise_variance=_noise_get_half_or_full(noise_model, batch_image_ind, prefer_half=prefer_half_noise),
+        )
 
-            xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
-                config, batch_data, model, opts,
-                experiment_dataset.image_stack.mask, contrast_grid,
-                contrast_mean, contrast_variance,
-                hermitian_weights,
-            )
+        xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
+            config, batch_data, model, opts,
+            experiment_dataset.image_stack.mask, contrast_grid,
+            contrast_mean, contrast_variance,
+            hermitian_weights,
+        )
 
         target_ind = batch_image_ind if force_not_shared_label else np.asarray(particle_ids)
         xs[target_ind] = xs_single
@@ -530,7 +489,7 @@ def _compute_batch_coords_p1(
             raise ValueError(
                 f"Expected batch image size {full_image_size} (full) or {half_image_size} (half), got {batch.shape[-1]}"
             )
-        batch = core.translate_half_images(batch, translations, config.image_shape)
+        batch = core.translate_images(batch, translations, config.image_shape, half_image=True)
     else:
         if batch.shape[-1] == half_image_size:
             batch = ftu.half_image_to_full_image(batch, config.image_shape)

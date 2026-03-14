@@ -4,17 +4,18 @@ import pytest
 
 pytest.importorskip("jax")
 import jax
+import recovar.core
 import recovar.core.forward as core_forward
 from recovar.core.configs import ForwardModelConfig
 
 pytestmark = pytest.mark.unit
 
 
-def _ones_ctf(ctf_params, image_shape, voxel_size):
+def _ones_ctf(ctf_params, image_shape, voxel_size, **kw):
     return np.ones((ctf_params.shape[0], image_shape[0] * image_shape[1]), dtype=np.float32)
 
 
-def _twos_ctf(ctf_params, image_shape, voxel_size):
+def _twos_ctf(ctf_params, image_shape, voxel_size, **kw):
     return 2.0 * np.ones((ctf_params.shape[0], image_shape[0] * image_shape[1]), dtype=np.float32)
 
 
@@ -28,7 +29,7 @@ def _make_config(image_shape=(2, 2), volume_shape=(4, 4, 4), disc_type="nearest"
         voxel_size=1.0,
         padding=0,
         disc_type=disc_type,
-        CTF_fun=ctf_fun,
+        ctf=recovar.core.as_ctf_evaluator(ctf_fun),
         premultiplied_ctf=False,
         volume_mask_threshold=0.0,
     )

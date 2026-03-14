@@ -12,8 +12,7 @@ pytestmark = pytest.mark.unit
 def test_core_reexports_ctf_api():
     assert core.CTFParamIndex is core_ctf.CTFParamIndex
     assert core.evaluate_ctf is core_ctf.evaluate_ctf
-    assert core.cryodrgn_CTF is core_ctf.cryodrgn_CTF
-    assert core.cryodrgn_CTF_half is core_ctf.cryodrgn_CTF_half
+    assert core.CTFEvaluator is core_ctf.CTFEvaluator
 
 
 def test_evaluate_ctf_shape():
@@ -40,27 +39,51 @@ def test_critical_exposure_decreases_with_frequency():
     assert np.all(np.diff(out) < 0)
 
 
-def test_ctfparams_basic_operations():
-    params = core_ctf.CTFParams.create_standard_params(n_images=2, contrast=1.0)
-    assert params.shape == (2, len(core_ctf.CTFParamIndex))
-    assert params.validate() is True
+def test_ctf_evaluator_spa_mode():
+    evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.SPA)
+    ctf_params = np.zeros((2, 9), dtype=np.float32)
+    ctf_params[:, core_ctf.CTFParamIndex.VOLT] = 300.0
+    ctf_params[:, core_ctf.CTFParamIndex.CS] = 2.7
+    ctf_params[:, core_ctf.CTFParamIndex.W] = 0.1
+    ctf_params[:, core_ctf.CTFParamIndex.CONTRAST] = 1.0
+    out = np.asarray(evaluator(ctf_params, image_shape=(4, 4), voxel_size=1.0))
+    assert out.shape == (2, 16)
 
-    params.set_param(core_ctf.CTFParamIndex.VOLT, np.array([200.0, 300.0]))
-    np.testing.assert_array_equal(params.get_param(core_ctf.CTFParamIndex.VOLT), np.array([200.0, 300.0]))
-
-    params.add_tilt_series_params(dose_values=np.array([1.0, 2.0]), tilt_angles=np.array([3.0, 6.0]))
-    np.testing.assert_array_equal(params.get_param(core_ctf.CTFParamIndex.DOSE), np.array([1.0, 2.0]))
-    np.testing.assert_array_equal(params.get_param(core_ctf.CTFParamIndex.TILT_ANGLE), np.array([3.0, 6.0]))
+    out_half = np.asarray(evaluator(ctf_params, image_shape=(4, 4), voxel_size=1.0, half_image=True))
+    assert out_half.shape == (2, 4 * (4 // 2 + 1))
 
 
-def test_ctfparams_validation_errors():
-    params = core_ctf.CTFParams(np.zeros((1, len(core_ctf.CTFParamIndex))))
-    with pytest.raises(ValueError):
-        params.validate()
+def test_ctf_evaluator_cryo_et_mode():
+    evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.CRYO_ET)
+    ctf_params = np.zeros((2, 11), dtype=np.float32)
+    ctf_params[:, core_ctf.CTFParamIndex.VOLT] = 300.0
+    ctf_params[:, core_ctf.CTFParamIndex.CS] = 2.7
+    ctf_params[:, core_ctf.CTFParamIndex.W] = 0.1
+    ctf_params[:, core_ctf.CTFParamIndex.CONTRAST] = 1.0
+    ctf_params[:, core_ctf.CTFParamIndex.DOSE] = np.array([1.0, 2.0])
+    out = np.asarray(evaluator(ctf_params, image_shape=(4, 4), voxel_size=1.0))
+    assert out.shape == (2, 16)
 
-    bad = core_ctf.CTFParams.create_standard_params(n_images=1, volt=-1.0)
-    with pytest.raises(ValueError):
-        bad.validate()
+
+def test_ctf_evaluator_tilt_series_mode():
+    evaluator = core_ctf.CTFEvaluator(
+        mode=core_ctf.CTFMode.TILT_SERIES,
+        dose_per_tilt=2.9,
+        angle_per_tilt=3.0,
+    )
+    assert evaluator.dose_per_tilt == 2.9
+    assert evaluator.angle_per_tilt == 3.0
+
+
+def test_as_ctf_evaluator_wraps_callable():
+    fn = lambda params, shape, vs, **kw: np.ones((params.shape[0], shape[0] * shape[1]))
+    wrapped = core_ctf.as_ctf_evaluator(fn)
+    assert isinstance(wrapped, core_ctf._LegacyCTFAdapter)
+    # Wrapping an evaluator should return it unchanged
+    assert core_ctf.as_ctf_evaluator(wrapped) is wrapped
+    # CTFEvaluator should pass through
+    ev = core_ctf.CTFEvaluator()
+    assert core_ctf.as_ctf_evaluator(ev) is ev
 
 
 def test_get_dose_filters_shape_for_non_square_image():
@@ -76,18 +99,18 @@ def test_get_dose_filters_shape_for_non_square_image():
     assert out.shape == (2, 6)
 
 
-def test_evaluate_ctf_wrapper_tilt_series_uses_voltage(monkeypatch):
+def test_tilt_series_ctf_uses_voltage(monkeypatch):
     captured = {}
 
-    def fake_dose_filters(Apix, image_shape, dose_per_tilt, angle_per_tilt, tilt_numbers, voltage):
+    def fake_dose_filters(Apix, image_shape, dose_per_tilt, angle_per_tilt, tilt_numbers, voltage, *, half_image=False):
         captured["voltage"] = voltage
         return np.ones((len(tilt_numbers), image_shape[0] * image_shape[1]), dtype=np.float32)
 
     monkeypatch.setattr(core_ctf, "get_dose_filters_from_tilt_number", fake_dose_filters)
     monkeypatch.setattr(
         core_ctf,
-        "cryodrgn_CTF",
-        lambda CTF_params, image_shape, voxel_size: np.ones(
+        "_compute_spa_ctf",
+        lambda CTF_params, image_shape, voxel_size, **kw: np.ones(
             (CTF_params.shape[0], image_shape[0] * image_shape[1]), dtype=np.float32
         ),
     )
@@ -97,7 +120,7 @@ def test_evaluate_ctf_wrapper_tilt_series_uses_voltage(monkeypatch):
     ctf_params[:, core_ctf.CTFParamIndex.CS] = 2.7
     ctf_params[:, core_ctf.CTFParamIndex.VOLT] = 300.0
     # Call the un-jitted Python function so monkeypatched side effects are concrete.
-    core_ctf.evaluate_ctf_wrapper_tilt_series.__wrapped__(
+    core_ctf._compute_tilt_series_ctf.__wrapped__(
         ctf_params,
         image_shape=(2, 2),
         voxel_size=1.0,
@@ -107,17 +130,18 @@ def test_evaluate_ctf_wrapper_tilt_series_uses_voltage(monkeypatch):
     assert captured["voltage"] == pytest.approx(300.0)
 
 
-def test_evaluate_ctf_wrapper_antialiasing_shape():
+def test_spa_antialiased_evaluator_shape():
     ctf_params = np.zeros((1, 9), dtype=np.float32)
     ctf_params[:, core_ctf.CTFParamIndex.VOLT] = 300.0
     ctf_params[:, core_ctf.CTFParamIndex.CS] = 2.7
     ctf_params[:, core_ctf.CTFParamIndex.W] = 0.1
     ctf_params[:, core_ctf.CTFParamIndex.CONTRAST] = 1.0
-    out = np.asarray(core_ctf.evaluate_ctf_wrapper(ctf_params, image_shape=(4, 4), voxel_size=1.0, antialiasing=True))
+    evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.SPA_ANTIALIASED)
+    out = np.asarray(evaluator(ctf_params, image_shape=(4, 4), voxel_size=1.0))
     assert out.shape == (1, 16)
 
 
-def test_evaluate_ctf_wrapper_tilt_series_v2_shape():
+def test_cryo_et_evaluator_shape():
     ctf_params = np.zeros((3, 11), dtype=np.float32)
     ctf_params[:, core_ctf.CTFParamIndex.DOSE] = np.array([0.0, 1.0, 2.0], dtype=np.float32)
     ctf_params[:, core_ctf.CTFParamIndex.TILT_ANGLE] = np.array([0.0, 3.0, 6.0], dtype=np.float32)
@@ -126,7 +150,8 @@ def test_evaluate_ctf_wrapper_tilt_series_v2_shape():
     ctf_params[:, core_ctf.CTFParamIndex.W] = 0.1
     ctf_params[:, core_ctf.CTFParamIndex.CONTRAST] = 1.0
 
-    out = np.asarray(core_ctf.evaluate_ctf_wrapper_tilt_series_v2(ctf_params, image_shape=(4, 4), voxel_size=1.0))
+    evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.CRYO_ET)
+    out = np.asarray(evaluator(ctf_params, image_shape=(4, 4), voxel_size=1.0))
     assert out.shape == (3, 16)
     assert np.isfinite(out).all()
 
@@ -148,78 +173,56 @@ def _make_standard_ctf_params(n_images):
 
 
 @pytest.mark.parametrize("image_shape", [(4, 8), (6, 10)])
-def test_cryodrgn_ctf_half_matches_full_mapping(image_shape):
+def test_spa_ctf_half_matches_full_mapping(image_shape):
     ctf_params = _make_standard_ctf_params(3)[:, :9]
-    full = np.asarray(core_ctf.cryodrgn_CTF(ctf_params, image_shape=image_shape, voxel_size=1.0))
-    half = np.asarray(core_ctf.cryodrgn_CTF_half(ctf_params, image_shape=image_shape, voxel_size=1.0))
+    evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.SPA)
+    full = np.asarray(evaluator(ctf_params, image_shape=image_shape, voxel_size=1.0))
+    half = np.asarray(evaluator(ctf_params, image_shape=image_shape, voxel_size=1.0, half_image=True))
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half, expected, atol=1e-6, rtol=1e-6)
 
 
-@pytest.mark.parametrize("antialiasing", [False, True])
-def test_evaluate_ctf_wrapper_half_matches_full_mapping(antialiasing):
+@pytest.mark.parametrize("mode", [core_ctf.CTFMode.SPA, core_ctf.CTFMode.SPA_ANTIALIASED])
+def test_spa_modes_half_matches_full_mapping(mode):
     ctf_params = _make_standard_ctf_params(2)[:, :9]
     image_shape = (4, 8)
-    full = np.asarray(
-        core_ctf.evaluate_ctf_wrapper(
-            ctf_params, image_shape=image_shape, voxel_size=1.0, antialiasing=antialiasing
-        )
-    )
-    half = np.asarray(
-        core_ctf.evaluate_ctf_wrapper_half(
-            ctf_params, image_shape=image_shape, voxel_size=1.0, antialiasing=antialiasing
-        )
-    )
+    evaluator = core_ctf.CTFEvaluator(mode=mode)
+    full = np.asarray(evaluator(ctf_params, image_shape=image_shape, voxel_size=1.0))
+    half = np.asarray(evaluator(ctf_params, image_shape=image_shape, voxel_size=1.0, half_image=True))
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half, expected, atol=1e-6, rtol=1e-6)
 
 
-def test_tilt_series_half_wrappers_match_full_mapping():
+def test_tilt_series_half_matches_full_mapping():
     ctf_params = _make_standard_ctf_params(4)
     image_shape = (4, 8)
 
-    full = np.asarray(
-        core_ctf.evaluate_ctf_wrapper_tilt_series(
-            ctf_params,
-            image_shape=image_shape,
-            voxel_size=1.0,
-            dose_per_tilt=2.9,
-            angle_per_tilt=3.0,
-        )
+    evaluator_ts = core_ctf.CTFEvaluator(
+        mode=core_ctf.CTFMode.TILT_SERIES, dose_per_tilt=2.9, angle_per_tilt=3.0,
     )
-    half = np.asarray(
-        core_ctf.evaluate_ctf_wrapper_tilt_series_half(
-            ctf_params,
-            image_shape=image_shape,
-            voxel_size=1.0,
-            dose_per_tilt=2.9,
-            angle_per_tilt=3.0,
-        )
-    )
+    full = np.asarray(evaluator_ts(ctf_params, image_shape=image_shape, voxel_size=1.0))
+    half = np.asarray(evaluator_ts(ctf_params, image_shape=image_shape, voxel_size=1.0, half_image=True))
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half, expected, atol=1e-6, rtol=1e-6)
 
-    full_v2 = np.asarray(core_ctf.evaluate_ctf_wrapper_tilt_series_v2(ctf_params, image_shape=image_shape, voxel_size=1.0))
-    half_v2 = np.asarray(core_ctf.evaluate_ctf_wrapper_tilt_series_v2_half(ctf_params, image_shape=image_shape, voxel_size=1.0))
+    evaluator_et = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.CRYO_ET)
+    full_v2 = np.asarray(evaluator_et(ctf_params, image_shape=image_shape, voxel_size=1.0))
+    half_v2 = np.asarray(evaluator_et(ctf_params, image_shape=image_shape, voxel_size=1.0, half_image=True))
     expected_v2 = np.asarray(fourier_transform_utils.full_image_to_half_image(full_v2, image_shape))
     np.testing.assert_allclose(half_v2, expected_v2, atol=1e-6, rtol=1e-6)
 
 
-def test_get_cryo_et_ctf_fun_half_matches_tilt_series_half_wrapper():
+def test_tilt_series_evaluator_half_matches_internal_function():
     ctf_params = _make_standard_ctf_params(3)
     image_shape = (4, 8)
-    ctf_fun = core_ctf.get_cryo_ET_CTF_fun_half(dose_per_tilt=2.9, angle_per_tilt=3.0)
-    out_fun = np.asarray(ctf_fun(ctf_params, image_shape, 1.0))
-    out_ref = np.asarray(
-        core_ctf.evaluate_ctf_wrapper_tilt_series_half(
-            ctf_params,
-            image_shape=image_shape,
-            voxel_size=1.0,
-            dose_per_tilt=2.9,
-            angle_per_tilt=3.0,
-        )
+    evaluator = core_ctf.CTFEvaluator(
+        mode=core_ctf.CTFMode.TILT_SERIES, dose_per_tilt=2.9, angle_per_tilt=3.0,
     )
-    np.testing.assert_allclose(out_fun, out_ref, atol=1e-6, rtol=1e-6)
+    out_eval = np.asarray(evaluator(ctf_params, image_shape, 1.0, half_image=True))
+    out_ref = np.asarray(core_ctf._compute_tilt_series_ctf(
+        ctf_params, image_shape, 1.0, 2.9, 3.0, half_image=True,
+    ))
+    np.testing.assert_allclose(out_eval, out_ref, atol=1e-6, rtol=1e-6)
 
 
 def test_ctf_half_pointwise_application_matches_full_mapping():
@@ -228,8 +231,9 @@ def test_ctf_half_pointwise_application_matches_full_mapping():
     n_images = 3
     ctf_params = _make_standard_ctf_params(n_images)[:, :9]
 
-    ctf_full = np.asarray(core_ctf.evaluate_ctf_wrapper(ctf_params, image_shape=image_shape, voxel_size=1.0))
-    ctf_half = np.asarray(core_ctf.evaluate_ctf_wrapper_half(ctf_params, image_shape=image_shape, voxel_size=1.0))
+    evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.SPA)
+    ctf_full = np.asarray(evaluator(ctf_params, image_shape=image_shape, voxel_size=1.0))
+    ctf_half = np.asarray(evaluator(ctf_params, image_shape=image_shape, voxel_size=1.0, half_image=True))
 
     real_images = rng.standard_normal((n_images,) + image_shape).astype(np.float32)
     images_full = np.asarray(fourier_transform_utils.get_dft2(real_images)).reshape(n_images, -1)
@@ -242,7 +246,7 @@ def test_ctf_half_pointwise_application_matches_full_mapping():
     np.testing.assert_allclose(half_product, mapped_full_product, atol=1e-6, rtol=1e-6)
 
 
-def test_get_cryo_et_ctf_fun_matches_wrapper_call():
+def test_tilt_series_evaluator_matches_internal_function():
     ctf_params = np.zeros((2, 11), dtype=np.float32)
     ctf_params[:, core_ctf.CTFParamIndex.DOSE] = np.array([0.0, 1.0], dtype=np.float32)
     ctf_params[:, core_ctf.CTFParamIndex.VOLT] = 300.0
@@ -250,18 +254,14 @@ def test_get_cryo_et_ctf_fun_matches_wrapper_call():
     ctf_params[:, core_ctf.CTFParamIndex.W] = 0.1
     ctf_params[:, core_ctf.CTFParamIndex.CONTRAST] = 1.0
 
-    ctf_fun = core_ctf.get_cryo_ET_CTF_fun(dose_per_tilt=2.9, angle_per_tilt=3.0)
-    out_fun = np.asarray(ctf_fun(ctf_params, (4, 4), 1.0))
-    out_ref = np.asarray(
-        core_ctf.evaluate_ctf_wrapper_tilt_series(
-            ctf_params,
-            image_shape=(4, 4),
-            voxel_size=1.0,
-            dose_per_tilt=2.9,
-            angle_per_tilt=3.0,
-        )
+    evaluator = core_ctf.CTFEvaluator(
+        mode=core_ctf.CTFMode.TILT_SERIES, dose_per_tilt=2.9, angle_per_tilt=3.0,
     )
-    np.testing.assert_allclose(out_fun, out_ref, atol=1e-6, rtol=1e-6)
+    out_eval = np.asarray(evaluator(ctf_params, (4, 4), 1.0))
+    out_ref = np.asarray(core_ctf._compute_tilt_series_ctf(
+        ctf_params, image_shape=(4, 4), voxel_size=1.0, dose_per_tilt=2.9, angle_per_tilt=3.0,
+    ))
+    np.testing.assert_allclose(out_eval, out_ref, atol=1e-6, rtol=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -299,106 +299,85 @@ def test_batch_evaluate_ctf_on_gpu(gpu_device):
 
 
 @pytest.mark.gpu
-def test_cryodrgn_CTF_on_gpu(gpu_device):
+def test_spa_evaluator_on_gpu(gpu_device):
     ctf_params = _make_standard_ctf_params(3)[:, :9].astype(np.float32)
     image_shape = (4, 8)
-    cpu_out = np.asarray(core_ctf.cryodrgn_CTF(ctf_params, image_shape=image_shape, voxel_size=1.0))
+    evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.SPA)
+    cpu_out = np.asarray(evaluator(ctf_params, image_shape=image_shape, voxel_size=1.0))
     with jax.default_device(gpu_device):
-        gpu_out = np.asarray(
-            core_ctf.cryodrgn_CTF(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0)
-        )
+        gpu_out = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.gpu
-def test_cryodrgn_CTF_half_matches_full_on_gpu(gpu_device):
+def test_spa_evaluator_half_matches_full_on_gpu(gpu_device):
     ctf_params = _make_standard_ctf_params(3)[:, :9].astype(np.float32)
     image_shape = (4, 8)
+    evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.SPA)
     with jax.default_device(gpu_device):
-        full = np.asarray(core_ctf.cryodrgn_CTF(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
-        half = np.asarray(core_ctf.cryodrgn_CTF_half(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
+        full = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
+        half = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True))
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.gpu
-@pytest.mark.parametrize("antialiasing", [False, True])
-def test_evaluate_ctf_wrapper_on_gpu(gpu_device, antialiasing):
+@pytest.mark.parametrize("mode", [core_ctf.CTFMode.SPA, core_ctf.CTFMode.SPA_ANTIALIASED])
+def test_spa_modes_evaluator_on_gpu(gpu_device, mode):
     ctf_params = _make_standard_ctf_params(2)[:, :9].astype(np.float32)
     image_shape = (4, 8)
-    cpu_out = np.asarray(
-        core_ctf.evaluate_ctf_wrapper(ctf_params, image_shape=image_shape, voxel_size=1.0, antialiasing=antialiasing)
-    )
+    evaluator = core_ctf.CTFEvaluator(mode=mode)
+    cpu_out = np.asarray(evaluator(ctf_params, image_shape=image_shape, voxel_size=1.0))
     with jax.default_device(gpu_device):
-        gpu_out = np.asarray(
-            core_ctf.evaluate_ctf_wrapper(
-                jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, antialiasing=antialiasing,
-            )
-        )
+        gpu_out = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.gpu
-def test_evaluate_ctf_wrapper_half_matches_full_on_gpu(gpu_device):
+def test_spa_evaluator_half_matches_full_mapping_on_gpu(gpu_device):
     ctf_params = _make_standard_ctf_params(2)[:, :9].astype(np.float32)
     image_shape = (4, 8)
+    evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.SPA)
     with jax.default_device(gpu_device):
-        full = np.asarray(
-            core_ctf.evaluate_ctf_wrapper(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0)
-        )
-        half = np.asarray(
-            core_ctf.evaluate_ctf_wrapper_half(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0)
-        )
+        full = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
+        half = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True))
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.gpu
-def test_tilt_series_ctf_on_gpu(gpu_device):
+def test_cryo_et_evaluator_on_gpu(gpu_device):
     ctf_params = _make_standard_ctf_params(4).astype(np.float32)
     image_shape = (4, 8)
-    cpu_out = np.asarray(
-        core_ctf.evaluate_ctf_wrapper_tilt_series_v2(ctf_params, image_shape=image_shape, voxel_size=1.0)
-    )
+    evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.CRYO_ET)
+    cpu_out = np.asarray(evaluator(ctf_params, image_shape=image_shape, voxel_size=1.0))
     with jax.default_device(gpu_device):
-        gpu_out = np.asarray(
-            core_ctf.evaluate_ctf_wrapper_tilt_series_v2(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0)
-        )
+        gpu_out = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.gpu
-def test_tilt_series_half_matches_full_on_gpu(gpu_device):
+def test_tilt_series_evaluator_half_matches_full_on_gpu(gpu_device):
     ctf_params = _make_standard_ctf_params(4).astype(np.float32)
     image_shape = (4, 8)
+    evaluator = core_ctf.CTFEvaluator(
+        mode=core_ctf.CTFMode.TILT_SERIES, dose_per_tilt=2.9, angle_per_tilt=3.0,
+    )
     with jax.default_device(gpu_device):
-        full = np.asarray(
-            core_ctf.evaluate_ctf_wrapper_tilt_series(
-                jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0,
-                dose_per_tilt=2.9, angle_per_tilt=3.0,
-            )
-        )
-        half = np.asarray(
-            core_ctf.evaluate_ctf_wrapper_tilt_series_half(
-                jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0,
-                dose_per_tilt=2.9, angle_per_tilt=3.0,
-            )
-        )
+        full = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
+        half = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True))
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.gpu
-def test_tilt_series_v2_half_matches_full_on_gpu(gpu_device):
+def test_cryo_et_evaluator_half_matches_full_on_gpu(gpu_device):
     ctf_params = _make_standard_ctf_params(4).astype(np.float32)
     image_shape = (4, 8)
+    evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.CRYO_ET)
     with jax.default_device(gpu_device):
-        full = np.asarray(
-            core_ctf.evaluate_ctf_wrapper_tilt_series_v2(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0)
-        )
-        half = np.asarray(
-            core_ctf.evaluate_ctf_wrapper_tilt_series_v2_half(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0)
-        )
+        full = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
+        half = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True))
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)
 

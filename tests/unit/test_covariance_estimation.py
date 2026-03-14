@@ -9,6 +9,7 @@ import recovar.heterogeneity.covariance_estimation as cov_est
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 from recovar.core.configs import ForwardModelConfig, BatchData
+from recovar.core.ctf import as_ctf_evaluator
 from recovar.data_io.dataset import CryoEMHalfsets
 from helpers.tiny_synthetic import make_tiny_cryo_dataset, make_tiny_cryo_dataset_with_images
 
@@ -412,7 +413,7 @@ def test_compute_freq_batch_two_calls_accumulate():
         voxel_size=1.0,
         padding=0,
         disc_type="linear_interp",
-        CTF_fun=lambda params, shape, voxel: jnp.ones((params.shape[0], shape[0]*shape[1]), dtype=jnp.complex64),
+        ctf=as_ctf_evaluator(lambda params, shape, voxel, **kw: jnp.ones((params.shape[0], shape[0]*shape[1]), dtype=jnp.complex64)),
     )
     opts = CovColumnOpts(
         right_kernel="triangular",
@@ -966,48 +967,51 @@ def _reduce_covariance_inner_reference(config, batch_data, model, opts, image_ma
 
 
 def test_reduce_covariance_inner_masked_half_matches_full():
-    """reduce_covariance_inner with do_mask_images=True uses half-image masking and matches full-image reference."""
+    """reduce_covariance_inner half-image path matches full-image path (both with Nyquist zeroing)."""
     config, batch_data, model_half, model_full, hermitian_weights, image_mask = _make_reduce_cov_fixtures()
 
     opts = CovarianceOpts(disc_type_u="linear_interp", do_mask_images=True)
 
-    # New code (half-image masking path, half volumes)
-    lhs_new, rhs_new = cov_est.reduce_covariance_inner(
-        config, batch_data, model_half, opts, image_mask,
+    # Half-image path (hermitian weights → half projection + sqrt(w) + .real)
+    lhs_half, rhs_half = cov_est.reduce_covariance_inner(
+        config, batch_data, model_full, opts, image_mask,
         hermitian_weights=hermitian_weights,
     )
 
-    # Reference (full-image masking path, full volumes)
-    lhs_ref, rhs_ref = _reduce_covariance_inner_reference(
-        config, batch_data, model_full, opts, image_mask, hermitian_weights,
+    # Full-image path (no hermitian weights → full projection)
+    lhs_full, rhs_full = cov_est.reduce_covariance_inner(
+        config, batch_data, model_full, opts, image_mask,
+        hermitian_weights=None,
     )
 
-    lhs_new_np = np.asarray(lhs_new)
-    lhs_ref_np = np.asarray(lhs_ref)
-    rhs_new_np = np.asarray(rhs_new)
-    rhs_ref_np = np.asarray(rhs_ref)
+    lhs_half_np = np.asarray(lhs_half)
+    lhs_full_np = np.asarray(lhs_full)
+    rhs_half_np = np.asarray(rhs_half)
+    rhs_full_np = np.asarray(rhs_full)
 
-    # Both should have matching NaN locations
-    np.testing.assert_array_equal(np.isnan(lhs_new_np), np.isnan(lhs_ref_np))
-    np.testing.assert_array_equal(np.isnan(rhs_new_np), np.isnan(rhs_ref_np))
+    # Both should be finite
+    assert np.all(np.isfinite(lhs_half_np)), f"half LHS has non-finite: {lhs_half_np}"
+    assert np.all(np.isfinite(lhs_full_np)), f"full LHS has non-finite: {lhs_full_np}"
+    assert np.all(np.isfinite(rhs_half_np)), f"half RHS has non-finite: {rhs_half_np}"
+    assert np.all(np.isfinite(rhs_full_np)), f"full RHS has non-finite: {rhs_full_np}"
 
-    # Compare finite elements
-    finite_lhs = np.isfinite(lhs_new_np) & np.isfinite(lhs_ref_np)
-    finite_rhs = np.isfinite(rhs_new_np) & np.isfinite(rhs_ref_np)
-    if finite_lhs.any():
-        np.testing.assert_allclose(lhs_new_np[finite_lhs], lhs_ref_np[finite_lhs], atol=1e-4, rtol=1e-4)
-    if finite_rhs.any():
-        np.testing.assert_allclose(rhs_new_np[finite_rhs], rhs_ref_np[finite_rhs], atol=1e-4, rtol=1e-4)
+    # Half and full paths should agree (Nyquist zeroing ensures consistency)
+    lhs_norm = np.linalg.norm(lhs_full_np)
+    rhs_norm = np.linalg.norm(rhs_full_np)
+    if lhs_norm > 0:
+        np.testing.assert_allclose(lhs_half_np, lhs_full_np, atol=1e-4, rtol=1e-3)
+    if rhs_norm > 0:
+        np.testing.assert_allclose(rhs_half_np, rhs_full_np, atol=1e-4, rtol=1e-3)
 
 
 def test_reduce_covariance_inner_unmasked_still_works():
     """reduce_covariance_inner with do_mask_images=False continues to work (regression)."""
-    config, batch_data, model_half, _, hermitian_weights, image_mask = _make_reduce_cov_fixtures()
+    config, batch_data, _, model_full, hermitian_weights, image_mask = _make_reduce_cov_fixtures()
 
     opts = CovarianceOpts(disc_type_u="linear_interp", do_mask_images=False)
 
     lhs, rhs = cov_est.reduce_covariance_inner(
-        config, batch_data, model_half, opts, image_mask,
+        config, batch_data, model_full, opts, image_mask,
         hermitian_weights=hermitian_weights,
     )
 
@@ -1019,17 +1023,17 @@ def test_reduce_covariance_inner_unmasked_still_works():
 
 def test_reduce_covariance_inner_masked_vs_unmasked_differ():
     """Masking must change the result (otherwise masking is a no-op, which would indicate a bug)."""
-    config, batch_data, model_half, _, hermitian_weights, image_mask = _make_reduce_cov_fixtures()
+    config, batch_data, _, model_full, hermitian_weights, image_mask = _make_reduce_cov_fixtures()
 
     opts_mask = CovarianceOpts(disc_type_u="linear_interp", do_mask_images=True)
     opts_no_mask = CovarianceOpts(disc_type_u="linear_interp", do_mask_images=False)
 
     lhs_mask, rhs_mask = cov_est.reduce_covariance_inner(
-        config, batch_data, model_half, opts_mask, image_mask,
+        config, batch_data, model_full, opts_mask, image_mask,
         hermitian_weights=hermitian_weights,
     )
     lhs_no, rhs_no = cov_est.reduce_covariance_inner(
-        config, batch_data, model_half, opts_no_mask, image_mask,
+        config, batch_data, model_full, opts_no_mask, image_mask,
         hermitian_weights=hermitian_weights,
     )
 

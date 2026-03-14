@@ -61,6 +61,34 @@ static __device__ __forceinline__ int floor_int(double x) { return (int)floor(x)
 static __device__ __forceinline__ int round_int(float  x) { return (int)rintf(x); }
 static __device__ __forceinline__ int round_int(double x) { return (int)rint(x); }
 
+/* ================================================================== */
+/*                 Cubic B-spline basis function                       */
+/* ================================================================== */
+
+/* Evaluate the cubic B-spline basis function B3(t).
+ * B3(t) is non-zero only for |t| < 2:
+ *   |t| < 1:  4 - 6t² + 3|t|³
+ *   1 ≤ |t| < 2:  (2 - |t|)³
+ *
+ * Note: this matches the JAX _cubic_basis function in cubic_interpolation.py.
+ */
+template <typename T>
+static __device__ __forceinline__ T cubic_basis(T t) {
+    T at = (t >= (T)0) ? t : -t;
+    if (at >= (T)2) return (T)0;
+    if (at >= (T)1) {
+        T u = (T)2 - at;
+        return u * u * u;
+    }
+    return (T)4 - (T)6 * at * at + (T)3 * at * at * at;
+}
+
+/* Modular wrap for periodic boundary: result in [0, N). */
+static __device__ __forceinline__ int wrap_mod(int x, int N) {
+    int r = x % N;
+    return r < 0 ? r + N : r;
+}
+
 #define BLOCK_SIZE 256
 
 /* ================================================================== */
@@ -608,6 +636,62 @@ project_kernel(
             return;
         }
 
+        /* ──── cubic HALF_VOL (ORDER==3, periodic wrap) ──── */
+        if (ORDER == 3) {
+            /* Periodic cubic: g = rk + c - 1 (the -1 shift for periodic convention).
+             * All indices wrap periodically, so no OOB checks needed. */
+            const T cg0 = rk0 + c0 - (T)1;
+            const T cg1 = rk1 + c1 - (T)1;
+            const T cg2_full = rk2 + c2 - (T)1;
+
+            const int cb0 = floor_int(cg0);
+            const int cb1 = floor_int(cg1);
+            const int cb2 = floor_int(cg2_full);
+            const T cf0 = cg0 - (T)cb0;
+            const T cf1 = cg1 - (T)cb1;
+            const T cf2 = cg2_full - (T)cb2;
+
+            T sum_re = 0, sum_im = 0;
+            const V2* vol2 = reinterpret_cast<const V2*>(vol);
+
+            for (int d0 = 0; d0 < 4; d0++) {
+                const int j0 = wrap_mod(cb0 + d0, N0);
+                const T bw0 = cubic_basis(cf0 - (T)d0 + (T)1);
+                for (int d1 = 0; d1 < 4; d1++) {
+                    const int j1 = wrap_mod(cb1 + d1, N1);
+                    const T bw01 = bw0 * cubic_basis(cf1 - (T)d1 + (T)1);
+                    for (int d2 = 0; d2 < 4; d2++) {
+                        const int j2_full = wrap_mod(cb2 + d2, N2_full);
+                        const T w = bw01 * cubic_basis(cf2 - (T)d2 + (T)1);
+                        const int kz = j2_full - ic2;
+                        int ri = j0, rj = j1;
+                        int hkz;
+                        bool cj = false;
+                        if (kz >= 0) {
+                            hkz = kz;
+                        } else if (-kz == ic2) {
+                            /* Nyquist: self-conjugate */
+                            hkz = ic2;
+                        } else {
+                            ri = (N0 - (N0 & 1) - j0) % N0;
+                            rj = (N1 - (N1 & 1) - j1) % N1;
+                            hkz = -kz;
+                            cj = true;
+                        }
+                        if (hkz <= ic2) {
+                            const int off = ri * stride0 + rj * stride1 + hkz;
+                            V2 v = __ldg(&vol2[off]);
+                            if (cj) v.y = -v.y;
+                            sum_re += w * v.x;
+                            sum_im += w * v.y;
+                        }
+                    }
+                }
+            }
+            img2[img_off] = make_v2(sum_re, sum_im);
+            return;
+        }
+
         /* ──── trilinear HALF_VOL ──── */
         if (g0 < (T)-1 || g0 >= (T)N0 ||
             g1 < (T)-1 || g1 >= (T)N1 ||
@@ -751,6 +835,44 @@ project_kernel(
         const int off = i0 * stride0 + i1 * stride1 + i2;
         V2 v = __ldg(&reinterpret_cast<const V2*>(vol)[off]);
         img2[img_off] = v;
+        return;
+    }
+
+    /* ──── cubic (full volume, ORDER==3, periodic wrap) ──── */
+    if (ORDER == 3) {
+        /* Periodic cubic: g = rk + c - 1 (the -1 shift for periodic convention).
+         * All indices wrap periodically, so no OOB checks needed. */
+        const T cg0 = rk0 + c0 - (T)1;
+        const T cg1 = rk1 + c1 - (T)1;
+        const T cg2 = rk2 + c2 - (T)1;
+
+        const int cb0 = floor_int(cg0);
+        const int cb1 = floor_int(cg1);
+        const int cb2 = floor_int(cg2);
+        const T cf0 = cg0 - (T)cb0;
+        const T cf1 = cg1 - (T)cb1;
+        const T cf2 = cg2 - (T)cb2;
+
+        T sum_re = 0, sum_im = 0;
+        const V2* vol2 = reinterpret_cast<const V2*>(vol);
+
+        for (int d0 = 0; d0 < 4; d0++) {
+            const int j0 = wrap_mod(cb0 + d0, N0);
+            const T bw0 = cubic_basis(cf0 - (T)d0 + (T)1);
+            for (int d1 = 0; d1 < 4; d1++) {
+                const int j1 = wrap_mod(cb1 + d1, N1);
+                const T bw01 = bw0 * cubic_basis(cf1 - (T)d1 + (T)1);
+                for (int d2 = 0; d2 < 4; d2++) {
+                    const int j2 = wrap_mod(cb2 + d2, N2_eff);
+                    const T w = bw01 * cubic_basis(cf2 - (T)d2 + (T)1);
+                    const int off = j0 * stride0 + j1 * stride1 + j2;
+                    V2 v = __ldg(&vol2[off]);
+                    sum_re += w * v.x;
+                    sum_im += w * v.y;
+                }
+            }
+        }
+        img2[img_off] = make_v2(sum_re, sum_im);
         return;
     }
 
@@ -906,16 +1028,23 @@ cudaError_t launch_project(
             vol, img, rot, (int)n_pixels, (int)ih, (int)iw, \
             (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, max_r2)
 
-    int key = (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
+    /* order_code: 0→0, 1→1, 3→2.  key = (order_code << 2) | (half_vol << 1) | half_img */
+    int order_code = (order == 3) ? 2 : (int)order;
+    int key = (order_code << 2) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
     switch (key) {
-    case 0: PJ(0, false, false); break;
-    case 1: PJ(0, false, true);  break;
-    case 2: PJ(0, true,  false); break;
-    case 3: PJ(0, true,  true);  break;
-    case 4: PJ(1, false, false); break;
-    case 5: PJ(1, false, true);  break;
-    case 6: PJ(1, true,  false); break;
-    case 7: PJ(1, true,  true);  break;
+    case  0: PJ(0, false, false); break;
+    case  1: PJ(0, false, true);  break;
+    case  2: PJ(0, true,  false); break;
+    case  3: PJ(0, true,  true);  break;
+    case  4: PJ(1, false, false); break;
+    case  5: PJ(1, false, true);  break;
+    case  6: PJ(1, true,  false); break;
+    case  7: PJ(1, true,  true);  break;
+    /* ORDER=3 (cubic, periodic wrap) — project only, no backproject */
+    case  8: PJ(3, false, false); break;
+    case  9: PJ(3, false, true);  break;
+    case 10: PJ(3, true,  false); break;
+    case 11: PJ(3, true,  true);  break;
     }
     #undef PJ
     return cudaGetLastError();
@@ -1206,6 +1335,68 @@ batch_project_kernel(
             return;
         }
 
+        /* ──── cubic HALF_VOL batch (ORDER==3, periodic wrap) ──── */
+        if (ORDER == 3) {
+            const T cg0 = rk0 + c0 - (T)1;
+            const T cg1 = rk1 + c1 - (T)1;
+            const T cg2_full = rk2 + c2 - (T)1;
+            const int cb0 = floor_int(cg0);
+            const int cb1 = floor_int(cg1);
+            const int cb2 = floor_int(cg2_full);
+            const T cf0 = cg0 - (T)cb0;
+            const T cf1 = cg1 - (T)cb1;
+            const T cf2 = cg2_full - (T)cb2;
+
+            /* Precompute 64 neighbor offsets/weights/conj flags */
+            struct { int off; T w; bool cj; } nbr[64];
+            int n_nbr = 0;
+            for (int d0 = 0; d0 < 4; d0++) {
+                const int j0 = wrap_mod(cb0 + d0, N0);
+                const T bw0 = cubic_basis(cf0 - (T)d0 + (T)1);
+                for (int d1 = 0; d1 < 4; d1++) {
+                    const int j1 = wrap_mod(cb1 + d1, N1);
+                    const T bw01 = bw0 * cubic_basis(cf1 - (T)d1 + (T)1);
+                    for (int d2 = 0; d2 < 4; d2++) {
+                        const int j2_full = wrap_mod(cb2 + d2, N2_full);
+                        const T w = bw01 * cubic_basis(cf2 - (T)d2 + (T)1);
+                        const int kz = j2_full - ic2;
+                        int ri = j0, rj = j1;
+                        int hkz;
+                        bool cjj = false;
+                        if (kz >= 0) {
+                            hkz = kz;
+                        } else if (-kz == ic2) {
+                            hkz = ic2;
+                        } else {
+                            ri = (N0 - (N0 & 1) - j0) % N0;
+                            rj = (N1 - (N1 & 1) - j1) % N1;
+                            hkz = -kz;
+                            cjj = true;
+                        }
+                        if (hkz <= ic2) {
+                            nbr[n_nbr].off = ri * stride0 + rj * stride1 + hkz;
+                            nbr[n_nbr].w = w;
+                            nbr[n_nbr].cj = cjj;
+                            n_nbr++;
+                        }
+                    }
+                }
+            }
+            for (int b = 0; b < batch_size; b++) {
+                V2* out = reinterpret_cast<V2*>(imgs) + b * img_stride + img_idx * n_pixels;
+                const V2* vol2 = reinterpret_cast<const V2*>(vols + b * vol_stride * 2);
+                T sr = 0, si = 0;
+                for (int i = 0; i < n_nbr; i++) {
+                    V2 v = __ldg(&vol2[nbr[i].off]);
+                    if (nbr[i].cj) v.y = -v.y;
+                    sr += nbr[i].w * v.x;
+                    si += nbr[i].w * v.y;
+                }
+                out[pix] = make_v2(sr, si);
+            }
+            return;
+        }
+
         /* trilinear HALF_VOL — precompute neighbor info, reuse across batch */
         const bool oob = (g0 < (T)-1 || g0 >= (T)N0 ||
                           g1 < (T)-1 || g1 >= (T)N1 ||
@@ -1342,7 +1533,51 @@ batch_project_kernel(
         return;
     }
 
-    /* ── Non-HALF_VOL path (unchanged) ───────────────────────────── */
+    /* ── Non-HALF_VOL path ───────────────────────────────────────── */
+
+    /* ──── cubic non-HALF_VOL batch (ORDER==3, periodic wrap) ──── */
+    if (ORDER == 3) {
+        const T cg0 = rk0 + c0 - (T)1;
+        const T cg1 = rk1 + c1 - (T)1;
+        const T cg2 = rk2 + c2 - (T)1;
+        const int cb0 = floor_int(cg0);
+        const int cb1 = floor_int(cg1);
+        const int cb2 = floor_int(cg2);
+        const T cf0 = cg0 - (T)cb0;
+        const T cf1 = cg1 - (T)cb1;
+        const T cf2 = cg2 - (T)cb2;
+
+        /* Precompute 64 neighbor offsets + weights */
+        int off[64]; T wt[64];
+        int n_nbr = 0;
+        for (int d0 = 0; d0 < 4; d0++) {
+            const int j0 = wrap_mod(cb0 + d0, N0);
+            const T bw0 = cubic_basis(cf0 - (T)d0 + (T)1);
+            for (int d1 = 0; d1 < 4; d1++) {
+                const int j1 = wrap_mod(cb1 + d1, N1);
+                const T bw01 = bw0 * cubic_basis(cf1 - (T)d1 + (T)1);
+                for (int d2 = 0; d2 < 4; d2++) {
+                    const int j2 = wrap_mod(cb2 + d2, N2_eff);
+                    off[n_nbr] = j0 * stride0 + j1 * stride1 + j2;
+                    wt[n_nbr] = bw01 * cubic_basis(cf2 - (T)d2 + (T)1);
+                    n_nbr++;
+                }
+            }
+        }
+        for (int b = 0; b < batch_size; b++) {
+            const V2* vol2 = reinterpret_cast<const V2*>(vols + b * vol_stride * 2);
+            V2* out = reinterpret_cast<V2*>(imgs) + b * img_stride + img_idx * n_pixels;
+            T sr = 0, si = 0;
+            for (int i = 0; i < 64; i++) {
+                V2 v = __ldg(&vol2[off[i]]);
+                sr += wt[i] * v.x;
+                si += wt[i] * v.y;
+            }
+            out[pix] = make_v2(sr, si);
+        }
+        return;
+    }
+
     const T g0 = rk0 + c0;
     const T g1 = rk1 + c1;
     const T g2 = rk2 + c2;
@@ -1517,16 +1752,22 @@ cudaError_t launch_batch_project(
             (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, \
             vol_stride, (int)n_images, (int)batch_size, max_r2)
 
-    int key = (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
+    int order_code = (order == 3) ? 2 : (int)order;
+    int key = (order_code << 2) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
     switch (key) {
-    case 0: BPJ(0, false, false); break;
-    case 1: BPJ(0, false, true);  break;
-    case 2: BPJ(0, true,  false); break;
-    case 3: BPJ(0, true,  true);  break;
-    case 4: BPJ(1, false, false); break;
-    case 5: BPJ(1, false, true);  break;
-    case 6: BPJ(1, true,  false); break;
-    case 7: BPJ(1, true,  true);  break;
+    case  0: BPJ(0, false, false); break;
+    case  1: BPJ(0, false, true);  break;
+    case  2: BPJ(0, true,  false); break;
+    case  3: BPJ(0, true,  true);  break;
+    case  4: BPJ(1, false, false); break;
+    case  5: BPJ(1, false, true);  break;
+    case  6: BPJ(1, true,  false); break;
+    case  7: BPJ(1, true,  true);  break;
+    /* ORDER=3 (cubic, periodic wrap) */
+    case  8: BPJ(3, false, false); break;
+    case  9: BPJ(3, false, true);  break;
+    case 10: BPJ(3, true,  false); break;
+    case 11: BPJ(3, true,  true);  break;
     }
     #undef BPJ
     return cudaGetLastError();

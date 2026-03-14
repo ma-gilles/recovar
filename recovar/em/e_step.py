@@ -89,7 +89,7 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
 
             for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):
                 rot_indices = np.array(rot_indices)
-                residuals[start_idx:end_idx, rot_indices] -= compute_bHb_terms(projections[rot_indices], u_projections[rot_indices], s, batch, translations, experiment_dataset.CTF_params[indices], experiment_dataset.CTF_fun, noise_variance, experiment_dataset.voxel_size, image_shape, experiment_dataset.image_stack.process_images)
+                residuals[start_idx:end_idx, rot_indices] -= compute_bHb_terms(projections[rot_indices], u_projections[rot_indices], s, batch, translations, experiment_dataset.CTF_params[indices], experiment_dataset.ctf_evaluator, noise_variance, experiment_dataset.voxel_size, image_shape, experiment_dataset.image_stack.process_images)
 
             start_idx = end_idx
 
@@ -179,12 +179,12 @@ def compute_residuals_many_poses_eqx(config: ForwardModelConfig, volumes, images
 # ============================================================================
 
 @functools.partial(jax.jit, static_argnums=[6,7,8,9,10,11])
-def compute_residuals_many_poses(volumes, images, rotation_matrices, translations, CTF_params, noise_variance, voxel_size, volume_shape, image_shape, disc_type, CTF_fun, translation_fn = "fft" ):
+def compute_residuals_many_poses(volumes, images, rotation_matrices, translations, CTF_params, noise_variance, voxel_size, volume_shape, image_shape, disc_type, ctf, translation_fn = "fft" ):
     # n_vols x rotations x image_size
     projected_volumes = batch_vol_rot_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, disc_type)
 
     # Broadcast CTF in volumes x rotations
-    projected_volumes = (projected_volumes * CTF_fun( CTF_params, image_shape, voxel_size)[:,None,None,:])
+    projected_volumes = (projected_volumes * ctf( CTF_params, image_shape, voxel_size)[:,None,None,:])
 
     # Broadcast over volumes x rotations
     images /= jnp.sqrt(noise_variance)
