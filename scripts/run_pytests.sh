@@ -81,9 +81,17 @@ case "$MODE" in
     shift || true
     ./scripts/run_long_metrics_regression.sh "$@"
     ;;
+  parallel)
+    shift || true
+    bash "$(dirname "$0")/run_tests_parallel.sh" full "$@"
+    ;;
+  parallel-long)
+    shift || true
+    bash "$(dirname "$0")/run_tests_parallel.sh" long-test "$@"
+    ;;
   *)
     echo "Unknown mode: $MODE"
-    echo "Usage: $0 [fast|smoke|integration|gpu|full|tiny-metrics|long-test|full-long|real-regression|long-metrics] [extra pytest args...]"
+    echo "Usage: $0 [fast|smoke|integration|gpu|full|tiny-metrics|long-test|full-long|real-regression|long-metrics|parallel|parallel-long] [extra pytest args...]"
     exit 2
     ;;
 esac
