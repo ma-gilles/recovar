@@ -1053,8 +1053,11 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
         upsampled_vol_shape = tuple(experiment_dataset.upsampled_volume_shape)
     half_volume_size = np.prod(volume_shape_to_half_volume_shape(upsampled_vol_shape))
 
-    rhs_all = jnp.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype)
-    lhs_all = jnp.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype_real)
+    # Accumulate on CPU to avoid OOM from JAX immutable-array copies at large
+    # grid sizes (256^3 × 50 bins ≈ 5 GB; .at[].set() would double that).
+    # Transferred to GPU only for the final matmul below.
+    rhs_all = np.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype)
+    lhs_all = np.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype_real)
 
     if upsampling_factor is not None:
         config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, upsampling_factor=upsampling_factor)
@@ -1078,8 +1081,8 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
                 config, batch_data, Ft_y=Ft_y_acc, Ft_ctf=Ft_ctf_acc,
             )
 
-        rhs_all = rhs_all.at[bin_idx].set(Ft_y_acc)
-        lhs_all = lhs_all.at[bin_idx].set(Ft_ctf_acc)
+        rhs_all[bin_idx] = np.asarray(Ft_y_acc)
+        lhs_all[bin_idx] = np.asarray(Ft_ctf_acc)
 
     # A slight improvement is an almost triangular kernel/ pyramid kernel
     #    _
@@ -1102,15 +1105,15 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
         for idx in range(1, n_bins):
             weights = kernel_fn(np_to_use.sqrt(distances/h_grid[idx]))
             weight_matrix[:,idx] = weights
-        weight_matrix = jnp.asarray(weight_matrix, dtype=lhs_all.dtype)
-        # (rhs.T @ W).T == W.T @ rhs; keep this on device.
-        rhs_all = jnp.matmul(weight_matrix.T.astype(rhs_all.real.dtype), rhs_all)
-        lhs_all = jnp.matmul(weight_matrix.T, lhs_all)
+        # Matmul on CPU: (50,50) @ (50, half_vol) — fast and avoids GPU OOM.
+        # Downstream post_process_from_filter_v2 transfers each row individually.
+        rhs_all = np.asarray(weight_matrix.T.astype(rhs_all.real.dtype) @ rhs_all)
+        lhs_all = np.asarray(weight_matrix.T @ lhs_all)
 
 
     elif heterogeneity_kernel == "square":
-        rhs_all = jnp.cumsum(rhs_all, axis=0)
-        lhs_all = jnp.cumsum(lhs_all, axis=0)
+        rhs_all = np.cumsum(rhs_all, axis=0)
+        lhs_all = np.cumsum(lhs_all, axis=0)
     else:
         raise NotImplementedError
 
