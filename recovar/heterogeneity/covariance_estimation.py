@@ -831,8 +831,9 @@ def compute_covariance_regularization_relion_style(
     shifts = core.vec_indices_to_frequencies(picked_frequencies, volume_shape) * options["shift_fsc"]
 
     n_freqs = picked_frequencies.size
-    # //4: regularization needs 4 volume-sized arrays simultaneously (H0, H1, B0, B1)
-    batch_size = utils.safe_batch_size(utils.get_column_batch_size(volume_shape[0], gpu_memory) // 4)
+    # //8: regularization vmaps iDFT+crop+mask+DFT per column; peak memory
+    # scales as ~10 volume-sized arrays per column, not 4.
+    batch_size = utils.safe_batch_size(utils.get_column_batch_size(volume_shape[0], gpu_memory) // 8)
 
     fsc_priors = [None] * n_freqs
     fscs = [None] * n_freqs

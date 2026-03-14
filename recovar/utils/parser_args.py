@@ -32,7 +32,7 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze= False):
     )
 
     parser.add_argument(
-        "--n-bins",  type =float, default=50, dest="n_bins",help="number of bins for kernel regression. Default is 50 and works well for most cases. E.g., it was used to generate all figures in the paper"
+        "--n-bins",  type =int, default=50, dest="n_bins",help="number of bins for kernel regression. Default is 50 and works well for most cases. E.g., it was used to generate all figures in the paper"
     )   
 
     parser.add_argument(

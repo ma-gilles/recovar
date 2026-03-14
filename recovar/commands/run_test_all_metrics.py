@@ -542,7 +542,7 @@ def metric_direction(metric_name):
     return "ignore"
 
 
-HIGH_VARIANCE_TOKENS = ("locres", "auc", "noise_max")
+HIGH_VARIANCE_TOKENS = ("locres", "auc", "noise_max", "spatial_fsc")
 _HIGH_VARIANCE_MIN_TOL = 0.10
 
 
