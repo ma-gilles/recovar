@@ -63,7 +63,7 @@ def _heterogeneity_kernel_batch_from_fft(
         # CTF² on 2x-upsampled grid → box-filter → downsample → half-spectrum
         upsample_factor = 2
         upsampled_shape = tuple(np.array(config.image_shape) * upsample_factor)
-        ctf_up = config.CTF_fun(batch.ctf_params, upsampled_shape, config.voxel_size) ** 2
+        ctf_up = config.compute_ctf_at_shape(batch.ctf_params, upsampled_shape) ** 2
         bsz = ctf_up.shape[0]
         kernel_size = upsample_factor + upsample_factor // 2
         box_kernel = jnp.ones((1, 1, kernel_size, kernel_size), dtype=ctf_up.dtype) / kernel_size ** 2
@@ -367,7 +367,7 @@ def precompute_triangular_kernel(experiment_dataset, noise_variance, pol_degree=
         voxel_size=float(experiment_dataset.voxel_size),
         padding=int(experiment_dataset.padding),
         disc_type='',
-        CTF_fun=experiment_dataset.CTF_fun,
+        ctf=experiment_dataset.ctf_evaluator,
         premultiplied_ctf=False,
         volume_mask_threshold=float(experiment_dataset.volume_mask_threshold),
     )
@@ -581,7 +581,7 @@ def precompute_kernel(experiment_dataset, noise_variance, pol_degree=0, heteroge
         voxel_size=float(experiment_dataset.voxel_size),
         padding=int(experiment_dataset.padding),
         disc_type='',
-        CTF_fun=experiment_dataset.CTF_fun,
+        ctf=experiment_dataset.ctf_evaluator,
         premultiplied_ctf=False,
         volume_mask_threshold=float(experiment_dataset.volume_mask_threshold),
     )
@@ -1571,7 +1571,7 @@ def compute_residuals_many_weights(experiment_dataset, weights , pol_degree, use
         voxel_size=float(experiment_dataset.voxel_size),
         padding=int(experiment_dataset.padding),
         disc_type='',
-        CTF_fun=experiment_dataset.CTF_fun,
+        ctf=experiment_dataset.ctf_evaluator,
         premultiplied_ctf=False,
         volume_mask_threshold=float(experiment_dataset.volume_mask_threshold),
     )

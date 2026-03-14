@@ -16,6 +16,7 @@ from recovar.core.configs import (
     ModelState,
 )
 import recovar.core.forward as core_forward
+from recovar.core.ctf import as_ctf_evaluator
 
 pytestmark = pytest.mark.unit
 
@@ -28,11 +29,11 @@ IMAGE_SHAPE = (2, 2)
 VOXEL_SIZE = 1.0
 
 
-def _ones_ctf(ctf_params, image_shape, voxel_size):
+def _ones_ctf(ctf_params, image_shape, voxel_size, **kw):
     return np.ones((ctf_params.shape[0], image_shape[0] * image_shape[1]), dtype=np.float32)
 
 
-def _twos_ctf(ctf_params, image_shape, voxel_size):
+def _twos_ctf(ctf_params, image_shape, voxel_size, **kw):
     return 2.0 * np.ones((ctf_params.shape[0], image_shape[0] * image_shape[1]), dtype=np.float32)
 
 
@@ -44,7 +45,7 @@ def _make_config(ctf_fun=_ones_ctf, disc_type="nearest"):
         voxel_size=VOXEL_SIZE,
         padding=0,
         disc_type=disc_type,
-        CTF_fun=ctf_fun,
+        ctf=as_ctf_evaluator(ctf_fun),
         premultiplied_ctf=False,
         volume_mask_threshold=0.25,
     )

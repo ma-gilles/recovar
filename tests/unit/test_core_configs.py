@@ -7,6 +7,7 @@ pytest.importorskip("jax")
 import jax.numpy as jnp
 
 import recovar.core.configs as configs
+from recovar.core.ctf import CTFEvaluator, CTFMode, as_ctf_evaluator
 
 pytestmark = pytest.mark.unit
 
@@ -24,7 +25,7 @@ def _make_config(**overrides):
         voxel_size=1.0,
         padding=0,
         disc_type="linear_interp",
-        CTF_fun=lambda params, shape, vs: jnp.ones(shape),
+        ctf=as_ctf_evaluator(lambda params, shape, vs, **kw: jnp.ones(shape)),
         premultiplied_ctf=False,
         volume_mask_threshold=0.0,
     )
@@ -63,14 +64,14 @@ class TestForwardModelConfig:
     def test_compute_ctf(self):
         called_with = {}
 
-        def mock_ctf(params, shape, vs):
+        def mock_ctf(params, shape, vs, **kw):
             called_with["params"] = params
             called_with["shape"] = shape
             called_with["vs"] = vs
             return jnp.ones(10)
 
         cfg = _make_config(
-            CTF_fun=mock_ctf,
+            ctf=as_ctf_evaluator(mock_ctf),
             image_shape=(32, 32),
             voxel_size=1.5,
         )
@@ -78,6 +79,25 @@ class TestForwardModelConfig:
         assert called_with["shape"] == (32, 32)
         assert called_with["vs"] == 1.5
         assert result.shape == (10,)
+
+    def test_ctf_backward_compat_property(self):
+        """config.CTF_fun should return the ctf evaluator for backward compat."""
+        cfg = _make_config(ctf=CTFEvaluator(mode=CTFMode.SPA))
+        assert cfg.CTF_fun is cfg.ctf
+
+    def test_compute_ctf_at_shape(self):
+        called_with = {}
+
+        def mock_ctf(params, shape, vs, **kw):
+            called_with["shape"] = shape
+            return jnp.ones(10)
+
+        cfg = _make_config(
+            ctf=as_ctf_evaluator(mock_ctf),
+            image_shape=(32, 32),
+        )
+        cfg.compute_ctf_at_shape(jnp.array([1.0, 2.0]), (64, 64))
+        assert called_with["shape"] == (64, 64)
 
     def test_process_fn_default_none(self):
         cfg = _make_config()

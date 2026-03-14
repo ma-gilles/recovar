@@ -147,13 +147,14 @@ def test_post_process_from_filter_v2_half_matches_full():
 def test_relion_kernel_batch_normalizes_noise_variance_shapes():
     from recovar.core.configs import ForwardModelConfig
 
-    def ctf_fun(params, image_shape, voxel_size):
-        return jnp.ones((params.shape[0], image_shape[0] * image_shape[1]), dtype=jnp.float32)
+    def ctf_fun(params, image_shape, voxel_size, *, half_image=False, **kwargs):
+        w = image_shape[1] // 2 + 1 if half_image else image_shape[1]
+        return jnp.ones((params.shape[0], image_shape[0] * w), dtype=jnp.float32)
 
     config = ForwardModelConfig(
         image_shape=(4, 4), volume_shape=(4, 4, 4),
         grid_size=4, voxel_size=1.5,
-        padding=0, disc_type="linear_interp", CTF_fun=ctf_fun,
+        padding=0, disc_type="linear_interp", ctf=core.as_ctf_evaluator(ctf_fun),
         premultiplied_ctf=False, volume_mask_threshold=0.0,
     )
 
@@ -236,7 +237,7 @@ def test_relion_kernel_batch_half_image_matches_full_reference():
     """New half-image relion_kernel_batch produces identical output to
     the old full-image path (padded_dft + translate + full adjoint)."""
     from recovar.core.configs import ForwardModelConfig
-    from recovar.core.ctf import cryodrgn_CTF
+    from recovar.core.ctf import CTFEvaluator
     from recovar.core import padding
     import recovar.core.forward as core_forward
     from recovar.reconstruction import noise as noise_mod
@@ -253,7 +254,7 @@ def test_relion_kernel_batch_half_image_matches_full_reference():
     config = ForwardModelConfig(
         image_shape=image_shape, volume_shape=volume_shape,
         grid_size=grid_size, voxel_size=voxel_size,
-        padding=pad, disc_type="linear_interp", CTF_fun=cryodrgn_CTF,
+        padding=pad, disc_type="linear_interp", ctf=CTFEvaluator(),
         premultiplied_ctf=False, volume_mask_threshold=0.0,
         data_multiplier=data_multiplier,
     )
@@ -312,7 +313,7 @@ def test_relion_kernel_batch_complex_input_matches_full_reference():
     """relion_kernel_batch_from_fft with pre-processed complex images
     matches the full-image reference."""
     from recovar.core.configs import ForwardModelConfig
-    from recovar.core.ctf import cryodrgn_CTF
+    from recovar.core.ctf import CTFEvaluator
     from recovar.core import padding
     import recovar.core.forward as core_forward
     from recovar.reconstruction import noise as noise_mod
@@ -327,7 +328,7 @@ def test_relion_kernel_batch_complex_input_matches_full_reference():
     config = ForwardModelConfig(
         image_shape=image_shape, volume_shape=volume_shape,
         grid_size=grid_size, voxel_size=1.5,
-        padding=pad, disc_type="linear_interp", CTF_fun=cryodrgn_CTF,
+        padding=pad, disc_type="linear_interp", ctf=CTFEvaluator(),
         premultiplied_ctf=False, volume_mask_threshold=0.0,
     )
 
@@ -370,7 +371,7 @@ def test_relion_kernel_batch_complex_input_matches_full_reference():
 def test_relion_kernel_batch_accumulator_matches_sequential():
     """Calling relion_kernel_batch twice with accumulators matches summing two independent calls."""
     from recovar.core.configs import ForwardModelConfig
-    from recovar.core.ctf import cryodrgn_CTF
+    from recovar.core.ctf import CTFEvaluator
 
     rng = np.random.default_rng(77)
     grid_size = 6
@@ -381,7 +382,7 @@ def test_relion_kernel_batch_accumulator_matches_sequential():
     config = ForwardModelConfig(
         image_shape=image_shape, volume_shape=volume_shape,
         grid_size=grid_size, voxel_size=1.0,
-        padding=pad, disc_type="linear_interp", CTF_fun=cryodrgn_CTF,
+        padding=pad, disc_type="linear_interp", ctf=CTFEvaluator(),
         premultiplied_ctf=False, volume_mask_threshold=0.0,
     )
 
@@ -414,7 +415,7 @@ def test_relion_kernel_batch_accumulator_matches_sequential():
 def test_relion_kernel_batch_half_volume_output_on_gpu(gpu_device):
     """relion_kernel_batch on GPU produces finite half-volume outputs."""
     from recovar.core.configs import ForwardModelConfig
-    from recovar.core.ctf import cryodrgn_CTF
+    from recovar.core.ctf import CTFEvaluator
     import recovar.core.fourier_transform_utils as ftu
 
     rng = np.random.default_rng(55)
@@ -427,7 +428,7 @@ def test_relion_kernel_batch_half_volume_output_on_gpu(gpu_device):
     config = ForwardModelConfig(
         image_shape=image_shape, volume_shape=volume_shape,
         grid_size=grid_size, voxel_size=1.5,
-        padding=pad, disc_type="linear_interp", CTF_fun=cryodrgn_CTF,
+        padding=pad, disc_type="linear_interp", ctf=CTFEvaluator(),
         premultiplied_ctf=False, volume_mask_threshold=0.0,
         data_multiplier=-1.0,
     )

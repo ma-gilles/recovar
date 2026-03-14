@@ -1004,7 +1004,7 @@ def get_average_residual_square_inner(batch, mean_estimate, volume_mask, basis, 
     config = ForwardModelConfig(
         image_shape=image_shape, volume_shape=volume_shape,
         grid_size=grid_size, voxel_size=voxel_size,
-        padding=padding, disc_type=disc_type, CTF_fun=CTF_fun,
+        padding=padding, disc_type=disc_type, ctf=core.as_ctf_evaluator(CTF_fun),
         premultiplied_ctf=False, volume_mask_threshold=volume_mask_threshold,
     )
 

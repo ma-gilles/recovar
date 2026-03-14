@@ -137,7 +137,7 @@ class CryoEMDataset:
         rotation_matrices: NDArray[np.floating],
         translations: NDArray[np.floating],
         CTF_params: NDArray[np.floating],
-        CTF_fun: Callable = core.evaluate_ctf_wrapper,
+        CTF_fun=None,
         dtype: type = np.complex64,
         rotation_dtype: type = np.float32,
         dataset_indices: Optional[NDArray[np.integer]] = None,
@@ -180,7 +180,10 @@ class CryoEMDataset:
         self.premultiplied_ctf = premultiplied_ctf
         # For SPA n_units == n_images; for tilt series n_units == n_particles
         self.n_units = self.image_stack.Np if self.tilt_series_flag else self.n_images
-        self.CTF_fun_inp = CTF_fun
+        if CTF_fun is None:
+            self.CTF_fun_inp = core.CTFEvaluator()
+        else:
+            self.CTF_fun_inp = core.as_ctf_evaluator(CTF_fun)
         self.hpad = self.padding // 2
         # Heuristic mask threshold scaled by grid size
         self.volume_mask_threshold = 4 * self.grid_size / 128
@@ -256,8 +259,13 @@ class CryoEMDataset:
             return self.get_dataset_generator(batch_size, num_workers = num_workers)
 
 
+    @property
+    def ctf_evaluator(self):
+        """The :class:`~recovar.core.ctf.CTFEvaluator` for this dataset."""
+        return self.CTF_fun_inp
+
     def CTF_fun(self, *args, **kwargs):
-        # Force dtype
+        """Evaluate CTF with dtype casting. Prefer :attr:`ctf_evaluator` for new code."""
         return self.CTF_fun_inp(*args, **kwargs).astype(self.CTF_dtype, copy=False)
 
     def get_valid_frequency_indices(self,rad = None):
@@ -519,6 +527,11 @@ class CryoEMHalfsets:
     def volume_upsampling_factor(self) -> int:
         return self._halves[0].volume_upsampling_factor
 
+    @property
+    def ctf_evaluator(self):
+        """The :class:`~recovar.core.ctf.CTFEvaluator` for this dataset."""
+        return self._halves[0].ctf_evaluator
+
     def CTF_fun(self, *args, **kwargs):
         return self._halves[0].CTF_fun(*args, **kwargs)
 
@@ -698,7 +711,7 @@ def load_dataset(
     # Initialize contrast == 1
     ctf_params = np.concatenate([ctf_params, np.ones_like(ctf_params[:, 0][..., None])], axis=-1)
     
-    CTF_fun = core.evaluate_ctf_wrapper
+    CTF_fun = core.CTFEvaluator()
 
     # This is an option used to treat a cryo-ET dataset as a cryo-EM dataset, but still use the right CTF.
     # It means, that it will use the cryo-EM pipeline but the cryoET CTF.
@@ -721,7 +734,7 @@ def load_dataset(
             dose = tilt_dataset_this.dose
             angles = np.zeros_like(dose) # Set angles to 0 - the np.cos factor is included already?
             ctf_params = np.concatenate( [ctf_params, dose[...,None], angles[...,None]], axis =-1)
-            CTF_fun = core.evaluate_ctf_wrapper_tilt_series_v2
+            CTF_fun = core.CTFEvaluator(mode=core.CTFMode.CRYO_ET)
 
 
         # The angles are used to compute a scale factor cos(angles). If scale from star, then the scale factor is already in the star file, so set angle to 0
@@ -743,7 +756,7 @@ def load_dataset(
 
             if not (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)):
                 raise ValueError("Critical exposure calculation requires 200kV or 300kV imaging")
-            CTF_fun = core.get_cryo_ET_CTF_fun(dose_per_tilt = dose_per_tilt, angle_per_tilt = angle_per_tilt)
+            CTF_fun = core.CTFEvaluator(mode=core.CTFMode.TILT_SERIES, dose_per_tilt=dose_per_tilt, angle_per_tilt=angle_per_tilt)
             logger.info('CTF from dose weighting')
         elif "v2" in tilt_series_ctf:
             tilt_numbers = tilt_dataset_this.tilt_numbers
@@ -762,7 +775,7 @@ def load_dataset(
                 logger.warning("Using dose from star file (- Bfactor/4)")
 
 
-            CTF_fun = core.evaluate_ctf_wrapper_tilt_series_v2
+            CTF_fun = core.CTFEvaluator(mode=core.CTFMode.CRYO_ET)
             ctf_params = np.concatenate( [ctf_params, dose[...,None], angles[...,None]], axis =-1)
             if not (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)):
                 raise ValueError("Critical exposure calculation requires 200kV or 300kV imaging") 

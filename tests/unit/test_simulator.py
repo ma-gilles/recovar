@@ -157,7 +157,7 @@ def test_generate_simulated_dataset_tilt_branch_wires_ctf_and_metadata(monkeypat
     )
     assert simulation_info["n_tilts"] == n_tilts
     np.testing.assert_array_equal(simulation_info["tilt_groups"], tilt_groups)
-    assert created[0].CTF_fun is core.evaluate_ctf_wrapper_tilt_series_v2
+    assert created[0].CTF_fun.mode == core.CTFMode.CRYO_ET
 
 
 def test_generate_simulated_dataset_extra_particles_and_outliers(monkeypatch):

@@ -45,7 +45,7 @@ def test_load_cryodrgn_dataset_tiny_spa_files(tmp_path):
     assert cryo.n_units == ind.size
     np.testing.assert_array_equal(cryo.dataset_indices, ind)
     assert cryo.CTF_params.shape[0] == ind.size
-    assert cryo.CTF_fun_inp is core.evaluate_ctf_wrapper
+    assert cryo.ctf_evaluator.mode == core.CTFMode.SPA
 
 
 def test_load_cryodrgn_dataset_tiny_spa_boolean_ind_preserves_dataset_indices_and_image_identity(tmp_path):
@@ -187,7 +187,7 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_files_and_subset_generators(tmp_
     assert cryo.tilt_series_flag is True
     assert cryo.n_images == files["n_images"]
     assert cryo.n_units == 3  # number of particle groups in fixture
-    assert cryo.CTF_fun_inp is core.evaluate_ctf_wrapper_tilt_series_v2
+    assert cryo.ctf_evaluator.mode == core.CTFMode.CRYO_ET
 
     # Particle-subset generator should preserve requested particle order.
     subset_particles = np.array([2, 0], dtype=np.int32)
@@ -538,7 +538,7 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_warp_path(tmp_path):
 
     assert cryo.tilt_series_flag is True
     assert cryo.n_images == files["n_images"]
-    assert cryo.CTF_fun_inp is core.evaluate_ctf_wrapper_tilt_series_v2
+    assert cryo.ctf_evaluator.mode == core.CTFMode.CRYO_ET
     # v2 branch appends dose and angle channels.
     assert cryo.CTF_params.shape[1] >= 11
 
@@ -564,7 +564,7 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_from_simulator_files(sim_tiny_ti
 
     assert cryo.tilt_series_flag is True
     assert cryo.n_images == files["n_images"]
-    assert cryo.CTF_fun_inp is core.evaluate_ctf_wrapper_tilt_series_v2
+    assert cryo.ctf_evaluator.mode == core.CTFMode.CRYO_ET
 
     subset_images = np.array([7, 2, 7, 11], dtype=np.int32)
     image_batches = list(cryo.get_image_subset_generator(batch_size=2, subset_indices=subset_images))
@@ -1006,7 +1006,7 @@ def test_load_cryodrgn_dataset_simulator_tilt_ctf_in_spa_mode_preserves_reordere
         tilt_series_ctf="relion5",
     )
     assert cryo.tilt_series_flag is False
-    assert cryo.CTF_fun_inp is core.evaluate_ctf_wrapper_tilt_series_v2
+    assert cryo.ctf_evaluator.mode == core.CTFMode.CRYO_ET
 
     batches = list(cryo.get_image_generator(batch_size=2))
     got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)

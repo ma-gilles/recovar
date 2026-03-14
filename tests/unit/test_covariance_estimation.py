@@ -9,6 +9,7 @@ import recovar.heterogeneity.covariance_estimation as cov_est
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 from recovar.core.configs import ForwardModelConfig, BatchData
+from recovar.core.ctf import as_ctf_evaluator
 from recovar.data_io.dataset import CryoEMHalfsets
 from helpers.tiny_synthetic import make_tiny_cryo_dataset, make_tiny_cryo_dataset_with_images
 
@@ -412,7 +413,7 @@ def test_compute_freq_batch_two_calls_accumulate():
         voxel_size=1.0,
         padding=0,
         disc_type="linear_interp",
-        CTF_fun=lambda params, shape, voxel: jnp.ones((params.shape[0], shape[0]*shape[1]), dtype=jnp.complex64),
+        ctf=as_ctf_evaluator(lambda params, shape, voxel, **kw: jnp.ones((params.shape[0], shape[0]*shape[1]), dtype=jnp.complex64)),
     )
     opts = CovColumnOpts(
         right_kernel="triangular",

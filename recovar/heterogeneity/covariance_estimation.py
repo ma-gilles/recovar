@@ -475,7 +475,7 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, b
         voxel_size=float(experiment_dataset.voxel_size),
         padding=int(experiment_dataset.padding),
         disc_type='linear_interp',  # trilinear kernel only supports linear_interp
-        CTF_fun=experiment_dataset.CTF_fun,
+        ctf=experiment_dataset.ctf_evaluator,
         premultiplied_ctf=bool(experiment_dataset.premultiplied_ctf),
         volume_mask_threshold=float(experiment_dataset.volume_mask_threshold),
     )

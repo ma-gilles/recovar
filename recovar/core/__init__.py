@@ -35,19 +35,22 @@ from recovar.core.indexing import (
     vol_indices_to_vec_indices,
 )
 from recovar.core.ctf import (
+    CTFEvaluator,
+    CTFMode,
     CTFParamIndex,
-    CTFParams,
+    as_ctf_evaluator,
     batch_evaluate_ctf,
     critical_exposure,
-    cryodrgn_CTF,
     evaluate_ctf,
     evaluate_ctf_packed,
+    get_dose_filters,
+    get_dose_filters_from_tilt_number,
+    # Backward compatibility aliases (deprecated)
+    cryodrgn_CTF,
     evaluate_ctf_wrapper,
     evaluate_ctf_wrapper_tilt_series,
     evaluate_ctf_wrapper_tilt_series_v2,
     get_cryo_ET_CTF_fun,
-    get_dose_filters,
-    get_dose_filters_from_tilt_number,
 )
 from recovar.core.configs import BatchData, DataIterator, ForwardModelConfig
 from recovar.core.forward import (
@@ -68,8 +71,10 @@ from recovar.core.slicing import (
 
 __all__ = [
     "BatchData",
+    "CTFEvaluator",
+    "CTFMode",
     "CTFParamIndex",
-    "CTFParams",
+    "as_ctf_evaluator",
     "adjoint_slice_volume",
     "batch_batch_find_frequencies_within_grid_dist",
     "batch_evaluate_ctf",

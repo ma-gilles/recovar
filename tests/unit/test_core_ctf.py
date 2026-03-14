@@ -39,27 +39,51 @@ def test_critical_exposure_decreases_with_frequency():
     assert np.all(np.diff(out) < 0)
 
 
-def test_ctfparams_basic_operations():
-    params = core_ctf.CTFParams.create_standard_params(n_images=2, contrast=1.0)
-    assert params.shape == (2, len(core_ctf.CTFParamIndex))
-    assert params.validate() is True
+def test_ctf_evaluator_spa_mode():
+    evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.SPA)
+    ctf_params = np.zeros((2, 9), dtype=np.float32)
+    ctf_params[:, core_ctf.CTFParamIndex.VOLT] = 300.0
+    ctf_params[:, core_ctf.CTFParamIndex.CS] = 2.7
+    ctf_params[:, core_ctf.CTFParamIndex.W] = 0.1
+    ctf_params[:, core_ctf.CTFParamIndex.CONTRAST] = 1.0
+    out = np.asarray(evaluator(ctf_params, image_shape=(4, 4), voxel_size=1.0))
+    assert out.shape == (2, 16)
 
-    params.set_param(core_ctf.CTFParamIndex.VOLT, np.array([200.0, 300.0]))
-    np.testing.assert_array_equal(params.get_param(core_ctf.CTFParamIndex.VOLT), np.array([200.0, 300.0]))
-
-    params.add_tilt_series_params(dose_values=np.array([1.0, 2.0]), tilt_angles=np.array([3.0, 6.0]))
-    np.testing.assert_array_equal(params.get_param(core_ctf.CTFParamIndex.DOSE), np.array([1.0, 2.0]))
-    np.testing.assert_array_equal(params.get_param(core_ctf.CTFParamIndex.TILT_ANGLE), np.array([3.0, 6.0]))
+    out_half = np.asarray(evaluator(ctf_params, image_shape=(4, 4), voxel_size=1.0, half_image=True))
+    assert out_half.shape == (2, 4 * (4 // 2 + 1))
 
 
-def test_ctfparams_validation_errors():
-    params = core_ctf.CTFParams(np.zeros((1, len(core_ctf.CTFParamIndex))))
-    with pytest.raises(ValueError):
-        params.validate()
+def test_ctf_evaluator_cryo_et_mode():
+    evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.CRYO_ET)
+    ctf_params = np.zeros((2, 11), dtype=np.float32)
+    ctf_params[:, core_ctf.CTFParamIndex.VOLT] = 300.0
+    ctf_params[:, core_ctf.CTFParamIndex.CS] = 2.7
+    ctf_params[:, core_ctf.CTFParamIndex.W] = 0.1
+    ctf_params[:, core_ctf.CTFParamIndex.CONTRAST] = 1.0
+    ctf_params[:, core_ctf.CTFParamIndex.DOSE] = np.array([1.0, 2.0])
+    out = np.asarray(evaluator(ctf_params, image_shape=(4, 4), voxel_size=1.0))
+    assert out.shape == (2, 16)
 
-    bad = core_ctf.CTFParams.create_standard_params(n_images=1, volt=-1.0)
-    with pytest.raises(ValueError):
-        bad.validate()
+
+def test_ctf_evaluator_tilt_series_mode():
+    evaluator = core_ctf.CTFEvaluator(
+        mode=core_ctf.CTFMode.TILT_SERIES,
+        dose_per_tilt=2.9,
+        angle_per_tilt=3.0,
+    )
+    assert evaluator.dose_per_tilt == 2.9
+    assert evaluator.angle_per_tilt == 3.0
+
+
+def test_as_ctf_evaluator_wraps_callable():
+    fn = lambda params, shape, vs, **kw: np.ones((params.shape[0], shape[0] * shape[1]))
+    wrapped = core_ctf.as_ctf_evaluator(fn)
+    assert isinstance(wrapped, core_ctf._LegacyCTFAdapter)
+    # Wrapping an evaluator should return it unchanged
+    assert core_ctf.as_ctf_evaluator(wrapped) is wrapped
+    # CTFEvaluator should pass through
+    ev = core_ctf.CTFEvaluator()
+    assert core_ctf.as_ctf_evaluator(ev) is ev
 
 
 def test_get_dose_filters_shape_for_non_square_image():
@@ -85,7 +109,7 @@ def test_evaluate_ctf_wrapper_tilt_series_uses_voltage(monkeypatch):
     monkeypatch.setattr(core_ctf, "get_dose_filters_from_tilt_number", fake_dose_filters)
     monkeypatch.setattr(
         core_ctf,
-        "cryodrgn_CTF",
+        "_compute_spa_ctf",
         lambda CTF_params, image_shape, voxel_size, **kw: np.ones(
             (CTF_params.shape[0], image_shape[0] * image_shape[1]), dtype=np.float32
         ),

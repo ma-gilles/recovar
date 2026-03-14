@@ -550,10 +550,9 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         tilt_series_assignment = None
 
     if n_tilts >0:
-        # CTF_fun = core.get_cryo_ET_CTF_fun(dose_per_tilt, angle_per_tilt)
-        CTF_fun = core.evaluate_ctf_wrapper_tilt_series_v2
+        CTF_fun = core.CTFEvaluator(mode=core.CTFMode.CRYO_ET)
     else:
-        CTF_fun = core.evaluate_ctf_wrapper
+        CTF_fun = core.CTFEvaluator()
 
     main_dataset = dataset.CryoEMDataset( None, voxel_size,
                               rots, trans, ctf_params, CTF_fun = CTF_fun, dataset_indices = None, grid_size = grid_size)

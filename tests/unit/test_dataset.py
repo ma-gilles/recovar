@@ -175,7 +175,7 @@ def test_cryoemdataset_minimal_and_noise_access():
     rots = np.tile(np.eye(3, dtype=np.float32), (3, 1, 1))
     trans = np.zeros((3, 2), dtype=np.float32)
 
-    def ctf_fun(params, image_shape, voxel_size):
+    def ctf_fun(params, image_shape, voxel_size, **kwargs):
         return np.ones((params.shape[0], image_shape[0] * image_shape[1]), dtype=np.float64)
 
     ds = dataset.CryoEMDataset(
@@ -481,7 +481,7 @@ def test_load_cryodrgn_dataset_cryoem_branch(monkeypatch):
         tilt_series=False,
         tilt_series_ctf="cryoem",
     )
-    assert out.CTF_fun_inp is core.evaluate_ctf_wrapper
+    assert out.ctf_evaluator.mode == core.CTFMode.SPA
     assert out.n_images == 4
     assert out.CTF_params.shape[1] == 9
     np.testing.assert_array_equal(out.dataset_indices, np.array([0, 2], dtype=int))
@@ -592,8 +592,6 @@ def test_load_cryodrgn_dataset_from_dose_branch(monkeypatch):
             self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.int32)
 
     monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
-    sentinel_ctf_fun = object()
-    monkeypatch.setattr(core, "get_cryo_ET_CTF_fun", lambda dose_per_tilt, angle_per_tilt: sentinel_ctf_fun)
 
     out = dataset.load_cryodrgn_dataset(
         particles_file="p.mrcs",
@@ -605,7 +603,9 @@ def test_load_cryodrgn_dataset_from_dose_branch(monkeypatch):
         dose_per_tilt=2.9,
         angle_per_tilt=3.0,
     )
-    assert out.CTF_fun_inp is sentinel_ctf_fun
+    assert out.ctf_evaluator.mode == core.CTFMode.TILT_SERIES
+    assert out.ctf_evaluator.dose_per_tilt == 2.9
+    assert out.ctf_evaluator.angle_per_tilt == 3.0
     # from_dose appends tilt-number channel after baseline CTF fields.
     assert out.CTF_params.shape[1] == 10
     np.testing.assert_array_equal(out.CTF_params[:, -1], np.array([0, 1, 2, 3], dtype=np.float32))
@@ -633,7 +633,7 @@ def test_load_cryodrgn_dataset_tilt_series_relion5_branch(monkeypatch):
     )
     assert out.tilt_series_flag is True
     assert out.n_units == 2  # Np from fake tilt dataset
-    assert out.CTF_fun_inp is core.evaluate_ctf_wrapper_tilt_series_v2
+    assert out.ctf_evaluator.mode == core.CTFMode.CRYO_ET
     # Baseline 8 + bfactor + contrast + (dose,angle) then drop voxel_size => 11.
     assert out.CTF_params.shape[1] == 11
     np.testing.assert_array_equal(
@@ -669,7 +669,7 @@ def test_load_cryodrgn_dataset_tilt_series_warp_alias_maps_to_v2_scale(monkeypat
     )
     assert called["tilt_file_option"] == "warp"
     assert out.tilt_series_flag is True
-    assert out.CTF_fun_inp is core.evaluate_ctf_wrapper_tilt_series_v2
+    assert out.ctf_evaluator.mode == core.CTFMode.CRYO_ET
     # Baseline 8 + bfactor + contrast + (dose,angle) then drop voxel_size => 11.
     assert out.CTF_params.shape[1] == 11
     np.testing.assert_array_equal(
@@ -705,7 +705,7 @@ def test_load_cryodrgn_dataset_defaults_tilt_series_ctf_by_mode(monkeypatch):
         tilt_series=False,
         tilt_series_ctf=None,
     )
-    assert out_spa.CTF_fun_inp is core.evaluate_ctf_wrapper
+    assert out_spa.ctf_evaluator.mode == core.CTFMode.SPA
     assert calls["tilt_init"] == 0
 
     # tilt_series=True with tilt_series_ctf=None should default to relion5.
@@ -717,7 +717,7 @@ def test_load_cryodrgn_dataset_defaults_tilt_series_ctf_by_mode(monkeypatch):
         tilt_series=True,
         tilt_series_ctf=None,
     )
-    assert out_tilt.CTF_fun_inp is core.evaluate_ctf_wrapper_tilt_series_v2
+    assert out_tilt.ctf_evaluator.mode == core.CTFMode.CRYO_ET
     assert calls["tilt_init"] == 1
     assert calls["tilt_file_option"] == "relion5"
 
@@ -748,7 +748,7 @@ def test_load_cryodrgn_dataset_from_star_branch_sets_contrast_and_bfactor(monkey
         sort_with_Bfac=True,
     )
     assert captured["sort_with_Bfac"] is True
-    assert out.CTF_fun_inp is core.evaluate_ctf_wrapper
+    assert out.ctf_evaluator.mode == core.CTFMode.SPA
     assert out.CTF_params.shape[1] == 9
     np.testing.assert_array_equal(
         out.CTF_params[:, core.CTFParamIndex.CONTRAST],
@@ -783,7 +783,7 @@ def test_load_cryodrgn_dataset_v2_scale_from_star_uses_star_scaling_and_zero_ang
         dose_per_tilt=None,
         angle_per_tilt=3.0,
     )
-    assert out.CTF_fun_inp is core.evaluate_ctf_wrapper_tilt_series_v2
+    assert out.ctf_evaluator.mode == core.CTFMode.CRYO_ET
     # Baseline 8 + bfactor + contrast + (dose,angle) then drop voxel_size => 11.
     assert out.CTF_params.shape[1] == 11
     np.testing.assert_array_equal(
@@ -819,7 +819,7 @@ def test_load_cryodrgn_dataset_warp_alias_for_non_tilt_series_maps_to_v2_scale(m
         tilt_series=False,
         tilt_series_ctf="warp",  # alias -> v2_scale_from_star
     )
-    assert out.CTF_fun_inp is core.evaluate_ctf_wrapper_tilt_series_v2
+    assert out.ctf_evaluator.mode == core.CTFMode.CRYO_ET
     assert out.CTF_params.shape[1] == 11
     np.testing.assert_array_equal(
         out.CTF_params[:, core.CTFParamIndex.CONTRAST],

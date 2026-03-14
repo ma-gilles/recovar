@@ -24,6 +24,8 @@ import equinox as eqx
 import jax
 import numpy as np
 
+from recovar.core.ctf import CTFEvaluator, as_ctf_evaluator
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,30 +47,29 @@ class ForwardModelConfig(eqx.Module):
     voxel_size: float = eqx.field(static=True)
     padding: int = eqx.field(static=True)
     disc_type: str = eqx.field(static=True)
-    CTF_fun: Callable = eqx.field(static=True)
+    ctf: CTFEvaluator = eqx.field(static=True)
     premultiplied_ctf: bool = eqx.field(static=True, default=False)
     volume_mask_threshold: float = eqx.field(static=True, default=0.0)
     volume_upsampling_factor: int = eqx.field(static=True, default=1)
     data_multiplier: float = eqx.field(static=True, default=1.0)
     process_fn: Optional[Callable] = eqx.field(static=True, default=None)
 
+    @property
+    def CTF_fun(self):
+        """Backward compatibility alias for :attr:`ctf`."""
+        return self.ctf
+
     def compute_ctf(self, ctf_params: jax.Array) -> jax.Array:
         """Compute CTF values for a batch of images (full spectrum)."""
-        return self.CTF_fun(ctf_params, self.image_shape, self.voxel_size)
+        return self.ctf(ctf_params, self.image_shape, self.voxel_size)
 
     def compute_ctf_half(self, ctf_params: jax.Array) -> jax.Array:
         """Compute CTF at half-spectrum (rfft-packed) frequencies."""
-        import inspect
-        sig = inspect.signature(self.CTF_fun)
-        params = sig.parameters
-        if "half_image" in params or any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-        ):
-            return self.CTF_fun(ctf_params, self.image_shape, self.voxel_size, half_image=True)
-        # Fallback for legacy CTF functions that don't accept half_image
-        import recovar.core.fourier_transform_utils as ftu
-        full_ctf = self.CTF_fun(ctf_params, self.image_shape, self.voxel_size)
-        return ftu.full_image_to_half_image(full_ctf, self.image_shape)
+        return self.ctf(ctf_params, self.image_shape, self.voxel_size, half_image=True)
+
+    def compute_ctf_at_shape(self, ctf_params: jax.Array, image_shape: Tuple[int, int]) -> jax.Array:
+        """Compute CTF on a different frequency grid (e.g. upsampled)."""
+        return self.ctf(ctf_params, image_shape, self.voxel_size)
 
     @property
     def base_volume_shape(self) -> Tuple[int, int, int]:
@@ -82,11 +83,14 @@ class ForwardModelConfig(eqx.Module):
         Useful for changing static fields (e.g. ``disc_type``) which cannot
         be modified via ``eqx.tree_at``.
         """
+        # Support old kwarg name for backward compat
+        if 'CTF_fun' in kwargs:
+            kwargs['ctf'] = as_ctf_evaluator(kwargs.pop('CTF_fun'))
         fields = dict(
             image_shape=self.image_shape, volume_shape=self.volume_shape,
             grid_size=self.grid_size, voxel_size=self.voxel_size,
             padding=self.padding, disc_type=self.disc_type,
-            CTF_fun=self.CTF_fun,
+            ctf=self.ctf,
             premultiplied_ctf=self.premultiplied_ctf,
             volume_mask_threshold=self.volume_mask_threshold,
             volume_upsampling_factor=self.volume_upsampling_factor,
@@ -139,17 +143,18 @@ class ForwardModelConfig(eqx.Module):
                 "Prefer upsampling_factor for new code."
             )
 
-        # CryoEMHalfsets.CTF_fun is a method; we need the underlying callable
-        # that takes (ctf_params, image_shape, voxel_size) directly.
         from recovar.data_io.dataset import CryoEMDataset, CryoEMHalfsets
 
+        # Extract the CTFEvaluator directly (not the dtype-casting method).
         if isinstance(cryo, CryoEMHalfsets):
-            ctf_fun = cryo[0].CTF_fun
+            ctf_eval = cryo[0].ctf_evaluator
         elif isinstance(cryo, CryoEMDataset):
-            ctf_fun = cryo.CTF_fun
+            ctf_eval = cryo.ctf_evaluator
         else:
-            # Duck-type: assume it has the right attributes
-            ctf_fun = cryo.CTF_fun
+            # Duck-type: try ctf_evaluator, fall back to CTF_fun
+            ctf_eval = as_ctf_evaluator(
+                getattr(cryo, 'ctf_evaluator', None) or cryo.CTF_fun
+            )
 
         base_grid_size = int(cryo.grid_size)
 
@@ -173,7 +178,7 @@ class ForwardModelConfig(eqx.Module):
             voxel_size=float(cryo.voxel_size),
             padding=int(getattr(cryo, 'padding', 0)),
             disc_type=disc_type,
-            CTF_fun=ctf_fun,
+            ctf=ctf_eval,
             premultiplied_ctf=bool(getattr(cryo, 'premultiplied_ctf', False)),
             volume_mask_threshold=float(getattr(cryo, 'volume_mask_threshold', 0.0)),
             volume_upsampling_factor=volume_upsampling,
