@@ -1051,6 +1051,20 @@ def main():
     gt_thing = synthetic_dataset.load_heterogeneous_reconstruction(sim_info_path)
     gt_mean = gt_thing.get_mean()
 
+    # Build a single union mask from all GT volumes for consistent error metrics
+    volume_shape = cryos[0].volume_shape
+    gt_union_soft_mask, gt_union_binary_mask = metrics.make_union_gt_mask_from_hvd(
+        gt_thing, volume_shape
+    )
+    diag_dir = os.path.join(output_state_dir, 'diagnostics')
+    os.makedirs(diag_dir, exist_ok=True)
+    utils.write_mrc(
+        os.path.join(diag_dir, 'gt_union_mask.mrc'),
+        gt_union_soft_mask,
+        voxel_size=cryos[0].voxel_size,
+    )
+    logger.info("GT union mask saved to %s/gt_union_mask.mrc", diag_dir)
+
     # FSC for mean maps
     fsc_filepath = os.path.join(plots_dir, 'fsc_mean.png')
     ax, score = plot_utils.plot_fsc_new(
@@ -1232,8 +1246,8 @@ def main():
             Path(output_state_dir, f'state{l_idx:03d}.mrc')
         )
         errors_metrics = metrics.compute_volume_error_metrics_from_gt(
-            gt_map, estimate_map, cryos[0].voxel_size, None, partial_mask=None,
-            normalize_by_map1=True
+            gt_map, estimate_map, cryos[0].voxel_size, gt_union_binary_mask,
+            partial_mask=None, normalize_by_map1=True
         )
         all_scores[f'state_{l_idx}_locres_90pct'] = errors_metrics.get('ninety_pc_locres')
         all_scores[f'state_{l_idx}_locres_median'] = errors_metrics.get('median_locres')
@@ -1411,6 +1425,11 @@ def main():
     output.mkdir_safe(str(baseline_path.parent))
     regression_report_path = os.path.join(plots_dir, "metrics_regression_report.json")
     write_baseline = args.overwrite_metrics_baseline or (not baseline_path.exists())
+    if baseline_path.exists() and not args.overwrite_metrics_baseline:
+        logger.warning(
+            "Baseline already exists at %s. Pass --overwrite-metrics-baseline to replace it.",
+            baseline_path,
+        )
     if write_baseline:
         with open(baseline_path, "w") as f:
             json.dump(all_scores, f, indent=2)
