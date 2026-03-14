@@ -58,12 +58,17 @@ class ForwardModelConfig(eqx.Module):
 
     def compute_ctf_half(self, ctf_params: jax.Array) -> jax.Array:
         """Compute CTF at half-spectrum (rfft-packed) frequencies."""
-        try:
+        import inspect
+        sig = inspect.signature(self.CTF_fun)
+        params = sig.parameters
+        if "half_image" in params or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+        ):
             return self.CTF_fun(ctf_params, self.image_shape, self.voxel_size, half_image=True)
-        except TypeError:
-            import recovar.core.fourier_transform_utils as ftu
-            full_ctf = self.CTF_fun(ctf_params, self.image_shape, self.voxel_size)
-            return ftu.full_image_to_half_image(full_ctf, self.image_shape)
+        # Fallback for legacy CTF functions that don't accept half_image
+        import recovar.core.fourier_transform_utils as ftu
+        full_ctf = self.CTF_fun(ctf_params, self.image_shape, self.voxel_size)
+        return ftu.full_image_to_half_image(full_ctf, self.image_shape)
 
     @property
     def base_volume_shape(self) -> Tuple[int, int, int]:

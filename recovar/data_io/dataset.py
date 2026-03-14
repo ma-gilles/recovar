@@ -256,9 +256,9 @@ class CryoEMDataset:
             return self.get_dataset_generator(batch_size, num_workers = num_workers)
 
 
-    def CTF_fun(self,*args):
+    def CTF_fun(self, *args, **kwargs):
         # Force dtype
-        return self.CTF_fun_inp(*args).astype(self.CTF_dtype, copy=False)
+        return self.CTF_fun_inp(*args, **kwargs).astype(self.CTF_dtype, copy=False)
 
     def get_valid_frequency_indices(self,rad = None):
         rad = self.grid_size//2 -1 if rad is None else rad
@@ -519,8 +519,8 @@ class CryoEMHalfsets:
     def volume_upsampling_factor(self) -> int:
         return self._halves[0].volume_upsampling_factor
 
-    def CTF_fun(self, *args):
-        return self._halves[0].CTF_fun(*args)
+    def CTF_fun(self, *args, **kwargs):
+        return self._halves[0].CTF_fun(*args, **kwargs)
 
     # --- Aggregate properties ---
 
