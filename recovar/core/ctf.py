@@ -182,9 +182,22 @@ def evaluate_ctf(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfactor):
 
 @jax.jit
 def evaluate_ctf_packed(freqs, ctf):
+    """Evaluate CTF from a packed parameter vector for a single image.
+
+    ``ctf`` layout: ``[DFU, DFV, DFANG, VOLT, CS, W, PHASE_SHIFT,
+    BFACTOR, CONTRAST]`` — see :class:`CTFParamIndex`.
+    """
     return evaluate_ctf(
-        freqs, ctf[0], ctf[1], ctf[2], ctf[3], ctf[4], ctf[5], ctf[6], ctf[7]
-    ) * ctf[8]
+        freqs,
+        ctf[CTFParamIndex.DFU],
+        ctf[CTFParamIndex.DFV],
+        ctf[CTFParamIndex.DFANG],
+        ctf[CTFParamIndex.VOLT],
+        ctf[CTFParamIndex.CS],
+        ctf[CTFParamIndex.W],
+        ctf[CTFParamIndex.PHASE_SHIFT],
+        ctf[CTFParamIndex.BFACTOR],
+    ) * ctf[CTFParamIndex.CONTRAST]
 
 
 batch_evaluate_ctf = jax.vmap(evaluate_ctf_packed, in_axes=(None, 0))
