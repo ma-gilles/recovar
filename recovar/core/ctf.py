@@ -181,26 +181,57 @@ def evaluate_ctf(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfactor):
 
 
 @jax.jit
-def evaluate_ctf_packed(freqs, ctf):
-    """Evaluate CTF from a packed parameter vector for a single image.
+def batch_evaluate_ctf(freqs, ctf_params):
+    """Evaluate CTF for a batch of images on a shared frequency grid.
 
-    ``ctf`` layout: ``[DFU, DFV, DFANG, VOLT, CS, W, PHASE_SHIFT,
-    BFACTOR, CONTRAST]`` — see :class:`CTFParamIndex`.
+    Directly broadcasts over images — no vmap overhead, single GPU kernel.
+
+    Parameters
+    ----------
+    freqs : array ``(n_pixels, 2)``
+        Shared frequency coordinates in 1/Angstrom.
+    ctf_params : array ``(n_images, K)``
+        Packed CTF parameters per image.  Layout: ``[DFU, DFV, DFANG,
+        VOLT, CS, W, PHASE_SHIFT, BFACTOR, CONTRAST, ...]`` — see
+        :class:`CTFParamIndex`.
+
+    Returns
+    -------
+    array ``(n_images, n_pixels)``
     """
-    return evaluate_ctf(
-        freqs,
-        ctf[CTFParamIndex.DFU],
-        ctf[CTFParamIndex.DFV],
-        ctf[CTFParamIndex.DFANG],
-        ctf[CTFParamIndex.VOLT],
-        ctf[CTFParamIndex.CS],
-        ctf[CTFParamIndex.W],
-        ctf[CTFParamIndex.PHASE_SHIFT],
-        ctf[CTFParamIndex.BFACTOR],
-    ) * ctf[CTFParamIndex.CONTRAST]
+    # Per-image params → (n_images, 1) for broadcasting with (n_pixels,)
+    dfu = ctf_params[:, CTFParamIndex.DFU, None]
+    dfv = ctf_params[:, CTFParamIndex.DFV, None]
+    dfang = ctf_params[:, CTFParamIndex.DFANG, None] * (jnp.pi / 180)
+    volt = ctf_params[:, CTFParamIndex.VOLT, None] * 1000
+    cs = ctf_params[:, CTFParamIndex.CS, None] * 1e7
+    w = ctf_params[:, CTFParamIndex.W, None]
+    phase_shift = ctf_params[:, CTFParamIndex.PHASE_SHIFT, None] * (jnp.pi / 180)
+    bfactor = ctf_params[:, CTFParamIndex.BFACTOR, None]
+    contrast = ctf_params[:, CTFParamIndex.CONTRAST, None]
+
+    lam = 12.2642598 / jnp.sqrt(volt * (1.0 + volt * 9.78475598e-7))
+
+    # Shared frequency grid — (n_pixels,)
+    x = freqs[:, 0]
+    y = freqs[:, 1]
+    ang = jnp.arctan2(y, x)
+    s2 = x * x + y * y
+
+    # (n_images, 1) * (n_pixels,) → (n_images, n_pixels)
+    df = 0.5 * (dfu + dfv + (dfu - dfv) * jnp.cos(2 * (ang - dfang)))
+    gamma = 2 * jnp.pi * (-0.5 * df * lam * s2 + 0.25 * cs * lam**3 * s2**2) - phase_shift
+    ctf = (1 - w**2) ** 0.5 * jnp.sin(gamma) - w * jnp.cos(gamma)
+    ctf = ctf * jnp.exp(-bfactor / 4 * s2)
+    return ctf * contrast
 
 
-batch_evaluate_ctf = jax.vmap(evaluate_ctf_packed, in_axes=(None, 0))
+def evaluate_ctf_packed(freqs, ctf):
+    """Evaluate CTF for a single image from a packed parameter vector.
+
+    Thin wrapper around :func:`batch_evaluate_ctf` for backward compatibility.
+    """
+    return batch_evaluate_ctf(freqs, ctf[None])[0]
 
 
 # ---------------------------------------------------------------------------

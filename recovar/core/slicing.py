@@ -112,18 +112,8 @@ def _is_complex(arr):
 
 
 def _normalize_volume(volume, volume_shape, half_volume):
-    """Validate volume dtype and flatten to 1-D.
-
-    Fourier-space volumes must be complex.  Raises :class:`TypeError` if
-    a real array is passed — this catches upstream bugs early rather than
-    silently casting (which can mask data that was never Fourier-transformed).
-    """
+    """Validate size and flatten volume to 1-D."""
     volume = jnp.asarray(volume)
-    if not _is_complex(volume):
-        raise TypeError(
-            f"volume must be complex (Fourier-space data), got dtype={volume.dtype}. "
-            "Ensure the volume has been Fourier-transformed before slicing."
-        )
     expected_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
     expected_size = int(np.prod(expected_shape))
     if volume.size != expected_size:
@@ -237,6 +227,9 @@ def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type
     order = decide_order(disc_type)
 
     if _use_cuda(order):
+        # CUDA kernel requires complex input
+        if not _is_complex(volume):
+            volume = volume.astype(jnp.result_type(volume, jnp.complex64))
         from recovar.core.cuda_ops import cuda_project
         try:
             return cuda_project(volume, rotation_matrices, image_shape, volume_shape,
@@ -278,13 +271,12 @@ def batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, di
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
     """
     volumes = jnp.asarray(volumes)
-    if not _is_complex(volumes):
-        raise TypeError(
-            f"volumes must be complex (Fourier-space data), got dtype={volumes.dtype}"
-        )
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
     if _use_cuda(order):
+        # CUDA kernel requires complex input
+        if not _is_complex(volumes):
+            volumes = volumes.astype(jnp.result_type(volumes, jnp.complex64))
         from recovar.cuda_backproject import batch_project
         return batch_project(volumes, rotation_matrices, image_shape, volume_shape,
                              order=order, half_volume=half_volume, half_image=half_image,

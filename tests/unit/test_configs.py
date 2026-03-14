@@ -169,7 +169,7 @@ class TestOptionModules:
 class TestNewForwardModelAPI:
     def test_forward_model_skip_ctf(self):
         config = _make_config()
-        volume = np.zeros(np.prod(VOLUME_SHAPE), dtype=np.complex64)
+        volume = np.zeros(np.prod(VOLUME_SHAPE), dtype=np.float32)
         rots = np.eye(3, dtype=np.float32)[None, ...]
         ctf_params = np.zeros((1, 9), dtype=np.float32)
 
@@ -178,7 +178,7 @@ class TestNewForwardModelAPI:
 
     def test_forward_model_applies_ctf(self):
         config = _make_config(ctf_fun=_twos_ctf)
-        volume = np.ones(np.prod(VOLUME_SHAPE), dtype=np.complex64)
+        volume = np.ones(np.prod(VOLUME_SHAPE), dtype=np.float32)
         rots = np.eye(3, dtype=np.float32)[None, ...]
         ctf_params = np.zeros((1, 9), dtype=np.float32)
 
@@ -197,7 +197,7 @@ class TestNewForwardModelAPI:
 
     def test_forward_model_and_adjoint_contracts(self):
         config = _make_config()
-        volume = np.zeros(np.prod(VOLUME_SHAPE), dtype=np.complex64)
+        volume = np.zeros(np.prod(VOLUME_SHAPE), dtype=np.float32)
         rots = np.eye(3, dtype=np.float32)[None, ...]
         ctf_params = np.zeros((1, 9), dtype=np.float32)
 
@@ -210,7 +210,7 @@ class TestNewForwardModelAPI:
 
     def test_compute_AtAv_shape(self):
         config = _make_config()
-        volume = np.ones(np.prod(VOLUME_SHAPE), dtype=np.complex64)
+        volume = np.ones(np.prod(VOLUME_SHAPE), dtype=np.float32)
         rots = np.eye(3, dtype=np.float32)[None, ...]
         ctf_params = np.zeros((1, 9), dtype=np.float32)
 

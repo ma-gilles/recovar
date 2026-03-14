@@ -41,7 +41,7 @@ def test_batch_translate_images_reexported():
 
 def test_forward_model_skip_ctf():
     config = _make_config()
-    volume = np.zeros(np.prod(config.volume_shape), dtype=np.complex64)
+    volume = np.zeros(np.prod(config.volume_shape), dtype=np.float32)
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
@@ -65,7 +65,7 @@ def test_adjoint_forward_model_shape():
 
 def test_forward_model_applies_ctf_when_enabled():
     config = _make_config(ctf_fun=_twos_ctf)
-    volume = np.ones(config.volume_size, dtype=np.complex64)
+    volume = np.ones(config.volume_size, dtype=np.float32)
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
@@ -80,7 +80,7 @@ def test_forward_model_applies_ctf_when_enabled():
 
 def test_forward_model_and_adjoint_contracts():
     config = _make_config()
-    volume = np.zeros(config.volume_size, dtype=np.complex64)
+    volume = np.zeros(config.volume_size, dtype=np.float32)
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
@@ -130,7 +130,7 @@ def test_adjoint_forward_model_linear_interp_applies_ctf():
 
 def test_compute_AtAv_returns_singleton_tuple():
     config = _make_config()
-    volume = np.ones(config.volume_size, dtype=np.complex64)
+    volume = np.ones(config.volume_size, dtype=np.float32)
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
