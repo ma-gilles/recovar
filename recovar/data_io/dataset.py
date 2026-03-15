@@ -419,22 +419,52 @@ class CryoEMDataset:
         # Override n_images/n_units to match the subset size, not the full
         # image_stack size (since we share the stack reference).
         sub.n_images = len(indices)
-        sub.n_units = len(indices)
+        if self.tilt_series_flag and hasattr(self.image_stack, '_particle_tilts'):
+            # Count how many particles have tilts in the subset.
+            subset_set = set(np.asarray(composed_subset).ravel().tolist())
+            n_particles = sum(
+                1 for tilts in self.image_stack._particle_tilts
+                if any(t in subset_set for t in tilts)
+            )
+            sub.n_units = n_particles
+        else:
+            sub.n_units = len(indices)
         if self.noise is not None:
             sub.noise = self.noise
         return sub
 
-    def _remap_generator(self, gen):
-        """Remap original image-stack indices to local 0..n-1 for subset views."""
+    def _remap_generator(self, gen, *, remap_particles=False):
+        """Remap original image-stack indices to local 0..n-1 for subset views.
+
+        When *remap_particles* is True (tilt-series particle-grouped path),
+        remap particle_indices as well as image_indices using their respective
+        mappings.
+        """
         remap = np.empty(int(self._subset_indices.max()) + 1, dtype=np.int32)
         remap[self._subset_indices] = np.arange(len(self._subset_indices), dtype=np.int32)
-        for images, _, image_indices in gen:
-            local = remap[np.asarray(image_indices)]
-            yield images, local, local
 
-    def _get_backing_subset_generator(self, batch_size, indices, num_workers=0, **kwargs):
+        if remap_particles and self.tilt_series_flag and hasattr(self.image_stack, '_particle_tilts'):
+            # Build global-particle → local-particle remap
+            subset_set = set(np.asarray(self._subset_indices).ravel().tolist())
+            global_to_local_particle = {}
+            local_pid = 0
+            for g_pid, tilts in enumerate(self.image_stack._particle_tilts):
+                if any(t in subset_set for t in tilts):
+                    global_to_local_particle[g_pid] = local_pid
+                    local_pid += 1
+            for images, particles_ind, image_indices in gen:
+                local_img = remap[np.asarray(image_indices)]
+                local_part = np.array([global_to_local_particle[int(p)] for p in np.asarray(particles_ind).ravel()],
+                                      dtype=np.int32)
+                yield images, local_part, local_img
+        else:
+            for images, _, image_indices in gen:
+                local = remap[np.asarray(image_indices)]
+                yield images, local, local
+
+    def _get_backing_subset_generator(self, batch_size, indices, num_workers=0, *, particle_grouped=False, **kwargs):
         """Get the right subset generator from the backing image_stack."""
-        if self.tilt_series_flag and hasattr(self.image_stack, 'get_image_subset_generator'):
+        if self.tilt_series_flag and not particle_grouped and hasattr(self.image_stack, 'get_image_subset_generator'):
             return self.image_stack.get_image_subset_generator(
                 batch_size, indices, num_workers=num_workers)
         return self.image_stack.get_dataset_subset_generator(
@@ -442,9 +472,22 @@ class CryoEMDataset:
 
     def _get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
         if self._subset_indices is not None:
-            gen = self._get_backing_subset_generator(
-                batch_size, self._subset_indices, num_workers=num_workers, **kwargs)
-            return self._remap_generator(gen)
+            if self.tilt_series_flag and hasattr(self.image_stack, '_particle_tilts'):
+                # Convert image-level _subset_indices to particle-level indices
+                # for the particle-grouped generator.
+                subset_set = set(np.asarray(self._subset_indices).ravel().tolist())
+                particle_indices = np.array([
+                    p_idx for p_idx, tilts in enumerate(self.image_stack._particle_tilts)
+                    if any(t in subset_set for t in tilts)
+                ], dtype=np.int32)
+                gen = self.image_stack.get_dataset_subset_generator(
+                    batch_size, particle_indices, num_workers=num_workers, **kwargs)
+                return self._remap_generator(gen, remap_particles=True)
+            else:
+                gen = self._get_backing_subset_generator(
+                    batch_size, self._subset_indices, num_workers=num_workers,
+                    particle_grouped=True, **kwargs)
+                return self._remap_generator(gen, remap_particles=True)
         return self.image_stack.get_dataset_generator(batch_size, num_workers=num_workers, **kwargs)
 
     def _get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):

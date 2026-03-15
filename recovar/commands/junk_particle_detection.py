@@ -181,6 +181,10 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
         for i, zs_subset in enumerate(zs_subsets):
             distances = np.linalg.norm(zs_subset - cluster_center, axis=1)
             closest_local = np.argsort(distances)[:n_particles_per_cluster]
+            if len(closest_local) == 0:
+                logger.warning("Cluster %s: No particles available for half-map %s, skipping", cluster_idx, i)
+                used_particles[i] = np.array([], dtype=np.int32)
+                continue
             # Map local half indices to global dataset indices
             global_indices = cryos.halfset_indices[i][closest_local]
             used_particles[i] = global_indices

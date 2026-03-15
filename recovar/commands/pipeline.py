@@ -981,7 +981,19 @@ def standard_recovar_pipeline(args):
 
     # --- Build result dict and save ---
     if args.tilt_series:
-        particles_ind_split = [ds.dataset_tilt_indices[ds.halfset_indices[i]] for i in range(2)]
+        # halfset_indices are image-level; dataset_tilt_indices is particle-level.
+        # Build image→particle map to derive per-half particle canonical indices.
+        _dti = np.asarray(ds.dataset_tilt_indices)
+        _img_to_particle = np.full(ds.n_images, -1, dtype=np.int32)
+        for p_idx, tilts in enumerate(ds.image_stack._particle_tilts):
+            for t in tilts:
+                if t < ds.n_images:
+                    _img_to_particle[t] = p_idx
+        particles_ind_split = []
+        for i in range(2):
+            half_images = np.asarray(ds.halfset_indices[i])
+            half_particles = np.unique(_img_to_particle[half_images])
+            particles_ind_split.append(_dti[half_particles])
     else:
         particles_ind_split = ind_split
 
