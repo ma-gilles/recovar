@@ -117,21 +117,21 @@ def test_validate_storage_args_passes_with_explicit_outdir():
     """When --output-dir is given explicitly, no validation error."""
     args = SimpleNamespace(volume_input=None)
     rtam.validate_storage_args_for_generated_volumes(
-        args, ["--output-dir", "/tmp/out", "--generate-volumes"]
+        args, ["--output-dir", "/tmp/out", "--generate-pdb-volumes"]
     )
 
 
 def test_validate_storage_args_passes_with_short_outdir_flag():
     args = SimpleNamespace(volume_input=None)
     rtam.validate_storage_args_for_generated_volumes(
-        args, ["-o", "/tmp/out", "--generate-volumes"]
+        args, ["-o", "/tmp/out", "--generate-pdb-volumes"]
     )
 
 
 def test_validate_storage_args_passes_with_equals_syntax():
     args = SimpleNamespace(volume_input=None)
     rtam.validate_storage_args_for_generated_volumes(
-        args, ["--output-dir=/tmp/out", "--generate-volumes"]
+        args, ["--output-dir=/tmp/out", "--generate-pdb-volumes"]
     )
 
 
@@ -140,7 +140,7 @@ def test_validate_storage_args_raises_without_outdir():
     args = SimpleNamespace(volume_input=None)
     with pytest.raises(ValueError, match="--output-dir"):
         rtam.validate_storage_args_for_generated_volumes(
-            args, ["--generate-volumes"]
+            args, ["--generate-pdb-volumes"]
         )
 
 
@@ -273,13 +273,6 @@ def test_main_registers_grid_size_with_default():
     parser.add_argument('--grid-size', type=int, default=64)
     action = parser._option_string_actions["--grid-size"]
     assert action.default == 64
-
-
-def test_main_registers_generate_volumes_flag():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--generate-volumes', action='store_true')
-    action = parser._option_string_actions["--generate-volumes"]
-    assert action.const is True
 
 
 def test_main_registers_n_images_with_default():

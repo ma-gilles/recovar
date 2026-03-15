@@ -29,7 +29,7 @@ def _load_json(path):
 
 
 def _run_metrics(output_dir, run_args, volumes_prefix=None, reuse_dataset=False):
-    """Run run_test_all_metrics; generate volumes synthetically when volumes_prefix is None."""
+    """Run run_test_all_metrics; generate PDB volumes when volumes_prefix is None."""
     cmd = [
         sys.executable,
         "-m",
@@ -41,8 +41,6 @@ def _run_metrics(output_dir, run_args, volumes_prefix=None, reuse_dataset=False)
         cmd += ["--reuse-dataset"]
     if volumes_prefix is not None:
         cmd += ["--volume-input", volumes_prefix]
-    else:
-        cmd += ["--generate-volumes"]
     # Let the test itself handle regression comparison; disable the
     # subprocess's internal check so it doesn't exit(1) on its own.
     cmd += ["--skip-metrics-regression-check"]
@@ -139,7 +137,7 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
     """
     Very long regression test (typically ~1h+) for run_test_all_metrics.
 
-    Volumes are generated synthetically (--generate-volumes) so no external
+    Volumes are generated from PDB 5nrl trajectory so no external
     data path is required; tests can be run from any machine with a GPU.
 
     Optional env:

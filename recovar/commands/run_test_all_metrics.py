@@ -160,100 +160,6 @@ from recovar.simulation.trajectory_generation import (
     split_atom_group_by_chains as _split_atom_group_by_chains,
     generate_trajectory_volumes as generate_pdb_trajectory_volumes,
 )
-def generate_compact_support_test_volumes(
-    output_dir,
-    grid_size=128,
-    n_volumes=50,
-    voxel_size=4.25,
-    prefix_name="vol",
-    output_prefix=None,
-):
-    """
-    Generate deterministic real-space MRC volumes with compact support.
-
-    Geometry:
-    - A static chain of Gaussian/ball-like blobs on one line.
-    - One additional compact ball moving horizontally on a parallel line.
-
-    Returns
-    -------
-    str
-        Prefix path to generated files, suitable for --volume-input
-        (e.g., "<...>/generated_volumes/vol" for files vol0000.mrc, ...).
-    """
-    if output_prefix is None:
-        vols_dir = Path(output_dir) / "generated_volumes"
-        output.mkdir_safe(str(vols_dir))
-        volume_prefix = str(vols_dir / prefix_name)
-    else:
-        volume_prefix = str(output_prefix)
-        output.mkdir_safe(str(Path(volume_prefix).parent))
-
-    # Normalized coordinate grid in [-1, 1]^3.
-    x = np.linspace(-1.0, 1.0, grid_size, dtype=np.float32)
-    xx, yy, zz = np.meshgrid(x, x, x, indexing="ij")
-    rr = np.sqrt(xx**2 + yy**2 + zz**2)
-
-    # Soft compact support mask to keep maps object-like.
-    support = np.clip((0.88 - rr) / 0.08, 0.0, 1.0)
-    support = support**2
-
-    # Static line of compact balls on y=0, z=-0.15.
-    static_xs = np.array([-0.55, -0.30, -0.05, 0.20, 0.45], dtype=np.float32)
-    static_y = 0.0
-    static_z = -0.15
-    static_radii = np.array([0.13, 0.11, 0.12, 0.11, 0.13], dtype=np.float32)
-    static_edges = np.array([0.02, 0.02, 0.02, 0.02, 0.02], dtype=np.float32)
-    static_amps = np.array([1.00, 0.85, 0.95, 0.80, 0.90], dtype=np.float32)
-
-    for idx in range(n_volumes):
-        t = idx / max(n_volumes - 1, 1)
-        vol = np.zeros((grid_size, grid_size, grid_size), dtype=np.float32)
-
-        # Static compact balls with mild high-frequency texture.
-        for cx, radius, edge, amp in zip(static_xs, static_radii, static_edges, static_amps):
-            sr = np.sqrt((xx - cx) ** 2 + (yy - static_y) ** 2 + (zz - static_z) ** 2)
-            static_ball = np.clip((radius - sr) / edge, 0.0, 1.0)
-            static_tex = (
-                np.cos((xx - cx) * (10.0 * np.pi))
-                * np.cos((yy - static_y) * (8.0 * np.pi))
-                * np.cos((zz - static_z) * (9.0 * np.pi))
-            )
-            vol += amp * (static_ball + 0.25 * static_ball * static_tex)
-
-        # Moving compact ball on a different (parallel) line y=0.32, z=0.18.
-        moving_x = -0.70 + 1.40 * t
-        moving_y = 0.32
-        moving_z = 0.18
-        moving_radius = 0.16
-        moving_edge = 0.03
-        moving_r = np.sqrt((xx - moving_x) ** 2 + (yy - moving_y) ** 2 + (zz - moving_z) ** 2)
-        moving_ball = np.clip((moving_radius - moving_r) / moving_edge, 0.0, 1.0)
-
-        # Add high-resolution content in the moving piece:
-        # a compact ripple texture whose phase drifts over states.
-        # This boosts high-frequency Fourier content for resolution-metric tests
-        # while keeping support local and physically bounded.
-        phase = 2.0 * np.pi * t
-        hf_osc = (
-            np.cos((xx - moving_x) * (18.0 * np.pi) + phase)
-            * np.cos((yy - moving_y) * (14.0 * np.pi) - 0.5 * phase)
-            * np.cos((zz - moving_z) * (16.0 * np.pi) + 0.25 * phase)
-        )
-        moving_component = 1.20 * moving_ball + 0.45 * moving_ball * hf_osc
-        vol += moving_component
-
-        # Apply compact support and normalize scale.
-        vol *= support
-        vol -= np.mean(vol)
-        norm = np.linalg.norm(vol.ravel())
-        if norm > 0:
-            vol /= norm
-
-        utils.write_mrc(f"{volume_prefix}{idx:04d}.mrc", vol.astype(np.float32), voxel_size=voxel_size)
-
-    return volume_prefix
-
 ##TODO use TMP_RECOVAR_DIR if set? (see staging.py)
 def validate_storage_args_for_generated_volumes(args, argv):
     """
@@ -609,10 +515,6 @@ def resolve_metrics_baseline_path(args):
         return Path(args.output_dir) / "generated_volumes" / (
             f"metrics_baseline_pdb_grid{args.grid_size}_nvol{args.generated_n_volumes}.json"
         )
-    if args.generate_volumes:
-        return Path(args.output_dir) / "generated_volumes" / (
-            f"metrics_baseline_grid{args.grid_size}_nvol{args.generated_n_volumes}.json"
-        )
     return None
 
 
@@ -801,8 +703,6 @@ def main():
                         help='Noise model for the test dataset')
     parser.add_argument('--new-noise-est', action='store_true',
                         help='Use new noise estimation method')
-    parser.add_argument('--generate-volumes', action='store_true',
-                        help='Generate synthetic compact-support test volumes if you do not want to provide --volume-input.')
     parser.add_argument('--generate-pdb-volumes', action='store_true',
                         help='Generate test volumes from PDB 5nrl (spliceosome) with rigid-body motion '
                              'trajectory (subcomplexes rotated). More realistic than --generate-volumes.')
@@ -841,7 +741,7 @@ def main():
         raise ValueError(
             f"--metrics-regression-tol-frac must be non-negative, got {args.metrics_regression_tol_frac}"
         )
-    if args.generate_volumes or args.generate_pdb_volumes or args.volume_input is None:
+    if args.generate_pdb_volumes or args.volume_input is None:
         if args.generated_n_volumes <= 0:
             raise ValueError(
                 f"--generated-n-volumes must be positive when generating volumes, got {args.generated_n_volumes}"
@@ -862,7 +762,7 @@ def main():
 
     if not _reuse:
         # Default: use PDB-based 5nrl trajectory volumes when no input is given.
-        if args.volume_input is None and not args.generate_volumes:
+        if args.volume_input is None:
             args.generate_pdb_volumes = True
 
         if args.generate_pdb_volumes:
@@ -886,23 +786,6 @@ def main():
                 output_prefix=gen_prefix,
             )
             logger.info("Using PDB-generated volume input prefix: %s", args.volume_input)
-        elif args.generate_volumes:
-            gen_prefix = args.generated_volumes_prefix
-            if gen_prefix is None:
-                gen_prefix = str(Path(args.output_dir) / "generated_volumes" / "vol")
-            logger.info(
-                f"Generating compact-support test volumes at prefix {gen_prefix} "
-                f"(n={args.generated_n_volumes}, grid_size={args.grid_size})"
-            )
-            args.volume_input = generate_compact_support_test_volumes(
-                output_dir=args.output_dir,
-                grid_size=args.grid_size,
-                n_volumes=args.generated_n_volumes,
-                voxel_size=4.25 * 128 / args.grid_size,
-                prefix_name=Path(gen_prefix).name,
-                output_prefix=gen_prefix,
-            )
-            logger.info("Using generated volume input prefix: %s", args.volume_input)
 
     # Dump parser arguments to a JSON file.
     dump_json_path = os.path.join(args.output_dir, "parser_args.json")
