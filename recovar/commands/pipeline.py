@@ -162,6 +162,10 @@ def add_args(parser: argparse.ArgumentParser):
         '--shared_contrast_across_tilts', action=argparse.BooleanOptionalAction, default=False,
         help="Share contrast across tilts in cryo-ET",
     )
+    tilt.add_argument(
+        "--premultiplied-ctf", dest='premultiplied_ctf', action="store_true",
+        help="Use premultiplied CTF (images already multiplied by CTF)",
+    )
 
     # ── Performance / GPU ──────────────────────────────────────────────────
     perf = parser.add_argument_group("Performance")
@@ -213,10 +217,6 @@ def add_args(parser: argparse.ArgumentParser):
     adv.add_argument(
         "--padding", type=int, default=0,
         help="Real-space padding",
-    )
-    adv.add_argument(
-        "--premultiplied-ctf", dest='premultiplied_ctf', action="store_true",
-        help="Use premultiplied CTF",
     )
     adv.add_argument(
         "--new-noise-est", dest='new_noise_est', action="store_true",
