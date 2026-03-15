@@ -591,7 +591,7 @@ def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies,
     st_time = time.time()
 
     for cryo_idx, cryo in enumerate(cryos):
-        mean = means["combined"] if options["use_combined_mean"] else means["corrected" + str(cryo_idx)]
+        mean = means.combined if options["use_combined_mean"] else means.corrected(cryo_idx)
         if options.get('disc_type') == 'cubic':
             mean = cubic_interpolation.calculate_spline_coefficients(
                 jnp.array(mean).reshape(cryos.volume_shape))

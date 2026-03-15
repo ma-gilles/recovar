@@ -44,8 +44,14 @@ def test_get_mean_conformation_relion_flow_and_restore(monkeypatch):
         upsampling_factor=3,
     )
 
-    assert {"combined", "corrected0", "corrected1", "corrected0reg", "corrected1reg", "lhs", "prior"}.issubset(means.keys())
-    assert means["combined"].shape == (4,)
+    assert means.combined is not None
+    assert means.corrected0 is not None
+    assert means.corrected1 is not None
+    assert means.corrected0reg is not None
+    assert means.corrected1reg is not None
+    assert means.lhs is not None
+    assert means.prior is not None
+    assert means.combined.shape == (4,)
     assert isinstance(mean_prior, np.ndarray)
     assert np.asarray(fsc).size > 0
 
@@ -83,6 +89,6 @@ def test_get_mean_conformation_relion_use_regularization_switch(monkeypatch):
     )
 
     # unregularized combined = average of tau=None outputs = 1.0
-    assert np.allclose(means_unreg["combined"], 1.0)
+    assert np.allclose(means_unreg.combined, 1.0)
     # regularized combined = average of tau!=None outputs = 3.0
-    assert np.allclose(means_reg["combined"], 3.0)
+    assert np.allclose(means_reg.combined, 3.0)

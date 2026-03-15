@@ -64,9 +64,9 @@ def masking_options(volume_mask_option, means, volume_shape, dtype_real = np.flo
     return np.array(volume_mask.astype(dtype_real)), np.array(dilated_volume_mask.astype(dtype_real))
 
 def make_mask_from_half_maps_from_means_dict(means, smax = 3 ):
-    vol_shape = utils.guess_vol_shape_from_vol_size(means['corrected0'].size)
-    halfmap1 = fourier_transform_utils.get_idft3(means['corrected0reg'].reshape(vol_shape)).real
-    halfmap2 = fourier_transform_utils.get_idft3(means['corrected1reg'].reshape(vol_shape)).real
+    vol_shape = utils.guess_vol_shape_from_vol_size(means.corrected0.size)
+    halfmap1 = fourier_transform_utils.get_idft3(means.corrected0reg.reshape(vol_shape)).real
+    halfmap2 = fourier_transform_utils.get_idft3(means.corrected1reg.reshape(vol_shape)).real
     return make_mask_from_half_maps(halfmap1, halfmap2, smax = smax )
 
 

@@ -232,7 +232,7 @@ def test_compute_mean(cryos, gt_data, intermediates, baseline_scores, tol_frac):
     )
 
     _, mean_fsc_score = plot_utils.plot_fsc_new(
-        gt_data["gt_mean"], means["combined"],
+        gt_data["gt_mean"], means.combined,
         np.array(volume_shape), gt_data["voxel_size"],
         threshold=0.5, name="Mean FSC"
     )
@@ -390,14 +390,17 @@ def test_covariance_columns(cryos, gt_data, intermediates, baseline_scores, tol_
     dilated_volume_mask = intermediates["dilated_volume_mask"]
     picked_frequencies = intermediates["picked_frequencies"]
 
-    # Rebuild means dict
-    means = {
-        "combined": mean_combined,
-        "prior": mean_prior,
-        "lhs": means_lhs,
-        "corrected0": intermediates.get("mean_corrected0", mean_combined),
-        "corrected1": intermediates.get("mean_corrected1", mean_combined),
-    }
+    # Rebuild means as MeanEstimate
+    from recovar.reconstruction.homogeneous import MeanEstimate
+    means = MeanEstimate(
+        combined=mean_combined,
+        corrected0=intermediates.get("mean_corrected0", mean_combined),
+        corrected1=intermediates.get("mean_corrected1", mean_combined),
+        corrected0reg=intermediates.get("mean_corrected0", mean_combined),
+        corrected1reg=intermediates.get("mean_corrected1", mean_combined),
+        lhs=means_lhs,
+        prior=mean_prior,
+    )
 
     noise.update_noise_variance(noise_var_used, cryos)
     valid_idx = cryos.get_valid_frequency_indices()
@@ -544,13 +547,16 @@ def test_principal_components(cryos, gt_data, intermediates, baseline_scores, to
     dilated_volume_mask = intermediates["dilated_volume_mask"]
     variance_combined = intermediates["variance_combined"]
 
-    means = {
-        "combined": mean_combined,
-        "prior": mean_prior,
-        "lhs": means_lhs,
-        "corrected0": intermediates.get("mean_corrected0", mean_combined),
-        "corrected1": intermediates.get("mean_corrected1", mean_combined),
-    }
+    from recovar.reconstruction.homogeneous import MeanEstimate
+    means = MeanEstimate(
+        combined=mean_combined,
+        corrected0=intermediates.get("mean_corrected0", mean_combined),
+        corrected1=intermediates.get("mean_corrected1", mean_combined),
+        corrected0reg=intermediates.get("mean_corrected0", mean_combined),
+        corrected1reg=intermediates.get("mean_corrected1", mean_combined),
+        lhs=means_lhs,
+        prior=mean_prior,
+    )
 
     noise.update_noise_variance(noise_var_used, cryos)
     valid_idx = cryos.get_valid_frequency_indices()

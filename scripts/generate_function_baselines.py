@@ -127,17 +127,17 @@ def main():
     logger.info("compute_mean took %.1fs", t_mean)
 
     # Save intermediates
-    np.save(os.path.join(intermediates_dir, "mean_combined.npy"), means["combined"])
+    np.save(os.path.join(intermediates_dir, "mean_combined.npy"), means.combined)
     np.save(os.path.join(intermediates_dir, "mean_prior.npy"), mean_prior)
-    np.save(os.path.join(intermediates_dir, "means_lhs.npy"), means["lhs"])
-    np.save(os.path.join(intermediates_dir, "mean_corrected0.npy"), means["corrected0"])
-    np.save(os.path.join(intermediates_dir, "mean_corrected1.npy"), means["corrected1"])
+    np.save(os.path.join(intermediates_dir, "means_lhs.npy"), means.lhs)
+    np.save(os.path.join(intermediates_dir, "mean_corrected0.npy"), means.corrected0)
+    np.save(os.path.join(intermediates_dir, "mean_corrected1.npy"), means.corrected1)
     np.save(os.path.join(intermediates_dir, "noise_var_from_hf.npy"), noise_var_from_hf)
 
     # Metric: FSC vs GT mean
     from recovar import plot_utils as pu
     _, mean_fsc_score = pu.plot_fsc_new(
-        gt_mean, means["combined"], np.array(volume_shape), voxel_size,
+        gt_mean, means.combined, np.array(volume_shape), voxel_size,
         threshold=0.5, name="Mean FSC"
     )
     scores["mean_fsc"] = float(mean_fsc_score)
@@ -186,7 +186,7 @@ def main():
     )
     # Upper bound from inside mask
     radial_ub_noise_var, _, _ = noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(
-        cryos[0], means["combined"], dilated_volume_mask, batch_size
+        cryos[0], means.combined, dilated_volume_mask, batch_size
     )
 
     # Take minimum
@@ -233,7 +233,7 @@ def main():
     # Compute variance with regularization
     variance_est, variance_prior, variance_fsc_curve, lhs, noise_p_variance = \
         covariance_estimation.compute_variance(
-            cryos, means["combined"], batch_size // 2, dilated_volume_mask,
+            cryos, means.combined, batch_size // 2, dilated_volume_mask,
             use_regularization=True, disc_type="cubic"
         )
     t_var = time.time() - t0
@@ -340,7 +340,7 @@ def main():
     gt_basis = u_gt_fourier[:, :n_gt_pcs]  # (vol_size, n_pcs)
 
     proj_cov = covariance_estimation.compute_projected_covariance(
-        cryos, means["combined"], gt_basis, volume_mask,
+        cryos, means.combined, gt_basis, volume_mask,
         batch_size, disc_type="linear_interp", disc_type_u="linear_interp"
     )
     # GT projected covariance = diag(s_gt_fourier[:n_gt_pcs]**2)
@@ -361,7 +361,7 @@ def main():
     for zdim in [4, 10]:
         n_pcs_to_use = zdim
         zs, cov_zs, est_contrasts_reg, _ = embedding.get_per_image_embedding(
-            means["combined"], u["rescaled"], s["rescaled"], n_pcs_to_use,
+            means.combined, u["rescaled"], s["rescaled"], n_pcs_to_use,
             cryos, volume_mask, gpu_memory, "linear_interp",
             contrast_grid=None, contrast_option="contrast",
             ignore_zero_frequency=options["ignore_zero_frequency"]
@@ -392,7 +392,7 @@ def main():
     for zdim in [4, 10]:
         n_pcs_to_use = zdim
         zs_noreg, cov_zs_noreg, est_contrasts_noreg, _ = embedding.get_per_image_embedding(
-            means["combined"], u["rescaled"], s["rescaled"] * 0 + np.inf, n_pcs_to_use,
+            means.combined, u["rescaled"], s["rescaled"] * 0 + np.inf, n_pcs_to_use,
             cryos, volume_mask, gpu_memory, "linear_interp",
             contrast_grid=None, contrast_option="contrast",
             ignore_zero_frequency=options["ignore_zero_frequency"]

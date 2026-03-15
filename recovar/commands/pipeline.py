@@ -376,15 +376,13 @@ def _check_uninvert_data(means, cryos, args):
     space. If the estimated mean has negative density in the protein region,
     the sign of the data (and means) is flipped.
     """
-    mean_real = fourier_transform_utils.get_idft3(means['combined'].reshape(cryos.volume_shape))
+    mean_real = fourier_transform_utils.get_idft3(means.combined.reshape(cryos.volume_shape))
     radial_mask = cryos.get_volume_radial_mask(cryos.grid_size // 3).reshape(cryos.volume_shape)
     uninvert_check = np.sum(mean_real.real ** 3 * radial_mask) < 0
 
     if args.uninvert_data == 'automatic':
         if uninvert_check:
-            for key in ['combined', 'init0', 'init1', 'corrected0', 'corrected1']:
-                if key in means:
-                    means[key] = -means[key]
+            means.negate()
             for cryo in cryos:
                 cryo.image_stack.mult = -1 * cryo.image_stack.mult
             args.uninvert_data = "true"
@@ -412,7 +410,7 @@ def _estimate_noise(cryos, means, dilated_volume_mask, batch_size, args, noise_m
     # Estimate noise outside the mask
     if use_new_noise_fn:
         masked_image_PS, image_PS = noise.fit_noise_model_to_images(
-            cryos[0], dilated_volume_mask, means['combined'], None,
+            cryos[0], dilated_volume_mask, means.combined, None,
             batch_size=batch_size, invert_mask=True, disc_type='linear_interp')
         logger.info("Using new noise estimation with linear_interp discretization")
     elif args.mask.endswith(".mrc"):
@@ -440,11 +438,11 @@ def _estimate_noise(cryos, means, dilated_volume_mask, batch_size, args, noise_m
     noise_time = time.time()
     if use_new_noise_fn:
         radial_ub_noise_var, _ = noise.fit_noise_model_to_images(
-            cryos[0], dilated_volume_mask, means['combined'], None,
+            cryos[0], dilated_volume_mask, means.combined, None,
             batch_size=batch_size, invert_mask=False, disc_type='linear_interp')
     else:
         radial_ub_noise_var, _, _ = noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(
-            cryos[0], means['combined'], dilated_volume_mask, batch_size)
+            cryos[0], means.combined, dilated_volume_mask, batch_size)
     logger.info("time to upper bound noise is %s", time.time() - noise_time)
 
     # Bound the noise variance
@@ -520,7 +518,7 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
         logger.info("Embedding mode: single-pass multi-zdim (experimental)")
         # Fast path: single data pass for all zdims
         zs_reg, zs_noreg = embedding.get_per_image_embedding_multi_zdim(
-            means['combined'], u['rescaled'], s['rescaled'], n_pcs_list,
+            means.combined, u['rescaled'], s['rescaled'], n_pcs_list,
             cryos, volume_mask, gpu_memory,
             contrast_option=options['contrast'],
             ignore_zero_frequency=options['ignore_zero_frequency'],
@@ -545,14 +543,14 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
         for zdim, n_pcs_to_use in zip(options['zs_dim_to_test'], n_pcs_list):
             z_time = time.time()
             latent_coords[zdim], latent_precision[zdim], contrasts[zdim], _ = embedding.get_per_image_embedding(
-                means['combined'], u['rescaled'], s['rescaled'], n_pcs_to_use,
+                means.combined, u['rescaled'], s['rescaled'], n_pcs_to_use,
                 cryos, volume_mask, gpu_memory, 'linear_interp',
                 contrast_grid=None, contrast_option=options['contrast'],
                 ignore_zero_frequency=options['ignore_zero_frequency'])
             logger.info("embedding time for zdim=%s: %s", zdim, time.time() - z_time)
             z_time = time.time()
             latent_coords_noreg[zdim], latent_precision_noreg[zdim], contrasts_noreg[zdim], _ = embedding.get_per_image_embedding(
-                means['combined'], u['rescaled'], s['rescaled'] * 0 + np.inf, n_pcs_to_use,
+                means.combined, u['rescaled'], s['rescaled'] * 0 + np.inf, n_pcs_to_use,
                 cryos, volume_mask, gpu_memory, 'linear_interp',
                 contrast_grid=None, contrast_option=options['contrast'],
                 ignore_zero_frequency=options['ignore_zero_frequency'])
@@ -769,9 +767,9 @@ def standard_recovar_pipeline(args):
         # --- Check sign and uninvert if needed ---
         _check_uninvert_data(means, cryos, args)
 
-        if means['combined'].dtype != cryos.dtype:
-            logger.warning("mean estimate is in type: %s", means['combined'].dtype)
-            means['combined'] = means['combined'].astype(cryos.dtype)
+        if means.combined.dtype != cryos.dtype:
+            logger.warning("mean estimate is in type: %s", means.combined.dtype)
+            means.combined = means.combined.astype(cryos.dtype)
 
         logger.info("mean computed in %s", time.time() - st_time)
         utils.report_memory_device(logger=logger)
@@ -784,19 +782,19 @@ def standard_recovar_pipeline(args):
         # --- Save mean and mask volumes ---
         paths.ensure_volumes_dir()
         # save_volume appends .mrc, so strip the extension from the path
-        output.save_volume(means['combined'], os.path.splitext(paths.mean_volume)[0], volume_shape,
+        output.save_volume(means.combined, os.path.splitext(paths.mean_volume)[0], volume_shape,
                       from_ft=True, voxel_size=cryos.voxel_size)
-        output.save_volume(means['corrected0'], os.path.splitext(paths.mean_half1_unfil)[0], volume_shape,
+        output.save_volume(means.corrected0, os.path.splitext(paths.mean_half1_unfil)[0], volume_shape,
                       from_ft=True, voxel_size=cryos.voxel_size)
-        output.save_volume(means['corrected1'], os.path.splitext(paths.mean_half2_unfil)[0], volume_shape,
+        output.save_volume(means.corrected1, os.path.splitext(paths.mean_half2_unfil)[0], volume_shape,
                       from_ft=True, voxel_size=cryos.voxel_size)
         output.save_volume(volume_mask, os.path.splitext(paths.mask_volume)[0], volume_shape,
                       from_ft=False, voxel_size=cryos.voxel_size)
 
         # Filter and save mean via local resolution
         from recovar.heterogeneity import locres
-        half1 = fourier_transform_utils.get_idft3(means['corrected0'].reshape(volume_shape))
-        half2 = fourier_transform_utils.get_idft3(means['corrected1'].reshape(volume_shape))
+        half1 = fourier_transform_utils.get_idft3(means.corrected0.reshape(volume_shape))
+        half2 = fourier_transform_utils.get_idft3(means.corrected1.reshape(volume_shape))
         best_filtered_nob, _, _, _, _ = locres.local_resolution(
             half1, half2, 0, cryos.voxel_size, use_filter=True, fsc_threshold=1/7, use_v2=True)
         del half1, half2
@@ -822,7 +820,7 @@ def standard_recovar_pipeline(args):
         # Compute variance with regularization
         # //2: variance computation with cubic disc_type needs ~2x memory per image (spline coefficients)
         variance_est, _, variance_fsc, _, noise_p_variance_est = covariance_estimation.compute_variance(
-            cryos, means['combined'], utils.safe_batch_size(batch_size // 2), dilated_volume_mask,
+            cryos, means.combined, utils.safe_batch_size(batch_size // 2), dilated_volume_mask,
             use_regularization=True, disc_type='cubic')
 
         utils.report_memory_device(logger=logger)
@@ -930,7 +928,7 @@ def standard_recovar_pipeline(args):
         n_pcs_to_use = (num_foc_masks - 1) * zdim_for_rest + zdim
         try:
             noise_var_from_het_residual, _, _ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(
-                cryos[0], dilated_volume_mask, means['combined'], u['rescaled'][:, :n_pcs_to_use],
+                cryos[0], dilated_volume_mask, means.combined, u['rescaled'][:, :n_pcs_to_use],
                 # //10: heterogeneity residual estimation is memory-intensive (holds full embedding + projections)
                 est_contrasts[zdim], latent_coords[zdim], utils.safe_batch_size(batch_size // 10),
                 disc_type=covariance_options['disc_type'])
@@ -981,7 +979,7 @@ def standard_recovar_pipeline(args):
 
     # --- Save volumes ---
     paths.ensure_volumes_dir()
-    output.save_covar_output_volumes(paths.output_dir, means['combined'], u['rescaled'], s,
+    output.save_covar_output_volumes(paths.output_dir, means.combined, u['rescaled'], s,
                                 volume_mask, volume_shape, voxel_size=cryos.voxel_size)
     output.save_volume(volume_mask, os.path.splitext(paths.mask_volume)[0], volume_shape,
                   from_ft=False, voxel_size=cryos.voxel_size)

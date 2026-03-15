@@ -2,6 +2,7 @@
 
 import logging
 import time
+from dataclasses import dataclass
 
 import numpy as np
 from recovar.utils.nvtx_shim import nvtx
@@ -9,6 +10,43 @@ from recovar.utils.nvtx_shim import nvtx
 from recovar.reconstruction import regularization
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class MeanEstimate:
+    """Result of half-set mean reconstruction.
+
+    Attributes
+    ----------
+    combined : ndarray — average of the two half-set reconstructions.
+    corrected0, corrected1 : ndarray — unregularized half-set means.
+    corrected0reg, corrected1reg : ndarray — regularized half-set means.
+    lhs : ndarray — average Hermitian (CTF²) filter.
+    prior : ndarray — FSC-derived regularization prior.
+    """
+    combined: np.ndarray
+    corrected0: np.ndarray
+    corrected1: np.ndarray
+    corrected0reg: np.ndarray
+    corrected1reg: np.ndarray
+    lhs: np.ndarray
+    prior: np.ndarray
+
+    def negate(self):
+        """Flip sign of all mean volumes (for uninverting data)."""
+        self.combined = -self.combined
+        self.corrected0 = -self.corrected0
+        self.corrected1 = -self.corrected1
+        self.corrected0reg = -self.corrected0reg
+        self.corrected1reg = -self.corrected1reg
+
+    def corrected(self, idx):
+        """Get unregularized half-map by index (0 or 1)."""
+        return self.corrected0 if idx == 0 else self.corrected1
+
+    def corrected_reg(self, idx):
+        """Get regularized half-map by index (0 or 1)."""
+        return self.corrected0reg if idx == 0 else self.corrected1reg
 
 NVTX_DOMAIN_HOMO = "homogeneous"
 
@@ -36,8 +74,7 @@ def get_mean_conformation_relion(
 
     Returns
     -------
-    means : dict with keys ``"corrected0"``, ``"corrected1"``, ``"combined"``,
-        ``"corrected0reg"``, ``"corrected1reg"``
+    means : MeanEstimate
     mean_prior : ndarray  —  FSC-derived regularization prior
     fsc : ndarray
     """
@@ -76,15 +113,15 @@ def get_mean_conformation_relion(
         combined = (corrected[0] + corrected[1]) / 2
 
     mean_prior = np.array(mean_prior)
-    means = {
-        "combined":      np.array(combined),
-        "corrected0":    np.array(corrected[0]),
-        "corrected1":    np.array(corrected[1]),
-        "corrected0reg": np.array(corrected_reg[0]),
-        "corrected1reg": np.array(corrected_reg[1]),
-        "lhs":           np.array((ft_ctfs[0] + ft_ctfs[1]) / 2),
-        "prior":         mean_prior,
-    }
+    means = MeanEstimate(
+        combined=np.array(combined),
+        corrected0=np.array(corrected[0]),
+        corrected1=np.array(corrected[1]),
+        corrected0reg=np.array(corrected_reg[0]),
+        corrected1reg=np.array(corrected_reg[1]),
+        lhs=np.array((ft_ctfs[0] + ft_ctfs[1]) / 2),
+        prior=mean_prior,
+    )
 
     logger.info("mean computation completed in %.2fs", time.time() - st_time)
     return means, mean_prior, fsc
