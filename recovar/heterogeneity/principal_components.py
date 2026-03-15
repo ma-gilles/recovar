@@ -30,8 +30,7 @@ def estimate_principal_components(dataset, options,  means, mean_prior, volume_m
     eigenvectors and eigenvalues via SVD.
 
     Args:
-        dataset: A ``CryoEMDataset`` with ``halfset_indices`` set, or
-            ``CryoEMHalfsets`` (backward compat).
+        dataset: A ``CryoEMDataset`` with ``halfset_indices`` set.
         options: Pipeline options namespace.
         means: Dict with mean volume estimates.
         mean_prior: Prior mean volume (Fourier coefficients).
@@ -51,9 +50,6 @@ def estimate_principal_components(dataset, options,  means, mean_prior, volume_m
         where *u* and *s* are dicts with keys ``'real'`` and ``'rescaled'``
         containing eigenvectors and eigenvalues respectively.
     """
-    from recovar.data_io.dataset import unwrap_dataset
-    dataset = unwrap_dataset(dataset)
-
     covariance_options = covariance_estimation.get_default_covariance_computation_options() if covariance_options is None else covariance_options
 
     volume_shape = dataset.volume_shape
@@ -172,8 +168,6 @@ def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,
 
 @nvtx.annotate("pca_by_projected_covariance", color="green", domain=NVTX_DOMAIN_PCA)
 def pca_by_projected_covariance(dataset, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, ignore_zero_frequency = False, n_pcs_to_compute = None):
-    from recovar.data_io.dataset import unwrap_dataset
-    dataset = unwrap_dataset(dataset)
 
     basis_size = basis.shape[1] if n_pcs_to_compute is None else n_pcs_to_compute
     basis = basis[:,:basis_size]

@@ -132,7 +132,7 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
     - Maps global particle indices to local indices for each halfset dataset
     - If filter_resolution is provided, combined reconstructions are low-pass filtered
     """
-    cryos = pipeline_output.get('dataset')  # This returns [cryo1, cryo2] for the two halfsets
+    cryos = pipeline_output.get('dataset')  # CryoEMDataset with halfset_indices
     coords_entry = 'latent_coords_noreg' if noreg else 'latent_coords'
     zs = pipeline_output.get(coords_entry)[zdim_key]
     volume_shape = pipeline_output.get('volume_shape')
@@ -174,36 +174,32 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
         os.makedirs(temp_dir, exist_ok=True)
         
         halfmaps = [None, None]
-        zs_subsets = [ zs[:cryos[0].n_units], zs[cryos[0].n_units:] ]
+        n_half0 = cryos.n_images_half(0)
+        zs_subsets = [ zs[:n_half0], zs[n_half0:] ]
         used_particles = [[], []]  # Track which particles are used for each halfmap
-        
+
         for i, zs_subset in enumerate(zs_subsets):
             distances = np.linalg.norm(zs_subset - cluster_center, axis=1)
-            closest_indices = np.argsort(distances)[:n_particles_per_cluster]
-            used_particles[i] = closest_indices.copy()
-            
-            # Map to global indices
-            if i == 0:
-                global_indices = closest_indices
-            else:
-                global_indices = closest_indices + cryos[0].n_units
+            closest_local = np.argsort(distances)[:n_particles_per_cluster]
+            # Map local half indices to global dataset indices
+            global_indices = cryos.halfset_indices[i][closest_local]
             used_particles[i] = global_indices
-            
-            logger.info("Cluster %s: Using %s closest particles for half-map %s (min distance: %.3f, max distance: %.3f). Average distance over all particles: %.3f", cluster_idx, len(closest_indices), i, distances[closest_indices[0]], distances[closest_indices[-1]], np.mean(distances))
-            
+
+            logger.info("Cluster %s: Using %s closest particles for half-map %s (min distance: %.3f, max distance: %.3f). Average distance over all particles: %.3f", cluster_idx, len(closest_local), i, distances[closest_local[0]], distances[closest_local[-1]], np.mean(distances))
+
             # noise_variance=None lets relion_style_triangular_kernel draw
             # per-batch noise from the dataset's noise model (correct for
             # tilt series where closest_indices are particle indices, and
             # also safe for SPA with radially-symmetric noise).
             Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(
-                cryos[i], None, batch_size,
+                cryos, None, batch_size,
                 disc_type='linear_interp',
-                index_subset=closest_indices,
+                index_subset=global_indices,
                 upsampling_factor=2,
             )
             halfmap = relion_functions.post_process_from_filter_v2(
                 Ft_ctf, F_ty,
-                cryos[i].volume_shape, 2,
+                cryos.volume_shape, 2,
                 kernel='triangular',
                 use_spherical_mask=True,
                 grid_correct=True, gridding_correct="square",
@@ -2082,7 +2078,7 @@ def main():
         from recovar import utils
         gpu_memory = utils.get_gpu_memory_total()
         cryos = pipeline_output.get('dataset')
-        grid_size = cryos[0].grid_size
+        grid_size = cryos.grid_size
         
         # Calculate automatic batch size like in pipeline
         auto_batch_size = utils.get_image_batch_size(grid_size, gpu_memory)

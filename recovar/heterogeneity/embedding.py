@@ -27,19 +27,7 @@ USE_CUBIC = True
 _rfft2_hermitian_weights = linalg.rfft2_hermitian_weights
 
 
-def split_weights(weight, dataset_or_cryos):
-    from recovar.data_io.dataset import unwrap_dataset, CryoEMHalfsets, CryoEMDataset
-    # Legacy path: list or CryoEMHalfsets — partition by n_images of each element.
-    if isinstance(dataset_or_cryos, (list, tuple, CryoEMHalfsets)):
-        start_idx = 0
-        weights = []
-        for cryo in dataset_or_cryos:
-            end_idx = start_idx + cryo.n_images
-            weights.append(weight[start_idx:end_idx])
-            start_idx = end_idx
-        return weights
-    # New path: single dataset with halfset_indices.
-    dataset = unwrap_dataset(dataset_or_cryos)
+def split_weights(weight, dataset):
     return [weight[dataset.halfset_indices[half]] for half in range(2)]
 
 def generate_conformation_from_reprojection(xs, mean, u ):
@@ -137,7 +125,7 @@ def get_per_image_embedding(mean, u, s, basis_size, dataset, volume_mask, gpu_me
         s: Eigenvalues, shape ``(n_components,)``.
         basis_size: Number of principal components to use.
         dataset: A ``CryoEMDataset`` with ``halfset_indices`` set, or
-            ``CryoEMHalfsets`` (backward compat).
+            a list of two half-set ``CryoEMDataset`` instances.
         volume_mask: Binary mask selecting valid voxels.
         gpu_memory: Available GPU memory in GB.
         disc_type: Discretization type (``'linear_interp'`` or ``'cubic'``).
@@ -160,9 +148,6 @@ def get_per_image_embedding(mean, u, s, basis_size, dataset, volume_mask, gpu_me
         *est_contrasts* has shape ``(n_images,)``, and *bias* is
         ``None`` unless *compute_bias* is ``True``.
     """
-    from recovar.data_io.dataset import unwrap_dataset
-    dataset = unwrap_dataset(dataset)
-
     if u.shape[0] != dataset.volume_size:
         raise ValueError(f"input u should be volume_size x basis_size, got {u.shape[0]} != {dataset.volume_size}")
     st_time = time.time()
@@ -1111,7 +1096,7 @@ def get_per_image_embedding_multi_zdim(
         s: Eigenvalues, shape ``(n_max_components,)``.
         n_pcs_list: List of int — n_pcs values to compute (need not be sorted).
         dataset: A ``CryoEMDataset`` with ``halfset_indices`` set, or
-            ``CryoEMHalfsets`` (backward compat).
+            a list of two half-set ``CryoEMDataset`` instances.
         volume_mask: Binary mask selecting valid voxels.
         gpu_memory: Available GPU memory in GB.
         disc_type: Discretization type (overridden to ``'cubic'`` when ``USE_CUBIC``).
@@ -1128,9 +1113,6 @@ def get_per_image_embedding_multi_zdim(
         ``(n_total_images, n_pcs, n_pcs)``, and *contrasts* has shape
         ``(n_total_images,)``.
     """
-    from recovar.data_io.dataset import unwrap_dataset
-    dataset = unwrap_dataset(dataset)
-
     if dataset.tilt_series_flag:
         raise ValueError(
             "get_per_image_embedding_multi_zdim does not support tilt-series data. "
@@ -1270,41 +1252,11 @@ def get_per_image_embedding_multi_zdim(
     return result_reg, result_noreg
 
 
-def set_contrasts_in_cryos(dataset_or_cryos, contrasts):
+def set_contrasts_in_cryos(dataset, contrasts):
     """Apply per-image contrast factors to CTF parameters.
 
-    Accepts either a ``CryoEMDataset`` (with ``halfset_indices`` set) or
-    ``CryoEMHalfsets`` (backward compat).  When a single ``CryoEMDataset`` is
-    given, the contrasts array must be in concatenated halfset order (half-0
-    images followed by half-1 images).
+    The *contrasts* array must be in concatenated halfset order (half-0
+    images followed by half-1 images).  This function reindexes them back
+    to original dataset order before calling ``dataset.set_contrasts``.
     """
-    from recovar.data_io.dataset import unwrap_dataset, CryoEMHalfsets
-
-    # New path: single dataset
-    if not isinstance(dataset_or_cryos, CryoEMHalfsets):
-        dataset = unwrap_dataset(dataset_or_cryos)
-        dataset.set_contrasts(contrasts)
-        return
-
-    # Legacy path: CryoEMHalfsets
-    cryos = dataset_or_cryos
-    if cryos.tilt_series_flag:
-
-        # If it's a per image assignment
-        if contrasts.shape[0] == cryos.n_total_images:
-            running_idx = 0
-            for i in range(2): # Untested
-                cryos[i].CTF_params[:,core.CTFParamIndex.CONTRAST] *= contrasts[running_idx:running_idx+cryos[i].n_images]
-                running_idx += cryos[i].n_images
-        else:
-            # If it's a per tilt series assignment
-            running_idx = 0
-            for i in range(2):
-                for p in cryos[i].tilt_particles:
-                    cryos[i].CTF_params[p,core.CTFParamIndex.CONTRAST] *= contrasts[running_idx]
-                    running_idx+=1
-    else:
-        running_idx = 0
-        for i in range(2):
-            cryos[i].CTF_params[:,core.CTFParamIndex.CONTRAST] *= contrasts[running_idx:running_idx+cryos[i].n_images]
-            running_idx += cryos[i].n_images
+    dataset.set_contrasts(contrasts)

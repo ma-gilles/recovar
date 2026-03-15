@@ -187,6 +187,21 @@ class ImageLoader:
         return load_images(filepath, indices=indices, datadir=datadir, lazy=lazy,
                            max_threads=max_threads, strip_prefix=strip_prefix)
 
+    @classmethod
+    def image_count(cls, filepath, datadir=None, strip_prefix=None):
+        """Get image count without constructing a full loader.
+
+        For MRC/MRCS files, reads only the header (1 kB).
+        For other formats, falls back to full lazy construction.
+        """
+        ext = os.path.splitext(filepath)[1].lower()
+        if ext in ('.mrc', '.mrcs'):
+            import mrcfile
+            with mrcfile.open(filepath, mode='r', header_only=True, permissive=True) as mrc:
+                return int(mrc.header.nz)
+        return cls.from_file(filepath, lazy=True, datadir=datadir or "",
+                             strip_prefix=strip_prefix).n
+
     def __init__(self, num_images: int, image_size: int, dtype=np.float32):
         self._num_images = num_images
         self._image_size = image_size

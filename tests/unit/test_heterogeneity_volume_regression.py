@@ -22,7 +22,7 @@ import jax.numpy as jnp
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.core.linalg as linalg
 import recovar.heterogeneity.heterogeneity_volume as hv
-from recovar.data_io.dataset import CryoEMHalfsets
+
 from recovar.output import metrics as metrics_mod
 from recovar.simulation import synthetic_dataset
 
@@ -46,7 +46,7 @@ def _make_halfsets_and_gt(grid_size=GRID_SIZE, n_images_per_half=N_IMAGES_PER_HA
     """Create two half-set datasets and ground-truth volume distribution.
 
     Returns (cryos, hvd, simulation_info, het_distances) where:
-      - cryos: CryoEMHalfsets with noise models attached
+      - cryos: CryoEMDataset with halfset_indices and noise models attached
       - hvd: HeterogeneousVolumeDistribution for GT metrics
       - simulation_info: dict with image_assignment, per_image_contrast, etc.
       - het_distances: list of two arrays of random heterogeneity distances
@@ -54,22 +54,17 @@ def _make_halfsets_and_gt(grid_size=GRID_SIZE, n_images_per_half=N_IMAGES_PER_HA
     n_shells = grid_size // 2 - 1
     noise_var = np.ones(n_shells, dtype=np.float32) * 1e-4
 
-    # Create two independent half-datasets with disjoint indices
-    cryo0 = make_tiny_cryo_dataset_with_images(
-        grid_size=grid_size, n_images=n_images_per_half, seed=seed
+    # Create a single dataset with 2*n_images_per_half images split into halves
+    cryo = make_tiny_cryo_dataset_with_images(
+        grid_size=grid_size, n_images=2 * n_images_per_half, seed=seed
     )
-    cryo0.dataset_indices = np.arange(n_images_per_half, dtype=np.int32)
-    cryo0.set_radial_noise_model(noise_var)
-
-    cryo1 = make_tiny_cryo_dataset_with_images(
-        grid_size=grid_size, n_images=n_images_per_half, seed=seed + 1
-    )
-    cryo1.dataset_indices = np.arange(
-        n_images_per_half, 2 * n_images_per_half, dtype=np.int32
-    )
-    cryo1.set_radial_noise_model(noise_var)
-
-    cryos = CryoEMHalfsets(cryo0, cryo1)
+    cryo.dataset_indices = np.arange(2 * n_images_per_half, dtype=np.int32)
+    cryo.set_radial_noise_model(noise_var)
+    cryo.halfset_indices = [
+        np.arange(n_images_per_half, dtype=np.int32),
+        np.arange(n_images_per_half, 2 * n_images_per_half, dtype=np.int32),
+    ]
+    cryos = cryo
 
     # Build GT volume distribution from the first half's simulation
     vols = make_tiny_fourier_volumes(grid_size=grid_size)

@@ -20,7 +20,7 @@ import jax
 import jax.numpy as jnp
 
 import recovar.heterogeneity.heterogeneity_volume as hv
-from recovar.data_io.dataset import CryoEMHalfsets
+
 from helpers.tiny_synthetic import make_tiny_cryo_dataset_with_images
 
 pytestmark = pytest.mark.unit
@@ -147,20 +147,19 @@ def test_make_volumes_kernel_estimate_local_smoke(tmp_path):
     make_volumes_kernel_estimate_local must run without crashing on tiny data.
     Output files are written to a temporary directory so nothing leaks.
 
-    The pipeline requires two halfsets with non-overlapping dataset_indices, so
-    we create two independent 4-image datasets with indices [0-3] and [4-7].
+    The pipeline requires a single dataset with halfset_indices set, so we
+    create an 8-image dataset split into two halves of 4 images each.
     """
     noise_variance = np.ones(4 // 2 - 1, dtype=np.float32) * 0.1  # grid_size=4 → 1 shell
 
-    # Half-dataset 0: images indexed 0-3 in the global particle stack
-    cryo0 = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=4, seed=0)
-    cryo0.dataset_indices = np.array([0, 1, 2, 3], dtype=np.int32)
-    cryo0.set_radial_noise_model(noise_variance)
-
-    # Half-dataset 1: images indexed 4-7 in the global particle stack
-    cryo1 = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=4, seed=1)
-    cryo1.dataset_indices = np.array([4, 5, 6, 7], dtype=np.int32)
-    cryo1.set_radial_noise_model(noise_variance)
+    # Single dataset with 8 images, split into two halves via halfset_indices
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8, seed=0)
+    cryo.dataset_indices = np.arange(8, dtype=np.int32)
+    cryo.set_radial_noise_model(noise_variance)
+    cryo.halfset_indices = [
+        np.array([0, 1, 2, 3], dtype=np.int32),
+        np.array([4, 5, 6, 7], dtype=np.int32),
+    ]
 
     rng = np.random.default_rng(0)
     # 4 distance values per half-dataset
@@ -174,7 +173,7 @@ def test_make_volumes_kernel_estimate_local_smoke(tmp_path):
 
     hv.make_volumes_kernel_estimate_local(
         heterogeneity_distances=het_dists,
-        cryos=CryoEMHalfsets(cryo0, cryo1),
+        cryos=cryo,
         output_folder=output_folder,
         ndim=2,
         bins=bins,

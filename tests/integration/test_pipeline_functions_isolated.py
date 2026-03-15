@@ -158,7 +158,7 @@ def gt_data(dataset_dir):
 
 @pytest.fixture(scope="module")
 def cryos(dataset_dir, intermediates):
-    """Create CryoEMHalfsets from the shared dataset using current code."""
+    """Create CryoEMDataset with halfset_indices from the shared dataset."""
     from recovar.data_io import dataset
 
     grid_size = 128  # known for this dataset

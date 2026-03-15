@@ -1017,7 +1017,7 @@ def main():
             gpu_memory = utils.get_gpu_memory_total()
             pipeline_output = output.PipelineOutput(args.pipeline_output_dir)
             cryos = pipeline_output.get('dataset')
-            grid_size = cryos[0].grid_size
+            grid_size = cryos.grid_size
             
             # Calculate automatic batch size like in pipeline
             batch_size = utils.get_image_batch_size(grid_size, gpu_memory)

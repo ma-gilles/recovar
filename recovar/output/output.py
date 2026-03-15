@@ -604,7 +604,7 @@ def plot_umap(output_folder, zs, centers):
 ## TODO this hsould move elsewhere
 
 def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state"):
-    # cryos: CryoEMDataset (with halfset_indices) or CryoEMHalfsets (backward compat)
+    # cryos: CryoEMDataset (with halfset_indices)
     """Compute reweighted volume estimates and save with RELION-style organization.
 
     Output structure (flat primary volumes + diagnostics subdirectory)::
@@ -626,8 +626,7 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
             latent_coords.txt                 # all latent coordinates
     """
     from recovar.output.output_paths import AnalysisPaths
-    from recovar.data_io.dataset import unwrap_dataset
-    ds = unwrap_dataset(cryos)
+    ds = cryos
 
     if n_min_particles is None:
         n_min_particles = 100
@@ -948,9 +947,9 @@ class PipelineOutput:
             return utils.pickle_load(self.paths.covariance_cols)
 
         elif key in ('dataset', 'lazy_dataset'):
-            cryos = dataset.load_dataset_from_args(self.get('input_args'), lazy='lazy' in key, ind_split=self.get('halfsets'))
-            add_noise_to_loaded_dataset(cryos, self.get('noise_var_used'))
-            return cryos
+            ds = dataset.load_dataset_from_args(self.get('input_args'), lazy='lazy' in key, ind_split=self.get('halfsets'))
+            add_noise_to_loaded_dataset(ds, self.get('noise_var_used'))
+            return ds
 
         elif key == 'halfsets':
             return utils.pickle_load(self.paths.halfsets)
@@ -988,28 +987,11 @@ class PipelineOutput:
         return keys
 
 
-def add_noise_to_loaded_dataset(cryos, noise_variance):
-    from recovar.data_io.dataset import unwrap_dataset, CryoEMHalfsets
-    if isinstance(cryos, CryoEMHalfsets):
-        # Set noise on each half (backward compat callers that iterate halves)
-        for cryo in cryos:
-            if noise_variance.ndim == 1:
-                cryo.set_radial_noise_model(noise_variance)
-            else:
-                cryo.set_variable_radial_noise_model(noise_variance)
-        # Also set on backing dataset so unwrap_dataset() path works
-        ds = cryos.dataset
-        if ds is not None:
-            if noise_variance.ndim == 1:
-                ds.set_radial_noise_model(noise_variance)
-            else:
-                ds.set_variable_radial_noise_model(noise_variance)
+def add_noise_to_loaded_dataset(ds, noise_variance):
+    if noise_variance.ndim == 1:
+        ds.set_radial_noise_model(noise_variance)
     else:
-        ds = unwrap_dataset(cryos)
-        if noise_variance.ndim == 1:
-            ds.set_radial_noise_model(noise_variance)
-        else:
-            ds.set_variable_radial_noise_model(noise_variance)
+        ds.set_variable_radial_noise_model(noise_variance)
 
 ## TODO these need to move as well
 def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False,  input_density = None, latent_space_bounds = None):
@@ -1023,7 +1005,7 @@ def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folde
         pipeline_output: Pipeline output object with embeddings and covariance.
         basis_size: Number of PCA dimensions for trajectory computation.
         output_folder: Directory to write trajectory volumes and plots.
-        cryos: CryoEMHalfsets (unused, kept for compatibility).
+        cryos: CryoEMDataset (optional; loaded from pipeline_output if None).
         z_st: Start point in latent space, shape (n_dims,).
         z_end: End point in latent space, shape (n_dims,).
         gt_volumes: Ground-truth volumes for automatic endpoint selection.
@@ -1042,8 +1024,8 @@ def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folde
     latent_space_bounds = ld.compute_latent_space_bounds(pipeline_output.get('latent_coords')[basis_size]) if latent_space_bounds is None else latent_space_bounds
 
     if cryos is None:
-        cryos = pipeline_output.get('dataset')
-        embedding.set_contrasts_in_cryos(cryos, pipeline_output.get('contrasts')[basis_size])
+        ds = pipeline_output.get('dataset')
+        embedding.set_contrasts_in_cryos(ds, pipeline_output.get('contrasts')[basis_size])
 
     density = input_density if input_density is not None else pipeline_output.get('density')
 

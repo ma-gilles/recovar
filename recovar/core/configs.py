@@ -113,11 +113,11 @@ class ForwardModelConfig(eqx.Module):
         process_fn: Optional[Callable] = None,
         upsampling_factor: Optional[int] = None,
     ) -> ForwardModelConfig:
-        """Create from a CryoEMDataset or CryoEMHalfsets instance.
+        """Create from a CryoEMDataset instance.
 
         Parameters
         ----------
-        cryo : CryoEMDataset or CryoEMHalfsets
+        cryo : CryoEMDataset
             Source dataset for geometry and CTF configuration.
         disc_type : str
             Discretization type (e.g. 'linear_interp', 'cubic', '').
@@ -128,12 +128,10 @@ class ForwardModelConfig(eqx.Module):
             Computes the upsampled volume shape directly without
             mutating the dataset object.
         """
-        from recovar.data_io.dataset import CryoEMDataset, CryoEMHalfsets
+        from recovar.data_io.dataset import CryoEMDataset
 
         # Extract the CTFEvaluator directly (not the dtype-casting method).
-        if isinstance(cryo, CryoEMHalfsets):
-            ctf_eval = cryo[0].ctf_evaluator
-        elif isinstance(cryo, CryoEMDataset):
+        if isinstance(cryo, CryoEMDataset):
             ctf_eval = cryo.ctf_evaluator
         else:
             # Duck-type fallback

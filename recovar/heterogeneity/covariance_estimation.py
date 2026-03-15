@@ -303,8 +303,7 @@ def compute_regularized_covariance_columns_in_batch(dataset, means, mean_prior, 
     and concatenates the results.
 
     Args:
-        dataset: A ``CryoEMDataset`` with ``halfset_indices`` set, or
-            ``CryoEMHalfsets`` (backward compat).
+        dataset: A ``CryoEMDataset`` with ``halfset_indices`` set.
         means: Dict with keys ``'combined'``, ``'prior'``, ``'lhs'``.
         mean_prior: Prior mean volume (Fourier coefficients).
         volume_mask: Binary mask selecting valid voxels.
@@ -321,9 +320,6 @@ def compute_regularized_covariance_columns_in_batch(dataset, means, mean_prior, 
         *covariance_cols* is a dict with key ``'est_mask'`` and *fscs*
         contains per-column FSC curves.
     """
-    from recovar.data_io.dataset import unwrap_dataset
-    dataset = unwrap_dataset(dataset)
-
     frequency_batch = utils.get_column_batch_size(dataset.grid_size, gpu_memory)
 
     covariance_cols = []
@@ -345,9 +341,6 @@ def compute_regularized_covariance_columns_in_batch(dataset, means, mean_prior, 
 
 @nvtx.annotate("compute_regularized_covariance_columns", color="purple")
 def compute_regularized_covariance_columns(dataset, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, options, picked_frequencies, use_multi_gpu=False, n_gpus=None):
-    from recovar.data_io.dataset import unwrap_dataset
-    dataset = unwrap_dataset(dataset)
-
     volume_shape = dataset.volume_shape
     mask_final = volume_mask
 
@@ -525,9 +518,6 @@ def compute_variance(
     disc_type='',
     noise_ind_subset=None,
 ):
-    from recovar.data_io.dataset import unwrap_dataset
-    dataset = unwrap_dataset(dataset)
-
     st = time.time()
 
     # Run variance kernel for each half-set.
@@ -596,9 +586,6 @@ def compute_variance(
 def compute_both_H_B(dataset, means, dilated_volume_mask, picked_frequencies,
                      gpu_memory, options, use_multi_gpu=False, n_gpus=None):
     """Compute H and B matrices for both half-sets."""
-    from recovar.data_io.dataset import unwrap_dataset
-    dataset = unwrap_dataset(dataset)
-
     Hs = []
     Bs = []
     st_time = time.time()
@@ -978,14 +965,13 @@ def _compute_projected_covariance_single(experiment_dataset, mean_estimate, basi
 
 @nvtx.annotate("compute_projected_covariance", color="green")
 def compute_projected_covariance(dataset, mean_estimate, basis, volume_mask, batch_size, disc_type, disc_type_u, do_mask_images=True):
-    from recovar.data_io.dataset import unwrap_dataset, CryoEMDataset
+    from recovar.data_io.dataset import CryoEMDataset
     # Backward compat: accept list of datasets (legacy API from em/heterogeneity.py)
     if isinstance(dataset, (list, tuple)):
         dataset = dataset[0] if len(dataset) == 1 else dataset
     if isinstance(dataset, CryoEMDataset) and dataset.halfset_indices is None:
         # Single dataset without halfset split — iterate over all images (no half-set logic)
         return _compute_projected_covariance_single(dataset, mean_estimate, basis, volume_mask, batch_size, disc_type, disc_type_u, do_mask_images)
-    dataset = unwrap_dataset(dataset)
 
     basis = basis.T.astype(dataset.dtype)
     basis = jnp.asarray(basis)

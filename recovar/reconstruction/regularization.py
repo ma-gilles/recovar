@@ -27,9 +27,7 @@ def compute_batch_prior_quantities(rotation_matrices, translations, CTF_params, 
     
     return diag_mean
 
-def compute_prior_quantites(dataset_or_cryos, cov_noise, batch_size, for_whitening = False ):
-    from recovar.data_io.dataset import unwrap_dataset
-    dataset = unwrap_dataset(dataset_or_cryos)
+def compute_prior_quantites(dataset, cov_noise, batch_size, for_whitening = False ):
 
     bottom_of_fraction = jnp.zeros(dataset.volume_size, dtype = dataset.dtype)
     for half in range(2):
@@ -59,11 +57,11 @@ def compute_prior_quantites(dataset_or_cryos, cov_noise, batch_size, for_whiteni
     return bottom_of_fraction
     
 
-def compute_relion_prior(dataset_or_cryos, cov_noise, image0, image1, batch_size, estimate_merged_SNR = False, noise_level = None):
+def compute_relion_prior(dataset, cov_noise, image0, image1, batch_size, estimate_merged_SNR = False, noise_level = None):
     """Compute a RELION-style spectral prior from two half-set reconstructions.
 
     Args:
-        dataset_or_cryos: ``CryoEMDataset`` (with halfset_indices) or ``CryoEMHalfsets``.
+        dataset: ``CryoEMDataset`` with ``halfset_indices`` set.
         cov_noise: Scalar noise variance.
         image0: First half-map (Fourier coefficients).
         image1: Second half-map (Fourier coefficients).
@@ -75,8 +73,6 @@ def compute_relion_prior(dataset_or_cryos, cov_noise, image0, image1, batch_size
         Tuple ``(prior, fsc, prior_avg)`` — the spectral prior, FSC
         curve, and averaged prior.
     """
-    from recovar.data_io.dataset import unwrap_dataset
-    dataset = unwrap_dataset(dataset_or_cryos)
 
     if noise_level is not None:
         bottom_of_fraction = noise_level

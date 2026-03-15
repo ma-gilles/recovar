@@ -60,7 +60,7 @@ def add_args(parser: argparse.ArgumentParser):
 
 def compute_embedding(recovar_result_dir):
     results = o.load_results_new(recovar_result_dir)
-    cryos = dataset.load_dataset_from_args(results['input_args'])
+    ds = dataset.load_dataset_from_args(results['input_args'])
     options = utils.make_algorithm_options(results['input_args'])
 
     gpu_memory = utils.get_gpu_memory_total()
@@ -79,8 +79,8 @@ def compute_embedding(recovar_result_dir):
         z_time = time.time()
         latent_coords[zdim], latent_precision[zdim], est_contrasts[zdim] = embedding.get_per_image_embedding(
             results['means']['combined'], results['u']['rescaled'], results['s']['rescaled'], zdim,
-            results['cov_noise'], cryos, results['volume_mask'], gpu_memory, 'linear_interp',
-            contrast_grid=None, contrast_option=options.contrast)
+            results['cov_noise'], ds, results['volume_mask'], gpu_memory, 'linear_interp',
+            contrast_grid=None, contrast_option=options['contrast'])
         logger.info("embedding time for zdim=%s: %s", zdim, time.time() - z_time)
 
     return latent_coords, latent_precision, est_contrasts

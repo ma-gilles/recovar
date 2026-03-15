@@ -5,7 +5,6 @@ jax = pytest.importorskip("jax")
 import jax.numpy as jnp
 
 from recovar.heterogeneity import embedding
-from recovar.data_io.dataset import CryoEMHalfsets
 from recovar.core.configs import ForwardModelConfig, BatchData, ModelState, EmbeddingOpts
 
 pytestmark = pytest.mark.unit
@@ -14,16 +13,17 @@ pytestmark = pytest.mark.unit
 class _Cryo:
     def __init__(self, n_images):
         self.n_images = n_images
+        self.halfset_indices = None
 
 
-def test_split_weights_partitions_by_cryo_sizes():
-    w = np.arange(10, dtype=np.float32)
-    cryos = [_Cryo(3), _Cryo(4), _Cryo(3)]
-    out = embedding.split_weights(w, cryos)
-    assert len(out) == 3
+def test_split_weights_partitions_by_halfset_indices():
+    w = np.arange(7, dtype=np.float32)
+    ds = _Cryo(7)
+    ds.halfset_indices = [np.array([0, 1, 2], dtype=np.int32), np.array([3, 4, 5, 6], dtype=np.int32)]
+    out = embedding.split_weights(w, ds)
+    assert len(out) == 2
     assert np.allclose(out[0], [0, 1, 2])
     assert np.allclose(out[1], [3, 4, 5, 6])
-    assert np.allclose(out[2], [7, 8, 9])
 
 
 def test_generate_conformation_from_reprojection_linear_combination():
@@ -75,11 +75,20 @@ class _DummyCryo:
         self.image_size = image_size
         self.n_images = n_images
         self.dtype = dtype
+        self.halfset_indices = None
+
+    def subset(self, indices):
+        return _DummyCryo(
+            volume_size=self.volume_size,
+            image_size=self.image_size,
+            n_images=len(indices),
+            dtype=self.dtype,
+        )
 
 
 def test_get_per_image_embedding_clamps_batch_size_to_at_least_one(monkeypatch):
-    cryo0 = _DummyCryo(volume_size=4, image_size=16, n_images=3)
-    cryo1 = _DummyCryo(volume_size=4, image_size=16, n_images=2)
+    ds = _DummyCryo(volume_size=4, image_size=16, n_images=5)
+    ds.halfset_indices = [np.arange(3, dtype=np.int32), np.arange(3, 5, dtype=np.int32)]
     mean = np.zeros((4,), dtype=np.complex64)
     u = np.zeros((4, 2), dtype=np.complex64)
     s = np.ones((2,), dtype=np.float32)
@@ -118,7 +127,7 @@ def test_get_per_image_embedding_clamps_batch_size_to_at_least_one(monkeypatch):
         u=u,
         s=s,
         basis_size=2,
-        dataset=CryoEMHalfsets(cryo0, cryo1),
+        dataset=ds,
         volume_mask=volume_mask,
         gpu_memory=1,
         disc_type="linear_interp",
@@ -139,8 +148,8 @@ def test_get_per_image_embedding_clamps_batch_size_to_at_least_one(monkeypatch):
 
 
 def test_get_per_image_embedding_ignore_zero_frequency_overrides_volume_mask(monkeypatch):
-    cryo0 = _DummyCryo(volume_size=4, image_size=16, n_images=2)
-    cryo1 = _DummyCryo(volume_size=4, image_size=16, n_images=1)
+    ds = _DummyCryo(volume_size=4, image_size=16, n_images=3)
+    ds.halfset_indices = [np.arange(2, dtype=np.int32), np.arange(2, 3, dtype=np.int32)]
     mean = np.zeros((4,), dtype=np.complex64)
     u = np.zeros((4, 1), dtype=np.complex64)
     s = np.ones((1,), dtype=np.float32)
@@ -181,7 +190,7 @@ def test_get_per_image_embedding_ignore_zero_frequency_overrides_volume_mask(mon
         u=u,
         s=s,
         basis_size=1,
-        dataset=CryoEMHalfsets(cryo0, cryo1),
+        dataset=ds,
         volume_mask=volume_mask,
         gpu_memory=1,
         disc_type="linear_interp",
@@ -199,7 +208,8 @@ def test_get_per_image_embedding_ignore_zero_frequency_overrides_volume_mask(mon
 
 
 def test_get_per_image_embedding_supports_single_cryo_list(monkeypatch):
-    cryo = _DummyCryo(volume_size=4, image_size=16, n_images=2)
+    cryo = _DummyCryo(volume_size=4, image_size=16, n_images=4)
+    cryo.halfset_indices = [np.arange(2, dtype=np.int32), np.arange(2, 4, dtype=np.int32)]
     mean = np.zeros((4,), dtype=np.complex64)
     u = np.zeros((4, 1), dtype=np.complex64)
     s = np.ones((1,), dtype=np.float32)
@@ -223,7 +233,7 @@ def test_get_per_image_embedding_supports_single_cryo_list(monkeypatch):
         u=u,
         s=s,
         basis_size=1,
-        dataset=CryoEMHalfsets(cryo, cryo),
+        dataset=cryo,
         volume_mask=volume_mask,
         gpu_memory=1,
         disc_type="linear_interp",
@@ -1093,11 +1103,13 @@ def test_get_per_image_embedding_multi_zdim_matches_per_zdim(gpu_device):
 
 
 def _make_multi_zdim_test_fixtures():
-    """Create a tiny CryoEMHalfsets with real images for embedding tests."""
+    """Create a tiny CryoEMDataset with real images for embedding tests."""
     from helpers import tiny_synthetic
 
     cryo = tiny_synthetic.make_tiny_cryo_dataset_with_images(grid_size=8, n_images=12, seed=3)
-    cryos = CryoEMHalfsets(cryo, cryo)
+    cryo.halfset_indices = [np.arange(cryo.n_images // 2, dtype=np.int32),
+                            np.arange(cryo.n_images // 2, cryo.n_images, dtype=np.int32)]
+    cryos = cryo
     volume_mask = np.ones(cryo.volume_size, dtype=np.float32)
     mean_np = np.zeros(cryo.volume_size, dtype=np.complex64)
     return cryos, mean_np, volume_mask

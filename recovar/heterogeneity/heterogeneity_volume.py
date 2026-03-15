@@ -46,7 +46,7 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
         latent_point: Target point in latent space, shape ``(zdim,)``.
         results: Pipeline output dictionary (loaded from pickle).
         ndim: Latent dimensionality to use.
-        cryos: Pre-loaded dataset (``CryoEMDataset`` or ``CryoEMHalfsets``);
+        cryos: Pre-loaded dataset (``CryoEMDataset`` or ``CryoEMDataset``);
             loaded from *results* if ``None``.
         n_bins: Number of heterogeneity bins for kernel regression.
         output_folder: Directory for output MRC files.
@@ -54,9 +54,7 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
         metric_used: Volume quality metric for selection.
         n_min_particles: Minimum particles per bin.
     """
-    from recovar.data_io.dataset import unwrap_dataset
-    cryos = dataset.load_dataset_from_args(results['input_args'], lazy = False) if cryos is None else cryos
-    ds = unwrap_dataset(cryos)
+    ds = dataset.load_dataset_from_args(results['input_args'], lazy = False) if cryos is None else cryos
     output_folder = results['input_args'].outdir + "/output/" if output_folder is None else output_folder
     logger.info("Dumping to %s", output_folder)
     output_mod.mkdir_safe(output_folder)
@@ -87,7 +85,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         heterogeneity_distances: Per-half-set log-likelihood distances,
             list of two arrays each of shape ``(n_images,)``.
         cryos: Half-set datasets (``CryoEMDataset`` with ``halfset_indices``,
-            or ``CryoEMHalfsets`` for backward compat).
+            or ``CryoEMDataset`` for backward compat).
         output_folder: Directory for output MRC files.
         ndim: Latent dimensionality (``-1`` for automatic).
         bins: Number of bins (int) or explicit bin edges (array).
@@ -105,8 +103,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         save_all_estimates: Save all intermediate estimates.
         heterogeneity_kernel: Kernel shape (``'parabola'`` or ``'flat'``).
     """
-    from recovar.data_io.dataset import unwrap_dataset
-    ds = unwrap_dataset(cryos)
+    ds = cryos
 
     if isinstance(bins, int):
         logger.warning("Picking bins based on number of particles only. n_min_particles = %s", n_min_particles) 

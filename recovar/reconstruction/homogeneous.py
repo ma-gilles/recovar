@@ -63,7 +63,7 @@ def get_mean_conformation_relion(
 
     Parameters
     ----------
-    dataset : CryoEMDataset (with ``halfset_indices`` set) or CryoEMHalfsets
+    dataset : CryoEMDataset (with ``halfset_indices`` set)
     batch_size : int
     noise_variance : array, optional
     use_regularization : bool
@@ -80,10 +80,6 @@ def get_mean_conformation_relion(
     fsc : ndarray
     """
     from recovar.reconstruction import relion_functions
-
-    # Support both new (single dataset) and legacy (CryoEMHalfsets) API
-    from recovar.data_io.dataset import unwrap_dataset
-    dataset = unwrap_dataset(dataset)
 
     st_time = time.time()
 

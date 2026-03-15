@@ -10,7 +10,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 from recovar.core.configs import ForwardModelConfig, BatchData
 from recovar.core.ctf import as_ctf_evaluator
-from recovar.data_io.dataset import CryoEMHalfsets
+
 from helpers.tiny_synthetic import make_tiny_cryo_dataset, make_tiny_cryo_dataset_with_images
 
 pytestmark = pytest.mark.unit
@@ -78,7 +78,7 @@ def test_set_covariance_options_updates_only_present_keys():
 def test_compute_regularized_covariance_columns_in_batch_concatenates(monkeypatch):
     mock_cryo = type("Cryo", (), {"grid_size": 4,
                                    "halfset_indices": [np.arange(5), np.arange(5, 10)]})()
-    cryos = CryoEMHalfsets(mock_cryo, mock_cryo, dataset=mock_cryo)
+    cryos = mock_cryo
     picked_frequencies = np.arange(10)
 
     monkeypatch.setattr(cov_est.utils, "get_column_batch_size", lambda *_: 4)
@@ -164,7 +164,7 @@ def test_compute_regularized_covariance_columns_with_real_tiny_dataset(monkeypat
     options = {"reg_fn": "new"}
     picked_frequencies = np.array([0, 1, 2], dtype=np.int32)
     covariance_cols, picked_out, fscs = cov_est.compute_regularized_covariance_columns(
-        dataset=CryoEMHalfsets(cryo, cryo),
+        dataset=cryo,
         means={},
         mean_prior=np.ones(cryo.volume_size, dtype=np.float32),
         volume_mask=np.ones(cryo.volume_size, dtype=np.float32),

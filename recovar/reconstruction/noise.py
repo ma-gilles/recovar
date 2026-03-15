@@ -572,15 +572,11 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
     return optimized_noise_variance, initial_noise_variance
     
 
-def update_noise_variance(noise_variance, dataset_or_cryos):
-    from recovar.data_io.dataset import unwrap_dataset
-    dataset = unwrap_dataset(dataset_or_cryos)
+def update_noise_variance(noise_variance, dataset):
     dataset.set_noise(noise_variance)
 
 
-def upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, dataset_or_cryos, means, batch_size, dilated_volume_mask):
-    from recovar.data_io.dataset import unwrap_dataset
-    dataset = unwrap_dataset(dataset_or_cryos)
+def upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, dataset, means, batch_size, dilated_volume_mask):
 
     if isinstance(dataset.noise, VariableRadialNoiseModel):
         # Get max tilt index
@@ -599,9 +595,6 @@ def upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, dataset_or_cr
 
 @nvtx.annotate("upper_bound_noise_by_signal_p_noise", color="green", domain=NVTX_DOMAIN_NOISE)
 def upper_bound_noise_by_signal_p_noise(noise_var_used, dataset, means, batch_size, dilated_volume_mask, noise_ind_subset = None):
-        from recovar.data_io.dataset import unwrap_dataset
-        dataset = unwrap_dataset(dataset)
-
         # Now, estimate the variance of the signal. If the variance estimate ends up negative, we have overestimated the noise variance.
         for noise_repeat in range(2):
             # Compute variance estimate (tilt series uses same path currently)

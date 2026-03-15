@@ -671,8 +671,7 @@ def standard_recovar_pipeline(args):
     ## TODO this is a big one, so do with care. I wonder if there is a better way to handle this logic.
     ## Could we instead store 'one' dataset and the indices instead of two different objects, then do a clevery use of iterators
     ## The current way to just have two of these objects around which is not great.
-    cryos = dataset.get_split_datasets(**dataset_loader_dict, ind_split=ind_split, lazy=args.lazy)
-    ds = cryos.dataset  # single dataset with halfset_indices
+    ds = dataset.get_split_datasets(**dataset_loader_dict, ind_split=ind_split, lazy=args.lazy)
 
     ## TODO: log this. Also document it better. Also I'd like a warning or something if I say "allocate this much" and peak gpu memory ends up being more than that
     ## So that it can be fixed in the future
@@ -982,7 +981,7 @@ def standard_recovar_pipeline(args):
 
     # --- Build result dict and save ---
     if args.tilt_series:
-        particles_ind_split = [cryos[i].dataset_tilt_indices for i in range(2)]
+        particles_ind_split = [ds.dataset_tilt_indices[ds.halfset_indices[i]] for i in range(2)]
     else:
         particles_ind_split = ind_split
 
