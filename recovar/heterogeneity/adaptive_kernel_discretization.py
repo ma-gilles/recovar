@@ -653,7 +653,7 @@ def estimate_from_relion_style(cryos, discretization_params, XWXs, Fs, volume_sh
     if pol_degree != 0:
         raise NotImplementedError("Only p = 0 supported for now")
 
-    volume_size = np.prod(cryos.volume_shape)
+    volume_size = np.prod(volume_shape)
     from recovar.reconstruction import relion_functions
 
     # Polynomial estimates

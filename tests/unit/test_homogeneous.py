@@ -10,17 +10,21 @@ from recovar.reconstruction import relion_functions
 pytestmark = pytest.mark.unit
 
 
-class _FakeCryo:
-    def __init__(self, tag):
-        self.tag = tag
+class _FakeDataset:
+    def __init__(self):
         self.volume_shape = (4,)
+        self.halfset_indices = [
+            np.array([0, 1], dtype=np.int32),
+            np.array([2, 3], dtype=np.int32),
+        ]
 
 
 def test_get_mean_conformation_relion_flow_and_restore(monkeypatch):
-    def fake_triangular_kernel(cryo, noise_variance, batch_size, **kwargs):
+    def fake_triangular_kernel(dataset, noise_variance, batch_size, index_subset=None, **kwargs):
+        tag = 0 if np.array_equal(index_subset, np.array([0, 1])) else 1
         return (
-            np.ones(4, dtype=np.float32) * (1 + cryo.tag),
-            np.ones(4, dtype=np.float32) * (10 + cryo.tag),
+            np.ones(4, dtype=np.float32) * (1 + tag),
+            np.ones(4, dtype=np.float32) * (10 + tag),
         )
 
     def fake_post_process_from_filter_v2(ft_ctf, ft_y, volume_shape, upsampling_factor, tau=None, **kwargs):
@@ -32,12 +36,12 @@ def test_get_mean_conformation_relion_flow_and_restore(monkeypatch):
     monkeypatch.setattr(
         regularization,
         "compute_relion_prior",
-        lambda cryos, noise, m0, m1, batch: (np.ones(4, dtype=np.float32) * 2.0, np.array([0.9]), np.array([0.0])),
+        lambda dataset, noise, m0, m1, batch: (np.ones(4, dtype=np.float32) * 2.0, np.array([0.9]), np.array([0.0])),
     )
 
-    cryos = [_FakeCryo(0), _FakeCryo(1)]
+    ds = _FakeDataset()
     means, mean_prior, fsc = homogeneous.get_mean_conformation_relion(
-        dataset=cryos,
+        dataset=ds,
         batch_size=2,
         noise_variance=np.ones(4, dtype=np.float32),
         use_regularization=False,
@@ -60,7 +64,7 @@ def test_get_mean_conformation_relion_use_regularization_switch(monkeypatch):
     monkeypatch.setattr(
         relion_functions,
         "relion_style_triangular_kernel",
-        lambda cryo, *_args, **_kwargs: (np.ones(2, dtype=np.float32), np.ones(2, dtype=np.float32)),
+        lambda dataset, *_args, **_kwargs: (np.ones(2, dtype=np.float32), np.ones(2, dtype=np.float32)),
     )
 
     def fake_pp_v2(ft_ctf, ft_y, volume_shape, upsampling_factor, tau=None, **kwargs):
@@ -75,15 +79,17 @@ def test_get_mean_conformation_relion_use_regularization_switch(monkeypatch):
         lambda *_args, **_kwargs: (np.ones(2, dtype=np.float32), np.array([0.8]), np.array([0.0])),
     )
 
-    cryos = [_FakeCryo(0), _FakeCryo(1)]
+    ds = _FakeDataset()
+    ds.volume_shape = (2,)
+    ds.halfset_indices = [np.array([0], dtype=np.int32), np.array([1], dtype=np.int32)]
 
     means_unreg, *_ = homogeneous.get_mean_conformation_relion(
-        dataset=cryos, batch_size=1,
+        dataset=ds, batch_size=1,
         noise_variance=np.ones(2, dtype=np.float32),
         use_regularization=False,
     )
     means_reg, *_ = homogeneous.get_mean_conformation_relion(
-        dataset=cryos, batch_size=1,
+        dataset=ds, batch_size=1,
         noise_variance=np.ones(2, dtype=np.float32),
         use_regularization=True,
     )

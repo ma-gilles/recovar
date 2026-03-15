@@ -1341,24 +1341,25 @@ def test_simulator_tiny_tilt_load_dataset_from_args_preserves_halfset_image_iden
     )
 
     cryos = dataset.load_dataset_from_args(args, lazy=True)
-    assert len(cryos) == 2
+    assert len(cryos.halfset_indices) == 2
 
-    half0 = np.asarray(cryos[0].dataset_indices, dtype=np.int32)
-    half1 = np.asarray(cryos[1].dataset_indices, dtype=np.int32)
+    half0 = np.asarray(cryos.halfset_indices[0], dtype=np.int32)
+    half1 = np.asarray(cryos.halfset_indices[1], dtype=np.int32)
     assert np.intersect1d(half0, half1).size == 0
     all_selected = np.sort(np.concatenate([half0, half1]))
-    np.testing.assert_array_equal(all_selected, np.arange(files["n_images"], dtype=np.int32))
+    np.testing.assert_array_equal(all_selected, np.arange(cryos.n_images, dtype=np.int32))
 
     original_images = utils.load_mrc(files["particles_mrcs"])
-    for cryo in cryos:
-        local = np.arange(cryo.n_images, dtype=np.int32)
-        batches = list(cryo.get_image_subset_generator(batch_size=3, subset_indices=local))
+    dataset_indices = np.asarray(cryos.dataset_indices, dtype=np.int32)
+    for half_idx in cryos.halfset_indices:
+        half_dataset_indices = dataset_indices[half_idx]
+        batches = list(cryos.get_image_subset_generator(batch_size=3, subset_indices=half_idx))
         got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
         got_local = np.concatenate([np.array(b[2]).reshape(-1) for b in batches], axis=0)
-        np.testing.assert_array_equal(got_local, local)
+        np.testing.assert_array_equal(got_local, half_idx)
         np.testing.assert_allclose(
             got_images,
-            original_images[np.asarray(cryo.dataset_indices, dtype=np.int32)],
+            original_images[half_dataset_indices],
             atol=1e-6,
         )
 
@@ -1381,12 +1382,13 @@ def test_simulator_tiny_tilt_get_split_datasets_preserves_half_order_and_duplica
         tilt_series_ctf="relion5",
     )
 
-    assert len(cryos) == 2
+    assert len(cryos.halfset_indices) == 2
     original_images = utils.load_mrc(files["particles_mrcs"])
-    for half, cryo in zip(ind_split, cryos):
-        np.testing.assert_array_equal(np.asarray(cryo.dataset_indices), half)
-        local = np.arange(len(half), dtype=np.int32)
-        batches = list(cryo.get_image_subset_generator(batch_size=2, subset_indices=local))
+    dataset_indices = np.asarray(cryos.dataset_indices, dtype=np.int32)
+    for half, half_idx in zip(ind_split, cryos.halfset_indices):
+        half_dataset_indices = dataset_indices[half_idx]
+        np.testing.assert_array_equal(half_dataset_indices, half)
+        batches = list(cryos.get_image_subset_generator(batch_size=2, subset_indices=half_idx))
         got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
         np.testing.assert_allclose(got_images, original_images[half], atol=1e-6)
 
@@ -1437,10 +1439,11 @@ def test_simulator_tiny_tilt_get_split_datasets_matches_direct_api(sim_tiny_tilt
     by_wrapper = dataset.get_split_datasets(**loader_dict, ind_split=ind_split, lazy=True)
     direct = dataset.get_split_datasets(ind_split=ind_split, lazy=True, **loader_dict)
 
-    assert len(by_wrapper) == len(direct) == 2
-    for c0, c1 in zip(by_wrapper, direct):
-        np.testing.assert_array_equal(np.asarray(c0.dataset_indices), np.asarray(c1.dataset_indices))
-        assert c0.n_images == c1.n_images
+    assert len(by_wrapper.halfset_indices) == len(direct.halfset_indices) == 2
+    np.testing.assert_array_equal(np.asarray(by_wrapper.dataset_indices), np.asarray(direct.dataset_indices))
+    assert by_wrapper.n_images == direct.n_images
+    for h0, h1 in zip(by_wrapper.halfset_indices, direct.halfset_indices):
+        np.testing.assert_array_equal(h0, h1)
 
 
 def test_simulator_tiny_tilt_load_dataset_from_args_with_explicit_split_skips_halfset_builder(
@@ -1479,12 +1482,13 @@ def test_simulator_tiny_tilt_load_dataset_from_args_with_explicit_split_skips_ha
     )
 
     cryos = dataset.load_dataset_from_args(args, lazy=True, ind_split=ind_split)
-    assert len(cryos) == 2
+    assert len(cryos.halfset_indices) == 2
     original_images = utils.load_mrc(files["particles_mrcs"])
-    for half, cryo in zip(ind_split, cryos):
-        np.testing.assert_array_equal(np.asarray(cryo.dataset_indices), half)
-        local = np.arange(len(half), dtype=np.int32)
-        batches = list(cryo.get_image_subset_generator(batch_size=2, subset_indices=local))
+    dataset_indices = np.asarray(cryos.dataset_indices, dtype=np.int32)
+    for half, half_idx in zip(ind_split, cryos.halfset_indices):
+        half_dataset_indices = dataset_indices[half_idx]
+        np.testing.assert_array_equal(half_dataset_indices, half)
+        batches = list(cryos.get_image_subset_generator(batch_size=2, subset_indices=half_idx))
         got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
         np.testing.assert_allclose(got_images, original_images[half], atol=1e-6)
 
@@ -1671,18 +1675,20 @@ def test_tiny_tilt_get_split_datasets_preserves_pose_and_ctf_alignment(tmp_path)
         tilt_series_ctf="relion5",
     )
 
-    assert len(cryos) == 2
-    for half, cryo in zip(ind_split, cryos):
-        np.testing.assert_array_equal(np.asarray(cryo.dataset_indices, dtype=np.int32), half)
-        np.testing.assert_allclose(np.asarray(cryo.rotation_matrices), rots[half], atol=1e-7)
-        np.testing.assert_allclose(np.asarray(cryo.translations), trans_frac[half] * files["grid_size"], atol=1e-7)
+    assert len(cryos.halfset_indices) == 2
+    dataset_indices = np.asarray(cryos.dataset_indices, dtype=np.int32)
+    for half, half_idx in zip(ind_split, cryos.halfset_indices):
+        half_dataset_indices = dataset_indices[half_idx]
+        np.testing.assert_array_equal(half_dataset_indices, half)
+        np.testing.assert_allclose(np.asarray(cryos.rotation_matrices)[half_idx], rots[half], atol=1e-7)
+        np.testing.assert_allclose(np.asarray(cryos.translations)[half_idx], trans_frac[half] * files["grid_size"], atol=1e-7)
         np.testing.assert_allclose(
-            np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.DFU],
+            np.asarray(cryos.CTF_params)[half_idx, core.CTFParamIndex.DFU],
             ctf[half, 2],
             atol=1e-7,
         )
         np.testing.assert_allclose(
-            np.asarray(cryo.CTF_params)[:, core.CTFParamIndex.DFV],
+            np.asarray(cryos.CTF_params)[half_idx, core.CTFParamIndex.DFV],
             ctf[half, 3],
             atol=1e-7,
         )

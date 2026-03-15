@@ -108,7 +108,7 @@ def _install_main_runtime_stubs(monkeypatch, tmp_path, *, mean_fsc=0.5, variance
             }
             self._u_real = np.ones((20, 2, 2, 2), dtype=np.float32)
             self._s = np.linspace(1.0, 2.0, 20, dtype=np.float32)
-            self._cryos = [SimpleNamespace(volume_shape=(2, 2, 2), voxel_size=1.0)]
+            self._cryos = SimpleNamespace(volume_shape=(2, 2, 2), voxel_size=1.0)
 
         def get_embedding_component(self, entry, key):
             return self._embedding[entry][key]

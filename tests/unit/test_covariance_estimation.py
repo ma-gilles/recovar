@@ -181,15 +181,13 @@ def test_compute_regularized_covariance_columns_with_real_tiny_dataset(monkeypat
 
 
 def test_compute_both_h_b_selects_combined_or_corrected_mean(monkeypatch):
-    cryos = [make_tiny_cryo_dataset(grid_size=4, n_images=4, seed=0), make_tiny_cryo_dataset(grid_size=4, n_images=4, seed=1)]
-    from recovar.reconstruction.homogeneous import MeanEstimate
-    z = np.zeros(1, dtype=np.float32)
-    means = MeanEstimate(
-        combined=np.array([11], dtype=np.float32),
-        corrected0=np.array([21], dtype=np.float32),
-        corrected1=np.array([31], dtype=np.float32),
-        corrected0reg=z, corrected1reg=z, lhs=z, prior=z,
-    )
+    ds = make_tiny_cryo_dataset(grid_size=4, n_images=8, seed=0)
+    ds.halfset_indices = [np.arange(4, dtype=np.int32), np.arange(4, 8, dtype=np.int32)]
+    means = {
+        "combined": np.array([11], dtype=np.float32),
+        "corrected0": np.array([21], dtype=np.float32),
+        "corrected1": np.array([31], dtype=np.float32),
+    }
 
     chosen_means = []
 
@@ -200,13 +198,13 @@ def test_compute_both_h_b_selects_combined_or_corrected_mean(monkeypatch):
     monkeypatch.setattr(cov_est, "compute_H_B_for_halfset", _fake_compute_h_b_for_halfset)
 
     options = {"use_combined_mean": True}
-    Hs, Bs = cov_est.compute_both_H_B(cryos, means, None, np.array([0, 1]), 8, options)
+    Hs, Bs = cov_est.compute_both_H_B(ds, means, None, np.array([0, 1]), 8, options)
     assert len(Hs) == 2 and len(Bs) == 2
     assert chosen_means == [11.0, 11.0]
 
     chosen_means.clear()
     options = {"use_combined_mean": False}
-    cov_est.compute_both_H_B(cryos, means, None, np.array([0, 1]), 8, options)
+    cov_est.compute_both_H_B(ds, means, None, np.array([0, 1]), 8, options)
     assert chosen_means == [21.0, 31.0]
 
 

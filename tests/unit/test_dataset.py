@@ -85,21 +85,6 @@ def test_reorder_to_original_indexing_from_halfsets():
     assert out[4] == pytest.approx(3.3)
 
 
-def test_reorder_to_original_indexing_with_fake_cryos():
-    arr = np.array([10, 20, 30])
-    cryos = [
-        SimpleNamespace(dataset_indices=np.array([2, 0]), dataset_tilt_indices=np.array([7, 5])),
-        SimpleNamespace(dataset_indices=np.array([4]), dataset_tilt_indices=np.array([9])),
-    ]
-    out = dataset.reorder_to_original_indexing(arr, cryos, use_tilt_indices=False)
-    assert out.shape == (5,)
-    assert out[0] == 20 and out[2] == 10 and out[4] == 30
-
-    out_tilt = dataset.reorder_to_original_indexing(arr, cryos, use_tilt_indices=True)
-    assert out_tilt.shape == (10,)
-    assert out_tilt[5] == 20 and out_tilt[7] == 10 and out_tilt[9] == 30
-
-
 def test_reorder_to_original_indexing_from_halfsets_rejects_duplicate_indices():
     arr = np.array([1.0, 2.0], dtype=np.float32)
     halfsets = [np.array([0], dtype=np.int32), np.array([0], dtype=np.int32)]

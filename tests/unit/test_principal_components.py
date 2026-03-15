@@ -136,7 +136,7 @@ def test_get_cov_svds_delegates_to_randomized_svd(monkeypatch):
 
 
 def test_pca_by_projected_covariance_sorts_and_clamps_eigs(monkeypatch):
-    cryos = [type("Cryo", (), {"image_size": 16})()]
+    cryos = type("Cryo", (), {"image_size": 16})()
     basis = np.eye(3, dtype=np.float32)
     mean = np.zeros(3, dtype=np.complex64)
     volume_mask = np.ones(3, dtype=np.float32)
@@ -377,7 +377,7 @@ def test_pca_by_projected_covariance_real_tiny_dataset_runs():
     basis = np.eye(cryo.volume_size, 4, dtype=np.complex64)
 
     u, s = pc.pca_by_projected_covariance(
-        dataset=[cryo],
+        dataset=cryo,
         basis=basis,
         mean=np.zeros(cryo.volume_size, dtype=np.complex64),
         volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
