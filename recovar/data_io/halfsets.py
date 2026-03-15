@@ -341,7 +341,13 @@ def get_split_datasets(particles_file, poses_file=None, ctf_file=None, datadir=N
                        angle_per_tilt=3, dose_per_tilt=2.9,
                        ind_split=None, lazy=False, premultiplied_ctf=False,
                        strip_prefix=None, downsample_D=None):
-    """Load a dataset and split it into two CryoEMHalfsets."""
+    """Load a dataset and split it into two CryoEMHalfsets.
+
+    Loads ONE full dataset and stores ``halfset_indices`` on it so that
+    the new ``dataset.iterate(half, ...)`` API can be used.  Also creates
+    two subset views for backward-compatible ``cryos[0]`` / ``cryos[1]``
+    access.
+    """
     from recovar.data_io.dataset import load_dataset, CryoEMHalfsets
 
     all_indices = np.unique(np.concatenate(ind_split))
@@ -359,9 +365,14 @@ def get_split_datasets(particles_file, poses_file=None, ctf_file=None, datadir=N
     orig_to_local[all_indices] = np.arange(len(all_indices), dtype=np.int32)
 
     local_split = [orig_to_local[s] for s in ind_split]
+
+    # Store halfset indices on the full dataset for the new iterate() API
+    full.halfset_indices = [np.asarray(s, dtype=np.int32) for s in local_split]
+
+    # Create subset views for backward-compatible half-by-half access
     half1 = full.subset(local_split[0])
     half2 = full.subset(local_split[1])
-    return CryoEMHalfsets(half1, half2)
+    return CryoEMHalfsets(half1, half2, dataset=full)
 
 
 def make_dataset_loader_dict(args):

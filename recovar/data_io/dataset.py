@@ -106,6 +106,8 @@ class CryoEMDataset:
         'rotation_matrices', 'translations', 'CTF_params',
         # Mutable state
         'dataset_indices', 'noise',
+        # Half-set views (index arrays into this dataset's ordering)
+        'halfset_indices',
         # Subset view (index into original image_stack)
         '_subset_indices',
     )
@@ -177,6 +179,7 @@ class CryoEMDataset:
         # --- Mutable state ---
         self.dataset_indices = dataset_indices
         self.noise = None
+        self.halfset_indices = None
         self._subset_indices = None
 
     def __repr__(self) -> str:
@@ -480,6 +483,65 @@ class CryoEMDataset:
             noise_variance_radials = np.tile(noise_variance_radials, (n_doses, 1))
         self.noise = noise.VariableRadialNoiseModel(noise_variance_radials, dose_indices, image_shape = self.image_shape)
 
+    # --- Half-set iteration (new v4 API) ---
+
+    def n_images_half(self, half: int) -> int:
+        """Number of images in a given halfset."""
+        if self.halfset_indices is None:
+            raise ValueError("halfset_indices not set on this dataset")
+        return len(self.halfset_indices[half])
+
+    def iterate(self, half: int, batch_size: int, **kw):
+        """Iterate over one halfset, yielding complete BatchData.
+
+        Parameters
+        ----------
+        half : int
+            Which halfset (0 or 1).
+        batch_size : int
+        **kw : dict
+            Additional keyword arguments passed to
+            :class:`~recovar.core.configs.DataIterator` (e.g.
+            ``noise_model``, ``noise_half``, ``apply_process_images``).
+        """
+        from recovar.core.configs import DataIterator
+        if self.halfset_indices is None:
+            raise ValueError("halfset_indices not set on this dataset")
+        return DataIterator(self, batch_size,
+                            index_subset=self.halfset_indices[half], **kw)
+
+    def iterate_all(self, batch_size: int, **kw):
+        """Iterate over all images, yielding complete BatchData."""
+        from recovar.core.configs import DataIterator
+        return DataIterator(self, batch_size, **kw)
+
+    def set_contrasts(self, contrasts: NDArray):
+        """Multiply per-image CTF contrast column by *contrasts*.
+
+        *contrasts* must be in this dataset's ordering (original ordering
+        for a full dataset, or local ordering for a subset).
+        For tilt-series with per-particle contrasts (len < n_images),
+        each particle's tilt images share a single contrast value.
+        """
+        if self.tilt_series_flag and contrasts.shape[0] != self.n_images:
+            # Per-particle contrast in tilt series
+            for i, p in enumerate(self.tilt_particles):
+                self.CTF_params[p, core.CTFParamIndex.CONTRAST] *= contrasts[i]
+        else:
+            self.CTF_params[:, core.CTFParamIndex.CONTRAST] *= contrasts
+
+    def set_noise(self, noise_variance):
+        """Set the radial noise model for this dataset.
+
+        If the dataset already has a ``VariableRadialNoiseModel``, updates
+        it; otherwise sets a ``RadialNoiseModel``.
+        """
+        from recovar.reconstruction import noise as noise_mod
+        if self.noise is not None and isinstance(self.noise, noise_mod.VariableRadialNoiseModel):
+            self.set_variable_radial_noise_model(noise_variance)
+        else:
+            self.set_radial_noise_model(noise_variance)
+
 
 class CryoEMHalfsets:
     """Container for two half-set CryoEMDataset instances.
@@ -508,10 +570,21 @@ class CryoEMHalfsets:
         cryos.n_total_images
     """
 
-    __slots__ = ('_halves',)
+    __slots__ = ('_halves', '_dataset',)
 
-    def __init__(self, half1: CryoEMDataset, half2: CryoEMDataset) -> None:
+    def __init__(self, half1: CryoEMDataset, half2: CryoEMDataset,
+                 dataset: Optional[CryoEMDataset] = None) -> None:
         self._halves = (half1, half2)
+        self._dataset = dataset
+
+    @property
+    def dataset(self) -> Optional[CryoEMDataset]:
+        """The underlying full dataset (with ``halfset_indices`` set).
+
+        Returns *None* when the halfsets were constructed without a
+        backing full dataset (legacy path).
+        """
+        return self._dataset
 
     # --- Backward-compatible container interface ---
 
