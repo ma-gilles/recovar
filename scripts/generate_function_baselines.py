@@ -144,15 +144,29 @@ def main():
     logger.info("mean_fsc: %s", mean_fsc_score)
 
     # ========================================================================
-    # Step 2: masking
+    # Step 2: masking — use GT union mask instead of from_halfmaps
     # ========================================================================
-    logger.info("=== Step 2: masking ===")
-    volume_mask, dilated_volume_mask = mask.masking_options(
-        "from_halfmaps", means, volume_shape, np.float32
-    )
+    logger.info("=== Step 2: GT union masking ===")
+    from scipy.ndimage import binary_dilation
+
+    # Build union mask from all GT real-space volumes
+    from recovar import fourier_transform_utils as ftu
+    dilation_iters = int(np.ceil(6 * volume_shape[0] / 128))
+    union_binary = np.zeros(volume_shape, dtype=bool)
+    for i in range(gt_vols.shape[0]):
+        vol_real = ftu.get_idft3(gt_vols[i].reshape(volume_shape)).real
+        per_mask = mask.make_mask_from_gt(vol_real, smax=3, iter=1, from_ft=False)
+        union_binary |= (per_mask > 0.5)
+    dilated_binary = binary_dilation(union_binary, iterations=dilation_iters)
+    from recovar.mask import soften_volume_mask
+    volume_mask = soften_volume_mask(dilated_binary, kern_rad=3).astype(np.float32)
+    dilated_volume_mask = volume_mask  # same mask for both
+
     np.save(os.path.join(intermediates_dir, "volume_mask.npy"), volume_mask)
     np.save(os.path.join(intermediates_dir, "dilated_volume_mask.npy"), dilated_volume_mask)
-    logger.info("Mask: %d/%d voxels masked", int(volume_mask.sum()), len(volume_mask))
+    logger.info("GT union mask: %d/%d voxels (%.1f%%)",
+                int(np.sum(volume_mask > 0.5)), volume_mask.size,
+                100 * np.sum(volume_mask > 0.5) / volume_mask.size)
 
     # ========================================================================
     # Step 3: estimate_noise
