@@ -276,10 +276,10 @@ def test_evaluate_ctf_on_gpu(gpu_device):
 def test_batch_evaluate_ctf_on_gpu(gpu_device):
     ctf_params = _make_standard_ctf_params(4)[:, :9]
     psi = np.array([[0.0, 0.0], [0.1, -0.2], [0.05, 0.15]], dtype=np.float32)
-    cpu_out = np.asarray(core_ctf.batch_evaluate_ctf(psi, ctf_params))
+    cpu_out = np.asarray(core_ctf.evaluate_ctf(psi, ctf_params))
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
-            core_ctf.batch_evaluate_ctf(jax.device_put(psi), jax.device_put(ctf_params))
+            core_ctf.evaluate_ctf(jax.device_put(psi), jax.device_put(ctf_params))
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
 

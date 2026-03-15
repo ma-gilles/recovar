@@ -190,10 +190,6 @@ def evaluate_ctf(freqs, ctf_params):
     return ctf * contrast
 
 
-# Backward-compatible aliases
-batch_evaluate_ctf = evaluate_ctf
-evaluate_ctf_packed = lambda freqs, ctf: evaluate_ctf(freqs, ctf[None])[0]
-
 
 # ---------------------------------------------------------------------------
 # Dose-filter helpers
@@ -315,8 +311,6 @@ __all__ = [
     "CTFParamIndex",
     # CTF evaluation
     "evaluate_ctf",
-    "batch_evaluate_ctf",       # alias for evaluate_ctf
-    "evaluate_ctf_packed",      # single-image alias
     # Dose filters
     "critical_exposure",
     "get_dose_filters",
