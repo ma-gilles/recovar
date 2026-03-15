@@ -845,13 +845,32 @@ def main():
     else:
         logger.info("No dose indices found in simulation info - skipping dose distribution analysis")
 
+    # Build GT union mask from generated volumes and use it as the pipeline mask.
+    # This ensures the pipeline operates with a known-good mask derived from GT,
+    # removing mask estimation as a source of variability in regression tests.
+    # The mask is deterministic: same GT volumes → same mask every time.
+    gt_mask_dir = os.path.join(dataset_dir, 'gt_masks')
+    os.makedirs(gt_mask_dir, exist_ok=True)
+    gt_mask_mrc_path = os.path.join(gt_mask_dir, 'gt_union_mask.mrc')
+
+    gt_for_mask = synthetic_dataset.load_heterogeneous_reconstruction(sim_info_path)
+    volume_shape_for_mask = (grid_size, grid_size, grid_size)
+    gt_union_soft_mask, gt_union_binary_mask = metrics.make_union_gt_mask_from_hvd(
+        gt_for_mask, volume_shape_for_mask
+    )
+    utils.write_mrc(gt_mask_mrc_path, gt_union_soft_mask,
+                    voxel_size=4.25 * 128 / grid_size)
+    logger.info("GT union mask written to %s (%.1f%% voxels)",
+                gt_mask_mrc_path,
+                100 * gt_union_binary_mask.sum() / gt_union_binary_mask.size)
+
     # Run pipeline plugin
     cmd = [
         f"{dataset_dir}/particles.{grid_size}.mrcs" if args.tomo_tilts < 0 else f"{dataset_dir}/particles.star",
         "--poses", f"{dataset_dir}/poses.pkl",
         "--ctf", f"{dataset_dir}/ctf.pkl",
         "-o", f"{dataset_dir}/pipeline_output",
-        "--mask", "from_halfmaps",
+        "--mask", gt_mask_mrc_path,
     ]
     if args.noise_model == 'radial_per_tilt':
         cmd.append("--noise-model")
@@ -934,19 +953,9 @@ def main():
     gt_thing = synthetic_dataset.load_heterogeneous_reconstruction(sim_info_path)
     gt_mean = gt_thing.get_mean()
 
-    # Build a single union mask from all GT volumes for consistent error metrics
+    # Reuse the GT union mask computed before the pipeline run.
+    # gt_union_soft_mask and gt_union_binary_mask are already in scope.
     volume_shape = cryos[0].volume_shape
-    gt_union_soft_mask, gt_union_binary_mask = metrics.make_union_gt_mask_from_hvd(
-        gt_thing, volume_shape
-    )
-    diag_dir = os.path.join(output_state_dir, 'diagnostics')
-    os.makedirs(diag_dir, exist_ok=True)
-    utils.write_mrc(
-        os.path.join(diag_dir, 'gt_union_mask.mrc'),
-        gt_union_soft_mask,
-        voxel_size=cryos[0].voxel_size,
-    )
-    logger.info("GT union mask saved to %s/gt_union_mask.mrc", diag_dir)
 
     # FSC for mean maps
     fsc_filepath = os.path.join(plots_dir, 'fsc_mean.png')
