@@ -491,6 +491,11 @@ class CryoEMDataset:
             raise ValueError("halfset_indices not set on this dataset")
         return len(self.halfset_indices[half])
 
+    def split_halfset_array(self, arr):
+        """Split a concatenated halfset-ordered array into [half0, half1]."""
+        n0 = self.n_images_half(0)
+        return [arr[:n0], arr[n0:]]
+
     def iterate(self, half: int, batch_size: int, **kw):
         """Iterate over one halfset, yielding complete BatchData.
 
@@ -1004,6 +1009,95 @@ from recovar.data_io.halfsets import (  # noqa: E402
     make_dataset_loader_dict,
     load_dataset_from_args,
 )
+
+
+def unwrap_dataset(dataset_or_cryos):
+    """Accept either a CryoEMDataset (with halfset_indices) or CryoEMHalfsets.
+
+    Returns a single CryoEMDataset with ``halfset_indices`` set.
+    This is the canonical way to get the full dataset for the new
+    ``dataset.iterate(half, ...)`` API from either old or new callers.
+    """
+    if isinstance(dataset_or_cryos, CryoEMHalfsets):
+        ds = dataset_or_cryos.dataset
+        if ds is not None:
+            return ds
+        # Legacy path: CryoEMHalfsets created without a backing dataset.
+        # Construct a single dataset from the two halves.
+        half0, half1 = dataset_or_cryos[0], dataset_or_cryos[1]
+        if half0 is half1 and isinstance(half0, CryoEMDataset):
+            # Same real CryoEMDataset for both halves — set halfset_indices.
+            if half0.halfset_indices is None:
+                idx = np.arange(half0.n_images)
+                half0.halfset_indices = [idx, idx]
+            return half0
+        # Wrap two halves with a minimal adapter (works for real CryoEMDataset
+        # and duck-typed/mock objects alike).
+        return _HalfsetAdapter(half0, half1)
+    if isinstance(dataset_or_cryos, CryoEMDataset):
+        if dataset_or_cryos.halfset_indices is None:
+            raise ValueError(
+                "CryoEMDataset does not have halfset_indices set. "
+                "Use get_split_datasets() or set halfset_indices manually."
+            )
+        return dataset_or_cryos
+    # Legacy list-of-datasets pattern: [half0, half1]
+    if isinstance(dataset_or_cryos, (list, tuple)):
+        if len(dataset_or_cryos) == 1:
+            ds = dataset_or_cryos[0]
+            if getattr(ds, 'halfset_indices', None) is None:
+                n = getattr(ds, 'n_images', 0)
+                idx = np.arange(n)
+                ds.halfset_indices = [idx, idx]
+            return ds
+        if len(dataset_or_cryos) == 2:
+            half0, half1 = dataset_or_cryos
+            if half0 is half1:
+                if getattr(half0, 'halfset_indices', None) is None:
+                    idx = np.arange(half0.n_images)
+                    half0.halfset_indices = [idx, idx]
+                return half0
+            return _HalfsetAdapter(half0, half1)
+        raise ValueError(f"Expected list of 1 or 2 datasets, got {len(dataset_or_cryos)}")
+    raise TypeError(
+        f"Expected CryoEMDataset or CryoEMHalfsets, got {type(dataset_or_cryos).__name__}"
+    )
+
+
+class _HalfsetAdapter:
+    """Minimal adapter that wraps two duck-typed half-datasets for legacy compat.
+
+    Delegates all attribute access to ``half0`` (geometry is assumed identical
+    between halves), and provides ``halfset_indices`` and ``subset()`` so that
+    consumer code can iterate over each half independently.
+
+    Uses disjoint index ranges so the two halves are always distinguishable,
+    even when ``n0 == n1``.
+    """
+    def __init__(self, half0, half1):
+        self._halves = (half0, half1)
+        n0 = getattr(half0, 'n_images', 0)
+        n1 = getattr(half1, 'n_images', 0)
+        self.halfset_indices = [np.arange(n0), np.arange(n0, n0 + n1)]
+
+    def __getattr__(self, name):
+        return getattr(self._halves[0], name)
+
+    def n_images_half(self, half):
+        return len(self.halfset_indices[half])
+
+    def subset(self, indices):
+        """Return the half that matches the given indices."""
+        for i, hi in enumerate(self.halfset_indices):
+            if np.array_equal(indices, hi):
+                return self._halves[i]
+        raise ValueError("indices don't match any halfset")
+
+    def split_halfset_array(self, arr):
+        """Split a concatenated halfset-ordered array into [half0, half1]."""
+        n0 = self.n_images_half(0)
+        return [arr[:n0], arr[n0:]]
+
 
 
 

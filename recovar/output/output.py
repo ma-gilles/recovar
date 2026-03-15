@@ -604,6 +604,7 @@ def plot_umap(output_folder, zs, centers):
 ## TODO this hsould move elsewhere
 
 def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state"):
+    # cryos: CryoEMDataset (with halfset_indices) or CryoEMHalfsets (backward compat)
     """Compute reweighted volume estimates and save with RELION-style organization.
 
     Output structure (flat primary volumes + diagnostics subdirectory)::
@@ -625,6 +626,8 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
             latent_coords.txt                 # all latent coordinates
     """
     from recovar.output.output_paths import AnalysisPaths
+    from recovar.data_io.dataset import unwrap_dataset
+    ds = unwrap_dataset(cryos)
 
     if n_min_particles is None:
         n_min_particles = 100
@@ -656,11 +659,11 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
         else:
             raise ValueError("Unknown embed option")
 
-        heterogeneity_distances = cryos.split_units_array(heterogeneity_distances)
+        heterogeneity_distances = ds.split_halfset_array(heterogeneity_distances)
 
-        locres_maskrad = cryos.grid_size * cryos.voxel_size / maskrad_fraction
+        locres_maskrad = ds.grid_size * ds.voxel_size / maskrad_fraction
         logger.info("Mask radius fraction = %s. Setting locres_maskrad = locres_sampling = box_size * voxel_size / %s = %.1f Angstroms. Using %d particles for template.", maskrad_fraction, maskrad_fraction, locres_maskrad, n_min_particles)
-        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, cryos, diag_dir, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely')
+        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, ds, diag_dir, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely')
 
         ## TODO: this is really ugly logic and organization. Just have them pass a folder or something so we dont have to move, 
         ## And come up with better way to organize results for this
@@ -986,11 +989,27 @@ class PipelineOutput:
 
 
 def add_noise_to_loaded_dataset(cryos, noise_variance):
-    for cryo in cryos:
+    from recovar.data_io.dataset import unwrap_dataset, CryoEMHalfsets
+    if isinstance(cryos, CryoEMHalfsets):
+        # Set noise on each half (backward compat callers that iterate halves)
+        for cryo in cryos:
+            if noise_variance.ndim == 1:
+                cryo.set_radial_noise_model(noise_variance)
+            else:
+                cryo.set_variable_radial_noise_model(noise_variance)
+        # Also set on backing dataset so unwrap_dataset() path works
+        ds = cryos.dataset
+        if ds is not None:
+            if noise_variance.ndim == 1:
+                ds.set_radial_noise_model(noise_variance)
+            else:
+                ds.set_variable_radial_noise_model(noise_variance)
+    else:
+        ds = unwrap_dataset(cryos)
         if noise_variance.ndim == 1:
-            cryo.set_radial_noise_model(noise_variance)
+            ds.set_radial_noise_model(noise_variance)
         else:
-            cryo.set_variable_radial_noise_model(noise_variance)
+            ds.set_variable_radial_noise_model(noise_variance)
 
 ## TODO these need to move as well
 def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False,  input_density = None, latent_space_bounds = None):
@@ -1023,7 +1042,7 @@ def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folde
     latent_space_bounds = ld.compute_latent_space_bounds(pipeline_output.get('latent_coords')[basis_size]) if latent_space_bounds is None else latent_space_bounds
 
     if cryos is None:
-        cryos = pipeline_output.get('dataset') if cryos is None else cryos
+        cryos = pipeline_output.get('dataset')
         embedding.set_contrasts_in_cryos(cryos, pipeline_output.get('contrasts')[basis_size])
 
     density = input_density if input_density is not None else pipeline_output.get('density')

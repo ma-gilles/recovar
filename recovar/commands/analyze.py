@@ -147,10 +147,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     cov_zs = np.asarray(cov_zs, dtype=np.float32)
     contrasts = np.asarray(contrasts, dtype=np.float32)
 
-    if lazy:
-        cryos = po.get('lazy_dataset')
-    else:
-        cryos = po.get('dataset')
+    cryos = po.get('lazy_dataset') if lazy else po.get('dataset')
     embedding.set_contrasts_in_cryos(cryos, contrasts)
 
     # Get the mask from pipeline output for FSC filtering
@@ -229,7 +226,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
     if not skip_centers:
         o.compute_and_save_reweighted(
-            cryos, centers, zs, cov_zs, kmeans_dir, B_factor, n_bins,
+            cryos,centers, zs, cov_zs, kmeans_dir, B_factor, n_bins,
             n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
             apply_global_filtering=apply_global_filtering,
             fsc_mask=fsc_mask,
@@ -259,7 +256,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 
             logger.info("trajectory %d done", pair_idx)
             o.compute_and_save_reweighted(
-                cryos, subsampled_path, zs, cov_zs, traj_folder, B_factor, n_bins,
+                cryos,subsampled_path, zs, cov_zs, traj_folder, B_factor, n_bins,
                 n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
                 apply_global_filtering=apply_global_filtering,
                 fsc_mask=fsc_mask,
@@ -278,7 +275,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         z_end = pairs[1]
         subsampled_path = np.linspace(z_st, z_end, n_vols_along_path)[:, None]
         o.compute_and_save_reweighted(
-            cryos, subsampled_path, zs, cov_zs, traj_folder, B_factor, n_bins,
+            cryos,subsampled_path, zs, cov_zs, traj_folder, B_factor, n_bins,
             save_all_estimates=False, n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
             apply_global_filtering=apply_global_filtering,
             fsc_mask=fsc_mask,

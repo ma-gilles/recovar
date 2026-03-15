@@ -154,7 +154,7 @@ def test_pca_by_projected_covariance_sorts_and_clamps_eigs(monkeypatch):
     monkeypatch.setattr(pc.covariance_estimation, "compute_projected_covariance", fake_projected_covariance)
 
     u, s = pc.pca_by_projected_covariance(
-        cryos=cryos,
+        dataset=cryos,
         basis=basis,
         mean=mean,
         volume_mask=volume_mask,
@@ -203,7 +203,7 @@ def test_estimate_principal_components_high_snr_from_var_est_requires_variance()
 
     with pytest.raises(ValueError, match="variance_estimate must be provided"):
         pc.estimate_principal_components(
-            cryos=cryos,
+            dataset=cryos,
             options=options,
             means=means,
             mean_prior=np.zeros(8, dtype=np.complex64),
@@ -275,7 +275,7 @@ def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
     )
 
     u, s, covariance_cols, picked_frequencies, column_fscs = pc.estimate_principal_components(
-        cryos=cryos,
+        dataset=cryos,
         options=options,
         means=means,
         mean_prior=np.zeros(8, dtype=np.complex64),
@@ -354,7 +354,7 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
     )
 
     u, s, covariance_cols, picked_frequencies, column_fscs = pc.estimate_principal_components(
-        cryos=cryos,
+        dataset=cryos,
         options=options,
         means=means,
         mean_prior=np.zeros(cryo.volume_size, dtype=np.complex64),
@@ -380,7 +380,7 @@ def test_pca_by_projected_covariance_real_tiny_dataset_runs():
     basis = np.eye(cryo.volume_size, 4, dtype=np.complex64)
 
     u, s = pc.pca_by_projected_covariance(
-        cryos=[cryo],
+        dataset=[cryo],
         basis=basis,
         mean=np.zeros(cryo.volume_size, dtype=np.complex64),
         volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),

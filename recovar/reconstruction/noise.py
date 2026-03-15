@@ -572,47 +572,49 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
     return optimized_noise_variance, initial_noise_variance
     
 
-def update_noise_variance(noise_variance, cryos):
-    for cryo in cryos:
-        if isinstance(cryo.noise, RadialNoiseModel):
-            cryo.set_radial_noise_model(noise_variance)
-        elif isinstance(cryo.noise, VariableRadialNoiseModel):
-            cryo.set_variable_radial_noise_model(noise_variance)
+def update_noise_variance(noise_variance, dataset_or_cryos):
+    from recovar.data_io.dataset import unwrap_dataset
+    dataset = unwrap_dataset(dataset_or_cryos)
+    dataset.set_noise(noise_variance)
 
 
-def upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, cryos, means, batch_size, dilated_volume_mask):
+def upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, dataset_or_cryos, means, batch_size, dilated_volume_mask):
+    from recovar.data_io.dataset import unwrap_dataset
+    dataset = unwrap_dataset(dataset_or_cryos)
 
-    if isinstance(cryos[0].noise, VariableRadialNoiseModel):
+    if isinstance(dataset.noise, VariableRadialNoiseModel):
         # Get max tilt index
-        experiment_dataset = cryos[0]
-        max_noise_index = int(jnp.max(experiment_dataset.noise.dose_indices)) + 1
+        max_noise_index = int(jnp.max(dataset.noise.dose_indices)) + 1
         ub_noise_var_by_var_ests = []
         # Fit noise model separately for each tilt
         for tilt_idx in range(max_noise_index):
             # noise_var_used may be 2D (per-tilt) or 1D (single radial profile)
             noise_for_tilt = noise_var_used[tilt_idx] if np.ndim(noise_var_used) >= 2 else noise_var_used
-            variance, ub_noise_var_by_var_est = upper_bound_noise_by_signal_p_noise(noise_for_tilt, cryos, means, batch_size, dilated_volume_mask, noise_ind_subset = tilt_idx)
+            variance, ub_noise_var_by_var_est = upper_bound_noise_by_signal_p_noise(noise_for_tilt, dataset, means, batch_size, dilated_volume_mask, noise_ind_subset = tilt_idx)
             ub_noise_var_by_var_ests.append(ub_noise_var_by_var_est)
         return variance, np.stack(ub_noise_var_by_var_ests)
     else:
-        return upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size, dilated_volume_mask, noise_ind_subset = None)
+        return upper_bound_noise_by_signal_p_noise(noise_var_used, dataset, means, batch_size, dilated_volume_mask, noise_ind_subset = None)
 
 
 @nvtx.annotate("upper_bound_noise_by_signal_p_noise", color="green", domain=NVTX_DOMAIN_NOISE)
-def upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size, dilated_volume_mask, noise_ind_subset = None):
+def upper_bound_noise_by_signal_p_noise(noise_var_used, dataset, means, batch_size, dilated_volume_mask, noise_ind_subset = None):
+        from recovar.data_io.dataset import unwrap_dataset
+        dataset = unwrap_dataset(dataset)
+
         # Now, estimate the variance of the signal. If the variance estimate ends up negative, we have overestimated the noise variance.
         for noise_repeat in range(2):
             # Compute variance estimate (tilt series uses same path currently)
             variance_time = time.time()
             from recovar.heterogeneity import covariance_estimation
             # //2: variance computation with cubic disc_type needs ~2x memory per image (spline coefficients)
-            variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(cryos, means.combined, utils.safe_batch_size(batch_size//2), dilated_volume_mask, noise_ind_subset = noise_ind_subset, use_regularization = True, disc_type = 'cubic')
+            variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(dataset, means['combined'], utils.safe_batch_size(batch_size//2), dilated_volume_mask, noise_ind_subset = noise_ind_subset, use_regularization = True, disc_type = 'cubic')
             logger.info("variance estimation time: %s", time.time() - variance_time)
             utils.report_memory_device(logger=logger)
 
-            rad_grid = np.array(fourier_transform_utils.get_grid_of_radial_distances(cryos.volume_shape).reshape(-1))
+            rad_grid = np.array(fourier_transform_utils.get_grid_of_radial_distances(dataset.volume_shape).reshape(-1))
             # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
-            n_shell_to_ub = np.min([32, cryos.grid_size//2 -1])
+            n_shell_to_ub = np.min([32, dataset.grid_size//2 -1])
             ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
             variance_est_low_res_5_pc = np.zeros(n_shell_to_ub, dtype = np.float32)
             variance_est_low_res_median = np.zeros(n_shell_to_ub, dtype = np.float32)
@@ -637,14 +639,14 @@ def upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size
                 # This is not correct, but it is better than nothing
             noise_var_used[:n_shell_to_ub] = np.where( noise_var_used[:n_shell_to_ub] > ub_noise_var_by_var_est, ub_noise_var_by_var_est, noise_var_used[:n_shell_to_ub])
 
-            noise_var_used = noise_var_used.astype(cryos[0].dtype_real)
+            noise_var_used = noise_var_used.astype(dataset.dtype_real)
             if noise_ind_subset is None:
-                update_noise_variance(noise_var_used, cryos)
+                update_noise_variance(noise_var_used, dataset)
             else:
-                new_noise_variance = cryos[0].noise.noise_variance_radials.copy()
+                new_noise_variance = dataset.noise.noise_variance_radials.copy()
                 new_noise_variance[noise_ind_subset] = noise_var_used
-                update_noise_variance(new_noise_variance, cryos)
-            
+                update_noise_variance(new_noise_variance, dataset)
+
         return variance_est, ub_noise_var_by_var_est
 
 

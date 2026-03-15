@@ -21,7 +21,7 @@ NVTX_DOMAIN_PCA = "principal_components"
 
 
 @nvtx.annotate("estimate_principal_components", color="purple", domain=NVTX_DOMAIN_PCA)
-def estimate_principal_components(cryos, options,  means, mean_prior, volume_mask,
+def estimate_principal_components(dataset, options,  means, mean_prior, volume_mask,
                                 dilated_volume_mask, valid_idx, batch_size, gpu_memory_to_use,
                                 covariance_options = None, variance_estimate = None, use_reg_mean_in_contrast = False, use_multi_gpu = False, n_gpus = None):
     """Estimate principal components of the covariance operator.
@@ -30,7 +30,8 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
     eigenvectors and eigenvalues via SVD.
 
     Args:
-        cryos: Half-set datasets (``CryoEMHalfsets``).
+        dataset: A ``CryoEMDataset`` with ``halfset_indices`` set, or
+            ``CryoEMHalfsets`` (backward compat).
         options: Pipeline options namespace.
         means: Dict with mean volume estimates.
         mean_prior: Prior mean volume (Fourier coefficients).
@@ -50,11 +51,13 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         where *u* and *s* are dicts with keys ``'real'`` and ``'rescaled'``
         containing eigenvectors and eigenvalues respectively.
     """
+    from recovar.data_io.dataset import unwrap_dataset
+    dataset = unwrap_dataset(dataset)
 
     covariance_options = covariance_estimation.get_default_covariance_computation_options() if covariance_options is None else covariance_options
 
-    volume_shape = cryos.volume_shape
-    vol_batch_size = utils.get_vol_batch_size(cryos.grid_size, gpu_memory_to_use)
+    volume_shape = dataset.volume_shape
+    vol_batch_size = utils.get_vol_batch_size(dataset.grid_size, gpu_memory_to_use)
 
     # Different way of sampling columns:
     # - from low to high frequencies
@@ -65,14 +68,14 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
 
     if covariance_options['column_sampling_scheme'] == 'low_freqs':
         from recovar.heterogeneity import covariance_core
-        volume_shape = cryos.volume_shape
-        if cryos.grid_size == 16:
-            picked_frequencies = np.arange(cryos.volume_size)
+        volume_shape = dataset.volume_shape
+        if dataset.grid_size == 16:
+            picked_frequencies = np.arange(dataset.volume_size)
         else:
             picked_frequencies = np.array(covariance_core.get_picked_frequencies(volume_shape, radius = covariance_options['column_radius'], use_half = True))
     elif covariance_options['column_sampling_scheme'] == 'high_snr' or covariance_options['column_sampling_scheme'] == 'high_lhs' or covariance_options['column_sampling_scheme'] == 'high_snr_p' or covariance_options['column_sampling_scheme'] =='high_snr_from_var_est':
         from recovar.reconstruction import regularization
-        upsampling_factor = np.round((means['lhs'].size / cryos.volume_size)**(1/3)).astype(int)
+        upsampling_factor = np.round((means['lhs'].size / dataset.volume_size)**(1/3)).astype(int)
         upsampled_volume_shape = tuple(upsampling_factor * np.array(volume_shape))
         lhs = regularization.downsample_lhs(means.lhs.reshape(upsampled_volume_shape), volume_shape, upsampling_factor = upsampling_factor).reshape(-1)
         # At low freqs, signal variance decays as ~1/rad^2
@@ -93,13 +96,13 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
             picked_frequencies, picked_frequencies_in_frequencies_format = covariance_estimation.greedy_column_choice(lhs, covariance_options['sampling_n_cols'], volume_shape, avoid_in_radius = covariance_options['sampling_avoid_in_radius'])
 
         logger.info("Largest frequency computed: %s", np.max(np.abs(picked_frequencies_in_frequencies_format)))
-        if np.max(np.abs(picked_frequencies_in_frequencies_format)) > cryos.grid_size//2-1:
+        if np.max(np.abs(picked_frequencies_in_frequencies_format)) > dataset.grid_size//2-1:
             logger.warning("Largest frequency computed is larger than grid size//2-1. This may cause issues in SVD. Check that variance estimates are correct")
     else:
         raise NotImplementedError('unrecognized column sampling scheme')
-    
-    covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, covariance_options, picked_frequencies, use_multi_gpu = use_multi_gpu, n_gpus = n_gpus)
-    
+
+    covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns_in_batch(dataset, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, covariance_options, picked_frequencies, use_multi_gpu = use_multi_gpu, n_gpus = n_gpus)
+
     # Check for NaN or Inf values in covariance_cols
     for col in covariance_cols.values():
         if np.any(np.isnan(col)) or np.any(np.isinf(col)):
@@ -125,7 +128,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         for key in covariance_cols.keys():
             covariance_cols[key] = None
 
-    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means.combined, dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'])
+    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(dataset, u['real'], means['combined'], dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'])
 
     if not options.keep_intermediate:
         u['real'] = None
@@ -150,10 +153,10 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
             u['rescaled_no_contrast'] = None
 
         logger.info("knock out time: %s", time.time() - c_time)
-        if u['rescaled'].dtype != cryos[0].dtype:
+        if u['rescaled'].dtype != dataset.dtype:
             logger.warning("u['rescaled'].dtype: %s", u['rescaled'].dtype)
 
-            
+
     return u, s, covariance_cols, picked_frequencies, column_fscs
 
 
@@ -168,7 +171,9 @@ def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,
 
 
 @nvtx.annotate("pca_by_projected_covariance", color="green", domain=NVTX_DOMAIN_PCA)
-def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, ignore_zero_frequency = False, n_pcs_to_compute = None):
+def pca_by_projected_covariance(dataset, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, ignore_zero_frequency = False, n_pcs_to_compute = None):
+    from recovar.data_io.dataset import unwrap_dataset
+    dataset = unwrap_dataset(dataset)
 
     basis_size = basis.shape[1] if n_pcs_to_compute is None else n_pcs_to_compute
     basis = basis[:,:basis_size]
@@ -176,11 +181,11 @@ def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , dis
     ####
     # TODO: Clean up this batch size computation, move elsewhere with other batch size comp. Also does the algebra make sense?
     memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() -  2*basis_size**4*8/1e9
-    batch_size = utils.get_embedding_batch_size(basis, cryos[0].image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate )
+    batch_size = utils.get_embedding_batch_size(basis, dataset.image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate )
 
     logger.info('batch size for covariance computation: ' + str(batch_size))
 
-    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, batch_size,  disc_type, disc_type_u, do_mask_images = use_mask)
+    covariance = covariance_estimation.compute_projected_covariance(dataset, mean, basis, volume_mask, batch_size,  disc_type, disc_type_u, do_mask_images = use_mask)
 
     if not np.all(np.isfinite(covariance)):
         n_nan = np.sum(np.isnan(covariance))

@@ -37,7 +37,7 @@ def test_get_mean_conformation_relion_flow_and_restore(monkeypatch):
 
     cryos = [_FakeCryo(0), _FakeCryo(1)]
     means, mean_prior, fsc = homogeneous.get_mean_conformation_relion(
-        cryos=cryos,
+        dataset=cryos,
         batch_size=2,
         noise_variance=np.ones(4, dtype=np.float32),
         use_regularization=False,
@@ -78,12 +78,12 @@ def test_get_mean_conformation_relion_use_regularization_switch(monkeypatch):
     cryos = [_FakeCryo(0), _FakeCryo(1)]
 
     means_unreg, *_ = homogeneous.get_mean_conformation_relion(
-        cryos=cryos, batch_size=1,
+        dataset=cryos, batch_size=1,
         noise_variance=np.ones(2, dtype=np.float32),
         use_regularization=False,
     )
     means_reg, *_ = homogeneous.get_mean_conformation_relion(
-        cryos=cryos, batch_size=1,
+        dataset=cryos, batch_size=1,
         noise_variance=np.ones(2, dtype=np.float32),
         use_regularization=True,
     )

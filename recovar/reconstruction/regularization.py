@@ -27,39 +27,43 @@ def compute_batch_prior_quantities(rotation_matrices, translations, CTF_params, 
     
     return diag_mean
 
-def compute_prior_quantites(experiment_datasets, cov_noise, batch_size, for_whitening = False ):
-    bottom_of_fraction = jnp.zeros(experiment_datasets.volume_size, dtype = experiment_datasets[0].dtype)
-    for experiment_dataset in experiment_datasets:
-        n_images = experiment_dataset.n_images
+def compute_prior_quantites(dataset_or_cryos, cov_noise, batch_size, for_whitening = False ):
+    from recovar.data_io.dataset import unwrap_dataset
+    dataset = unwrap_dataset(dataset_or_cryos)
+
+    bottom_of_fraction = jnp.zeros(dataset.volume_size, dtype = dataset.dtype)
+    for half in range(2):
+        half_indices = dataset.halfset_indices[half]
+        n_images = len(half_indices)
         # Compute the bottom of fraction.
         for k in range(0, int(np.ceil(n_images/batch_size))):
             batch_st = int(k * batch_size)
             batch_end = int(np.min( [(k+1) * batch_size, n_images]))
-            indices = jnp.arange(batch_st, batch_end)
+            indices = half_indices[batch_st:batch_end]
             bottom_of_fraction_this = compute_batch_prior_quantities(
-                                             experiment_dataset.rotation_matrices[indices], 
-                                             experiment_dataset.translations[indices], 
-                                             experiment_dataset.CTF_params[indices], 
+                                             dataset.rotation_matrices[indices],
+                                             dataset.translations[indices],
+                                             dataset.CTF_params[indices],
                                              cov_noise,
-                                             experiment_dataset.voxel_size, 
-                                             experiment_dataset.dtype,
-                                             experiment_dataset.volume_shape, 
-                                             experiment_dataset.image_shape, 
-                                             experiment_dataset.grid_size, 
-                                             experiment_dataset.ctf_evaluator,
+                                             dataset.voxel_size,
+                                             dataset.dtype,
+                                             dataset.volume_shape,
+                                             dataset.image_shape,
+                                             dataset.grid_size,
+                                             dataset.ctf_evaluator,
                                              for_whitening)
-            
+
             bottom_of_fraction += bottom_of_fraction_this
-        
-    bottom_of_fraction = bottom_of_fraction.real / len(experiment_datasets)
-    return bottom_of_fraction 
+
+    bottom_of_fraction = bottom_of_fraction.real / 2
+    return bottom_of_fraction
     
 
-def compute_relion_prior(experiment_datasets, cov_noise, image0, image1, batch_size, estimate_merged_SNR = False, noise_level = None):
+def compute_relion_prior(dataset_or_cryos, cov_noise, image0, image1, batch_size, estimate_merged_SNR = False, noise_level = None):
     """Compute a RELION-style spectral prior from two half-set reconstructions.
 
     Args:
-        experiment_datasets: ``CryoEMHalfsets`` instance.
+        dataset_or_cryos: ``CryoEMDataset`` (with halfset_indices) or ``CryoEMHalfsets``.
         cov_noise: Scalar noise variance.
         image0: First half-map (Fourier coefficients).
         image1: Second half-map (Fourier coefficients).
@@ -71,15 +75,17 @@ def compute_relion_prior(experiment_datasets, cov_noise, image0, image1, batch_s
         Tuple ``(prior, fsc, prior_avg)`` — the spectral prior, FSC
         curve, and averaged prior.
     """
+    from recovar.data_io.dataset import unwrap_dataset
+    dataset = unwrap_dataset(dataset_or_cryos)
 
     if noise_level is not None:
         bottom_of_fraction = noise_level
         from_noise_level = True
     else:
-        bottom_of_fraction = compute_prior_quantites(experiment_datasets, cov_noise, batch_size, for_whitening = False )
+        bottom_of_fraction = compute_prior_quantites(dataset, cov_noise, batch_size, for_whitening = False )
         from_noise_level = False
-    
-    return compute_fsc_prior_gpu(experiment_datasets.volume_shape, image0, image1, bottom_of_fraction, estimate_merged_SNR = estimate_merged_SNR, from_noise_level = from_noise_level )
+
+    return compute_fsc_prior_gpu(dataset.volume_shape, image0, image1, bottom_of_fraction, estimate_merged_SNR = estimate_merged_SNR, from_noise_level = from_noise_level )
 
 
 def get_fsc(vol1, vol2, volume_shape, substract_shell_mean = False, frequency_shift = 0):

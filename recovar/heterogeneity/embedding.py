@@ -27,14 +27,20 @@ USE_CUBIC = True
 _rfft2_hermitian_weights = linalg.rfft2_hermitian_weights
 
 
-def split_weights(weight, cryos):
-    start_idx = 0
-    weights = []
-    for cryo in cryos:
-        end_idx = start_idx + cryo.n_images
-        weights.append(weight[start_idx:end_idx])
-        start_idx = end_idx
-    return weights
+def split_weights(weight, dataset_or_cryos):
+    from recovar.data_io.dataset import unwrap_dataset, CryoEMHalfsets, CryoEMDataset
+    # Legacy path: list or CryoEMHalfsets — partition by n_images of each element.
+    if isinstance(dataset_or_cryos, (list, tuple, CryoEMHalfsets)):
+        start_idx = 0
+        weights = []
+        for cryo in dataset_or_cryos:
+            end_idx = start_idx + cryo.n_images
+            weights.append(weight[start_idx:end_idx])
+            start_idx = end_idx
+        return weights
+    # New path: single dataset with halfset_indices.
+    dataset = unwrap_dataset(dataset_or_cryos)
+    return [weight[dataset.halfset_indices[half]] for half in range(2)]
 
 def generate_conformation_from_reprojection(xs, mean, u ):
     return ((mean[...,None] + u @ xs.T)[0]).T
@@ -118,7 +124,7 @@ def _particle_ids_per_image(particles_ind, n_images):
 
 
 @nvtx.annotate("get_per_image_embedding", color="purple", domain=NVTX_DOMAIN_EMBED)
-def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None):
+def get_per_image_embedding(mean, u, s, basis_size, dataset, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None):
     """Compute per-image latent coordinates by projecting onto principal components.
 
     For each image, estimates the linear coefficients (latent embedding)
@@ -130,7 +136,8 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
         u: Eigenvectors, shape ``(volume_size, n_components)``.
         s: Eigenvalues, shape ``(n_components,)``.
         basis_size: Number of principal components to use.
-        cryos: Half-set datasets (``CryoEMHalfsets``).
+        dataset: A ``CryoEMDataset`` with ``halfset_indices`` set, or
+            ``CryoEMHalfsets`` (backward compat).
         volume_mask: Binary mask selecting valid voxels.
         gpu_memory: Available GPU memory in GB.
         disc_type: Discretization type (``'linear_interp'`` or ``'cubic'``).
@@ -153,10 +160,12 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
         *est_contrasts* has shape ``(n_images,)``, and *bias* is
         ``None`` unless *compute_bias* is ``True``.
     """
+    from recovar.data_io.dataset import unwrap_dataset
+    dataset = unwrap_dataset(dataset)
 
-    if u.shape[0] != cryos.volume_size:
-        raise ValueError(f"input u should be volume_size x basis_size, got {u.shape[0]} != {cryos.volume_size}")
-    st_time = time.time()    
+    if u.shape[0] != dataset.volume_size:
+        raise ValueError(f"input u should be volume_size x basis_size, got {u.shape[0]} != {dataset.volume_size}")
+    st_time = time.time()
     basis = np.asarray(u[:, :basis_size]).T
     eigenvalues = (s + jax_config.ROOT_EPSILON)
     use_contrast = "contrast" in contrast_option
@@ -167,10 +176,10 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
         contrast_grid = np.linspace(0, 2, 51)[1:] if contrast_grid is None else contrast_grid
     else:
         contrast_grid = np.ones([1])
-    
+
     basis_size = u.shape[-1] if basis_size == -1 else basis_size
 
-    batch_size = utils.get_embedding_batch_size(basis, cryos.image_size, contrast_grid, basis_size, gpu_memory)
+    batch_size = utils.get_embedding_batch_size(basis, dataset.image_size, contrast_grid, basis_size, gpu_memory)
     # JIT trace uses ~10x more peak memory than the raw array estimate
     _EMBEDDING_BATCH_SAFETY_FACTOR = 10
     batch_size = utils.safe_batch_size(batch_size // _EMBEDDING_BATCH_SAFETY_FACTOR)
@@ -185,30 +194,29 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
     if USE_CUBIC:
         disc_type = 'cubic'
         from recovar.core import cubic_interpolation
-        mean = cubic_interpolation.calculate_spline_coefficients(mean.reshape(cryos.volume_shape))
+        mean = cubic_interpolation.calculate_spline_coefficients(mean.reshape(dataset.volume_shape))
         from recovar.heterogeneity import covariance_estimation
-        basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, cryos.volume_shape, gpu_memory= None)
+        basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, dataset.volume_shape, gpu_memory= None)
 
-    ## TODO: I don't love the way this is handled either. Perhaps should be stored in a more clever consistent way
-    ## E.g. instantly resort to the right order, when CryoDataset also gets cleaned up
-    ## Perhaps 
-    n_cryos = len(cryos)
-    zs = [None] * n_cryos
-    cov_zs = [None] * n_cryos
-    est_contrasts = [None] * n_cryos
-    bias = [None] * n_cryos
-    for cryo_idx,cryo in enumerate(cryos):
-        zs[cryo_idx], cov_zs[cryo_idx], est_contrasts[cryo_idx], bias[cryo_idx] = get_coords_in_basis_and_contrast_3(
-            cryo, mean, basis, eigenvalues[:basis.shape[0]], volume_mask,
-             contrast_grid, batch_size, disc_type, 
+    # Iterate over half-sets, creating temporary half-views for the inner function.
+    # Results are concatenated in halfset order (same as legacy behavior).
+    zs = [None, None]
+    cov_zs = [None, None]
+    est_contrasts = [None, None]
+    bias = [None, None]
+    for half in range(2):
+        half_ds = dataset.subset(dataset.halfset_indices[half])
+        zs[half], cov_zs[half], est_contrasts[half], bias[half] = get_coords_in_basis_and_contrast_3(
+            half_ds, mean, basis, eigenvalues[:basis.shape[0]], volume_mask,
+             contrast_grid, batch_size, disc_type,
             compute_covariances = compute_covariances, contrast_mean = contrast_mean, contrast_variance = contrast_variance , compute_bias = compute_bias, image_subset_in_tilt_series = image_subset_in_tilt_series, contrast_shared_across_tilt_series= contrast_shared_across_tilt_series)
 
-    
+
     zs = np.concatenate(zs, axis = 0)
     est_contrasts = np.concatenate(est_contrasts)
     end_time = time.time()
     logger.info("time to compute xs %s", end_time - st_time)
-    
+
     if compute_covariances:
         cov_zs = np.concatenate(cov_zs, axis = 0)
         if to_real:
@@ -221,7 +229,7 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
 
     if to_real:
         zs = zs.real
-    
+
     return zs, cov_zs, est_contrasts, bias
     
 ## TODO: a lot of implementations of same thing. It shoudl be refactored better and the names as well.
@@ -1083,7 +1091,7 @@ def _solve_batch_from_stats(
 
 
 def get_per_image_embedding_multi_zdim(
-    mean, u, s, n_pcs_list, cryos, volume_mask, gpu_memory,
+    mean, u, s, n_pcs_list, dataset, volume_mask, gpu_memory,
     disc_type='linear_interp', contrast_grid=None, contrast_option='none',
     ignore_zero_frequency=False, contrast_mean=1, contrast_variance=np.inf,
 ):
@@ -1102,7 +1110,8 @@ def get_per_image_embedding_multi_zdim(
         u: Eigenvectors, shape ``(volume_size, n_max_components)``.
         s: Eigenvalues, shape ``(n_max_components,)``.
         n_pcs_list: List of int — n_pcs values to compute (need not be sorted).
-        cryos: Half-set datasets.
+        dataset: A ``CryoEMDataset`` with ``halfset_indices`` set, or
+            ``CryoEMHalfsets`` (backward compat).
         volume_mask: Binary mask selecting valid voxels.
         gpu_memory: Available GPU memory in GB.
         disc_type: Discretization type (overridden to ``'cubic'`` when ``USE_CUBIC``).
@@ -1119,7 +1128,10 @@ def get_per_image_embedding_multi_zdim(
         ``(n_total_images, n_pcs, n_pcs)``, and *contrasts* has shape
         ``(n_total_images,)``.
     """
-    if cryos.tilt_series_flag:
+    from recovar.data_io.dataset import unwrap_dataset
+    dataset = unwrap_dataset(dataset)
+
+    if dataset.tilt_series_flag:
         raise ValueError(
             "get_per_image_embedding_multi_zdim does not support tilt-series data. "
             "Use get_per_image_embedding instead."
@@ -1148,9 +1160,9 @@ def get_per_image_embedding_multi_zdim(
         actual_disc_type = 'cubic'
         from recovar.core import cubic_interpolation
         from recovar.heterogeneity import covariance_estimation as _cov_est
-        mean_out = cubic_interpolation.calculate_spline_coefficients(mean.reshape(cryos.volume_shape))
+        mean_out = cubic_interpolation.calculate_spline_coefficients(mean.reshape(dataset.volume_shape))
         logger.info("Computing spline coefficients for %d basis vectors (multi-zdim)", max_n_pcs)
-        full_basis = _cov_est.compute_spline_coeffs_in_batch(full_basis, cryos.volume_shape, gpu_memory=None)
+        full_basis = _cov_est.compute_spline_coeffs_in_batch(full_basis, dataset.volume_shape, gpu_memory=None)
 
     dtype = full_basis.dtype
 
@@ -1161,25 +1173,26 @@ def get_per_image_embedding_multi_zdim(
     # Allocate per-halfset output arrays, concatenated at the end.
     def _alloc(n_pcs):
         return {
-            'zs':        [np.zeros((cryo.n_images, n_pcs),        dtype=dtype)    for cryo in cryos],
-            'cov_zs':    [np.zeros((cryo.n_images, n_pcs, n_pcs), dtype=dtype)    for cryo in cryos],
-            'contrasts': [np.zeros(cryo.n_images,                  dtype=np.float32) for cryo in cryos],
+            'zs':        [np.zeros((dataset.n_images_half(half), n_pcs),        dtype=dtype)    for half in range(2)],
+            'cov_zs':    [np.zeros((dataset.n_images_half(half), n_pcs, n_pcs), dtype=dtype)    for half in range(2)],
+            'contrasts': [np.zeros(dataset.n_images_half(half),                  dtype=np.float32) for half in range(2)],
         }
 
     zs_reg   = {k: _alloc(k) for k in n_pcs_list}
     zs_noreg = {k: _alloc(k) for k in n_pcs_list}
 
-    for cryo_idx, cryo in enumerate(cryos):
+    for half in range(2):
+        half_ds = dataset.subset(dataset.halfset_indices[half])
         config = ForwardModelConfig.from_dataset(
-            cryo, disc_type=actual_disc_type,
-            process_fn=cryo.process_images,
+            half_ds, disc_type=actual_disc_type,
+            process_fn=half_ds.process_images,
         )
         # eigenvalues field not used by _collect_batch_stats; set placeholder.
         model = ModelState(
-            mean_estimate=jnp.asarray(mean_out, dtype=cryo.dtype),
-            volume_mask=jnp.asarray(volume_mask, dtype=cryo.dtype_real),
-            basis=jnp.asarray(full_basis, dtype=cryo.dtype),
-            eigenvalues=jnp.ones(max_n_pcs, dtype=cryo.dtype),
+            mean_estimate=jnp.asarray(mean_out, dtype=half_ds.dtype),
+            volume_mask=jnp.asarray(volume_mask, dtype=half_ds.dtype_real),
+            basis=jnp.asarray(full_basis, dtype=half_ds.dtype),
+            eigenvalues=jnp.ones(max_n_pcs, dtype=half_ds.dtype),
         )
         mean_hv, basis_hv = _prepare_model_half_volumes(
             config, model.mean_estimate, model.basis,
@@ -1191,22 +1204,22 @@ def get_per_image_embedding_multi_zdim(
             eigenvalues=model.eigenvalues,
         )
 
-        batch_size = utils.get_embedding_batch_size(full_basis, cryo.image_size, cg, max_n_pcs, gpu_memory)
+        batch_size = utils.get_embedding_batch_size(full_basis, half_ds.image_size, cg, max_n_pcs, gpu_memory)
         _EMBEDDING_BATCH_SAFETY_FACTOR = 10
         batch_size = utils.safe_batch_size(batch_size // _EMBEDDING_BATCH_SAFETY_FACTOR)
-        logger.info("multi-zdim embedding batch size (halfset %d): %d", cryo_idx, batch_size)
+        logger.info("multi-zdim embedding batch size (halfset %d): %d", half, batch_size)
 
         hermitian_weights = _embedding_hermitian_weights(config)
         prefer_half_noise = hermitian_weights is not None
-        noise_model = cryo.noise
-        data_generator = cryo.get_dataset_generator(batch_size=batch_size)
+        noise_model = half_ds.noise
+        data_generator = half_ds.get_dataset_generator(batch_size=batch_size)
 
         for batch, particles_ind, batch_image_ind in data_generator:
             batch_data = BatchData(
                 images=batch,
-                ctf_params=cryo.CTF_params[batch_image_ind],
-                rotation_matrices=cryo.rotation_matrices[batch_image_ind],
-                translations=cryo.translations[batch_image_ind],
+                ctf_params=half_ds.CTF_params[batch_image_ind],
+                rotation_matrices=half_ds.rotation_matrices[batch_image_ind],
+                translations=half_ds.translations[batch_image_ind],
                 noise_variance=_noise_get_half_or_full(noise_model, batch_image_ind, prefer_half=prefer_half_noise),
             )
 
@@ -1225,18 +1238,18 @@ def get_per_image_embedding_multi_zdim(
                     im_norms_sq, im_T_Am, Am_norm_sq,
                     s_reg[n_pcs], cg_jax, contrast_mean_jax, contrast_variance_jax,
                 )
-                zs_reg[n_pcs]['zs']      [cryo_idx][particles_ind] = np.asarray(xs_r).real
-                zs_reg[n_pcs]['cov_zs']  [cryo_idx][particles_ind] = np.asarray(cov_r).real
-                zs_reg[n_pcs]['contrasts'][cryo_idx][batch_image_ind] = np.asarray(c_r)
+                zs_reg[n_pcs]['zs']      [half][particles_ind] = np.asarray(xs_r).real
+                zs_reg[n_pcs]['cov_zs']  [half][particles_ind] = np.asarray(cov_r).real
+                zs_reg[n_pcs]['contrasts'][half][batch_image_ind] = np.asarray(c_r)
 
                 xs_n, c_n, cov_n = _solve_batch_from_stats(
                     sub_AI, sub_AM, sub_AAU,
                     im_norms_sq, im_T_Am, Am_norm_sq,
                     s_noreg[n_pcs], cg_jax, contrast_mean_jax, contrast_variance_jax,
                 )
-                zs_noreg[n_pcs]['zs']      [cryo_idx][particles_ind] = np.asarray(xs_n).real
-                zs_noreg[n_pcs]['cov_zs']  [cryo_idx][particles_ind] = np.asarray(cov_n).real
-                zs_noreg[n_pcs]['contrasts'][cryo_idx][batch_image_ind] = np.asarray(c_n)
+                zs_noreg[n_pcs]['zs']      [half][particles_ind] = np.asarray(xs_n).real
+                zs_noreg[n_pcs]['cov_zs']  [half][particles_ind] = np.asarray(cov_n).real
+                zs_noreg[n_pcs]['contrasts'][half][batch_image_ind] = np.asarray(c_n)
 
     # Concatenate across halfsets; return flat (xs, cov_zs, contrasts) tuples per n_pcs.
     result_reg   = {}
@@ -1257,25 +1270,41 @@ def get_per_image_embedding_multi_zdim(
     return result_reg, result_noreg
 
 
-def set_contrasts_in_cryos(cryos, contrasts):
+def set_contrasts_in_cryos(dataset_or_cryos, contrasts):
+    """Apply per-image contrast factors to CTF parameters.
 
+    Accepts either a ``CryoEMDataset`` (with ``halfset_indices`` set) or
+    ``CryoEMHalfsets`` (backward compat).  When a single ``CryoEMDataset`` is
+    given, the contrasts array must be in concatenated halfset order (half-0
+    images followed by half-1 images).
+    """
+    from recovar.data_io.dataset import unwrap_dataset, CryoEMHalfsets
+
+    # New path: single dataset
+    if not isinstance(dataset_or_cryos, CryoEMHalfsets):
+        dataset = unwrap_dataset(dataset_or_cryos)
+        dataset.set_contrasts(contrasts)
+        return
+
+    # Legacy path: CryoEMHalfsets
+    cryos = dataset_or_cryos
     if cryos.tilt_series_flag:
 
         # If it's a per image assignment
         if contrasts.shape[0] == cryos.n_total_images:
-            running_idx = 0 
+            running_idx = 0
             for i in range(2): # Untested
                 cryos[i].CTF_params[:,core.CTFParamIndex.CONTRAST] *= contrasts[running_idx:running_idx+cryos[i].n_images]
                 running_idx += cryos[i].n_images
         else:
             # If it's a per tilt series assignment
-            running_idx = 0 
+            running_idx = 0
             for i in range(2):
                 for p in cryos[i].tilt_particles:
                     cryos[i].CTF_params[p,core.CTFParamIndex.CONTRAST] *= contrasts[running_idx]
                     running_idx+=1
     else:
-        running_idx = 0 
-        for i in range(2): 
+        running_idx = 0
+        for i in range(2):
             cryos[i].CTF_params[:,core.CTFParamIndex.CONTRAST] *= contrasts[running_idx:running_idx+cryos[i].n_images]
             running_idx += cryos[i].n_images

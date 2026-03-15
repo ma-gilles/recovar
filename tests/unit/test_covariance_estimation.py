@@ -76,8 +76,9 @@ def test_set_covariance_options_updates_only_present_keys():
 
 
 def test_compute_regularized_covariance_columns_in_batch_concatenates(monkeypatch):
-    mock_cryo = type("Cryo", (), {"grid_size": 4})()
-    cryos = CryoEMHalfsets(mock_cryo, mock_cryo)
+    mock_cryo = type("Cryo", (), {"grid_size": 4,
+                                   "halfset_indices": [np.arange(5), np.arange(5, 10)]})()
+    cryos = CryoEMHalfsets(mock_cryo, mock_cryo, dataset=mock_cryo)
     picked_frequencies = np.arange(10)
 
     monkeypatch.setattr(cov_est.utils, "get_column_batch_size", lambda *_: 4)
@@ -85,7 +86,7 @@ def test_compute_regularized_covariance_columns_in_batch_concatenates(monkeypatc
     calls = []
 
     def fake_compute_regularized_covariance_columns(
-        cryos_in,
+        dataset_in,
         means,
         mean_prior,
         volume_mask,
@@ -107,7 +108,7 @@ def test_compute_regularized_covariance_columns_in_batch_concatenates(monkeypatc
     monkeypatch.setattr(cov_est, "compute_regularized_covariance_columns", fake_compute_regularized_covariance_columns)
 
     covariance_cols, picked_out, fscs = cov_est.compute_regularized_covariance_columns_in_batch(
-        cryos=cryos,
+        dataset=cryos,
         means={},
         mean_prior=None,
         volume_mask=None,
@@ -163,7 +164,7 @@ def test_compute_regularized_covariance_columns_with_real_tiny_dataset(monkeypat
     options = {"reg_fn": "new"}
     picked_frequencies = np.array([0, 1, 2], dtype=np.int32)
     covariance_cols, picked_out, fscs = cov_est.compute_regularized_covariance_columns(
-        cryos=CryoEMHalfsets(cryo, cryo),
+        dataset=CryoEMHalfsets(cryo, cryo),
         means={},
         mean_prior=np.ones(cryo.volume_size, dtype=np.float32),
         volume_mask=np.ones(cryo.volume_size, dtype=np.float32),
@@ -300,26 +301,20 @@ def test_compute_h_b_for_halfset_batches_frequency_chunks(monkeypatch):
 
 
 def test_compute_variance_orchestration_with_stubbed_kernels(monkeypatch):
-    vol_shape = (2, 2, 2)
-    vol_size = int(np.prod(vol_shape))
+    # Create a dataset with 8 images, split into two halves of 4.
+    ds = make_tiny_cryo_dataset(grid_size=4, n_images=8, seed=0)
+    ds.halfset_indices = [np.arange(4), np.arange(4, 8)]
+    vol_shape = ds.volume_shape
+    vol_size = ds.volume_size
 
-    class _Cryo:
-        def __init__(self, scale):
-            self.scale = scale
-            self.volume_shape = vol_shape
-            self.volume_size = vol_size
-            self.dtype_real = np.float32
-
-        def get_valid_frequency_indices(self, rad=None):
-            return np.ones(self.volume_size, dtype=np.float32)
-
-    cryos = CryoEMHalfsets(_Cryo(1.0), _Cryo(2.0))
-
+    # Scale factor per half: half0 → 1.0, half1 → 2.0
+    half0_idx = set(ds.halfset_indices[0].tolist())
     def _fake_var_kernel(cryo, mean_estimate, batch_size, image_subset=None, volume_mask=None, disc_type=""):
-        lhs = np.ones(vol_size, dtype=np.float32) * (10.0 * cryo.scale)
-        rhs = np.ones(vol_size, dtype=np.float32) * (4.0 * cryo.scale)
-        noise_lhs = np.ones(vol_size, dtype=np.float32) * (2.0 * cryo.scale)
-        noise_rhs = np.ones(vol_size, dtype=np.float32) * (1.0 * cryo.scale)
+        scale = 1.0 if set(image_subset.tolist()) == half0_idx else 2.0
+        lhs = np.ones(vol_size, dtype=np.float32) * (10.0 * scale)
+        rhs = np.ones(vol_size, dtype=np.float32) * (4.0 * scale)
+        noise_lhs = np.ones(vol_size, dtype=np.float32) * (2.0 * scale)
+        noise_rhs = np.ones(vol_size, dtype=np.float32) * (1.0 * scale)
         return lhs, rhs, noise_lhs, noise_rhs
 
     monkeypatch.setattr(cov_est, "variance_relion_style_triangular_kernel", _fake_var_kernel)
@@ -336,7 +331,7 @@ def test_compute_variance_orchestration_with_stubbed_kernels(monkeypatch):
     )
 
     variance, variance_prior, fsc, lhs, noise_p_variance_est = cov_est.compute_variance(
-        cryos=cryos,
+        dataset=ds,
         mean_estimate=np.ones(vol_size, dtype=np.complex64),
         batch_size=2,
         volume_mask=np.ones(vol_size, dtype=np.float32),
@@ -455,7 +450,7 @@ def test_compute_projected_covariance_runs_on_tiny_image_dataset():
     cryo = make_tiny_cryo_dataset_with_images(grid_size=6, n_images=6, seed=0)
     basis = np.eye(cryo.volume_size, 4, dtype=np.complex64)
     covar = cov_est.compute_projected_covariance(
-        experiment_datasets=[cryo],
+        dataset=[cryo],
         mean_estimate=np.zeros(cryo.volume_size, dtype=np.complex64),
         basis=basis,
         volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
@@ -1054,7 +1049,7 @@ def test_compute_projected_covariance_masked():
     cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=6, seed=0)
     basis = np.eye(cryo.volume_size, 3, dtype=np.complex64)
     covar = cov_est.compute_projected_covariance(
-        experiment_datasets=[cryo],
+        dataset=[cryo],
         mean_estimate=np.zeros(cryo.volume_size, dtype=np.complex64),
         basis=basis,
         volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
@@ -1082,7 +1077,7 @@ def test_compute_projected_covariance_masked_matches_unmasked_with_ones_mask():
     cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=6, seed=0)
     basis = np.eye(cryo.volume_size, 3, dtype=np.complex64)
     kwargs = dict(
-        experiment_datasets=[cryo],
+        dataset=[cryo],
         mean_estimate=np.zeros(cryo.volume_size, dtype=np.complex64),
         basis=basis,
         volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),

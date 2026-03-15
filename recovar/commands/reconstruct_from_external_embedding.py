@@ -177,9 +177,10 @@ def generate(args):
     ind_split = dataset.figure_out_halfsets(args)
     dataset_loader_dict = dataset.make_dataset_loader_dict(args)
     cryos = dataset.get_split_datasets(**dataset_loader_dict, ind_split=ind_split)
+    ds = cryos.dataset
 
     zs = utils.pickle_load(args.embedding)
-    zs_split = [zs[cryos[0].dataset_indices], zs[cryos[1].dataset_indices]]
+    zs_split = [zs[ds.halfset_indices[0]], zs[ds.halfset_indices[1]]]
     zs = np.concatenate(zs_split)
 
     target = np.loadtxt(args.target)
@@ -192,13 +193,13 @@ def generate(args):
 
     cov_zs = np.tile(np.eye(zs.shape[-1], dtype=zs.dtype), (zs.shape[0], 1, 1))
 
-    noise_variance, _ = noise.estimate_noise_variance(cryos[0], 100)
-    noise_variance = np.full(cryos[0].image_shape[0] // 2 - 1, noise_variance)
+    half0_ds = ds.subset(ds.halfset_indices[0])
+    noise_variance, _ = noise.estimate_noise_variance(half0_ds, 100)
+    noise_variance = np.full(ds.image_shape[0] // 2 - 1, noise_variance)
 
-    for cryo in cryos:
-        cryo.noise = noise.RadialNoiseModel(noise_variance)
+    ds.set_radial_noise_model(noise_variance)
 
-    o.compute_and_save_reweighted(cryos, target, zs, cov_zs, args.outdir,
+    o.compute_and_save_reweighted(ds, target, zs, cov_zs, args.outdir,
                                   args.Bfactor, args.n_bins)
 
 
