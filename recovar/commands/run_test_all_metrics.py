@@ -186,6 +186,9 @@ def make_big_test_dataset(input_dir, output_dir, noise_level=0.1, grid_size=128,
                           contrast_std=0.1, n_tilts=-1, premultiplied_ctf=False, noise_increase_per_tilt=None):
     output_folder = os.path.join(output_dir, 'test_dataset')
     output.mkdir_safe(output_folder)
+
+    # Fixed seed for reproducible dataset generation across runs.
+    np.random.seed(42)
     from scipy.stats import vonmises
 
     # Count available volumes from prefix input_dir + "####.mrc" to match simulator loader behavior.
