@@ -207,6 +207,18 @@ def _run_outliers_pipeline(
         env = gpu_subprocess_env()
         subprocess.run(make_cmd, check=True, env=env)
 
+    # -- compute GT union mask from synthetic volumes ------------------------
+    from recovar.simulation import synthetic_dataset
+    from recovar.output import metrics as gt_metrics
+    from recovar import utils as recovar_utils
+
+    sim_info_path = dataset_dir / "simulation_info.pkl"
+    gt_thing = synthetic_dataset.load_heterogeneous_reconstruction(str(sim_info_path))
+    volume_shape = (grid_size, grid_size, grid_size)
+    gt_union_soft_mask, _ = gt_metrics.make_union_gt_mask_from_hvd(gt_thing, volume_shape)
+    gt_mask_mrc = str(output_dir / "gt_union_mask.mrc")
+    recovar_utils.write_mrc(gt_mask_mrc, gt_union_soft_mask)
+
     # -- run pipeline_with_outliers ------------------------------------------
     pipeline_out = output_dir / "pipeline_outliers_output"
     mrcs = dataset_dir / f"particles.{grid_size}.mrcs"
@@ -220,7 +232,7 @@ def _run_outliers_pipeline(
         "--ctf", str(ctf),
         "--correct-contrast",
         "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "--mask", gt_mask_mrc,
         "--lazy",
         "--zdim", "4",
         "--k-rounds", str(k_rounds),
@@ -600,6 +612,19 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         ]
         subprocess.run(make_cmd, check=True, env=gpu_subprocess_env())
 
+    # Compute GT union mask from synthetic volumes
+    from recovar.simulation import synthetic_dataset
+    from recovar.output import metrics as gt_metrics
+    from recovar import utils as recovar_utils
+
+    sim_info_path = dataset_dir / "simulation_info.pkl"
+    assert sim_info_path.exists()
+    gt_thing = synthetic_dataset.load_heterogeneous_reconstruction(str(sim_info_path))
+    volume_shape_et = (grid_size, grid_size, grid_size)
+    gt_union_soft_mask_et, _ = gt_metrics.make_union_gt_mask_from_hvd(gt_thing, volume_shape_et)
+    gt_mask_mrc_et = str(output_dir / "gt_union_mask_et.mrc")
+    recovar_utils.write_mrc(gt_mask_mrc_et, gt_union_soft_mask_et)
+
     # Run pipeline_with_outliers for tilt series
     pipeline_out = output_dir / "pipeline_outliers_output"
     star = dataset_dir / "particles.star"
@@ -615,7 +640,7 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         "--tilt-series-ctf", "relion5",
         "--correct-contrast",
         "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "--mask", gt_mask_mrc_et,
         "--lazy",
         "--zdim", "4",
         "--k-rounds", str(k_rounds),
@@ -624,9 +649,6 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         "--save-pipeline-indices",
     ]
     subprocess.run(pipe_cmd, check=True, env=gpu_subprocess_env())
-
-    sim_info_path = dataset_dir / "simulation_info.pkl"
-    assert sim_info_path.exists()
 
     with open(sim_info_path, "rb") as f:
         sim_info = pickle.load(f)

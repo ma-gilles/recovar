@@ -106,6 +106,17 @@ def _run_and_score(
     ]
     subprocess.run(make_cmd, check=True)
 
+    # Compute GT union mask from the volume MRC files
+    from recovar.core import mask as mask_mod
+    from recovar import utils as recovar_utils
+
+    vol_files = sorted(volumes_prefix.parent.glob(f"{volumes_prefix.name}*.mrc"))
+    vols = [recovar_utils.load_mrc(str(f)) for f in vol_files]
+    volume_shape = (_GRID, _GRID, _GRID)
+    gt_union_soft_mask, _ = mask_mod.make_union_gt_mask(vols, volume_shape)
+    gt_mask_mrc = str(output_dir / "gt_union_mask.mrc")
+    recovar_utils.write_mrc(gt_mask_mrc, gt_union_soft_mask)
+
     dataset_dir = output_dir / "test_dataset"
     pipeline_out = dataset_dir / "pipeline_outliers_output"
     particles = str(dataset_dir / f"particles.{_GRID}.mrcs")
@@ -117,7 +128,7 @@ def _run_and_score(
         "--ctf", str(dataset_dir / "ctf.pkl"),
         "--correct-contrast",
         "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "--mask", gt_mask_mrc,
         "--lazy",
         "--zdim", "4",
         "--k-rounds", str(_K),

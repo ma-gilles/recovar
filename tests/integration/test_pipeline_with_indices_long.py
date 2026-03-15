@@ -219,12 +219,14 @@ def _run_pipeline_with_ind(
     grid_size: int,
     k_rounds: int,
     ind_path: Path,
+    mask_path: Optional[str] = None,
 ) -> None:
     """Run pipeline_with_outliers on SPA data with a user-supplied --ind file."""
     mrcs = dataset_dir / f"particles.{grid_size}.mrcs"
     poses = dataset_dir / "poses.pkl"
     ctf = dataset_dir / "ctf.pkl"
 
+    mask_arg = mask_path if mask_path else "from_halfmaps"
     cmd = [
         sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
         str(mrcs),
@@ -233,7 +235,7 @@ def _run_pipeline_with_ind(
         "--ind", str(ind_path),
         "--correct-contrast",
         "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "--mask", mask_arg,
         "--lazy",
         "--zdim", "4",
         "--k-rounds", str(k_rounds),
@@ -249,12 +251,14 @@ def _run_pipeline_with_particle_ind(
     pipeline_out: Path,
     k_rounds: int,
     particle_ind_path: Path,
+    mask_path: Optional[str] = None,
 ) -> None:
     """Run pipeline_with_outliers on cryo-ET data with a --particle-ind file."""
     star = dataset_dir / "particles.star"
     poses = dataset_dir / "poses.pkl"
     ctf = dataset_dir / "ctf.pkl"
 
+    mask_arg = mask_path if mask_path else "from_halfmaps"
     cmd = [
         sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
         str(star),
@@ -265,7 +269,7 @@ def _run_pipeline_with_particle_ind(
         "--particle-ind", str(particle_ind_path),
         "--correct-contrast",
         "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "--mask", mask_arg,
         "--lazy",
         "--zdim", "4",
         "--k-rounds", str(k_rounds),
@@ -476,6 +480,19 @@ def test_pipeline_spa_with_ind_regression(tmp_path):
     with open(ind_path, "wb") as f:
         pickle.dump(ind, f)
 
+    # Compute GT union mask from synthetic volumes
+    from recovar.simulation import synthetic_dataset
+    from recovar.output import metrics as gt_metrics
+    from recovar import utils as recovar_utils
+
+    sim_info_path = dataset_dir / "simulation_info.pkl"
+    assert sim_info_path.exists(), f"simulation_info.pkl missing: {sim_info_path}"
+    gt_thing = synthetic_dataset.load_heterogeneous_reconstruction(str(sim_info_path))
+    volume_shape = (grid_size, grid_size, grid_size)
+    gt_union_soft_mask, _ = gt_metrics.make_union_gt_mask_from_hvd(gt_thing, volume_shape)
+    gt_mask_path = str(output_dir / "gt_union_mask.mrc")
+    recovar_utils.write_mrc(gt_mask_path, gt_union_soft_mask)
+
     # Run pipeline_with_outliers with the ind file (output outside dataset_dir
     # so reused datasets are not polluted).
     pipeline_out = output_dir / "pipeline_outliers_with_ind_output"
@@ -485,14 +502,13 @@ def test_pipeline_spa_with_ind_regression(tmp_path):
         grid_size=grid_size,
         k_rounds=k_rounds,
         ind_path=ind_path,
+        mask_path=gt_mask_path,
     )
 
     # Partition consistency: round 1 must partition exactly n_subset images
     _check_ind_partition_consistency(pipeline_out, n_subset=n_subset, k_rounds=k_rounds)
 
     # Compute outlier metrics relative to the subset
-    sim_info_path = dataset_dir / "simulation_info.pkl"
-    assert sim_info_path.exists(), f"simulation_info.pkl missing: {sim_info_path}"
     with open(sim_info_path, "rb") as f:
         sim_info = pickle.load(f)
 
@@ -581,6 +597,17 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
     with open(sim_info_path, "rb") as f:
         sim_info = pickle.load(f)
 
+    # Compute GT union mask from synthetic volumes
+    from recovar.simulation import synthetic_dataset
+    from recovar.output import metrics as gt_metrics
+    from recovar import utils as recovar_utils
+
+    gt_thing = synthetic_dataset.load_heterogeneous_reconstruction(str(sim_info_path))
+    volume_shape = (grid_size, grid_size, grid_size)
+    gt_union_soft_mask, _ = gt_metrics.make_union_gt_mask_from_hvd(gt_thing, volume_shape)
+    gt_mask_path = str(output_dir / "gt_union_mask_et.mrc")
+    recovar_utils.write_mrc(gt_mask_path, gt_union_soft_mask)
+
     # Determine number of particles from sim_info
     tilt_series_assignment = np.asarray(sim_info.get("tilt_series_assignment", []))
     if tilt_series_assignment.size == 0:
@@ -602,6 +629,7 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
         pipeline_out=pipeline_out,
         k_rounds=k_rounds,
         particle_ind_path=particle_ind_path,
+        mask_path=gt_mask_path,
     )
 
     # Partition consistency at image level is harder to assert for cryo-ET with
