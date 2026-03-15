@@ -294,14 +294,12 @@ def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
 def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
     # Build a real tiny CryoEMDataset from simulator outputs.
     _, ctf_params, rots, trans, _, voxel_size, _ = make_tiny_simulation(grid_size=4, n_images=6, seed=0)
+    metadata = dataset.Metadata(rots, trans, ctf_params)
     cryo = dataset.CryoEMDataset(
         image_stack=None,
         voxel_size=voxel_size,
-        rotation_matrices=rots,
-        translations=trans,
-        CTF_params=ctf_params,
+        metadata=metadata,
         ctf_evaluator=core.CTFEvaluator(),
-        dataset_indices=None,
         grid_size=4,
     )
     cryos = cryo

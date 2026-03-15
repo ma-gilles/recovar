@@ -271,17 +271,17 @@ class DataIterator:
     def __iter__(self):
         if self.index_subset is None:
             gen = (
-                self.dataset.get_image_generator(batch_size=self.batch_size)
+                self.dataset._get_image_generator(batch_size=self.batch_size)
                 if self.use_image_generator
-                else self.dataset.get_dataset_generator(batch_size=self.batch_size)
+                else self.dataset._get_dataset_generator(batch_size=self.batch_size)
             )
         else:
             gen = (
-                self.dataset.get_image_subset_generator(
+                self.dataset._get_image_subset_generator(
                     batch_size=self.batch_size, subset_indices=self.index_subset,
                 )
                 if self.use_image_generator
-                else self.dataset.get_dataset_subset_generator(
+                else self.dataset._get_dataset_subset_generator(
                     batch_size=self.batch_size, subset_indices=self.index_subset,
                 )
             )
@@ -305,14 +305,9 @@ class DataIterator:
                 nv = nm.get_half(noise_idx) if self.noise_half else nm.get(noise_idx)
             else:
                 nv = None
-            yield BatchData(
-                images=batch,
-                rotation_matrices=self.dataset.rotation_matrices[indices],
-                translations=self.dataset.translations[indices],
-                ctf_params=self.dataset.CTF_params[indices],
-                noise_variance=nv,
+            yield self.dataset.make_batch_data(
+                batch, indices, noise_variance=nv,
                 particle_indices=particles_ind,
-                image_indices=indices,
             )
 
 

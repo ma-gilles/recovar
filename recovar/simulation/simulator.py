@@ -555,7 +555,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         ctf_evaluator = core.CTFEvaluator()
 
     main_dataset = dataset.CryoEMDataset( None, voxel_size,
-                              rots, trans, ctf_params, ctf_evaluator = ctf_evaluator, dataset_indices = None, grid_size = grid_size)
+                              dataset.Metadata(rots, trans, ctf_params), ctf_evaluator = ctf_evaluator, grid_size = grid_size)
     
     # cubic interpolation uses ~4x more GPU memory per image than linear
     mult = 0.5 if 'cubic' in disc_type else 5
@@ -582,7 +582,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         # Move the center by around twice the radius
         trans_2 *= 2 * volume_radius * volume_shape[0] / 2
         other_particles_dataset = dataset.CryoEMDataset( None, voxel_size,
-                                rots_2, trans_2, ctf_params, ctf_evaluator = ctf_evaluator, dataset_indices = None, grid_size = grid_size)
+                                dataset.Metadata(rots_2, trans_2, ctf_params), ctf_evaluator = ctf_evaluator, grid_size = grid_size)
         # No noise in this stack.
         extra_particles_image_stack = simulate_data(other_particles_dataset, volumes,  noise_variance * 0 ,  batch_size, image_assignments, per_image_noise_scale_2, per_image_noise_scale, seed =0, disc_type = disc_type, mrc_file = None, pad_before_translate= True, premultiplied_ctf=premultiplied_ctf )
 
@@ -601,7 +601,7 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         outlier_contrast, outlier_noise_scale = generate_contrast_params(n_outlier_images, noise_scale_std, contrast_std )
 
         outlier_particle_dataset = dataset.CryoEMDataset( None, voxel_size,
-                                rots_3, trans_3, ctf_params_3, ctf_evaluator = ctf_evaluator, dataset_indices = None, grid_size = grid_size)
+                                dataset.Metadata(rots_3, trans_3, ctf_params_3), ctf_evaluator = ctf_evaluator, grid_size = grid_size)
         
         outlier_particle_image_stack = simulate_data(outlier_particle_dataset, outlier_volume[None],  noise_variance ,  batch_size, np.zeros(n_outlier_images, dtype = int), outlier_noise_scale, outlier_contrast, seed =1, disc_type = disc_type, mrc_file = None , premultiplied_ctf=premultiplied_ctf)
 
@@ -631,8 +631,8 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         
         # Create dataset for tilt outliers
         tilt_outlier_dataset = dataset.CryoEMDataset(None, voxel_size,
-                                                    rots_tilt_outliers, trans_tilt_outliers, ctf_params_tilt_outliers,
-                                                    ctf_evaluator=ctf_evaluator, dataset_indices=None, grid_size=grid_size)
+                                                    dataset.Metadata(rots_tilt_outliers, trans_tilt_outliers, ctf_params_tilt_outliers),
+                                                    ctf_evaluator=ctf_evaluator, grid_size=grid_size)
         
         # Generate tilt outlier images
         tilt_outlier_image_stack = simulate_data(tilt_outlier_dataset, outlier_volume[None], noise_variance, 
@@ -722,25 +722,26 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
             batch_end = int(np.min( [(k+1) * batch_size, n_images]))
             indices = img_indices[batch_st:batch_end]
 
-            translations = np.zeros_like(experiment_dataset.translations[indices]) if pad_before_translate else experiment_dataset.translations[indices]
+            bd = experiment_dataset.make_batch_data(None, indices)
+            translations = np.zeros_like(bd.translations) if pad_before_translate else bd.translations
 
             if disc_type == "nufft":
-                images_batch = simulate_nufft_data_batch(vol_real, 
-                                                 experiment_dataset.rotation_matrices[indices], 
-                                                 translations, 
-                                                 experiment_dataset.CTF_params[indices], 
-                                                 experiment_dataset.voxel_size, 
-                                                 experiment_dataset.volume_shape, 
-                                                 experiment_dataset.image_shape, 
-                                                 experiment_dataset.grid_size, 
+                images_batch = simulate_nufft_data_batch(vol_real,
+                                                 bd.rotation_matrices,
+                                                 translations,
+                                                 bd.ctf_params,
+                                                 experiment_dataset.voxel_size,
+                                                 experiment_dataset.volume_shape,
+                                                 experiment_dataset.image_shape,
+                                                 experiment_dataset.grid_size,
                                                  disc_type,
                                                  experiment_dataset.ctf_evaluator,
                                                  skip_ctf = pad_before_ctf)
             elif disc_type == "pdb":
                 images_batch = simulate_nufft_data_batch_from_pdb(volumes[vol_idx],
-                                                 experiment_dataset.rotation_matrices[indices],
+                                                 bd.rotation_matrices,
                                                  translations,
-                                                 experiment_dataset.CTF_params[indices],
+                                                 bd.ctf_params,
                                                  experiment_dataset.voxel_size,
                                                  experiment_dataset.volume_shape,
                                                  experiment_dataset.image_shape,
@@ -748,20 +749,19 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                                                  disc_type,
                                                  experiment_dataset.ctf_evaluator,
                                                   skip_ctf = pad_before_ctf) / gt_vols_norm
-                
+
 
             elif "ewald" in disc_type:
                 disc_type_e = disc_type[6:]
 
                 from recovar.reconstruction import ewald
-                # lam = ewald.volt_to_wavelength(experiment_dataset.CTF_params[0,3])
                 images_batch_real, images_batch_real_imag = ewald.ewald_sphere_forward_model(
-                        volume.real, 
-                        volume.imag, 
-                        experiment_dataset.rotation_matrices[indices], 
-                        experiment_dataset.CTF_params[indices],
+                        volume.real,
+                        volume.imag,
+                        bd.rotation_matrices,
+                        bd.ctf_params,
                         experiment_dataset.image_shape,
-                        experiment_dataset.volume_shape, 
+                        experiment_dataset.volume_shape,
                         experiment_dataset.voxel_size, disc_type_e ,
                         skip_ctf = pad_before_ctf)
                 images_batch = images_batch_real + 1j * images_batch_real_imag
@@ -769,21 +769,21 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 images_batch = core.translate_images(images_batch,
                         -translations,
                         experiment_dataset.image_shape)
-                
+
                 if premultiplied_ctf:
                     raise NotImplementedError("Premultiplied CTF not implemented for Ewald")
-                
+
             elif disc_type == "linear_interp" or disc_type == "nearest" or disc_type == "cubic":
                 _sim_config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
                 images_batch = simulate_batch(
                     _sim_config, volume,
-                    experiment_dataset.rotation_matrices[indices],
+                    bd.rotation_matrices,
                     translations,
-                    experiment_dataset.CTF_params[indices],
+                    bd.ctf_params,
                     skip_ctf=pad_before_ctf,
                 )
-                
-                
+
+
             else:
                 raise ValueError("Invalid disc_type")
 
@@ -793,7 +793,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 # IF this is on, we did not apply CTF above.
                 upsample_factor=2
                 upsampled_shape = tuple(np.array(experiment_dataset.image_shape) * upsample_factor)
-                upsampled_CTF = experiment_dataset.ctf_evaluator(experiment_dataset.CTF_params[indices],  upsampled_shape, experiment_dataset.voxel_size)
+                upsampled_CTF = experiment_dataset.ctf_evaluator(bd.ctf_params,  upsampled_shape, experiment_dataset.voxel_size)
 
                 images_batch = padding.pad_images_fourier_domain(images_batch,  experiment_dataset.image_shape, experiment_dataset.grid_size * (upsample_factor-1))
                 images_batch = images_batch * upsampled_CTF
@@ -814,13 +814,13 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 
                 ## AND THE MAGIC NUMBER IS... (to make things consistent with the non-premultiplied CTF case)
                 noise_image = noise_image * upsample_factor **2
-                
+
                 # Make big noise
                 key, subkey = jax.random.split(key)
                 noise_batch = make_noise_batch(subkey, noise_image, images_batch.shape)
                 noise_batch *= per_image_noise_scale[indices][...,None,None]
                 images_batch *= per_image_contrast[indices][...,None,None]
-                
+
                 # Now apply CTF AGAIN after noise is added, and unpad
                 images_batch = (images_batch + noise_batch).real
 
@@ -830,8 +830,9 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                     images_batch = fourier_transform_utils.get_idft2(images_batch)
 
                 if pad_before_translate:
-                    images_batch = roll_batch(images_batch, -np.round(experiment_dataset.translations[indices]).astype(int)[:,0], -1 )
-                    images_batch = roll_batch(images_batch, -np.round(experiment_dataset.translations[indices]).astype(int)[:,1], -2 )
+                    bd_trans = np.asarray(bd.translations)
+                    images_batch = roll_batch(images_batch, -np.round(bd_trans).astype(int)[:,0], -1 )
+                    images_batch = roll_batch(images_batch, -np.round(bd_trans).astype(int)[:,1], -2 )
 
                 images_batch = padding.unpad_images_spatial_domain(images_batch, experiment_dataset.grid_size * (upsample_factor-1)).real
                 output_array[indices] = np.array(images_batch)
@@ -840,9 +841,10 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 
                 if pad_before_translate:
                     from recovar.core import padding
+                    bd_trans = np.asarray(bd.translations)
                     padded_images = padding.pad_images_spatial_domain(images_batch,experiment_dataset.grid_size)
-                    padded_images = roll_batch(padded_images, -np.round(experiment_dataset.translations[indices]).astype(int)[:,0], -1 )
-                    padded_images = roll_batch(padded_images, -np.round(experiment_dataset.translations[indices]).astype(int)[:,1], -2 )
+                    padded_images = roll_batch(padded_images, -np.round(bd_trans).astype(int)[:,0], -1 )
+                    padded_images = roll_batch(padded_images, -np.round(bd_trans).astype(int)[:,1], -2 )
                     images_batch = padding.unpad_images_spatial_domain(padded_images, experiment_dataset.grid_size)
                 
                 images_batch = fourier_transform_utils.get_idft2(images_batch.reshape([-1, *experiment_dataset.image_shape]))

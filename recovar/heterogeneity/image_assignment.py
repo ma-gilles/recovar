@@ -5,7 +5,7 @@ import numpy as np
 import scipy.stats
 
 from recovar import core
-from recovar.core.configs import DataIterator, ForwardModelConfig
+from recovar.core.configs import ForwardModelConfig
 import recovar.core.forward as core_forward
 
 logger = logging.getLogger(__name__)
@@ -35,9 +35,8 @@ def compute_image_assignment(experiment_dataset, volumes, noise_variance, batch_
                 volumes.shape[0], experiment_dataset.n_units, batch_size)
     volumes = jnp.asarray(volumes, dtype=experiment_dataset.dtype)
     residuals = np.zeros((volumes.shape[0], experiment_dataset.n_units), dtype=experiment_dataset.dtype_real)
-    for batch_data in DataIterator(
-        experiment_dataset, batch_size,
-        apply_process_images=True,
+    for batch_data in experiment_dataset.iterate(
+        batch_size, process_images=True,
     ):
         for volume_ind in range(volumes.shape[0]):
             residuals[volume_ind, batch_data.particle_indices] = compute_residual(
@@ -59,9 +58,8 @@ def estimate_false_positive_rate(experiment_dataset, volumes, noise_variance, ba
     if volumes.shape[0] != 2:
         raise ValueError(f"Only two volumes are supported, got {volumes.shape[0]}")
     difference = volumes[0] - volumes[1]
-    for batch_data in DataIterator(
-        experiment_dataset, batch_size,
-        apply_process_images=True,
+    for batch_data in experiment_dataset.iterate(
+        batch_size, process_images=True,
     ):
         # Zero out images — compute residual of the difference volume alone
         from recovar.core.configs import BatchData

@@ -42,6 +42,17 @@ class _TinyDataset:
         _ = subset_indices
         yield jnp.ones((1, 4), dtype=jnp.complex64), None, np.array([0], dtype=np.int32)
 
+    def iterate(self, batch_size, *, indices=None, **kwargs):
+        from recovar.core.configs import BatchData
+        yield BatchData(
+            images=jnp.ones((1, 4), dtype=jnp.complex64),
+            rotation_matrices=jnp.zeros((1, 3, 3), dtype=jnp.float32),
+            translations=jnp.zeros((1, 2), dtype=jnp.float32),
+            ctf_params=self.CTF_params[:1],
+            particle_indices=np.array([0], dtype=np.int32),
+            image_indices=np.array([0], dtype=np.int32),
+        )
+
 
 def test_compute_H_B_rejects_empty_rotations_or_translations():
     ds = _TinyDataset()

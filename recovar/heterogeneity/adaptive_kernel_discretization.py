@@ -18,7 +18,7 @@ from recovar import core, jax_config, utils
 from recovar.reconstruction import noise, regularization, relion_functions
 from recovar.data_io import dataset
 from recovar.core import linalg
-from recovar.core.configs import BatchData, DataIterator, ForwardModelConfig
+from recovar.core.configs import BatchData, ForwardModelConfig
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 
@@ -358,10 +358,10 @@ def precompute_triangular_kernel(experiment_dataset, noise_variance, pol_degree=
         volume_mask_threshold=float(experiment_dataset.volume_mask_threshold),
     )
 
-    for batch_data in DataIterator(
-        experiment_dataset, batch_size,
+    for batch_data in experiment_dataset.iterate(
+        batch_size,
         noise_model=experiment_dataset.noise, noise_half=False,
-        apply_process_images=True, half_images=True,
+        process_images=True, half_images=True,
     ):
         XWX, F = precompute_triangular_kernel_batch(
             config, batch_data,
@@ -571,10 +571,10 @@ def precompute_kernel(experiment_dataset, noise_variance, pol_degree=0, heteroge
         volume_mask_threshold=float(experiment_dataset.volume_mask_threshold),
     )
 
-    for batch_data in DataIterator(
-        experiment_dataset, batch_size,
+    for batch_data in experiment_dataset.iterate(
+        batch_size,
         noise_model=experiment_dataset.noise, noise_half=False,
-        apply_process_images=True,
+        process_images=True,
     ):
         XWX, F = precompute_kernel_batch(
             config, batch_data,
@@ -960,7 +960,7 @@ def naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, 
 
     estimates = []
     lhs, rhs = [], []
-    og_contrast = experiment_dataset.CTF_params[:,8]
+    og_contrast = experiment_dataset.get_ctf_column(8)
     idx =0 
     for residual_threshold in heterogeneity_bins:
         from recovar.data_io import dataset
@@ -1063,16 +1063,11 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
 
         Ft_y_acc = jnp.zeros_like(Ft_y_acc)
         Ft_ctf_acc = jnp.zeros_like(Ft_ctf_acc)
-        # image_inds are derived from per-particle embedding distances, so for
-        # tilt series they are particle indices.  Use particle-grouped iteration
-        # so that all tilts of a particle are yielded together.
-        _use_image_gen = image_inds is None or not getattr(experiment_dataset, 'tilt_series_flag', False)
-        for batch_data in DataIterator(
-            experiment_dataset, batch_size,
+        for batch_data in experiment_dataset.iterate(
+            batch_size,
             noise_model=experiment_dataset.noise, noise_half=False,
-            apply_process_images=True, half_images=True,
-            index_subset=image_inds,
-            use_image_generator=_use_image_gen,
+            process_images=True, half_images=True,
+            indices=image_inds,
         ):
             Ft_y_acc, Ft_ctf_acc = _heterogeneity_kernel_batch_from_fft(
                 config, batch_data, Ft_y=Ft_y_acc, Ft_ctf=Ft_ctf_acc,
@@ -1579,9 +1574,8 @@ def compute_residuals_many_weights(experiment_dataset, weights , pol_degree, use
     residuals, summed_n = 0, 0
     logger.info("batch size in residual computation: %s", batch_size)
     weights = jnp.asarray(weights)
-    for batch_data in DataIterator(
-        experiment_dataset, batch_size,
-        apply_process_images=True,
+    for batch_data in experiment_dataset.iterate(
+        batch_size, process_images=True,
     ):
         residuals_t, summed_n_t = compute_residuals_batch(
             config, batch_data, weights,

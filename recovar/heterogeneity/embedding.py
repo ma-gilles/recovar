@@ -255,7 +255,6 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
     )
 
     basis_size = basis.shape[0]
-    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
 
     xs = np.zeros((n_units, basis_size), dtype=basis.dtype)
     image_latent_precisions = np.zeros((n_units, basis_size, basis_size), dtype=basis.dtype) if compute_covariances else None
@@ -271,9 +270,12 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
 
     noise_model = experiment_dataset.noise
 
-    for batch, particles_ind, batch_image_ind in data_generator:
-        batch = jnp.asarray(batch)
-        batch_image_ind = np.asarray(batch_image_ind).reshape(-1)
+    for iter_bd in experiment_dataset.iterate(batch_size, by_image=False,
+                                              noise_model=noise_model,
+                                              noise_half=prefer_half_noise):
+        batch = jnp.asarray(iter_bd.images)
+        particles_ind = iter_bd.particle_indices
+        batch_image_ind = np.asarray(iter_bd.image_indices).reshape(-1)
         particle_ids = _particle_ids_per_image(particles_ind, batch.shape[0])
 
         # Handle tilt series image subsetting
@@ -286,6 +288,9 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
             batch_image_ind = batch_image_ind[subset]
             particle_ids = particle_ids[subset]
 
+        # Build noise_variance for the (possibly subsetted) batch
+        nv = _noise_get_half_or_full(noise_model, batch_image_ind, prefer_half=prefer_half_noise)
+
         if shared_label:
             # Some iterators may return multiple particles in one image batch.
             # Shared-label solves must be computed per particle (tilt series).
@@ -295,12 +300,8 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
             # iterator batch. Skip boolean-mask splitting to avoid extra gathers.
             if unique_particles.size == 1:
                 particle_ind = np.asarray(unique_particles, dtype=np.int32)
-                batch_data = BatchData(
-                    images=batch,
-                    ctf_params=experiment_dataset.CTF_params[batch_image_ind],
-                    rotation_matrices=experiment_dataset.rotation_matrices[batch_image_ind],
-                    translations=experiment_dataset.translations[batch_image_ind],
-                    noise_variance=_noise_get_half_or_full(noise_model, batch_image_ind, prefer_half=prefer_half_noise),
+                batch_data = experiment_dataset.make_batch_data(
+                    batch, batch_image_ind, noise_variance=nv,
                 )
 
                 xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
@@ -325,12 +326,8 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
             # Fast path: when contrast is shared across tilts and a batch contains
             # multiple particles, solve all particle groups in one batched call.
             if contrast_shared_across_tilt_series and unique_particles.size > 1:
-                batch_data = BatchData(
-                    images=batch,
-                    ctf_params=experiment_dataset.CTF_params[batch_image_ind],
-                    rotation_matrices=experiment_dataset.rotation_matrices[batch_image_ind],
-                    translations=experiment_dataset.translations[batch_image_ind],
-                    noise_variance=_noise_get_half_or_full(noise_model, batch_image_ind, prefer_half=prefer_half_noise),
+                batch_data = experiment_dataset.make_batch_data(
+                    batch, batch_image_ind, noise_variance=nv,
                 )
 
                 xs_group, contrast_group, cov_group, bias_group = compute_grouped_shared_batch_coords(
@@ -366,12 +363,9 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
                 local_batch = batch[mask]
                 local_particle_ind = np.asarray([pid], dtype=np.int32)
 
-                batch_data = BatchData(
-                    images=local_batch,
-                    ctf_params=experiment_dataset.CTF_params[local_image_ind],
-                    rotation_matrices=experiment_dataset.rotation_matrices[local_image_ind],
-                    translations=experiment_dataset.translations[local_image_ind],
-                    noise_variance=_noise_get_half_or_full(noise_model, local_image_ind, prefer_half=prefer_half_noise),
+                local_nv = _noise_get_half_or_full(noise_model, local_image_ind, prefer_half=prefer_half_noise)
+                batch_data = experiment_dataset.make_batch_data(
+                    local_batch, local_image_ind, noise_variance=local_nv,
                 )
 
                 xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
@@ -393,12 +387,8 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
                     image_latent_bias[local_particle_ind] = bias
             continue
 
-        batch_data = BatchData(
-            images=batch,
-            ctf_params=experiment_dataset.CTF_params[batch_image_ind],
-            rotation_matrices=experiment_dataset.rotation_matrices[batch_image_ind],
-            translations=experiment_dataset.translations[batch_image_ind],
-            noise_variance=_noise_get_half_or_full(noise_model, batch_image_ind, prefer_half=prefer_half_noise),
+        batch_data = experiment_dataset.make_batch_data(
+            batch, batch_image_ind, noise_variance=nv,
         )
 
         xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
@@ -1194,16 +1184,12 @@ def get_per_image_embedding_multi_zdim(
         hermitian_weights = _embedding_hermitian_weights(config)
         prefer_half_noise = hermitian_weights is not None
         noise_model = half_ds.noise
-        data_generator = half_ds.get_dataset_generator(batch_size=batch_size)
 
-        for batch, particles_ind, batch_image_ind in data_generator:
-            batch_data = BatchData(
-                images=batch,
-                ctf_params=half_ds.CTF_params[batch_image_ind],
-                rotation_matrices=half_ds.rotation_matrices[batch_image_ind],
-                translations=half_ds.translations[batch_image_ind],
-                noise_variance=_noise_get_half_or_full(noise_model, batch_image_ind, prefer_half=prefer_half_noise),
-            )
+        for batch_data in half_ds.iterate(batch_size, by_image=False,
+                                          noise_model=noise_model,
+                                          noise_half=prefer_half_noise):
+            particles_ind = batch_data.particle_indices
+            batch_image_ind = np.asarray(batch_data.image_indices).reshape(-1)
 
             # ── Single forward-model pass at max_n_pcs ──────────────────
             AU_t_im, AU_t_Am, AU_t_AU, im_norms_sq, im_T_Am, Am_norm_sq = \

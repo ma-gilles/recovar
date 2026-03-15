@@ -76,14 +76,12 @@ def make_tiny_cryo_dataset(grid_size=4, n_images=8, seed=0):
     _, ctf_params, rots, trans, _, voxel_size, _ = make_tiny_simulation(
         grid_size=grid_size, n_images=n_images, seed=seed
     )
+    metadata = dataset.Metadata(rots, trans, ctf_params)
     cryo = dataset.CryoEMDataset(
         image_stack=None,
         voxel_size=voxel_size,
-        rotation_matrices=rots,
-        translations=trans,
-        CTF_params=ctf_params,
+        metadata=metadata,
         ctf_evaluator=core.CTFEvaluator(),
-        dataset_indices=None,
         grid_size=grid_size,
     )
     return cryo
@@ -140,12 +138,11 @@ def make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8, seed=0):
         seed=seed,
     )
     image_stack = TinyFTImageStack(images)
+    metadata = dataset.Metadata(rots, trans, ctf_params)
     cryo = dataset.CryoEMDataset(
         image_stack=image_stack,
         voxel_size=voxel_size,
-        rotation_matrices=rots,
-        translations=trans,
-        CTF_params=ctf_params,
+        metadata=metadata,
         ctf_evaluator=core.CTFEvaluator(),
         dataset_indices=np.arange(image_stack.n_images, dtype=np.int32),
         grid_size=grid_size,

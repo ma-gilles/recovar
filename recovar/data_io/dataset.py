@@ -23,6 +23,23 @@ from recovar.data_io._index_utils import normalize_indices
 from recovar.data_io.image_loader import ImageLoader
 
 
+_SENTINEL = object()
+
+
+def _prefetch_iter(iterable):
+    """1-lookahead prefetch: loads next batch while caller processes current."""
+    from concurrent.futures import ThreadPoolExecutor
+    it = iter(iterable)
+    with ThreadPoolExecutor(1) as pool:
+        future = pool.submit(next, it, _SENTINEL)
+        while True:
+            result = future.result()
+            if result is _SENTINEL:
+                return
+            future = pool.submit(next, it, _SENTINEL)
+            yield result
+
+
 def get_num_images_in_dataset(mrc_path, datadir=None, strip_prefix=None):
     return ImageLoader.image_count(mrc_path, datadir=datadir, strip_prefix=strip_prefix)
 
@@ -72,6 +89,87 @@ def _deduplicate_preserve_order(values, name):
     return values[np.sort(first_idx)]
     
 
+class Metadata:
+    """Per-image metadata store (poses + CTF parameters).
+
+    Callers access metadata only through ``get_batch()`` or narrow
+    column/mutation methods — never by indexing raw arrays.
+    """
+
+    __slots__ = ('_rotation_matrices', '_translations', '_ctf_params',
+                 'rotation_dtype', 'ctf_dtype', 'real_dtype')
+
+    def __init__(self, rotation_matrices, translations, ctf_params, *,
+                 rotation_dtype=np.float32, ctf_dtype=np.float32,
+                 real_dtype=np.float32):
+        self._rotation_matrices = np.asarray(rotation_matrices, dtype=rotation_dtype)
+        self._translations = np.asarray(translations, dtype=real_dtype)
+        self._ctf_params = np.asarray(ctf_params, dtype=ctf_dtype)
+        self.rotation_dtype = rotation_dtype
+        self.ctf_dtype = ctf_dtype
+        self.real_dtype = real_dtype
+
+    @property
+    def n_images(self):
+        return self._rotation_matrices.shape[0]
+
+    # --- Batch access (primary API) ---
+
+    def get_batch(self, indices):
+        """Return (rotation_matrices, translations, ctf_params) for indices."""
+        return (self._rotation_matrices[indices],
+                self._translations[indices],
+                self._ctf_params[indices])
+
+    # --- Narrow accessors ---
+
+    def get_ctf_column(self, col):
+        """Read a single CTF parameter column for all images."""
+        return self._ctf_params[:, col]
+
+    def get_ctf_params_copy(self):
+        """Return a mutable copy of the full CTF parameter array."""
+        return self._ctf_params.copy()
+
+    def get_rotations_copy(self):
+        """Return a mutable copy of rotation matrices."""
+        return self._rotation_matrices.copy()
+
+    # --- Mutations ---
+
+    def set_poses(self, rotation_matrices, translations):
+        """Replace all poses (used by EM hard assignment)."""
+        self._rotation_matrices = np.asarray(rotation_matrices, dtype=self.rotation_dtype)
+        self._translations = np.asarray(translations, dtype=self.real_dtype)
+
+    def set_ctf(self, ctf_params):
+        """Replace all CTF parameters (used by Ewald preprocessing)."""
+        self._ctf_params = np.asarray(ctf_params, dtype=self.ctf_dtype)
+
+    def set_ctf_column(self, col, values):
+        """Update a single CTF column in-place."""
+        self._ctf_params[:, col] = values
+
+    def scale_ctf_column(self, col, multipliers):
+        """Multiply a CTF column by per-image values."""
+        self._ctf_params[:, col] *= multipliers
+
+    def scale_ctf_element(self, row_indices, col, multiplier):
+        """Multiply a specific CTF element for given rows."""
+        self._ctf_params[row_indices, col] *= multiplier
+
+    def subset(self, indices):
+        """Return a new Metadata for the given image indices."""
+        return Metadata(
+            self._rotation_matrices[indices],
+            self._translations[indices],
+            self._ctf_params[indices],
+            rotation_dtype=self.rotation_dtype,
+            ctf_dtype=self.ctf_dtype,
+            real_dtype=self.real_dtype,
+        )
+
+
 class CryoEMDataset:
     """Core dataset class for cryo-EM heterogeneity analysis.
 
@@ -85,9 +183,6 @@ class CryoEMDataset:
         grid_size: Side length of the image (and default 3-D reconstruction grid).
         voxel_size: Pixel / voxel size in Angstroms.
         n_images: Number of particle images in this dataset.
-        rotation_matrices: Per-image rotation matrices, shape ``(N, 3, 3)``.
-        translations: Per-image in-plane shifts, shape ``(N, 2)``.
-        CTF_params: Per-image CTF parameters, shape ``(N, K)``.
         image_stack: Underlying image loader (``None`` for simulation).
         tilt_series_flag: ``True`` when the dataset represents tilt-series data.
     """
@@ -101,9 +196,9 @@ class CryoEMDataset:
         'tilt_series_flag', 'premultiplied_ctf', 'n_units',
         '_ctf_evaluator', 'hpad', 'volume_mask_threshold',
         # Data types
-        'dtype', 'dtype_real', 'CTF_dtype', 'rotation_dtype',
-        # Per-image arrays
-        'rotation_matrices', 'translations', 'CTF_params',
+        'dtype', 'dtype_real',
+        # Per-image metadata (private — access via iterate/make_batch_data)
+        '_metadata',
         # Mutable state
         'dataset_indices', 'noise',
         # Half-set views (index arrays into this dataset's ordering)
@@ -116,12 +211,9 @@ class CryoEMDataset:
         self,
         image_stack,
         voxel_size: float,
-        rotation_matrices: NDArray[np.floating],
-        translations: NDArray[np.floating],
-        CTF_params: NDArray[np.floating],
+        metadata: Metadata,
         ctf_evaluator=None,
         dtype: type = np.complex64,
-        rotation_dtype: type = np.float32,
         dataset_indices: Optional[NDArray[np.integer]] = None,
         grid_size: Optional[int] = None,
         tilt_series_flag: bool = False,
@@ -143,7 +235,7 @@ class CryoEMDataset:
             self.image_stack = None
             self.image_shape = (grid_size, grid_size)
             self.image_size = grid_size ** 2
-            self.n_images = CTF_params.shape[0]
+            self.n_images = metadata.n_images
             self.padding = 0
         else:
             self.image_stack = image_stack
@@ -168,19 +260,82 @@ class CryoEMDataset:
         # --- Data types ---
         self.dtype = dtype
         self.dtype_real = dtype(0).real.dtype
-        self.CTF_dtype = self.dtype_real
-        self.rotation_dtype = rotation_dtype
 
-        # --- Per-image arrays ---
-        self.rotation_matrices = np.asarray(rotation_matrices, dtype=rotation_dtype)
-        self.translations = np.asarray(translations, dtype=self.dtype_real)
-        self.CTF_params = np.asarray(CTF_params, dtype=self.CTF_dtype)
+        # --- Per-image metadata ---
+        self._metadata = metadata
 
         # --- Mutable state ---
         self.dataset_indices = dataset_indices
         self.noise = None
         self.halfset_indices = None
         self._subset_indices = None
+
+    # --- Metadata access (public API) ---
+
+    @property
+    def metadata(self):
+        """The per-image metadata store."""
+        return self._metadata
+
+    def make_batch_data(self, images, indices, *, noise_variance=None,
+                        particle_indices=None):
+        """Bundle images with per-image metadata for a batch."""
+        from recovar.core.configs import BatchData
+        rots, trans, ctf = self._metadata.get_batch(indices)
+        return BatchData(
+            images=images,
+            rotation_matrices=rots,
+            translations=trans,
+            ctf_params=ctf,
+            noise_variance=noise_variance,
+            particle_indices=particle_indices,
+            image_indices=indices,
+        )
+
+    # --- Convenience delegation to Metadata ---
+
+    @property
+    def rotation_matrices(self):
+        """Per-image rotation matrices (read-only view)."""
+        return self._metadata._rotation_matrices
+
+    @rotation_matrices.setter
+    def rotation_matrices(self, value):
+        self._metadata._rotation_matrices = np.asarray(value, dtype=self._metadata.rotation_dtype)
+
+    @property
+    def translations(self):
+        """Per-image translations (read-only view)."""
+        return self._metadata._translations
+
+    @translations.setter
+    def translations(self, value):
+        self._metadata._translations = np.asarray(value, dtype=self._metadata.real_dtype)
+
+    @property
+    def CTF_params(self):
+        """Per-image CTF parameters (read-only view)."""
+        return self._metadata._ctf_params
+
+    @CTF_params.setter
+    def CTF_params(self, value):
+        self._metadata._ctf_params = np.asarray(value, dtype=self._metadata.ctf_dtype)
+
+    def get_ctf_column(self, col):
+        """Read a single CTF parameter column for all images."""
+        return self._metadata.get_ctf_column(col)
+
+    def get_ctf_params_copy(self):
+        """Return a mutable copy of the full CTF parameter array."""
+        return self._metadata.get_ctf_params_copy()
+
+    def update_poses(self, rots, trans):
+        """Replace all poses."""
+        self._metadata.set_poses(rots, trans)
+
+    def update_ctf(self, ctf_params):
+        """Replace all CTF parameters."""
+        self._metadata.set_ctf(ctf_params)
 
     def __repr__(self) -> str:
         return (
@@ -253,9 +408,7 @@ class CryoEMDataset:
         sub = CryoEMDataset(
             image_stack=self.image_stack,
             voxel_size=self.voxel_size,
-            rotation_matrices=self.rotation_matrices[indices],
-            translations=self.translations[indices],
-            CTF_params=self.CTF_params[indices],
+            metadata=self._metadata.subset(indices),
             ctf_evaluator=self.ctf_evaluator,
             grid_size=self.grid_size,
             tilt_series_flag=self.tilt_series_flag,
@@ -287,16 +440,16 @@ class CryoEMDataset:
         return self.image_stack.get_dataset_subset_generator(
             batch_size, indices, num_workers=num_workers, **kwargs)
 
-    def get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
+    def _get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
         if self._subset_indices is not None:
             gen = self._get_backing_subset_generator(
                 batch_size, self._subset_indices, num_workers=num_workers, **kwargs)
             return self._remap_generator(gen)
         return self.image_stack.get_dataset_generator(batch_size, num_workers=num_workers, **kwargs)
 
-    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
+    def _get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
         if subset_indices is None:
-            return self.get_dataset_generator(batch_size, num_workers=num_workers, **kwargs)
+            return self._get_dataset_generator(batch_size, num_workers=num_workers, **kwargs)
         # Map local subset_indices through _subset_indices to original indices.
         subset_indices = _normalize_image_indices(
             subset_indices, n_images_total=self.n_images, name="subset_indices")
@@ -316,7 +469,7 @@ class CryoEMDataset:
             batch_size, subset_indices, num_workers=num_workers, **kwargs)
 
     # Iterate over individual images rather than tilt groups. For SPA, same as get_dataset_subset_generator.
-    def get_image_subset_generator(self, batch_size, subset_indices, num_workers=0):
+    def _get_image_subset_generator(self, batch_size, subset_indices, num_workers=0):
         if self.tilt_series_flag:
             if self._subset_indices is not None:
                 if subset_indices is not None:
@@ -330,18 +483,31 @@ class CryoEMDataset:
                 return self._remap_generator(gen)
             return self.image_stack.get_image_subset_generator(
                 batch_size, subset_indices, num_workers=num_workers)
-        return self.get_dataset_subset_generator(batch_size, subset_indices, num_workers=num_workers)
+        return self._get_dataset_subset_generator(batch_size, subset_indices, num_workers=num_workers)
 
     # Iterate over individual images rather than tilt groups. For SPA, same as get_dataset_generator.
-    def get_image_generator(self, batch_size, num_workers=0):
+    def _get_image_generator(self, batch_size, num_workers=0):
         if self.tilt_series_flag:
             if self._subset_indices is not None:
                 gen = self.image_stack.get_image_subset_generator(
                     batch_size, self._subset_indices, num_workers=num_workers)
                 return self._remap_generator(gen)
             return self.image_stack.get_image_generator(batch_size, num_workers=num_workers)
-        return self.get_dataset_generator(batch_size, num_workers=num_workers)
+        return self._get_dataset_generator(batch_size, num_workers=num_workers)
 
+
+    # --- Backward-compatible public aliases for generator methods ---
+    def get_dataset_generator(self, *args, **kwargs):
+        return self._get_dataset_generator(*args, **kwargs)
+
+    def get_dataset_subset_generator(self, *args, **kwargs):
+        return self._get_dataset_subset_generator(*args, **kwargs)
+
+    def get_image_generator(self, *args, **kwargs):
+        return self._get_image_generator(*args, **kwargs)
+
+    def get_image_subset_generator(self, *args, **kwargs):
+        return self._get_image_subset_generator(*args, **kwargs)
 
     @property
     def ctf_evaluator(self):
@@ -496,29 +662,58 @@ class CryoEMDataset:
         n0 = self.n_images_half(0)
         return [arr[:n0], arr[n0:]]
 
-    def iterate(self, half: int, batch_size: int, **kw):
-        """Iterate over one halfset, yielding complete BatchData.
+    def iterate(self, batch_size, *, half=None, indices=None,
+                noise_model=None, noise_half=True, noise_by_particle=False,
+                by_image=True, process_images=False, half_images=False,
+                prefetch=True):
+        """Iterate over images, yielding BatchData with all metadata bundled.
 
         Parameters
         ----------
-        half : int
-            Which halfset (0 or 1).
         batch_size : int
-        **kw : dict
-            Additional keyword arguments passed to
-            :class:`~recovar.core.configs.DataIterator` (e.g.
-            ``noise_model``, ``noise_half``, ``apply_process_images``).
+        half : int, optional
+            Halfset index (0 or 1). Mutually exclusive with *indices*.
+        indices : array-like, optional
+            Iterate over this subset of image indices.
+        noise_model : optional
+            Noise model for noise_variance in BatchData.
+        noise_half : bool
+            Use half-spectrum noise (default True for mean reconstruction).
+        noise_by_particle : bool
+            Index noise by particle group (for covariance path).
+        by_image : bool
+            True = flat per-image iteration; False = particle-grouped (tilt).
+        process_images : bool
+            Apply DFT preprocessing to images before yielding.
+        half_images : bool
+            Convert images to rfft-packed half-spectrum.
+        prefetch : bool
+            Enable 1-lookahead prefetch buffer (default True).
         """
+        if half is not None and indices is not None:
+            raise ValueError("Cannot specify both half and indices")
+        if half is not None:
+            if self.halfset_indices is None:
+                raise ValueError("halfset_indices not set on this dataset")
+            indices = self.halfset_indices[half]
+
         from recovar.core.configs import DataIterator
-        if self.halfset_indices is None:
-            raise ValueError("halfset_indices not set on this dataset")
-        return DataIterator(self, batch_size,
-                            index_subset=self.halfset_indices[half], **kw)
+        inner = DataIterator(self, batch_size,
+                             noise_model=noise_model, noise_half=noise_half,
+                             noise_by_particle=noise_by_particle,
+                             index_subset=indices, use_image_generator=by_image,
+                             apply_process_images=process_images,
+                             half_images=half_images)
+        if prefetch:
+            return _prefetch_iter(inner)
+        return inner
 
     def iterate_all(self, batch_size: int, **kw):
-        """Iterate over all images, yielding complete BatchData."""
-        from recovar.core.configs import DataIterator
-        return DataIterator(self, batch_size, **kw)
+        """Iterate over all images, yielding complete BatchData.
+
+        Convenience wrapper — equivalent to ``iterate(batch_size, **kw)``.
+        """
+        return self.iterate(batch_size, **kw)
 
     def set_contrasts(self, contrasts: NDArray):
         """Multiply per-image CTF contrast column by *contrasts*.
@@ -792,9 +987,13 @@ def load_dataset(
     voxel_size = np.float32(voxel_sizes[0])
 
     ctf_params = ctf_params.astype(np.float32)
+    dtype_real = np.complex64(0).real.dtype
 
-    return CryoEMDataset(image_stack, voxel_size,
-                         rots, translations, ctf_params[:, 1:],
+    meta = Metadata(rots, translations, ctf_params[:, 1:],
+                    rotation_dtype=np.float32,
+                    ctf_dtype=dtype_real,
+                    real_dtype=dtype_real)
+    return CryoEMDataset(image_stack, voxel_size, meta,
                          ctf_evaluator=ctf_eval,
                          dataset_indices=dataset_indices,
                          tilt_series_flag=tilt_series,

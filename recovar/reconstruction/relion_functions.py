@@ -11,7 +11,7 @@ import numpy as np
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, jax_config, utils
 from recovar.core import mask, padding
-from recovar.core.configs import BatchData, DataIterator, ForwardModelConfig
+from recovar.core.configs import BatchData, ForwardModelConfig
 from recovar.reconstruction import noise, regularization
 
 logger = logging.getLogger(__name__)
@@ -84,12 +84,7 @@ def relion_style_triangular_kernel(
     )
 
     Ft_y, Ft_ctf = None, None
-    # For tilt series with index_subset, indices are particle-level, so use
-    # the particle-grouped generator (get_dataset_subset_generator) not the
-    # per-image generator.  Without a subset, default image iteration is fine.
-    _use_image_gen = index_subset is None or not getattr(experiment_dataset, 'tilt_series_flag', False)
-    for batch_data in DataIterator(experiment_dataset, batch_size, noise_model=noise_model,
-                                   index_subset=index_subset, use_image_generator=_use_image_gen):
+    for batch_data in experiment_dataset.iterate(batch_size, noise_model=noise_model, indices=index_subset):
         Ft_y, Ft_ctf = relion_kernel_batch(config, batch_data, Ft_y=Ft_y, Ft_ctf=Ft_ctf)
 
     if Ft_y is not None:
@@ -212,24 +207,19 @@ def residual_relion_kernel_trilinear(
 
 def residual_relion_style_triangular_kernel(experiment_dataset, mean_estimate, cov_noise, batch_size, index_subset=None):
     """Residual RELION-style triangular kernel reconstruction."""
-    if index_subset is None:
-        data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
-    else:
-        data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices=index_subset)
-
     config = ForwardModelConfig.from_dataset(
         experiment_dataset, disc_type='linear_interp',
         upsampling_factor=1,
     )
 
     Ft_y, Ft_ctf = None, None
-    for batch, particles_ind, indices in data_generator:
-        batch = experiment_dataset.process_images(batch, apply_image_mask=False)
+    for batch_data in experiment_dataset.iterate(batch_size, indices=index_subset,
+                                                  process_images=True, by_image=False):
         Ft_y, Ft_ctf = residual_relion_kernel_trilinear(
-            config, mean_estimate, batch,
-            experiment_dataset.CTF_params[indices],
-            experiment_dataset.rotation_matrices[indices],
-            experiment_dataset.translations[indices],
+            config, mean_estimate, batch_data.images,
+            batch_data.ctf_params,
+            batch_data.rotation_matrices,
+            batch_data.translations,
             cov_noise,
             Ft_y=Ft_y, Ft_ctf=Ft_ctf,
         )

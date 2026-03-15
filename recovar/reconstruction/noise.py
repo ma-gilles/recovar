@@ -13,7 +13,7 @@ from recovar.utils.nvtx_shim import nvtx
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, utils, jax_config
-from recovar.core.configs import ForwardModelConfig, BatchData, DataIterator, ModelState
+from recovar.core.configs import ForwardModelConfig, BatchData, ModelState
 from recovar.heterogeneity import covariance_core
 from recovar.reconstruction import regularization
 
@@ -399,15 +399,13 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
     def infinite_data_iterator():
             while True:                              # repeat forever (or add a break after N epochs)
 
-                for batch, _, batch_ind in \
-                    experiment_dataset.get_image_subset_generator(
-                        batch_size=batch_size,
-                        subset_indices=image_subset):
+                for bd in experiment_dataset.iterate(
+                        batch_size, indices=image_subset, prefetch=False):
                     yield (
-                        batch,
-                        experiment_dataset.rotation_matrices[batch_ind],
-                        experiment_dataset.translations[batch_ind],
-                        experiment_dataset.CTF_params[batch_ind],
+                        bd.images,
+                        bd.rotation_matrices,
+                        bd.translations,
+                        bd.ctf_params,
                     )
 
 
@@ -492,18 +490,15 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
                 noise_variance = noise_variance.at[:only_up_to_k].set(noise_variance_to_opt)
             else:
                 noise_variance = noise_variance_to_opt
-            data_generator = experiment_dataset.get_image_subset_generator(
-                batch_size=batch_size,
-                subset_indices=image_subset
-            )
             total_loss = 0.0
             total_grad = 0.0
             n_images = (image_subset.size if image_subset is not None else experiment_dataset.n_images)
-            for batch, _, batch_ind in data_generator:
-                batch = experiment_dataset.process_images(batch)
+            for batch_data in experiment_dataset.iterate(
+                    batch_size, indices=image_subset,
+                    process_images=True, prefetch=False):
                 image_masks = get_image_masks(
                     volume_mask,
-                    experiment_dataset.rotation_matrices[batch_ind],
+                    batch_data.rotation_matrices,
                     experiment_dataset.volume_mask_threshold,
                     experiment_dataset.volume_shape,
                     experiment_dataset.image_shape,
@@ -513,10 +508,10 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
                 loss_val, grad_val = jax.value_and_grad(
                     noise_variance_loss, argnums=1
                 )(
-                    batch,
+                    batch_data.images,
                     noise_variance,
-                    experiment_dataset.translations[batch_ind],
-                    experiment_dataset.CTF_params[batch_ind],
+                    batch_data.translations,
+                    batch_data.ctf_params,
                     experiment_dataset.voxel_size,
                     experiment_dataset.ctf_evaluator,
                     image_masks,
@@ -652,10 +647,8 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
     
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
 
-    batch_iter = DataIterator(
-        experiment_dataset,
-        batch_size=batch_size,
-        index_subset=image_subset,
+    batch_iter = experiment_dataset.iterate(
+        batch_size, indices=image_subset,
     )
 
     n_images = (image_subset.size if image_subset is not None else experiment_dataset.n_images)
@@ -739,10 +732,8 @@ def estimate_noise_variance(experiment_dataset, batch_size, max_images = 10000):
     else:
         n_images_used = experiment_dataset.n_images
 
-    batch_iter = DataIterator(
-        experiment_dataset,
-        batch_size=batch_size,
-        index_subset=subset_indices,
+    batch_iter = experiment_dataset.iterate(
+        batch_size, indices=subset_indices,
     )
 
     for batch_data in batch_iter:
@@ -764,7 +755,7 @@ def estimate_white_noise_variance_from_mask(experiment_dataset, volume_mask, bat
 
 def estimate_noise_variance_from_outside_mask(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp'):
 
-    batch_iter = DataIterator(experiment_dataset, batch_size=batch_size)
+    batch_iter = experiment_dataset.iterate(batch_size)
     image_PSs = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
 
     masked_image_PSs = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
@@ -791,7 +782,7 @@ def estimate_noise_variance_from_outside_mask(experiment_dataset, volume_mask, b
 
 def estimate_noise_variance_from_outside_mask_v2(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp'):
 
-    batch_iter = DataIterator(experiment_dataset, batch_size=batch_size)
+    batch_iter = experiment_dataset.iterate(batch_size)
 
     image_mask = jnp.ones_like(experiment_dataset.image_mask)
     top_fraction = 0
@@ -948,22 +939,18 @@ def estimate_noise_from_heterogeneity_residuals_inside_mask(experiment_dataset, 
 
 def get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp', subset_indices = None):
     
-    if subset_indices is None:
-        n_images = experiment_dataset.n_images
-        data_generator = experiment_dataset.get_image_generator(batch_size=batch_size) 
-    else:
-        n_images = subset_indices.size
-        data_generator = experiment_dataset.get_image_subset_generator(batch_size=batch_size, subset_indices = subset_indices) 
+    n_images = experiment_dataset.n_images if subset_indices is None else subset_indices.size
 
     residual_squared = jnp.zeros(experiment_dataset.grid_size, dtype = basis.dtype)
     all_averaged_residual_squared = np.empty((n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
     basis = jnp.asarray(basis.T)
-    for batch, _, batch_image_ind in data_generator:
-        averaged_residual_squared = get_average_residual_square_inner(batch, mean_estimate, volume_mask, 
+    for batch_data in experiment_dataset.iterate(batch_size, indices=subset_indices):
+        batch_image_ind = batch_data.image_indices
+        averaged_residual_squared = get_average_residual_square_inner(batch_data.images, mean_estimate, volume_mask,
                                                                         basis,
-                                                                        experiment_dataset.CTF_params[batch_image_ind],
-                                                                        experiment_dataset.rotation_matrices[batch_image_ind],
-                                                                        experiment_dataset.translations[batch_image_ind],
+                                                                        batch_data.ctf_params,
+                                                                        batch_data.rotation_matrices,
+                                                                        batch_data.translations,
                                                                         experiment_dataset.image_mask,
                                                                         experiment_dataset.volume_mask_threshold,
                                                                         experiment_dataset.image_shape,
@@ -1055,14 +1042,7 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
         logger.info("Time to compute spline coefficients: %f", time.time() - st_time)
 
 
-    if subset_indices is None:
-        n_images = experiment_dataset.n_images
-        data_generator = experiment_dataset.get_image_generator(batch_size=batch_size) 
-
-    else:
-        n_images = subset_indices.size
-        data_generator = experiment_dataset.get_image_subset_generator(batch_size=batch_size, subset_indices = subset_indices) 
-
+    n_images = experiment_dataset.n_images if subset_indices is None else subset_indices.size
 
     # Construct structured parameters once outside the loop
     config = ForwardModelConfig.from_dataset(
@@ -1089,7 +1069,9 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
     top_fraction = None
     kernel_sq_sum = None
 
-    for batch, _, batch_image_ind in data_generator:
+    for iter_bd in experiment_dataset.iterate(batch_size, indices=subset_indices):
+        batch_image_ind = iter_bd.image_indices
+        batch = iter_bd.images
         if subset_fn is not None:
             idx = subset_fn(batch_image_ind)
             batch = batch[idx]

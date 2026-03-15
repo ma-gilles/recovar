@@ -170,24 +170,22 @@ def M_with_precompute(experiment_dataset, probabilities, rotations, translations
     batch_size = utils.safe_batch_size(
         utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) // translations.shape[0] * 20)
 
-    data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = image_indices)
-
     Ft_y, Ft_ctf = jnp.zeros((experiment_dataset.volume_size), dtype = experiment_dataset.dtype), jnp.zeros((experiment_dataset.volume_size), experiment_dataset.dtype)
 
     mult = 5
     rotation_batch = max(1, rotations.shape[0] // mult)
     logger.info("Starting sum up images. Batch size %s, rotation batch %s", batch_size, rotation_batch)
     start_idx = 0
-    for batch, _, indices in data_generator:
-        batch = jnp.asarray(batch)
-        end_idx = start_idx + len(indices)
+    for batch_data in experiment_dataset.iterate(batch_size, indices=image_indices, by_image=False):
+        batch = jnp.asarray(batch_data.images)
+        end_idx = start_idx + len(batch_data.image_indices)
 
         for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):
             Ft_y, Ft_ctf = sum_up_images_fixed_rots_eqx(
                 config, batch,
                 probabilities[start_idx:end_idx, rot_indices[0]:rot_indices[-1]+1],
                 translations, rotations[rot_indices],
-                experiment_dataset.CTF_params[indices], noise_variance,
+                batch_data.ctf_params, noise_variance,
                 Ft_y=Ft_y, Ft_ctf=Ft_ctf,
             )
 

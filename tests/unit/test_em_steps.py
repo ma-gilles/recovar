@@ -226,6 +226,17 @@ def test_M_with_precompute_handles_small_rotation_count_without_zero_batch(monke
             _ = subset_indices
             yield jnp.ones((1, 4), dtype=jnp.float32), None, np.array([0], dtype=np.int32)
 
+        def iterate(self, batch_size, *, indices=None, **kwargs):
+            from recovar.core.configs import BatchData
+            yield BatchData(
+                images=jnp.ones((1, 4), dtype=jnp.float32),
+                rotation_matrices=jnp.zeros((1, 3, 3), dtype=jnp.float32),
+                translations=jnp.zeros((1, 2), dtype=jnp.float32),
+                ctf_params=self.CTF_params[:1],
+                particle_indices=np.array([0], dtype=np.int32),
+                image_indices=np.array([0], dtype=np.int32),
+            )
+
     monkeypatch.setattr(rec_utils, "get_gpu_memory_total", lambda: 1)
     monkeypatch.setattr(rec_utils, "get_image_batch_size", lambda _grid_size, _gpu_memory: 1)
     monkeypatch.setattr(

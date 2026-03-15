@@ -19,7 +19,7 @@ import jax.numpy as jnp
 
 import recovar.heterogeneity.adaptive_kernel_discretization as akd
 
-from recovar.core.configs import DataIterator, ForwardModelConfig
+from recovar.core.configs import ForwardModelConfig
 from recovar.reconstruction import relion_functions
 from helpers.tiny_synthetic import make_tiny_cryo_dataset_with_images
 
@@ -287,11 +287,11 @@ def test_even_less_naive_matches_reference_bin_loop(gpu_device):
             image_inds = np.sort(np.where(inds == bin_idx)[0])
             Ft_y_acc = jnp.zeros(half_vol_size, dtype=cryo.dtype)
             Ft_ctf_acc = jnp.zeros(half_vol_size, dtype=cryo.dtype_real)
-            for batch_data in DataIterator(
-                cryo, batch_size,
+            for batch_data in cryo.iterate(
+                batch_size,
                 noise_model=cryo.noise, noise_half=False,
-                apply_process_images=True, half_images=True,
-                index_subset=image_inds,
+                process_images=True, half_images=True,
+                indices=image_inds,
             ):
                 Ft_y_acc, Ft_ctf_acc = akd._heterogeneity_kernel_batch_from_fft(
                     cfg, batch_data, Ft_y=Ft_y_acc, Ft_ctf=Ft_ctf_acc

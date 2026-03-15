@@ -106,17 +106,17 @@ def test_generate_simulated_dataset_tilt_branch_wires_ctf_and_metadata(monkeypat
 
     created = []
 
-    def _fake_cryo_dataset(image_stack, voxel_size, rots, trans, ctf_params, ctf_evaluator=None, dataset_indices=None, grid_size=None, **kwargs):
+    def _fake_cryo_dataset(image_stack, voxel_size, metadata, ctf_evaluator=None, grid_size=None, **kwargs):
         obj = type("FakeDataset", (), {})()
-        obj.n_images = rots.shape[0]
+        obj.n_images = metadata.n_images
         obj.image_shape = (grid_size, grid_size)
-        obj.CTF_params = ctf_params
+        obj.CTF_params = metadata._ctf_params
         obj.ctf_evaluator = ctf_evaluator
         obj.grid_size = grid_size
         obj.voxel_size = voxel_size
         obj.volume_shape = (grid_size, grid_size, grid_size)
-        obj.translations = trans
-        obj.rotation_matrices = rots
+        obj.translations = metadata._translations
+        obj.rotation_matrices = metadata._rotation_matrices
         created.append(obj)
         return obj
 
@@ -181,8 +181,8 @@ def test_generate_simulated_dataset_extra_particles_and_outliers(monkeypatch):
             self.voxel_size = voxel_size
             self.volume_shape = (grid_size, grid_size, grid_size)
 
-    def _fake_cryo_dataset(image_stack, voxel_size, rots, trans, ctf_params, ctf_evaluator=None, dataset_indices=None, grid_size=None, **kwargs):
-        return _FakeDatasetObj(rots.shape[0], grid_size, ctf_evaluator, ctf_params, rots, trans)
+    def _fake_cryo_dataset(image_stack, voxel_size, metadata, ctf_evaluator=None, grid_size=None, **kwargs):
+        return _FakeDatasetObj(metadata.n_images, grid_size, ctf_evaluator, metadata._ctf_params, metadata._rotation_matrices, metadata._translations)
 
     monkeypatch.setattr(simulator.dataset, "CryoEMDataset", _fake_cryo_dataset)
     monkeypatch.setattr(simulator.utils, "get_gpu_memory_total", lambda: 10)

@@ -16,7 +16,7 @@ from recovar import core, utils, jax_config
 from recovar.core import linalg
 from recovar.jax_config import _to_cpu
 from recovar.core import cubic_interpolation
-from recovar.core.configs import ForwardModelConfig, BatchData, DataIterator, ModelState, CovarianceOpts, CovColumnOpts
+from recovar.core.configs import ForwardModelConfig, BatchData, ModelState, CovarianceOpts, CovColumnOpts
 from recovar.heterogeneity import covariance_core
 from recovar.reconstruction import regularization, relion_functions, noise
 
@@ -478,13 +478,13 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, b
 
     # Full-spectrum noise needed for masked noise variance inside the kernel.
     Ft_y, Ft_ctf, Ft_im, Ft_one = None, None, None, None
-    for batch_data in DataIterator(
-        experiment_dataset, batch_size,
+    for batch_data in experiment_dataset.iterate(
+        batch_size,
         noise_model=experiment_dataset.noise,
         noise_half=False,
-        apply_process_images=True,
+        process_images=True,
         half_images=True,
-        index_subset=image_subset,
+        indices=image_subset,
     ):
         Ft_y, Ft_ctf, Ft_im, Ft_one = variance_relion_kernel_trilinear(
             config, batch_data, mean_estimate, volume_mask,
@@ -783,14 +783,14 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
         H_accum = jnp.zeros((n_freq_batch, volume_size), dtype=jnp.complex64)
         B_accum = jnp.zeros((n_freq_batch, volume_size), dtype=jnp.complex64)
 
-        # Inner loop: image batches via DataIterator
-        for batch_data in DataIterator(
-                cryo, image_batch_size,
+        # Inner loop: image batches
+        for batch_data in cryo.iterate(
+                image_batch_size,
                 noise_model=cryo.noise, noise_half=False,
                 noise_by_particle=True,
-                index_subset=image_subset,
-                use_image_generator=image_subset is not None,
-                apply_process_images=True):
+                indices=image_subset,
+                by_image=image_subset is not None,
+                process_images=True):
 
             images, ctf_on_grid, plane_coords, image_mask, tilt_labels = \
                 preprocess_covariance_batch(
@@ -937,7 +937,7 @@ def _compute_projected_covariance_single(experiment_dataset, mean_estimate, basi
     opts = CovarianceOpts(disc_type_u=disc_type_u, do_mask_images=do_mask_images, shared_label=experiment_dataset.tilt_series_flag)
     hermitian_weights = linalg.rfft2_hermitian_weights(config.image_shape, dtype=experiment_dataset.dtype_real)
 
-    for batch_data in DataIterator(experiment_dataset, batch_size, noise_model=experiment_dataset.noise, noise_half=False, apply_process_images=False):
+    for batch_data in experiment_dataset.iterate(batch_size, noise_model=experiment_dataset.noise, noise_half=False):
         lhs, rhs = reduce_covariance_inner(config, batch_data, model, opts, experiment_dataset.image_mask, hermitian_weights=hermitian_weights, lhs=lhs, rhs=rhs)
     del basis
 
@@ -1012,12 +1012,11 @@ def compute_projected_covariance(dataset, mean_estimate, basis, volume_mask, bat
         hermitian_weights = linalg.rfft2_hermitian_weights(
             config.image_shape, dtype=dataset.dtype_real)
 
-        for batch_data in DataIterator(
-            dataset, batch_size,
+        for batch_data in dataset.iterate(
+            batch_size,
             noise_model=dataset.noise,
             noise_half=False,
-            apply_process_images=False,
-            index_subset=dataset.halfset_indices[half],
+            half=half,
         ):
             lhs, rhs = reduce_covariance_inner(
                 config, batch_data, model, opts,

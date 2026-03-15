@@ -266,12 +266,13 @@ def compute_ewald_LS_matvec_in_batches(experiment_dataset, input_volume_real, in
     n_batches = utils.get_number_of_index_batch(experiment_dataset.n_images, batch_size)
     for k in range(n_batches):
         indices = utils.get_batch_of_indices_arange(experiment_dataset.n_images, batch_size, k)
+        bd = experiment_dataset.make_batch_data(None, indices)
         vol_real_this, vol_imag_this =compute_A_t_Av_ewald_sphere_forward_model(input_volume_real,
                                         input_volume_imag,
-                                        experiment_dataset.rotation_matrices[indices],
-                                        experiment_dataset.CTF_params[indices], 
+                                        bd.rotation_matrices,
+                                        bd.ctf_params,
                                         noise_variance,
-                                        experiment_dataset.image_shape, 
+                                        experiment_dataset.image_shape,
                                         experiment_dataset.volume_shape, experiment_dataset.voxel_size, disc_type)
         vol_real += vol_real_this
         vol_imag += vol_imag_this
@@ -295,9 +296,10 @@ def compute_diag_mean(experiment_dataset, batch_size, disc_type, noise_variance 
     for k in range(n_batches):
         volume = jnp.ones(experiment_dataset.volume_size, dtype = jnp.float32)
         indices = utils.get_batch_of_indices_arange(experiment_dataset.n_images, batch_size, k)
+        bd = experiment_dataset.make_batch_data(None, indices)
         ATA_one = core_forward.compute_AtAv(
-            config, volume, experiment_dataset.CTF_params[indices],
-            experiment_dataset.rotation_matrices[indices],
+            config, volume, bd.ctf_params,
+            bd.rotation_matrices,
             noise_variance=noise_variance,
         )
         diagonal += ATA_one[0]
@@ -315,20 +317,16 @@ def volt_to_wavelength(volt):
 
 def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance):
     logger.info("batch size in Ewald LHS: %s", batch_size)
-    data_generator = experiment_dataset.get_dataset_generator(batch_size=batch_size)
-
     vol_real, vol_imag = 0, 0
 
     # Compute \sum_i A_i^T y_i / sigma_i^2
-    for batch, _, indices in data_generator:
-        # Only place where image mask is used ?
-        batch = experiment_dataset.process_images(batch, apply_image_mask = False)
-        batch = core.translate_images(batch, experiment_dataset.translations[indices], experiment_dataset.image_shape)
+    for batch_data in experiment_dataset.iterate(batch_size, process_images=True, by_image=False):
+        batch = core.translate_images(batch_data.images, batch_data.translations, experiment_dataset.image_shape)
 
         batch /= noise_variance
         A_t_vol_real, A_t_vol_imag = adjoint_ewald_sphere_forward_model(batch.real, batch.imag,
-                                        experiment_dataset.rotation_matrices[indices],
-                                        experiment_dataset.CTF_params[indices], 
+                                        batch_data.rotation_matrices,
+                                        batch_data.ctf_params,
                                         experiment_dataset.image_shape, experiment_dataset.volume_shape,
                                         experiment_dataset.voxel_size, disc_type)
 
@@ -342,15 +340,15 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
     from recovar.reconstruction import noise
     from recovar.reconstruction import homogeneous
 
-    if not np.isclose(experiment_dataset.CTF_params[:,core.CTFParamIndex.W],0).all():
-        ctf_params = experiment_dataset.CTF_params
-        if not np.isclose(experiment_dataset.CTF_params[:,core.CTFParamIndex.PHASE_SHIFT],0).all():
+    ctf_copy = experiment_dataset.get_ctf_params_copy()
+    if not np.isclose(ctf_copy[:, core.CTFParamIndex.W], 0).all():
+        if not np.isclose(ctf_copy[:, core.CTFParamIndex.PHASE_SHIFT], 0).all():
             raise ValueError("Either w or phase shift should be zero")
 
-        phase_shift = np.arcsin(ctf_params[:,core.CTFParamIndex.W]) / np.pi * 180
-        ctf_params[:,core.CTFParamIndex.W] = 0
-        ctf_params[:,core.CTFParamIndex.PHASE_SHIFT] = phase_shift
-        experiment_dataset.CTF_params = ctf_params
+        phase_shift = np.arcsin(ctf_copy[:, core.CTFParamIndex.W]) / np.pi * 180
+        ctf_copy[:, core.CTFParamIndex.W] = 0
+        ctf_copy[:, core.CTFParamIndex.PHASE_SHIFT] = phase_shift
+        experiment_dataset.update_ctf(ctf_copy)
 
 
     noise_variance = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape)

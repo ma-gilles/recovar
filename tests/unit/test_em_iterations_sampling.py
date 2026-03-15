@@ -211,6 +211,10 @@ def test_split_E_M_v2_updates_state_means_noise_and_pose_assignments(monkeypatch
             self.rotation_matrices = None
             self.translations = None
 
+        def update_poses(self, rots, trans):
+            self.rotation_matrices = rots
+            self.translations = trans
+
         def get_valid_frequency_indices(self, _cutoff):
             mask = np.zeros((8,), dtype=bool)
             mask[0] = True
@@ -298,6 +302,10 @@ def test_split_E_M_v2_heterogeneous_branch_updates_covariance_prior_and_masks_u(
             self.volume_shape = (2, 2, 2)
             self.rotation_matrices = None
             self.translations = None
+
+        def update_poses(self, rots, trans):
+            self.rotation_matrices = rots
+            self.translations = trans
 
         def get_valid_frequency_indices(self, _cutoff):
             mask = np.zeros((8,), dtype=np.float32)

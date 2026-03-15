@@ -37,7 +37,7 @@ def test_compute_residual_uses_forward_model_translation_and_noise_scaling(monke
 
 
 class _MockDS:
-    """Minimal mock dataset for DataIterator."""
+    """Minimal mock dataset for iterate()."""
     dtype = np.complex64
     dtype_real = np.float32
     n_units = 4
@@ -51,21 +51,20 @@ class _MockDS:
     CTF_params = np.zeros((4, 1), dtype=np.float32)
     rotation_matrices = np.zeros((4, 3, 3), dtype=np.float32)
     translations = np.zeros((4, 2), dtype=np.float32)
-    image_stack = SimpleNamespace(
-        process_images=lambda x, apply_image_mask=False: x,
-    )
     ctf_evaluator = staticmethod(lambda *_args, **_kwargs: None)
 
-    @staticmethod
-    def process_images(x, apply_image_mask=False):
-        return x
-
-    def get_image_generator(self, batch_size):
-        _ = batch_size
+    def iterate(self, batch_size, **kwargs):
         batch = np.zeros((2, 2), dtype=np.float32)
         particles_ind = np.array([1, 3], dtype=np.int32)
         batch_image_ind = np.array([1, 3], dtype=np.int32)
-        yield batch, particles_ind, batch_image_ind
+        yield BatchData(
+            images=batch,
+            rotation_matrices=self.rotation_matrices[batch_image_ind],
+            translations=self.translations[batch_image_ind],
+            ctf_params=self.CTF_params[batch_image_ind],
+            particle_indices=particles_ind,
+            image_indices=batch_image_ind,
+        )
 
 
 def test_compute_image_assignment_fills_residual_matrix(monkeypatch):
@@ -91,12 +90,18 @@ def test_estimate_false_positive_rate_from_mocked_residual(monkeypatch):
         rotation_matrices = np.zeros((2, 3, 3), dtype=np.float32)
         translations = np.zeros((2, 2), dtype=np.float32)
 
-        def get_image_generator(self, batch_size):
-            _ = batch_size
+        def iterate(self, batch_size, **kwargs):
             batch = np.zeros((2, 2), dtype=np.float32)
             particles_ind = np.array([0, 1], dtype=np.int32)
             batch_image_ind = np.array([0, 1], dtype=np.int32)
-            yield batch, particles_ind, batch_image_ind
+            yield BatchData(
+                images=batch,
+                rotation_matrices=self.rotation_matrices[batch_image_ind],
+                translations=self.translations[batch_image_ind],
+                ctf_params=self.CTF_params[batch_image_ind],
+                particle_indices=particles_ind,
+                image_indices=batch_image_ind,
+            )
 
     monkeypatch.setattr(ia, "compute_residual", lambda *_args, **_kwargs: np.array([4.0, 9.0], dtype=np.float32))
     vols = np.array([[1.0], [2.0]], dtype=np.float32)

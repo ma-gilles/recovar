@@ -452,6 +452,22 @@ class _MockNoiseDataset:
     def get_image_subset_generator(self, batch_size, subset_indices):
         return self._iter_indices(np.asarray(subset_indices, dtype=np.int32), batch_size)
 
+    def iterate(self, batch_size, *, indices=None, **kwargs):
+        from recovar.core.configs import BatchData
+        if indices is None:
+            indices = np.arange(self.n_images, dtype=np.int32)
+        idx = np.asarray(indices, dtype=np.int32)
+        for start in range(0, idx.size, batch_size):
+            batch_ind = idx[start:start + batch_size]
+            yield BatchData(
+                images=self._images[batch_ind],
+                rotation_matrices=self.rotation_matrices[batch_ind],
+                translations=self.translations[batch_ind],
+                ctf_params=self.CTF_params[batch_ind],
+                particle_indices=batch_ind,
+                image_indices=batch_ind,
+            )
+
 
 def _legacy_estimate_noise_variance(dataset, batch_size, max_images=10000):
     from recovar.reconstruction import regularization

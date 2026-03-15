@@ -167,9 +167,7 @@ def test_cryoemdataset_minimal_and_noise_access():
     ds = dataset.CryoEMDataset(
         image_stack=None,
         voxel_size=1.0,
-        rotation_matrices=rots,
-        translations=trans,
-        CTF_params=ctf_params,
+        metadata=dataset.Metadata(rots, trans, ctf_params),
         ctf_evaluator=ctf_fun,
         grid_size=4,
     )
@@ -186,7 +184,7 @@ def test_cryoemdataset_minimal_and_noise_access():
     np.testing.assert_array_equal(ds.get_noise_variance(np.array([0, 2])), np.array([1, 3]))
 
     ctf = ds.ctf_evaluator(ds.CTF_params[:1], ds.image_shape, ds.voxel_size)
-    assert ctf.dtype == ds.CTF_dtype
+    assert ctf.dtype == ds.CTF_params.dtype
 
 
 def test_cryoemdataset_casts_arrays_to_expected_dtypes():
@@ -197,9 +195,7 @@ def test_cryoemdataset_casts_arrays_to_expected_dtypes():
     ds = dataset.CryoEMDataset(
         image_stack=None,
         voxel_size=1.0,
-        rotation_matrices=rots,
-        translations=trans,
-        CTF_params=ctf_params,
+        metadata=dataset.Metadata(rots, trans, ctf_params),
         grid_size=4,
     )
 
@@ -810,9 +806,7 @@ def test_cryoemdataset_predicted_image_and_generators(monkeypatch):
     ds = dataset.CryoEMDataset(
         image_stack=stack,
         voxel_size=1.0,
-        rotation_matrices=rots,
-        translations=trans,
-        CTF_params=ctf_params,
+        metadata=dataset.Metadata(rots, trans, ctf_params),
         tilt_series_flag=True,
     )
     assert ds.n_units == stack.Np
@@ -1113,9 +1107,7 @@ def test_subsample_cryoem_dataset_reindexes_and_slices_metadata():
     cryo = dataset.CryoEMDataset(
         image_stack=stack,
         voxel_size=1.5,
-        rotation_matrices=rots,
-        translations=trans,
-        CTF_params=ctf_params,
+        metadata=dataset.Metadata(rots, trans, ctf_params),
     )
 
     sub = dataset.subsample_cryoem_dataset(cryo, np.array([True, False, True, False, True]))
@@ -1159,9 +1151,7 @@ def test_subsample_cryoem_dataset_preserves_premultiplied_ctf_flag():
     cryo = dataset.CryoEMDataset(
         image_stack=stack,
         voxel_size=1.5,
-        rotation_matrices=rots,
-        translations=trans,
-        CTF_params=ctf_params,
+        metadata=dataset.Metadata(rots, trans, ctf_params),
         premultiplied_ctf=True,
     )
 
@@ -1178,9 +1168,7 @@ def _make_subset_cryo(backing_stack, subset_indices):
     cryo = dataset.CryoEMDataset(
         image_stack=backing_stack,
         voxel_size=1.5,
-        rotation_matrices=rots,
-        translations=trans,
-        CTF_params=ctf_params,
+        metadata=dataset.Metadata(rots, trans, ctf_params),
     )
     return cryo.subset(np.asarray(subset_indices, dtype=np.int32))
 
@@ -1336,9 +1324,7 @@ def test_subsampled_image_stack_prefers_backing_image_subset_generator_when_avai
     cryo = dataset.CryoEMDataset(
         image_stack=backing,
         voxel_size=1.5,
-        rotation_matrices=rots,
-        translations=trans,
-        CTF_params=ctf_params,
+        metadata=dataset.Metadata(rots, trans, ctf_params),
         tilt_series_flag=True,
     )
     sub = cryo.subset(np.array([7, 2, 4, 1], dtype=np.int32))
@@ -1599,9 +1585,7 @@ def test_subsample_cryoem_dataset_preserves_duplicate_requested_indices():
     cryo = dataset.CryoEMDataset(
         image_stack=stack,
         voxel_size=1.5,
-        rotation_matrices=rots,
-        translations=trans,
-        CTF_params=ctf_params,
+        metadata=dataset.Metadata(rots, trans, ctf_params),
     )
 
     requested = np.array([4, 1, 4], dtype=np.int32)
@@ -1621,9 +1605,7 @@ def test_subsample_cryoem_dataset_rejects_non_1d_boolean_mask():
     cryo = dataset.CryoEMDataset(
         image_stack=None,
         voxel_size=1.5,
-        rotation_matrices=rots,
-        translations=trans,
-        CTF_params=ctf_params,
+        metadata=dataset.Metadata(rots, trans, ctf_params),
         grid_size=4,
     )
 
@@ -1639,9 +1621,7 @@ def test_subsample_cryoem_dataset_rejects_wrong_length_boolean_mask():
     cryo = dataset.CryoEMDataset(
         image_stack=None,
         voxel_size=1.5,
-        rotation_matrices=rots,
-        translations=trans,
-        CTF_params=ctf_params,
+        metadata=dataset.Metadata(rots, trans, ctf_params),
         grid_size=4,
     )
 
@@ -1657,9 +1637,7 @@ def test_subsample_cryoem_dataset_rejects_out_of_range_indices():
     cryo = dataset.CryoEMDataset(
         image_stack=None,
         voxel_size=1.5,
-        rotation_matrices=rots,
-        translations=trans,
-        CTF_params=ctf_params,
+        metadata=dataset.Metadata(rots, trans, ctf_params),
         grid_size=4,
     )
 

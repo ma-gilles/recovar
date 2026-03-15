@@ -76,8 +76,7 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
 
     for k in range(2):
         best_rotations, best_translations = hard_assignment_idx_to_pose(hard_assignments[k], rotations, translations)
-        experiment_datasets[k].rotation_matrices = best_rotations
-        experiment_datasets[k].translations = best_translations
+        experiment_datasets[k].update_poses(best_rotations, best_translations)
 
     noise_from_res = noise.estimate_noise_level_no_masks(experiment_datasets[0], np.arange(np.min([1000, cryo.n_units])), means[0], 100, disc_type='linear_interp')
     noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)

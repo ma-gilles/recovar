@@ -253,7 +253,6 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
     
     # Allocate this to GPU.
     mean_projections = jnp.asarray(mean_projections)
-    data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = image_indices)
     rotation_batch = max(1, rotations.shape[0] // 10)
 
     config = ForwardModelConfig.from_dataset(
@@ -262,13 +261,13 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
     )
 
     start_idx =0
-    for images, _, indices in data_generator:
+    for batch_data in experiment_dataset.iterate(batch_size, indices=image_indices, by_image=False):
+        indices = batch_data.image_indices
         end_idx = start_idx + len(indices)
         prob_batch = jnp.array(probabilities[start_idx:end_idx])
         shifted_CTFed_images, CTF = sum_up_images_fixed_rots_covariance_precompute_eqx(
-            config, images, translations, experiment_dataset.CTF_params[indices],
+            config, batch_data.images, translations, batch_data.ctf_params,
         )
-        del images
         for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):# k in range(mult):
 
             gridpoints = core.batch_get_gridpoint_coords(
@@ -409,17 +408,17 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
         process_fn=experiment_dataset.process_images,
     )
 
-    data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = image_indices)
     start_idx = 0
-    for batch, _, batch_image_ind in data_generator:
+    for batch_data in experiment_dataset.iterate(batch_size, indices=image_indices, by_image=False):
+        batch_image_ind = batch_data.image_indices
 
         for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):# k in range(mult):
             end_idx = start_idx + len(batch_image_ind)
             lhs_this, rhs_this = reduce_covariance_est_inner_eqx(
                 config, mean_projections[rot_indices], u_projections[rot_indices],
                 probabilities[start_idx:end_idx][:,np.array(rot_indices)],
-                batch, translations,
-                experiment_dataset.CTF_params[batch_image_ind], noise_variance,
+                batch_data.images, translations,
+                batch_data.ctf_params, noise_variance,
             )
             lhs += lhs_this
             rhs += rhs_this

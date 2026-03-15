@@ -287,13 +287,31 @@ def test_get_coords_shared_label_splits_mixed_particle_batches(monkeypatch):
         def process_images(self, batch, apply_image_mask=False):
             return self.image_stack.process_images(batch, apply_image_mask=apply_image_mask)
 
-        def get_dataset_generator(self, batch_size):
-            _ = batch_size
-            # Mixed particles in one image batch: two tilts from particle 0 and two from particle 1
+        def iterate(self, batch_size, **kwargs):
             batch = np.zeros((4, 16), dtype=np.complex64)
             particles_ind = np.array([0, 0, 1, 1], dtype=np.int32)
             batch_image_ind = np.array([0, 1, 2, 3], dtype=np.int32)
-            yield batch, particles_ind, batch_image_ind
+            nv = self.noise.get_half(batch_image_ind)
+            yield BatchData(
+                images=batch,
+                rotation_matrices=self.rotation_matrices[batch_image_ind],
+                translations=self.translations[batch_image_ind],
+                ctf_params=self.CTF_params[batch_image_ind],
+                noise_variance=nv,
+                particle_indices=particles_ind,
+                image_indices=batch_image_ind,
+            )
+
+        def make_batch_data(self, images, indices, *, noise_variance=None, particle_indices=None):
+            return BatchData(
+                images=images,
+                rotation_matrices=self.rotation_matrices[indices],
+                translations=self.translations[indices],
+                ctf_params=self.CTF_params[indices],
+                noise_variance=noise_variance,
+                particle_indices=particle_indices,
+                image_indices=indices,
+            )
 
     calls = []
 
@@ -379,12 +397,31 @@ def test_get_coords_shared_label_grouped_shared_contrast(monkeypatch):
         def process_images(self, batch, apply_image_mask=False):
             return self.image_stack.process_images(batch, apply_image_mask=apply_image_mask)
 
-        def get_dataset_generator(self, batch_size):
-            _ = batch_size
+        def iterate(self, batch_size, **kwargs):
             batch = np.zeros((4, 16), dtype=np.complex64)
             particles_ind = np.array([0, 0, 1, 1], dtype=np.int32)
             batch_image_ind = np.array([0, 1, 2, 3], dtype=np.int32)
-            yield batch, particles_ind, batch_image_ind
+            nv = self.noise.get_half(batch_image_ind)
+            yield BatchData(
+                images=batch,
+                rotation_matrices=self.rotation_matrices[batch_image_ind],
+                translations=self.translations[batch_image_ind],
+                ctf_params=self.CTF_params[batch_image_ind],
+                noise_variance=nv,
+                particle_indices=particles_ind,
+                image_indices=batch_image_ind,
+            )
+
+        def make_batch_data(self, images, indices, *, noise_variance=None, particle_indices=None):
+            return BatchData(
+                images=images,
+                rotation_matrices=self.rotation_matrices[indices],
+                translations=self.translations[indices],
+                ctf_params=self.CTF_params[indices],
+                noise_variance=noise_variance,
+                particle_indices=particle_indices,
+                image_indices=indices,
+            )
 
     grouped_calls = []
 

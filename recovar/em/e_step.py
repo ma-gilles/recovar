@@ -60,15 +60,15 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
         utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory - utils.get_size_in_gb(projections)) / translations.shape[0] * 10)
     logger.info("Starting IP. Dot product batch size %s. Remaining memory %s", dot_product_batch_size, gpu_memory - utils.get_size_in_gb(projections))
     utils.report_memory_device(logger=logger)
-    data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=dot_product_batch_size, subset_indices = image_indices)
     image_indices = np.arange(n_images) if image_indices is None else image_indices
 
     start_idx = 0
-    for batch, _, indices in data_generator:
+    for batch_data in experiment_dataset.iterate(dot_product_batch_size, indices=image_indices, by_image=False):
+        indices = batch_data.image_indices
         end_idx = start_idx + len(indices)
         residuals[start_idx:end_idx] = compute_dot_products_eqx(
-            config, projections, batch, translations,
-            experiment_dataset.CTF_params[indices], noise_variance,
+            config, projections, batch_data.images, translations,
+            batch_data.ctf_params, noise_variance,
         )
         start_idx  = end_idx
 
@@ -79,17 +79,17 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
             u_projections[rot_indices] = batch_vol_slice_volume(u, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type)
 
         logger.info("done with u_proj %s", batch_size)
-        data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=dot_product_batch_size, subset_indices = image_indices)
 
         rotation_batch = max(1, rotations.shape[0] // 10)
         start_idx = 0
-        for batch, _, indices in data_generator:
-            batch = jnp.asarray(batch)
+        for batch_data in experiment_dataset.iterate(dot_product_batch_size, indices=image_indices, by_image=False):
+            batch = jnp.asarray(batch_data.images)
+            indices = batch_data.image_indices
             end_idx = start_idx + len(indices)
 
             for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):
                 rot_indices = np.array(rot_indices)
-                residuals[start_idx:end_idx, rot_indices] -= compute_bHb_terms(projections[rot_indices], u_projections[rot_indices], s, batch, translations, experiment_dataset.CTF_params[indices], experiment_dataset.ctf_evaluator, noise_variance, experiment_dataset.voxel_size, image_shape, experiment_dataset.process_images)
+                residuals[start_idx:end_idx, rot_indices] -= compute_bHb_terms(projections[rot_indices], u_projections[rot_indices], s, batch, translations, batch_data.ctf_params, experiment_dataset.ctf_evaluator, noise_variance, experiment_dataset.voxel_size, image_shape, experiment_dataset.process_images)
 
             start_idx = end_idx
 
