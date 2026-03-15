@@ -31,6 +31,7 @@ class MeanEstimate:
     corrected1reg: np.ndarray
     lhs: np.ndarray
     prior: np.ndarray
+    cubic_coeffs: np.ndarray = None  # precomputed spline coefficients for combined
 
     def negate(self):
         """Flip sign of all mean volumes (for uninverting data)."""

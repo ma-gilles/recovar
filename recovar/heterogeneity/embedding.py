@@ -118,7 +118,7 @@ def _particle_ids_per_image(particles_ind, n_images):
 
 
 @nvtx.annotate("get_per_image_embedding", color="purple", domain=NVTX_DOMAIN_EMBED)
-def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None):
+def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memory, disc_type = 'linear_interp',  contrast_grid = None, contrast_option = "contrast", to_real = True, compute_covariances = True, ignore_zero_frequency = False, contrast_mean = 1, contrast_variance = np.inf, compute_bias = False, image_subset_in_tilt_series = None, mean_cubic_coeffs=None):
     """Compute per-image latent coordinates by projecting onto principal components.
 
     For each image, estimates the linear coefficients (latent embedding)
@@ -184,8 +184,11 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
 
     if USE_CUBIC:
         disc_type = 'cubic'
-        from recovar.core import cubic_interpolation
-        mean = cubic_interpolation.calculate_spline_coefficients(mean.reshape(cryos.volume_shape))
+        if mean_cubic_coeffs is not None:
+            mean = mean_cubic_coeffs
+        else:
+            from recovar.core import cubic_interpolation
+            mean = cubic_interpolation.calculate_spline_coefficients(mean.reshape(cryos.volume_shape))
         from recovar.heterogeneity import covariance_estimation
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, cryos.volume_shape, gpu_memory= None)
 

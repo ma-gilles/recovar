@@ -4,6 +4,7 @@ import functools
 import logging
 import os
 import pickle
+from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
@@ -259,6 +260,23 @@ def get_column_batch_size(grid_size, gpu_memory):
     batch_size = max(min_batch_size, min(max_batch_size, batch_size))
     return int(batch_size)
 
+from collections import namedtuple
+
+BatchSizes = namedtuple('BatchSizes', ['image', 'volume', 'column'])
+
+
+def compute_batch_sizes(grid_size, gpu_memory):
+    """Compute all batch sizes at once.
+
+    Returns a ``BatchSizes(image, volume, column)`` namedtuple.
+    """
+    return BatchSizes(
+        image=get_image_batch_size(grid_size, gpu_memory),
+        volume=get_vol_batch_size(grid_size, gpu_memory),
+        column=get_column_batch_size(grid_size, gpu_memory),
+    )
+
+
 def get_latent_density_batch_size(test_pts,zdim, gpu_memory):
     return np.max([int(gpu_memory /(3 * (get_size_in_gb(test_pts) * zdim**1))), 1])
 
@@ -278,14 +296,37 @@ def get_embedding_batch_size(basis, image_size, contrast_grid, zdim, gpu_memory)
     return batch_size
 
 
+@dataclass
+class AlgorithmOptions:
+    """Typed container for pipeline algorithm options."""
+    volume_mask_option: str
+    zs_dim_to_test: list
+    contrast: str
+    ignore_zero_frequency: bool
+    keep_intermediate: bool
+
+    def __getitem__(self, key):
+        """Dict-like access for backward compatibility with downstream code."""
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
+
+    def __contains__(self, key):
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+
 def make_algorithm_options(args):
-    options = {'volume_mask_option': args.mask,
-    'zs_dim_to_test': args.zdim,
-    'contrast' : "contrast_qr" if args.correct_contrast else "none",
-    'ignore_zero_frequency' : args.ignore_zero_frequency ,
-    'keep_intermediate' : args.keep_intermediate ,
-    }
-    return options
+    return AlgorithmOptions(
+        volume_mask_option=args.mask,
+        zs_dim_to_test=args.zdim,
+        contrast="contrast_qr" if args.correct_contrast else "none",
+        ignore_zero_frequency=args.ignore_zero_frequency,
+        keep_intermediate=args.keep_intermediate,
+    )
 
 
 def pickle_dump(object, file):

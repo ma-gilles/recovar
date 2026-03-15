@@ -593,8 +593,13 @@ def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies,
     for cryo_idx, cryo in enumerate(cryos):
         mean = means.combined if options["use_combined_mean"] else means.corrected(cryo_idx)
         if options.get('disc_type') == 'cubic':
-            mean = cubic_interpolation.calculate_spline_coefficients(
-                jnp.array(mean).reshape(cryos.volume_shape))
+            # Use precomputed coefficients if available (from MeanEstimate),
+            # otherwise compute them here.
+            if options["use_combined_mean"] and means.cubic_coeffs is not None:
+                mean = means.cubic_coeffs
+            else:
+                mean = cubic_interpolation.calculate_spline_coefficients(
+                    jnp.array(mean).reshape(cryos.volume_shape))
         if use_multi_gpu:
             H, B = _compute_H_B_multi_gpu(
                 cryo, mean, dilated_volume_mask, picked_frequencies,
@@ -904,7 +909,7 @@ def compute_spline_coeffs_in_batch(basis, volume_shape, gpu_memory=None):
 ## REDUCED COVARIANCE COMPUTATION
 
 @nvtx.annotate("compute_projected_covariance", color="green")
-def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volume_mask, batch_size, disc_type, disc_type_u, do_mask_images=True):
+def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volume_mask, batch_size, disc_type, disc_type_u, do_mask_images=True, mean_cubic_coeffs=None):
 
     experiment_dataset = experiment_datasets[0]
 
@@ -920,8 +925,11 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     logger.info("batch size in compute_projected_covariance %s", batch_size)
 
     if disc_type == 'cubic':
-        mean_estimate = cubic_interpolation.calculate_spline_coefficients(
-            mean_estimate.reshape(experiment_dataset.volume_shape))
+        if mean_cubic_coeffs is not None:
+            mean_estimate = jnp.asarray(mean_cubic_coeffs)
+        else:
+            mean_estimate = cubic_interpolation.calculate_spline_coefficients(
+                mean_estimate.reshape(experiment_dataset.volume_shape))
 
     if disc_type_u == 'cubic':
         basis = compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)

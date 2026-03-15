@@ -398,43 +398,39 @@ def _estimate_noise(cryos, means, dilated_volume_mask, batch_size, args, noise_m
 
     Returns a dict with all noise-related quantities needed by the pipeline.
 
-    NOTE(refactor): the three branches (new_noise_fn / .mrc mask / fallback)
-    share most logic.  A future cleanup could unify them into a single path
-    that takes an ``estimate_fn`` callable.
+    Three estimation paths exist depending on data source:
+      - new noise fn (``--new-noise-est`` or ``--premultiplied-ctf``):
+        uses ``fit_noise_model_to_images`` for both outside/inside mask.
+      - explicit .mrc mask: v2 outside-mask estimator + radial statistics.
+      - fallback: radial statistics from outside mask.
+    All paths produce (radial_noise_var, image_PS, upper_bound) which are
+    then combined identically.
     """
     use_new_noise_fn = args.new_noise_est or args.premultiplied_ctf
-    logger.info("Using new noise estimation function?: %s", use_new_noise_fn)
+    logger.info("Noise estimation mode: %s",
+                "fit_noise_model" if use_new_noise_fn else
+                "outside-mask-v2" if args.mask.endswith(".mrc") else "radial-statistic")
 
+    if use_new_noise_fn and noise_model not in ("radial", "radial_per_tilt"):
+        raise ValueError(f"new noise fn only works with radial noise model, got {noise_model}")
+
+    # --- Step 1: estimate noise from outside the mask ---
     noise_time = time.time()
-
-    # Estimate noise outside the mask
     if use_new_noise_fn:
-        masked_image_PS, image_PS = noise.fit_noise_model_to_images(
+        radial_noise_var, image_PS = noise.fit_noise_model_to_images(
             cryos[0], dilated_volume_mask, means.combined, None,
             batch_size=batch_size, invert_mask=True, disc_type='linear_interp')
-        logger.info("Using new noise estimation with linear_interp discretization")
     elif args.mask.endswith(".mrc"):
-        masked_image_PS, _, _ = noise.estimate_noise_variance_from_outside_mask_v2(
-            cryos[0], dilated_volume_mask, batch_size)
-        white_noise_var_outside_mask = noise.estimate_white_noise_variance_from_mask(
+        radial_noise_var, _, _ = noise.estimate_noise_variance_from_outside_mask_v2(
             cryos[0], dilated_volume_mask, batch_size)
         _, _, image_PS, _ = noise.estimate_radial_noise_statistic_from_outside_mask(
             cryos[0], dilated_volume_mask, batch_size)
     else:
-        masked_image_PS, _, image_PS, _ = noise.estimate_radial_noise_statistic_from_outside_mask(
+        radial_noise_var, _, image_PS, _ = noise.estimate_radial_noise_statistic_from_outside_mask(
             cryos[0], dilated_volume_mask, batch_size)
+    logger.info("outside-mask noise estimated in %.1fs", time.time() - noise_time)
 
-    radial_noise_var_outside_mask = masked_image_PS
-    white_noise_var_outside_mask_val = np.median(masked_image_PS)
-
-    if use_new_noise_fn:
-        if noise_model not in ("radial", "radial_per_tilt"):
-            raise ValueError(f"new noise fn only works with radial noise model, got {noise_model}")
-
-    logger.info("time to estimate noise is %s", time.time() - noise_time)
-    utils.report_memory_device(logger=logger)
-
-    # Upper bound on noise variance from inside the mask
+    # --- Step 2: upper bound from inside the mask ---
     noise_time = time.time()
     if use_new_noise_fn:
         radial_ub_noise_var, _ = noise.fit_noise_model_to_images(
@@ -443,30 +439,27 @@ def _estimate_noise(cryos, means, dilated_volume_mask, batch_size, args, noise_m
     else:
         radial_ub_noise_var, _, _ = noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(
             cryos[0], means.combined, dilated_volume_mask, batch_size)
-    logger.info("time to upper bound noise is %s", time.time() - noise_time)
+    logger.info("upper-bound noise estimated in %.1fs", time.time() - noise_time)
 
-    # Bound the noise variance
-    utils.report_memory_device(logger=logger)
-    radial_noise_var_ubed = np.where(
-        radial_noise_var_outside_mask > radial_ub_noise_var,
-        radial_ub_noise_var, radial_noise_var_outside_mask)
+    # --- Step 3: combine ---
+    noise_var_used = np.minimum(radial_noise_var, radial_ub_noise_var)
+    white_noise_var = np.median(radial_noise_var)
 
     if noise_model == "white":
-        noise_var_used = np.ones_like(radial_noise_var_ubed) * white_noise_var_outside_mask_val
-    else:
-        noise_var_used = radial_noise_var_ubed
+        noise_var_used = np.full_like(noise_var_used, white_noise_var)
 
     if (noise_var_used < 0).any():
-        logger.info("Negative noise variance detected. Setting to image power spectrum / 10")
-    noise_var_used = np.where(noise_var_used < 0, image_PS / 10, noise_var_used)
+        logger.warning("Negative noise variance detected — replacing with image_PS / 10")
+        noise_var_used = np.where(noise_var_used < 0, image_PS / 10, noise_var_used)
 
+    utils.report_memory_device(logger=logger)
     return {
         'noise_var_used': noise_var_used,
-        'radial_noise_var_outside_mask': radial_noise_var_outside_mask,
+        'radial_noise_var_outside_mask': radial_noise_var,
         'radial_ub_noise_var': radial_ub_noise_var,
-        'white_noise_var_outside_mask': white_noise_var_outside_mask_val,
+        'white_noise_var_outside_mask': white_noise_var,
         'image_PS': image_PS,
-        'masked_image_PS': masked_image_PS,
+        'masked_image_PS': radial_noise_var,
     }
 
 def _build_focus_masks(args, means, volume_mask, volume_shape, cryos):
@@ -495,7 +488,7 @@ def _build_focus_masks(args, means, volume_mask, volume_shape, cryos):
 
 
 def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
-                        focus_masks, zdim_for_rest, args):
+                        focus_masks, zdim_for_rest, args, mean_cubic_coeffs=None):
     """Compute per-image embeddings for all requested zdim values.
 
     By default uses the legacy per-zdim embedding loops (reg + noreg), which are
@@ -546,14 +539,16 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
                 means.combined, u['rescaled'], s['rescaled'], n_pcs_to_use,
                 cryos, volume_mask, gpu_memory, 'linear_interp',
                 contrast_grid=None, contrast_option=options['contrast'],
-                ignore_zero_frequency=options['ignore_zero_frequency'])
+                ignore_zero_frequency=options['ignore_zero_frequency'],
+                mean_cubic_coeffs=mean_cubic_coeffs)
             logger.info("embedding time for zdim=%s: %s", zdim, time.time() - z_time)
             z_time = time.time()
             latent_coords_noreg[zdim], latent_precision_noreg[zdim], contrasts_noreg[zdim], _ = embedding.get_per_image_embedding(
                 means.combined, u['rescaled'], s['rescaled'] * 0 + np.inf, n_pcs_to_use,
                 cryos, volume_mask, gpu_memory, 'linear_interp',
                 contrast_grid=None, contrast_option=options['contrast'],
-                ignore_zero_frequency=options['ignore_zero_frequency'])
+                ignore_zero_frequency=options['ignore_zero_frequency'],
+                mean_cubic_coeffs=mean_cubic_coeffs)
             logger.info("embedding time for zdim=%s_noreg: %s", zdim, time.time() - z_time)
 
     logger.info("total embedding time (all zdims): %s", time.time() - emb_time)
@@ -685,18 +680,14 @@ def standard_recovar_pipeline(args):
     gpu_memory = utils.get_gpu_memory_total()
     volume_shape = cryos.volume_shape
 
-    # NOTE(refactor): batch size heuristics are hand-tuned and live in utils.
-    # A dedicated BatchSizeEstimator class would be more transparent and
-    # easier to maintain as new kernels are added.
-    batch_size = utils.get_image_batch_size(cryos.grid_size, gpu_memory)
+    batch_sizes = utils.compute_batch_sizes(cryos.grid_size, gpu_memory)
+    batch_size = batch_sizes.image
     logger.info("Resource summary:")
     logger.info("  GPU memory:     %.1f GB", gpu_memory)
     logger.info("  Image size:     %d x %d", cryos.grid_size, cryos.grid_size)
     logger.info("  Total images:   %d", cryos.n_total_images)
     logger.info("  Batch sizes:    image=%d  volume=%d  column=%d",
-                batch_size,
-                utils.get_vol_batch_size(cryos.grid_size, gpu_memory),
-                utils.get_column_batch_size(cryos.grid_size, gpu_memory))
+                batch_sizes.image, batch_sizes.volume, batch_sizes.column)
     utils.report_memory_device(logger=logger)
 
     # --- Initial noise estimate from half-maps ---
@@ -709,11 +700,8 @@ def standard_recovar_pipeline(args):
     if args.do_over_with_contrast and not args.correct_contrast:
         logger.warning("Do over with contrast, but contrast correction is off. Setting contrast correction to on")
         args.correct_contrast = True
-        # NOTE(refactor): the options dict and "contrast_qr" naming are
-        # confusing.  "_qr" means covariance columns are orthogonalized
-        # against the mean when contrast correction is on (see paper S3.2).
-        # Consider renaming to "per_image_scale" (cryoSPARC convention)
-        # and replacing the options dict with a typed config.
+        # "_qr" = covariance columns orthogonalized against mean when
+        # contrast correction is on (paper S3.2).
         options["contrast"] = "contrast_qr"
 
     # Per-image amplitude scaling correction (called "contrast" internally,
@@ -744,11 +732,6 @@ def standard_recovar_pipeline(args):
             embedding.set_contrasts_in_cryos(cryos, contrasts_for_second)
             options["contrast"] = "contrast"
 
-        # NOTE(refactor): mean functions return a dict of volume-sized arrays.
-        # Only 'combined', 'corrected0', 'corrected1' are used downstream;
-        # the rest (e.g. 'init0', 'init1') could be saved and deleted.
-        # Also consider replacing the dict with a typed NamedTuple/dataclass.
-
         # --- Compute mean ---
         if args.mean_fn == 'triangular':
             means, mean_prior, _ = homogeneous.get_mean_conformation_relion(
@@ -760,16 +743,18 @@ def standard_recovar_pipeline(args):
             raise ValueError(f"mean function {args.mean_fn} not recognized")
         utils.report_memory_device(logger=logger)
 
-        # NOTE(perf): downstream functions mostly slice the mean via cubic
-        # interpolation, recomputing spline coefficients each time.
-        # Precomputing coefficients here and passing them would save time.
-
         # --- Check sign and uninvert if needed ---
         _check_uninvert_data(means, cryos, args)
 
         if means.combined.dtype != cryos.dtype:
             logger.warning("mean estimate is in type: %s", means.combined.dtype)
             means.combined = means.combined.astype(cryos.dtype)
+
+        # Precompute cubic spline coefficients once — used by covariance,
+        # PCA, and embedding instead of recomputing each time.
+        from recovar.core.slicing import precompute_cubic_coefficients
+        means.cubic_coeffs = np.array(precompute_cubic_coefficients(
+            means.combined, volume_shape))
 
         logger.info("mean computed in %s", time.time() - st_time)
         utils.report_memory_device(logger=logger)
@@ -913,7 +898,8 @@ def standard_recovar_pipeline(args):
          latent_precision, latent_precision_noreg,
          est_contrasts, est_contrasts_noreg) = _compute_embeddings(
             means, u, s, cryos, volume_mask, options, gpu_memory,
-            focus_masks, zdim_for_rest, args)
+            focus_masks, zdim_for_rest, args,
+            mean_cubic_coeffs=means.cubic_coeffs)
         
         ## Make sure this makes sense
         if repeat == 1:

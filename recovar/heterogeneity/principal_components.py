@@ -125,7 +125,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
         for key in covariance_cols.keys():
             covariance_cols[key] = None
 
-    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means.combined, dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'])
+    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means.combined, dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'], mean_cubic_coeffs=getattr(means, 'cubic_coeffs', None))
 
     if not options['keep_intermediate']:
         u['real'] = None
@@ -168,7 +168,7 @@ def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,
 
 
 @nvtx.annotate("pca_by_projected_covariance", color="green", domain=NVTX_DOMAIN_PCA)
-def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, ignore_zero_frequency = False, n_pcs_to_compute = None):
+def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, ignore_zero_frequency = False, n_pcs_to_compute = None, mean_cubic_coeffs=None):
 
     basis_size = basis.shape[1] if n_pcs_to_compute is None else n_pcs_to_compute
     basis = basis[:,:basis_size]
@@ -180,7 +180,7 @@ def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , dis
 
     logger.info('batch size for covariance computation: ' + str(batch_size))
 
-    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, batch_size,  disc_type, disc_type_u, do_mask_images = use_mask)
+    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, batch_size,  disc_type, disc_type_u, do_mask_images = use_mask, mean_cubic_coeffs=mean_cubic_coeffs)
 
     if not np.all(np.isfinite(covariance)):
         n_nan = np.sum(np.isnan(covariance))
