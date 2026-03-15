@@ -230,12 +230,9 @@ def slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type
         if not _is_complex(volume):
             volume = volume.astype(jnp.result_type(volume, jnp.complex64))
         from recovar.core.cuda_ops import cuda_project
-        try:
-            return cuda_project(volume, rotation_matrices, image_shape, volume_shape,
-                                order, half_volume, half_image,
-                                _cuda_max_r(max_r, image_shape, volume_shape))
-        except TypeError:
-            pass  # JVP through custom_vjp — fall through to JAX
+        return cuda_project(volume, rotation_matrices, image_shape, volume_shape,
+                            order, half_volume, half_image,
+                            _cuda_max_r(max_r, image_shape, volume_shape))
 
     # JAX path — order 0/1: RELION-style trilinear/nearest
     if order <= 1:
