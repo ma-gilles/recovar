@@ -305,19 +305,6 @@ class AlgorithmOptions:
     ignore_zero_frequency: bool
     keep_intermediate: bool
 
-    def __getitem__(self, key):
-        """Dict-like access for backward compatibility with downstream code."""
-        return getattr(self, key)
-
-    def __setitem__(self, key, value):
-        setattr(self, key, value)
-
-    def __contains__(self, key):
-        return hasattr(self, key)
-
-    def get(self, key, default=None):
-        return getattr(self, key, default)
-
 
 def make_algorithm_options(args):
     return AlgorithmOptions(

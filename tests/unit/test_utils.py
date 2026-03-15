@@ -189,8 +189,8 @@ def test_options_and_pickle_helpers(tmp_path):
         keep_intermediate=True,
     )
     opts = utils.make_algorithm_options(args)
-    assert opts["contrast"] == "contrast_qr"
-    assert opts["zs_dim_to_test"] == 8
+    assert opts.contrast == "contrast_qr"
+    assert opts.zs_dim_to_test == 8
 
     path = tmp_path / "obj.pkl"
     obj = {"a": 1, "b": [1, 2]}

@@ -568,16 +568,16 @@ def estimate_principal_components(cryos, options,  means, mean_signal_variance, 
     
 
     # First approximation of eigenvalue decomposition
-    u,s = get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use, options['ignore_zero_frequency'], covariance_options['randomized_sketch_size'])
-    
-    if not options['keep_intermediate']:
+    u,s = get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use, options.ignore_zero_frequency, covariance_options['randomized_sketch_size'])
+
+    if not options.keep_intermediate:
         for key in covariance_cols.keys():
             covariance_cols[key] = None
     image_cov_noise = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].image_shape))
 
     u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means.combined, image_cov_noise, dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'])
 
-    if not options['keep_intermediate']:
+    if not options.keep_intermediate:
         u['real'] = None
             
     return u, s, covariance_cols, picked_frequencies, column_fscs

@@ -488,7 +488,7 @@ def _build_focus_masks(args, means, volume_mask, volume_shape, cryos):
 
 
 def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
-                        focus_masks, zdim_for_rest, args, mean_cubic_coeffs=None):
+                        focus_masks, zdim_for_rest, args):
     """Compute per-image embeddings for all requested zdim values.
 
     By default uses the legacy per-zdim embedding loops (reg + noreg), which are
@@ -502,7 +502,7 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
     """
     num_foc_masks = len(focus_masks)
     n_pcs_list = [(num_foc_masks - 1) * zdim_for_rest + zdim
-                  for zdim in options['zs_dim_to_test']]
+                  for zdim in options.zs_dim_to_test]
 
     emb_time = time.time()
 
@@ -513,15 +513,15 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
         zs_reg, zs_noreg = embedding.get_per_image_embedding_multi_zdim(
             means.combined, u['rescaled'], s['rescaled'], n_pcs_list,
             cryos, volume_mask, gpu_memory,
-            contrast_option=options['contrast'],
-            ignore_zero_frequency=options['ignore_zero_frequency'],
+            contrast_option=options.contrast,
+            ignore_zero_frequency=options.ignore_zero_frequency,
         )
-        latent_coords         = {zdim: zs_reg[n_pcs][0]   for zdim, n_pcs in zip(options['zs_dim_to_test'], n_pcs_list)}
-        latent_precision      = {zdim: zs_reg[n_pcs][1]   for zdim, n_pcs in zip(options['zs_dim_to_test'], n_pcs_list)}
-        contrasts             = {zdim: zs_reg[n_pcs][2]   for zdim, n_pcs in zip(options['zs_dim_to_test'], n_pcs_list)}
-        latent_coords_noreg   = {zdim: zs_noreg[n_pcs][0] for zdim, n_pcs in zip(options['zs_dim_to_test'], n_pcs_list)}
-        latent_precision_noreg= {zdim: zs_noreg[n_pcs][1] for zdim, n_pcs in zip(options['zs_dim_to_test'], n_pcs_list)}
-        contrasts_noreg       = {zdim: zs_noreg[n_pcs][2] for zdim, n_pcs in zip(options['zs_dim_to_test'], n_pcs_list)}
+        latent_coords         = {zdim: zs_reg[n_pcs][0]   for zdim, n_pcs in zip(options.zs_dim_to_test, n_pcs_list)}
+        latent_precision      = {zdim: zs_reg[n_pcs][1]   for zdim, n_pcs in zip(options.zs_dim_to_test, n_pcs_list)}
+        contrasts             = {zdim: zs_reg[n_pcs][2]   for zdim, n_pcs in zip(options.zs_dim_to_test, n_pcs_list)}
+        latent_coords_noreg   = {zdim: zs_noreg[n_pcs][0] for zdim, n_pcs in zip(options.zs_dim_to_test, n_pcs_list)}
+        latent_precision_noreg= {zdim: zs_noreg[n_pcs][1] for zdim, n_pcs in zip(options.zs_dim_to_test, n_pcs_list)}
+        contrasts_noreg       = {zdim: zs_noreg[n_pcs][2] for zdim, n_pcs in zip(options.zs_dim_to_test, n_pcs_list)}
     else:
         if args.tilt_series:
             logger.info("Embedding mode: per-zdim loops (tilt-series)")
@@ -533,22 +533,22 @@ def _compute_embeddings(means, u, s, cryos, volume_mask, options, gpu_memory,
         latent_precision_noreg = {}
         contrasts = {}
         contrasts_noreg = {}
-        for zdim, n_pcs_to_use in zip(options['zs_dim_to_test'], n_pcs_list):
+        for zdim, n_pcs_to_use in zip(options.zs_dim_to_test, n_pcs_list):
             z_time = time.time()
             latent_coords[zdim], latent_precision[zdim], contrasts[zdim], _ = embedding.get_per_image_embedding(
                 means.combined, u['rescaled'], s['rescaled'], n_pcs_to_use,
                 cryos, volume_mask, gpu_memory, 'linear_interp',
-                contrast_grid=None, contrast_option=options['contrast'],
-                ignore_zero_frequency=options['ignore_zero_frequency'],
-                mean_cubic_coeffs=mean_cubic_coeffs)
+                contrast_grid=None, contrast_option=options.contrast,
+                ignore_zero_frequency=options.ignore_zero_frequency,
+)
             logger.info("embedding time for zdim=%s: %s", zdim, time.time() - z_time)
             z_time = time.time()
             latent_coords_noreg[zdim], latent_precision_noreg[zdim], contrasts_noreg[zdim], _ = embedding.get_per_image_embedding(
                 means.combined, u['rescaled'], s['rescaled'] * 0 + np.inf, n_pcs_to_use,
                 cryos, volume_mask, gpu_memory, 'linear_interp',
-                contrast_grid=None, contrast_option=options['contrast'],
-                ignore_zero_frequency=options['ignore_zero_frequency'],
-                mean_cubic_coeffs=mean_cubic_coeffs)
+                contrast_grid=None, contrast_option=options.contrast,
+                ignore_zero_frequency=options.ignore_zero_frequency,
+)
             logger.info("embedding time for zdim=%s_noreg: %s", zdim, time.time() - z_time)
 
     logger.info("total embedding time (all zdims): %s", time.time() - emb_time)
@@ -702,12 +702,12 @@ def standard_recovar_pipeline(args):
         args.correct_contrast = True
         # "_qr" = covariance columns orthogonalized against mean when
         # contrast correction is on (paper S3.2).
-        options["contrast"] = "contrast_qr"
+        options.contrast = "contrast_qr"
 
     # Per-image amplitude scaling correction (called "contrast" internally,
     # "per_image_scale" in cryoSPARC).
     if args.shared_contrast_across_tilts:
-        options['contrast'] += '_shared'
+        options.contrast += '_shared'
         logger.info("Setting contrast to shared")
 
     # Initialize noise model
@@ -725,12 +725,12 @@ def standard_recovar_pipeline(args):
     for repeat in range(n_repeats):
 
         if repeat == 1:
-            ndim = 10 if 10 in options['zs_dim_to_test'] else int(np.median(options['zs_dim_to_test']))
+            ndim = 10 if 10 in options.zs_dim_to_test else int(np.median(options.zs_dim_to_test))
             logger.warning("repeating with contrast of zdim=%s", ndim)
             contrasts_for_second = est_contrasts[ndim]
             contrasts_for_second /= np.mean(contrasts_for_second)
             embedding.set_contrasts_in_cryos(cryos, contrasts_for_second)
-            options["contrast"] = "contrast"
+            options.contrast = "contrast"
 
         # --- Compute mean ---
         if args.mean_fn == 'triangular':
@@ -840,9 +840,9 @@ def standard_recovar_pipeline(args):
         u = []
         s = []
         zdim_for_rest = 20
-        n_pcs_to_keep = np.max(np.append(options['zs_dim_to_test'], 50))
+        n_pcs_to_keep = np.max(np.append(options.zs_dim_to_test, 50))
 
-        ignore_zero_frequency = options['ignore_zero_frequency']
+        ignore_zero_frequency = options.ignore_zero_frequency
         for idx, focus_mask in enumerate(focus_masks):
             u_this, s_this, covariance_cols, picked_frequencies, column_fscs = \
                 principal_components.estimate_principal_components(
@@ -863,7 +863,7 @@ def standard_recovar_pipeline(args):
 
         u = {'rescaled': np.concatenate(u, axis=1), 'real': None}
         s = {'rescaled': np.concatenate(s, axis=0), 'real': None}
-        options['ignore_zero_frequency'] = ignore_zero_frequency
+        options.ignore_zero_frequency = ignore_zero_frequency
 
 
         # Validate PCA results
@@ -880,7 +880,7 @@ def standard_recovar_pipeline(args):
         if volume_mask.dtype != np.float32:
             raise TypeError(f"volume_mask is not of dtype float32, but {volume_mask.dtype}")
 
-        if options['ignore_zero_frequency']:
+        if options.ignore_zero_frequency:
             logger.warning(
                 "ignore_zero_frequency is ON — inflating DC noise by 1e16. "
                 "This is experimental and may degrade mean/variance estimates."
@@ -898,8 +898,7 @@ def standard_recovar_pipeline(args):
          latent_precision, latent_precision_noreg,
          est_contrasts, est_contrasts_noreg) = _compute_embeddings(
             means, u, s, cryos, volume_mask, options, gpu_memory,
-            focus_masks, zdim_for_rest, args,
-            mean_cubic_coeffs=means.cubic_coeffs)
+            focus_masks, zdim_for_rest, args)
         
         ## Make sure this makes sense
         if repeat == 1:
@@ -909,7 +908,7 @@ def standard_recovar_pipeline(args):
                 est_contrasts_noreg[key] = est_contrasts_noreg[key] * contrasts_for_second
 
     # --- Post-embedding: noise residual estimate ---
-    zdim = np.max(options['zs_dim_to_test'])
+    zdim = np.max(options.zs_dim_to_test)
     if not args.tilt_series:
         n_pcs_to_use = (num_foc_masks - 1) * zdim_for_rest + zdim
         try:
@@ -993,7 +992,7 @@ def standard_recovar_pipeline(args):
     # Reorder embeddings from halfset ordering to original particle ordering
     for entry in embedding_dict:
         for key in embedding_dict[entry]:
-            if entry.startswith('contrasts') and args.tilt_series and ('shared' not in options['contrast']):
+            if entry.startswith('contrasts') and args.tilt_series and ('shared' not in options.contrast):
                 embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(
                     embedding_dict[entry][key], ind_split)
             else:

@@ -121,32 +121,32 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
     if s['real'].dtype not in [np.float32, np.complex64]:
         raise TypeError("s['real'] is not of type np.float32 or np.complex64")
 
-    if not options['keep_intermediate']:
+    if not options.keep_intermediate:
         for key in covariance_cols.keys():
             covariance_cols[key] = None
 
-    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means.combined, dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'], mean_cubic_coeffs=getattr(means, 'cubic_coeffs', None))
+    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(cryos, u['real'], means.combined, dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'])
 
-    if not options['keep_intermediate']:
+    if not options.keep_intermediate:
         u['real'] = None
 
 
-    if options['ignore_zero_frequency']:
+    if options.ignore_zero_frequency:
         logger.warning("FIX THIS OPTION!! NOT SURE IT WILL STILL WORK")
 
     logger.info("memory after rescaling")
     utils.report_memory_device(logger=logger)
 
-    if (options['contrast'] == "contrast_qr" or options['ignore_zero_frequency']):
+    if (options.contrast == "contrast_qr" or options.ignore_zero_frequency):
         c_time = time.time()
         # Keep reference (not copy) for debugging; numpy arrays below are reassigned, not mutated
         u['rescaled_no_contrast'] = u['rescaled']
         s['rescaled_no_contrast'] = s['rescaled']
 
         mean_used = (means.corrected0reg + means.corrected1reg) / 2 if use_reg_mean_in_contrast else means.combined
-        u['rescaled'],s['rescaled'] = knock_out_mean_component_2(u['rescaled'], s['rescaled'],mean_used, volume_mask, volume_shape, vol_batch_size, options['ignore_zero_frequency'], options['contrast'] == "contrast_qr" )
+        u['rescaled'],s['rescaled'] = knock_out_mean_component_2(u['rescaled'], s['rescaled'],mean_used, volume_mask, volume_shape, vol_batch_size, options.ignore_zero_frequency, options.contrast == "contrast_qr" )
 
-        if not options['keep_intermediate']:
+        if not options.keep_intermediate:
             u['rescaled_no_contrast'] = None
 
         logger.info("knock out time: %s", time.time() - c_time)
@@ -168,7 +168,7 @@ def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,
 
 
 @nvtx.annotate("pca_by_projected_covariance", color="green", domain=NVTX_DOMAIN_PCA)
-def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, ignore_zero_frequency = False, n_pcs_to_compute = None, mean_cubic_coeffs=None):
+def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , disc_type_u, gpu_memory_to_use= 40, use_mask = True, ignore_zero_frequency = False, n_pcs_to_compute = None):
 
     basis_size = basis.shape[1] if n_pcs_to_compute is None else n_pcs_to_compute
     basis = basis[:,:basis_size]
@@ -180,7 +180,7 @@ def pca_by_projected_covariance(cryos, basis, mean, volume_mask, disc_type , dis
 
     logger.info('batch size for covariance computation: ' + str(batch_size))
 
-    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, batch_size,  disc_type, disc_type_u, do_mask_images = use_mask, mean_cubic_coeffs=mean_cubic_coeffs)
+    covariance = covariance_estimation.compute_projected_covariance(cryos, mean, basis, volume_mask, batch_size,  disc_type, disc_type_u, do_mask_images = use_mask)
 
     if not np.all(np.isfinite(covariance)):
         n_nan = np.sum(np.isnan(covariance))
