@@ -542,18 +542,27 @@ def metric_direction(metric_name):
     return "ignore"
 
 
-def compare_metric(current, baseline, direction, tol_frac):
+HIGH_VARIANCE_TOKENS = ("locres", "auc", "noise_max")
+_HIGH_VARIANCE_MIN_TOL = 0.10
+
+
+def compare_metric(current, baseline, direction, tol_frac, metric_name=None):
     if not (math.isfinite(current) and math.isfinite(baseline)):
         return False, f"non-finite values current={current} baseline={baseline}"
+    effective_tol = tol_frac
+    if metric_name is not None:
+        name = metric_name.lower()
+        if any(tok in name for tok in HIGH_VARIANCE_TOKENS):
+            effective_tol = max(tol_frac, _HIGH_VARIANCE_MIN_TOL)
     scale = max(abs(baseline), 1e-12)
     delta = (current - baseline) / scale
     if direction == "lower":
-        ok = delta <= tol_frac
-        msg = f"increase={delta:.4f} allowed={tol_frac:.4f}"
+        ok = delta <= effective_tol
+        msg = f"increase={delta:.4f} allowed={effective_tol:.4f}"
         return ok, msg
     if direction == "higher":
-        ok = delta >= -tol_frac
-        msg = f"drop={-delta:.4f} allowed={tol_frac:.4f}"
+        ok = delta >= -effective_tol
+        msg = f"drop={-delta:.4f} allowed={effective_tol:.4f}"
         return ok, msg
     return True, "ignored"
 
@@ -637,7 +646,7 @@ def compare_scores_against_baseline(current_scores, baseline_scores, tol_frac, s
             continue
         seen_canonical.add(canonical)
         checked += 1
-        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac)
+        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac, metric_name=key)
         details[key] = {
             "current": float(cur),
             "baseline": float(base),

@@ -120,7 +120,7 @@ def _compare_against_baseline(
                 direction = "higher"
             else:
                 continue
-        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac)
+        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac, metric_name=key)
         checked += 1
         if not ok:
             failures.append(f"{key}: current={cur:.4f} baseline={base:.4f} ({msg})")

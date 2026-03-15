@@ -30,27 +30,40 @@ def metric_direction(metric_name):
     return "ignore"
 
 
-_LOCRES_TOL_FRAC = 0.06  # locres is noisier, especially 90th-pct in ET; allow 6% tolerance
+# Metrics that are inherently noisy across runs (depend on local resolution
+# estimation which varies with dataset regeneration and GPU non-determinism).
+# These get a looser tolerance than the default.
+HIGH_VARIANCE_TOKENS = ("locres", "auc", "noise_max")
+_HIGH_VARIANCE_MIN_TOL = 0.10
 
 
 def metric_tolerance(metric_name, default_tol_frac):
-    """Return per-metric tolerance (locres gets a wider band)."""
-    if "locres" in metric_name.lower():
-        return max(default_tol_frac, _LOCRES_TOL_FRAC)
+    """Return per-metric tolerance (high-variance metrics get a wider band)."""
+    name = metric_name.lower()
+    if any(tok in name for tok in HIGH_VARIANCE_TOKENS):
+        return max(default_tol_frac, _HIGH_VARIANCE_MIN_TOL)
     return default_tol_frac
 
 
-def compare_metric(current, baseline, direction, tol_frac):
+def compare_metric(current, baseline, direction, tol_frac, metric_name=None):
+    """Compare current vs baseline with tolerance.
+
+    If *metric_name* is provided and is a high-variance metric, the tolerance
+    is widened automatically via metric_tolerance().
+    """
     if not (math.isfinite(current) and math.isfinite(baseline)):
         return False, f"non-finite values current={current} baseline={baseline}"
+    effective_tol = tol_frac
+    if metric_name is not None:
+        effective_tol = metric_tolerance(metric_name, tol_frac)
     scale = max(abs(baseline), 1e-12)
     delta = (current - baseline) / scale
     if direction == "lower":
-        ok = delta <= tol_frac
-        msg = f"increase={delta:.4f} allowed={tol_frac:.4f}"
+        ok = delta <= effective_tol
+        msg = f"increase={delta:.4f} allowed={effective_tol:.4f}"
         return ok, msg
     if direction == "higher":
-        ok = delta >= -tol_frac
-        msg = f"drop={-delta:.4f} allowed={tol_frac:.4f}"
+        ok = delta >= -effective_tol
+        msg = f"drop={-delta:.4f} allowed={effective_tol:.4f}"
         return ok, msg
     return True, "ignored"

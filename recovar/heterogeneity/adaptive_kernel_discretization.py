@@ -53,9 +53,14 @@ def _heterogeneity_kernel_batch_from_fft(
     )
     half_images = half_images / noise_half
 
+    # Pre-compute CTF once (reused for both image and weight backprojections)
+    ctf = config.compute_ctf_half(batch.ctf_params)
+    if not config.premultiplied_ctf:
+        half_images = half_images * ctf
+
     Ft_y = core_forward.adjoint_forward_model(
         config, half_images, batch.ctf_params, batch.rotation_matrices,
-        skip_ctf=config.premultiplied_ctf,
+        skip_ctf=True,
         volume=Ft_y, half_image=True, half_volume=True,
     )
 
@@ -76,7 +81,7 @@ def _heterogeneity_kernel_batch_from_fft(
             ctf_up.reshape(bsz, -1), config.image_shape
         ) / noise_half
     else:
-        ctf_half = config.compute_ctf_half(batch.ctf_params) ** 2 / noise_half
+        ctf_half = ctf ** 2 / noise_half
 
     Ft_ctf = core_forward.adjoint_forward_model(
         config, ctf_half, batch.ctf_params, batch.rotation_matrices,
@@ -325,18 +330,15 @@ def compute_residuals_batch(
     use_linear_interp: bool = False,
 ):
     """Compute residuals for many weights — Equinox API."""
+    X_mat, gridpoint_indices = make_X_mat(
+        batch_data.rotation_matrices, config.volume_shape, config.image_shape, pol_degree=pol_degree
+    )
+    weights_on_grid = weights[gridpoint_indices]
     if use_linear_interp:
-        X_mat, gridpoint_indices = make_X_mat(
-            batch_data.rotation_matrices, config.volume_shape, config.image_shape, pol_degree=pol_degree
-        )
-        weights_on_grid = weights[gridpoint_indices]
         X_mat = jnp.repeat(X_mat[..., None, :], axis=-2, repeats=weights_on_grid.shape[-2])
         predicted_phi = linalg.broadcast_dot(X_mat, weights_on_grid)
     else:
-        predicted_phi = core.slice_volume(
-            weights_on_grid[..., 0], batch_data.rotation_matrices,
-            config.image_shape, config.volume_shape, 'linear_interp',
-        )
+        predicted_phi = weights_on_grid[..., 0]
 
     CTF = config.compute_ctf(batch_data.ctf_params)
     translated_images = core.translate_images(batch_data.images, batch_data.translations, config.image_shape)
@@ -1042,7 +1044,7 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
 
     return estimates
 
-def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola", upsampling_factor=None, return_real_space=False):
+def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = None, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola", upsampling_factor=None, return_real_space=False):
     bins = heterogeneity_bins
     inds = np.digitize(heterogeneity_distances, bins, right = True).astype(np.int32)
     n_bins = bins.size
@@ -1053,8 +1055,18 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
         upsampled_vol_shape = tuple(experiment_dataset.upsampled_volume_shape)
     half_volume_size = np.prod(volume_shape_to_half_volume_shape(upsampled_vol_shape))
 
-    rhs_all = jnp.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype)
-    lhs_all = jnp.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype_real)
+    # Accumulate on CPU to avoid OOM from JAX immutable-array copies at large
+    # grid sizes (256^3 × 50 bins ≈ 5 GB; .at[].set() would double that).
+    # Transferred to GPU only for the final matmul below.
+    rhs_all = np.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype)
+    lhs_all = np.zeros((n_bins, half_volume_size), dtype=experiment_dataset.dtype_real)
+
+    # Auto-compute batch size based on GPU memory if not specified
+    if batch_size is None:
+        accum_gb = utils.get_size_in_gb(rhs_all) + utils.get_size_in_gb(lhs_all)
+        avail_gb = max(1.0, utils.get_gpu_memory_total() - accum_gb)
+        batch_size = int(utils.get_image_batch_size(experiment_dataset.grid_size, avail_gb))
+    logger.info("batch size in heterogeneity kernel: %s", batch_size)
 
     if upsampling_factor is not None:
         config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, upsampling_factor=upsampling_factor)
@@ -1062,12 +1074,15 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
         config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, use_upsampled=True)
 
     image_inds_by_bin = [np.flatnonzero(inds == bin_idx).astype(np.int32) for bin_idx in range(n_bins)]
+    # Pre-allocate accumulators once (reused across bins)
+    Ft_y_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
+    Ft_ctf_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype_real)
     for bin_idx, image_inds in enumerate(image_inds_by_bin):
         if image_inds.size == 0:
             continue
 
-        Ft_y_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype)
-        Ft_ctf_acc = jnp.zeros(half_volume_size, dtype=experiment_dataset.dtype_real)
+        Ft_y_acc = jnp.zeros_like(Ft_y_acc)
+        Ft_ctf_acc = jnp.zeros_like(Ft_ctf_acc)
         for batch_data in DataIterator(
             experiment_dataset, batch_size,
             noise_model=experiment_dataset.noise, noise_half=False,
@@ -1078,8 +1093,8 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
                 config, batch_data, Ft_y=Ft_y_acc, Ft_ctf=Ft_ctf_acc,
             )
 
-        rhs_all = rhs_all.at[bin_idx].set(Ft_y_acc)
-        lhs_all = lhs_all.at[bin_idx].set(Ft_ctf_acc)
+        rhs_all[bin_idx] = np.asarray(Ft_y_acc)
+        lhs_all[bin_idx] = np.asarray(Ft_ctf_acc)
 
     # A slight improvement is an almost triangular kernel/ pyramid kernel
     #    _
@@ -1102,15 +1117,15 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
         for idx in range(1, n_bins):
             weights = kernel_fn(np_to_use.sqrt(distances/h_grid[idx]))
             weight_matrix[:,idx] = weights
-        weight_matrix = jnp.asarray(weight_matrix, dtype=lhs_all.dtype)
-        # (rhs.T @ W).T == W.T @ rhs; keep this on device.
-        rhs_all = jnp.matmul(weight_matrix.T.astype(rhs_all.real.dtype), rhs_all)
-        lhs_all = jnp.matmul(weight_matrix.T, lhs_all)
+        # Matmul on CPU: (50,50) @ (50, half_vol) — fast and avoids GPU OOM.
+        # Downstream post_process_from_filter_v2 transfers each row individually.
+        rhs_all = np.asarray(weight_matrix.T.astype(rhs_all.real.dtype) @ rhs_all)
+        lhs_all = np.asarray(weight_matrix.T @ lhs_all)
 
 
     elif heterogeneity_kernel == "square":
-        rhs_all = jnp.cumsum(rhs_all, axis=0)
-        lhs_all = jnp.cumsum(lhs_all, axis=0)
+        rhs_all = np.cumsum(rhs_all, axis=0)
+        lhs_all = np.cumsum(lhs_all, axis=0)
     else:
         raise NotImplementedError
 
