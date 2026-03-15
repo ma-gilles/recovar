@@ -300,8 +300,14 @@ class DataIterator:
             # Noise indexing: particle-grouped generators use particles_ind
             # for noise lookup (covariance path), while image generators use
             # flat indices (mean reconstruction path).
+            # When the generator is image-level, always use image indices —
+            # the particle placeholder may be non-finite (e.g. np.inf from
+            # _ImageView) and can't be used for array indexing.
             if nm is not None:
-                noise_idx = particles_ind if noise_by_particle else indices
+                use_particle_noise = (
+                    noise_by_particle and not self.use_image_generator
+                )
+                noise_idx = particles_ind if use_particle_noise else indices
                 nv = nm.get_half(noise_idx) if self.noise_half else nm.get(noise_idx)
             else:
                 nv = None

@@ -146,36 +146,51 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
     fsc_auc_scores = {}
     particle_usage = {}
     reconstructions = {}
-    
+
+    # Split zs by halfset.  zs is in original ordering (after
+    # reorder_to_original_indexing_from_halfsets), so we must index by the
+    # particle-level halfset indices rather than slicing by image count.
+    particles_halfsets = pipeline_output.get('particles_halfsets')
+    zs_subsets = [zs[particles_halfsets[i]] for i in range(2)]
+
+    # For tilt-series we need to map canonical particle indices back to
+    # image indices for reconstruction (relion_style_triangular_kernel
+    # iterates over image indices).
+    is_tilt = cryos.tilt_series_flag and hasattr(cryos.image_stack, '_particle_tilts')
+    if is_tilt:
+        _dti = np.asarray(cryos.dataset_tilt_indices)
+        # Invert _dti: canonical group index → local particle index
+        _canonical_to_local = np.full(int(_dti.max()) + 1, -1, dtype=np.int32)
+        for _p, _c in enumerate(_dti):
+            _canonical_to_local[_c] = _p
+
     # Create reconstructions directory if saving
     if save_reconstructions and output_folder is not None:
         reconstructions_dir = os.path.join(output_folder, 'reconstructions')
         os.makedirs(reconstructions_dir, exist_ok=True)
         logger.info("Saving reconstructions to %s", reconstructions_dir)
-        
+
         # Create single folder for all individual .mrc files
         individual_mrc_dir = os.path.join(output_folder, 'individual_mrc_files')
         os.makedirs(individual_mrc_dir, exist_ok=True)
         logger.info("Saving individual .mrc files to %s", individual_mrc_dir)
-        
+
         # Initialize list to collect all combined reconstructions for stacking
         all_combined_reconstructions = []
-        
+
         # Track file paths for individual .mrc files
         individual_mrc_files = []
-    
+
     for cluster_idx in range(len(cluster_centers)):
         logger.info("Processing cluster %s/%s", cluster_idx + 1, len(cluster_centers))
-        
+
         cluster_center = cluster_centers[cluster_idx]
-        
+
         # Create temporary directory for this cluster
         temp_dir = f"/tmp/cluster_{cluster_idx}_reconstruction"
         os.makedirs(temp_dir, exist_ok=True)
-        
+
         halfmaps = [None, None]
-        n_half0 = cryos.n_images_half(0)
-        zs_subsets = [ zs[:n_half0], zs[n_half0:] ]
         used_particles = [[], []]  # Track which particles are used for each halfmap
 
         for i, zs_subset in enumerate(zs_subsets):
@@ -185,9 +200,21 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
                 logger.warning("Cluster %s: No particles available for half-map %s, skipping", cluster_idx, i)
                 used_particles[i] = np.array([], dtype=np.int32)
                 continue
-            # Map local half indices to global dataset indices
-            global_indices = cryos.halfset_indices[i][closest_local]
-            used_particles[i] = global_indices
+            # Map local half indices back to original indices
+            canonical_indices = particles_halfsets[i][closest_local]
+            if is_tilt:
+                # Expand particle-level canonical indices → image indices
+                local_particles = _canonical_to_local[canonical_indices]
+                image_list = []
+                for p in local_particles:
+                    image_list.extend(cryos.image_stack._particle_tilts[p])
+                global_indices = np.array(image_list, dtype=np.int32)
+            else:
+                global_indices = canonical_indices
+            # Store canonical (particle-level) indices for downstream use
+            # (e.g. plotting against zs which is particle-indexed).
+            # The image-level global_indices are only needed for reconstruction.
+            used_particles[i] = canonical_indices
 
             logger.info("Cluster %s: Using %s closest particles for half-map %s (min distance: %.3f, max distance: %.3f). Average distance over all particles: %.3f", cluster_idx, len(closest_local), i, distances[closest_local[0]], distances[closest_local[-1]], np.mean(distances))
 
