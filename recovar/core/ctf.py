@@ -144,47 +144,11 @@ def as_ctf_evaluator(fn_or_evaluator):
 # ---------------------------------------------------------------------------
 
 @jax.jit
-def evaluate_ctf(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfactor):
-    """Evaluate the Contrast Transfer Function at given frequencies.
+def evaluate_ctf(freqs, ctf_params):
+    """Evaluate the Contrast Transfer Function for a batch of images.
 
-    Args:
-        freqs: 2-D frequency coordinates, shape ``(..., 2)`` in 1/Angstrom.
-        dfu: Defocus U in Angstroms.
-        dfv: Defocus V in Angstroms.
-        dfang: Astigmatism angle in degrees.
-        volt: Accelerating voltage in kV.
-        cs: Spherical aberration in mm.
-        w: Amplitude contrast fraction (0-1).
-        phase_shift: Phase shift in degrees.
-        bfactor: B-factor for envelope decay in Angstroms squared.
-
-    Returns:
-        CTF values with the same shape as ``freqs[..., 0]``.
-    """
-    if freqs.shape[-1] != 2:
-        raise ValueError(f"freqs last dimension must be 2, got {freqs.shape[-1]}")
-    volt = volt * 1000
-    cs = cs * 10**7
-    dfang = dfang * jnp.pi / 180
-    phase_shift = phase_shift * jnp.pi / 180
-    lam = 12.2642598 / jnp.sqrt(volt * (1.0 + volt * 9.78475598e-7))
-
-    x = freqs[..., 0]
-    y = freqs[..., 1]
-    ang = jnp.arctan2(y, x)
-    s2 = x**2 + y**2
-    df = 0.5 * (dfu + dfv + (dfu - dfv) * jnp.cos(2 * (ang - dfang)))
-    gamma = 2 * jnp.pi * (-0.5 * df * lam * s2 + 0.25 * cs * lam**3 * s2**2) - phase_shift
-    ctf = (1 - w**2) ** 0.5 * jnp.sin(gamma) - w * jnp.cos(gamma)
-    ctf = ctf * jnp.exp(-bfactor / 4 * s2)
-    return ctf
-
-
-@jax.jit
-def batch_evaluate_ctf(freqs, ctf_params):
-    """Evaluate CTF for a batch of images on a shared frequency grid.
-
-    Directly broadcasts over images — no vmap overhead, single GPU kernel.
+    Broadcasts per-image parameters over a shared frequency grid in a
+    single fused kernel (no vmap).
 
     Parameters
     ----------
@@ -226,12 +190,9 @@ def batch_evaluate_ctf(freqs, ctf_params):
     return ctf * contrast
 
 
-def evaluate_ctf_packed(freqs, ctf):
-    """Evaluate CTF for a single image from a packed parameter vector.
-
-    Thin wrapper around :func:`batch_evaluate_ctf` for backward compatibility.
-    """
-    return batch_evaluate_ctf(freqs, ctf[None])[0]
+# Backward-compatible aliases
+batch_evaluate_ctf = evaluate_ctf
+evaluate_ctf_packed = lambda freqs, ctf: evaluate_ctf(freqs, ctf[None])[0]
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +244,7 @@ def _compute_spa_ctf(CTF_params, image_shape, voxel_size, *, half_image=False):
         psi = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size, scaled=True)
     else:
         psi = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=True)
-    return batch_evaluate_ctf(psi, CTF_params)
+    return evaluate_ctf(psi, CTF_params)
 
 
 def _compute_spa_ctf_antialiased(CTF_params, image_shape, voxel_size, *, half_image=False):
@@ -352,10 +313,10 @@ __all__ = [
     "as_ctf_evaluator",
     # Parameter indexing
     "CTFParamIndex",
-    # Low-level physics
+    # CTF evaluation
     "evaluate_ctf",
-    "evaluate_ctf_packed",
-    "batch_evaluate_ctf",
+    "batch_evaluate_ctf",       # alias for evaluate_ctf
+    "evaluate_ctf_packed",      # single-image alias
     # Dose filters
     "critical_exposure",
     "get_dose_filters",
