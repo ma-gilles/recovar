@@ -1290,6 +1290,7 @@ class _SubsampledImageStack:
         self.unpadded_D = getattr(image_stack, "unpadded_D", self.D)
         self.padding = getattr(image_stack, "padding", 0)
         self.image_shape = image_stack.image_shape
+        self.dtype = getattr(image_stack, "dtype", np.float32)
         self.mask = getattr(image_stack, "mask", None)
 
     def process_images(self, images, apply_image_mask=True):
