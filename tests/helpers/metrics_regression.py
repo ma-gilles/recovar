@@ -33,7 +33,7 @@ def metric_direction(metric_name):
 # Metrics that are inherently noisy across runs (depend on local resolution
 # estimation which varies with dataset regeneration and GPU non-determinism).
 # These get a looser tolerance than the default.
-HIGH_VARIANCE_TOKENS = ("locres", "auc", "noise_max", "spatial_fsc")
+HIGH_VARIANCE_TOKENS = ("locres", "auc", "noise_max", "variance_fsc")
 _HIGH_VARIANCE_MIN_TOL = 0.10
 
 
