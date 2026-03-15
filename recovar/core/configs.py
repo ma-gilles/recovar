@@ -111,7 +111,6 @@ class ForwardModelConfig(eqx.Module):
         cryo,
         disc_type: str = "linear_interp",
         process_fn: Optional[Callable] = None,
-        use_upsampled: bool = False,
         upsampling_factor: Optional[int] = None,
     ) -> ForwardModelConfig:
         """Create from a CryoEMDataset or CryoEMHalfsets instance.
@@ -124,22 +123,11 @@ class ForwardModelConfig(eqx.Module):
             Discretization type (e.g. 'linear_interp', 'cubic', '').
         process_fn : callable, optional
             Image preprocessing function applied inside jitted code.
-        use_upsampled : bool
-            If True, use the upsampled volume shape/grid_size from the
-            dataset (reads ``cryo.volume_upsampling_factor``).
-            Prefer ``upsampling_factor`` for new code.
         upsampling_factor : int, optional
             Volume upsampling factor (e.g. 2 for 2× oversampled grid).
             Computes the upsampled volume shape directly without
-            mutating the dataset object.  Cannot be combined with
-            ``use_upsampled=True``.
+            mutating the dataset object.
         """
-        if use_upsampled and upsampling_factor is not None:
-            raise ValueError(
-                "Cannot specify both use_upsampled=True and upsampling_factor. "
-                "Prefer upsampling_factor for new code."
-            )
-
         from recovar.data_io.dataset import CryoEMDataset, CryoEMHalfsets
 
         # Extract the CTFEvaluator directly (not the dtype-casting method).
@@ -157,12 +145,8 @@ class ForwardModelConfig(eqx.Module):
             volume_upsampling = int(upsampling_factor)
             grid_size = base_grid_size * volume_upsampling
             volume_shape = (grid_size, grid_size, grid_size)
-        elif use_upsampled:
-            volume_shape = tuple(int(x) for x in cryo.upsampled_volume_shape)
-            grid_size = int(cryo.upsampled_grid_size)
-            volume_upsampling = int(getattr(cryo, 'volume_upsampling_factor', 1))
         else:
-            volume_shape = tuple(int(x) for x in cryo.volume_shape)
+            volume_shape = (base_grid_size,) * 3
             grid_size = base_grid_size
             volume_upsampling = 1
 

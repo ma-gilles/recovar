@@ -40,8 +40,6 @@ def test_halfsets_shared_properties():
     cryos = CryoEMHalfsets(h1, h2)
 
     assert cryos.grid_size == 4
-    assert cryos.volume_shape == (4, 4, 4)
-    assert cryos.volume_size == 64
     assert cryos.image_shape == (4, 4)
     assert cryos.image_size == 16
     assert cryos.voxel_size == h1.voxel_size

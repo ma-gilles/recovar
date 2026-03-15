@@ -272,7 +272,7 @@ def compute_ewald_LS_matvec_in_batches(experiment_dataset, input_volume_real, in
                                         experiment_dataset.CTF_params[indices], 
                                         noise_variance,
                                         experiment_dataset.image_shape, 
-                                        experiment_dataset.volume_shape, experiment_dataset.voxel_size, disc_type)
+                                        (experiment_dataset.grid_size,)*3, experiment_dataset.voxel_size, disc_type)
         vol_real += vol_real_this
         vol_imag += vol_imag_this
 
@@ -293,7 +293,7 @@ def compute_diag_mean(experiment_dataset, batch_size, disc_type, noise_variance 
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
 
     for k in range(n_batches):
-        volume = jnp.ones(experiment_dataset.volume_size, dtype = jnp.float32)
+        volume = jnp.ones(experiment_dataset.grid_size**3, dtype = jnp.float32)
         indices = utils.get_batch_of_indices_arange(experiment_dataset.n_images, batch_size, k)
         ATA_one = core_forward.compute_AtAv(
             config, volume, experiment_dataset.CTF_params[indices],
@@ -329,7 +329,7 @@ def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, n
         A_t_vol_real, A_t_vol_imag = adjoint_ewald_sphere_forward_model(batch.real, batch.imag,
                                         experiment_dataset.rotation_matrices[indices],
                                         experiment_dataset.CTF_params[indices], 
-                                        experiment_dataset.image_shape, experiment_dataset.volume_shape, 
+                                        experiment_dataset.image_shape, (experiment_dataset.grid_size,)*3, 
                                         experiment_dataset.voxel_size, disc_type)
 
         vol_real += A_t_vol_real
@@ -356,28 +356,28 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
     noise_variance = noise.make_radial_noise(noise_variance, experiment_dataset.image_shape)
     utils.report_memory_device(logger=logger)
     rhs_real, rhs_imag = compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, noise_variance)
-    rhs = vec_masked(rhs_real, rhs_imag, experiment_dataset.volume_shape)
+    rhs = vec_masked(rhs_real, rhs_imag, (experiment_dataset.grid_size,)*3)
     del rhs_imag, rhs_real
 
     rhs = np.array(rhs)
 
-    mask_real = mask.get_radial_mask(experiment_dataset.volume_shape).reshape(-1)
+    mask_real = mask.get_radial_mask((experiment_dataset.grid_size,)*3).reshape(-1)
     mask_size = int(jnp.sum(mask_real))
 
     def mat_vec_wrapped_up(x):
-        volume_real, volume_imag = unvec_masked(x, experiment_dataset.volume_shape, mask_size)
+        volume_real, volume_imag = unvec_masked(x, (experiment_dataset.grid_size,)*3, mask_size)
         z_real, z_imag = compute_ewald_LS_matvec_in_batches(experiment_dataset, volume_real, volume_imag, batch_size, disc_type, signal_variance, noise_variance  )
-        return vec_masked(z_real, z_imag, experiment_dataset.volume_shape)
+        return vec_masked(z_real, z_imag, (experiment_dataset.grid_size,)*3)
     
 
     diag_mean2 = compute_diag_mean(experiment_dataset, batch_size, disc_type, noise_variance  )
     diag_mean = (1/ signal_variance + diag_mean2).reshape(-1)
-    diag_mean = vec_masked(diag_mean, diag_mean, experiment_dataset.volume_shape)
+    diag_mean = vec_masked(diag_mean, diag_mean, (experiment_dataset.grid_size,)*3)
     diag_mean2 = np.array(diag_mean2)
     diag_mean = np.array(diag_mean)
 
     if x0 is not None:
-        x0_masked = vec_masked(x0.reshape(-1).real, x0.reshape(-1).imag, experiment_dataset.volume_shape)
+        x0_masked = vec_masked(x0.reshape(-1).real, x0.reshape(-1).imag, (experiment_dataset.grid_size,)*3)
         x0_masked = np.array(x0_masked)
     else:
         x0_masked = None
@@ -403,8 +403,8 @@ def solve_ewald_least_squares(experiment_dataset, batch_size, disc_type, signal_
     utils.report_memory_device(logger=logger)
     x_result,_ = scipy.sparse.linalg.cg(ATA_op, rhs, x0 = x0_masked, maxiter=max_iter, tol=tol, M = planar_op, callback=report)
 
-    volume_real, volume_imag = unvec_masked(x_result, experiment_dataset.volume_shape, mask_size)
-    vol = fourier_transform_utils.get_idft3((volume_real + 1j * volume_imag).reshape(experiment_dataset.volume_shape))
+    volume_real, volume_imag = unvec_masked(x_result, (experiment_dataset.grid_size,)*3, mask_size)
+    vol = fourier_transform_utils.get_idft3((volume_real + 1j * volume_imag).reshape((experiment_dataset.grid_size,)*3))
 
     return vol, ress
 

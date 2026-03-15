@@ -28,7 +28,7 @@ try:
 except ImportError:
     grain = None
 
-from recovar.data_io.image_loader import ImageSource
+from recovar.data_io.image_loader import ImageLoader
 from recovar.data_io import starfile
 from recovar.core import mask
 
@@ -133,7 +133,7 @@ class ParticleImageDataset:
         if padding != 0:
             raise NotImplementedError("Padding not yet supported")
 
-        self.source = ImageSource.from_file(
+        self.source = ImageLoader.from_file(
             image_file, lazy=lazy, datadir=datadir or "",
             indices=ind, max_threads=max_threads, strip_prefix=strip_prefix
         )
@@ -891,21 +891,6 @@ def tilt_series_to_images(tilt_series_indices: np.ndarray, starfile_path: str,
 def get_canonical_group_names(df, group_column: str = '_rlnGroupName') -> List[str]:
     """Get sorted list of unique group names."""
     return sorted(df[group_column].unique())
-
-
-# ---------------------------------------------------------------------------
-# Compatibility aliases
-# ---------------------------------------------------------------------------
-
-##TODO remove aliases, just pip new names over.
-ImageDataset = ParticleImageDataset
-TiltSeriesData = TiltSeriesDataset
-NumpyLoader = JAXDataLoader
-make_dataloader = simple_dataloader
-numpy_collate = collate_to_jax
-ImageBatchDataLoader = ImageCountBatchLoader
-TiltSeriesSubset = ParticleSubset
-tilt_series_indices_to_image_indices = tilt_series_to_images
 
 
 def set_standard_mask(D, dtype):

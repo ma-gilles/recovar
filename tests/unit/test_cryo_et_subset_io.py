@@ -7,7 +7,7 @@ the simulator so that exact byte-level STAR/MRC compatibility is exercised.
 
 Tested paths
 ------------
-* load_cryodrgn_dataset(tilt_series=True, ind=...)
+* load_dataset(tilt_series=True, ind=...)
   - image-level subset that leaves some particles with fewer tilts
   - boolean mask subset (all-True identity, all-False empty)
   - duplicate image indices propagate through CTF / poses
@@ -25,7 +25,7 @@ Tested paths
 
 NOTE on parse_particle_tilt return type
 ----------------------------------------
-TiltSeriesData.parse_particle_tilt(starfile) returns:
+TiltSeriesDataset.parse_particle_tilt(starfile) returns:
   particles_to_tilts: List[np.ndarray]  – one array of image indices per particle
   tilts_to_particles: Dict[int, int]    – image_idx -> particle_idx
 Particle i has images particles_to_tilts[i].
@@ -71,7 +71,7 @@ def tilt_files(tmp_path_factory):
 
 def _load_tilt_cryo(tilt_files, ind=None):
     """Load tiny cryo-ET dataset with optional image-level ind."""
-    return recovar_dataset.load_cryodrgn_dataset(
+    return recovar_dataset.load_dataset(
         particles_file=tilt_files["particles_star"],
         poses_file=tilt_files["poses_pkl"],
         ctf_file=tilt_files["ctf_pkl"],
@@ -84,7 +84,7 @@ def _load_tilt_cryo(tilt_files, ind=None):
 
 def _parse_p2t(tilt_files):
     """Return (particles_to_tilts: List[ndarray], tilts_to_particles: dict)."""
-    return tilt_dataset.TiltSeriesData.parse_particle_tilt(
+    return tilt_dataset.TiltSeriesDataset.parse_particle_tilt(
         tilt_files["particles_star"]
     )
 

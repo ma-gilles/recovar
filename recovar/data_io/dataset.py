@@ -15,25 +15,16 @@ from numpy.typing import NDArray
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 from recovar.core import mask
-from recovar.data_io import tilt_dataset
+from recovar.data_io import cryo_dataset
 from recovar.output import plot_utils
 
 logger = logging.getLogger(__name__)
 
-# Maybe should take out these dependencies?
-from recovar.data_io.image_loader import ImageSource
+from recovar.data_io.image_loader import ImageLoader
 
 
-def MRCDataMod(particles_file, ind=None, datadir=None, padding=0, uninvert_data=False, strip_prefix=None, downsample_D=None):
-    return tilt_dataset.ImageDataset(particles_file, ind=ind, datadir=datadir, padding=padding, invert_data=uninvert_data, lazy=False, strip_prefix=strip_prefix, downsample_D=downsample_D)
-
-
-def LazyMRCDataMod(particles_file, ind=None, datadir=None, padding=0, uninvert_data=False, strip_prefix=None, downsample_D=None):
-    return tilt_dataset.ImageDataset(particles_file, ind=ind, datadir=datadir, padding=padding, invert_data=uninvert_data, lazy=True, strip_prefix=strip_prefix, downsample_D=downsample_D)
-    
-    
 def get_num_images_in_dataset(mrc_path, datadir = None, strip_prefix = None):
-    return ImageSource.from_file(mrc_path, lazy=True, datadir = datadir, strip_prefix = strip_prefix).n
+    return ImageLoader.from_file(mrc_path, lazy=True, datadir = datadir, strip_prefix = strip_prefix).n
 
 def set_standard_mask(D, dtype):
     return mask.window_mask(D, 0.85, 0.99)
@@ -101,8 +92,7 @@ class CryoEMDataset:
     managed together via :class:`CryoEMHalfsets`.
 
     Attributes:
-        grid_size: Side length of the 3-D reconstruction grid.
-        volume_shape: ``(grid_size, grid_size, grid_size)``.
+        grid_size: Side length of the image (and default 3-D reconstruction grid).
         voxel_size: Pixel / voxel size in Angstroms.
         n_images: Number of particle images in this dataset.
         rotation_matrices: Per-image rotation matrices, shape ``(N, 3, 3)``.
@@ -113,10 +103,8 @@ class CryoEMDataset:
     """
 
     __slots__ = (
-        # Grid / volume geometry
-        'voxel_size', 'grid_size', 'volume_upsampling_factor',
-        'upsampled_grid_size', 'volume_shape', 'volume_size',
-        'upsampled_volume_shape', 'upsampled_volume_size',
+        # Grid geometry
+        'voxel_size', 'grid_size',
         # Image stack and image geometry
         'image_stack', 'image_shape', 'image_size', 'n_images', 'padding',
         # Processing flags
@@ -142,11 +130,10 @@ class CryoEMDataset:
         rotation_dtype: type = np.float32,
         dataset_indices: Optional[NDArray[np.integer]] = None,
         grid_size: Optional[int] = None,
-        volume_upsampling_factor: int = 1,
         tilt_series_flag: bool = False,
         premultiplied_ctf: bool = False,
     ) -> None:
-        # --- Grid / volume geometry ---
+        # --- Grid geometry ---
         if image_stack is not None:
             grid_size = image_stack.D
         elif grid_size is None:
@@ -154,12 +141,6 @@ class CryoEMDataset:
 
         self.voxel_size = voxel_size
         self.grid_size = grid_size
-        self.volume_upsampling_factor = volume_upsampling_factor
-        self.upsampled_grid_size = grid_size * volume_upsampling_factor
-        self.volume_shape = (grid_size, grid_size, grid_size)
-        self.volume_size = grid_size ** 3
-        self.upsampled_volume_shape = tuple(3 * [grid_size * volume_upsampling_factor])
-        self.upsampled_volume_size = np.prod(self.upsampled_volume_shape)
 
         # --- Image stack and image geometry ---
         if image_stack is None:
@@ -214,27 +195,31 @@ class CryoEMDataset:
             return None
         return self.noise.get(indices)
 
-    def delete(self):
-        del self.image_stack.particles
-        del self.image_stack
-        del self.rotation_matrices
-        del self.CTF_params
-        del self.translations
-        del self.noise
-
-    def update_volume_upsampling_factor(self, volume_upsampling_factor):
-        import warnings
-        warnings.warn(
-            "update_volume_upsampling_factor is deprecated. Pass upsampling_factor "
-            "to ForwardModelConfig.from_dataset() or pipeline functions instead.",
-            DeprecationWarning,
-            stacklevel=2,
+    def subset(self, indices):
+        """Return a new CryoEMDataset containing only the images at *indices*."""
+        indices = _normalize_image_indices(indices, n_images_total=self.n_images, name="indices")
+        new_stack = _SubsampledImageStack(self.image_stack, indices) if self.image_stack is not None else None
+        # Compose dataset_indices: if the parent was already a subset, map
+        # through its indices to preserve the original file-level indices.
+        if self.dataset_indices is not None:
+            composed_indices = self.dataset_indices[indices]
+        else:
+            composed_indices = indices
+        sub = CryoEMDataset(
+            image_stack=new_stack,
+            voxel_size=self.voxel_size,
+            rotation_matrices=self.rotation_matrices[indices],
+            translations=self.translations[indices],
+            CTF_params=self.CTF_params[indices],
+            ctf_evaluator=self.ctf_evaluator,
+            grid_size=self.grid_size,
+            tilt_series_flag=self.tilt_series_flag,
+            premultiplied_ctf=self.premultiplied_ctf,
+            dataset_indices=composed_indices,
         )
-        self.volume_upsampling_factor = volume_upsampling_factor
-        self.upsampled_grid_size = self.grid_size * volume_upsampling_factor
-
-        self.upsampled_volume_shape = tuple(3*[self.grid_size * volume_upsampling_factor ])
-        self.upsampled_volume_size = np.prod(self.upsampled_volume_shape)
+        if self.noise is not None:
+            sub.noise = self.noise
+        return sub
 
     def get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
         return self.image_stack.get_dataset_generator(batch_size, num_workers=num_workers, **kwargs)
@@ -268,10 +253,6 @@ class CryoEMDataset:
         rad = self.grid_size//2 -1 if rad is None else rad
         return np.array(self.get_volume_radial_mask(rad))
 
-    def get_valid_upsampled_frequency_indices(self,rad = None):
-        rad = self.upsampled_grid_size//2 -1 if rad is None else rad
-        return np.array(self.get_upsampled_volume_radial_mask(rad))
-
 
     #### All functions below are only just for plotting/debugging
 
@@ -282,17 +263,14 @@ class CryoEMDataset:
         return self.compute_CTF(self.CTF_params[indices])
 
     def get_volume_radial_mask(self, radius = None):
-        return mask.get_radial_mask(self.volume_shape, radius = radius).reshape(-1)
-
-    def get_upsampled_volume_radial_mask(self, radius = None):
-        return mask.get_radial_mask(self.upsampled_volume_shape, radius = radius).reshape(-1)
+        return mask.get_radial_mask((self.grid_size,)*3, radius = radius).reshape(-1)
 
 
     def get_image_radial_mask(self, radius = None):        
         return mask.get_radial_mask(self.image_shape, radius = radius).reshape(-1)
 
     def get_proj(self, X, to_real = np.real, axis = 0, hide_padding = True):
-        im = to_real(fourier_transform_utils.get_idft2(jnp.take(X.reshape(self.volume_shape), self.grid_size//2, axis = axis)))
+        im = to_real(fourier_transform_utils.get_idft2(jnp.take(X.reshape((self.grid_size,)*3), self.grid_size//2, axis = axis)))
         if hide_padding:
             im = im[self.hpad:self.image_stack.unpadded_D + self.hpad,self.hpad:self.image_stack.unpadded_D + self.hpad]
         return im
@@ -301,11 +279,11 @@ class CryoEMDataset:
     def get_slice(self, X, to_real_fn = np.abs, axis = 0):
         # zero_th freq
         z_freq = self.grid_size//2 +1
-        im = to_real_fn(jnp.take(X.reshape(self.volume_shape), z_freq, axis = axis))
+        im = to_real_fn(jnp.take(X.reshape((self.grid_size,)*3), z_freq, axis = axis))
         return im
 
     def get_slice_real(self, X, to_real_fn = np.real, axis = 0):
-        im = to_real_fn(fourier_transform_utils.get_idft3(X.reshape(self.volume_shape)))
+        im = to_real_fn(fourier_transform_utils.get_idft3(X.reshape((self.grid_size,)*3)))
         im2 = jnp.take(im, self.grid_size//2, axis = axis)
         return to_real_fn(im2)
 
@@ -353,13 +331,13 @@ class CryoEMDataset:
 
 
     def plot_FSC(self, image1 = None, image2 = None, filename = None, threshold = 0.5, curve = None, ax = None):
-        score = plot_utils.plot_fsc_new(image1, image2, self.volume_shape, self.voxel_size,  curve = curve, ax = ax, threshold = threshold, filename = filename)
+        score = plot_utils.plot_fsc_new(image1, image2, (self.grid_size,)*3, self.voxel_size,  curve = curve, ax = ax, threshold = threshold, filename = filename)
         return score
     
     def get_image_mask(self, indices, mask, binary = True, soften = 5):
         indices = np.asarray(indices, dtype=int)
         from recovar.heterogeneity import covariance_core # Not sure I want this depency to exist... Could make some circular imports
-        mask = covariance_core.get_per_image_tight_mask(mask, self.rotation_matrices[indices], self.image_stack.mask, self.volume_mask_threshold, self.image_shape, self.volume_shape, self.grid_size, self.padding, disc_type = 'linear_interp',  binary = binary, soften = soften)
+        mask = covariance_core.get_per_image_tight_mask(mask, self.rotation_matrices[indices], self.image_stack.mask, self.volume_mask_threshold, self.image_shape, (self.grid_size,)*3, self.grid_size, self.padding, disc_type = 'linear_interp',  binary = binary, soften = soften)
         mask_ft = fourier_transform_utils.get_dft2(mask).reshape(mask.shape[0], -1)
         # Usually images are translated, here we translate back.
         batch = core.translate_images(mask_ft, -self.translations[indices].astype(int) , self.image_shape)
@@ -410,7 +388,7 @@ class CryoEMDataset:
 class CryoEMHalfsets:
     """Container for two half-set CryoEMDataset instances.
 
-    Provides direct access to shared properties (``grid_size``, ``volume_shape``,
+    Provides direct access to shared properties (``grid_size``,
     ``voxel_size``, ...) that are identical between halves, while still allowing
     per-half access via indexing or iteration.
 
@@ -420,7 +398,6 @@ class CryoEMHalfsets:
 
         # Shared properties (replaces cryos[0].grid_size):
         cryos.grid_size
-        cryos.volume_shape
         cryos.voxel_size
 
         # Per-half access (backward compatible):
@@ -458,14 +435,6 @@ class CryoEMHalfsets:
         return self._halves[0].grid_size
 
     @property
-    def volume_shape(self) -> Tuple[int, int, int]:
-        return self._halves[0].volume_shape
-
-    @property
-    def volume_size(self) -> int:
-        return self._halves[0].volume_size
-
-    @property
     def voxel_size(self) -> float:
         return self._halves[0].voxel_size
 
@@ -480,18 +449,6 @@ class CryoEMHalfsets:
     @property
     def padding(self) -> int:
         return self._halves[0].padding
-
-    @property
-    def upsampled_grid_size(self) -> int:
-        return self._halves[0].upsampled_grid_size
-
-    @property
-    def upsampled_volume_shape(self) -> tuple:
-        return self._halves[0].upsampled_volume_shape
-
-    @property
-    def upsampled_volume_size(self) -> int:
-        return self._halves[0].upsampled_volume_size
 
     @property
     def volume_mask_threshold(self) -> float:
@@ -518,10 +475,6 @@ class CryoEMHalfsets:
     @property
     def premultiplied_ctf(self) -> bool:
         return self._halves[0].premultiplied_ctf
-
-    @property
-    def volume_upsampling_factor(self) -> int:
-        return self._halves[0].volume_upsampling_factor
 
     @property
     def ctf_evaluator(self):
@@ -558,15 +511,8 @@ class CryoEMHalfsets:
     def get_volume_radial_mask(self, radius=None):
         return self._halves[0].get_volume_radial_mask(radius)
 
-    def get_upsampled_volume_radial_mask(self, radius=None):
-        return self._halves[0].get_upsampled_volume_radial_mask(radius)
-
     def get_image_radial_mask(self, radius=None):
         return self._halves[0].get_image_radial_mask(radius)
-
-    def update_volume_upsampling_factor(self, factor: int) -> None:
-        for h in self._halves:
-            h.update_volume_upsampling_factor(factor)
 
     def compute_CTF(self, CTF_params):
         return self._halves[0].compute_CTF(CTF_params)
@@ -661,15 +607,11 @@ def load_dataset(
 
         
     if tilt_series:
-            from recovar.data_io import tilt_dataset
             tilt_file_option = 'relion5' if tilt_series_ctf == 'relion5' else 'warp'
-            dataset = tilt_dataset.TiltSeriesData(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, tilt_file_option=tilt_file_option, strip_prefix=strip_prefix)
+            dataset = cryo_dataset.TiltSeriesDataset(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, tilt_file_option=tilt_file_option, strip_prefix=strip_prefix)
 
     else:
-        if lazy:
-            dataset = LazyMRCDataMod(particles_file, ind=ind, datadir=datadir, padding=padding, uninvert_data=uninvert_data, strip_prefix=strip_prefix, downsample_D=downsample_D)
-        else:
-            dataset = MRCDataMod(particles_file, ind=ind, datadir=datadir, padding=padding, uninvert_data=uninvert_data, strip_prefix=strip_prefix, downsample_D=downsample_D)
+        dataset = cryo_dataset.ParticleImageDataset(particles_file, ind=ind, datadir=datadir, padding=padding, invert_data=uninvert_data, lazy=lazy, strip_prefix=strip_prefix, downsample_D=downsample_D)
 
     # ---- Load CTF parameters ----
     from recovar.data_io import load_utils
@@ -709,8 +651,7 @@ def load_dataset(
     # This is an option used to treat a cryo-ET dataset as a cryo-EM dataset, but still use the right CTF.
     # It means, that it will use the cryo-EM pipeline but the cryoET CTF.
     if (tilt_series is False) and (tilt_series_ctf != 'cryoem'):
-        from recovar.data_io import tilt_dataset
-        tilt_dataset_this = tilt_dataset.TiltSeriesData(
+        tilt_dataset_this = cryo_dataset.TiltSeriesDataset(
             particles_file,
             ind=ind,
             datadir=datadir,
@@ -827,12 +768,6 @@ def load_dataset(
                          premultiplied_ctf=premultiplied_ctf)
 
 
-# Backward compatibility alias
-load_cryodrgn_dataset = load_dataset
-
-
-def get_split_datasets_from_dict(dataset_loader_dict, ind_split, lazy = False):
-    return get_split_datasets(**dataset_loader_dict, ind_split=ind_split, lazy =lazy)
 
 def get_split_datasets(particles_file, poses_file=None, ctf_file=None, datadir=None,
                        uninvert_data=False, ind_file=None,
@@ -841,12 +776,26 @@ def get_split_datasets(particles_file, poses_file=None, ctf_file=None, datadir=N
                        angle_per_tilt=3, dose_per_tilt=2.9,
                        ind_split=None, lazy=False, premultiplied_ctf=False,
                        strip_prefix=None, downsample_D=None):
+    # Load dataset once with the union of all split indices
+    all_indices = np.unique(np.concatenate(ind_split))
 
-    cryos = []
-    for ind in ind_split:
-        cryos.append(load_dataset(particles_file, poses_file, ctf_file, datadir=datadir, n_images=n_images, ind=ind, lazy=lazy, padding=padding, uninvert_data=uninvert_data, tilt_series=tilt_series, tilt_series_ctf=tilt_series_ctf, angle_per_tilt=angle_per_tilt, dose_per_tilt=dose_per_tilt, premultiplied_ctf=premultiplied_ctf, strip_prefix=strip_prefix, downsample_D=downsample_D))
+    full = load_dataset(
+        particles_file, poses_file, ctf_file, datadir=datadir,
+        n_images=n_images, ind=all_indices, lazy=lazy, padding=padding,
+        uninvert_data=uninvert_data, tilt_series=tilt_series,
+        tilt_series_ctf=tilt_series_ctf, angle_per_tilt=angle_per_tilt,
+        dose_per_tilt=dose_per_tilt, premultiplied_ctf=premultiplied_ctf,
+        strip_prefix=strip_prefix, downsample_D=downsample_D,
+    )
 
-    return CryoEMHalfsets(cryos[0], cryos[1])
+    # Map original indices to local (0..N-1) indices in the union
+    orig_to_local = np.empty(int(all_indices.max()) + 1, dtype=np.int32)
+    orig_to_local[all_indices] = np.arange(len(all_indices), dtype=np.int32)
+
+    local_split = [orig_to_local[s] for s in ind_split]
+    half1 = full.subset(local_split[0])
+    half2 = full.subset(local_split[1])
+    return CryoEMHalfsets(half1, half2)
 
 
 def _read_relion_halfsets_from_star(particles_file, ind_file=None, datadir=None, strip_prefix=None):
@@ -960,7 +909,6 @@ def get_split_tilt_indices(
     """
     Split a tilt-series dataset into two halfsets (image indices), supporting optional filtering by image/particle indices and precomputed splits.
     """
-    from recovar.data_io import tilt_dataset
     import pickle
     import numpy as np
 
@@ -1036,12 +984,12 @@ def get_split_tilt_indices(
         return values.astype(np.int32, copy=False)
 
     # Step 1: Parse STAR file for mapping
-    particles_to_tilts, tilts_to_particles = tilt_dataset.TiltSeriesData.parse_particle_tilt(particles_file)
+    particles_to_tilts, tilts_to_particles = cryo_dataset.TiltSeriesDataset.parse_particle_tilt(particles_file)
 
     # Step 2: Optionally get tilt numbers for ntilts filtering
     tilt_numbers = None
     if ntilts is not None and ntilts > 0:
-        dataset_tmp = tilt_dataset.TiltSeriesData(particles_file, datadir=datadir)
+        dataset_tmp = cryo_dataset.TiltSeriesDataset(particles_file, datadir=datadir)
         tilt_numbers = dataset_tmp.tilt_numbers
 
     n_particles_total = len(particles_to_tilts)
@@ -1061,7 +1009,7 @@ def get_split_tilt_indices(
         return [empty, empty]
 
     # Map selected particles to image indices
-    allowed_image_indices = tilt_dataset.tilt_series_indices_to_image_indices(particle_ind, particles_file)
+    allowed_image_indices = cryo_dataset.tilt_series_to_images(particle_ind, particles_file)
 
     # Step 4: Optionally filter by image indices
     if ind_file is not None:
@@ -1280,31 +1228,9 @@ def load_dataset_from_args(args, lazy = False, ind_split = None):
     if ind_split is None:
         ind_split = figure_out_halfsets(args)
     dataset_loader_dict = make_dataset_loader_dict(args)
-    return get_split_datasets_from_dict(dataset_loader_dict, ind_split, lazy = lazy)
+    return get_split_datasets(**dataset_loader_dict, ind_split=ind_split, lazy=lazy)
 
 
-
-# Only used in recovar_coding_example.ipynb  
-def get_default_dataset_option():
-    dataset_loader_dict = { 'particles_file' : None,
-                            'ctf_file': None ,
-                            'poses_file' : None,
-                            'datadir': None,
-                            'n_images' : -1,
-                            'ind': None,
-                            # 'tilt_ind': None,
-                            'padding' : 0,
-                            # 'lazy': False,
-                            'tilt_series' : False,
-                            'tilt_series_ctf' : 'cryoem',
-                            'angle_per_tilt' : 3,
-                            'dose_per_tilt' : 2.9,
-                            'uninvert_data' : False,
-                            'premultiplied_ctf' : False,}
-    return dataset_loader_dict
-
-def load_dataset_from_dict(dataset_loader_dict, lazy = True):
-    return load_cryodrgn_dataset(**dataset_loader_dict, lazy = lazy)
 
 
 def reorder_to_original_indexing(arr, cryos, use_tilt_indices = False):
@@ -1436,29 +1362,5 @@ class _SubsampledImageStack:
 
 
 def subsample_cryoem_dataset(cryo, good_indices):
-    """Return a new CryoEMDataset containing only the images at *good_indices*.
-
-    *good_indices* may be a boolean mask or an array of integer indices.
-    The returned dataset has re-numbered per-image arrays so index ``i`` always
-    refers to the i-th kept image.
-    """
-    good_indices = _normalize_image_indices(good_indices, n_images_total=cryo.n_images, name="good_indices")
-
-    new_stack = _SubsampledImageStack(cryo.image_stack, good_indices) if cryo.image_stack is not None else None
-
-    sub = CryoEMDataset(
-        image_stack=new_stack,
-        voxel_size=cryo.voxel_size,
-        rotation_matrices=cryo.rotation_matrices[good_indices],
-        translations=cryo.translations[good_indices],
-        CTF_params=cryo.CTF_params[good_indices],
-        ctf_evaluator=cryo.ctf_evaluator,
-        grid_size=cryo.grid_size,
-        volume_upsampling_factor=cryo.volume_upsampling_factor,
-        tilt_series_flag=cryo.tilt_series_flag,
-        premultiplied_ctf=cryo.premultiplied_ctf,
-        dataset_indices=good_indices,
-    )
-    if cryo.noise is not None:
-        sub.noise = cryo.noise
-    return sub
+    """Return a new CryoEMDataset containing only the images at *good_indices*."""
+    return cryo.subset(good_indices)

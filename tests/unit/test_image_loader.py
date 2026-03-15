@@ -641,7 +641,7 @@ def test_image_source_from_file_delegates_to_load_images(monkeypatch):
         return sentinel
 
     monkeypatch.setattr(image_loader, "load_images", _fake_load)
-    out = image_loader.ImageSource.from_file(
+    out = image_loader.ImageLoader.from_file(
         "particles.star",
         lazy=False,
         indices=np.array([0, 3], dtype=np.int32),

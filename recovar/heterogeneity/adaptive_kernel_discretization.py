@@ -338,7 +338,7 @@ def precompute_triangular_kernel(experiment_dataset, noise_variance, pol_degree=
     pol_degree = int(pol_degree)  # ensure Python int (numpy scalars are traced by eqx.filter_jit)
     n_bins = 1 if heterogeneity_bins is None else heterogeneity_bins.size
 
-    half_volume_size = np.prod(volume_shape_to_half_volume_shape(experiment_dataset.upsampled_volume_shape))
+    half_volume_size = np.prod(volume_shape_to_half_volume_shape((experiment_dataset.grid_size,)*3))
     XWX = jnp.zeros((half_volume_size, small_gram_matrix_size(pol_degree) * n_bins ), dtype = np.float32)
     F = jnp.zeros((half_volume_size, get_feature_size(pol_degree) *  n_bins), dtype = np.complex64)
 
@@ -348,7 +348,7 @@ def precompute_triangular_kernel(experiment_dataset, noise_variance, pol_degree=
 
     config = ForwardModelConfig(
         image_shape=tuple(experiment_dataset.image_shape),
-        volume_shape=tuple(experiment_dataset.upsampled_volume_shape),
+        volume_shape=tuple((experiment_dataset.grid_size,)*3),
         grid_size=int(experiment_dataset.grid_size),
         voxel_size=float(experiment_dataset.voxel_size),
         padding=int(experiment_dataset.padding),
@@ -551,7 +551,7 @@ def precompute_kernel(experiment_dataset, noise_variance, pol_degree=0, heteroge
     pol_degree = int(pol_degree)  # ensure Python int (numpy scalars are traced by eqx.filter_jit)
     n_bins = 1 if heterogeneity_bins is None else heterogeneity_bins.size
 
-    half_volume_size = np.prod(volume_shape_to_half_volume_shape(experiment_dataset.upsampled_volume_shape))
+    half_volume_size = np.prod(volume_shape_to_half_volume_shape((experiment_dataset.grid_size,)*3))
     XWX = jnp.zeros((half_volume_size, small_gram_matrix_size(pol_degree) * n_bins ), dtype = np.float32)
     F = jnp.zeros((half_volume_size, get_feature_size(pol_degree) *  n_bins), dtype = np.complex64)
 
@@ -561,7 +561,7 @@ def precompute_kernel(experiment_dataset, noise_variance, pol_degree=0, heteroge
 
     config = ForwardModelConfig(
         image_shape=tuple(experiment_dataset.image_shape),
-        volume_shape=tuple(experiment_dataset.upsampled_volume_shape),
+        volume_shape=tuple((experiment_dataset.grid_size,)*3),
         grid_size=int(experiment_dataset.grid_size),
         voxel_size=float(experiment_dataset.voxel_size),
         padding=int(experiment_dataset.padding),
@@ -653,7 +653,7 @@ def estimate_from_relion_style(cryos, discretization_params, XWXs, Fs, volume_sh
     if pol_degree != 0:
         raise NotImplementedError("Only p = 0 supported for now")
 
-    volume_size = np.prod(cryos.volume_shape)
+    volume_size = np.prod((cryos.grid_size,)*3)
     from recovar.reconstruction import relion_functions
 
     # Polynomial estimates
@@ -694,16 +694,16 @@ def estimate_multiple_disc_relion_style(experiment_datasets, noise_variance, dis
 
 
     n_disc_test = len(discretization_params)
-    volume_size = experiment_datasets[0].upsampled_volume_size
+    volume_size = experiment_datasets[0].grid_size**3
 
 
     n_bins = 1 if heterogeneity_bins is None else heterogeneity_bins.size
-    first_estimates = np.zeros((n_disc_test, n_bins,  2, experiment_datasets[0].volume_size), dtype = np.complex64)
+    first_estimates = np.zeros((n_disc_test, n_bins,  2, experiment_datasets[0].grid_size**3), dtype = np.complex64)
 
 
     for idx, disc_params_this in enumerate(discretization_params):
         for b in range(n_bins):
-            first, second = estimate_from_relion_style(cryos, disc_params_this, [XWXs[0][...,b], XWXs[1][...,b] ], [Fs[0][...,b], Fs[1][...,b] ], cryos[0].upsampled_volume_shape, tau = None, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = gridding_correct )
+            first, second = estimate_from_relion_style(cryos, disc_params_this, [XWXs[0][...,b], XWXs[1][...,b] ], [Fs[0][...,b], Fs[1][...,b] ], (cryos[0].grid_size,)*3, tau = None, use_spherical_mask = use_spherical_mask, grid_correct = grid_correct, gridding_correct = gridding_correct )
             first_estimates[idx,b,0] = first.reshape(-1)
             first_estimates[idx,b,1] = second.reshape(-1)
 
@@ -756,8 +756,6 @@ def pick_best_heterogeneity_from_residual(estimates, full_test_dataset, heteroge
 
     logger.info("Number of images used for residual computation: %s", test_dataset.n_images)
 
-    upsample_fac = test_dataset.volume_upsampling_factor
-    test_dataset.update_volume_upsampling_factor(1)
     residuals, _ = compute_residuals_many_weights_in_weight_batch(test_dataset, estimates, max_pol_degree, use_linear_interp = True)
 
     all_params = []
@@ -766,7 +764,7 @@ def pick_best_heterogeneity_from_residual(estimates, full_test_dataset, heteroge
             all_params.append((*param, bin))
             
 
-    index_array_vol, disc_choices, residuals_averaged = pick_best_params(residuals, all_params, test_dataset.volume_shape)
+    index_array_vol, disc_choices, residuals_averaged = pick_best_params(residuals, all_params, (test_dataset.grid_size,)*3)
 
     summed_residuals = jnp.sum(residuals, axis = 0)
     return index_array_vol, disc_choices, residuals_averaged, summed_residuals
@@ -910,7 +908,7 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, noise_varia
 
     final_estimates = 0
     n_disc_test = len(discretization_params)
-    volume_size = experiment_datasets[0].volume_size
+    volume_size = experiment_datasets[0].grid_size**3
     # Compute weights for each discretization
     n_bins = heterogeneity_bins.size
     final_estimates = np.zeros((n_disc_test, n_bins, volume_size, get_feature_size(max_pol_degree)), dtype = np.complex64)
@@ -918,7 +916,7 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, noise_varia
 
     for idx, disc_params_this in enumerate(discretization_params):
         for b in range(n_bins):
-            final_estimates[idx,b], first_estimates[idx,b] = estimate_volume_from_covariance_and_precompute(signal_variance, disc_params_this, [XWXs[0][...,b], XWXs[1][...,b] ], [Fs[0][...,b], Fs[1][...,b] ], experiment_datasets[0].upsampled_volume_shape)
+            final_estimates[idx,b], first_estimates[idx,b] = estimate_volume_from_covariance_and_precompute(signal_variance, disc_params_this, [XWXs[0][...,b], XWXs[1][...,b] ], [Fs[0][...,b], Fs[1][...,b] ], (experiment_datasets[0].grid_size,)*3)
 
     # volume_size (N^3) x n_disc_test x n_bins x feature_size  
     final_estimates = final_estimates.transpose(2, 0, 1, 3)
@@ -945,7 +943,7 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, noise_varia
         for bin in heterogeneity_bins:
             all_params.append((*param, bin))
 
-    index_array_vol, disc_choices, residuals_averaged = pick_best_params(residuals, all_params, experiment_datasets[0].upsampled_volume_shape)
+    index_array_vol, disc_choices, residuals_averaged = pick_best_params(residuals, all_params, (experiment_datasets[0].grid_size,)*3)
 
     weights_opt = jnp.take_along_axis(final_estimates[...,0] , np.expand_dims(index_array_vol, axis=-1), axis=-1)
 
@@ -979,7 +977,7 @@ def naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, 
             Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(test_dataset , noise_variance.astype(np.float32),  batch_size,  disc_type = disc_type, upsampling_factor=1)
 
             kernel_type = 'triangular' if disc_type == 'linear_interp' else 'square'
-            estimate = relion_functions.post_process_from_filter_v2(Ft_ctf, F_ty, test_dataset.volume_shape, 1, tau = tau, kernel = kernel_type, use_spherical_mask = False, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
+            estimate = relion_functions.post_process_from_filter_v2(Ft_ctf, F_ty, (test_dataset.grid_size,)*3, 1, tau = tau, kernel = kernel_type, use_spherical_mask = False, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
 
             lhs.append(np.array(Ft_ctf))
             rhs.append(np.array(F_ty))
@@ -1004,7 +1002,6 @@ def naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, 
 def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = 100, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp'):
 
     estimates = []
-    experiment_dataset.update_volume_upsampling_factor(2)
     XWX, F = precompute_triangular_kernel(experiment_dataset, noise_variance.astype(np.float32), pol_degree=0, heterogeneity_distances= heterogeneity_distances, heterogeneity_bins = heterogeneity_bins)
 
     XWX = XWX[:,0,:].T
@@ -1017,7 +1014,7 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
         estimate = relion_functions.post_process_from_filter_v2(
             XWX[idx],
             F[idx],
-            experiment_dataset.volume_shape, 2,
+            (experiment_dataset.grid_size,)*3, 2,
             tau = tau, kernel = kernel_type, use_spherical_mask = True,
             grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1,
             input_half_volume=True,
@@ -1035,7 +1032,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
     if upsampling_factor is not None:
         upsampled_vol_shape = tuple(3 * [experiment_dataset.grid_size * upsampling_factor])
     else:
-        upsampled_vol_shape = tuple(experiment_dataset.upsampled_volume_shape)
+        upsampled_vol_shape = tuple((experiment_dataset.grid_size,)*3)
     half_volume_size = np.prod(volume_shape_to_half_volume_shape(upsampled_vol_shape))
 
     # Accumulate on CPU to avoid OOM from JAX immutable-array copies at large
@@ -1054,7 +1051,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
     if upsampling_factor is not None:
         config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, upsampling_factor=upsampling_factor)
     else:
-        config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, use_upsampled=True)
+        config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, upsampling_factor=2)
 
     image_inds_by_bin = [np.flatnonzero(inds == bin_idx).astype(np.int32) for bin_idx in range(n_bins)]
     # Pre-allocate accumulators once (reused across bins)
@@ -1118,13 +1115,13 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
         raise NotImplementedError
 
     kernel_type = 'triangular' if disc_type == 'linear_interp' else 'square'
-    vol_upsample = upsampling_factor if upsampling_factor is not None else int(experiment_dataset.volume_upsampling_factor)
+    vol_upsample = upsampling_factor if upsampling_factor is not None else 1
     estimate_bins = []
     for idx in range(heterogeneity_bins.size):
         estimate = relion_functions.post_process_from_filter_v2(
             lhs_all[idx],
             rhs_all[idx],
-            experiment_dataset.volume_shape, vol_upsample,
+            (experiment_dataset.grid_size,)*3, vol_upsample,
             tau = tau, kernel = kernel_type,
             use_spherical_mask = use_spherical_mask, grid_correct = grid_correct,
             gridding_correct = "square", kernel_width = 1,
@@ -1174,14 +1171,14 @@ def estimate_variance_and_discretization_params(experiment_datasets, noise_varia
 
     final_estimates = 0
     n_disc_test = len(discretization_params)
-    volume_size = experiment_datasets[0].upsampled_volume_size
+    volume_size = experiment_datasets[0].grid_size**3
     # Compute weights for each discretization
     final_estimates = np.zeros((n_disc_test, 2, volume_size, get_feature_size(max_pol_degree)), dtype = np.complex64)
     first_estimates = np.zeros((n_disc_test, 2, volume_size, get_feature_size(max_pol_degree)), dtype = np.complex64)
 
 
     for idx, disc_params_this in enumerate(discretization_params):
-        final_estimates[idx], first_estimates[idx], prior_inverse_covariance = estimate_optimal_covariance_and_volume(signal_var, "one_fixed", disc_params_this, XWXs, Fs, experiment_datasets[0].upsampled_volume_shape)
+        final_estimates[idx], first_estimates[idx], prior_inverse_covariance = estimate_optimal_covariance_and_volume(signal_var, "one_fixed", disc_params_this, XWXs, Fs, (experiment_datasets[0].grid_size,)*3)
 
 
     final_estimates = final_estimates.transpose(1, 2, 0, 3)
@@ -1190,7 +1187,7 @@ def estimate_variance_and_discretization_params(experiment_datasets, noise_varia
     # residuals to pick best one
     residuals, _ = compute_residuals_many_weights_in_weight_batch(experiment_datasets[1], final_estimates[0], max_pol_degree )
 
-    index_array_vol, disc_choices, residuals_averaged = pick_best_params(residuals, discretization_params, experiment_datasets[0].upsampled_volume_shape)
+    index_array_vol, disc_choices, residuals_averaged = pick_best_params(residuals, discretization_params, (experiment_datasets[0].grid_size,)*3)
 
     weights_opt = jnp.take_along_axis(0.5 * (final_estimates[0][...,0] + final_estimates[1][...,0]), np.expand_dims(index_array_vol, axis=-1), axis=-1)
 
@@ -1359,8 +1356,8 @@ def test_multiple_disc2(experiment_dataset, noise_variance, discretization_param
     n_disc_test = len(discretization_params)
 
     # Compute weights for each discretization
-    weights = np.zeros((n_disc_test, experiment_dataset.upsampled_volume_size, get_feature_size(max_pol_degree)), dtype = np.complex64)
-    valid_weights = np.zeros((n_disc_test, experiment_dataset.upsampled_volume_size), dtype = bool)
+    weights = np.zeros((n_disc_test, experiment_dataset.grid_size**3, get_feature_size(max_pol_degree)), dtype = np.complex64)
+    valid_weights = np.zeros((n_disc_test, experiment_dataset.grid_size**3), dtype = bool)
     utils.report_memory_device(logger=logger)
     XWX = np.asarray(XWX)
     F = np.asarray(F)
@@ -1369,7 +1366,7 @@ def test_multiple_disc2(experiment_dataset, noise_variance, discretization_param
     F_s = dict()
     for idx, (pol_degree, h, reg) in enumerate(discretization_params):
         logger.info("computing discretization with params: degree=%s, h=%s, reg=%s", pol_degree, h, reg)
-        weights_this, valid_weights_this, XWX_s[idx],F_s[idx] = compute_weights_from_precompute(experiment_dataset.upsampled_volume_shape, XWX, F, prior_inverse_covariance, pol_degree, max_pol_degree, h, prior_option = reg)
+        weights_this, valid_weights_this, XWX_s[idx],F_s[idx] = compute_weights_from_precompute((experiment_dataset.grid_size,)*3, XWX, F, prior_inverse_covariance, pol_degree, max_pol_degree, h, prior_option = reg)
         weights[idx,:,:weights_this.shape[-1]] = weights_this
         valid_weights[idx] = valid_weights_this
 
@@ -1387,14 +1384,14 @@ def test_multiple_disc(experiment_dataset, cross_validation_dataset, noise_varia
     n_disc_test = len(discretization_params)
 
     # Compute weights for each discretization
-    weights = np.zeros((n_disc_test, experiment_dataset.upsampled_volume_size, get_feature_size(max_pol_degree)), dtype = np.complex64)
-    valid_weights = np.zeros((n_disc_test, experiment_dataset.upsampled_volume_size), dtype = bool)
+    weights = np.zeros((n_disc_test, experiment_dataset.grid_size**3, get_feature_size(max_pol_degree)), dtype = np.complex64)
+    valid_weights = np.zeros((n_disc_test, experiment_dataset.grid_size**3), dtype = bool)
     utils.report_memory_device(logger=logger)
     XWX = np.asarray(XWX)
     F = np.asarray(F)
     for idx, (pol_degree, h, reg) in enumerate(discretization_params):
         logger.info("computing discretization with params: degree=%s, h=%s, reg=%s", pol_degree, h, reg)
-        weights_this, valid_weights_this, _,_ = compute_weights_from_precompute(experiment_dataset.upsampled_volume_shape, XWX, F, prior_inverse_covariance, pol_degree, max_pol_degree, h, prior_option = reg)
+        weights_this, valid_weights_this, _,_ = compute_weights_from_precompute((experiment_dataset.grid_size,)*3, XWX, F, prior_inverse_covariance, pol_degree, max_pol_degree, h, prior_option = reg)
         weights[idx,:,:weights_this.shape[-1]] = weights_this
         valid_weights[idx] = valid_weights_this
 
@@ -1406,11 +1403,11 @@ def test_multiple_disc(experiment_dataset, cross_validation_dataset, noise_varia
 
     # residuals to pick best one
     residuals, _ = compute_residuals_many_weights_in_weight_batch(cross_validation_dataset, weights, max_pol_degree )
-    residuals_averaged = regularization.batch_average_over_shells(residuals.T, experiment_dataset.upsampled_volume_shape,0)
+    residuals_averaged = regularization.batch_average_over_shells(residuals.T, (experiment_dataset.grid_size,)*3,0)
 
     # Make choice. Impose that h must be increasing
     index_array = jnp.argmin(residuals_averaged, axis = 0)
-    index_array_vol = utils.make_radial_image(index_array, experiment_dataset.upsampled_volume_shape)
+    index_array_vol = utils.make_radial_image(index_array, (experiment_dataset.grid_size,)*3)
 
     disc_choices = np.array(discretization_params)[index_array]
     hs_choices = disc_choices[:,1].astype(int)
@@ -1569,7 +1566,7 @@ def compute_residuals_many_weights(experiment_dataset, weights , pol_degree, use
 
     config = ForwardModelConfig(
         image_shape=tuple(experiment_dataset.image_shape),
-        volume_shape=tuple(experiment_dataset.upsampled_volume_shape),
+        volume_shape=tuple((experiment_dataset.grid_size,)*3),
         grid_size=int(experiment_dataset.grid_size),
         voxel_size=float(experiment_dataset.voxel_size),
         padding=int(experiment_dataset.padding),

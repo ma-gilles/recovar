@@ -43,8 +43,8 @@ def M_step(experiment_dataset, latent_means, latent_covariances, noise_variance,
 
 
     basis_size = latent_means.shape[-1]
-    rhs_summed = jnp.zeros((experiment_dataset.volume_size, basis_size), dtype = experiment_dataset.dtype)
-    lhs_summed = jnp.zeros((experiment_dataset.volume_size, basis_size *  basis_size), dtype = experiment_dataset.dtype)
+    rhs_summed = jnp.zeros((experiment_dataset.grid_size**3, basis_size), dtype = experiment_dataset.dtype)
+    lhs_summed = jnp.zeros((experiment_dataset.grid_size**3, basis_size *  basis_size), dtype = experiment_dataset.dtype)
 
     for batch_data in DataIterator(experiment_dataset, batch_size):
         lhs_summed, rhs_summed = M_step_batch(batch_data.images, lhs_summed, rhs_summed,
@@ -53,14 +53,14 @@ def M_step(experiment_dataset, latent_means, latent_covariances, noise_variance,
                                             batch_data.rotation_matrices,
                                             batch_data.translations,
                                             experiment_dataset.image_shape,
-                                            experiment_dataset.volume_shape,
+                                            (experiment_dataset.grid_size,)*3,
                                             experiment_dataset.grid_size,
                                             experiment_dataset.voxel_size,
                                             noise_variance,
                                             experiment_dataset.ctf_evaluator)
         
     # Solve least squares
-    lhs_summed = lhs_summed.reshape(experiment_dataset.volume_size, basis_size, basis_size)
+    lhs_summed = lhs_summed.reshape(experiment_dataset.grid_size**3, basis_size, basis_size)
     W = linalg.batch_solve(lhs_summed, rhs_summed)
     # Orthogonalize
     U, S, _ = jnp.linalg.svd(W, full_matrices=False)
@@ -73,10 +73,10 @@ def EM(experiment_dataset, mean_estimate, noise_variance, EM_iter = 20, basis_si
 
     # Initialize
     matrix_key, vector_key = jr.split(jr.PRNGKey(0))
-    W = jr.normal(matrix_key, (experiment_dataset.volume_size, basis_size), dtype = experiment_dataset.dtype_real)
-    W = linalg.batch_dft3(W, experiment_dataset.volume_shape, basis_size)
+    W = jr.normal(matrix_key, (experiment_dataset.grid_size**3, basis_size), dtype = experiment_dataset.dtype_real)
+    W = linalg.batch_dft3(W, (experiment_dataset.grid_size,)*3, basis_size)
     eigenvalue = np.ones(basis_size)
-    volume_mask = np.ones(experiment_dataset.volume_shape)
+    volume_mask = np.ones((experiment_dataset.grid_size,)*3)
     contrast_grid = np.ones([1])
     batch_size = 1000
     disc_type = 'nearest'

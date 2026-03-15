@@ -73,9 +73,9 @@ def relion_style_triangular_kernel(
     index_subset : array-like, optional
         If given, only iterate over these image indices (e.g. a cluster subset).
     upsampling_factor : int, optional
-        Defaults to ``experiment_dataset.volume_upsampling_factor``.
+        Defaults to ``1``.
     """
-    uf = upsampling_factor if upsampling_factor is not None else experiment_dataset.volume_upsampling_factor
+    uf = upsampling_factor if upsampling_factor is not None else 1
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, upsampling_factor=uf)
     noise_model = (
         noise.as_noise_model(cov_noise, config.image_shape)
@@ -219,7 +219,7 @@ def residual_relion_style_triangular_kernel(experiment_dataset, mean_estimate, c
 
     config = ForwardModelConfig.from_dataset(
         experiment_dataset, disc_type='linear_interp',
-        upsampling_factor=experiment_dataset.volume_upsampling_factor,
+        upsampling_factor=1,
     )
 
     Ft_y, Ft_ctf = None, None
@@ -356,7 +356,7 @@ def post_process_from_filter(cryo, Ft_ctf, F_ty, tau=None, disc_type='nearest', 
     kernel = 'triangular' if disc_type == 'linear_interp' else 'square'
     return post_process_from_filter_v2(
         Ft_ctf, F_ty,
-        cryo.volume_shape, cryo.volume_upsampling_factor,
+        (cryo.grid_size,)*3, 1,
         tau=tau, kernel=kernel,
         use_spherical_mask=use_spherical_mask, grid_correct=grid_correct,
         gridding_correct=gridding_correct, kernel_width=kernel_width,
@@ -454,7 +454,7 @@ def relion_reconstruct(cryo, noise_variance, batch_size=100, disc_type='linear_i
     )
     kernel = 'triangular' if disc_type == 'linear_interp' else 'square'
     estimate = post_process_from_filter_v2(
-        Ft_ctf, F_ty, cryo.volume_shape, upsampling_factor,
+        Ft_ctf, F_ty, (cryo.grid_size,)*3, upsampling_factor,
         tau=tau, kernel=kernel,
         use_spherical_mask=use_spherical_mask, grid_correct=grid_correct,
         gridding_correct=gridding_correct, kernel_width=1,

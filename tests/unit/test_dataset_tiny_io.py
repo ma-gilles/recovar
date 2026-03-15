@@ -25,11 +25,11 @@ def sim_tiny_tilt_files(tmp_path_factory):
     )
 
 
-def test_load_cryodrgn_dataset_tiny_spa_files(tmp_path):
+def test_load_dataset_tiny_spa_files(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
     ind = np.array([1, 4], dtype=np.int32)
 
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_mrcs"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -48,12 +48,12 @@ def test_load_cryodrgn_dataset_tiny_spa_files(tmp_path):
     assert cryo.ctf_evaluator.mode == core.CTFMode.SPA
 
 
-def test_load_cryodrgn_dataset_tiny_spa_boolean_ind_preserves_dataset_indices_and_image_identity(tmp_path):
+def test_load_dataset_tiny_spa_boolean_ind_preserves_dataset_indices_and_image_identity(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
     mask = np.array([False, True, True, False, True, False], dtype=bool)
     selected = np.flatnonzero(mask).astype(np.int32)
 
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_mrcs"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -77,12 +77,12 @@ def test_load_cryodrgn_dataset_tiny_spa_boolean_ind_preserves_dataset_indices_an
     np.testing.assert_allclose(got_images, original_images[selected], atol=1e-6)
 
 
-def test_load_cryodrgn_dataset_tiny_spa_duplicate_ind_preserves_order_duplicates_and_ctf_alignment(tmp_path):
+def test_load_dataset_tiny_spa_duplicate_ind_preserves_order_duplicates_and_ctf_alignment(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
     requested = np.array([4, 1, 4, 0], dtype=np.int32)
     ctf = np.asarray(utils.pickle_load(files["ctf_pkl"]))
 
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_mrcs"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -117,7 +117,7 @@ def test_load_cryodrgn_dataset_tiny_spa_duplicate_ind_preserves_order_duplicates
     np.testing.assert_allclose(got_images, source_images[requested], atol=1e-6)
 
 
-def test_load_cryodrgn_dataset_tiny_spa_full_length_duplicate_ind_keeps_pose_alignment(tmp_path):
+def test_load_dataset_tiny_spa_full_length_duplicate_ind_keeps_pose_alignment(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
     requested = np.array([5, 0, 5, 1, 2, 3], dtype=np.int32)  # len(requested) == total n_images
 
@@ -137,7 +137,7 @@ def test_load_cryodrgn_dataset_tiny_spa_full_length_duplicate_ind_keeps_pose_ali
     )
     utils.pickle_dump((rots, trans_frac), files["poses_pkl"])
 
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_mrcs"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -153,7 +153,7 @@ def test_load_cryodrgn_dataset_tiny_spa_full_length_duplicate_ind_keeps_pose_ali
     np.testing.assert_allclose(np.asarray(cryo.translations), trans_frac[requested] * 8.0, atol=1e-7)
 
 
-def test_load_cryodrgn_dataset_tiny_spa_rejects_nonfinite_ctf_params(tmp_path):
+def test_load_dataset_tiny_spa_rejects_nonfinite_ctf_params(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
     ctf = np.asarray(utils.pickle_load(files["ctf_pkl"]))
     ctf[0, 2] = np.nan
@@ -161,7 +161,7 @@ def test_load_cryodrgn_dataset_tiny_spa_rejects_nonfinite_ctf_params(tmp_path):
     utils.pickle_dump(ctf, str(bad_ctf_pkl))
 
     with pytest.raises(ValueError, match="non-finite"):
-        dataset.load_cryodrgn_dataset(
+        dataset.load_dataset(
             particles_file=files["particles_mrcs"],
             poses_file=files["poses_pkl"],
             ctf_file=str(bad_ctf_pkl),
@@ -172,9 +172,9 @@ def test_load_cryodrgn_dataset_tiny_spa_rejects_nonfinite_ctf_params(tmp_path):
         )
 
 
-def test_load_cryodrgn_dataset_tiny_tilt_series_files_and_subset_generators(tmp_path):
+def test_load_dataset_tiny_tilt_series_files_and_subset_generators(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -204,12 +204,12 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_files_and_subset_generators(tmp_
     assert got_images == subset_images.tolist()
 
 
-def test_load_cryodrgn_dataset_tiny_tilt_series_image_subset_preserves_duplicate_order_and_identity(
+def test_load_dataset_tiny_tilt_series_image_subset_preserves_duplicate_order_and_identity(
     sim_tiny_tilt_files,
 ):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -230,14 +230,14 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_image_subset_preserves_duplicate
     np.testing.assert_allclose(got_images, source_images[subset_images], atol=1e-6)
 
 
-def test_load_cryodrgn_dataset_tiny_tilt_series_boolean_ind_preserves_dataset_indices(sim_tiny_tilt_files):
+def test_load_dataset_tiny_tilt_series_boolean_ind_preserves_dataset_indices(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
     mask = np.zeros(files["n_images"], dtype=bool)
     mask[[1, 4, 7, 10]] = True
     selected = np.flatnonzero(mask).astype(np.int32)
 
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -262,7 +262,7 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_boolean_ind_preserves_dataset_in
     np.testing.assert_allclose(got_images, original_images[selected], atol=1e-6)
 
 
-def test_load_cryodrgn_dataset_tiny_tilt_series_rejects_out_of_range_star_image_indices(sim_tiny_tilt_files, tmp_path):
+def test_load_dataset_tiny_tilt_series_rejects_out_of_range_star_image_indices(sim_tiny_tilt_files, tmp_path):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
 
@@ -275,7 +275,7 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_rejects_out_of_range_star_image_
     starfile.write_star(str(bad_star), data=sf.df)
 
     with pytest.raises(ValueError, match="out of range"):
-        dataset.load_cryodrgn_dataset(
+        dataset.load_dataset(
             particles_file=str(bad_star),
             poses_file=files["poses_pkl"],
             ctf_file=files["ctf_pkl"],
@@ -286,7 +286,7 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_rejects_out_of_range_star_image_
         )
 
 
-def test_load_cryodrgn_dataset_tiny_tilt_series_full_length_duplicate_ind_keeps_pose_alignment(
+def test_load_dataset_tiny_tilt_series_full_length_duplicate_ind_keeps_pose_alignment(
     sim_tiny_tilt_files,
     tmp_path,
 ):
@@ -305,7 +305,7 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_full_length_duplicate_ind_keeps_
     poses_pkl = Path(tmp_path) / "poses_override.pkl"
     utils.pickle_dump((rots, trans_frac), str(poses_pkl))
 
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=str(poses_pkl),
         ctf_file=files["ctf_pkl"],
@@ -329,7 +329,7 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_full_length_duplicate_ind_keeps_
     )
 
 
-def test_load_cryodrgn_dataset_tiny_tilt_series_duplicate_ind_preserves_order_duplicates_and_image_identity(
+def test_load_dataset_tiny_tilt_series_duplicate_ind_preserves_order_duplicates_and_image_identity(
     sim_tiny_tilt_files,
 ):
     files = sim_tiny_tilt_files
@@ -337,7 +337,7 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_duplicate_ind_preserves_order_du
     requested = np.array([9, 2, 9, 0], dtype=np.int32)
     ctf = np.asarray(utils.pickle_load(files["ctf_pkl"]))
 
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -365,11 +365,11 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_duplicate_ind_preserves_order_du
     np.testing.assert_allclose(got_images, source_images[requested], atol=1e-6)
 
 
-def test_load_cryodrgn_dataset_rejects_invalid_ind_values(tmp_path):
+def test_load_dataset_rejects_invalid_ind_values(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
 
     with pytest.raises(IndexError, match="out of range|negative"):
-        dataset.load_cryodrgn_dataset(
+        dataset.load_dataset(
             particles_file=files["particles_mrcs"],
             poses_file=files["poses_pkl"],
             ctf_file=files["ctf_pkl"],
@@ -381,7 +381,7 @@ def test_load_cryodrgn_dataset_rejects_invalid_ind_values(tmp_path):
         )
 
     with pytest.raises(IndexError, match="out of range|number of images"):
-        dataset.load_cryodrgn_dataset(
+        dataset.load_dataset(
             particles_file=files["particles_mrcs"],
             poses_file=files["poses_pkl"],
             ctf_file=files["ctf_pkl"],
@@ -393,7 +393,7 @@ def test_load_cryodrgn_dataset_rejects_invalid_ind_values(tmp_path):
         )
 
     with pytest.raises(ValueError, match="boolean mask length"):
-        dataset.load_cryodrgn_dataset(
+        dataset.load_dataset(
             particles_file=files["particles_mrcs"],
             poses_file=files["poses_pkl"],
             ctf_file=files["ctf_pkl"],
@@ -411,7 +411,7 @@ def test_tiny_spa_loading_rejects_ctf_count_mismatch_without_subset(tmp_path):
     utils.pickle_dump(ctf[:-1], files["ctf_pkl"])
 
     with pytest.raises(ValueError, match="CTF parameter count"):
-        dataset.load_cryodrgn_dataset(
+        dataset.load_dataset(
             particles_file=files["particles_mrcs"],
             poses_file=files["poses_pkl"],
             ctf_file=files["ctf_pkl"],
@@ -429,7 +429,7 @@ def test_tiny_spa_loading_allows_short_ctf_when_subset_fits(tmp_path):
     utils.pickle_dump(ctf[:4], str(short_ctf_pkl))
     requested = np.array([0, 2, 3], dtype=np.int32)
 
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_mrcs"],
         poses_file=files["poses_pkl"],
         ctf_file=str(short_ctf_pkl),
@@ -450,7 +450,7 @@ def test_tiny_spa_loading_rejects_short_ctf_when_subset_exceeds_bounds(tmp_path)
     utils.pickle_dump(ctf[:4], str(short_ctf_pkl))
 
     with pytest.raises(IndexError, match="number of images"):
-        dataset.load_cryodrgn_dataset(
+        dataset.load_dataset(
             particles_file=files["particles_mrcs"],
             poses_file=files["poses_pkl"],
             ctf_file=str(short_ctf_pkl),
@@ -470,7 +470,7 @@ def test_simulator_tiny_tilt_loading_rejects_ctf_count_mismatch_without_subset(s
     utils.pickle_dump(ctf[:-2], str(bad_ctf_pkl))
 
     with pytest.raises(ValueError, match="CTF parameter count"):
-        dataset.load_cryodrgn_dataset(
+        dataset.load_dataset(
             particles_file=files["particles_star"],
             poses_file=files["poses_pkl"],
             ctf_file=str(bad_ctf_pkl),
@@ -489,7 +489,7 @@ def test_simulator_tiny_tilt_loading_allows_short_ctf_when_subset_fits(sim_tiny_
     utils.pickle_dump(ctf[:10], str(short_ctf_pkl))
     requested = np.array([0, 7, 9], dtype=np.int32)
 
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=str(short_ctf_pkl),
@@ -511,7 +511,7 @@ def test_simulator_tiny_tilt_loading_rejects_short_ctf_when_subset_exceeds_bound
     utils.pickle_dump(ctf[:10], str(short_ctf_pkl))
 
     with pytest.raises(IndexError, match="number of images"):
-        dataset.load_cryodrgn_dataset(
+        dataset.load_dataset(
             particles_file=files["particles_star"],
             poses_file=files["poses_pkl"],
             ctf_file=str(short_ctf_pkl),
@@ -523,9 +523,9 @@ def test_simulator_tiny_tilt_loading_rejects_short_ctf_when_subset_exceeds_bound
         )
 
 
-def test_load_cryodrgn_dataset_tiny_tilt_series_warp_path(tmp_path):
+def test_load_dataset_tiny_tilt_series_warp_path(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -550,9 +550,9 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_warp_path(tmp_path):
     assert got_images == subset_images.tolist()
 
 
-def test_load_cryodrgn_dataset_tiny_tilt_series_from_simulator_files(sim_tiny_tilt_files):
+def test_load_dataset_tiny_tilt_series_from_simulator_files(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -576,10 +576,10 @@ def test_load_cryodrgn_dataset_tiny_tilt_series_from_simulator_files(sim_tiny_ti
 
 def test_simulator_tiny_tilt_series_to_images_matches_particle_mapping(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
-    particles_to_tilts, _ = tilt_dataset.TiltSeriesData.parse_particle_tilt(files["particles_star"])
+    particles_to_tilts, _ = tilt_dataset.TiltSeriesDataset.parse_particle_tilt(files["particles_star"])
     subset_particles = np.array([2, 0, 2], dtype=np.int32)
 
-    mapped = tilt_dataset.tilt_series_indices_to_image_indices(subset_particles, files["particles_star"])
+    mapped = tilt_dataset.tilt_series_to_images(subset_particles, files["particles_star"])
     expected = np.concatenate(
         [
             np.asarray(particles_to_tilts[2], dtype=np.int32),
@@ -592,7 +592,7 @@ def test_simulator_tiny_tilt_series_to_images_matches_particle_mapping(sim_tiny_
 
 def test_simulator_tiny_tilt_series_to_images_with_subset_preserves_order_and_duplicates(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
-    particles_to_tilts, _ = tilt_dataset.TiltSeriesData.parse_particle_tilt(files["particles_star"])
+    particles_to_tilts, _ = tilt_dataset.TiltSeriesDataset.parse_particle_tilt(files["particles_star"])
     subset_particles = np.array([2, 0, 2], dtype=np.int32)
     full = np.concatenate(
         [
@@ -603,7 +603,7 @@ def test_simulator_tiny_tilt_series_to_images_with_subset_preserves_order_and_du
     )
 
     image_subset = np.array([int(full[1]), int(full[-1]), int(full[1])], dtype=np.int32)
-    mapped = tilt_dataset.tilt_series_indices_to_image_indices(
+    mapped = tilt_dataset.tilt_series_to_images(
         subset_particles,
         files["particles_star"],
         image_subset=image_subset,
@@ -614,7 +614,7 @@ def test_simulator_tiny_tilt_series_to_images_with_subset_preserves_order_and_du
 
 def test_simulator_tiny_tilt_series_to_images_accepts_boolean_image_subset_mask(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
-    particles_to_tilts, _ = tilt_dataset.TiltSeriesData.parse_particle_tilt(files["particles_star"])
+    particles_to_tilts, _ = tilt_dataset.TiltSeriesDataset.parse_particle_tilt(files["particles_star"])
     subset_particles = np.array([1, 0], dtype=np.int32)
     full = np.concatenate(
         [
@@ -626,7 +626,7 @@ def test_simulator_tiny_tilt_series_to_images_accepts_boolean_image_subset_mask(
     mask = np.zeros(files["n_images"], dtype=bool)
     mask[int(full[0])] = True
     mask[int(full[-1])] = True
-    mapped = tilt_dataset.tilt_series_indices_to_image_indices(
+    mapped = tilt_dataset.tilt_series_to_images(
         subset_particles,
         files["particles_star"],
         image_subset=mask,
@@ -638,7 +638,7 @@ def test_simulator_tiny_tilt_series_to_images_accepts_boolean_image_subset_mask(
 def test_simulator_tiny_tilt_series_to_images_rejects_wrong_length_boolean_mask(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     with pytest.raises(ValueError, match="must match total size"):
-        tilt_dataset.tilt_series_indices_to_image_indices(
+        tilt_dataset.tilt_series_to_images(
             np.array([0, 1], dtype=np.int32),
             files["particles_star"],
             image_subset=np.array([True, False, True], dtype=bool),
@@ -648,7 +648,7 @@ def test_simulator_tiny_tilt_series_to_images_rejects_wrong_length_boolean_mask(
 def test_simulator_tilt_dataset_subset_generator_images_mode_preserves_particle_order_and_duplicates(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
-    ds = tilt_dataset.TiltSeriesData(
+    ds = tilt_dataset.TiltSeriesDataset(
         files["particles_star"],
         datadir=datadir,
         lazy=True,
@@ -679,7 +679,7 @@ def test_simulator_tilt_dataset_subset_generator_images_mode_preserves_particle_
 
 def test_get_split_tilt_indices_simulator_generated_with_ntilts_cap(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
-    particles_to_tilts, _ = tilt_dataset.TiltSeriesData.parse_particle_tilt(files["particles_star"])
+    particles_to_tilts, _ = tilt_dataset.TiltSeriesDataset.parse_particle_tilt(files["particles_star"])
     n_particles = len(particles_to_tilts)
     half0 = np.arange(0, n_particles, 2, dtype=np.int32)
     half1 = np.arange(1, n_particles, 2, dtype=np.int32)
@@ -733,7 +733,7 @@ def test_get_split_tilt_indices_simulator_with_negative_tilts_returns_empty_halv
 def test_simulator_tiny_tilt_split_indices_sanitizes_tilt_ind_file_values(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
-    particles_to_tilts, _ = tilt_dataset.TiltSeriesData.parse_particle_tilt(files["particles_star"])
+    particles_to_tilts, _ = tilt_dataset.TiltSeriesDataset.parse_particle_tilt(files["particles_star"])
     n_particles = len(particles_to_tilts)
     keep_a = int(n_particles - 1)
     keep_b = 0
@@ -774,7 +774,7 @@ def test_simulator_tiny_tilt_split_indices_with_only_invalid_tilt_ids_returns_em
 def test_simulator_tilt_dataset_random_tilts_clamps_when_requested_exceeds_available(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
-    ds = tilt_dataset.TiltSeriesData(
+    ds = tilt_dataset.TiltSeriesDataset(
         files["particles_star"],
         datadir=datadir,
         lazy=True,
@@ -794,7 +794,7 @@ def test_simulator_tilt_dataset_random_tilts_clamps_when_requested_exceeds_avail
 def test_simulator_tilt_dataset_images_mode_rejects_too_small_batch(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
-    ds = tilt_dataset.TiltSeriesData(
+    ds = tilt_dataset.TiltSeriesDataset(
         files["particles_star"],
         datadir=datadir,
         lazy=True,
@@ -809,7 +809,7 @@ def test_simulator_tilt_dataset_images_mode_rejects_too_small_batch(sim_tiny_til
 def test_simulator_tilt_image_subset_none_matches_full_generator(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
-    ds = tilt_dataset.TiltSeriesData(
+    ds = tilt_dataset.TiltSeriesDataset(
         files["particles_star"],
         datadir=datadir,
         lazy=True,
@@ -834,7 +834,7 @@ def test_simulator_tiny_tilt_loading_with_duplicate_ind_preserves_image_identity
     duplicated_ind = np.array([7, 2, 7, 11], dtype=np.int32)
     datadir = str(Path(files["particles_star"]).parent)
 
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -890,8 +890,8 @@ def test_simulator_tiny_tilt_figure_out_halfsets_applies_n_images_cap(sim_tiny_t
 def test_simulator_tiny_tilt_split_indices_with_halfset_file_and_filters_preserves_particle_order(sim_tiny_tilt_files, tmp_path):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
-    particles_to_tilts, _ = tilt_dataset.TiltSeriesData.parse_particle_tilt(files["particles_star"])
-    tilt_ds = tilt_dataset.TiltSeriesData(files["particles_star"], datadir=datadir)
+    particles_to_tilts, _ = tilt_dataset.TiltSeriesDataset.parse_particle_tilt(files["particles_star"])
+    tilt_ds = tilt_dataset.TiltSeriesDataset(files["particles_star"], datadir=datadir)
     tilt_numbers = np.asarray(tilt_ds.tilt_numbers)
 
     # Restrict to a subset of particles and provide an explicit halfset order.
@@ -937,7 +937,7 @@ def test_simulator_tiny_tilt_split_indices_with_halfset_file_and_filters_preserv
 def test_simulator_tiny_tilt_split_indices_ignores_out_of_range_particle_ids_in_halfset_file(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
-    particles_to_tilts, _ = tilt_dataset.TiltSeriesData.parse_particle_tilt(files["particles_star"])
+    particles_to_tilts, _ = tilt_dataset.TiltSeriesDataset.parse_particle_tilt(files["particles_star"])
     n_particles = len(particles_to_tilts)
 
     split = dataset.get_split_tilt_indices(
@@ -964,7 +964,7 @@ def test_simulator_tiny_tilt_split_indices_ignores_out_of_range_particle_ids_in_
 def test_simulator_tiny_tilt_split_indices_deduplicates_halfset_particle_ids(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
-    particles_to_tilts, _ = tilt_dataset.TiltSeriesData.parse_particle_tilt(files["particles_star"])
+    particles_to_tilts, _ = tilt_dataset.TiltSeriesDataset.parse_particle_tilt(files["particles_star"])
     n_particles = len(particles_to_tilts)
     keep_a = int(n_particles - 1)
     keep_b = 0
@@ -990,12 +990,12 @@ def test_simulator_tiny_tilt_split_indices_deduplicates_halfset_particle_ids(sim
     np.testing.assert_array_equal(np.asarray(split[1], dtype=np.int32), np.array([], dtype=np.int32))
 
 
-def test_load_cryodrgn_dataset_simulator_tilt_ctf_in_spa_mode_preserves_reordered_duplicates(sim_tiny_tilt_files):
+def test_load_dataset_simulator_tilt_ctf_in_spa_mode_preserves_reordered_duplicates(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
     reordered_ind = np.array([8, 1, 8, 5], dtype=np.int32)
 
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -1105,7 +1105,7 @@ def test_tiny_tilt_loading_with_reordered_ind_preserves_image_identity(tmp_path)
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
     reordered_ind = np.array([5, 1, 4], dtype=np.int32)
 
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -1131,7 +1131,7 @@ def test_tiny_tilt_loading_with_duplicate_ind_preserves_duplicates_and_order(tmp
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
     duplicated_ind = np.array([5, 1, 5, 4], dtype=np.int32)
 
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -1153,7 +1153,7 @@ def test_tiny_tilt_loading_with_duplicate_ind_preserves_duplicates_and_order(tmp
 
 def test_tiny_tilt_particle_subset_generator_preserves_duplicates(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -1190,7 +1190,7 @@ def test_tiny_tilt_split_indices_accepts_in_memory_halfsets_and_arrays(tmp_path)
 def test_simulator_tiny_tilt_split_indices_accepts_boolean_masks(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
-    particles_to_tilts, _ = tilt_dataset.TiltSeriesData.parse_particle_tilt(files["particles_star"])
+    particles_to_tilts, _ = tilt_dataset.TiltSeriesDataset.parse_particle_tilt(files["particles_star"])
     n_particles = len(particles_to_tilts)
 
     keep_particles = np.array([0, n_particles - 1], dtype=np.int32)
@@ -1198,7 +1198,7 @@ def test_simulator_tiny_tilt_split_indices_accepts_boolean_masks(sim_tiny_tilt_f
     particle_mask[keep_particles] = True
 
     # Build expected one-tilt-per-particle set under deterministic ordering.
-    tilt_ds = tilt_dataset.TiltSeriesData(files["particles_star"], datadir=datadir)
+    tilt_ds = tilt_dataset.TiltSeriesDataset(files["particles_star"], datadir=datadir)
     tilt_numbers = np.asarray(tilt_ds.tilt_numbers)
     half0_expected = np.asarray(particles_to_tilts[keep_particles[0]], dtype=np.int32)
     half0_expected = half0_expected[tilt_numbers[half0_expected] < 1]
@@ -1266,10 +1266,10 @@ def test_tiny_tilt_loading_with_strip_prefix_resolves_prefixed_star_paths(tmp_pa
 
     # Without strip_prefix this should fail because STAR points to nonexistent prefixed path.
     with pytest.raises(Exception):
-        dataset.load_cryodrgn_dataset(**base_kwargs)
+        dataset.load_dataset(**base_kwargs)
 
     # With strip_prefix, loader should recover and resolve to datadir/particles.mrcs.
-    cryo = dataset.load_cryodrgn_dataset(strip_prefix=bad_prefix + "/", **base_kwargs)
+    cryo = dataset.load_dataset(strip_prefix=bad_prefix + "/", **base_kwargs)
     assert cryo.tilt_series_flag is True
     assert cryo.n_images == files["n_images"]
 
@@ -1283,7 +1283,7 @@ def test_tiny_tilt_loading_with_strip_prefix_resolves_prefixed_star_paths(tmp_pa
 def test_simulator_tiny_tilt_subsample_cryoem_dataset_preserves_local_order_and_image_identity(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -1390,21 +1390,19 @@ def test_simulator_tiny_tilt_get_split_datasets_preserves_half_order_and_duplica
         np.testing.assert_allclose(got_images, original_images[half], atol=1e-6)
 
 
-def test_simulator_tiny_tilt_load_dataset_from_dict_preserves_ind_order_and_duplicates(sim_tiny_tilt_files):
+def test_simulator_tiny_tilt_load_dataset_preserves_ind_order_and_duplicates(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
     requested = np.array([7, 2, 7, 1], dtype=np.int32)
 
-    cryo = dataset.load_dataset_from_dict(
-        {
-            "particles_file": files["particles_star"],
-            "poses_file": files["poses_pkl"],
-            "ctf_file": files["ctf_pkl"],
-            "datadir": datadir,
-            "ind": requested,
-            "tilt_series": True,
-            "tilt_series_ctf": "relion5",
-        },
+    cryo = dataset.load_dataset(
+        particles_file=files["particles_star"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=datadir,
+        ind=requested,
+        tilt_series=True,
+        tilt_series_ctf="relion5",
         lazy=True,
     )
 
@@ -1419,7 +1417,7 @@ def test_simulator_tiny_tilt_load_dataset_from_dict_preserves_ind_order_and_dupl
     np.testing.assert_allclose(got_images, original_images[requested], atol=1e-6)
 
 
-def test_simulator_tiny_tilt_get_split_datasets_from_dict_matches_direct_api(sim_tiny_tilt_files):
+def test_simulator_tiny_tilt_get_split_datasets_matches_direct_api(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
     ind_split = [
@@ -1435,7 +1433,7 @@ def test_simulator_tiny_tilt_get_split_datasets_from_dict_matches_direct_api(sim
         "tilt_series_ctf": "relion5",
     }
 
-    by_wrapper = dataset.get_split_datasets_from_dict(loader_dict, ind_split=ind_split, lazy=True)
+    by_wrapper = dataset.get_split_datasets(**loader_dict, ind_split=ind_split, lazy=True)
     direct = dataset.get_split_datasets(ind_split=ind_split, lazy=True, **loader_dict)
 
     assert len(by_wrapper) == len(direct) == 2
@@ -1490,21 +1488,19 @@ def test_simulator_tiny_tilt_load_dataset_from_args_with_explicit_split_skips_ha
         np.testing.assert_allclose(got_images, original_images[half], atol=1e-6)
 
 
-def test_simulator_tiny_tilt_load_dataset_from_dict_eager_mode_preserves_identity(sim_tiny_tilt_files):
+def test_simulator_tiny_tilt_load_dataset_eager_mode_preserves_identity(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
     requested = np.array([7, 2, 7, 1], dtype=np.int32)
 
-    cryo = dataset.load_dataset_from_dict(
-        {
-            "particles_file": files["particles_star"],
-            "poses_file": files["poses_pkl"],
-            "ctf_file": files["ctf_pkl"],
-            "datadir": datadir,
-            "ind": requested,
-            "tilt_series": True,
-            "tilt_series_ctf": "relion5",
-        },
+    cryo = dataset.load_dataset(
+        particles_file=files["particles_star"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=datadir,
+        ind=requested,
+        tilt_series=True,
+        tilt_series_ctf="relion5",
         lazy=False,
     )
 
@@ -1547,7 +1543,7 @@ def test_tiny_tilt_loading_preserves_pose_and_ctf_row_alignment_with_reordered_d
     utils.pickle_dump((rots, trans_frac), files["poses_pkl"])
 
     requested = np.array([6, 2, 6, 1], dtype=np.int32)
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -1606,7 +1602,7 @@ def test_tiny_spa_with_tilt_ctf_preserves_pose_and_ctf_row_alignment(tmp_path):
     utils.pickle_dump((rots, trans_frac), files["poses_pkl"])
 
     requested = np.array([7, 1, 7, 3], dtype=np.int32)
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -1717,7 +1713,7 @@ def test_tiny_relion5_ctf_channels_preserve_requested_order_with_duplicates(tmp_
     ctf[:, 8] = 0.0
     utils.pickle_dump(ctf, files["ctf_pkl"])
 
-    cryo = dataset.load_cryodrgn_dataset(
+    cryo = dataset.load_dataset(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
@@ -1758,7 +1754,7 @@ def test_tiny_relion5_ctf_channels_preserve_requested_order_with_duplicates(tmp_
 
 def test_tiny_tilt_image_count_batch_loader_subset_len_matches_emitted_images(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=7, n_particles=3)
-    ds = tilt_dataset.TiltSeriesData(
+    ds = tilt_dataset.TiltSeriesDataset(
         files["particles_star"],
         datadir=str(tmp_path),
         lazy=True,
@@ -1789,7 +1785,7 @@ def test_tiny_tilt_image_count_batch_loader_subset_len_matches_emitted_images(tm
 def test_simulator_tiny_tilt_image_count_batch_loader_reports_consistent_lengths(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
-    ds = tilt_dataset.TiltSeriesData(
+    ds = tilt_dataset.TiltSeriesDataset(
         files["particles_star"],
         datadir=datadir,
         lazy=True,
@@ -1809,7 +1805,7 @@ def test_simulator_tiny_tilt_image_count_batch_loader_reports_consistent_lengths
 def test_simulator_tiny_tilt_image_count_batch_loader_nested_torch_subsets(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
-    ds = tilt_dataset.TiltSeriesData(
+    ds = tilt_dataset.TiltSeriesDataset(
         files["particles_star"],
         datadir=datadir,
         lazy=True,
@@ -1845,7 +1841,7 @@ def test_simulator_tiny_tilt_image_count_batch_loader_nested_torch_subsets(sim_t
 def test_simulator_tiny_tilt_image_count_batch_loader_num_tilts_zero_emits_no_batches(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
-    ds = tilt_dataset.TiltSeriesData(
+    ds = tilt_dataset.TiltSeriesDataset(
         files["particles_star"],
         datadir=datadir,
         lazy=True,
@@ -1872,7 +1868,7 @@ def test_simulator_tiny_tilt_image_count_batch_loader_num_tilts_zero_emits_no_ba
 def test_simulator_tiny_tilt_negative_num_tilts_matches_all_tilts(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
-    ds_all = tilt_dataset.TiltSeriesData(
+    ds_all = tilt_dataset.TiltSeriesDataset(
         files["particles_star"],
         datadir=datadir,
         lazy=True,
@@ -1880,7 +1876,7 @@ def test_simulator_tiny_tilt_negative_num_tilts_matches_all_tilts(sim_tiny_tilt_
         random_tilts=False,
         tilt_file_option="relion5",
     )
-    ds_neg = tilt_dataset.TiltSeriesData(
+    ds_neg = tilt_dataset.TiltSeriesDataset(
         files["particles_star"],
         datadir=datadir,
         lazy=True,
@@ -1902,7 +1898,7 @@ def test_simulator_tiny_tilt_negative_num_tilts_matches_all_tilts(sim_tiny_tilt_
 def test_simulator_tiny_tilt_simple_dataloader_forces_batch_size_one_and_particle_order(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
-    ds = tilt_dataset.TiltSeriesData(
+    ds = tilt_dataset.TiltSeriesDataset(
         files["particles_star"],
         datadir=datadir,
         lazy=True,

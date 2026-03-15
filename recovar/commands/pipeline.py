@@ -376,8 +376,8 @@ def _check_uninvert_data(means, cryos, args):
     space. If the estimated mean has negative density in the protein region,
     the sign of the data (and means) is flipped.
     """
-    mean_real = fourier_transform_utils.get_idft3(means.combined.reshape(cryos.volume_shape))
-    radial_mask = cryos.get_volume_radial_mask(cryos.grid_size // 3).reshape(cryos.volume_shape)
+    mean_real = fourier_transform_utils.get_idft3(means['combined'].reshape((cryos.grid_size,)*3))
+    radial_mask = cryos.get_volume_radial_mask(cryos.grid_size // 3).reshape((cryos.grid_size,)*3)
     uninvert_check = np.sum(mean_real.real ** 3 * radial_mask) < 0
 
     if args.uninvert_data == 'automatic':
@@ -670,15 +670,16 @@ def standard_recovar_pipeline(args):
 
     options = utils.make_algorithm_options(args)
 
-    # NOTE(refactor): storing two CryoEMDataset objects (one per halfset) is
-    # wasteful.  A single dataset + index arrays would halve metadata memory.
-    cryos = dataset.get_split_datasets_from_dict(dataset_loader_dict, ind_split, args.lazy)
+    ## TODO this is a big one, so do with care. I wonder if there is a better way to handle this logic.
+    ## Could we instead store 'one' dataset and the indices instead of two different objects, then do a clevery use of iterators
+    ## The current way to just have two of these objects around which is not great.
+    cryos = dataset.get_split_datasets(**dataset_loader_dict, ind_split=ind_split, lazy=args.lazy)
 
     if args.gpu_memory is not None:
         utils.set_gpu_memory_limit(args.gpu_memory)
         logger.info("GPU memory limited to %.1f GB (requested via --gpu-gb)", args.gpu_memory)
     gpu_memory = utils.get_gpu_memory_total()
-    volume_shape = cryos.volume_shape
+    volume_shape = (cryos.grid_size,)*3
 
     batch_sizes = utils.compute_batch_sizes(cryos.grid_size, gpu_memory)
     batch_size = batch_sizes.image

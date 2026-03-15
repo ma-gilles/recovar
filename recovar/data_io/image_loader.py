@@ -838,12 +838,3 @@ class DownsamplingImageLoader(ImageLoader):
         return downsample_images(images, self._target_D)
 
 
-# ---------------------------------------------------------------------------
-# Compatibility aliases
-# ---------------------------------------------------------------------------
-## TODO Remove these, just pipe right names to places 
-ImageSource = ImageLoader
-MRCFileSource = MRCLoader
-StarfileSource = StarLoader
-TxtFileSource = MultiMRCLoader
-CsSource = CryoSparcLoader

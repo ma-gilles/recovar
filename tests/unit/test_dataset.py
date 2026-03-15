@@ -222,20 +222,6 @@ def test_cryoemdataset_casts_arrays_to_expected_dtypes():
     assert ds.CTF_params.dtype == np.float32
 
 
-def test_get_default_dataset_option_has_expected_keys():
-    d = dataset.get_default_dataset_option()
-    for key in [
-        "particles_file",
-        "ctf_file",
-        "poses_file",
-        "tilt_series",
-        "tilt_series_ctf",
-        "uninvert_data",
-        "premultiplied_ctf",
-    ]:
-        assert key in d
-
-
 def test_figure_out_halfsets_random_path(monkeypatch):
     args = SimpleNamespace(
         halfsets=None,
@@ -466,13 +452,13 @@ def _fake_load_poses(poses_file, n_images, D, ind=None):
     return rots, trans, None
 
 
-def test_load_cryodrgn_dataset_cryoem_branch(monkeypatch):
+def test_load_dataset_cryoem_branch(monkeypatch):
     fake_stack = _FakeImageStack(n_images=4, D=8, padding=2)
-    monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: fake_stack)
+    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: fake_stack)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
-    out = dataset.load_cryodrgn_dataset(
+    out = dataset.load_dataset(
         particles_file="p.mrcs",
         poses_file="poses.pkl",
         ctf_file="ctf.pkl",
@@ -487,9 +473,9 @@ def test_load_cryodrgn_dataset_cryoem_branch(monkeypatch):
     np.testing.assert_array_equal(out.dataset_indices, np.array([0, 2], dtype=int))
 
 
-def test_load_cryodrgn_dataset_rejects_ctf_count_mismatch_when_no_subset(monkeypatch):
+def test_load_dataset_rejects_ctf_count_mismatch_when_no_subset(monkeypatch):
     fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
-    monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: fake_stack)
+    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: fake_stack)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
     def _short_ctf(D, ctf_file):
@@ -504,7 +490,7 @@ def test_load_cryodrgn_dataset_rejects_ctf_count_mismatch_when_no_subset(monkeyp
     monkeypatch.setattr(load_utils, "load_ctf_params", _short_ctf)
 
     with pytest.raises(ValueError, match="CTF parameter count"):
-        dataset.load_cryodrgn_dataset(
+        dataset.load_dataset(
             particles_file="p.mrcs",
             poses_file="poses.pkl",
             ctf_file="ctf.pkl",
@@ -514,13 +500,13 @@ def test_load_cryodrgn_dataset_rejects_ctf_count_mismatch_when_no_subset(monkeyp
         )
 
 
-def test_load_cryodrgn_dataset_propagates_premultiplied_ctf_flag(monkeypatch):
+def test_load_dataset_propagates_premultiplied_ctf_flag(monkeypatch):
     fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
-    monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: fake_stack)
+    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: fake_stack)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
-    out = dataset.load_cryodrgn_dataset(
+    out = dataset.load_dataset(
         particles_file="p.mrcs",
         poses_file="poses.pkl",
         ctf_file="ctf.pkl",
@@ -532,9 +518,9 @@ def test_load_cryodrgn_dataset_propagates_premultiplied_ctf_flag(monkeypatch):
     assert out.premultiplied_ctf is True
 
 
-def test_load_cryodrgn_dataset_rotation_only_pose_defaults_zero_translations(monkeypatch):
+def test_load_dataset_rotation_only_pose_defaults_zero_translations(monkeypatch):
     fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
-    monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: fake_stack)
+    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: fake_stack)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
 
     def _poses_no_trans(_poses_file, n_images, _D, ind=None):
@@ -544,7 +530,7 @@ def test_load_cryodrgn_dataset_rotation_only_pose_defaults_zero_translations(mon
 
     monkeypatch.setattr(load_utils, "load_poses", _poses_no_trans)
 
-    out = dataset.load_cryodrgn_dataset(
+    out = dataset.load_dataset(
         particles_file="p.mrcs",
         poses_file="poses.pkl",
         ctf_file="ctf.pkl",
@@ -555,9 +541,9 @@ def test_load_cryodrgn_dataset_rotation_only_pose_defaults_zero_translations(mon
     np.testing.assert_array_equal(out.translations, np.zeros((4, 2), dtype=np.float32))
 
 
-def test_load_cryodrgn_dataset_rejects_translation_shape_mismatch(monkeypatch):
+def test_load_dataset_rejects_translation_shape_mismatch(monkeypatch):
     fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
-    monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: fake_stack)
+    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: fake_stack)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
 
     def _poses_bad_trans(_poses_file, n_images, _D, ind=None):
@@ -569,7 +555,7 @@ def test_load_cryodrgn_dataset_rejects_translation_shape_mismatch(monkeypatch):
     monkeypatch.setattr(load_utils, "load_poses", _poses_bad_trans)
 
     with pytest.raises(ValueError, match="Translation array must have shape"):
-        dataset.load_cryodrgn_dataset(
+        dataset.load_dataset(
             particles_file="p.mrcs",
             poses_file="poses.pkl",
             ctf_file="ctf.pkl",
@@ -579,9 +565,9 @@ def test_load_cryodrgn_dataset_rejects_translation_shape_mismatch(monkeypatch):
         )
 
 
-def test_load_cryodrgn_dataset_from_dose_branch(monkeypatch):
+def test_load_dataset_from_dose_branch(monkeypatch):
     fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
-    monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: fake_stack)
+    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: fake_stack)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
@@ -591,9 +577,9 @@ def test_load_cryodrgn_dataset_from_dose_branch(monkeypatch):
             self.ctfBfactor = np.array([-2.0, -4.0, -6.0, -8.0], dtype=np.float32)
             self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.int32)
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
 
-    out = dataset.load_cryodrgn_dataset(
+    out = dataset.load_dataset(
         particles_file="p.mrcs",
         poses_file="poses.pkl",
         ctf_file="ctf.pkl",
@@ -611,7 +597,7 @@ def test_load_cryodrgn_dataset_from_dose_branch(monkeypatch):
     np.testing.assert_array_equal(out.CTF_params[:, -1], np.array([0, 1, 2, 3], dtype=np.float32))
 
 
-def test_load_cryodrgn_dataset_tilt_series_relion5_branch(monkeypatch):
+def test_load_dataset_tilt_series_relion5_branch(monkeypatch):
     class _FakeTiltSeriesData(_FakeImageStack):
         def __init__(self, *args, **kwargs):
             super().__init__(n_images=4, D=8, padding=0, Np=2)
@@ -619,11 +605,11 @@ def test_load_cryodrgn_dataset_tilt_series_relion5_branch(monkeypatch):
             self.dose = np.array([0.0, 1.5, 3.0, 4.5], dtype=np.float32)
             self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.float32)
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
-    out = dataset.load_cryodrgn_dataset(
+    out = dataset.load_dataset(
         particles_file="p.star",
         poses_file="poses.pkl",
         ctf_file="ctf.pkl",
@@ -642,7 +628,7 @@ def test_load_cryodrgn_dataset_tilt_series_relion5_branch(monkeypatch):
     )
 
 
-def test_load_cryodrgn_dataset_tilt_series_warp_alias_maps_to_v2_scale(monkeypatch):
+def test_load_dataset_tilt_series_warp_alias_maps_to_v2_scale(monkeypatch):
     called = {}
 
     class _FakeTiltSeriesData(_FakeImageStack):
@@ -654,11 +640,11 @@ def test_load_cryodrgn_dataset_tilt_series_warp_alias_maps_to_v2_scale(monkeypat
             self.ctfBfactor = np.array([-4.0, -8.0, -12.0, -16.0], dtype=np.float32)
             self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.float32)
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
-    out = dataset.load_cryodrgn_dataset(
+    out = dataset.load_dataset(
         particles_file="p.star",
         poses_file="poses.pkl",
         ctf_file="ctf.pkl",
@@ -678,7 +664,7 @@ def test_load_cryodrgn_dataset_tilt_series_warp_alias_maps_to_v2_scale(monkeypat
     )
 
 
-def test_load_cryodrgn_dataset_defaults_tilt_series_ctf_by_mode(monkeypatch):
+def test_load_dataset_defaults_tilt_series_ctf_by_mode(monkeypatch):
     calls = {"tilt_init": 0}
 
     class _FakeTiltSeriesData(_FakeImageStack):
@@ -691,13 +677,13 @@ def test_load_cryodrgn_dataset_defaults_tilt_series_ctf_by_mode(monkeypatch):
             self.tilt_numbers = np.arange(4, dtype=np.float32)
             self.dose = np.arange(4, dtype=np.float32)
 
-    monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
-    # tilt_series=False with tilt_series_ctf=None should default to cryoem and not instantiate TiltSeriesData.
-    out_spa = dataset.load_cryodrgn_dataset(
+    # tilt_series=False with tilt_series_ctf=None should default to cryoem and not instantiate TiltSeriesDataset.
+    out_spa = dataset.load_dataset(
         particles_file="p.mrcs",
         poses_file="poses.pkl",
         ctf_file="ctf.pkl",
@@ -709,7 +695,7 @@ def test_load_cryodrgn_dataset_defaults_tilt_series_ctf_by_mode(monkeypatch):
     assert calls["tilt_init"] == 0
 
     # tilt_series=True with tilt_series_ctf=None should default to relion5.
-    out_tilt = dataset.load_cryodrgn_dataset(
+    out_tilt = dataset.load_dataset(
         particles_file="p.star",
         poses_file="poses.pkl",
         ctf_file="ctf.pkl",
@@ -722,7 +708,7 @@ def test_load_cryodrgn_dataset_defaults_tilt_series_ctf_by_mode(monkeypatch):
     assert calls["tilt_file_option"] == "relion5"
 
 
-def test_load_cryodrgn_dataset_from_star_branch_sets_contrast_and_bfactor(monkeypatch):
+def test_load_dataset_from_star_branch_sets_contrast_and_bfactor(monkeypatch):
     captured = {}
 
     class _FakeTiltSeriesData:
@@ -733,12 +719,12 @@ def test_load_cryodrgn_dataset_from_star_branch_sets_contrast_and_bfactor(monkey
             self.ctfBfactor = np.array([-5.0, -10.0, -15.0, -20.0], dtype=np.float32)
             self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.float32)
 
-    monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
-    out = dataset.load_cryodrgn_dataset(
+    out = dataset.load_dataset(
         particles_file="p.mrcs",
         poses_file="poses.pkl",
         ctf_file="ctf.pkl",
@@ -761,19 +747,19 @@ def test_load_cryodrgn_dataset_from_star_branch_sets_contrast_and_bfactor(monkey
     )
 
 
-def test_load_cryodrgn_dataset_v2_scale_from_star_uses_star_scaling_and_zero_angles(monkeypatch):
+def test_load_dataset_v2_scale_from_star_uses_star_scaling_and_zero_angles(monkeypatch):
     class _FakeTiltSeriesData:
         def __init__(self, *args, **kwargs):
             self.ctfscalefactor = np.array([0.7, 0.8, 0.9, 1.0], dtype=np.float32)
             self.ctfBfactor = np.array([-4.0, -8.0, -12.0, -16.0], dtype=np.float32)
             self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.float32)
 
-    monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
-    out = dataset.load_cryodrgn_dataset(
+    out = dataset.load_dataset(
         particles_file="p.mrcs",
         poses_file="poses.pkl",
         ctf_file="ctf.pkl",
@@ -799,19 +785,19 @@ def test_load_cryodrgn_dataset_v2_scale_from_star_uses_star_scaling_and_zero_ang
     )
 
 
-def test_load_cryodrgn_dataset_warp_alias_for_non_tilt_series_maps_to_v2_scale(monkeypatch):
+def test_load_dataset_warp_alias_for_non_tilt_series_maps_to_v2_scale(monkeypatch):
     class _FakeTiltSeriesData:
         def __init__(self, *args, **kwargs):
             self.ctfscalefactor = np.array([1.0, 1.1, 0.9, 1.2], dtype=np.float32)
             self.ctfBfactor = np.array([-4.0, -8.0, -12.0, -16.0], dtype=np.float32)
             self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.float32)
 
-    monkeypatch.setattr(dataset, "LazyMRCDataMod", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
-    out = dataset.load_cryodrgn_dataset(
+    out = dataset.load_dataset(
         particles_file="p.mrcs",
         poses_file="poses.pkl",
         ctf_file="ctf.pkl",
@@ -857,7 +843,7 @@ def test_cryoemdataset_predicted_image_and_generators(monkeypatch):
 
     monkeypatch.setattr(core_forward_mod, "forward_model", _fake_fwd)
     monkeypatch.setattr(dataset.fourier_transform_utils, "get_idft2", lambda x: x)
-    pred = ds.get_predicted_image(np.array([0, 2]), volume=np.zeros(ds.volume_size), skip_ctf=True, spatial=True)
+    pred = ds.get_predicted_image(np.array([0, 2]), volume=np.zeros(ds.grid_size**3), skip_ctf=True, spatial=True)
     assert pred.shape == (2, 4, 4)
     assert called["disc_type"] == "linear_interp"
     assert called["skip_ctf"] is True
@@ -875,10 +861,10 @@ def test_get_split_tilt_indices_with_filters(tmp_path, monkeypatch):
         def __init__(self, particles_file, datadir=None):
             self.tilt_numbers = np.array([0, 1, 0, 1, 0, 1], dtype=np.int32)
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(
-        dataset.tilt_dataset,
-        "tilt_series_indices_to_image_indices",
+        dataset.cryo_dataset,
+        "tilt_series_to_images",
         lambda particle_ind, particles_file: np.concatenate(
             [[np.array([0, 1]), np.array([2, 3]), np.array([4, 5])][i] for i in particle_ind]
         ),
@@ -912,10 +898,10 @@ def test_get_split_tilt_indices_with_precomputed_halfsets_handles_empty_half(tmp
             tilts_to_particles = [0, 0, 1, 1, 2, 2]
             return particles_to_tilts, tilts_to_particles
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(
-        dataset.tilt_dataset,
-        "tilt_series_indices_to_image_indices",
+        dataset.cryo_dataset,
+        "tilt_series_to_images",
         lambda particle_ind, particles_file: np.concatenate(
             [[np.array([0, 1]), np.array([2, 3]), np.array([4, 5])][i] for i in particle_ind]
         ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
@@ -948,10 +934,10 @@ def test_get_split_tilt_indices_no_allowed_images_returns_empty_halfsets(tmp_pat
             tilts_to_particles = [0, 0, 1, 1]
             return particles_to_tilts, tilts_to_particles
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(
-        dataset.tilt_dataset,
-        "tilt_series_indices_to_image_indices",
+        dataset.cryo_dataset,
+        "tilt_series_to_images",
         lambda particle_ind, particles_file: np.concatenate(
             [[np.array([0, 1]), np.array([2, 3])][i] for i in particle_ind]
         ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
@@ -990,20 +976,6 @@ def test_get_split_indices_raises_on_overlapping_split(monkeypatch):
         dataset.get_split_indices("particles.star", validate_split=True)
 
 
-def test_load_dataset_from_dict_delegates(monkeypatch):
-    captured = {}
-
-    def _fake_load_cryodrgn_dataset(**kwargs):
-        captured["kwargs"] = kwargs
-        return "cryo"
-
-    monkeypatch.setattr(dataset, "load_cryodrgn_dataset", _fake_load_cryodrgn_dataset)
-    out = dataset.load_dataset_from_dict({"particles_file": "p", "poses_file": "r", "ctf_file": "c"}, lazy=False)
-    assert out == "cryo"
-    assert captured["kwargs"]["lazy"] is False
-    assert captured["kwargs"]["particles_file"] == "p"
-
-
 def test_load_dataset_from_args_uses_given_split(monkeypatch):
     args = SimpleNamespace(
         particles="p.star",
@@ -1025,17 +997,18 @@ def test_load_dataset_from_args_uses_given_split(monkeypatch):
     captured = {}
 
     monkeypatch.setattr(dataset, "make_dataset_loader_dict", lambda _a: {"particles_file": "p.star"})
-    monkeypatch.setattr(
-        dataset,
-        "get_split_datasets_from_dict",
-        lambda loader_dict, ind_split, lazy=False: captured.setdefault("call", (loader_dict, ind_split, lazy)) or ["a", "b"],
-    )
+
+    def _fake_get_split(**kwargs):
+        captured["call"] = kwargs
+        return "sentinel"
+
+    monkeypatch.setattr(dataset, "get_split_datasets", _fake_get_split)
 
     out = dataset.load_dataset_from_args(args, lazy=True, ind_split=given_split)
-    assert out == captured["call"]
-    assert captured["call"][0] == {"particles_file": "p.star"}
-    assert captured["call"][1] is given_split
-    assert captured["call"][2] is True
+    assert out == "sentinel"
+    assert captured["call"]["particles_file"] == "p.star"
+    assert captured["call"]["ind_split"] is given_split
+    assert captured["call"]["lazy"] is True
 
 
 def test_load_dataset_from_args_computes_split_when_missing(monkeypatch):
@@ -1060,15 +1033,15 @@ def test_load_dataset_from_args_computes_split_when_missing(monkeypatch):
     monkeypatch.setattr(dataset, "make_dataset_loader_dict", lambda _a: {"particles_file": "p.star"})
     called = {}
 
-    def _fake_get_split(loader_dict, ind_split, lazy=False):
-        called["v"] = (loader_dict, ind_split, lazy)
-        return ["ok"]
+    def _fake_get_split(**kwargs):
+        called["v"] = kwargs
+        return "ok"
 
-    monkeypatch.setattr(dataset, "get_split_datasets_from_dict", _fake_get_split)
+    monkeypatch.setattr(dataset, "get_split_datasets", _fake_get_split)
     out = dataset.load_dataset_from_args(args, lazy=False, ind_split=None)
-    assert out == ["ok"]
-    assert called["v"][1] is computed
-    assert called["v"][2] is False
+    assert out == "ok"
+    assert called["v"]["ind_split"] is computed
+    assert called["v"]["lazy"] is False
 
 
 def test_make_dataset_loader_dict_without_strip_prefix_attr():
@@ -1091,12 +1064,19 @@ def test_make_dataset_loader_dict_without_strip_prefix_attr():
     assert out["strip_prefix"] is None
 
 
-def test_get_split_datasets_calls_loader_once_per_halfset(monkeypatch):
+def test_get_split_datasets_calls_loader_once(monkeypatch):
     calls = []
+
+    class _FakeDataset:
+        def __init__(self, ind):
+            self.grid_size = 4
+            self._ind = ind
+        def subset(self, indices):
+            return _FakeDataset(indices)
 
     def _fake_load(*args, **kwargs):
         calls.append(kwargs)
-        return kwargs["ind"]
+        return _FakeDataset(kwargs["ind"])
 
     monkeypatch.setattr(dataset, "load_dataset", _fake_load)
     ind_split = [np.array([2, 0], dtype=np.int32), np.array([5], dtype=np.int32)]
@@ -1110,9 +1090,9 @@ def test_get_split_datasets_calls_loader_once_per_halfset(monkeypatch):
         tilt_series=True,
         tilt_series_ctf="relion5",
     )
-    assert len(calls) == 2
-    np.testing.assert_array_equal(out[0], ind_split[0])
-    np.testing.assert_array_equal(out[1], ind_split[1])
+    # Load-once: load_dataset called exactly once with the union
+    assert len(calls) == 1
+    np.testing.assert_array_equal(calls[0]["ind"], np.array([0, 2, 5]))
     assert calls[0]["lazy"] is True
     assert calls[0]["tilt_series"] is True
     assert calls[0]["tilt_series_ctf"] == "relion5"
@@ -1657,10 +1637,10 @@ def test_get_split_tilt_indices_accepts_array_inputs_for_all_index_args(monkeypa
         def __init__(self, particles_file, datadir=None):
             self.tilt_numbers = np.array([0, 1, 0, 1, 0, 1], dtype=np.int32)
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(
-        dataset.tilt_dataset,
-        "tilt_series_indices_to_image_indices",
+        dataset.cryo_dataset,
+        "tilt_series_to_images",
         lambda particle_ind, particles_file: np.concatenate(
             [[np.array([0, 1]), np.array([2, 3]), np.array([4, 5])][int(i)] for i in np.asarray(particle_ind)]
         ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
@@ -1695,10 +1675,10 @@ def test_get_split_tilt_indices_accepts_boolean_masks_for_particle_and_image_fil
         def __init__(self, particles_file, datadir=None):
             self.tilt_numbers = np.array([0, 1, 0, 1, 0, 1], dtype=np.int32)
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(
-        dataset.tilt_dataset,
-        "tilt_series_indices_to_image_indices",
+        dataset.cryo_dataset,
+        "tilt_series_to_images",
         lambda particle_ind, particles_file: np.concatenate(
             [[np.array([0, 1]), np.array([2, 3]), np.array([4, 5])][int(i)] for i in np.asarray(particle_ind)]
         ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
@@ -1728,10 +1708,10 @@ def test_get_split_tilt_indices_rejects_wrong_length_boolean_masks(monkeypatch):
             tilts_to_particles = [0, 0, 1, 1, 2, 2]
             return particles_to_tilts, tilts_to_particles
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(
-        dataset.tilt_dataset,
-        "tilt_series_indices_to_image_indices",
+        dataset.cryo_dataset,
+        "tilt_series_to_images",
         lambda particle_ind, particles_file: np.concatenate(
             [[np.array([0, 1]), np.array([2, 3]), np.array([4, 5])][int(i)] for i in np.asarray(particle_ind)]
         ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
@@ -1765,10 +1745,10 @@ def test_get_split_tilt_indices_rejects_non_1d_mask_and_index_arrays(monkeypatch
             tilts_to_particles = [0, 0, 1, 1, 2, 2]
             return particles_to_tilts, tilts_to_particles
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(
-        dataset.tilt_dataset,
-        "tilt_series_indices_to_image_indices",
+        dataset.cryo_dataset,
+        "tilt_series_to_images",
         lambda particle_ind, particles_file: np.concatenate(
             [[np.array([0, 1]), np.array([2, 3]), np.array([4, 5])][int(i)] for i in np.asarray(particle_ind)]
         ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
@@ -1809,10 +1789,10 @@ def test_get_split_tilt_indices_sanitizes_tilt_ind_file_values(monkeypatch):
         def __init__(self, particles_file, datadir=None):
             self.tilt_numbers = np.array([0, 1, 0, 1, 0, 1], dtype=np.int32)
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(
-        dataset.tilt_dataset,
-        "tilt_series_indices_to_image_indices",
+        dataset.cryo_dataset,
+        "tilt_series_to_images",
         lambda particle_ind, particles_file: np.concatenate(
             [[np.array([0, 1]), np.array([2, 3]), np.array([4, 5])][int(i)] for i in np.asarray(particle_ind)]
         ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
@@ -1836,10 +1816,10 @@ def test_get_split_tilt_indices_with_only_invalid_tilt_ind_file_returns_empty(mo
             tilts_to_particles = [0, 0, 1, 1]
             return particles_to_tilts, tilts_to_particles
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(
-        dataset.tilt_dataset,
-        "tilt_series_indices_to_image_indices",
+        dataset.cryo_dataset,
+        "tilt_series_to_images",
         lambda particle_ind, particles_file: np.concatenate(
             [[np.array([0, 1]), np.array([2, 3])][int(i)] for i in np.asarray(particle_ind)]
         ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
@@ -1865,12 +1845,12 @@ def test_get_split_tilt_indices_zero_tilts_skips_tilt_dataset_instantiation(monk
             return particles_to_tilts, tilts_to_particles
 
         def __init__(self, *args, **kwargs):
-            raise AssertionError("TiltSeriesData should not be instantiated for ntilts <= 0")
+            raise AssertionError("TiltSeriesDataset should not be instantiated for ntilts <= 0")
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(
-        dataset.tilt_dataset,
-        "tilt_series_indices_to_image_indices",
+        dataset.cryo_dataset,
+        "tilt_series_to_images",
         lambda particle_ind, particles_file: np.concatenate(
             [[np.array([0, 1]), np.array([2, 3])][int(i)] for i in np.asarray(particle_ind)]
         ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
@@ -1900,12 +1880,12 @@ def test_get_split_tilt_indices_negative_tilts_returns_empty_without_tilt_datase
             return particles_to_tilts, tilts_to_particles
 
         def __init__(self, *args, **kwargs):
-            raise AssertionError("TiltSeriesData should not be instantiated for ntilts <= 0")
+            raise AssertionError("TiltSeriesDataset should not be instantiated for ntilts <= 0")
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(
-        dataset.tilt_dataset,
-        "tilt_series_indices_to_image_indices",
+        dataset.cryo_dataset,
+        "tilt_series_to_images",
         lambda particle_ind, particles_file: np.concatenate(
             [[np.array([0, 1]), np.array([2, 3])][int(i)] for i in np.asarray(particle_ind)]
         ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
@@ -1931,10 +1911,10 @@ def test_get_split_tilt_indices_rejects_invalid_halfset_container(monkeypatch):
             tilts_to_particles = [0, 0, 1, 1]
             return particles_to_tilts, tilts_to_particles
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(
-        dataset.tilt_dataset,
-        "tilt_series_indices_to_image_indices",
+        dataset.cryo_dataset,
+        "tilt_series_to_images",
         lambda particle_ind, particles_file: np.concatenate(
             [[np.array([0, 1]), np.array([2, 3])][int(i)] for i in np.asarray(particle_ind)]
         ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
@@ -1958,10 +1938,10 @@ def test_get_split_tilt_indices_ind_filter_preserves_allowed_image_order(monkeyp
             tilts_to_particles = [0, 0, 1, 1, 1, 0]
             return particles_to_tilts, tilts_to_particles
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(
-        dataset.tilt_dataset,
-        "tilt_series_indices_to_image_indices",
+        dataset.cryo_dataset,
+        "tilt_series_to_images",
         lambda particle_ind, particles_file: np.concatenate(
             [[np.array([5, 1]), np.array([4, 2])][int(i)] for i in np.asarray(particle_ind)]
         ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
@@ -1990,10 +1970,10 @@ def test_get_split_tilt_indices_preserves_precomputed_particle_halfset_order(mon
             tilts_to_particles = [0, 1, 2]
             return particles_to_tilts, tilts_to_particles
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(
-        dataset.tilt_dataset,
-        "tilt_series_indices_to_image_indices",
+        dataset.cryo_dataset,
+        "tilt_series_to_images",
         lambda particle_ind, particles_file: np.concatenate(
             [[np.array([0]), np.array([1]), np.array([2])][int(i)] for i in np.asarray(particle_ind)]
         ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
@@ -2022,10 +2002,10 @@ def test_get_split_tilt_indices_ignores_out_of_range_precomputed_particle_ids(mo
             tilts_to_particles = [0, 0, 1, 1, 2, 2]
             return particles_to_tilts, tilts_to_particles
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(
-        dataset.tilt_dataset,
-        "tilt_series_indices_to_image_indices",
+        dataset.cryo_dataset,
+        "tilt_series_to_images",
         lambda particle_ind, particles_file: np.concatenate(
             [[np.array([0, 1]), np.array([2, 3]), np.array([4, 5])][int(i)] for i in np.asarray(particle_ind)]
         ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),
@@ -2053,10 +2033,10 @@ def test_get_split_tilt_indices_deduplicates_precomputed_particle_ids_preserving
             tilts_to_particles = [0, 1, 2]
             return particles_to_tilts, tilts_to_particles
 
-    monkeypatch.setattr(dataset.tilt_dataset, "TiltSeriesData", _FakeTiltSeriesData)
+    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(
-        dataset.tilt_dataset,
-        "tilt_series_indices_to_image_indices",
+        dataset.cryo_dataset,
+        "tilt_series_to_images",
         lambda particle_ind, particles_file: np.concatenate(
             [[np.array([0]), np.array([1]), np.array([2])][int(i)] for i in np.asarray(particle_ind)]
         ) if len(particle_ind) > 0 else np.array([], dtype=np.int32),

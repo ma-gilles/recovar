@@ -22,7 +22,7 @@ class _TinyDataset:
     image_size = 4
     volume_shape = (2, 2, 2)
     volume_size = 8
-    grid_size = 8
+    grid_size = 2
     dtype_real = jnp.float32
     dtype = jnp.complex64
     voxel_size = 1.0

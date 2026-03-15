@@ -343,7 +343,7 @@ def compute_regularized_covariance_columns_in_batch(cryos, means, mean_prior, vo
 @nvtx.annotate("compute_regularized_covariance_columns", color="purple")
 def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask, dilated_volume_mask, valid_idx, gpu_memory, options, picked_frequencies, use_multi_gpu=False, n_gpus=None):
 
-    volume_shape = cryos.volume_shape
+    volume_shape = (cryos.grid_size,)*3
     mask_final = volume_mask
 
     utils.report_memory_device(logger=logger)
@@ -363,7 +363,7 @@ def compute_regularized_covariance_columns(cryos, means, mean_prior, volume_mask
         logger.info("CUDA Profiler: Stopped profiling covariance computation")
 
     volume_noise_var = np.asarray(noise.make_radial_noise(
-        cryos[0].noise.get_average_radial_noise(), cryos.volume_shape))
+        cryos[0].noise.get_average_radial_noise(), (cryos.grid_size,)*3))
 
     covariance_cols = {}
     utils.report_memory_device(logger=logger)
@@ -466,10 +466,9 @@ def variance_relion_kernel_trilinear(
 
 @nvtx.annotate("variance_relion_style_triangular_kernel", color="yellow")
 def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, batch_size, image_subset=None, volume_mask=None, disc_type=''):
-    # Variance uses upsampled_volume_shape (not regular volume_shape).
     config = ForwardModelConfig(
         image_shape=tuple(experiment_dataset.image_shape),
-        volume_shape=tuple(experiment_dataset.upsampled_volume_shape),
+        volume_shape=(int(experiment_dataset.grid_size),)*3,
         grid_size=int(experiment_dataset.grid_size),
         voxel_size=float(experiment_dataset.voxel_size),
         padding=int(experiment_dataset.padding),
@@ -539,7 +538,7 @@ def compute_variance(
             cryo, mean_estimate, batch_size,
             image_subset=subset, volume_mask=volume_mask, disc_type=disc_type,
         )
-        ctf_w.append(relion_functions.adjust_regularization_relion_style(fw, cryos.volume_shape))
+        ctf_w.append(relion_functions.adjust_regularization_relion_style(fw, (cryos.grid_size,)*3))
         signal.append(sig)
         noise_w.append(nw)
         noise_s.append(ns)
@@ -548,10 +547,10 @@ def compute_variance(
 
     lhs = (ctf_w[0] + ctf_w[1]) / 2
     variance_prior, fsc, _ = regularization.compute_fsc_prior_gpu_v2(
-        cryos.volume_shape,
+        (cryos.grid_size,)*3,
         variance["corrected0"], variance["corrected1"],
         lhs,
-        jnp.ones(cryos.volume_size, dtype=cryos.dtype_real) * np.inf,
+        jnp.ones(cryos.grid_size**3, dtype=cryos.dtype_real) * np.inf,
         frequency_shift=jnp.array([0, 0, 0]),
         upsampling_factor=1,
         substract_shell_mean=True,
@@ -560,7 +559,7 @@ def compute_variance(
     if use_regularization:
         for i in range(2):
             reg_lhs = relion_functions.adjust_regularization_relion_style(
-                ctf_w[i], cryos.volume_shape, tau=variance_prior,
+                ctf_w[i], (cryos.grid_size,)*3, tau=variance_prior,
             )
             variance[f"corrected{i}"] = _safe_div(signal[i], reg_lhs)
 
@@ -591,13 +590,10 @@ def compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies,
     st_time = time.time()
 
     for cryo_idx, cryo in enumerate(cryos):
-        if options.get('disc_type') == 'cubic' and options["use_combined_mean"] and means.cubic_coeffs is not None:
-            mean = means.cubic_coeffs
-        else:
-            mean = means.combined if options["use_combined_mean"] else means.corrected(cryo_idx)
-            if options.get('disc_type') == 'cubic':
-                mean = cubic_interpolation.calculate_spline_coefficients(
-                    jnp.array(mean).reshape(cryos.volume_shape))
+        mean = means["combined"] if options["use_combined_mean"] else means["corrected" + str(cryo_idx)]
+        if options.get('disc_type') == 'cubic':
+            mean = cubic_interpolation.calculate_spline_coefficients(
+                jnp.array(mean).reshape((cryos.grid_size,)*3))
         if use_multi_gpu:
             H, B = _compute_H_B_multi_gpu(
                 cryo, mean, dilated_volume_mask, picked_frequencies,
@@ -744,7 +740,7 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
     (from ``cubic_interpolation.calculate_spline_coefficients``) for ``'cubic'``.
     The caller (``compute_both_H_B``) is responsible for the conversion.
     """
-    volume_size = cryo.volume_size
+    volume_size = cryo.grid_size**3
 
     disc_type = 'cubic' if options['disc_type'] == 'cubic' else 'linear_interp'
     mean_estimate = jnp.asarray(mean_estimate)
@@ -924,10 +920,10 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
 
     if disc_type == 'cubic':
         mean_estimate = cubic_interpolation.calculate_spline_coefficients(
-            mean_estimate.reshape(experiment_dataset.volume_shape))
+            mean_estimate.reshape((experiment_dataset.grid_size,)*3))
 
     if disc_type_u == 'cubic':
-        basis = compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)
+        basis = compute_spline_coeffs_in_batch(basis, (experiment_dataset.grid_size,)*3, gpu_memory= None)
 
     change_device= False
 

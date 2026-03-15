@@ -134,8 +134,8 @@ def test_heterogeneity_volume_locres_regression(tmp_path, gpu_device):
     half1 = recovar.utils.load_mrc(output_folder + "half1_unfil.mrc")
     half2 = recovar.utils.load_mrc(output_folder + "half2_unfil.mrc")
 
-    assert half1.shape == cryos.volume_shape, f"Expected {cryos.volume_shape}, got {half1.shape}"
-    assert half2.shape == cryos.volume_shape
+    assert half1.shape == (cryos.grid_size,)*3, f"Expected {(cryos.grid_size,)*3}, got {half1.shape}"
+    assert half2.shape == (cryos.grid_size,)*3
 
     # Compute halfmap-based metrics
     halfmap_metrics = metrics_mod.compute_volume_error_metrics_from_halfmaps(
@@ -156,8 +156,8 @@ def test_heterogeneity_volume_locres_regression(tmp_path, gpu_device):
     gt_mean_ft = hvd.get_mean()
     # batch_idft3 expects (vol_size, n_vol) layout
     gt_mean_real = np.real(
-        linalg.batch_idft3(gt_mean_ft[:, None], cryos.volume_shape, batch_size=1)
-    )[:, 0].reshape(cryos.volume_shape)
+        linalg.batch_idft3(gt_mean_ft[:, None], (cryos.grid_size,)*3, batch_size=1)
+    )[:, 0].reshape((cryos.grid_size,)*3)
     estimate_avg = (half1 + half2) / 2.0
 
     gt_metrics = metrics_mod.compute_volume_error_metrics_from_gt(
@@ -179,8 +179,8 @@ def test_heterogeneity_volume_locres_regression(tmp_path, gpu_device):
     filtered = recovar.utils.load_mrc(output_folder + "filtered_noB.mrc")
     locres_map = recovar.utils.load_mrc(output_folder + "local_resolution.mrc")
 
-    assert filtered.shape == cryos.volume_shape
-    assert locres_map.shape == cryos.volume_shape
+    assert filtered.shape == (cryos.grid_size,)*3
+    assert locres_map.shape == (cryos.grid_size,)*3
     assert np.all(np.isfinite(filtered))
     assert np.all(np.isfinite(locres_map))
 

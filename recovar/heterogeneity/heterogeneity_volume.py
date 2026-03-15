@@ -123,7 +123,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
             heterogeneity_kernel=heterogeneity_kernel, upsampling_factor=upsampling_for_ests,
             return_real_space=True,
         )
-        estimates[k] = estimates[k].reshape(-1, *cryos.volume_shape).astype(np.float32)
+        estimates[k] = estimates[k].reshape(-1, *(cryos.grid_size,)*3).astype(np.float32)
         logger.info("Computing estimates done")
 
         cross_validation_estimators[k], lhs[k], rhs[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(
@@ -133,10 +133,13 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
             return_real_space=True,
         )
 
-        lhs[k] = fourier_transform_utils.half_volume_to_full_volume(lhs[k][0], cryos[k].volume_shape)
+        lhs[k] = fourier_transform_utils.half_volume_to_full_volume(
+            lhs[k][0],
+            (cryos[k].grid_size,) * 3,
+        )
         # Zero out things after Nyquist - these won't be used in CV
-        lhs[k] = (lhs[k] * cryos.get_valid_frequency_indices()).reshape(cryos.volume_shape)
-        cross_validation_estimators[k] = cross_validation_estimators[k].reshape(cryos.volume_shape).astype(np.float32)
+        lhs[k] = (lhs[k] * cryos.get_valid_frequency_indices()).reshape((cryos.grid_size,)*3)
+        cross_validation_estimators[k] = cross_validation_estimators[k].reshape((cryos.grid_size,)*3).astype(np.float32)
 
 
     logger.info("Computing estimates done")
@@ -158,7 +161,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
             grid_correct=True, use_spherical_mask=True, heterogeneity_kernel=heterogeneity_kernel,
             upsampling_factor=2, return_real_space=True,
         )
-        estimates[k] = estimates[k].reshape(-1, *cryos.volume_shape).astype(np.float32)
+        estimates[k] = estimates[k].reshape(-1, *(cryos.grid_size,)*3).astype(np.float32)
 
 
     def use_choice_and_filter(choice, name):
@@ -226,7 +229,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
                 opt_filtered_before, smoothed_choice = smoothed_best_choice(loc_filtered_estimates , choice, kernel_rad=kernel_rad)
                 recovar.utils.write_mrc(output_folder + name + prefix + "filtered_before_smooth.mrc", opt_filtered_before, voxel_size = cryos.voxel_size)
 
-            output_mod.save_volumes(loc_filtered_estimates, output_folder + "estimates_filt", cryos.volume_shape, voxel_size = cryos.voxel_size, from_ft = False)
+            output_mod.save_volumes(loc_filtered_estimates, output_folder + "estimates_filt", (cryos.grid_size,)*3, voxel_size = cryos.voxel_size, from_ft = False)
 
         if "locshellmost_likely" in metric_used:
             recovar.utils.pickle_dump( { "split_choice" : ml_choice, "ml_errors" :ml_errors } ,  output_folder  + "split_choice.pkl")
@@ -245,8 +248,8 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
 
     if save_all_estimates:
         # For debugging
-        output_mod.save_volumes(estimates[0], output_folder + "estimates_half1_unfil", cryos.volume_shape, voxel_size = cryos.voxel_size, from_ft = False)
-        output_mod.save_volumes(estimates[1], output_folder + "estimates_half2_unfil", cryos.volume_shape, voxel_size = cryos.voxel_size, from_ft = False)
+        output_mod.save_volumes(estimates[0], output_folder + "estimates_half1_unfil", (cryos.grid_size,)*3, voxel_size = cryos.voxel_size, from_ft = False)
+        output_mod.save_volumes(estimates[1], output_folder + "estimates_half2_unfil", (cryos.grid_size,)*3, voxel_size = cryos.voxel_size, from_ft = False)
 
         recovar.utils.write_mrc(output_folder + "CV_estimates_half1_unfil.mrc", cross_validation_estimators[0], voxel_size = cryos.voxel_size)
         recovar.utils.write_mrc(output_folder + "CV_noise_half1.mrc", lhs[0], voxel_size = cryos.voxel_size)

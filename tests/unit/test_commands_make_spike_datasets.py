@@ -59,13 +59,11 @@ def test_make_spike_main_uses_utils_pickle_dump(monkeypatch, tmp_path):
         lambda *_args, **_kwargs: np.ones((2, 8), dtype=np.float32),
     )
 
-    monkeypatch.setattr(msd.dataset, "get_default_dataset_option", lambda: {})
-
-    def _fake_load_dataset_from_dict(_opts, lazy=False):
-        calls["dataset_lazy"] = lazy
+    def _fake_load_dataset(**kwargs):
+        calls["dataset_lazy"] = kwargs.get("lazy", True)
         return SimpleNamespace(image_shape=(2, 2))
 
-    monkeypatch.setattr(msd.dataset, "load_dataset_from_dict", _fake_load_dataset_from_dict)
+    monkeypatch.setattr(msd.dataset, "load_dataset", _fake_load_dataset)
     monkeypatch.setattr(
         msd.noise,
         "make_radial_noise",

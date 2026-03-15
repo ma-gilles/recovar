@@ -688,7 +688,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
     if disc_type == "pdb":
         from recovar.simulation import simulate_scattering_potential as gsm
         gt_vols = [gsm.generate_volume_from_atoms(vol, voxel_size = experiment_dataset.voxel_size,  grid_size = experiment_dataset.grid_size,  freq_coords = None, jax_backend = False).reshape(-1) for vol in volumes ]
-        B_fac_vols = [Bfactorize_vol(volume, experiment_dataset.voxel_size, Bfactor, experiment_dataset.volume_shape) for volume in gt_vols]
+        B_fac_vols = [Bfactorize_vol(volume, experiment_dataset.voxel_size, Bfactor, (experiment_dataset.grid_size,)*3) for volume in gt_vols]
         gt_vols_norm = np.mean(np.linalg.norm(B_fac_vols, axis =(-1)))
         logger.debug("gt_vols_norm: %s", gt_vols_norm)
 
@@ -708,10 +708,10 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
         n_images = img_indices.size
         
         if disc_type == "nufft":
-            vol_real = fourier_transform_utils.get_idft3(vol.reshape(experiment_dataset.volume_shape))
+            vol_real = fourier_transform_utils.get_idft3(vol.reshape((experiment_dataset.grid_size,)*3))
         elif 'cubic' in disc_type:
             from recovar.core import cubic_interpolation
-            volume = cubic_interpolation.calculate_spline_coefficients(vol.reshape(experiment_dataset.volume_shape))
+            volume = cubic_interpolation.calculate_spline_coefficients(vol.reshape((experiment_dataset.grid_size,)*3))
         else:
             volume = vol
 
@@ -730,7 +730,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                                                  translations, 
                                                  experiment_dataset.CTF_params[indices], 
                                                  experiment_dataset.voxel_size, 
-                                                 experiment_dataset.volume_shape, 
+                                                 (experiment_dataset.grid_size,)*3, 
                                                  experiment_dataset.image_shape, 
                                                  experiment_dataset.grid_size, 
                                                  disc_type,
@@ -742,7 +742,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                                                  translations,
                                                  experiment_dataset.CTF_params[indices],
                                                  experiment_dataset.voxel_size,
-                                                 experiment_dataset.volume_shape,
+                                                 (experiment_dataset.grid_size,)*3,
                                                  experiment_dataset.image_shape,
                                                  experiment_dataset.grid_size,
                                                  disc_type,
@@ -761,7 +761,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                         experiment_dataset.rotation_matrices[indices], 
                         experiment_dataset.CTF_params[indices],
                         experiment_dataset.image_shape,
-                        experiment_dataset.volume_shape, 
+                        (experiment_dataset.grid_size,)*3, 
                         experiment_dataset.voxel_size, disc_type_e ,
                         skip_ctf = pad_before_ctf)
                 images_batch = images_batch_real + 1j * images_batch_real_imag

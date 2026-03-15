@@ -101,8 +101,8 @@ def main():
         particles_file, poses_file, ctf_file,
         datadir=None, ind_split=ind_split, lazy=True
     )
-    volume_shape = cryos[0].volume_shape
-    volume_size = cryos[0].volume_size
+    volume_shape = (cryos[0].grid_size,)*3
+    volume_size = cryos[0].grid_size**3
     vol_norm = np.sqrt(np.prod(volume_shape))
     voxel_size = cryos[0].voxel_size
     logger.info("Dataset loaded: volume_shape=%s, voxel_size=%s", volume_shape, voxel_size)

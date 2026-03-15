@@ -428,7 +428,7 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
                 volume_mask,
                 rot,
                 experiment_dataset.volume_mask_threshold,
-                experiment_dataset.volume_shape,
+                (experiment_dataset.grid_size,)*3,
                 experiment_dataset.image_shape,
                 experiment_dataset.image_stack.mask,
                 invert_mask,
@@ -505,7 +505,7 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
                     volume_mask,
                     experiment_dataset.rotation_matrices[batch_ind],
                     experiment_dataset.volume_mask_threshold,
-                    experiment_dataset.volume_shape,
+                    (experiment_dataset.grid_size,)*3,
                     experiment_dataset.image_shape,
                     None,
                     invert_mask
@@ -610,7 +610,7 @@ def upper_bound_noise_by_signal_p_noise(noise_var_used, cryos, means, batch_size
             logger.info("variance estimation time: %s", time.time() - variance_time)
             utils.report_memory_device(logger=logger)
 
-            rad_grid = np.array(fourier_transform_utils.get_grid_of_radial_distances(cryos.volume_shape).reshape(-1))
+            rad_grid = np.array(fourier_transform_utils.get_grid_of_radial_distances((cryos.grid_size,)*3).reshape(-1))
             # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
             n_shell_to_ub = np.min([32, cryos.grid_size//2 -1])
             ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
@@ -783,7 +783,7 @@ def estimate_noise_variance_from_outside_mask(experiment_dataset, volume_mask, b
                     image_mask, 
                     experiment_dataset.volume_mask_threshold, 
                     experiment_dataset.image_shape, 
-                    experiment_dataset.volume_shape, 
+                    (experiment_dataset.grid_size,)*3, 
                     experiment_dataset.grid_size, 
                     experiment_dataset.padding, 
                     disc_type, 
@@ -809,7 +809,7 @@ def estimate_noise_variance_from_outside_mask_v2(experiment_dataset, volume_mask
                     image_mask, 
                     experiment_dataset.volume_mask_threshold, 
                     experiment_dataset.image_shape, 
-                    experiment_dataset.volume_shape, 
+                    (experiment_dataset.grid_size,)*3, 
                     experiment_dataset.grid_size, 
                     experiment_dataset.padding, 
                     disc_type, 
@@ -972,7 +972,7 @@ def get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, 
                                                                         experiment_dataset.image_stack.mask,
                                                                         experiment_dataset.volume_mask_threshold,
                                                                         experiment_dataset.image_shape, 
-                                                                        experiment_dataset.volume_shape, 
+                                                                        (experiment_dataset.grid_size,)*3, 
                                                                         experiment_dataset.grid_size, 
                                                                         experiment_dataset.voxel_size, 
                                                                         experiment_dataset.padding, 
@@ -1033,7 +1033,7 @@ def get_average_residual_square_inner(batch, mean_estimate, volume_mask, basis, 
 
 def get_average_residual_square_just_mean(experiment_dataset, volume_mask, mean_estimate, batch_size, disc_type = 'linear_interp', subset_indices = None, subset_fn = None):
     contrasts = np.ones(experiment_dataset.n_images, dtype = experiment_dataset.dtype_real)
-    basis = np.zeros((experiment_dataset.volume_size, 0))
+    basis = np.zeros((experiment_dataset.grid_size**3, 0))
     zs = np.zeros((experiment_dataset.n_images, 0))
 
     return get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,zs, batch_size, disc_type = disc_type, subset_indices=subset_indices, subset_fn = subset_fn)
@@ -1046,8 +1046,8 @@ def estimate_noise_from_heterogeneity_residuals_inside_mask_v2(experiment_datase
 def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp', subset_indices = None, subset_fn = None):
 
 
-    if basis.shape[0] != experiment_dataset.volume_size:
-        raise ValueError(f"input u should be volume_size x basis_size, got {basis.shape[0]} != {experiment_dataset.volume_size}")
+    if basis.shape[0] != experiment_dataset.grid_size**3:
+        raise ValueError(f"input u should be volume_size x basis_size, got {basis.shape[0]} != {experiment_dataset.grid_size**3}")
     st_time = time.time()    
     basis = np.asarray(basis[:, :basis_coordinates.shape[-1]]).T
 
@@ -1055,8 +1055,8 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
         st_time = time.time()
         from recovar.core import cubic_interpolation
         from recovar.heterogeneity import covariance_estimation
-        mean_estimate = cubic_interpolation.calculate_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
-        basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)
+        mean_estimate = cubic_interpolation.calculate_spline_coefficients(mean_estimate.reshape((experiment_dataset.grid_size,)*3))
+        basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, (experiment_dataset.grid_size,)*3, gpu_memory= None)
         logger.info("Time to compute spline coefficients: %f", time.time() - st_time)
 
 

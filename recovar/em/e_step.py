@@ -46,7 +46,7 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
 
     projections = np.zeros((rotations.shape[0], image_size), dtype = np.complex64)
     for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
-        projections[rot_indices] = core.slice_volume(volume, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type)
+        projections[rot_indices] = core.slice_volume(volume, rotations[rot_indices], experiment_dataset.image_shape, (experiment_dataset.grid_size,)*3, disc_type)
 
     logger.info("done with precomp proj, batch size %s", batch_size)
     projections = jnp.asarray(projections)
@@ -76,7 +76,7 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
         u_projections = np.empty((rotations.shape[0], n_principal_components, image_size), dtype = np.complex64)
         # Compute all mean and principal component projections
         for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
-            u_projections[rot_indices] = batch_vol_slice_volume(u, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type)
+            u_projections[rot_indices] = batch_vol_slice_volume(u, rotations[rot_indices], experiment_dataset.image_shape, (experiment_dataset.grid_size,)*3, disc_type)
 
         logger.info("done with u_proj %s", batch_size)
         data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=dot_product_batch_size, subset_indices = image_indices)

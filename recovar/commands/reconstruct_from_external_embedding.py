@@ -176,7 +176,7 @@ def generate(args):
 
     ind_split = dataset.figure_out_halfsets(args)
     dataset_loader_dict = dataset.make_dataset_loader_dict(args)
-    cryos = dataset.get_split_datasets_from_dict(dataset_loader_dict, ind_split)
+    cryos = dataset.get_split_datasets(**dataset_loader_dict, ind_split=ind_split)
 
     zs = utils.pickle_load(args.embedding)
     zs_split = [zs[cryos[0].dataset_indices], zs[cryos[1].dataset_indices]]

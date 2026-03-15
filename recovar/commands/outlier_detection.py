@@ -12,7 +12,7 @@ from sklearn.covariance import EllipticEnvelope
 from sklearn.ensemble import IsolationForest
 from sklearn.neighbors import LocalOutlierFactor
 
-from recovar.data_io import tilt_dataset
+from recovar.data_io import cryo_dataset
 from recovar.output import output
 
 matplotlib.rcParams["contour.negative_linestyle"] = "solid"
@@ -445,8 +445,8 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
     
     if starfile is not None and starfile.endswith('.star'):
         try:
-            particle_to_tilts, tilts_to_particle = tilt_dataset.TiltSeriesData.parse_particle_tilt(starfile)
-            micrographtilt_to_tilts, tilts_to_micrographtilt = tilt_dataset.TiltSeriesData.parse_micrograph_tilt_mapping(starfile)
+            particle_to_tilts, tilts_to_particle = cryo_dataset.TiltSeriesDataset.parse_particle_tilt(starfile)
+            micrographtilt_to_tilts, tilts_to_micrographtilt = cryo_dataset.TiltSeriesDataset.parse_micrograph_tilt_mapping(starfile)
         except (KeyError, ValueError, FileNotFoundError) as e:
             logger.warning("Failed to parse starfile %s: %s", starfile, e)
             logger.warning("Skipping particle and micrograph-based outlier detection")
@@ -1246,7 +1246,7 @@ def main():
 
 
 def map_particle_original_indexing_to_images_original_indexing(particle_indices_in_original_ordering, image_subset, starfile):
-    return tilt_dataset.tilt_series_indices_to_image_indices(particle_indices_in_original_ordering, starfile, image_subset)
+    return cryo_dataset.tilt_series_to_images(particle_indices_in_original_ordering, starfile, image_subset)
 
 
 def add_args(parser):
@@ -1355,7 +1355,7 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
         
         if is_tilt_series:
             # For tilt series, map particle indices to image indices
-            particle_to_tilts, _ = tilt_dataset.TiltSeriesData.parse_particle_tilt(starfile)
+            particle_to_tilts, _ = cryo_dataset.TiltSeriesDataset.parse_particle_tilt(starfile)
             n_particles = len(particle_to_tilts)
             valid_particle_indices = particle_indices[(particle_indices >= 0) & (particle_indices < n_particles)]
             if valid_particle_indices.size == 0:

@@ -28,7 +28,7 @@ def compute_batch_prior_quantities(rotation_matrices, translations, CTF_params, 
     return diag_mean
 
 def compute_prior_quantites(experiment_datasets, cov_noise, batch_size, for_whitening = False ):
-    bottom_of_fraction = jnp.zeros(experiment_datasets.volume_size, dtype = experiment_datasets[0].image_stack.dtype)
+    bottom_of_fraction = jnp.zeros(experiment_datasets.grid_size**3, dtype = experiment_datasets[0].image_stack.dtype)
     for experiment_dataset in experiment_datasets:
         n_images = experiment_dataset.n_images
         # Compute the bottom of fraction.
@@ -43,7 +43,7 @@ def compute_prior_quantites(experiment_datasets, cov_noise, batch_size, for_whit
                                              cov_noise,
                                              experiment_dataset.voxel_size, 
                                              experiment_dataset.dtype,
-                                             experiment_dataset.volume_shape, 
+                                             (experiment_dataset.grid_size,)*3, 
                                              experiment_dataset.image_shape, 
                                              experiment_dataset.grid_size, 
                                              experiment_dataset.ctf_evaluator,
@@ -79,7 +79,7 @@ def compute_relion_prior(experiment_datasets, cov_noise, image0, image1, batch_s
         bottom_of_fraction = compute_prior_quantites(experiment_datasets, cov_noise, batch_size, for_whitening = False )
         from_noise_level = False
     
-    return compute_fsc_prior_gpu(experiment_datasets.volume_shape, image0, image1, bottom_of_fraction, estimate_merged_SNR = estimate_merged_SNR, from_noise_level = from_noise_level )
+    return compute_fsc_prior_gpu((experiment_datasets.grid_size,)*3, image0, image1, bottom_of_fraction, estimate_merged_SNR = estimate_merged_SNR, from_noise_level = from_noise_level )
 
 
 def get_fsc(vol1, vol2, volume_shape, substract_shell_mean = False, frequency_shift = 0):

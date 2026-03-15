@@ -27,7 +27,7 @@ class _DummySource:
 
 
 def test_particle_image_dataset_basic_getitem_and_preprocess(monkeypatch):
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
     ds = cryo_dataset.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=True)
 
     imgs, p_idx, t_idx = ds[1]
@@ -40,7 +40,7 @@ def test_particle_image_dataset_basic_getitem_and_preprocess(monkeypatch):
 
 
 def test_particle_image_dataset_subset_generators_preserve_order_and_duplicates(monkeypatch):
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _DummySource(n=5, D=8))
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=5, D=8))
     ds = cryo_dataset.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
 
     subset = np.array([3, 1, 3], dtype=np.int32)
@@ -58,7 +58,7 @@ def test_particle_image_dataset_subset_generators_preserve_order_and_duplicates(
 
 
 def test_particle_image_dataset_subset_generators_accept_boolean_mask(monkeypatch):
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _DummySource(n=5, D=8))
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=5, D=8))
     ds = cryo_dataset.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
 
     mask = np.array([False, True, False, True, False], dtype=bool)
@@ -70,7 +70,7 @@ def test_particle_image_dataset_subset_generators_accept_boolean_mask(monkeypatc
 
 
 def test_particle_image_dataset_subset_generators_reject_invalid_masks(monkeypatch):
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _DummySource(n=5, D=8))
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=5, D=8))
     ds = cryo_dataset.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
 
     with pytest.raises(ValueError, match="boolean mask must be 1D"):
@@ -689,7 +689,7 @@ def test_tiltseries_dataset_getitem_deterministic_selection(monkeypatch):
             "_rlnCtfBfactor": [-1, -2, -3, -4, -5, -6],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=2, random_tilts=False, tilt_file_option="relion5")
@@ -723,7 +723,7 @@ def test_tiltseries_dataset_random_selection_clamps_when_num_tilts_exceeds_avail
             "_rlnCtfBfactor": [-1.0, -2.0, -3.0, -4.0, -5.0],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     np.random.seed(0)
@@ -765,7 +765,7 @@ def test_tiltseries_dataset_negative_num_tilts_matches_all_tilts(monkeypatch):
             "_rlnCtfBfactor": [-1, -2, -3, -4, -5, -6],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     ds_all = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=None, random_tilts=False, tilt_file_option="relion5")
@@ -799,7 +799,7 @@ def test_tiltseries_dataset_non_integer_num_tilts_raises(monkeypatch):
             "_rlnCtfBfactor": [-1, -1],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     with pytest.raises(TypeError, match="num_tilts must be an integer or None"):
@@ -827,7 +827,7 @@ def test_tiltseries_dataset_getitem_deterministic_selection_warp(monkeypatch):
             "_rlnCtfBfactor": [-5.0, -1.0, -3.0, -2.0],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=2, random_tilts=False, tilt_file_option="warp")
@@ -858,7 +858,7 @@ def test_tiltseries_get_tilt_returns_single_image_tuple(monkeypatch):
             "_rlnCtfBfactor": [-1.0, -2.0, -3.0],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=None, random_tilts=False, tilt_file_option="relion5")
 
@@ -889,7 +889,7 @@ def test_tiltseries_dataset_images_mode_batch_size_validation(monkeypatch):
             "_rlnCtfBfactor": [-1, -1, -1, -1],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=None, random_tilts=False, tilt_file_option="relion5")
@@ -919,7 +919,7 @@ def test_tiltseries_subset_generator_images_mode_batch_size_validation(monkeypat
             "_rlnCtfBfactor": [-1, -1, -1, -1, -1],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=None, random_tilts=False, tilt_file_option="relion5")
@@ -949,7 +949,7 @@ def test_simple_dataloader_forces_batch_size_one(monkeypatch):
             "_rlnCtfBfactor": [-1, -1, -1, -1],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=1, random_tilts=False, tilt_file_option="relion5")
@@ -978,7 +978,7 @@ def test_tiltseries_dataset_invalid_mode_raises(monkeypatch):
             "_rlnCtfBfactor": [-1, -1],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=1, random_tilts=False, tilt_file_option="relion5")
     with pytest.raises(ValueError, match="Invalid mode"):
@@ -1006,7 +1006,7 @@ def test_tiltseries_dataset_invalid_tilt_file_option_raises(monkeypatch):
             "_rlnCtfBfactor": [-1, -1],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
     with pytest.raises(ValueError, match="Invalid tilt ordering method"):
         cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=1, random_tilts=False, tilt_file_option="bad")
@@ -1032,7 +1032,7 @@ def test_tiltseries_dataset_missing_group_column_raises(monkeypatch):
             "_rlnCtfBfactor": [-1.0, -1.0],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     with pytest.raises(ValueError, match="_rlnGroupName"):
@@ -1060,7 +1060,7 @@ def test_tiltseries_image_subset_generator_none_matches_full(monkeypatch):
             "_rlnCtfBfactor": [-1, -1, -1, -1],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=1, random_tilts=False, tilt_file_option="relion5")
     full = list(ds.get_image_generator(batch_size=2))
@@ -1127,7 +1127,7 @@ def test_tiltseries_subset_generator_preserves_subset_order_and_duplicates(monke
             "_rlnCtfBfactor": [-1, -2, -1, -2, -1, -2],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=1, random_tilts=False, tilt_file_option="relion5")
@@ -1165,7 +1165,7 @@ def test_tiltseries_subset_generator_accepts_boolean_particle_mask(monkeypatch):
             "_rlnCtfBfactor": [-1, -2, -1, -2, -1, -2],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=1, random_tilts=False, tilt_file_option="relion5")
@@ -1197,7 +1197,7 @@ def test_tiltseries_subset_generator_images_mode_accepts_boolean_particle_mask(m
             "_rlnCtfBfactor": [-1, -2, -1, -2, -1, -2],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=1, random_tilts=False, tilt_file_option="relion5")
@@ -1231,7 +1231,7 @@ def test_tiltseries_subset_generator_rejects_bad_particle_masks(monkeypatch):
             "_rlnCtfBfactor": [-1, -2, -1, -2, -1, -2],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=1, random_tilts=False, tilt_file_option="relion5")
@@ -1264,7 +1264,7 @@ def test_tiltseries_image_subset_generator_preserves_requested_image_order_and_d
             "_rlnCtfBfactor": [-1, -2, -1, -2, -1],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=None, random_tilts=False, tilt_file_option="relion5")
@@ -1299,7 +1299,7 @@ def test_tiltseries_image_subset_generator_accepts_boolean_image_mask(monkeypatc
             "_rlnCtfBfactor": [-1, -2, -1, -2, -1],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=None, random_tilts=False, tilt_file_option="relion5")
@@ -1333,7 +1333,7 @@ def test_tiltseries_image_subset_generator_rejects_bad_image_masks(monkeypatch):
             "_rlnCtfBfactor": [-1, -2, -1, -2, -1],
         }
     )
-    monkeypatch.setattr(cryo_dataset.ImageSource, "from_file", lambda *args, **kwargs: _Source())
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=None, random_tilts=False, tilt_file_option="relion5")
@@ -1372,7 +1372,7 @@ def test_tiltseries_dataset_ind_subset_preserves_image_tilt_alignment(monkeypatc
         }
     )
     monkeypatch.setattr(
-        cryo_dataset.ImageSource,
+        cryo_dataset.ImageLoader,
         "from_file",
         lambda *_args, **kwargs: _Source(indices=kwargs.get("indices")),
     )

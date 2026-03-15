@@ -99,11 +99,12 @@ def main(
         )
         gt_volumes = volumes * sim_info["scale_vol"]
 
-        dataset_options = dataset.get_default_dataset_option()
-        dataset_options["particles_file"] = os.path.join(dataset_folder, f"particles.{grid_size}.mrcs")
-        dataset_options["ctf_file"] = os.path.join(dataset_folder, "ctf.pkl")
-        dataset_options["poses_file"] = os.path.join(dataset_folder, "poses.pkl")
-        cryo = dataset.load_dataset_from_dict(dataset_options, lazy=False)
+        cryo = dataset.load_dataset(
+            particles_file=os.path.join(dataset_folder, f"particles.{grid_size}.mrcs"),
+            ctf_file=os.path.join(dataset_folder, "ctf.pkl"),
+            poses_file=os.path.join(dataset_folder, "poses.pkl"),
+            lazy=False,
+        )
 
         # Compute hard-assignment
         batch_size = 1000

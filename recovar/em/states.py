@@ -183,8 +183,8 @@ class HeterogeneousEMState():
 
         post_process_vmap = jax.vmap(relion_functions.post_process_from_filter_v2, in_axes = (0, 0, None, None, 0, None,None, None, None, None, None))
         
-        self.cov_cols = post_process_vmap(self.H, self.B, experiment_dataset.volume_shape, 1, self.covariance_prior, self.covariance_options['left_kernel'], False, self.covariance_options['grid_correct'],  "square",  1, self.volume_mask ).reshape(self.H.shape[0], -1).T
+        self.cov_cols = post_process_vmap(self.H, self.B, (experiment_dataset.grid_size,)*3, 1, self.covariance_prior, self.covariance_options['left_kernel'], False, self.covariance_options['grid_correct'],  "square",  1, self.volume_mask ).reshape(self.H.shape[0], -1).T
 
         memory_to_use = utils.get_gpu_memory_total()
-        self.subspace, _ , _ = principal_components.randomized_real_svd_of_columns(self.cov_cols, self.picked_frequency_indices, None, experiment_dataset.volume_shape, 50, test_size=self.covariance_options['randomized_sketch_size'], gpu_memory_to_use=memory_to_use)
+        self.subspace, _ , _ = principal_components.randomized_real_svd_of_columns(self.cov_cols, self.picked_frequency_indices, None, (experiment_dataset.grid_size,)*3, 50, test_size=self.covariance_options['randomized_sketch_size'], gpu_memory_to_use=memory_to_use)
         self.subspace = self.subspace[:,:self.covariance_options['n_pcs_to_compute']]

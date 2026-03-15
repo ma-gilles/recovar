@@ -93,7 +93,7 @@ def get_mean_conformation_relion(
             upsampling_factor=upsampling_factor,
         )
         corrected[idx] = relion_functions.post_process_from_filter_v2(
-            ft_ctfs[idx], ft_ys[idx], cryo.volume_shape, upsampling_factor,
+            ft_ctfs[idx], ft_ys[idx], (cryo.grid_size,)*3, upsampling_factor,
         )
 
     mean_prior, fsc, _ = regularization.compute_relion_prior(
@@ -102,7 +102,7 @@ def get_mean_conformation_relion(
 
     corrected_reg = [
         relion_functions.post_process_from_filter_v2(
-            ft_ctfs[idx], ft_ys[idx], cryo.volume_shape, upsampling_factor,
+            ft_ctfs[idx], ft_ys[idx], (cryo.grid_size,)*3, upsampling_factor,
             tau=mean_prior,
         )
         for idx, cryo in enumerate(cryos)
