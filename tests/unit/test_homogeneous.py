@@ -13,7 +13,6 @@ pytestmark = pytest.mark.unit
 class _FakeCryo:
     def __init__(self, tag):
         self.tag = tag
-        self.grid_size = 4
         self.volume_shape = (4,)
 
 

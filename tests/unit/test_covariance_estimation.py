@@ -165,16 +165,16 @@ def test_compute_regularized_covariance_columns_with_real_tiny_dataset(monkeypat
     covariance_cols, picked_out, fscs = cov_est.compute_regularized_covariance_columns(
         cryos=CryoEMHalfsets(cryo, cryo),
         means={},
-        mean_prior=np.ones(cryo.grid_size**3, dtype=np.float32),
-        volume_mask=np.ones(cryo.grid_size**3, dtype=np.float32),
-        dilated_volume_mask=np.ones(cryo.grid_size**3, dtype=np.float32),
-        valid_idx=np.ones(cryo.grid_size**3, dtype=np.float32),
+        mean_prior=np.ones(cryo.volume_size, dtype=np.float32),
+        volume_mask=np.ones(cryo.volume_size, dtype=np.float32),
+        dilated_volume_mask=np.ones(cryo.volume_size, dtype=np.float32),
+        valid_idx=np.ones(cryo.volume_size, dtype=np.float32),
         gpu_memory=8,
         options=options,
         picked_frequencies=picked_frequencies,
     )
 
-    assert covariance_cols["est_mask"].shape == (cryo.grid_size**3, picked_frequencies.size)
+    assert covariance_cols["est_mask"].shape == (cryo.volume_size, picked_frequencies.size)
     np.testing.assert_array_equal(picked_out, picked_frequencies)
     assert fscs.shape == (picked_frequencies.size,)
 
@@ -286,8 +286,8 @@ def test_compute_h_b_for_halfset_batches_frequency_chunks(monkeypatch):
 
     H, B = cov_est.compute_H_B_for_halfset(
         cryo=cryo,
-        mean_estimate=np.zeros(cryo.grid_size**3, dtype=np.complex64),
-        volume_mask=np.ones((cryo.grid_size,)*3, dtype=np.float32),
+        mean_estimate=np.zeros(cryo.volume_size, dtype=np.complex64),
+        volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
         picked_frequencies=picked_frequencies,
         gpu_memory=8,
         options=options,
@@ -295,8 +295,8 @@ def test_compute_h_b_for_halfset_batches_frequency_chunks(monkeypatch):
 
     # Should have called compute_freq_batch for each frequency
     assert set(freq_calls) == {0, 1, 2, 3, 4}
-    assert H.shape == (cryo.grid_size**3, picked_frequencies.size)
-    assert B.shape == (cryo.grid_size**3, picked_frequencies.size)
+    assert H.shape == (cryo.volume_size, picked_frequencies.size)
+    assert B.shape == (cryo.volume_size, picked_frequencies.size)
 
 
 def test_compute_variance_orchestration_with_stubbed_kernels(monkeypatch):
@@ -306,11 +306,12 @@ def test_compute_variance_orchestration_with_stubbed_kernels(monkeypatch):
     class _Cryo:
         def __init__(self, scale):
             self.scale = scale
-            self.grid_size = vol_shape[0]
+            self.volume_shape = vol_shape
+            self.volume_size = vol_size
             self.dtype_real = np.float32
 
         def get_valid_frequency_indices(self, rad=None):
-            return np.ones(vol_size, dtype=np.float32)
+            return np.ones(self.volume_size, dtype=np.float32)
 
     cryos = CryoEMHalfsets(_Cryo(1.0), _Cryo(2.0))
 
@@ -371,15 +372,15 @@ def test_compute_h_b_runs_on_tiny_image_dataset():
 
     H, B = cov_est.compute_H_B_for_halfset(
         cryo=cryo,
-        mean_estimate=np.zeros(cryo.grid_size**3, dtype=np.complex64),
-        volume_mask=np.ones((cryo.grid_size,)*3, dtype=np.float32),
+        mean_estimate=np.zeros(cryo.volume_size, dtype=np.complex64),
+        volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
         picked_frequencies=np.array([0, 1], dtype=np.int32),
         gpu_memory=8,
         options=options,
     )
 
-    assert H.shape == (cryo.grid_size**3, 2)
-    assert B.shape == (cryo.grid_size**3, 2)
+    assert H.shape == (cryo.volume_size, 2)
+    assert B.shape == (cryo.volume_size, 2)
     assert np.isfinite(np.asarray(H)).all()
 
 
@@ -452,12 +453,12 @@ def test_compute_freq_batch_two_calls_accumulate():
 def test_compute_projected_covariance_runs_on_tiny_image_dataset():
     # grid_size>=6 required: simulator noise interpolation produces NaN at grid_size=4
     cryo = make_tiny_cryo_dataset_with_images(grid_size=6, n_images=6, seed=0)
-    basis = np.eye(cryo.grid_size**3, 4, dtype=np.complex64)
+    basis = np.eye(cryo.volume_size, 4, dtype=np.complex64)
     covar = cov_est.compute_projected_covariance(
         experiment_datasets=[cryo],
-        mean_estimate=np.zeros(cryo.grid_size**3, dtype=np.complex64),
+        mean_estimate=np.zeros(cryo.volume_size, dtype=np.complex64),
         basis=basis,
-        volume_mask=np.ones((cryo.grid_size,)*3, dtype=np.float32),
+        volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
         batch_size=3,
         disc_type="linear_interp",
         disc_type_u="linear_interp",
@@ -860,19 +861,19 @@ def _make_reduce_cov_fixtures(grid_size=4, n_images=6, seed=0):
         noise_variance=jnp.asarray(cryo.noise.get(indices)),
     )
 
-    mean_estimate_full = jnp.zeros(cryo.grid_size**3, dtype=jnp.complex64)
-    volume_mask = jnp.ones((cryo.grid_size,)*3, dtype=jnp.float32)
-    basis_full = jnp.eye(cryo.grid_size**3, 3, dtype=jnp.complex64)  # (vol_size, 3)
+    mean_estimate_full = jnp.zeros(cryo.volume_size, dtype=jnp.complex64)
+    volume_mask = jnp.ones(cryo.volume_shape, dtype=jnp.float32)
+    basis_full = jnp.eye(cryo.volume_size, 3, dtype=jnp.complex64)  # (vol_size, 3)
 
     # Pre-convert to half-volumes (matching what compute_projected_covariance does).
     # reduce_covariance_inner expects half volumes when disc_type != 'cubic'.
     mean_estimate_half = fourier_transform_utils.full_volume_to_half_volume(
-        mean_estimate_full.reshape((cryo.grid_size,)*3), (cryo.grid_size,)*3,
+        mean_estimate_full.reshape(cryo.volume_shape), cryo.volume_shape,
     ).reshape(-1)
     # basis is (n_basis, vol_size) after .T in compute_projected_covariance
     basis_T = basis_full.T  # (3, vol_size)
     basis_half = fourier_transform_utils.full_volume_to_half_volume(
-        basis_T.reshape(3, *(cryo.grid_size,)*3), (cryo.grid_size,)*3,
+        basis_T.reshape(3, *cryo.volume_shape), cryo.volume_shape,
     ).reshape(3, -1)
 
     model_half = ModelState(
@@ -1051,12 +1052,12 @@ def test_reduce_covariance_inner_masked_vs_unmasked_differ():
 def test_compute_projected_covariance_masked():
     """compute_projected_covariance with do_mask_images=True completes and returns valid result."""
     cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=6, seed=0)
-    basis = np.eye(cryo.grid_size**3, 3, dtype=np.complex64)
+    basis = np.eye(cryo.volume_size, 3, dtype=np.complex64)
     covar = cov_est.compute_projected_covariance(
         experiment_datasets=[cryo],
-        mean_estimate=np.zeros(cryo.grid_size**3, dtype=np.complex64),
+        mean_estimate=np.zeros(cryo.volume_size, dtype=np.complex64),
         basis=basis,
-        volume_mask=np.ones((cryo.grid_size,)*3, dtype=np.float32),
+        volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
         batch_size=3,
         disc_type="linear_interp",
         disc_type_u="linear_interp",
@@ -1079,12 +1080,12 @@ def test_compute_projected_covariance_masked_matches_unmasked_with_ones_mask():
     should agree closely (modulo FFT rounding in the mask-project-threshold cycle).
     """
     cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=6, seed=0)
-    basis = np.eye(cryo.grid_size**3, 3, dtype=np.complex64)
+    basis = np.eye(cryo.volume_size, 3, dtype=np.complex64)
     kwargs = dict(
         experiment_datasets=[cryo],
-        mean_estimate=np.zeros(cryo.grid_size**3, dtype=np.complex64),
+        mean_estimate=np.zeros(cryo.volume_size, dtype=np.complex64),
         basis=basis,
-        volume_mask=np.ones((cryo.grid_size,)*3, dtype=np.float32),
+        volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
         batch_size=6,
         disc_type="linear_interp",
         disc_type_u="linear_interp",

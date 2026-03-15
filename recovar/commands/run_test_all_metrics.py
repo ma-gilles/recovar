@@ -964,7 +964,7 @@ def main():
     fsc_filepath = os.path.join(plots_dir, 'fsc_mean.png')
     ax, score = plot_utils.plot_fsc_new(
         gt_mean, mean,
-        np.array((cryos[0].grid_size,)*3),
+        np.array(cryos[0].volume_shape),
         cryos[0].voxel_size,
         threshold=0.5,
         filename=fsc_filepath,
@@ -976,7 +976,7 @@ def main():
     # FSC for variance maps — two metrics:
     #   variance_spatial_fsc: spatial variance from eigendecomposition vs GT, DFT both, FSC
     #   variance_fourier_fsc: Fourier-space per-voxel power vs GT Fourier variance
-    volume_shape = (cryos[0].grid_size,)*3
+    volume_shape = cryos[0].volume_shape
     gt_spatial_variance = gt_thing.get_spatial_variances(contrasted=False)
     estimated_spatial_variance = pipeline_output.get('variance')
 
@@ -1116,7 +1116,7 @@ def main():
             plt.close()
 
     for l_idx, l in enumerate(labels_to_plot):
-        gt_map = fourier_transform_utils.get_idft3(synt.volumes[l].reshape((cryos[0].grid_size,)*3)).real
+        gt_map = fourier_transform_utils.get_idft3(synt.volumes[l].reshape(cryos[0].volume_shape)).real
         estimate_map = utils.load_mrc(
             Path(output_state_dir, f'state{l_idx:03d}.mrc')
         )

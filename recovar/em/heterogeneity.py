@@ -222,8 +222,8 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
 
     image_shape = experiment_dataset.image_shape
     image_size = experiment_dataset.image_size
-    volume_shape = (experiment_dataset.grid_size,)*3
-    volume_size = experiment_dataset.grid_size**3
+    volume_shape = experiment_dataset.volume_shape
+    volume_size = experiment_dataset.volume_size
     n_picked_indices = picked_frequency_indices.size
     n_rotations = rotations.shape[0]
     if n_rotations <= 0:
@@ -241,7 +241,7 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
 
     mean_projections = np.zeros((rotations.shape[0], image_size), dtype = np.complex64)
     for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
-        mean_projections[rot_indices] = core.slice_volume(mean, rotations[rot_indices], experiment_dataset.image_shape, (experiment_dataset.grid_size,)*3, mean_disc)
+        mean_projections[rot_indices] = core.slice_volume(mean, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, mean_disc)
 
     picked_freq_coords = core.vec_indices_to_vol_indices(picked_frequency_indices, volume_shape)
 
@@ -366,10 +366,10 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
 
     if disc_type_mean == 'cubic':
         from recovar.core import cubic_interpolation
-        mean = cubic_interpolation.calculate_spline_coefficients(mean.reshape((experiment_dataset.grid_size,)*3))
+        mean = cubic_interpolation.calculate_spline_coefficients(mean.reshape(experiment_dataset.volume_shape))
 
     if disc_type_u == 'cubic':
-        basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, (experiment_dataset.grid_size,)*3, gpu_memory= None)
+        basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)
     
     n_rotations = rotations.shape[0]
     if n_rotations <= 0:
@@ -385,8 +385,8 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
     # Compute all mean and principal component projections
     mean_projections = np.empty((rotations.shape[0], image_size), dtype = np.complex64)
     for rot_indices in utils.index_batch_iter(n_rotations, batch_size): 
-        mean_projections[rot_indices] = core.slice_volume(mean, rotations[rot_indices], experiment_dataset.image_shape, (experiment_dataset.grid_size,)*3, disc_type_mean)
-        u_projections[rot_indices] = batch_vol_slice_volume(basis, rotations[rot_indices], experiment_dataset.image_shape, (experiment_dataset.grid_size,)*3, disc_type_u)
+        mean_projections[rot_indices] = core.slice_volume(mean, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type_mean)
+        u_projections[rot_indices] = batch_vol_slice_volume(basis, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type_u)
 
     
     del basis, mean
@@ -494,7 +494,7 @@ def estimate_principal_components_simple(experiment_dataset, mean, mean_signal_v
     vol_batch_size = 50
     gpu_memory_to_use =  50
 
-    basis,s = principal_components.get_cov_svds(cov, picked_frequency_indices, volume_mask, (experiment_dataset.grid_size,)*3, vol_batch_size, gpu_memory_to_use, False, covariance_options['randomized_sketch_size'])
+    basis,s = principal_components.get_cov_svds(cov, picked_frequency_indices, volume_mask, experiment_dataset.volume_shape, vol_batch_size, gpu_memory_to_use, False, covariance_options['randomized_sketch_size'])
     basis = basis['real']
     # basis_size = basis.shape[-1]
     basis_size = 3
@@ -517,14 +517,14 @@ def estimate_principal_components_halfset(cryos, means, mean_signal_variance, co
     covariance_options = covariance_estimation.get_default_covariance_computation_options() if covariance_options is None else covariance_options
 
     gpu_memory = utils.report_gpu_memory()
-    volume_shape = (cryos[0].grid_size,)*3
+    volume_shape = cryos[0].volume_shape
     Hs, Bs = 2*[None], 2*[None]
     for cryo_idx, cryo in enumerate(cryos):
         Hs[cryo_idx], Bs[cryo_idx] = compute_H_B(cryo, means[cryo_idx], probabilities[cryo_idx], rotations, translations, noise_variance, volume_mask, picked_frequency_indices, image_indices, disc_type_mean)
     
     volume_noise_var = None
     volume_mask = None
-    _, covariance_prior, covariance_fscs = principal_components.compute_covariance_regularization_relion_style(Hs, Bs, mean_signal_variance, picked_frequency_indices, volume_noise_var, volume_mask, (cryos[0].grid_size,)*3, gpu_memory, reg_init_multiplier = jax_config.REG_INIT_MULTIPLIER, options = covariance_options)
+    _, covariance_prior, covariance_fscs = principal_components.compute_covariance_regularization_relion_style(Hs, Bs, mean_signal_variance, picked_frequency_indices, volume_noise_var, volume_mask, cryos[0].volume_shape, gpu_memory, reg_init_multiplier = jax_config.REG_INIT_MULTIPLIER, options = covariance_options)
 
     cov_cols = 2 * [None]
     us = 2 * [None]; ss = 2 * [None]
@@ -559,7 +559,7 @@ def estimate_principal_components(cryos, options,  means, mean_signal_variance, 
     
     covariance_options = covariance_estimation.get_default_covariance_computation_options() if covariance_options is None else covariance_options
 
-    volume_shape = (cryos[0].grid_size,)*3
+    volume_shape = cryos[0].volume_shape
     vol_batch_size = utils.get_vol_batch_size(cryos[0].grid_size, gpu_memory_to_use)
 
     covariance_cols, picked_frequencies, column_fscs = covariance_estimation.compute_regularized_covariance_columns_in_batch(cryos, means, mean_signal_variance, cov_noise, volume_mask, dilated_volume_mask, valid_idx, gpu_memory_to_use, noise_model, covariance_options, picked_frequencies)
@@ -586,13 +586,13 @@ def estimate_principal_components(cryos, options,  means, mean_signal_variance, 
 
 def compute_regularized_covariance_columns(cryos, means, mean_signal_variance, cov_noise, volume_mask, dilated_volume_mask, gpu_memory, noise_model, options, picked_frequencies):
 
-    volume_shape = (cryos[0].grid_size,)*3
+    volume_shape = cryos[0].volume_shape
     mask_final = volume_mask
 
     utils.report_memory_device(logger=logger)
     Hs, Bs = compute_both_H_B(cryos, means, dilated_volume_mask, picked_frequencies,
                                gpu_memory, options=options)
-    volume_noise_var = np.asarray(noise.make_radial_noise(cov_noise, (cryos[0].grid_size,)*3))
+    volume_noise_var = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].volume_shape))
     covariance_cols = {}
 
     logger.info("using new covariance reg fn")

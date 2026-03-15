@@ -63,12 +63,12 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
         )
         
     else:
-        fsc = regularization.get_fsc_gpu(means[0], means[1], (cryo.grid_size,)*3, substract_shell_mean = False, frequency_shift = 0 )
+        fsc = regularization.get_fsc_gpu(means[0], means[1], cryo.volume_shape, substract_shell_mean = False, frequency_shift = 0 )
         mean_avg = (means[0] + means[1])/2
-        PS = regularization.average_over_shells(jnp.abs(mean_avg)**2, (cryo.grid_size,)*3)
+        PS = regularization.average_over_shells(jnp.abs(mean_avg)**2, cryo.volume_shape)
 
         T = 4
-        mean_signal_variance = T * 1/2 * utils.make_radial_image(PS, (cryo.grid_size,)*3, extend_last_frequency = True)
+        mean_signal_variance = T * 1/2 * utils.make_radial_image(PS, cryo.volume_shape, extend_last_frequency = True)
         
         mean_signal_variance += np.max(mean_signal_variance) * 1e-6
 
@@ -98,7 +98,7 @@ def split_E_M_v2(experiment_datasets, state_objs, rotations, translations, disc_
         _, covariance_prior, _ = regularization.prior_iteration_relion_style_batch(state_objs[0].H, state_objs[1].H, state_objs[0].B, state_objs[1].B, np.zeros(state_objs[0].H.shape[0]),
         state_objs[0].covariance_prior, 
         covariance_options['substract_shell_mean'], 
-        (cryo.grid_size,)*3, covariance_options['left_kernel'],
+        cryo.volume_shape, covariance_options['left_kernel'], 
         covariance_options['use_spherical_mask'],  covariance_options['grid_correct'],  None, covariance_options["prior_n_iterations"], covariance_options["downsample_from_fsc"])
 
         for k in range(2):

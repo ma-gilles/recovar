@@ -376,8 +376,8 @@ def _check_uninvert_data(means, cryos, args):
     space. If the estimated mean has negative density in the protein region,
     the sign of the data (and means) is flipped.
     """
-    mean_real = fourier_transform_utils.get_idft3(means['combined'].reshape((cryos.grid_size,)*3))
-    radial_mask = cryos.get_volume_radial_mask(cryos.grid_size // 3).reshape((cryos.grid_size,)*3)
+    mean_real = fourier_transform_utils.get_idft3(means['combined'].reshape(cryos.volume_shape))
+    radial_mask = cryos.get_volume_radial_mask(cryos.grid_size // 3).reshape(cryos.volume_shape)
     uninvert_check = np.sum(mean_real.real ** 3 * radial_mask) < 0
 
     if args.uninvert_data == 'automatic':
@@ -679,7 +679,7 @@ def standard_recovar_pipeline(args):
         utils.set_gpu_memory_limit(args.gpu_memory)
         logger.info("GPU memory limited to %.1f GB (requested via --gpu-gb)", args.gpu_memory)
     gpu_memory = utils.get_gpu_memory_total()
-    volume_shape = (cryos.grid_size,)*3
+    volume_shape = cryos.volume_shape
 
     batch_sizes = utils.compute_batch_sizes(cryos.grid_size, gpu_memory)
     batch_size = batch_sizes.image

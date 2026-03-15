@@ -203,7 +203,7 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
             )
             halfmap = relion_functions.post_process_from_filter_v2(
                 Ft_ctf, F_ty,
-                (cryos[i].grid_size,)*3, 2,
+                cryos[i].volume_shape, 2,
                 kernel='triangular',
                 use_spherical_mask=True,
                 grid_correct=True, gridding_correct="square",

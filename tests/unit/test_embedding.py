@@ -70,20 +70,20 @@ def test_generate_conformation_from_reprojection_gpu(gpu_device):
 
 
 class _DummyCryo:
-    def __init__(self, grid_size=2, image_size=16, n_images=3, dtype=np.complex64):
-        self.grid_size = grid_size
+    def __init__(self, volume_size=4, image_size=16, n_images=3, dtype=np.complex64):
+        self.volume_size = volume_size
         self.image_size = image_size
         self.n_images = n_images
         self.dtype = dtype
 
 
 def test_get_per_image_embedding_clamps_batch_size_to_at_least_one(monkeypatch):
-    cryo0 = _DummyCryo(grid_size=2, image_size=16, n_images=3)
-    cryo1 = _DummyCryo(grid_size=2, image_size=16, n_images=2)
-    mean = np.zeros((8,), dtype=np.complex64)
-    u = np.zeros((8, 2), dtype=np.complex64)
+    cryo0 = _DummyCryo(volume_size=4, image_size=16, n_images=3)
+    cryo1 = _DummyCryo(volume_size=4, image_size=16, n_images=2)
+    mean = np.zeros((4,), dtype=np.complex64)
+    u = np.zeros((4, 2), dtype=np.complex64)
     s = np.ones((2,), dtype=np.float32)
-    volume_mask = np.ones((8,), dtype=np.float32)
+    volume_mask = np.ones((4,), dtype=np.float32)
 
     monkeypatch.setattr(embedding, "USE_CUBIC", False)
     monkeypatch.setattr(embedding.utils, "get_embedding_batch_size", lambda *_args, **_kwargs: 0)
@@ -139,12 +139,12 @@ def test_get_per_image_embedding_clamps_batch_size_to_at_least_one(monkeypatch):
 
 
 def test_get_per_image_embedding_ignore_zero_frequency_overrides_volume_mask(monkeypatch):
-    cryo0 = _DummyCryo(grid_size=2, image_size=16, n_images=2)
-    cryo1 = _DummyCryo(grid_size=2, image_size=16, n_images=1)
-    mean = np.zeros((8,), dtype=np.complex64)
-    u = np.zeros((8, 1), dtype=np.complex64)
+    cryo0 = _DummyCryo(volume_size=4, image_size=16, n_images=2)
+    cryo1 = _DummyCryo(volume_size=4, image_size=16, n_images=1)
+    mean = np.zeros((4,), dtype=np.complex64)
+    u = np.zeros((4, 1), dtype=np.complex64)
     s = np.ones((1,), dtype=np.float32)
-    volume_mask = np.array([0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0], dtype=np.float32)
+    volume_mask = np.array([0.0, 1.0, 0.0, 1.0], dtype=np.float32)
 
     monkeypatch.setattr(embedding, "USE_CUBIC", False)
     monkeypatch.setattr(embedding.utils, "get_embedding_batch_size", lambda *_args, **_kwargs: 10)
@@ -193,17 +193,17 @@ def test_get_per_image_embedding_ignore_zero_frequency_overrides_volume_mask(mon
     )
 
     assert len(captured["masks"]) == 2
-    np.testing.assert_allclose(captured["masks"][0], np.ones((8,), dtype=np.float32))
-    np.testing.assert_allclose(captured["masks"][1], np.ones((8,), dtype=np.float32))
+    np.testing.assert_allclose(captured["masks"][0], np.ones((4,), dtype=np.float32))
+    np.testing.assert_allclose(captured["masks"][1], np.ones((4,), dtype=np.float32))
     assert captured["contrast_grid_size"] == [1, 1]
 
 
 def test_get_per_image_embedding_supports_single_cryo_list(monkeypatch):
-    cryo = _DummyCryo(grid_size=2, image_size=16, n_images=2)
-    mean = np.zeros((8,), dtype=np.complex64)
-    u = np.zeros((8, 1), dtype=np.complex64)
+    cryo = _DummyCryo(volume_size=4, image_size=16, n_images=2)
+    mean = np.zeros((4,), dtype=np.complex64)
+    u = np.zeros((4, 1), dtype=np.complex64)
     s = np.ones((1,), dtype=np.float32)
-    volume_mask = np.ones((8,), dtype=np.float32)
+    volume_mask = np.ones((4,), dtype=np.float32)
 
     monkeypatch.setattr(embedding, "USE_CUBIC", False)
     monkeypatch.setattr(embedding.utils, "get_embedding_batch_size", lambda *_args, **_kwargs: 10)
@@ -1055,7 +1055,7 @@ def test_get_per_image_embedding_multi_zdim_matches_per_zdim(gpu_device):
 
         n_basis = 4
         rng = np.random.default_rng(0)
-        u = rng.standard_normal((cryos.grid_size**3, n_basis)).astype(np.complex64)
+        u = rng.standard_normal((cryos.volume_size, n_basis)).astype(np.complex64)
         s = np.array([4.0, 2.0, 1.0, 0.5], dtype=np.float32)
         n_pcs_list = [1, 2, 4]
         gpu_memory = 10.0
@@ -1090,8 +1090,8 @@ def _make_multi_zdim_test_fixtures():
 
     cryo = tiny_synthetic.make_tiny_cryo_dataset_with_images(grid_size=8, n_images=12, seed=3)
     cryos = CryoEMHalfsets(cryo, cryo)
-    volume_mask = np.ones(cryo.grid_size**3, dtype=np.float32)
-    mean_np = np.zeros(cryo.grid_size**3, dtype=np.complex64)
+    volume_mask = np.ones(cryo.volume_size, dtype=np.float32)
+    mean_np = np.zeros(cryo.volume_size, dtype=np.complex64)
     return cryos, mean_np, volume_mask
 
 

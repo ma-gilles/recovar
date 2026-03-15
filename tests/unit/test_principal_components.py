@@ -310,10 +310,10 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
     cryos = CryoEMHalfsets(cryo, cryo)
 
     means = {
-        "lhs": np.ones(cryo.grid_size**3, dtype=np.float32),
-        "prior": np.ones(cryo.grid_size**3, dtype=np.float32),
-        "combined": np.ones(cryo.grid_size**3, dtype=np.complex64),
-        "combined_regularized": np.ones(cryo.grid_size**3, dtype=np.complex64),
+        "lhs": np.ones(cryo.volume_size, dtype=np.float32),
+        "prior": np.ones(cryo.volume_size, dtype=np.float32),
+        "combined": np.ones(cryo.volume_size, dtype=np.complex64),
+        "combined_regularized": np.ones(cryo.volume_size, dtype=np.complex64),
     }
     options = {"keep_intermediate": False, "contrast": "none", "ignore_zero_frequency": False}
     cov_options = {
@@ -331,7 +331,7 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
         pc.covariance_estimation,
         "compute_regularized_covariance_columns_in_batch",
         lambda *args, **kwargs: (
-            {"est_mask": np.ones((cryo.grid_size**3, 2), dtype=np.complex64)},
+            {"est_mask": np.ones((cryo.volume_size, 2), dtype=np.complex64)},
             np.array([0, 1]),
             np.array([0.1, 0.2]),
         ),
@@ -340,7 +340,7 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
         pc,
         "get_cov_svds",
         lambda *args, **kwargs: (
-            {"real": np.ones((cryo.grid_size**3, 2), dtype=np.float32)},
+            {"real": np.ones((cryo.volume_size, 2), dtype=np.float32)},
             {"real": np.array([2.0, 1.0], dtype=np.float32)},
         ),
     )
@@ -348,7 +348,7 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
         pc,
         "pca_by_projected_covariance",
         lambda *args, **kwargs: (
-            np.ones((cryo.grid_size**3, 2), dtype=np.complex64),
+            np.ones((cryo.volume_size, 2), dtype=np.complex64),
             np.array([2.0, 1.0], dtype=np.float32),
         ),
     )
@@ -357,16 +357,16 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
         cryos=cryos,
         options=options,
         means=means,
-        mean_prior=np.zeros(cryo.grid_size**3, dtype=np.complex64),
-        volume_mask=np.ones(cryo.grid_size**3, dtype=np.float32),
-        dilated_volume_mask=np.ones(cryo.grid_size**3, dtype=np.float32),
+        mean_prior=np.zeros(cryo.volume_size, dtype=np.complex64),
+        volume_mask=np.ones(cryo.volume_size, dtype=np.float32),
+        dilated_volume_mask=np.ones(cryo.volume_size, dtype=np.float32),
         valid_idx=np.arange(cryo.n_images),
         batch_size=2,
         gpu_memory_to_use=8,
         covariance_options=cov_options,
     )
 
-    assert u["rescaled"].shape == (cryo.grid_size**3, 2)
+    assert u["rescaled"].shape == (cryo.volume_size, 2)
     np.testing.assert_array_equal(s["rescaled"], np.array([2.0, 1.0], dtype=np.float32))
     np.testing.assert_array_equal(picked_frequencies, np.array([0, 1]))
     np.testing.assert_array_equal(column_fscs, np.array([0.1, 0.2]))
@@ -377,13 +377,13 @@ def test_pca_by_projected_covariance_real_tiny_dataset_runs():
     # grid_size>=6 required: simulator noise interpolation produces NaN at grid_size=4
     # (only 1 radial frequency bin → scipy interp1d divides by zero)
     cryo = make_tiny_cryo_dataset_with_images(grid_size=6, n_images=6, seed=0)
-    basis = np.eye(cryo.grid_size**3, 4, dtype=np.complex64)
+    basis = np.eye(cryo.volume_size, 4, dtype=np.complex64)
 
     u, s = pc.pca_by_projected_covariance(
         cryos=[cryo],
         basis=basis,
-        mean=np.zeros(cryo.grid_size**3, dtype=np.complex64),
-        volume_mask=np.ones((cryo.grid_size,)*3, dtype=np.float32),
+        mean=np.zeros(cryo.volume_size, dtype=np.complex64),
+        volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
         disc_type="linear_interp",
         disc_type_u="linear_interp",
         gpu_memory_to_use=8,
@@ -391,7 +391,7 @@ def test_pca_by_projected_covariance_real_tiny_dataset_runs():
         n_pcs_to_compute=2,
     )
 
-    assert u.shape == (cryo.grid_size**3, 2)
+    assert u.shape == (cryo.volume_size, 2)
     assert s.shape == (2,)
     assert np.isfinite(s).all()
     assert np.all(s >= pc.jax_config.EPSILON)

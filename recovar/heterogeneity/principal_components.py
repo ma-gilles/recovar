@@ -53,7 +53,7 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
 
     covariance_options = covariance_estimation.get_default_covariance_computation_options() if covariance_options is None else covariance_options
 
-    volume_shape = (cryos.grid_size,)*3
+    volume_shape = cryos.volume_shape
     vol_batch_size = utils.get_vol_batch_size(cryos.grid_size, gpu_memory_to_use)
 
     # Different way of sampling columns:
@@ -65,14 +65,14 @@ def estimate_principal_components(cryos, options,  means, mean_prior, volume_mas
 
     if covariance_options['column_sampling_scheme'] == 'low_freqs':
         from recovar.heterogeneity import covariance_core
-        volume_shape = (cryos.grid_size,)*3
+        volume_shape = cryos.volume_shape
         if cryos.grid_size == 16:
-            picked_frequencies = np.arange(cryos.grid_size**3)
+            picked_frequencies = np.arange(cryos.volume_size)
         else:
             picked_frequencies = np.array(covariance_core.get_picked_frequencies(volume_shape, radius = covariance_options['column_radius'], use_half = True))
     elif covariance_options['column_sampling_scheme'] == 'high_snr' or covariance_options['column_sampling_scheme'] == 'high_lhs' or covariance_options['column_sampling_scheme'] == 'high_snr_p' or covariance_options['column_sampling_scheme'] =='high_snr_from_var_est':
         from recovar.reconstruction import regularization
-        upsampling_factor = np.round((means['lhs'].size / cryos.grid_size**3)**(1/3)).astype(int)
+        upsampling_factor = np.round((means['lhs'].size / cryos.volume_size)**(1/3)).astype(int)
         upsampled_volume_shape = tuple(upsampling_factor * np.array(volume_shape))
         lhs = regularization.downsample_lhs(means.lhs.reshape(upsampled_volume_shape), volume_shape, upsampling_factor = upsampling_factor).reshape(-1)
         # At low freqs, signal variance decays as ~1/rad^2
@@ -716,9 +716,9 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
                 # Compute two estimators
                 from recovar.heterogeneity import adaptive_kernel_discretization
                 estimators[cryo_idx], lhs[cryo_idx], rhs[cryo_idx] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[cryo_idx], noise_variance.astype(np.float32), None, best_likelihood, single_bin, tau= None, grid_correct=False, use_spherical_mask=False, return_lhs_rhs=True)
-                lhs[cryo_idx] = adaptive_kernel_discretization.half_volume_to_full_volume(lhs[cryo_idx][0], (cryos[cryo_idx].grid_size,)*3)
+                lhs[cryo_idx] = adaptive_kernel_discretization.half_volume_to_full_volume(lhs[cryo_idx][0], cryos[cryo_idx].volume_shape)
                 lhs[cryo_idx] = (lhs[cryo_idx] * cryos[0].get_valid_frequency_indices())
-                real_estimators[cryo_idx] = fourier_transform_utils.get_idft3(estimators[cryo_idx].reshape((cryos[0].grid_size,)*3))
+                real_estimators[cryo_idx] = fourier_transform_utils.get_idft3(estimators[cryo_idx].reshape(cryos[0].volume_shape))
                 all_estimators[zdim][cryo_idx] = estimators[cryo_idx]
                 all_lhs[zdim][cryo_idx] = lhs[cryo_idx]
 
@@ -726,7 +726,7 @@ def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zd
             weighting1 = 1/(1/lhs[0] + 1/lhs[1])
             global_likely_choice1[zdim_idx] += jnp.linalg.norm(np.sqrt(weighting1) * (estimators[0] - estimators[1]) )**2
             from recovar.heterogeneity import locres
-            weighting1 = weighting1.reshape((cryos[0].grid_size,)*3)
+            weighting1 = weighting1.reshape(cryos[0].volume_shape)
             loc_error = locres.expensive_local_error_with_cov(real_estimators[0], real_estimators[1], cryos[0].voxel_size, weighting1.reshape(real_estimators[0].shape), locres_sampling = 25, locres_maskrad= 25, locres_edgwidth= 0)
             volume_mask = volume_mask > 1e-3
             good_errors = loc_error.reshape(-1)[volume_mask.reshape(-1)]
@@ -787,12 +787,12 @@ def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, z
                 Ft_y = (Ft_y * cryos[0].get_valid_frequency_indices())
 
                 if first:
-                    Ft_ctf_avg = regularization.average_over_shells(Ft_ctf, (cryos[0].grid_size,)*3) / 10
-                    Ft_avg_radial = utils.make_radial_image(Ft_ctf_avg, (cryos[0].grid_size,)*3)
+                    Ft_ctf_avg = regularization.average_over_shells(Ft_ctf, cryos[0].volume_shape) / 10
+                    Ft_avg_radial = utils.make_radial_image(Ft_ctf_avg, cryos[0].volume_shape)
                     first = False
 
                 variance_estimate = Ft_y / (Ft_ctf + Ft_avg_radial)
-                avg_variance = regularization.average_over_shells(variance_estimate, (cryos[0].grid_size,)*3)
+                avg_variance = regularization.average_over_shells(variance_estimate, cryos[0].volume_shape)
                 plt.plot(avg_variance)
 
 

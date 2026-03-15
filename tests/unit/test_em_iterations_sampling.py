@@ -206,7 +206,6 @@ def test_split_E_M_v2_updates_state_means_noise_and_pose_assignments(monkeypatch
         def __init__(self, n_units, voxel_size):
             self.n_units = n_units
             self.voxel_size = voxel_size
-            self.grid_size = 2
             self.image_shape = (2, 2)
             self.volume_shape = (2, 2, 2)
             self.rotation_matrices = None
@@ -295,7 +294,6 @@ def test_split_E_M_v2_heterogeneous_branch_updates_covariance_prior_and_masks_u(
         def __init__(self):
             self.n_units = 3
             self.voxel_size = 1.5
-            self.grid_size = 2
             self.image_shape = (2, 2)
             self.volume_shape = (2, 2, 2)
             self.rotation_matrices = None

@@ -222,7 +222,7 @@ def test_compute_mean(cryos, gt_data, intermediates, baseline_scores, tol_frac):
     snap_before = perf_snapshot()
 
     batch_size = 512
-    volume_shape = (cryos.grid_size,)*3
+    volume_shape = cryos.volume_shape
 
     # Initial noise from half-maps
     noise_var_from_hf, _ = noise.estimate_noise_variance(cryos[0], batch_size)
@@ -327,7 +327,7 @@ def test_compute_variance(cryos, gt_data, intermediates, baseline_scores, tol_fr
     from recovar import utils
 
     batch_size = 512
-    volume_shape = (cryos.grid_size,)*3
+    volume_shape = cryos.volume_shape
     mean_combined = intermediates["mean_combined"]
     noise_var_used = intermediates["noise_var_used"]
     dilated_volume_mask = intermediates["dilated_volume_mask"]
@@ -379,7 +379,7 @@ def test_covariance_columns(cryos, gt_data, intermediates, baseline_scores, tol_
 
     batch_size = 512
     gpu_memory = 40.0
-    volume_shape = (cryos.grid_size,)*3
+    volume_shape = cryos.volume_shape
 
     # Standardized inputs from baseline
     mean_combined = intermediates["mean_combined"]
@@ -534,7 +534,7 @@ def test_principal_components(cryos, gt_data, intermediates, baseline_scores, to
 
     batch_size = 512
     gpu_memory = 40.0
-    volume_shape = (cryos.grid_size,)*3
+    volume_shape = cryos.volume_shape
     volume_size = int(np.prod(volume_shape))
     vol_norm = np.sqrt(volume_size)
 

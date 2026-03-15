@@ -356,7 +356,7 @@ def post_process_from_filter(cryo, Ft_ctf, F_ty, tau=None, disc_type='nearest', 
     kernel = 'triangular' if disc_type == 'linear_interp' else 'square'
     return post_process_from_filter_v2(
         Ft_ctf, F_ty,
-        (cryo.grid_size,)*3, 1,
+        cryo.volume_shape, 1,
         tau=tau, kernel=kernel,
         use_spherical_mask=use_spherical_mask, grid_correct=grid_correct,
         gridding_correct=gridding_correct, kernel_width=kernel_width,
@@ -454,7 +454,7 @@ def relion_reconstruct(cryo, noise_variance, batch_size=100, disc_type='linear_i
     )
     kernel = 'triangular' if disc_type == 'linear_interp' else 'square'
     estimate = post_process_from_filter_v2(
-        Ft_ctf, F_ty, (cryo.grid_size,)*3, upsampling_factor,
+        Ft_ctf, F_ty, cryo.volume_shape, upsampling_factor,
         tau=tau, kernel=kernel,
         use_spherical_mask=use_spherical_mask, grid_correct=grid_correct,
         gridding_correct=gridding_correct, kernel_width=1,

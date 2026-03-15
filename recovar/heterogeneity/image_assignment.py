@@ -27,7 +27,7 @@ def compute_image_assignment(experiment_dataset, volumes, noise_variance, batch_
 
     if disc_type == 'cubic':
         from recovar.heterogeneity import covariance_estimation
-        volumes = covariance_estimation.compute_spline_coeffs_in_batch(volumes, (experiment_dataset.grid_size,)*3, gpu_memory=None)
+        volumes = covariance_estimation.compute_spline_coeffs_in_batch(volumes, experiment_dataset.volume_shape, gpu_memory=None)
 
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
 
@@ -50,7 +50,7 @@ def estimate_false_positive_rate(experiment_dataset, volumes, noise_variance, ba
 
     if disc_type == 'cubic':
         from recovar.heterogeneity import covariance_estimation
-        volumes = covariance_estimation.compute_spline_coeffs_in_batch(volumes, (experiment_dataset.grid_size,)*3, gpu_memory=None)
+        volumes = covariance_estimation.compute_spline_coeffs_in_batch(volumes, experiment_dataset.volume_shape, gpu_memory=None)
 
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
 

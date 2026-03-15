@@ -186,7 +186,7 @@ def test_precompute_triangular_kernel_shapes():
 
     XWX, F = akd.precompute_triangular_kernel(cryo, noise_variance, pol_degree=0)
 
-    half_vol_size = int(np.prod(akd.volume_shape_to_half_volume_shape((cryo.grid_size,)*3)))
+    half_vol_size = int(np.prod(akd.volume_shape_to_half_volume_shape(cryo.volume_shape)))
     gram_size = akd.small_gram_matrix_size(0)
     feat_size = akd.get_feature_size(0)
 
@@ -204,7 +204,7 @@ def test_precompute_kernel_shapes():
 
     XWX, F = akd.precompute_kernel(cryo, noise_variance, pol_degree=0)
 
-    half_vol_size = int(np.prod(akd.volume_shape_to_half_volume_shape((cryo.grid_size,)*3)))
+    half_vol_size = int(np.prod(akd.volume_shape_to_half_volume_shape(cryo.volume_shape)))
     gram_size = akd.small_gram_matrix_size(0)
     feat_size = akd.get_feature_size(0)
 
@@ -226,7 +226,7 @@ def test_precompute_kernel_with_heterogeneity_bins():
         heterogeneity_bins=het_bins,
     )
 
-    half_vol_size = int(np.prod(akd.volume_shape_to_half_volume_shape((cryo.grid_size,)*3)))
+    half_vol_size = int(np.prod(akd.volume_shape_to_half_volume_shape(cryo.volume_shape)))
     assert XWX.shape == (half_vol_size, akd.small_gram_matrix_size(0), n_bins)
     assert F.shape == (half_vol_size, akd.get_feature_size(0), n_bins)
 
@@ -306,7 +306,7 @@ def test_even_less_naive_matches_reference_bin_loop(gpu_device):
         for idx in range(n_bins):
             est = relion_functions.post_process_from_filter_v2(
                 lhs_ref[idx], rhs_ref[idx],
-                (cryo.grid_size,)*3, 1,
+                cryo.volume_shape, 1,
                 tau=None, kernel="triangular",
                 use_spherical_mask=False, grid_correct=False,
                 input_half_volume=True,

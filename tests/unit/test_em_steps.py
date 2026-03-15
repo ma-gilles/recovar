@@ -201,8 +201,8 @@ def test_M_with_precompute_handles_small_rotation_count_without_zero_batch(monke
         image_size = 4
         image_shape = (2, 2)
         n_images = 1
-        grid_size = 2
-        volume_size = 8
+        grid_size = 8
+        volume_size = 5
         dtype = jnp.float32
         CTF_params = np.zeros((1, 9), dtype=np.float32)
         ctf_evaluator = staticmethod(lambda params, _shape, _voxel: jnp.ones((params.shape[0], 4), dtype=jnp.float32))
@@ -241,8 +241,8 @@ def test_M_with_precompute_handles_small_rotation_count_without_zero_batch(monke
 
     ft_y, ft_ctf = m_step.M_with_precompute(_Dataset(), probs, rots, trans, noise, "linear_interp")
 
-    np.testing.assert_allclose(np.asarray(ft_y), np.ones((8,), dtype=np.float32), atol=1e-6)
-    np.testing.assert_allclose(np.asarray(ft_ctf), np.ones((8,), dtype=np.float32) * 2.0, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(ft_y), np.ones((5,), dtype=np.float32), atol=1e-6)
+    np.testing.assert_allclose(np.asarray(ft_ctf), np.ones((5,), dtype=np.float32) * 2.0, atol=1e-6)
 
 
 def test_E_with_precompute_rejects_empty_rotations_or_translations():

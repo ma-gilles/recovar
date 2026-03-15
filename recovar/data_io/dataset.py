@@ -104,7 +104,7 @@ class CryoEMDataset:
 
     __slots__ = (
         # Grid geometry
-        'voxel_size', 'grid_size',
+        'voxel_size', 'grid_size', 'volume_shape', 'volume_size',
         # Image stack and image geometry
         'image_stack', 'image_shape', 'image_size', 'n_images', 'padding',
         # Processing flags
@@ -141,6 +141,8 @@ class CryoEMDataset:
 
         self.voxel_size = voxel_size
         self.grid_size = grid_size
+        self.volume_shape = (grid_size, grid_size, grid_size)
+        self.volume_size = grid_size ** 3
 
         # --- Image stack and image geometry ---
         if image_stack is None:
@@ -263,14 +265,14 @@ class CryoEMDataset:
         return self.compute_CTF(self.CTF_params[indices])
 
     def get_volume_radial_mask(self, radius = None):
-        return mask.get_radial_mask((self.grid_size,)*3, radius = radius).reshape(-1)
+        return mask.get_radial_mask(self.volume_shape, radius = radius).reshape(-1)
 
 
     def get_image_radial_mask(self, radius = None):        
         return mask.get_radial_mask(self.image_shape, radius = radius).reshape(-1)
 
     def get_proj(self, X, to_real = np.real, axis = 0, hide_padding = True):
-        im = to_real(fourier_transform_utils.get_idft2(jnp.take(X.reshape((self.grid_size,)*3), self.grid_size//2, axis = axis)))
+        im = to_real(fourier_transform_utils.get_idft2(jnp.take(X.reshape(self.volume_shape), self.grid_size//2, axis = axis)))
         if hide_padding:
             im = im[self.hpad:self.image_stack.unpadded_D + self.hpad,self.hpad:self.image_stack.unpadded_D + self.hpad]
         return im
@@ -279,11 +281,11 @@ class CryoEMDataset:
     def get_slice(self, X, to_real_fn = np.abs, axis = 0):
         # zero_th freq
         z_freq = self.grid_size//2 +1
-        im = to_real_fn(jnp.take(X.reshape((self.grid_size,)*3), z_freq, axis = axis))
+        im = to_real_fn(jnp.take(X.reshape(self.volume_shape), z_freq, axis = axis))
         return im
 
     def get_slice_real(self, X, to_real_fn = np.real, axis = 0):
-        im = to_real_fn(fourier_transform_utils.get_idft3(X.reshape((self.grid_size,)*3)))
+        im = to_real_fn(fourier_transform_utils.get_idft3(X.reshape(self.volume_shape)))
         im2 = jnp.take(im, self.grid_size//2, axis = axis)
         return to_real_fn(im2)
 
@@ -331,13 +333,13 @@ class CryoEMDataset:
 
 
     def plot_FSC(self, image1 = None, image2 = None, filename = None, threshold = 0.5, curve = None, ax = None):
-        score = plot_utils.plot_fsc_new(image1, image2, (self.grid_size,)*3, self.voxel_size,  curve = curve, ax = ax, threshold = threshold, filename = filename)
+        score = plot_utils.plot_fsc_new(image1, image2, self.volume_shape, self.voxel_size,  curve = curve, ax = ax, threshold = threshold, filename = filename)
         return score
     
     def get_image_mask(self, indices, mask, binary = True, soften = 5):
         indices = np.asarray(indices, dtype=int)
         from recovar.heterogeneity import covariance_core # Not sure I want this depency to exist... Could make some circular imports
-        mask = covariance_core.get_per_image_tight_mask(mask, self.rotation_matrices[indices], self.image_stack.mask, self.volume_mask_threshold, self.image_shape, (self.grid_size,)*3, self.grid_size, self.padding, disc_type = 'linear_interp',  binary = binary, soften = soften)
+        mask = covariance_core.get_per_image_tight_mask(mask, self.rotation_matrices[indices], self.image_stack.mask, self.volume_mask_threshold, self.image_shape, self.volume_shape, self.grid_size, self.padding, disc_type = 'linear_interp',  binary = binary, soften = soften)
         mask_ft = fourier_transform_utils.get_dft2(mask).reshape(mask.shape[0], -1)
         # Usually images are translated, here we translate back.
         batch = core.translate_images(mask_ft, -self.translations[indices].astype(int) , self.image_shape)
@@ -433,6 +435,14 @@ class CryoEMHalfsets:
     @property
     def grid_size(self) -> int:
         return self._halves[0].grid_size
+
+    @property
+    def volume_shape(self) -> Tuple[int, int, int]:
+        return self._halves[0].volume_shape
+
+    @property
+    def volume_size(self) -> int:
+        return self._halves[0].volume_size
 
     @property
     def voxel_size(self) -> float:

@@ -172,7 +172,7 @@ def M_with_precompute(experiment_dataset, probabilities, rotations, translations
 
     data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = image_indices)
 
-    Ft_y, Ft_ctf = jnp.zeros((experiment_dataset.grid_size**3), dtype = experiment_dataset.dtype), jnp.zeros((experiment_dataset.grid_size**3), experiment_dataset.dtype)
+    Ft_y, Ft_ctf = jnp.zeros((experiment_dataset.volume_size), dtype = experiment_dataset.dtype), jnp.zeros((experiment_dataset.volume_size), experiment_dataset.dtype)
 
     mult = 5
     rotation_batch = max(1, rotations.shape[0] // mult)

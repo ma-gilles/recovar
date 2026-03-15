@@ -154,8 +154,8 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
         ``None`` unless *compute_bias* is ``True``.
     """
 
-    if u.shape[0] != cryos.grid_size**3:
-        raise ValueError(f"input u should be volume_size x basis_size, got {u.shape[0]} != {cryos.grid_size**3}")
+    if u.shape[0] != cryos.volume_size:
+        raise ValueError(f"input u should be volume_size x basis_size, got {u.shape[0]} != {cryos.volume_size}")
     st_time = time.time()    
     basis = np.asarray(u[:, :basis_size]).T
     eigenvalues = (s + jax_config.ROOT_EPSILON)
@@ -185,9 +185,9 @@ def get_per_image_embedding(mean, u, s, basis_size, cryos, volume_mask, gpu_memo
     if USE_CUBIC:
         disc_type = 'cubic'
         from recovar.core import cubic_interpolation
-        mean = cubic_interpolation.calculate_spline_coefficients(mean.reshape((cryos.grid_size,)*3))
+        mean = cubic_interpolation.calculate_spline_coefficients(mean.reshape(cryos.volume_shape))
         from recovar.heterogeneity import covariance_estimation
-        basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, (cryos.grid_size,)*3, gpu_memory= None)
+        basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, cryos.volume_shape, gpu_memory= None)
 
     ## TODO: I don't love the way this is handled either. Perhaps should be stored in a more clever consistent way
     ## E.g. instantly resort to the right order, when CryoDataset also gets cleaned up
@@ -1148,9 +1148,9 @@ def get_per_image_embedding_multi_zdim(
         actual_disc_type = 'cubic'
         from recovar.core import cubic_interpolation
         from recovar.heterogeneity import covariance_estimation as _cov_est
-        mean_out = cubic_interpolation.calculate_spline_coefficients(mean.reshape((cryos.grid_size,)*3))
+        mean_out = cubic_interpolation.calculate_spline_coefficients(mean.reshape(cryos.volume_shape))
         logger.info("Computing spline coefficients for %d basis vectors (multi-zdim)", max_n_pcs)
-        full_basis = _cov_est.compute_spline_coeffs_in_batch(full_basis, (cryos.grid_size,)*3, gpu_memory=None)
+        full_basis = _cov_est.compute_spline_coeffs_in_batch(full_basis, cryos.volume_shape, gpu_memory=None)
 
     dtype = full_basis.dtype
 

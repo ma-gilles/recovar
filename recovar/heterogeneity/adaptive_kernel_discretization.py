@@ -653,7 +653,7 @@ def estimate_from_relion_style(cryos, discretization_params, XWXs, Fs, volume_sh
     if pol_degree != 0:
         raise NotImplementedError("Only p = 0 supported for now")
 
-    volume_size = np.prod((cryos.grid_size,)*3)
+    volume_size = np.prod(cryos.volume_shape)
     from recovar.reconstruction import relion_functions
 
     # Polynomial estimates
@@ -698,7 +698,7 @@ def estimate_multiple_disc_relion_style(experiment_datasets, noise_variance, dis
 
 
     n_bins = 1 if heterogeneity_bins is None else heterogeneity_bins.size
-    first_estimates = np.zeros((n_disc_test, n_bins,  2, experiment_datasets[0].grid_size**3), dtype = np.complex64)
+    first_estimates = np.zeros((n_disc_test, n_bins,  2, experiment_datasets[0].volume_size), dtype = np.complex64)
 
 
     for idx, disc_params_this in enumerate(discretization_params):
@@ -764,7 +764,7 @@ def pick_best_heterogeneity_from_residual(estimates, full_test_dataset, heteroge
             all_params.append((*param, bin))
             
 
-    index_array_vol, disc_choices, residuals_averaged = pick_best_params(residuals, all_params, (test_dataset.grid_size,)*3)
+    index_array_vol, disc_choices, residuals_averaged = pick_best_params(residuals, all_params, test_dataset.volume_shape)
 
     summed_residuals = jnp.sum(residuals, axis = 0)
     return index_array_vol, disc_choices, residuals_averaged, summed_residuals
@@ -908,7 +908,7 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, noise_varia
 
     final_estimates = 0
     n_disc_test = len(discretization_params)
-    volume_size = experiment_datasets[0].grid_size**3
+    volume_size = experiment_datasets[0].volume_size
     # Compute weights for each discretization
     n_bins = heterogeneity_bins.size
     final_estimates = np.zeros((n_disc_test, n_bins, volume_size, get_feature_size(max_pol_degree)), dtype = np.complex64)
@@ -977,7 +977,7 @@ def naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, 
             Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(test_dataset , noise_variance.astype(np.float32),  batch_size,  disc_type = disc_type, upsampling_factor=1)
 
             kernel_type = 'triangular' if disc_type == 'linear_interp' else 'square'
-            estimate = relion_functions.post_process_from_filter_v2(Ft_ctf, F_ty, (test_dataset.grid_size,)*3, 1, tau = tau, kernel = kernel_type, use_spherical_mask = False, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
+            estimate = relion_functions.post_process_from_filter_v2(Ft_ctf, F_ty, test_dataset.volume_shape, 1, tau = tau, kernel = kernel_type, use_spherical_mask = False, grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1 )
 
             lhs.append(np.array(Ft_ctf))
             rhs.append(np.array(F_ty))
@@ -1014,7 +1014,7 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
         estimate = relion_functions.post_process_from_filter_v2(
             XWX[idx],
             F[idx],
-            (experiment_dataset.grid_size,)*3, 2,
+            experiment_dataset.volume_shape, 2,
             tau = tau, kernel = kernel_type, use_spherical_mask = True,
             grid_correct = grid_correct, gridding_correct = "square", kernel_width = 1,
             input_half_volume=True,
@@ -1121,7 +1121,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
         estimate = relion_functions.post_process_from_filter_v2(
             lhs_all[idx],
             rhs_all[idx],
-            (experiment_dataset.grid_size,)*3, vol_upsample,
+            experiment_dataset.volume_shape, vol_upsample,
             tau = tau, kernel = kernel_type,
             use_spherical_mask = use_spherical_mask, grid_correct = grid_correct,
             gridding_correct = "square", kernel_width = 1,
