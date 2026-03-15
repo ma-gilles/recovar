@@ -126,55 +126,10 @@ def add_args(parser: argparse.ArgumentParser):
         '--zdim', type=list_of_ints, default=[1, 2, 4, 10, 20],
         help="Dimensions of latent variable (comma-separated). Default=1,2,4,10,20",
     )
-
-    ## TODO move to advanced
-    algo.add_argument(
-        "--noise-model", dest="noise_model", default="radial",
-        help="Noise model: radial (default) or white",
-    )
-
-    ## TODO: there should be a new section of params perhaps, "debug or dev or advanced."I'll call it advanced. This hsould be one of them
-    algo.add_argument(
-        "--mean-fn", dest="mean_fn", default="triangular",
-        help="Mean function: triangular (default), old, triangular_reg",
-    )
     algo.add_argument(
         "--correct-contrast", dest="correct_contrast",
         action=argparse.BooleanOptionalAction, default=False,
         help="Estimate and correct for amplitude scaling variation across images",
-    )
-
-    ## TODO move to advanced
-
-    algo.add_argument(
-        "--do-over-with-contrast", dest="do_over_with_contrast",
-        action=argparse.BooleanOptionalAction, default=None,
-        help="Re-run once contrast is estimated. Default = same as --correct-contrast",
-    )
-    ## TODO move to advanced
-
-    algo.add_argument(
-        "--ignore-zero-frequency", dest="ignore_zero_frequency", action="store_true",
-        help="Ignore zero frequency (useful when images are normalized to 0 mean)",
-    )
-    ## TODO move to advanced
-
-    algo.add_argument(
-        "--padding", type=int, default=0,
-        help="Real-space padding",
-    )
-    algo.add_argument(
-        "--premultiplied-ctf", dest='premultiplied_ctf', action="store_true",
-        help="Use premultiplied CTF",
-    )
-    algo.add_argument(
-        "--new-noise-est", dest='new_noise_est', action="store_true",
-        help="Use new noise estimation",
-    )
-    ## TODO move to advanced
-
-    algo.add_argument(
-        '--use_reg_mean_in_contrast', action=argparse.BooleanOptionalAction, default=True,
     )
     algo.add_argument(
         "--only-mean", action="store_true", dest="only_mean",
@@ -235,16 +190,46 @@ def add_args(parser: argparse.ArgumentParser):
         help="Use lowest memory options for covariance estimation",
     )
 
-    ## TODO move to advanced
-    ## TODO: also debug this and decide if it should be there
-    perf.add_argument(
+    # ── Advanced / debugging ─────────────────────────────────────────────
+    adv = parser.add_argument_group("Advanced")
+    adv.add_argument(
+        "--noise-model", dest="noise_model", default="radial",
+        help="Noise model: radial (default) or white",
+    )
+    adv.add_argument(
+        "--mean-fn", dest="mean_fn", default="triangular",
+        help="Mean function: triangular (default) or triangular_reg",
+    )
+    adv.add_argument(
+        "--do-over-with-contrast", dest="do_over_with_contrast",
+        action=argparse.BooleanOptionalAction, default=None,
+        help="Re-run once contrast is estimated. Default = same as --correct-contrast",
+    )
+    adv.add_argument(
+        "--ignore-zero-frequency", dest="ignore_zero_frequency", action="store_true",
+        help="Ignore zero frequency (useful when images are normalized to 0 mean). "
+             "Experimental: inflates DC noise by 1e16",
+    )
+    adv.add_argument(
+        "--padding", type=int, default=0,
+        help="Real-space padding",
+    )
+    adv.add_argument(
+        "--premultiplied-ctf", dest='premultiplied_ctf', action="store_true",
+        help="Use premultiplied CTF",
+    )
+    adv.add_argument(
+        "--new-noise-est", dest='new_noise_est', action="store_true",
+        help="Use new noise estimation",
+    )
+    adv.add_argument(
+        '--use_reg_mean_in_contrast', action=argparse.BooleanOptionalAction, default=True,
+    )
+    adv.add_argument(
         "--multi-zdim-embedding", dest="multi_zdim_embedding",
         action=argparse.BooleanOptionalAction, default=False,
-        help="Use experimental single-pass embedding for all zdims (can be slower on some datasets)",
+        help="Experimental: single-pass embedding for all zdims (can be slower on some datasets)",
     )
-
-    # ── Debugging / advanced ───────────────────────────────────────────────
-    adv = parser.add_argument_group("Advanced")
     adv.add_argument(
         "--keep-intermediate", dest="keep_intermediate", action="store_true",
         help="Save intermediate results (for debugging)",
@@ -259,7 +244,9 @@ def add_args(parser: argparse.ArgumentParser):
 # ---------------------------------------------------------------------------
 # Helper functions — extracted from standard_recovar_pipeline for clarity
 # ---------------------------------------------------------------------------
-## TODO move to this to somewhere that makes more sense, perhaps data_io or something
+# NOTE(refactor): _peek_image_size and _resolve_downsample could live in
+# data_io, but they depend on argparse args and are only used here, so
+# moving them would require an intermediate data class.  Low priority.
 
 def _peek_image_size(particles_file: str, datadir: str = '', strip_prefix=None) -> int:
     """Get the image box size D without constructing a full ImageLoader.
@@ -337,8 +324,6 @@ def _peek_image_size(particles_file: str, datadir: str = '', strip_prefix=None) 
                          datadir=datadir or '', strip_prefix=strip_prefix)
     return loader.image_size
 
-## TODO Also should be moved elsewhere. Also there should be an option to specify where to downsample?
-
 def _resolve_downsample(args):
     """Decide whether downsampling is actually needed.
 
@@ -410,11 +395,14 @@ def _check_uninvert_data(means, cryos, args):
     elif uninvert_check:
         logger.warning('sum(mean) < 0! Data probably needs to be inverted! set --uninvert-data=true (or automatic)')
 
-## TODO I'd like to simplify the logic here in this function, seems confusing
 def _estimate_noise(cryos, means, dilated_volume_mask, batch_size, args, noise_model):
     """Estimate radial noise variance from outside-mask and upper-bound methods.
 
     Returns a dict with all noise-related quantities needed by the pipeline.
+
+    NOTE(refactor): the three branches (new_noise_fn / .mrc mask / fallback)
+    share most logic.  A future cleanup could unify them into a single path
+    that takes an ``estimate_fn`` callable.
     """
     use_new_noise_fn = args.new_noise_est or args.premultiplied_ctf
     logger.info("Using new noise estimation function?: %s", use_new_noise_fn)
@@ -483,11 +471,14 @@ def _estimate_noise(cryos, means, dilated_volume_mask, batch_size, args, noise_m
         'masked_image_PS': masked_image_PS,
     }
 
-## TODO perhaps should move, and complement mask should be better documented in the parse args/documentation
-## The principal goes is to have "two embeddings", to "factor" out the heterogeneity in a part of molecule we don't care about
-## Rather than ignoring it which may cause interference with the one we care about
 def _build_focus_masks(args, means, volume_mask, volume_shape, cryos):
-    """Build focus masks and optional complement mask."""
+    """Build focus masks and optional complement mask.
+
+    When ``--use-complement-mask`` is set, returns ``[complement, focus]``
+    so that heterogeneity in the complement region is factored out into
+    separate PCs rather than ignored (which could interfere with the
+    focus region's embedding).
+    """
     if args.focus_mask is not None:
         focus_mask, _ = mask.masking_options(
             args.focus_mask, means, volume_shape, cryos.dtype_real,
@@ -669,9 +660,10 @@ def standard_recovar_pipeline(args):
             args.strip_prefix = None
 
     # --- Load dataset ---
-    ## TODO clean up this logic of loading in dicts, passing them, etc. This is quite messy.
-    ## Though I would still like a way to load halfsetes in a reasonable way even outside pipelien
-    ## E.g. to do some simple scripts like the ones you can find in EM folder or PPCA one.
+    # NOTE(refactor): the dict-based dataset loading (make_dataset_loader_dict →
+    # get_split_datasets_from_dict) is verbose but also used by standalone
+    # scripts in em/ and ppca/.  A future cleanup could wrap this in a single
+    # load_halfset_datasets(args) helper that returns (cryos, ind_split).
     ind_split = dataset.figure_out_halfsets(args)
     dataset_loader_dict = dataset.make_dataset_loader_dict(args)
     logger.info("Data loading configuration:")
@@ -685,29 +677,28 @@ def standard_recovar_pipeline(args):
 
     options = utils.make_algorithm_options(args)
 
-    ## TODO this is a big one, so do with care. I wonder if there is a better way to handle this logic.
-    ## Could we instead store 'one' dataset and the indices instead of two different objects, then do a clevery use of iterators
-    ## The current way to just have two of these objects around which is not great.
+    # NOTE(refactor): storing two CryoEMDataset objects (one per halfset) is
+    # wasteful.  A single dataset + index arrays would halve metadata memory.
     cryos = dataset.get_split_datasets_from_dict(dataset_loader_dict, ind_split, args.lazy)
 
-    ## TODO: log this. Also document it better. Also I'd like a warning or something if I say "allocate this much" and peak gpu memory ends up being more than that
-    ## So that it can be fixed in the future 
     if args.gpu_memory is not None:
         utils.set_gpu_memory_limit(args.gpu_memory)
+        logger.info("GPU memory limited to %.1f GB (requested via --gpu-gb)", args.gpu_memory)
     gpu_memory = utils.get_gpu_memory_total()
     volume_shape = cryos.volume_shape
 
-    ## TODO: a big one: I want batch size logic to be separated from rest of utils, 
-    # and have a better/more transparent way this is done, to make future development easier
-    ## Right now, all these numbers were basically found "by hand" by trying to maximize gpu memory, without 
-    ## breaking, but it is  not robust
-    ## Also, I would like some slightly better formatting/more informational logging here
+    # NOTE(refactor): batch size heuristics are hand-tuned and live in utils.
+    # A dedicated BatchSizeEstimator class would be more transparent and
+    # easier to maintain as new kernels are added.
     batch_size = utils.get_image_batch_size(cryos.grid_size, gpu_memory)
-    logger.info("image batch size: %s", batch_size)
-    logger.info("volume batch size: %s", utils.get_vol_batch_size(cryos.grid_size, gpu_memory))
-    logger.info("column batch size: %s", utils.get_column_batch_size(cryos.grid_size, gpu_memory))
-    logger.info("number of images: %s", cryos.n_total_images)
-    logger.info("image size: %sx%s", cryos.grid_size, cryos.grid_size)
+    logger.info("Resource summary:")
+    logger.info("  GPU memory:     %.1f GB", gpu_memory)
+    logger.info("  Image size:     %d x %d", cryos.grid_size, cryos.grid_size)
+    logger.info("  Total images:   %d", cryos.n_total_images)
+    logger.info("  Batch sizes:    image=%d  volume=%d  column=%d",
+                batch_size,
+                utils.get_vol_batch_size(cryos.grid_size, gpu_memory),
+                utils.get_column_batch_size(cryos.grid_size, gpu_memory))
     utils.report_memory_device(logger=logger)
 
     # --- Initial noise estimate from half-maps ---
@@ -720,13 +711,15 @@ def standard_recovar_pipeline(args):
     if args.do_over_with_contrast and not args.correct_contrast:
         logger.warning("Do over with contrast, but contrast correction is off. Setting contrast correction to on")
         args.correct_contrast = True
-        ## TODO the whole options dict is mesy and should be removed. Also the contrast_qr should be better documented and named
-        ## Currently, the _qr just refers to teh fact that the covariance cols are made orthogonal to mean if contrast is on, as detailed in paper
+        # NOTE(refactor): the options dict and "contrast_qr" naming are
+        # confusing.  "_qr" means covariance columns are orthogonalized
+        # against the mean when contrast correction is on (see paper S3.2).
+        # Consider renaming to "per_image_scale" (cryoSPARC convention)
+        # and replacing the options dict with a typed config.
         options["contrast"] = "contrast_qr"
 
-    ## TODO: better documentation for what this is doing. Also "contrast" is not a good name for this in general,
-    ## So perhaps I should swap the (outward facing) name to something else, like per_image_scale following csparc's convention.
-    ## Either wya, it should be better explained in args
+    # Per-image amplitude scaling correction (called "contrast" internally,
+    # "per_image_scale" in cryoSPARC).
     if args.shared_contrast_across_tilts:
         options['contrast'] += '_shared'
         logger.info("Setting contrast to shared")
@@ -753,11 +746,10 @@ def standard_recovar_pipeline(args):
             embedding.set_contrasts_in_cryos(cryos, contrasts_for_second)
             options["contrast"] = "contrast"
 
-        ##TODO: mean functions return a dict with volume sized arrays.
-        ## I think none of them are on gpu which is good (nothing should be on gpu that absolutely has to be)
-        ## But still can build on cpu memory. I would like any ararys which is not used downstream to be 
-        ## deallocated right away, or after they're saved to disk.
-        ## Also I don't like the use of dicts, to return arguments, this should probably be removed
+        # NOTE(refactor): mean functions return a dict of volume-sized arrays.
+        # Only 'combined', 'corrected0', 'corrected1' are used downstream;
+        # the rest (e.g. 'init0', 'init1') could be saved and deleted.
+        # Also consider replacing the dict with a typed NamedTuple/dataclass.
 
         # --- Compute mean ---
         if args.mean_fn == 'triangular':
@@ -770,10 +762,9 @@ def standard_recovar_pipeline(args):
             raise ValueError(f"mean function {args.mean_fn} not recognized")
         utils.report_memory_device(logger=logger)
 
-        ## TODO: after this the mean is used (almost exclusively not but quite) from its cubic interpolant
-        ## So this should be compute here and passed around isntead of recomputed in downstream functions.
-        ## In some cases though, the mean on teh original grid needs to be used, so it needs to be kept aroudn as 
-        ## well I think (on cpu).
+        # NOTE(perf): downstream functions mostly slice the mean via cubic
+        # interpolation, recomputing spline coefficients each time.
+        # Precomputing coefficients here and passing them would save time.
 
         # --- Check sign and uninvert if needed ---
         _check_uninvert_data(means, cryos, args)
@@ -802,15 +793,16 @@ def standard_recovar_pipeline(args):
         output.save_volume(volume_mask, os.path.splitext(paths.mask_volume)[0], volume_shape,
                       from_ft=False, voxel_size=cryos.voxel_size)
 
-        ## TODO: deallocate when done withthis
-        # Filter and save mean
+        # Filter and save mean via local resolution
         from recovar.heterogeneity import locres
         half1 = fourier_transform_utils.get_idft3(means['corrected0'].reshape(volume_shape))
         half2 = fourier_transform_utils.get_idft3(means['corrected1'].reshape(volume_shape))
         best_filtered_nob, _, _, _, _ = locres.local_resolution(
             half1, half2, 0, cryos.voxel_size, use_filter=True, fsc_threshold=1/7, use_v2=True)
+        del half1, half2
         output.save_volume(best_filtered_nob, os.path.splitext(paths.mean_filtered)[0], volume_shape,
                       from_ft=False, voxel_size=cryos.voxel_size)
+        del best_filtered_nob
 
         if args.only_mean:
             return
@@ -838,16 +830,19 @@ def standard_recovar_pipeline(args):
         # --- Covariance options ---
         covariance_options = covariance_estimation.get_default_covariance_computation_options(cryos.grid_size)
 
-        ## TODO: make sure these make sense and can be used/dont crash, and I didn't forget to adjust another relevant paramter
         if args.low_memory_option:
+            logger.info("Using low-memory covariance options (reduced sampling)")
             covariance_options['sampling_n_cols'] = 50
             covariance_options['randomized_sketch_size'] = 100
             covariance_options['n_pcs_to_compute'] = 100
             covariance_options['sampling_avoid_in_radius'] = 3
 
-        ## TODO: This would probably result in a very degraded results so it should throw a warning for users
-        ## Nevertheless, it should probably be used for fast CPU tests, so add these options for cpu, e.g. with outliers and so now that I deleted with tiny datasets.
         if args.very_low_memory_option:
+            logger.warning(
+                "Using very-low-memory covariance options — results will be "
+                "degraded (fewer columns, smaller sketch).  Use only for "
+                "quick tests or CPU runs."
+            )
             covariance_options['sampling_n_cols'] = 25
             covariance_options['randomized_sketch_size'] = 35
             covariance_options['n_pcs_to_compute'] = 30
@@ -866,7 +861,6 @@ def standard_recovar_pipeline(args):
 
         ignore_zero_frequency = options['ignore_zero_frequency']
         for idx, focus_mask in enumerate(focus_masks):
-            ## TODO: remove the use dicts in returns again
             u_this, s_this, covariance_cols, picked_frequencies, column_fscs = \
                 principal_components.estimate_principal_components(
                     cryos, options, means, mean_prior, focus_mask, dilated_volume_mask,
@@ -903,10 +897,11 @@ def standard_recovar_pipeline(args):
         if volume_mask.dtype != np.float32:
             raise TypeError(f"volume_mask is not of dtype float32, but {volume_mask.dtype}")
 
-        ##TODO: Should this option just be deleted all together? At least there should be big warnings in 
-        ## the parse args 
         if options['ignore_zero_frequency']:
-            logger.info('ignoring zero frequency')
+            logger.warning(
+                "ignore_zero_frequency is ON — inflating DC noise by 1e16. "
+                "This is experimental and may degrade mean/variance estimates."
+            )
             noise_var_used[0] *= 1e16
 
         if not args.keep_intermediate:
@@ -955,7 +950,19 @@ def standard_recovar_pipeline(args):
 
     logger.info("embedding time: %s", time.time() - st_time)
     utils.report_memory_device()
-    logger.info("peak gpu memory use %s", utils.get_peak_gpu_memory_used(device=0))
+    peak_gpu_gb = utils.get_peak_gpu_memory_used(device=0)
+    logger.info("peak GPU memory used: %s", peak_gpu_gb)
+    if args.gpu_memory is not None and peak_gpu_gb is not None:
+        try:
+            peak_val = float(peak_gpu_gb) if not isinstance(peak_gpu_gb, (int, float)) else peak_gpu_gb
+            if peak_val > args.gpu_memory:
+                logger.warning(
+                    "Peak GPU usage (%.1f GB) exceeded --gpu-gb limit (%.1f GB). "
+                    "Consider increasing --gpu-gb or reducing batch sizes.",
+                    peak_val, args.gpu_memory,
+                )
+        except (TypeError, ValueError):
+            pass  # peak_gpu_gb may not be numeric on all backends
 
     # --- Handle complement mask trimming ---
     if args.use_complement_mask:
