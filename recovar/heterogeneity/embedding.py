@@ -543,7 +543,7 @@ def _compute_batch_coords_p1(
         AU_t_images = batch_x_T_y(AUs, batch)
         image_T_A_mean = batch_x_T_y(batch, projected_mean)
         # Use half-spectrum CTF when operating in half space
-        CTF = config.compute_ctf_half(ctf_params) if hermitian_weights is not None else config.compute_ctf(ctf_params)
+        CTF = config.compute_ctf(ctf_params, half_image=(hermitian_weights is not None))
         AUs *= CTF[..., None]
         projected_mean *= CTF
     else:

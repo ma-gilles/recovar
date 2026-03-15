@@ -1093,8 +1093,7 @@ def reduce_covariance_inner(
     AUs = AUs.transpose(1, 2, 0)
 
     if config.premultiplied_ctf:
-        CTF = (config.compute_ctf_half(ctf_params) if hermitian_weights is not None
-               else config.compute_ctf(ctf_params))
+        CTF = config.compute_ctf(ctf_params, half_image=(hermitian_weights is not None))
         batch = batch - projected_mean * CTF
         AU_t_images = batch_x_T_y(AUs, batch)
         AUs = AUs * CTF[..., None]

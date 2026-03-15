@@ -169,7 +169,7 @@ def batch_vol_forward_from_map(
         half_volume=half_volume, half_image=half_image,
     )
     if not skip_ctf:
-        ctf = config.compute_ctf_half(ctf_params) if half_image else config.compute_ctf(ctf_params)
+        ctf = config.compute_ctf(ctf_params, half_image=half_image)
         slices = slices * ctf[jnp.newaxis]
     return slices
 

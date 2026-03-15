@@ -54,13 +54,18 @@ class ForwardModelConfig(eqx.Module):
     data_multiplier: float = eqx.field(static=True, default=1.0)
     process_fn: Optional[Callable] = eqx.field(static=True, default=None)
 
-    def compute_ctf(self, ctf_params: jax.Array) -> jax.Array:
-        """Compute CTF values for a batch of images (full spectrum)."""
-        return self.ctf(ctf_params, self.image_shape, self.voxel_size)
+    def compute_ctf(self, ctf_params: jax.Array, *, half_image: bool = False) -> jax.Array:
+        """Compute CTF values for a batch of images.
+
+        Parameters
+        ----------
+        half_image : if True, evaluate on the rfft-packed half-spectrum grid.
+        """
+        return self.ctf(ctf_params, self.image_shape, self.voxel_size, half_image=half_image)
 
     def compute_ctf_half(self, ctf_params: jax.Array) -> jax.Array:
-        """Compute CTF at half-spectrum (rfft-packed) frequencies."""
-        return self.ctf(ctf_params, self.image_shape, self.voxel_size, half_image=True)
+        """Convenience alias for ``compute_ctf(ctf_params, half_image=True)``."""
+        return self.compute_ctf(ctf_params, half_image=True)
 
     def compute_ctf_at_shape(self, ctf_params: jax.Array, image_shape: Tuple[int, int]) -> jax.Array:
         """Compute CTF on a different frequency grid (e.g. upsampled)."""

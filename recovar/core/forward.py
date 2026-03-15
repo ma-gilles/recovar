@@ -46,8 +46,7 @@ def forward_model(
         half_volume=half_volume, half_image=half_image,
     )
     if not skip_ctf:
-        ctf = config.compute_ctf_half(ctf_params) if half_image else config.compute_ctf(ctf_params)
-        slices = slices * ctf
+        slices = slices * config.compute_ctf(ctf_params, half_image=half_image)
     return slices
 
 
@@ -90,8 +89,7 @@ def adjoint_forward_model(
         ``(N0 * N1 * (N2 // 2 + 1),)``.  Only supported with CUDA.
     """
     if not skip_ctf:
-        ctf = config.compute_ctf_half(ctf_params) if half_image else config.compute_ctf(ctf_params)
-        slices = slices * ctf
+        slices = slices * config.compute_ctf(ctf_params, half_image=half_image)
     return adjoint_slice_volume(
         slices, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
         volume=volume, half_image=half_image, half_volume=half_volume,

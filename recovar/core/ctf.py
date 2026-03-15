@@ -144,50 +144,51 @@ def as_ctf_evaluator(fn_or_evaluator):
 # ---------------------------------------------------------------------------
 
 @jax.jit
-def evaluate_ctf(freqs, dfu, dfv, dfang, volt, cs, w, phase_shift, bfactor):
-    """Evaluate the Contrast Transfer Function at given frequencies.
+def evaluate_ctf(freqs, ctf_params):
+    """Evaluate the Contrast Transfer Function for a batch of images.
 
-    Args:
-        freqs: 2-D frequency coordinates, shape ``(..., 2)`` in 1/Angstrom.
-        dfu: Defocus U in Angstroms.
-        dfv: Defocus V in Angstroms.
-        dfang: Astigmatism angle in degrees.
-        volt: Accelerating voltage in kV.
-        cs: Spherical aberration in mm.
-        w: Amplitude contrast fraction (0-1).
-        phase_shift: Phase shift in degrees.
-        bfactor: B-factor for envelope decay in Angstroms squared.
+    Broadcasts per-image parameters over a shared frequency grid in a
+    single fused kernel (no vmap).
 
-    Returns:
-        CTF values with the same shape as ``freqs[..., 0]``.
+    Parameters
+    ----------
+    freqs : array ``(n_pixels, 2)``
+        Shared frequency coordinates in 1/Angstrom.
+    ctf_params : array ``(n_images, K)``
+        Packed CTF parameters per image.  Layout: ``[DFU, DFV, DFANG,
+        VOLT, CS, W, PHASE_SHIFT, BFACTOR, CONTRAST, ...]`` — see
+        :class:`CTFParamIndex`.
+
+    Returns
+    -------
+    array ``(n_images, n_pixels)``
     """
-    if freqs.shape[-1] != 2:
-        raise ValueError(f"freqs last dimension must be 2, got {freqs.shape[-1]}")
-    volt = volt * 1000
-    cs = cs * 10**7
-    dfang = dfang * jnp.pi / 180
-    phase_shift = phase_shift * jnp.pi / 180
+    # Per-image params → (n_images, 1) for broadcasting with (n_pixels,)
+    dfu = ctf_params[:, CTFParamIndex.DFU, None]
+    dfv = ctf_params[:, CTFParamIndex.DFV, None]
+    dfang = ctf_params[:, CTFParamIndex.DFANG, None] * (jnp.pi / 180)
+    volt = ctf_params[:, CTFParamIndex.VOLT, None] * 1000
+    cs = ctf_params[:, CTFParamIndex.CS, None] * 1e7
+    w = ctf_params[:, CTFParamIndex.W, None]
+    phase_shift = ctf_params[:, CTFParamIndex.PHASE_SHIFT, None] * (jnp.pi / 180)
+    bfactor = ctf_params[:, CTFParamIndex.BFACTOR, None]
+    contrast = ctf_params[:, CTFParamIndex.CONTRAST, None]
+
     lam = 12.2642598 / jnp.sqrt(volt * (1.0 + volt * 9.78475598e-7))
 
-    x = freqs[..., 0]
-    y = freqs[..., 1]
+    # Shared frequency grid — (n_pixels,)
+    x = freqs[:, 0]
+    y = freqs[:, 1]
     ang = jnp.arctan2(y, x)
-    s2 = x**2 + y**2
+    s2 = x * x + y * y
+
+    # (n_images, 1) * (n_pixels,) → (n_images, n_pixels)
     df = 0.5 * (dfu + dfv + (dfu - dfv) * jnp.cos(2 * (ang - dfang)))
     gamma = 2 * jnp.pi * (-0.5 * df * lam * s2 + 0.25 * cs * lam**3 * s2**2) - phase_shift
     ctf = (1 - w**2) ** 0.5 * jnp.sin(gamma) - w * jnp.cos(gamma)
     ctf = ctf * jnp.exp(-bfactor / 4 * s2)
-    return ctf
+    return ctf * contrast
 
-
-@jax.jit
-def evaluate_ctf_packed(freqs, ctf):
-    return evaluate_ctf(
-        freqs, ctf[0], ctf[1], ctf[2], ctf[3], ctf[4], ctf[5], ctf[6], ctf[7]
-    ) * ctf[8]
-
-
-batch_evaluate_ctf = jax.vmap(evaluate_ctf_packed, in_axes=(None, 0))
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +240,7 @@ def _compute_spa_ctf(CTF_params, image_shape, voxel_size, *, half_image=False):
         psi = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size, scaled=True)
     else:
         psi = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=True)
-    return batch_evaluate_ctf(psi, CTF_params)
+    return evaluate_ctf(psi, CTF_params)
 
 
 def _compute_spa_ctf_antialiased(CTF_params, image_shape, voxel_size, *, half_image=False):
@@ -308,10 +309,8 @@ __all__ = [
     "as_ctf_evaluator",
     # Parameter indexing
     "CTFParamIndex",
-    # Low-level physics
+    # CTF evaluation
     "evaluate_ctf",
-    "evaluate_ctf_packed",
-    "batch_evaluate_ctf",
     # Dose filters
     "critical_exposure",
     "get_dose_filters",

@@ -17,20 +17,10 @@ def test_core_reexports_ctf_api():
 
 def test_evaluate_ctf_shape():
     freqs = np.array([[0.0, 0.0], [0.1, -0.2]], dtype=np.float32)
-    out = np.asarray(
-        core_ctf.evaluate_ctf(
-            freqs,
-            dfu=15000.0,
-            dfv=15000.0,
-            dfang=0.0,
-            volt=300.0,
-            cs=2.7,
-            w=0.1,
-            phase_shift=0.0,
-            bfactor=0.0,
-        )
-    )
-    assert out.shape == (2,)
+    # Single-image CTF params: [DFU, DFV, DFANG, VOLT, CS, W, PHASE_SHIFT, BFACTOR, CONTRAST]
+    ctf_params = np.array([[15000.0, 15000.0, 0.0, 300.0, 2.7, 0.1, 0.0, 0.0, 1.0]], dtype=np.float32)
+    out = np.asarray(core_ctf.evaluate_ctf(freqs, ctf_params))
+    assert out.shape == (1, 2)
 
 
 def test_critical_exposure_decreases_with_frequency():
@@ -273,15 +263,11 @@ import jax
 @pytest.mark.gpu
 def test_evaluate_ctf_on_gpu(gpu_device):
     freqs = np.array([[0.0, 0.0], [0.1, -0.2], [0.05, 0.15]], dtype=np.float32)
-    cpu_out = np.asarray(
-        core_ctf.evaluate_ctf(freqs, dfu=15000.0, dfv=15000.0, dfang=0.0, volt=300.0, cs=2.7, w=0.1, phase_shift=0.0, bfactor=0.0)
-    )
+    ctf_params = np.array([[15000.0, 15000.0, 0.0, 300.0, 2.7, 0.1, 0.0, 0.0, 1.0]], dtype=np.float32)
+    cpu_out = np.asarray(core_ctf.evaluate_ctf(freqs, ctf_params))
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
-            core_ctf.evaluate_ctf(
-                jax.device_put(freqs), dfu=15000.0, dfv=15000.0, dfang=0.0,
-                volt=300.0, cs=2.7, w=0.1, phase_shift=0.0, bfactor=0.0,
-            )
+            core_ctf.evaluate_ctf(jax.device_put(freqs), jax.device_put(ctf_params))
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
 
@@ -290,10 +276,10 @@ def test_evaluate_ctf_on_gpu(gpu_device):
 def test_batch_evaluate_ctf_on_gpu(gpu_device):
     ctf_params = _make_standard_ctf_params(4)[:, :9]
     psi = np.array([[0.0, 0.0], [0.1, -0.2], [0.05, 0.15]], dtype=np.float32)
-    cpu_out = np.asarray(core_ctf.batch_evaluate_ctf(psi, ctf_params))
+    cpu_out = np.asarray(core_ctf.evaluate_ctf(psi, ctf_params))
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
-            core_ctf.batch_evaluate_ctf(jax.device_put(psi), jax.device_put(ctf_params))
+            core_ctf.evaluate_ctf(jax.device_put(psi), jax.device_put(ctf_params))
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
 
