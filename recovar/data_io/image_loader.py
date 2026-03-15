@@ -18,6 +18,7 @@ from typing import Optional, Tuple, Iterator
 from concurrent.futures import ThreadPoolExecutor
 import logging
 
+from recovar.data_io._index_utils import normalize_indices
 from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
@@ -42,25 +43,7 @@ def _normalize_selection_indices(indices, n_total: int, name: str) -> np.ndarray
     """Normalize optional subset indices used at loader construction time."""
     if indices is None:
         return np.arange(int(n_total), dtype=np.int32)
-    arr = np.asarray(indices)
-    if arr.dtype == bool:
-        if arr.ndim != 1:
-            raise ValueError(f"{name} boolean mask must be 1D")
-        if arr.size != int(n_total):
-            raise ValueError(
-                f"{name} boolean mask length {arr.size} must match available length {int(n_total)}"
-            )
-        return np.flatnonzero(arr).astype(np.int32, copy=False)
-    if arr.ndim == 0:
-        arr = arr.reshape(1)
-    if arr.ndim != 1:
-        raise ValueError(f"{name} indices must be 1D")
-    if arr.dtype.kind not in ("i", "u"):
-        raise TypeError(f"{name} indices must be integer or boolean mask")
-    arr = arr.astype(np.int64, copy=False)
-    if np.any(arr < 0) or np.any(arr >= int(n_total)):
-        raise IndexError(f"{name} indices out of range [0, {int(n_total)})")
-    return arr.astype(np.int32, copy=False)
+    return normalize_indices(indices, n_total=int(n_total), name=name)
 
 
 # ---------------------------------------------------------------------------

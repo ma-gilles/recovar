@@ -268,10 +268,14 @@ def test_get_coords_shared_label_splits_mixed_particle_batches(monkeypatch):
             self._ctf_evaluator = embedding.core.CTFEvaluator()
             self.ctf_evaluator = self._ctf_evaluator
             self.image_stack = _DummyImageStack()
+            self.image_mask = self.image_stack.mask
             self.noise = _DummyNoise()
             self.CTF_params = np.zeros((4, 9), dtype=np.float32)
             self.rotation_matrices = np.zeros((4, 3, 3), dtype=np.float32)
             self.translations = np.zeros((4, 2), dtype=np.float32)
+
+        def process_images(self, batch, apply_image_mask=False):
+            return self.image_stack.process_images(batch, apply_image_mask=apply_image_mask)
 
         def get_dataset_generator(self, batch_size):
             _ = batch_size
@@ -356,10 +360,14 @@ def test_get_coords_shared_label_grouped_shared_contrast(monkeypatch):
             self._ctf_evaluator = embedding.core.CTFEvaluator()
             self.ctf_evaluator = self._ctf_evaluator
             self.image_stack = _DummyImageStack()
+            self.image_mask = self.image_stack.mask
             self.noise = _DummyNoise()
             self.CTF_params = np.zeros((4, 9), dtype=np.float32)
             self.rotation_matrices = np.zeros((4, 3, 3), dtype=np.float32)
             self.translations = np.zeros((4, 2), dtype=np.float32)
+
+        def process_images(self, batch, apply_image_mask=False):
+            return self.image_stack.process_images(batch, apply_image_mask=apply_image_mask)
 
         def get_dataset_generator(self, batch_size):
             _ = batch_size

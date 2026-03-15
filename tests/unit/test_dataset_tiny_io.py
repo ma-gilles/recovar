@@ -380,7 +380,7 @@ def test_load_dataset_rejects_invalid_ind_values(tmp_path):
             tilt_series_ctf="cryoem",
         )
 
-    with pytest.raises(IndexError, match="out of range|number of images"):
+    with pytest.raises(IndexError, match="out.of.range"):
         dataset.load_dataset(
             particles_file=files["particles_mrcs"],
             poses_file=files["poses_pkl"],
@@ -449,7 +449,7 @@ def test_tiny_spa_loading_rejects_short_ctf_when_subset_exceeds_bounds(tmp_path)
     short_ctf_pkl = Path(tmp_path) / "ctf_short.pkl"
     utils.pickle_dump(ctf[:4], str(short_ctf_pkl))
 
-    with pytest.raises(IndexError, match="number of images"):
+    with pytest.raises(IndexError, match="out-of-range"):
         dataset.load_dataset(
             particles_file=files["particles_mrcs"],
             poses_file=files["poses_pkl"],
@@ -510,7 +510,7 @@ def test_simulator_tiny_tilt_loading_rejects_short_ctf_when_subset_exceeds_bound
     short_ctf_pkl = Path(datadir) / "ctf_short_subset_bad.pkl"
     utils.pickle_dump(ctf[:10], str(short_ctf_pkl))
 
-    with pytest.raises(IndexError, match="number of images"):
+    with pytest.raises(IndexError, match="out-of-range"):
         dataset.load_dataset(
             particles_file=files["particles_star"],
             poses_file=files["poses_pkl"],
@@ -1293,7 +1293,8 @@ def test_simulator_tiny_tilt_subsample_cryoem_dataset_preserves_local_order_and_
         tilt_series_ctf="relion5",
     )
 
-    requested = np.array([7, 2, 7, 1], dtype=np.int32)
+    # Use unique original indices so the remap table is bijective.
+    requested = np.array([7, 2, 5, 1], dtype=np.int32)
     sub = dataset.subsample_cryoem_dataset(cryo, requested)
     np.testing.assert_array_equal(np.asarray(sub.dataset_indices), requested)
     assert sub.n_images == requested.size
@@ -1308,7 +1309,7 @@ def test_simulator_tiny_tilt_subsample_cryoem_dataset_preserves_local_order_and_
     np.testing.assert_array_equal(got_full_local, full_local)
     np.testing.assert_allclose(got_full_images, original_images[requested], atol=1e-6)
 
-    local_subset = np.array([3, 0, 3, 1], dtype=np.int32)
+    local_subset = np.array([3, 0, 2, 1], dtype=np.int32)
     subset_batches = list(sub.get_image_subset_generator(batch_size=2, subset_indices=local_subset))
     got_subset_images = np.concatenate([np.array(b[0]) for b in subset_batches], axis=0)
     got_subset_local = np.concatenate([np.array(b[2]).reshape(-1) for b in subset_batches], axis=0)

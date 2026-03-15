@@ -28,6 +28,7 @@ try:
 except ImportError:
     grain = None
 
+from recovar.data_io._index_utils import normalize_indices
 from recovar.data_io.image_loader import ImageLoader
 from recovar.data_io import starfile
 from recovar.core import mask
@@ -52,32 +53,7 @@ def create_window_mask(image_size: int, inner_radius: float = 0.85,
 def _normalize_subset_indices(indices: Optional[np.ndarray], n_total: int,
                               name: str = "subset_indices") -> np.ndarray:
     """Normalize integer or boolean-mask subset indices with strict validation."""
-    arr = np.asarray(indices)
-    if arr.dtype == bool:
-        if arr.ndim != 1:
-            raise ValueError(f"{name} boolean mask must be 1D")
-        if arr.size != int(n_total):
-            raise ValueError(
-                f"{name} boolean mask length {arr.size} must match total size {int(n_total)}"
-            )
-        return np.flatnonzero(arr).astype(np.int32, copy=False)
-
-    if arr.ndim == 0:
-        arr = arr.reshape(1)
-    if arr.ndim != 1:
-        raise ValueError(f"{name} must be 1D")
-    if arr.dtype.kind not in ("i", "u"):
-        raise TypeError(f"{name} must be integer indices or boolean mask")
-
-    arr = arr.astype(np.int64, copy=False).reshape(-1)
-    if arr.size == 0:
-        return arr.astype(np.int32, copy=False)
-    if np.any(arr < 0):
-        raise IndexError(f"{name} contains negative indices")
-    if np.any(arr >= int(n_total)):
-        raise IndexError(f"{name} contains out-of-range indices for total size {int(n_total)}")
-
-    return arr.astype(np.int32, copy=False)
+    return normalize_indices(indices, n_total=int(n_total), name=name)
 
 
 class _SimpleSubset:

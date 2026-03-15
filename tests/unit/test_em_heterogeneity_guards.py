@@ -29,6 +29,9 @@ class _TinyDataset:
     CTF_params = np.zeros((1, 9), dtype=np.float32)
     image_stack = _TinyImageStack()
 
+    def process_images(self, batch, apply_image_mask=False):
+        return self.image_stack.process_images(batch, apply_image_mask=apply_image_mask)
+
     @staticmethod
     def ctf_evaluator(params, _image_shape, _voxel_size):
         return jnp.ones((params.shape[0], 4), dtype=jnp.float32)

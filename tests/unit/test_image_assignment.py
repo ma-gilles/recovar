@@ -56,6 +56,10 @@ class _MockDS:
     )
     ctf_evaluator = staticmethod(lambda *_args, **_kwargs: None)
 
+    @staticmethod
+    def process_images(x, apply_image_mask=False):
+        return x
+
     def get_image_generator(self, batch_size):
         _ = batch_size
         batch = np.zeros((2, 2), dtype=np.float32)

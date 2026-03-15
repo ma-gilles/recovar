@@ -243,7 +243,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
     # Construct structured parameters once outside the loop
     config = ForwardModelConfig.from_dataset(
         experiment_dataset, disc_type=disc_type,
-        process_fn=experiment_dataset.image_stack.process_images,
+        process_fn=experiment_dataset.process_images,
     )
     # Embedding uses half-spectrum inner products by default; pre-convert model
     # Fourier volumes once so forward passes can use native half-volume kernels.
@@ -312,7 +312,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
 
                 xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
                     config, batch_data, model, opts,
-                    experiment_dataset.image_stack.mask, contrast_grid,
+                    experiment_dataset.image_mask, contrast_grid,
                     contrast_mean, contrast_variance,
                     hermitian_weights,
                 )
@@ -344,7 +344,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
                     config,
                     batch_data,
                     model,
-                    experiment_dataset.image_stack.mask,
+                    experiment_dataset.image_mask,
                     contrast_grid,
                     contrast_mean,
                     contrast_variance,
@@ -383,7 +383,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
 
                 xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
                     config, batch_data, model, opts,
-                    experiment_dataset.image_stack.mask, contrast_grid,
+                    experiment_dataset.image_mask, contrast_grid,
                     contrast_mean, contrast_variance,
                     hermitian_weights,
                 )
@@ -410,7 +410,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
 
         xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
             config, batch_data, model, opts,
-            experiment_dataset.image_stack.mask, contrast_grid,
+            experiment_dataset.image_mask, contrast_grid,
             contrast_mean, contrast_variance,
             hermitian_weights,
         )
@@ -1172,7 +1172,7 @@ def get_per_image_embedding_multi_zdim(
     for cryo_idx, cryo in enumerate(cryos):
         config = ForwardModelConfig.from_dataset(
             cryo, disc_type=actual_disc_type,
-            process_fn=cryo.image_stack.process_images,
+            process_fn=cryo.process_images,
         )
         # eigenvalues field not used by _collect_batch_stats; set placeholder.
         model = ModelState(
@@ -1271,7 +1271,7 @@ def set_contrasts_in_cryos(cryos, contrasts):
             # If it's a per tilt series assignment
             running_idx = 0 
             for i in range(2):
-                for p in cryos[i].image_stack.particles:
+                for p in cryos[i].tilt_particles:
                     cryos[i].CTF_params[p,core.CTFParamIndex.CONTRAST] *= contrasts[running_idx]
                     running_idx+=1
     else:

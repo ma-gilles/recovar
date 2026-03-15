@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import pickle
-from collections import defaultdict, deque
 from typing import Callable, Optional, Tuple
 
 import jax
@@ -20,6 +19,7 @@ from recovar.output import plot_utils
 
 logger = logging.getLogger(__name__)
 
+from recovar.data_io._index_utils import normalize_indices
 from recovar.data_io.image_loader import ImageLoader
 
 
@@ -40,35 +40,25 @@ def _load_index_like(value):
 
 
 def _normalize_image_indices(values, n_images_total=None, name="indices"):
-    arr = np.asarray(values)
-    if arr.dtype == bool:
-        if n_images_total is None:
+    """Normalize image indices using the canonical implementation."""
+    if values is None:
+        raise ValueError(f"{name} must not be None")
+    if n_images_total is None:
+        # Legacy compatibility: when n_total is unknown, skip range check
+        arr = np.asarray(values)
+        if arr.dtype == bool:
             raise ValueError(f"{name} boolean mask requires known dataset size for validation")
+        if arr.ndim == 0:
+            arr = arr.reshape(1)
         if arr.ndim != 1:
-            raise ValueError(f"{name} boolean mask must be 1D")
-        if arr.size != int(n_images_total):
-            raise ValueError(
-                f"{name} boolean mask length {arr.size} must match number of images {int(n_images_total)}"
-            )
-        return np.flatnonzero(arr).astype(np.int32, copy=False)
-
-    if arr.ndim == 0:
-        arr = arr.reshape(1)
-    if arr.ndim != 1:
-        raise ValueError(f"{name} indices must be 1D")
-    if arr.dtype.kind not in ("i", "u"):
-        raise TypeError(f"{name} indices must be integer or boolean mask")
-
-    arr = arr.astype(np.int64, copy=False).reshape(-1)
-    if arr.size == 0:
+            raise ValueError(f"{name} indices must be 1D")
+        if arr.dtype.kind not in ("i", "u"):
+            raise TypeError(f"{name} indices must be integer or boolean mask")
+        arr = arr.astype(np.int64, copy=False).reshape(-1)
+        if arr.size > 0 and np.any(arr < 0):
+            raise ValueError(f"{name} indices must be non-negative")
         return arr.astype(np.int32, copy=False)
-
-    if np.any(arr < 0):
-        raise ValueError(f"{name} indices must be non-negative")
-    if n_images_total is not None and np.any(arr >= int(n_images_total)):
-        raise ValueError(f"{name} indices contain values >= number of images ({int(n_images_total)})")
-
-    return arr.astype(np.int32, copy=False)
+    return normalize_indices(values, n_total=int(n_images_total), name=name)
 
 
 def _deduplicate_preserve_order(values, name):
@@ -116,6 +106,8 @@ class CryoEMDataset:
         'rotation_matrices', 'translations', 'CTF_params',
         # Mutable state
         'dataset_indices', 'noise',
+        # Subset view (index into original image_stack)
+        '_subset_indices',
     )
 
     def __init__(
@@ -185,6 +177,7 @@ class CryoEMDataset:
         # --- Mutable state ---
         self.dataset_indices = dataset_indices
         self.noise = None
+        self._subset_indices = None
 
     def __repr__(self) -> str:
         return (
@@ -192,23 +185,70 @@ class CryoEMDataset:
             f"voxel_size={self.voxel_size:.4f}, tilt_series={self.tilt_series_flag})"
         )
 
+    # --- Delegating properties (avoid leaking image_stack internals) ---
+
+    def process_images(self, images, apply_image_mask=False):
+        """Apply windowing + DFT preprocessing to raw images."""
+        return self.image_stack.process_images(images, apply_image_mask=apply_image_mask)
+
+    @property
+    def image_mask(self):
+        """Circular window mask from the image stack."""
+        return self.image_stack.mask if self.image_stack is not None else None
+
+    @property
+    def data_multiplier(self):
+        """Sign multiplier for data inversion (±1)."""
+        return getattr(self.image_stack, 'mult', 1)
+
+    @data_multiplier.setter
+    def data_multiplier(self, value):
+        if self.image_stack is not None:
+            self.image_stack.mult = value
+
+    @property
+    def dataset_tilt_indices(self):
+        """Per-particle tilt index lists (tilt-series only)."""
+        if not self.tilt_series_flag:
+            return None
+        return self.image_stack.dataset_tilt_indices
+
+    @property
+    def tilt_particles(self):
+        """List of per-particle tilt index arrays (tilt-series only)."""
+        if not self.tilt_series_flag:
+            return None
+        return getattr(self.image_stack, 'particles', None)
+
     def get_noise_variance(self, indices):
         if self.noise is None:
             return None
         return self.noise.get(indices)
 
     def subset(self, indices):
-        """Return a new CryoEMDataset containing only the images at *indices*."""
+        """Return a new CryoEMDataset containing only the images at *indices*.
+
+        The returned dataset keeps a reference to the *original* image_stack
+        and stores ``_subset_indices`` for on-the-fly subsetting in generators,
+        instead of wrapping the stack in an intermediate object.
+        """
         indices = _normalize_image_indices(indices, n_images_total=self.n_images, name="indices")
-        new_stack = _SubsampledImageStack(self.image_stack, indices) if self.image_stack is not None else None
-        # Compose dataset_indices: if the parent was already a subset, map
-        # through its indices to preserve the original file-level indices.
+
+        # Compose subset indices: if the parent is already a subset view,
+        # map through its indices to reach the original image_stack.
+        if self._subset_indices is not None:
+            composed_subset = self._subset_indices[indices]
+        else:
+            composed_subset = indices
+
+        # Compose dataset_indices for original file-level indexing.
         if self.dataset_indices is not None:
             composed_indices = self.dataset_indices[indices]
         else:
             composed_indices = indices
+
         sub = CryoEMDataset(
-            image_stack=new_stack,
+            image_stack=self.image_stack,
             voxel_size=self.voxel_size,
             rotation_matrices=self.rotation_matrices[indices],
             translations=self.translations[indices],
@@ -219,31 +259,85 @@ class CryoEMDataset:
             premultiplied_ctf=self.premultiplied_ctf,
             dataset_indices=composed_indices,
         )
+        sub._subset_indices = composed_subset
+        # Override n_images/n_units to match the subset size, not the full
+        # image_stack size (since we share the stack reference).
+        sub.n_images = len(indices)
+        sub.n_units = len(indices)
         if self.noise is not None:
             sub.noise = self.noise
         return sub
 
+    def _remap_generator(self, gen):
+        """Remap original image-stack indices to local 0..n-1 for subset views."""
+        remap = np.empty(int(self._subset_indices.max()) + 1, dtype=np.int32)
+        remap[self._subset_indices] = np.arange(len(self._subset_indices), dtype=np.int32)
+        for images, _, image_indices in gen:
+            local = remap[np.asarray(image_indices)]
+            yield images, local, local
+
+    def _get_backing_subset_generator(self, batch_size, indices, num_workers=0, **kwargs):
+        """Get the right subset generator from the backing image_stack."""
+        if self.tilt_series_flag and hasattr(self.image_stack, 'get_image_subset_generator'):
+            return self.image_stack.get_image_subset_generator(
+                batch_size, indices, num_workers=num_workers)
+        return self.image_stack.get_dataset_subset_generator(
+            batch_size, indices, num_workers=num_workers, **kwargs)
+
     def get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
+        if self._subset_indices is not None:
+            gen = self._get_backing_subset_generator(
+                batch_size, self._subset_indices, num_workers=num_workers, **kwargs)
+            return self._remap_generator(gen)
         return self.image_stack.get_dataset_generator(batch_size, num_workers=num_workers, **kwargs)
-    
+
     def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
         if subset_indices is None:
             return self.get_dataset_generator(batch_size, num_workers=num_workers, **kwargs)
-        return self.image_stack.get_dataset_subset_generator(batch_size, subset_indices, num_workers=num_workers, **kwargs)
+        # Map local subset_indices through _subset_indices to original indices.
+        subset_indices = _normalize_image_indices(
+            subset_indices, n_images_total=self.n_images, name="subset_indices")
+        if self._subset_indices is not None:
+            orig_indices = self._subset_indices[subset_indices]
+            gen = self._get_backing_subset_generator(
+                batch_size, orig_indices, num_workers=num_workers, **kwargs)
+            # Remap the yielded original indices back to the local space of this dataset.
+            remap = np.empty(int(self._subset_indices.max()) + 1, dtype=np.int32)
+            remap[self._subset_indices] = np.arange(len(self._subset_indices), dtype=np.int32)
+            def _remap(g):
+                for images, _, image_indices in g:
+                    local = remap[np.asarray(image_indices)]
+                    yield images, local, local
+            return _remap(gen)
+        return self.image_stack.get_dataset_subset_generator(
+            batch_size, subset_indices, num_workers=num_workers, **kwargs)
 
-    # This is a generator that iterates over individual images rather than tilt groups. For SPA, this is the same as get_dataset_subset_generator.
-    def get_image_subset_generator(self, batch_size, subset_indices, num_workers = 0):
+    # Iterate over individual images rather than tilt groups. For SPA, same as get_dataset_subset_generator.
+    def get_image_subset_generator(self, batch_size, subset_indices, num_workers=0):
         if self.tilt_series_flag:
-            return self.image_stack.get_image_subset_generator(batch_size, subset_indices, num_workers = num_workers)
-        else:
-            return self.get_dataset_subset_generator(batch_size, subset_indices, num_workers = num_workers)
+            if self._subset_indices is not None:
+                if subset_indices is not None:
+                    subset_indices = _normalize_image_indices(
+                        subset_indices, n_images_total=self.n_images, name="subset_indices")
+                    orig_indices = self._subset_indices[subset_indices]
+                else:
+                    orig_indices = self._subset_indices
+                gen = self.image_stack.get_image_subset_generator(
+                    batch_size, orig_indices, num_workers=num_workers)
+                return self._remap_generator(gen)
+            return self.image_stack.get_image_subset_generator(
+                batch_size, subset_indices, num_workers=num_workers)
+        return self.get_dataset_subset_generator(batch_size, subset_indices, num_workers=num_workers)
 
-    # This is a generator that iterates over individual images rather than tilt groups. For SPA, this is the same as get_dataset_generator.
-    def get_image_generator(self, batch_size, num_workers = 0):
+    # Iterate over individual images rather than tilt groups. For SPA, same as get_dataset_generator.
+    def get_image_generator(self, batch_size, num_workers=0):
         if self.tilt_series_flag:
-            return self.image_stack.get_image_generator(batch_size, num_workers = num_workers)
-        else:
-            return self.get_dataset_generator(batch_size, num_workers = num_workers)
+            if self._subset_indices is not None:
+                gen = self.image_stack.get_image_subset_generator(
+                    batch_size, self._subset_indices, num_workers=num_workers)
+                return self._remap_generator(gen)
+            return self.image_stack.get_image_generator(batch_size, num_workers=num_workers)
+        return self.get_dataset_generator(batch_size, num_workers=num_workers)
 
 
     @property
@@ -491,6 +585,32 @@ class CryoEMHalfsets:
         """The :class:`~recovar.core.ctf.CTFEvaluator` for this dataset."""
         return self._halves[0].ctf_evaluator
 
+    # --- Delegated image_stack properties ---
+
+    def process_images(self, images, apply_image_mask=False):
+        """Apply windowing + DFT preprocessing to raw images."""
+        return self._halves[0].process_images(images, apply_image_mask=apply_image_mask)
+
+    @property
+    def image_mask(self):
+        """Circular window mask from the image stack."""
+        return self._halves[0].image_mask
+
+    @property
+    def data_multiplier(self):
+        """Sign multiplier for data inversion (±1)."""
+        return self._halves[0].data_multiplier
+
+    @property
+    def dataset_tilt_indices(self):
+        """Per-particle tilt index lists (tilt-series only)."""
+        return self._halves[0].dataset_tilt_indices
+
+    @property
+    def tilt_particles(self):
+        """List of per-particle tilt index arrays (tilt-series only)."""
+        return self._halves[0].tilt_particles
+
     # --- Aggregate properties ---
 
     @property
@@ -544,6 +664,168 @@ class CryoEMHalfsets:
         )
 
 
+def _normalize_dataset_indices(ind_value, n_total):
+    """Normalize dataset selection indices (integer array or boolean mask)."""
+    if ind_value is None:
+        return None
+    return _normalize_image_indices(ind_value, n_images_total=n_total, name="ind")
+
+
+def _create_image_stack(particles_file, ind, lazy, tilt_series, tilt_series_ctf,
+                        uninvert_data, datadir, padding, strip_prefix, downsample_D):
+    """Create the underlying image-stack dataset."""
+    if tilt_series:
+        tilt_file_option = 'relion5' if tilt_series_ctf == 'relion5' else 'warp'
+        return cryo_dataset.TiltSeriesDataset(
+            particles_file, ind=ind, datadir=datadir,
+            invert_data=uninvert_data, tilt_file_option=tilt_file_option,
+            strip_prefix=strip_prefix,
+        )
+    return cryo_dataset.ParticleImageDataset(
+        particles_file, ind=ind, datadir=datadir, padding=padding,
+        invert_data=uninvert_data, lazy=lazy, strip_prefix=strip_prefix,
+        downsample_D=downsample_D,
+    )
+
+
+def _load_ctf_params(particles_file, ctf_file, D, ind, n_images):
+    """Load CTF parameters from pickle or auto-extract from STAR/CS.
+
+    Returns ``(ctf_params, dataset_indices)`` where *ctf_params* includes
+    appended bfactor (=0) and contrast (=1) columns.
+    """
+    from recovar.data_io import load_utils
+    if ctf_file is not None and ctf_file.endswith('.pkl'):
+        ctf_params_all = np.array(load_utils.load_ctf_params(D, ctf_file))
+        dataset_indices = _normalize_dataset_indices(ind, n_total=ctf_params_all.shape[0])
+        if dataset_indices is None and ctf_params_all.shape[0] != n_images:
+            raise ValueError(
+                f"CTF parameter count ({ctf_params_all.shape[0]}) must match loaded image count ({n_images}) "
+                "when ind is not provided"
+            )
+        ctf_params = ctf_params_all if dataset_indices is None else ctf_params_all[dataset_indices]
+    else:
+        from recovar.data_io import metadata_parsing
+        source_file = ctf_file if ctf_file is not None else particles_file
+        ctf_params = metadata_parsing.auto_parse_ctf(source_file, D)
+        dataset_indices = _normalize_dataset_indices(ind, n_total=ctf_params.shape[0])
+        if dataset_indices is not None:
+            ctf_params = ctf_params[dataset_indices]
+        elif ctf_params.shape[0] != n_images:
+            raise ValueError(
+                f"CTF parameter count ({ctf_params.shape[0]}) must match loaded image count ({n_images}) "
+                "when ind is not provided"
+            )
+        logger.info("Auto-extracted CTF parameters from %s", source_file)
+
+    # Append bfactor (=0) and contrast (=1) columns
+    ctf_params = np.concatenate([
+        ctf_params,
+        np.zeros_like(ctf_params[:, 0][..., None]),
+        np.ones_like(ctf_params[:, 0][..., None]),
+    ], axis=-1)
+    return ctf_params, dataset_indices
+
+
+def _load_poses(particles_file, poses_file, D, n_images, dataset_indices):
+    """Load rotation matrices and translations.
+
+    Returns ``(rots, translations)`` as float32 arrays.
+    """
+    if poses_file is not None and poses_file.endswith('.pkl'):
+        from recovar.data_io import load_utils
+        rots, trans, _ = load_utils.load_poses(poses_file, n_images, D, ind=dataset_indices)
+    else:
+        from recovar.data_io import metadata_parsing
+        source_file = poses_file if poses_file is not None else particles_file
+        rots_raw, trans_frac = metadata_parsing.auto_parse_poses(source_file, D)
+        if dataset_indices is not None:
+            rots_raw = rots_raw[dataset_indices]
+            trans_frac = trans_frac[dataset_indices]
+        elif rots_raw.shape[0] != n_images:
+            raise ValueError(
+                f"Pose count ({rots_raw.shape[0]}) must match loaded image count ({n_images}) "
+                "when ind is not provided"
+            )
+        rots = rots_raw
+        trans = trans_frac * D
+        logger.info("Auto-extracted poses from %s", source_file)
+
+    rots = np.asarray(rots, dtype=np.float32)
+    if rots.ndim != 3 or rots.shape[1:] != (3, 3):
+        raise ValueError(f"Rotation array must have shape (N, 3, 3), got {rots.shape}")
+
+    if trans is None:
+        translations = np.zeros((rots.shape[0], 2), dtype=np.float32)
+    else:
+        translations = np.asarray(trans, dtype=np.float32)
+        expected_t_shape = (rots.shape[0], 2)
+        if translations.shape != expected_t_shape:
+            raise ValueError(
+                f"Translation array must have shape {expected_t_shape}, got {translations.shape}"
+            )
+    return rots, translations
+
+
+def _apply_tilt_ctf_augmentation(ctf_params, tilt_dataset, tilt_series_ctf,
+                                  dose_per_tilt, angle_per_tilt):
+    """Apply tilt-series-specific CTF augmentation.
+
+    Returns ``(ctf_params, ctf_evaluator)`` with augmented columns.
+    """
+    ctf_eval = core.CTFEvaluator()
+
+    if tilt_series_ctf == 'relion5':
+        ctf_params[:, core.CTFParamIndex.CONTRAST + 1] = tilt_dataset.ctfscalefactor
+        dose = tilt_dataset.dose
+        angles = np.zeros_like(dose)
+        ctf_params = np.concatenate([ctf_params, dose[..., None], angles[..., None]], axis=-1)
+        ctf_eval = core.CTFEvaluator(mode=core.CTFMode.CRYO_ET)
+
+    if "scale_from_star" in tilt_series_ctf:
+        angle_per_tilt = 0
+
+    if tilt_series_ctf == "from_star":
+        ctf_params[:, core.CTFParamIndex.CONTRAST + 1] = tilt_dataset.ctfscalefactor
+        ctf_params[:, core.CTFParamIndex.BFACTOR + 1] = -tilt_dataset.ctfBfactor
+        logger.info('CTF from star')
+
+    elif (tilt_series_ctf == "scale_from_star") or (tilt_series_ctf == "from_dose"):
+        if "scale_from_star" in tilt_series_ctf:
+            ctf_params[:, core.CTFParamIndex.CONTRAST + 1] = tilt_dataset.ctfscalefactor
+
+        tilt_numbers = tilt_dataset.tilt_numbers
+        ctf_params = np.concatenate([ctf_params, tilt_numbers[..., None]], axis=-1)
+
+        if not (np.isclose(ctf_params[0, 4], 200) or np.isclose(ctf_params[0, 4], 300)):
+            raise ValueError("Critical exposure calculation requires 200kV or 300kV imaging")
+        ctf_eval = core.CTFEvaluator(mode=core.CTFMode.TILT_SERIES,
+                                      dose_per_tilt=dose_per_tilt,
+                                      angle_per_tilt=angle_per_tilt)
+        logger.info('CTF from dose weighting')
+
+    elif "v2" in tilt_series_ctf:
+        tilt_numbers = tilt_dataset.tilt_numbers
+        dose = -(tilt_dataset.ctfBfactor / 4)
+
+        angles = jnp.ceil(tilt_numbers / 2) * angle_per_tilt
+        if 'scale_from_star' in tilt_series_ctf:
+            ctf_params[:, core.CTFParamIndex.CONTRAST + 1] = tilt_dataset.ctfscalefactor
+            logger.warning("Using scale from star")
+
+        if dose_per_tilt is None:
+            dose = -(tilt_dataset.ctfBfactor / 4)
+            logger.warning("Using dose from star file (- Bfactor/4)")
+
+        ctf_eval = core.CTFEvaluator(mode=core.CTFMode.CRYO_ET)
+        ctf_params = np.concatenate([ctf_params, dose[..., None], angles[..., None]], axis=-1)
+        if not (np.isclose(ctf_params[0, 4], 200) or np.isclose(ctf_params[0, 4], 300)):
+            raise ValueError("Critical exposure calculation requires 200kV or 300kV imaging")
+        logger.info('CTF from dose weighting - V2')
+
+    return ctf_params, ctf_eval
+
+
 def load_dataset(
     particles_file,
     poses_file=None,
@@ -569,37 +851,8 @@ def load_dataset(
     - Pickle files (legacy cryoDRGN format) via *poses_file* / *ctf_file*
     - Auto-extracted from the particles STAR or CS file when those are None
     """
-    def _normalize_dataset_indices(ind_value, n_total):
-        if ind_value is None:
-            return None
-        arr = np.asarray(ind_value)
-        if arr.dtype == bool:
-            if arr.ndim != 1:
-                raise ValueError("ind boolean mask must be 1D")
-            if arr.size != int(n_total):
-                raise ValueError(
-                    f"ind boolean mask length {arr.size} must match number of images {int(n_total)}"
-                )
-            return np.flatnonzero(arr).astype(np.int32, copy=False)
-
-        if arr.ndim == 0:
-            arr = arr.reshape(1)
-        if arr.ndim != 1:
-            raise ValueError("ind must be 1D")
-        if arr.dtype.kind not in ("i", "u"):
-            raise TypeError("ind must be integer indices or boolean mask")
-
-        arr = arr.astype(np.int64, copy=False).reshape(-1)
-        if arr.size > 0:
-            if np.any(arr < 0):
-                raise IndexError("ind contains negative indices")
-            if np.any(arr >= int(n_total)):
-                raise IndexError(f"ind contains values >= number of images ({int(n_total)})")
-        return arr.astype(np.int32, copy=False)
-
-    # ---- Determine if we can auto-extract metadata ----
-    _auto_extract = (poses_file is None or ctf_file is None)
-    if _auto_extract:
+    # ---- Validate auto-extraction capability ----
+    if poses_file is None or ctf_file is None:
         from recovar.data_io import metadata_parsing
         if not metadata_parsing.can_extract_poses(particles_file):
             raise ValueError(
@@ -615,162 +868,47 @@ def load_dataset(
     elif tilt_series_ctf == 'warp':
         tilt_series_ctf = 'v2_scale_from_star'
 
-        
-    if tilt_series:
-            tilt_file_option = 'relion5' if tilt_series_ctf == 'relion5' else 'warp'
-            dataset = cryo_dataset.TiltSeriesDataset(particles_file, ind = ind, datadir = datadir, invert_data = uninvert_data, tilt_file_option=tilt_file_option, strip_prefix=strip_prefix)
-
-    else:
-        dataset = cryo_dataset.ParticleImageDataset(particles_file, ind=ind, datadir=datadir, padding=padding, invert_data=uninvert_data, lazy=lazy, strip_prefix=strip_prefix, downsample_D=downsample_D)
+    # ---- Create image stack ----
+    image_stack = _create_image_stack(
+        particles_file, ind, lazy, tilt_series, tilt_series_ctf,
+        uninvert_data, datadir, padding, strip_prefix, downsample_D,
+    )
 
     # ---- Load CTF parameters ----
-    from recovar.data_io import load_utils
-    if ctf_file is not None and ctf_file.endswith('.pkl'):
-        # Legacy pickle path
-        ctf_params_all = np.array(load_utils.load_ctf_params(dataset.D, ctf_file))
-        dataset_indices = _normalize_dataset_indices(ind, n_total=ctf_params_all.shape[0])
-        if dataset_indices is None and ctf_params_all.shape[0] != dataset.n_images:
-            raise ValueError(
-                f"CTF parameter count ({ctf_params_all.shape[0]}) must match loaded image count ({dataset.n_images}) "
-                "when ind is not provided"
+    ctf_params, dataset_indices = _load_ctf_params(
+        particles_file, ctf_file, image_stack.D, ind, image_stack.n_images,
+    )
+
+    # ---- Apply tilt-series CTF augmentation ----
+    if tilt_series_ctf != 'cryoem':
+        if (tilt_series is False) and (tilt_series_ctf != 'cryoem'):
+            tilt_dataset = cryo_dataset.TiltSeriesDataset(
+                particles_file, ind=ind, datadir=datadir,
+                invert_data=uninvert_data, sort_with_Bfac=sort_with_Bfac,
             )
-        ctf_params = ctf_params_all if dataset_indices is None else ctf_params_all[dataset_indices]
-    else:
-        # Auto-extract from STAR/CS
-        from recovar.data_io import metadata_parsing
-        source_file = ctf_file if ctf_file is not None else particles_file
-        ctf_params = metadata_parsing.auto_parse_ctf(source_file, dataset.D)
-        dataset_indices = _normalize_dataset_indices(ind, n_total=ctf_params.shape[0])
-        if dataset_indices is not None:
-            ctf_params = ctf_params[dataset_indices]
-        elif ctf_params.shape[0] != dataset.n_images:
-            raise ValueError(
-                f"CTF parameter count ({ctf_params.shape[0]}) must match loaded image count ({dataset.n_images}) "
-                "when ind is not provided"
-            )
-        logger.info("Auto-extracted CTF parameters from %s", source_file)
-
-    # Initialize bfactor == 0
-    ctf_params = np.concatenate([ctf_params, np.zeros_like(ctf_params[:, 0][..., None])], axis=-1)
-
-    # Initialize contrast == 1
-    ctf_params = np.concatenate([ctf_params, np.ones_like(ctf_params[:, 0][..., None])], axis=-1)
-    
-    ctf_eval = core.CTFEvaluator()
-
-    # This is an option used to treat a cryo-ET dataset as a cryo-EM dataset, but still use the right CTF.
-    # It means, that it will use the cryo-EM pipeline but the cryoET CTF.
-    if (tilt_series is False) and (tilt_series_ctf != 'cryoem'):
-        tilt_dataset_this = cryo_dataset.TiltSeriesDataset(
-            particles_file,
-            ind=ind,
-            datadir=datadir,
-            invert_data=uninvert_data,
-            sort_with_Bfac=sort_with_Bfac,
+        else:
+            tilt_dataset = image_stack
+        ctf_params, ctf_eval = _apply_tilt_ctf_augmentation(
+            ctf_params, tilt_dataset, tilt_series_ctf, dose_per_tilt, angle_per_tilt,
         )
     else:
-        tilt_dataset_this = dataset
-
-    if tilt_series_ctf != 'cryoem':
-
-        if tilt_series_ctf == 'relion5':
-            ctf_params[:,core.CTFParamIndex.CONTRAST+1] = tilt_dataset_this.ctfscalefactor
-            dose = tilt_dataset_this.dose
-            angles = np.zeros_like(dose) # Set angles to 0 - the np.cos factor is included already?
-            ctf_params = np.concatenate( [ctf_params, dose[...,None], angles[...,None]], axis =-1)
-            ctf_eval = core.CTFEvaluator(mode=core.CTFMode.CRYO_ET)
-
-
-        # The angles are used to compute a scale factor cos(angles). If scale from star, then the scale factor is already in the star file, so set angle to 0
-        if "scale_from_star" in tilt_series_ctf:
-            angle_per_tilt = 0
-
-        if tilt_series_ctf == "from_star":
-            ctf_params[:,core.CTFParamIndex.CONTRAST+1] = tilt_dataset_this.ctfscalefactor
-            ctf_params[:,core.CTFParamIndex.BFACTOR+1] = -tilt_dataset_this.ctfBfactor # should be POSITIVE (negative in star file)
-            logger.info('CTF from star')
-
-        elif (tilt_series_ctf == "scale_from_star") or (tilt_series_ctf == "from_dose"):
-            # CTF params array includes voxel_size at index 0, so column offsets are +1
-            if "scale_from_star" in tilt_series_ctf:
-                ctf_params[:,core.CTFParamIndex.CONTRAST+1] = tilt_dataset_this.ctfscalefactor
-
-            tilt_numbers = tilt_dataset_this.tilt_numbers
-            ctf_params = np.concatenate( [ctf_params, tilt_numbers[...,None]], axis =-1)
-
-            if not (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)):
-                raise ValueError("Critical exposure calculation requires 200kV or 300kV imaging")
-            ctf_eval = core.CTFEvaluator(mode=core.CTFMode.TILT_SERIES, dose_per_tilt=dose_per_tilt, angle_per_tilt=angle_per_tilt)
-            logger.info('CTF from dose weighting')
-        elif "v2" in tilt_series_ctf:
-            tilt_numbers = tilt_dataset_this.tilt_numbers
-            dose = - (tilt_dataset_this.ctfBfactor / 4) # WARP uses a ctfBfactor == -4 * dose
-
-            # The angles are used to compute a scale factor cos(angles). If scale from star, then the scale factor is already in the star file
-            angles = jnp.ceil(tilt_numbers/2) * angle_per_tilt 
-            if 'scale_from_star' in tilt_series_ctf:
-                # +1 offset: CTF params array includes voxel_size at index 0
-                ctf_params[:,core.CTFParamIndex.CONTRAST+1] = tilt_dataset_this.ctfscalefactor
-                # angles *=0 
-                logger.warning("Using scale from star")
-
-            if dose_per_tilt is None:
-                dose = - (tilt_dataset_this.ctfBfactor / 4) # WARP uses a ctfBfactor == -4 * dose
-                logger.warning("Using dose from star file (- Bfactor/4)")
-
-
-            ctf_eval = core.CTFEvaluator(mode=core.CTFMode.CRYO_ET)
-            ctf_params = np.concatenate( [ctf_params, dose[...,None], angles[...,None]], axis =-1)
-            if not (np.isclose(ctf_params[0,4], 200) or np.isclose(ctf_params[0,4], 300)):
-                raise ValueError("Critical exposure calculation requires 200kV or 300kV imaging") 
-            logger.info('CTF from dose weighting - V2')
-            
+        ctf_eval = core.CTFEvaluator()
 
     # ---- Load poses ----
-    if poses_file is not None and poses_file.endswith('.pkl'):
-        # Legacy pickle path
-        rots, trans, _ = load_utils.load_poses(poses_file, dataset.n_images, dataset.unpadded_D, ind=dataset_indices)
-    else:
-        # Auto-extract from STAR/CS
-        from recovar.data_io import metadata_parsing
-        source_file = poses_file if poses_file is not None else particles_file
-        rots_raw, trans_frac = metadata_parsing.auto_parse_poses(source_file, dataset.unpadded_D)
-        if dataset_indices is not None:
-            rots_raw = rots_raw[dataset_indices]
-            trans_frac = trans_frac[dataset_indices]
-        elif rots_raw.shape[0] != dataset.n_images:
-            raise ValueError(
-                f"Pose count ({rots_raw.shape[0]}) must match loaded image count ({dataset.n_images}) "
-                "when ind is not provided"
-            )
-        # Convert fractional -> pixel (same as load_poses does)
-        rots = rots_raw
-        trans = trans_frac * dataset.unpadded_D
-        logger.info("Auto-extracted poses from %s", source_file)
+    rots, translations = _load_poses(
+        particles_file, poses_file, image_stack.unpadded_D,
+        image_stack.n_images, dataset_indices,
+    )
 
+    # ---- Validate voxel sizes ----
     voxel_sizes = ctf_params[:, 0]
     if not np.all(np.isclose(voxel_sizes - voxel_sizes[0], 0)):
         raise ValueError("All voxel sizes must be the same")
     voxel_size = np.float32(voxel_sizes[0])
 
-    # Make sure everything is in correct dtype:
     ctf_params = ctf_params.astype(np.float32)
-    rots = np.asarray(rots, dtype=np.float32)
-    if rots.ndim != 3 or rots.shape[1:] != (3, 3):
-        raise ValueError(f"Rotation array must have shape (N, 3, 3), got {rots.shape}")
 
-    if trans is None:
-        # Support rotation-only pose files by assuming zero in-plane shifts.
-        translations = np.zeros((rots.shape[0], 2), dtype=np.float32)
-    else:
-        translations = np.asarray(trans, dtype=np.float32)
-        expected_t_shape = (rots.shape[0], 2)
-        if translations.shape != expected_t_shape:
-            raise ValueError(
-                f"Translation array must have shape {expected_t_shape}, got {translations.shape}"
-            )
-
-    return CryoEMDataset(dataset, voxel_size,
+    return CryoEMDataset(image_stack, voxel_size,
                          rots, translations, ctf_params[:, 1:],
                          ctf_evaluator=ctf_eval,
                          dataset_indices=dataset_indices,
@@ -779,473 +917,27 @@ def load_dataset(
 
 
 
-def get_split_datasets(particles_file, poses_file=None, ctf_file=None, datadir=None,
-                       uninvert_data=False, ind_file=None,
-                       padding=0, n_images=None, tilt_series=False,
-                       tilt_series_ctf=None,
-                       angle_per_tilt=3, dose_per_tilt=2.9,
-                       ind_split=None, lazy=False, premultiplied_ctf=False,
-                       strip_prefix=None, downsample_D=None):
-    # Load dataset once with the union of all split indices
-    all_indices = np.unique(np.concatenate(ind_split))
+# ---------------------------------------------------------------------------
+# Half-set splitting — delegated to recovar.data_io.halfsets
+# ---------------------------------------------------------------------------
 
-    full = load_dataset(
-        particles_file, poses_file, ctf_file, datadir=datadir,
-        n_images=n_images, ind=all_indices, lazy=lazy, padding=padding,
-        uninvert_data=uninvert_data, tilt_series=tilt_series,
-        tilt_series_ctf=tilt_series_ctf, angle_per_tilt=angle_per_tilt,
-        dose_per_tilt=dose_per_tilt, premultiplied_ctf=premultiplied_ctf,
-        strip_prefix=strip_prefix, downsample_D=downsample_D,
-    )
-
-    # Map original indices to local (0..N-1) indices in the union
-    orig_to_local = np.empty(int(all_indices.max()) + 1, dtype=np.int32)
-    orig_to_local[all_indices] = np.arange(len(all_indices), dtype=np.int32)
-
-    local_split = [orig_to_local[s] for s in ind_split]
-    half1 = full.subset(local_split[0])
-    half2 = full.subset(local_split[1])
-    return CryoEMHalfsets(half1, half2)
-
-
-def _read_relion_halfsets_from_star(particles_file, ind_file=None, datadir=None, strip_prefix=None):
-    """Try to read halfset assignments from _rlnRandomSubset in a STAR file.
-
-    Returns ``(halfsets, n_total)`` where *halfsets* is a list of two index
-    arrays when the column is present and valid, or ``None`` when the column
-    is absent or the file is not a STAR file.  *n_total* is ``len(df)`` from
-    the already-parsed star file so the caller can avoid a second full parse
-    when it falls back to a random split.
-    """
-    if not str(particles_file).endswith('.star'):
-        return None, None
-
-    try:
-        from recovar.data_io.starfile import read_star
-        df, _ = read_star(particles_file)
-    except (ImportError, FileNotFoundError, ValueError):
-        return None, None
-
-    n_total = len(df)  # available for free after parsing
-
-    if '_rlnRandomSubset' not in df.columns:
-        return None, n_total
-
-    subsets = df['_rlnRandomSubset'].values.astype(int)
-    unique_vals = np.unique(subsets)
-    if not (set(unique_vals) <= {1, 2}):
-        logger.warning(
-            "_rlnRandomSubset contains values other than 1/2 (%s); ignoring",
-            unique_vals,
-        )
-        return None, n_total
-
-    all_indices = np.arange(len(subsets), dtype=np.int32)
-    halfsets = [
-        all_indices[subsets == 1],
-        all_indices[subsets == 2],
-    ]
-
-    # Apply index filter if provided
-    if ind_file is not None:
-        raw_indices = _load_index_like(ind_file)
-        n_images_total = len(subsets)
-        ind = _normalize_image_indices(raw_indices, n_images_total=n_images_total, name="ind_file")
-        halfsets = [h[np.isin(h, ind)] for h in halfsets]
-
-    if len(halfsets[0]) == 0 or len(halfsets[1]) == 0:
-        logger.warning("RELION halfsets are empty after filtering; falling back to random split")
-        return None, n_total
-
-    logger.info(
-        "Using RELION halfsets from _rlnRandomSubset: %d and %d images",
-        len(halfsets[0]), len(halfsets[1]),
-    )
-    return halfsets, n_total
-
-
-def get_split_indices(particles_file, datadir=None, strip_prefix=None, ind_file=None, split_random_seed=0, validate_split=True, n_images=None):
-    """
-    Get indices for splitting dataset into halfsets.
-
-    Args:
-        particles_file: Path to particles STAR file
-        datadir: Data directory (optional)
-        strip_prefix: Prefix to strip from file paths (optional)
-        ind_file: File containing specific indices to use (optional)
-        split_random_seed: Random seed for reproducible splits
-        validate_split: Whether to validate the split is balanced
-        n_images: Pre-computed image count (avoids re-reading the file)
-
-    Returns:
-        List of two numpy arrays containing indices for each halfset
-    """
-    if ind_file is None:
-        if n_images is None:
-            n_images = get_num_images_in_dataset(particles_file, datadir=datadir, strip_prefix=strip_prefix)
-        indices = np.arange(n_images, dtype=np.int32)
-    else:
-        raw_indices = _load_index_like(ind_file)
-        n_images_total = None
-        if np.asarray(raw_indices).dtype == bool:
-            n_images_total = get_num_images_in_dataset(particles_file, datadir=datadir, strip_prefix=strip_prefix)
-        indices = _normalize_image_indices(raw_indices, n_images_total=n_images_total, name="ind_file")
-        indices = _deduplicate_preserve_order(indices, name="ind_file").astype(np.int32, copy=False)
-    
-    if len(indices) == 0:
-        raise ValueError("No valid indices found for dataset splitting")
-    
-    split_indices = split_index_list(indices, split_random_seed=split_random_seed)
-    
-    if validate_split:
-        # Validate split is reasonably balanced
-        n1, n2 = len(split_indices[0]), len(split_indices[1])
-        total = n1 + n2
-        if abs(n1 - n2) > max(1, total * 0.01):  # Allow 1% imbalance
-            logger.warning("Split is imbalanced: %s vs %s images (%.1f% difference)", n1, n2, abs(n1-n2)/total*100)
-        
-        # Check for overlap
-        overlap = np.intersect1d(split_indices[0], split_indices[1])
-        if len(overlap) > 0:
-            raise ValueError(f"Split contains {len(overlap)} overlapping indices")
-    
-    logger.info("Split dataset into halfsets: %s and %s images", len(split_indices[0]), len(split_indices[1]))
-    return split_indices
-
-
-def get_split_tilt_indices(
-    particles_file, ind_file=None, tilt_ind_file=None, ntilts=None, datadir=None, particle_halfset_indices_file=None
-):
-    """
-    Split a tilt-series dataset into two halfsets (image indices), supporting optional filtering by image/particle indices and precomputed splits.
-    """
-    import pickle
-    import numpy as np
-
-    def _load_index_like(value):
-        if value is None:
-            return None
-        if isinstance(value, (np.ndarray, list, tuple)):
-            return value
-        with open(value, "rb") as f:
-            return pickle.load(f)
-
-    def _filter_preserve_order(values, allowed):
-        values = np.asarray(values)
-        allowed = np.asarray(allowed)
-        if values.size == 0:
-            return values.astype(np.int32, copy=False)
-        return values[np.isin(values, allowed)]
-
-    def _normalize_particle_ids(values, n_particles_total):
-        arr = np.asarray(values)
-        if arr.dtype == bool:
-            if arr.ndim != 1:
-                raise ValueError("tilt_ind_file/particle halfset boolean mask must be 1D")
-            if arr.size != int(n_particles_total):
-                raise ValueError(
-                    f"tilt_ind_file/particle halfset boolean mask length {arr.size} "
-                    f"must match number of particles {int(n_particles_total)}"
-                )
-            return np.flatnonzero(arr).astype(np.int64, copy=False)
-        if arr.ndim == 0:
-            arr = arr.reshape(1)
-        if arr.ndim != 1:
-            raise ValueError("tilt_ind_file/particle halfset ids must be 1D")
-        if arr.dtype.kind not in ("i", "u"):
-            raise TypeError("tilt_ind_file/particle halfset ids must be integer or boolean mask")
-        return arr.astype(np.int64, copy=False).reshape(-1)
-
-    def _normalize_image_ids(values, n_images_total):
-        arr = np.asarray(values)
-        if arr.dtype == bool:
-            if arr.ndim != 1:
-                raise ValueError("ind_file boolean mask must be 1D")
-            if arr.size != int(n_images_total):
-                raise ValueError(
-                    f"ind_file boolean mask length {arr.size} must match number of images {int(n_images_total)}"
-                )
-            return np.flatnonzero(arr).astype(np.int32, copy=False)
-        if arr.ndim == 0:
-            arr = arr.reshape(1)
-        if arr.ndim != 1:
-            raise ValueError("ind_file image ids must be 1D")
-        if arr.dtype.kind not in ("i", "u"):
-            raise TypeError("ind_file image ids must be integer or boolean mask")
-        return arr.astype(np.int32, copy=False).reshape(-1)
-
-    def _sanitize_particle_ids(values, n_particles_total, allowed_particles):
-        values = _normalize_particle_ids(values, n_particles_total=n_particles_total)
-        if values.size == 0:
-            return values.astype(np.int32, copy=False)
-        in_bounds = (values >= 0) & (values < int(n_particles_total))
-        if not np.all(in_bounds):
-            dropped = int(np.sum(~in_bounds))
-            logger.warning("Dropping %d out-of-range particle ids from precomputed halfset.", dropped)
-        values = values[in_bounds]
-        values = _filter_preserve_order(values, allowed_particles)
-        if values.size > 0:
-            # Remove duplicate particle ids while preserving first-seen order.
-            _, first_idx = np.unique(values, return_index=True)
-            if first_idx.size != values.size:
-                dropped = int(values.size - first_idx.size)
-                logger.warning("Dropping %d duplicate particle ids from precomputed halfset.", dropped)
-            values = values[np.sort(first_idx)]
-        return values.astype(np.int32, copy=False)
-
-    # Step 1: Parse STAR file for mapping
-    particles_to_tilts, tilts_to_particles = cryo_dataset.TiltSeriesDataset.parse_particle_tilt(particles_file)
-
-    # Step 2: Optionally get tilt numbers for ntilts filtering
-    tilt_numbers = None
-    if ntilts is not None and ntilts > 0:
-        dataset_tmp = cryo_dataset.TiltSeriesDataset(particles_file, datadir=datadir)
-        tilt_numbers = dataset_tmp.tilt_numbers
-
-    n_particles_total = len(particles_to_tilts)
-
-    # Step 3: Determine which particles to use
-    if tilt_ind_file is not None:
-        particle_ind = _sanitize_particle_ids(
-            _load_index_like(tilt_ind_file),
-            n_particles_total=n_particles_total,
-            allowed_particles=np.arange(n_particles_total, dtype=np.int32),
-        )
-    else:
-        particle_ind = np.arange(n_particles_total, dtype=np.int32)
-
-    if particle_ind.size == 0:
-        empty = np.array([], dtype=np.int32)
-        return [empty, empty]
-
-    # Map selected particles to image indices
-    allowed_image_indices = cryo_dataset.tilt_series_to_images(particle_ind, particles_file)
-
-    # Step 4: Optionally filter by image indices
-    if ind_file is not None:
-        ind_images = _normalize_image_ids(
-            _load_index_like(ind_file),
-            n_images_total=len(tilts_to_particles),
-        )
-        allowed_image_indices = _filter_preserve_order(allowed_image_indices, ind_images)
-
-    if len(allowed_image_indices) == 0:
-        empty = np.array([], dtype=np.int32)
-        return [empty, empty]
-
-    # Step 5: Keep only particles with at least one allowed image.
-    # Use fromiter to avoid materializing an intermediate Python list for large ET datasets.
-    image_to_particle = np.fromiter(
-        (tilts_to_particles[int(i)] for i in np.asarray(allowed_image_indices).reshape(-1)),
-        dtype=np.int32,
-        count=len(allowed_image_indices),
-    )
-    valid_particles = np.unique(image_to_particle)
-    if valid_particles.size == 0:
-        empty = np.array([], dtype=np.int32)
-        return [empty, empty]
-
-    # Step 6: Determine halfset split (by particles)
-    if particle_halfset_indices_file is not None:
-        split_particles_raw = _load_index_like(particle_halfset_indices_file)
-        if len(split_particles_raw) != 2:
-            raise ValueError("particle_halfset_indices_file must contain exactly two halfsets")
-        split_particles = [
-            _sanitize_particle_ids(split_particles_raw[0], n_particles_total=n_particles_total, allowed_particles=valid_particles),
-            _sanitize_particle_ids(split_particles_raw[1], n_particles_total=n_particles_total, allowed_particles=valid_particles),
-        ]
-    else:
-        split_particles = split_index_list(valid_particles)
-
-    # Step 7: For each halfset, get all image indices for those particles, filter by ntilts if needed, and intersect with allowed images
-    split_image_indices = []
-    for half in split_particles:
-        if len(half) == 0:
-            split_image_indices.append(np.array([], dtype=np.int32))
-            continue
-        imgs = np.concatenate([particles_to_tilts[ind] for ind in half])
-        if ntilts is not None:
-            if ntilts <= 0:
-                imgs = imgs[:0]
-            else:
-                imgs = imgs[tilt_numbers[imgs] < ntilts]
-        imgs = _filter_preserve_order(imgs, allowed_image_indices)
-        split_image_indices.append(imgs)
-
-    return split_image_indices
-
-
-
-def split_index_list(all_valid_image_indices, split_random_seed=0):
-    """
-    Split a list of indices into two balanced halves with reproducible randomization.
-    
-    Args:
-        all_valid_image_indices: Array of indices to split
-        split_random_seed: Random seed for reproducible splits
-        
-    Returns:
-        List of two numpy arrays containing the split indices
-    """
-    all_valid_image_indices = np.asarray(all_valid_image_indices)
-    if len(all_valid_image_indices) == 0:
-        raise ValueError("Cannot split empty index list")
-    
-    n_indices = len(all_valid_image_indices)
-    half_ind_size = n_indices // 2
-    
-    # Create shuffled indices — use legacy np.random API (not default_rng)
-    # to match the old code's halfset splits exactly.
-    np.random.seed(split_random_seed)
-    shuffled_ind = np.arange(n_indices)
-    np.random.shuffle(shuffled_ind)
-    
-    # Split into two halves
-    ind_split = [
-        np.sort(all_valid_image_indices[shuffled_ind[:half_ind_size]]), 
-        np.sort(all_valid_image_indices[shuffled_ind[half_ind_size:]]),
-    ]
-    
-    return ind_split
-        
-
-def make_dataset_loader_dict(args):
-    """Build the loader-configuration dict consumed by get_split_datasets_from_dict.
-
-    All fields have explicit defaults so callers that don't set every pipeline
-    attribute (e.g. tests) still produce a valid dict without AttributeErrors.
-    """
-    uninvert_data_str = getattr(args, 'uninvert_data', 'false')
-    if uninvert_data_str in ('automatic', 'false'):
-        uninvert_data = False
-    elif uninvert_data_str == 'true':
-        uninvert_data = True
-    else:
-        raise ValueError(
-            f"uninvert_data must be 'automatic', 'true', or 'false'; got {uninvert_data_str!r}"
-        )
-
-    return {
-        'particles_file':   args.particles,
-        'ctf_file':         getattr(args, 'ctf', None),
-        'poses_file':       getattr(args, 'poses', None),
-        'datadir':          getattr(args, 'datadir', None),
-        'n_images':         getattr(args, 'n_images', -1),
-        'ind_file':         getattr(args, 'ind', None),
-        'padding':          getattr(args, 'padding', 0),
-        'tilt_series':      getattr(args, 'tilt_series', False),
-        'tilt_series_ctf':  getattr(args, 'tilt_series_ctf', 'cryoem'),
-        'angle_per_tilt':   getattr(args, 'angle_per_tilt', None),
-        'dose_per_tilt':    getattr(args, 'dose_per_tilt', None),
-        'premultiplied_ctf': getattr(args, 'premultiplied_ctf', False),
-        'strip_prefix':     getattr(args, 'strip_prefix', None),
-        'downsample_D':     getattr(args, 'downsample', None),
-        'uninvert_data':    uninvert_data,
-    }
-
-def figure_out_halfsets(args):
-    """Determine which images belong to each reconstruction half-set.
-
-    Priority order:
-      1. Explicit halfsets file (``--halfsets``).
-      2. _rlnRandomSubset column in the STAR file (RELION convention).
-      3. Random 50/50 split of all valid images.
-
-    For tilt-series data the split is always at the particle level so that
-    all tilts of a particle stay in the same half-set.
-    """
-    is_tilt = getattr(args, 'tilt_series', False) or getattr(args, 'tilt_series_ctf', 'cryoem') != 'cryoem'
-    datadir = getattr(args, 'datadir', None)
-    strip_prefix = getattr(args, 'strip_prefix', None)
-    ind_file = getattr(args, 'ind', None)
-    tilt_ind_file = getattr(args, 'tilt_ind', None)
-    ntilts = getattr(args, 'ntilts', None)
-    n_images = getattr(args, 'n_images', None) or -1
-
-    if args.halfsets is None:
-        # --- Auto-detect from RELION _rlnRandomSubset (SPA only) ---
-        n_total_from_star = None
-        if not is_tilt:
-            halfsets, n_total_from_star = _read_relion_halfsets_from_star(
-                args.particles, ind_file=ind_file,
-                datadir=datadir, strip_prefix=strip_prefix,
-            )
-            if halfsets is not None:
-                if n_images > 0:
-                    halfsets = [halfset[:n_images // 2] for halfset in halfsets]
-                    logger.info("using only %s particles", n_images)
-                return halfsets
-
-        # --- Random split ---
-        logger.info("Randomly splitting dataset into halfsets")
-        if is_tilt:
-            halfsets = get_split_tilt_indices(
-                args.particles, ind_file=ind_file, tilt_ind_file=tilt_ind_file,
-                ntilts=ntilts, datadir=datadir,
-            )
-        else:
-            halfsets = get_split_indices(
-                args.particles, datadir=datadir, strip_prefix=strip_prefix,
-                ind_file=ind_file, n_images=n_total_from_star,
-            )
-
-    else:
-        # --- Explicit halfsets file ---
-        logger.info("Loading halfsets from file")
-        if is_tilt:
-            halfsets = get_split_tilt_indices(
-                args.particles, ind_file=ind_file, tilt_ind_file=tilt_ind_file,
-                ntilts=ntilts, datadir=datadir,
-                particle_halfset_indices_file=args.halfsets,
-            )
-        else:
-            with open(args.halfsets, 'rb') as f:
-                halfsets = pickle.load(f)
-            logger.info("Loaded halfsets from file")
-            if len(halfsets) != 2:
-                raise ValueError("halfsets file must contain exactly two halfsets")
-
-            needs_n_images = any(np.asarray(h).dtype == bool for h in halfsets)
-            n_images_total = None
-            if needs_n_images:
-                n_images_total = get_num_images_in_dataset(
-                    args.particles, datadir=datadir, strip_prefix=strip_prefix,
-                )
-            halfsets = [
-                _normalize_image_indices(halfsets[0], n_images_total=n_images_total, name="halfsets[0]"),
-                _normalize_image_indices(halfsets[1], n_images_total=n_images_total, name="halfsets[1]"),
-            ]
-
-            if ind_file is not None:
-                ind_raw = _load_index_like(ind_file)
-                if n_images_total is None and np.asarray(ind_raw).dtype == bool:
-                    n_images_total = get_num_images_in_dataset(
-                        args.particles, datadir=datadir, strip_prefix=strip_prefix,
-                    )
-                ind = _normalize_image_indices(ind_raw, n_images_total=n_images_total, name="ind")
-                halfsets = [
-                    np.asarray(halfset)[np.isin(np.asarray(halfset), ind)]
-                    for halfset in halfsets
-                ]
-
-    if n_images > 0:
-        halfsets = [halfset[:n_images // 2] for halfset in halfsets]
-        logger.info("using only %s particles", n_images)
-    return halfsets
-
-
-def load_dataset_from_args(args, lazy = False, ind_split = None):
-    if ind_split is None:
-        ind_split = figure_out_halfsets(args)
-    dataset_loader_dict = make_dataset_loader_dict(args)
-    return get_split_datasets(**dataset_loader_dict, ind_split=ind_split, lazy=lazy)
+from recovar.data_io.halfsets import (  # noqa: E402
+    split_index_list,
+    get_split_indices,
+    get_split_tilt_indices,
+    _read_relion_halfsets_from_star,
+    figure_out_halfsets,
+    get_split_datasets,
+    make_dataset_loader_dict,
+    load_dataset_from_args,
+)
 
 
 
 
 def reorder_to_original_indexing(arr, cryos, use_tilt_indices = False):
     if use_tilt_indices:
-        dataset_indices = [ cryo.image_stack.dataset_tilt_indices for cryo in cryos]
+        dataset_indices = [ cryo.dataset_tilt_indices for cryo in cryos]
     else:
         dataset_indices = [ cryo.dataset_indices for cryo in cryos]
     return reorder_to_original_indexing_from_halfsets(arr, dataset_indices)
@@ -1286,90 +978,6 @@ def reorder_to_original_indexing_from_halfsets(arr, halfsets, num_images = None 
     arr_reorder[dataset_indices] = arr
     return arr_reorder
 
-
-class _SubsampledImageStack:
-    """Lightweight image-stack wrapper that exposes a boolean/integer index subset."""
-
-    def __init__(self, image_stack, subset_indices):
-        self._stack = image_stack
-        self._idx = np.asarray(subset_indices, dtype=np.int32)
-        # Re-map to 0..n-1 so indices returned to the dataset are contiguous.
-        self.n_images = len(self._idx)
-        self.Np = self.n_images
-        self.D = image_stack.D
-        self.unpadded_D = getattr(image_stack, "unpadded_D", self.D)
-        self.padding = getattr(image_stack, "padding", 0)
-        self.image_shape = image_stack.image_shape
-        self.dtype = getattr(image_stack, "dtype", np.float32)
-        self.mask = getattr(image_stack, "mask", None)
-
-    def process_images(self, images, apply_image_mask=True):
-        return self._stack.process_images(images, apply_image_mask=apply_image_mask)
-
-    def _build_orig_to_local(self, local_indices, orig_indices):
-        out = defaultdict(deque)
-        for local, orig in zip(np.asarray(local_indices).reshape(-1), np.asarray(orig_indices).reshape(-1)):
-            out[int(orig)].append(int(local))
-        return out
-
-    def _map_orig_to_local(self, indices, orig_to_local):
-        idx_arr = np.asarray(indices)
-        if idx_arr.size == 0:
-            return idx_arr.astype(np.int32, copy=False)
-        flat = idx_arr.reshape(-1)
-        mapped_vals = []
-        for i in flat:
-            key = int(i)
-            if key not in orig_to_local or len(orig_to_local[key]) == 0:
-                raise KeyError(f"Original index {key} was not found in local mapping.")
-            mapped_vals.append(orig_to_local[key].popleft())
-        mapped = np.asarray(mapped_vals, dtype=np.int32)
-        return mapped.reshape(idx_arr.shape)
-
-    def _get_backing_image_subset_generator(self, batch_size, subset_indices, num_workers=0):
-        # Prefer image-level generator for tilt-series stacks where dataset-level
-        # subset APIs are particle-indexed.
-        if hasattr(self._stack, "get_image_subset_generator"):
-            return self._stack.get_image_subset_generator(
-                batch_size, subset_indices, num_workers=num_workers
-            )
-        return self._stack.get_dataset_subset_generator(
-            batch_size, subset_indices, num_workers=num_workers
-        )
-
-    def get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
-        for start in range(0, self.n_images, batch_size):
-            local_idx = np.arange(start, min(start + batch_size, self.n_images), dtype=np.int32)
-            orig_idx = self._idx[local_idx]
-            orig_to_local = self._build_orig_to_local(local_idx, orig_idx)
-            for images, _, image_indices in self._get_backing_image_subset_generator(
-                batch_size, orig_idx, num_workers=num_workers
-            ):
-                # Some image-stack implementations may emit one or many batches.
-                # Always map yielded original indices back to contiguous local ones.
-                local_image_indices = self._map_orig_to_local(image_indices, orig_to_local)
-                yield images, local_image_indices, local_image_indices
-
-    def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
-        if subset_indices is None:
-            subset_indices = np.arange(self.n_images, dtype=np.int32)
-        else:
-            subset_indices = _normalize_image_indices(
-                subset_indices, n_images_total=self.n_images, name="subset_indices"
-            )
-        orig_idx = self._idx[subset_indices]
-        orig_to_local = self._build_orig_to_local(subset_indices, orig_idx)
-        for images, _, image_indices in self._get_backing_image_subset_generator(
-            batch_size, orig_idx, num_workers=num_workers
-        ):
-            local_image_indices = self._map_orig_to_local(image_indices, orig_to_local)
-            yield images, local_image_indices, local_image_indices
-
-    def get_image_generator(self, batch_size, num_workers=0):
-        return self.get_dataset_generator(batch_size, num_workers=num_workers)
-
-    def get_image_subset_generator(self, batch_size, subset_indices, num_workers=0):
-        return self.get_dataset_subset_generator(batch_size, subset_indices, num_workers=num_workers)
 
 
 def subsample_cryoem_dataset(cryo, good_indices):

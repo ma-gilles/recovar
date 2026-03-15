@@ -258,7 +258,7 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
 
     config = ForwardModelConfig.from_dataset(
         experiment_dataset, disc_type=mean_disc,
-        process_fn=experiment_dataset.image_stack.process_images,
+        process_fn=experiment_dataset.process_images,
     )
 
     start_idx =0
@@ -406,7 +406,7 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
 
     config = ForwardModelConfig.from_dataset(
         experiment_dataset, disc_type=disc_type_mean,
-        process_fn=experiment_dataset.image_stack.process_images,
+        process_fn=experiment_dataset.process_images,
     )
 
     data_generator = experiment_dataset.get_dataset_subset_generator(batch_size=batch_size, subset_indices = image_indices)

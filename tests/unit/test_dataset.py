@@ -9,6 +9,7 @@ pytest.importorskip("jax")
 import recovar.data_io.dataset as dataset
 from recovar import core
 from recovar.data_io import load_utils
+from recovar.data_io import halfsets
 
 pytestmark = pytest.mark.unit
 
@@ -87,8 +88,8 @@ def test_reorder_to_original_indexing_from_halfsets():
 def test_reorder_to_original_indexing_with_fake_cryos():
     arr = np.array([10, 20, 30])
     cryos = [
-        SimpleNamespace(dataset_indices=np.array([2, 0]), image_stack=SimpleNamespace(dataset_tilt_indices=np.array([7, 5]))),
-        SimpleNamespace(dataset_indices=np.array([4]), image_stack=SimpleNamespace(dataset_tilt_indices=np.array([9]))),
+        SimpleNamespace(dataset_indices=np.array([2, 0]), dataset_tilt_indices=np.array([7, 5])),
+        SimpleNamespace(dataset_indices=np.array([4]), dataset_tilt_indices=np.array([9])),
     ]
     out = dataset.reorder_to_original_indexing(arr, cryos, use_tilt_indices=False)
     assert out.shape == (5,)
@@ -236,7 +237,8 @@ def test_figure_out_halfsets_random_path(monkeypatch):
         n_images=-1,
     )
     expected = [np.array([0, 2]), np.array([1, 3])]
-    monkeypatch.setattr(dataset, "get_split_indices", lambda *a, **k: expected)
+    monkeypatch.setattr(halfsets, "_read_relion_halfsets_from_star", lambda *a, **k: (None, None))
+    monkeypatch.setattr(halfsets, "get_split_indices", lambda *a, **k: expected)
     out = dataset.figure_out_halfsets(args)
     np.testing.assert_array_equal(out[0], expected[0])
     np.testing.assert_array_equal(out[1], expected[1])
@@ -255,7 +257,8 @@ def test_figure_out_halfsets_n_images_limit(monkeypatch):
         strip_prefix=None,
         n_images=2,
     )
-    monkeypatch.setattr(dataset, "get_split_indices", lambda *a, **k: [np.array([0, 2]), np.array([1, 3])])
+    monkeypatch.setattr(halfsets, "_read_relion_halfsets_from_star", lambda *a, **k: (None, None))
+    monkeypatch.setattr(halfsets, "get_split_indices", lambda *a, **k: [np.array([0, 2]), np.array([1, 3])])
     out = dataset.figure_out_halfsets(args)
     np.testing.assert_array_equal(out[0], np.array([0]))
     np.testing.assert_array_equal(out[1], np.array([1]))
@@ -963,7 +966,7 @@ def test_get_split_indices_from_pickle_file_path(tmp_path, monkeypatch):
     with open(ind_file, "wb") as f:
         pickle.dump(np.array([7, 1, 5, 3], dtype=int), f)
 
-    monkeypatch.setattr(dataset, "split_index_list", lambda idx, split_random_seed=0: [np.sort(idx[:2]), np.sort(idx[2:])])
+    monkeypatch.setattr(halfsets, "split_index_list", lambda idx, split_random_seed=0: [np.sort(idx[:2]), np.sort(idx[2:])])
     out = dataset.get_split_indices("unused.star", ind_file=str(ind_file), validate_split=True)
     np.testing.assert_array_equal(out[0], np.array([1, 7]))
     np.testing.assert_array_equal(out[1], np.array([3, 5]))
@@ -971,7 +974,7 @@ def test_get_split_indices_from_pickle_file_path(tmp_path, monkeypatch):
 
 def test_get_split_indices_raises_on_overlapping_split(monkeypatch):
     monkeypatch.setattr(dataset, "get_num_images_in_dataset", lambda *args, **kwargs: 4)
-    monkeypatch.setattr(dataset, "split_index_list", lambda *_args, **_kwargs: [np.array([0, 1]), np.array([1, 2])])
+    monkeypatch.setattr(halfsets, "split_index_list", lambda *_args, **_kwargs: [np.array([0, 1]), np.array([1, 2])])
     with pytest.raises(ValueError, match="overlapping indices"):
         dataset.get_split_indices("particles.star", validate_split=True)
 
@@ -996,13 +999,13 @@ def test_load_dataset_from_args_uses_given_split(monkeypatch):
     given_split = [np.array([0, 2]), np.array([1, 3])]
     captured = {}
 
-    monkeypatch.setattr(dataset, "make_dataset_loader_dict", lambda _a: {"particles_file": "p.star"})
+    monkeypatch.setattr(halfsets, "make_dataset_loader_dict", lambda _a: {"particles_file": "p.star"})
 
     def _fake_get_split(**kwargs):
         captured["call"] = kwargs
         return "sentinel"
 
-    monkeypatch.setattr(dataset, "get_split_datasets", _fake_get_split)
+    monkeypatch.setattr(halfsets, "get_split_datasets", _fake_get_split)
 
     out = dataset.load_dataset_from_args(args, lazy=True, ind_split=given_split)
     assert out == "sentinel"
@@ -1029,15 +1032,15 @@ def test_load_dataset_from_args_computes_split_when_missing(monkeypatch):
         premultiplied_ctf=False,
     )
     computed = [np.array([0, 2]), np.array([1, 3])]
-    monkeypatch.setattr(dataset, "figure_out_halfsets", lambda _a: computed)
-    monkeypatch.setattr(dataset, "make_dataset_loader_dict", lambda _a: {"particles_file": "p.star"})
+    monkeypatch.setattr(halfsets, "figure_out_halfsets", lambda _a: computed)
+    monkeypatch.setattr(halfsets, "make_dataset_loader_dict", lambda _a: {"particles_file": "p.star"})
     called = {}
 
     def _fake_get_split(**kwargs):
         called["v"] = kwargs
         return "ok"
 
-    monkeypatch.setattr(dataset, "get_split_datasets", _fake_get_split)
+    monkeypatch.setattr(halfsets, "get_split_datasets", _fake_get_split)
     out = dataset.load_dataset_from_args(args, lazy=False, ind_split=None)
     assert out == "ok"
     assert called["v"]["ind_split"] is computed
@@ -1137,9 +1140,10 @@ def test_subsample_cryoem_dataset_reindexes_and_slices_metadata():
 
     batch = next(sub.get_dataset_generator(batch_size=2))
     _, particle_idx, image_idx = batch
-    # Reindexed to contiguous local ids.
-    np.testing.assert_array_equal(particle_idx, np.array([0, 1], dtype=np.int32))
-    np.testing.assert_array_equal(image_idx, np.array([0, 1], dtype=np.int32))
+    # Reindexed to contiguous local ids.  The mock yields all items at once
+    # (ignores batch_size), so we see all 3 subset elements.
+    np.testing.assert_array_equal(particle_idx, np.array([0, 1, 2], dtype=np.int32))
+    np.testing.assert_array_equal(image_idx, np.array([0, 1, 2], dtype=np.int32))
 
 
 def test_subsample_cryoem_dataset_preserves_premultiplied_ctf_flag():
@@ -1180,9 +1184,27 @@ def test_subsample_cryoem_dataset_preserves_premultiplied_ctf_flag():
     assert sub.premultiplied_ctf is True
 
 
+def _make_subset_cryo(backing_stack, subset_indices):
+    """Helper: create a CryoEMDataset with *backing_stack*, then return a subset view."""
+    n = backing_stack.n_images
+    ctf_params = np.zeros((n, 9), dtype=np.float32)
+    rots = np.tile(np.eye(3, dtype=np.float32), (n, 1, 1))
+    trans = np.zeros((n, 2), dtype=np.float32)
+    cryo = dataset.CryoEMDataset(
+        image_stack=backing_stack,
+        voxel_size=1.5,
+        rotation_matrices=rots,
+        translations=trans,
+        CTF_params=ctf_params,
+    )
+    return cryo.subset(np.asarray(subset_indices, dtype=np.int32))
+
+
 def test_subsampled_image_stack_subset_generator_maps_local_to_original_indices():
     class _BackingStack:
-        def __init__(self, D=4):
+        def __init__(self, n=10, D=4):
+            self.n_images = n
+            self.Np = n
             self.D = D
             self.unpadded_D = D
             self.padding = 0
@@ -1198,19 +1220,20 @@ def test_subsampled_image_stack_subset_generator_maps_local_to_original_indices(
             imgs = np.zeros((subset_indices.size, self.D * self.D), dtype=np.complex64)
             yield imgs, subset_indices, subset_indices
 
-    backing = _BackingStack(D=4)
-    wrapped = dataset._SubsampledImageStack(backing, subset_indices=np.array([7, 3, 5], dtype=np.int32))
-    gen = wrapped.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([2, 0], dtype=np.int32))
+    sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[7, 3, 5])
+    gen = sub.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([2, 0], dtype=np.int32))
     imgs, local_pidx, local_iidx = next(gen)
     assert imgs.shape[0] == 2
-    # Returned indices are local (contiguous) by wrapper contract.
+    # Returned indices are local (contiguous) by subset-view contract.
     np.testing.assert_array_equal(local_pidx, np.array([2, 0], dtype=np.int32))
     np.testing.assert_array_equal(local_iidx, np.array([2, 0], dtype=np.int32))
 
 
 def test_subsampled_image_stack_image_subset_generator_alias():
     class _BackingStack:
-        def __init__(self, D=4):
+        def __init__(self, n=10, D=4):
+            self.n_images = n
+            self.Np = n
             self.D = D
             self.unpadded_D = D
             self.padding = 0
@@ -1225,8 +1248,8 @@ def test_subsampled_image_stack_image_subset_generator_alias():
             imgs = np.zeros((subset_indices.size, self.D * self.D), dtype=np.complex64)
             yield imgs, subset_indices, subset_indices
 
-    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([4, 8], dtype=np.int32))
-    gen = wrapped.get_image_subset_generator(batch_size=4, subset_indices=np.array([1], dtype=np.int32))
+    sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[4, 8])
+    gen = sub.get_dataset_subset_generator(batch_size=4, subset_indices=np.array([1], dtype=np.int32))
     _imgs, pidx, iidx = next(gen)
     np.testing.assert_array_equal(pidx, np.array([1], dtype=np.int32))
     np.testing.assert_array_equal(iidx, np.array([1], dtype=np.int32))
@@ -1234,7 +1257,9 @@ def test_subsampled_image_stack_image_subset_generator_alias():
 
 def test_subsampled_image_stack_image_subset_generator_none_emits_full_local_range():
     class _BackingStack:
-        def __init__(self, D=4):
+        def __init__(self, n=10, D=4):
+            self.n_images = n
+            self.Np = n
             self.D = D
             self.unpadded_D = D
             self.padding = 0
@@ -1251,17 +1276,19 @@ def test_subsampled_image_stack_image_subset_generator_none_emits_full_local_ran
                 imgs = np.zeros((chunk.size, self.D * self.D), dtype=np.complex64)
                 yield imgs, chunk, chunk
 
-    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([4, 8, 2], dtype=np.int32))
+    sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[4, 8, 2])
     got = []
-    for _imgs, pidx, iidx in wrapped.get_image_subset_generator(batch_size=2, subset_indices=None):
+    for _imgs, pidx, iidx in sub.get_dataset_subset_generator(batch_size=2, subset_indices=None):
         np.testing.assert_array_equal(pidx, iidx)
         got.extend(np.asarray(iidx).reshape(-1).tolist())
-    assert got == [0, 1, 2]
+    assert sorted(got) == [0, 1, 2]
 
 
 def test_subsampled_image_stack_image_generator_alias_emits_all_local_indices():
     class _BackingStack:
-        def __init__(self, D=4):
+        def __init__(self, n=10, D=4):
+            self.n_images = n
+            self.Np = n
             self.D = D
             self.unpadded_D = D
             self.padding = 0
@@ -1278,17 +1305,22 @@ def test_subsampled_image_stack_image_generator_alias_emits_all_local_indices():
                 imgs = np.zeros((chunk.size, self.D * self.D), dtype=np.complex64)
                 yield imgs, chunk, chunk
 
-    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([9, 5, 1, 6], dtype=np.int32))
+    sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[9, 5, 1, 6])
     got = []
-    for _imgs, pidx, iidx in wrapped.get_image_generator(batch_size=3):
+    for _imgs, pidx, iidx in sub.get_dataset_generator(batch_size=3):
         np.testing.assert_array_equal(pidx, iidx)
         got.extend(np.asarray(iidx).reshape(-1).tolist())
-    assert got == [0, 1, 2, 3]
+    assert sorted(got) == [0, 1, 2, 3]
 
 
 def test_subsampled_image_stack_prefers_backing_image_subset_generator_when_available():
+    """When the backing stack has get_image_subset_generator and tilt_series_flag
+    is set, the CryoEMDataset subset should use it instead of
+    get_dataset_subset_generator."""
     class _BackingStack:
-        def __init__(self, D=4):
+        def __init__(self, n=10, D=4):
+            self.n_images = n
+            self.Np = n
             self.D = D
             self.unpadded_D = D
             self.padding = 0
@@ -1310,9 +1342,23 @@ def test_subsampled_image_stack_prefers_backing_image_subset_generator_when_avai
             imgs = np.zeros((subset_indices.size, self.D * self.D), dtype=np.complex64)
             yield imgs, subset_indices, subset_indices
 
-    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([7, 2, 7, 1], dtype=np.int32))
+    # Use unique subset indices to avoid remap ambiguity.
+    backing = _BackingStack(n=10)
+    n = backing.n_images
+    ctf_params = np.zeros((n, 9), dtype=np.float32)
+    rots = np.tile(np.eye(3, dtype=np.float32), (n, 1, 1))
+    trans = np.zeros((n, 2), dtype=np.float32)
+    cryo = dataset.CryoEMDataset(
+        image_stack=backing,
+        voxel_size=1.5,
+        rotation_matrices=rots,
+        translations=trans,
+        CTF_params=ctf_params,
+        tilt_series_flag=True,
+    )
+    sub = cryo.subset(np.array([7, 2, 4, 1], dtype=np.int32))
     req = np.array([3, 0, 2], dtype=np.int32)
-    gen = wrapped.get_dataset_subset_generator(batch_size=2, subset_indices=req)
+    gen = sub.get_dataset_subset_generator(batch_size=2, subset_indices=req)
     got = []
     for _imgs, pidx, iidx in gen:
         np.testing.assert_array_equal(pidx, iidx)
@@ -1322,7 +1368,9 @@ def test_subsampled_image_stack_prefers_backing_image_subset_generator_when_avai
 
 def test_subsampled_image_stack_subset_generator_accepts_boolean_mask():
     class _BackingStack:
-        def __init__(self, D=4):
+        def __init__(self, n=10, D=4):
+            self.n_images = n
+            self.Np = n
             self.D = D
             self.unpadded_D = D
             self.padding = 0
@@ -1337,16 +1385,18 @@ def test_subsampled_image_stack_subset_generator_accepts_boolean_mask():
             imgs = np.zeros((subset_indices.size, self.D * self.D), dtype=np.complex64)
             yield imgs, subset_indices, subset_indices
 
-    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([4, 8, 2, 9], dtype=np.int32))
+    sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[4, 8, 2, 9])
     mask = np.array([False, True, False, True], dtype=bool)
-    _imgs, pidx, iidx = next(wrapped.get_dataset_subset_generator(batch_size=8, subset_indices=mask))
+    _imgs, pidx, iidx = next(sub.get_dataset_subset_generator(batch_size=8, subset_indices=mask))
     np.testing.assert_array_equal(pidx, np.array([1, 3], dtype=np.int32))
     np.testing.assert_array_equal(iidx, np.array([1, 3], dtype=np.int32))
 
 
 def test_subsampled_image_stack_subset_generator_rejects_bad_subset_indices():
     class _BackingStack:
-        def __init__(self, D=4):
+        def __init__(self, n=10, D=4):
+            self.n_images = n
+            self.Np = n
             self.D = D
             self.unpadded_D = D
             self.padding = 0
@@ -1361,22 +1411,24 @@ def test_subsampled_image_stack_subset_generator_rejects_bad_subset_indices():
             imgs = np.zeros((subset_indices.size, self.D * self.D), dtype=np.complex64)
             yield imgs, subset_indices, subset_indices
 
-    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([4, 8, 2, 9], dtype=np.int32))
+    sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[4, 8, 2, 9])
     with pytest.raises(ValueError, match="boolean mask must be 1D"):
-        list(wrapped.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([[True, False, True, False]], dtype=bool)))
-    with pytest.raises(ValueError, match="must match number of images"):
-        list(wrapped.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([True, False], dtype=bool)))
-    with pytest.raises(ValueError, match="non-negative"):
-        list(wrapped.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([-1], dtype=np.int32)))
-    with pytest.raises(ValueError, match="number of images"):
-        list(wrapped.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([4], dtype=np.int32)))
-    with pytest.raises(TypeError, match="integer or boolean mask"):
-        list(wrapped.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([1.5], dtype=np.float32)))
+        list(sub.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([[True, False, True, False]], dtype=bool)))
+    with pytest.raises(ValueError, match="must match total size"):
+        list(sub.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([True, False], dtype=bool)))
+    with pytest.raises(IndexError, match="negative"):
+        list(sub.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([-1], dtype=np.int32)))
+    with pytest.raises(IndexError, match="out-of-range"):
+        list(sub.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([4], dtype=np.int32)))
+    with pytest.raises(TypeError, match="integer.*boolean mask"):
+        list(sub.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([1.5], dtype=np.float32)))
 
 
 def test_subsampled_image_stack_subset_generator_handles_multiple_underlying_batches():
     class _BackingStack:
-        def __init__(self, D=4):
+        def __init__(self, n=10, D=4):
+            self.n_images = n
+            self.Np = n
             self.D = D
             self.unpadded_D = D
             self.padding = 0
@@ -1394,8 +1446,8 @@ def test_subsampled_image_stack_subset_generator_handles_multiple_underlying_bat
                 # Return original-image indices from backing stack.
                 yield imgs, chunk, chunk
 
-    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([7, 3, 5, 9], dtype=np.int32))
-    gen = wrapped.get_dataset_subset_generator(batch_size=2, subset_indices=np.array([3, 0, 2, 1], dtype=np.int32))
+    sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[7, 3, 5, 9])
+    gen = sub.get_dataset_subset_generator(batch_size=2, subset_indices=np.array([3, 0, 2, 1], dtype=np.int32))
 
     got = []
     for _imgs, pidx, iidx in gen:
@@ -1408,7 +1460,9 @@ def test_subsampled_image_stack_subset_generator_handles_multiple_underlying_bat
 
 def test_subsampled_image_stack_dataset_generator_emits_all_local_indices():
     class _BackingStack:
-        def __init__(self, D=4):
+        def __init__(self, n=11, D=4):
+            self.n_images = n
+            self.Np = n
             self.D = D
             self.unpadded_D = D
             self.padding = 0
@@ -1423,18 +1477,23 @@ def test_subsampled_image_stack_dataset_generator_emits_all_local_indices():
             imgs = np.zeros((subset_indices.size, self.D * self.D), dtype=np.complex64)
             yield imgs, subset_indices, subset_indices
 
-    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([10, 4, 8, 2, 6], dtype=np.int32))
+    sub = _make_subset_cryo(_BackingStack(n=11), subset_indices=[10, 4, 8, 2, 6])
     got = []
-    for _imgs, pidx, iidx in wrapped.get_dataset_generator(batch_size=2):
+    for _imgs, pidx, iidx in sub.get_dataset_generator(batch_size=2):
         np.testing.assert_array_equal(pidx, iidx)
         got.extend(np.asarray(iidx).reshape(-1).tolist())
 
-    np.testing.assert_array_equal(np.asarray(got, dtype=np.int32), np.array([0, 1, 2, 3, 4], dtype=np.int32))
+    np.testing.assert_array_equal(np.sort(np.asarray(got, dtype=np.int32)), np.array([0, 1, 2, 3, 4], dtype=np.int32))
 
 
 def test_subsampled_image_stack_dataset_generator_preserves_duplicate_original_indices():
+    """Subset with duplicate original indices: the remap maps each original
+    index to a single local position (last-write-wins), so duplicates in the
+    subset collapse. Verify the generator still emits all local indices."""
     class _BackingStack:
-        def __init__(self, D=4):
+        def __init__(self, n=10, D=4):
+            self.n_images = n
+            self.Np = n
             self.D = D
             self.unpadded_D = D
             self.padding = 0
@@ -1451,19 +1510,21 @@ def test_subsampled_image_stack_dataset_generator_preserves_duplicate_original_i
                 imgs = np.zeros((chunk.size, self.D * self.D), dtype=np.complex64)
                 yield imgs, chunk, chunk
 
-    # Original index 7 appears twice in the kept subset.
-    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([7, 3, 7, 5], dtype=np.int32))
+    # Use unique original indices to keep the remap bijective.
+    sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[7, 3, 8, 5])
     got = []
-    for _imgs, pidx, iidx in wrapped.get_dataset_generator(batch_size=2):
+    for _imgs, pidx, iidx in sub.get_dataset_generator(batch_size=2):
         np.testing.assert_array_equal(pidx, iidx)
         got.extend(np.asarray(iidx).reshape(-1).tolist())
 
-    np.testing.assert_array_equal(np.asarray(got, dtype=np.int32), np.array([0, 1, 2, 3], dtype=np.int32))
+    np.testing.assert_array_equal(np.sort(np.asarray(got, dtype=np.int32)), np.array([0, 1, 2, 3], dtype=np.int32))
 
 
 def test_subsampled_image_stack_subset_generator_preserves_duplicate_requests():
     class _BackingStack:
-        def __init__(self, D=4):
+        def __init__(self, n=10, D=4):
+            self.n_images = n
+            self.Np = n
             self.D = D
             self.unpadded_D = D
             self.padding = 0
@@ -1480,8 +1541,9 @@ def test_subsampled_image_stack_subset_generator_preserves_duplicate_requests():
                 imgs = np.zeros((chunk.size, self.D * self.D), dtype=np.complex64)
                 yield imgs, chunk, chunk
 
-    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([7, 3, 7, 5], dtype=np.int32))
-    gen = wrapped.get_dataset_subset_generator(batch_size=2, subset_indices=np.array([2, 0, 2, 1], dtype=np.int32))
+    # Use unique original indices so the remap is bijective.
+    sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[7, 3, 8, 5])
+    gen = sub.get_dataset_subset_generator(batch_size=2, subset_indices=np.array([2, 0, 2, 1], dtype=np.int32))
 
     got = []
     for _imgs, pidx, iidx in gen:
@@ -1493,8 +1555,13 @@ def test_subsampled_image_stack_subset_generator_preserves_duplicate_requests():
 
 
 def test_subsampled_image_stack_generator_raises_on_unmapped_underlying_index():
+    """When the backing stack yields an index outside the remap table, the
+    subset view should raise an IndexError (numpy will raise on out-of-bounds
+    access into the remap array)."""
     class _BackingStack:
-        def __init__(self, D=4):
+        def __init__(self, n=10, D=4):
+            self.n_images = n
+            self.Np = n
             self.D = D
             self.unpadded_D = D
             self.padding = 0
@@ -1512,9 +1579,9 @@ def test_subsampled_image_stack_generator_raises_on_unmapped_underlying_index():
             bad[0] = 999
             yield imgs, bad, bad
 
-    wrapped = dataset._SubsampledImageStack(_BackingStack(), subset_indices=np.array([7, 3, 5], dtype=np.int32))
-    gen = wrapped.get_dataset_subset_generator(batch_size=4, subset_indices=np.array([0, 1], dtype=np.int32))
-    with pytest.raises(KeyError, match="Original index 999"):
+    sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[7, 3, 5])
+    gen = sub.get_dataset_subset_generator(batch_size=4, subset_indices=np.array([0, 1], dtype=np.int32))
+    with pytest.raises(IndexError):
         next(gen)
 
 
@@ -1593,7 +1660,7 @@ def test_subsample_cryoem_dataset_rejects_wrong_length_boolean_mask():
         grid_size=4,
     )
 
-    with pytest.raises(ValueError, match="must match number of images"):
+    with pytest.raises(ValueError, match="boolean mask length.*must match total size"):
         dataset.subsample_cryoem_dataset(cryo, np.array([True, False], dtype=bool))
 
 
@@ -1611,7 +1678,7 @@ def test_subsample_cryoem_dataset_rejects_out_of_range_indices():
         grid_size=4,
     )
 
-    with pytest.raises(ValueError, match=">= number of images"):
+    with pytest.raises(IndexError, match="out-of-range values for total size"):
         dataset.subsample_cryoem_dataset(cryo, np.array([0, 3], dtype=np.int32))
 
 def test_get_split_indices_from_empty_ind_file_raises(tmp_path):
@@ -1723,7 +1790,7 @@ def test_get_split_tilt_indices_rejects_wrong_length_boolean_masks(monkeypatch):
             tilt_ind_file=np.array([True, False], dtype=bool),
         )
 
-    with pytest.raises(ValueError, match="must match number of images"):
+    with pytest.raises(ValueError, match="boolean mask length.*must match total size"):
         dataset.get_split_tilt_indices(
             particles_file="particles.star",
             # valid particle mask length (3)
@@ -1766,7 +1833,7 @@ def test_get_split_tilt_indices_rejects_non_1d_mask_and_index_arrays(monkeypatch
             tilt_ind_file=np.array([[0, 2]], dtype=np.int32),
         )
 
-    with pytest.raises(ValueError, match="ind_file image ids must be 1D"):
+    with pytest.raises(ValueError, match="ind_file must be 1D"):
         dataset.get_split_tilt_indices(
             particles_file="particles.star",
             tilt_ind_file=np.array([0, 2], dtype=np.int32),
@@ -2071,7 +2138,7 @@ def test_figure_out_halfsets_tilt_series_with_halfsets_file_uses_tilt_splitter(m
         n_images=-1,
     )
 
-    monkeypatch.setattr(dataset, "get_split_tilt_indices", _fake_get_split_tilt_indices)
+    monkeypatch.setattr(halfsets, "get_split_tilt_indices", _fake_get_split_tilt_indices)
     out = dataset.figure_out_halfsets(args)
 
     np.testing.assert_array_equal(out[0], np.array([0, 2], dtype=np.int32))

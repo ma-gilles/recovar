@@ -209,6 +209,11 @@ def test_M_with_precompute_handles_small_rotation_count_without_zero_batch(monke
         voxel_size = 1.0
         volume_shape = (2, 2, 2)
 
+        @staticmethod
+        def process_images(batch, apply_image_mask=False):
+            _ = apply_image_mask
+            return batch
+
         class image_stack:
             @staticmethod
             def process_images(batch, apply_image_mask=False):

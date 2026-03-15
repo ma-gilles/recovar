@@ -28,7 +28,7 @@ def compute_batch_prior_quantities(rotation_matrices, translations, CTF_params, 
     return diag_mean
 
 def compute_prior_quantites(experiment_datasets, cov_noise, batch_size, for_whitening = False ):
-    bottom_of_fraction = jnp.zeros(experiment_datasets.volume_size, dtype = experiment_datasets[0].image_stack.dtype)
+    bottom_of_fraction = jnp.zeros(experiment_datasets.volume_size, dtype = experiment_datasets[0].dtype)
     for experiment_dataset in experiment_datasets:
         n_images = experiment_dataset.n_images
         # Compute the bottom of fraction.

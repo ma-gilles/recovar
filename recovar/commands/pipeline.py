@@ -384,7 +384,7 @@ def _check_uninvert_data(means, cryos, args):
         if uninvert_check:
             means.negate()
             for cryo in cryos:
-                cryo.image_stack.mult = -1 * cryo.image_stack.mult
+                cryo.data_multiplier = -1 * cryo.data_multiplier
             args.uninvert_data = "true"
             logger.warning('sum(mean) < 0! Swapping sign of data (uninvert-data = true). If this is not what you want, explicitely set uninvert-data=False ')
         else:
@@ -981,7 +981,7 @@ def standard_recovar_pipeline(args):
 
     # --- Build result dict and save ---
     if args.tilt_series:
-        particles_ind_split = [cryo.image_stack.dataset_tilt_indices for cryo in cryos]
+        particles_ind_split = [cryo.dataset_tilt_indices for cryo in cryos]
     else:
         particles_ind_split = ind_split
 

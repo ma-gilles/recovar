@@ -186,7 +186,7 @@ def test_mrc_loader_constructor_rejects_bad_subset_masks(tmp_path):
     with pytest.raises(ValueError, match="boolean mask must be 1D"):
         image_loader.MRCLoader(str(mrc_path), indices=np.array([[True, False, True, False, True]], dtype=bool), lazy=True)
 
-    with pytest.raises(ValueError, match="must match available length"):
+    with pytest.raises(ValueError, match="boolean mask length.*must match total size"):
         image_loader.MRCLoader(str(mrc_path), indices=np.array([True, False], dtype=bool), lazy=True)
 
 
@@ -280,10 +280,10 @@ def test_multi_mrc_loader_constructor_rejects_bad_subset_masks(tmp_path):
     with pytest.raises(ValueError, match="boolean mask must be 1D"):
         image_loader.MultiMRCLoader(df, indices=np.array([[True, False, True]], dtype=bool), lazy=True, max_threads=1)
 
-    with pytest.raises(ValueError, match="must match available length"):
+    with pytest.raises(ValueError, match="boolean mask length.*must match total size"):
         image_loader.MultiMRCLoader(df, indices=np.array([True, False], dtype=bool), lazy=True, max_threads=1)
 
-    with pytest.raises(ValueError, match="indices must be 1D"):
+    with pytest.raises(ValueError, match="must be 1D"):
         image_loader.MultiMRCLoader(df, indices=np.array([[0, 1]], dtype=np.int32), lazy=True, max_threads=1)
 
 
@@ -842,7 +842,7 @@ def test_load_images_star_rejects_wrong_length_boolean_constructor_mask(tmp_path
     )
     datadir = str(Path(files["particles_star"]).parent)
 
-    with pytest.raises(ValueError, match="must match available length"):
+    with pytest.raises(ValueError, match="boolean mask length.*must match total size"):
         image_loader.load_images(
             files["particles_star"],
             indices=np.array([True, False, True], dtype=bool),

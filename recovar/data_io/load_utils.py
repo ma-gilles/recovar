@@ -9,36 +9,14 @@ from typing import List, Optional, Tuple, Union
 import numpy as np
 
 from recovar import utils
+from recovar.data_io._index_utils import normalize_indices
 
 logger = logging.getLogger(__name__)
 
 
 def _normalize_pose_indices(ind: np.ndarray, n_total: int) -> np.ndarray:
     """Normalize pose-selection indices (integer ids or boolean mask)."""
-    arr = np.asarray(ind)
-    if arr.dtype == bool:
-        if arr.ndim != 1:
-            raise ValueError("Pose index boolean mask must be 1D")
-        if arr.size != int(n_total):
-            raise ValueError(
-                f"Pose index boolean mask length {arr.size} must match number of poses {int(n_total)}"
-            )
-        return np.flatnonzero(arr).astype(np.int32, copy=False)
-
-    if arr.ndim == 0:
-        arr = arr.reshape(1)
-    if arr.ndim != 1:
-        raise ValueError("Pose indices must be 1D")
-    if arr.dtype.kind not in ("i", "u"):
-        raise TypeError("Pose indices must be integer or boolean mask")
-
-    arr = arr.astype(np.int64, copy=False).reshape(-1)
-    if arr.size > 0:
-        if np.any(arr < 0):
-            raise IndexError("Pose indices contain negative values")
-        if np.any(arr >= int(n_total)):
-            raise IndexError(f"Pose indices contain values >= number of poses ({int(n_total)})")
-    return arr.astype(np.int32, copy=False)
+    return normalize_indices(ind, n_total=int(n_total), name="pose indices")
 
 
 def print_ctf_params(params: np.ndarray) -> None:

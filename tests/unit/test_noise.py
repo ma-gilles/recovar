@@ -429,6 +429,13 @@ class _MockNoiseDataset:
         self.rotation_matrices = jnp.tile(jnp.eye(3, dtype=jnp.float32), (self.n_images, 1, 1))
         self.CTF_params = jnp.zeros((self.n_images, 1), dtype=jnp.float32)
 
+    def process_images(self, images, apply_image_mask=False):
+        return self.image_stack.process_images(images)
+
+    @property
+    def image_mask(self):
+        return self.image_stack.mask
+
     def ctf_evaluator(self, ctf_params, image_shape, voxel_size):
         del voxel_size
         return jnp.ones((ctf_params.shape[0], int(np.prod(image_shape))), dtype=jnp.float32)

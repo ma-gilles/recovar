@@ -178,11 +178,11 @@ def test_load_poses_index_filter_rejects_bad_masks_or_indices(monkeypatch):
 
     with pytest.raises(ValueError, match="boolean mask must be 1D"):
         load_utils.load_poses("poses.pkl", Nimg=3, D=64, ind=np.array([[True, False, True, False, True]], dtype=bool))
-    with pytest.raises(ValueError, match="must match number of poses"):
+    with pytest.raises(ValueError, match="boolean mask length.*must match total size"):
         load_utils.load_poses("poses.pkl", Nimg=3, D=64, ind=np.array([True, False], dtype=bool))
     with pytest.raises(IndexError, match="negative"):
         load_utils.load_poses("poses.pkl", Nimg=3, D=64, ind=np.array([0, -1, 2], dtype=np.int32))
-    with pytest.raises(IndexError, match="number of poses"):
+    with pytest.raises(IndexError, match="out-of-range"):
         load_utils.load_poses("poses.pkl", Nimg=3, D=64, ind=np.array([0, 2, 9], dtype=np.int32))
 
 

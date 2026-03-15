@@ -161,7 +161,7 @@ def M_with_precompute(experiment_dataset, probabilities, rotations, translations
 
     config = ForwardModelConfig.from_dataset(
         experiment_dataset, disc_type=disc_type,
-        process_fn=experiment_dataset.image_stack.process_images,
+        process_fn=experiment_dataset.process_images,
     )
 
     gpu_memory = utils.get_gpu_memory_total()

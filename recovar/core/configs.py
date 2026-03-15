@@ -233,7 +233,7 @@ class DataIterator:
         When *False*, use ``get_dataset_generator`` /
         ``get_dataset_subset_generator`` (particle-grouped, for tilt-series EM).
     apply_process_images : bool, default False
-        When *True*, call ``dataset.image_stack.process_images(batch,
+        When *True*, call ``dataset.process_images(batch,
         apply_image_mask=False)`` on each raw batch before yielding.
         Required for kernels that expect preprocessed real-space images
         (e.g. the heterogeneity and residual kernels).
@@ -296,7 +296,7 @@ class DataIterator:
             image_shape = tuple(self.dataset.image_shape)
         for batch, particles_ind, indices in gen:
             if do_process:
-                batch = self.dataset.image_stack.process_images(batch, apply_image_mask=False)
+                batch = self.dataset.process_images(batch, apply_image_mask=False)
             if do_half:
                 batch = ftu.full_image_to_half_image(batch, image_shape)
             # Noise indexing: particle-grouped generators use particles_ind

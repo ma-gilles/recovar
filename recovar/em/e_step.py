@@ -37,7 +37,7 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     n_principal_components = u.shape[0] if use_heterogeneous else 0
     config = ForwardModelConfig.from_dataset(
         experiment_dataset, disc_type=disc_type,
-        process_fn=experiment_dataset.image_stack.process_images,
+        process_fn=experiment_dataset.process_images,
     )
 
     gpu_memory = utils.get_gpu_memory_total()
@@ -89,7 +89,7 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
 
             for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):
                 rot_indices = np.array(rot_indices)
-                residuals[start_idx:end_idx, rot_indices] -= compute_bHb_terms(projections[rot_indices], u_projections[rot_indices], s, batch, translations, experiment_dataset.CTF_params[indices], experiment_dataset.ctf_evaluator, noise_variance, experiment_dataset.voxel_size, image_shape, experiment_dataset.image_stack.process_images)
+                residuals[start_idx:end_idx, rot_indices] -= compute_bHb_terms(projections[rot_indices], u_projections[rot_indices], s, batch, translations, experiment_dataset.CTF_params[indices], experiment_dataset.ctf_evaluator, noise_variance, experiment_dataset.voxel_size, image_shape, experiment_dataset.process_images)
 
             start_idx = end_idx
 

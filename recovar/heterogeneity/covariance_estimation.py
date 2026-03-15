@@ -490,7 +490,7 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, b
     ):
         Ft_y, Ft_ctf, Ft_im, Ft_one = variance_relion_kernel_trilinear(
             config, batch_data, mean_estimate, volume_mask,
-            experiment_dataset.image_stack.mask, soften=5,
+            experiment_dataset.image_mask, soften=5,
             Ft_y=Ft_y, Ft_ctf=Ft_ctf, Ft_im=Ft_im, Ft_one=Ft_one,
         )
 
@@ -791,7 +791,7 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
             images, ctf_on_grid, plane_coords, image_mask, tilt_labels = \
                 preprocess_covariance_batch(
                     config, batch_data, mean_estimate, volume_mask,
-                    cryo.image_stack.mask, opts)
+                    cryo.image_mask, opts)
 
             # All frequencies in single XLA program (fori_loop, accumulates via .at[k].add)
             H_accum, B_accum = compute_freq_batch(
@@ -930,7 +930,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
     for experiment_dataset in experiment_datasets:
         config = ForwardModelConfig.from_dataset(
             experiment_dataset, disc_type=disc_type,
-            process_fn=experiment_dataset.image_stack.process_images,
+            process_fn=experiment_dataset.process_images,
         )
         model = ModelState(
             mean_estimate=mean_estimate,
@@ -955,7 +955,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
         ):
             lhs, rhs = reduce_covariance_inner(
                 config, batch_data, model, opts,
-                experiment_dataset.image_stack.mask,
+                experiment_dataset.image_mask,
                 hermitian_weights=hermitian_weights,
                 lhs=lhs, rhs=rhs,
             )

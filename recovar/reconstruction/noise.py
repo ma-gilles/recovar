@@ -422,7 +422,7 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
             batch, rot, trans, ctf_p = data
 
             # preprocess images
-            batch = experiment_dataset.image_stack.process_images(batch)
+            batch = experiment_dataset.process_images(batch)
 
             img_masks = get_image_masks(
                 volume_mask,
@@ -430,7 +430,7 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
                 experiment_dataset.volume_mask_threshold,
                 experiment_dataset.volume_shape,
                 experiment_dataset.image_shape,
-                experiment_dataset.image_stack.mask,
+                experiment_dataset.image_mask,
                 invert_mask,
             )
 
@@ -500,7 +500,7 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
             total_grad = 0.0
             n_images = (image_subset.size if image_subset is not None else experiment_dataset.n_images)
             for batch, _, batch_ind in data_generator:
-                batch = experiment_dataset.image_stack.process_images(batch)
+                batch = experiment_dataset.process_images(batch)
                 image_masks = get_image_masks(
                     volume_mask,
                     experiment_dataset.rotation_matrices[batch_ind],
@@ -665,7 +665,7 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
 
     n_images = (image_subset.size if image_subset is not None else experiment_dataset.n_images)
     for batch_data in batch_iter:
-        batch = experiment_dataset.image_stack.process_images(batch_data.images)
+        batch = experiment_dataset.process_images(batch_data.images)
         batch = core.translate_images(batch, batch_data.translations, experiment_dataset.image_shape)
         CTF = experiment_dataset.ctf_evaluator(batch_data.ctf_params, experiment_dataset.image_shape, experiment_dataset.voxel_size)
 
@@ -751,7 +751,7 @@ def estimate_noise_variance(experiment_dataset, batch_size, max_images = 10000):
     )
 
     for batch_data in batch_iter:
-        batch = experiment_dataset.image_stack.process_images(batch_data.images)
+        batch = experiment_dataset.process_images(batch_data.images)
         sum_sq += jnp.sum(jnp.abs(batch)**2, axis =0)
 
     mean_PS =  sum_sq / n_images_used
@@ -774,20 +774,20 @@ def estimate_noise_variance_from_outside_mask(experiment_dataset, volume_mask, b
 
     masked_image_PSs = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
 
-    image_mask = jnp.ones_like(experiment_dataset.image_stack.mask)
+    image_mask = jnp.ones_like(experiment_dataset.image_mask)
     for batch_data in batch_iter:
         batch_ind = batch_data.image_indices
         masked_image_PS, image_PS = estimate_noise_variance_from_outside_mask_inner(batch_data.images,
                     volume_mask, batch_data.rotation_matrices,
                     batch_data.translations,
-                    image_mask, 
+                    image_mask,
                     experiment_dataset.volume_mask_threshold,
                     experiment_dataset.image_shape,
                     experiment_dataset.volume_shape,
                     experiment_dataset.grid_size,
                     experiment_dataset.padding,
                     disc_type,
-                    experiment_dataset.image_stack.process_images)
+                    experiment_dataset.process_images)
         image_PSs[batch_ind] = np.array(image_PS)
         masked_image_PSs[batch_ind] = np.array(masked_image_PS)
 
@@ -798,7 +798,7 @@ def estimate_noise_variance_from_outside_mask_v2(experiment_dataset, volume_mask
 
     batch_iter = DataIterator(experiment_dataset, batch_size=batch_size)
 
-    image_mask = jnp.ones_like(experiment_dataset.image_stack.mask)
+    image_mask = jnp.ones_like(experiment_dataset.image_mask)
     top_fraction = 0
     kernel_sq_sum =0
     per_image_est = None
@@ -806,14 +806,14 @@ def estimate_noise_variance_from_outside_mask_v2(experiment_dataset, volume_mask
         top_fraction_this, kernel_sq_sum_this, per_image_est = estimate_noise_variance_from_outside_mask_inner_v2(batch_data.images,
                     volume_mask, batch_data.rotation_matrices,
                     batch_data.translations,
-                    image_mask, 
+                    image_mask,
                     experiment_dataset.volume_mask_threshold,
                     experiment_dataset.image_shape,
                     experiment_dataset.volume_shape,
                     experiment_dataset.grid_size,
                     experiment_dataset.padding,
                     disc_type,
-                    experiment_dataset.image_stack.process_images)
+                    experiment_dataset.process_images)
         top_fraction += top_fraction_this
         kernel_sq_sum+= kernel_sq_sum_this
     predicted_pixel_variances= top_fraction / kernel_sq_sum
@@ -960,7 +960,7 @@ def get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, 
         n_images = subset_indices.size
         data_generator = experiment_dataset.get_image_subset_generator(batch_size=batch_size, subset_indices = subset_indices) 
 
-    residual_squared = jnp.zeros(experiment_dataset.image_stack.image_size, dtype = basis.dtype)
+    residual_squared = jnp.zeros(experiment_dataset.grid_size, dtype = basis.dtype)
     all_averaged_residual_squared = np.empty((n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
     basis = jnp.asarray(basis.T)
     for batch, _, batch_image_ind in data_generator:
@@ -969,15 +969,15 @@ def get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, 
                                                                         experiment_dataset.CTF_params[batch_image_ind],
                                                                         experiment_dataset.rotation_matrices[batch_image_ind],
                                                                         experiment_dataset.translations[batch_image_ind],
-                                                                        experiment_dataset.image_stack.mask,
+                                                                        experiment_dataset.image_mask,
                                                                         experiment_dataset.volume_mask_threshold,
                                                                         experiment_dataset.image_shape,
                                                                         experiment_dataset.volume_shape,
                                                                         experiment_dataset.grid_size,
-                                                                        experiment_dataset.voxel_size, 
-                                                                        experiment_dataset.padding, 
-                                                                        disc_type, 
-                                                                        experiment_dataset.image_stack.process_images,
+                                                                        experiment_dataset.voxel_size,
+                                                                        experiment_dataset.padding,
+                                                                        disc_type,
+                                                                        experiment_dataset.process_images,
                                                                         experiment_dataset.ctf_evaluator,
                                                                         contrasts[batch_image_ind], basis_coordinates[batch_image_ind])
         all_averaged_residual_squared[batch_image_ind] = np.array(averaged_residual_squared)
@@ -1072,7 +1072,7 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
     # Construct structured parameters once outside the loop
     config = ForwardModelConfig.from_dataset(
         experiment_dataset, disc_type=disc_type,
-        process_fn=experiment_dataset.image_stack.process_images,
+        process_fn=experiment_dataset.process_images,
     )
     # Keep all dynamic inputs on one JAX device (GPU when available) so
     # average_residual_square compiles against CUDA kernels, not Host.
@@ -1089,7 +1089,7 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
         volume_mask=None if volume_mask is None else _to_target(volume_mask),
         basis=_to_target(basis.T),
     )
-    image_mask = _to_target(experiment_dataset.image_stack.mask)
+    image_mask = _to_target(experiment_dataset.image_mask)
 
     top_fraction = None
     kernel_sq_sum = None

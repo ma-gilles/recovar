@@ -224,7 +224,7 @@ def residual_relion_style_triangular_kernel(experiment_dataset, mean_estimate, c
 
     Ft_y, Ft_ctf = None, None
     for batch, particles_ind, indices in data_generator:
-        batch = experiment_dataset.image_stack.process_images(batch, apply_image_mask=False)
+        batch = experiment_dataset.process_images(batch, apply_image_mask=False)
         Ft_y, Ft_ctf = residual_relion_kernel_trilinear(
             config, mean_estimate, batch,
             experiment_dataset.CTF_params[indices],
