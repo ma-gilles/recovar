@@ -7,6 +7,8 @@ import recovar.heterogeneity.principal_components as pc
 import recovar.core as core
 from recovar.data_io import dataset
 from recovar.data_io.dataset import CryoEMHalfsets
+from recovar.utils.helpers import AlgorithmOptions
+from recovar.reconstruction.homogeneous import MeanEstimate
 from helpers.tiny_synthetic import make_tiny_simulation, make_tiny_cryo_dataset_with_images
 
 pytestmark = pytest.mark.unit
@@ -180,13 +182,13 @@ def test_estimate_principal_components_high_snr_from_var_est_requires_variance()
         },
     )()
     cryos = CryoEMHalfsets(mock_cryo, mock_cryo)
-    means = {
-        "lhs": np.ones(8, dtype=np.float32),
-        "prior": np.ones(8, dtype=np.float32),
-        "combined": np.ones(8, dtype=np.complex64),
-        "combined_regularized": np.ones(8, dtype=np.complex64),
-    }
-    options = {"keep_intermediate": True, "contrast": "none", "ignore_zero_frequency": False}
+    means = MeanEstimate(
+        combined=np.ones(8, dtype=np.complex64),
+        corrected0=np.ones(8, dtype=np.complex64), corrected1=np.ones(8, dtype=np.complex64),
+        corrected0reg=np.ones(8, dtype=np.complex64), corrected1reg=np.ones(8, dtype=np.complex64),
+        lhs=np.ones(8, dtype=np.float32), prior=np.ones(8, dtype=np.float32),
+    )
+    options = AlgorithmOptions(volume_mask_option="none", zs_dim_to_test=[1], contrast="none", ignore_zero_frequency=False, keep_intermediate=True)
     cov_options = {
         "column_sampling_scheme": "high_snr_from_var_est",
         "sampling_n_cols": 2,
@@ -228,13 +230,13 @@ def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
         },
     )()
     cryos = CryoEMHalfsets(mock_cryo, mock_cryo)
-    means = {
-        "lhs": np.ones(8, dtype=np.float32),
-        "prior": np.ones(8, dtype=np.float32),
-        "combined": np.ones(8, dtype=np.complex64),
-        "combined_regularized": np.ones(8, dtype=np.complex64),
-    }
-    options = {"keep_intermediate": False, "contrast": "none", "ignore_zero_frequency": False}
+    means = MeanEstimate(
+        combined=np.ones(8, dtype=np.complex64),
+        corrected0=np.ones(8, dtype=np.complex64), corrected1=np.ones(8, dtype=np.complex64),
+        corrected0reg=np.ones(8, dtype=np.complex64), corrected1reg=np.ones(8, dtype=np.complex64),
+        lhs=np.ones(8, dtype=np.float32), prior=np.ones(8, dtype=np.float32),
+    )
+    options = AlgorithmOptions(volume_mask_option="none", zs_dim_to_test=[1], contrast="none", ignore_zero_frequency=False, keep_intermediate=False)
     cov_options = {
         "column_sampling_scheme": "low_freqs",
         "column_radius": 1,
@@ -307,13 +309,14 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
     )
     cryos = CryoEMHalfsets(cryo, cryo)
 
-    means = {
-        "lhs": np.ones(cryo.volume_size, dtype=np.float32),
-        "prior": np.ones(cryo.volume_size, dtype=np.float32),
-        "combined": np.ones(cryo.volume_size, dtype=np.complex64),
-        "combined_regularized": np.ones(cryo.volume_size, dtype=np.complex64),
-    }
-    options = {"keep_intermediate": False, "contrast": "none", "ignore_zero_frequency": False}
+    vs = cryo.volume_size
+    means = MeanEstimate(
+        combined=np.ones(vs, dtype=np.complex64),
+        corrected0=np.ones(vs, dtype=np.complex64), corrected1=np.ones(vs, dtype=np.complex64),
+        corrected0reg=np.ones(vs, dtype=np.complex64), corrected1reg=np.ones(vs, dtype=np.complex64),
+        lhs=np.ones(vs, dtype=np.float32), prior=np.ones(vs, dtype=np.float32),
+    )
+    options = AlgorithmOptions(volume_mask_option="none", zs_dim_to_test=[1], contrast="none", ignore_zero_frequency=False, keep_intermediate=False)
     cov_options = {
         "column_sampling_scheme": "low_freqs",
         "column_radius": 1,

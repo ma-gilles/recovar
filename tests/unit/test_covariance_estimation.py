@@ -181,11 +181,14 @@ def test_compute_regularized_covariance_columns_with_real_tiny_dataset(monkeypat
 
 def test_compute_both_h_b_selects_combined_or_corrected_mean(monkeypatch):
     cryos = [make_tiny_cryo_dataset(grid_size=4, n_images=4, seed=0), make_tiny_cryo_dataset(grid_size=4, n_images=4, seed=1)]
-    means = {
-        "combined": np.array([11], dtype=np.float32),
-        "corrected0": np.array([21], dtype=np.float32),
-        "corrected1": np.array([31], dtype=np.float32),
-    }
+    from recovar.reconstruction.homogeneous import MeanEstimate
+    z = np.zeros(1, dtype=np.float32)
+    means = MeanEstimate(
+        combined=np.array([11], dtype=np.float32),
+        corrected0=np.array([21], dtype=np.float32),
+        corrected1=np.array([31], dtype=np.float32),
+        corrected0reg=z, corrected1reg=z, lhs=z, prior=z,
+    )
 
     chosen_means = []
 

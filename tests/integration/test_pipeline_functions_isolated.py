@@ -561,13 +561,14 @@ def test_principal_components(cryos, gt_data, intermediates, baseline_scores, to
     noise.update_noise_variance(noise_var_used, cryos)
     valid_idx = cryos.get_valid_frequency_indices()
 
-    options = {
-        "zs_dim_to_test": [4, 10],
-        "contrast": "contrast_qr",
-        "keep_intermediate": False,
-        "ignore_zero_frequency": True,
-        "use_combined_mean": True,
-    }
+    from recovar.utils.helpers import AlgorithmOptions
+    options = AlgorithmOptions(
+        volume_mask_option="none",
+        zs_dim_to_test=[4, 10],
+        contrast="contrast_qr",
+        keep_intermediate=False,
+        ignore_zero_frequency=True,
+    )
     covariance_options = covariance_estimation.get_default_covariance_computation_options()
 
     u, s, _, _, _ = principal_components.estimate_principal_components(
