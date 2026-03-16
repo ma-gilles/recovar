@@ -206,7 +206,7 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
     run_args = os.environ.get(
         "LONG_METRICS_ET_RUN_ARGS",
         "--grid-size 128 --n-images 50000 --noise-level 0.1 --contrast-std 0.1 "
-        "--tomo-tilts 7 --noise-model radial_per_tilt --noise-increase-per-tilt 0.05",
+        "--tomo-tilts 7 --noise-model radial",
     )
     tol_frac = float(os.environ.get("LONG_METRICS_ET_TOL_FRAC", os.environ.get("LONG_METRICS_TOL_FRAC", "0.01")))
 
