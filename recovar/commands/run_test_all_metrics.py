@@ -973,54 +973,32 @@ def main():
     )
     all_scores['mean_fsc'] = score
 
-    # FSC for variance maps — two metrics:
-    #   variance_spatial_fsc: spatial variance from eigendecomposition vs GT, DFT both, FSC
-    #   variance_fourier_fsc: Fourier-space per-voxel power vs GT Fourier variance
+    # Variance FSC: GT Fourier variance vs pipeline's variance estimate.
+    # Both are per-Fourier-voxel quantities — no DFT needed.
     volume_shape = cryos[0].volume_shape
-    gt_spatial_variance = gt_thing.get_spatial_variances(contrasted=False)
-    estimated_spatial_variance = pipeline_output.get('variance')
+    estimated_variance = pipeline_output.get('variance')  # Fourier-space variance
 
-    # Spatial variance FSC: DFT both spatial variance maps, then FSC
-    gt_sp_dft = fourier_transform_utils.get_dft3(
-        gt_spatial_variance.reshape(volume_shape)
-    ).reshape(-1)
-    est_sp_dft = fourier_transform_utils.get_dft3(
-        estimated_spatial_variance.reshape(volume_shape)
-    ).reshape(-1)
-    ax, score_spatial = plot_utils.plot_fsc_new(
-        gt_sp_dft, est_sp_dft,
-        np.array(volume_shape),
-        cryos[0].voxel_size,
-        threshold=0.5,
-        filename=os.path.join(plots_dir, 'fsc_variance_spatial.png'),
-        name="Variance Spatial FSC",
-        fmat=""
-    )
-    all_scores['variance_spatial_fsc'] = score_spatial
-    # Keep legacy key for backward compatibility
-    all_scores['variance_fsc'] = score_spatial
-
-    # Fourier variance FSC: GT Fourier variance vs estimated from eigendecomposition
     if hasattr(gt_thing, 'get_covariance_square_root'):
         cov_sqrt_fourier = gt_thing.get_covariance_square_root(contrasted=False)
         gt_fourier_variance = np.sum(np.abs(cov_sqrt_fourier) ** 2, axis=-1)
-        # Estimated Fourier variance from eigenvectors: sum_i s_i |U_i(k)|^2
-        u_fourier_all = np.asarray(pipeline_output.get('u'))
-        s_all_var = np.asarray(pipeline_output.get('s'))
-        n_pcs_var = min(20, u_fourier_all.shape[0])
-        est_fourier_variance = utils.estimate_variance(
-            u_fourier_all[:n_pcs_var, :], s_all_var[:n_pcs_var]
-        )
-        ax, score_fourier = plot_utils.plot_fsc_new(
-            gt_fourier_variance, est_fourier_variance,
-            np.array(volume_shape),
-            cryos[0].voxel_size,
-            threshold=0.5,
-            filename=os.path.join(plots_dir, 'fsc_variance_fourier.png'),
-            name="Variance Fourier FSC",
-            fmat=""
-        )
-        all_scores['variance_fourier_fsc'] = score_fourier
+    else:
+        gt_fourier_variance = fourier_transform_utils.get_dft3(
+            gt_thing.get_spatial_variances(contrasted=False).reshape(volume_shape)
+        ).reshape(-1)
+
+    ax, score_variance = plot_utils.plot_fsc_new(
+        gt_fourier_variance, estimated_variance,
+        np.array(volume_shape),
+        cryos[0].voxel_size,
+        threshold=0.5,
+        filename=os.path.join(plots_dir, 'fsc_variance.png'),
+        name="Variance FSC",
+        fmat=""
+    )
+    all_scores['variance_fsc'] = score_variance
+    # Legacy aliases
+    all_scores['variance_spatial_fsc'] = score_variance
+    all_scores['variance_fourier_fsc'] = score_variance
 
     # SVD metrics
     synt = gt_thing
