@@ -976,7 +976,10 @@ def main():
     # Variance FSC: GT Fourier variance vs pipeline's variance estimate.
     # Both are per-Fourier-voxel quantities — no DFT needed.
     volume_shape = cryos[0].volume_shape
-    estimated_variance = pipeline_output.get('variance')  # Fourier-space variance
+    # Use variance_est['combined'] (Fourier-space, from compute_variance),
+    # NOT pipeline_output.get('variance') which is the real-space spatial
+    # variance from eigendecomposition (different quantity entirely).
+    estimated_variance = np.asarray(pipeline_output.get('variance_est')['combined'])
 
     if hasattr(gt_thing, 'get_covariance_square_root'):
         cov_sqrt_fourier = gt_thing.get_covariance_square_root(contrasted=False)
