@@ -76,12 +76,13 @@ from helpers.metrics_regression import compare_metric, metric_direction
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 # ---------------------------------------------------------------------------
-# Tiny-test thresholds (loose – small dataset is noisy)
+# Tiny-test thresholds (low noise → deterministic, reproducible)
 # ---------------------------------------------------------------------------
-MIN_RECALL_TINY = 0.30       # at least 30 % of true outliers detected
+MIN_RECALL_TINY = 0.40       # at least 40 % of true outliers detected
 MIN_PRECISION_TINY = 0.20    # at least 20 % of detected are real outliers
 TINY_GRID_SIZE = 32
 TINY_N_IMAGES = 500
+TINY_NOISE_LEVEL = 0.01      # high SNR for deterministic results
 TINY_PERCENT_OUTLIERS = 0.20
 TINY_K_ROUNDS = 1
 
@@ -171,6 +172,7 @@ def _run_outliers_pipeline(
     extra_args: str = "",
     accept_cpu: bool = False,
     reuse_dataset: bool = False,
+    noise_level: float = 0.1,
 ) -> Path:
     """
     Generate a test dataset and run pipeline_with_outliers; return the
@@ -201,7 +203,10 @@ def _run_outliers_pipeline(
             "--percent-outliers", str(percent_outliers),
             "--image-size", str(grid_size),
             "--seed", "42",
+            "--noise-level", str(noise_level),
         ]
+        if volumes_prefix is not None:
+            make_cmd += ["--volume-input", str(volumes_prefix)]
         if extra_args:
             make_cmd.extend(shlex.split(extra_args))
         env = gpu_subprocess_env()
@@ -388,6 +393,7 @@ def test_outliers_pipeline_tiny_regression(tmp_path):
         n_images=TINY_N_IMAGES,
         percent_outliers=TINY_PERCENT_OUTLIERS,
         k_rounds=TINY_K_ROUNDS,
+        noise_level=TINY_NOISE_LEVEL,
     )
 
     sim_info_path = output_dir / "test_dataset" / "simulation_info.pkl"
@@ -421,7 +427,7 @@ def test_outliers_pipeline_tiny_regression(tmp_path):
     _compare_against_baseline(
         current=metrics,
         baseline_path=_TINY_BASELINE_JSON,
-        tol_frac=0.25,  # allow 25 % degradation from tiny-dataset noise
+        tol_frac=0.05,  # tight tolerance — test is deterministic (seed=42, noise=0.01)
     )
 
 
@@ -517,7 +523,8 @@ def test_outliers_pipeline_regression_against_baseline(tmp_path):
     n_images = int(os.environ.get("OUTLIERS_N_IMAGES", "10000"))
     pct_out = float(os.environ.get("OUTLIERS_PERCENT_OUTLIERS", "0.15"))
     k_rounds = int(os.environ.get("OUTLIERS_K_ROUNDS", "2"))
-    tol_frac = float(os.environ.get("OUTLIERS_TOL_FRAC", "0.15"))
+    tol_frac = float(os.environ.get("OUTLIERS_TOL_FRAC", "0.05"))
+    noise_level = float(os.environ.get("OUTLIERS_NOISE_LEVEL", "0.1"))
 
     output_dir = _resolve_output_dir(tmp_path, "outliers_long")
     reuse = _dataset_exists_spa(output_dir, grid_size)
@@ -530,6 +537,7 @@ def test_outliers_pipeline_regression_against_baseline(tmp_path):
         k_rounds=k_rounds,
         accept_cpu=False,
         reuse_dataset=reuse,
+        noise_level=noise_level,
     )
 
     sim_info_path = output_dir / "test_dataset" / "simulation_info.pkl"
@@ -584,7 +592,8 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
     pct_tilt_out = float(os.environ.get("OUTLIERS_PCT_TILT_OUTLIERS", "0.10"))
     n_tilts = int(os.environ.get("OUTLIERS_N_TILTS", "7"))
     k_rounds = int(os.environ.get("OUTLIERS_K_ROUNDS", "2"))
-    tol_frac = float(os.environ.get("OUTLIERS_TOL_FRAC", "0.15"))
+    tol_frac = float(os.environ.get("OUTLIERS_TOL_FRAC", "0.05"))
+    noise_level = float(os.environ.get("OUTLIERS_NOISE_LEVEL", "0.1"))
 
     output_dir = _resolve_output_dir(tmp_path, "outliers_cryo_et")
     dataset_dir = output_dir / "test_dataset"
@@ -609,7 +618,10 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
             "--tilt-series",
             "--image-size", str(grid_size),
             "--seed", "42",
+            "--noise-level", str(noise_level),
         ]
+        if volumes_prefix is not None:
+            make_cmd += ["--volume-input", str(volumes_prefix)]
         subprocess.run(make_cmd, check=True, env=gpu_subprocess_env())
 
     # Compute GT union mask from synthetic volumes
