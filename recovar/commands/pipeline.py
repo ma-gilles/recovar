@@ -918,10 +918,16 @@ def standard_recovar_pipeline(args):
     if not args.tilt_series:
         n_pcs_to_use = (num_foc_masks - 1) * zdim_for_rest + zdim
         try:
+            # Reorder halfset-concatenated arrays to original dataset order
+            # for iteration over the unified dataset.
+            contrasts_orig_resid = dataset.reorder_to_original_indexing(
+                est_contrasts[zdim], ds, use_tilt_indices=ds.tilt_series_flag)
+            coords_orig_resid = dataset.reorder_to_original_indexing(
+                latent_coords[zdim], ds, use_tilt_indices=ds.tilt_series_flag)
             noise_var_from_het_residual, _, _ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(
                 ds, dilated_volume_mask, means['combined'], u['rescaled'][:, :n_pcs_to_use],
                 # //10: heterogeneity residual estimation is memory-intensive (holds full embedding + projections)
-                est_contrasts[zdim], latent_coords[zdim], utils.safe_batch_size(batch_size // 10),
+                contrasts_orig_resid, coords_orig_resid, utils.safe_batch_size(batch_size // 10),
                 disc_type=covariance_options['disc_type'])
         except Exception as exc:
             # Some CPU/mixed backend traces can hit CUDA FFI host-registration
