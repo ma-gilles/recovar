@@ -937,7 +937,10 @@ def _compute_projected_covariance_single(experiment_dataset, mean_estimate, basi
     opts = CovarianceOpts(disc_type_u=disc_type_u, do_mask_images=do_mask_images, shared_label=experiment_dataset.tilt_series_flag)
     hermitian_weights = linalg.rfft2_hermitian_weights(config.image_shape, dtype=experiment_dataset.dtype_real)
 
-    for batch_data in experiment_dataset.iterate(batch_size, noise_model=experiment_dataset.noise, noise_half=False):
+    for batch_data in experiment_dataset.iterate(
+        batch_size, noise_model=experiment_dataset.noise, noise_half=False,
+        by_image=not experiment_dataset.tilt_series_flag,
+    ):
         lhs, rhs = reduce_covariance_inner(config, batch_data, model, opts, experiment_dataset.image_mask, hermitian_weights=hermitian_weights, lhs=lhs, rhs=rhs)
     del basis
 
@@ -1017,6 +1020,7 @@ def compute_projected_covariance(dataset, mean_estimate, basis, volume_mask, bat
             noise_model=dataset.noise,
             noise_half=False,
             half=half,
+            by_image=not dataset.tilt_series_flag,
         ):
             lhs, rhs = reduce_covariance_inner(
                 config, batch_data, model, opts,
