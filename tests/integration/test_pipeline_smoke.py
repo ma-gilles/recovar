@@ -519,6 +519,9 @@ def test_pipeline_cryo_et_gpu(tmp_path):
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",
+        # With only 10 particles (5 per halfset), the default ~183 PCs is
+        # massively underdetermined for projected covariance.  Cap at 30.
+        "--very-low-memory-option",
     ]
     _run(cmd, env=_gpu_env())
 
