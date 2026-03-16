@@ -1245,4 +1245,8 @@ def set_contrasts_in_cryos(dataset, contrasts):
     images followed by half-1 images).  This function reindexes them back
     to original dataset order before calling ``dataset.set_contrasts``.
     """
-    dataset.set_contrasts(contrasts)
+    from recovar.data_io import dataset as dataset_mod
+    contrasts_orig = dataset_mod.reorder_to_original_indexing(
+        contrasts, dataset,
+        use_tilt_indices=dataset.tilt_series_flag)
+    dataset.set_contrasts(contrasts_orig)

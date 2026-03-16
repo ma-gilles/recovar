@@ -732,7 +732,12 @@ def standard_recovar_pipeline(args):
             logger.warning("repeating with contrast of zdim=%s", ndim)
             contrasts_for_second = est_contrasts[ndim]
             contrasts_for_second /= np.mean(contrasts_for_second)
-            ds.set_contrasts(contrasts_for_second)
+            # est_contrasts is in halfset-concatenated order; reindex to
+            # original dataset order before applying to the unified dataset.
+            contrasts_orig = dataset.reorder_to_original_indexing(
+                contrasts_for_second, ds,
+                use_tilt_indices=ds.tilt_series_flag)
+            ds.set_contrasts(contrasts_orig)
             options["contrast"] = "contrast"
 
         ##TODO: mean functions return a dict with volume sized arrays.

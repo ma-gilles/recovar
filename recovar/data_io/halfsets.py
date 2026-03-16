@@ -167,7 +167,26 @@ def get_split_tilt_indices(
         return arr.astype(np.int64, copy=False).reshape(-1)
 
     def _normalize_image_ids(values, n_images_total):
-        return _normalize_image_indices(values, n_images_total=n_images_total, name="ind_file")
+        """Normalize image IDs, silently dropping out-of-range values."""
+        arr = np.asarray(values)
+        if arr.dtype == bool:
+            if arr.ndim != 1:
+                raise ValueError("ind_file boolean mask must be 1D")
+            if arr.size != int(n_images_total):
+                raise ValueError(
+                    f"ind_file boolean mask length {arr.size} must match total size {n_images_total}")
+            return np.flatnonzero(arr).astype(np.int32, copy=False)
+        if arr.ndim == 0:
+            arr = arr.reshape(1)
+        if arr.ndim != 1:
+            raise ValueError("ind_file must be 1D")
+        if arr.dtype.kind not in ("i", "u"):
+            raise TypeError("ind_file must be integer array")
+        in_bounds = (arr >= 0) & (arr < int(n_images_total))
+        if not np.all(in_bounds):
+            dropped = int(np.sum(~in_bounds))
+            logger.warning("Dropping %d out-of-range image ids from ind_file (total=%d).", dropped, n_images_total)
+        return arr[in_bounds].astype(np.int32, copy=False)
 
     def _sanitize_particle_ids(values, n_particles_total, allowed_particles):
         values = _normalize_particle_ids(values, n_particles_total=n_particles_total)
