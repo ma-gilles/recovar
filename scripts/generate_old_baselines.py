@@ -166,7 +166,6 @@ def main():
     # ================================================================
     logger.info("=== Step 3: Compute metrics on OLD pipeline output ===")
     gt_mean = gt_thing.get_mean()
-    gt_variance = gt_thing.get_spatial_variances(contrasted=False)
     u_gt, s_gt, _ = gt_thing.get_vol_svd(contrasted=False, real_space=True, random_svd_pcs=200)
 
     po = output.PipelineOutput(old_pipe_dir)
@@ -182,12 +181,13 @@ def main():
         threshold=0.5, name="Mean FSC",
     )
 
-    # Variance spatial FSC
-    gt_sp_dft = ftu.get_dft3(gt_variance.reshape(volume_shape)).reshape(-1)
-    est_sp_dft = ftu.get_dft3(po.get("variance").reshape(volume_shape)).reshape(-1)
-    _, scores["variance_spatial_fsc"] = plot_utils.plot_fsc_new(
-        gt_sp_dft, est_sp_dft, np.array(volume_shape), voxel_size,
-        threshold=0.5, name="Variance Spatial FSC",
+    # Variance FSC: GT Fourier variance vs variance_est['combined']
+    cov_sqrt = gt_thing.get_covariance_square_root(contrasted=False)
+    gt_fourier_var = np.sum(np.abs(cov_sqrt) ** 2, axis=-1)
+    est_var = np.asarray(po.get("variance_est")["combined"])
+    _, scores["variance_fsc"] = plot_utils.plot_fsc_new(
+        gt_fourier_var, est_var, np.array(volume_shape), voxel_size,
+        threshold=0.5, name="Variance FSC",
     )
 
     # SVD relative variance

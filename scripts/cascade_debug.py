@@ -136,9 +136,11 @@ def main():
             cryos, means["combined"], utils.safe_batch_size(batch_size // 2),
             dilated_volume_mask, use_regularization=True, disc_type="cubic")
 
-    gt_variance = gt.get_spatial_variances(contrasted=False)
+    # Variance FSC: GT Fourier variance vs variance_est['combined'] (both Fourier-space)
+    cov_sqrt = gt.get_covariance_square_root(contrasted=False)
+    gt_fourier_var = np.sum(np.abs(cov_sqrt) ** 2, axis=-1)
     _, var_fsc = plot_utils.plot_fsc_new(
-        gt_variance, variance_est["combined"], np.array(volume_shape), voxel_size,
+        gt_fourier_var, variance_est["combined"], np.array(volume_shape), voxel_size,
         threshold=0.5, name="Variance FSC")
     scores_cascade["variance_fsc"] = float(np.asarray(var_fsc))
     logger.info("variance_fsc: cascade=%.8f baseline=%.8f", scores_cascade["variance_fsc"], baseline["variance_fsc"])
