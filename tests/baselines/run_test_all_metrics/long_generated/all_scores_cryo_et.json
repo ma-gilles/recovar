@@ -13,7 +13,7 @@
   "pcs_relative_variance_4": 0.6323373331905843,
   "svd_relative_variance_10": 0.6343110222344932,
   "svd_relative_variance_4": 0.6323373331905843,
-  "variance_fourier_fsc": 0.006339334104014599,
-  "variance_fsc": 0.006339334104014599,
-  "variance_spatial_fsc": 0.006339334104014599
+  "variance_fourier_fsc": 0.11133150135152817,
+  "variance_fsc": 0.11133150135152817,
+  "variance_spatial_fsc": 0.11133150135152817
 }
