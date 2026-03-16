@@ -69,7 +69,8 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
     coords = results.get('latent_coords', results.get('zs', {}))
     precision = results.get('latent_precision', results.get('cov_zs', {}))
     log_likelihoods = recovar.heterogeneity.latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], coords[ndim], precision[ndim])[...,0]
-    heterogeneity_distances = ds.split_halfset_array(log_likelihoods)
+    heterogeneity_distances = ds.split_halfset_array(
+        log_likelihoods, per_particle=ds.tilt_series_flag)
     if metric_used == "global":
         pass
     else:
@@ -250,8 +251,8 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         recovar.utils.pickle_dump(output_dict ,  output_folder + name + "params.pkl")
 
 
-    distances_reordered = dataset.reorder_to_original_indexing_from_halfsets(
-        np.concatenate(heterogeneity_distances), ds.halfset_indices)
+    distances_reordered = dataset.reorder_to_original_indexing(
+        heterogeneity_distances, ds, use_tilt_indices=ds.tilt_series_flag)
     np.savetxt(output_folder + "heterogeneity_distances.txt", distances_reordered)
     use_choice_and_filter(ml_choice, "")
 

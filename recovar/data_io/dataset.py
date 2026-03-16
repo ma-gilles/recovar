@@ -87,7 +87,37 @@ def _deduplicate_preserve_order(values, name):
         dropped = int(values.size - first_idx.size)
         logger.warning("Dropping %d duplicate entries from %s.", dropped, name)
     return values[np.sort(first_idx)]
-    
+
+
+class _SubsetNoiseAdapter:
+    """Wrap a noise model to translate subset-local indices to original indices.
+
+    When ``CryoEMDataset.subset()`` creates a view, generators remap yielded
+    indices to local 0..n-1 space.  The parent's noise model still expects
+    *original* image-stack indices.  This adapter intercepts ``get()`` and
+    ``get_half()`` and translates local → original before delegating.
+
+    All other attributes (``get_average_radial_noise``, ``dose_indices``, etc.)
+    are forwarded transparently, including ``isinstance`` checks.
+    """
+
+    def __init__(self, noise_model, subset_indices):
+        self._noise = noise_model
+        self._subset_indices = np.asarray(subset_indices)
+
+    def get(self, indices):
+        return self._noise.get(self._subset_indices[indices])
+
+    def get_half(self, indices):
+        return self._noise.get_half(self._subset_indices[indices])
+
+    @property
+    def __class__(self):
+        return type(self._noise)
+
+    def __getattr__(self, name):
+        return getattr(self._noise, name)
+
 
 class Metadata:
     """Per-image metadata store (poses + CTF parameters).
@@ -430,7 +460,7 @@ class CryoEMDataset:
         else:
             sub.n_units = len(indices)
         if self.noise is not None:
-            sub.noise = self.noise
+            sub.noise = _SubsetNoiseAdapter(self.noise, composed_subset)
         return sub
 
     def _remap_generator(self, gen, *, remap_particles=False):
@@ -700,9 +730,44 @@ class CryoEMDataset:
             raise ValueError("halfset_indices not set on this dataset")
         return len(self.halfset_indices[half])
 
-    def split_halfset_array(self, arr):
-        """Split a concatenated halfset-ordered array into [half0, half1]."""
-        n0 = self.n_images_half(0)
+    def get_particle_halfset_indices(self):
+        """Per-half canonical particle indices for tilt-series datasets.
+
+        For SPA datasets, this simply returns ``halfset_indices`` (images
+        and particles are 1-to-1).  For tilt-series, it maps each half's
+        image indices through the image→particle mapping and returns the
+        unique canonical (``dataset_tilt_indices``) particle ids per half.
+        """
+        if self.halfset_indices is None:
+            raise ValueError("halfset_indices not set on this dataset")
+        if not self.tilt_series_flag:
+            return self.halfset_indices
+        _dti = np.asarray(self.dataset_tilt_indices)
+        _img_to_particle = np.full(self.n_images, -1, dtype=np.int32)
+        for p_idx, tilts in enumerate(self.image_stack._particle_tilts):
+            for t in tilts:
+                if t < self.n_images:
+                    _img_to_particle[t] = p_idx
+        result = []
+        for half_imgs in self.halfset_indices:
+            half_particles = np.unique(_img_to_particle[np.asarray(half_imgs)])
+            result.append(_dti[half_particles])
+        return result
+
+    def split_halfset_array(self, arr, per_particle=False):
+        """Split a concatenated halfset-ordered array into [half0, half1].
+
+        Parameters
+        ----------
+        per_particle : bool
+            If True **and** this is a tilt-series dataset, split at the
+            particle boundary instead of the image boundary.
+        """
+        if per_particle and self.tilt_series_flag:
+            particle_halfs = self.get_particle_halfset_indices()
+            n0 = len(particle_halfs[0])
+        else:
+            n0 = self.n_images_half(0)
         return [arr[:n0], arr[n0:]]
 
     def iterate(self, batch_size, *, half=None, indices=None,
@@ -739,6 +804,17 @@ class CryoEMDataset:
             if self.halfset_indices is None:
                 raise ValueError("halfset_indices not set on this dataset")
             indices = self.halfset_indices[half]
+            # For tilt-series with particle-grouped iteration, convert
+            # image-level halfset indices to particle-level indices.  The
+            # particle-grouped generator (TiltSeriesDataset) expects particle
+            # indices, not image indices.  All tilts from a single particle
+            # belong to the same halfset.
+            if not by_image and self.tilt_series_flag and hasattr(self.image_stack, '_particle_tilts'):
+                img_set = set(np.asarray(indices).ravel().tolist())
+                indices = np.array([
+                    p_idx for p_idx, tilts in enumerate(self.image_stack._particle_tilts)
+                    if any(t in img_set for t in tilts)
+                ], dtype=np.int32)
 
         from recovar.core.configs import DataIterator
         inner = DataIterator(self, batch_size,
@@ -1098,6 +1174,20 @@ def reorder_to_original_indexing_from_halfsets(arr, halfsets, num_images = None 
     arr_reorder[dataset_indices] = arr
     return arr_reorder
 
+
+def reorder_to_original_indexing(arr, ds, use_tilt_indices=False):
+    """Reorder a halfset-concatenated array back to original file ordering.
+
+    For SPA (``use_tilt_indices=False``), uses ``ds.halfset_indices``
+    (image-level).  For tilt-series (``use_tilt_indices=True``), uses
+    the canonical particle indices derived from each half's images so
+    that per-particle data is scattered to its original particle position.
+    """
+    if use_tilt_indices:
+        halfsets = ds.get_particle_halfset_indices()
+    else:
+        halfsets = ds.halfset_indices
+    return reorder_to_original_indexing_from_halfsets(arr, halfsets)
 
 
 def subsample_cryoem_dataset(cryo, good_indices):

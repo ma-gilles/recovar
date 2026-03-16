@@ -203,9 +203,12 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
                 logger.warning("Cluster %s: No particles available for half-map %s, skipping", cluster_idx, i)
                 used_particles[i] = np.array([], dtype=np.int32)
                 continue
-            # Map local half indices back to original indices for reconstruction
-            canonical_indices = particles_halfsets[i][closest_local]
+            # Map local half indices back to LOCAL dataset indices for
+            # reconstruction.  ``cryos.halfset_indices[i]`` are LOCAL image
+            # indices that correspond 1-to-1 with positions in ``zs_subsets[i]``
+            # (both ordered the same way via load_embedding).
             if is_tilt:
+                canonical_indices = particles_halfsets[i][closest_local]
                 # Expand particle-level canonical indices → image indices
                 local_particles = _canonical_to_local[canonical_indices]
                 image_list = []
@@ -213,7 +216,8 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
                     image_list.extend(cryos.image_stack._particle_tilts[p])
                 global_indices = np.array(image_list, dtype=np.int32)
             else:
-                global_indices = canonical_indices
+                # SPA: use LOCAL halfset indices (not FILE-LEVEL particles_halfsets)
+                global_indices = np.asarray(cryos.halfset_indices[i])[closest_local]
             # Store dense zs indices for downstream use (plotting, usage counts).
             # These index into the halfset-concatenated zs array.
             used_particles[i] = half_offsets[i] + closest_local

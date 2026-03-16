@@ -658,7 +658,8 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
         else:
             raise ValueError("Unknown embed option")
 
-        heterogeneity_distances = ds.split_halfset_array(heterogeneity_distances)
+        heterogeneity_distances = ds.split_halfset_array(
+            heterogeneity_distances, per_particle=ds.tilt_series_flag)
 
         locres_maskrad = ds.grid_size * ds.voxel_size / maskrad_fraction
         logger.info("Mask radius fraction = %s. Setting locres_maskrad = locres_sampling = box_size * voxel_size / %s = %.1f Angstroms. Using %d particles for template.", maskrad_fraction, maskrad_fraction, locres_maskrad, n_min_particles)
