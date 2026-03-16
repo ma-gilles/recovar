@@ -125,6 +125,7 @@ def _install_main_runtime_stubs(monkeypatch, tmp_path, *, mean_fsc=0.5, variance
                 "volume_shape": (2, 2, 2),
                 "s": self._s,
                 "noise_var_used": np.array([1.0, 1.0], dtype=np.float32),
+                "unsorted_embedding": self._embedding,
             }
             return mapping[key]
 
@@ -779,14 +780,22 @@ def test_load_u_real_for_metrics_rejects_nonpositive_request():
         rtam.load_u_real_for_metrics(_PO(), 0)
 
 
-def test_load_unsorted_embedding_component_prefers_selective_api_and_caches_by_component():
+def test_load_unsorted_embedding_component_caches_by_component():
+    """get('unsorted_embedding') is called once; components are cached by (entry, key)."""
     class _PO:
         def __init__(self):
-            self.calls = []
+            self.get_calls = 0
+            self.root = {
+                "latent_coords": {
+                    10: np.array([1.0, 10.0], dtype=np.float32),
+                    4: np.array([2.0, 4.0], dtype=np.float32),
+                },
+            }
 
-        def get_embedding_component(self, entry, key):
-            self.calls.append((entry, key))
-            return np.array([len(self.calls), int(key)], dtype=np.float32)
+        def get(self, key):
+            assert key == "unsorted_embedding"
+            self.get_calls += 1
+            return self.root
 
     po = _PO()
     cache = {}
@@ -795,8 +804,8 @@ def test_load_unsorted_embedding_component_prefers_selective_api_and_caches_by_c
     second = rtam.load_unsorted_embedding_component(po, "latent_coords", 10, cache)
     third = rtam.load_unsorted_embedding_component(po, "latent_coords", 4, cache)
 
-    # Same component is loaded once; different key triggers another load.
-    assert po.calls == [("latent_coords", 10), ("latent_coords", 4)]
+    # Root loaded once; same (entry, key) returns cached result.
+    assert po.get_calls == 1
     np.testing.assert_array_equal(first, second)
     assert not np.array_equal(first, third)
 

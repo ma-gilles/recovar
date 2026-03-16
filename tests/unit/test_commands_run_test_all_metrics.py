@@ -188,13 +188,15 @@ def test_load_u_real_for_metrics_rejects_negative():
 # load_unsorted_embedding_component
 # ---------------------------------------------------------------------------
 
-def test_load_unsorted_embedding_component_uses_component_api():
-    """Should prefer get_embedding_component when available."""
+def test_load_unsorted_embedding_component_uses_get_unsorted():
+    """Should use get('unsorted_embedding') to retrieve data in original order."""
     expected = np.arange(10, dtype=np.float32)
 
     class FakePO:
-        def get_embedding_component(self, entry, key):
-            return expected
+        def get(self, key):
+            if key == 'unsorted_embedding':
+                return {"latent_coords": {4: expected}}
+            raise KeyError(key)
 
     result = rtam.load_unsorted_embedding_component(FakePO(), "latent_coords", 4)
     np.testing.assert_array_equal(result, expected)
@@ -206,13 +208,14 @@ def test_load_unsorted_embedding_component_caches():
     expected = np.ones(5, dtype=np.float32)
 
     class FakePO:
-        def get_embedding_component(self, entry, key):
+        def get(self, key):
             call_count["n"] += 1
-            return expected
+            return {"latent_coords": {4: expected}}
 
     cache = {}
     rtam.load_unsorted_embedding_component(FakePO(), "latent_coords", 4, legacy_cache=cache)
     rtam.load_unsorted_embedding_component(FakePO(), "latent_coords", 4, legacy_cache=cache)
+    # get() called once for __root__, then cached
     assert call_count["n"] == 1
 
 
