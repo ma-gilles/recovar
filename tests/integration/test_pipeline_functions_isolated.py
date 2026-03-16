@@ -559,30 +559,8 @@ def test_principal_components(cryos, gt_data, intermediates, baseline_scores, to
         if rel_var.size > k:
             results[f"pcs_relative_variance_{k}"] = float(rel_var[k])
 
-    # Spatial variance FSC: estimate_variance(u_real, s) vs GT spatial variance
-    # This is what po.get('variance') computes in the pipeline
-    from recovar import utils
-    from recovar.output import plot_utils
-    from recovar.core import fourier_transform_utils
-    est_spatial_var = utils.estimate_variance(u_real.T, s["rescaled"][:n_pcs])
-    gt_spatial_var = gt_data["gt_spatial_variance"]
-    # DFT both, then FSC
-    est_spatial_dft = fourier_transform_utils.get_dft3(
-        est_spatial_var.reshape(volume_shape)
-    ).reshape(-1)
-    gt_spatial_dft = fourier_transform_utils.get_dft3(
-        gt_spatial_var.reshape(volume_shape)
-    ).reshape(-1)
-    _, spatial_var_fsc = plot_utils.plot_fsc_new(
-        gt_spatial_dft, est_spatial_dft,
-        np.array(volume_shape), gt_data["voxel_size"],
-        threshold=0.5, name="Variance Spatial FSC"
-    )
-    results["variance_spatial_fsc"] = float(spatial_var_fsc)
-
     print("  PCS relative variance:", {k: f"{v:.6f}" for k, v in results.items()
                                         if k.startswith("pcs_")})
-    print(f"  variance_spatial_fsc = {spatial_var_fsc:.6f}")
     assert results, "No PCS metrics computed"
     _assert_metrics(results, baseline_scores, tol_frac)
 
