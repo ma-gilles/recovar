@@ -1242,11 +1242,8 @@ def set_contrasts_in_cryos(dataset, contrasts):
     """Apply per-image contrast factors to CTF parameters.
 
     The *contrasts* array must be in concatenated halfset order (half-0
-    images followed by half-1 images).  This function reindexes them back
-    to original dataset order before calling ``dataset.set_contrasts``.
+    images followed by half-1 images).  For the unified single-dataset
+    design, callers that need original-order contrasts should reindex
+    before calling this function.
     """
-    from recovar.data_io import dataset as dataset_mod
-    contrasts_orig = dataset_mod.reorder_to_original_indexing(
-        contrasts, dataset,
-        use_tilt_indices=dataset.tilt_series_flag)
-    dataset.set_contrasts(contrasts_orig)
+    dataset.set_contrasts(contrasts)
