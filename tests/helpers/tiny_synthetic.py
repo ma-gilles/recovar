@@ -130,6 +130,9 @@ class TinyRadialNoise:
     def get(self, indices):
         return np.tile(self._noise[None], (len(indices), 1))
 
+    def get_half(self, indices):
+        return self.get(indices)
+
 
 def make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8, seed=0):
     images, ctf_params, rots, trans, _, voxel_size, _ = make_tiny_simulation(

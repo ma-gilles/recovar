@@ -30,6 +30,10 @@ def pick_minimum_discretization_size(ndim, log_likelihoods, q = 0.5, min_images 
     return value * ( 1 + 1e-8)
 
 def pick_heterogeneity_bins2(ndim, log_likelihoods, q = 0.5, min_images = 50, n_bins = 11):
+    if log_likelihoods.size == 0:
+        logger.warning("Empty log_likelihoods array; returning default bins.")
+        disc_latent_dist = recovar.heterogeneity.latent_density.get_log_likelihood_threshold(k=max(ndim, 1), q=q)
+        return np.linspace(np.sqrt(disc_latent_dist), np.sqrt(disc_latent_dist * 10), n_bins) ** 2
     disc_latent_dist = pick_minimum_discretization_size(ndim, log_likelihoods, q , min_images )
     max_latent_dist = np.percentile(log_likelihoods, 95)
     return np.linspace(np.sqrt(disc_latent_dist), np.sqrt(max_latent_dist), n_bins ) **2

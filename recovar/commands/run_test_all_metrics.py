@@ -579,10 +579,12 @@ def load_u_real_for_metrics(pipeline_output, n_pcs):
 
 def load_unsorted_embedding_component(pipeline_output, entry, key, legacy_cache=None):
     """
-    Load one unsorted embedding component with minimal I/O when supported.
+    Load one unsorted embedding component in original (simulation) order.
 
-    Prefer `PipelineOutput.get_embedding_component(entry, key)` to avoid loading
-    the entire embeddings payload. Fall back to legacy `get('unsorted_embedding')`.
+    Uses ``get('unsorted_embedding')`` which returns the raw reordered embedding
+    indexed by original particle position.  Unlike ``get_embedding_component``,
+    this does NOT apply the halfset re-indexing that produces halfset-concatenated
+    order.
     """
     if legacy_cache is None:
         legacy_cache = {}
@@ -591,12 +593,9 @@ def load_unsorted_embedding_component(pipeline_output, entry, key, legacy_cache=
     if cache_key in legacy_cache:
         return legacy_cache[cache_key]
 
-    if hasattr(pipeline_output, "get_embedding_component"):
-        value = np.asarray(pipeline_output.get_embedding_component(entry, key))
-    else:
-        if "__root__" not in legacy_cache:
-            legacy_cache["__root__"] = pipeline_output.get('unsorted_embedding')
-        value = np.asarray(legacy_cache["__root__"][entry][key])
+    if "__root__" not in legacy_cache:
+        legacy_cache["__root__"] = pipeline_output.get('unsorted_embedding')
+    value = np.asarray(legacy_cache["__root__"][entry][key])
 
     legacy_cache[cache_key] = value
     return value

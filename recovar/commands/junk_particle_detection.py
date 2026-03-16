@@ -147,11 +147,12 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
     particle_usage = {}
     reconstructions = {}
 
-    # Split zs by halfset.  zs is in original ordering (after
-    # reorder_to_original_indexing_from_halfsets), so we must index by the
-    # particle-level halfset indices rather than slicing by image count.
+    # Split zs by halfset.  PipelineOutput.load_embedding() returns zs in
+    # halfset-concatenated order: first len(halfsets[0]) entries for half 0,
+    # then len(halfsets[1]) entries for half 1.  Split by sizes.
     particles_halfsets = pipeline_output.get('particles_halfsets')
-    zs_subsets = [zs[particles_halfsets[i]] for i in range(2)]
+    n_half0 = len(particles_halfsets[0])
+    zs_subsets = [zs[:n_half0], zs[n_half0:]]
 
     # For tilt-series we need to map canonical particle indices back to
     # image indices for reconstruction (relion_style_triangular_kernel
@@ -193,6 +194,8 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
         halfmaps = [None, None]
         used_particles = [[], []]  # Track which particles are used for each halfmap
 
+        # Offset to convert local halfset index → dense zs index
+        half_offsets = [0, n_half0]
         for i, zs_subset in enumerate(zs_subsets):
             distances = np.linalg.norm(zs_subset - cluster_center, axis=1)
             closest_local = np.argsort(distances)[:n_particles_per_cluster]
@@ -200,7 +203,7 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
                 logger.warning("Cluster %s: No particles available for half-map %s, skipping", cluster_idx, i)
                 used_particles[i] = np.array([], dtype=np.int32)
                 continue
-            # Map local half indices back to original indices
+            # Map local half indices back to original indices for reconstruction
             canonical_indices = particles_halfsets[i][closest_local]
             if is_tilt:
                 # Expand particle-level canonical indices → image indices
@@ -211,10 +214,9 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
                 global_indices = np.array(image_list, dtype=np.int32)
             else:
                 global_indices = canonical_indices
-            # Store canonical (particle-level) indices for downstream use
-            # (e.g. plotting against zs which is particle-indexed).
-            # The image-level global_indices are only needed for reconstruction.
-            used_particles[i] = canonical_indices
+            # Store dense zs indices for downstream use (plotting, usage counts).
+            # These index into the halfset-concatenated zs array.
+            used_particles[i] = half_offsets[i] + closest_local
 
             logger.info("Cluster %s: Using %s closest particles for half-map %s (min distance: %.3f, max distance: %.3f). Average distance over all particles: %.3f", cluster_idx, len(closest_local), i, distances[closest_local[0]], distances[closest_local[-1]], np.mean(distances))
 

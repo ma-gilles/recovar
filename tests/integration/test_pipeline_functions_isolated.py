@@ -178,14 +178,13 @@ def cryos(dataset_dir, intermediates):
         perm = rng.permutation(n_images)
         ind_split = [perm[:n_images // 2], perm[n_images // 2:]]
 
-    cryos = dataset.get_split_datasets(
+    ds = dataset.get_split_datasets(
         particles_file, poses_file, ctf_file,
         datadir=None, ind_split=ind_split, lazy=True,
     )
     # Initialize noise model (same as pipeline.py line 737)
-    for cryo in cryos:
-        cryo.set_radial_noise_model(None)
-    return cryos
+    ds.set_radial_noise_model(None)
+    return ds
 
 
 def _check_metric(key, current_val, baseline_scores, tol_frac):
@@ -225,7 +224,7 @@ def test_compute_mean(cryos, gt_data, intermediates, baseline_scores, tol_frac):
     volume_shape = cryos.volume_shape
 
     # Initial noise from half-maps
-    noise_var_from_hf, _ = noise.estimate_noise_variance(cryos[0], batch_size)
+    noise_var_from_hf, _ = noise.estimate_noise_variance(cryos, batch_size)
 
     means, mean_prior, _ = homogeneous.get_mean_conformation_relion(
         cryos, batch_size, noise_variance=noise_var_from_hf, use_regularization=False
@@ -267,15 +266,15 @@ def test_estimate_noise(cryos, gt_data, intermediates, baseline_scores, tol_frac
 
     # Outside mask
     masked_image_PS, _, _ = noise.estimate_noise_variance_from_outside_mask_v2(
-        cryos[0], dilated_volume_mask, batch_size
+        cryos, dilated_volume_mask, batch_size
     )
     # Upper bound inside mask
     radial_ub_noise_var, _, _ = noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(
-        cryos[0], mean_combined, dilated_volume_mask, batch_size
+        cryos, mean_combined, dilated_volume_mask, batch_size
     )
     # Image PS for fallback
     _, _, image_PS, _ = noise.estimate_radial_noise_statistic_from_outside_mask(
-        cryos[0], dilated_volume_mask, batch_size
+        cryos, dilated_volume_mask, batch_size
     )
 
     noise_var_used = np.where(
