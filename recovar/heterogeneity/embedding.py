@@ -101,8 +101,14 @@ def _noise_get_half_or_full(noise_model, image_indices, prefer_half=True):
 
 
 def _embedding_hermitian_weights(config: ForwardModelConfig):
-    """Half-spectrum weights for embedding inner products, or ``None``."""
-    return _rfft2_hermitian_weights(config.image_shape)
+    """Half-spectrum weights for embedding inner products, or ``None``.
+
+    Disabled: half-spectrum inner products introduce ~0.03% FP error that
+    gets amplified by cancellation in the contrast estimation linear system,
+    producing ~66% worse contrast estimates.  Using full-image inner products
+    avoids this (same fix as compute_projected_covariance).
+    """
+    return None
 
 
 def _particle_ids_per_image(particles_ind, n_images):
@@ -245,9 +251,9 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
         experiment_dataset, disc_type=disc_type,
         process_fn=experiment_dataset.image_stack.process_images,
     )
-    # Embedding uses half-spectrum inner products by default; pre-convert model
-    # Fourier volumes once so forward passes can use native half-volume kernels.
-    mean_estimate, basis = _prepare_model_half_volumes(config, mean_estimate, basis)
+    # Only convert to half-volume layout when using half-spectrum inner products.
+    if _embedding_hermitian_weights(config) is not None:
+        mean_estimate, basis = _prepare_model_half_volumes(config, mean_estimate, basis)
     model = ModelState(
         mean_estimate=mean_estimate,
         volume_mask=volume_mask,
@@ -491,12 +497,13 @@ def _compute_batch_coords_p1(
             )
         batch = core.translate_images(batch, translations, config.image_shape, half_image=True)
     else:
-        if batch.shape[-1] == half_image_size:
-            batch = ftu.half_image_to_full_image(batch, config.image_shape)
-        elif batch.shape[-1] != full_image_size:
-            raise ValueError(
-                f"Expected batch image size {full_image_size} (full) or {half_image_size} (half), got {batch.shape[-1]}"
-            )
+        if batch.shape[-1] != full_image_size:
+            if batch.shape[-1] == half_image_size:
+                batch = ftu.half_image_to_full_image(batch, config.image_shape)
+            else:
+                raise ValueError(
+                    f"Expected batch image size {full_image_size} (full) or {half_image_size} (half), got {batch.shape[-1]}"
+                )
         batch = core.translate_images(batch, translations, config.image_shape)
 
     mean_half_volume = half and _mean_is_half_volume(model.mean_estimate, config.volume_shape)
@@ -555,13 +562,9 @@ def _compute_batch_coords_p1(
     A_mean_norm_sq = jnp.linalg.norm(projected_mean, axis=-1) ** 2
     image_norms_sq = jnp.linalg.norm(batch, axis=-1) ** 2
 
-    # Cross inner products are real for Hermitian cryo-EM data.  CUDA trilinear
-    # interpolation breaks exact Hermitian symmetry in float32, producing spurious
-    # ~1e-1 imaginary parts even in the full-spectrum path; discard unconditionally.
-    AU_t_images = AU_t_images.real
-    AU_t_Amean = AU_t_Amean.real
-    AU_t_AU = AU_t_AU.real
-    image_T_A_mean = image_T_A_mean.real
+    # NOTE: .real casting was removed — it discarded information used by the
+    # complex Hermitian linear solver, causing contrast estimation regression.
+    # The old ~/recovar code did not do .real here.
 
     return AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq
 

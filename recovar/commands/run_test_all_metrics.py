@@ -700,7 +700,7 @@ def main():
                         help='Use premultiplied CTF for the test dataset')
     parser.add_argument('--noise-increase-per-tilt', default=None, type=float,
                         help= 'Noise increase per tilt in the test dataset')
-    parser.add_argument('--noise-level', type=float, default=1.0,
+    parser.add_argument('--noise-level', type=float, default=0.1,
                         help='Noise level for the test dataset')
     parser.add_argument('--noise-model', type=str, default='radial',
                         help='Noise model for the test dataset')

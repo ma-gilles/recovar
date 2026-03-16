@@ -151,7 +151,7 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
     if volumes_prefix and not Path(f"{volumes_prefix}0000.mrc").exists():
         pytest.skip(f"invalid LONG_METRICS_VOLUMES_DIR prefix: {volumes_prefix}")
     baseline_json = Path(os.environ.get("LONG_METRICS_BASELINE_JSON", str(_DEFAULT_LONG_METRICS_BASELINE_JSON)))
-    run_args = os.environ.get("LONG_METRICS_RUN_ARGS", "--grid-size 128 --n-images 50000 --noise-level 1.0 --contrast-std 0.1")
+    run_args = os.environ.get("LONG_METRICS_RUN_ARGS", "--grid-size 128 --n-images 50000 --noise-level 0.1 --contrast-std 0.1")
     tol_frac = float(os.environ.get("LONG_METRICS_TOL_FRAC", "0.01"))
 
     output_dir = _resolve_output_dir(tmp_path, "current")
@@ -205,7 +205,7 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
     )
     run_args = os.environ.get(
         "LONG_METRICS_ET_RUN_ARGS",
-        "--grid-size 128 --n-images 50000 --noise-level 1.0 --contrast-std 0.1 "
+        "--grid-size 128 --n-images 50000 --noise-level 0.1 --contrast-std 0.1 "
         "--tomo-tilts 7 --noise-model radial_per_tilt --noise-increase-per-tilt 0.05",
     )
     tol_frac = float(os.environ.get("LONG_METRICS_ET_TOL_FRAC", os.environ.get("LONG_METRICS_TOL_FRAC", "0.01")))

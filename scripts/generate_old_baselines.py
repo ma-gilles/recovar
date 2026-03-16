@@ -51,7 +51,7 @@ def main():
                         help="Path to old recovar repo (default: ~/recovar)")
     parser.add_argument("--grid-size", type=int, default=128)
     parser.add_argument("--n-images", type=int, default=50000)
-    parser.add_argument("--noise-level", type=float, default=1.0)
+    parser.add_argument("--noise-level", type=float, default=0.1)
     parser.add_argument("--contrast-std", type=float, default=0.1)
     parser.add_argument("--tomo-tilts", type=int, default=-1,
                         help="Number of tilts for cryo-ET (default -1 = SPA)")

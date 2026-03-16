@@ -206,6 +206,11 @@ def _assert_metrics(results: dict, baseline_scores: dict, tol_frac: float):
         if not isinstance(val, (int, float)):
             continue
         ok, msg = _check_metric(key, val, baseline_scores, tol_frac)
+        # Always print scores for diagnostics
+        base = baseline_scores.get(key)
+        if base is not None and isinstance(base, (int, float)) and base != 0:
+            drift_pct = 100 * (float(val) - float(base)) / abs(float(base))
+            print(f"  SCORE {key}: current={float(val):.8f} baseline={float(base):.8f} drift={drift_pct:+.4f}%")
         if not ok:
             failures.append(msg)
     assert not failures, "Metric regressions:\n" + "\n".join(failures)
