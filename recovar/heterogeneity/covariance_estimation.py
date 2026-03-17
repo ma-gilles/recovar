@@ -945,8 +945,10 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
             shared_label=experiment_dataset.tilt_series_flag,
         )
 
-        hermitian_weights = linalg.rfft2_hermitian_weights(
-            config.image_shape, dtype=experiment_dataset.dtype_real)
+        # Disable half-image weights for projected covariance to match
+        # old code behavior. The half-image path interacts poorly with
+        # shared_label tilt-series grouping.
+        hermitian_weights = None
 
         for batch_data in DataIterator(
             experiment_dataset, batch_size,
