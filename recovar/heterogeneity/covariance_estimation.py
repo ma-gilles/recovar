@@ -604,7 +604,7 @@ def compute_both_H_B(dataset, means, dilated_volume_mask, picked_frequencies,
             H, B = compute_H_B_for_halfset(
                 dataset, mean, dilated_volume_mask, picked_frequencies,
                 gpu_memory, options,
-                image_subset=dataset.halfset_indices[half])
+                half=half)
         logger.info("Time to cov %s", time.time() - st_time)
         Hs.append(H)
         Bs.append(B)
@@ -732,7 +732,7 @@ def _batched_stack_transfer(H, B, H_out, B_out, freq_offset, volume_size, n_item
 
 @nvtx.annotate("compute_H_B_for_halfset", color="blue", domain=NVTX_DOMAIN_H_B)
 def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies,
-                            gpu_memory, options, image_subset=None):
+                            gpu_memory, options, image_subset=None, half=None):
     """Compute H and B matrices for one half-set.
 
     Replaces the old ``compute_H_B`` + ``compute_H_B_in_volume_batch`` pair.
@@ -784,13 +784,19 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
         B_accum = jnp.zeros((n_freq_batch, volume_size), dtype=jnp.complex64)
 
         # Inner loop: image batches
-        for batch_data in cryo.iterate(
-                image_batch_size,
-                noise_model=cryo.noise, noise_half=False,
-                noise_by_particle=True,
-                indices=image_subset,
-                by_image=image_subset is not None,
-                process_images=True):
+        # When half= is given, iterate() handles image-to-particle
+        # conversion for tilt-series, preserving per-particle grouping.
+        _iter_kw = dict(
+            noise_model=cryo.noise, noise_half=False,
+            noise_by_particle=True,
+            by_image=not cryo.tilt_series_flag,
+            process_images=True,
+        )
+        if half is not None:
+            _iter_kw['half'] = half
+        elif image_subset is not None:
+            _iter_kw['indices'] = image_subset
+        for batch_data in cryo.iterate(image_batch_size, **_iter_kw):
 
             images, ctf_on_grid, plane_coords, image_mask, tilt_labels = \
                 preprocess_covariance_batch(
