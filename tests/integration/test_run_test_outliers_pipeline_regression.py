@@ -616,6 +616,7 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
             "--percent-outliers", str(pct_out),
             "--percent-tilt-series-outliers", str(pct_tilt_out),
             "--tilt-series",
+            "--n-tilts", str(n_tilts),
             "--image-size", str(grid_size),
             "--seed", "42",
             "--noise-level", str(noise_level),
