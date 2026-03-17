@@ -31,9 +31,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-GRID_SIZE = 64
-N_IMAGES_SPA = 5000
-N_IMAGES_ET = 5000
+GRID_SIZE = 128
+N_IMAGES_SPA = 50000
+N_IMAGES_ET = 50000
 N_TILTS = 5
 NOISE_LEVEL = 0.1
 ZDIM = 4
@@ -41,10 +41,9 @@ N_CENTERS = 5      # number of k-means cluster centers for compute_state
 SEED = 42
 
 # Locres thresholds — median local resolution in Angstroms (lower = better)
-# These are loose thresholds since we use small grid_size=64 datasets.
-# At 64^3 with 5k images and voxel_size=8.5A, typical median locres is ~33A.
-MAX_LOCRES_MEDIAN_SPA = 40.0   # Angstroms
-MAX_LOCRES_MEDIAN_ET = 45.0    # ET is harder (fewer effective images per tilt)
+# At 128^3 with 50k images and voxel_size=4.25A, typical median locres is ~10-15A.
+MAX_LOCRES_MEDIAN_SPA = 20.0   # Angstroms
+MAX_LOCRES_MEDIAN_ET = 25.0    # ET is harder (fewer effective images per tilt)
 
 
 # ---------------------------------------------------------------------------
