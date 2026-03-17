@@ -150,13 +150,20 @@ def _compute_fsc_vs_gt(state_output: Path, test_dataset: Path, n_centers: int) -
 
     Returns a list of best-match FSC values (one per reconstructed volume).
     """
-    from recovar.output import plot_utils
     from recovar.simulation import synthetic_dataset
+    from recovar.core import fourier_transform_utils
     import mrcfile
 
     sim_path = test_dataset / "simulation_info.pkl"
     gt = synthetic_dataset.load_heterogeneous_reconstruction(str(sim_path))
-    gt_volumes = gt.get_all_volumes(real_space=True)  # (n_vols, *vol_shape)
+    # gt.volumes is (n_vols, vol_size) in Fourier space — convert to real
+    vol_shape = gt.volume_shape
+    gt_volumes_real = []
+    for i in range(gt.volumes.shape[0]):
+        gt_real = np.real(fourier_transform_utils.get_idft3(
+            gt.volumes[i].reshape(vol_shape)
+        )).astype(np.float32)
+        gt_volumes_real.append(gt_real)
 
     # Load reconstructed volumes
     mrc_files = sorted(state_output.glob("state*.mrc"))
@@ -171,9 +178,7 @@ def _compute_fsc_vs_gt(state_output: Path, test_dataset: Path, n_centers: int) -
 
         # Find best FSC match against all GT volumes
         best_fsc = -1.0
-        for gt_vol in gt_volumes:
-            gt_real = np.real(gt_vol).astype(np.float32)
-            # Compute FSC
+        for gt_real in gt_volumes_real:
             fsc_curve = _fsc_between_volumes(rec_vol, gt_real)
             # Take FSC at ~half-Nyquist
             idx = len(fsc_curve) // 4
