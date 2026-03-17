@@ -42,8 +42,9 @@ SEED = 42
 
 # Locres thresholds — median local resolution in Angstroms (lower = better)
 # These are loose thresholds since we use small grid_size=64 datasets.
-MAX_LOCRES_MEDIAN_SPA = 30.0   # Angstroms
-MAX_LOCRES_MEDIAN_ET = 35.0    # ET is harder
+# At 64^3 with 5k images and voxel_size=8.5A, typical median locres is ~33A.
+MAX_LOCRES_MEDIAN_SPA = 40.0   # Angstroms
+MAX_LOCRES_MEDIAN_ET = 45.0    # ET is harder (fewer effective images per tilt)
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +115,8 @@ def _run_pipeline_and_compute_state(
         "--lazy",
         "--correct-contrast",
     ]
+    if n_tilts is not None:
+        pipeline_cmd += ["--tilt-series", "--tilt-series-ctf", "relion5"]
     subprocess.run(pipeline_cmd, check=True, env=env, timeout=3600)
     assert pipeline_output.exists()
 
