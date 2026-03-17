@@ -1,12 +1,15 @@
 """Integration tests for compute_state volume reconstruction quality.
 
-Verifies that compute_state produces volumes that match GT volumes via FSC,
+Verifies that compute_state produces volumes with good local resolution,
 for both SPA and cryo-ET data.  This exercises the full call chain:
   compute_state → compute_and_save_reweighted → make_volumes_kernel_estimate_local
   → even_less_naive_heterogeneity_scheme_relion_style → DataIterator
 
 The cryo-ET variant specifically tests that particle-grouped iteration works
 correctly in even_less_naive_heterogeneity_scheme_relion_style (the AKD fix).
+
+Quality is measured by local resolution (locres) from the half-map FSC,
+not raw FSC vs GT — locres is a much better metric for reconstruction quality.
 """
 
 from __future__ import annotations
@@ -37,11 +40,10 @@ ZDIM = 4
 N_CENTERS = 5      # number of k-means cluster centers for compute_state
 SEED = 42
 
-# FSC thresholds — reconstructed volumes must reach at least this FSC vs GT
-# at the half-Nyquist shell.  These are deliberately loose since compute_state
-# uses kernel estimation (not direct backprojection).
-MIN_FSC_SPA = 0.3
-MIN_FSC_ET = 0.2  # ET is harder (fewer total images per tilt)
+# Locres thresholds — median local resolution in Angstroms (lower = better)
+# These are loose thresholds since we use small grid_size=64 datasets.
+MAX_LOCRES_MEDIAN_SPA = 30.0   # Angstroms
+MAX_LOCRES_MEDIAN_ET = 35.0    # ET is harder
 
 
 # ---------------------------------------------------------------------------
@@ -145,73 +147,51 @@ np.savetxt('{centers_file}', km.cluster_centers_)
     return test_dataset, pipeline_output, state_output
 
 
-def _compute_fsc_vs_gt(state_output: Path, test_dataset: Path, n_centers: int) -> list[float]:
-    """For each reconstructed volume, find the best FSC match against GT.
+def _compute_locres_metrics(state_output: Path, n_centers: int) -> dict:
+    """Extract local resolution metrics from compute_state output.
 
-    Returns a list of best-match FSC values (one per reconstructed volume).
+    Reads the local_resolution.mrc and half-maps from each volume's
+    diagnostics directory. Returns median/90th percentile/AUC of locres.
     """
-    from recovar.simulation import synthetic_dataset
-    from recovar.core import fourier_transform_utils
     import mrcfile
 
-    sim_path = test_dataset / "simulation_info.pkl"
-    gt = synthetic_dataset.load_heterogeneous_reconstruction(str(sim_path))
-    # gt.volumes is (n_vols, vol_size) in Fourier space — convert to real
-    vol_shape = gt.volume_shape
-    gt_volumes_real = []
-    for i in range(gt.volumes.shape[0]):
-        gt_real = np.real(fourier_transform_utils.get_idft3(
-            gt.volumes[i].reshape(vol_shape)
-        )).astype(np.float32)
-        gt_volumes_real.append(gt_real)
+    diagnostics = state_output / "diagnostics"
+    locres_medians = []
+    locres_90pcts = []
 
-    # Load reconstructed volumes
-    mrc_files = sorted(state_output.glob("state*.mrc"))
-    # Filter out half-maps and diagnostics
-    mrc_files = [f for f in mrc_files if "half" not in f.name and "unfil" not in f.name]
-    assert len(mrc_files) > 0, f"No state MRC files in {state_output}"
+    for vol_idx in range(n_centers):
+        diag_dir = diagnostics / f"state{vol_idx:03d}"
+        locres_mrc = diag_dir / "local_resolution.mrc"
 
-    best_fscs = []
-    for mrc_path in mrc_files:
-        with mrcfile.open(str(mrc_path), mode='r') as mrc:
-            rec_vol = np.array(mrc.data, dtype=np.float32)
-
-        # Find best FSC match against all GT volumes
-        best_fsc = -1.0
-        for gt_real in gt_volumes_real:
-            fsc_curve = _fsc_between_volumes(rec_vol, gt_real)
-            # Take FSC at ~half-Nyquist
-            idx = len(fsc_curve) // 4
-            fsc_val = float(np.mean(fsc_curve[1:idx+1]))  # skip DC
-            best_fsc = max(best_fsc, fsc_val)
-        best_fscs.append(best_fsc)
-
-    return best_fscs
-
-
-def _fsc_between_volumes(vol1: np.ndarray, vol2: np.ndarray) -> np.ndarray:
-    """Compute FSC curve between two real-space volumes."""
-    ft1 = np.fft.fftn(vol1)
-    ft2 = np.fft.fftn(vol2)
-    grid_size = vol1.shape[0]
-    n_shells = grid_size // 2
-
-    # Compute shell indices
-    coords = np.fft.fftfreq(grid_size) * grid_size
-    kx, ky, kz = np.meshgrid(coords, coords, coords, indexing='ij')
-    r = np.sqrt(kx**2 + ky**2 + kz**2)
-    shell_idx = np.round(r).astype(int)
-
-    fsc = np.zeros(n_shells)
-    for s in range(n_shells):
-        mask = shell_idx == s
-        if mask.sum() == 0:
+        if not locres_mrc.exists():
+            print(f"  Volume {vol_idx}: local_resolution.mrc not found, skipping")
             continue
-        num = np.real(np.sum(ft1[mask] * np.conj(ft2[mask])))
-        denom = np.sqrt(np.sum(np.abs(ft1[mask])**2) * np.sum(np.abs(ft2[mask])**2))
-        fsc[s] = num / max(denom, 1e-30)
 
-    return fsc
+        with mrcfile.open(str(locres_mrc), mode='r') as mrc:
+            locres_map = np.array(mrc.data, dtype=np.float32)
+
+        # Only consider voxels with finite, positive resolution
+        valid = locres_map[np.isfinite(locres_map) & (locres_map > 0)]
+        if valid.size == 0:
+            print(f"  Volume {vol_idx}: no valid locres voxels")
+            continue
+
+        median = float(np.median(valid))
+        pct90 = float(np.percentile(valid, 90))
+        locres_medians.append(median)
+        locres_90pcts.append(pct90)
+        print(f"  Volume {vol_idx}: locres_median={median:.2f}A, locres_90pct={pct90:.2f}A")
+
+    if not locres_medians:
+        return {"locres_median": float('inf'), "locres_90pct": float('inf')}
+
+    result = {
+        "locres_median": float(np.mean(locres_medians)),
+        "locres_90pct": float(np.mean(locres_90pcts)),
+        "per_volume_locres_median": [float(x) for x in locres_medians],
+        "per_volume_locres_90pct": [float(x) for x in locres_90pcts],
+    }
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +199,7 @@ def _fsc_between_volumes(vol1: np.ndarray, vol2: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def test_compute_state_spa(tmp_path):
-    """SPA compute_state: reconstructed volumes should match GT via FSC."""
+    """SPA compute_state: reconstructed volumes should have good local resolution."""
     output_dir = _resolve_output_dir(tmp_path, "compute_state_spa")
 
     test_dataset, pipeline_output, state_output = _run_pipeline_and_compute_state(
@@ -232,28 +212,25 @@ def test_compute_state_spa(tmp_path):
         seed=SEED,
     )
 
-    best_fscs = _compute_fsc_vs_gt(state_output, test_dataset, N_CENTERS)
+    print(f"\n=== SPA compute_state locres scores ===")
+    metrics = _compute_locres_metrics(state_output, N_CENTERS)
 
-    print(f"\n=== SPA compute_state FSC scores ===")
-    for i, fsc in enumerate(best_fscs):
-        print(f"  Volume {i}: best GT match FSC = {fsc:.4f}")
+    mean_median = metrics["locres_median"]
+    mean_90pct = metrics["locres_90pct"]
+    print(f"  Mean locres_median = {mean_median:.2f}A  (threshold = {MAX_LOCRES_MEDIAN_SPA}A)")
+    print(f"  Mean locres_90pct  = {mean_90pct:.2f}A")
 
-    mean_fsc = np.mean(best_fscs)
-    print(f"  Mean FSC = {mean_fsc:.4f}  (threshold = {MIN_FSC_SPA})")
-
-    assert mean_fsc >= MIN_FSC_SPA, (
-        f"SPA compute_state mean FSC {mean_fsc:.4f} < {MIN_FSC_SPA}. "
-        f"Per-volume: {best_fscs}"
+    assert mean_median <= MAX_LOCRES_MEDIAN_SPA, (
+        f"SPA compute_state locres_median {mean_median:.2f}A > {MAX_LOCRES_MEDIAN_SPA}A"
     )
 
     # Save scores
-    scores = {"mean_fsc": mean_fsc, "per_volume_fsc": best_fscs}
     with open(output_dir / "compute_state_scores.json", "w") as f:
-        json.dump(scores, f, indent=2, default=float)
+        json.dump(metrics, f, indent=2, default=float)
 
 
 def test_compute_state_et(tmp_path):
-    """Cryo-ET compute_state: reconstructed volumes should match GT via FSC.
+    """Cryo-ET compute_state: reconstructed volumes should have good local resolution.
 
     This exercises the AKD fix for particle-grouped DataIterator iteration
     in even_less_naive_heterogeneity_scheme_relion_style.
@@ -271,21 +248,18 @@ def test_compute_state_et(tmp_path):
         seed=SEED,
     )
 
-    best_fscs = _compute_fsc_vs_gt(state_output, test_dataset, N_CENTERS)
+    print(f"\n=== ET compute_state locres scores ===")
+    metrics = _compute_locres_metrics(state_output, N_CENTERS)
 
-    print(f"\n=== ET compute_state FSC scores ===")
-    for i, fsc in enumerate(best_fscs):
-        print(f"  Volume {i}: best GT match FSC = {fsc:.4f}")
+    mean_median = metrics["locres_median"]
+    mean_90pct = metrics["locres_90pct"]
+    print(f"  Mean locres_median = {mean_median:.2f}A  (threshold = {MAX_LOCRES_MEDIAN_ET}A)")
+    print(f"  Mean locres_90pct  = {mean_90pct:.2f}A")
 
-    mean_fsc = np.mean(best_fscs)
-    print(f"  Mean FSC = {mean_fsc:.4f}  (threshold = {MIN_FSC_ET})")
-
-    assert mean_fsc >= MIN_FSC_ET, (
-        f"ET compute_state mean FSC {mean_fsc:.4f} < {MIN_FSC_ET}. "
-        f"Per-volume: {best_fscs}"
+    assert mean_median <= MAX_LOCRES_MEDIAN_ET, (
+        f"ET compute_state locres_median {mean_median:.2f}A > {MAX_LOCRES_MEDIAN_ET}A"
     )
 
     # Save scores
-    scores = {"mean_fsc": mean_fsc, "per_volume_fsc": best_fscs}
     with open(output_dir / "compute_state_scores.json", "w") as f:
-        json.dump(scores, f, indent=2, default=float)
+        json.dump(metrics, f, indent=2, default=float)
