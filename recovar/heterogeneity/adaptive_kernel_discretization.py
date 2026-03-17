@@ -1083,11 +1083,16 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
 
         Ft_y_acc = jnp.zeros_like(Ft_y_acc)
         Ft_ctf_acc = jnp.zeros_like(Ft_ctf_acc)
+        # image_inds are derived from per-particle embedding distances, so for
+        # tilt series they are particle indices.  Use particle-grouped iteration
+        # so that all tilts of a particle are yielded together.
+        _use_image_gen = image_inds is None or not getattr(experiment_dataset, 'tilt_series_flag', False)
         for batch_data in DataIterator(
             experiment_dataset, batch_size,
             noise_model=experiment_dataset.noise, noise_half=False,
             apply_process_images=True, half_images=True,
             index_subset=image_inds,
+            use_image_generator=_use_image_gen,
         ):
             Ft_y_acc, Ft_ctf_acc = _heterogeneity_kernel_batch_from_fft(
                 config, batch_data, Ft_y=Ft_y_acc, Ft_ctf=Ft_ctf_acc,
