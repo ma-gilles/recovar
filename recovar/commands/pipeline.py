@@ -732,11 +732,12 @@ def standard_recovar_pipeline(args):
             logger.warning("repeating with contrast of zdim=%s", ndim)
             contrasts_for_second = est_contrasts[ndim]
             contrasts_for_second /= np.mean(contrasts_for_second)
-            # est_contrasts is in halfset-concatenated order; reindex to
-            # original dataset order before applying to the unified dataset.
+            # est_contrasts is in halfset-concatenated order (per-image);
+            # reindex to original dataset order before applying to the
+            # unified dataset.  Always image-level, even for tilt-series.
             contrasts_orig = dataset.reorder_to_original_indexing(
                 contrasts_for_second, ds,
-                use_tilt_indices=ds.tilt_series_flag)
+                use_tilt_indices=False)
             ds.set_contrasts(contrasts_orig)
             options["contrast"] = "contrast"
 
@@ -918,12 +919,12 @@ def standard_recovar_pipeline(args):
     if not args.tilt_series:
         n_pcs_to_use = (num_foc_masks - 1) * zdim_for_rest + zdim
         try:
-            # Reorder halfset-concatenated arrays to original dataset order
-            # for iteration over the unified dataset.
+            # Reorder halfset-concatenated arrays (per-image) to original
+            # dataset order for iteration over the unified dataset.
             contrasts_orig_resid = dataset.reorder_to_original_indexing(
-                est_contrasts[zdim], ds, use_tilt_indices=ds.tilt_series_flag)
+                est_contrasts[zdim], ds, use_tilt_indices=False)
             coords_orig_resid = dataset.reorder_to_original_indexing(
-                latent_coords[zdim], ds, use_tilt_indices=ds.tilt_series_flag)
+                latent_coords[zdim], ds, use_tilt_indices=False)
             noise_var_from_het_residual, _, _ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(
                 ds, dilated_volume_mask, means['combined'], u['rescaled'][:, :n_pcs_to_use],
                 # //10: heterogeneity residual estimation is memory-intensive (holds full embedding + projections)
