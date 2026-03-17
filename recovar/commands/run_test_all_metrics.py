@@ -957,7 +957,7 @@ def main():
 
     # Reuse the GT union mask computed before the pipeline run.
     # gt_union_soft_mask and gt_union_binary_mask are already in scope.
-    volume_shape = cryos[0].volume_shape
+    volume_shape = ds.volume_shape
 
     # FSC for mean maps
     fsc_filepath = os.path.join(plots_dir, 'fsc_mean.png')
@@ -1140,8 +1140,8 @@ def main():
             Path(output_state_dir, f'state{l_idx:03d}.mrc')
         )
         errors_metrics = metrics.compute_volume_error_metrics_from_gt(
-            gt_map, estimate_map, ds.voxel_size, None, partial_mask=None,
-            normalize_by_map1=True
+            gt_map, estimate_map, ds.voxel_size, gt_union_binary_mask,
+            partial_mask=None, normalize_by_map1=True
         )
         all_scores[f'state_{l_idx}_locres_90pct'] = errors_metrics.get('ninety_pc_locres')
         all_scores[f'state_{l_idx}_locres_median'] = errors_metrics.get('median_locres')
