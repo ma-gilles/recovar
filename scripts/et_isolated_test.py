@@ -16,6 +16,7 @@ def main():
     ap.add_argument("--dataset-dir", required=True)
     ap.add_argument("--output", required=True)
     ap.add_argument("--old", action="store_true", help="Use old ~/recovar code")
+    ap.add_argument("--halfsets", default=None, help="Pickle file with pre-computed halfset split")
     args = ap.parse_args()
 
     if args.old:
@@ -68,10 +69,15 @@ def main():
     particles_file = os.path.join(args.dataset_dir, "particles.star")
     poses_file = os.path.join(args.dataset_dir, "poses.pkl")
     ctf_file = os.path.join(args.dataset_dir, "ctf.pkl")
-    if hasattr(dataset, 'get_split_tilt_indices'):
+    if args.halfsets:
+        with open(args.halfsets, "rb") as f:
+            ind_split = pickle.load(f)
+        logger.info("Using pre-computed halfsets from %s", args.halfsets)
+    elif hasattr(dataset, 'get_split_tilt_indices'):
         ind_split = dataset.get_split_tilt_indices(particles_file)
     else:
         ind_split = dataset.get_split_indices(particles_file)
+    logger.info("half0: %d images, half1: %d images", len(ind_split[0]), len(ind_split[1]))
     cryos = dataset.get_split_datasets(particles_file, poses_file, ctf_file,
                                         datadir=None, ind_split=ind_split, lazy=True)
     voxel_size = cryos[0].voxel_size
