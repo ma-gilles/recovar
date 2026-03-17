@@ -452,7 +452,7 @@ def metric_direction(metric_name):
 
 
 HIGH_VARIANCE_TOKENS = ("locres", "auc", "noise_max")
-_HIGH_VARIANCE_MIN_TOL = 0.10
+_HIGH_VARIANCE_MIN_TOL = 0.03
 
 
 def compare_metric(current, baseline, direction, tol_frac, metric_name=None):
