@@ -1121,18 +1121,22 @@ def reduce_covariance_inner(
     per_image_noise_bias = batch_x_T_y(AUs_noise, AUs_noise)
 
     if opts.shared_label:
+        # For tilt series: sum AU_t_images and AU_t_AU over tilts of each particle.
+        # The noise bias must also be summed BEFORE subtraction to match shapes.
+        # (per_image_outer has shape (1, n, n) after summing, but noise_bias
+        #  has shape (n_tilts, n, n) — broadcasting would be wrong.)
+        summed_noise_bias = jnp.sum(per_image_noise_bias, axis=0, keepdims=True)
         AU_t_images = jnp.sum(AU_t_images, axis=0, keepdims=True)
         AU_t_AU = jnp.sum(AU_t_AU, axis=0, keepdims=True)
-
-    # RHS = sum_i [x_i x_i^H - M_i]  where x_i = AU^T residual_i
-    #
-    # Subtracting per-image BEFORE accumulation avoids catastrophic cancellation.
-    # When accumulated first, both sum_i(x_i x_i^H) and sum_i(M_i) are ~1e21
-    # while their difference is ~1e14 — a 7-order-of-magnitude cancellation that
-    # exceeds float32 precision.  Per-image, each (x_i x_i^H - M_i) retains only
-    # the signal contribution (~22% of per-image magnitude), well within float32.
-    per_image_outer = AU_t_images[:, :, None] * jnp.conj(AU_t_images[:, None, :])
-    rhs_batch = (per_image_outer - per_image_noise_bias).sum(axis=0).real.astype(ctf_params.dtype)
+        per_image_outer = AU_t_images[:, :, None] * jnp.conj(AU_t_images[:, None, :])
+        rhs_batch = (per_image_outer - summed_noise_bias).sum(axis=0).real.astype(ctf_params.dtype)
+    else:
+        # For SPA: per-image subtraction avoids catastrophic cancellation.
+        # When accumulated first, both sum_i(x_i x_i^H) and sum_i(M_i) are ~1e21
+        # while their difference is ~1e14 — a 7-order-of-magnitude cancellation
+        # that exceeds float32 precision.
+        per_image_outer = AU_t_images[:, :, None] * jnp.conj(AU_t_images[:, None, :])
+        rhs_batch = (per_image_outer - per_image_noise_bias).sum(axis=0).real.astype(ctf_params.dtype)
 
     # Kron product via einsum — avoids materialising (n_images, n²,n²) tensor.
     _n = AU_t_AU.shape[-1]
