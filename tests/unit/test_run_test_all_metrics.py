@@ -121,6 +121,7 @@ def _install_main_runtime_stubs(monkeypatch, tmp_path, *, mean_fsc=0.5, variance
                 "lazy_dataset": self._cryos,
                 "mean": np.zeros((2, 2, 2), dtype=np.float32),
                 "variance": np.zeros((2, 2, 2), dtype=np.float32),
+                "variance_est": {"combined": np.zeros(8, dtype=np.float32)},
                 "volume_shape": (2, 2, 2),
                 "s": self._s,
                 "noise_var_used": np.array([1.0, 1.0], dtype=np.float32),
