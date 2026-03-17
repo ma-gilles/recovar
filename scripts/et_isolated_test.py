@@ -79,7 +79,8 @@ def main():
         ind_split = dataset.get_split_indices(particles_file)
     logger.info("half0: %d images, half1: %d images", len(ind_split[0]), len(ind_split[1]))
     cryos = dataset.get_split_datasets(particles_file, poses_file, ctf_file,
-                                        datadir=None, ind_split=ind_split, lazy=True)
+                                        datadir=None, ind_split=ind_split, lazy=True,
+                                        tilt_series=True)
     voxel_size = cryos[0].voxel_size
 
     # Step 1: Mean

@@ -734,8 +734,9 @@ def estimate_noise_variance(experiment_dataset, batch_size, max_images = 10000):
     subset_indices = None
     if experiment_dataset.n_images > max_images:
         # Create subset indices for subsampling
-        rng = np.random.default_rng(0)
-        subset_indices = rng.choice(
+        # Use legacy RNG to match ~/recovar's noise subsampling
+        np.random.seed(0)
+        subset_indices = np.random.choice(
             experiment_dataset.n_images,
             size=max_images,
             replace=False
