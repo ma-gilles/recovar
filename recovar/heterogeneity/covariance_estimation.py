@@ -955,6 +955,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
             noise_model=experiment_dataset.noise,
             noise_half=False,
             apply_process_images=False,
+            use_image_generator=not experiment_dataset.tilt_series_flag,
         ):
             lhs, rhs = reduce_covariance_inner(
                 config, batch_data, model, opts,
