@@ -72,6 +72,10 @@ import pytest
 
 from conftest import gpu_subprocess_env
 from helpers.metrics_regression import compare_metric, metric_direction
+from helpers.perf_regression import (
+    perf_snapshot, stage_perf, build_perf_record,
+    check_perf_regression,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -528,6 +532,8 @@ def test_outliers_pipeline_regression_against_baseline(tmp_path):
 
     output_dir = _resolve_output_dir(tmp_path, "outliers_long")
     reuse = _dataset_exists_spa(output_dir, grid_size)
+
+    snap_before = perf_snapshot()
     pipeline_out = _run_outliers_pipeline(
         output_dir=output_dir,
         volumes_prefix=volumes_prefix,
@@ -539,6 +545,7 @@ def test_outliers_pipeline_regression_against_baseline(tmp_path):
         reuse_dataset=reuse,
         noise_level=noise_level,
     )
+    perf_stages = {"pipeline_with_outliers": stage_perf(snap_before, perf_snapshot())}
 
     sim_info_path = output_dir / "test_dataset" / "simulation_info.pkl"
     assert sim_info_path.exists()
@@ -556,6 +563,13 @@ def test_outliers_pipeline_regression_against_baseline(tmp_path):
         baseline_path=baseline_json,
         tol_frac=tol_frac,
     )
+
+    # Perf regression check (warn only)
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(
+        _REPO_ROOT / "tests" / "baselines" / "run_test_outliers_pipeline" / "long_generated" / "perf_baseline_spa.json"
+    )
+    check_perf_regression(perf_record, perf_baseline_path, "SPA outlier pipeline")
 
 
 # ---------------------------------------------------------------------------
@@ -644,6 +658,7 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
     poses = dataset_dir / "poses.pkl"
     ctf = dataset_dir / "ctf.pkl"
 
+    snap_before = perf_snapshot()
     pipe_cmd = [
         sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
         str(star),
@@ -662,6 +677,7 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         "--save-pipeline-indices",
     ]
     subprocess.run(pipe_cmd, check=True, env=gpu_subprocess_env())
+    perf_stages = {"pipeline_with_outliers": stage_perf(snap_before, perf_snapshot())}
 
     with open(sim_info_path, "rb") as f:
         sim_info = pickle.load(f)
@@ -684,6 +700,13 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         baseline_path=baseline_json,
         tol_frac=tol_frac,
     )
+
+    # Perf regression check (warn only)
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(
+        _REPO_ROOT / "tests" / "baselines" / "run_test_outliers_pipeline" / "long_generated" / "perf_baseline_cryo_et.json"
+    )
+    check_perf_regression(perf_record, perf_baseline_path, "ET outlier pipeline")
 
 
 def _compute_particle_outlier_metrics(

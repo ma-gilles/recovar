@@ -25,6 +25,10 @@ import numpy as np
 import pytest
 
 from conftest import gpu_subprocess_env
+from helpers.perf_regression import (
+    perf_snapshot, stage_perf, build_perf_record,
+    check_perf_regression,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.long_test]
 
@@ -73,9 +77,10 @@ def _run_pipeline_and_compute_state(
 ) -> tuple[Path, Path, Path]:
     """Generate dataset, run pipeline, run compute_state.
 
-    Returns (test_dataset_dir, pipeline_output_dir, state_output_dir).
+    Returns (test_dataset_dir, pipeline_output_dir, state_output_dir, perf_stages).
     """
     env = gpu_subprocess_env()
+    perf_stages = {}
 
     dataset_dir = output_dir / "dataset"
     test_dataset = dataset_dir / "test_dataset"
@@ -83,6 +88,7 @@ def _run_pipeline_and_compute_state(
     state_output = output_dir / "state_output"
 
     # 1. Generate dataset
+    snap = perf_snapshot()
     make_cmd = [
         sys.executable, "-m", "recovar.commands.make_test_dataset",
         str(dataset_dir),
@@ -94,6 +100,7 @@ def _run_pipeline_and_compute_state(
     if n_tilts is not None:
         make_cmd += ["--n-tilts", str(n_tilts)]
     subprocess.run(make_cmd, check=True, env=env, timeout=600)
+    perf_stages["dataset_generation"] = stage_perf(snap, perf_snapshot())
 
     # 2. Determine particles file
     if n_tilts is not None:
@@ -103,6 +110,7 @@ def _run_pipeline_and_compute_state(
     assert particles.exists(), f"Missing particles: {particles}"
 
     # 3. Run pipeline
+    snap = perf_snapshot()
     pipeline_cmd = [
         sys.executable, "-m", "recovar.command_line", "pipeline",
         str(particles),
@@ -117,6 +125,7 @@ def _run_pipeline_and_compute_state(
     if n_tilts is not None:
         pipeline_cmd += ["--tilt-series", "--tilt-series-ctf", "relion5"]
     subprocess.run(pipeline_cmd, check=True, env=env, timeout=3600)
+    perf_stages["pipeline"] = stage_perf(snap, perf_snapshot())
     assert pipeline_output.exists()
 
     # 4. Generate k-means centers from embedding
@@ -135,6 +144,7 @@ np.savetxt('{centers_file}', km.cluster_centers_)
     assert centers_file.exists()
 
     # 5. Run compute_state
+    snap = perf_snapshot()
     state_cmd = [
         sys.executable, "-m", "recovar.command_line", "compute_state",
         str(pipeline_output),
@@ -144,9 +154,10 @@ np.savetxt('{centers_file}', km.cluster_centers_)
         "--n-bins", "30",
     ]
     subprocess.run(state_cmd, check=True, env=env, timeout=3600)
+    perf_stages["compute_state"] = stage_perf(snap, perf_snapshot())
     assert state_output.exists()
 
-    return test_dataset, pipeline_output, state_output
+    return test_dataset, pipeline_output, state_output, perf_stages
 
 
 def _compute_locres_metrics(state_output: Path, n_centers: int) -> dict:
@@ -200,11 +211,14 @@ def _compute_locres_metrics(state_output: Path, n_centers: int) -> dict:
 # Tests
 # ---------------------------------------------------------------------------
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
 def test_compute_state_spa(tmp_path):
     """SPA compute_state: reconstructed volumes should have good local resolution."""
     output_dir = _resolve_output_dir(tmp_path, "compute_state_spa")
 
-    test_dataset, pipeline_output, state_output = _run_pipeline_and_compute_state(
+    test_dataset, pipeline_output, state_output, perf_stages = _run_pipeline_and_compute_state(
         output_dir,
         grid_size=GRID_SIZE,
         n_images=N_IMAGES_SPA,
@@ -230,6 +244,13 @@ def test_compute_state_spa(tmp_path):
     with open(output_dir / "compute_state_scores.json", "w") as f:
         json.dump(metrics, f, indent=2, default=float)
 
+    # Perf regression check (warn only)
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(
+        _REPO_ROOT / "tests" / "baselines" / "compute_state" / "perf_baseline_spa.json"
+    )
+    check_perf_regression(perf_record, perf_baseline_path, "SPA compute_state")
+
 
 def test_compute_state_et(tmp_path):
     """Cryo-ET compute_state: reconstructed volumes should have good local resolution.
@@ -239,7 +260,7 @@ def test_compute_state_et(tmp_path):
     """
     output_dir = _resolve_output_dir(tmp_path, "compute_state_et")
 
-    test_dataset, pipeline_output, state_output = _run_pipeline_and_compute_state(
+    test_dataset, pipeline_output, state_output, perf_stages = _run_pipeline_and_compute_state(
         output_dir,
         grid_size=GRID_SIZE,
         n_images=N_IMAGES_ET,
@@ -265,3 +286,10 @@ def test_compute_state_et(tmp_path):
     # Save scores
     with open(output_dir / "compute_state_scores.json", "w") as f:
         json.dump(metrics, f, indent=2, default=float)
+
+    # Perf regression check (warn only)
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(
+        _REPO_ROOT / "tests" / "baselines" / "compute_state" / "perf_baseline_cryo_et.json"
+    )
+    check_perf_regression(perf_record, perf_baseline_path, "ET compute_state")
