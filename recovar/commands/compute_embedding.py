@@ -78,9 +78,9 @@ def compute_embedding(recovar_result_dir):
     for zdim in zdims:
         z_time = time.time()
         latent_coords[zdim], latent_precision[zdim], est_contrasts[zdim] = embedding.get_per_image_embedding(
-            results['means']['combined'], results['u']['rescaled'], results['s']['rescaled'], zdim,
+            results['means'].combined, results['u']['rescaled'], results['s']['rescaled'], zdim,
             results['cov_noise'], ds, results['volume_mask'], gpu_memory, 'linear_interp',
-            contrast_grid=None, contrast_option=options['contrast'])
+            contrast_grid=None, contrast_option=options.contrast)
         logger.info("embedding time for zdim=%s: %s", zdim, time.time() - z_time)
 
     return latent_coords, latent_precision, est_contrasts

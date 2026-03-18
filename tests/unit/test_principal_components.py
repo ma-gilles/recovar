@@ -6,10 +6,21 @@ pytest.importorskip("jax")
 import recovar.heterogeneity.principal_components as pc
 import recovar.core as core
 from recovar.data_io import dataset
-from recovar.data_io.dataset import CryoEMHalfsets
-from recovar.utils.helpers import AlgorithmOptions
 from recovar.reconstruction.homogeneous import MeanEstimate
 from helpers.tiny_synthetic import make_tiny_simulation, make_tiny_cryo_dataset_with_images
+
+
+def _make_means(vol_size, dtype_real=np.float32, dtype_complex=np.complex64):
+    """Create a MeanEstimate with dummy data for testing."""
+    return MeanEstimate(
+        combined=np.ones(vol_size, dtype=dtype_complex),
+        corrected0=np.ones(vol_size, dtype=dtype_complex),
+        corrected1=np.ones(vol_size, dtype=dtype_complex),
+        corrected0reg=np.ones(vol_size, dtype=dtype_complex),
+        corrected1reg=np.ones(vol_size, dtype=dtype_complex),
+        lhs=np.ones(vol_size, dtype=dtype_real),
+        prior=np.ones(vol_size, dtype=dtype_real),
+    )
 
 pytestmark = pytest.mark.unit
 
@@ -139,7 +150,7 @@ def test_get_cov_svds_delegates_to_randomized_svd(monkeypatch):
 
 
 def test_pca_by_projected_covariance_sorts_and_clamps_eigs(monkeypatch):
-    cryos = [type("Cryo", (), {"image_size": 16})()]
+    cryos = type("Cryo", (), {"image_size": 16})()
     basis = np.eye(3, dtype=np.float32)
     mean = np.zeros(3, dtype=np.complex64)
     volume_mask = np.ones(3, dtype=np.float32)
@@ -154,7 +165,7 @@ def test_pca_by_projected_covariance_sorts_and_clamps_eigs(monkeypatch):
     monkeypatch.setattr(pc.covariance_estimation, "compute_projected_covariance", fake_projected_covariance)
 
     u, s = pc.pca_by_projected_covariance(
-        cryos=cryos,
+        dataset=cryos,
         basis=basis,
         mean=mean,
         volume_mask=volume_mask,
@@ -181,14 +192,9 @@ def test_estimate_principal_components_high_snr_from_var_est_requires_variance()
             "image_size": 4,
         },
     )()
-    cryos = CryoEMHalfsets(mock_cryo, mock_cryo)
-    means = MeanEstimate(
-        combined=np.ones(8, dtype=np.complex64),
-        corrected0=np.ones(8, dtype=np.complex64), corrected1=np.ones(8, dtype=np.complex64),
-        corrected0reg=np.ones(8, dtype=np.complex64), corrected1reg=np.ones(8, dtype=np.complex64),
-        lhs=np.ones(8, dtype=np.float32), prior=np.ones(8, dtype=np.float32),
-    )
-    options = AlgorithmOptions(volume_mask_option="none", zs_dim_to_test=[1], contrast="none", ignore_zero_frequency=False, keep_intermediate=True)
+    cryos = mock_cryo
+    means = _make_means(8)
+    options = {"keep_intermediate": True, "contrast": "none", "ignore_zero_frequency": False}
     cov_options = {
         "column_sampling_scheme": "high_snr_from_var_est",
         "sampling_n_cols": 2,
@@ -203,7 +209,7 @@ def test_estimate_principal_components_high_snr_from_var_est_requires_variance()
 
     with pytest.raises(ValueError, match="variance_estimate must be provided"):
         pc.estimate_principal_components(
-            cryos=cryos,
+            dataset=cryos,
             options=options,
             means=means,
             mean_prior=np.zeros(8, dtype=np.complex64),
@@ -229,14 +235,9 @@ def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
             "image_size": 4,
         },
     )()
-    cryos = CryoEMHalfsets(mock_cryo, mock_cryo)
-    means = MeanEstimate(
-        combined=np.ones(8, dtype=np.complex64),
-        corrected0=np.ones(8, dtype=np.complex64), corrected1=np.ones(8, dtype=np.complex64),
-        corrected0reg=np.ones(8, dtype=np.complex64), corrected1reg=np.ones(8, dtype=np.complex64),
-        lhs=np.ones(8, dtype=np.float32), prior=np.ones(8, dtype=np.float32),
-    )
-    options = AlgorithmOptions(volume_mask_option="none", zs_dim_to_test=[1], contrast="none", ignore_zero_frequency=False, keep_intermediate=False)
+    cryos = mock_cryo
+    means = _make_means(8)
+    options = {"keep_intermediate": False, "contrast": "none", "ignore_zero_frequency": False}
     cov_options = {
         "column_sampling_scheme": "low_freqs",
         "column_radius": 1,
@@ -275,7 +276,7 @@ def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
     )
 
     u, s, covariance_cols, picked_frequencies, column_fscs = pc.estimate_principal_components(
-        cryos=cryos,
+        dataset=cryos,
         options=options,
         means=means,
         mean_prior=np.zeros(8, dtype=np.complex64),
@@ -297,26 +298,18 @@ def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
 def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
     # Build a real tiny CryoEMDataset from simulator outputs.
     _, ctf_params, rots, trans, _, voxel_size, _ = make_tiny_simulation(grid_size=4, n_images=6, seed=0)
+    metadata = dataset.Metadata(rots, trans, ctf_params)
     cryo = dataset.CryoEMDataset(
         image_stack=None,
         voxel_size=voxel_size,
-        rotation_matrices=rots,
-        translations=trans,
-        CTF_params=ctf_params,
+        metadata=metadata,
         ctf_evaluator=core.CTFEvaluator(),
-        dataset_indices=None,
         grid_size=4,
     )
-    cryos = CryoEMHalfsets(cryo, cryo)
+    cryos = cryo
 
-    vs = cryo.volume_size
-    means = MeanEstimate(
-        combined=np.ones(vs, dtype=np.complex64),
-        corrected0=np.ones(vs, dtype=np.complex64), corrected1=np.ones(vs, dtype=np.complex64),
-        corrected0reg=np.ones(vs, dtype=np.complex64), corrected1reg=np.ones(vs, dtype=np.complex64),
-        lhs=np.ones(vs, dtype=np.float32), prior=np.ones(vs, dtype=np.float32),
-    )
-    options = AlgorithmOptions(volume_mask_option="none", zs_dim_to_test=[1], contrast="none", ignore_zero_frequency=False, keep_intermediate=False)
+    means = _make_means(cryo.volume_size)
+    options = {"keep_intermediate": False, "contrast": "none", "ignore_zero_frequency": False}
     cov_options = {
         "column_sampling_scheme": "low_freqs",
         "column_radius": 1,
@@ -355,7 +348,7 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
     )
 
     u, s, covariance_cols, picked_frequencies, column_fscs = pc.estimate_principal_components(
-        cryos=cryos,
+        dataset=cryos,
         options=options,
         means=means,
         mean_prior=np.zeros(cryo.volume_size, dtype=np.complex64),
@@ -381,7 +374,7 @@ def test_pca_by_projected_covariance_real_tiny_dataset_runs():
     basis = np.eye(cryo.volume_size, 4, dtype=np.complex64)
 
     u, s = pc.pca_by_projected_covariance(
-        cryos=[cryo],
+        dataset=cryo,
         basis=basis,
         mean=np.zeros(cryo.volume_size, dtype=np.complex64),
         volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
