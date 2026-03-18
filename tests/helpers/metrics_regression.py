@@ -69,14 +69,28 @@ def compare_metric(current, baseline, direction, tol_frac, metric_name=None):
     return True, "ignored"
 
 
-def log_comparison_table(current, baseline, tol_frac, title="Metric Comparison"):
+def log_comparison_table(current, baseline, tol_frac, title="Metric Comparison",
+                         direction_fn=None, skip_unknown=True):
     """Print a comparison table for all shared numeric metrics.
 
     Always prints every metric — not just failures. This makes it possible
     to review metric drift without re-running.
 
+    Parameters
+    ----------
+    direction_fn : callable, optional
+        Custom function ``(key) -> direction`` where direction is
+        "higher", "lower", or "ignore".  Defaults to ``metric_direction``
+        with outlier-style overrides (precision/recall/f1 → higher).
+    skip_unknown : bool
+        If True (default), skip metrics where direction is "ignore".
+        If False, treat unknown metrics as "higher" (i.e. regression = drop).
+
     Returns (checked, failures) where failures is a list of error strings.
     """
+    if direction_fn is None:
+        direction_fn = metric_direction
+
     failures = []
     checked = 0
     lines = []
@@ -92,10 +106,12 @@ def log_comparison_table(current, baseline, tol_frac, title="Metric Comparison")
         if not (isinstance(cur, (int, float)) and isinstance(base, (int, float))):
             continue
 
-        direction = metric_direction(key)
+        direction = direction_fn(key)
         if direction == "ignore":
             # Treat outlier_recall / outlier_precision / outlier_f1 as higher-is-better
             if any(tok in key for tok in ("recall", "precision", "f1")):
+                direction = "higher"
+            elif not skip_unknown:
                 direction = "higher"
             else:
                 continue
