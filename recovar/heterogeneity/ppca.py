@@ -9,6 +9,7 @@ import functools
 from recovar import core
 from recovar.core import linalg
 from recovar.core.configs import ForwardModelConfig
+from recovar.data_io.batch_iterator import iter_batch_fields
 from recovar.heterogeneity import embedding
 
 logger = logging.getLogger(__name__)
@@ -46,18 +47,23 @@ def M_step(experiment_dataset, latent_means, latent_covariances, noise_variance,
     rhs_summed = jnp.zeros((experiment_dataset.volume_size, basis_size), dtype = experiment_dataset.dtype)
     lhs_summed = jnp.zeros((experiment_dataset.volume_size, basis_size *  basis_size), dtype = experiment_dataset.dtype)
 
-    for batch_data in experiment_dataset.iterate(batch_size):
-        lhs_summed, rhs_summed = M_step_batch(batch_data.images, lhs_summed, rhs_summed,
-                                            latent_means[batch_data.image_indices], latent_covariances[batch_data.image_indices],
-                                            batch_data.ctf_params,
-                                            batch_data.rotation_matrices,
-                                            batch_data.translations,
-                                            experiment_dataset.image_shape,
-                                            experiment_dataset.volume_shape,
-                                            experiment_dataset.grid_size,
-                                            experiment_dataset.voxel_size,
-                                            noise_variance,
-                                            experiment_dataset.ctf_evaluator)
+    for images, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, image_indices in iter_batch_fields(experiment_dataset.iterate(batch_size)):
+        lhs_summed, rhs_summed = M_step_batch(
+            images,
+            lhs_summed,
+            rhs_summed,
+            latent_means[image_indices],
+            latent_covariances[image_indices],
+            ctf_params,
+            rotation_matrices,
+            translations,
+            experiment_dataset.image_shape,
+            experiment_dataset.volume_shape,
+            experiment_dataset.grid_size,
+            experiment_dataset.voxel_size,
+            noise_variance,
+            experiment_dataset.ctf_evaluator,
+        )
         
     # Solve least squares
     lhs_summed = lhs_summed.reshape(experiment_dataset.volume_size, basis_size, basis_size)

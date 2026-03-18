@@ -19,6 +19,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, utils
 from recovar.core import mask
 from recovar.core.configs import ForwardModelConfig
+from recovar.data_io.batch_iterator import iter_batch_fields
 
 logger = logging.getLogger(__name__)
 
@@ -266,11 +267,11 @@ def compute_ewald_LS_matvec_in_batches(experiment_dataset, input_volume_real, in
     n_batches = utils.get_number_of_index_batch(experiment_dataset.n_images, batch_size)
     for k in range(n_batches):
         indices = utils.get_batch_of_indices_arange(experiment_dataset.n_images, batch_size, k)
-        bd = experiment_dataset.make_batch_data(None, indices)
+        rotation_matrices, _translations, ctf_params = experiment_dataset.metadata.get_batch(indices)
         vol_real_this, vol_imag_this =compute_A_t_Av_ewald_sphere_forward_model(input_volume_real,
                                         input_volume_imag,
-                                        bd.rotation_matrices,
-                                        bd.ctf_params,
+                                        rotation_matrices,
+                                        ctf_params,
                                         noise_variance,
                                         experiment_dataset.image_shape,
                                         experiment_dataset.volume_shape, experiment_dataset.voxel_size, disc_type)
@@ -296,10 +297,10 @@ def compute_diag_mean(experiment_dataset, batch_size, disc_type, noise_variance 
     for k in range(n_batches):
         volume = jnp.ones(experiment_dataset.volume_size, dtype = jnp.float32)
         indices = utils.get_batch_of_indices_arange(experiment_dataset.n_images, batch_size, k)
-        bd = experiment_dataset.make_batch_data(None, indices)
+        rotation_matrices, _translations, ctf_params = experiment_dataset.metadata.get_batch(indices)
         ATA_one = core_forward.compute_AtAv(
-            config, volume, bd.ctf_params,
-            bd.rotation_matrices,
+            config, volume, ctf_params,
+            rotation_matrices,
             noise_variance=noise_variance,
         )
         diagonal += ATA_one[0]
@@ -320,13 +321,19 @@ def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, n
     vol_real, vol_imag = 0, 0
 
     # Compute \sum_i A_i^T y_i / sigma_i^2
-    for batch_data in experiment_dataset.iterate(batch_size, process_images=True, by_image=False):
-        batch = core.translate_images(batch_data.images, batch_data.translations, experiment_dataset.image_shape)
+    for images, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in iter_batch_fields(
+        experiment_dataset.iterate(
+            batch_size,
+            by_image=False,
+        )
+    ):
+        batch = experiment_dataset.process_images(images)
+        batch = core.translate_images(batch, translations, experiment_dataset.image_shape)
 
         batch /= noise_variance
         A_t_vol_real, A_t_vol_imag = adjoint_ewald_sphere_forward_model(batch.real, batch.imag,
-                                        batch_data.rotation_matrices,
-                                        batch_data.ctf_params,
+                                        rotation_matrices,
+                                        ctf_params,
                                         experiment_dataset.image_shape, experiment_dataset.volume_shape,
                                         experiment_dataset.voxel_size, disc_type)
 

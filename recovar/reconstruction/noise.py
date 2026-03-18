@@ -13,7 +13,8 @@ from recovar.utils.nvtx_shim import nvtx
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, utils, jax_config
-from recovar.core.configs import ForwardModelConfig, BatchData, ModelState
+from recovar.core.configs import ForwardModelConfig, ModelState
+from recovar.data_io.batch_iterator import coerce_batch_fields, iter_batch_fields
 from recovar.heterogeneity import covariance_core
 from recovar.reconstruction import regularization
 
@@ -399,13 +400,14 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
     def infinite_data_iterator():
             while True:                              # repeat forever (or add a break after N epochs)
 
-                for bd in experiment_dataset.iterate(
-                        batch_size, indices=image_subset, prefetch=False):
+                for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in iter_batch_fields(
+                    experiment_dataset.iterate(batch_size, indices=image_subset, prefetch=False)
+                ):
                     yield (
-                        bd.images,
-                        bd.rotation_matrices,
-                        bd.translations,
-                        bd.ctf_params,
+                        batch,
+                        rotation_matrices,
+                        translations,
+                        ctf_params,
                     )
 
 
@@ -493,12 +495,17 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
             total_loss = 0.0
             total_grad = 0.0
             n_images = (image_subset.size if image_subset is not None else experiment_dataset.n_images)
-            for batch_data in experiment_dataset.iterate(
-                    batch_size, indices=image_subset,
-                    process_images=True, prefetch=False):
+            for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in iter_batch_fields(
+                experiment_dataset.iterate(
+                    batch_size,
+                    indices=image_subset,
+                    prefetch=False,
+                )
+            ):
+                batch = experiment_dataset.process_images(batch)
                 image_masks = get_image_masks(
                     volume_mask,
-                    batch_data.rotation_matrices,
+                    rotation_matrices,
                     experiment_dataset.volume_mask_threshold,
                     experiment_dataset.volume_shape,
                     experiment_dataset.image_shape,
@@ -508,10 +515,10 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
                 loss_val, grad_val = jax.value_and_grad(
                     noise_variance_loss, argnums=1
                 )(
-                    batch_data.images,
+                    batch,
                     noise_variance,
-                    batch_data.translations,
-                    batch_data.ctf_params,
+                    translations,
+                    ctf_params,
                     experiment_dataset.voxel_size,
                     experiment_dataset.ctf_evaluator,
                     image_masks,
@@ -647,21 +654,21 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
     
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
 
-    batch_iter = experiment_dataset.iterate(
+    batch_iter = iter_batch_fields(experiment_dataset.iterate(
         batch_size, indices=image_subset,
-    )
+    ))
 
     n_images = (image_subset.size if image_subset is not None else experiment_dataset.n_images)
-    for batch_data in batch_iter:
-        batch = experiment_dataset.process_images(batch_data.images)
-        batch = core.translate_images(batch, batch_data.translations, experiment_dataset.image_shape)
-        CTF = experiment_dataset.ctf_evaluator(batch_data.ctf_params, experiment_dataset.image_shape, experiment_dataset.voxel_size)
+    for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in batch_iter:
+        batch = experiment_dataset.process_images(batch)
+        batch = core.translate_images(batch, translations, experiment_dataset.image_shape)
+        CTF = experiment_dataset.ctf_evaluator(ctf_params, experiment_dataset.image_shape, experiment_dataset.voxel_size)
 
         if mean_estimate is not None:
             projected_mean = core_forward.forward_model(
                 config, mean_estimate,
-                batch_data.ctf_params,
-                batch_data.rotation_matrices,
+                ctf_params,
+                rotation_matrices,
             )
             if experiment_dataset.premultiplied_ctf:
                 batch = batch - projected_mean * CTF
@@ -732,12 +739,12 @@ def estimate_noise_variance(experiment_dataset, batch_size, max_images = 10000):
     else:
         n_images_used = experiment_dataset.n_images
 
-    batch_iter = experiment_dataset.iterate(
+    batch_iter = iter_batch_fields(experiment_dataset.iterate(
         batch_size, indices=subset_indices,
-    )
+    ))
 
-    for batch_data in batch_iter:
-        batch = experiment_dataset.process_images(batch_data.images)
+    for batch, _rotation_matrices, _translations, _ctf_params, _noise_variance, _particle_indices, _image_indices in batch_iter:
+        batch = experiment_dataset.process_images(batch)
         sum_sq += jnp.sum(jnp.abs(batch)**2, axis =0)
 
     mean_PS =  sum_sq / n_images_used
@@ -755,17 +762,17 @@ def estimate_white_noise_variance_from_mask(experiment_dataset, volume_mask, bat
 
 def estimate_noise_variance_from_outside_mask(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp'):
 
-    batch_iter = experiment_dataset.iterate(batch_size)
+    batch_iter = iter_batch_fields(experiment_dataset.iterate(batch_size))
     image_PSs = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
 
     masked_image_PSs = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
 
     image_mask = jnp.ones_like(experiment_dataset.image_mask)
-    for batch_data in batch_iter:
-        batch_ind = batch_data.image_indices
-        masked_image_PS, image_PS = estimate_noise_variance_from_outside_mask_inner(batch_data.images,
-                    volume_mask, batch_data.rotation_matrices,
-                    batch_data.translations,
+    for batch, rotation_matrices, translations, _ctf_params, _noise_variance, _particle_indices, image_indices in batch_iter:
+        batch_ind = image_indices
+        masked_image_PS, image_PS = estimate_noise_variance_from_outside_mask_inner(batch,
+                    volume_mask, rotation_matrices,
+                    translations,
                     image_mask,
                     experiment_dataset.volume_mask_threshold,
                     experiment_dataset.image_shape,
@@ -782,16 +789,16 @@ def estimate_noise_variance_from_outside_mask(experiment_dataset, volume_mask, b
 
 def estimate_noise_variance_from_outside_mask_v2(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp'):
 
-    batch_iter = experiment_dataset.iterate(batch_size)
+    batch_iter = iter_batch_fields(experiment_dataset.iterate(batch_size))
 
     image_mask = jnp.ones_like(experiment_dataset.image_mask)
     top_fraction = 0
     kernel_sq_sum =0
     per_image_est = None
-    for batch_data in batch_iter:
-        top_fraction_this, kernel_sq_sum_this, per_image_est = estimate_noise_variance_from_outside_mask_inner_v2(batch_data.images,
-                    volume_mask, batch_data.rotation_matrices,
-                    batch_data.translations,
+    for batch, rotation_matrices, translations, _ctf_params, _noise_variance, _particle_indices, _image_indices in batch_iter:
+        top_fraction_this, kernel_sq_sum_this, per_image_est = estimate_noise_variance_from_outside_mask_inner_v2(batch,
+                    volume_mask, rotation_matrices,
+                    translations,
                     image_mask,
                     experiment_dataset.volume_mask_threshold,
                     experiment_dataset.image_shape,
@@ -944,13 +951,18 @@ def get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, 
     residual_squared = jnp.zeros(experiment_dataset.grid_size, dtype = basis.dtype)
     all_averaged_residual_squared = np.empty((n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
     basis = jnp.asarray(basis.T)
-    for batch_data in experiment_dataset.iterate(batch_size, indices=subset_indices):
-        batch_image_ind = batch_data.image_indices
-        averaged_residual_squared = get_average_residual_square_inner(batch_data.images, mean_estimate, volume_mask,
+    for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, image_indices in iter_batch_fields(
+        experiment_dataset.iterate(
+            batch_size,
+            indices=subset_indices,
+        )
+    ):
+        batch_image_ind = image_indices
+        averaged_residual_squared = get_average_residual_square_inner(batch, mean_estimate, volume_mask,
                                                                         basis,
-                                                                        batch_data.ctf_params,
-                                                                        batch_data.rotation_matrices,
-                                                                        batch_data.translations,
+                                                                        ctf_params,
+                                                                        rotation_matrices,
+                                                                        translations,
                                                                         experiment_dataset.image_mask,
                                                                         experiment_dataset.volume_mask_threshold,
                                                                         experiment_dataset.image_shape,
@@ -1069,25 +1081,27 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
     top_fraction = None
     kernel_sq_sum = None
 
-    for iter_bd in experiment_dataset.iterate(batch_size, indices=subset_indices):
-        batch_image_ind = iter_bd.image_indices
-        batch = iter_bd.images
+    for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, image_indices in iter_batch_fields(
+        experiment_dataset.iterate(
+            batch_size,
+            indices=subset_indices,
+        )
+    ):
+        batch_image_ind = image_indices
         if subset_fn is not None:
             idx = subset_fn(batch_image_ind)
             batch = batch[idx]
             batch_image_ind = batch_image_ind[idx]
-
-        batch_data = BatchData(
-            images=_to_target(batch),
-            ctf_params=_to_target(experiment_dataset.CTF_params[batch_image_ind]),
-            rotation_matrices=_to_target(experiment_dataset.rotation_matrices[batch_image_ind]),
-            translations=_to_target(experiment_dataset.translations[batch_image_ind]),
-        )
         top_fraction_this, kernel_sq_sum_this, per_image_est = average_residual_square(
-            config, batch_data, model,
+            config,
+            _to_target(batch),
+            model,
             image_mask,
             _to_target(contrasts[batch_image_ind]),
             _to_target(basis_coordinates[batch_image_ind]),
+            rotation_matrices=_to_target(rotation_matrices[idx] if subset_fn is not None else rotation_matrices),
+            translations=_to_target(translations[idx] if subset_fn is not None else translations),
+            ctf_params=_to_target(ctf_params[idx] if subset_fn is not None else ctf_params),
         )
         if top_fraction is None:
             top_fraction = top_fraction_this
@@ -1131,23 +1145,52 @@ def batch_basis_times_coords2(basis, coords):
 # ============================================================================
 
 
-@eqx.filter_jit
 def average_residual_square(
     config: ForwardModelConfig,
-    batch_data: BatchData,
+    images,
     model: ModelState,
     image_mask: jax.Array,
     contrasts: jax.Array,
     basis_coordinates: jax.Array,
+    rotation_matrices=None,
+    translations=None,
+    ctf_params=None,
 ):
     """Compute average residual squared — Equinox API.
 
     Replaces the 19-param ``get_average_residual_square_inner_v2``.
     """
-    batch = batch_data.images
-    ctf_params = batch_data.ctf_params
-    rotation_matrices = batch_data.rotation_matrices
-    translations = batch_data.translations
+    images, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices = coerce_batch_fields(
+        images,
+        rotation_matrices=rotation_matrices,
+        translations=translations,
+        ctf_params=ctf_params,
+    )
+    return _average_residual_square_explicit(
+        config,
+        images,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        model,
+        image_mask,
+        contrasts,
+        basis_coordinates,
+    )
+
+
+@eqx.filter_jit
+def _average_residual_square_explicit(
+    config: ForwardModelConfig,
+    batch,
+    rotation_matrices,
+    translations,
+    ctf_params,
+    model: ModelState,
+    image_mask: jax.Array,
+    contrasts: jax.Array,
+    basis_coordinates: jax.Array,
+):
 
     if model.volume_mask is not None:
         image_mask = covariance_core.get_per_image_tight_mask(

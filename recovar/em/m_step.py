@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import equinox as eqx
 from recovar import core, utils
 from recovar.core.configs import ForwardModelConfig
+from recovar.data_io.batch_iterator import iter_batch_fields
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from .sampling import translations_to_indices
 from .core import VOL_AXIS
@@ -176,16 +177,22 @@ def M_with_precompute(experiment_dataset, probabilities, rotations, translations
     rotation_batch = max(1, rotations.shape[0] // mult)
     logger.info("Starting sum up images. Batch size %s, rotation batch %s", batch_size, rotation_batch)
     start_idx = 0
-    for batch_data in experiment_dataset.iterate(batch_size, indices=image_indices, by_image=False):
-        batch = jnp.asarray(batch_data.images)
-        end_idx = start_idx + len(batch_data.image_indices)
+    for batch, _rotation_matrices, _translations, ctf_params, _noise_variance, _particle_indices, batch_image_indices in iter_batch_fields(
+        experiment_dataset.iterate(
+            batch_size,
+            indices=image_indices,
+            by_image=False,
+        )
+    ):
+        batch = jnp.asarray(batch)
+        end_idx = start_idx + len(batch_image_indices)
 
         for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):
             Ft_y, Ft_ctf = sum_up_images_fixed_rots_eqx(
                 config, batch,
                 probabilities[start_idx:end_idx, rot_indices[0]:rot_indices[-1]+1],
                 translations, rotations[rot_indices],
-                batch_data.ctf_params, noise_variance,
+                ctf_params, noise_variance,
                 Ft_y=Ft_y, Ft_ctf=Ft_ctf,
             )
 

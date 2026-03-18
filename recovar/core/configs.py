@@ -188,21 +188,18 @@ class BatchData(eqx.Module):
 
 
 # ---------------------------------------------------------------------------
-# DataIterator — yields BatchData from a dataset
+# DataIterator — legacy compatibility wrapper over the dataset iterator
 # ---------------------------------------------------------------------------
 
 class DataIterator:
-    """Wraps a dataset generator to yield :class:`BatchData` objects.
+    """Legacy compatibility wrapper yielding :class:`BatchData` objects.
 
-    Pulls images from *dataset* in batches and bundles them with the
-    requested per-image metadata into a :class:`BatchData` ready for
-    jitted computation kernels.
+    New code should prefer ``dataset.iter_batches()``, which yields explicit
+    batch fields directly. This wrapper exists only for older call sites that
+    still expect :class:`BatchData`.
 
-    Uses ``get_image_generator`` / ``get_image_subset_generator`` by default,
-    which iterates over individual images regardless of tilt-series grouping.
-    This is correct for mean reconstruction and other per-image kernels.
-    Pass ``use_image_generator=False`` to use the particle-grouped generator
-    (``get_dataset_generator``), which is needed for tilt-series EM E-steps.
+    Iterator selection and noise lookup are delegated to the dataset iterator
+    backend so there is a single implementation of batching logic.
 
     Parameters
     ----------
@@ -269,27 +266,17 @@ class DataIterator:
         self.half_images = half_images
 
     def __iter__(self):
-        if self.index_subset is None:
-            gen = (
-                self.dataset._get_image_generator(batch_size=self.batch_size)
-                if self.use_image_generator
-                else self.dataset._get_dataset_generator(batch_size=self.batch_size)
-            )
-        else:
-            gen = (
-                self.dataset._get_image_subset_generator(
-                    batch_size=self.batch_size, subset_indices=self.index_subset,
-                )
-                if self.use_image_generator
-                else self.dataset._get_dataset_subset_generator(
-                    batch_size=self.batch_size, subset_indices=self.index_subset,
-                )
-            )
-        nm = self.noise_model
         do_process = self.apply_process_images
-        noise_by_particle = self.noise_by_particle
         do_half = self.half_images
-        for batch, particles_ind, indices in gen:
+        for batch, rotation_matrices, translations, ctf_params, noise_variance, particle_indices, image_indices in self.dataset.iter_batches(
+            self.batch_size,
+            indices=self.index_subset,
+            noise_model=self.noise_model,
+            noise_half=self.noise_half,
+            noise_by_particle=self.noise_by_particle,
+            by_image=self.use_image_generator,
+            prefetch=False,
+        ):
             if do_process and do_half:
                 # Fused path: pad + rfft2 directly → half-spectrum output.
                 batch = self.dataset.process_images_half(batch, apply_image_mask=False)
@@ -298,23 +285,14 @@ class DataIterator:
             elif do_half:
                 import recovar.core.fourier_transform_utils as ftu
                 batch = ftu.full_image_to_half_image(batch, tuple(self.dataset.image_shape))
-            # Noise indexing: particle-grouped generators use particles_ind
-            # for noise lookup (covariance path), while image generators use
-            # flat indices (mean reconstruction path).
-            # When the generator is image-level, always use image indices —
-            # the particle placeholder may be non-finite (e.g. np.inf from
-            # _ImageView) and can't be used for array indexing.
-            if nm is not None:
-                use_particle_noise = (
-                    noise_by_particle and not self.use_image_generator
-                )
-                noise_idx = particles_ind if use_particle_noise else indices
-                nv = nm.get_half(noise_idx) if self.noise_half else nm.get(noise_idx)
-            else:
-                nv = None
-            yield self.dataset.make_batch_data(
-                batch, indices, noise_variance=nv,
-                particle_indices=particles_ind,
+            yield BatchData(
+                images=batch,
+                rotation_matrices=rotation_matrices,
+                translations=translations,
+                ctf_params=ctf_params,
+                noise_variance=noise_variance,
+                particle_indices=particle_indices,
+                image_indices=image_indices,
             )
 
 

@@ -722,14 +722,14 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
             batch_end = int(np.min( [(k+1) * batch_size, n_images]))
             indices = img_indices[batch_st:batch_end]
 
-            bd = experiment_dataset.make_batch_data(None, indices)
-            translations = np.zeros_like(bd.translations) if pad_before_translate else bd.translations
+            rotation_matrices, translations, ctf_params = experiment_dataset.metadata.get_batch(indices)
+            translations = np.zeros_like(translations) if pad_before_translate else translations
 
             if disc_type == "nufft":
                 images_batch = simulate_nufft_data_batch(vol_real,
-                                                 bd.rotation_matrices,
+                                                 rotation_matrices,
                                                  translations,
-                                                 bd.ctf_params,
+                                                 ctf_params,
                                                  experiment_dataset.voxel_size,
                                                  experiment_dataset.volume_shape,
                                                  experiment_dataset.image_shape,
@@ -739,9 +739,9 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                                                  skip_ctf = pad_before_ctf)
             elif disc_type == "pdb":
                 images_batch = simulate_nufft_data_batch_from_pdb(volumes[vol_idx],
-                                                 bd.rotation_matrices,
+                                                 rotation_matrices,
                                                  translations,
-                                                 bd.ctf_params,
+                                                 ctf_params,
                                                  experiment_dataset.voxel_size,
                                                  experiment_dataset.volume_shape,
                                                  experiment_dataset.image_shape,
@@ -758,8 +758,8 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 images_batch_real, images_batch_real_imag = ewald.ewald_sphere_forward_model(
                         volume.real,
                         volume.imag,
-                        bd.rotation_matrices,
-                        bd.ctf_params,
+                        rotation_matrices,
+                        ctf_params,
                         experiment_dataset.image_shape,
                         experiment_dataset.volume_shape,
                         experiment_dataset.voxel_size, disc_type_e ,
@@ -777,9 +777,9 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 _sim_config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
                 images_batch = simulate_batch(
                     _sim_config, volume,
-                    bd.rotation_matrices,
+                    rotation_matrices,
                     translations,
-                    bd.ctf_params,
+                    ctf_params,
                     skip_ctf=pad_before_ctf,
                 )
 
@@ -793,7 +793,7 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                 # IF this is on, we did not apply CTF above.
                 upsample_factor=2
                 upsampled_shape = tuple(np.array(experiment_dataset.image_shape) * upsample_factor)
-                upsampled_CTF = experiment_dataset.ctf_evaluator(bd.ctf_params,  upsampled_shape, experiment_dataset.voxel_size)
+                upsampled_CTF = experiment_dataset.ctf_evaluator(ctf_params,  upsampled_shape, experiment_dataset.voxel_size)
 
                 images_batch = padding.pad_images_fourier_domain(images_batch,  experiment_dataset.image_shape, experiment_dataset.grid_size * (upsample_factor-1))
                 images_batch = images_batch * upsampled_CTF
@@ -830,9 +830,9 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
                     images_batch = fourier_transform_utils.get_idft2(images_batch)
 
                 if pad_before_translate:
-                    bd_trans = np.asarray(bd.translations)
-                    images_batch = roll_batch(images_batch, -np.round(bd_trans).astype(int)[:,0], -1 )
-                    images_batch = roll_batch(images_batch, -np.round(bd_trans).astype(int)[:,1], -2 )
+                    batch_translations = np.asarray(translations)
+                    images_batch = roll_batch(images_batch, -np.round(batch_translations).astype(int)[:,0], -1 )
+                    images_batch = roll_batch(images_batch, -np.round(batch_translations).astype(int)[:,1], -2 )
 
                 images_batch = padding.unpad_images_spatial_domain(images_batch, experiment_dataset.grid_size * (upsample_factor-1)).real
                 output_array[indices] = np.array(images_batch)
@@ -841,10 +841,10 @@ def simulate_data(experiment_dataset, volumes,  noise_variance,  batch_size, ima
 
                 if pad_before_translate:
                     from recovar.core import padding
-                    bd_trans = np.asarray(bd.translations)
+                    batch_translations = np.asarray(translations)
                     padded_images = padding.pad_images_spatial_domain(images_batch,experiment_dataset.grid_size)
-                    padded_images = roll_batch(padded_images, -np.round(bd_trans).astype(int)[:,0], -1 )
-                    padded_images = roll_batch(padded_images, -np.round(bd_trans).astype(int)[:,1], -2 )
+                    padded_images = roll_batch(padded_images, -np.round(batch_translations).astype(int)[:,0], -1 )
+                    padded_images = roll_batch(padded_images, -np.round(batch_translations).astype(int)[:,1], -2 )
                     images_batch = padding.unpad_images_spatial_domain(padded_images, experiment_dataset.grid_size)
                 
                 images_batch = fourier_transform_utils.get_idft2(images_batch.reshape([-1, *experiment_dataset.image_shape]))

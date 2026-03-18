@@ -16,7 +16,8 @@ from recovar import core, utils, jax_config
 from recovar.core import linalg
 from recovar.jax_config import _to_cpu
 from recovar.core import cubic_interpolation
-from recovar.core.configs import ForwardModelConfig, BatchData, ModelState, CovarianceOpts, CovColumnOpts
+from recovar.core.configs import ForwardModelConfig, ModelState, CovarianceOpts, CovColumnOpts
+from recovar.data_io.batch_iterator import coerce_batch_fields, iter_batch_fields
 from recovar.heterogeneity import covariance_core
 from recovar.reconstruction import regularization, relion_functions, noise
 
@@ -383,14 +384,17 @@ def compute_regularized_covariance_columns(dataset, means, mean_prior, volume_ma
 
 ## TODO there is clean up to be done here so that all functions use half images/half noise/half ctf etc, 
 ## but another branch is already working on it so perhaps check with that
-@eqx.filter_jit
 @nvtx.annotate("variance_relion_kernel_trilinear", color="yellow")
 def variance_relion_kernel_trilinear(
     config: ForwardModelConfig,
-    batch_data: BatchData,
+    images,
     mean_estimate: jax.Array,
     volume_mask: jax.Array,
     image_mask: jax.Array,
+    rotation_matrices=None,
+    translations=None,
+    ctf_params=None,
+    noise_variance=None,
     soften: int = 5,
     Ft_y: jax.Array = None,
     Ft_ctf: jax.Array = None,
@@ -402,13 +406,52 @@ def variance_relion_kernel_trilinear(
     Backprojects into half-volume accumulators (Ft_y, Ft_ctf, Ft_im, Ft_one).
     Pass None to initialise from zero; pass an existing half-volume to accumulate.
     """
-    rotation_matrices = batch_data.rotation_matrices
+    images, rotation_matrices, translations, ctf_params, noise_variance, _, _ = coerce_batch_fields(
+        images,
+        rotation_matrices=rotation_matrices,
+        translations=translations,
+        ctf_params=ctf_params,
+        noise_variance=noise_variance,
+    )
+    return _variance_relion_kernel_trilinear_explicit(
+        config,
+        images,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        noise_variance,
+        mean_estimate,
+        volume_mask,
+        image_mask,
+        soften=soften,
+        Ft_y=Ft_y,
+        Ft_ctf=Ft_ctf,
+        Ft_im=Ft_im,
+        Ft_one=Ft_one,
+    )
 
-    noise_variances = batch_data.noise_variance
 
-    # batch_data.images is already in half-image (rfft-packed) format.
-    half_images = core.translate_images(batch_data.images, batch_data.translations, config.image_shape, half_image=True)
-    half_ctf = config.compute_ctf_half(batch_data.ctf_params)
+@eqx.filter_jit
+def _variance_relion_kernel_trilinear_explicit(
+    config: ForwardModelConfig,
+    images,
+    rotation_matrices,
+    translations,
+    ctf_params,
+    noise_variance,
+    mean_estimate: jax.Array,
+    volume_mask: jax.Array,
+    image_mask: jax.Array,
+    soften: int = 5,
+    Ft_y: jax.Array = None,
+    Ft_ctf: jax.Array = None,
+    Ft_im: jax.Array = None,
+    Ft_one: jax.Array = None,
+):
+    noise_variances = noise_variance
+
+    half_images = core.translate_images(images, translations, config.image_shape, half_image=True)
+    half_ctf = config.compute_ctf_half(ctf_params)
     CTF_squared = half_ctf ** 2
 
     mean_slice_half = core.slice_volume(
@@ -419,7 +462,7 @@ def variance_relion_kernel_trilinear(
     if config.premultiplied_ctf:
         half_images = half_images - mean_slice_half * CTF_squared
         # CTF² needed in full space for noise scaling; computed from scratch for this case only.
-        noise_variances = noise_variances * config.compute_ctf(batch_data.ctf_params) ** 2
+        noise_variances = noise_variances * config.compute_ctf(ctf_params) ** 2
     else:
         half_images = half_images - mean_slice_half * half_ctf
 
@@ -478,17 +521,26 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, b
 
     # Full-spectrum noise needed for masked noise variance inside the kernel.
     Ft_y, Ft_ctf, Ft_im, Ft_one = None, None, None, None
-    for batch_data in experiment_dataset.iterate(
-        batch_size,
-        noise_model=experiment_dataset.noise,
-        noise_half=False,
-        process_images=True,
-        half_images=True,
-        indices=image_subset,
+    for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in iter_batch_fields(
+        experiment_dataset.iterate(
+            batch_size,
+            noise_model=experiment_dataset.noise,
+            noise_half=False,
+            indices=image_subset,
+        )
     ):
+        images = experiment_dataset.process_images_half(images)
         Ft_y, Ft_ctf, Ft_im, Ft_one = variance_relion_kernel_trilinear(
-            config, batch_data, mean_estimate, volume_mask,
-            experiment_dataset.image_mask, soften=5,
+            config,
+            images,
+            mean_estimate,
+            volume_mask,
+            experiment_dataset.image_mask,
+            rotation_matrices=rotation_matrices,
+            translations=translations,
+            ctf_params=ctf_params,
+            noise_variance=noise_variance,
+            soften=5,
             Ft_y=Ft_y, Ft_ctf=Ft_ctf, Ft_im=Ft_im, Ft_one=Ft_one,
         )
 
@@ -646,8 +698,18 @@ def _compute_H_B_multi_gpu(cryo, mean, dilated_volume_mask, picked_frequencies,
 
     return H, B
 
-def preprocess_covariance_batch(config, batch_data, mean_estimate, volume_mask,
-                                image_stack_mask, opts):
+def preprocess_covariance_batch(
+    config,
+    images,
+    rotation_matrices,
+    translations,
+    ctf_params,
+    particle_indices,
+    mean_estimate,
+    volume_mask,
+    image_stack_mask,
+    opts,
+):
     """Preprocess one image batch for covariance column computation.
 
     Applies tight mask, centers images (y_i - A_i*mu), masks, computes CTF,
@@ -658,10 +720,6 @@ def preprocess_covariance_batch(config, batch_data, mean_estimate, volume_mask,
     -------
     tuple of (centered_images, ctf_on_grid, plane_coords, image_mask, tilt_labels)
     """
-    images = batch_data.images
-    rotation_matrices = batch_data.rotation_matrices
-    ctf_params = batch_data.ctf_params
-
     # 1. Per-image tight mask (skip expensive 3D FFT + projection when not masking)
     if opts.mask_images:
         ## TODO a big one: image_tight_mask and similar probably be using cubic discretization for the mask
@@ -682,7 +740,7 @@ def preprocess_covariance_batch(config, batch_data, mean_estimate, volume_mask,
     images = covariance_core.centered_images(
         config, images, mean_estimate,
         ctf_params, rotation_matrices,
-        batch_data.translations)
+        translations)
 
     # 3. Apply image masks (skip FFT pair when mask is all ones)
     if opts.mask_images:
@@ -699,7 +757,7 @@ def preprocess_covariance_batch(config, batch_data, mean_estimate, volume_mask,
     # particle_indices from JAXDataLoader(batch_size=1) is per-particle (shape (1,)),
     # but we need per-image labels for the scatter-add in group_sum_by_labels.
     # Broadcast the single particle index to match all images in the tilt-series batch.
-    tilt_labels = batch_data.particle_indices
+    tilt_labels = particle_indices
     if tilt_labels is not None and tilt_labels.shape[0] != images.shape[0]:
         tilt_labels = jnp.broadcast_to(tilt_labels, (images.shape[0],))
 
@@ -790,25 +848,34 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
             noise_model=cryo.noise, noise_half=False,
             noise_by_particle=True,
             by_image=not cryo.tilt_series_flag,
-            process_images=True,
         )
         if half is not None:
             _iter_kw['half'] = half
         elif image_subset is not None:
             _iter_kw['indices'] = image_subset
-        for batch_data in cryo.iterate(image_batch_size, **_iter_kw):
-
-            images, ctf_on_grid, plane_coords, image_mask, tilt_labels = \
-                preprocess_covariance_batch(
-                    config, batch_data, mean_estimate, volume_mask,
-                    cryo.image_mask, opts)
+        for images, rotation_matrices, translations, ctf_params, noise_variance, particle_indices, _image_indices in iter_batch_fields(
+            cryo.iterate(image_batch_size, **_iter_kw)
+        ):
+            images = cryo.process_images(images)
+            images, ctf_on_grid, plane_coords, image_mask, tilt_labels = preprocess_covariance_batch(
+                config,
+                images,
+                rotation_matrices,
+                translations,
+                ctf_params,
+                particle_indices,
+                mean_estimate,
+                volume_mask,
+                cryo.image_mask,
+                opts,
+            )
 
             # All frequencies in single XLA program (fori_loop, accumulates via .at[k].add)
             H_accum, B_accum = compute_freq_batch(
                 config, opts, freq_batch_jax,
                 images, ctf_on_grid, plane_coords,
-                batch_data.rotation_matrices,
-                batch_data.noise_variance,
+                rotation_matrices,
+                noise_variance,
                 image_mask, tilt_labels,
                 cryo.premultiplied_ctf, cryo.tilt_series_flag, no_mask,
                 H_accum, B_accum)
@@ -943,11 +1010,26 @@ def _compute_projected_covariance_single(experiment_dataset, mean_estimate, basi
     opts = CovarianceOpts(disc_type_u=disc_type_u, do_mask_images=do_mask_images, shared_label=experiment_dataset.tilt_series_flag)
     hermitian_weights = linalg.rfft2_hermitian_weights(config.image_shape, dtype=experiment_dataset.dtype_real)
 
-    for batch_data in experiment_dataset.iterate(
-        batch_size, noise_model=experiment_dataset.noise, noise_half=False,
-        by_image=not experiment_dataset.tilt_series_flag,
+    for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in iter_batch_fields(
+        experiment_dataset.iterate(
+            batch_size, noise_model=experiment_dataset.noise, noise_half=False,
+            by_image=not experiment_dataset.tilt_series_flag,
+        )
     ):
-        lhs, rhs = reduce_covariance_inner(config, batch_data, model, opts, experiment_dataset.image_mask, hermitian_weights=hermitian_weights, lhs=lhs, rhs=rhs)
+        lhs, rhs = reduce_covariance_inner(
+            config,
+            images,
+            model,
+            opts,
+            experiment_dataset.image_mask,
+            rotation_matrices=rotation_matrices,
+            translations=translations,
+            ctf_params=ctf_params,
+            noise_variance=noise_variance,
+            hermitian_weights=hermitian_weights,
+            lhs=lhs,
+            rhs=rhs,
+        )
     del basis
 
     def vec(X):
@@ -1021,16 +1103,25 @@ def compute_projected_covariance(dataset, mean_estimate, basis, volume_mask, bat
         hermitian_weights = linalg.rfft2_hermitian_weights(
             config.image_shape, dtype=dataset.dtype_real)
 
-        for batch_data in dataset.iterate(
-            batch_size,
-            noise_model=dataset.noise,
-            noise_half=False,
-            half=half,
-            by_image=not dataset.tilt_series_flag,
+        for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in iter_batch_fields(
+            dataset.iterate(
+                batch_size,
+                noise_model=dataset.noise,
+                noise_half=False,
+                half=half,
+                by_image=not dataset.tilt_series_flag,
+            )
         ):
             lhs, rhs = reduce_covariance_inner(
-                config, batch_data, model, opts,
+                config,
+                images,
+                model,
+                opts,
                 dataset.image_mask,
+                rotation_matrices=rotation_matrices,
+                translations=translations,
+                ctf_params=ctf_params,
+                noise_variance=noise_variance,
                 hermitian_weights=hermitian_weights,
                 lhs=lhs, rhs=rhs,
             )
@@ -1076,14 +1167,17 @@ def compute_projected_covariance(dataset, mean_estimate, basis, volume_mask, bat
 # ============================================================================
 
 
-@eqx.filter_jit
 @nvtx.annotate("reduce_covariance_inner", color="green")
 def reduce_covariance_inner(
     config: ForwardModelConfig,
-    batch_data: BatchData,
+    images,
     model: ModelState,
     opts: CovarianceOpts,
     image_mask: jax.Array,
+    rotation_matrices=None,
+    translations=None,
+    ctf_params=None,
+    noise_variance=None,
     hermitian_weights=None,
     lhs=None,
     rhs=None,
@@ -1092,15 +1186,48 @@ def reduce_covariance_inner(
 
     Replaces the 24-param ``reduce_covariance_est_inner`` with structured inputs.
     All geometry/CTF/discretization params come from ``config``.
-    Per-batch arrays come from ``batch_data``.
+    Per-batch arrays are passed explicitly.
     Reconstruction state (mean, mask, basis) comes from ``model``.
     Boolean flags come from ``opts``.
     """
-    batch = batch_data.images
-    ctf_params = batch_data.ctf_params
-    rotation_matrices = batch_data.rotation_matrices
-    translations = batch_data.translations
-    noise_variance = batch_data.noise_variance
+    batch, rotation_matrices, translations, ctf_params, noise_variance, _, _ = coerce_batch_fields(
+        images,
+        rotation_matrices=rotation_matrices,
+        translations=translations,
+        ctf_params=ctf_params,
+        noise_variance=noise_variance,
+    )
+    return _reduce_covariance_inner_explicit(
+        config,
+        batch,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        noise_variance,
+        model,
+        opts,
+        image_mask,
+        hermitian_weights=hermitian_weights,
+        lhs=lhs,
+        rhs=rhs,
+    )
+
+
+@eqx.filter_jit
+def _reduce_covariance_inner_explicit(
+    config: ForwardModelConfig,
+    batch,
+    rotation_matrices,
+    translations,
+    ctf_params,
+    noise_variance,
+    model: ModelState,
+    opts: CovarianceOpts,
+    image_mask: jax.Array,
+    hermitian_weights=None,
+    lhs=None,
+    rhs=None,
+):
 
     if (config.disc_type != 'linear_interp') and (config.disc_type != 'cubic'):
         logger.warning("USING NEAREST NEIGHBOR DISCRETIZATION. disc_type=%s", config.disc_type)

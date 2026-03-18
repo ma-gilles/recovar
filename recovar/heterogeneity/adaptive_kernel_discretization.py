@@ -18,24 +18,28 @@ from recovar import core, jax_config, utils
 from recovar.reconstruction import noise, regularization, relion_functions
 from recovar.data_io import dataset
 from recovar.core import linalg
-from recovar.core.configs import BatchData, ForwardModelConfig
+from recovar.core.configs import ForwardModelConfig
+from recovar.data_io.batch_iterator import coerce_batch_fields, iter_batch_fields
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
 
 
-@eqx.filter_jit
 def _heterogeneity_kernel_batch_from_fft(
     config: ForwardModelConfig,
-    batch: BatchData,
+    images,
+    ctf_params=None,
+    rotation_matrices=None,
+    translations=None,
+    noise_variance=None,
     Ft_y: jax.Array = None,
     Ft_ctf: jax.Array = None,
     upsample_ctf: bool = True,
 ):
     """Backproject half-spectrum images into heterogeneity kernel accumulators.
 
-    Expects ``batch.images`` in half-image (rfft) format.  Accumulates into
+    Expects ``images`` in half-image (rfft) format. Accumulates into
     half-volume layout for memory efficiency.
 
     Parameters
@@ -45,17 +49,49 @@ def _heterogeneity_kernel_batch_from_fft(
         native resolution before backprojecting.  Reduces aliasing in the CTF
         weight accumulator.  Default True (matches legacy behaviour).
     """
+    images, rotation_matrices, translations, ctf_params, noise_variance, _, _ = coerce_batch_fields(
+        images,
+        rotation_matrices=rotation_matrices,
+        translations=translations,
+        ctf_params=ctf_params,
+        noise_variance=noise_variance,
+    )
+    return _heterogeneity_kernel_batch_from_fft_explicit(
+        config,
+        images,
+        ctf_params,
+        rotation_matrices,
+        translations,
+        noise_variance,
+        Ft_y=Ft_y,
+        Ft_ctf=Ft_ctf,
+        upsample_ctf=upsample_ctf,
+    )
+
+
+@eqx.filter_jit
+def _heterogeneity_kernel_batch_from_fft_explicit(
+    config: ForwardModelConfig,
+    images,
+    ctf_params,
+    rotation_matrices,
+    translations,
+    noise_variance,
+    Ft_y: jax.Array = None,
+    Ft_ctf: jax.Array = None,
+    upsample_ctf: bool = False,
+):
     from recovar.core.geometry import translate_images
     from recovar.reconstruction import noise as noise_mod
 
-    half_images = translate_images(batch.images, batch.translations, config.image_shape, half_image=True)
+    half_images = translate_images(images, translations, config.image_shape, half_image=True)
     noise_half = noise_mod.to_batched_half_pixel_noise(
-        batch.noise_variance, config.image_shape, batch_size=half_images.shape[0]
+        noise_variance, config.image_shape, batch_size=half_images.shape[0]
     )
     half_images = half_images / noise_half
 
     # Pre-compute CTF once (reused for both image and weight backprojections)
-    ctf = config.compute_ctf_half(batch.ctf_params)
+    ctf = config.compute_ctf_half(ctf_params)
     if not config.premultiplied_ctf:
         half_images = half_images * ctf
 
@@ -63,24 +99,41 @@ def _heterogeneity_kernel_batch_from_fft(
     # Currently needed because the old code had no sphere clipping and the default
     # max_r=image_shape[0]//2-1 discards the outermost frequency shell.
     Ft_y = core.adjoint_slice_volume(
-        half_images, batch.rotation_matrices, config.image_shape, config.volume_shape,
+        half_images,
+        rotation_matrices,
+        config.image_shape,
+        config.volume_shape,
         config.disc_type,
-        volume=Ft_y, half_image=True, half_volume=True, max_r=None,
+        volume=Ft_y,
+        half_image=True,
+        half_volume=True,
+        max_r=None,
     )
 
     if upsample_ctf:
         from recovar.core.ctf import compute_antialiased_ctf_squared
+
         ctf_half = compute_antialiased_ctf_squared(
-            config.ctf, batch.ctf_params, config.image_shape, config.voxel_size,
+            config.ctf,
+            ctf_params,
+            config.image_shape,
+            config.voxel_size,
             half_image=True,
         ) / noise_half
     else:
         ctf_half = ctf ** 2 / noise_half
 
     Ft_ctf = core.adjoint_slice_volume(
-        ctf_half, batch.rotation_matrices, config.image_shape, config.volume_shape,
+        ctf_half,
+        rotation_matrices,
+        config.image_shape,
+        config.volume_shape,
         config.disc_type,
-        volume=Ft_ctf, half_image=True, half_volume=True, max_r=None,  # TODO: see above
+        volume=Ft_ctf,
+        half_image=True,
+        half_volume=True,
+        max_r=None,  # TODO: see above
+    )
     )
     return Ft_y, Ft_ctf.real
 
@@ -198,10 +251,13 @@ def half_vec_index_to_vec_index(indices_half, volume_shape):
 # ============================================================================
 
 
-@eqx.filter_jit
 def precompute_kernel_batch(
     config: ForwardModelConfig,
-    batch_data: BatchData,
+    images,
+    rotation_matrices=None,
+    translations=None,
+    ctf_params=None,
+    noise_variance=None,
     pol_degree: int = 0,
     XWX=None, F=None,
     heterogeneity_distances=None, heterogeneity_bins=None,
@@ -209,17 +265,51 @@ def precompute_kernel_batch(
     """Precompute kernel for one batch — Equinox API.
 
     Uses nearest-neighbor scatter so images are full-spectrum (not half-image).
-    Noise variance from ``batch_data.noise_variance``.
+    ``noise_variance`` is passed explicitly.
     """
+    images, rotation_matrices, translations, ctf_params, noise_variance, _, _ = coerce_batch_fields(
+        images,
+        rotation_matrices=rotation_matrices,
+        translations=translations,
+        ctf_params=ctf_params,
+        noise_variance=noise_variance,
+    )
+    return _precompute_kernel_batch_explicit(
+        config,
+        images,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        noise_variance,
+        pol_degree=pol_degree,
+        XWX=XWX,
+        F=F,
+        heterogeneity_distances=heterogeneity_distances,
+        heterogeneity_bins=heterogeneity_bins,
+    )
+
+
+@eqx.filter_jit
+def _precompute_kernel_batch_explicit(
+    config: ForwardModelConfig,
+    images,
+    rotation_matrices,
+    translations,
+    ctf_params,
+    noise_variance,
+    pol_degree: int = 0,
+    XWX=None, F=None,
+    heterogeneity_distances=None, heterogeneity_bins=None,
+):
     from recovar.reconstruction import noise as noise_mod
     noise_variance = noise_mod.to_batched_pixel_noise(
-        batch_data.noise_variance, config.image_shape,
+        noise_variance, config.image_shape,
     )
-    CTF = config.compute_ctf(batch_data.ctf_params)
+    CTF = config.compute_ctf(ctf_params)
     ctf_over_noise_variance = CTF ** 2 / noise_variance
 
     X, grid_point_indices = make_X_mat(
-        batch_data.rotation_matrices, config.volume_shape, config.image_shape, pol_degree=pol_degree
+        rotation_matrices, config.volume_shape, config.image_shape, pol_degree=pol_degree
     )
     grid_point_indices, good_idx = vec_index_to_half_vec_index(
         grid_point_indices, config.volume_shape, flip_positive=True
@@ -235,7 +325,7 @@ def precompute_kernel_batch(
         heterogeneity_bins_this = (heterogeneity_distances[..., None] <= heterogeneity_bins)
         n_bins = heterogeneity_bins.size
     else:
-        heterogeneity_bins_this = jnp.ones((batch_data.images.shape[0], 1), dtype=np.bool_)
+        heterogeneity_bins_this = jnp.ones((images.shape[0], 1), dtype=np.bool_)
         n_bins = 1
 
     XWX_b = XWX_b[..., None] * heterogeneity_bins_this[..., None, None, :]
@@ -243,7 +333,7 @@ def precompute_kernel_batch(
 
     XWX = XWX.at[grid_point_indices.reshape(-1)].add(XWX_b.reshape(-1, XWX_b.shape[-1]))
 
-    images = core.translate_images(batch_data.images, batch_data.translations, config.image_shape)
+    images = core.translate_images(images, translations, config.image_shape)
     F_b = X * (images * CTF / noise_variance)[..., None]
     F_b = F_b[..., None] * heterogeneity_bins_this[..., None, None, :]
     F_b = F_b.reshape(F_b.shape[:-2] + (-1,))
@@ -252,20 +342,57 @@ def precompute_kernel_batch(
     return XWX, F
 
 
-@eqx.filter_jit
 def precompute_triangular_kernel_batch(
     config: ForwardModelConfig,
-    batch_data: BatchData,
+    images,
+    rotation_matrices=None,
+    translations=None,
+    ctf_params=None,
+    noise_variance=None,
     pol_degree: int = 0,
     XWX=None, F=None,
     heterogeneity_distances=None, heterogeneity_bins=None,
 ):
     """Precompute triangular kernel for one batch — Equinox API.
 
-    Expects ``batch_data.images`` in half-image (rfft) format and
-    ``batch_data.noise_variance`` from ``noise.get()`` (full-spectrum OK,
-    auto-converted to half-pixel noise internally).
+    Expects ``images`` in half-image (rfft) format and explicit
+    ``noise_variance`` from ``noise.get()`` (full-spectrum OK, auto-converted
+    to half-pixel noise internally).
     """
+    images, rotation_matrices, translations, ctf_params, noise_variance, _, _ = coerce_batch_fields(
+        images,
+        rotation_matrices=rotation_matrices,
+        translations=translations,
+        ctf_params=ctf_params,
+        noise_variance=noise_variance,
+    )
+    return _precompute_triangular_kernel_batch_explicit(
+        config,
+        images,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        noise_variance,
+        pol_degree=pol_degree,
+        XWX=XWX,
+        F=F,
+        heterogeneity_distances=heterogeneity_distances,
+        heterogeneity_bins=heterogeneity_bins,
+    )
+
+
+@eqx.filter_jit
+def _precompute_triangular_kernel_batch_explicit(
+    config: ForwardModelConfig,
+    images,
+    rotation_matrices,
+    translations,
+    ctf_params,
+    noise_variance,
+    pol_degree: int = 0,
+    XWX=None, F=None,
+    heterogeneity_distances=None, heterogeneity_bins=None,
+):
     from recovar.reconstruction import noise as noise_mod
 
     if pol_degree > 0:
@@ -273,29 +400,27 @@ def precompute_triangular_kernel_batch(
 
     if heterogeneity_bins is not None:
         heterogeneity_bins_this = (heterogeneity_distances[..., None] <= heterogeneity_bins)
-        n_bins = heterogeneity_bins.size
     else:
-        heterogeneity_bins_this = jnp.ones((batch_data.images.shape[0], 1), dtype=np.bool_)
-        n_bins = 1
+        heterogeneity_bins_this = jnp.ones((images.shape[0], 1), dtype=np.bool_)
 
-    half_images = core.translate_images(batch_data.images, batch_data.translations, config.image_shape, half_image=True)
+    half_images = core.translate_images(images, translations, config.image_shape, half_image=True)
     noise_half = noise_mod.to_batched_half_pixel_noise(
-        batch_data.noise_variance, config.image_shape, batch_size=half_images.shape[0]
+        noise_variance, config.image_shape, batch_size=half_images.shape[0]
     )
     images = half_images / noise_half
     images = images[..., None] * heterogeneity_bins_this[..., None, :]
 
     config_li = config.replace(disc_type='linear_interp')
     Ft_y = batch_im_adjoint_forward(
-        config_li, images, batch_data.ctf_params, batch_data.rotation_matrices,
+        config_li, images, ctf_params, rotation_matrices,
         half_image=True, half_volume=True,
     )
 
-    CTF = config.compute_ctf_half(batch_data.ctf_params) / noise_half
+    CTF = config.compute_ctf_half(ctf_params) / noise_half
     CTF = CTF[..., None] * heterogeneity_bins_this[..., None, :]
 
     Ft_ctf = batch_im_adjoint_forward(
-        config_li, CTF, batch_data.ctf_params, batch_data.rotation_matrices,
+        config_li, CTF, ctf_params, rotation_matrices,
         half_image=True, half_volume=True,
     )
 
@@ -305,17 +430,49 @@ def precompute_triangular_kernel_batch(
     )
 
 
-@eqx.filter_jit
 def compute_residuals_batch(
     config: ForwardModelConfig,
-    batch_data: BatchData,
+    images,
+    weights: jax.Array,
+    rotation_matrices=None,
+    translations=None,
+    ctf_params=None,
+    pol_degree: int = 0,
+    use_linear_interp: bool = False,
+):
+    """Compute residuals for many weights — Equinox API."""
+    images, rotation_matrices, translations, ctf_params, _noise_variance, _, _ = coerce_batch_fields(
+        images,
+        rotation_matrices=rotation_matrices,
+        translations=translations,
+        ctf_params=ctf_params,
+    )
+    return _compute_residuals_batch_explicit(
+        config,
+        images,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        weights,
+        pol_degree=pol_degree,
+        use_linear_interp=use_linear_interp,
+    )
+
+
+@eqx.filter_jit
+def _compute_residuals_batch_explicit(
+    config: ForwardModelConfig,
+    images,
+    rotation_matrices,
+    translations,
+    ctf_params,
     weights: jax.Array,
     pol_degree: int = 0,
     use_linear_interp: bool = False,
 ):
     """Compute residuals for many weights — Equinox API."""
     X_mat, gridpoint_indices = make_X_mat(
-        batch_data.rotation_matrices, config.volume_shape, config.image_shape, pol_degree=pol_degree
+        rotation_matrices, config.volume_shape, config.image_shape, pol_degree=pol_degree
     )
     weights_on_grid = weights[gridpoint_indices]
     if use_linear_interp:
@@ -324,8 +481,8 @@ def compute_residuals_batch(
     else:
         predicted_phi = weights_on_grid[..., 0]
 
-    CTF = config.compute_ctf(batch_data.ctf_params)
-    translated_images = core.translate_images(batch_data.images, batch_data.translations, config.image_shape)
+    CTF = config.compute_ctf(ctf_params)
+    translated_images = core.translate_images(images, translations, config.image_shape)
     residuals = jnp.abs(translated_images[..., None] - predicted_phi * CTF[..., None]) ** 2
 
     volume_size = np.prod(config.volume_shape)
@@ -358,15 +515,24 @@ def precompute_triangular_kernel(experiment_dataset, noise_variance, pol_degree=
         volume_mask_threshold=float(experiment_dataset.volume_mask_threshold),
     )
 
-    for batch_data in experiment_dataset.iterate(
-        batch_size,
-        noise_model=experiment_dataset.noise, noise_half=False,
-        process_images=True, half_images=True,
+    for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, image_indices in iter_batch_fields(
+        experiment_dataset.iterate(
+            batch_size,
+            noise_model=experiment_dataset.noise, noise_half=False,
+        )
     ):
+        images = experiment_dataset.process_images_half(images)
         XWX, F = precompute_triangular_kernel_batch(
-            config, batch_data,
-            pol_degree=pol_degree, XWX=XWX, F=F,
-            heterogeneity_distances=None if heterogeneity_distances is None else heterogeneity_distances[batch_data.image_indices],
+            config,
+            images,
+            rotation_matrices=rotation_matrices,
+            translations=translations,
+            ctf_params=ctf_params,
+            noise_variance=noise_variance,
+            pol_degree=pol_degree,
+            XWX=XWX,
+            F=F,
+            heterogeneity_distances=None if heterogeneity_distances is None else heterogeneity_distances[image_indices],
             heterogeneity_bins=heterogeneity_bins,
         )
 
@@ -571,15 +737,24 @@ def precompute_kernel(experiment_dataset, noise_variance, pol_degree=0, heteroge
         volume_mask_threshold=float(experiment_dataset.volume_mask_threshold),
     )
 
-    for batch_data in experiment_dataset.iterate(
-        batch_size,
-        noise_model=experiment_dataset.noise, noise_half=False,
-        process_images=True,
+    for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, image_indices in iter_batch_fields(
+        experiment_dataset.iterate(
+            batch_size,
+            noise_model=experiment_dataset.noise, noise_half=False,
+        )
     ):
+        images = experiment_dataset.process_images(images)
         XWX, F = precompute_kernel_batch(
-            config, batch_data,
-            pol_degree=pol_degree, XWX=XWX, F=F,
-            heterogeneity_distances=None if heterogeneity_distances is None else heterogeneity_distances[batch_data.image_indices],
+            config,
+            images,
+            rotation_matrices=rotation_matrices,
+            translations=translations,
+            ctf_params=ctf_params,
+            noise_variance=noise_variance,
+            pol_degree=pol_degree,
+            XWX=XWX,
+            F=F,
+            heterogeneity_distances=None if heterogeneity_distances is None else heterogeneity_distances[image_indices],
             heterogeneity_bins=heterogeneity_bins,
         )
 
@@ -1063,14 +1238,23 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
 
         Ft_y_acc = jnp.zeros_like(Ft_y_acc)
         Ft_ctf_acc = jnp.zeros_like(Ft_ctf_acc)
-        for batch_data in experiment_dataset.iterate(
-            batch_size,
-            noise_model=experiment_dataset.noise, noise_half=False,
-            process_images=True, half_images=True,
-            indices=image_inds,
+        for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in iter_batch_fields(
+            experiment_dataset.iterate(
+                batch_size,
+                noise_model=experiment_dataset.noise, noise_half=False,
+                indices=image_inds,
+            )
         ):
+            images = experiment_dataset.process_images_half(images)
             Ft_y_acc, Ft_ctf_acc = _heterogeneity_kernel_batch_from_fft(
-                config, batch_data, Ft_y=Ft_y_acc, Ft_ctf=Ft_ctf_acc,
+                config,
+                images,
+                ctf_params,
+                rotation_matrices,
+                translations,
+                noise_variance,
+                Ft_y=Ft_y_acc,
+                Ft_ctf=Ft_ctf_acc,
             )
 
         rhs_all[bin_idx] = np.asarray(Ft_y_acc)
@@ -1574,11 +1758,15 @@ def compute_residuals_many_weights(experiment_dataset, weights , pol_degree, use
     residuals, summed_n = 0, 0
     logger.info("batch size in residual computation: %s", batch_size)
     weights = jnp.asarray(weights)
-    for batch_data in experiment_dataset.iterate(
-        batch_size, process_images=True,
-    ):
+    for images, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in iter_batch_fields(experiment_dataset.iterate(batch_size)):
+        images = experiment_dataset.process_images(images)
         residuals_t, summed_n_t = compute_residuals_batch(
-            config, batch_data, weights,
+            config,
+            images,
+            weights,
+            rotation_matrices=rotation_matrices,
+            translations=translations,
+            ctf_params=ctf_params,
             pol_degree=pol_degree, use_linear_interp=use_linear_interp,
         )
         residuals += residuals_t

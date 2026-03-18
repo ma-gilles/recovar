@@ -14,6 +14,7 @@ from numpy.typing import NDArray
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 from recovar.core import mask
+from recovar.data_io.batch_iterator import BatchIterator, IteratorOptions
 from recovar.data_io import cryo_dataset
 from recovar.output import plot_utils
 
@@ -227,7 +228,7 @@ class CryoEMDataset:
         '_ctf_evaluator', 'hpad', 'volume_mask_threshold',
         # Data types
         'dtype', 'dtype_real',
-        # Per-image metadata (private — access via iterate/make_batch_data)
+        # Per-image metadata (private — access via iter_batches/metadata helpers)
         '_metadata',
         # Mutable state
         'dataset_indices', 'noise',
@@ -315,7 +316,7 @@ class CryoEMDataset:
 
     def make_batch_data(self, images, indices, *, noise_variance=None,
                         particle_indices=None):
-        """Bundle images with per-image metadata for a batch."""
+        """Legacy compatibility helper that bundles explicit batch fields."""
         from recovar.core.configs import BatchData
         rots, trans, ctf = self._metadata.get_batch(indices)
         return BatchData(
@@ -387,7 +388,10 @@ class CryoEMDataset:
 
     def process_images_half(self, images, apply_image_mask=False):
         """Apply windowing + rfft2 preprocessing → half-spectrum output."""
-        return self.image_stack.process_images_half(images, apply_image_mask=apply_image_mask)
+        if hasattr(self.image_stack, 'process_images_half'):
+            return self.image_stack.process_images_half(images, apply_image_mask=apply_image_mask)
+        processed = self.image_stack.process_images(images, apply_image_mask=apply_image_mask)
+        return fourier_transform_utils.full_image_to_half_image(processed, self.image_shape)
 
     @property
     def image_mask(self):
@@ -780,11 +784,30 @@ class CryoEMDataset:
             n0 = self.n_images_half(0)
         return [arr[:n0], arr[n0:]]
 
-    def iterate(self, batch_size, *, half=None, indices=None,
-                noise_model=None, noise_half=True, noise_by_particle=False,
-                by_image=True, process_images=False, half_images=False,
-                prefetch=True):
-        """Iterate over images, yielding BatchData with all metadata bundled.
+    def _resolve_iteration_subset(self, *, half=None, indices=None, by_image=True):
+        """Resolve halfset or subset selection for iteration."""
+        if half is not None and indices is not None:
+            raise ValueError("Cannot specify both half and indices")
+        if half is None:
+            return indices
+
+        if self.halfset_indices is None:
+            raise ValueError("halfset_indices not set on this dataset")
+
+        half_indices = self.halfset_indices[half]
+        if by_image or not self.tilt_series_flag or not hasattr(self.image_stack, '_particle_tilts'):
+            return half_indices
+
+        img_set = set(np.asarray(half_indices).ravel().tolist())
+        return np.array([
+            p_idx for p_idx, tilts in enumerate(self.image_stack._particle_tilts)
+            if any(t in img_set for t in tilts)
+        ], dtype=np.int32)
+
+    def iter_batches(self, batch_size, *, half=None, indices=None,
+                     noise_model=None, noise_half=True, noise_by_particle=False,
+                     by_image=True, prefetch=True):
+        """Iterate over dataset batches, yielding explicit batch fields.
 
         Parameters
         ----------
@@ -794,55 +817,52 @@ class CryoEMDataset:
         indices : array-like, optional
             Iterate over this subset of image indices.
         noise_model : optional
-            Noise model for noise_variance in BatchData.
+            Noise model used to populate the yielded ``noise_variance`` field.
         noise_half : bool
             Use half-spectrum noise (default True for mean reconstruction).
         noise_by_particle : bool
             Index noise by particle group (for covariance path).
         by_image : bool
             True = flat per-image iteration; False = particle-grouped (tilt).
-        process_images : bool
-            Apply DFT preprocessing to images before yielding.
-        half_images : bool
-            Convert images to rfft-packed half-spectrum.
         prefetch : bool
             Enable 1-lookahead prefetch buffer (default True).
-        """
-        if half is not None and indices is not None:
-            raise ValueError("Cannot specify both half and indices")
-        if half is not None:
-            if self.halfset_indices is None:
-                raise ValueError("halfset_indices not set on this dataset")
-            indices = self.halfset_indices[half]
-            # For tilt-series with particle-grouped iteration, convert
-            # image-level halfset indices to particle-level indices.  The
-            # particle-grouped generator (TiltSeriesDataset) expects particle
-            # indices, not image indices.  All tilts from a single particle
-            # belong to the same halfset.
-            if not by_image and self.tilt_series_flag and hasattr(self.image_stack, '_particle_tilts'):
-                img_set = set(np.asarray(indices).ravel().tolist())
-                indices = np.array([
-                    p_idx for p_idx, tilts in enumerate(self.image_stack._particle_tilts)
-                    if any(t in img_set for t in tilts)
-                ], dtype=np.int32)
 
-        from recovar.core.configs import DataIterator
-        inner = DataIterator(self, batch_size,
-                             noise_model=noise_model, noise_half=noise_half,
-                             noise_by_particle=noise_by_particle,
-                             index_subset=indices, use_image_generator=by_image,
-                             apply_process_images=process_images,
-                             half_images=half_images)
+        Yields
+        ------
+        tuple
+            ``(images, rotation_matrices, translations, ctf_params,
+            noise_variance, particle_indices, image_indices)``
+        """
+        resolved_indices = self._resolve_iteration_subset(
+            half=half,
+            indices=indices,
+            by_image=by_image,
+        )
+        inner = BatchIterator(
+            self,
+            IteratorOptions(
+                batch_size=batch_size,
+                batch_mode="images" if by_image else "groups",
+                index_subset=resolved_indices,
+                noise_model=noise_model,
+                noise_half=noise_half,
+                noise_by_particle=noise_by_particle,
+            ),
+        )
         if prefetch:
             return _prefetch_iter(inner)
         return inner
 
-    def iterate_all(self, batch_size: int, **kw):
-        """Iterate over all images, yielding complete BatchData.
+    def iterate(self, batch_size, **kwargs):
+        """Backward-compatible alias for :meth:`iter_batches`."""
+        return self.iter_batches(batch_size, **kwargs)
 
-        Convenience wrapper — equivalent to ``iterate(batch_size, **kw)``.
+    def iterate_all(self, batch_size: int, **kw):
+        """Iterate over all images, yielding explicit batch fields.
+
+        Convenience wrapper — equivalent to ``iter_batches(batch_size, **kw)``.
         """
-        return self.iterate(batch_size, **kw)
+        return self.iter_batches(batch_size, **kw)
 
     def set_contrasts(self, contrasts: NDArray):
         """Multiply per-image CTF contrast column by *contrasts*.
