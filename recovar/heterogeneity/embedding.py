@@ -183,14 +183,33 @@ def get_per_image_embedding(mean, u, s, basis_size, dataset, volume_mask, gpu_me
         from recovar.heterogeneity import covariance_estimation
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, dataset.volume_shape, gpu_memory= None)
 
-    # Iterate over half-sets, creating temporary half-views for the inner function.
-    # Results are concatenated in halfset order (same as legacy behavior).
+    # Iterate over half-sets.  For tilt-series we load independent half-datasets
+    # (matching legacy behavior) to preserve identical batch composition and
+    # thus bitwise-identical eigenvector projections.  For SPA the lightweight
+    # subset() view is equivalent and much faster.
     zs = [None, None]
     cov_zs = [None, None]
     est_contrasts = [None, None]
     bias = [None, None]
     for half in range(2):
-        half_ds = dataset.subset(dataset.halfset_indices[half])
+        if dataset.tilt_series_flag:
+            from recovar.data_io.dataset import load_dataset as _load_dataset
+            half_ds = _load_dataset(
+                dataset.particles_file, dataset.poses_file, dataset.ctf_file,
+                datadir=dataset.datadir,
+                ind=dataset.halfset_indices[half],
+                lazy=True, padding=dataset.padding,
+                tilt_series=True,
+                tilt_series_ctf=getattr(dataset.image_stack, '_tilt_file_option', 'relion5'),
+                dose_per_tilt=getattr(dataset.image_stack, 'dose_per_tilt', 2.9),
+                angle_per_tilt=getattr(dataset.image_stack, 'angle_per_tilt', 3),
+                premultiplied_ctf=dataset.premultiplied_ctf,
+            )
+            if dataset.noise is not None:
+                half_ds.set_radial_noise_model(None)
+                half_ds.noise = dataset.noise
+        else:
+            half_ds = dataset.subset(dataset.halfset_indices[half])
         zs[half], cov_zs[half], est_contrasts[half], bias[half] = get_coords_in_basis_and_contrast_3(
             half_ds, mean, basis, eigenvalues[:basis.shape[0]], volume_mask,
              contrast_grid, batch_size, disc_type,

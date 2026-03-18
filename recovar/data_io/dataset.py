@@ -1112,11 +1112,17 @@ def load_dataset(
                     rotation_dtype=np.float32,
                     ctf_dtype=dtype_real,
                     real_dtype=dtype_real)
-    return CryoEMDataset(image_stack, voxel_size, meta,
-                         ctf_evaluator=ctf_eval,
-                         dataset_indices=dataset_indices,
-                         tilt_series_flag=tilt_series,
-                         premultiplied_ctf=premultiplied_ctf)
+    ds = CryoEMDataset(image_stack, voxel_size, meta,
+                       ctf_evaluator=ctf_eval,
+                       dataset_indices=dataset_indices,
+                       tilt_series_flag=tilt_series,
+                       premultiplied_ctf=premultiplied_ctf)
+    # Store loader paths for downstream reload (e.g. independent half-datasets).
+    ds.particles_file = particles_file
+    ds.poses_file = poses_file
+    ds.ctf_file = ctf_file
+    ds.datadir = datadir
+    return ds
 
 
 
