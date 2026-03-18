@@ -71,7 +71,7 @@ def estimate_principal_components(dataset, options,  means, mean_prior, volume_m
             picked_frequencies = np.array(covariance_core.get_picked_frequencies(volume_shape, radius = covariance_options['column_radius'], use_half = True))
     elif covariance_options['column_sampling_scheme'] == 'high_snr' or covariance_options['column_sampling_scheme'] == 'high_lhs' or covariance_options['column_sampling_scheme'] == 'high_snr_p' or covariance_options['column_sampling_scheme'] =='high_snr_from_var_est':
         from recovar.reconstruction import regularization
-        upsampling_factor = np.round((means['lhs'].size / dataset.volume_size)**(1/3)).astype(int)
+        upsampling_factor = np.round((means.lhs.size / dataset.volume_size)**(1/3)).astype(int)
         upsampled_volume_shape = tuple(upsampling_factor * np.array(volume_shape))
         lhs = regularization.downsample_lhs(means.lhs.reshape(upsampled_volume_shape), volume_shape, upsampling_factor = upsampling_factor).reshape(-1)
         # At low freqs, signal variance decays as ~1/rad^2
@@ -124,7 +124,7 @@ def estimate_principal_components(dataset, options,  means, mean_prior, volume_m
         for key in covariance_cols.keys():
             covariance_cols[key] = None
 
-    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(dataset, u['real'], means['combined'], dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'])
+    u['rescaled'], s['rescaled'] = pca_by_projected_covariance(dataset, u['real'], means.combined, dilated_volume_mask, disc_type = covariance_options['disc_type'], disc_type_u = covariance_options['disc_type_u'], gpu_memory_to_use= gpu_memory_to_use, use_mask = covariance_options['mask_images_in_proj'], ignore_zero_frequency = False, n_pcs_to_compute = covariance_options['n_pcs_to_compute'])
 
     if not options.keep_intermediate:
         u['real'] = None

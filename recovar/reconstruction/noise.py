@@ -596,7 +596,7 @@ def upper_bound_noise_by_signal_p_noise(noise_var_used, dataset, means, batch_si
             variance_time = time.time()
             from recovar.heterogeneity import covariance_estimation
             # //2: variance computation with cubic disc_type needs ~2x memory per image (spline coefficients)
-            variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(dataset, means['combined'], utils.safe_batch_size(batch_size//2), dilated_volume_mask, noise_ind_subset = noise_ind_subset, use_regularization = True, disc_type = 'cubic')
+            variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(dataset, means.combined, utils.safe_batch_size(batch_size//2), dilated_volume_mask, noise_ind_subset = noise_ind_subset, use_regularization = True, disc_type = 'cubic')
             logger.info("variance estimation time: %s", time.time() - variance_time)
             utils.report_memory_device(logger=logger)
 

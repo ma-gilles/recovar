@@ -591,7 +591,7 @@ def compute_both_H_B(dataset, means, dilated_volume_mask, picked_frequencies,
     st_time = time.time()
 
     for half in range(2):
-        mean = means["combined"] if options["use_combined_mean"] else means["corrected" + str(half)]
+        mean = means.combined if options["use_combined_mean"] else means.corrected(half)
         if options.get('disc_type') == 'cubic':
             mean = cubic_interpolation.calculate_spline_coefficients(
                 jnp.array(mean).reshape(dataset.volume_shape))
