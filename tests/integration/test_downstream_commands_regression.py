@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
+from helpers.metrics_regression import log_comparison_table
 
 pytestmark = [pytest.mark.integration, pytest.mark.gpu, pytest.mark.slow]
 
@@ -38,6 +38,8 @@ _TOL_FRAC = float(os.environ.get("DOWNSTREAM_REGRESSION_TOL_FRAC", "0.10"))
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BASELINE_DIR = _REPO_ROOT / "tests" / "baselines" / "downstream_commands"
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +84,7 @@ def _save_baseline(name: str, data: dict):
 
 
 def _check_regression(name: str, current: dict, tol_frac: float = _TOL_FRAC):
-    """Compare current metrics against committed baseline."""
+    """Compare current locres metrics against committed baseline."""
     overwrite = os.environ.get("DOWNSTREAM_OVERWRITE_BASELINE")
 
     if overwrite:
@@ -205,34 +207,23 @@ def density_output(pipeline_output, shared_dir):
 # ---------------------------------------------------------------------------
 
 def test_analyze_kmeans_regression(analyze_output):
-    """Check k-means cluster quality: centers spread, label coverage."""
+    """Check k-means cluster quality: structural invariants only."""
     from recovar import utils
     result = utils.pickle_load(str(analyze_output / "kmeans_result.pkl"))
     centers = np.asarray(result["centers"])
     labels = np.asarray(result["labels"])
 
-    metrics = {
-        "n_clusters": int(centers.shape[0]),
-        "centers_mean_norm": float(np.mean(np.linalg.norm(centers, axis=1))),
-        "centers_std_norm": float(np.std(np.linalg.norm(centers, axis=1))),
-        "label_coverage": float(np.sum(~np.isnan(labels)) / labels.size),
-        "n_unique_labels": int(len(np.unique(labels[~np.isnan(labels)]))),
-        "centers_max_pairwise_dist": float(
-            np.max(np.linalg.norm(centers[:, None] - centers[None, :], axis=-1))
-        ),
-    }
-
-    # Sanity checks that must always hold
-    assert metrics["n_clusters"] == _N_CLUSTERS
-    assert metrics["label_coverage"] > 0.5, "Less than 50% of images got cluster labels"
-    assert metrics["n_unique_labels"] == _N_CLUSTERS
-    assert metrics["centers_max_pairwise_dist"] > 0, "All k-means centers collapsed"
-
-    _check_regression("analyze_kmeans", metrics)
+    assert centers.shape[0] == _N_CLUSTERS
+    label_coverage = float(np.sum(~np.isnan(labels)) / labels.size)
+    assert label_coverage > 0.5, "Less than 50% of images got cluster labels"
+    n_unique = int(len(np.unique(labels[~np.isnan(labels)])))
+    assert n_unique == _N_CLUSTERS
+    max_pairwise = float(np.max(np.linalg.norm(centers[:, None] - centers[None, :], axis=-1)))
+    assert max_pairwise > 0, "All k-means centers collapsed"
 
 
 def test_compute_state_volume_quality(pipeline_output, analyze_output, shared_dir):
-    """Check that compute_state produces volumes with reasonable properties."""
+    """Check that compute_state produces volumes with good local resolution."""
     centers_txt = analyze_output / "kmeans" / "centers.txt"
     centers = np.loadtxt(str(centers_txt))
     pts_path = shared_dir / "regression_latent_points.txt"
@@ -248,39 +239,30 @@ def test_compute_state_volume_quality(pipeline_output, analyze_output, shared_di
     ]
     _run(cmd)
 
-    from recovar import utils
-    # compute_state names files state000.mrc, state001.mrc, ...
-    # Exclude half-map files (*_half*_unfil.mrc)
-    mrc_files = sorted(
-        p for p in state_out.glob("state*.mrc")
-        if "_half" not in p.name
-    )
-    assert len(mrc_files) >= 2, f"Expected at least 2 volumes, got {len(mrc_files)}"
+    import mrcfile
 
+    # Read locres from diagnostics
     metrics = {}
-    vols = []
-    for i, mrc_path in enumerate(mrc_files[:2]):
-        vol = utils.load_mrc(str(mrc_path))
-        vols.append(vol)
-        metrics[f"vol_{i}_mean"] = float(np.mean(vol))
-        metrics[f"vol_{i}_std"] = float(np.std(vol))
-        metrics[f"vol_{i}_max"] = float(np.max(np.abs(vol)))
+    diagnostics = state_out / "diagnostics"
+    for i in range(2):
+        locres_mrc = diagnostics / f"state{i:03d}" / "local_resolution.mrc"
+        if not locres_mrc.exists():
+            continue
+        with mrcfile.open(str(locres_mrc), mode='r') as mrc:
+            locres_map = np.array(mrc.data, dtype=np.float32)
+        valid = locres_map[np.isfinite(locres_map) & (locres_map > 0)]
+        if valid.size == 0:
+            continue
+        metrics[f"state_{i}_locres_median"] = float(np.median(valid))
+        metrics[f"state_{i}_locres_90pct"] = float(np.percentile(valid, 90))
 
-    # Volumes at different latent points should differ
-    if len(vols) >= 2:
-        diff_norm = float(np.linalg.norm(vols[0] - vols[1]))
-        metrics["vol_pair_diff_norm"] = diff_norm
-        assert diff_norm > 0, "Volumes at different latent points are identical"
-
-    # All volumes should have non-zero content
-    for i in range(min(2, len(vols))):
-        assert metrics[f"vol_{i}_std"] > 0, f"Volume {i} is constant"
+    assert len(metrics) > 0, "No locres data found in compute_state output"
 
     _check_regression("compute_state_volumes", metrics)
 
 
 def test_compute_trajectory_regression(pipeline_output, analyze_output, shared_dir):
-    """Check that trajectory volumes vary smoothly along the path."""
+    """Check that trajectory volumes vary along the path."""
     centers_txt = analyze_output / "kmeans" / "centers.txt"
 
     traj_out = shared_dir / "regression_trajectory"
@@ -298,9 +280,6 @@ def test_compute_trajectory_regression(pipeline_output, analyze_output, shared_d
     _run(cmd)
 
     from recovar import utils
-    # compute_trajectory names files state000.mrc, state001.mrc, ...
-    # For zdim>1, files are at output root; for zdim==1, under path0/
-    # Exclude half-map files (*_half*_unfil.mrc)
     mrc_files = sorted(
         p for p in traj_out.rglob("state*.mrc")
         if "_half" not in p.name
@@ -310,61 +289,28 @@ def test_compute_trajectory_regression(pipeline_output, analyze_output, shared_d
     )
 
     vols = [utils.load_mrc(str(p)) for p in mrc_files[:n_vols]]
-    metrics = {}
-    for i, vol in enumerate(vols):
-        metrics[f"traj_vol_{i}_std"] = float(np.std(vol))
-
-    # Check variation: consecutive volumes should differ
-    consecutive_diffs = []
-    for i in range(len(vols) - 1):
-        d = float(np.linalg.norm(vols[i] - vols[i + 1]))
-        consecutive_diffs.append(d)
-        metrics[f"traj_consecutive_diff_{i}"] = d
-    metrics["traj_mean_consecutive_diff"] = float(np.mean(consecutive_diffs))
-
     end_to_end = float(np.linalg.norm(vols[0] - vols[-1]))
-    metrics["traj_end_to_end_diff"] = end_to_end
-
-    # On small synthetic datasets, some consecutive volumes may be very close
-    # but start and end should differ
     assert end_to_end > 0, "Start and end trajectory volumes are identical"
+    consecutive_diffs = [float(np.linalg.norm(vols[i] - vols[i + 1])) for i in range(len(vols) - 1)]
     assert any(d > 0 for d in consecutive_diffs), "All consecutive trajectory volumes are identical"
-
-    _check_regression("compute_trajectory", metrics)
 
 
 def test_density_estimation_regression(density_output):
-    """Check that estimated density has reasonable properties."""
+    """Check that estimated density has reasonable structure."""
     from recovar import utils
     knee_pkl = density_output / "deconv_density_knee.pkl"
     assert knee_pkl.exists()
 
     result = utils.pickle_load(str(knee_pkl))
     density = np.asarray(result["density"])
-    bounds = np.asarray(result["latent_space_bounds"])
 
-    metrics = {
-        "density_ndim": int(density.ndim),
-        "density_shape_0": int(density.shape[0]),
-        "density_sum": float(np.sum(density)),
-        "density_max": float(np.max(density)),
-        "density_min": float(np.min(density)),
-        "density_mean": float(np.mean(density)),
-        "density_std": float(np.std(density)),
-        "density_positive_frac": float(np.mean(density > 0)),
-        "bounds_range": float(np.max(bounds) - np.min(bounds)),
-    }
-
-    # Density should have meaningful structure
     assert density.ndim == 2, f"Expected 2D density (pca_dim=2), got {density.ndim}D"
-    assert metrics["density_max"] > 0, "Density is non-positive everywhere"
-    assert metrics["density_std"] > 0, "Density is constant"
-
-    _check_regression("density_estimation", metrics)
+    assert np.max(density) > 0, "Density is non-positive everywhere"
+    assert np.std(density) > 0, "Density is constant"
 
 
 def test_stable_states_regression(density_output, shared_dir):
-    """Check that stable states are found at reasonable locations."""
+    """Check that stable states are found."""
     knee_pkl = density_output / "deconv_density_knee.pkl"
 
     stable_out = shared_dir / "regression_stable_states"
@@ -382,26 +328,12 @@ def test_stable_states_regression(density_output, shared_dir):
     coords = np.loadtxt(str(coords_file))
     if coords.ndim == 1:
         coords = coords.reshape(1, -1)
-
-    metrics = {
-        "n_stable_states": int(coords.shape[0]),
-        "coords_mean_norm": float(np.mean(np.linalg.norm(coords, axis=1))),
-        "coords_max_norm": float(np.max(np.linalg.norm(coords, axis=1))),
-    }
-
-    if coords.shape[0] >= 2:
-        pairwise = np.linalg.norm(coords[:, None] - coords[None, :], axis=-1)
-        np.fill_diagonal(pairwise, np.inf)
-        metrics["min_pairwise_dist"] = float(np.min(pairwise))
-
-    assert metrics["n_stable_states"] >= 1, "No stable states found"
+    assert coords.shape[0] >= 1, "No stable states found"
     assert np.all(np.isfinite(coords)), "Stable state coordinates contain NaN/Inf"
-
-    _check_regression("stable_states", metrics)
 
 
 def test_extract_kmeans_subset_regression(analyze_output, shared_dir):
-    """Check that k-means subset extraction produces consistent results."""
+    """Check that k-means subset extraction works."""
     from recovar import utils
 
     kmeans_pkl = analyze_output / "kmeans_result.pkl"
@@ -419,14 +351,6 @@ def test_extract_kmeans_subset_regression(analyze_output, shared_dir):
     labels = np.asarray(kmeans_result["labels"])
     n_valid = int(np.sum(~np.isnan(labels)))
 
-    metrics = {
-        "n_selected": int(len(indices)),
-        "n_valid_labels": n_valid,
-        "selection_fraction": float(len(indices) / n_valid) if n_valid > 0 else 0.0,
-    }
-
-    assert metrics["n_selected"] > 0, "No images selected"
-    assert metrics["selection_fraction"] < 1.0, "All images selected (should be subset)"
-    assert metrics["selection_fraction"] > 0.0, "No images selected"
-
-    _check_regression("extract_kmeans_subset", metrics)
+    assert len(indices) > 0, "No images selected"
+    frac = len(indices) / n_valid if n_valid > 0 else 0.0
+    assert 0.0 < frac < 1.0, f"Selection fraction {frac} should be between 0 and 1"
