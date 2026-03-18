@@ -75,11 +75,21 @@ def get_hardware_info():
 
 
 def perf_snapshot():
-    """Capture wall-clock + memory snapshot."""
+    """Capture wall-clock + memory snapshot.
+
+    Includes child process memory (important when tests run pipelines
+    as subprocesses via subprocess.run).
+    """
     import psutil
+    proc = psutil.Process(os.getpid())
+    # Include children (subprocess.run spawns child processes)
+    try:
+        children_rss = sum(c.memory_info().rss for c in proc.children(recursive=True))
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        children_rss = 0
     snap = {
         "wall_time": time.monotonic(),
-        "cpu_rss_bytes": psutil.Process(os.getpid()).memory_info().rss,
+        "cpu_rss_bytes": proc.memory_info().rss + children_rss,
         "gpu_bytes_in_use": 0,
         "gpu_peak_bytes": 0,
     }
@@ -91,6 +101,23 @@ def perf_snapshot():
             snap["gpu_peak_bytes"] = stats.get("peak_bytes_in_use", 0)
     except Exception:
         pass
+    # Also try nvidia-smi for GPU memory (works across processes)
+    if snap["gpu_bytes_in_use"] == 0:
+        try:
+            import subprocess as sp
+            result = sp.run(
+                ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                # Take max across GPUs (MiB)
+                vals = [int(x.strip()) for x in result.stdout.strip().split("\n") if x.strip()]
+                if vals:
+                    gpu_mib = max(vals)
+                    snap["gpu_bytes_in_use"] = gpu_mib * 1024 * 1024
+                    snap["gpu_peak_bytes"] = max(snap["gpu_peak_bytes"], snap["gpu_bytes_in_use"])
+        except Exception:
+            pass
     return snap
 
 
