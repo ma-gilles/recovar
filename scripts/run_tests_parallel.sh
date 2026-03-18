@@ -35,11 +35,11 @@ G_ARGS=()
 
 # -- Groups that always run --------------------------------------------------
 
-# Unit tests (no GPU needed, but cryoem partition requires --gres=gpu)
+# Unit tests (including GPU unit tests)
 G_NAMES+=(unit)
-G_MEM+=(64GB)
-G_TIME+=(00:30:00)
-G_ARGS+=("tests/ --ignore=tests/unit/test_gui_app.py --ignore=tests/integration --run-gpu --run-slow -v")
+G_MEM+=(300GB)
+G_TIME+=(01:00:00)
+G_ARGS+=("tests/ --ignore=tests/unit/test_gui_app.py --ignore=tests/integration --run-gpu -v")
 
 # Smoke + tiny-metrics integration tests
 G_NAMES+=(smoke-tiny)
