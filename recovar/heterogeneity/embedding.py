@@ -192,7 +192,7 @@ def get_per_image_embedding(mean, u, s, basis_size, dataset, volume_mask, gpu_me
     est_contrasts = [None, None]
     bias = [None, None]
     for half in range(2):
-        if dataset.tilt_series_flag:
+        if getattr(dataset, 'tilt_series_flag', False):
             from recovar.data_io.dataset import load_dataset as _load_dataset
             half_ds = _load_dataset(
                 dataset.particles_file, dataset.poses_file, dataset.ctf_file,
