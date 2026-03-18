@@ -39,7 +39,7 @@ G_ARGS=()
 G_NAMES+=(unit)
 G_MEM+=(64GB)
 G_TIME+=(00:30:00)
-G_ARGS+=("tests/ --ignore=tests/unit/test_gui_app.py --ignore=tests/integration -v")
+G_ARGS+=("tests/ --ignore=tests/unit/test_gui_app.py --ignore=tests/integration --run-gpu --run-slow -v")
 
 # Smoke + tiny-metrics integration tests
 G_NAMES+=(smoke-tiny)
