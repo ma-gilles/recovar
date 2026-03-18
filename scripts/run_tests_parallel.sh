@@ -87,11 +87,17 @@ if [[ "$MODE" == "long-test" ]]; then
     G_TIME+=(06:00:00)
     G_ARGS+=("tests/integration/test_pipeline_with_indices_long.py --long-test -v")
 
-    # GPU memory stress tests + isolated function tests
-    G_NAMES+=(stress-funcs)
+    # GPU memory stress tests (~30 min)
+    G_NAMES+=(stress)
     G_MEM+=(500GB)
-    G_TIME+=(04:00:00)
-    G_ARGS+=("tests/integration/test_gpu_memory_stress.py tests/integration/test_compute_state_gpu_stress.py tests/integration/test_pipeline_functions_isolated.py --long-test -v")
+    G_TIME+=(01:00:00)
+    G_ARGS+=("tests/integration/test_gpu_memory_stress.py tests/integration/test_compute_state_gpu_stress.py --long-test -v")
+
+    # Isolated pipeline function tests (~1.5h)
+    G_NAMES+=(isolated-funcs)
+    G_MEM+=(500GB)
+    G_TIME+=(03:00:00)
+    G_ARGS+=("tests/integration/test_pipeline_functions_isolated.py --long-test -v")
 
 fi
 

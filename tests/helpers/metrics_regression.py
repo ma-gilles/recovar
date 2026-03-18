@@ -67,3 +67,52 @@ def compare_metric(current, baseline, direction, tol_frac, metric_name=None):
         msg = f"drop={-delta:.4f} allowed={effective_tol:.4f}"
         return ok, msg
     return True, "ignored"
+
+
+def log_comparison_table(current, baseline, tol_frac, title="Metric Comparison"):
+    """Print a comparison table for all shared numeric metrics.
+
+    Always prints every metric — not just failures. This makes it possible
+    to review metric drift without re-running.
+
+    Returns (checked, failures) where failures is a list of error strings.
+    """
+    failures = []
+    checked = 0
+    lines = []
+    lines.append(f"\n{'=' * 80}")
+    lines.append(f"  {title}")
+    lines.append(f"{'=' * 80}")
+    lines.append(f"  {'Metric':<45s} {'Current':>10s}  {'Baseline':>10s}  {'Delta':>8s}  {'Status'}")
+    lines.append(f"  {'-' * 75}")
+
+    for key in sorted(set(current) & set(baseline)):
+        cur = current[key]
+        base = baseline[key]
+        if not (isinstance(cur, (int, float)) and isinstance(base, (int, float))):
+            continue
+
+        direction = metric_direction(key)
+        if direction == "ignore":
+            # Treat outlier_recall / outlier_precision / outlier_f1 as higher-is-better
+            if any(tok in key for tok in ("recall", "precision", "f1")):
+                direction = "higher"
+            else:
+                continue
+
+        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac, metric_name=key)
+        checked += 1
+
+        scale = max(abs(base), 1e-12)
+        delta_pct = (cur - base) / scale * 100
+        status = "OK" if ok else "FAIL"
+        if not ok:
+            failures.append(f"{key}: current={cur:.4f} baseline={base:.4f} ({msg})")
+
+        lines.append(f"  {key:<45s} {cur:10.4f}  {base:10.4f}  {delta_pct:+7.1f}%  {status}")
+
+    lines.append(f"  {'-' * 75}")
+    lines.append(f"  Checked: {checked}, Failures: {len(failures)}")
+    lines.append(f"{'=' * 80}")
+    print("\n".join(lines))
+    return checked, failures

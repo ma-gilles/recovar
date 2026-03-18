@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from helpers.metrics_regression import compare_metric, metric_direction
+from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
 
 pytestmark = [pytest.mark.integration, pytest.mark.gpu, pytest.mark.slow]
 
@@ -93,23 +93,9 @@ def _check_regression(name: str, current: dict, tol_frac: float = _TOL_FRAC):
 
     baseline = _load_baseline(name)
 
-    failures = []
-    for key, cur_val in current.items():
-        if key not in baseline:
-            continue
-        base_val = baseline[key]
-        if not isinstance(base_val, (int, float)) or not isinstance(cur_val, (int, float)):
-            continue
-        direction = metric_direction(key)
-        if direction == "ignore":
-            continue
-        ok, msg = compare_metric(cur_val, base_val, direction, tol_frac)
-        if not ok:
-            failures.append(f"{key}: baseline={base_val:.6g}, current={cur_val:.6g}, {msg}")
-
-    if failures:
-        msg = f"Regression in {name}:\n" + "\n".join(failures)
-        pytest.fail(msg)
+    checked, failures = log_comparison_table(current, baseline, tol_frac, title=f"Downstream: {name}")
+    assert checked > 0, "no metrics compared"
+    assert not failures, "regressions:\n" + "\n".join(failures)
 
 
 # ---------------------------------------------------------------------------

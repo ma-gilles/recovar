@@ -33,7 +33,7 @@ import mrcfile
 import numpy as np
 import pytest
 
-from helpers.metrics_regression import compare_metric, metric_direction
+from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io, pytest.mark.tiny_metrics]
 
@@ -179,24 +179,7 @@ def _run_and_score(
     with open(baseline_json) as f:
         baseline = json.load(f)
 
-    failures = []
-    checked = 0
-    for key in sorted(set(scores) & set(baseline)):
-        cur = scores[key]
-        base = baseline[key]
-        if not isinstance(cur, (int, float)) or not isinstance(base, (int, float)):
-            continue
-        # Treat recall/precision/f1 as higher-is-better
-        if any(tok in key for tok in ("recall", "precision", "f1")):
-            direction = "higher"
-        else:
-            direction = metric_direction(key)
-        if direction == "ignore":
-            continue
-        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=_TOL, metric_name=key)
-        checked += 1
-        if not ok:
-            failures.append(f"{key}: current={cur:.4f} baseline={base:.4f} ({msg})")
+    checked, failures = log_comparison_table(scores, baseline, _TOL, title="Tiny Outliers Regression Baseline")
 
     report["checked_metrics"] = checked
     report["failures"] = failures

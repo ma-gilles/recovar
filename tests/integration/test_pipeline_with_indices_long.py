@@ -48,7 +48,7 @@ import numpy as np
 import pytest
 
 from conftest import gpu_subprocess_env
-from helpers.metrics_regression import compare_metric, metric_direction
+from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +95,7 @@ def _compare_against_baseline(
     current: Dict[str, float],
     baseline_path: Path,
     tol_frac: float,
+    title: str = "Pipeline With Indices",
 ) -> None:
     """Compare current metrics against the stored baseline.
 
@@ -107,26 +108,9 @@ def _compare_against_baseline(
             json.dump(current, f, indent=2, sort_keys=True)
         return  # nothing to compare on first run
     baseline = _load_json(baseline_path)
-    failures: List[str] = []
-    checked = 0
-    for key in sorted(set(current) & set(baseline)):
-        cur = current[key]
-        base = baseline[key]
-        if not (isinstance(cur, (int, float)) and isinstance(base, (int, float))):
-            continue
-        direction = metric_direction(key)
-        if direction == "ignore":
-            if any(tok in key for tok in ("recall", "precision", "f1")):
-                direction = "higher"
-            else:
-                continue
-        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac, metric_name=key)
-        checked += 1
-        if not ok:
-            failures.append(f"{key}: current={cur:.4f} baseline={base:.4f} ({msg})")
-
-    assert checked > 0, "no numeric metrics were compared; check baseline/current dicts"
-    assert not failures, "pipeline-with-ind metric regressions:\n" + "\n".join(failures)
+    checked, failures = log_comparison_table(current, baseline, tol_frac, title=title)
+    assert checked > 0, "no metrics compared"
+    assert not failures, "regressions:\n" + "\n".join(failures)
 
 
 def _dataset_exists(output_dir: Path, grid_size: int, is_tilt: bool = False) -> bool:
@@ -523,6 +507,7 @@ def test_pipeline_spa_with_ind_regression(tmp_path):
         current=metrics,
         baseline_path=baseline_json,
         tol_frac=tol_frac,
+        title="SPA Pipeline With --ind",
     )
 
 
@@ -667,4 +652,5 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
         current=all_metrics,
         baseline_path=baseline_json,
         tol_frac=tol_frac,
+        title="Cryo-ET Pipeline With --particle-ind",
     )

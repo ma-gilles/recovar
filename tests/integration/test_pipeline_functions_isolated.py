@@ -36,7 +36,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from helpers.metrics_regression import compare_metric, metric_direction
+from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
 
 pytestmark = [
     pytest.mark.integration,
@@ -199,21 +199,11 @@ def _check_metric(key, current_val, baseline_scores, tol_frac):
     return ok, f"{key}: current={current_val:.6f} baseline={base:.6f} ({msg})"
 
 
-def _assert_metrics(results: dict, baseline_scores: dict, tol_frac: float):
+def _assert_metrics(results: dict, baseline_scores: dict, tol_frac: float, title: str = "Pipeline Functions Isolated"):
     """Assert all metrics in results pass against baseline."""
-    failures = []
-    for key, val in results.items():
-        if not isinstance(val, (int, float)):
-            continue
-        ok, msg = _check_metric(key, val, baseline_scores, tol_frac)
-        # Always print scores for diagnostics
-        base = baseline_scores.get(key)
-        if base is not None and isinstance(base, (int, float)) and base != 0:
-            drift_pct = 100 * (float(val) - float(base)) / abs(float(base))
-            print(f"  SCORE {key}: current={float(val):.8f} baseline={float(base):.8f} drift={drift_pct:+.4f}%")
-        if not ok:
-            failures.append(msg)
-    assert not failures, "Metric regressions:\n" + "\n".join(failures)
+    checked, failures = log_comparison_table(results, baseline_scores, tol_frac, title=title)
+    assert checked > 0, "no metrics compared"
+    assert not failures, "regressions:\n" + "\n".join(failures)
 
 
 # ---------------------------------------------------------------------------

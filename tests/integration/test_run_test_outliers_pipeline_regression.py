@@ -71,7 +71,7 @@ import numpy as np
 import pytest
 
 from conftest import gpu_subprocess_env
-from helpers.metrics_regression import compare_metric, metric_direction
+from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
 from helpers.perf_regression import (
     perf_snapshot, stage_perf, build_perf_record,
     check_perf_regression,
@@ -85,7 +85,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.slow]
 MIN_RECALL_TINY = 0.40       # at least 40 % of true outliers detected
 MIN_PRECISION_TINY = 0.20    # at least 20 % of detected are real outliers
 TINY_GRID_SIZE = 32
-TINY_N_IMAGES = 500
+TINY_N_IMAGES = 1000         # 500 was too few → stochastic recall swings
 TINY_NOISE_LEVEL = 0.01      # high SNR for deterministic results
 TINY_PERCENT_OUTLIERS = 0.20
 TINY_K_ROUNDS = 1
@@ -341,29 +341,15 @@ def _compare_against_baseline(
     current: Dict[str, float],
     baseline_path: Path,
     tol_frac: float,
+    title: str = "Outlier Metrics",
 ) -> None:
-    """Compare current metrics against the stored baseline."""
+    """Compare current metrics against the stored baseline.
+
+    Always prints a full comparison table (not just failures).
+    """
     assert baseline_path.exists(), f"baseline not found: {baseline_path}"
     baseline = _load_json(baseline_path)
-    failures: List[str] = []
-    checked = 0
-    for key in sorted(set(current) & set(baseline)):
-        cur = current[key]
-        base = baseline[key]
-        if not (isinstance(cur, (int, float)) and isinstance(base, (int, float))):
-            continue
-        direction = metric_direction(key)
-        if direction == "ignore":
-            # Treat outlier_recall / outlier_precision / outlier_f1 as higher-is-better
-            if any(tok in key for tok in ("recall", "precision", "f1")):
-                direction = "higher"
-            else:
-                continue
-        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac, metric_name=key)
-        checked += 1
-        if not ok:
-            failures.append(f"{key}: current={cur:.4f} baseline={base:.4f} ({msg})")
-
+    checked, failures = log_comparison_table(current, baseline, tol_frac, title=title)
     assert checked > 0, "no numeric metrics were compared; check baseline/current dicts"
     assert not failures, "outlier metric regressions:\n" + "\n".join(failures)
 

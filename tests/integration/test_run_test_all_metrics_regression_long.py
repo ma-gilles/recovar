@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from helpers.metrics_regression import compare_metric, metric_direction, metric_tolerance
+from helpers.metrics_regression import compare_metric, metric_direction, metric_tolerance, log_comparison_table
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io, pytest.mark.long_test]
@@ -161,25 +161,9 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
     assert baseline_json.exists(), f"baseline not found: {baseline_json}"
     baseline = _load_json(baseline_json)
 
-    failures = []
-    checked = 0
-    shared_keys = sorted(set(current.keys()) & set(baseline.keys()))
-    for key in shared_keys:
-        cur = current[key]
-        base = baseline[key]
-        if not isinstance(cur, (int, float)) or not isinstance(base, (int, float)):
-            continue
-        direction = metric_direction(key)
-        if direction == "ignore":
-            continue
-        tol = metric_tolerance(key, tol_frac)
-        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol)
-        checked += 1
-        if not ok:
-            failures.append(f"{key}: current={cur} baseline={base} ({msg})")
-
-    assert checked > 0, "no numeric metrics were checked; verify baseline/current score files"
-    assert not failures, "metric regressions:\n" + "\n".join(failures)
+    checked, failures = log_comparison_table(current, baseline, tol_frac, title="SPA Metrics Regression")
+    assert checked > 0, "no metrics compared"
+    assert not failures, "regressions:\n" + "\n".join(failures)
 
 
 def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tmp_path):
@@ -221,22 +205,6 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
     assert baseline_json.exists(), f"ET baseline not found: {baseline_json}"
     baseline = _load_json(baseline_json)
 
-    failures = []
-    checked = 0
-    shared_keys = sorted(set(current.keys()) & set(baseline.keys()))
-    for key in shared_keys:
-        cur = current[key]
-        base = baseline[key]
-        if not isinstance(cur, (int, float)) or not isinstance(base, (int, float)):
-            continue
-        direction = metric_direction(key)
-        if direction == "ignore":
-            continue
-        tol = metric_tolerance(key, tol_frac)
-        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol)
-        checked += 1
-        if not ok:
-            failures.append(f"{key}: current={cur} baseline={base} ({msg})")
-
-    assert checked > 0, "no numeric ET metrics were checked; verify ET baseline/current score files"
-    assert not failures, "ET metric regressions:\n" + "\n".join(failures)
+    checked, failures = log_comparison_table(current, baseline, tol_frac, title="Cryo-ET Metrics Regression")
+    assert checked > 0, "no metrics compared"
+    assert not failures, "regressions:\n" + "\n".join(failures)
