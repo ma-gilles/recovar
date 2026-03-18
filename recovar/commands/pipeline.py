@@ -417,18 +417,16 @@ def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise
     # --- Step 1: estimate noise from outside the mask ---
     noise_time = time.time()
     if use_new_noise_fn:
-        masked_image_PS, image_PS = noise.fit_noise_model_to_images(
+        radial_noise_var, image_PS = noise.fit_noise_model_to_images(
             dataset, dilated_volume_mask, means.combined, None,
             batch_size=batch_size, invert_mask=True, disc_type='linear_interp')
     elif args.mask.endswith(".mrc"):
-        masked_image_PS, _, _ = noise.estimate_noise_variance_from_outside_mask_v2(
-            dataset, dilated_volume_mask, batch_size)
-        white_noise_var_outside_mask = noise.estimate_white_noise_variance_from_mask(
+        radial_noise_var, _, _ = noise.estimate_noise_variance_from_outside_mask_v2(
             dataset, dilated_volume_mask, batch_size)
         _, _, image_PS, _ = noise.estimate_radial_noise_statistic_from_outside_mask(
             dataset, dilated_volume_mask, batch_size)
     else:
-        masked_image_PS, _, image_PS, _ = noise.estimate_radial_noise_statistic_from_outside_mask(
+        radial_noise_var, _, image_PS, _ = noise.estimate_radial_noise_statistic_from_outside_mask(
             dataset, dilated_volume_mask, batch_size)
 
     # --- Step 2: upper bound from inside the mask ---
