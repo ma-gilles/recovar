@@ -245,7 +245,6 @@ def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_rad
     if n_samples < 1 or n_samples > sampling_vec.size:
         raise ValueError("n_samples should be between 1 and the size of sampling_vec")
 
-    rng = np.random.default_rng(0)
     sorted_idx = np.asarray(jnp.argsort(-sampling_vec))
     picked_set = set()
     picked = []
@@ -256,12 +255,12 @@ def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_rad
 
     probs = running_vec/np.sum(running_vec)
     draw_size = min(running_vec.size, n_samples * 100)
-    random_choices = rng.choice(running_vec.size, size=draw_size, p=probs, replace=False)
+    random_choices = np.random.choice(running_vec.size, size=draw_size, p=probs, replace=False)
     test_idx =0
 
     while n_picked < n_samples:
         if test_idx >= random_choices.size:
-            random_choices = rng.choice(running_vec.size, size=draw_size, p=probs, replace=False)
+            random_choices = np.random.choice(running_vec.size, size=draw_size, p=probs, replace=False)
             test_idx =0
 
         idx = random_choices[test_idx]
@@ -953,6 +952,7 @@ def compute_projected_covariance(experiment_datasets, mean_estimate, basis, volu
             noise_model=experiment_dataset.noise,
             noise_half=False,
             apply_process_images=False,
+            use_image_generator=not experiment_dataset.tilt_series_flag,
         ):
             lhs, rhs = reduce_covariance_inner(
                 config, batch_data, model, opts,
@@ -1121,18 +1121,22 @@ def reduce_covariance_inner(
     per_image_noise_bias = batch_x_T_y(AUs_noise, AUs_noise)
 
     if opts.shared_label:
+        # For tilt series: sum AU_t_images and AU_t_AU over tilts of each particle.
+        # The noise bias must also be summed BEFORE subtraction to match shapes.
+        # (per_image_outer has shape (1, n, n) after summing, but noise_bias
+        #  has shape (n_tilts, n, n) — broadcasting would be wrong.)
+        summed_noise_bias = jnp.sum(per_image_noise_bias, axis=0, keepdims=True)
         AU_t_images = jnp.sum(AU_t_images, axis=0, keepdims=True)
         AU_t_AU = jnp.sum(AU_t_AU, axis=0, keepdims=True)
-
-    # RHS = sum_i [x_i x_i^H - M_i]  where x_i = AU^T residual_i
-    #
-    # Subtracting per-image BEFORE accumulation avoids catastrophic cancellation.
-    # When accumulated first, both sum_i(x_i x_i^H) and sum_i(M_i) are ~1e21
-    # while their difference is ~1e14 — a 7-order-of-magnitude cancellation that
-    # exceeds float32 precision.  Per-image, each (x_i x_i^H - M_i) retains only
-    # the signal contribution (~22% of per-image magnitude), well within float32.
-    per_image_outer = AU_t_images[:, :, None] * jnp.conj(AU_t_images[:, None, :])
-    rhs_batch = (per_image_outer - per_image_noise_bias).sum(axis=0).real.astype(ctf_params.dtype)
+        per_image_outer = AU_t_images[:, :, None] * jnp.conj(AU_t_images[:, None, :])
+        rhs_batch = (per_image_outer - summed_noise_bias).sum(axis=0).real.astype(ctf_params.dtype)
+    else:
+        # For SPA: per-image subtraction avoids catastrophic cancellation.
+        # When accumulated first, both sum_i(x_i x_i^H) and sum_i(M_i) are ~1e21
+        # while their difference is ~1e14 — a 7-order-of-magnitude cancellation
+        # that exceeds float32 precision.
+        per_image_outer = AU_t_images[:, :, None] * jnp.conj(AU_t_images[:, None, :])
+        rhs_batch = (per_image_outer - per_image_noise_bias).sum(axis=0).real.astype(ctf_params.dtype)
 
     # Kron product via einsum — avoids materialising (n_images, n²,n²) tensor.
     _n = AU_t_AU.shape[-1]

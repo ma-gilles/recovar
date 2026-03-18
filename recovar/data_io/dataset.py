@@ -1136,10 +1136,11 @@ def split_index_list(all_valid_image_indices, split_random_seed=0):
     n_indices = len(all_valid_image_indices)
     half_ind_size = n_indices // 2
     
-    # Create shuffled indices
+    # Create shuffled indices — use legacy np.random API (not default_rng)
+    # to match the old code's halfset splits exactly.
+    np.random.seed(split_random_seed)
     shuffled_ind = np.arange(n_indices)
-    rng = np.random.default_rng(split_random_seed)
-    rng.shuffle(shuffled_ind)
+    np.random.shuffle(shuffled_ind)
     
     # Split into two halves
     ind_split = [

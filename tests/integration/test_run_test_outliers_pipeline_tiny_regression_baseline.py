@@ -33,7 +33,7 @@ import mrcfile
 import numpy as np
 import pytest
 
-from helpers.metrics_regression import compare_metric, metric_direction
+from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io, pytest.mark.tiny_metrics]
 
@@ -106,6 +106,17 @@ def _run_and_score(
     ]
     subprocess.run(make_cmd, check=True)
 
+    # Compute GT union mask from the volume MRC files
+    from recovar.core import mask as mask_mod
+    from recovar import utils as recovar_utils
+
+    vol_files = sorted(volumes_prefix.parent.glob(f"{volumes_prefix.name}*.mrc"))
+    vols = [recovar_utils.load_mrc(str(f)) for f in vol_files]
+    volume_shape = (_GRID, _GRID, _GRID)
+    gt_union_soft_mask, _ = mask_mod.make_union_gt_mask(vols, volume_shape)
+    gt_mask_mrc = str(output_dir / "gt_union_mask.mrc")
+    recovar_utils.write_mrc(gt_mask_mrc, gt_union_soft_mask)
+
     dataset_dir = output_dir / "test_dataset"
     pipeline_out = dataset_dir / "pipeline_outliers_output"
     particles = str(dataset_dir / f"particles.{_GRID}.mrcs")
@@ -117,7 +128,7 @@ def _run_and_score(
         "--ctf", str(dataset_dir / "ctf.pkl"),
         "--correct-contrast",
         "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "--mask", gt_mask_mrc,
         "--lazy",
         "--zdim", "4",
         "--k-rounds", str(_K),
@@ -168,24 +179,7 @@ def _run_and_score(
     with open(baseline_json) as f:
         baseline = json.load(f)
 
-    failures = []
-    checked = 0
-    for key in sorted(set(scores) & set(baseline)):
-        cur = scores[key]
-        base = baseline[key]
-        if not isinstance(cur, (int, float)) or not isinstance(base, (int, float)):
-            continue
-        # Treat recall/precision/f1 as higher-is-better
-        if any(tok in key for tok in ("recall", "precision", "f1")):
-            direction = "higher"
-        else:
-            direction = metric_direction(key)
-        if direction == "ignore":
-            continue
-        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=_TOL, metric_name=key)
-        checked += 1
-        if not ok:
-            failures.append(f"{key}: current={cur:.4f} baseline={base:.4f} ({msg})")
+    checked, failures = log_comparison_table(scores, baseline, _TOL, title="Tiny Outliers Regression Baseline")
 
     report["checked_metrics"] = checked
     report["failures"] = failures

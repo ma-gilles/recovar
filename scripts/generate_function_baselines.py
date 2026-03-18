@@ -144,15 +144,29 @@ def main():
     logger.info("mean_fsc: %s", mean_fsc_score)
 
     # ========================================================================
-    # Step 2: masking
+    # Step 2: masking — use GT union mask instead of from_halfmaps
     # ========================================================================
-    logger.info("=== Step 2: masking ===")
-    volume_mask, dilated_volume_mask = mask.masking_options(
-        "from_halfmaps", means, volume_shape, np.float32
-    )
+    logger.info("=== Step 2: GT union masking ===")
+    from scipy.ndimage import binary_dilation
+
+    # Build union mask from all GT real-space volumes
+    # Use make_mask_from_gt with from_ft=True to avoid needing get_idft3
+    # (old ~/recovar has get_idft3 as a class method, not a module function)
+    dilation_iters = int(np.ceil(6 * volume_shape[0] / 128))
+    union_binary = np.zeros(volume_shape, dtype=bool)
+    for i in range(gt_vols.shape[0]):
+        per_mask = mask.make_mask_from_gt(gt_vols[i], smax=3, iter=1, from_ft=True)
+        union_binary |= (per_mask > 0.5)
+    dilated_binary = binary_dilation(union_binary, iterations=dilation_iters)
+    from recovar.mask import soften_volume_mask
+    volume_mask = soften_volume_mask(dilated_binary, kern_rad=3).astype(np.float32)
+    dilated_volume_mask = volume_mask  # same mask for both
+
     np.save(os.path.join(intermediates_dir, "volume_mask.npy"), volume_mask)
     np.save(os.path.join(intermediates_dir, "dilated_volume_mask.npy"), dilated_volume_mask)
-    logger.info("Mask: %d/%d voxels masked", int(volume_mask.sum()), len(volume_mask))
+    logger.info("GT union mask: %d/%d voxels (%.1f%%)",
+                int(np.sum(volume_mask > 0.5)), volume_mask.size,
+                100 * np.sum(volume_mask > 0.5) / volume_mask.size)
 
     # ========================================================================
     # Step 3: estimate_noise
@@ -229,13 +243,16 @@ def main():
     np.save(os.path.join(intermediates_dir, "variance_prior.npy"), variance_prior)
     np.save(os.path.join(intermediates_dir, "variance_lhs.npy"), lhs)
 
-    # Metric: variance FSC
+    # Metric: Fourier variance FSC (GT per-Fourier-voxel power vs estimated)
+    gt_fourier_variance = np.sum(np.abs(gt.get_covariance_square_root(contrasted=False)) ** 2, axis=-1)
     _, var_fsc_score = pu.plot_fsc_new(
-        gt_variance, variance_est["combined"], np.array(volume_shape), voxel_size,
-        threshold=0.5, name="Variance FSC"
+        gt_fourier_variance, variance_est["combined"], np.array(volume_shape), voxel_size,
+        threshold=0.5, name="Variance Fourier FSC"
     )
+    scores["variance_fourier_fsc"] = float(var_fsc_score)
+    # Keep old key for backward compat
     scores["variance_fsc"] = float(var_fsc_score)
-    logger.info("variance_fsc: %s", var_fsc_score)
+    logger.info("variance_fourier_fsc: %s", var_fsc_score)
 
     # ========================================================================
     # Step 5: principal_components (covariance_columns + SVD + projected_cov)

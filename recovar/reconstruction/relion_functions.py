@@ -84,7 +84,12 @@ def relion_style_triangular_kernel(
     )
 
     Ft_y, Ft_ctf = None, None
-    for batch_data in DataIterator(experiment_dataset, batch_size, noise_model=noise_model, index_subset=index_subset):
+    # For tilt series with index_subset, indices are particle-level, so use
+    # the particle-grouped generator (get_dataset_subset_generator) not the
+    # per-image generator.  Without a subset, default image iteration is fine.
+    _use_image_gen = index_subset is None or not getattr(experiment_dataset, 'tilt_series_flag', False)
+    for batch_data in DataIterator(experiment_dataset, batch_size, noise_model=noise_model,
+                                   index_subset=index_subset, use_image_generator=_use_image_gen):
         Ft_y, Ft_ctf = relion_kernel_batch(config, batch_data, Ft_y=Ft_y, Ft_ctf=Ft_ctf)
 
     if Ft_y is not None:

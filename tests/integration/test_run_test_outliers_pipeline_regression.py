@@ -71,17 +71,22 @@ import numpy as np
 import pytest
 
 from conftest import gpu_subprocess_env
-from helpers.metrics_regression import compare_metric, metric_direction
+from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
+from helpers.perf_regression import (
+    perf_snapshot, stage_perf, build_perf_record,
+    check_perf_regression,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 # ---------------------------------------------------------------------------
-# Tiny-test thresholds (loose – small dataset is noisy)
+# Tiny-test thresholds (low noise → deterministic, reproducible)
 # ---------------------------------------------------------------------------
-MIN_RECALL_TINY = 0.30       # at least 30 % of true outliers detected
+MIN_RECALL_TINY = 0.40       # at least 40 % of true outliers detected
 MIN_PRECISION_TINY = 0.20    # at least 20 % of detected are real outliers
 TINY_GRID_SIZE = 32
-TINY_N_IMAGES = 500
+TINY_N_IMAGES = 1000         # 500 was too few → stochastic recall swings
+TINY_NOISE_LEVEL = 0.01      # high SNR for deterministic results
 TINY_PERCENT_OUTLIERS = 0.20
 TINY_K_ROUNDS = 1
 
@@ -171,6 +176,7 @@ def _run_outliers_pipeline(
     extra_args: str = "",
     accept_cpu: bool = False,
     reuse_dataset: bool = False,
+    noise_level: float = 0.1,
 ) -> Path:
     """
     Generate a test dataset and run pipeline_with_outliers; return the
@@ -201,11 +207,26 @@ def _run_outliers_pipeline(
             "--percent-outliers", str(percent_outliers),
             "--image-size", str(grid_size),
             "--seed", "42",
+            "--noise-level", str(noise_level),
         ]
+        if volumes_prefix is not None:
+            make_cmd += ["--volume-input", str(volumes_prefix)]
         if extra_args:
             make_cmd.extend(shlex.split(extra_args))
         env = gpu_subprocess_env()
         subprocess.run(make_cmd, check=True, env=env)
+
+    # -- compute GT union mask from synthetic volumes ------------------------
+    from recovar.simulation import synthetic_dataset
+    from recovar.output import metrics as gt_metrics
+    from recovar import utils as recovar_utils
+
+    sim_info_path = dataset_dir / "simulation_info.pkl"
+    gt_thing = synthetic_dataset.load_heterogeneous_reconstruction(str(sim_info_path))
+    volume_shape = (grid_size, grid_size, grid_size)
+    gt_union_soft_mask, _ = gt_metrics.make_union_gt_mask_from_hvd(gt_thing, volume_shape)
+    gt_mask_mrc = str(output_dir / "gt_union_mask.mrc")
+    recovar_utils.write_mrc(gt_mask_mrc, gt_union_soft_mask)
 
     # -- run pipeline_with_outliers ------------------------------------------
     pipeline_out = output_dir / "pipeline_outliers_output"
@@ -220,7 +241,7 @@ def _run_outliers_pipeline(
         "--ctf", str(ctf),
         "--correct-contrast",
         "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "--mask", gt_mask_mrc,
         "--lazy",
         "--zdim", "4",
         "--k-rounds", str(k_rounds),
@@ -320,29 +341,15 @@ def _compare_against_baseline(
     current: Dict[str, float],
     baseline_path: Path,
     tol_frac: float,
+    title: str = "Outlier Metrics",
 ) -> None:
-    """Compare current metrics against the stored baseline."""
+    """Compare current metrics against the stored baseline.
+
+    Always prints a full comparison table (not just failures).
+    """
     assert baseline_path.exists(), f"baseline not found: {baseline_path}"
     baseline = _load_json(baseline_path)
-    failures: List[str] = []
-    checked = 0
-    for key in sorted(set(current) & set(baseline)):
-        cur = current[key]
-        base = baseline[key]
-        if not (isinstance(cur, (int, float)) and isinstance(base, (int, float))):
-            continue
-        direction = metric_direction(key)
-        if direction == "ignore":
-            # Treat outlier_recall / outlier_precision / outlier_f1 as higher-is-better
-            if any(tok in key for tok in ("recall", "precision", "f1")):
-                direction = "higher"
-            else:
-                continue
-        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac, metric_name=key)
-        checked += 1
-        if not ok:
-            failures.append(f"{key}: current={cur:.4f} baseline={base:.4f} ({msg})")
-
+    checked, failures = log_comparison_table(current, baseline, tol_frac, title=title)
     assert checked > 0, "no numeric metrics were compared; check baseline/current dicts"
     assert not failures, "outlier metric regressions:\n" + "\n".join(failures)
 
@@ -376,6 +383,7 @@ def test_outliers_pipeline_tiny_regression(tmp_path):
         n_images=TINY_N_IMAGES,
         percent_outliers=TINY_PERCENT_OUTLIERS,
         k_rounds=TINY_K_ROUNDS,
+        noise_level=TINY_NOISE_LEVEL,
     )
 
     sim_info_path = output_dir / "test_dataset" / "simulation_info.pkl"
@@ -409,7 +417,7 @@ def test_outliers_pipeline_tiny_regression(tmp_path):
     _compare_against_baseline(
         current=metrics,
         baseline_path=_TINY_BASELINE_JSON,
-        tol_frac=0.25,  # allow 25 % degradation from tiny-dataset noise
+        tol_frac=0.05,  # tight tolerance — test is deterministic (seed=42, noise=0.01)
     )
 
 
@@ -505,10 +513,13 @@ def test_outliers_pipeline_regression_against_baseline(tmp_path):
     n_images = int(os.environ.get("OUTLIERS_N_IMAGES", "10000"))
     pct_out = float(os.environ.get("OUTLIERS_PERCENT_OUTLIERS", "0.15"))
     k_rounds = int(os.environ.get("OUTLIERS_K_ROUNDS", "2"))
-    tol_frac = float(os.environ.get("OUTLIERS_TOL_FRAC", "0.15"))
+    tol_frac = float(os.environ.get("OUTLIERS_TOL_FRAC", "0.05"))
+    noise_level = float(os.environ.get("OUTLIERS_NOISE_LEVEL", "0.1"))
 
     output_dir = _resolve_output_dir(tmp_path, "outliers_long")
     reuse = _dataset_exists_spa(output_dir, grid_size)
+
+    snap_before = perf_snapshot()
     pipeline_out = _run_outliers_pipeline(
         output_dir=output_dir,
         volumes_prefix=volumes_prefix,
@@ -518,7 +529,9 @@ def test_outliers_pipeline_regression_against_baseline(tmp_path):
         k_rounds=k_rounds,
         accept_cpu=False,
         reuse_dataset=reuse,
+        noise_level=noise_level,
     )
+    perf_stages = {"pipeline_with_outliers": stage_perf(snap_before, perf_snapshot())}
 
     sim_info_path = output_dir / "test_dataset" / "simulation_info.pkl"
     assert sim_info_path.exists()
@@ -536,6 +549,13 @@ def test_outliers_pipeline_regression_against_baseline(tmp_path):
         baseline_path=baseline_json,
         tol_frac=tol_frac,
     )
+
+    # Perf regression check (warn only)
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(
+        _REPO_ROOT / "tests" / "baselines" / "run_test_outliers_pipeline" / "long_generated" / "perf_baseline_spa.json"
+    )
+    check_perf_regression(perf_record, perf_baseline_path, "SPA outlier pipeline")
 
 
 # ---------------------------------------------------------------------------
@@ -572,7 +592,8 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
     pct_tilt_out = float(os.environ.get("OUTLIERS_PCT_TILT_OUTLIERS", "0.10"))
     n_tilts = int(os.environ.get("OUTLIERS_N_TILTS", "7"))
     k_rounds = int(os.environ.get("OUTLIERS_K_ROUNDS", "2"))
-    tol_frac = float(os.environ.get("OUTLIERS_TOL_FRAC", "0.15"))
+    tol_frac = float(os.environ.get("OUTLIERS_TOL_FRAC", "0.05"))
+    noise_level = float(os.environ.get("OUTLIERS_NOISE_LEVEL", "0.1"))
 
     output_dir = _resolve_output_dir(tmp_path, "outliers_cryo_et")
     dataset_dir = output_dir / "test_dataset"
@@ -595,10 +616,27 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
             "--percent-outliers", str(pct_out),
             "--percent-tilt-series-outliers", str(pct_tilt_out),
             "--tilt-series",
+            "--n-tilts", str(n_tilts),
             "--image-size", str(grid_size),
             "--seed", "42",
+            "--noise-level", str(noise_level),
         ]
+        if volumes_prefix is not None:
+            make_cmd += ["--volume-input", str(volumes_prefix)]
         subprocess.run(make_cmd, check=True, env=gpu_subprocess_env())
+
+    # Compute GT union mask from synthetic volumes
+    from recovar.simulation import synthetic_dataset
+    from recovar.output import metrics as gt_metrics
+    from recovar import utils as recovar_utils
+
+    sim_info_path = dataset_dir / "simulation_info.pkl"
+    assert sim_info_path.exists()
+    gt_thing = synthetic_dataset.load_heterogeneous_reconstruction(str(sim_info_path))
+    volume_shape_et = (grid_size, grid_size, grid_size)
+    gt_union_soft_mask_et, _ = gt_metrics.make_union_gt_mask_from_hvd(gt_thing, volume_shape_et)
+    gt_mask_mrc_et = str(output_dir / "gt_union_mask_et.mrc")
+    recovar_utils.write_mrc(gt_mask_mrc_et, gt_union_soft_mask_et)
 
     # Run pipeline_with_outliers for tilt series
     pipeline_out = output_dir / "pipeline_outliers_output"
@@ -606,6 +644,7 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
     poses = dataset_dir / "poses.pkl"
     ctf = dataset_dir / "ctf.pkl"
 
+    snap_before = perf_snapshot()
     pipe_cmd = [
         sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
         str(star),
@@ -615,7 +654,7 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         "--tilt-series-ctf", "relion5",
         "--correct-contrast",
         "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "--mask", gt_mask_mrc_et,
         "--lazy",
         "--zdim", "4",
         "--k-rounds", str(k_rounds),
@@ -624,9 +663,7 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         "--save-pipeline-indices",
     ]
     subprocess.run(pipe_cmd, check=True, env=gpu_subprocess_env())
-
-    sim_info_path = dataset_dir / "simulation_info.pkl"
-    assert sim_info_path.exists()
+    perf_stages = {"pipeline_with_outliers": stage_perf(snap_before, perf_snapshot())}
 
     with open(sim_info_path, "rb") as f:
         sim_info = pickle.load(f)
@@ -649,6 +686,13 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         baseline_path=baseline_json,
         tol_frac=tol_frac,
     )
+
+    # Perf regression check (warn only)
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(
+        _REPO_ROOT / "tests" / "baselines" / "run_test_outliers_pipeline" / "long_generated" / "perf_baseline_cryo_et.json"
+    )
+    check_perf_regression(perf_record, perf_baseline_path, "ET outlier pipeline")
 
 
 def _compute_particle_outlier_metrics(

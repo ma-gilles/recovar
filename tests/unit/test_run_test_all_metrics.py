@@ -38,11 +38,6 @@ def _install_main_runtime_stubs(monkeypatch, tmp_path, *, mean_fsc=0.5, variance
     )
     monkeypatch.setattr(
         rtam,
-        "generate_compact_support_test_volumes",
-        lambda **_kwargs: str(tmp_path / "generated_volumes" / "vol"),
-    )
-    monkeypatch.setattr(
-        rtam,
         "compute_noise_variance_metrics",
         lambda *_args, **_kwargs: {
             "noise_mean_relative_error": 0.1,
@@ -71,6 +66,11 @@ def _install_main_runtime_stubs(monkeypatch, tmp_path, *, mean_fsc=0.5, variance
     monkeypatch.setattr(rtam.metrics, "variance_of_zs", lambda *_args, **_kwargs: (None, 0.01))
     monkeypatch.setattr(
         rtam.metrics,
+        "make_union_gt_mask_from_hvd",
+        lambda *_args, **_kwargs: (np.ones((2, 2, 2), dtype=np.float32), np.ones((2, 2, 2), dtype=bool)),
+    )
+    monkeypatch.setattr(
+        rtam.metrics,
         "compute_volume_error_metrics_from_gt",
         lambda *_args, **_kwargs: {"ninety_pc_locres": 1.0, "median_locres": 1.0, "mask": None},
     )
@@ -79,11 +79,11 @@ def _install_main_runtime_stubs(monkeypatch, tmp_path, *, mean_fsc=0.5, variance
         "subspace_angles",
         lambda *_args, **_kwargs: np.linspace(0.0, 1.0, 20, dtype=np.float32),
     )
-    monkeypatch.setattr(
-        rtam.fourier_transform_utils,
-        "get_idft3",
-        lambda arr: np.asarray(arr).reshape(2, 2, 2),
-    )
+    def _fake_idft3(arr):
+        a = np.asarray(arr)
+        n = round(a.size ** (1/3))
+        return a.reshape(n, n, n)
+    monkeypatch.setattr(rtam.fourier_transform_utils, "get_idft3", _fake_idft3)
     monkeypatch.setattr(
         rtam.utils,
         "load_mrc",
@@ -121,6 +121,7 @@ def _install_main_runtime_stubs(monkeypatch, tmp_path, *, mean_fsc=0.5, variance
                 "lazy_dataset": self._cryos,
                 "mean": np.zeros((2, 2, 2), dtype=np.float32),
                 "variance": np.zeros((2, 2, 2), dtype=np.float32),
+                "variance_est": {"combined": np.zeros(8, dtype=np.float32)},
                 "volume_shape": (2, 2, 2),
                 "s": self._s,
                 "noise_var_used": np.array([1.0, 1.0], dtype=np.float32),
@@ -172,7 +173,7 @@ def test_main_generated_run_writes_default_baseline_when_missing(monkeypatch, tm
             "--output-dir",
             str(tmp_path),
             "--cpu",
-            "--generate-volumes",
+            "--generate-pdb-volumes",
             "--generated-n-volumes",
             "3",
             "--grid-size",
@@ -182,7 +183,7 @@ def test_main_generated_run_writes_default_baseline_when_missing(monkeypatch, tm
 
     rtam.main()
 
-    baseline_path = tmp_path / "generated_volumes" / "metrics_baseline_grid8_nvol3.json"
+    baseline_path = tmp_path / "generated_volumes" / "metrics_baseline_pdb_grid8_nvol3.json"
     report_path = tmp_path / "test_dataset" / "metrics_plot" / "metrics_regression_report.json"
     assert baseline_path.exists()
     assert report_path.exists()
@@ -553,36 +554,6 @@ def test_make_big_test_dataset_raises_when_no_input_volumes(monkeypatch, tmp_pat
         )
 
 
-def test_generate_compact_support_test_volumes_has_high_freq_content(tmp_path):
-    prefix = rtam.generate_compact_support_test_volumes(
-        output_dir=str(tmp_path),
-        grid_size=32,
-        n_volumes=10,
-        voxel_size=1.0,
-        output_prefix=str(tmp_path / "vol"),
-    )
-    p0 = Path(f"{prefix}0000.mrc")
-    p5 = Path(f"{prefix}0005.mrc")
-    assert p0.exists() and p5.exists()
-
-    v0 = rtam.utils.load_mrc(p0)
-    v5 = rtam.utils.load_mrc(p5)
-    assert v0.shape == (32, 32, 32)
-    # Moving component should change volume over sequence.
-    assert np.linalg.norm(v0 - v5) > 1e-3
-
-    # Check that a non-trivial fraction of spectral energy is in higher frequencies.
-    fv = np.fft.fftn(v0)
-    power = np.abs(fv) ** 2
-    freqs = np.fft.fftfreq(v0.shape[0])
-    fx, fy, fz = np.meshgrid(freqs, freqs, freqs, indexing="ij")
-    fr = np.sqrt(fx**2 + fy**2 + fz**2)
-    hi = power[fr > 0.22].sum()
-    lo = power[fr <= 0.22].sum() + 1e-12
-    hi_lo_ratio = hi / lo
-    assert hi_lo_ratio > 0.08
-
-
 def test_validate_storage_args_for_generated_volumes_requires_explicit_outdir():
     args = SimpleNamespace(volume_input=None)
     with pytest.raises(ValueError, match="must pass --output-dir/-o explicitly"):
@@ -638,7 +609,7 @@ def test_main_rejects_nonpositive_generated_n_volumes_when_generating(monkeypatc
             "--output-dir",
             str(tmp_path),
             "--cpu",
-            "--generate-volumes",
+            "--generate-pdb-volumes",
             "--generated-n-volumes",
             "0",
         ],
@@ -650,20 +621,20 @@ def test_main_rejects_nonpositive_generated_n_volumes_when_generating(monkeypatc
 def test_resolve_metrics_baseline_path_defaults_for_generated_volumes(tmp_path):
     args = SimpleNamespace(
         metrics_baseline_json=None,
-        generate_volumes=True,
+        generate_pdb_volumes=True,
         output_dir=str(tmp_path),
         grid_size=128,
         generated_n_volumes=50,
     )
     path = rtam.resolve_metrics_baseline_path(args)
-    assert path == tmp_path / "generated_volumes" / "metrics_baseline_grid128_nvol50.json"
+    assert path == tmp_path / "generated_volumes" / "metrics_baseline_pdb_grid128_nvol50.json"
 
 
 def test_resolve_metrics_baseline_path_explicit_wins(tmp_path):
     explicit = tmp_path / "my_baseline.json"
     args = SimpleNamespace(
         metrics_baseline_json=str(explicit),
-        generate_volumes=True,
+        generate_pdb_volumes=True,
         output_dir=str(tmp_path),
         grid_size=64,
         generated_n_volumes=10,
@@ -674,7 +645,7 @@ def test_resolve_metrics_baseline_path_explicit_wins(tmp_path):
 def test_resolve_metrics_baseline_path_returns_none_when_not_generated_and_not_explicit(tmp_path):
     args = SimpleNamespace(
         metrics_baseline_json=None,
-        generate_volumes=False,
+        generate_pdb_volumes=False,
         output_dir=str(tmp_path),
         grid_size=64,
         generated_n_volumes=10,
@@ -978,19 +949,6 @@ def test_load_u_real_for_metrics_legacy_get_handles_shorter_arrays():
     out = rtam.load_u_real_for_metrics(_PO(), 10)
     assert out.shape == (2, 3)
     np.testing.assert_array_equal(out, np.arange(2 * 3, dtype=np.float32).reshape(2, 3))
-
-
-def test_generate_compact_support_test_volumes_default_prefix_and_count(tmp_path):
-    prefix = rtam.generate_compact_support_test_volumes(
-        output_dir=str(tmp_path),
-        grid_size=16,
-        n_volumes=6,
-        voxel_size=1.0,
-    )
-    assert str(Path(prefix).parent) == str(tmp_path / "generated_volumes")
-    assert Path(prefix).name == "vol"
-    for i in range(6):
-        assert Path(f"{prefix}{i:04d}.mrc").exists()
 
 
 def test_compare_scores_against_baseline_deduplicates_aliased_keys():

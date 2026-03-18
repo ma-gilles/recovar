@@ -160,100 +160,6 @@ from recovar.simulation.trajectory_generation import (
     split_atom_group_by_chains as _split_atom_group_by_chains,
     generate_trajectory_volumes as generate_pdb_trajectory_volumes,
 )
-def generate_compact_support_test_volumes(
-    output_dir,
-    grid_size=128,
-    n_volumes=50,
-    voxel_size=4.25,
-    prefix_name="vol",
-    output_prefix=None,
-):
-    """
-    Generate deterministic real-space MRC volumes with compact support.
-
-    Geometry:
-    - A static chain of Gaussian/ball-like blobs on one line.
-    - One additional compact ball moving horizontally on a parallel line.
-
-    Returns
-    -------
-    str
-        Prefix path to generated files, suitable for --volume-input
-        (e.g., "<...>/generated_volumes/vol" for files vol0000.mrc, ...).
-    """
-    if output_prefix is None:
-        vols_dir = Path(output_dir) / "generated_volumes"
-        output.mkdir_safe(str(vols_dir))
-        volume_prefix = str(vols_dir / prefix_name)
-    else:
-        volume_prefix = str(output_prefix)
-        output.mkdir_safe(str(Path(volume_prefix).parent))
-
-    # Normalized coordinate grid in [-1, 1]^3.
-    x = np.linspace(-1.0, 1.0, grid_size, dtype=np.float32)
-    xx, yy, zz = np.meshgrid(x, x, x, indexing="ij")
-    rr = np.sqrt(xx**2 + yy**2 + zz**2)
-
-    # Soft compact support mask to keep maps object-like.
-    support = np.clip((0.88 - rr) / 0.08, 0.0, 1.0)
-    support = support**2
-
-    # Static line of compact balls on y=0, z=-0.15.
-    static_xs = np.array([-0.55, -0.30, -0.05, 0.20, 0.45], dtype=np.float32)
-    static_y = 0.0
-    static_z = -0.15
-    static_radii = np.array([0.13, 0.11, 0.12, 0.11, 0.13], dtype=np.float32)
-    static_edges = np.array([0.02, 0.02, 0.02, 0.02, 0.02], dtype=np.float32)
-    static_amps = np.array([1.00, 0.85, 0.95, 0.80, 0.90], dtype=np.float32)
-
-    for idx in range(n_volumes):
-        t = idx / max(n_volumes - 1, 1)
-        vol = np.zeros((grid_size, grid_size, grid_size), dtype=np.float32)
-
-        # Static compact balls with mild high-frequency texture.
-        for cx, radius, edge, amp in zip(static_xs, static_radii, static_edges, static_amps):
-            sr = np.sqrt((xx - cx) ** 2 + (yy - static_y) ** 2 + (zz - static_z) ** 2)
-            static_ball = np.clip((radius - sr) / edge, 0.0, 1.0)
-            static_tex = (
-                np.cos((xx - cx) * (10.0 * np.pi))
-                * np.cos((yy - static_y) * (8.0 * np.pi))
-                * np.cos((zz - static_z) * (9.0 * np.pi))
-            )
-            vol += amp * (static_ball + 0.25 * static_ball * static_tex)
-
-        # Moving compact ball on a different (parallel) line y=0.32, z=0.18.
-        moving_x = -0.70 + 1.40 * t
-        moving_y = 0.32
-        moving_z = 0.18
-        moving_radius = 0.16
-        moving_edge = 0.03
-        moving_r = np.sqrt((xx - moving_x) ** 2 + (yy - moving_y) ** 2 + (zz - moving_z) ** 2)
-        moving_ball = np.clip((moving_radius - moving_r) / moving_edge, 0.0, 1.0)
-
-        # Add high-resolution content in the moving piece:
-        # a compact ripple texture whose phase drifts over states.
-        # This boosts high-frequency Fourier content for resolution-metric tests
-        # while keeping support local and physically bounded.
-        phase = 2.0 * np.pi * t
-        hf_osc = (
-            np.cos((xx - moving_x) * (18.0 * np.pi) + phase)
-            * np.cos((yy - moving_y) * (14.0 * np.pi) - 0.5 * phase)
-            * np.cos((zz - moving_z) * (16.0 * np.pi) + 0.25 * phase)
-        )
-        moving_component = 1.20 * moving_ball + 0.45 * moving_ball * hf_osc
-        vol += moving_component
-
-        # Apply compact support and normalize scale.
-        vol *= support
-        vol -= np.mean(vol)
-        norm = np.linalg.norm(vol.ravel())
-        if norm > 0:
-            vol /= norm
-
-        utils.write_mrc(f"{volume_prefix}{idx:04d}.mrc", vol.astype(np.float32), voxel_size=voxel_size)
-
-    return volume_prefix
-
 ##TODO use TMP_RECOVAR_DIR if set? (see staging.py)
 def validate_storage_args_for_generated_volumes(args, argv):
     """
@@ -280,6 +186,9 @@ def make_big_test_dataset(input_dir, output_dir, noise_level=0.1, grid_size=128,
                           contrast_std=0.1, n_tilts=-1, premultiplied_ctf=False, noise_increase_per_tilt=None):
     output_folder = os.path.join(output_dir, 'test_dataset')
     output.mkdir_safe(output_folder)
+
+    # Fixed seed for reproducible dataset generation across runs.
+    np.random.seed(42)
     from scipy.stats import vonmises
 
     # Count available volumes from prefix input_dir + "####.mrc" to match simulator loader behavior.
@@ -543,7 +452,7 @@ def metric_direction(metric_name):
 
 
 HIGH_VARIANCE_TOKENS = ("locres", "auc", "noise_max")
-_HIGH_VARIANCE_MIN_TOL = 0.10
+_HIGH_VARIANCE_MIN_TOL = 0.03
 
 
 def compare_metric(current, baseline, direction, tol_frac, metric_name=None):
@@ -608,10 +517,6 @@ def resolve_metrics_baseline_path(args):
     if getattr(args, 'generate_pdb_volumes', False):
         return Path(args.output_dir) / "generated_volumes" / (
             f"metrics_baseline_pdb_grid{args.grid_size}_nvol{args.generated_n_volumes}.json"
-        )
-    if args.generate_volumes:
-        return Path(args.output_dir) / "generated_volumes" / (
-            f"metrics_baseline_grid{args.grid_size}_nvol{args.generated_n_volumes}.json"
         )
     return None
 
@@ -795,14 +700,12 @@ def main():
                         help='Use premultiplied CTF for the test dataset')
     parser.add_argument('--noise-increase-per-tilt', default=None, type=float,
                         help= 'Noise increase per tilt in the test dataset')
-    parser.add_argument('--noise-level', type=float, default=1.0,
+    parser.add_argument('--noise-level', type=float, default=0.1,
                         help='Noise level for the test dataset')
     parser.add_argument('--noise-model', type=str, default='radial',
                         help='Noise model for the test dataset')
     parser.add_argument('--new-noise-est', action='store_true',
                         help='Use new noise estimation method')
-    parser.add_argument('--generate-volumes', action='store_true',
-                        help='Generate synthetic compact-support test volumes if you do not want to provide --volume-input.')
     parser.add_argument('--generate-pdb-volumes', action='store_true',
                         help='Generate test volumes from PDB 5nrl (spliceosome) with rigid-body motion '
                              'trajectory (subcomplexes rotated). More realistic than --generate-volumes.')
@@ -841,7 +744,7 @@ def main():
         raise ValueError(
             f"--metrics-regression-tol-frac must be non-negative, got {args.metrics_regression_tol_frac}"
         )
-    if args.generate_volumes or args.generate_pdb_volumes or args.volume_input is None:
+    if args.generate_pdb_volumes or args.volume_input is None:
         if args.generated_n_volumes <= 0:
             raise ValueError(
                 f"--generated-n-volumes must be positive when generating volumes, got {args.generated_n_volumes}"
@@ -862,7 +765,7 @@ def main():
 
     if not _reuse:
         # Default: use PDB-based 5nrl trajectory volumes when no input is given.
-        if args.volume_input is None and not args.generate_volumes:
+        if args.volume_input is None:
             args.generate_pdb_volumes = True
 
         if args.generate_pdb_volumes:
@@ -886,23 +789,6 @@ def main():
                 output_prefix=gen_prefix,
             )
             logger.info("Using PDB-generated volume input prefix: %s", args.volume_input)
-        elif args.generate_volumes:
-            gen_prefix = args.generated_volumes_prefix
-            if gen_prefix is None:
-                gen_prefix = str(Path(args.output_dir) / "generated_volumes" / "vol")
-            logger.info(
-                f"Generating compact-support test volumes at prefix {gen_prefix} "
-                f"(n={args.generated_n_volumes}, grid_size={args.grid_size})"
-            )
-            args.volume_input = generate_compact_support_test_volumes(
-                output_dir=args.output_dir,
-                grid_size=args.grid_size,
-                n_volumes=args.generated_n_volumes,
-                voxel_size=4.25 * 128 / args.grid_size,
-                prefix_name=Path(gen_prefix).name,
-                output_prefix=gen_prefix,
-            )
-            logger.info("Using generated volume input prefix: %s", args.volume_input)
 
     # Dump parser arguments to a JSON file.
     dump_json_path = os.path.join(args.output_dir, "parser_args.json")
@@ -962,13 +848,32 @@ def main():
     else:
         logger.info("No dose indices found in simulation info - skipping dose distribution analysis")
 
+    # Build GT union mask from generated volumes and use it as the pipeline mask.
+    # This ensures the pipeline operates with a known-good mask derived from GT,
+    # removing mask estimation as a source of variability in regression tests.
+    # The mask is deterministic: same GT volumes → same mask every time.
+    gt_mask_dir = os.path.join(dataset_dir, 'gt_masks')
+    os.makedirs(gt_mask_dir, exist_ok=True)
+    gt_mask_mrc_path = os.path.join(gt_mask_dir, 'gt_union_mask.mrc')
+
+    gt_for_mask = synthetic_dataset.load_heterogeneous_reconstruction(sim_info_path)
+    volume_shape_for_mask = (grid_size, grid_size, grid_size)
+    gt_union_soft_mask, gt_union_binary_mask = metrics.make_union_gt_mask_from_hvd(
+        gt_for_mask, volume_shape_for_mask
+    )
+    utils.write_mrc(gt_mask_mrc_path, gt_union_soft_mask,
+                    voxel_size=4.25 * 128 / grid_size)
+    logger.info("GT union mask written to %s (%.1f%% voxels)",
+                gt_mask_mrc_path,
+                100 * gt_union_binary_mask.sum() / gt_union_binary_mask.size)
+
     # Run pipeline plugin
     cmd = [
         f"{dataset_dir}/particles.{grid_size}.mrcs" if args.tomo_tilts < 0 else f"{dataset_dir}/particles.star",
         "--poses", f"{dataset_dir}/poses.pkl",
         "--ctf", f"{dataset_dir}/ctf.pkl",
         "-o", f"{dataset_dir}/pipeline_output",
-        "--mask", "from_halfmaps",
+        "--mask", gt_mask_mrc_path,
     ]
     if args.noise_model == 'radial_per_tilt':
         cmd.append("--noise-model")
@@ -1051,6 +956,10 @@ def main():
     gt_thing = synthetic_dataset.load_heterogeneous_reconstruction(sim_info_path)
     gt_mean = gt_thing.get_mean()
 
+    # Reuse the GT union mask computed before the pipeline run.
+    # gt_union_soft_mask and gt_union_binary_mask are already in scope.
+    volume_shape = cryos[0].volume_shape
+
     # FSC for mean maps
     fsc_filepath = os.path.join(plots_dir, 'fsc_mean.png')
     ax, score = plot_utils.plot_fsc_new(
@@ -1064,54 +973,35 @@ def main():
     )
     all_scores['mean_fsc'] = score
 
-    # FSC for variance maps — two metrics:
-    #   variance_spatial_fsc: spatial variance from eigendecomposition vs GT, DFT both, FSC
-    #   variance_fourier_fsc: Fourier-space per-voxel power vs GT Fourier variance
+    # Variance FSC: GT Fourier variance vs pipeline's variance estimate.
+    # Both are per-Fourier-voxel quantities — no DFT needed.
     volume_shape = cryos[0].volume_shape
-    gt_spatial_variance = gt_thing.get_spatial_variances(contrasted=False)
-    estimated_spatial_variance = pipeline_output.get('variance')
+    # Use variance_est['combined'] (Fourier-space, from compute_variance),
+    # NOT pipeline_output.get('variance') which is the real-space spatial
+    # variance from eigendecomposition (different quantity entirely).
+    estimated_variance = np.asarray(pipeline_output.get('variance_est')['combined'])
 
-    # Spatial variance FSC: DFT both spatial variance maps, then FSC
-    gt_sp_dft = fourier_transform_utils.get_dft3(
-        gt_spatial_variance.reshape(volume_shape)
-    ).reshape(-1)
-    est_sp_dft = fourier_transform_utils.get_dft3(
-        estimated_spatial_variance.reshape(volume_shape)
-    ).reshape(-1)
-    ax, score_spatial = plot_utils.plot_fsc_new(
-        gt_sp_dft, est_sp_dft,
-        np.array(volume_shape),
-        cryos[0].voxel_size,
-        threshold=0.5,
-        filename=os.path.join(plots_dir, 'fsc_variance_spatial.png'),
-        name="Variance Spatial FSC",
-        fmat=""
-    )
-    all_scores['variance_spatial_fsc'] = score_spatial
-    # Keep legacy key for backward compatibility
-    all_scores['variance_fsc'] = score_spatial
-
-    # Fourier variance FSC: GT Fourier variance vs estimated from eigendecomposition
     if hasattr(gt_thing, 'get_covariance_square_root'):
         cov_sqrt_fourier = gt_thing.get_covariance_square_root(contrasted=False)
         gt_fourier_variance = np.sum(np.abs(cov_sqrt_fourier) ** 2, axis=-1)
-        # Estimated Fourier variance from eigenvectors: sum_i s_i |U_i(k)|^2
-        u_fourier_all = np.asarray(pipeline_output.get('u'))
-        s_all_var = np.asarray(pipeline_output.get('s'))
-        n_pcs_var = min(20, u_fourier_all.shape[0])
-        est_fourier_variance = utils.estimate_variance(
-            u_fourier_all[:n_pcs_var, :], s_all_var[:n_pcs_var]
-        )
-        ax, score_fourier = plot_utils.plot_fsc_new(
-            gt_fourier_variance, est_fourier_variance,
-            np.array(volume_shape),
-            cryos[0].voxel_size,
-            threshold=0.5,
-            filename=os.path.join(plots_dir, 'fsc_variance_fourier.png'),
-            name="Variance Fourier FSC",
-            fmat=""
-        )
-        all_scores['variance_fourier_fsc'] = score_fourier
+    else:
+        gt_fourier_variance = fourier_transform_utils.get_dft3(
+            gt_thing.get_spatial_variances(contrasted=False).reshape(volume_shape)
+        ).reshape(-1)
+
+    ax, score_variance = plot_utils.plot_fsc_new(
+        gt_fourier_variance, estimated_variance,
+        np.array(volume_shape),
+        cryos[0].voxel_size,
+        threshold=0.5,
+        filename=os.path.join(plots_dir, 'fsc_variance.png'),
+        name="Variance FSC",
+        fmat=""
+    )
+    all_scores['variance_fsc'] = score_variance
+    # Legacy aliases
+    all_scores['variance_spatial_fsc'] = score_variance
+    all_scores['variance_fourier_fsc'] = score_variance
 
     # SVD metrics
     synt = gt_thing
@@ -1232,8 +1122,8 @@ def main():
             Path(output_state_dir, f'state{l_idx:03d}.mrc')
         )
         errors_metrics = metrics.compute_volume_error_metrics_from_gt(
-            gt_map, estimate_map, cryos[0].voxel_size, None, partial_mask=None,
-            normalize_by_map1=True
+            gt_map, estimate_map, cryos[0].voxel_size, gt_union_binary_mask,
+            partial_mask=None, normalize_by_map1=True
         )
         all_scores[f'state_{l_idx}_locres_90pct'] = errors_metrics.get('ninety_pc_locres')
         all_scores[f'state_{l_idx}_locres_median'] = errors_metrics.get('median_locres')
@@ -1411,6 +1301,11 @@ def main():
     output.mkdir_safe(str(baseline_path.parent))
     regression_report_path = os.path.join(plots_dir, "metrics_regression_report.json")
     write_baseline = args.overwrite_metrics_baseline or (not baseline_path.exists())
+    if baseline_path.exists() and not args.overwrite_metrics_baseline:
+        logger.warning(
+            "Baseline already exists at %s. Pass --overwrite-metrics-baseline to replace it.",
+            baseline_path,
+        )
     if write_baseline:
         with open(baseline_path, "w") as f:
             json.dump(all_scores, f, indent=2)

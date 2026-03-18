@@ -89,6 +89,18 @@ def pipeline_output(shared_dir):
     ctf = dataset_dir / "ctf.pkl"
     pipeline_out = shared_dir / "pipeline_output"
 
+    # Compute GT union mask from synthetic volumes
+    from recovar.simulation import synthetic_dataset
+    from recovar.output import metrics
+    from recovar import utils
+
+    sim_info_path = str(dataset_dir / "simulation_info.pkl")
+    gt_thing = synthetic_dataset.load_heterogeneous_reconstruction(sim_info_path)
+    volume_shape = (_GRID, _GRID, _GRID)
+    gt_union_soft_mask, _ = metrics.make_union_gt_mask_from_hvd(gt_thing, volume_shape)
+    mask_path = str(shared_dir / "gt_union_mask.mrc")
+    utils.write_mrc(mask_path, gt_union_soft_mask)
+
     cmd = [
         sys.executable, "-m", "recovar.command_line", "pipeline",
         str(mrcs),
@@ -96,7 +108,7 @@ def pipeline_output(shared_dir):
         "--ctf", str(ctf),
         "--correct-contrast",
         "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "--mask", mask_path,
         "--lazy",
         "--zdim", str(_ZDIM),
     ]

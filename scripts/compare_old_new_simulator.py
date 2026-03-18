@@ -181,9 +181,9 @@ def test_full_dataset_generation():
     n_images = 200
 
     # Generate test volumes first
-    from recovar.commands.run_test_all_metrics import generate_compact_support_test_volumes
+    from recovar.simulation.trajectory_generation import generate_trajectory_volumes
     with tempfile.TemporaryDirectory() as tmpdir:
-        vol_prefix = generate_compact_support_test_volumes(
+        vol_prefix = generate_trajectory_volumes(
             output_dir=tmpdir,
             grid_size=grid_size,
             n_volumes=3,

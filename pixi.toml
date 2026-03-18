@@ -101,6 +101,8 @@ test-fast = "python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py"
 test-smoke = "python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py --run-integration -k smoke"
 test-gpu = "python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py --run-gpu"
 test-full = "XLA_PYTHON_CLIENT_PREALLOCATE=false python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py --run-integration --run-gpu --run-slow --run-tiny-metrics --long-test"
+test-parallel = "bash ./scripts/run_tests_parallel.sh full"
+test-parallel-long = "bash ./scripts/run_tests_parallel.sh long-test"
 
 # Dataset creation tasks
 create-dataset-small = "bash ./scripts/run_test.sh create 128 100000"

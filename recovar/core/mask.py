@@ -94,6 +94,52 @@ def make_mask_from_gt(gt_map_ft, smax = 3, iter = 10, from_ft = True ):
     return x.mask
 
 
+def make_union_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1,
+                       dilation_iters=None, kern_rad=3):
+    """Create a union mask from multiple ground-truth real-space volumes.
+
+    For each volume, generates a per-volume mask via ``make_mask_from_gt``,
+    thresholds at 0.5, then takes the logical OR of all per-volume masks.
+    The union is dilated and softened to produce the final mask.
+
+    Args:
+        gt_volumes_real: Either a list of 3-D arrays or a 2-D array of shape
+            ``(n_vols, n_voxels)`` (reshaped internally to 3-D).
+        volume_shape: Tuple giving the 3-D grid dimensions.
+        smax: Gaussian kernel radius for ``make_mask_from_gt``.
+        iter: Dilation iterations inside ``make_mask_from_gt``.
+        dilation_iters: Additional dilation iterations applied to the union
+            mask.  Defaults to ``ceil(6 * volume_shape[0] / 128)`` (pipeline
+            convention).
+        kern_rad: Kernel radius for ``soften_volume_mask``.
+
+    Returns:
+        Tuple ``(soft_mask, binary_mask)`` where *soft_mask* is a float array
+        in [0, 1] and *binary_mask* is the pre-softening boolean array.
+    """
+    if dilation_iters is None:
+        dilation_iters = int(np.ceil(6 * volume_shape[0] / 128))
+
+    # Normalise input to a list of 3-D arrays
+    if isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 2:
+        gt_volumes_real = [gt_volumes_real[i].reshape(volume_shape)
+                          for i in range(gt_volumes_real.shape[0])]
+    elif isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 3:
+        gt_volumes_real = [gt_volumes_real]
+
+    union_mask = np.zeros(volume_shape, dtype=bool)
+    for vol in gt_volumes_real:
+        vol_3d = np.asarray(vol).reshape(volume_shape)
+        per_vol_mask = make_mask_from_gt(vol_3d, smax=smax, iter=iter, from_ft=False)
+        union_mask |= (per_vol_mask > 0.5)
+
+    dilated = binary_dilation(union_mask, iterations=dilation_iters)
+    binary_mask = np.asarray(dilated, dtype=bool)
+    soft_mask = soften_volume_mask(binary_mask, kern_rad=kern_rad)
+
+    return np.asarray(soft_mask, dtype=np.float32), binary_mask
+
+
 def create_soft_edged_kernel_pxl(r1, shape):
     # Create soft-edged-kernel. r1 is the radius of kernel in pixels
     # This implementation is adapted from EMDA - https://gitlab.com/ccpem/emda

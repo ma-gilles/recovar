@@ -48,7 +48,7 @@ import numpy as np
 import pytest
 
 from conftest import gpu_subprocess_env
-from helpers.metrics_regression import compare_metric, metric_direction
+from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +95,7 @@ def _compare_against_baseline(
     current: Dict[str, float],
     baseline_path: Path,
     tol_frac: float,
+    title: str = "Pipeline With Indices",
 ) -> None:
     """Compare current metrics against the stored baseline.
 
@@ -107,26 +108,9 @@ def _compare_against_baseline(
             json.dump(current, f, indent=2, sort_keys=True)
         return  # nothing to compare on first run
     baseline = _load_json(baseline_path)
-    failures: List[str] = []
-    checked = 0
-    for key in sorted(set(current) & set(baseline)):
-        cur = current[key]
-        base = baseline[key]
-        if not (isinstance(cur, (int, float)) and isinstance(base, (int, float))):
-            continue
-        direction = metric_direction(key)
-        if direction == "ignore":
-            if any(tok in key for tok in ("recall", "precision", "f1")):
-                direction = "higher"
-            else:
-                continue
-        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac, metric_name=key)
-        checked += 1
-        if not ok:
-            failures.append(f"{key}: current={cur:.4f} baseline={base:.4f} ({msg})")
-
-    assert checked > 0, "no numeric metrics were compared; check baseline/current dicts"
-    assert not failures, "pipeline-with-ind metric regressions:\n" + "\n".join(failures)
+    checked, failures = log_comparison_table(current, baseline, tol_frac, title=title)
+    assert checked > 0, "no metrics compared"
+    assert not failures, "regressions:\n" + "\n".join(failures)
 
 
 def _dataset_exists(output_dir: Path, grid_size: int, is_tilt: bool = False) -> bool:
@@ -219,12 +203,14 @@ def _run_pipeline_with_ind(
     grid_size: int,
     k_rounds: int,
     ind_path: Path,
+    mask_path: Optional[str] = None,
 ) -> None:
     """Run pipeline_with_outliers on SPA data with a user-supplied --ind file."""
     mrcs = dataset_dir / f"particles.{grid_size}.mrcs"
     poses = dataset_dir / "poses.pkl"
     ctf = dataset_dir / "ctf.pkl"
 
+    mask_arg = mask_path if mask_path else "from_halfmaps"
     cmd = [
         sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
         str(mrcs),
@@ -233,7 +219,7 @@ def _run_pipeline_with_ind(
         "--ind", str(ind_path),
         "--correct-contrast",
         "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "--mask", mask_arg,
         "--lazy",
         "--zdim", "4",
         "--k-rounds", str(k_rounds),
@@ -249,12 +235,14 @@ def _run_pipeline_with_particle_ind(
     pipeline_out: Path,
     k_rounds: int,
     particle_ind_path: Path,
+    mask_path: Optional[str] = None,
 ) -> None:
     """Run pipeline_with_outliers on cryo-ET data with a --particle-ind file."""
     star = dataset_dir / "particles.star"
     poses = dataset_dir / "poses.pkl"
     ctf = dataset_dir / "ctf.pkl"
 
+    mask_arg = mask_path if mask_path else "from_halfmaps"
     cmd = [
         sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
         str(star),
@@ -265,7 +253,7 @@ def _run_pipeline_with_particle_ind(
         "--particle-ind", str(particle_ind_path),
         "--correct-contrast",
         "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "--mask", mask_arg,
         "--lazy",
         "--zdim", "4",
         "--k-rounds", str(k_rounds),
@@ -476,6 +464,19 @@ def test_pipeline_spa_with_ind_regression(tmp_path):
     with open(ind_path, "wb") as f:
         pickle.dump(ind, f)
 
+    # Compute GT union mask from synthetic volumes
+    from recovar.simulation import synthetic_dataset
+    from recovar.output import metrics as gt_metrics
+    from recovar import utils as recovar_utils
+
+    sim_info_path = dataset_dir / "simulation_info.pkl"
+    assert sim_info_path.exists(), f"simulation_info.pkl missing: {sim_info_path}"
+    gt_thing = synthetic_dataset.load_heterogeneous_reconstruction(str(sim_info_path))
+    volume_shape = (grid_size, grid_size, grid_size)
+    gt_union_soft_mask, _ = gt_metrics.make_union_gt_mask_from_hvd(gt_thing, volume_shape)
+    gt_mask_path = str(output_dir / "gt_union_mask.mrc")
+    recovar_utils.write_mrc(gt_mask_path, gt_union_soft_mask)
+
     # Run pipeline_with_outliers with the ind file (output outside dataset_dir
     # so reused datasets are not polluted).
     pipeline_out = output_dir / "pipeline_outliers_with_ind_output"
@@ -485,14 +486,13 @@ def test_pipeline_spa_with_ind_regression(tmp_path):
         grid_size=grid_size,
         k_rounds=k_rounds,
         ind_path=ind_path,
+        mask_path=gt_mask_path,
     )
 
     # Partition consistency: round 1 must partition exactly n_subset images
     _check_ind_partition_consistency(pipeline_out, n_subset=n_subset, k_rounds=k_rounds)
 
     # Compute outlier metrics relative to the subset
-    sim_info_path = dataset_dir / "simulation_info.pkl"
-    assert sim_info_path.exists(), f"simulation_info.pkl missing: {sim_info_path}"
     with open(sim_info_path, "rb") as f:
         sim_info = pickle.load(f)
 
@@ -507,6 +507,7 @@ def test_pipeline_spa_with_ind_regression(tmp_path):
         current=metrics,
         baseline_path=baseline_json,
         tol_frac=tol_frac,
+        title="SPA Pipeline With --ind",
     )
 
 
@@ -581,6 +582,17 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
     with open(sim_info_path, "rb") as f:
         sim_info = pickle.load(f)
 
+    # Compute GT union mask from synthetic volumes
+    from recovar.simulation import synthetic_dataset
+    from recovar.output import metrics as gt_metrics
+    from recovar import utils as recovar_utils
+
+    gt_thing = synthetic_dataset.load_heterogeneous_reconstruction(str(sim_info_path))
+    volume_shape = (grid_size, grid_size, grid_size)
+    gt_union_soft_mask, _ = gt_metrics.make_union_gt_mask_from_hvd(gt_thing, volume_shape)
+    gt_mask_path = str(output_dir / "gt_union_mask_et.mrc")
+    recovar_utils.write_mrc(gt_mask_path, gt_union_soft_mask)
+
     # Determine number of particles from sim_info
     tilt_series_assignment = np.asarray(sim_info.get("tilt_series_assignment", []))
     if tilt_series_assignment.size == 0:
@@ -602,6 +614,7 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
         pipeline_out=pipeline_out,
         k_rounds=k_rounds,
         particle_ind_path=particle_ind_path,
+        mask_path=gt_mask_path,
     )
 
     # Partition consistency at image level is harder to assert for cryo-ET with
@@ -639,4 +652,5 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
         current=all_metrics,
         baseline_path=baseline_json,
         tol_frac=tol_frac,
+        title="Cryo-ET Pipeline With --particle-ind",
     )

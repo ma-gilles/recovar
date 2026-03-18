@@ -5,8 +5,8 @@ Render projection images from a sequence of 3D volumes.
 By default it expects files like:
   <volume_prefix>0000.mrc, <volume_prefix>0001.mrc, ...
 
-It can also auto-generate compact-support test volumes using
-recovar.commands.run_test_all_metrics.generate_compact_support_test_volumes.
+It can also auto-generate trajectory test volumes using
+recovar.simulation.trajectory_generation.generate_trajectory_volumes.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from recovar import utils
-from recovar.commands.run_test_all_metrics import generate_compact_support_test_volumes
+from recovar.simulation.trajectory_generation import generate_trajectory_volumes
 
 
 def discover_n_volumes(prefix: str, max_try: int = 2000) -> int:
@@ -57,7 +57,7 @@ def main() -> None:
         args.generate_if_missing = True
 
     if args.generate_if_missing and not Path(f"{volume_prefix}0000.mrc").exists():
-        generate_compact_support_test_volumes(
+        generate_trajectory_volumes(
             output_dir=str(Path(volume_prefix).parent),
             grid_size=args.generate_grid_size,
             n_volumes=args.generate_n_volumes,

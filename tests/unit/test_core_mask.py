@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+from scipy.ndimage import binary_dilation
 
 pytest.importorskip("jax")
 import jax.numpy as jnp
@@ -195,6 +196,92 @@ class TestSoftMaskOutsideMap:
 # ---------------------------------------------------------------------------
 # MaskedMaps
 # ---------------------------------------------------------------------------
+
+class TestMakeUnionGtMask:
+    """Tests for make_union_gt_mask."""
+
+    def test_single_volume_matches_per_volume(self):
+        """Union mask of a single volume should match the per-volume mask."""
+        rng = np.random.RandomState(42)
+        vol = rng.randn(16, 16, 16).astype(np.float32)
+        vol[4:12, 4:12, 4:12] += 5.0  # strong signal region
+
+        per_vol = mask.make_mask_from_gt(vol, smax=3, iter=1, from_ft=False)
+        per_vol_binary = per_vol > 0.5
+
+        soft_union, binary_union = mask.make_union_gt_mask(
+            [vol], volume_shape=(16, 16, 16), smax=3, iter=1, dilation_iters=1, kern_rad=3
+        )
+
+        # The union of a single volume should match
+        per_vol_dilated = binary_dilation(per_vol_binary, iterations=1)
+        np.testing.assert_array_equal(binary_union, per_vol_dilated)
+
+    def test_union_of_two_blobs_is_superset(self):
+        """Union of two non-overlapping blobs covers both regions."""
+        from scipy.ndimage import gaussian_filter
+        vol_shape = (32, 32, 32)
+
+        # Create Gaussian blobs (realistic signal profile, passes threshold_map)
+        vol1 = np.zeros(vol_shape, dtype=np.float32)
+        vol1[8, 8, 8] = 100.0
+        vol1 = gaussian_filter(vol1, sigma=2.0)
+
+        vol2 = np.zeros(vol_shape, dtype=np.float32)
+        vol2[24, 24, 24] = 100.0
+        vol2 = gaussian_filter(vol2, sigma=2.0)
+
+        soft_union, binary_union = mask.make_union_gt_mask(
+            [vol1, vol2], volume_shape=vol_shape, smax=3, iter=1,
+            dilation_iters=1, kern_rad=3,
+        )
+
+        # Each blob's core should be inside the union
+        assert binary_union[8, 8, 8], "Blob 1 core must be in union"
+        assert binary_union[24, 24, 24], "Blob 2 core must be in union"
+
+        # Union should be larger than either individual mask
+        _, mask1_only = mask.make_union_gt_mask(
+            [vol1], vol_shape, smax=3, iter=1, dilation_iters=1, kern_rad=3)
+        _, mask2_only = mask.make_union_gt_mask(
+            [vol2], vol_shape, smax=3, iter=1, dilation_iters=1, kern_rad=3)
+        assert binary_union.sum() >= mask1_only.sum()
+        assert binary_union.sum() >= mask2_only.sum()
+
+    def test_accepts_flattened_input(self):
+        """Should accept (n_vols, n_voxels) 2-D input."""
+        vol_shape = (8, 8, 8)
+        n_voxels = 8 * 8 * 8
+        rng = np.random.RandomState(0)
+        vols_flat = rng.randn(3, n_voxels).astype(np.float32)
+        vols_flat[:, :n_voxels // 2] += 5.0  # signal in first half
+
+        soft, binary = mask.make_union_gt_mask(
+            vols_flat, volume_shape=vol_shape, smax=3, iter=1,
+        )
+        assert soft.shape == vol_shape
+        assert binary.shape == vol_shape
+        assert soft.dtype == np.float32
+
+    def test_soft_mask_range(self):
+        """Soft mask values should be in [0, 1]."""
+        rng = np.random.RandomState(7)
+        vol = rng.randn(12, 12, 12).astype(np.float32)
+        vol[3:9, 3:9, 3:9] += 5.0
+        soft, _ = mask.make_union_gt_mask([vol], (12, 12, 12))
+        assert soft.min() >= 0.0
+        assert soft.max() <= 1.0 + 1e-5
+
+    def test_default_dilation_iters(self):
+        """Default dilation_iters should be ceil(6 * N / 128)."""
+        vol_shape = (128, 128, 128)
+        expected = int(np.ceil(6 * 128 / 128))  # = 6
+        # Just verify the function runs with defaults
+        vol = np.zeros(vol_shape, dtype=np.float32)
+        vol[50:78, 50:78, 50:78] = 10.0
+        soft, binary = mask.make_union_gt_mask([vol], vol_shape)
+        assert soft.shape == vol_shape
+
 
 class TestMaskedMaps:
     def test_init_defaults(self):

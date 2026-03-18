@@ -155,3 +155,4 @@ pytest_*.out
 
 # SLURM log output directory
 logs/
+.test_results/

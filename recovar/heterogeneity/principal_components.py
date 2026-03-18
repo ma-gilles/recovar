@@ -577,8 +577,7 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     smaller_vol_shape = tuple(3*[smaller_size])
 
     smaller_vol_size = np.prod(smaller_vol_shape)
-    rng = np.random.default_rng(0)
-    test_mat = rng.standard_normal((smaller_vol_size, test_size)).astype(np.float32)
+    test_mat = np.random.randn(smaller_vol_size, test_size).real.astype(np.float32)
 
     st_time = time.time()
     if use_v2_fn:
@@ -647,8 +646,7 @@ def test_different_embeddings(cryos, volume_mask, mean_estimate, basis, eigenval
         residuals[zdim_idx] = noise.get_average_residual_square_v3(cryos[0], volume_mask, mean_estimate, basis[:,:zdim].T, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp')
 
         basis_flipped = basis[:,:zdim].copy()
-        _rng_flip = np.random.default_rng(0)
-        basis_flipped[:,zdim-1] = basis[:,zdim-1] * (_rng_flip.integers(0,2, size = basis[:,zdim-1].shape)*2 - 1)
+        basis_flipped[:,zdim-1] = basis[:,zdim-1] * (np.random.randint(0,2, size = basis[:,zdim-1].shape)*2 - 1)
 
         if zdim > 0:
             basis_coordinates, image_latent_covariances, estimated_contrasts = embedding.get_coords_in_basis_and_contrast_3(cryo, mean_estimate, basis_flipped, eigenvalues[:zdim], volume_mask, noise_variance, contrast_grid, batch_size, disc_type, compute_covariances = False )
@@ -753,8 +751,7 @@ def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, z
     all_lhs = {}
 
 
-    _rng_img = np.random.default_rng(0)
-    images_chosen_index = _rng_img.integers(0, zs[zdims[0]].shape[0], 30)
+    images_chosen_index = np.random.randint(0, zs[zdims[0]].shape[0], 30)
     first = True
     for zdim_idx, zdim in enumerate(zdims):
         zs_this = zs[zdim]#[:cryo.n_images]
