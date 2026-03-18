@@ -113,14 +113,17 @@ def log_comparison_table(current, baseline, tol_frac, title="Metric Comparison",
                 direction = "higher"
             elif not skip_unknown:
                 direction = "higher"
-            else:
-                continue
-
-        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac, metric_name=key)
-        checked += 1
 
         scale = max(abs(base), 1e-12)
         delta_pct = (cur - base) / scale * 100
+
+        if direction == "ignore":
+            # Print for visibility but don't check
+            lines.append(f"  {key:<45s} {cur:10.4f}  {base:10.4f}  {delta_pct:+7.1f}%  (info)")
+            continue
+
+        ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac, metric_name=key)
+        checked += 1
         status = "OK" if ok else "FAIL"
         if not ok:
             failures.append(f"{key}: current={cur:.4f} baseline={base:.4f} ({msg})")

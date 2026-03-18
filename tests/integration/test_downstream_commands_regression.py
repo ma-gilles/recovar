@@ -95,7 +95,6 @@ def _check_regression(name: str, current: dict, tol_frac: float = _TOL_FRAC):
 
     checked, failures = log_comparison_table(
         current, baseline, tol_frac, title=f"Downstream: {name}",
-        skip_unknown=False,
     )
     if checked > 0:
         assert not failures, "regressions:\n" + "\n".join(failures)

@@ -73,7 +73,7 @@ if [[ "$MODE" == "long-test" ]]; then
     G_NAMES+=(outliers-long)
     G_MEM+=(500GB)
     G_TIME+=(06:00:00)
-    G_ARGS+=("tests/integration/test_run_test_outliers_pipeline_regression.py --long-test -v")
+    G_ARGS+=("tests/integration/test_run_test_outliers_pipeline_regression.py --long-test --run-tiny-metrics -v")
 
     # PDB trajectory regression
     G_NAMES+=(pdb-traj)

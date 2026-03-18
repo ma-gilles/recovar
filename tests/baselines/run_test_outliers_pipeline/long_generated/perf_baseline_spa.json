@@ -1,0 +1,22 @@
+{
+  "hardware": {
+    "gpu_name": "NVIDIA A100-SXM4-80GB",
+    "cpu": "x86_64",
+    "hostname": "della-l09g3"
+  },
+  "code_version": "43b9e01",
+  "package_versions": {
+    "jax": "0.9.0.1",
+    "jaxlib": "0.9.0.1",
+    "numpy": "2.2.6",
+    "scipy": "1.16.2",
+    "sklearn": "1.7.2"
+  },
+  "stages": {
+    "pipeline_with_outliers": {
+      "wall_seconds": 1076.34,
+      "peak_cpu_memory_gb": 1.425,
+      "peak_gpu_memory_gb": 0.117
+    }
+  }
+}
