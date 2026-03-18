@@ -37,6 +37,7 @@ import numpy as np
 import pytest
 
 from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
+from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression
 
 pytestmark = [
     pytest.mark.integration,
@@ -218,6 +219,8 @@ def test_compute_mean(cryos, gt_data, intermediates, baseline_scores, tol_frac):
     from recovar.reconstruction import homogeneous, noise
     from recovar.output import plot_utils
 
+    snap_before = perf_snapshot()
+
     batch_size = 512
     volume_shape = cryos.volume_shape
 
@@ -237,6 +240,11 @@ def test_compute_mean(cryos, gt_data, intermediates, baseline_scores, tol_frac):
     results = {"mean_fsc": float(mean_fsc_score)}
     _assert_metrics(results, baseline_scores, tol_frac)
 
+    perf_stages = {"compute_mean": stage_perf(snap_before, perf_snapshot())}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "perf_baseline.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_compute_mean")
+
 
 # ---------------------------------------------------------------------------
 # Test 2: estimate_noise
@@ -248,6 +256,8 @@ def test_estimate_noise(cryos, gt_data, intermediates, baseline_scores, tol_frac
     Uses ~/recovar's mean and mask as standardized inputs to decouple
     from mean estimation quality.
     """
+    snap_before = perf_snapshot()
+
     from recovar.reconstruction import noise
 
     batch_size = 512
@@ -285,6 +295,11 @@ def test_estimate_noise(cryos, gt_data, intermediates, baseline_scores, tol_frac
     }
     _assert_metrics(results, baseline_scores, tol_frac)
 
+    perf_stages = {"estimate_noise": stage_perf(snap_before, perf_snapshot())}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "perf_baseline.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_estimate_noise")
+
 
 # ---------------------------------------------------------------------------
 # Test 3: compute_variance
@@ -304,6 +319,8 @@ def test_compute_variance(cryos, gt_data, intermediates, baseline_scores, tol_fr
     NOTE: compute_variance was refactored (safe_div, half-image processing),
     so baseline scores reflect the current code, not ~/recovar.
     """
+    snap_before = perf_snapshot()
+
     from recovar.heterogeneity import covariance_estimation
     from recovar.reconstruction import noise
     from recovar.output import plot_utils
@@ -338,6 +355,11 @@ def test_compute_variance(cryos, gt_data, intermediates, baseline_scores, tol_fr
     results = {"variance_fourier_fsc": float(fourier_var_fsc)}
     _assert_metrics(results, baseline_scores, tol_frac)
 
+    perf_stages = {"compute_variance": stage_perf(snap_before, perf_snapshot())}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "perf_baseline.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_compute_variance")
+
 
 # ---------------------------------------------------------------------------
 # Test 4: covariance_columns
@@ -349,6 +371,8 @@ def test_covariance_columns(cryos, gt_data, intermediates, baseline_scores, tol_
     Uses ~/recovar's mean, noise, and mask. Uses the same picked_frequencies
     from the baseline.
     """
+    snap_before = perf_snapshot()
+
     from recovar.heterogeneity import covariance_estimation, principal_components
     from recovar.reconstruction import noise
     from recovar.output import plot_utils
@@ -404,6 +428,11 @@ def test_covariance_columns(cryos, gt_data, intermediates, baseline_scores, tol_
         }
         _assert_metrics(results, baseline_scores, tol_frac)
 
+    perf_stages = {"covariance_columns": stage_perf(snap_before, perf_snapshot())}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "perf_baseline.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_covariance_columns")
+
 
 # ---------------------------------------------------------------------------
 # Test 5: projected_covariance
@@ -423,6 +452,8 @@ def test_projected_covariance(cryos, gt_data, intermediates, baseline_scores, to
     cancellation).  The baseline Frobenius error of ~0.27 reflects this
     intentional divergence from ~/recovar.
     """
+    snap_before = perf_snapshot()
+
     from recovar.heterogeneity import covariance_estimation
     from recovar.reconstruction import noise
 
@@ -476,6 +507,11 @@ def test_projected_covariance(cryos, gt_data, intermediates, baseline_scores, to
     else:
         pytest.skip("No baseline projected covariance available")
 
+    perf_stages = {"projected_covariance": stage_perf(snap_before, perf_snapshot())}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "perf_baseline.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_projected_covariance")
+
 
 # ---------------------------------------------------------------------------
 # Test 6: principal_components (full: columns → SVD → projected cov)
@@ -486,6 +522,8 @@ def test_principal_components(cryos, gt_data, intermediates, baseline_scores, to
 
     Uses ~/recovar's mean, noise, mask, and variance as standardized inputs.
     """
+    snap_before = perf_snapshot()
+
     from recovar.heterogeneity import principal_components, covariance_estimation
     from recovar.reconstruction import noise
     from recovar.output import metrics
@@ -554,6 +592,11 @@ def test_principal_components(cryos, gt_data, intermediates, baseline_scores, to
     assert results, "No PCS metrics computed"
     _assert_metrics(results, baseline_scores, tol_frac)
 
+    perf_stages = {"principal_components": stage_perf(snap_before, perf_snapshot())}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "perf_baseline.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_principal_components")
+
 
 # ---------------------------------------------------------------------------
 # Test 7: embedding with contrast
@@ -565,6 +608,8 @@ def test_embedding_with_contrast(cryos, gt_data, intermediates, baseline_scores,
     Uses ~/recovar's mean, eigenvectors, and eigenvalues as standardized
     inputs — isolates embedding from PC estimation.
     """
+    snap_before = perf_snapshot()
+
     from recovar.heterogeneity import embedding
     from recovar.reconstruction import noise
     from recovar.output import metrics
@@ -597,6 +642,11 @@ def test_embedding_with_contrast(cryos, gt_data, intermediates, baseline_scores,
 
     _assert_metrics(results, baseline_scores, tol_frac)
 
+    perf_stages = {"embedding_with_contrast": stage_perf(snap_before, perf_snapshot())}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "perf_baseline.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_embedding_with_contrast")
+
 
 # ---------------------------------------------------------------------------
 # Test 8: embedding without contrast (no regularization)
@@ -607,6 +657,8 @@ def test_embedding_without_contrast(cryos, gt_data, intermediates, baseline_scor
 
     Same as test 7 but s → inf (unregularized least-squares).
     """
+    snap_before = perf_snapshot()
+
     from recovar.heterogeneity import embedding
     from recovar.reconstruction import noise
     from recovar.output import metrics
@@ -638,3 +690,8 @@ def test_embedding_without_contrast(cryos, gt_data, intermediates, baseline_scor
         results[f"contrasts_{zdim}_noreg"] = contrast_mae
 
     _assert_metrics(results, baseline_scores, tol_frac)
+
+    perf_stages = {"embedding_without_contrast": stage_perf(snap_before, perf_snapshot())}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated" / "pdb_5nrl" / "perf_baseline.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_embedding_without_contrast")

@@ -38,6 +38,7 @@ import numpy as np
 import pytest
 
 from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
+from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression
 
 pytestmark = [
     pytest.mark.integration,
@@ -136,7 +137,15 @@ def test_pdb_trajectory_regression(tmp_path):
         os.environ.get("PDB_REGRESSION_REUSE_DATASET", "0") == "1"
         and (output_dir / "test_dataset" / "simulation_info.pkl").exists()
     )
+
+    snap_before = perf_snapshot()
     current = _run_pdb_metrics(output_dir, run_args, reuse_dataset=reuse)
+    snap_after = perf_snapshot()
+
+    perf_stages = {"pdb_trajectory": stage_perf(snap_before, snap_after)}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics" / "pdb_5nrl_old_pipeline" / "perf_baseline.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_pdb_trajectory_regression")
 
     assert baseline_json.exists(), f"PDB baseline not found: {baseline_json}"
     baseline = _load_json(baseline_json)
