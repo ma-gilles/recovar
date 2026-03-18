@@ -7,6 +7,7 @@ import recovar.heterogeneity.principal_components as pc
 import recovar.core as core
 from recovar.data_io import dataset
 from recovar.reconstruction.homogeneous import MeanEstimate
+from recovar.utils.helpers import AlgorithmOptions
 from helpers.tiny_synthetic import make_tiny_simulation, make_tiny_cryo_dataset_with_images
 
 
@@ -194,7 +195,7 @@ def test_estimate_principal_components_high_snr_from_var_est_requires_variance()
     )()
     cryos = mock_cryo
     means = _make_means(8)
-    options = {"keep_intermediate": True, "contrast": "none", "ignore_zero_frequency": False}
+    options = AlgorithmOptions(volume_mask_option="none", zs_dim_to_test=[4], contrast="none", ignore_zero_frequency=False, keep_intermediate=True)
     cov_options = {
         "column_sampling_scheme": "high_snr_from_var_est",
         "sampling_n_cols": 2,
@@ -237,7 +238,7 @@ def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
     )()
     cryos = mock_cryo
     means = _make_means(8)
-    options = {"keep_intermediate": False, "contrast": "none", "ignore_zero_frequency": False}
+    options = AlgorithmOptions(volume_mask_option="none", zs_dim_to_test=[4], contrast="none", ignore_zero_frequency=False, keep_intermediate=False)
     cov_options = {
         "column_sampling_scheme": "low_freqs",
         "column_radius": 1,
@@ -309,7 +310,7 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
     cryos = cryo
 
     means = _make_means(cryo.volume_size)
-    options = {"keep_intermediate": False, "contrast": "none", "ignore_zero_frequency": False}
+    options = AlgorithmOptions(volume_mask_option="none", zs_dim_to_test=[4], contrast="none", ignore_zero_frequency=False, keep_intermediate=False)
     cov_options = {
         "column_sampling_scheme": "low_freqs",
         "column_radius": 1,
