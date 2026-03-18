@@ -1,8 +1,0 @@
-{
-  "captured_at_utc": "2026-02-20T13:25:46.468992+00:00",
-  "git_commit": "1e44bfb90cb7272e54c9e0033fb4de8d85fe96bc",
-  "notes": "Captured from clean comparison run on 2026-02-19; source dataset currently low-resolution.",
-  "run_args": "--grid-size 128 --n-images 50000 --noise-level 1.0 --contrast-std 0.1",
-  "source_scores_json": "/scratch/gpfs/AMITS/mg6942/cooperative/models/metrics_compare_20260219_204328/clean/test_dataset/metrics_plot/all_scores.json",
-  "volumes_prefix": "/scratch/gpfs/AMITS/mg6942/cooperative/models/renamed/vol"
-}

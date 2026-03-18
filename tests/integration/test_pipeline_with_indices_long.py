@@ -49,6 +49,7 @@ import pytest
 
 from conftest import gpu_subprocess_env
 from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
+from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression
 
 logger = logging.getLogger(__name__)
 
@@ -443,6 +444,8 @@ def test_pipeline_spa_with_ind_regression(tmp_path):
 
     output_dir = _resolve_output_dir(tmp_path, "pipeline_spa_with_ind")
 
+    snap_before = perf_snapshot()
+
     # Reuse saved dataset from a previous run if available.
     if _dataset_exists(output_dir, grid_size, is_tilt=False):
         logger.info("Reusing existing SPA dataset at %s", output_dir / "test_dataset")
@@ -510,6 +513,11 @@ def test_pipeline_spa_with_ind_regression(tmp_path):
         title="SPA Pipeline With --ind",
     )
 
+    perf_stages = {"pipeline_spa_with_ind": stage_perf(snap_before, perf_snapshot())}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "pipeline_with_indices" / "perf_baseline_spa.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_pipeline_spa_with_ind")
+
 
 # ---------------------------------------------------------------------------
 # Test 2: cryo-ET pipeline with user-supplied --particle-ind subset
@@ -561,6 +569,8 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
     tol_frac = float(os.environ.get("PIPELINE_IND_TOL_FRAC", "0.20"))
 
     output_dir = _resolve_output_dir(tmp_path, "pipeline_cryo_et_with_particle_ind")
+
+    snap_before = perf_snapshot()
 
     # Reuse saved dataset from a previous run if available.
     if _dataset_exists(output_dir, grid_size, is_tilt=True):
@@ -654,3 +664,8 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
         tol_frac=tol_frac,
         title="Cryo-ET Pipeline With --particle-ind",
     )
+
+    perf_stages = {"pipeline_cryo_et_with_particle_ind": stage_perf(snap_before, perf_snapshot())}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "pipeline_with_indices" / "perf_baseline_cryo_et.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_pipeline_cryo_et_with_particle_ind")

@@ -27,6 +27,7 @@ import numpy as np
 import pytest
 
 from helpers.metrics_regression import log_comparison_table
+from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression
 
 pytestmark = [pytest.mark.integration, pytest.mark.gpu, pytest.mark.slow]
 
@@ -224,6 +225,8 @@ def test_analyze_kmeans_regression(analyze_output):
 
 def test_compute_state_volume_quality(pipeline_output, analyze_output, shared_dir):
     """Check that compute_state produces volumes with good local resolution."""
+    snap_before = perf_snapshot()
+
     centers_txt = analyze_output / "kmeans" / "centers.txt"
     centers = np.loadtxt(str(centers_txt))
     pts_path = shared_dir / "regression_latent_points.txt"
@@ -260,9 +263,16 @@ def test_compute_state_volume_quality(pipeline_output, analyze_output, shared_di
 
     _check_regression("compute_state_volumes", metrics)
 
+    perf_stages = {"compute_state": stage_perf(snap_before, perf_snapshot())}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "downstream_commands" / "perf_baseline_compute_state.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_compute_state_volume_quality")
+
 
 def test_compute_trajectory_regression(pipeline_output, analyze_output, shared_dir):
     """Check that trajectory volumes vary along the path."""
+    snap_before = perf_snapshot()
+
     centers_txt = analyze_output / "kmeans" / "centers.txt"
 
     traj_out = shared_dir / "regression_trajectory"
@@ -294,6 +304,11 @@ def test_compute_trajectory_regression(pipeline_output, analyze_output, shared_d
     consecutive_diffs = [float(np.linalg.norm(vols[i] - vols[i + 1])) for i in range(len(vols) - 1)]
     assert any(d > 0 for d in consecutive_diffs), "All consecutive trajectory volumes are identical"
 
+    perf_stages = {"compute_trajectory": stage_perf(snap_before, perf_snapshot())}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "downstream_commands" / "perf_baseline_compute_trajectory.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_compute_trajectory_regression")
+
 
 def test_density_estimation_regression(density_output):
     """Check that estimated density has reasonable structure."""
@@ -311,6 +326,8 @@ def test_density_estimation_regression(density_output):
 
 def test_stable_states_regression(density_output, shared_dir):
     """Check that stable states are found."""
+    snap_before = perf_snapshot()
+
     knee_pkl = density_output / "deconv_density_knee.pkl"
 
     stable_out = shared_dir / "regression_stable_states"
@@ -331,9 +348,16 @@ def test_stable_states_regression(density_output, shared_dir):
     assert coords.shape[0] >= 1, "No stable states found"
     assert np.all(np.isfinite(coords)), "Stable state coordinates contain NaN/Inf"
 
+    perf_stages = {"stable_states": stage_perf(snap_before, perf_snapshot())}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "downstream_commands" / "perf_baseline_stable_states.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_stable_states_regression")
+
 
 def test_extract_kmeans_subset_regression(analyze_output, shared_dir):
     """Check that k-means subset extraction works."""
+    snap_before = perf_snapshot()
+
     from recovar import utils
 
     kmeans_pkl = analyze_output / "kmeans_result.pkl"
@@ -354,3 +378,8 @@ def test_extract_kmeans_subset_regression(analyze_output, shared_dir):
     assert len(indices) > 0, "No images selected"
     frac = len(indices) / n_valid if n_valid > 0 else 0.0
     assert 0.0 < frac < 1.0, f"Selection fraction {frac} should be between 0 and 1"
+
+    perf_stages = {"extract_kmeans_subset": stage_perf(snap_before, perf_snapshot())}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "downstream_commands" / "perf_baseline_extract_kmeans_subset.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_extract_kmeans_subset_regression")

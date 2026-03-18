@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from helpers.metrics_regression import compare_metric, metric_direction, metric_tolerance, log_comparison_table
+from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io, pytest.mark.long_test]
@@ -156,7 +157,18 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
 
     output_dir = _resolve_output_dir(tmp_path, "current")
     reuse = (output_dir / "test_dataset" / "simulation_info.pkl").exists()
+
+    snap_before = perf_snapshot()
     current = _run_metrics(output_dir, run_args, volumes_prefix=volumes_prefix, reuse_dataset=reuse)
+    snap_after = perf_snapshot()
+
+    # Build perf record from all_scores["perf"] if available, else from wall-clock timing
+    perf_stages = current.get("perf", {})
+    if not perf_stages:
+        perf_stages = {"run_test_all_metrics_spa": stage_perf(snap_before, snap_after)}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics" / "long_generated" / "perf_baseline_spa.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_run_test_all_metrics_spa")
 
     assert baseline_json.exists(), f"baseline not found: {baseline_json}"
     baseline = _load_json(baseline_json)
@@ -196,7 +208,10 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
 
     output_dir = _resolve_output_dir(tmp_path, "current_cryo_et")
     reuse = (output_dir / "test_dataset" / "simulation_info.pkl").exists()
+
+    snap_before = perf_snapshot()
     current = _run_metrics(output_dir, run_args, volumes_prefix=volumes_prefix, reuse_dataset=reuse)
+    snap_after = perf_snapshot()
 
     particles_star = output_dir / "test_dataset" / "particles.star"
     assert particles_star.exists(), f"expected cryo-ET particles.star at {particles_star}"
@@ -208,3 +223,11 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
     checked, failures = log_comparison_table(current, baseline, tol_frac, title="Cryo-ET Metrics Regression")
     assert checked > 0, "no metrics compared"
     assert not failures, "regressions:\n" + "\n".join(failures)
+
+    # Build perf record from all_scores["perf"] if available, else from wall-clock timing
+    perf_stages = current.get("perf", {})
+    if not perf_stages:
+        perf_stages = {"run_test_all_metrics_cryo_et": stage_perf(snap_before, snap_after)}
+    perf_record = build_perf_record(perf_stages)
+    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics" / "long_generated" / "perf_baseline_cryo_et.json")
+    check_perf_regression(perf_record, perf_baseline_path, "test_run_test_all_metrics_cryo_et")
