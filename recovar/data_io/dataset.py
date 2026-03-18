@@ -235,6 +235,8 @@ class CryoEMDataset:
         'halfset_indices',
         # Subset view (index into original image_stack)
         '_subset_indices',
+        # Loader paths (for reloading independent half-datasets)
+        'particles_file', 'poses_file', 'ctf_file', 'datadir',
     )
 
     def __init__(
@@ -299,6 +301,10 @@ class CryoEMDataset:
         self.noise = None
         self.halfset_indices = None
         self._subset_indices = None
+        self.particles_file = None
+        self.poses_file = None
+        self.ctf_file = None
+        self.datadir = None
 
     # --- Metadata access (public API) ---
 
