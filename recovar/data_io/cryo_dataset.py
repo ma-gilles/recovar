@@ -171,9 +171,21 @@ class ParticleImageDataset:
         images = pad.padded_dft(images * self.data_multiplier, self.D, self.padding)
         return images.astype(self.dtype, copy=False)
 
+    def apply_preprocessing_half(self, images: np.ndarray, use_mask: bool = False) -> np.ndarray:
+        """Like apply_preprocessing but uses rfft2 → half-spectrum directly."""
+        if use_mask:
+            images = images * self.image_mask
+        import recovar.core.padding as pad
+        images = pad.padded_rfft(images * self.data_multiplier, self.D, self.padding)
+        return images.astype(self.dtype, copy=False)
+
     def process_images(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:
         """Compatibility alias for apply_preprocessing."""
         return self.apply_preprocessing(images, use_mask=apply_image_mask)
+
+    def process_images_half(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:
+        """Like process_images but produces half-spectrum (rfft2) output."""
+        return self.apply_preprocessing_half(images, use_mask=apply_image_mask)
 
     def create_dataloader(self, batch_size: int, num_workers: int = 0, **kwargs):
         return JAXDataLoader(self, batch_size=batch_size, shuffle=False,

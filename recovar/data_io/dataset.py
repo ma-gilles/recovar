@@ -382,8 +382,12 @@ class CryoEMDataset:
     # --- Delegating properties (avoid leaking image_stack internals) ---
 
     def process_images(self, images, apply_image_mask=False):
-        """Apply windowing + DFT preprocessing to raw images."""
+        """Apply windowing + full DFT preprocessing to raw images."""
         return self.image_stack.process_images(images, apply_image_mask=apply_image_mask)
+
+    def process_images_half(self, images, apply_image_mask=False):
+        """Apply windowing + rfft2 preprocessing → half-spectrum output."""
+        return self.image_stack.process_images_half(images, apply_image_mask=apply_image_mask)
 
     @property
     def image_mask(self):

@@ -289,14 +289,15 @@ class DataIterator:
         do_process = self.apply_process_images
         noise_by_particle = self.noise_by_particle
         do_half = self.half_images
-        if do_half:
-            import recovar.core.fourier_transform_utils as ftu
-            image_shape = tuple(self.dataset.image_shape)
         for batch, particles_ind, indices in gen:
-            if do_process:
+            if do_process and do_half:
+                # Fused path: pad + rfft2 directly → half-spectrum output.
+                batch = self.dataset.process_images_half(batch, apply_image_mask=False)
+            elif do_process:
                 batch = self.dataset.process_images(batch, apply_image_mask=False)
-            if do_half:
-                batch = ftu.full_image_to_half_image(batch, image_shape)
+            elif do_half:
+                import recovar.core.fourier_transform_utils as ftu
+                batch = ftu.full_image_to_half_image(batch, tuple(self.dataset.image_shape))
             # Noise indexing: particle-grouped generators use particles_ind
             # for noise lookup (covariance path), while image generators use
             # flat indices (mean reconstruction path).
