@@ -260,10 +260,21 @@ def check_perf_regression(current: dict, baseline_path: str, test_name: str = ""
         logger.info("No perf baseline at %s — skipping perf check", baseline_path)
         return
 
+    # Always print current perf for visibility
+    cur_stages = current.get("stages", {})
+    hw = current.get("hardware", {}).get("gpu_name", "?")
+    lines = [f"\n  Perf: {test_name} ({hw})"]
+    for k, v in cur_stages.items():
+        if isinstance(v, dict):
+            lines.append(f"    {k:30s} wall={v.get('wall_seconds',0):7.0f}s  "
+                         f"gpu={v.get('peak_gpu_memory_gb',0):5.1f}GB  "
+                         f"cpu={v.get('peak_cpu_memory_gb',0):5.1f}GB")
+    print("\n".join(lines))
+
     warns = compare_perf(current, baseline)
     if warns:
-        msg = f"Performance regressions in {test_name}:\n" + "\n".join(f"  - {w}" for w in warns)
+        msg = f"PERF REGRESSION in {test_name}:\n" + "\n".join(f"  - {w}" for w in warns)
+        print(f"\n  *** {msg}")
         warnings.warn(msg, stacklevel=2)
-        logger.warning(msg)
     else:
-        logger.info("Perf check passed for %s", test_name)
+        print(f"  Perf OK (within {WALL_TIME_TOL*100:.0f}% of baseline)")
