@@ -103,6 +103,11 @@ class ImageSource:
     info: ImageSourceInfo
 
     @property
+    def already_prefetches(self) -> bool:
+        """Whether batch iteration already performs background prefetching."""
+        return False
+
+    @property
     def index_layout(self) -> DatasetIndexLayout:
         raise NotImplementedError
 
@@ -214,6 +219,10 @@ class BackendImageSource(ImageSource):
     @property
     def index_layout(self) -> DatasetIndexLayout:
         return self._index_layout
+
+    @property
+    def already_prefetches(self) -> bool:
+        return True
 
     @property
     def n_images(self) -> int:
@@ -336,6 +345,10 @@ class SubsetImageSource(ImageSource):
     @property
     def index_layout(self) -> DatasetIndexLayout:
         return self._index_layout
+
+    @property
+    def already_prefetches(self) -> bool:
+        return self.parent.already_prefetches
 
     @property
     def n_images(self) -> int:

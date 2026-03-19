@@ -701,6 +701,109 @@ class _FakeImageStack:
         return np.asarray(image)
 
 
+def test_iter_batches_skips_outer_prefetch_when_image_source_already_prefetches(monkeypatch):
+    monkeypatch.setattr(dataset, "_prefetch_iter", lambda iterable: iter([("wrapped",)]))
+
+    class _MinimalImageSource(dataset.ImageSource):
+        def __init__(self, *, already_prefetches):
+            self.info = dataset.ImageSourceInfo()
+            self._already_prefetches = already_prefetches
+            self._index_layout = DatasetIndexLayout.from_image_indices(
+                np.array([0, 1], dtype=np.int32)
+            )
+            self._mult = 1.0
+            self._mask = np.ones((4, 4), dtype=np.float32)
+
+        @property
+        def already_prefetches(self):
+            return self._already_prefetches
+
+        @property
+        def index_layout(self):
+            return self._index_layout
+
+        @property
+        def n_images(self):
+            return 2
+
+        @property
+        def image_shape(self):
+            return (4, 4)
+
+        @property
+        def image_size(self):
+            return 16
+
+        @property
+        def grid_size(self):
+            return 4
+
+        @property
+        def padding(self):
+            return 0
+
+        @property
+        def unpadded_D(self):
+            return 4
+
+        @property
+        def mask(self):
+            return self._mask
+
+        @property
+        def mult(self):
+            return self._mult
+
+        @mult.setter
+        def mult(self, value):
+            self._mult = value
+
+        def __getitem__(self, index):
+            _ = index
+            raise NotImplementedError
+
+        def process_images(self, images, apply_image_mask=False):
+            _ = apply_image_mask
+            return np.asarray(images)
+
+        def iter_batches(self, batch_size, *, batch_mode, subset_indices=None, num_workers=0, **kwargs):
+            _ = (batch_size, batch_mode, subset_indices, num_workers, kwargs)
+            yield (
+                np.ones((1, 16), dtype=np.float32),
+                np.array([0], dtype=np.int32),
+                np.array([0], dtype=np.int32),
+            )
+
+    metadata = dataset.Metadata(
+        np.tile(np.eye(3, dtype=np.float32), (2, 1, 1)),
+        np.zeros((2, 2), dtype=np.float32),
+        np.zeros((2, 9), dtype=np.float32),
+    )
+
+    non_prefetched = dataset.CryoEMDataset(
+        image_source=_MinimalImageSource(already_prefetches=False),
+        voxel_size=1.0,
+        metadata=metadata,
+    )
+    wrapped_batch = next(non_prefetched.iter_batches(1, prefetch=True))
+    assert wrapped_batch == ("wrapped",)
+
+    already_prefetched = dataset.CryoEMDataset(
+        image_source=_MinimalImageSource(already_prefetches=True),
+        voxel_size=1.0,
+        metadata=metadata,
+    )
+    direct_batch = next(already_prefetched.iter_batches(1, prefetch=True))
+    assert len(direct_batch) == 7
+    np.testing.assert_array_equal(
+        direct_batch[-1],
+        np.array([0], dtype=np.int32),
+    )
+
+    no_prefetch_batch = next(already_prefetched.iter_batches(1, prefetch=False))
+    assert len(no_prefetch_batch) == 7
+
+
 def _fake_load_ctf_params(D, ctf_file):
     n = 4
     # [voxel, dfu, dfv, dfang, volt, cs, w, phase]

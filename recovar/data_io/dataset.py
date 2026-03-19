@@ -830,7 +830,7 @@ class CryoEMDataset:
             noise_half=noise_half,
             noise_by_particle=noise_by_particle,
         )
-        if prefetch:
+        if prefetch and not self.image_source.already_prefetches:
             return _prefetch_iter(inner)
         return inner
 
