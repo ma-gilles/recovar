@@ -243,34 +243,50 @@ def _compute_spa_ctf(CTF_params, image_shape, voxel_size, *, half_image=False):
     return evaluate_ctf(psi, CTF_params)
 
 
+def _box_downsample_2d(images_2x, image_shape, upsample_factor=2):
+    """Box-filter and downsample a batch of 2x-upsampled 2D images.
+
+    ``images_2x`` has shape ``(batch, H*upsample, W*upsample)`` or is flattened.
+    Returns ``(batch, H*W)`` at the original *image_shape* resolution.
+    """
+    upsampled_shape = tuple(s * upsample_factor for s in image_shape)
+    bsz = images_2x.shape[0]
+    images_2x = images_2x.reshape(bsz, *upsampled_shape)
+    kernel_size = upsample_factor + upsample_factor // 2
+    kernel = jnp.ones((1, 1, kernel_size, kernel_size), dtype=images_2x.dtype) / kernel_size ** 2
+    out = jax.lax.conv_general_dilated(
+        jnp.expand_dims(images_2x, 1),
+        kernel,
+        window_strides=(1, 1),
+        padding="SAME",
+        dimension_numbers=("NCHW", "IOHW", "NCHW"),
+    ).squeeze(1)[:, ::upsample_factor, ::upsample_factor]
+    return out.reshape(bsz, -1)
+
+
 def _compute_spa_ctf_antialiased(CTF_params, image_shape, voxel_size, *, half_image=False):
     """SPA CTF with 2x-upsampled antialiasing filter."""
     if half_image:
         full = _compute_spa_ctf_antialiased(CTF_params, image_shape, voxel_size)
         return fourier_transform_utils.full_image_to_half_image(full, image_shape)
 
-    upsample_factor = 2
-    upsampled_shape = tuple(s * upsample_factor for s in image_shape)
+    upsampled_shape = tuple(s * 2 for s in image_shape)
     upsampled_ctf = _compute_spa_ctf(CTF_params, upsampled_shape, voxel_size)
+    return _box_downsample_2d(upsampled_ctf.reshape(-1, *upsampled_shape), image_shape)
 
-    batch_size = upsampled_ctf.shape[0]
-    ctf = upsampled_ctf.reshape(batch_size, *upsampled_shape)
 
-    kernel_size = upsample_factor + upsample_factor // 2
-    kernel = jnp.ones((kernel_size, kernel_size), dtype=upsampled_ctf.dtype) / (kernel_size * kernel_size)
+def compute_antialiased_ctf_squared(ctf_fn, ctf_params, image_shape, voxel_size, *, half_image=False):
+    """Compute CTF² with 2x-upsampled antialiasing, in full or half-image format.
 
-    ctf = jnp.expand_dims(ctf, 1)
-    kernel = kernel.reshape(1, 1, kernel_size, kernel_size)
-    ctf = jax.lax.conv_general_dilated(
-        ctf,
-        kernel,
-        window_strides=(1, 1),
-        padding="SAME",
-        dimension_numbers=("NCHW", "IOHW", "NCHW"),
-    )
-    ctf = jnp.squeeze(ctf, axis=1)
-    ctf = ctf[:, ::upsample_factor, ::upsample_factor]
-    return ctf.reshape(ctf.shape[0], -1)
+    Evaluates CTF on a 2x grid, squares, box-filters, and downsamples.
+    This reduces aliasing in the Wiener weight accumulator.
+    """
+    upsampled_shape = tuple(s * 2 for s in image_shape)
+    ctf_up = ctf_fn(ctf_params, upsampled_shape, voxel_size) ** 2
+    result = _box_downsample_2d(ctf_up.reshape(-1, *upsampled_shape), image_shape)
+    if half_image:
+        return fourier_transform_utils.full_image_to_half_image(result, image_shape)
+    return result
 
 
 @functools.partial(jax.jit, static_argnames=['image_shape', 'half_image'])
