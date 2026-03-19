@@ -126,7 +126,6 @@ def _heterogeneity_kernel_batch_from_fft_explicit(
         half_volume=True,
         max_r=None,  # TODO: see above
     )
-    )
     return Ft_y, Ft_ctf.real
 
 def make_X_mat(rotation_matrices, volume_shape, image_shape, pol_degree = 0, dtype = np.float32):
