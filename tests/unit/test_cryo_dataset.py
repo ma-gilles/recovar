@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from recovar.data_io import cryo_dataset
+from recovar.core import fourier_transform_utils
 from helpers import tiny_synthetic
 
 pytestmark = pytest.mark.unit
@@ -37,6 +38,18 @@ def test_particle_image_dataset_basic_getitem_and_preprocess(monkeypatch):
     processed = ds.process_images(imgs, apply_image_mask=False)
     assert processed.shape[0] == 1
     assert processed.dtype == np.complex64
+
+
+def test_particle_image_dataset_process_images_half_matches_legacy_full_fft_path(monkeypatch):
+    monkeypatch.setattr(cryo_dataset.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = cryo_dataset.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+
+    imgs, _p_idx, _t_idx = ds[2]
+    processed_full = ds.process_images(imgs, apply_image_mask=False)
+    legacy_half = fourier_transform_utils.full_image_to_half_image(processed_full, ds.image_shape)
+    processed_half = ds.process_images_half(imgs, apply_image_mask=False)
+
+    np.testing.assert_array_equal(processed_half, legacy_half)
 
 
 def test_particle_image_dataset_subset_generators_preserve_order_and_duplicates(monkeypatch):

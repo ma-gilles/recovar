@@ -21,24 +21,6 @@ matplotlib.rcParams["contour.negative_linestyle"] = "solid"
 # Set up logger
 logger = logging.getLogger(__name__)
 
-
-def _should_merge_anomaly_outliers(
-    *,
-    is_tilt_series: bool,
-    has_contrast_signal: bool,
-    has_junk_signal: bool,
-) -> bool:
-    """Decide whether anomaly detections participate in the final merge.
-
-    For tilt-series data, contrast- and reconstruction-backed detectors are
-    substantially more reliable than latent-space anomaly heuristics. Keep the
-    anomaly results for standalone inspection, but only merge them when they
-    are the sole available detector.
-    """
-    if not is_tilt_series:
-        return True
-    return not (has_contrast_signal or has_junk_signal)
-
 def plot_anomaly_detection_results(zs, original_indices, folder_name):
     """
     Plots anomaly detection results for given data and saves the plots and inlier/outlier indices.
@@ -1086,24 +1068,11 @@ def main():
     combined_output_dir = os.path.join(args.output_dir, 'combined_results')
     os.makedirs(combined_output_dir, exist_ok=True)
 
-    merge_anomaly_outliers = _should_merge_anomaly_outliers(
-        is_tilt_series=is_tilt_series,
-        has_contrast_signal=(
-            contrast_image_outliers is not None or contrast_particle_outliers is not None
-        ),
-        has_junk_signal=junk_outliers is not None,
-    )
-    if anomaly_outliers is not None and not merge_anomaly_outliers:
-        logger.info(
-            "Tilt-series merge: anomaly detection is advisory-only because "
-            "contrast and/or junk detection results are available."
-        )
-    
     # Collect all particle-level outlier indices (for visualization)
     all_particle_outliers = []
     particle_method_names = []
     
-    if anomaly_outliers is not None and merge_anomaly_outliers:
+    if anomaly_outliers is not None:
         all_particle_outliers.append(anomaly_outliers)
         particle_method_names.append("Anomaly Detection")
     
@@ -1140,7 +1109,7 @@ def main():
     all_image_outliers = []
     image_method_names = []
     
-    if anomaly_outliers is not None and merge_anomaly_outliers:
+    if anomaly_outliers is not None:
         # Convert particle outliers to image outliers for anomaly detection
         if is_tilt_series:
             # For tilt series, map particle outliers to image outliers

@@ -121,6 +121,13 @@ class _ImageIndexRemappedNoiseAdapter:
         return self._noise.get_half(self._parent_image_indices[np.asarray(indices)])
 
     @property
+    def dose_indices(self):
+        dose_indices = getattr(self._noise, "dose_indices", None)
+        if dose_indices is None:
+            raise AttributeError("wrapped noise model has no dose_indices")
+        return np.asarray(dose_indices)[self._parent_image_indices]
+
+    @property
     def __class__(self):
         return type(self._noise)
 
@@ -501,11 +508,17 @@ class CryoEMDataset:
             downsample_D=info.downsample_D,
         )
 
+        parent_local_image_indices = self.local_image_indices_from_original(
+            original_image_indices,
+            allow_missing=False,
+        )
+        reloaded.update_poses(
+            self.rotation_matrices[parent_local_image_indices],
+            self.translations[parent_local_image_indices],
+        )
+        reloaded.update_ctf(self.CTF_params[parent_local_image_indices])
+
         if self.noise is not None:
-            parent_local_image_indices = self.local_image_indices_from_original(
-                original_image_indices,
-                allow_missing=False,
-            )
             reloaded.noise = _ImageIndexRemappedNoiseAdapter(
                 self.noise,
                 parent_local_image_indices,

@@ -47,6 +47,18 @@ def test_split_index_list_accepts_python_list():
     np.testing.assert_array_equal(merged, np.array([1, 2, 5, 9]))
 
 
+def test_split_index_list_matches_legacy_seed_zero_partition():
+    split = dataset.split_index_list(np.arange(20, dtype=np.int32), split_random_seed=0)
+    np.testing.assert_array_equal(
+        split[0],
+        np.array([1, 2, 4, 6, 8, 10, 13, 17, 18, 19], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        split[1],
+        np.array([0, 3, 5, 7, 9, 11, 12, 14, 15, 16], dtype=np.int32),
+    )
+
+
 def test_split_index_list_rejects_empty():
     with pytest.raises(ValueError):
         dataset.split_index_list(np.array([], dtype=int))
@@ -279,8 +291,8 @@ def test_reload_from_original_images_preserves_original_indices_and_noise_mappin
         ),
     )
     rots = np.tile(np.eye(3, dtype=np.float32), (6, 1, 1))
-    trans = np.zeros((6, 2), dtype=np.float32)
-    ctf = np.zeros((6, 9), dtype=np.float32)
+    trans = np.arange(12, dtype=np.float32).reshape(6, 2)
+    ctf = np.arange(54, dtype=np.float32).reshape(6, 9)
     cryo = dataset.CryoEMDataset(
         image_source=image_source,
         voxel_size=1.0,
@@ -300,6 +312,7 @@ def test_reload_from_original_images_preserves_original_indices_and_noise_mappin
     class _Noise:
         def __init__(self):
             self.calls = []
+            self.dose_indices = np.array([3, 4, 7, 9, 10, 11], dtype=np.int32)
 
         def get(self, indices):
             arr = np.asarray(indices, dtype=np.int32)
@@ -315,10 +328,24 @@ def test_reload_from_original_images_preserves_original_indices_and_noise_mappin
 
     captured = {}
 
+    class _Reloaded:
+        def __init__(self):
+            self.noise = None
+            self.rotation_matrices = None
+            self.translations = None
+            self.CTF_params = None
+
+        def update_poses(self, rots, trans):
+            self.rotation_matrices = np.asarray(rots)
+            self.translations = np.asarray(trans)
+
+        def update_ctf(self, ctf_params):
+            self.CTF_params = np.asarray(ctf_params)
+
     def fake_load_dataset(*args, **kwargs):
         captured["args"] = args
         captured["kwargs"] = kwargs
-        return SimpleNamespace(noise=None)
+        return _Reloaded()
 
     monkeypatch.setattr(dataset, "load_dataset", fake_load_dataset)
 
@@ -341,6 +368,22 @@ def test_reload_from_original_images_preserves_original_indices_and_noise_mappin
     np.testing.assert_array_equal(
         half0.noise.get_half(np.array([1], dtype=np.int32)),
         np.array([2], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        half0.noise.dose_indices,
+        np.array([3, 7, 10], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        half0.rotation_matrices,
+        rots[[0, 2, 4]],
+    )
+    np.testing.assert_array_equal(
+        half0.translations,
+        trans[[0, 2, 4]],
+    )
+    np.testing.assert_array_equal(
+        half0.CTF_params,
+        ctf[[0, 2, 4]],
     )
     assert cryo.noise.calls[0][0] == "full"
     np.testing.assert_array_equal(

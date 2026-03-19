@@ -58,9 +58,11 @@ def split_index_list(all_valid_image_indices, split_random_seed=0):
     n_indices = len(all_valid_image_indices)
     half_ind_size = n_indices // 2
 
+    # Keep the legacy global-RNG shuffle to preserve main-branch halfset
+    # assignments exactly. The Generator API produces different partitions.
+    np.random.seed(split_random_seed)
     shuffled_ind = np.arange(n_indices)
-    rng = np.random.default_rng(split_random_seed)
-    rng.shuffle(shuffled_ind)
+    np.random.shuffle(shuffled_ind)
 
     ind_split = [
         np.sort(all_valid_image_indices[shuffled_ind[:half_ind_size]]),

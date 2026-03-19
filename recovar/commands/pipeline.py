@@ -397,39 +397,36 @@ def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise
     """Estimate radial noise variance from outside-mask and upper-bound methods.
 
     Returns a dict with all noise-related quantities needed by the pipeline.
-
-    Three estimation paths exist depending on data source:
-      - new noise fn (``--new-noise-est`` or ``--premultiplied-ctf``):
-        uses ``fit_noise_model_to_images`` for both outside/inside mask.
-      - explicit .mrc mask: v2 outside-mask estimator + radial statistics.
-      - fallback: radial statistics from outside mask.
-    All paths produce (radial_noise_var, image_PS, upper_bound) which are
-    then combined identically.
     """
     use_new_noise_fn = args.new_noise_est or args.premultiplied_ctf
-    logger.info("Noise estimation mode: %s",
-                "fit_noise_model" if use_new_noise_fn else
-                "outside-mask-v2" if args.mask.endswith(".mrc") else "radial-statistic")
+    logger.info("Using new noise estimation function?: %s", use_new_noise_fn)
 
-    if use_new_noise_fn and noise_model not in ("radial", "radial_per_tilt"):
-        raise ValueError(f"new noise fn only works with radial noise model, got {noise_model}")
-
-    # --- Step 1: estimate noise from outside the mask ---
     noise_time = time.time()
     if use_new_noise_fn:
-        radial_noise_var, image_PS = noise.fit_noise_model_to_images(
+        masked_image_PS, image_PS = noise.fit_noise_model_to_images(
             dataset, dilated_volume_mask, means.combined, None,
             batch_size=batch_size, invert_mask=True, disc_type='linear_interp')
+        logger.info("Using new noise estimation with linear_interp discretization")
     elif args.mask.endswith(".mrc"):
-        radial_noise_var, _, _ = noise.estimate_noise_variance_from_outside_mask_v2(
+        masked_image_PS, _, _ = noise.estimate_noise_variance_from_outside_mask_v2(
+            dataset, dilated_volume_mask, batch_size)
+        white_noise_var_outside_mask = noise.estimate_white_noise_variance_from_mask(
             dataset, dilated_volume_mask, batch_size)
         _, _, image_PS, _ = noise.estimate_radial_noise_statistic_from_outside_mask(
             dataset, dilated_volume_mask, batch_size)
     else:
-        radial_noise_var, _, image_PS, _ = noise.estimate_radial_noise_statistic_from_outside_mask(
+        masked_image_PS, _, image_PS, _ = noise.estimate_radial_noise_statistic_from_outside_mask(
             dataset, dilated_volume_mask, batch_size)
 
-    # --- Step 2: upper bound from inside the mask ---
+    radial_noise_var_outside_mask = masked_image_PS
+    white_noise_var_outside_mask_val = np.median(masked_image_PS)
+
+    if use_new_noise_fn and noise_model not in ("radial", "radial_per_tilt"):
+        raise ValueError(f"new noise fn only works with radial noise model, got {noise_model}")
+
+    logger.info("time to estimate noise is %s", time.time() - noise_time)
+    utils.report_memory_device(logger=logger)
+
     noise_time = time.time()
     if use_new_noise_fn:
         radial_ub_noise_var, _ = noise.fit_noise_model_to_images(
@@ -440,25 +437,28 @@ def _estimate_noise(dataset, means, dilated_volume_mask, batch_size, args, noise
             dataset, means.combined, dilated_volume_mask, batch_size)
     logger.info("time to upper bound noise is %s", time.time() - noise_time)
 
-    # --- Step 3: combine ---
-    noise_var_used = np.minimum(radial_noise_var, radial_ub_noise_var)
-    white_noise_var = np.median(radial_noise_var)
+    utils.report_memory_device(logger=logger)
+    radial_noise_var_ubed = np.where(
+        radial_noise_var_outside_mask > radial_ub_noise_var,
+        radial_ub_noise_var, radial_noise_var_outside_mask)
 
     if noise_model == "white":
-        noise_var_used = np.full_like(noise_var_used, white_noise_var)
+        noise_var_used = np.ones_like(radial_noise_var_ubed) * white_noise_var_outside_mask_val
+    else:
+        noise_var_used = radial_noise_var_ubed
 
     if (noise_var_used < 0).any():
-        logger.warning("Negative noise variance detected — replacing with image_PS / 10")
-        noise_var_used = np.where(noise_var_used < 0, image_PS / 10, noise_var_used)
+        logger.info("Negative noise variance detected. Setting to image power spectrum / 10")
+    noise_var_used = np.where(noise_var_used < 0, image_PS / 10, noise_var_used)
 
     utils.report_memory_device(logger=logger)
     return {
         'noise_var_used': noise_var_used,
-        'radial_noise_var_outside_mask': radial_noise_var,
+        'radial_noise_var_outside_mask': radial_noise_var_outside_mask,
         'radial_ub_noise_var': radial_ub_noise_var,
-        'white_noise_var_outside_mask': white_noise_var,
+        'white_noise_var_outside_mask': white_noise_var_outside_mask_val,
         'image_PS': image_PS,
-        'masked_image_PS': radial_noise_var,
+        'masked_image_PS': masked_image_PS,
     }
 
 ## TODO perhaps should move, and complement mask should be better documented in the parse args/documentation
@@ -690,8 +690,15 @@ def standard_recovar_pipeline(args):
     logger.info("image size: %sx%s", ds.grid_size, ds.grid_size)
     utils.report_memory_device(logger=logger)
 
-    # --- Initial noise estimate from half-maps ---
-    noise_var_from_hf, _ = noise.estimate_noise_variance(ds, batch_size)
+    # --- Initial noise estimate from half-map 0 ---
+    # Preserve main-branch behavior exactly: the initial scalar noise estimate
+    # comes from the first halfset dataset, not from the unified full dataset.
+    noise_estimate_dataset = ds.get_halfset_dataset(
+        0,
+        independent=bool(ds.tilt_series_flag),
+        lazy=args.lazy,
+    )
+    noise_var_from_hf, _ = noise.estimate_noise_variance(noise_estimate_dataset, batch_size)
     valid_idx = ds.get_valid_frequency_indices()
     noise_model = args.noise_model
 

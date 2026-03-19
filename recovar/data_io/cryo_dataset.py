@@ -172,12 +172,20 @@ class ParticleImageDataset:
         return images.astype(self.dtype, copy=False)
 
     def apply_preprocessing_half(self, images: np.ndarray, use_mask: bool = False) -> np.ndarray:
-        """Like apply_preprocessing but uses rfft2 → half-spectrum directly."""
-        if use_mask:
-            images = images * self.image_mask
-        import recovar.core.padding as pad
-        images = pad.padded_rfft(images * self.data_multiplier, self.D, self.padding)
-        return images.astype(self.dtype, copy=False)
+        """Return half-spectrum images using the legacy full-FFT path.
+
+        The old pipeline applied ``process_images`` first and then converted
+        the full FFT layout to half-spectrum storage.  Direct ``rfft`` is
+        mathematically close, but it is not numerically identical and that
+        drift is enough to change downstream PCA / outlier regressions.
+        """
+        processed = self.apply_preprocessing(images, use_mask=use_mask)
+        import recovar.core.fourier_transform_utils as fourier_transform_utils
+        half_images = fourier_transform_utils.full_image_to_half_image(
+            processed,
+            self.image_shape,
+        )
+        return half_images.astype(self.dtype, copy=False)
 
     def process_images(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:
         """Compatibility alias for apply_preprocessing."""
