@@ -13,6 +13,7 @@ from sklearn.ensemble import IsolationForest
 from sklearn.neighbors import LocalOutlierFactor
 
 from recovar.data_io import cryo_dataset
+from recovar.data_io._index_utils import TiltSeriesOriginalIndexMap
 from recovar.output import output
 
 matplotlib.rcParams["contour.negative_linestyle"] = "solid"
@@ -440,20 +441,15 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
     # Only try to parse starfile if it actually has a .star extension
     particle_to_tilts = None
     tilts_to_particle = None
+    tilt_index_map = None
     micrographtilt_to_tilts = None
     tilts_to_micrographtilt = None
     
     if starfile is not None and starfile.endswith('.star'):
-        try:
-            particle_to_tilts, tilts_to_particle = cryo_dataset.TiltSeriesDataset.parse_particle_tilt(starfile)
-            micrographtilt_to_tilts, tilts_to_micrographtilt = cryo_dataset.TiltSeriesDataset.parse_micrograph_tilt_mapping(starfile)
-        except (KeyError, ValueError, FileNotFoundError) as e:
-            logger.warning("Failed to parse starfile %s: %s", starfile, e)
-            logger.warning("Skipping particle and micrograph-based outlier detection")
-            particle_to_tilts = None
-            tilts_to_particle = None
-            micrographtilt_to_tilts = None
-            tilts_to_micrographtilt = None
+        tilt_index_map = TiltSeriesOriginalIndexMap.from_particles_file(starfile)
+        particle_to_tilts = tilt_index_map.particle_to_images
+        tilts_to_particle = tilt_index_map.image_to_particle
+        micrographtilt_to_tilts, tilts_to_micrographtilt = cryo_dataset.TiltSeriesDataset.parse_micrograph_tilt_mapping(starfile)
     else:
         logger.info("Starfile %s is not a .star file, skipping particle and micrograph-based outlier detection", starfile)
 
@@ -1246,7 +1242,15 @@ def main():
 
 
 def map_particle_original_indexing_to_images_original_indexing(particle_indices_in_original_ordering, image_subset, starfile):
-    return cryo_dataset.tilt_series_to_images(particle_indices_in_original_ordering, starfile, image_subset)
+    index_map = TiltSeriesOriginalIndexMap.from_particles_file(starfile)
+    particle_indices = index_map.sanitize_particle_indices(
+        particle_indices_in_original_ordering,
+        name="particle_indices_in_original_ordering",
+    )
+    return index_map.image_indices_from_particles(
+        particle_indices,
+        allowed_images=image_subset,
+    )
 
 
 def add_args(parser):
@@ -1344,6 +1348,10 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
     viz_dir = os.path.join(output_dir, 'outlier_visualizations')
     os.makedirs(viz_dir, exist_ok=True)
     
+    contrast_tilt_index_map = None
+    if is_tilt_series and starfile is not None and str(starfile).endswith(".star"):
+        contrast_tilt_index_map = TiltSeriesOriginalIndexMap.from_particles_file(starfile)
+
     # Function to map particle indices to image indices for contrast plotting
     def get_contrast_indices_for_particles(particle_indices):
         """Map particle indices to image indices for contrast plotting."""
@@ -1354,15 +1362,18 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
             return np.array([], dtype=original_image_indices.dtype)
         
         if is_tilt_series:
-            # For tilt series, map particle indices to image indices
-            particle_to_tilts, _ = cryo_dataset.TiltSeriesDataset.parse_particle_tilt(starfile)
-            n_particles = len(particle_to_tilts)
-            valid_particle_indices = particle_indices[(particle_indices >= 0) & (particle_indices < n_particles)]
+            if contrast_tilt_index_map is None:
+                return np.array([], dtype=original_image_indices.dtype)
+            valid_particle_indices = contrast_tilt_index_map.sanitize_particle_indices(
+                particle_indices,
+                name="particle_indices",
+            )
             if valid_particle_indices.size == 0:
                 return np.array([], dtype=original_image_indices.dtype)
-            image_indices = np.concatenate([particle_to_tilts[particle_index] for particle_index in valid_particle_indices])
-            # Only include images that are in the original image subset
-            return np.intersect1d(image_indices, original_image_indices)
+            return contrast_tilt_index_map.image_indices_from_particles(
+                valid_particle_indices,
+                allowed_images=original_image_indices,
+            )
         else:
             # For regular datasets, particle indices = image indices
             return particle_indices

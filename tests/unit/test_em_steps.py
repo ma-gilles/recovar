@@ -214,27 +214,22 @@ def test_M_with_precompute_handles_small_rotation_count_without_zero_batch(monke
             _ = apply_image_mask
             return batch
 
-        class image_stack:
+        class image_source:
             @staticmethod
             def process_images(batch, apply_image_mask=False):
                 _ = apply_image_mask
                 return batch
 
-        @staticmethod
-        def get_dataset_subset_generator(batch_size, subset_indices):
-            assert batch_size >= 1
-            _ = subset_indices
-            yield jnp.ones((1, 4), dtype=jnp.float32), None, np.array([0], dtype=np.int32)
-
-        def iterate(self, batch_size, *, indices=None, **kwargs):
-            from recovar.core.configs import BatchData
-            yield BatchData(
-                images=jnp.ones((1, 4), dtype=jnp.float32),
-                rotation_matrices=jnp.zeros((1, 3, 3), dtype=jnp.float32),
-                translations=jnp.zeros((1, 2), dtype=jnp.float32),
-                ctf_params=self.CTF_params[:1],
-                particle_indices=np.array([0], dtype=np.int32),
-                image_indices=np.array([0], dtype=np.int32),
+        def iter_batches(self, batch_size, *, indices=None, **kwargs):
+            _ = (batch_size, indices, kwargs)
+            yield (
+                jnp.ones((1, 4), dtype=jnp.float32),
+                jnp.zeros((1, 3, 3), dtype=jnp.float32),
+                jnp.zeros((1, 2), dtype=jnp.float32),
+                self.CTF_params[:1],
+                None,
+                np.array([0], dtype=np.int32),
+                np.array([0], dtype=np.int32),
             )
 
     monkeypatch.setattr(rec_utils, "get_gpu_memory_total", lambda: 1)

@@ -7,17 +7,6 @@ import jax.numpy as jnp
 from recovar import jax_config
 from recovar import core
 from recovar.reconstruction import relion_functions as rf
-from recovar.core.configs import BatchData
-
-
-def _make_batch_data(images, ctf_params, rots, trans, noise_var):
-    return BatchData(
-        images=images,
-        ctf_params=ctf_params,
-        rotation_matrices=rots,
-        translations=trans,
-        noise_variance=noise_var,
-    )
 
 
 def test_gridding_correct_invalid_order_raises():
@@ -174,7 +163,7 @@ def test_relion_kernel_batch_normalizes_noise_variance_shapes():
     ]
     for noise_var in candidate_noises:
         ft_y, ft_ctf = rf.relion_kernel_batch_from_fft(
-            config, _make_batch_data(images, ctf_params, rots, trans, noise_var),
+            config, images, ctf_params, rots, trans, noise_var,
         )
         assert np.asarray(ft_y).shape == (half_vol_size,)
         assert np.asarray(ft_ctf).shape == (half_vol_size,)
@@ -298,10 +287,12 @@ def test_relion_kernel_batch_half_image_matches_full_reference():
     # --- New: half-image path via relion_kernel_batch (outputs half-volume) ---
     import recovar.core.fourier_transform_utils as ftu
     half_Ft_y, half_Ft_ctf = rf.relion_kernel_batch(
-        config, _make_batch_data(
-            jnp.array(raw_images), jnp.array(ctf_params),
-            jnp.array(rots), jnp.array(trans), jnp.array(noise_var),
-        ),
+        config,
+        jnp.array(raw_images),
+        jnp.array(ctf_params),
+        jnp.array(rots),
+        jnp.array(trans),
+        jnp.array(noise_var),
     )
     new_Ft_y = np.asarray(ftu.half_volume_to_full_volume(half_Ft_y, volume_shape)).reshape(-1)
     new_Ft_ctf = np.asarray(ftu.half_volume_to_full_volume(half_Ft_ctf, volume_shape)).reshape(-1)
@@ -360,7 +351,7 @@ def test_relion_kernel_batch_complex_input_matches_full_reference():
     # --- New: half-image path (outputs half-volume) ---
     import recovar.core.fourier_transform_utils as ftu
     half_Ft_y, half_Ft_ctf = rf.relion_kernel_batch_from_fft(
-        config, _make_batch_data(complex_images, jnp.array(ctf_params), rots, trans, jnp.array(noise_var)),
+        config, complex_images, jnp.array(ctf_params), rots, trans, jnp.array(noise_var),
     )
     new_Ft_y = np.asarray(ftu.half_volume_to_full_volume(half_Ft_y, volume_shape)).reshape(-1)
     new_Ft_ctf = np.asarray(ftu.half_volume_to_full_volume(half_Ft_ctf, volume_shape)).reshape(-1)
@@ -394,18 +385,15 @@ def test_relion_kernel_batch_accumulator_matches_sequential():
     ctf_params = jnp.zeros((bsz, 9), dtype=jnp.float32)
     noise_var = jnp.ones((1, np.prod(image_shape)), dtype=jnp.float32)
 
-    bd1 = _make_batch_data(imgs1, ctf_params, rots, trans, noise_var)
-    bd2 = _make_batch_data(imgs2, ctf_params, rots, trans, noise_var)
-
     # Two independent calls, sum result
-    y1, c1 = rf.relion_kernel_batch(config, bd1)
-    y2, c2 = rf.relion_kernel_batch(config, bd2)
+    y1, c1 = rf.relion_kernel_batch(config, imgs1, ctf_params, rots, trans, noise_var)
+    y2, c2 = rf.relion_kernel_batch(config, imgs2, ctf_params, rots, trans, noise_var)
     sum_Ft_y = np.asarray(y1) + np.asarray(y2)
     sum_Ft_ctf = np.asarray(c1) + np.asarray(c2)
 
     # Accumulated version
-    acc_y, acc_c = rf.relion_kernel_batch(config, bd1)
-    acc_y, acc_c = rf.relion_kernel_batch(config, bd2, Ft_y=acc_y, Ft_ctf=acc_c)
+    acc_y, acc_c = rf.relion_kernel_batch(config, imgs1, ctf_params, rots, trans, noise_var)
+    acc_y, acc_c = rf.relion_kernel_batch(config, imgs2, ctf_params, rots, trans, noise_var, Ft_y=acc_y, Ft_ctf=acc_c)
 
     np.testing.assert_allclose(np.asarray(acc_y), sum_Ft_y, atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(np.asarray(acc_c), sum_Ft_ctf, atol=1e-5, rtol=1e-5)
@@ -443,10 +431,8 @@ def test_relion_kernel_batch_half_volume_output_on_gpu(gpu_device):
     ctf_params = ctf_params.at[:, 3].set(2.0)
     ctf_params = ctf_params.at[:, 4].set(2.0)
     noise_var = jnp.ones((1, np.prod(image_shape)), dtype=jnp.float32)
-    bd = _make_batch_data(raw_images, ctf_params, rots, trans, noise_var)
-
     with jax.default_device(gpu_device):
-        half_y, half_c = rf.relion_kernel_batch(config, bd)
+        half_y, half_c = rf.relion_kernel_batch(config, raw_images, ctf_params, rots, trans, noise_var)
 
     # Expand and verify shape + finiteness
     full_y = np.asarray(ftu.half_volume_to_full_volume(half_y, volume_shape)).reshape(-1)

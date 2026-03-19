@@ -154,14 +154,9 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
     n_half0 = len(particles_halfsets[0])
     zs_subsets = [zs[:n_half0], zs[n_half0:]]
 
-    # For tilt-series we need to map canonical particle indices back to
-    # image indices for reconstruction.
-    is_tilt = cryos.tilt_series_flag and hasattr(cryos.image_stack, '_particle_tilts')
-    if is_tilt:
-        _dti = np.asarray(cryos.dataset_tilt_indices)
-        _canonical_to_local = np.full(int(_dti.max()) + 1, -1, dtype=np.int32)
-        for _p, _c in enumerate(_dti):
-            _canonical_to_local[_c] = _p
+    # For tilt-series, the embeddings live in original particle indexing,
+    # while reconstruction needs dataset-local image indices.
+    is_tilt = cryos.tilt_series_flag
 
     # Create reconstructions directory if saving
     if save_reconstructions and output_folder is not None:
@@ -201,18 +196,16 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
                 logger.warning("Cluster %s: No particles available for half-map %s, skipping", cluster_idx, i)
                 used_particles[i] = np.array([], dtype=np.int32)
                 continue
-            # Map local half indices back to LOCAL dataset indices for
-            # reconstruction.
+            # Map halfset-local embedding indices back to dataset-local
+            # reconstruction indices.
             if is_tilt:
                 canonical_indices = particles_halfsets[i][closest_local]
-                # Expand particle-level canonical indices → image indices
-                local_particles = _canonical_to_local[canonical_indices]
-                image_list = []
-                for p in local_particles:
-                    image_list.extend(cryos.image_stack._particle_tilts[p])
-                global_indices = np.array(image_list, dtype=np.int32)
+                local_group_indices = cryos.local_group_indices_from_original(canonical_indices)
+                selected_image_indices = cryos.index_layout.local_image_indices_from_local_groups(
+                    local_group_indices
+                )
             else:
-                global_indices = np.asarray(cryos.halfset_indices[i])[closest_local]
+                selected_image_indices = cryos.halfset_local_image_indices(i)[closest_local]
             # Store dense zs indices for downstream use (plotting, usage counts).
             # These index into the halfset-concatenated zs array.
             used_particles[i] = half_offsets[i] + closest_local
@@ -222,7 +215,7 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
             Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(
                 cryos, None, batch_size,
                 disc_type='linear_interp',
-                index_subset=global_indices,
+                index_subset=selected_image_indices,
                 upsampling_factor=2,
             )
             halfmap = relion_functions.post_process_from_filter_v2(

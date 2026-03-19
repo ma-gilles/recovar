@@ -44,7 +44,7 @@ from recovar.core.ctf import (
     get_dose_filters,
     get_dose_filters_from_tilt_number,
 )
-from recovar.core.configs import BatchData, DataIterator, ForwardModelConfig
+from recovar.core.configs import ForwardModelConfig
 from recovar.core.forward import (
     batch_translate_images,
 )
@@ -62,7 +62,6 @@ from recovar.core.slicing import (
 )
 
 __all__ = [
-    "BatchData",
     "CTFEvaluator",
     "CTFMode",
     "CTFParamIndex",
@@ -81,7 +80,6 @@ __all__ = [
     "check_vec_indices_in_bound",
     "check_vol_indices_in_bound",
     "critical_exposure",
-    "DataIterator",
     "decide_order",
     "distance_to_max_grid_dist",
     "evaluate_ctf",

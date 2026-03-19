@@ -12,7 +12,6 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, jax_config, utils
 from recovar.core import mask, padding
 from recovar.core.configs import ForwardModelConfig
-from recovar.data_io.batch_iterator import coerce_batch_fields, iter_batch_fields
 from recovar.reconstruction import noise, regularization
 
 logger = logging.getLogger(__name__)
@@ -85,12 +84,10 @@ def relion_style_triangular_kernel(
     )
 
     Ft_y, Ft_ctf = None, None
-    for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in iter_batch_fields(
-        experiment_dataset.iterate(
-            batch_size,
-            noise_model=noise_model,
-            indices=index_subset,
-        )
+    for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in experiment_dataset.iter_batches(
+        batch_size,
+        noise_model=noise_model,
+        indices=index_subset,
     ):
         Ft_y, Ft_ctf = relion_kernel_batch(
             config,
@@ -113,10 +110,10 @@ def relion_style_triangular_kernel(
 def relion_kernel_batch(
     config: ForwardModelConfig,
     images,
-    ctf_params=None,
-    rotation_matrices=None,
-    translations=None,
-    noise_variance=None,
+    ctf_params,
+    rotation_matrices,
+    translations,
+    noise_variance,
     Ft_y: jax.Array = None,
     Ft_ctf: jax.Array = None,
 ):
@@ -125,13 +122,6 @@ def relion_kernel_batch(
     Applies pad + rfft2 internally, then backprojects with half_image and
     half_volume layouts for maximum memory efficiency.
     """
-    images, rotation_matrices, translations, ctf_params, noise_variance, _, _ = coerce_batch_fields(
-        images,
-        rotation_matrices=rotation_matrices,
-        translations=translations,
-        ctf_params=ctf_params,
-        noise_variance=noise_variance,
-    )
     half_images = padding.padded_rfft(
         images * config.data_multiplier, config.grid_size, config.padding
     )
@@ -150,10 +140,10 @@ def relion_kernel_batch(
 def relion_kernel_batch_from_fft(
     config: ForwardModelConfig,
     images,
-    ctf_params=None,
-    rotation_matrices=None,
-    translations=None,
-    noise_variance=None,
+    ctf_params,
+    rotation_matrices,
+    translations,
+    noise_variance,
     Ft_y: jax.Array = None,
     Ft_ctf: jax.Array = None,
 ):
@@ -161,15 +151,7 @@ def relion_kernel_batch_from_fft(
 
     Extracts the half-spectrum from full-spectrum images, then backprojects
     using half_image and half_volume layouts.
-
     """
-    images, rotation_matrices, translations, ctf_params, noise_variance, _, _ = coerce_batch_fields(
-        images,
-        rotation_matrices=rotation_matrices,
-        translations=translations,
-        ctf_params=ctf_params,
-        noise_variance=noise_variance,
-    )
     half_images = fourier_transform_utils.full_image_to_half_image(images, config.image_shape)
     return _relion_kernel_batch_half(
         config,
@@ -253,12 +235,10 @@ def residual_relion_style_triangular_kernel(experiment_dataset, mean_estimate, c
     )
 
     Ft_y, Ft_ctf = None, None
-    for images, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in iter_batch_fields(
-        experiment_dataset.iterate(
-            batch_size,
-            indices=index_subset,
-            by_image=False,
-        )
+    for images, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in experiment_dataset.iter_batches(
+        batch_size,
+        indices=index_subset,
+        by_image=False,
     ):
         images = experiment_dataset.process_images(images)
         Ft_y, Ft_ctf = residual_relion_kernel_trilinear(

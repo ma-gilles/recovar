@@ -1,11 +1,21 @@
-"""Canonical index normalization for cryo-EM datasets.
+"""Explicit index-domain helpers for cryo-EM / cryo-ET datasets.
 
-All functions that accept ``indices`` arguments (boolean masks, integer
-arrays, or ``None``) should call :func:`normalize_indices` to validate and
-convert them to a consistent ``int32`` array representation.
+This module centralizes the translation between:
+
+- local image indices inside a loaded dataset view
+- original image indices in the source file
+- local group indices inside a loaded dataset view
+- original group indices in the source file
+
+For SPA datasets, image and group domains are identical. For grouped datasets
+such as cryo-ET tilt series, a group corresponds to one particle / tilt
+series and expands to one or more local images.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Iterable, Optional
 
 import numpy as np
 
@@ -17,24 +27,7 @@ def normalize_indices(
     name: str = "indices",
     allow_none: bool = False,
 ):
-    """Normalize int/bool indices to an int32 array with bounds checking.
-
-    Parameters
-    ----------
-    values : array-like, bool mask, or None
-        The indices to normalize.
-    n_total : int
-        Total number of items (used for bool-mask validation and range checks).
-    name : str
-        Human-readable label for error messages.
-    allow_none : bool
-        If *True*, ``None`` input returns ``None`` instead of raising.
-
-    Returns
-    -------
-    np.ndarray[int32] or None
-        Validated, 1-D integer index array.
-    """
+    """Normalize int/bool indices to an int32 array with bounds checking."""
     if values is None:
         if allow_none:
             return None
@@ -42,7 +35,6 @@ def normalize_indices(
 
     arr = np.asarray(values)
 
-    # --- Boolean mask path ---
     if arr.dtype == bool:
         if arr.ndim != 1:
             raise ValueError(f"{name} boolean mask must be 1D")
@@ -52,7 +44,6 @@ def normalize_indices(
             )
         return np.flatnonzero(arr).astype(np.int32, copy=False)
 
-    # --- Integer index path ---
     if arr.ndim == 0:
         arr = arr.reshape(1)
     if arr.ndim != 1:
@@ -72,3 +63,498 @@ def normalize_indices(
         )
 
     return arr.astype(np.int32, copy=False)
+
+
+def deduplicate_preserve_order(values, *, name: str = "indices"):
+    """Drop duplicate values while keeping the first occurrence order."""
+    arr = np.asarray(values)
+    if arr.ndim == 0:
+        arr = arr.reshape(1)
+    if arr.ndim != 1:
+        raise ValueError(f"{name} must be 1D")
+    if arr.size == 0:
+        return arr.astype(np.int32, copy=False)
+    _, first_idx = np.unique(arr, return_index=True)
+    return arr[np.sort(first_idx)].astype(np.int32, copy=False)
+
+
+def filter_preserve_order(values, allowed):
+    """Return the subset of *values* that appears in *allowed*, keeping order."""
+    values = np.asarray(values)
+    allowed = np.asarray(allowed)
+    if values.ndim == 0:
+        values = values.reshape(1)
+    if values.ndim != 1:
+        raise ValueError("values must be 1D")
+    if allowed.ndim == 0:
+        allowed = allowed.reshape(1)
+    if allowed.ndim != 1:
+        raise ValueError("allowed must be 1D")
+    if values.size == 0:
+        return values.astype(np.int32, copy=False)
+    return values[np.isin(values, allowed)].astype(np.int32, copy=False)
+
+
+def _normalize_index_array(values, *, name: str):
+    arr = np.asarray(values)
+    if arr.ndim == 0:
+        arr = arr.reshape(1)
+    if arr.ndim != 1:
+        raise ValueError(f"{name} must be 1D")
+    if arr.dtype.kind not in ("i", "u"):
+        raise TypeError(f"{name} must contain integer indices")
+    arr = arr.astype(np.int64, copy=False).reshape(-1)
+    if arr.size > 0 and np.any(arr < 0):
+        raise ValueError(f"{name} must be non-negative")
+    return arr.astype(np.int32, copy=False)
+
+
+def _build_last_write_inverse(original_indices):
+    original_indices = np.asarray(original_indices, dtype=np.int32).reshape(-1)
+    if original_indices.size == 0:
+        return np.full(0, -1, dtype=np.int32)
+    size = int(np.max(original_indices)) + 1
+    inverse = np.full(size, -1, dtype=np.int32)
+    inverse[original_indices] = np.arange(original_indices.size, dtype=np.int32)
+    return inverse
+
+
+@dataclass(frozen=True)
+class DatasetIndexLayout:
+    """Index mapping for one dataset view.
+
+    Parameters
+    ----------
+    original_image_indices
+        For each local image index, the source-file image index.
+    grouped
+        ``False`` for SPA, where image and group domains are the same.
+        ``True`` for grouped datasets such as tilt-series data.
+    original_group_indices
+        For each local group index, the source-file group index.
+    group_local_image_indices
+        Only used when ``grouped=True``. Each entry lists the local images
+        belonging to one local group.
+
+    Notes
+    -----
+    Original image/group ids may repeat in SPA subsets created from duplicate
+    selections. Reverse lookup therefore uses explicit "last-write-wins"
+    semantics, matching the previous subset remap behavior.
+    """
+
+    original_image_indices: np.ndarray
+    grouped: bool = False
+    original_group_indices: Optional[np.ndarray] = None
+    group_local_image_indices: Optional[tuple[np.ndarray, ...]] = None
+
+    def __post_init__(self):
+        original_image_indices = _normalize_index_array(
+            self.original_image_indices,
+            name="original_image_indices",
+        )
+        n_images = int(original_image_indices.size)
+
+        if not bool(self.grouped):
+            if self.original_group_indices is None:
+                original_group_indices = original_image_indices.copy()
+            else:
+                original_group_indices = _normalize_index_array(
+                    self.original_group_indices,
+                    name="original_group_indices",
+                )
+                if original_group_indices.shape != original_image_indices.shape:
+                    raise ValueError(
+                        "SPA layouts require original_group_indices to match original_image_indices"
+                    )
+            image_local_to_group_local = np.arange(n_images, dtype=np.int32)
+            group_local_image_indices = None
+        else:
+            if self.original_group_indices is None:
+                raise ValueError("grouped layouts require original_group_indices")
+            if self.group_local_image_indices is None:
+                raise ValueError("grouped layouts require group_local_image_indices")
+
+            original_group_indices = _normalize_index_array(
+                self.original_group_indices,
+                name="original_group_indices",
+            )
+            if original_group_indices.size != len(self.group_local_image_indices):
+                raise ValueError(
+                    "grouped layouts require one original_group_indices entry per group"
+                )
+
+            image_local_to_group_local = np.full(n_images, -1, dtype=np.int32)
+            normalized_groups = []
+            for group_idx, local_images in enumerate(self.group_local_image_indices):
+                local_images = _normalize_index_array(
+                    local_images,
+                    name=f"group_local_image_indices[{group_idx}]",
+                )
+                if local_images.size == 0:
+                    raise ValueError(
+                        f"group_local_image_indices[{group_idx}] must not be empty"
+                    )
+                if local_images.size > 0 and np.any(local_images >= n_images):
+                    raise IndexError(
+                        f"group_local_image_indices[{group_idx}] contains out-of-range local images"
+                    )
+                normalized_groups.append(local_images.astype(np.int32, copy=False))
+                image_local_to_group_local[local_images] = np.int32(group_idx)
+
+            if n_images > 0 and np.any(image_local_to_group_local < 0):
+                raise ValueError(
+                    "group_local_image_indices must cover every local image exactly once"
+                )
+            group_local_image_indices = tuple(normalized_groups)
+
+        object.__setattr__(
+            self,
+            "original_image_indices",
+            original_image_indices.astype(np.int32, copy=False),
+        )
+        object.__setattr__(
+            self,
+            "original_group_indices",
+            original_group_indices.astype(np.int32, copy=False),
+        )
+        object.__setattr__(self, "grouped", bool(self.grouped))
+        object.__setattr__(self, "group_local_image_indices", group_local_image_indices)
+        object.__setattr__(self, "_image_local_to_group_local", image_local_to_group_local)
+        object.__setattr__(
+            self,
+            "_original_image_to_local",
+            _build_last_write_inverse(original_image_indices),
+        )
+        object.__setattr__(
+            self,
+            "_original_group_to_local",
+            _build_last_write_inverse(original_group_indices),
+        )
+
+    @classmethod
+    def from_image_indices(cls, original_image_indices):
+        return cls(
+            original_image_indices=np.asarray(original_image_indices, dtype=np.int32),
+            grouped=False,
+        )
+
+    @classmethod
+    def from_grouped_images(
+        cls,
+        *,
+        original_image_indices,
+        original_group_indices,
+        group_local_image_indices: Iterable[np.ndarray],
+    ):
+        return cls(
+            original_image_indices=np.asarray(original_image_indices, dtype=np.int32),
+            grouped=True,
+            original_group_indices=np.asarray(original_group_indices, dtype=np.int32),
+            group_local_image_indices=tuple(
+                np.asarray(local_images, dtype=np.int32)
+                for local_images in group_local_image_indices
+            ),
+        )
+
+    @property
+    def n_images(self) -> int:
+        return int(self.original_image_indices.size)
+
+    @property
+    def n_groups(self) -> int:
+        return int(self.original_group_indices.size)
+
+    @property
+    def image_local_to_group_local(self):
+        return self._image_local_to_group_local
+
+    def subset(self, local_image_indices):
+        local_image_indices = normalize_indices(
+            local_image_indices,
+            self.n_images,
+            name="local_image_indices",
+        )
+        if not self.grouped:
+            return DatasetIndexLayout.from_image_indices(
+                self.original_image_indices[local_image_indices]
+            )
+
+        original_image_indices = self.original_image_indices[local_image_indices]
+        old_to_new_local_image = np.full(self.n_images, -1, dtype=np.int32)
+        old_to_new_local_image[local_image_indices] = np.arange(
+            local_image_indices.size,
+            dtype=np.int32,
+        )
+
+        selected_old_groups = np.unique(
+            self._image_local_to_group_local[local_image_indices]
+        ).astype(np.int32, copy=False)
+        group_local_image_indices = []
+        for old_group_idx in selected_old_groups:
+            old_group_images = self.group_local_image_indices[int(old_group_idx)]
+            new_group_images = old_to_new_local_image[old_group_images]
+            new_group_images = new_group_images[new_group_images >= 0]
+            if new_group_images.size == 0:
+                continue
+            group_local_image_indices.append(new_group_images.astype(np.int32, copy=False))
+
+        return DatasetIndexLayout.from_grouped_images(
+            original_image_indices=original_image_indices,
+            original_group_indices=self.original_group_indices[selected_old_groups],
+            group_local_image_indices=group_local_image_indices,
+        )
+
+    def original_image_indices_for_local(self, local_image_indices=None):
+        if local_image_indices is None:
+            return self.original_image_indices
+        local_image_indices = normalize_indices(
+            local_image_indices,
+            self.n_images,
+            name="local_image_indices",
+        )
+        return self.original_image_indices[local_image_indices].astype(np.int32, copy=False)
+
+    def original_group_indices_for_local(self, local_group_indices=None):
+        if local_group_indices is None:
+            return self.original_group_indices
+        local_group_indices = normalize_indices(
+            local_group_indices,
+            self.n_groups,
+            name="local_group_indices",
+        )
+        return self.original_group_indices[local_group_indices].astype(np.int32, copy=False)
+
+    def local_image_indices_from_original(self, original_image_indices, *, allow_missing=False):
+        original_image_indices = _normalize_index_array(
+            original_image_indices,
+            name="original_image_indices",
+        )
+        if original_image_indices.size == 0:
+            return original_image_indices
+        local_image_indices = np.full(original_image_indices.shape, -1, dtype=np.int32)
+        in_bounds = original_image_indices < self._original_image_to_local.size
+        local_image_indices[in_bounds] = self._original_image_to_local[original_image_indices[in_bounds]]
+        if not allow_missing and np.any(~in_bounds):
+            raise IndexError("original_image_indices contains ids outside this layout")
+        if not allow_missing and np.any(local_image_indices < 0):
+            raise IndexError("original_image_indices contains ids not present in this layout")
+        return local_image_indices.astype(np.int32, copy=False)
+
+    def local_group_indices_from_original(self, original_group_indices, *, allow_missing=False):
+        original_group_indices = _normalize_index_array(
+            original_group_indices,
+            name="original_group_indices",
+        )
+        if original_group_indices.size == 0:
+            return original_group_indices
+        local_group_indices = np.full(original_group_indices.shape, -1, dtype=np.int32)
+        in_bounds = original_group_indices < self._original_group_to_local.size
+        local_group_indices[in_bounds] = self._original_group_to_local[original_group_indices[in_bounds]]
+        if not allow_missing and np.any(~in_bounds):
+            raise IndexError("original_group_indices contains ids outside this layout")
+        if not allow_missing and np.any(local_group_indices < 0):
+            raise IndexError("original_group_indices contains ids not present in this layout")
+        return local_group_indices.astype(np.int32, copy=False)
+
+    def local_group_indices_from_local_images(self, local_image_indices):
+        local_image_indices = normalize_indices(
+            local_image_indices,
+            self.n_images,
+            name="local_image_indices",
+        )
+        if not self.grouped:
+            return local_image_indices.astype(np.int32, copy=False)
+        return np.unique(
+            self._image_local_to_group_local[local_image_indices]
+        ).astype(np.int32, copy=False)
+
+    def original_group_indices_from_local_images(self, local_image_indices):
+        local_group_indices = self.local_group_indices_from_local_images(local_image_indices)
+        return self.original_group_indices_for_local(local_group_indices)
+
+    def local_image_indices_from_local_groups(self, local_group_indices):
+        local_group_indices = normalize_indices(
+            local_group_indices,
+            self.n_groups,
+            name="local_group_indices",
+        )
+        if not self.grouped:
+            return local_group_indices.astype(np.int32, copy=False)
+        if local_group_indices.size == 0:
+            return np.array([], dtype=np.int32)
+        return np.concatenate(
+            [self.group_local_image_indices[int(group_idx)] for group_idx in local_group_indices]
+        ).astype(np.int32, copy=False)
+
+    def original_image_indices_from_local_groups(self, local_group_indices):
+        local_image_indices = self.local_image_indices_from_local_groups(local_group_indices)
+        return self.original_image_indices_for_local(local_image_indices)
+
+
+class TiltSeriesOriginalIndexMap:
+    """Original-file particle/image mapping used by cryo-ET selection logic."""
+
+    def __init__(self, particle_to_images, image_to_particle, tilt_numbers=None):
+        self._particle_to_images = tuple(
+            _normalize_index_array(image_indices, name=f"particle_to_images[{idx}]")
+            for idx, image_indices in enumerate(particle_to_images)
+        )
+        self._image_to_particle = _normalize_index_array(
+            image_to_particle,
+            name="image_to_particle",
+        )
+        self.tilt_numbers = None if tilt_numbers is None else _normalize_index_array(
+            tilt_numbers,
+            name="tilt_numbers",
+        )
+        if self.tilt_numbers is not None and self.tilt_numbers.shape[0] != self._image_to_particle.shape[0]:
+            raise ValueError("tilt_numbers must have one entry per original image")
+
+    @classmethod
+    def from_particles_file(cls, particles_file, *, datadir=None, ntilts=None):
+        from recovar.data_io import cryo_dataset
+
+        particle_to_images, tilt_to_particle = cryo_dataset.TiltSeriesDataset.parse_particle_tilt(
+            particles_file
+        )
+        particle_to_images = tuple(
+            _normalize_index_array(image_indices, name=f"particle_to_images[{idx}]")
+            for idx, image_indices in enumerate(particle_to_images)
+        )
+        if isinstance(tilt_to_particle, dict):
+            if tilt_to_particle:
+                n_images = int(max(tilt_to_particle)) + 1
+                image_to_particle = np.full(n_images, -1, dtype=np.int32)
+                for image_idx, particle_idx in tilt_to_particle.items():
+                    image_to_particle[int(image_idx)] = int(particle_idx)
+            else:
+                image_to_particle = np.array([], dtype=np.int32)
+        else:
+            image_to_particle = np.asarray(tilt_to_particle, dtype=np.int32).reshape(-1)
+
+        inferred_n_images = (
+            max((int(np.max(imgs)) for imgs in particle_to_images if imgs.size > 0), default=-1) + 1
+        )
+        if image_to_particle.size < inferred_n_images:
+            extended = np.full(inferred_n_images, -1, dtype=np.int32)
+            if image_to_particle.size > 0:
+                extended[:image_to_particle.size] = image_to_particle
+            image_to_particle = extended
+
+        tilt_numbers = None
+        if ntilts is not None and ntilts > 0:
+            tilt_dataset = cryo_dataset.TiltSeriesDataset(
+                particles_file,
+                datadir=datadir,
+                lazy=True,
+            )
+            tilt_numbers = np.asarray(tilt_dataset.tilt_numbers, dtype=np.int32)
+
+        return cls(
+            particle_to_images=particle_to_images,
+            image_to_particle=image_to_particle,
+            tilt_numbers=tilt_numbers,
+        )
+
+    @property
+    def n_particles(self) -> int:
+        return len(self._particle_to_images)
+
+    @property
+    def n_images(self) -> int:
+        return int(self._image_to_particle.shape[0])
+
+    @property
+    def particle_to_images(self):
+        return self._particle_to_images
+
+    @property
+    def image_to_particle(self):
+        return self._image_to_particle
+
+    def sanitize_particle_indices(self, values, *, name, allowed_particles=None):
+        arr = np.asarray(values)
+        if arr.dtype == bool:
+            if arr.ndim != 1:
+                raise ValueError(f"{name} boolean mask must be 1D")
+            if arr.size != int(self.n_particles):
+                raise ValueError(
+                    f"{name} boolean mask length {arr.size} must match number of particles {int(self.n_particles)}"
+                )
+            particle_indices = np.flatnonzero(arr).astype(np.int32, copy=False)
+        else:
+            if arr.ndim == 0:
+                arr = arr.reshape(1)
+            if arr.ndim != 1:
+                raise ValueError(f"{name} ids must be 1D")
+            if arr.dtype.kind not in ("i", "u"):
+                raise TypeError(f"{name} ids must be integer or boolean mask")
+            arr = arr.astype(np.int64, copy=False).reshape(-1)
+            in_bounds = (arr >= 0) & (arr < self.n_particles)
+            particle_indices = arr[in_bounds].astype(np.int32, copy=False)
+        if allowed_particles is not None:
+            particle_indices = filter_preserve_order(particle_indices, allowed_particles)
+        return deduplicate_preserve_order(particle_indices, name=name)
+
+    def sanitize_image_indices(self, values, *, name, allowed_images=None):
+        arr = np.asarray(values)
+        if arr.dtype == bool:
+            if arr.ndim != 1:
+                raise ValueError(f"{name} boolean mask must be 1D")
+            if arr.size != int(self.n_images):
+                raise ValueError(
+                    f"{name} boolean mask length {arr.size} must match total size {int(self.n_images)}"
+                )
+            image_indices = np.flatnonzero(arr).astype(np.int32, copy=False)
+        else:
+            if arr.ndim == 0:
+                arr = arr.reshape(1)
+            if arr.ndim != 1:
+                raise ValueError(f"{name} must be 1D")
+            if arr.dtype.kind not in ("i", "u"):
+                raise TypeError(f"{name} must be integer array")
+            arr = arr.astype(np.int64, copy=False).reshape(-1)
+            in_bounds = (arr >= 0) & (arr < self.n_images)
+            image_indices = arr[in_bounds].astype(np.int32, copy=False)
+        if allowed_images is not None:
+            image_indices = filter_preserve_order(image_indices, allowed_images)
+        return image_indices.astype(np.int32, copy=False)
+
+    def particle_indices_from_images(self, image_indices):
+        image_indices = normalize_indices(image_indices, self.n_images, name="image_indices")
+        if image_indices.size == 0:
+            return np.array([], dtype=np.int32)
+        particle_indices = self._image_to_particle[image_indices]
+        particle_indices = particle_indices[particle_indices >= 0]
+        if particle_indices.size == 0:
+            return np.array([], dtype=np.int32)
+        return np.unique(particle_indices).astype(np.int32, copy=False)
+
+    def image_indices_from_particles(
+        self,
+        particle_indices,
+        *,
+        allowed_images=None,
+        ntilts=None,
+    ):
+        particle_indices = normalize_indices(
+            particle_indices,
+            self.n_particles,
+            name="particle_indices",
+        )
+        if particle_indices.size == 0:
+            return np.array([], dtype=np.int32)
+
+        image_indices = np.concatenate(
+            [self._particle_to_images[int(particle_idx)] for particle_idx in particle_indices]
+        ).astype(np.int32, copy=False)
+        if ntilts is not None:
+            if ntilts <= 0:
+                return np.array([], dtype=np.int32)
+            if self.tilt_numbers is None:
+                raise ValueError("tilt_numbers are required when ntilts is specified")
+            image_indices = image_indices[self.tilt_numbers[image_indices] < int(ntilts)]
+        if allowed_images is not None:
+            image_indices = filter_preserve_order(image_indices, allowed_images)
+        return image_indices.astype(np.int32, copy=False)

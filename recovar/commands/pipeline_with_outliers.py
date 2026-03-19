@@ -94,7 +94,10 @@ def run_pipeline_with_outlier_removal():
     zdim = zdim_list[-1]  # Use the last zdim for outlier detection
 
     # Initialize indices (start with None to include all particles)
-    current_indices = None
+    # Outlier detection always saves original-file image and particle ids.
+    # Keep those ids unchanged across rounds and use them directly for
+    # subsequent --ind / --particle-ind filtering.
+    current_image_indices = None
     current_particle_indices = None
 
     # Keep track of inliers from all rounds
@@ -113,15 +116,24 @@ def run_pipeline_with_outlier_removal():
         round_dirs.append(args.outdir)  # Keep track of the round directory
 
         # If not the first round, update the indices file
-        if current_indices is not None:
-            # Save current_indices to a pickle file
+        if current_image_indices is not None:
+            # Save original-file indices for the next round's dataset filtering.
             indices_filename = os.path.join(args.outdir, f"inliers_round_{k}.pkl")
             with open(indices_filename, "wb") as f:
-                pickle.dump(current_indices, f)
-            # Update args to use the indices file - always use image indices after first round
+                pickle.dump(current_image_indices, f)
             args.ind = indices_filename
-            args.tilt_ind = None  # Clear particle indices since we're using image indices
-            logger.info("Using image inliers (%s images) from round %s for round %s", len(current_indices), k, round_number)
+            args.tilt_ind = None
+            if args.tilt_series and current_particle_indices is not None:
+                particle_indices_filename = os.path.join(
+                    args.outdir, f"particle_inliers_round_{k}.pkl"
+                )
+                with open(particle_indices_filename, "wb") as f:
+                    pickle.dump(current_particle_indices, f)
+                args.tilt_ind = particle_indices_filename
+            logger.info(
+                "Using original inliers (%s images) from round %s for round %s",
+                len(current_image_indices), k, round_number,
+            )
         else:
             # First round - store the original index arguments for future rounds
             if args.tilt_series:
@@ -226,8 +238,8 @@ def run_pipeline_with_outlier_removal():
             logger.error("Combined inliers file not found: %s", combined_inliers_file)
             sys.exit(1)
         with open(combined_inliers_file, 'rb') as f:
-            current_indices = pickle.load(f)
-        
+            current_image_indices = pickle.load(f)
+
         # For tilt series, also load particle indices
         current_particle_indices = None
         if args.tilt_series:
@@ -266,14 +278,14 @@ def run_pipeline_with_outlier_removal():
         logger.info("Saved outliers of round %s to %s", round_number, outliers_save_path)
         
         # Keep track of inliers for all rounds
-        all_rounds_inliers[round_number] = current_indices
+        all_rounds_inliers[round_number] = current_image_indices
 
         # Check if there are enough inliers to continue
-        if len(current_indices) == 0:
+        if len(current_image_indices) == 0:
             logger.warning("No inliers left after round %s. Stopping iterations.", round_number)
             break
 
-        logger.info("Round %s completed. Number of inliers: %s", round_number, len(current_indices))
+        logger.info("Round %s completed. Number of inliers: %s", round_number, len(current_image_indices))
 
     # Save all rounds inliers to a file
     all_inliers_file = os.path.join(original_outdir, "all_rounds_inliers.pkl")

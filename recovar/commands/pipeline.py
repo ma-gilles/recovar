@@ -731,10 +731,10 @@ def standard_recovar_pipeline(args):
             # est_contrasts is in halfset-concatenated order (per-image);
             # reindex to original dataset order before applying to the
             # unified dataset.  Always image-level, even for tilt-series.
-            contrasts_orig = dataset.reorder_to_original_indexing(
+            contrasts_local = dataset.reorder_to_dataset_indexing(
                 contrasts_for_second, ds,
                 use_tilt_indices=False)
-            ds.set_contrasts(contrasts_orig)
+            ds.set_contrasts(contrasts_local)
             options.contrast = "contrast"
 
         ##TODO: mean functions return a dict with volume sized arrays.
@@ -917,14 +917,14 @@ def standard_recovar_pipeline(args):
         try:
             # Reorder halfset-concatenated arrays (per-image) to original
             # dataset order for iteration over the unified dataset.
-            contrasts_orig_resid = dataset.reorder_to_original_indexing(
+            contrasts_local_resid = dataset.reorder_to_dataset_indexing(
                 est_contrasts[zdim], ds, use_tilt_indices=False)
-            coords_orig_resid = dataset.reorder_to_original_indexing(
+            coords_local_resid = dataset.reorder_to_dataset_indexing(
                 latent_coords[zdim], ds, use_tilt_indices=False)
             noise_var_from_het_residual, _, _ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(
                 ds, dilated_volume_mask, means.combined, u['rescaled'][:, :n_pcs_to_use],
                 # //10: heterogeneity residual estimation is memory-intensive (holds full embedding + projections)
-                contrasts_orig_resid, coords_orig_resid, utils.safe_batch_size(batch_size // 10),
+                contrasts_local_resid, coords_local_resid, utils.safe_batch_size(batch_size // 10),
                 disc_type=covariance_options['disc_type'])
         except Exception as exc:
             # Some CPU/mixed backend traces can hit CUDA FFI host-registration
@@ -989,19 +989,10 @@ def standard_recovar_pipeline(args):
 
     # --- Build result dict and save ---
     if args.tilt_series:
-        # halfset_indices are image-level; dataset_tilt_indices is particle-level.
-        # Build image→particle map to derive per-half particle canonical indices.
-        _dti = np.asarray(ds.dataset_tilt_indices)
-        _img_to_particle = np.full(ds.n_images, -1, dtype=np.int32)
-        for p_idx, tilts in enumerate(ds.image_stack._particle_tilts):
-            for t in tilts:
-                if t < ds.n_images:
-                    _img_to_particle[t] = p_idx
-        particles_ind_split = []
-        for i in range(2):
-            half_images = np.asarray(ds.halfset_indices[i])
-            half_particles = np.unique(_img_to_particle[half_images])
-            particles_ind_split.append(_dti[half_particles])
+        particles_ind_split = [
+            ds.halfset_original_group_indices(halfset_id)
+            for halfset_id in range(2)
+        ]
     else:
         particles_ind_split = ind_split
 

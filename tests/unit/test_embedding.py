@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -5,15 +7,69 @@ jax = pytest.importorskip("jax")
 import jax.numpy as jnp
 
 from recovar.heterogeneity import embedding
-from recovar.core.configs import ForwardModelConfig, BatchData, ModelState, EmbeddingOpts
+from recovar.core.configs import ForwardModelConfig, ModelState, EmbeddingOpts
 
 pytestmark = pytest.mark.unit
+
+
+def _make_batch_fields(*, images, rotation_matrices, translations, ctf_params, noise_variance):
+    return SimpleNamespace(
+        images=images,
+        rotation_matrices=rotation_matrices,
+        translations=translations,
+        ctf_params=ctf_params,
+        noise_variance=noise_variance,
+    )
+
+
+def _call_compute_batch_coords_p1(config, batch_data, model, hermitian_weights=None):
+    return embedding._compute_batch_coords_p1(
+        config,
+        batch_data.images,
+        model,
+        hermitian_weights=hermitian_weights,
+        rotation_matrices=batch_data.rotation_matrices,
+        translations=batch_data.translations,
+        ctf_params=batch_data.ctf_params,
+        noise_variance=batch_data.noise_variance,
+    )
+
+
+def _call_compute_batch_coords(
+    config,
+    batch_data,
+    model,
+    opts,
+    image_mask,
+    contrast_grid,
+    contrast_mean=1.0,
+    contrast_variance=np.inf,
+    hermitian_weights=None,
+):
+    return embedding.compute_batch_coords(
+        config,
+        batch_data.images,
+        model,
+        opts,
+        image_mask,
+        contrast_grid,
+        contrast_mean=contrast_mean,
+        contrast_variance=contrast_variance,
+        hermitian_weights=hermitian_weights,
+        rotation_matrices=batch_data.rotation_matrices,
+        translations=batch_data.translations,
+        ctf_params=batch_data.ctf_params,
+        noise_variance=batch_data.noise_variance,
+    )
 
 
 class _Cryo:
     def __init__(self, n_images):
         self.n_images = n_images
         self.halfset_indices = None
+
+    def halfset_local_image_indices(self, halfset_id):
+        return np.asarray(self.halfset_indices[halfset_id], dtype=np.int32)
 
 
 def test_split_weights_partitions_by_halfset_indices():
@@ -76,6 +132,7 @@ class _DummyCryo:
         self.n_images = n_images
         self.dtype = dtype
         self.halfset_indices = None
+        self.tilt_series_flag = False
 
     def subset(self, indices):
         return _DummyCryo(
@@ -84,6 +141,13 @@ class _DummyCryo:
             n_images=len(indices),
             dtype=self.dtype,
         )
+
+    def halfset_local_image_indices(self, halfset_id):
+        return np.asarray(self.halfset_indices[halfset_id], dtype=np.int32)
+
+    def get_halfset_dataset(self, halfset_id, *, independent=False, lazy=None):
+        _ = (independent, lazy)
+        return self.subset(self.halfset_local_image_indices(halfset_id))
 
 
 def test_get_per_image_embedding_clamps_batch_size_to_at_least_one(monkeypatch):
@@ -207,6 +271,69 @@ def test_get_per_image_embedding_ignore_zero_frequency_overrides_volume_mask(mon
     assert captured["contrast_grid_size"] == [1, 1]
 
 
+def test_get_per_image_embedding_uses_independent_halfset_datasets_for_tilt_series(monkeypatch):
+    class _HalfsetCryo:
+        def __init__(self, n_images):
+            self.n_images = n_images
+
+    class _TiltCryo:
+        def __init__(self):
+            self.volume_size = 4
+            self.image_size = 16
+            self.n_images = 5
+            self.dtype = np.complex64
+            self.tilt_series_flag = True
+            self.halfset_indices = [
+                np.array([0, 2, 4], dtype=np.int32),
+                np.array([1, 3], dtype=np.int32),
+            ]
+            self.calls = []
+
+        def get_halfset_dataset(self, halfset_id, *, independent=False, lazy=None):
+            self.calls.append((halfset_id, independent, lazy))
+            return _HalfsetCryo(len(self.halfset_indices[halfset_id]))
+
+    ds = _TiltCryo()
+    mean = np.zeros((4,), dtype=np.complex64)
+    u = np.zeros((4, 2), dtype=np.complex64)
+    s = np.ones((2,), dtype=np.float32)
+    volume_mask = np.ones((4,), dtype=np.float32)
+
+    monkeypatch.setattr(embedding, "USE_CUBIC", False)
+    monkeypatch.setattr(embedding.utils, "get_embedding_batch_size", lambda *_args, **_kwargs: 10)
+    monkeypatch.setattr(
+        embedding,
+        "get_coords_in_basis_and_contrast_3",
+        lambda experiment_dataset, _mean_estimate, basis, _eigenvalues, _volume_mask_in, _contrast_grid, _batch_size, _disc_type, **_kwargs: (
+            np.zeros((experiment_dataset.n_images, basis.shape[0]), dtype=np.complex64),
+            np.zeros((experiment_dataset.n_images, basis.shape[0], basis.shape[0]), dtype=np.complex64),
+            np.ones((experiment_dataset.n_images,), dtype=np.float32),
+            np.zeros((experiment_dataset.n_images, basis.shape[0], basis.shape[0]), dtype=np.complex64),
+        ),
+    )
+
+    zs, cov_zs, est_contrasts, bias = embedding.get_per_image_embedding(
+        mean=mean,
+        u=u,
+        s=s,
+        basis_size=2,
+        dataset=ds,
+        volume_mask=volume_mask,
+        gpu_memory=1,
+        disc_type="linear_interp",
+        contrast_option="none",
+        to_real=True,
+        compute_covariances=True,
+        compute_bias=True,
+    )
+
+    assert ds.calls == [(0, True, True), (1, True, True)]
+    assert zs.shape == (5, 2)
+    assert cov_zs.shape == (5, 2, 2)
+    assert est_contrasts.shape == (5,)
+    assert bias.shape == (5, 2, 2)
+
+
 def test_get_per_image_embedding_supports_single_cryo_list(monkeypatch):
     cryo = _DummyCryo(volume_size=4, image_size=16, n_images=4)
     cryo.halfset_indices = [np.arange(2, dtype=np.int32), np.arange(2, 4, dtype=np.int32)]
@@ -277,49 +404,39 @@ def test_get_coords_shared_label_splits_mixed_particle_batches(monkeypatch):
             self.premultiplied_ctf = False
             self._ctf_evaluator = embedding.core.CTFEvaluator()
             self.ctf_evaluator = self._ctf_evaluator
-            self.image_stack = _DummyImageStack()
-            self.image_mask = self.image_stack.mask
+            self.image_source = _DummyImageStack()
+            self.image_mask = self.image_source.mask
             self.noise = _DummyNoise()
             self.CTF_params = np.zeros((4, 9), dtype=np.float32)
             self.rotation_matrices = np.zeros((4, 3, 3), dtype=np.float32)
             self.translations = np.zeros((4, 2), dtype=np.float32)
 
         def process_images(self, batch, apply_image_mask=False):
-            return self.image_stack.process_images(batch, apply_image_mask=apply_image_mask)
+            return self.image_source.process_images(batch, apply_image_mask=apply_image_mask)
 
-        def iterate(self, batch_size, **kwargs):
+        def iter_batches(self, batch_size, **kwargs):
+            _ = (batch_size, kwargs)
             batch = np.zeros((4, 16), dtype=np.complex64)
             particles_ind = np.array([0, 0, 1, 1], dtype=np.int32)
             batch_image_ind = np.array([0, 1, 2, 3], dtype=np.int32)
             nv = self.noise.get_half(batch_image_ind)
-            yield BatchData(
-                images=batch,
-                rotation_matrices=self.rotation_matrices[batch_image_ind],
-                translations=self.translations[batch_image_ind],
-                ctf_params=self.CTF_params[batch_image_ind],
-                noise_variance=nv,
-                particle_indices=particles_ind,
-                image_indices=batch_image_ind,
-            )
-
-        def make_batch_data(self, images, indices, *, noise_variance=None, particle_indices=None):
-            return BatchData(
-                images=images,
-                rotation_matrices=self.rotation_matrices[indices],
-                translations=self.translations[indices],
-                ctf_params=self.CTF_params[indices],
-                noise_variance=noise_variance,
-                particle_indices=particle_indices,
-                image_indices=indices,
+            yield (
+                batch,
+                self.rotation_matrices[batch_image_ind],
+                self.translations[batch_image_ind],
+                self.CTF_params[batch_image_ind],
+                nv,
+                particles_ind,
+                batch_image_ind,
             )
 
     calls = []
 
-    def fake_compute_batch_coords(config, batch_data, model, opts, image_mask, contrast_grid, contrast_mean, contrast_variance, hermitian_weights):
+    def fake_compute_batch_coords(config, images, model, opts, image_mask, contrast_grid, contrast_mean, contrast_variance, hermitian_weights, *, rotation_matrices, translations, ctf_params, noise_variance):
         _ = (config, model, image_mask, contrast_grid, contrast_mean, contrast_variance, hermitian_weights)
-        local_idx = np.asarray(batch_data.ctf_params)[:, 0].astype(int)
+        local_idx = np.asarray(ctf_params)[:, 0].astype(int)
         # ctf_params are zeros in this fixture, so infer group size from batch length
-        n_local = batch_data.images.shape[0]
+        n_local = images.shape[0]
         calls.append((n_local, bool(opts.shared_label)))
         basis_size = model.eigenvalues.shape[0]
         # Return one latent row for shared-label solves.
@@ -387,47 +504,37 @@ def test_get_coords_shared_label_grouped_shared_contrast(monkeypatch):
             self.premultiplied_ctf = False
             self._ctf_evaluator = embedding.core.CTFEvaluator()
             self.ctf_evaluator = self._ctf_evaluator
-            self.image_stack = _DummyImageStack()
-            self.image_mask = self.image_stack.mask
+            self.image_source = _DummyImageStack()
+            self.image_mask = self.image_source.mask
             self.noise = _DummyNoise()
             self.CTF_params = np.zeros((4, 9), dtype=np.float32)
             self.rotation_matrices = np.zeros((4, 3, 3), dtype=np.float32)
             self.translations = np.zeros((4, 2), dtype=np.float32)
 
         def process_images(self, batch, apply_image_mask=False):
-            return self.image_stack.process_images(batch, apply_image_mask=apply_image_mask)
+            return self.image_source.process_images(batch, apply_image_mask=apply_image_mask)
 
-        def iterate(self, batch_size, **kwargs):
+        def iter_batches(self, batch_size, **kwargs):
+            _ = (batch_size, kwargs)
             batch = np.zeros((4, 16), dtype=np.complex64)
             particles_ind = np.array([0, 0, 1, 1], dtype=np.int32)
             batch_image_ind = np.array([0, 1, 2, 3], dtype=np.int32)
             nv = self.noise.get_half(batch_image_ind)
-            yield BatchData(
-                images=batch,
-                rotation_matrices=self.rotation_matrices[batch_image_ind],
-                translations=self.translations[batch_image_ind],
-                ctf_params=self.CTF_params[batch_image_ind],
-                noise_variance=nv,
-                particle_indices=particles_ind,
-                image_indices=batch_image_ind,
-            )
-
-        def make_batch_data(self, images, indices, *, noise_variance=None, particle_indices=None):
-            return BatchData(
-                images=images,
-                rotation_matrices=self.rotation_matrices[indices],
-                translations=self.translations[indices],
-                ctf_params=self.CTF_params[indices],
-                noise_variance=noise_variance,
-                particle_indices=particle_indices,
-                image_indices=indices,
+            yield (
+                batch,
+                self.rotation_matrices[batch_image_ind],
+                self.translations[batch_image_ind],
+                self.CTF_params[batch_image_ind],
+                nv,
+                particles_ind,
+                batch_image_ind,
             )
 
     grouped_calls = []
 
-    def fake_grouped(*args):
+    def fake_grouped(*args, **kwargs):
         grouped_calls.append(True)
-        _ = args
+        _ = (args, kwargs)
         xs = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
         contrast = np.array([11.0, 12.0], dtype=np.float32)
         cov = np.stack([np.eye(2, dtype=np.float32), 2 * np.eye(2, dtype=np.float32)], axis=0)
@@ -708,7 +815,7 @@ def test_compute_batch_coords_p1_half_matches_full(H, W, noise_type, monkeypatch
                         _make_batch_vol_mock(aus, image_shape))
 
     config = _minimal_config(image_shape, premultiplied_ctf=False)
-    batch_data = BatchData(
+    batch_data = _make_batch_fields(
         images=images_flat,
         rotation_matrices=jnp.zeros((n_images, 3, 3)),
         translations=jnp.zeros((n_images, 2)),
@@ -723,8 +830,8 @@ def test_compute_batch_coords_p1_half_matches_full(H, W, noise_type, monkeypatch
     )
 
     hw = embedding._rfft2_hermitian_weights(image_shape)
-    full_out = embedding._compute_batch_coords_p1(config, batch_data, model, hermitian_weights=None)
-    half_out = embedding._compute_batch_coords_p1(config, batch_data, model, hermitian_weights=hw)
+    full_out = _call_compute_batch_coords_p1(config, batch_data, model, hermitian_weights=None)
+    half_out = _call_compute_batch_coords_p1(config, batch_data, model, hermitian_weights=hw)
 
     names = ["AU_t_images", "AU_t_Amean", "AU_t_AU",
              "image_norms_sq", "image_T_A_mean", "A_mean_norm_sq"]
@@ -790,7 +897,7 @@ def test_compute_batch_coords_p1_premult_ctf_half_matches_full(H, W, monkeypatch
     ctf_std[:, 4] = 2.7       # CS
     ctf_std[:, 5] = 0.1       # W (amplitude contrast)
     ctf_std[:, 8] = 1.0       # CONTRAST scale
-    batch_data = BatchData(
+    batch_data = _make_batch_fields(
         images=images_flat,
         rotation_matrices=jnp.zeros((n_images, 3, 3)),
         translations=jnp.zeros((n_images, 2)),
@@ -805,8 +912,8 @@ def test_compute_batch_coords_p1_premult_ctf_half_matches_full(H, W, monkeypatch
     )
 
     hw = embedding._rfft2_hermitian_weights(image_shape)
-    full_out = embedding._compute_batch_coords_p1(config, batch_data, model, hermitian_weights=None)
-    half_out = embedding._compute_batch_coords_p1(config, batch_data, model, hermitian_weights=hw)
+    full_out = _call_compute_batch_coords_p1(config, batch_data, model, hermitian_weights=None)
+    half_out = _call_compute_batch_coords_p1(config, batch_data, model, hermitian_weights=hw)
 
     names = ["AU_t_images", "AU_t_Amean", "AU_t_AU",
              "image_norms_sq", "image_T_A_mean", "A_mean_norm_sq"]
@@ -863,7 +970,7 @@ def test_compute_batch_coords_p1_half_matches_full_float64(H, W, monkeypatch):
             premultiplied_ctf=False,
             process_fn=None,
         )
-        batch_data = BatchData(
+        batch_data = _make_batch_fields(
             images=images_flat,
             rotation_matrices=jnp.zeros((n_images, 3, 3)),
             translations=jnp.zeros((n_images, 2)),
@@ -878,8 +985,8 @@ def test_compute_batch_coords_p1_half_matches_full_float64(H, W, monkeypatch):
         )
 
         hw64 = jnp.array(np.asarray(embedding._rfft2_hermitian_weights(image_shape)), dtype=jnp.float64)
-        full_out = embedding._compute_batch_coords_p1(config, batch_data, model, hermitian_weights=None)
-        half_out = embedding._compute_batch_coords_p1(config, batch_data, model, hermitian_weights=hw64)
+        full_out = _call_compute_batch_coords_p1(config, batch_data, model, hermitian_weights=None)
+        half_out = _call_compute_batch_coords_p1(config, batch_data, model, hermitian_weights=hw64)
 
         names = ["AU_t_images", "AU_t_Amean", "AU_t_AU",
                  "image_norms_sq", "image_T_A_mean", "A_mean_norm_sq"]
@@ -966,7 +1073,7 @@ def _run_half_vs_full_compute_batch_coords(H=16, W=16, n_images=32, n_basis=6):
         premultiplied_ctf=False,
         process_fn=None,
     )
-    batch_data = BatchData(
+    batch_data = _make_batch_fields(
         images=images_flat,
         rotation_matrices=rotation_matrices,
         translations=translations,
@@ -989,11 +1096,11 @@ def _run_half_vs_full_compute_batch_coords(H=16, W=16, n_images=32, n_basis=6):
 
     hw = embedding._rfft2_hermitian_weights(image_shape)
 
-    full_xs, full_contrast, full_cov, full_bias = embedding.compute_batch_coords(
+    full_xs, full_contrast, full_cov, full_bias = _call_compute_batch_coords(
         config, batch_data, model, opts, image_mask, contrast_grid,
         hermitian_weights=None,
     )
-    half_xs, half_contrast, half_cov, half_bias = embedding.compute_batch_coords(
+    half_xs, half_contrast, half_cov, half_bias = _call_compute_batch_coords(
         config, batch_data, model, opts, image_mask, contrast_grid,
         hermitian_weights=hw,
     )
@@ -1042,7 +1149,7 @@ def test_compute_batch_coords_half_vs_full_gpu(gpu_device, monkeypatch):
                             _make_batch_vol_mock(aus, image_shape))
 
         config = _minimal_config(image_shape, premultiplied_ctf=False)
-        batch_data = BatchData(
+        batch_data = _make_batch_fields(
             images=images_flat,
             rotation_matrices=jnp.zeros((n_images, 3, 3)),
             translations=jnp.zeros((n_images, 2)),
@@ -1061,11 +1168,11 @@ def test_compute_batch_coords_half_vs_full_gpu(gpu_device, monkeypatch):
         hw = embedding._rfft2_hermitian_weights(image_shape)
 
         with jax.disable_jit():
-            full_xs, full_contrast, full_cov, full_bias = embedding.compute_batch_coords(
+            full_xs, full_contrast, full_cov, full_bias = _call_compute_batch_coords(
                 config, batch_data, model, opts, image_mask, contrast_grid,
                 hermitian_weights=None,
             )
-            half_xs, half_contrast, half_cov, half_bias = embedding.compute_batch_coords(
+            half_xs, half_contrast, half_cov, half_bias = _call_compute_batch_coords(
                 config, batch_data, model, opts, image_mask, contrast_grid,
                 hermitian_weights=hw,
             )
@@ -1177,7 +1284,7 @@ def test_compute_batch_coords_half_vs_full_cpu(monkeypatch):
                         _make_batch_vol_mock(aus, image_shape))
 
     config = _minimal_config(image_shape, premultiplied_ctf=False)
-    batch_data = BatchData(
+    batch_data = _make_batch_fields(
         images=images_flat,
         rotation_matrices=jnp.zeros((n_images, 3, 3)),
         translations=jnp.zeros((n_images, 2)),
@@ -1196,11 +1303,11 @@ def test_compute_batch_coords_half_vs_full_cpu(monkeypatch):
     hw = embedding._rfft2_hermitian_weights(image_shape)
 
     with jax.disable_jit():
-        full_xs, full_contrast, full_cov, full_bias = embedding.compute_batch_coords(
+        full_xs, full_contrast, full_cov, full_bias = _call_compute_batch_coords(
             config, batch_data, model, opts, image_mask, contrast_grid,
             hermitian_weights=None,
         )
-        half_xs, half_contrast, half_cov, half_bias = embedding.compute_batch_coords(
+        half_xs, half_contrast, half_cov, half_bias = _call_compute_batch_coords(
             config, batch_data, model, opts, image_mask, contrast_grid,
             hermitian_weights=hw,
         )

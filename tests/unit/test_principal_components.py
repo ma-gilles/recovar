@@ -301,7 +301,7 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
     _, ctf_params, rots, trans, _, voxel_size, _ = make_tiny_simulation(grid_size=4, n_images=6, seed=0)
     metadata = dataset.Metadata(rots, trans, ctf_params)
     cryo = dataset.CryoEMDataset(
-        image_stack=None,
+        image_source=None,
         voxel_size=voxel_size,
         metadata=metadata,
         ctf_evaluator=core.CTFEvaluator(),

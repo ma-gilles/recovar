@@ -9,7 +9,6 @@ pytest.importorskip("jax")
 import jax.numpy as jnp
 
 from recovar.core.configs import (
-    BatchData,
     CovarianceOpts,
     EmbeddingOpts,
     ForwardModelConfig,
@@ -97,24 +96,6 @@ class TestForwardModelConfig:
         c2 = _make_config(disc_type="linear_interp")
         # Static fields differ, so they shouldn't be equal in pytree sense
         assert c1.disc_type != c2.disc_type
-
-
-# ---------------------------------------------------------------------------
-# BatchData tests
-# ---------------------------------------------------------------------------
-
-
-class TestBatchData:
-    def test_fields_are_accessible(self):
-        bd = BatchData(
-            images=jnp.zeros((2, 4)),
-            rotation_matrices=jnp.eye(3)[None].repeat(2, axis=0),
-            translations=jnp.zeros((2, 2)),
-            ctf_params=jnp.zeros((2, 9)),
-            noise_variance=jnp.ones((2, 4)),
-        )
-        assert bd.images.shape == (2, 4)
-        assert bd.ctf_params.shape == (2, 9)
 
 
 # ---------------------------------------------------------------------------
@@ -219,4 +200,3 @@ class TestNewForwardModelAPI:
         )
         assert isinstance(out, tuple)
         assert np.asarray(out[0]).shape == (np.prod(VOLUME_SHAPE),)
-

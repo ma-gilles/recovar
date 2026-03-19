@@ -25,6 +25,40 @@ def sim_tiny_tilt_files(tmp_path_factory):
     )
 
 
+def _dataset_image_batches(cryo, *, batch_size, subset_indices=None):
+    return list(
+        cryo.iter_batches(
+            batch_size=batch_size,
+            indices=subset_indices,
+            by_image=True,
+            prefetch=False,
+        )
+    )
+
+
+def _dataset_group_batches(cryo, *, batch_size, subset_indices=None):
+    return list(
+        cryo.iter_batches(
+            batch_size=batch_size,
+            indices=subset_indices,
+            by_image=False,
+            prefetch=False,
+        )
+    )
+
+
+def _batch_images(batch):
+    return np.asarray(batch[0])
+
+
+def _batch_particle_indices(batch):
+    return np.asarray(batch[5]).reshape(-1)
+
+
+def _batch_image_indices(batch):
+    return np.asarray(batch[6]).reshape(-1)
+
+
 def test_load_dataset_tiny_spa_files(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
     ind = np.array([1, 4], dtype=np.int32)
@@ -68,9 +102,9 @@ def test_load_dataset_tiny_spa_boolean_ind_preserves_dataset_indices_and_image_i
     assert cryo.n_images == selected.size
     assert cryo.CTF_params.shape[0] == selected.size
 
-    batches = list(cryo.get_image_generator(batch_size=2))
-    got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
-    got_local_idx = np.concatenate([np.array(b[2]).reshape(-1) for b in batches], axis=0)
+    batches = _dataset_image_batches(cryo, batch_size=2)
+    got_images = np.concatenate([_batch_images(batch) for batch in batches], axis=0)
+    got_local_idx = np.concatenate([_batch_image_indices(batch) for batch in batches], axis=0)
     np.testing.assert_array_equal(got_local_idx, np.arange(selected.size, dtype=np.int32))
 
     original_images = utils.load_mrc(files["particles_mrcs"])
@@ -108,9 +142,9 @@ def test_load_dataset_tiny_spa_duplicate_ind_preserves_order_duplicates_and_ctf_
         atol=1e-7,
     )
 
-    batches = list(cryo.get_image_generator(batch_size=2))
-    got_images = np.concatenate([np.asarray(b[0]) for b in batches], axis=0)
-    got_local_idx = np.concatenate([np.asarray(b[2]).reshape(-1) for b in batches], axis=0)
+    batches = _dataset_image_batches(cryo, batch_size=2)
+    got_images = np.concatenate([_batch_images(batch) for batch in batches], axis=0)
+    got_local_idx = np.concatenate([_batch_image_indices(batch) for batch in batches], axis=0)
     np.testing.assert_array_equal(got_local_idx, np.arange(requested.size, dtype=np.int32))
 
     source_images = utils.load_mrc(files["particles_mrcs"])
@@ -191,16 +225,16 @@ def test_load_dataset_tiny_tilt_series_files_and_subset_generators(tmp_path):
 
     # Particle-subset generator should preserve requested particle order.
     subset_particles = np.array([2, 0], dtype=np.int32)
-    batches = list(cryo.get_dataset_subset_generator(batch_size=8, subset_indices=subset_particles, mode="tilt_series"))
-    got_particles = [int(np.array(b[1]).reshape(-1)[0]) for b in batches]
+    batches = _dataset_group_batches(cryo, batch_size=8, subset_indices=subset_particles)
+    got_particles = [int(_batch_particle_indices(batch)[0]) for batch in batches]
     assert got_particles == subset_particles.tolist()
 
     # Image-subset generator should only emit requested image indices, in order.
     subset_images = np.array([5, 1, 4], dtype=np.int32)
-    image_batches = list(cryo.get_image_subset_generator(batch_size=2, subset_indices=subset_images))
+    image_batches = _dataset_image_batches(cryo, batch_size=2, subset_indices=subset_images)
     got_images = []
-    for b in image_batches:
-        got_images.extend(np.array(b[2]).reshape(-1).tolist())
+    for batch in image_batches:
+        got_images.extend(_batch_image_indices(batch).tolist())
     assert got_images == subset_images.tolist()
 
 
@@ -220,10 +254,10 @@ def test_load_dataset_tiny_tilt_series_image_subset_preserves_duplicate_order_an
     )
 
     subset_images = np.array([7, 1, 7, 4], dtype=np.int32)
-    image_batches = list(cryo.get_image_subset_generator(batch_size=2, subset_indices=subset_images))
+    image_batches = _dataset_image_batches(cryo, batch_size=2, subset_indices=subset_images)
 
-    got_indices = np.concatenate([np.array(b[2]).reshape(-1) for b in image_batches], axis=0)
-    got_images = np.concatenate([np.array(b[0]) for b in image_batches], axis=0)
+    got_indices = np.concatenate([_batch_image_indices(batch) for batch in image_batches], axis=0)
+    got_images = np.concatenate([_batch_images(batch) for batch in image_batches], axis=0)
     source_images = utils.load_mrc(files["particles_mrcs"])
 
     np.testing.assert_array_equal(got_indices, subset_images)
@@ -253,9 +287,9 @@ def test_load_dataset_tiny_tilt_series_boolean_ind_preserves_dataset_indices(sim
     assert cryo.n_images == selected.size
     assert cryo.CTF_params.shape[0] == selected.size
 
-    batches = list(cryo.get_image_generator(batch_size=2))
-    got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
-    got_local_idx = np.concatenate([np.array(b[2]).reshape(-1) for b in batches], axis=0)
+    batches = _dataset_image_batches(cryo, batch_size=2)
+    got_images = np.concatenate([_batch_images(batch) for batch in batches], axis=0)
+    got_local_idx = np.concatenate([_batch_image_indices(batch) for batch in batches], axis=0)
     np.testing.assert_array_equal(got_local_idx, np.arange(selected.size, dtype=np.int32))
 
     original_images = utils.load_mrc(files["particles_mrcs"])
@@ -356,9 +390,9 @@ def test_load_dataset_tiny_tilt_series_duplicate_ind_preserves_order_duplicates_
         atol=1e-7,
     )
 
-    batches = list(cryo.get_image_generator(batch_size=2))
-    got_images = np.concatenate([np.asarray(b[0]) for b in batches], axis=0)
-    got_local_idx = np.concatenate([np.asarray(b[2]).reshape(-1) for b in batches], axis=0)
+    batches = _dataset_image_batches(cryo, batch_size=2)
+    got_images = np.concatenate([_batch_images(batch) for batch in batches], axis=0)
+    got_local_idx = np.concatenate([_batch_image_indices(batch) for batch in batches], axis=0)
     np.testing.assert_array_equal(got_local_idx, np.arange(requested.size, dtype=np.int32))
 
     source_images = utils.load_mrc(files["particles_mrcs"])
@@ -543,10 +577,10 @@ def test_load_dataset_tiny_tilt_series_warp_path(tmp_path):
     assert cryo.CTF_params.shape[1] >= 11
 
     subset_images = np.array([5, 1, 4], dtype=np.int32)
-    image_batches = list(cryo.get_image_subset_generator(batch_size=2, subset_indices=subset_images))
+    image_batches = _dataset_image_batches(cryo, batch_size=2, subset_indices=subset_images)
     got_images = []
-    for b in image_batches:
-        got_images.extend(np.array(b[2]).reshape(-1).tolist())
+    for batch in image_batches:
+        got_images.extend(_batch_image_indices(batch).tolist())
     assert got_images == subset_images.tolist()
 
 
@@ -567,10 +601,10 @@ def test_load_dataset_tiny_tilt_series_from_simulator_files(sim_tiny_tilt_files)
     assert cryo.ctf_evaluator.mode == core.CTFMode.CRYO_ET
 
     subset_images = np.array([7, 2, 7, 11], dtype=np.int32)
-    image_batches = list(cryo.get_image_subset_generator(batch_size=2, subset_indices=subset_images))
+    image_batches = _dataset_image_batches(cryo, batch_size=2, subset_indices=subset_images)
     got_images = []
-    for b in image_batches:
-        got_images.extend(np.array(b[2]).reshape(-1).tolist())
+    for batch in image_batches:
+        got_images.extend(_batch_image_indices(batch).tolist())
     assert got_images == subset_images.tolist()
 
 
@@ -845,9 +879,9 @@ def test_simulator_tiny_tilt_loading_with_duplicate_ind_preserves_image_identity
         tilt_series_ctf="relion5",
     )
 
-    batches = list(cryo.get_image_generator(batch_size=2))
-    got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
-    got_local_idx = np.concatenate([np.array(b[2]).reshape(-1) for b in batches], axis=0)
+    batches = _dataset_image_batches(cryo, batch_size=2)
+    got_images = np.concatenate([_batch_images(batch) for batch in batches], axis=0)
+    got_local_idx = np.concatenate([_batch_image_indices(batch) for batch in batches], axis=0)
     np.testing.assert_array_equal(got_local_idx, np.array([0, 1, 2, 3], dtype=np.int32))
 
     original_images = utils.load_mrc(files["particles_mrcs"])
@@ -1008,9 +1042,9 @@ def test_load_dataset_simulator_tilt_ctf_in_spa_mode_preserves_reordered_duplica
     assert cryo.tilt_series_flag is False
     assert cryo.ctf_evaluator.mode == core.CTFMode.CRYO_ET
 
-    batches = list(cryo.get_image_generator(batch_size=2))
-    got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
-    got_local_idx = np.concatenate([np.array(b[2]).reshape(-1) for b in batches], axis=0)
+    batches = _dataset_image_batches(cryo, batch_size=2)
+    got_images = np.concatenate([_batch_images(batch) for batch in batches], axis=0)
+    got_local_idx = np.concatenate([_batch_image_indices(batch) for batch in batches], axis=0)
     np.testing.assert_array_equal(got_local_idx, np.array([0, 1, 2, 3], dtype=np.int32))
 
     original_images = utils.load_mrc(files["particles_mrcs"])
@@ -1118,9 +1152,9 @@ def test_tiny_tilt_loading_with_reordered_ind_preserves_image_identity(tmp_path)
 
     # Image loader returns subset-local indices [0..n-1], but image payloads must
     # correspond exactly to the requested original rows in `reordered_ind`.
-    batches = list(cryo.get_image_generator(batch_size=2))
-    got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
-    got_local_idx = np.concatenate([np.array(b[2]).reshape(-1) for b in batches], axis=0)
+    batches = _dataset_image_batches(cryo, batch_size=2)
+    got_images = np.concatenate([_batch_images(batch) for batch in batches], axis=0)
+    got_local_idx = np.concatenate([_batch_image_indices(batch) for batch in batches], axis=0)
     np.testing.assert_array_equal(got_local_idx, np.array([0, 1, 2], dtype=np.int32))
 
     original_images = utils.load_mrc(files["particles_mrcs"])
@@ -1142,9 +1176,9 @@ def test_tiny_tilt_loading_with_duplicate_ind_preserves_duplicates_and_order(tmp
         tilt_series_ctf="relion5",
     )
 
-    batches = list(cryo.get_image_generator(batch_size=2))
-    got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
-    got_local_idx = np.concatenate([np.array(b[2]).reshape(-1) for b in batches], axis=0)
+    batches = _dataset_image_batches(cryo, batch_size=2)
+    got_images = np.concatenate([_batch_images(batch) for batch in batches], axis=0)
+    got_local_idx = np.concatenate([_batch_image_indices(batch) for batch in batches], axis=0)
     np.testing.assert_array_equal(got_local_idx, np.array([0, 1, 2, 3], dtype=np.int32))
 
     original_images = utils.load_mrc(files["particles_mrcs"])
@@ -1164,8 +1198,8 @@ def test_tiny_tilt_particle_subset_generator_preserves_duplicates(tmp_path):
     )
 
     subset_particles = np.array([2, 0, 2], dtype=np.int32)
-    batches = list(cryo.get_dataset_subset_generator(batch_size=8, subset_indices=subset_particles, mode="tilt_series"))
-    got_particles = [int(np.array(b[1]).reshape(-1)[0]) for b in batches]
+    batches = _dataset_group_batches(cryo, batch_size=8, subset_indices=subset_particles)
+    got_particles = [int(_batch_particle_indices(batch)[0]) for batch in batches]
     assert got_particles == [2, 0, 2]
 
 def test_tiny_tilt_split_indices_accepts_in_memory_halfsets_and_arrays(tmp_path):
@@ -1273,10 +1307,14 @@ def test_tiny_tilt_loading_with_strip_prefix_resolves_prefixed_star_paths(tmp_pa
     assert cryo.tilt_series_flag is True
     assert cryo.n_images == files["n_images"]
 
-    batches = list(cryo.get_image_subset_generator(batch_size=2, subset_indices=np.array([5, 1, 4], dtype=np.int32)))
+    batches = _dataset_image_batches(
+        cryo,
+        batch_size=2,
+        subset_indices=np.array([5, 1, 4], dtype=np.int32),
+    )
     got = []
     for batch in batches:
-        got.extend(np.array(batch[2]).reshape(-1).tolist())
+        got.extend(_batch_image_indices(batch).tolist())
     assert got == [5, 1, 4]
 
 
@@ -1303,16 +1341,16 @@ def test_simulator_tiny_tilt_subsample_cryoem_dataset_preserves_local_order_and_
     original_images = utils.load_mrc(files["particles_mrcs"])
 
     full_local = np.arange(sub.n_images, dtype=np.int32)
-    full_batches = list(sub.get_image_subset_generator(batch_size=2, subset_indices=full_local))
-    got_full_images = np.concatenate([np.array(b[0]) for b in full_batches], axis=0)
-    got_full_local = np.concatenate([np.array(b[2]).reshape(-1) for b in full_batches], axis=0)
+    full_batches = _dataset_image_batches(sub, batch_size=2, subset_indices=full_local)
+    got_full_images = np.concatenate([_batch_images(batch) for batch in full_batches], axis=0)
+    got_full_local = np.concatenate([_batch_image_indices(batch) for batch in full_batches], axis=0)
     np.testing.assert_array_equal(got_full_local, full_local)
     np.testing.assert_allclose(got_full_images, original_images[requested], atol=1e-6)
 
     local_subset = np.array([3, 0, 2, 1], dtype=np.int32)
-    subset_batches = list(sub.get_image_subset_generator(batch_size=2, subset_indices=local_subset))
-    got_subset_images = np.concatenate([np.array(b[0]) for b in subset_batches], axis=0)
-    got_subset_local = np.concatenate([np.array(b[2]).reshape(-1) for b in subset_batches], axis=0)
+    subset_batches = _dataset_image_batches(sub, batch_size=2, subset_indices=local_subset)
+    got_subset_images = np.concatenate([_batch_images(batch) for batch in subset_batches], axis=0)
+    got_subset_local = np.concatenate([_batch_image_indices(batch) for batch in subset_batches], axis=0)
     np.testing.assert_array_equal(got_subset_local, local_subset)
     np.testing.assert_allclose(got_subset_images, original_images[requested[local_subset]], atol=1e-6)
 
@@ -1353,9 +1391,9 @@ def test_simulator_tiny_tilt_load_dataset_from_args_preserves_halfset_image_iden
     dataset_indices = np.asarray(cryos.dataset_indices, dtype=np.int32)
     for half_idx in cryos.halfset_indices:
         half_dataset_indices = dataset_indices[half_idx]
-        batches = list(cryos.get_image_subset_generator(batch_size=3, subset_indices=half_idx))
-        got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
-        got_local = np.concatenate([np.array(b[2]).reshape(-1) for b in batches], axis=0)
+        batches = _dataset_image_batches(cryos, batch_size=3, subset_indices=half_idx)
+        got_images = np.concatenate([_batch_images(batch) for batch in batches], axis=0)
+        got_local = np.concatenate([_batch_image_indices(batch) for batch in batches], axis=0)
         np.testing.assert_array_equal(got_local, half_idx)
         np.testing.assert_allclose(
             got_images,
@@ -1388,8 +1426,8 @@ def test_simulator_tiny_tilt_get_split_datasets_preserves_half_order_and_duplica
     for half, half_idx in zip(ind_split, cryos.halfset_indices):
         half_dataset_indices = dataset_indices[half_idx]
         np.testing.assert_array_equal(half_dataset_indices, half)
-        batches = list(cryos.get_image_subset_generator(batch_size=2, subset_indices=half_idx))
-        got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
+        batches = _dataset_image_batches(cryos, batch_size=2, subset_indices=half_idx)
+        got_images = np.concatenate([_batch_images(batch) for batch in batches], axis=0)
         np.testing.assert_allclose(got_images, original_images[half], atol=1e-6)
 
 
@@ -1415,8 +1453,8 @@ def test_simulator_tiny_tilt_load_dataset_preserves_ind_order_and_duplicates(sim
 
     original_images = utils.load_mrc(files["particles_mrcs"])
     local = np.arange(requested.size, dtype=np.int32)
-    batches = list(cryo.get_image_subset_generator(batch_size=2, subset_indices=local))
-    got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
+    batches = _dataset_image_batches(cryo, batch_size=2, subset_indices=local)
+    got_images = np.concatenate([_batch_images(batch) for batch in batches], axis=0)
     np.testing.assert_allclose(got_images, original_images[requested], atol=1e-6)
 
 
@@ -1488,8 +1526,8 @@ def test_simulator_tiny_tilt_load_dataset_from_args_with_explicit_split_skips_ha
     for half, half_idx in zip(ind_split, cryos.halfset_indices):
         half_dataset_indices = dataset_indices[half_idx]
         np.testing.assert_array_equal(half_dataset_indices, half)
-        batches = list(cryos.get_image_subset_generator(batch_size=2, subset_indices=half_idx))
-        got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
+        batches = _dataset_image_batches(cryos, batch_size=2, subset_indices=half_idx)
+        got_images = np.concatenate([_batch_images(batch) for batch in batches], axis=0)
         np.testing.assert_allclose(got_images, original_images[half], atol=1e-6)
 
 
@@ -1514,8 +1552,8 @@ def test_simulator_tiny_tilt_load_dataset_eager_mode_preserves_identity(sim_tiny
     original_images = utils.load_mrc(files["particles_mrcs"])
 
     local = np.arange(requested.size, dtype=np.int32)
-    batches = list(cryo.get_image_subset_generator(batch_size=2, subset_indices=local))
-    got_images = np.concatenate([np.array(b[0]) for b in batches], axis=0)
+    batches = _dataset_image_batches(cryo, batch_size=2, subset_indices=local)
+    got_images = np.concatenate([_batch_images(batch) for batch in batches], axis=0)
     np.testing.assert_allclose(got_images, original_images[requested], atol=1e-6)
 
 

@@ -179,7 +179,7 @@ def generate(args):
     ds = dataset.get_split_datasets(**dataset_loader_dict, ind_split=ind_split)
 
     zs = utils.pickle_load(args.embedding)
-    zs_split = [zs[ds.halfset_indices[0]], zs[ds.halfset_indices[1]]]
+    zs_split = [zs[ds.halfset_local_image_indices(0)], zs[ds.halfset_local_image_indices(1)]]
     zs = np.concatenate(zs_split)
 
     target = np.loadtxt(args.target)
@@ -192,7 +192,7 @@ def generate(args):
 
     cov_zs = np.tile(np.eye(zs.shape[-1], dtype=zs.dtype), (zs.shape[0], 1, 1))
 
-    half0_ds = ds.subset(ds.halfset_indices[0])
+    half0_ds = ds.get_halfset_dataset(0, independent=False)
     noise_variance, _ = noise.estimate_noise_variance(half0_ds, 100)
     noise_variance = np.full(ds.image_shape[0] // 2 - 1, noise_variance)
 

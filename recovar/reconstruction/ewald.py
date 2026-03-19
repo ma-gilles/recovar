@@ -19,7 +19,6 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, utils
 from recovar.core import mask
 from recovar.core.configs import ForwardModelConfig
-from recovar.data_io.batch_iterator import iter_batch_fields
 
 logger = logging.getLogger(__name__)
 
@@ -321,11 +320,9 @@ def compute_ewald_LS_rhs_in_batches(experiment_dataset, batch_size, disc_type, n
     vol_real, vol_imag = 0, 0
 
     # Compute \sum_i A_i^T y_i / sigma_i^2
-    for images, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in iter_batch_fields(
-        experiment_dataset.iterate(
-            batch_size,
-            by_image=False,
-        )
+    for images, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in experiment_dataset.iter_batches(
+        batch_size,
+        by_image=False,
     ):
         batch = experiment_dataset.process_images(images)
         batch = core.translate_images(batch, translations, experiment_dataset.image_shape)

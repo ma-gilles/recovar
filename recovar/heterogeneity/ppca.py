@@ -9,7 +9,6 @@ import functools
 from recovar import core
 from recovar.core import linalg
 from recovar.core.configs import ForwardModelConfig
-from recovar.data_io.batch_iterator import iter_batch_fields
 from recovar.heterogeneity import embedding
 
 logger = logging.getLogger(__name__)
@@ -47,7 +46,7 @@ def M_step(experiment_dataset, latent_means, latent_covariances, noise_variance,
     rhs_summed = jnp.zeros((experiment_dataset.volume_size, basis_size), dtype = experiment_dataset.dtype)
     lhs_summed = jnp.zeros((experiment_dataset.volume_size, basis_size *  basis_size), dtype = experiment_dataset.dtype)
 
-    for images, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, image_indices in iter_batch_fields(experiment_dataset.iterate(batch_size)):
+    for images, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, image_indices in experiment_dataset.iter_batches(batch_size):
         lhs_summed, rhs_summed = M_step_batch(
             images,
             lhs_summed,

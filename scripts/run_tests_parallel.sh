@@ -123,7 +123,7 @@ for i in "${!G_NAMES[@]}"; do
     cat > "$SCRIPT" << EOF
 #!/usr/bin/env bash
 #SBATCH --job-name=recovar-${name}
-#SBATCH --account=amits
+#SBATCH --account=gilles
 #SBATCH --partition=cryoem
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
@@ -140,7 +140,9 @@ cd ${WORKDIR}
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export TMPDIR="/scratch/gpfs/GILLES/mg6942/tmp/slurm_\${SLURM_JOB_ID}"
-mkdir -p "\$TMPDIR"
+export PIXI_HOME="/scratch/gpfs/GILLES/mg6942/pixi_home/slurm_\${SLURM_JOB_ID}"
+export RATTLER_CACHE_DIR="/scratch/gpfs/GILLES/mg6942/rattler_cache/slurm_\${SLURM_JOB_ID}"
+mkdir -p "\$TMPDIR" "\$PIXI_HOME" "\$RATTLER_CACHE_DIR"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 
@@ -174,7 +176,7 @@ SUMMARY_SCRIPT="${SLURMO_DIR}/job_${TAG}_summary.sh"
 cat > "$SUMMARY_SCRIPT" << EOF
 #!/usr/bin/env bash
 #SBATCH --job-name=recovar-summary
-#SBATCH --account=amits
+#SBATCH --account=gilles
 #SBATCH --partition=cryoem
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
@@ -185,6 +187,13 @@ cat > "$SUMMARY_SCRIPT" << EOF
 
 set -euo pipefail
 cd ${WORKDIR}
+
+export PYTHONNOUSERSITE=1
+export TMPDIR="/scratch/gpfs/GILLES/mg6942/tmp/slurm_\${SLURM_JOB_ID}"
+export PIXI_HOME="/scratch/gpfs/GILLES/mg6942/pixi_home/slurm_\${SLURM_JOB_ID}"
+export RATTLER_CACHE_DIR="/scratch/gpfs/GILLES/mg6942/rattler_cache/slurm_\${SLURM_JOB_ID}"
+mkdir -p "\$TMPDIR" "\$PIXI_HOME" "\$RATTLER_CACHE_DIR"
+unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 
 PIXI_PY="\$(pixi run which python)"
 "\$PIXI_PY" scripts/summarize_test_results.py ${RESULTS_DIR}/${TAG}_*.xml

@@ -18,6 +18,9 @@ class _FakeDataset:
             np.array([2, 3], dtype=np.int32),
         ]
 
+    def halfset_local_image_indices(self, halfset_id):
+        return self.halfset_indices[halfset_id]
+
 
 def test_get_mean_conformation_relion_flow_and_restore(monkeypatch):
     def fake_triangular_kernel(dataset, noise_variance, batch_size, index_subset=None, **kwargs):

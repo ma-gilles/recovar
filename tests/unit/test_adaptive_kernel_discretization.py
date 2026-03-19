@@ -287,14 +287,30 @@ def test_even_less_naive_matches_reference_bin_loop(gpu_device):
             image_inds = np.sort(np.where(inds == bin_idx)[0])
             Ft_y_acc = jnp.zeros(half_vol_size, dtype=cryo.dtype)
             Ft_ctf_acc = jnp.zeros(half_vol_size, dtype=cryo.dtype_real)
-            for batch_data in cryo.iterate(
+            for (
+                images,
+                rotation_matrices,
+                translations,
+                ctf_params,
+                noise_variance,
+                _particle_indices,
+                _image_indices,
+            ) in cryo.iter_batches(
                 batch_size,
-                noise_model=cryo.noise, noise_half=False,
-                process_images=True, half_images=True,
+                noise_model=cryo.noise,
+                noise_half=False,
                 indices=image_inds,
             ):
+                images = cryo.process_images_half(images)
                 Ft_y_acc, Ft_ctf_acc = akd._heterogeneity_kernel_batch_from_fft(
-                    cfg, batch_data, Ft_y=Ft_y_acc, Ft_ctf=Ft_ctf_acc
+                    cfg,
+                    images,
+                    ctf_params,
+                    rotation_matrices,
+                    translations,
+                    noise_variance,
+                    Ft_y=Ft_y_acc,
+                    Ft_ctf=Ft_ctf_acc,
                 )
             rhs_ref[bin_idx] = np.asarray(Ft_y_acc)
             lhs_ref[bin_idx] = np.asarray(Ft_ctf_acc)

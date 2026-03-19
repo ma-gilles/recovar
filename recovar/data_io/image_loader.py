@@ -207,6 +207,7 @@ class ImageLoader:
         self._image_size = image_size
         self._dtype = dtype
         self._cached = None
+        self._selection_indices = np.arange(int(num_images), dtype=np.int32)
 
     # -- Properties ----------------------------------------------------------
 
@@ -231,6 +232,11 @@ class ImageLoader:
     @property
     def shape(self) -> Tuple[int, int, int]:
         return (self._num_images, self._image_size, self._image_size)
+
+    @property
+    def selection_indices(self) -> np.ndarray:
+        """Original source-row indices represented by this loader."""
+        return self._selection_indices
 
     def __len__(self) -> int:
         return self._num_images
@@ -389,6 +395,7 @@ class MRCLoader(ImageLoader):
         self._file_indices = _normalize_selection_indices(indices, nz, "MRCLoader indices")
 
         super().__init__(len(self._file_indices), ny, self._file_dtype)
+        self._selection_indices = self._file_indices.astype(np.int32, copy=False)
 
         if not lazy:
             self.load_all()
@@ -510,7 +517,10 @@ class MultiMRCLoader(ImageLoader):
             iloc_idx = _normalize_selection_indices(
                 indices, len(self._file_map), "MultiMRCLoader indices"
             )
+            self._selection_indices = iloc_idx.astype(np.int32, copy=False)
             self._file_map = self._file_map.iloc[iloc_idx].reset_index(drop=True)
+        else:
+            self._selection_indices = np.arange(len(self._file_map), dtype=np.int32)
 
         if len(self._file_map) == 0:
             raise ValueError("No images selected for MultiMRCLoader")
@@ -605,6 +615,7 @@ class MultiMRCLoader(ImageLoader):
                 )
 
         super().__init__(len(self._file_map), img_size, dtype)
+        self._selection_indices = self._selection_indices.astype(np.int32, copy=False)
 
         if not lazy:
             self.load_all()
@@ -827,6 +838,7 @@ class DownsamplingImageLoader(ImageLoader):
         self._base = base_loader
         self._target_D = target_D
         super().__init__(base_loader.num_images, target_D, base_loader._dtype)
+        self._selection_indices = np.asarray(base_loader.selection_indices, dtype=np.int32)
 
     def _load(self, indices: np.ndarray) -> np.ndarray:
         images = self._base._load(indices)
@@ -834,5 +846,4 @@ class DownsamplingImageLoader(ImageLoader):
             return images
         from recovar.data_io.downsample import downsample_images
         return downsample_images(images, self._target_D)
-
 

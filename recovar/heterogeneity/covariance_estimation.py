@@ -17,7 +17,6 @@ from recovar.core import linalg
 from recovar.jax_config import _to_cpu
 from recovar.core import cubic_interpolation
 from recovar.core.configs import ForwardModelConfig, ModelState, CovarianceOpts, CovColumnOpts
-from recovar.data_io.batch_iterator import coerce_batch_fields, iter_batch_fields
 from recovar.heterogeneity import covariance_core
 from recovar.reconstruction import regularization, relion_functions, noise
 
@@ -391,10 +390,10 @@ def variance_relion_kernel_trilinear(
     mean_estimate: jax.Array,
     volume_mask: jax.Array,
     image_mask: jax.Array,
-    rotation_matrices=None,
-    translations=None,
-    ctf_params=None,
-    noise_variance=None,
+    rotation_matrices,
+    translations,
+    ctf_params,
+    noise_variance,
     soften: int = 5,
     Ft_y: jax.Array = None,
     Ft_ctf: jax.Array = None,
@@ -406,13 +405,6 @@ def variance_relion_kernel_trilinear(
     Backprojects into half-volume accumulators (Ft_y, Ft_ctf, Ft_im, Ft_one).
     Pass None to initialise from zero; pass an existing half-volume to accumulate.
     """
-    images, rotation_matrices, translations, ctf_params, noise_variance, _, _ = coerce_batch_fields(
-        images,
-        rotation_matrices=rotation_matrices,
-        translations=translations,
-        ctf_params=ctf_params,
-        noise_variance=noise_variance,
-    )
     return _variance_relion_kernel_trilinear_explicit(
         config,
         images,
@@ -521,13 +513,11 @@ def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, b
 
     # Full-spectrum noise needed for masked noise variance inside the kernel.
     Ft_y, Ft_ctf, Ft_im, Ft_one = None, None, None, None
-    for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in iter_batch_fields(
-        experiment_dataset.iterate(
-            batch_size,
-            noise_model=experiment_dataset.noise,
-            noise_half=False,
-            indices=image_subset,
-        )
+    for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in experiment_dataset.iter_batches(
+        batch_size,
+        noise_model=experiment_dataset.noise,
+        noise_half=False,
+        indices=image_subset,
     ):
         images = experiment_dataset.process_images_half(images)
         Ft_y, Ft_ctf, Ft_im, Ft_one = variance_relion_kernel_trilinear(
@@ -579,14 +569,14 @@ def compute_variance(
     #   noise_w — noise-normalisation denominator
     #   noise_s — |residuals|^2 accumulator (noise-normalisation numerator)
     ctf_w, signal, noise_w, noise_s = [], [], [], []
-    for half in range(2):
-        half_idx = dataset.halfset_indices[half]
+    for halfset_id in range(2):
+        halfset_indices = dataset.halfset_local_image_indices(halfset_id)
         if noise_ind_subset is not None:
-            subset = half_idx[dataset.noise.dose_indices[half_idx] == noise_ind_subset]
+            subset = halfset_indices[dataset.noise.dose_indices[halfset_indices] == noise_ind_subset]
         elif image_subset is not None:
-            subset = np.intersect1d(half_idx, image_subset)
+            subset = np.intersect1d(halfset_indices, image_subset)
         else:
-            subset = half_idx
+            subset = halfset_indices
         fw, sig, nw, ns = variance_relion_style_triangular_kernel(
             dataset, mean_estimate, batch_size,
             image_subset=subset, volume_mask=volume_mask, disc_type=disc_type,
@@ -642,8 +632,8 @@ def compute_both_H_B(dataset, means, dilated_volume_mask, picked_frequencies,
     Bs = []
     st_time = time.time()
 
-    for half in range(2):
-        mean = means.combined if options["use_combined_mean"] else means.corrected(half)
+    for halfset_id in range(2):
+        mean = means.combined if options["use_combined_mean"] else means.corrected(halfset_id)
         if options.get('disc_type') == 'cubic':
             mean = cubic_interpolation.calculate_spline_coefficients(
                 jnp.array(mean).reshape(dataset.volume_shape))
@@ -651,12 +641,12 @@ def compute_both_H_B(dataset, means, dilated_volume_mask, picked_frequencies,
             H, B = _compute_H_B_multi_gpu(
                 dataset, mean, dilated_volume_mask, picked_frequencies,
                 gpu_memory, options, n_gpus=n_gpus,
-                image_subset=dataset.halfset_indices[half])
+                image_subset=dataset.halfset_local_image_indices(halfset_id))
         else:
             H, B = compute_H_B_for_halfset(
                 dataset, mean, dilated_volume_mask, picked_frequencies,
                 gpu_memory, options,
-                half=half)
+                halfset_id=halfset_id)
         logger.info("Time to cov %s", time.time() - st_time)
         Hs.append(H)
         Bs.append(B)
@@ -790,12 +780,12 @@ def _batched_stack_transfer(H, B, H_out, B_out, freq_offset, volume_size, n_item
 
 @nvtx.annotate("compute_H_B_for_halfset", color="blue", domain=NVTX_DOMAIN_H_B)
 def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies,
-                            gpu_memory, options, image_subset=None, half=None):
+                            gpu_memory, options, image_subset=None, halfset_id=None):
     """Compute H and B matrices for one half-set.
 
     Replaces the old ``compute_H_B`` + ``compute_H_B_in_volume_batch`` pair.
-    Uses :class:`DataIterator` for data loading and :class:`CovColumnOpts`
-    for static kernel options.
+    Uses explicit dataset batch iteration and :class:`CovColumnOpts` for
+    static kernel options.
 
     ``mean_estimate`` must already be in the correct form for ``disc_type``:
     raw Fourier coefficients for ``'linear_interp'``, or spline coefficients
@@ -842,19 +832,17 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
         B_accum = jnp.zeros((n_freq_batch, volume_size), dtype=jnp.complex64)
 
         # Inner loop: image batches
-        # When half= is given, iterate() handles image-to-particle
-        # conversion for tilt-series, preserving per-particle grouping.
         _iter_kw = dict(
             noise_model=cryo.noise, noise_half=False,
             noise_by_particle=True,
             by_image=not cryo.tilt_series_flag,
         )
-        if half is not None:
-            _iter_kw['half'] = half
+        if halfset_id is not None:
+            _iter_kw['halfset_id'] = halfset_id
         elif image_subset is not None:
             _iter_kw['indices'] = image_subset
-        for images, rotation_matrices, translations, ctf_params, noise_variance, particle_indices, _image_indices in iter_batch_fields(
-            cryo.iterate(image_batch_size, **_iter_kw)
+        for images, rotation_matrices, translations, ctf_params, noise_variance, particle_indices, _image_indices in cryo.iter_batches(
+            image_batch_size, **_iter_kw
         ):
             images = cryo.process_images(images)
             images, ctf_on_grid, plane_coords, image_mask, tilt_labels = preprocess_covariance_batch(
@@ -1010,11 +998,9 @@ def _compute_projected_covariance_single(experiment_dataset, mean_estimate, basi
     opts = CovarianceOpts(disc_type_u=disc_type_u, do_mask_images=do_mask_images, shared_label=experiment_dataset.tilt_series_flag)
     hermitian_weights = linalg.rfft2_hermitian_weights(config.image_shape, dtype=experiment_dataset.dtype_real)
 
-    for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in iter_batch_fields(
-        experiment_dataset.iterate(
-            batch_size, noise_model=experiment_dataset.noise, noise_half=False,
-            by_image=not experiment_dataset.tilt_series_flag,
-        )
+    for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in experiment_dataset.iter_batches(
+        batch_size, noise_model=experiment_dataset.noise, noise_half=False,
+        by_image=not experiment_dataset.tilt_series_flag,
     ):
         lhs, rhs = reduce_covariance_inner(
             config,
@@ -1084,7 +1070,7 @@ def compute_projected_covariance(dataset, mean_estimate, basis, volume_mask, bat
 
     change_device= False
 
-    for half in range(2):
+    for halfset_id in range(2):
         config = ForwardModelConfig.from_dataset(
             dataset, disc_type=disc_type,
             process_fn=dataset.process_images,
@@ -1103,14 +1089,12 @@ def compute_projected_covariance(dataset, mean_estimate, basis, volume_mask, bat
         hermitian_weights = linalg.rfft2_hermitian_weights(
             config.image_shape, dtype=dataset.dtype_real)
 
-        for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in iter_batch_fields(
-            dataset.iterate(
-                batch_size,
-                noise_model=dataset.noise,
-                noise_half=False,
-                half=half,
-                by_image=not dataset.tilt_series_flag,
-            )
+        for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in dataset.iter_batches(
+            batch_size,
+            noise_model=dataset.noise,
+            noise_half=False,
+            halfset_id=halfset_id,
+            by_image=not dataset.tilt_series_flag,
         ):
             lhs, rhs = reduce_covariance_inner(
                 config,
@@ -1174,10 +1158,10 @@ def reduce_covariance_inner(
     model: ModelState,
     opts: CovarianceOpts,
     image_mask: jax.Array,
-    rotation_matrices=None,
-    translations=None,
-    ctf_params=None,
-    noise_variance=None,
+    rotation_matrices,
+    translations,
+    ctf_params,
+    noise_variance,
     hermitian_weights=None,
     lhs=None,
     rhs=None,
@@ -1190,16 +1174,9 @@ def reduce_covariance_inner(
     Reconstruction state (mean, mask, basis) comes from ``model``.
     Boolean flags come from ``opts``.
     """
-    batch, rotation_matrices, translations, ctf_params, noise_variance, _, _ = coerce_batch_fields(
-        images,
-        rotation_matrices=rotation_matrices,
-        translations=translations,
-        ctf_params=ctf_params,
-        noise_variance=noise_variance,
-    )
     return _reduce_covariance_inner_explicit(
         config,
-        batch,
+        images,
         rotation_matrices,
         translations,
         ctf_params,

@@ -10,7 +10,7 @@ import recovar.em.heterogeneity as hetero
 pytestmark = pytest.mark.unit
 
 
-class _TinyImageStack:
+class _TinyImageSource:
     @staticmethod
     def process_images(batch, apply_image_mask=False):
         _ = apply_image_mask
@@ -27,30 +27,25 @@ class _TinyDataset:
     dtype = jnp.complex64
     voxel_size = 1.0
     CTF_params = np.zeros((1, 9), dtype=np.float32)
-    image_stack = _TinyImageStack()
+    image_source = _TinyImageSource()
 
     def process_images(self, batch, apply_image_mask=False):
-        return self.image_stack.process_images(batch, apply_image_mask=apply_image_mask)
+        return self.image_source.process_images(batch, apply_image_mask=apply_image_mask)
 
     @staticmethod
     def ctf_evaluator(params, _image_shape, _voxel_size):
         return jnp.ones((params.shape[0], 4), dtype=jnp.float32)
 
-    @staticmethod
-    def get_dataset_subset_generator(batch_size, subset_indices=None):
-        assert batch_size >= 1
-        _ = subset_indices
-        yield jnp.ones((1, 4), dtype=jnp.complex64), None, np.array([0], dtype=np.int32)
-
-    def iterate(self, batch_size, *, indices=None, **kwargs):
-        from recovar.core.configs import BatchData
-        yield BatchData(
-            images=jnp.ones((1, 4), dtype=jnp.complex64),
-            rotation_matrices=jnp.zeros((1, 3, 3), dtype=jnp.float32),
-            translations=jnp.zeros((1, 2), dtype=jnp.float32),
-            ctf_params=self.CTF_params[:1],
-            particle_indices=np.array([0], dtype=np.int32),
-            image_indices=np.array([0], dtype=np.int32),
+    def iter_batches(self, batch_size, *, indices=None, **kwargs):
+        _ = (batch_size, indices, kwargs)
+        yield (
+            jnp.ones((1, 4), dtype=jnp.complex64),
+            jnp.zeros((1, 3, 3), dtype=jnp.float32),
+            jnp.zeros((1, 2), dtype=jnp.float32),
+            self.CTF_params[:1],
+            None,
+            np.array([0], dtype=np.int32),
+            np.array([0], dtype=np.int32),
         )
 
 

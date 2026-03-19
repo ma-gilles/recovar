@@ -87,14 +87,14 @@ def get_mean_conformation_relion(
     ft_ys = [None, None]
     corrected = [None, None]
 
-    for half in range(2):
-        ft_ctfs[half], ft_ys[half] = relion_functions.relion_style_triangular_kernel(
+    for halfset_id in range(2):
+        ft_ctfs[halfset_id], ft_ys[halfset_id] = relion_functions.relion_style_triangular_kernel(
             dataset, noise_variance.astype(np.float32), batch_size,
-            index_subset=dataset.halfset_indices[half],
+            index_subset=dataset.halfset_local_image_indices(halfset_id),
             upsampling_factor=upsampling_factor,
         )
-        corrected[half] = relion_functions.post_process_from_filter_v2(
-            ft_ctfs[half], ft_ys[half], dataset.volume_shape, upsampling_factor,
+        corrected[halfset_id] = relion_functions.post_process_from_filter_v2(
+            ft_ctfs[halfset_id], ft_ys[halfset_id], dataset.volume_shape, upsampling_factor,
         )
 
     mean_prior, fsc, _ = regularization.compute_relion_prior(
@@ -103,10 +103,10 @@ def get_mean_conformation_relion(
 
     corrected_reg = [
         relion_functions.post_process_from_filter_v2(
-            ft_ctfs[half], ft_ys[half], dataset.volume_shape, upsampling_factor,
+            ft_ctfs[halfset_id], ft_ys[halfset_id], dataset.volume_shape, upsampling_factor,
             tau=mean_prior,
         )
-        for half in range(2)
+        for halfset_id in range(2)
     ]
 
     if use_regularization:
@@ -127,5 +127,3 @@ def get_mean_conformation_relion(
 
     logger.info("mean computation completed in %.2fs", time.time() - st_time)
     return means, mean_prior, fsc
-
-

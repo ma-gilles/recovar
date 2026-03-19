@@ -1,4 +1,11 @@
-"""Dataset loading, half-set splitting, and image access for cryo-EM/cryo-ET."""
+"""Dataset coordination for cryo-EM / cryo-ET loading and iteration.
+
+Architecture:
+- ``image_sources.py`` owns raw image loading, lazy/eager access, and subset views
+- ``metadata.py`` owns poses and CTF metadata only
+- ``CryoEMDataset`` coordinates both layers and exposes the single explicit
+  batch iterator used by downstream code
+"""
 
 from __future__ import annotations
 
@@ -14,13 +21,23 @@ from numpy.typing import NDArray
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 from recovar.core import mask
-from recovar.data_io.batch_iterator import BatchIterator, IteratorOptions
 from recovar.data_io import cryo_dataset
+from recovar.data_io.image_sources import (
+    BackendImageSource,
+    ImageSource,
+    ImageSourceInfo,
+    create_image_source,
+)
+from recovar.data_io.metadata import MetadataStore, Metadata
 from recovar.output import plot_utils
 
 logger = logging.getLogger(__name__)
 
-from recovar.data_io._index_utils import normalize_indices
+from recovar.data_io._index_utils import (
+    DatasetIndexLayout,
+    deduplicate_preserve_order,
+    normalize_indices,
+)
 from recovar.data_io.image_loader import ImageLoader
 
 
@@ -82,35 +99,26 @@ def _normalize_image_indices(values, n_images_total=None, name="indices"):
 def _deduplicate_preserve_order(values, name):
     values = np.asarray(values)
     if values.size == 0:
-        return values
-    _, first_idx = np.unique(values, return_index=True)
-    if first_idx.size != values.size:
-        dropped = int(values.size - first_idx.size)
+        return values.astype(np.int32, copy=False)
+    deduped = deduplicate_preserve_order(values, name=name)
+    dropped = int(values.size - deduped.size)
+    if dropped > 0:
         logger.warning("Dropping %d duplicate entries from %s.", dropped, name)
-    return values[np.sort(first_idx)]
+    return deduped
 
 
-class _SubsetNoiseAdapter:
-    """Wrap a noise model to translate subset-local indices to original indices.
+class _ImageIndexRemappedNoiseAdapter:
+    """Wrap a noise model with an explicit child-local -> parent-local remap."""
 
-    When ``CryoEMDataset.subset()`` creates a view, generators remap yielded
-    indices to local 0..n-1 space.  The parent's noise model still expects
-    *original* image-stack indices.  This adapter intercepts ``get()`` and
-    ``get_half()`` and translates local → original before delegating.
-
-    All other attributes (``get_average_radial_noise``, ``dose_indices``, etc.)
-    are forwarded transparently, including ``isinstance`` checks.
-    """
-
-    def __init__(self, noise_model, subset_indices):
+    def __init__(self, noise_model, parent_image_indices):
         self._noise = noise_model
-        self._subset_indices = np.asarray(subset_indices)
+        self._parent_image_indices = np.asarray(parent_image_indices, dtype=np.int32)
 
     def get(self, indices):
-        return self._noise.get(self._subset_indices[indices])
+        return self._noise.get(self._parent_image_indices[np.asarray(indices)])
 
     def get_half(self, indices):
-        return self._noise.get_half(self._subset_indices[indices])
+        return self._noise.get_half(self._parent_image_indices[np.asarray(indices)])
 
     @property
     def __class__(self):
@@ -120,85 +128,13 @@ class _SubsetNoiseAdapter:
         return getattr(self._noise, name)
 
 
-class Metadata:
-    """Per-image metadata store (poses + CTF parameters).
-
-    Callers access metadata only through ``get_batch()`` or narrow
-    column/mutation methods — never by indexing raw arrays.
-    """
-
-    __slots__ = ('_rotation_matrices', '_translations', '_ctf_params',
-                 'rotation_dtype', 'ctf_dtype', 'real_dtype')
-
-    def __init__(self, rotation_matrices, translations, ctf_params, *,
-                 rotation_dtype=np.float32, ctf_dtype=np.float32,
-                 real_dtype=np.float32):
-        self._rotation_matrices = np.asarray(rotation_matrices, dtype=rotation_dtype)
-        self._translations = np.asarray(translations, dtype=real_dtype)
-        self._ctf_params = np.asarray(ctf_params, dtype=ctf_dtype)
-        self.rotation_dtype = rotation_dtype
-        self.ctf_dtype = ctf_dtype
-        self.real_dtype = real_dtype
-
-    @property
-    def n_images(self):
-        return self._rotation_matrices.shape[0]
-
-    # --- Batch access (primary API) ---
-
-    def get_batch(self, indices):
-        """Return (rotation_matrices, translations, ctf_params) for indices."""
-        return (self._rotation_matrices[indices],
-                self._translations[indices],
-                self._ctf_params[indices])
-
-    # --- Narrow accessors ---
-
-    def get_ctf_column(self, col):
-        """Read a single CTF parameter column for all images."""
-        return self._ctf_params[:, col]
-
-    def get_ctf_params_copy(self):
-        """Return a mutable copy of the full CTF parameter array."""
-        return self._ctf_params.copy()
-
-    def get_rotations_copy(self):
-        """Return a mutable copy of rotation matrices."""
-        return self._rotation_matrices.copy()
-
-    # --- Mutations ---
-
-    def set_poses(self, rotation_matrices, translations):
-        """Replace all poses (used by EM hard assignment)."""
-        self._rotation_matrices = np.asarray(rotation_matrices, dtype=self.rotation_dtype)
-        self._translations = np.asarray(translations, dtype=self.real_dtype)
-
-    def set_ctf(self, ctf_params):
-        """Replace all CTF parameters (used by Ewald preprocessing)."""
-        self._ctf_params = np.asarray(ctf_params, dtype=self.ctf_dtype)
-
-    def set_ctf_column(self, col, values):
-        """Update a single CTF column in-place."""
-        self._ctf_params[:, col] = values
-
-    def scale_ctf_column(self, col, multipliers):
-        """Multiply a CTF column by per-image values."""
-        self._ctf_params[:, col] *= multipliers
-
-    def scale_ctf_element(self, row_indices, col, multiplier):
-        """Multiply a specific CTF element for given rows."""
-        self._ctf_params[row_indices, col] *= multiplier
-
-    def subset(self, indices):
-        """Return a new Metadata for the given image indices."""
-        return Metadata(
-            self._rotation_matrices[indices],
-            self._translations[indices],
-            self._ctf_params[indices],
-            rotation_dtype=self.rotation_dtype,
-            ctf_dtype=self.ctf_dtype,
-            real_dtype=self.real_dtype,
-        )
+def _coerce_image_source(image_source, *, tilt_series_flag):
+    if image_source is None or isinstance(image_source, ImageSource):
+        return image_source
+    return BackendImageSource(
+        image_source,
+        info=ImageSourceInfo(tilt_series=tilt_series_flag),
+    )
 
 
 class CryoEMDataset:
@@ -214,7 +150,7 @@ class CryoEMDataset:
         grid_size: Side length of the image (and default 3-D reconstruction grid).
         voxel_size: Pixel / voxel size in Angstroms.
         n_images: Number of particle images in this dataset.
-        image_stack: Underlying image loader (``None`` for simulation).
+        image_source: Underlying image-loading layer (``None`` for simulation).
         tilt_series_flag: ``True`` when the dataset represents tilt-series data.
     """
 
@@ -222,7 +158,7 @@ class CryoEMDataset:
         # Grid geometry
         'voxel_size', 'grid_size', 'volume_shape', 'volume_size',
         # Image stack and image geometry
-        'image_stack', 'image_shape', 'image_size', 'n_images', 'padding',
+        '_image_source', 'image_shape', 'image_size', 'n_images', 'padding',
         # Processing flags
         'tilt_series_flag', 'premultiplied_ctf', 'n_units',
         '_ctf_evaluator', 'hpad', 'volume_mask_threshold',
@@ -230,21 +166,21 @@ class CryoEMDataset:
         'dtype', 'dtype_real',
         # Per-image metadata (private — access via iter_batches/metadata helpers)
         '_metadata',
+        # Explicit local/original image/group index mapping
+        '_index_layout',
         # Mutable state
         'dataset_indices', 'noise',
         # Half-set views (index arrays into this dataset's ordering)
         'halfset_indices',
-        # Subset view (index into original image_stack)
-        '_subset_indices',
         # Loader paths (for reloading independent half-datasets)
         'particles_file', 'poses_file', 'ctf_file', 'datadir',
     )
 
     def __init__(
         self,
-        image_stack,
+        image_source,
         voxel_size: float,
-        metadata: Metadata,
+        metadata: MetadataStore,
         ctf_evaluator=None,
         dtype: type = np.complex64,
         dataset_indices: Optional[NDArray[np.integer]] = None,
@@ -252,36 +188,46 @@ class CryoEMDataset:
         tilt_series_flag: bool = False,
         premultiplied_ctf: bool = False,
     ) -> None:
+        image_source = _coerce_image_source(
+            image_source,
+            tilt_series_flag=tilt_series_flag,
+        )
         # --- Grid geometry ---
-        if image_stack is not None:
-            grid_size = image_stack.D
+        if image_source is not None:
+            grid_size = image_source.grid_size
         elif grid_size is None:
-            raise ValueError("Must specify grid_size if image_stack is None")
+            raise ValueError("Must specify grid_size if image_source is None")
+        elif metadata.n_images <= 0:
+            raise ValueError("metadata must contain at least one image when image_source is None")
+
+        if image_source is not None and metadata.n_images != image_source.n_images:
+            raise ValueError(
+                "metadata/image-source size mismatch: "
+                f"{metadata.n_images} metadata rows vs {image_source.n_images} images"
+            )
 
         self.voxel_size = voxel_size
         self.grid_size = grid_size
         self.volume_shape = (grid_size, grid_size, grid_size)
         self.volume_size = grid_size ** 3
 
-        # --- Image stack and image geometry ---
-        if image_stack is None:
-            self.image_stack = None
+        # --- Image source and image geometry ---
+        self._image_source = image_source
+        if image_source is None:
             self.image_shape = (grid_size, grid_size)
             self.image_size = grid_size ** 2
             self.n_images = metadata.n_images
             self.padding = 0
         else:
-            self.image_stack = image_stack
-            self.image_shape = tuple(image_stack.image_shape)
-            self.image_size = int(np.prod(image_stack.image_shape))
-            self.n_images = image_stack.n_images
-            self.padding = image_stack.padding
+            self.image_shape = tuple(image_source.image_shape)
+            self.image_size = int(np.prod(image_source.image_shape))
+            self.n_images = image_source.n_images
+            self.padding = image_source.padding
 
         # --- Processing flags ---
-        self.tilt_series_flag = tilt_series_flag
+        self.tilt_series_flag = bool(tilt_series_flag or (image_source is not None and image_source.tilt_series))
         self.premultiplied_ctf = premultiplied_ctf
-        # For SPA n_units == n_images; for tilt series n_units == n_particles
-        self.n_units = self.image_stack.Np if self.tilt_series_flag else self.n_images
+        self.n_units = image_source.n_groups if self.tilt_series_flag and image_source is not None else self.n_images
         if ctf_evaluator is None:
             self._ctf_evaluator = core.CTFEvaluator()
         else:
@@ -297,11 +243,53 @@ class CryoEMDataset:
         # --- Per-image metadata ---
         self._metadata = metadata
 
+        # --- Explicit index mapping ---
+        if image_source is not None:
+            source_layout = image_source.index_layout
+            if dataset_indices is None:
+                dataset_indices = source_layout.original_image_indices
+                self._index_layout = source_layout
+            else:
+                dataset_indices = _normalize_image_indices(
+                    dataset_indices,
+                    n_images_total=None,
+                    name="dataset_indices",
+                )
+                dataset_indices = np.asarray(dataset_indices, dtype=np.int32)
+                if source_layout.n_images != dataset_indices.size:
+                    raise ValueError(
+                        "dataset_indices must have the same length as the image_source"
+                    )
+                if np.array_equal(
+                    dataset_indices,
+                    np.asarray(source_layout.original_image_indices, dtype=np.int32),
+                ):
+                    self._index_layout = source_layout
+                elif source_layout.grouped:
+                    self._index_layout = DatasetIndexLayout.from_grouped_images(
+                        original_image_indices=dataset_indices,
+                        original_group_indices=source_layout.original_group_indices,
+                        group_local_image_indices=source_layout.group_local_image_indices,
+                    )
+                else:
+                    self._index_layout = DatasetIndexLayout.from_image_indices(dataset_indices)
+            if hasattr(image_source, "_index_layout"):
+                image_source._index_layout = self._index_layout
+        else:
+            if dataset_indices is None:
+                dataset_indices = np.arange(metadata.n_images, dtype=np.int32)
+            else:
+                dataset_indices = _normalize_image_indices(
+                    dataset_indices,
+                    n_images_total=None,
+                    name="dataset_indices",
+                )
+            self._index_layout = DatasetIndexLayout.from_image_indices(dataset_indices)
+
         # --- Mutable state ---
-        self.dataset_indices = dataset_indices
+        self.dataset_indices = np.asarray(dataset_indices, dtype=np.int32)
         self.noise = None
         self.halfset_indices = None
-        self._subset_indices = None
         self.particles_file = None
         self.poses_file = None
         self.ctf_file = None
@@ -314,19 +302,42 @@ class CryoEMDataset:
         """The per-image metadata store."""
         return self._metadata
 
-    def make_batch_data(self, images, indices, *, noise_variance=None,
-                        particle_indices=None):
-        """Legacy compatibility helper that bundles explicit batch fields."""
-        from recovar.core.configs import BatchData
-        rots, trans, ctf = self._metadata.get_batch(indices)
-        return BatchData(
-            images=images,
-            rotation_matrices=rots,
-            translations=trans,
-            ctf_params=ctf,
-            noise_variance=noise_variance,
-            particle_indices=particle_indices,
-            image_indices=indices,
+    @property
+    def image_source(self):
+        """Image-loading layer for this dataset."""
+        return self._image_source
+
+    @property
+    def index_layout(self):
+        """Explicit local/original image/group mapping for this dataset."""
+        return self._index_layout
+
+    @property
+    def original_image_indices(self):
+        """Original source-file image index for each local image."""
+        return self._index_layout.original_image_indices
+
+    @property
+    def original_group_indices(self):
+        """Original source-file group index for each local group."""
+        return self._index_layout.original_group_indices
+
+    def original_image_indices_from_local(self, local_image_indices=None):
+        return self._index_layout.original_image_indices_for_local(local_image_indices)
+
+    def local_image_indices_from_original(self, original_image_indices, *, allow_missing=False):
+        return self._index_layout.local_image_indices_from_original(
+            original_image_indices,
+            allow_missing=allow_missing,
+        )
+
+    def original_group_indices_from_local(self, local_group_indices=None):
+        return self._index_layout.original_group_indices_for_local(local_group_indices)
+
+    def local_group_indices_from_original(self, original_group_indices, *, allow_missing=False):
+        return self._index_layout.local_group_indices_from_original(
+            original_group_indices,
+            allow_missing=allow_missing,
         )
 
     # --- Convenience delegation to Metadata ---
@@ -380,47 +391,44 @@ class CryoEMDataset:
             f"voxel_size={self.voxel_size:.4f}, tilt_series={self.tilt_series_flag})"
         )
 
-    # --- Delegating properties (avoid leaking image_stack internals) ---
+    # --- Delegating properties (avoid leaking image-source internals) ---
 
     def process_images(self, images, apply_image_mask=False):
         """Apply windowing + full DFT preprocessing to raw images."""
-        return self.image_stack.process_images(images, apply_image_mask=apply_image_mask)
+        return self.image_source.process_images(images, apply_image_mask=apply_image_mask)
 
     def process_images_half(self, images, apply_image_mask=False):
         """Apply windowing + rfft2 preprocessing → half-spectrum output."""
-        if hasattr(self.image_stack, 'process_images_half'):
-            return self.image_stack.process_images_half(images, apply_image_mask=apply_image_mask)
-        processed = self.image_stack.process_images(images, apply_image_mask=apply_image_mask)
-        return fourier_transform_utils.full_image_to_half_image(processed, self.image_shape)
+        return self.image_source.process_images_half(images, apply_image_mask=apply_image_mask)
 
     @property
     def image_mask(self):
         """Circular window mask from the image stack."""
-        return self.image_stack.mask if self.image_stack is not None else None
+        return self.image_source.mask if self.image_source is not None else None
 
     @property
     def data_multiplier(self):
         """Sign multiplier for data inversion (±1)."""
-        return getattr(self.image_stack, 'mult', 1)
+        return getattr(self.image_source, 'mult', 1)
 
     @data_multiplier.setter
     def data_multiplier(self, value):
-        if self.image_stack is not None:
-            self.image_stack.mult = value
+        if self.image_source is not None:
+            self.image_source.mult = value
 
     @property
     def dataset_tilt_indices(self):
         """Per-particle tilt index lists (tilt-series only)."""
         if not self.tilt_series_flag:
             return None
-        return self.image_stack.dataset_tilt_indices
+        return self._index_layout.original_group_indices
 
     @property
     def tilt_particles(self):
         """List of per-particle tilt index arrays (tilt-series only)."""
         if not self.tilt_series_flag:
             return None
-        return getattr(self.image_stack, 'particles', None)
+        return [np.asarray(local_images, dtype=np.int32) for local_images in self._index_layout.group_local_image_indices]
 
     def get_noise_variance(self, indices):
         if self.noise is None:
@@ -430,27 +438,16 @@ class CryoEMDataset:
     def subset(self, indices):
         """Return a new CryoEMDataset containing only the images at *indices*.
 
-        The returned dataset keeps a reference to the *original* image_stack
-        and stores ``_subset_indices`` for on-the-fly subsetting in generators,
-        instead of wrapping the stack in an intermediate object.
+        The returned dataset uses an ``ImageSource`` subset view, so the
+        subset/remap logic stays inside the image-loading layer rather than
+        being duplicated in the dataset class.
         """
         indices = _normalize_image_indices(indices, n_images_total=self.n_images, name="indices")
 
-        # Compose subset indices: if the parent is already a subset view,
-        # map through its indices to reach the original image_stack.
-        if self._subset_indices is not None:
-            composed_subset = self._subset_indices[indices]
-        else:
-            composed_subset = indices
-
-        # Compose dataset_indices for original file-level indexing.
-        if self.dataset_indices is not None:
-            composed_indices = self.dataset_indices[indices]
-        else:
-            composed_indices = indices
+        composed_indices = self._index_layout.original_image_indices_for_local(indices)
 
         sub = CryoEMDataset(
-            image_stack=self.image_stack,
+            image_source=None if self.image_source is None else self.image_source.subset(indices),
             voxel_size=self.voxel_size,
             metadata=self._metadata.subset(indices),
             ctf_evaluator=self.ctf_evaluator,
@@ -459,142 +456,70 @@ class CryoEMDataset:
             premultiplied_ctf=self.premultiplied_ctf,
             dataset_indices=composed_indices,
         )
-        sub._subset_indices = composed_subset
-        # Override n_images/n_units to match the subset size, not the full
-        # image_stack size (since we share the stack reference).
-        sub.n_images = len(indices)
-        if self.tilt_series_flag and hasattr(self.image_stack, '_particle_tilts'):
-            # Count how many particles have tilts in the subset.
-            subset_set = set(np.asarray(composed_subset).ravel().tolist())
-            n_particles = sum(
-                1 for tilts in self.image_stack._particle_tilts
-                if any(t in subset_set for t in tilts)
-            )
-            sub.n_units = n_particles
-        else:
-            sub.n_units = len(indices)
         if self.noise is not None:
-            sub.noise = _SubsetNoiseAdapter(self.noise, composed_subset)
+            sub.noise = _ImageIndexRemappedNoiseAdapter(self.noise, indices)
         return sub
 
-    def _remap_generator(self, gen, *, remap_particles=False):
-        """Remap original image-stack indices to local 0..n-1 for subset views.
+    def reload_from_original_images(self, original_image_indices, *, lazy=None):
+        """Reload a dataset view from original file image indices.
 
-        When *remap_particles* is True (tilt-series particle-grouped path),
-        remap particle_indices as well as image_indices using their respective
-        mappings.
+        This is used only when an independent file-backed dataset is required.
+        The input indices are always in original file ordering, never this
+        dataset's local ordering.
         """
-        remap = np.empty(int(self._subset_indices.max()) + 1, dtype=np.int32)
-        remap[self._subset_indices] = np.arange(len(self._subset_indices), dtype=np.int32)
+        if self.image_source is None:
+            raise ValueError("Cannot reload dataset without an image source")
+        if self.particles_file is None:
+            raise ValueError("Cannot reload dataset without stored loader paths")
 
-        if remap_particles and self.tilt_series_flag and hasattr(self.image_stack, '_particle_tilts'):
-            # Build global-particle → local-particle remap
-            subset_set = set(np.asarray(self._subset_indices).ravel().tolist())
-            global_to_local_particle = {}
-            local_pid = 0
-            for g_pid, tilts in enumerate(self.image_stack._particle_tilts):
-                if any(t in subset_set for t in tilts):
-                    global_to_local_particle[g_pid] = local_pid
-                    local_pid += 1
-            for images, particles_ind, image_indices in gen:
-                local_img = remap[np.asarray(image_indices)]
-                local_part = np.array([global_to_local_particle[int(p)] for p in np.asarray(particles_ind).ravel()],
-                                      dtype=np.int32)
-                yield images, local_part, local_img
-        else:
-            for images, _, image_indices in gen:
-                local = remap[np.asarray(image_indices)]
-                yield images, local, local
+        original_image_indices = _normalize_image_indices(
+            original_image_indices,
+            n_images_total=None,
+            name="original_image_indices",
+        )
 
-    def _get_backing_subset_generator(self, batch_size, indices, num_workers=0, *, particle_grouped=False, **kwargs):
-        """Get the right subset generator from the backing image_stack."""
-        if self.tilt_series_flag and not particle_grouped and hasattr(self.image_stack, 'get_image_subset_generator'):
-            return self.image_stack.get_image_subset_generator(
-                batch_size, indices, num_workers=num_workers)
-        return self.image_stack.get_dataset_subset_generator(
-            batch_size, indices, num_workers=num_workers, **kwargs)
+        info = self.image_source.info
+        if lazy is None:
+            lazy = info.lazy
 
-    def _get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
-        if self._subset_indices is not None:
-            if self.tilt_series_flag and hasattr(self.image_stack, '_particle_tilts'):
-                # Convert image-level _subset_indices to particle-level indices
-                # for the particle-grouped generator.
-                subset_set = set(np.asarray(self._subset_indices).ravel().tolist())
-                particle_indices = np.array([
-                    p_idx for p_idx, tilts in enumerate(self.image_stack._particle_tilts)
-                    if any(t in subset_set for t in tilts)
-                ], dtype=np.int32)
-                gen = self.image_stack.get_dataset_subset_generator(
-                    batch_size, particle_indices, num_workers=num_workers, **kwargs)
-                return self._remap_generator(gen, remap_particles=True)
-            else:
-                gen = self._get_backing_subset_generator(
-                    batch_size, self._subset_indices, num_workers=num_workers,
-                    particle_grouped=True, **kwargs)
-                return self._remap_generator(gen, remap_particles=True)
-        return self.image_stack.get_dataset_generator(batch_size, num_workers=num_workers, **kwargs)
+        reloaded = load_dataset(
+            self.particles_file,
+            self.poses_file,
+            self.ctf_file,
+            datadir=self.datadir,
+            ind=original_image_indices,
+            lazy=lazy,
+            padding=self.padding,
+            uninvert_data=info.invert_data,
+            tilt_series=self.tilt_series_flag,
+            tilt_series_ctf=info.tilt_series_ctf,
+            dose_per_tilt=info.dose_per_tilt,
+            angle_per_tilt=info.angle_per_tilt,
+            premultiplied_ctf=self.premultiplied_ctf,
+            strip_prefix=info.strip_prefix,
+            sort_with_Bfac=info.sort_with_Bfac,
+            downsample_D=info.downsample_D,
+        )
 
-    def _get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
-        if subset_indices is None:
-            return self._get_dataset_generator(batch_size, num_workers=num_workers, **kwargs)
-        # Map local subset_indices through _subset_indices to original indices.
-        subset_indices = _normalize_image_indices(
-            subset_indices, n_images_total=self.n_images, name="subset_indices")
-        if self._subset_indices is not None:
-            orig_indices = self._subset_indices[subset_indices]
-            gen = self._get_backing_subset_generator(
-                batch_size, orig_indices, num_workers=num_workers, **kwargs)
-            # Remap the yielded original indices back to the local space of this dataset.
-            remap = np.empty(int(self._subset_indices.max()) + 1, dtype=np.int32)
-            remap[self._subset_indices] = np.arange(len(self._subset_indices), dtype=np.int32)
-            def _remap(g):
-                for images, _, image_indices in g:
-                    local = remap[np.asarray(image_indices)]
-                    yield images, local, local
-            return _remap(gen)
-        return self.image_stack.get_dataset_subset_generator(
-            batch_size, subset_indices, num_workers=num_workers, **kwargs)
+        if self.noise is not None:
+            parent_local_image_indices = self.local_image_indices_from_original(
+                original_image_indices,
+                allow_missing=False,
+            )
+            reloaded.noise = _ImageIndexRemappedNoiseAdapter(
+                self.noise,
+                parent_local_image_indices,
+            )
+        return reloaded
 
-    # Iterate over individual images rather than tilt groups. For SPA, same as get_dataset_subset_generator.
-    def _get_image_subset_generator(self, batch_size, subset_indices, num_workers=0):
-        if self.tilt_series_flag:
-            if self._subset_indices is not None:
-                if subset_indices is not None:
-                    subset_indices = _normalize_image_indices(
-                        subset_indices, n_images_total=self.n_images, name="subset_indices")
-                    orig_indices = self._subset_indices[subset_indices]
-                else:
-                    orig_indices = self._subset_indices
-                gen = self.image_stack.get_image_subset_generator(
-                    batch_size, orig_indices, num_workers=num_workers)
-                return self._remap_generator(gen)
-            return self.image_stack.get_image_subset_generator(
-                batch_size, subset_indices, num_workers=num_workers)
-        return self._get_dataset_subset_generator(batch_size, subset_indices, num_workers=num_workers)
-
-    # Iterate over individual images rather than tilt groups. For SPA, same as get_dataset_generator.
-    def _get_image_generator(self, batch_size, num_workers=0):
-        if self.tilt_series_flag:
-            if self._subset_indices is not None:
-                gen = self.image_stack.get_image_subset_generator(
-                    batch_size, self._subset_indices, num_workers=num_workers)
-                return self._remap_generator(gen)
-            return self.image_stack.get_image_generator(batch_size, num_workers=num_workers)
-        return self._get_dataset_generator(batch_size, num_workers=num_workers)
-
-
-    # --- Backward-compatible public aliases for generator methods ---
-    def get_dataset_generator(self, *args, **kwargs):
-        return self._get_dataset_generator(*args, **kwargs)
-
-    def get_dataset_subset_generator(self, *args, **kwargs):
-        return self._get_dataset_subset_generator(*args, **kwargs)
-
-    def get_image_generator(self, *args, **kwargs):
-        return self._get_image_generator(*args, **kwargs)
-
-    def get_image_subset_generator(self, *args, **kwargs):
-        return self._get_image_subset_generator(*args, **kwargs)
+    def get_halfset_dataset(self, halfset_id: int, *, independent=False, lazy=None):
+        """Return one halfset as either a lightweight view or independent reload."""
+        if independent:
+            return self.reload_from_original_images(
+                self.halfset_original_image_indices(halfset_id),
+                lazy=lazy,
+            )
+        return self.subset(self.halfset_local_image_indices(halfset_id))
 
     @property
     def ctf_evaluator(self):
@@ -624,7 +549,7 @@ class CryoEMDataset:
     def get_proj(self, X, to_real = np.real, axis = 0, hide_padding = True):
         im = to_real(fourier_transform_utils.get_idft2(jnp.take(X.reshape(self.volume_shape), self.grid_size//2, axis = axis)))
         if hide_padding:
-            im = im[self.hpad:self.image_stack.unpadded_D + self.hpad,self.hpad:self.image_stack.unpadded_D + self.hpad]
+            im = im[self.hpad:self.image_source.unpadded_D + self.hpad,self.hpad:self.image_source.unpadded_D + self.hpad]
         return im
 
 
@@ -645,18 +570,18 @@ class CryoEMDataset:
                 raise ValueError("Tilt index must be specified for tilt series")
 
         if tilt_idx is None:
-            image = self.image_stack.__getitem__(i)[0]#[None]
+            image = self.image_source.__getitem__(i)[0]
         else:
-            image = self.image_stack.__getitem__(i)[0][tilt_idx][None]
+            image = self.image_source.__getitem__(i)[0][tilt_idx][None]
 
-        processed_image = self.image_stack.process_images(image)
+        processed_image = self.image_source.process_images(image)
         return processed_image.reshape(self.image_shape)
 
     def get_CTF_image(self, i ):
         return self.get_CTF(np.array([i])).reshape(self.image_shape)
 
     def get_image_real(self,i, tilt_idx = None, to_real= np.real, hide_padding = True):
-        hpad= self.image_stack.padding//2
+        hpad= self.image_source.padding//2
         if hide_padding:
             return to_real(fourier_transform_utils.get_idft2(self.get_image(i,tilt_idx))[hpad:self.image_shape[0]-hpad,hpad:self.image_shape[1]-hpad])
         else:
@@ -670,13 +595,13 @@ class CryoEMDataset:
                 raise ValueError("Tilt index must be specified for tilt series")
 
         if tilt_idx is not None:
-            images, _, image_ind = self.image_stack.__getitem__(i)
+            images, _, image_ind = self.image_source.__getitem__(i)
             images = images[tilt_idx][None]
             CTFs = self.ctf_evaluator(self.CTF_params[image_ind[tilt_idx]][None], self.image_shape, self.voxel_size) # Compute CTF
         else:
-            images, _, _ = self.image_stack.__getitem__(i)
+            images, _, _ = self.image_source.__getitem__(i)
             CTFs = self.ctf_evaluator(self.CTF_params[i][None], self.image_shape, self.voxel_size) # Compute CTF
-        images = self.image_stack.process_images(images) # Compute DFT, masking
+        images = self.image_source.process_images(images) # Compute DFT, masking
         images = (CTFs / (CTFs**2 + weiner_param)) * images  # CTF correction
         images = images.reshape(self.image_shape)
         return to_real(fourier_transform_utils.get_idft2(images))
@@ -689,7 +614,7 @@ class CryoEMDataset:
     def get_image_mask(self, indices, mask, binary = True, soften = 5):
         indices = np.asarray(indices, dtype=int)
         from recovar.heterogeneity import covariance_core # Not sure I want this depency to exist... Could make some circular imports
-        mask = covariance_core.get_per_image_tight_mask(mask, self.rotation_matrices[indices], self.image_stack.mask, self.volume_mask_threshold, self.image_shape, self.volume_shape, self.grid_size, self.padding, disc_type = 'linear_interp',  binary = binary, soften = soften)
+        mask = covariance_core.get_per_image_tight_mask(mask, self.rotation_matrices[indices], self.image_source.mask, self.volume_mask_threshold, self.image_shape, self.volume_shape, self.grid_size, self.padding, disc_type = 'linear_interp',  binary = binary, soften = soften)
         mask_ft = fourier_transform_utils.get_dft2(mask).reshape(mask.shape[0], -1)
         # Usually images are translated, here we translate back.
         batch = core.translate_images(mask_ft, -self.translations[indices].astype(int) , self.image_shape)
@@ -738,11 +663,31 @@ class CryoEMDataset:
 
     # --- Half-set iteration (new v4 API) ---
 
-    def n_images_half(self, half: int) -> int:
+    def n_halfset_images(self, halfset_id: int) -> int:
         """Number of images in a given halfset."""
         if self.halfset_indices is None:
             raise ValueError("halfset_indices not set on this dataset")
-        return len(self.halfset_indices[half])
+        return len(self.halfset_indices[halfset_id])
+
+    def halfset_local_image_indices(self, halfset_id: int):
+        if self.halfset_indices is None:
+            raise ValueError("halfset_indices not set on this dataset")
+        return np.asarray(self.halfset_indices[halfset_id], dtype=np.int32)
+
+    def halfset_original_image_indices(self, halfset_id: int):
+        return self._index_layout.original_image_indices_for_local(
+            self.halfset_local_image_indices(halfset_id)
+        )
+
+    def halfset_local_group_indices(self, halfset_id: int):
+        return self._index_layout.local_group_indices_from_local_images(
+            self.halfset_local_image_indices(halfset_id)
+        )
+
+    def halfset_original_group_indices(self, halfset_id: int):
+        return self._index_layout.original_group_indices_from_local_images(
+            self.halfset_local_image_indices(halfset_id)
+        )
 
     def get_particle_halfset_indices(self):
         """Per-half canonical particle indices for tilt-series datasets.
@@ -754,19 +699,7 @@ class CryoEMDataset:
         """
         if self.halfset_indices is None:
             raise ValueError("halfset_indices not set on this dataset")
-        if not self.tilt_series_flag:
-            return self.halfset_indices
-        _dti = np.asarray(self.dataset_tilt_indices)
-        _img_to_particle = np.full(self.n_images, -1, dtype=np.int32)
-        for p_idx, tilts in enumerate(self.image_stack._particle_tilts):
-            for t in tilts:
-                if t < self.n_images:
-                    _img_to_particle[t] = p_idx
-        result = []
-        for half_imgs in self.halfset_indices:
-            half_particles = np.unique(_img_to_particle[np.asarray(half_imgs)])
-            result.append(_dti[half_particles])
-        return result
+        return [self.halfset_original_group_indices(halfset_id) for halfset_id in range(2)]
 
     def split_halfset_array(self, arr, per_particle=False):
         """Split a concatenated halfset-ordered array into [half0, half1].
@@ -778,33 +711,71 @@ class CryoEMDataset:
             particle boundary instead of the image boundary.
         """
         if per_particle and self.tilt_series_flag:
-            particle_halfs = self.get_particle_halfset_indices()
-            n0 = len(particle_halfs[0])
+            n0 = len(self.halfset_original_group_indices(0))
         else:
-            n0 = self.n_images_half(0)
+            n0 = self.n_halfset_images(0)
         return [arr[:n0], arr[n0:]]
 
-    def _resolve_iteration_subset(self, *, half=None, indices=None, by_image=True):
+    def _resolve_iteration_subset(self, *, halfset_id=None, indices=None, by_image=True):
         """Resolve halfset or subset selection for iteration."""
-        if half is not None and indices is not None:
-            raise ValueError("Cannot specify both half and indices")
-        if half is None:
+        if halfset_id is not None and indices is not None:
+            raise ValueError("Cannot specify both halfset_id and indices")
+        if halfset_id is None:
             return indices
 
         if self.halfset_indices is None:
             raise ValueError("halfset_indices not set on this dataset")
 
-        half_indices = self.halfset_indices[half]
-        if by_image or not self.tilt_series_flag or not hasattr(self.image_stack, '_particle_tilts'):
-            return half_indices
+        halfset_image_indices = self.halfset_indices[halfset_id]
+        if by_image or not self.tilt_series_flag:
+            return halfset_image_indices
 
-        img_set = set(np.asarray(half_indices).ravel().tolist())
-        return np.array([
-            p_idx for p_idx, tilts in enumerate(self.image_stack._particle_tilts)
-            if any(t in img_set for t in tilts)
-        ], dtype=np.int32)
+        return self.halfset_local_group_indices(halfset_id)
 
-    def iter_batches(self, batch_size, *, half=None, indices=None,
+    def _iter_explicit_batches(
+        self,
+        *,
+        batch_size,
+        batch_mode,
+        index_subset,
+        noise_model,
+        noise_half,
+        noise_by_particle,
+    ):
+        """Yield explicit batch fields from the image source and metadata store."""
+        if self.image_source is None:
+            raise ValueError("Cannot iterate batches without an image source")
+
+        use_particle_noise = noise_by_particle and batch_mode == "groups"
+        generator = self.image_source.iter_batches(
+            batch_size=batch_size,
+            batch_mode=batch_mode,
+            subset_indices=index_subset,
+        )
+
+        for images, particle_indices, image_indices in generator:
+            image_indices = np.asarray(image_indices, dtype=np.int32).reshape(-1)
+            particle_indices = np.asarray(particle_indices)
+            rotation_matrices, translations, ctf_params = self.metadata.get_batch(image_indices)
+
+            if noise_model is None:
+                noise_variance = None
+            else:
+                noise_indices = particle_indices if use_particle_noise else image_indices
+                noise_getter = noise_model.get_half if noise_half else noise_model.get
+                noise_variance = noise_getter(noise_indices)
+
+            yield (
+                images,
+                rotation_matrices,
+                translations,
+                ctf_params,
+                noise_variance,
+                particle_indices,
+                image_indices,
+            )
+
+    def iter_batches(self, batch_size, *, halfset_id=None, indices=None,
                      noise_model=None, noise_half=True, noise_by_particle=False,
                      by_image=True, prefetch=True):
         """Iterate over dataset batches, yielding explicit batch fields.
@@ -812,7 +783,7 @@ class CryoEMDataset:
         Parameters
         ----------
         batch_size : int
-        half : int, optional
+        halfset_id : int, optional
             Halfset index (0 or 1). Mutually exclusive with *indices*.
         indices : array-like, optional
             Iterate over this subset of image indices.
@@ -834,35 +805,21 @@ class CryoEMDataset:
             noise_variance, particle_indices, image_indices)``
         """
         resolved_indices = self._resolve_iteration_subset(
-            half=half,
+            halfset_id=halfset_id,
             indices=indices,
             by_image=by_image,
         )
-        inner = BatchIterator(
-            self,
-            IteratorOptions(
-                batch_size=batch_size,
-                batch_mode="images" if by_image else "groups",
-                index_subset=resolved_indices,
-                noise_model=noise_model,
-                noise_half=noise_half,
-                noise_by_particle=noise_by_particle,
-            ),
+        inner = self._iter_explicit_batches(
+            batch_size=batch_size,
+            batch_mode="images" if by_image else "groups",
+            index_subset=resolved_indices,
+            noise_model=noise_model,
+            noise_half=noise_half,
+            noise_by_particle=noise_by_particle,
         )
         if prefetch:
             return _prefetch_iter(inner)
         return inner
-
-    def iterate(self, batch_size, **kwargs):
-        """Backward-compatible alias for :meth:`iter_batches`."""
-        return self.iter_batches(batch_size, **kwargs)
-
-    def iterate_all(self, batch_size: int, **kw):
-        """Iterate over all images, yielding explicit batch fields.
-
-        Convenience wrapper — equivalent to ``iter_batches(batch_size, **kw)``.
-        """
-        return self.iter_batches(batch_size, **kw)
 
     def set_contrasts(self, contrasts: NDArray):
         """Multiply per-image CTF contrast column by *contrasts*.
@@ -900,20 +857,22 @@ def _normalize_dataset_indices(ind_value, n_total):
     return _normalize_image_indices(ind_value, n_images_total=n_total, name="ind")
 
 
-def _create_image_stack(particles_file, ind, lazy, tilt_series, tilt_series_ctf,
-                        uninvert_data, datadir, padding, strip_prefix, downsample_D):
-    """Create the underlying image-stack dataset."""
-    if tilt_series:
-        tilt_file_option = 'relion5' if tilt_series_ctf == 'relion5' else 'warp'
-        return cryo_dataset.TiltSeriesDataset(
-            particles_file, ind=ind, datadir=datadir,
-            invert_data=uninvert_data, tilt_file_option=tilt_file_option,
-            strip_prefix=strip_prefix,
-        )
-    return cryo_dataset.ParticleImageDataset(
-        particles_file, ind=ind, datadir=datadir, padding=padding,
-        invert_data=uninvert_data, lazy=lazy, strip_prefix=strip_prefix,
+def _create_image_source(particles_file, ind, lazy, tilt_series, tilt_series_ctf,
+                         uninvert_data, datadir, padding, strip_prefix, downsample_D,
+                         sort_with_Bfac=False):
+    """Create the image-loading layer for this dataset."""
+    return create_image_source(
+        particles_file,
+        ind=ind,
+        lazy=lazy,
+        tilt_series=tilt_series,
+        tilt_series_ctf=tilt_series_ctf,
+        uninvert_data=uninvert_data,
+        datadir=datadir,
+        padding=padding,
+        strip_prefix=strip_prefix,
         downsample_D=downsample_D,
+        sort_with_Bfac=sort_with_Bfac,
     )
 
 
@@ -1055,6 +1014,48 @@ def _apply_tilt_ctf_augmentation(ctf_params, tilt_dataset, tilt_series_ctf,
     return ctf_params, ctf_eval
 
 
+def _resolve_tilt_series_ctf_mode(tilt_series, tilt_series_ctf):
+    """Normalize the requested CTF mode for SPA and cryo-ET inputs."""
+    if tilt_series_ctf is None:
+        return "relion5" if tilt_series else "cryoem"
+    if tilt_series_ctf == "warp":
+        return "v2_scale_from_star"
+    return tilt_series_ctf
+
+
+def _get_tilt_ctf_source(
+    image_source,
+    *,
+    particles_file,
+    ind,
+    lazy,
+    tilt_series,
+    tilt_series_ctf,
+    uninvert_data,
+    datadir,
+    padding,
+    strip_prefix,
+    downsample_D,
+    sort_with_Bfac,
+):
+    """Return the grouped image source needed for tilt-specific CTF metadata."""
+    if tilt_series or tilt_series_ctf == "cryoem":
+        return image_source
+    return _create_image_source(
+        particles_file,
+        ind=ind,
+        lazy=lazy,
+        tilt_series=True,
+        tilt_series_ctf=tilt_series_ctf,
+        uninvert_data=uninvert_data,
+        datadir=datadir,
+        padding=padding,
+        strip_prefix=strip_prefix,
+        downsample_D=downsample_D,
+        sort_with_Bfac=sort_with_Bfac,
+    )
+
+
 def load_dataset(
     particles_file,
     poses_file=None,
@@ -1090,33 +1091,36 @@ def load_dataset(
             )
 
     # ---- CTF mode defaults ----
-    if tilt_series_ctf is None and tilt_series is False:
-        tilt_series_ctf = 'cryoem'
-    elif tilt_series_ctf is None and tilt_series is True:
-        tilt_series_ctf = 'relion5'
-    elif tilt_series_ctf == 'warp':
-        tilt_series_ctf = 'v2_scale_from_star'
+    tilt_series_ctf = _resolve_tilt_series_ctf_mode(tilt_series, tilt_series_ctf)
 
-    # ---- Create image stack ----
-    image_stack = _create_image_stack(
+    # ---- Create image source ----
+    image_source = _create_image_source(
         particles_file, ind, lazy, tilt_series, tilt_series_ctf,
         uninvert_data, datadir, padding, strip_prefix, downsample_D,
+        sort_with_Bfac=sort_with_Bfac,
     )
 
     # ---- Load CTF parameters ----
     ctf_params, dataset_indices = _load_ctf_params(
-        particles_file, ctf_file, image_stack.D, ind, image_stack.n_images,
+        particles_file, ctf_file, image_source.grid_size, ind, image_source.n_images,
     )
 
     # ---- Apply tilt-series CTF augmentation ----
     if tilt_series_ctf != 'cryoem':
-        if (tilt_series is False) and (tilt_series_ctf != 'cryoem'):
-            tilt_dataset = cryo_dataset.TiltSeriesDataset(
-                particles_file, ind=ind, datadir=datadir,
-                invert_data=uninvert_data, sort_with_Bfac=sort_with_Bfac,
-            )
-        else:
-            tilt_dataset = image_stack
+        tilt_dataset = _get_tilt_ctf_source(
+            image_source,
+            particles_file=particles_file,
+            ind=ind,
+            lazy=lazy,
+            tilt_series=tilt_series,
+            tilt_series_ctf=tilt_series_ctf,
+            uninvert_data=uninvert_data,
+            datadir=datadir,
+            padding=padding,
+            strip_prefix=strip_prefix,
+            downsample_D=downsample_D,
+            sort_with_Bfac=sort_with_Bfac,
+        )
         ctf_params, ctf_eval = _apply_tilt_ctf_augmentation(
             ctf_params, tilt_dataset, tilt_series_ctf, dose_per_tilt, angle_per_tilt,
         )
@@ -1125,8 +1129,8 @@ def load_dataset(
 
     # ---- Load poses ----
     rots, translations = _load_poses(
-        particles_file, poses_file, image_stack.unpadded_D,
-        image_stack.n_images, dataset_indices,
+        particles_file, poses_file, image_source.unpadded_D,
+        image_source.n_images, dataset_indices,
     )
 
     # ---- Validate voxel sizes ----
@@ -1138,11 +1142,11 @@ def load_dataset(
     ctf_params = ctf_params.astype(np.float32)
     dtype_real = np.complex64(0).real.dtype
 
-    meta = Metadata(rots, translations, ctf_params[:, 1:],
-                    rotation_dtype=np.float32,
-                    ctf_dtype=dtype_real,
-                    real_dtype=dtype_real)
-    ds = CryoEMDataset(image_stack, voxel_size, meta,
+    meta = MetadataStore(rots, translations, ctf_params[:, 1:],
+                         rotation_dtype=np.float32,
+                         ctf_dtype=dtype_real,
+                         real_dtype=dtype_real)
+    ds = CryoEMDataset(image_source, voxel_size, meta,
                        ctf_evaluator=ctf_eval,
                        dataset_indices=dataset_indices,
                        tilt_series_flag=tilt_series,
@@ -1220,10 +1224,21 @@ def reorder_to_original_indexing(arr, ds, use_tilt_indices=False):
     that per-particle data is scattered to its original particle position.
     """
     if use_tilt_indices:
-        halfsets = ds.get_particle_halfset_indices()
+        halfsets = [ds.halfset_original_group_indices(halfset_id) for halfset_id in range(2)]
     else:
-        halfsets = ds.halfset_indices
+        halfsets = [ds.halfset_original_image_indices(halfset_id) for halfset_id in range(2)]
     return reorder_to_original_indexing_from_halfsets(arr, halfsets)
+
+
+def reorder_to_dataset_indexing(arr, ds, use_tilt_indices=False):
+    """Reorder a halfset-concatenated array back to this dataset's local ordering."""
+    if use_tilt_indices:
+        halfsets = [ds.halfset_local_group_indices(halfset_id) for halfset_id in range(2)]
+        n_items = ds.n_units
+    else:
+        halfsets = [ds.halfset_local_image_indices(halfset_id) for halfset_id in range(2)]
+        n_items = ds.n_images
+    return reorder_to_original_indexing_from_halfsets(arr, halfsets, num_images=n_items)
 
 
 def subsample_cryoem_dataset(cryo, good_indices):

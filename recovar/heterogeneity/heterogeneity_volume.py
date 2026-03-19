@@ -124,7 +124,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
     lhs, rhs = [None, None], [None, None]
     cross_validation_estimators = [None, None]
     for k in range(2):
-        half_ds = ds.subset(ds.halfset_indices[k])
+        half_ds = ds.get_halfset_dataset(k, independent=False)
         estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(
             half_ds, None, heterogeneity_distances[k], heterogeneity_bins, tau=tau,
             grid_correct=grid_correct_ests, use_spherical_mask=use_mask_ests,
@@ -164,7 +164,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
 
     for k in range(2):
         logger.info("Computing estimates start")
-        half_ds = ds.subset(ds.halfset_indices[k])
+        half_ds = ds.get_halfset_dataset(k, independent=False)
         estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(
             half_ds, None, heterogeneity_distances[k], heterogeneity_bins, tau=None,
             grid_correct=True, use_spherical_mask=True, heterogeneity_kernel=heterogeneity_kernel,

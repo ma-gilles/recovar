@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -8,12 +10,52 @@ import jax.numpy as jnp
 import recovar.heterogeneity.covariance_estimation as cov_est
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
-from recovar.core.configs import ForwardModelConfig, BatchData
+from recovar.core.configs import ForwardModelConfig
 from recovar.core.ctf import as_ctf_evaluator
 
 from helpers.tiny_synthetic import make_tiny_cryo_dataset, make_tiny_cryo_dataset_with_images
 
 pytestmark = pytest.mark.unit
+
+
+def _make_batch_fields(*, images, ctf_params, rotation_matrices, translations, noise_variance):
+    return SimpleNamespace(
+        images=images,
+        ctf_params=ctf_params,
+        rotation_matrices=rotation_matrices,
+        translations=translations,
+        noise_variance=noise_variance,
+    )
+
+
+def _call_variance_kernel(config, batch_data, mean_estimate, volume_mask, image_mask, **kwargs):
+    return cov_est.variance_relion_kernel_trilinear(
+        config,
+        batch_data.images,
+        mean_estimate,
+        volume_mask,
+        image_mask,
+        batch_data.rotation_matrices,
+        batch_data.translations,
+        batch_data.ctf_params,
+        batch_data.noise_variance,
+        **kwargs,
+    )
+
+
+def _call_reduce_covariance_inner(config, batch_data, model, opts, image_mask, **kwargs):
+    return cov_est.reduce_covariance_inner(
+        config,
+        batch_data.images,
+        model,
+        opts,
+        image_mask,
+        batch_data.rotation_matrices,
+        batch_data.translations,
+        batch_data.ctf_params,
+        batch_data.noise_variance,
+        **kwargs,
+    )
 
 
 def test_default_covariance_options_has_expected_keys(monkeypatch):
@@ -554,18 +596,19 @@ def _make_variance_test_fixtures(grid_size=4, n_images=4, seed=42):
     cryo = make_tiny_cryo_dataset_with_images(grid_size=grid_size, n_images=n_images, seed=seed)
     config = ForwardModelConfig.from_dataset(cryo, disc_type="linear_interp")
 
-    images_gen = cryo.image_stack.get_dataset_generator(batch_size=n_images)
-    images_batch, _, indices = next(iter(images_gen))
+    images_batch, _, indices = next(
+        cryo.image_source.iter_batches(batch_size=n_images, batch_mode="groups")
+    )
 
     # nan_to_num: tiny-grid DFTs can produce NaN at edge frequencies;
     # NaN in slices propagates through the VJP-based JAX half-volume adjoint.
     full_images = jnp.nan_to_num(jnp.asarray(images_batch))
-    # The variance kernel expects batch_data.images in half-image (rfft-packed) format,
-    # matching what DataIterator(half_images=True) provides.
+    # The variance kernel expects half-image (rfft-packed) batches from the
+    # explicit dataset iterator path.
     half_images = fourier_transform_utils.full_image_to_half_image(
         full_images, config.image_shape
     )
-    batch_data = BatchData(
+    batch_data = _make_batch_fields(
         images=half_images,
         ctf_params=jnp.asarray(cryo.CTF_params[indices]),
         rotation_matrices=jnp.asarray(cryo.rotation_matrices[indices]),
@@ -645,7 +688,7 @@ def test_variance_kernel_no_mask_matches_reference():
     ref_y, ref_ctf, ref_im, ref_one = _reference_variance_kernel(
         config, batch_data, mean_estimate, volume_mask=None, image_mask=image_mask
     )
-    new_y, new_ctf, new_im, new_one = cov_est.variance_relion_kernel_trilinear(
+    new_y, new_ctf, new_im, new_one = _call_variance_kernel(
         config, batch_data, mean_estimate, volume_mask=None, image_mask=image_mask
     )
 
@@ -663,7 +706,7 @@ def test_variance_kernel_with_mask_matches_reference():
     ref_y, ref_ctf, ref_im, ref_one = _reference_variance_kernel(
         config, batch_data, mean_estimate, volume_mask, image_mask
     )
-    new_y, new_ctf, new_im, new_one = cov_est.variance_relion_kernel_trilinear(
+    new_y, new_ctf, new_im, new_one = _call_variance_kernel(
         config, batch_data, mean_estimate, volume_mask, image_mask
     )
 
@@ -680,7 +723,7 @@ def test_variance_kernel_accumulator_matches_sequential_sum():
 
     # Split into two half-batches.
     def _slice_batch(bd, sl):
-        return BatchData(
+        return _make_batch_fields(
             images=bd.images[sl],
             ctf_params=bd.ctf_params[sl],
             rotation_matrices=bd.rotation_matrices[sl],
@@ -693,8 +736,8 @@ def test_variance_kernel_accumulator_matches_sequential_sum():
 
     # Reference: run separately, convert, sum.
     kwargs = dict(mean_estimate=mean_estimate, volume_mask=volume_mask, image_mask=image_mask)
-    y1, ctf1, im1, one1 = cov_est.variance_relion_kernel_trilinear(config, b1, **kwargs)
-    y2, ctf2, im2, one2 = cov_est.variance_relion_kernel_trilinear(config, b2, **kwargs)
+    y1, ctf1, im1, one1 = _call_variance_kernel(config, b1, **kwargs)
+    y2, ctf2, im2, one2 = _call_variance_kernel(config, b2, **kwargs)
     vol_shape = config.volume_shape
     ref_y = _to_full(y1, vol_shape) + _to_full(y2, vol_shape)
     ref_ctf = _to_full(ctf1, vol_shape) + _to_full(ctf2, vol_shape)
@@ -702,8 +745,8 @@ def test_variance_kernel_accumulator_matches_sequential_sum():
     ref_one = _to_full(one1, vol_shape) + _to_full(one2, vol_shape)
 
     # Accumulator: pass running accumulators between calls.
-    acc_y, acc_ctf, acc_im, acc_one = cov_est.variance_relion_kernel_trilinear(config, b1, **kwargs)
-    acc_y, acc_ctf, acc_im, acc_one = cov_est.variance_relion_kernel_trilinear(
+    acc_y, acc_ctf, acc_im, acc_one = _call_variance_kernel(config, b1, **kwargs)
+    acc_y, acc_ctf, acc_im, acc_one = _call_variance_kernel(
         config, b2, mean_estimate=mean_estimate, volume_mask=volume_mask, image_mask=image_mask,
         Ft_y=acc_y, Ft_ctf=acc_ctf, Ft_im=acc_im, Ft_one=acc_one,
     )
@@ -729,7 +772,7 @@ def enable_x64():
 
 
 def _cast_batch_data_f64(batch_data):
-    return BatchData(
+    return _make_batch_fields(
         images=batch_data.images.astype(jnp.complex128),
         ctf_params=batch_data.ctf_params.astype(jnp.float64),
         rotation_matrices=batch_data.rotation_matrices.astype(jnp.float64),
@@ -753,7 +796,7 @@ def test_variance_kernel_no_mask_f64(enable_x64):
     ref_y, ref_ctf, ref_im, ref_one = _reference_variance_kernel(
         config, bd64, mean64, volume_mask=None, image_mask=im64
     )
-    new_y, new_ctf, new_im, new_one = cov_est.variance_relion_kernel_trilinear(
+    new_y, new_ctf, new_im, new_one = _call_variance_kernel(
         config, bd64, mean64, volume_mask=None, image_mask=im64
     )
 
@@ -775,7 +818,7 @@ def test_variance_kernel_with_mask_f64(enable_x64):
     ref_y, ref_ctf, ref_im, ref_one = _reference_variance_kernel(
         config, bd64, mean64, vm64, im64
     )
-    new_y, new_ctf, new_im, new_one = cov_est.variance_relion_kernel_trilinear(
+    new_y, new_ctf, new_im, new_one = _call_variance_kernel(
         config, bd64, mean64, vm64, im64
     )
 
@@ -800,7 +843,7 @@ def test_variance_kernel_accumulator_f64(enable_x64):
     im64 = image_mask.astype(jnp.float64)
 
     def _slice_batch(bd, sl):
-        return BatchData(
+        return _make_batch_fields(
             images=bd.images[sl],
             ctf_params=bd.ctf_params[sl],
             rotation_matrices=bd.rotation_matrices[sl],
@@ -813,14 +856,14 @@ def test_variance_kernel_accumulator_f64(enable_x64):
     kwargs = dict(mean_estimate=mean64, volume_mask=vm64, image_mask=im64)
 
     # Sum of separate runs.
-    y1, c1, im1, o1 = cov_est.variance_relion_kernel_trilinear(config, b1, **kwargs)
-    y2, c2, im2, o2 = cov_est.variance_relion_kernel_trilinear(config, b2, **kwargs)
+    y1, c1, im1, o1 = _call_variance_kernel(config, b1, **kwargs)
+    y2, c2, im2, o2 = _call_variance_kernel(config, b2, **kwargs)
     vol_shape = config.volume_shape
     ref_y = _to_full(y1, vol_shape) + _to_full(y2, vol_shape)
 
     # Accumulated run.
-    acc_y, acc_c, acc_im, acc_o = cov_est.variance_relion_kernel_trilinear(config, b1, **kwargs)
-    acc_y, acc_c, acc_im, acc_o = cov_est.variance_relion_kernel_trilinear(
+    acc_y, acc_c, acc_im, acc_o = _call_variance_kernel(config, b1, **kwargs)
+    acc_y, acc_c, acc_im, acc_o = _call_variance_kernel(
         config, b2, mean_estimate=mean64, volume_mask=vm64, image_mask=im64,
         Ft_y=acc_y, Ft_ctf=acc_c, Ft_im=acc_im, Ft_one=acc_o,
     )
@@ -844,14 +887,15 @@ def _make_reduce_cov_fixtures(grid_size=4, n_images=6, seed=0):
     cryo = make_tiny_cryo_dataset_with_images(grid_size=grid_size, n_images=n_images, seed=seed)
     config = ForwardModelConfig.from_dataset(
         cryo, disc_type="linear_interp",
-        process_fn=cryo.image_stack.process_images,
+        process_fn=cryo.image_source.process_images,
     )
 
-    images_gen = cryo.image_stack.get_dataset_generator(batch_size=n_images)
-    images_batch, _, indices = next(iter(images_gen))
+    images_batch, _, indices = next(
+        cryo.image_source.iter_batches(batch_size=n_images, batch_mode="groups")
+    )
     images = jnp.nan_to_num(jnp.asarray(images_batch))
 
-    batch_data = BatchData(
+    batch_data = _make_batch_fields(
         images=images,
         ctf_params=jnp.asarray(cryo.CTF_params[indices]),
         rotation_matrices=jnp.asarray(cryo.rotation_matrices[indices]),
@@ -886,7 +930,7 @@ def _make_reduce_cov_fixtures(grid_size=4, n_images=6, seed=0):
     )
 
     hermitian_weights = linalg.rfft2_hermitian_weights(config.image_shape)
-    image_mask = cryo.image_stack.mask
+    image_mask = cryo.image_source.mask
     return config, batch_data, model_half, model_full, hermitian_weights, image_mask
 
 
@@ -974,13 +1018,13 @@ def test_reduce_covariance_inner_masked_half_matches_full():
     opts = CovarianceOpts(disc_type_u="linear_interp", do_mask_images=True)
 
     # Half-image path (hermitian weights → half projection + sqrt(w) + .real)
-    lhs_half, rhs_half = cov_est.reduce_covariance_inner(
+    lhs_half, rhs_half = _call_reduce_covariance_inner(
         config, batch_data, model_full, opts, image_mask,
         hermitian_weights=hermitian_weights,
     )
 
     # Full-image path (no hermitian weights → full projection)
-    lhs_full, rhs_full = cov_est.reduce_covariance_inner(
+    lhs_full, rhs_full = _call_reduce_covariance_inner(
         config, batch_data, model_full, opts, image_mask,
         hermitian_weights=None,
     )
@@ -1011,7 +1055,7 @@ def test_reduce_covariance_inner_unmasked_still_works():
 
     opts = CovarianceOpts(disc_type_u="linear_interp", do_mask_images=False)
 
-    lhs, rhs = cov_est.reduce_covariance_inner(
+    lhs, rhs = _call_reduce_covariance_inner(
         config, batch_data, model_full, opts, image_mask,
         hermitian_weights=hermitian_weights,
     )
@@ -1029,11 +1073,11 @@ def test_reduce_covariance_inner_masked_vs_unmasked_differ():
     opts_mask = CovarianceOpts(disc_type_u="linear_interp", do_mask_images=True)
     opts_no_mask = CovarianceOpts(disc_type_u="linear_interp", do_mask_images=False)
 
-    lhs_mask, rhs_mask = cov_est.reduce_covariance_inner(
+    lhs_mask, rhs_mask = _call_reduce_covariance_inner(
         config, batch_data, model_full, opts_mask, image_mask,
         hermitian_weights=hermitian_weights,
     )
-    lhs_no, rhs_no = cov_est.reduce_covariance_inner(
+    lhs_no, rhs_no = _call_reduce_covariance_inner(
         config, batch_data, model_full, opts_no_mask, image_mask,
         hermitian_weights=hermitian_weights,
     )

@@ -8,6 +8,7 @@ import pytest
 pytest.importorskip("jax")
 
 from recovar.commands import outlier_detection as outlier_cmd
+from recovar.data_io._index_utils import TiltSeriesOriginalIndexMap
 
 
 pytestmark = pytest.mark.unit
@@ -66,6 +67,51 @@ def test_outlier_detection_from_contrast_tilt_shared_contrast_returns_particle_i
     np.testing.assert_array_equal(image_inliers, np.array([31], dtype=np.int32))
     assert particle_outliers is None
     assert particle_inliers is None
+
+
+def test_outlier_detection_from_contrast_tilt_uses_explicit_image_to_particle_map(monkeypatch):
+    payload = {
+        "input_args": SimpleNamespace(tilt_series=True, shared_contrast_across_tilts=False, particles="particles.star"),
+        "contrasts": {4: np.array([0.05, 0.05, 0.2, 0.2], dtype=np.float32)},
+        "halfsets": [np.array([0, 1], dtype=np.int32), np.array([2, 3], dtype=np.int32)],
+        "particles_halfsets": [np.array([100], dtype=np.int32), np.array([101], dtype=np.int32)],
+    }
+    po = _FakePipelineOutput(payload)
+
+    image_to_particle = np.array([0, 0, 1, 1], dtype=np.int32)
+    tilt_index_map = TiltSeriesOriginalIndexMap(
+        particle_to_images=(
+            np.array([0, 1], dtype=np.int32),
+            np.array([2, 3], dtype=np.int32),
+        ),
+        image_to_particle=image_to_particle,
+    )
+
+    class _FakeTiltIndexMap:
+        @staticmethod
+        def from_particles_file(_starfile):
+            return tilt_index_map
+
+    monkeypatch.setattr(outlier_cmd, "TiltSeriesOriginalIndexMap", _FakeTiltIndexMap)
+    monkeypatch.setattr(
+        outlier_cmd.cryo_dataset.TiltSeriesDataset,
+        "parse_micrograph_tilt_mapping",
+        staticmethod(lambda _starfile: (None, None)),
+    )
+
+    image_outliers, image_inliers, particle_outliers, particle_inliers = outlier_cmd.outlier_detection_from_contrast(
+        po,
+        zdim_key=4,
+        low_contrast_threshold=0.1,
+        high_contrast_threshold=3.5,
+        particle_bad_fraction_threshold=0.7,
+        output_dir=None,
+    )
+
+    np.testing.assert_array_equal(image_outliers, np.array([0, 1], dtype=np.int32))
+    np.testing.assert_array_equal(image_inliers, np.array([2, 3], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(particle_outliers), np.array([0], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(particle_inliers), np.array([1], dtype=np.int32))
 
 
 def test_outlier_detection_main_combines_anomaly_and_contrast_for_spa(monkeypatch, tmp_path):
@@ -207,4 +253,3 @@ def test_outlier_detection_main_tilt_maps_particle_outliers_to_images(monkeypatc
     np.testing.assert_array_equal(combined_image_outliers, np.array([1, 5], dtype=np.int64))
     np.testing.assert_array_equal(combined_particle_outliers, np.array([100, 102], dtype=np.int64))
     assert map_calls["n"] >= 2
-

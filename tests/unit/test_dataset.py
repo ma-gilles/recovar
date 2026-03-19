@@ -10,8 +10,25 @@ import recovar.data_io.dataset as dataset
 from recovar import core
 from recovar.data_io import load_utils
 from recovar.data_io import halfsets
+from recovar.data_io._index_utils import DatasetIndexLayout
 
 pytestmark = pytest.mark.unit
+
+
+def _iter_group_batches(cryo, batch_size, subset_indices=None):
+    return cryo.image_source.iter_batches(
+        batch_size=batch_size,
+        batch_mode="groups",
+        subset_indices=subset_indices,
+    )
+
+
+def _iter_image_batches(cryo, batch_size, subset_indices=None):
+    return cryo.image_source.iter_batches(
+        batch_size=batch_size,
+        batch_mode="images",
+        subset_indices=subset_indices,
+    )
 
 
 def test_split_index_list_deterministic_and_disjoint():
@@ -106,6 +123,27 @@ def test_reorder_to_original_indexing_from_halfsets_rejects_negative_indices():
         dataset.reorder_to_original_indexing_from_halfsets(arr, halfsets)
 
 
+def test_reorder_to_dataset_indexing_uses_local_dataset_order():
+    class _Cryo:
+        n_images = 4
+        n_units = 4
+
+        @staticmethod
+        def halfset_local_image_indices(halfset_id):
+            return [
+                np.array([2, 0], dtype=np.int32),
+                np.array([3, 1], dtype=np.int32),
+            ][halfset_id]
+
+        @staticmethod
+        def halfset_local_group_indices(halfset_id):
+            return _Cryo.halfset_local_image_indices(halfset_id)
+
+    arr = np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float32)
+    out = dataset.reorder_to_dataset_indexing(arr, _Cryo(), use_tilt_indices=False)
+    np.testing.assert_array_equal(out, np.array([20.0, 40.0, 10.0, 30.0], dtype=np.float32))
+
+
 def test_reorder_to_original_indexing_from_halfsets_rejects_too_small_num_images():
     arr = np.array([1.0], dtype=np.float32)
     halfsets = [np.array([2], dtype=np.int32), np.array([], dtype=np.int32)]
@@ -125,6 +163,195 @@ def test_reorder_to_original_indexing_from_halfsets_empty_list_input_return_empt
     halfsets = [np.array([], dtype=np.int32), np.array([], dtype=np.int32)]
     out = dataset.reorder_to_original_indexing_from_halfsets(arr, halfsets)
     assert out.shape == (0,)
+
+
+def test_dataset_index_layout_grouped_subset_roundtrip():
+    layout = DatasetIndexLayout.from_grouped_images(
+        original_image_indices=np.array([10, 20, 30, 40, 50], dtype=np.int32),
+        original_group_indices=np.array([7, 9], dtype=np.int32),
+        group_local_image_indices=(
+            np.array([0, 2, 4], dtype=np.int32),
+            np.array([1, 3], dtype=np.int32),
+        ),
+    )
+
+    np.testing.assert_array_equal(
+        layout.original_group_indices_from_local_images(np.array([4, 1, 2], dtype=np.int32)),
+        np.array([7, 9], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        layout.local_image_indices_from_original(np.array([10, 30, 50], dtype=np.int32)),
+        np.array([0, 2, 4], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        layout.local_image_indices_from_original(
+            np.array([10, 999], dtype=np.int32),
+            allow_missing=True,
+        ),
+        np.array([0, -1], dtype=np.int32),
+    )
+
+    sub = layout.subset(np.array([4, 1, 2], dtype=np.int32))
+    np.testing.assert_array_equal(sub.original_image_indices, np.array([50, 20, 30], dtype=np.int32))
+    np.testing.assert_array_equal(sub.original_group_indices, np.array([7, 9], dtype=np.int32))
+    np.testing.assert_array_equal(
+        sub.group_local_image_indices[0],
+        np.array([2, 0], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        sub.group_local_image_indices[1],
+        np.array([1], dtype=np.int32),
+    )
+
+
+def test_dataset_index_layout_spa_subset_preserves_duplicate_original_ids():
+    layout = DatasetIndexLayout.from_image_indices(np.array([7, 1, 7, 3], dtype=np.int32))
+
+    np.testing.assert_array_equal(
+        layout.local_group_indices_from_local_images(np.array([0, 2], dtype=np.int32)),
+        np.array([0, 2], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        layout.local_image_indices_from_original(np.array([7], dtype=np.int32)),
+        np.array([2], dtype=np.int32),
+    )
+
+    sub = layout.subset(np.array([2, 0, 2, 1], dtype=np.int32))
+    np.testing.assert_array_equal(
+        sub.original_image_indices,
+        np.array([7, 7, 7, 1], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        sub.local_image_indices_from_original(np.array([7, 1], dtype=np.int32)),
+        np.array([2, 3], dtype=np.int32),
+    )
+
+
+def test_cryoemdataset_halfset_original_group_indices_tilt():
+    fake_stack = _FakeImageStack(n_images=6, D=8, padding=0, Np=3)
+    image_source = dataset.BackendImageSource(
+        fake_stack,
+        info=dataset.ImageSourceInfo(tilt_series=True),
+    )
+    rots = np.tile(np.eye(3, dtype=np.float32), (6, 1, 1))
+    trans = np.zeros((6, 2), dtype=np.float32)
+    ctf = np.zeros((6, 9), dtype=np.float32)
+    cryo = dataset.CryoEMDataset(
+        image_source=image_source,
+        voxel_size=1.0,
+        metadata=dataset.Metadata(rots, trans, ctf),
+        dataset_indices=np.array([10, 11, 12, 13, 14, 15], dtype=np.int32),
+        tilt_series_flag=True,
+    )
+    cryo.halfset_indices = [
+        np.array([0, 1, 4], dtype=np.int32),
+        np.array([2, 3, 5], dtype=np.int32),
+    ]
+
+    np.testing.assert_array_equal(
+        cryo.halfset_original_image_indices(0),
+        np.array([10, 11, 14], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        cryo.halfset_local_group_indices(0),
+        np.array([0, 2], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        cryo.halfset_original_group_indices(0),
+        np.array([0, 2], dtype=np.int32),
+    )
+
+
+def test_reload_from_original_images_preserves_original_indices_and_noise_mapping(monkeypatch):
+    fake_stack = _FakeImageStack(n_images=6, D=8, padding=0, Np=3)
+    image_source = dataset.BackendImageSource(
+        fake_stack,
+        info=dataset.ImageSourceInfo(
+            tilt_series=True,
+            lazy=False,
+            tilt_series_ctf="warp",
+            dose_per_tilt=1.5,
+            angle_per_tilt=2.0,
+            sort_with_Bfac=True,
+            strip_prefix="Extract/job001",
+            downsample_D=64,
+            invert_data=True,
+        ),
+    )
+    rots = np.tile(np.eye(3, dtype=np.float32), (6, 1, 1))
+    trans = np.zeros((6, 2), dtype=np.float32)
+    ctf = np.zeros((6, 9), dtype=np.float32)
+    cryo = dataset.CryoEMDataset(
+        image_source=image_source,
+        voxel_size=1.0,
+        metadata=dataset.Metadata(rots, trans, ctf),
+        dataset_indices=np.array([10, 11, 14, 15, 20, 21], dtype=np.int32),
+        tilt_series_flag=True,
+    )
+    cryo.particles_file = "particles.star"
+    cryo.poses_file = "poses.pkl"
+    cryo.ctf_file = "ctf.pkl"
+    cryo.datadir = "/data"
+    cryo.halfset_indices = [
+        np.array([0, 2, 4], dtype=np.int32),
+        np.array([1, 3, 5], dtype=np.int32),
+    ]
+
+    class _Noise:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, indices):
+            arr = np.asarray(indices, dtype=np.int32)
+            self.calls.append(("full", arr.copy()))
+            return arr
+
+        def get_half(self, indices):
+            arr = np.asarray(indices, dtype=np.int32)
+            self.calls.append(("half", arr.copy()))
+            return arr
+
+    cryo.noise = _Noise()
+
+    captured = {}
+
+    def fake_load_dataset(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(noise=None)
+
+    monkeypatch.setattr(dataset, "load_dataset", fake_load_dataset)
+
+    half0 = cryo.get_halfset_dataset(0, independent=True, lazy=True)
+
+    np.testing.assert_array_equal(
+        captured["kwargs"]["ind"],
+        np.array([10, 14, 20], dtype=np.int32),
+    )
+    assert captured["kwargs"]["tilt_series_ctf"] == "warp"
+    assert captured["kwargs"]["strip_prefix"] == "Extract/job001"
+    assert captured["kwargs"]["downsample_D"] == 64
+    assert captured["kwargs"]["uninvert_data"] is True
+    assert half0.noise is not None
+
+    np.testing.assert_array_equal(
+        half0.noise.get(np.array([0, 1, 2], dtype=np.int32)),
+        np.array([0, 2, 4], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        half0.noise.get_half(np.array([1], dtype=np.int32)),
+        np.array([2], dtype=np.int32),
+    )
+    assert cryo.noise.calls[0][0] == "full"
+    np.testing.assert_array_equal(
+        cryo.noise.calls[0][1],
+        np.array([0, 2, 4], dtype=np.int32),
+    )
+    assert cryo.noise.calls[1][0] == "half"
+    np.testing.assert_array_equal(
+        cryo.noise.calls[1][1],
+        np.array([2], dtype=np.int32),
+    )
 
 
 def test_make_dataset_loader_dict_uninvert_parsing():
@@ -165,7 +392,7 @@ def test_cryoemdataset_minimal_and_noise_access():
         return np.ones((params.shape[0], image_shape[0] * image_shape[1]), dtype=np.float32)
 
     ds = dataset.CryoEMDataset(
-        image_stack=None,
+        image_source=None,
         voxel_size=1.0,
         metadata=dataset.Metadata(rots, trans, ctf_params),
         ctf_evaluator=ctf_fun,
@@ -193,7 +420,7 @@ def test_cryoemdataset_casts_arrays_to_expected_dtypes():
     trans = np.array([[1, 2], [3, 4]], dtype=np.float64)
 
     ds = dataset.CryoEMDataset(
-        image_stack=None,
+        image_source=None,
         voxel_size=1.0,
         metadata=dataset.Metadata(rots, trans, ctf_params),
         grid_size=4,
@@ -398,18 +625,30 @@ class _FakeImageStack:
         self.image_shape = (D, D)
         self.Np = Np
         self.mask = np.ones((D, D), dtype=np.float32)
+        self._particle_tilts = [
+            np.asarray(chunk, dtype=np.int32)
+            for chunk in np.array_split(np.arange(n_images, dtype=np.int32), Np)
+        ]
+        self.particles = self._particle_tilts
+        self.dataset_tilt_indices = np.arange(Np, dtype=np.int32)
 
     def get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
-        return ("dataset", batch_size, num_workers, kwargs)
+        _ = (batch_size, num_workers, kwargs)
+        yield "dataset", np.array([0], dtype=np.int32), np.array([0], dtype=np.int32)
 
     def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
-        return ("subset", batch_size, tuple(subset_indices), num_workers, kwargs)
+        _ = (batch_size, num_workers, kwargs)
+        subset_indices = np.asarray(subset_indices, dtype=np.int32)
+        yield "subset", subset_indices, subset_indices
 
     def get_image_subset_generator(self, batch_size, subset_indices, num_workers=0):
-        return ("image_subset", batch_size, tuple(subset_indices), num_workers)
+        _ = (batch_size, num_workers)
+        subset_indices = np.asarray(subset_indices, dtype=np.int32)
+        yield "image_subset", subset_indices, subset_indices
 
     def get_image_generator(self, batch_size, num_workers=0):
-        return ("image", batch_size, num_workers)
+        _ = (batch_size, num_workers)
+        yield "image", np.array([0], dtype=np.int32), np.array([0], dtype=np.int32)
 
     def __getitem__(self, i):
         img = np.ones((self.D * self.D,), dtype=np.complex64) * (i + 1)
@@ -437,8 +676,13 @@ def _fake_load_poses(poses_file, n_images, D, ind=None):
 
 
 def test_load_dataset_cryoem_branch(monkeypatch):
-    fake_stack = _FakeImageStack(n_images=4, D=8, padding=2)
-    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: fake_stack)
+    def _particle_dataset(*args, **kwargs):
+        _ = args
+        ind = kwargs.get("ind")
+        n_images = 4 if ind is None else len(np.asarray(ind))
+        return _FakeImageStack(n_images=n_images, D=8, padding=2)
+
+    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", _particle_dataset)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
@@ -452,7 +696,7 @@ def test_load_dataset_cryoem_branch(monkeypatch):
         tilt_series_ctf="cryoem",
     )
     assert out.ctf_evaluator.mode == core.CTFMode.SPA
-    assert out.n_images == 4
+    assert out.n_images == 2
     assert out.CTF_params.shape[1] == 9
     np.testing.assert_array_equal(out.dataset_indices, np.array([0, 2], dtype=int))
 
@@ -804,16 +1048,16 @@ def test_cryoemdataset_predicted_image_and_generators(monkeypatch):
     rots = np.tile(np.eye(3, dtype=np.float32), (3, 1, 1))
     trans = np.zeros((3, 2), dtype=np.float32)
     ds = dataset.CryoEMDataset(
-        image_stack=stack,
+        image_source=stack,
         voxel_size=1.0,
         metadata=dataset.Metadata(rots, trans, ctf_params),
         tilt_series_flag=True,
     )
     assert ds.n_units == stack.Np
-    assert ds.get_dataset_generator(2)[0] == "dataset"
-    assert ds.get_dataset_subset_generator(2, np.array([0, 2]))[0] == "subset"
-    assert ds.get_image_generator(2)[0] == "image"
-    assert ds.get_image_subset_generator(2, np.array([1]))[0] == "image_subset"
+    assert next(_iter_group_batches(ds, 2))[0] == "dataset"
+    assert next(_iter_group_batches(ds, 2, np.array([0, 1])))[0] == "subset"
+    assert next(_iter_image_batches(ds, 2))[0] == "image"
+    assert next(_iter_image_batches(ds, 2, np.array([1])))[0] == "image_subset"
 
     called = {}
     import recovar.core.forward as core_forward_mod
@@ -840,7 +1084,7 @@ def test_get_split_tilt_indices_with_filters(tmp_path, monkeypatch):
             tilts_to_particles = [0, 0, 1, 1, 2, 2]
             return particles_to_tilts, tilts_to_particles
 
-        def __init__(self, particles_file, datadir=None):
+        def __init__(self, particles_file, datadir=None, lazy=True):
             self.tilt_numbers = np.array([0, 1, 0, 1, 0, 1], dtype=np.int32)
 
     monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
@@ -1105,7 +1349,7 @@ def test_subsample_cryoem_dataset_reindexes_and_slices_metadata():
     rots = np.tile(np.eye(3, dtype=np.float32), (n, 1, 1))
     trans = np.arange(n * 2, dtype=np.float32).reshape(n, 2)
     cryo = dataset.CryoEMDataset(
-        image_stack=stack,
+        image_source=stack,
         voxel_size=1.5,
         metadata=dataset.Metadata(rots, trans, ctf_params),
     )
@@ -1115,7 +1359,7 @@ def test_subsample_cryoem_dataset_reindexes_and_slices_metadata():
     assert sub.n_images == 3
     np.testing.assert_array_equal(sub.translations, trans[[0, 2, 4]])
 
-    batch = next(sub.get_dataset_generator(batch_size=2))
+    batch = next(_iter_group_batches(sub, batch_size=2))
     _, particle_idx, image_idx = batch
     # Reindexed to contiguous local ids.  The mock yields all items at once
     # (ignores batch_size), so we see all 3 subset elements.
@@ -1149,7 +1393,7 @@ def test_subsample_cryoem_dataset_preserves_premultiplied_ctf_flag():
     rots = np.tile(np.eye(3, dtype=np.float32), (n, 1, 1))
     trans = np.zeros((n, 2), dtype=np.float32)
     cryo = dataset.CryoEMDataset(
-        image_stack=stack,
+        image_source=stack,
         voxel_size=1.5,
         metadata=dataset.Metadata(rots, trans, ctf_params),
         premultiplied_ctf=True,
@@ -1166,7 +1410,7 @@ def _make_subset_cryo(backing_stack, subset_indices):
     rots = np.tile(np.eye(3, dtype=np.float32), (n, 1, 1))
     trans = np.zeros((n, 2), dtype=np.float32)
     cryo = dataset.CryoEMDataset(
-        image_stack=backing_stack,
+        image_source=backing_stack,
         voxel_size=1.5,
         metadata=dataset.Metadata(rots, trans, ctf_params),
     )
@@ -1194,7 +1438,7 @@ def test_subsampled_image_stack_subset_generator_maps_local_to_original_indices(
             yield imgs, subset_indices, subset_indices
 
     sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[7, 3, 5])
-    gen = sub.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([2, 0], dtype=np.int32))
+    gen = _iter_group_batches(sub, batch_size=8, subset_indices=np.array([2, 0], dtype=np.int32))
     imgs, local_pidx, local_iidx = next(gen)
     assert imgs.shape[0] == 2
     # Returned indices are local (contiguous) by subset-view contract.
@@ -1222,7 +1466,7 @@ def test_subsampled_image_stack_image_subset_generator_alias():
             yield imgs, subset_indices, subset_indices
 
     sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[4, 8])
-    gen = sub.get_dataset_subset_generator(batch_size=4, subset_indices=np.array([1], dtype=np.int32))
+    gen = _iter_group_batches(sub, batch_size=4, subset_indices=np.array([1], dtype=np.int32))
     _imgs, pidx, iidx = next(gen)
     np.testing.assert_array_equal(pidx, np.array([1], dtype=np.int32))
     np.testing.assert_array_equal(iidx, np.array([1], dtype=np.int32))
@@ -1251,7 +1495,7 @@ def test_subsampled_image_stack_image_subset_generator_none_emits_full_local_ran
 
     sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[4, 8, 2])
     got = []
-    for _imgs, pidx, iidx in sub.get_dataset_subset_generator(batch_size=2, subset_indices=None):
+    for _imgs, pidx, iidx in _iter_group_batches(sub, batch_size=2, subset_indices=None):
         np.testing.assert_array_equal(pidx, iidx)
         got.extend(np.asarray(iidx).reshape(-1).tolist())
     assert sorted(got) == [0, 1, 2]
@@ -1280,7 +1524,7 @@ def test_subsampled_image_stack_image_generator_alias_emits_all_local_indices():
 
     sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[9, 5, 1, 6])
     got = []
-    for _imgs, pidx, iidx in sub.get_dataset_generator(batch_size=3):
+    for _imgs, pidx, iidx in _iter_group_batches(sub, batch_size=3):
         np.testing.assert_array_equal(pidx, iidx)
         got.extend(np.asarray(iidx).reshape(-1).tolist())
     assert sorted(got) == [0, 1, 2, 3]
@@ -1299,6 +1543,9 @@ def test_subsampled_image_stack_prefers_backing_image_subset_generator_when_avai
             self.padding = 0
             self.image_shape = (D, D)
             self.mask = np.ones((D, D), dtype=np.float32)
+            self._particle_tilts = [np.array([i], dtype=np.int32) for i in range(n)]
+            self.particles = self._particle_tilts
+            self.dataset_tilt_indices = np.arange(n, dtype=np.int32)
 
         def process_images(self, images, apply_image_mask=True):
             return np.asarray(images)
@@ -1322,14 +1569,14 @@ def test_subsampled_image_stack_prefers_backing_image_subset_generator_when_avai
     rots = np.tile(np.eye(3, dtype=np.float32), (n, 1, 1))
     trans = np.zeros((n, 2), dtype=np.float32)
     cryo = dataset.CryoEMDataset(
-        image_stack=backing,
+        image_source=backing,
         voxel_size=1.5,
         metadata=dataset.Metadata(rots, trans, ctf_params),
         tilt_series_flag=True,
     )
     sub = cryo.subset(np.array([7, 2, 4, 1], dtype=np.int32))
     req = np.array([3, 0, 2], dtype=np.int32)
-    gen = sub.get_dataset_subset_generator(batch_size=2, subset_indices=req)
+    gen = _iter_image_batches(sub, batch_size=2, subset_indices=req)
     got = []
     for _imgs, pidx, iidx in gen:
         np.testing.assert_array_equal(pidx, iidx)
@@ -1358,7 +1605,7 @@ def test_subsampled_image_stack_subset_generator_accepts_boolean_mask():
 
     sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[4, 8, 2, 9])
     mask = np.array([False, True, False, True], dtype=bool)
-    _imgs, pidx, iidx = next(sub.get_dataset_subset_generator(batch_size=8, subset_indices=mask))
+    _imgs, pidx, iidx = next(_iter_group_batches(sub, batch_size=8, subset_indices=mask))
     np.testing.assert_array_equal(pidx, np.array([1, 3], dtype=np.int32))
     np.testing.assert_array_equal(iidx, np.array([1, 3], dtype=np.int32))
 
@@ -1384,15 +1631,15 @@ def test_subsampled_image_stack_subset_generator_rejects_bad_subset_indices():
 
     sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[4, 8, 2, 9])
     with pytest.raises(ValueError, match="boolean mask must be 1D"):
-        list(sub.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([[True, False, True, False]], dtype=bool)))
+        list(_iter_group_batches(sub, batch_size=8, subset_indices=np.array([[True, False, True, False]], dtype=bool)))
     with pytest.raises(ValueError, match="must match total size"):
-        list(sub.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([True, False], dtype=bool)))
+        list(_iter_group_batches(sub, batch_size=8, subset_indices=np.array([True, False], dtype=bool)))
     with pytest.raises(IndexError, match="negative"):
-        list(sub.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([-1], dtype=np.int32)))
+        list(_iter_group_batches(sub, batch_size=8, subset_indices=np.array([-1], dtype=np.int32)))
     with pytest.raises(IndexError, match="out-of-range"):
-        list(sub.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([4], dtype=np.int32)))
+        list(_iter_group_batches(sub, batch_size=8, subset_indices=np.array([4], dtype=np.int32)))
     with pytest.raises(TypeError, match="integer.*boolean mask"):
-        list(sub.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([1.5], dtype=np.float32)))
+        list(_iter_group_batches(sub, batch_size=8, subset_indices=np.array([1.5], dtype=np.float32)))
 
 
 def test_subsampled_image_stack_subset_generator_handles_multiple_underlying_batches():
@@ -1418,7 +1665,7 @@ def test_subsampled_image_stack_subset_generator_handles_multiple_underlying_bat
                 yield imgs, chunk, chunk
 
     sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[7, 3, 5, 9])
-    gen = sub.get_dataset_subset_generator(batch_size=2, subset_indices=np.array([3, 0, 2, 1], dtype=np.int32))
+    gen = _iter_group_batches(sub, batch_size=2, subset_indices=np.array([3, 0, 2, 1], dtype=np.int32))
 
     got = []
     for _imgs, pidx, iidx in gen:
@@ -1450,7 +1697,7 @@ def test_subsampled_image_stack_dataset_generator_emits_all_local_indices():
 
     sub = _make_subset_cryo(_BackingStack(n=11), subset_indices=[10, 4, 8, 2, 6])
     got = []
-    for _imgs, pidx, iidx in sub.get_dataset_generator(batch_size=2):
+    for _imgs, pidx, iidx in _iter_group_batches(sub, batch_size=2):
         np.testing.assert_array_equal(pidx, iidx)
         got.extend(np.asarray(iidx).reshape(-1).tolist())
 
@@ -1484,7 +1731,7 @@ def test_subsampled_image_stack_dataset_generator_preserves_duplicate_original_i
     # Use unique original indices to keep the remap bijective.
     sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[7, 3, 8, 5])
     got = []
-    for _imgs, pidx, iidx in sub.get_dataset_generator(batch_size=2):
+    for _imgs, pidx, iidx in _iter_group_batches(sub, batch_size=2):
         np.testing.assert_array_equal(pidx, iidx)
         got.extend(np.asarray(iidx).reshape(-1).tolist())
 
@@ -1514,7 +1761,7 @@ def test_subsampled_image_stack_subset_generator_preserves_duplicate_requests():
 
     # Use unique original indices so the remap is bijective.
     sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[7, 3, 8, 5])
-    gen = sub.get_dataset_subset_generator(batch_size=2, subset_indices=np.array([2, 0, 2, 1], dtype=np.int32))
+    gen = _iter_group_batches(sub, batch_size=2, subset_indices=np.array([2, 0, 2, 1], dtype=np.int32))
 
     got = []
     for _imgs, pidx, iidx in gen:
@@ -1551,7 +1798,7 @@ def test_subsampled_image_stack_generator_raises_on_unmapped_underlying_index():
             yield imgs, bad, bad
 
     sub = _make_subset_cryo(_BackingStack(n=10), subset_indices=[7, 3, 5])
-    gen = sub.get_dataset_subset_generator(batch_size=4, subset_indices=np.array([0, 1], dtype=np.int32))
+    gen = _iter_group_batches(sub, batch_size=4, subset_indices=np.array([0, 1], dtype=np.int32))
     with pytest.raises(IndexError):
         next(gen)
 
@@ -1583,7 +1830,7 @@ def test_subsample_cryoem_dataset_preserves_duplicate_requested_indices():
     rots[:, 0, 0] = np.arange(n, dtype=np.float32)
     trans = np.arange(n * 2, dtype=np.float32).reshape(n, 2)
     cryo = dataset.CryoEMDataset(
-        image_stack=stack,
+        image_source=stack,
         voxel_size=1.5,
         metadata=dataset.Metadata(rots, trans, ctf_params),
     )
@@ -1603,7 +1850,7 @@ def test_subsample_cryoem_dataset_rejects_non_1d_boolean_mask():
     rots = np.tile(np.eye(3, dtype=np.float32), (n, 1, 1))
     trans = np.zeros((n, 2), dtype=np.float32)
     cryo = dataset.CryoEMDataset(
-        image_stack=None,
+        image_source=None,
         voxel_size=1.5,
         metadata=dataset.Metadata(rots, trans, ctf_params),
         grid_size=4,
@@ -1619,7 +1866,7 @@ def test_subsample_cryoem_dataset_rejects_wrong_length_boolean_mask():
     rots = np.tile(np.eye(3, dtype=np.float32), (n, 1, 1))
     trans = np.zeros((n, 2), dtype=np.float32)
     cryo = dataset.CryoEMDataset(
-        image_stack=None,
+        image_source=None,
         voxel_size=1.5,
         metadata=dataset.Metadata(rots, trans, ctf_params),
         grid_size=4,
@@ -1635,7 +1882,7 @@ def test_subsample_cryoem_dataset_rejects_out_of_range_indices():
     rots = np.tile(np.eye(3, dtype=np.float32), (n, 1, 1))
     trans = np.zeros((n, 2), dtype=np.float32)
     cryo = dataset.CryoEMDataset(
-        image_stack=None,
+        image_source=None,
         voxel_size=1.5,
         metadata=dataset.Metadata(rots, trans, ctf_params),
         grid_size=4,
@@ -1664,7 +1911,7 @@ def test_get_split_tilt_indices_accepts_array_inputs_for_all_index_args(monkeypa
             tilts_to_particles = [0, 0, 1, 1, 2, 2]
             return particles_to_tilts, tilts_to_particles
 
-        def __init__(self, particles_file, datadir=None):
+        def __init__(self, particles_file, datadir=None, lazy=True):
             self.tilt_numbers = np.array([0, 1, 0, 1, 0, 1], dtype=np.int32)
 
     monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
@@ -1702,7 +1949,7 @@ def test_get_split_tilt_indices_accepts_boolean_masks_for_particle_and_image_fil
             tilts_to_particles = [0, 0, 1, 1, 2, 2]
             return particles_to_tilts, tilts_to_particles
 
-        def __init__(self, particles_file, datadir=None):
+        def __init__(self, particles_file, datadir=None, lazy=True):
             self.tilt_numbers = np.array([0, 1, 0, 1, 0, 1], dtype=np.int32)
 
     monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
@@ -1816,7 +2063,7 @@ def test_get_split_tilt_indices_sanitizes_tilt_ind_file_values(monkeypatch):
             tilts_to_particles = [0, 0, 1, 1, 2, 2]
             return particles_to_tilts, tilts_to_particles
 
-        def __init__(self, particles_file, datadir=None):
+        def __init__(self, particles_file, datadir=None, lazy=True):
             self.tilt_numbers = np.array([0, 1, 0, 1, 0, 1], dtype=np.int32)
 
     monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)

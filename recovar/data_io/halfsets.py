@@ -13,7 +13,7 @@ import pickle
 
 import numpy as np
 
-from recovar.data_io import cryo_dataset
+from recovar.data_io._index_utils import TiltSeriesOriginalIndexMap, filter_preserve_order
 
 logger = logging.getLogger(__name__)
 
@@ -138,153 +138,92 @@ def get_split_tilt_indices(
 
     Supports optional filtering by image/particle indices and precomputed splits.
     """
-    _normalize_image_indices, _ = _get_normalize_and_dedup()
+    index_map = TiltSeriesOriginalIndexMap.from_particles_file(
+        particles_file,
+        datadir=datadir,
+        ntilts=ntilts,
+    )
 
-    def _filter_preserve_order(values, allowed):
-        values = np.asarray(values)
-        allowed = np.asarray(allowed)
-        if values.size == 0:
-            return values.astype(np.int32, copy=False)
-        return values[np.isin(values, allowed)]
+    def _sanitize_particle_ids(values, *, name, allowed_particles=None):
+        raw = np.asarray(values)
+        if raw.dtype != bool:
+            raw = np.asarray(raw).reshape(-1)
+            dropped = int(np.sum((raw < 0) | (raw >= index_map.n_particles)))
+            if dropped > 0:
+                logger.warning("Dropping %d out-of-range particle ids from %s.", dropped, name)
+        sanitized = index_map.sanitize_particle_indices(
+            values,
+            name=name,
+            allowed_particles=allowed_particles,
+        )
+        duplicates = int(np.asarray(values).reshape(-1).size - sanitized.size) if np.asarray(values).ndim <= 1 else 0
+        if duplicates > 0 and allowed_particles is not None:
+            logger.warning("Dropping duplicate particle ids from %s.", name)
+        return sanitized
 
-    def _normalize_particle_ids(values, n_particles_total):
-        arr = np.asarray(values)
-        if arr.dtype == bool:
-            if arr.ndim != 1:
-                raise ValueError("tilt_ind_file/particle halfset boolean mask must be 1D")
-            if arr.size != int(n_particles_total):
-                raise ValueError(
-                    f"tilt_ind_file/particle halfset boolean mask length {arr.size} "
-                    f"must match number of particles {int(n_particles_total)}"
-                )
-            return np.flatnonzero(arr).astype(np.int64, copy=False)
-        if arr.ndim == 0:
-            arr = arr.reshape(1)
-        if arr.ndim != 1:
-            raise ValueError("tilt_ind_file/particle halfset ids must be 1D")
-        if arr.dtype.kind not in ("i", "u"):
-            raise TypeError("tilt_ind_file/particle halfset ids must be integer or boolean mask")
-        return arr.astype(np.int64, copy=False).reshape(-1)
+    def _sanitize_image_ids(values, *, name):
+        raw = np.asarray(values)
+        if raw.dtype != bool:
+            raw = np.asarray(raw).reshape(-1)
+            dropped = int(np.sum((raw < 0) | (raw >= index_map.n_images)))
+            if dropped > 0:
+                logger.warning("Dropping %d out-of-range image ids from %s.", dropped, name)
+        return index_map.sanitize_image_indices(values, name=name)
 
-    def _normalize_image_ids(values, n_images_total):
-        """Normalize image IDs, silently dropping out-of-range values."""
-        arr = np.asarray(values)
-        if arr.dtype == bool:
-            if arr.ndim != 1:
-                raise ValueError("ind_file boolean mask must be 1D")
-            if arr.size != int(n_images_total):
-                raise ValueError(
-                    f"ind_file boolean mask length {arr.size} must match total size {n_images_total}")
-            return np.flatnonzero(arr).astype(np.int32, copy=False)
-        if arr.ndim == 0:
-            arr = arr.reshape(1)
-        if arr.ndim != 1:
-            raise ValueError("ind_file must be 1D")
-        if arr.dtype.kind not in ("i", "u"):
-            raise TypeError("ind_file must be integer array")
-        in_bounds = (arr >= 0) & (arr < int(n_images_total))
-        if not np.all(in_bounds):
-            dropped = int(np.sum(~in_bounds))
-            logger.warning("Dropping %d out-of-range image ids from ind_file (total=%d).", dropped, n_images_total)
-        return arr[in_bounds].astype(np.int32, copy=False)
-
-    def _sanitize_particle_ids(values, n_particles_total, allowed_particles):
-        values = _normalize_particle_ids(values, n_particles_total=n_particles_total)
-        if values.size == 0:
-            return values.astype(np.int32, copy=False)
-        in_bounds = (values >= 0) & (values < int(n_particles_total))
-        if not np.all(in_bounds):
-            dropped = int(np.sum(~in_bounds))
-            logger.warning("Dropping %d out-of-range particle ids from precomputed halfset.", dropped)
-        values = values[in_bounds]
-        values = _filter_preserve_order(values, allowed_particles)
-        if values.size > 0:
-            _, first_idx = np.unique(values, return_index=True)
-            if first_idx.size != values.size:
-                dropped = int(values.size - first_idx.size)
-                logger.warning("Dropping %d duplicate particle ids from precomputed halfset.", dropped)
-            values = values[np.sort(first_idx)]
-        return values.astype(np.int32, copy=False)
-
-    # Step 1: Parse STAR file for mapping
-    particles_to_tilts, tilts_to_particles = cryo_dataset.TiltSeriesDataset.parse_particle_tilt(particles_file)
-
-    # Step 2: Optionally get tilt numbers for ntilts filtering
-    tilt_numbers = None
-    if ntilts is not None and ntilts > 0:
-        dataset_tmp = cryo_dataset.TiltSeriesDataset(particles_file, datadir=datadir)
-        tilt_numbers = dataset_tmp.tilt_numbers
-
-    n_particles_total = len(particles_to_tilts)
-
-    # Step 3: Determine which particles to use
     if tilt_ind_file is not None:
         particle_ind = _sanitize_particle_ids(
             _load_index_like(tilt_ind_file),
-            n_particles_total=n_particles_total,
-            allowed_particles=np.arange(n_particles_total, dtype=np.int32),
+            name="tilt_ind_file",
         )
     else:
-        particle_ind = np.arange(n_particles_total, dtype=np.int32)
+        particle_ind = np.arange(index_map.n_particles, dtype=np.int32)
 
     if particle_ind.size == 0:
         empty = np.array([], dtype=np.int32)
         return [empty, empty]
 
-    # Map selected particles to image indices
-    allowed_image_indices = cryo_dataset.tilt_series_to_images(particle_ind, particles_file)
-
-    # Step 4: Optionally filter by image indices
+    allowed_image_indices = index_map.image_indices_from_particles(particle_ind)
     if ind_file is not None:
-        ind_images = _normalize_image_ids(
-            _load_index_like(ind_file),
-            n_images_total=len(tilts_to_particles),
-        )
-        allowed_image_indices = _filter_preserve_order(allowed_image_indices, ind_images)
+        image_ind = _sanitize_image_ids(_load_index_like(ind_file), name="ind_file")
+        allowed_image_indices = filter_preserve_order(allowed_image_indices, image_ind)
 
-    if len(allowed_image_indices) == 0:
+    if allowed_image_indices.size == 0:
         empty = np.array([], dtype=np.int32)
         return [empty, empty]
 
-    # Step 5: Keep only particles with at least one allowed image.
-    image_to_particle = np.fromiter(
-        (tilts_to_particles[int(i)] for i in np.asarray(allowed_image_indices).reshape(-1)),
-        dtype=np.int32,
-        count=len(allowed_image_indices),
-    )
-    valid_particles = np.unique(image_to_particle)
+    valid_particles = index_map.particle_indices_from_images(allowed_image_indices)
     if valid_particles.size == 0:
         empty = np.array([], dtype=np.int32)
         return [empty, empty]
 
-    # Step 6: Determine halfset split (by particles)
     if particle_halfset_indices_file is not None:
         split_particles_raw = _load_index_like(particle_halfset_indices_file)
         if len(split_particles_raw) != 2:
             raise ValueError("particle_halfset_indices_file must contain exactly two halfsets")
         split_particles = [
-            _sanitize_particle_ids(split_particles_raw[0], n_particles_total=n_particles_total,
-                                   allowed_particles=valid_particles),
-            _sanitize_particle_ids(split_particles_raw[1], n_particles_total=n_particles_total,
-                                   allowed_particles=valid_particles),
+            _sanitize_particle_ids(
+                split_particles_raw[0],
+                name="particle_halfset_indices_file[0]",
+                allowed_particles=valid_particles,
+            ),
+            _sanitize_particle_ids(
+                split_particles_raw[1],
+                name="particle_halfset_indices_file[1]",
+                allowed_particles=valid_particles,
+            ),
         ]
     else:
         split_particles = split_index_list(valid_particles)
 
-    # Step 7: For each halfset, filter by ntilts and allowed images
     split_image_indices = []
-    for half in split_particles:
-        if len(half) == 0:
-            split_image_indices.append(np.array([], dtype=np.int32))
-            continue
-        imgs = np.concatenate([particles_to_tilts[ind] for ind in half])
-        if ntilts is not None:
-            if ntilts <= 0:
-                imgs = imgs[:0]
-            else:
-                imgs = imgs[tilt_numbers[imgs] < ntilts]
-        imgs = _filter_preserve_order(imgs, allowed_image_indices)
-        split_image_indices.append(imgs)
+    for halfset_particle_indices in split_particles:
+        split_image_indices.append(
+            index_map.image_indices_from_particles(
+                halfset_particle_indices,
+                allowed_images=allowed_image_indices,
+                ntilts=ntilts,
+            )
+        )
 
     return split_image_indices
 
@@ -363,7 +302,7 @@ def get_split_datasets(particles_file, poses_file=None, ctf_file=None, datadir=N
     """Load a dataset and set halfset indices for half-set iteration.
 
     Loads ONE full dataset and stores ``halfset_indices`` on it so that
-    ``dataset.iterate(half, ...)`` can be used.
+    ``dataset.iter_batches(halfset_id=..., ...)`` can be used.
 
     Returns
     -------

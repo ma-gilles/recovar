@@ -112,32 +112,6 @@ class TestForwardModelConfig:
 
 
 # ---------------------------------------------------------------------------
-# BatchData
-# ---------------------------------------------------------------------------
-
-class TestBatchData:
-    def test_creation(self):
-        bd = configs.BatchData(
-            images=jnp.ones((5, 64)),
-            rotation_matrices=jnp.eye(3)[None].repeat(5, axis=0),
-            translations=jnp.zeros((5, 2)),
-            ctf_params=jnp.ones((5, 9)),
-        )
-        assert bd.images.shape == (5, 64)
-        assert bd.noise_variance is None
-
-    def test_with_noise_variance(self):
-        bd = configs.BatchData(
-            images=jnp.ones((3, 16)),
-            rotation_matrices=jnp.eye(3)[None].repeat(3, axis=0),
-            translations=jnp.zeros((3, 2)),
-            ctf_params=jnp.ones((3, 9)),
-            noise_variance=jnp.ones(3),
-        )
-        assert bd.noise_variance.shape == (3,)
-
-
-# ---------------------------------------------------------------------------
 # ModelState
 # ---------------------------------------------------------------------------
 

@@ -14,7 +14,6 @@ import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, utils, jax_config
 from recovar.core.configs import ForwardModelConfig, ModelState
-from recovar.data_io.batch_iterator import coerce_batch_fields, iter_batch_fields
 from recovar.heterogeneity import covariance_core
 from recovar.reconstruction import regularization
 
@@ -400,8 +399,10 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
     def infinite_data_iterator():
             while True:                              # repeat forever (or add a break after N epochs)
 
-                for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in iter_batch_fields(
-                    experiment_dataset.iterate(batch_size, indices=image_subset, prefetch=False)
+                for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in experiment_dataset.iter_batches(
+                    batch_size,
+                    indices=image_subset,
+                    prefetch=False,
                 ):
                     yield (
                         batch,
@@ -495,12 +496,10 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
             total_loss = 0.0
             total_grad = 0.0
             n_images = (image_subset.size if image_subset is not None else experiment_dataset.n_images)
-            for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in iter_batch_fields(
-                experiment_dataset.iterate(
-                    batch_size,
-                    indices=image_subset,
-                    prefetch=False,
-                )
+            for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in experiment_dataset.iter_batches(
+                batch_size,
+                indices=image_subset,
+                prefetch=False,
             ):
                 batch = experiment_dataset.process_images(batch)
                 image_masks = get_image_masks(
@@ -654,9 +653,9 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
     
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
 
-    batch_iter = iter_batch_fields(experiment_dataset.iterate(
+    batch_iter = experiment_dataset.iter_batches(
         batch_size, indices=image_subset,
-    ))
+    )
 
     n_images = (image_subset.size if image_subset is not None else experiment_dataset.n_images)
     for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in batch_iter:
@@ -739,9 +738,9 @@ def estimate_noise_variance(experiment_dataset, batch_size, max_images = 10000):
     else:
         n_images_used = experiment_dataset.n_images
 
-    batch_iter = iter_batch_fields(experiment_dataset.iterate(
+    batch_iter = experiment_dataset.iter_batches(
         batch_size, indices=subset_indices,
-    ))
+    )
 
     for batch, _rotation_matrices, _translations, _ctf_params, _noise_variance, _particle_indices, _image_indices in batch_iter:
         batch = experiment_dataset.process_images(batch)
@@ -762,7 +761,7 @@ def estimate_white_noise_variance_from_mask(experiment_dataset, volume_mask, bat
 
 def estimate_noise_variance_from_outside_mask(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp'):
 
-    batch_iter = iter_batch_fields(experiment_dataset.iterate(batch_size))
+    batch_iter = experiment_dataset.iter_batches(batch_size)
     image_PSs = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
 
     masked_image_PSs = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
@@ -789,7 +788,7 @@ def estimate_noise_variance_from_outside_mask(experiment_dataset, volume_mask, b
 
 def estimate_noise_variance_from_outside_mask_v2(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp'):
 
-    batch_iter = iter_batch_fields(experiment_dataset.iterate(batch_size))
+    batch_iter = experiment_dataset.iter_batches(batch_size)
 
     image_mask = jnp.ones_like(experiment_dataset.image_mask)
     top_fraction = 0
@@ -951,11 +950,9 @@ def get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, 
     residual_squared = jnp.zeros(experiment_dataset.grid_size, dtype = basis.dtype)
     all_averaged_residual_squared = np.empty((n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
     basis = jnp.asarray(basis.T)
-    for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, image_indices in iter_batch_fields(
-        experiment_dataset.iterate(
-            batch_size,
-            indices=subset_indices,
-        )
+    for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, image_indices in experiment_dataset.iter_batches(
+        batch_size,
+        indices=subset_indices,
     ):
         batch_image_ind = image_indices
         averaged_residual_squared = get_average_residual_square_inner(batch, mean_estimate, volume_mask,
@@ -1081,11 +1078,9 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
     top_fraction = None
     kernel_sq_sum = None
 
-    for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, image_indices in iter_batch_fields(
-        experiment_dataset.iterate(
-            batch_size,
-            indices=subset_indices,
-        )
+    for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, image_indices in experiment_dataset.iter_batches(
+        batch_size,
+        indices=subset_indices,
     ):
         batch_image_ind = image_indices
         if subset_fn is not None:
@@ -1152,20 +1147,14 @@ def average_residual_square(
     image_mask: jax.Array,
     contrasts: jax.Array,
     basis_coordinates: jax.Array,
-    rotation_matrices=None,
-    translations=None,
-    ctf_params=None,
+    rotation_matrices,
+    translations,
+    ctf_params,
 ):
     """Compute average residual squared — Equinox API.
 
     Replaces the 19-param ``get_average_residual_square_inner_v2``.
     """
-    images, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices = coerce_batch_fields(
-        images,
-        rotation_matrices=rotation_matrices,
-        translations=translations,
-        ctf_params=ctf_params,
-    )
     return _average_residual_square_explicit(
         config,
         images,

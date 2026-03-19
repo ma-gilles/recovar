@@ -1,10 +1,8 @@
 """Per-image latent coordinate estimation via linear projection."""
 
-import inspect
 import logging
 import time
 import functools
-from types import SimpleNamespace
 
 import equinox as eqx
 import jax
@@ -17,7 +15,6 @@ import recovar.core.fourier_transform_utils as ftu
 from recovar import core, jax_config, utils
 from recovar.core import linalg
 from recovar.core.configs import ForwardModelConfig, ModelState, EmbeddingOpts
-from recovar.data_io.batch_iterator import coerce_batch_fields, iter_batch_fields
 from recovar.heterogeneity import covariance_core
 
 logger = logging.getLogger(__name__)
@@ -31,137 +28,10 @@ _rfft2_hermitian_weights = linalg.rfft2_hermitian_weights
 
 
 def split_weights(weight, dataset):
-    return [weight[dataset.halfset_indices[half]] for half in range(2)]
+    return [weight[dataset.halfset_local_image_indices(halfset_id)] for halfset_id in range(2)]
 
 def generate_conformation_from_reprojection(xs, mean, u ):
     return ((mean[...,None] + u @ xs.T)[0]).T
-
-
-def _make_legacy_batch(images, rotation_matrices, translations, ctf_params, noise_variance):
-    return SimpleNamespace(
-        images=images,
-        rotation_matrices=rotation_matrices,
-        translations=translations,
-        ctf_params=ctf_params,
-        noise_variance=noise_variance,
-    )
-
-
-def _call_compute_batch_coords(
-    config,
-    images,
-    model,
-    opts,
-    image_mask,
-    contrast_grid,
-    contrast_mean,
-    contrast_variance,
-    hermitian_weights,
-    *,
-    rotation_matrices,
-    translations,
-    ctf_params,
-    noise_variance,
-):
-    params = inspect.signature(compute_batch_coords).parameters
-    if "rotation_matrices" in params:
-        return compute_batch_coords(
-            config,
-            images,
-            model,
-            opts,
-            image_mask,
-            contrast_grid,
-            contrast_mean,
-            contrast_variance,
-            hermitian_weights,
-            rotation_matrices=rotation_matrices,
-            translations=translations,
-            ctf_params=ctf_params,
-            noise_variance=noise_variance,
-        )
-
-    legacy_batch = _make_legacy_batch(
-        images,
-        rotation_matrices,
-        translations,
-        ctf_params,
-        noise_variance,
-    )
-    return compute_batch_coords(
-        config,
-        legacy_batch,
-        model,
-        opts,
-        image_mask,
-        contrast_grid,
-        contrast_mean,
-        contrast_variance,
-        hermitian_weights,
-    )
-
-
-def _call_compute_grouped_shared_batch_coords(
-    config,
-    images,
-    model,
-    image_mask,
-    contrast_grid,
-    contrast_mean,
-    contrast_variance,
-    group_ids,
-    n_groups,
-    compute_covariances,
-    compute_bias,
-    hermitian_weights,
-    *,
-    rotation_matrices,
-    translations,
-    ctf_params,
-    noise_variance,
-):
-    params = inspect.signature(compute_grouped_shared_batch_coords).parameters
-    if "rotation_matrices" in params:
-        return compute_grouped_shared_batch_coords(
-            config,
-            images,
-            model,
-            image_mask,
-            contrast_grid,
-            contrast_mean,
-            contrast_variance,
-            group_ids,
-            n_groups,
-            compute_covariances,
-            compute_bias,
-            hermitian_weights,
-            rotation_matrices=rotation_matrices,
-            translations=translations,
-            ctf_params=ctf_params,
-            noise_variance=noise_variance,
-        )
-
-    legacy_batch = _make_legacy_batch(
-        images,
-        rotation_matrices,
-        translations,
-        ctf_params,
-        noise_variance,
-    )
-    return compute_grouped_shared_batch_coords(
-        config,
-        legacy_batch,
-        model,
-        image_mask,
-        contrast_grid,
-        contrast_mean,
-        contrast_variance,
-        group_ids,
-        n_groups,
-        compute_covariances,
-        compute_bias,
-        hermitian_weights,
-    )
 
 
 def _volume_layout_sizes(volume_shape):
@@ -313,35 +183,21 @@ def get_per_image_embedding(mean, u, s, basis_size, dataset, volume_mask, gpu_me
         from recovar.heterogeneity import covariance_estimation
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, dataset.volume_shape, gpu_memory= None)
 
-    # Iterate over half-sets.  For tilt-series we load independent half-datasets
-    # (matching legacy behavior) to preserve identical batch composition and
-    # thus bitwise-identical eigenvector projections.  For SPA the lightweight
-    # subset() view is equivalent and much faster.
+    # Iterate over half-sets. Tilt-series uses an independent reload so the
+    # grouped particle iterator exactly matches the original file-backed layout.
+    # SPA uses a lightweight local subset view.
     zs = [None, None]
     cov_zs = [None, None]
     est_contrasts = [None, None]
     bias = [None, None]
-    for half in range(2):
-        if getattr(dataset, 'tilt_series_flag', False):
-            from recovar.data_io.dataset import load_dataset as _load_dataset
-            half_ds = _load_dataset(
-                dataset.particles_file, dataset.poses_file, dataset.ctf_file,
-                datadir=dataset.datadir,
-                ind=dataset.halfset_indices[half],
-                lazy=True, padding=dataset.padding,
-                tilt_series=True,
-                tilt_series_ctf=getattr(dataset.image_stack, '_tilt_file_option', 'relion5'),
-                dose_per_tilt=getattr(dataset.image_stack, 'dose_per_tilt', 2.9),
-                angle_per_tilt=getattr(dataset.image_stack, 'angle_per_tilt', 3),
-                premultiplied_ctf=dataset.premultiplied_ctf,
-            )
-            if dataset.noise is not None:
-                half_ds.set_radial_noise_model(None)
-                half_ds.noise = dataset.noise
-        else:
-            half_ds = dataset.subset(dataset.halfset_indices[half])
-        zs[half], cov_zs[half], est_contrasts[half], bias[half] = get_coords_in_basis_and_contrast_3(
-            half_ds, mean, basis, eigenvalues[:basis.shape[0]], volume_mask,
+    for halfset_id in range(2):
+        halfset_dataset = dataset.get_halfset_dataset(
+            halfset_id,
+            independent=bool(getattr(dataset, 'tilt_series_flag', False)),
+            lazy=True,
+        )
+        zs[halfset_id], cov_zs[halfset_id], est_contrasts[halfset_id], bias[halfset_id] = get_coords_in_basis_and_contrast_3(
+            halfset_dataset, mean, basis, eigenvalues[:basis.shape[0]], volume_mask,
              contrast_grid, batch_size, disc_type,
             compute_covariances = compute_covariances, contrast_mean = contrast_mean, contrast_variance = contrast_variance , compute_bias = compute_bias, image_subset_in_tilt_series = image_subset_in_tilt_series, contrast_shared_across_tilt_series= contrast_shared_across_tilt_series)
 
@@ -419,13 +275,11 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
 
     noise_model = experiment_dataset.noise
 
-    for batch, rotation_matrices, translations, ctf_params, _noise_variance, particles_ind, image_indices in iter_batch_fields(
-        experiment_dataset.iterate(
-            batch_size,
-            by_image=False,
-            noise_model=noise_model,
-            noise_half=prefer_half_noise,
-        )
+    for batch, rotation_matrices, translations, ctf_params, _noise_variance, particles_ind, image_indices in experiment_dataset.iter_batches(
+        batch_size,
+        by_image=False,
+        noise_model=noise_model,
+        noise_half=prefer_half_noise,
     ):
         batch = jnp.asarray(batch)
         batch_image_ind = np.asarray(image_indices).reshape(-1)
@@ -456,7 +310,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
             # iterator batch. Skip boolean-mask splitting to avoid extra gathers.
             if unique_particles.size == 1:
                 particle_ind = np.asarray(unique_particles, dtype=np.int32)
-                xs_single, contrast_single, cov_batch, bias = _call_compute_batch_coords(
+                xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
                     config,
                     batch,
                     model,
@@ -485,7 +339,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
             # Fast path: when contrast is shared across tilts and a batch contains
             # multiple particles, solve all particle groups in one batched call.
             if contrast_shared_across_tilt_series and unique_particles.size > 1:
-                xs_group, contrast_group, cov_group, bias_group = _call_compute_grouped_shared_batch_coords(
+                xs_group, contrast_group, cov_group, bias_group = compute_grouped_shared_batch_coords(
                     config,
                     batch,
                     model,
@@ -523,7 +377,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
                 local_particle_ind = np.asarray([pid], dtype=np.int32)
 
                 local_nv = _noise_get_half_or_full(noise_model, local_image_ind, prefer_half=prefer_half_noise)
-                xs_single, contrast_single, cov_batch, bias = _call_compute_batch_coords(
+                xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
                     config,
                     local_batch,
                     model,
@@ -549,7 +403,7 @@ def get_coords_in_basis_and_contrast_3(experiment_dataset, mean_estimate, basis,
                     image_latent_bias[local_particle_ind] = bias
             continue
 
-        xs_single, contrast_single, cov_batch, bias = _call_compute_batch_coords(
+        xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
             config,
             batch,
             model,
@@ -616,13 +470,7 @@ def _compute_batch_coords_p1(
         correct full-spectrum inner product.  When ``None``, the computation
         stays in full Fourier space.
     """
-    batch, rotation_matrices, translations, ctf_params, noise_variance, _, _ = coerce_batch_fields(
-        images,
-        rotation_matrices=rotation_matrices,
-        translations=translations,
-        ctf_params=ctf_params,
-        noise_variance=noise_variance,
-    )
+    batch = images
 
     if config.process_fn is not None:
         batch = config.process_fn(batch)
@@ -730,10 +578,11 @@ def compute_batch_coords(
     contrast_mean: float = 1.0,
     contrast_variance: float = np.inf,
     hermitian_weights=None,
-    rotation_matrices=None,
-    translations=None,
-    ctf_params=None,
-    noise_variance=None,
+    *,
+    rotation_matrices,
+    translations,
+    ctf_params,
+    noise_variance,
 ):
     """Compute latent coordinates for a batch — Equinox API.
 
@@ -747,16 +596,9 @@ def compute_batch_coords(
         products are computed in the compressed half-spectrum representation,
         roughly halving memory use and compute for the inner-product step.
     """
-    batch, rotation_matrices, translations, ctf_params, noise_variance, _, _ = coerce_batch_fields(
-        images,
-        rotation_matrices=rotation_matrices,
-        translations=translations,
-        ctf_params=ctf_params,
-        noise_variance=noise_variance,
-    )
     return _compute_batch_coords_explicit(
         config,
-        batch,
+        images,
         rotation_matrices,
         translations,
         ctf_params,
@@ -898,10 +740,11 @@ def compute_grouped_shared_batch_coords(
     compute_covariances: bool,
     compute_bias: bool,
     hermitian_weights=None,
-    rotation_matrices=None,
-    translations=None,
-    ctf_params=None,
-    noise_variance=None,
+    *,
+    rotation_matrices,
+    translations,
+    ctf_params,
+    noise_variance,
 ):
     """Solve shared-label, shared-contrast batches for multiple particles at once.
 
@@ -911,16 +754,9 @@ def compute_grouped_shared_batch_coords(
     call. This avoids per-particle Python/JIT dispatch overhead while
     preserving shared-label semantics.
     """
-    batch, rotation_matrices, translations, ctf_params, noise_variance, _, _ = coerce_batch_fields(
-        images,
-        rotation_matrices=rotation_matrices,
-        translations=translations,
-        ctf_params=ctf_params,
-        noise_variance=noise_variance,
-    )
     return _compute_grouped_shared_batch_coords_explicit(
         config,
-        batch,
+        images,
         rotation_matrices,
         translations,
         ctf_params,
@@ -1435,26 +1271,26 @@ def get_per_image_embedding_multi_zdim(
     # Allocate per-halfset output arrays, concatenated at the end.
     def _alloc(n_pcs):
         return {
-            'zs':        [np.zeros((dataset.n_images_half(half), n_pcs),        dtype=dtype)    for half in range(2)],
-            'cov_zs':    [np.zeros((dataset.n_images_half(half), n_pcs, n_pcs), dtype=dtype)    for half in range(2)],
-            'contrasts': [np.zeros(dataset.n_images_half(half),                  dtype=np.float32) for half in range(2)],
+            'zs':        [np.zeros((dataset.n_halfset_images(halfset_id), n_pcs),        dtype=dtype)    for halfset_id in range(2)],
+            'cov_zs':    [np.zeros((dataset.n_halfset_images(halfset_id), n_pcs, n_pcs), dtype=dtype)    for halfset_id in range(2)],
+            'contrasts': [np.zeros(dataset.n_halfset_images(halfset_id),                  dtype=np.float32) for halfset_id in range(2)],
         }
 
     zs_reg   = {k: _alloc(k) for k in n_pcs_list}
     zs_noreg = {k: _alloc(k) for k in n_pcs_list}
 
-    for half in range(2):
-        half_ds = dataset.subset(dataset.halfset_indices[half])
+    for halfset_id in range(2):
+        halfset_dataset = dataset.get_halfset_dataset(halfset_id, independent=False)
         config = ForwardModelConfig.from_dataset(
-            half_ds, disc_type=actual_disc_type,
-            process_fn=half_ds.process_images,
+            halfset_dataset, disc_type=actual_disc_type,
+            process_fn=halfset_dataset.process_images,
         )
         # eigenvalues field not used by _collect_batch_stats; set placeholder.
         model = ModelState(
-            mean_estimate=jnp.asarray(mean_out, dtype=half_ds.dtype),
-            volume_mask=jnp.asarray(volume_mask, dtype=half_ds.dtype_real),
-            basis=jnp.asarray(full_basis, dtype=half_ds.dtype),
-            eigenvalues=jnp.ones(max_n_pcs, dtype=half_ds.dtype),
+            mean_estimate=jnp.asarray(mean_out, dtype=halfset_dataset.dtype),
+            volume_mask=jnp.asarray(volume_mask, dtype=halfset_dataset.dtype_real),
+            basis=jnp.asarray(full_basis, dtype=halfset_dataset.dtype),
+            eigenvalues=jnp.ones(max_n_pcs, dtype=halfset_dataset.dtype),
         )
         mean_hv, basis_hv = _prepare_model_half_volumes(
             config, model.mean_estimate, model.basis,
@@ -1466,22 +1302,20 @@ def get_per_image_embedding_multi_zdim(
             eigenvalues=model.eigenvalues,
         )
 
-        batch_size = utils.get_embedding_batch_size(full_basis, half_ds.image_size, cg, max_n_pcs, gpu_memory)
+        batch_size = utils.get_embedding_batch_size(full_basis, halfset_dataset.image_size, cg, max_n_pcs, gpu_memory)
         _EMBEDDING_BATCH_SAFETY_FACTOR = 10
         batch_size = utils.safe_batch_size(batch_size // _EMBEDDING_BATCH_SAFETY_FACTOR)
-        logger.info("multi-zdim embedding batch size (halfset %d): %d", half, batch_size)
+        logger.info("multi-zdim embedding batch size (halfset %d): %d", halfset_id, batch_size)
 
         hermitian_weights = _embedding_hermitian_weights(config)
         prefer_half_noise = hermitian_weights is not None
-        noise_model = half_ds.noise
+        noise_model = halfset_dataset.noise
 
-        for batch, rotation_matrices, translations, ctf_params, noise_variance, particles_ind, image_indices in iter_batch_fields(
-            half_ds.iterate(
-                batch_size,
-                by_image=False,
-                noise_model=noise_model,
-                noise_half=prefer_half_noise,
-            )
+        for batch, rotation_matrices, translations, ctf_params, noise_variance, particles_ind, image_indices in halfset_dataset.iter_batches(
+            batch_size,
+            by_image=False,
+            noise_model=noise_model,
+            noise_half=prefer_half_noise,
         ):
             batch_image_ind = np.asarray(image_indices).reshape(-1)
 
@@ -1509,18 +1343,18 @@ def get_per_image_embedding_multi_zdim(
                     im_norms_sq, im_T_Am, Am_norm_sq,
                     s_reg[n_pcs], cg_jax, contrast_mean_jax, contrast_variance_jax,
                 )
-                zs_reg[n_pcs]['zs']      [half][particles_ind] = np.asarray(xs_r).real
-                zs_reg[n_pcs]['cov_zs']  [half][particles_ind] = np.asarray(cov_r).real
-                zs_reg[n_pcs]['contrasts'][half][batch_image_ind] = np.asarray(c_r)
+                zs_reg[n_pcs]['zs']      [halfset_id][particles_ind] = np.asarray(xs_r).real
+                zs_reg[n_pcs]['cov_zs']  [halfset_id][particles_ind] = np.asarray(cov_r).real
+                zs_reg[n_pcs]['contrasts'][halfset_id][batch_image_ind] = np.asarray(c_r)
 
                 xs_n, c_n, cov_n = _solve_batch_from_stats(
                     sub_AI, sub_AM, sub_AAU,
                     im_norms_sq, im_T_Am, Am_norm_sq,
                     s_noreg[n_pcs], cg_jax, contrast_mean_jax, contrast_variance_jax,
                 )
-                zs_noreg[n_pcs]['zs']      [half][particles_ind] = np.asarray(xs_n).real
-                zs_noreg[n_pcs]['cov_zs']  [half][particles_ind] = np.asarray(cov_n).real
-                zs_noreg[n_pcs]['contrasts'][half][batch_image_ind] = np.asarray(c_n)
+                zs_noreg[n_pcs]['zs']      [halfset_id][particles_ind] = np.asarray(xs_n).real
+                zs_noreg[n_pcs]['cov_zs']  [halfset_id][particles_ind] = np.asarray(cov_n).real
+                zs_noreg[n_pcs]['contrasts'][halfset_id][batch_image_ind] = np.asarray(c_n)
 
     # Concatenate across halfsets; return flat (xs, cov_zs, contrasts) tuples per n_pcs.
     result_reg   = {}

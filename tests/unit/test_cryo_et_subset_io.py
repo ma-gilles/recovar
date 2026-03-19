@@ -495,11 +495,16 @@ def test_tilt_generator_local_image_indices_in_range_after_image_ind(tilt_files)
     selected = np.concatenate([p2t[0], p2t[1]]).astype(np.int32)
 
     cryo = _load_tilt_cryo(tilt_files, ind=selected)
-    gen = cryo.get_image_generator(batch_size=cryo.n_images)
-    batches = list(gen)
+    batches = list(
+        cryo.iter_batches(
+            batch_size=cryo.n_images,
+            by_image=True,
+            prefetch=False,
+        )
+    )
     assert len(batches) >= 1
     # Local image indices (b[2]) must cover [0, n_images)
-    all_local = np.concatenate([np.asarray(b[2]).ravel() for b in batches]).astype(np.int32)
+    all_local = np.concatenate([np.asarray(b[6]).ravel() for b in batches]).astype(np.int32)
     np.testing.assert_array_equal(np.sort(all_local), np.arange(cryo.n_images, dtype=np.int32))
 
 

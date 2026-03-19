@@ -399,7 +399,7 @@ def test_to_batched_half_pixel_noise_full_converts():
     np.testing.assert_allclose(out, expected, atol=1e-6)
 
 
-class _MockImageStack:
+class _MockImageSource:
     def __init__(self, image_shape, scale=1.0):
         self.mask = np.ones(image_shape, dtype=np.float32)
         self._scale = np.float32(scale)
@@ -409,7 +409,7 @@ class _MockImageStack:
 
 
 class _MockNoiseDataset:
-    """Minimal dataset stub to compare legacy loops vs DataIterator code paths."""
+    """Minimal dataset stub to compare legacy loops vs explicit iterator paths."""
 
     def __init__(self, images, image_shape):
         self._images = jnp.asarray(images)
@@ -424,17 +424,18 @@ class _MockNoiseDataset:
         self.dtype_real = np.float32
         self.premultiplied_ctf = False
 
-        self.image_stack = _MockImageStack(image_shape, scale=1.25)
+        self.image_source = _MockImageSource(image_shape, scale=1.25)
         self.translations = jnp.zeros((self.n_images, 2), dtype=jnp.float32)
         self.rotation_matrices = jnp.tile(jnp.eye(3, dtype=jnp.float32), (self.n_images, 1, 1))
         self.CTF_params = jnp.zeros((self.n_images, 1), dtype=jnp.float32)
 
     def process_images(self, images, apply_image_mask=False):
-        return self.image_stack.process_images(images)
+        _ = apply_image_mask
+        return self.image_source.process_images(images)
 
     @property
     def image_mask(self):
-        return self.image_stack.mask
+        return self.image_source.mask
 
     def ctf_evaluator(self, ctf_params, image_shape, voxel_size):
         del voxel_size
@@ -446,26 +447,21 @@ class _MockNoiseDataset:
             batch_ind = idx[start:start + batch_size]
             yield self._images[batch_ind], batch_ind, batch_ind
 
-    def get_image_generator(self, batch_size):
-        return self._iter_indices(np.arange(self.n_images, dtype=np.int32), batch_size)
-
-    def get_image_subset_generator(self, batch_size, subset_indices):
-        return self._iter_indices(np.asarray(subset_indices, dtype=np.int32), batch_size)
-
-    def iterate(self, batch_size, *, indices=None, **kwargs):
-        from recovar.core.configs import BatchData
+    def iter_batches(self, batch_size, *, indices=None, **kwargs):
+        _ = kwargs
         if indices is None:
             indices = np.arange(self.n_images, dtype=np.int32)
         idx = np.asarray(indices, dtype=np.int32)
         for start in range(0, idx.size, batch_size):
             batch_ind = idx[start:start + batch_size]
-            yield BatchData(
-                images=self._images[batch_ind],
-                rotation_matrices=self.rotation_matrices[batch_ind],
-                translations=self.translations[batch_ind],
-                ctf_params=self.CTF_params[batch_ind],
-                particle_indices=batch_ind,
-                image_indices=batch_ind,
+            yield (
+                self._images[batch_ind],
+                self.rotation_matrices[batch_ind],
+                self.translations[batch_ind],
+                self.CTF_params[batch_ind],
+                None,
+                batch_ind,
+                batch_ind,
             )
 
 
@@ -475,14 +471,14 @@ def _legacy_estimate_noise_variance(dataset, batch_size, max_images=10000):
     sum_sq = 0
     if dataset.n_images > max_images:
         subset_indices = np.random.choice(dataset.n_images, size=max_images, replace=False)
-        data_generator = dataset.get_image_subset_generator(batch_size=batch_size, subset_indices=subset_indices)
+        data_generator = dataset.iter_batches(batch_size=batch_size, indices=subset_indices)
         n_images_used = max_images
     else:
-        data_generator = dataset.get_image_generator(batch_size=batch_size)
+        data_generator = dataset.iter_batches(batch_size=batch_size)
         n_images_used = dataset.n_images
 
-    for batch, _, _ in data_generator:
-        batch = dataset.image_stack.process_images(batch)
+    for batch, _rotation_matrices, _translations, _ctf_params, _noise_variance, _particle_indices, _image_indices in data_generator:
+        batch = dataset.image_source.process_images(batch)
         sum_sq += jnp.sum(jnp.abs(batch) ** 2, axis=0)
 
     mean_ps = sum_sq / n_images_used
@@ -499,19 +495,19 @@ def _legacy_estimate_noise_level_no_masks(dataset, image_subset, mean_estimate, 
     lhs = 0
     rhs = 0
     config = ForwardModelConfig.from_dataset(dataset, disc_type=disc_type)
-    data_generator = dataset.get_image_subset_generator(batch_size=batch_size, subset_indices=image_subset)
+    data_generator = dataset.iter_batches(batch_size=batch_size, indices=image_subset)
 
-    for batch, _, batch_ind in data_generator:
-        batch = dataset.image_stack.process_images(batch)
+    for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, batch_ind in data_generator:
+        batch = dataset.image_source.process_images(batch)
         batch = core.translate_images(batch, dataset.translations[batch_ind], dataset.image_shape)
-        ctf = dataset.ctf_evaluator(dataset.CTF_params[batch_ind], dataset.image_shape, dataset.voxel_size)
+        ctf = dataset.ctf_evaluator(ctf_params, dataset.image_shape, dataset.voxel_size)
 
         if mean_estimate is not None:
             projected_mean = noise.core_forward.forward_model(
                 config,
                 mean_estimate,
-                dataset.CTF_params[batch_ind],
-                dataset.rotation_matrices[batch_ind],
+                ctf_params,
+                rotation_matrices,
             )
             if dataset.premultiplied_ctf:
                 batch = batch - projected_mean * ctf

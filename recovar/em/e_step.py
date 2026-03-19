@@ -8,7 +8,6 @@ import jax.numpy as jnp
 import equinox as eqx
 from recovar import core, utils
 from recovar.core.configs import ForwardModelConfig
-from recovar.data_io.batch_iterator import iter_batch_fields
 from .core import (
     batch_vol_slice_volume,
     batch_vol_rot_slice_volume,
@@ -64,12 +63,10 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
     image_indices = np.arange(n_images) if image_indices is None else image_indices
 
     start_idx = 0
-    for batch, _rotation_matrices, _translations, ctf_params, _noise_variance, _particle_indices, indices in iter_batch_fields(
-        experiment_dataset.iterate(
-            dot_product_batch_size,
-            indices=image_indices,
-            by_image=False,
-        )
+    for batch, _rotation_matrices, _translations, ctf_params, _noise_variance, _particle_indices, indices in experiment_dataset.iter_batches(
+        dot_product_batch_size,
+        indices=image_indices,
+        by_image=False,
     ):
         end_idx = start_idx + len(indices)
         residuals[start_idx:end_idx] = compute_dot_products_eqx(
@@ -88,12 +85,10 @@ def E_with_precompute(experiment_dataset, volume, rotations, translations, noise
 
         rotation_batch = max(1, rotations.shape[0] // 10)
         start_idx = 0
-        for batch, _rotation_matrices, _translations, ctf_params, _noise_variance, _particle_indices, indices in iter_batch_fields(
-            experiment_dataset.iterate(
-                dot_product_batch_size,
-                indices=image_indices,
-                by_image=False,
-            )
+        for batch, _rotation_matrices, _translations, ctf_params, _noise_variance, _particle_indices, indices in experiment_dataset.iter_batches(
+            dot_product_batch_size,
+            indices=image_indices,
+            by_image=False,
         ):
             batch = jnp.asarray(batch)
             end_idx = start_idx + len(indices)

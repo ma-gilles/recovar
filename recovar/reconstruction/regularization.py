@@ -30,14 +30,14 @@ def compute_batch_prior_quantities(rotation_matrices, translations, CTF_params, 
 def compute_prior_quantites(dataset, cov_noise, batch_size, for_whitening = False ):
 
     bottom_of_fraction = jnp.zeros(dataset.volume_size, dtype = dataset.dtype)
-    for half in range(2):
-        half_indices = dataset.halfset_indices[half]
-        n_images = len(half_indices)
+    for halfset_id in range(2):
+        halfset_indices = dataset.halfset_local_image_indices(halfset_id)
+        n_images = len(halfset_indices)
         # Compute the bottom of fraction.
         for k in range(0, int(np.ceil(n_images/batch_size))):
             batch_st = int(k * batch_size)
             batch_end = int(np.min( [(k+1) * batch_size, n_images]))
-            indices = half_indices[batch_st:batch_end]
+            indices = halfset_indices[batch_st:batch_end]
             bottom_of_fraction_this = compute_batch_prior_quantities(
                                              dataset.rotation_matrices[indices],
                                              dataset.translations[indices],

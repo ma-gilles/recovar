@@ -9,7 +9,6 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.reconstruction import relion_functions, noise
 from recovar.heterogeneity import covariance_estimation, principal_components
 from recovar.core.configs import ForwardModelConfig
-from recovar.data_io.batch_iterator import iter_batch_fields
 from .core import batch_vol_slice_volume
 from recovar.heterogeneity.principal_components import get_cov_svds, pca_by_projected_covariance
 from recovar.heterogeneity.covariance_estimation import compute_both_H_B, compute_covariance_regularization_relion_style
@@ -262,12 +261,10 @@ def compute_H_B(experiment_dataset, mean, probabilities, rotations, translations
     )
 
     start_idx =0
-    for images, _rotation_matrices, _translations, ctf_params, _noise_variance, _particle_indices, indices in iter_batch_fields(
-        experiment_dataset.iterate(
-            batch_size,
-            indices=image_indices,
-            by_image=False,
-        )
+    for images, _rotation_matrices, _translations, ctf_params, _noise_variance, _particle_indices, indices in experiment_dataset.iter_batches(
+        batch_size,
+        indices=image_indices,
+        by_image=False,
     ):
         end_idx = start_idx + len(indices)
         prob_batch = jnp.array(probabilities[start_idx:end_idx])
@@ -415,12 +412,10 @@ def compute_projected_covariance_rhs_lhs(experiment_dataset, mean, basis, rotati
     )
 
     start_idx = 0
-    for images, _rotation_matrices, _translations, ctf_params, _noise_variance, _particle_indices, batch_image_ind in iter_batch_fields(
-        experiment_dataset.iterate(
-            batch_size,
-            indices=image_indices,
-            by_image=False,
-        )
+    for images, _rotation_matrices, _translations, ctf_params, _noise_variance, _particle_indices, batch_image_ind in experiment_dataset.iter_batches(
+        batch_size,
+        indices=image_indices,
+        by_image=False,
     ):
 
         for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):# k in range(mult):

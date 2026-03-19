@@ -6,7 +6,6 @@ import scipy.stats
 
 pytest.importorskip("jax")
 
-from recovar.core.configs import BatchData
 from recovar.heterogeneity import image_assignment as ia
 
 pytestmark = pytest.mark.unit
@@ -20,14 +19,11 @@ def test_compute_residual_uses_forward_model_translation_and_noise_scaling(monke
     monkeypatch.setattr(ia.core_forward, "forward_model", lambda *_args, **_kwargs: projected)
 
     config = SimpleNamespace(image_shape=(1, 2))
-    batch_data = BatchData(
+    out = ia.compute_residual(
         images=images,
+        ctf_params=None,
         rotation_matrices=None,
         translations=None,
-        ctf_params=None,
-    )
-    out = ia.compute_residual(
-        batch_data=batch_data,
         mean_estimate=np.array([0.0], dtype=np.float32),
         config=config,
         noise_variance=np.array([4.0, 4.0], dtype=np.float32),
@@ -37,7 +33,7 @@ def test_compute_residual_uses_forward_model_translation_and_noise_scaling(monke
 
 
 class _MockDS:
-    """Minimal mock dataset for iterate()."""
+    """Minimal mock dataset for iter_batches()."""
     dtype = np.complex64
     dtype_real = np.float32
     n_units = 4
@@ -53,23 +49,24 @@ class _MockDS:
     translations = np.zeros((4, 2), dtype=np.float32)
     ctf_evaluator = staticmethod(lambda *_args, **_kwargs: None)
 
-    def iterate(self, batch_size, **kwargs):
+    def iter_batches(self, batch_size, **kwargs):
         batch = np.zeros((2, 2), dtype=np.float32)
         particles_ind = np.array([1, 3], dtype=np.int32)
         batch_image_ind = np.array([1, 3], dtype=np.int32)
-        yield BatchData(
-            images=batch,
-            rotation_matrices=self.rotation_matrices[batch_image_ind],
-            translations=self.translations[batch_image_ind],
-            ctf_params=self.CTF_params[batch_image_ind],
-            particle_indices=particles_ind,
-            image_indices=batch_image_ind,
+        yield (
+            batch,
+            self.rotation_matrices[batch_image_ind],
+            self.translations[batch_image_ind],
+            self.CTF_params[batch_image_ind],
+            None,
+            particles_ind,
+            batch_image_ind,
         )
 
 
 def test_compute_image_assignment_fills_residual_matrix(monkeypatch):
-    def fake_compute_residual(batch_data, mean_estimate, *_args, **_kwargs):
-        return np.full(batch_data.images.shape[0], float(np.real(mean_estimate[0])), dtype=np.float32)
+    def fake_compute_residual(images, _ctf_params, _rotation_matrices, _translations, mean_estimate, *_args, **_kwargs):
+        return np.full(images.shape[0], float(np.real(mean_estimate[0])), dtype=np.float32)
 
     monkeypatch.setattr(ia, "compute_residual", fake_compute_residual)
 
@@ -90,17 +87,18 @@ def test_estimate_false_positive_rate_from_mocked_residual(monkeypatch):
         rotation_matrices = np.zeros((2, 3, 3), dtype=np.float32)
         translations = np.zeros((2, 2), dtype=np.float32)
 
-        def iterate(self, batch_size, **kwargs):
+        def iter_batches(self, batch_size, **kwargs):
             batch = np.zeros((2, 2), dtype=np.float32)
             particles_ind = np.array([0, 1], dtype=np.int32)
             batch_image_ind = np.array([0, 1], dtype=np.int32)
-            yield BatchData(
-                images=batch,
-                rotation_matrices=self.rotation_matrices[batch_image_ind],
-                translations=self.translations[batch_image_ind],
-                ctf_params=self.CTF_params[batch_image_ind],
-                particle_indices=particles_ind,
-                image_indices=batch_image_ind,
+            yield (
+                batch,
+                self.rotation_matrices[batch_image_ind],
+                self.translations[batch_image_ind],
+                self.CTF_params[batch_image_ind],
+                None,
+                particles_ind,
+                batch_image_ind,
             )
 
     monkeypatch.setattr(ia, "compute_residual", lambda *_args, **_kwargs: np.array([4.0, 9.0], dtype=np.float32))
