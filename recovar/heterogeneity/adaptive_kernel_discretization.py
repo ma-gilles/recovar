@@ -59,6 +59,9 @@ def _heterogeneity_kernel_batch_from_fft(
     if not config.premultiplied_ctf:
         half_images = half_images * ctf
 
+    # TODO: remove max_r=None once the default max_r clipping is resolved globally.
+    # Currently needed because the old code had no sphere clipping and the default
+    # max_r=image_shape[0]//2-1 discards the outermost frequency shell.
     Ft_y = core.adjoint_slice_volume(
         half_images, batch.rotation_matrices, config.image_shape, config.volume_shape,
         config.disc_type,
@@ -77,7 +80,7 @@ def _heterogeneity_kernel_batch_from_fft(
     Ft_ctf = core.adjoint_slice_volume(
         ctf_half, batch.rotation_matrices, config.image_shape, config.volume_shape,
         config.disc_type,
-        volume=Ft_ctf, half_image=True, half_volume=True, max_r=None,
+        volume=Ft_ctf, half_image=True, half_volume=True, max_r=None,  # TODO: see above
     )
     return Ft_y, Ft_ctf.real
 
