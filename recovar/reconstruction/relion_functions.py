@@ -55,7 +55,7 @@ def griddingCorrect_square(vol_in, ori_size, padding_factor, order=0):
 
 def relion_style_triangular_kernel(
     experiment_dataset, cov_noise, batch_size, disc_type='linear_interp',
-    index_subset=None, upsampling_factor=None,
+    index_subset=None, upsampling_factor=None, by_image=True,
 ):
     """RELION-style triangular kernel reconstruction.
 
@@ -71,9 +71,15 @@ def relion_style_triangular_kernel(
     batch_size : int
     disc_type : str
     index_subset : array-like, optional
-        If given, only iterate over these image indices (e.g. a cluster subset).
+        If given, only iterate over this subset in the domain selected by
+        ``by_image``.
     upsampling_factor : int, optional
         Defaults to ``1``.
+    by_image : bool, default True
+        When ``True``, interpret ``index_subset`` as image indices.
+        When ``False``, interpret it as group / particle indices and iterate
+        with the grouped dataset iterator. Needed for tilt-series particle
+        subsets such as junk-detection halfmap reconstruction.
     """
     uf = upsampling_factor if upsampling_factor is not None else 1
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, upsampling_factor=uf)
@@ -88,6 +94,7 @@ def relion_style_triangular_kernel(
         batch_size,
         noise_model=noise_model,
         indices=index_subset,
+        by_image=by_image,
     ):
         Ft_y, Ft_ctf = relion_kernel_batch(
             config,

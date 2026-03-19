@@ -135,3 +135,110 @@ def test_detect_junk_clusters_rejects_unknown_method(monkeypatch, tmp_path):
             method="not_a_method",
         )
 
+
+def test_compute_cluster_fsc_scores_uses_group_iteration_for_tilt_subsets(monkeypatch):
+    volume_shape = (2, 2, 2)
+    relion_calls = []
+
+    class _FakeDataset:
+        tilt_series_flag = True
+
+        def __init__(self):
+            self.volume_shape = volume_shape
+
+        def local_group_indices_from_original(self, original_group_indices):
+            return np.asarray(original_group_indices, dtype=np.int32) - 10
+
+    class _FakePipelineOutput:
+        def __init__(self):
+            self._payload = {
+                "dataset": _FakeDataset(),
+                "latent_coords": {
+                    4: np.array(
+                        [
+                            [0.0, 0.0],
+                            [10.0, 10.0],
+                            [0.1, 0.1],
+                            [11.0, 11.0],
+                        ],
+                        dtype=np.float32,
+                    )
+                },
+                "volume_shape": volume_shape,
+                "voxel_size": 1.0,
+                "mean": np.zeros(np.prod(volume_shape), dtype=np.complex64),
+                "particles_halfsets": [
+                    np.array([10, 12], dtype=np.int32),
+                    np.array([11, 13], dtype=np.int32),
+                ],
+            }
+
+        def get(self, key):
+            return self._payload[key]
+
+    def fake_relion_style_triangular_kernel(
+        _dataset,
+        _cov_noise,
+        _batch_size,
+        *,
+        disc_type,
+        index_subset=None,
+        upsampling_factor=None,
+        by_image=True,
+    ):
+        relion_calls.append(
+            {
+                "disc_type": disc_type,
+                "index_subset": np.asarray(index_subset, dtype=np.int32),
+                "upsampling_factor": upsampling_factor,
+                "by_image": by_image,
+            }
+        )
+        half_volume = np.ones(np.prod(volume_shape), dtype=np.float32)
+        return half_volume, half_volume.astype(np.complex64)
+
+    monkeypatch.setattr(
+        junk_cmd.relion_functions,
+        "relion_style_triangular_kernel",
+        fake_relion_style_triangular_kernel,
+    )
+    monkeypatch.setattr(
+        junk_cmd.relion_functions,
+        "post_process_from_filter_v2",
+        lambda *_args, **_kwargs: np.zeros(np.prod(volume_shape), dtype=np.complex64),
+    )
+    monkeypatch.setattr(
+        junk_cmd.fourier_transform_utils,
+        "get_idft3",
+        lambda arr: np.asarray(arr).reshape(volume_shape),
+    )
+    monkeypatch.setattr(
+        junk_cmd.plot_utils,
+        "FSC",
+        lambda *_args, **_kwargs: np.array([1.0, 0.5], dtype=np.float32),
+    )
+    monkeypatch.setattr(junk_cmd.plot_utils, "fsc_score", lambda *_args, **_kwargs: 0.5)
+    monkeypatch.setattr(junk_cmd, "compute_fsc_auc", lambda *_args, **_kwargs: 0.5)
+
+    pipeline_output = _FakePipelineOutput()
+    cluster_centers = np.array([[0.0, 0.0]], dtype=np.float32)
+    cluster_indices = np.array([0, 0, 0, 0], dtype=np.int32)
+
+    junk_cmd.compute_cluster_fsc_scores(
+        pipeline_output=pipeline_output,
+        cluster_centers=cluster_centers,
+        cluster_indices=cluster_indices,
+        zdim_key=4,
+        batch_size=2,
+        n_particles_per_cluster=1,
+        save_reconstructions=False,
+        output_folder=None,
+        filter_resolution=None,
+        filter_fourier_shells=10,
+        noreg=False,
+    )
+
+    assert len(relion_calls) == 2
+    assert all(call["by_image"] is False for call in relion_calls)
+    np.testing.assert_array_equal(relion_calls[0]["index_subset"], np.array([0], dtype=np.int32))
+    np.testing.assert_array_equal(relion_calls[1]["index_subset"], np.array([1], dtype=np.int32))

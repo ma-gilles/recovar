@@ -154,8 +154,9 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
     n_half0 = len(particles_halfsets[0])
     zs_subsets = [zs[:n_half0], zs[n_half0:]]
 
-    # For tilt-series, the embeddings live in original particle indexing,
-    # while reconstruction needs dataset-local image indices.
+    # For tilt-series, embeddings are indexed by particle / group. Preserve
+    # that grouped domain for reconstruction to match the halfset dataset
+    # semantics used before the loader refactor.
     is_tilt = cryos.tilt_series_flag
 
     # Create reconstructions directory if saving
@@ -197,15 +198,12 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
                 used_particles[i] = np.array([], dtype=np.int32)
                 continue
             # Map halfset-local embedding indices back to dataset-local
-            # reconstruction indices.
+            # reconstruction indices in the correct domain.
             if is_tilt:
                 canonical_indices = particles_halfsets[i][closest_local]
-                local_group_indices = cryos.local_group_indices_from_original(canonical_indices)
-                selected_image_indices = cryos.index_layout.local_image_indices_from_local_groups(
-                    local_group_indices
-                )
+                selected_subset = cryos.local_group_indices_from_original(canonical_indices)
             else:
-                selected_image_indices = cryos.halfset_local_image_indices(i)[closest_local]
+                selected_subset = cryos.halfset_local_image_indices(i)[closest_local]
             # Store dense zs indices for downstream use (plotting, usage counts).
             # These index into the halfset-concatenated zs array.
             used_particles[i] = half_offsets[i] + closest_local
@@ -215,8 +213,9 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
             Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(
                 cryos, None, batch_size,
                 disc_type='linear_interp',
-                index_subset=selected_image_indices,
+                index_subset=selected_subset,
                 upsampling_factor=2,
+                by_image=not is_tilt,
             )
             halfmap = relion_functions.post_process_from_filter_v2(
                 Ft_ctf, F_ty,

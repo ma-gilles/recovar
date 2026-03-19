@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from types import SimpleNamespace
 
 pytest.importorskip("jax")
 import jax.numpy as jnp
@@ -168,6 +169,67 @@ def test_relion_kernel_batch_normalizes_noise_variance_shapes():
         assert np.asarray(ft_y).shape == (half_vol_size,)
         assert np.asarray(ft_ctf).shape == (half_vol_size,)
         assert np.isfinite(np.asarray(ft_y)).all()
+
+
+def test_relion_style_triangular_kernel_respects_by_image_flag(monkeypatch):
+    calls = {}
+
+    class _FakeDataset:
+        noise = None
+
+        def iter_batches(self, batch_size, *, noise_model=None, indices=None, by_image=True):
+            calls["batch_size"] = batch_size
+            calls["noise_model"] = noise_model
+            calls["indices"] = np.asarray(indices, dtype=np.int32)
+            calls["by_image"] = by_image
+            yield (
+                np.ones((1, 4, 4), dtype=np.float32),
+                np.tile(np.eye(3, dtype=np.float32), (1, 1, 1)),
+                np.zeros((1, 2), dtype=np.float32),
+                np.zeros((1, 9), dtype=np.float32),
+                None,
+                np.array([0], dtype=np.int32),
+                np.array([3], dtype=np.int32),
+            )
+
+    monkeypatch.setattr(
+        rf.ForwardModelConfig,
+        "from_dataset",
+        staticmethod(
+            lambda *_args, **_kwargs: SimpleNamespace(
+                image_shape=(4, 4),
+                volume_shape=(4, 4, 4),
+                premultiplied_ctf=False,
+                compute_ctf_half=lambda ctf_params: jnp.ones((ctf_params.shape[0], 12), dtype=jnp.float32),
+                data_multiplier=1.0,
+                grid_size=4,
+                padding=0,
+                disc_type="linear_interp",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        rf,
+        "relion_kernel_batch",
+        lambda _config, _images, _ctf_params, _rots, _trans, _noise_variance, Ft_y=None, Ft_ctf=None: (
+            jnp.ones((4 * 4 * (4 // 2 + 1),), dtype=jnp.complex64),
+            jnp.ones((4 * 4 * (4 // 2 + 1),), dtype=jnp.float32),
+        ),
+    )
+
+    ft_ctf, ft_y = rf.relion_style_triangular_kernel(
+        _FakeDataset(),
+        cov_noise=None,
+        batch_size=7,
+        index_subset=np.array([1, 5], dtype=np.int32),
+        by_image=False,
+    )
+
+    np.testing.assert_array_equal(calls["indices"], np.array([1, 5], dtype=np.int32))
+    assert calls["by_image"] is False
+    assert calls["batch_size"] == 7
+    assert np.asarray(ft_ctf).shape == (4 * 4 * 4,)
+    assert np.asarray(ft_y).shape == (4 * 4 * 4,)
 
 
 # ---------------------------------------------------------------------------
