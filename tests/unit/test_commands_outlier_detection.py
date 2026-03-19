@@ -253,3 +253,99 @@ def test_outlier_detection_main_tilt_maps_particle_outliers_to_images(monkeypatc
     np.testing.assert_array_equal(combined_image_outliers, np.array([1, 5], dtype=np.int64))
     np.testing.assert_array_equal(combined_particle_outliers, np.array([100, 102], dtype=np.int64))
     assert map_calls["n"] >= 2
+
+
+def test_outlier_detection_main_tilt_ignores_anomaly_merge_when_physics_detectors_exist(
+    monkeypatch, tmp_path
+):
+    outdir = tmp_path / "outlier_output_tilt_physics"
+    args = SimpleNamespace(
+        pipeline_output_dir=str(tmp_path / "pipeline_out"),
+        zdim_key=4,
+        no_z_regularization=False,
+        output_dir=str(outdir),
+        save_pipeline_indices=False,
+        output_format="both",
+        low_contrast_threshold=0.1,
+        high_contrast_threshold=3.5,
+        max_contrast=4.0,
+        particle_bad_fraction_threshold=0.7,
+        micrograph_bad_fraction_threshold=0.7,
+        use_junk_detection=True,
+        junk_threshold=0.5,
+        particles_per_cluster=None,
+    )
+
+    class _Parser:
+        def parse_args(self):
+            return args
+
+    monkeypatch.setattr(outlier_cmd, "add_args", lambda _parser: _Parser())
+
+    payload = {
+        "latent_coords": {4: np.zeros((3, 2), dtype=np.float32)},
+        "input_args": SimpleNamespace(tilt_series=True, particles="particles.star", shared_contrast=False),
+        "particles_halfsets": [np.array([100, 101], dtype=np.int32), np.array([102], dtype=np.int32)],
+        "halfsets": [np.array([0, 1], dtype=np.int32), np.array([2, 3], dtype=np.int32)],
+        "contrasts": {4: np.ones(4, dtype=np.float32)},
+        "dataset": SimpleNamespace(grid_size=32),
+    }
+    monkeypatch.setattr(outlier_cmd.output, "PipelineOutput", lambda _p: _FakePipelineOutput(payload))
+
+    def fake_plot(_zs, _orig_indices, folder):
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "inliers_consensus.pkl"), "wb") as f:
+            pickle.dump(np.array([101], dtype=np.int32), f)
+        with open(os.path.join(folder, "outliers_consensus.pkl"), "wb") as f:
+            pickle.dump(np.array([100, 102], dtype=np.int32), f)
+
+    monkeypatch.setattr(outlier_cmd, "plot_anomaly_detection_results", fake_plot)
+    monkeypatch.setattr(
+        outlier_cmd,
+        "outlier_detection_from_contrast",
+        lambda *_args, **_kwargs: (
+            np.array([2, 3], dtype=np.int32),
+            np.array([0, 1], dtype=np.int32),
+            np.array([102], dtype=np.int32),
+            np.array([100, 101], dtype=np.int32),
+        ),
+    )
+    monkeypatch.setattr(outlier_cmd, "create_particle_outlier_visualization", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(outlier_cmd, "create_overlap_matrix_visualization", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(outlier_cmd, "create_outlier_visualizations", lambda *_args, **_kwargs: None)
+
+    import recovar.commands.junk_particle_detection as junk_cmd
+    import recovar.utils as utils_mod
+
+    monkeypatch.setattr(utils_mod, "get_gpu_memory_total", lambda: 16)
+    monkeypatch.setattr(utils_mod, "get_image_batch_size", lambda _grid, _mem: 8)
+
+    def fake_junk_detection(*, output_folder, zdim, **_kwargs):
+        os.makedirs(output_folder, exist_ok=True)
+        with open(os.path.join(output_folder, f"junk_indices_{zdim}.pkl"), "wb") as f:
+            pickle.dump(np.array([102], dtype=np.int32), f)
+        with open(os.path.join(output_folder, f"good_indices_{zdim}.pkl"), "wb") as f:
+            pickle.dump(np.array([100, 101], dtype=np.int32), f)
+
+    monkeypatch.setattr(junk_cmd, "junk_particle_detection", fake_junk_detection)
+
+    def fake_map(particle_indices, image_subset, _starfile):
+        particle_indices = np.sort(np.asarray(particle_indices, dtype=np.int32))
+        if np.array_equal(particle_indices, np.array([100, 102], dtype=np.int32)):
+            return np.array([0, 2, 3], dtype=np.int32)
+        if np.array_equal(particle_indices, np.array([102], dtype=np.int32)):
+            return np.array([2, 3], dtype=np.int32)
+        return np.array([], dtype=np.int32)
+
+    monkeypatch.setattr(outlier_cmd, "map_particle_original_indexing_to_images_original_indexing", fake_map)
+
+    outlier_cmd.main()
+
+    combined_dir = outdir / "combined_results"
+    with open(combined_dir / "combined_image_outliers_4.pkl", "rb") as f:
+        combined_image_outliers = pickle.load(f)
+    with open(combined_dir / "combined_particle_outliers_4.pkl", "rb") as f:
+        combined_particle_outliers = pickle.load(f)
+
+    np.testing.assert_array_equal(combined_particle_outliers, np.array([102], dtype=np.int64))
+    np.testing.assert_array_equal(combined_image_outliers, np.array([2, 3], dtype=np.int64))
