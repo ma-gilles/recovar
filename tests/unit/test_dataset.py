@@ -1138,7 +1138,7 @@ def test_get_split_tilt_indices_with_filters(tmp_path, monkeypatch):
             [[np.array([0, 1]), np.array([2, 3]), np.array([4, 5])][i] for i in particle_ind]
         ),
     )
-    monkeypatch.setattr(dataset, "split_index_list", lambda valid_particles: [np.array([0]), np.array([2])])
+    monkeypatch.setattr(halfsets, "split_index_list", lambda valid_particles: [np.array([0]), np.array([2])])
 
     ind_file = tmp_path / "ind.pkl"
     tilt_ind_file = tmp_path / "tilt_ind.pkl"
