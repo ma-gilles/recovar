@@ -243,15 +243,21 @@ def compare_perf(
 
 
 def check_perf_regression(current: dict, baseline_path: str, test_name: str = ""):
-    """Compare perf and issue warnings.  Never fails the test.
+    """Compare perf against committed baseline and warn on regression.
 
-    Saves current as the new baseline if none exists.
+    Baselines are stored in the repo and never auto-updated.
+    If no baseline exists, the test skips the perf check (does not create one).
+    To generate baselines, run with PERF_OVERWRITE_BASELINE=1.
     """
-    baseline = load_perf_baseline(baseline_path)
-
-    if baseline is None:
+    overwrite = os.environ.get("PERF_OVERWRITE_BASELINE")
+    if overwrite:
         save_perf_baseline(current, baseline_path)
-        logger.info("No perf baseline found — saved current as baseline: %s", baseline_path)
+        logger.info("Wrote perf baseline: %s", baseline_path)
+        return
+
+    baseline = load_perf_baseline(baseline_path)
+    if baseline is None:
+        logger.info("No perf baseline at %s — skipping perf check", baseline_path)
         return
 
     warns = compare_perf(current, baseline)
@@ -261,6 +267,3 @@ def check_perf_regression(current: dict, baseline_path: str, test_name: str = ""
         logger.warning(msg)
     else:
         logger.info("Perf check passed for %s", test_name)
-
-    # Always update perf baseline with latest run
-    save_perf_baseline(current, baseline_path)
