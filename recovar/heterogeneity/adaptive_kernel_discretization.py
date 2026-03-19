@@ -31,18 +31,19 @@ def _heterogeneity_kernel_batch_from_fft(
     batch: BatchData,
     Ft_y: jax.Array = None,
     Ft_ctf: jax.Array = None,
-    upsample_ctf: bool = False,
+    upsample_ctf: bool = True,
 ):
     """Backproject half-spectrum images into heterogeneity kernel accumulators.
 
-    Expects ``batch.images`` in half-image (rfft) format.
+    Expects ``batch.images`` in half-image (rfft) format.  Accumulates into
+    half-volume layout for memory efficiency.
 
     Parameters
     ----------
     upsample_ctf : bool
         If True, evaluate CTF² on a 2x-upsampled grid and box-filter back to
         native resolution before backprojecting.  Reduces aliasing in the CTF
-        weight accumulator but is more expensive.  Default False.
+        weight accumulator.  Default True (matches legacy behaviour).
     """
     from recovar.core.geometry import translate_images
     from recovar.reconstruction import noise as noise_mod
@@ -58,14 +59,15 @@ def _heterogeneity_kernel_batch_from_fft(
     if not config.premultiplied_ctf:
         half_images = half_images * ctf
 
-    Ft_y = core_forward.adjoint_forward_model(
-        config, half_images, batch.ctf_params, batch.rotation_matrices,
-        skip_ctf=True,
-        volume=Ft_y, half_image=True, half_volume=True,
+    Ft_y = core.adjoint_slice_volume(
+        half_images, batch.rotation_matrices, config.image_shape, config.volume_shape,
+        config.disc_type,
+        volume=Ft_y, half_image=True, half_volume=True, max_r=None,
     )
 
     if upsample_ctf:
-        # CTF² on 2x-upsampled grid → box-filter → downsample → half-spectrum
+        # CTF² on 2x-upsampled grid → box-filter → downsample → half-spectrum.
+        # Computed on the full image grid, then converted to half-image format.
         upsample_factor = 2
         upsampled_shape = tuple(np.array(config.image_shape) * upsample_factor)
         ctf_up = config.compute_ctf_at_shape(batch.ctf_params, upsampled_shape) ** 2
@@ -83,9 +85,10 @@ def _heterogeneity_kernel_batch_from_fft(
     else:
         ctf_half = ctf ** 2 / noise_half
 
-    Ft_ctf = core_forward.adjoint_forward_model(
-        config, ctf_half, batch.ctf_params, batch.rotation_matrices,
-        skip_ctf=True, volume=Ft_ctf, half_image=True, half_volume=True,
+    Ft_ctf = core.adjoint_slice_volume(
+        ctf_half, batch.rotation_matrices, config.image_shape, config.volume_shape,
+        config.disc_type,
+        volume=Ft_ctf, half_image=True, half_volume=True, max_r=None,
     )
     return Ft_y, Ft_ctf.real
 

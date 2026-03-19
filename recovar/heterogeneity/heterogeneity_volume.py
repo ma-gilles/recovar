@@ -133,7 +133,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
             return_real_space=True,
         )
 
-        lhs[k] = adaptive_kernel_discretization.half_volume_to_full_volume(lhs[k][0], cryos[k].volume_shape)
+        lhs[k] = fourier_transform_utils.half_volume_to_full_volume(lhs[k][0], cryos[k].volume_shape)
         # Zero out things after Nyquist - these won't be used in CV
         lhs[k] = (lhs[k] * cryos.get_valid_frequency_indices()).reshape(cryos.volume_shape)
         cross_validation_estimators[k] = cross_validation_estimators[k].reshape(cryos.volume_shape).astype(np.float32)
