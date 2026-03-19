@@ -202,6 +202,10 @@ def compare_perf(
         cur_s = cur_stages[stage_name]
         bl_s = bl_stages[stage_name]
 
+        # Skip non-dict entries (e.g. "gpu_name": "NVIDIA A100...")
+        if not isinstance(cur_s, dict) or not isinstance(bl_s, dict):
+            continue
+
         # Wall time
         cur_wall = cur_s.get("wall_seconds", 0)
         bl_wall = bl_s.get("wall_seconds", 0)
