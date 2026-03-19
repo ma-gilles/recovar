@@ -1,22 +1,46 @@
 {
-  "hardware": {
-    "gpu_name": "NVIDIA H100 80GB HBM3",
-    "cpu": "x86_64",
-    "hostname": "della-h21g4"
+  "NVIDIA H100 80GB HBM3": {
+    "hardware": {
+      "gpu_name": "NVIDIA H100 80GB HBM3",
+      "cpu": "x86_64",
+      "hostname": "della-h21g4"
+    },
+    "code_version": "98e5303*",
+    "package_versions": {
+      "jax": "0.9.0.1",
+      "jaxlib": "0.9.0.1",
+      "numpy": "2.2.6",
+      "scipy": "1.16.2",
+      "sklearn": "1.7.2"
+    },
+    "stages": {
+      "pipeline_with_outliers": {
+        "wall_seconds": 1145.29,
+        "peak_cpu_memory_gb": 1.473,
+        "peak_gpu_memory_gb": 0.0
+      }
+    }
   },
-  "code_version": "98e5303*",
-  "package_versions": {
-    "jax": "0.9.0.1",
-    "jaxlib": "0.9.0.1",
-    "numpy": "2.2.6",
-    "scipy": "1.16.2",
-    "sklearn": "1.7.2"
-  },
-  "stages": {
-    "pipeline_with_outliers": {
-      "wall_seconds": 1145.29,
-      "peak_cpu_memory_gb": 1.473,
-      "peak_gpu_memory_gb": 0.0
+  "NVIDIA A100-SXM4-80GB": {
+    "hardware": {
+      "gpu_name": "NVIDIA A100-SXM4-80GB",
+      "cpu": "x86_64",
+      "hostname": "della-l08g4"
+    },
+    "code_version": "fce3b34*",
+    "package_versions": {
+      "jax": "0.9.0.1",
+      "jaxlib": "0.9.0.1",
+      "numpy": "2.2.6",
+      "scipy": "1.16.2",
+      "sklearn": "1.7.2"
+    },
+    "stages": {
+      "pipeline_with_outliers": {
+        "wall_seconds": 1484.58,
+        "peak_cpu_memory_gb": 1.573,
+        "peak_gpu_memory_gb": 0.0
+      }
     }
   }
 }
