@@ -31,18 +31,19 @@ def _heterogeneity_kernel_batch_from_fft(
     batch: BatchData,
     Ft_y: jax.Array = None,
     Ft_ctf: jax.Array = None,
-    upsample_ctf: bool = False,
+    upsample_ctf: bool = True,
 ):
     """Backproject half-spectrum images into heterogeneity kernel accumulators.
 
-    Expects ``batch.images`` in half-image (rfft) format.
+    Expects ``batch.images`` in half-image (rfft) format.  Accumulates into
+    half-volume layout for memory efficiency.
 
     Parameters
     ----------
     upsample_ctf : bool
         If True, evaluate CTF² on a 2x-upsampled grid and box-filter back to
         native resolution before backprojecting.  Reduces aliasing in the CTF
-        weight accumulator but is more expensive.  Default False.
+        weight accumulator.  Default True (matches legacy behaviour).
     """
     from recovar.core.geometry import translate_images
     from recovar.reconstruction import noise as noise_mod
@@ -58,34 +59,28 @@ def _heterogeneity_kernel_batch_from_fft(
     if not config.premultiplied_ctf:
         half_images = half_images * ctf
 
-    Ft_y = core_forward.adjoint_forward_model(
-        config, half_images, batch.ctf_params, batch.rotation_matrices,
-        skip_ctf=True,
-        volume=Ft_y, half_image=True, half_volume=True,
+    # TODO: remove max_r=None once the default max_r clipping is resolved globally.
+    # Currently needed because the old code had no sphere clipping and the default
+    # max_r=image_shape[0]//2-1 discards the outermost frequency shell.
+    Ft_y = core.adjoint_slice_volume(
+        half_images, batch.rotation_matrices, config.image_shape, config.volume_shape,
+        config.disc_type,
+        volume=Ft_y, half_image=True, half_volume=True, max_r=None,
     )
 
     if upsample_ctf:
-        # CTF² on 2x-upsampled grid → box-filter → downsample → half-spectrum
-        upsample_factor = 2
-        upsampled_shape = tuple(np.array(config.image_shape) * upsample_factor)
-        ctf_up = config.compute_ctf_at_shape(batch.ctf_params, upsampled_shape) ** 2
-        bsz = ctf_up.shape[0]
-        kernel_size = upsample_factor + upsample_factor // 2
-        box_kernel = jnp.ones((1, 1, kernel_size, kernel_size), dtype=ctf_up.dtype) / kernel_size ** 2
-        ctf_up = jax.lax.conv_general_dilated(
-            ctf_up.reshape(bsz, 1, *upsampled_shape),
-            box_kernel, window_strides=(1, 1), padding='SAME',
-            dimension_numbers=('NCHW', 'IOHW', 'NCHW'),
-        ).squeeze(1)[:, ::upsample_factor, ::upsample_factor]
-        ctf_half = fourier_transform_utils.full_image_to_half_image(
-            ctf_up.reshape(bsz, -1), config.image_shape
+        from recovar.core.ctf import compute_antialiased_ctf_squared
+        ctf_half = compute_antialiased_ctf_squared(
+            config.ctf, batch.ctf_params, config.image_shape, config.voxel_size,
+            half_image=True,
         ) / noise_half
     else:
         ctf_half = ctf ** 2 / noise_half
 
-    Ft_ctf = core_forward.adjoint_forward_model(
-        config, ctf_half, batch.ctf_params, batch.rotation_matrices,
-        skip_ctf=True, volume=Ft_ctf, half_image=True, half_volume=True,
+    Ft_ctf = core.adjoint_slice_volume(
+        ctf_half, batch.rotation_matrices, config.image_shape, config.volume_shape,
+        config.disc_type,
+        volume=Ft_ctf, half_image=True, half_volume=True, max_r=None,  # TODO: see above
     )
     return Ft_y, Ft_ctf.real
 
@@ -181,24 +176,13 @@ def vec_index_to_half_vec_index(indices, volume_shape, flip_positive = False):
     vec_indices = jnp.where(in_bound, vec_indices, -1*jnp.ones_like(vec_indices))
     return vec_indices, negative_frequencies
 
-@functools.partial(jax.jit, static_argnums = [1])
-def half_volume_to_full_volume(half_volume, volume_shape):
-    volume_size = np.prod(volume_shape)
-    indices = jnp.arange(volume_size) # will this JIT this whole thing? ugh
-    half_indices, negative_frequencies = vec_index_to_half_vec_index(indices, volume_shape, flip_positive = True)
-    volume = jnp.zeros(volume_size, dtype = half_volume.dtype)
-    volume = half_volume[half_indices]
-    volume = jnp.where(negative_frequencies, volume, jnp.conj(volume))
-    return volume
-
-batch_half_volume_to_full_volume = jax.vmap(half_volume_to_full_volume, in_axes = (0,None), out_axes = 0)
-
-def full_volume_to_half_volume(volume, volume_shape):
-    half_volume_shape = volume_shape_to_half_volume_shape(volume_shape)
-    half_volume_size = np.prod(half_volume_shape)
-    return volume[:half_volume_size]
-
-batch_full_volume_to_half_volume = jax.vmap(full_volume_to_half_volume, in_axes = (0,None), out_axes = 0)
+# Use the canonical rfft-aware implementations from fourier_transform_utils.
+# Legacy duplicates with different packing conventions were removed to prevent
+# packing-mismatch bugs (see commit fixing heterogeneity_volume.py:136).
+half_volume_to_full_volume = fourier_transform_utils.half_volume_to_full_volume
+full_volume_to_half_volume = fourier_transform_utils.full_volume_to_half_volume
+batch_half_volume_to_full_volume = jax.vmap(half_volume_to_full_volume, in_axes=(0, None), out_axes=0)
+batch_full_volume_to_half_volume = jax.vmap(full_volume_to_half_volume, in_axes=(0, None), out_axes=0)
 
 
 def half_vec_index_to_vec_index(indices_half, volume_shape):
@@ -515,7 +499,6 @@ def compute_estimate_from_XWX_F_summed(XWX_summed_neighbor, F_summed_neighbor, p
 
     return np.asarray(reconstruction), np.asarray(good_pixels)
 
-batch_half_volume_to_full_volume = jax.vmap(half_volume_to_full_volume, in_axes = (0,None), out_axes = 0)
 
 def summed_scaled_outer(alpha, indices, differences_zero, valid_points):
     alpha_slices = alpha[indices] * valid_points

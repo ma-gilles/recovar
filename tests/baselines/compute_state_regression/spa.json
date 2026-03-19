@@ -1,0 +1,8 @@
+{
+  "state_0_locres_median": 29.794767379760742,
+  "state_0_locres_90pct": 48.314918518066406,
+  "state_1_locres_median": 29.166955947875977,
+  "state_1_locres_90pct": 48.302635192871094,
+  "state_0_fsc_auc_vs_gt": 0.7807952761650085,
+  "state_1_fsc_auc_vs_gt": 0.777588963508606
+}
