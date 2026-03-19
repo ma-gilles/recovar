@@ -1,10 +1,10 @@
 {
   "hardware": {
-    "gpu_name": "NVIDIA H100 80GB HBM3",
+    "gpu_name": "NVIDIA A100-SXM4-80GB",
     "cpu": "x86_64",
-    "hostname": "della-h19g3"
+    "hostname": "della-l08g1"
   },
-  "code_version": "d3b773a",
+  "code_version": "ead10a9*",
   "package_versions": {
     "jax": "0.9.0.1",
     "jaxlib": "0.9.0.1",
@@ -14,8 +14,8 @@
   },
   "stages": {
     "compute_trajectory": {
-      "wall_seconds": 201.75,
-      "peak_cpu_memory_gb": 0.959,
+      "wall_seconds": 240.38,
+      "peak_cpu_memory_gb": 0.944,
       "peak_gpu_memory_gb": 0.0
     }
   }

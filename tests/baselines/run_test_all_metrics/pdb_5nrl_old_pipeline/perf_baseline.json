@@ -2,7 +2,7 @@
   "hardware": {
     "gpu_name": "NVIDIA A100-SXM4-80GB",
     "cpu": "x86_64",
-    "hostname": "della-l08g7"
+    "hostname": "della-l07g3"
   },
   "code_version": "ead10a9*",
   "package_versions": {
@@ -13,9 +13,9 @@
     "sklearn": "1.7.2"
   },
   "stages": {
-    "pipeline_spa_with_ind": {
-      "wall_seconds": 1052.2,
-      "peak_cpu_memory_gb": 1.449,
+    "pdb_trajectory": {
+      "wall_seconds": 1405.11,
+      "peak_cpu_memory_gb": 0.877,
       "peak_gpu_memory_gb": 0.454
     }
   }
