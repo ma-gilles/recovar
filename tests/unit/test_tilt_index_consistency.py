@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from recovar.data_io import cryo_dataset, dataset, starfile
+from recovar.data_io._index_utils import TiltSeriesOriginalIndexMap
 
 pytestmark = pytest.mark.unit
 
@@ -64,13 +65,14 @@ def test_particle_tilt_mapping_matches_golden_reference(tmp_path):
     particles_to_tilts = [arr.tolist() for arr in particles_to_tilts]
     tilts_to_particles = {str(k): int(v) for k, v in sorted(tilts_to_particles.items())}
 
-    assert cryo_dataset.get_canonical_group_names(starfile.StarFile.load(str(star_path)).df) == golden["canonical_groups"]
+    assert sorted(starfile.StarFile.load(str(star_path)).df["_rlnGroupName"].unique()) == golden["canonical_groups"]
     assert particles_to_tilts == golden["particles_to_tilts"]
     assert tilts_to_particles == golden["tilts_to_particles"]
 
     subset_particles = np.array(golden["subset_particles"], dtype=np.int32)
     subset_images = np.array([1, 2, 4, 7], dtype=np.int32)
-    mapped = cryo_dataset.tilt_series_to_images(subset_particles, str(star_path), image_subset=subset_images)
+    index_map = TiltSeriesOriginalIndexMap.from_particles_file(str(star_path))
+    mapped = index_map.image_indices_from_particles(subset_particles, allowed_images=subset_images)
     np.testing.assert_array_equal(mapped, np.array(golden["subset_image_intersection"], dtype=np.int32))
 
 
@@ -96,7 +98,7 @@ def test_tilt_series_subset_generator_preserves_subset_order_and_indices(tmp_pat
     returned_particles = []
     returned_tilts = []
     for batch in batches:
-        # simple_dataloader enforces batch_size=1 for tilt-series mode.
+        # Tilt-series iteration remains particle-at-a-time even with a large requested batch size.
         returned_particles.append(int(np.array(batch[1]).reshape(-1)[0]))
         returned_tilts.append(np.array(batch[2]).reshape(-1))
 

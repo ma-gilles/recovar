@@ -61,9 +61,6 @@ def _prefetch_iter(iterable):
 def get_num_images_in_dataset(mrc_path, datadir=None, strip_prefix=None):
     return ImageLoader.image_count(mrc_path, datadir=datadir, strip_prefix=strip_prefix)
 
-def set_standard_mask(D, dtype):
-    return mask.window_mask(D, 0.85, 0.99)
-
 
 def _load_index_like(value):
     if value is None:

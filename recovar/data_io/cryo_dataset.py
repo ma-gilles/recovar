@@ -1,16 +1,8 @@
-"""
-Dataset classes for cryo-EM single particle and tilt series data loading.
+"""Legacy dataset/backends used by the image-source compatibility layer.
 
-Uses Google Grain for efficient batched iteration with background-thread
-prefetching, eliminating GPU idle time during disk I/O.  All public APIs
-are backward-compatible with the previous PyTorch-based implementation.
-
-Core classes:
-- ParticleImageDataset: Dataset for single particle images
-- TiltSeriesDataset: Dataset for tilt series with automatic grouping
-- JAXDataLoader: Grain-backed iterable yielding JAX arrays
-- ImageCountBatchLoader: Batches tilt series by total image count
-- PrefetchIterator: Generic background-thread prefetch wrapper
+This module still owns the direct Grain-backed loaders used by the old
+``ImageLoader`` / ``TiltSeriesDataset`` path, but higher-level batching now
+lives in ``recovar.data_io.dataset``.
 """
 
 import logging
@@ -462,7 +454,7 @@ class TiltSeriesDataset(ParticleImageDataset):
                 )
             return ImageCountBatchLoader(self, batch_size, num_workers, pad_to_batch_size)
         elif mode == 'tilt_series':
-            return simple_dataloader(self, batch_size=batch_size, num_workers=num_workers)
+            return JAXDataLoader(self, batch_size=1, shuffle=False, num_workers=num_workers)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -483,7 +475,7 @@ class TiltSeriesDataset(ParticleImageDataset):
             return ImageCountBatchLoader(subset, batch_size, num_workers, pad_to_batch_size)
         else:
             subset = _SimpleSubset(self, subset_indices)
-            return simple_dataloader(subset, batch_size=batch_size, num_workers=num_workers)
+            return JAXDataLoader(subset, batch_size=1, shuffle=False, num_workers=num_workers)
 
 
 # ---------------------------------------------------------------------------
@@ -621,16 +613,6 @@ class JAXDataLoader:
 
     def __len__(self) -> int:
         return (len(self.dataset) + self.batch_size - 1) // self.batch_size
-
-
-# ---------------------------------------------------------------------------
-# Simple dataloader
-# ---------------------------------------------------------------------------
-
-def simple_dataloader(dataset, batch_size: int = 1, num_workers: int = 0, **kwargs):
-    """Create dataloader with batch_size=1 for tilt series iteration."""
-    return JAXDataLoader(dataset, batch_size=1, shuffle=False,
-                         num_workers=num_workers)
 
 
 # ---------------------------------------------------------------------------
@@ -848,47 +830,3 @@ class ParticleSubset:
             max_tilts = max(max_tilts, n_actual)
         return max_tilts
 
-
-# ---------------------------------------------------------------------------
-# Free functions
-# ---------------------------------------------------------------------------
-
-def tilt_series_to_images(tilt_series_indices: np.ndarray, starfile_path: str,
-                          image_subset: Optional[np.ndarray] = None) -> np.ndarray:
-    """Convert tilt series (particle) indices to image indices."""
-    particle_tilts, tilts_to_particles = TiltSeriesDataset.parse_particle_tilt(starfile_path)
-    n_particles = len(particle_tilts)
-
-    tilt_series_indices = _normalize_subset_indices(
-        tilt_series_indices, n_particles, name="tilt_series_indices"
-    )
-
-    if tilt_series_indices.size == 0:
-        return np.array([], dtype=np.int32)
-
-    image_indices = np.concatenate(
-        [particle_tilts[i] for i in tilt_series_indices]
-    ).astype(np.int32, copy=False)
-
-    if image_subset is not None:
-        inferred_n_images = (
-            max((int(np.max(t)) for t in particle_tilts if np.asarray(t).size > 0),
-                default=-1) + 1
-        )
-        n_images_total = max(int(len(tilts_to_particles)), inferred_n_images)
-        subset_arr = _normalize_subset_indices(
-            image_subset, n_images_total, name="image_subset"
-        )
-        image_indices = image_indices[np.isin(image_indices, subset_arr)]
-
-    return image_indices
-
-
-def get_canonical_group_names(df, group_column: str = '_rlnGroupName') -> List[str]:
-    """Get sorted list of unique group names."""
-    return sorted(df[group_column].unique())
-
-
-def set_standard_mask(D, dtype):
-    """Compatibility wrapper for create_window_mask (dtype ignored)."""
-    return create_window_mask(D, inner_radius=0.85, outer_radius=0.99)

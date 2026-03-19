@@ -195,169 +195,6 @@ def test_particles_tilts_conversion_helpers_and_canonical_groups():
     outp = cryo_dataset.TiltSeriesDataset.tilts_to_particles(t2p, np.array([7, 1, 7]))
     assert np.all(outp == np.array([2]))
 
-    df = pd.DataFrame({"_rlnGroupName": ["b", "a", "c", "a"]})
-    names = cryo_dataset.get_canonical_group_names(df)
-    assert names == ["a", "b", "c"]
-
-
-def test_tilt_series_to_images_with_subset(monkeypatch):
-    monkeypatch.setattr(
-        cryo_dataset.TiltSeriesDataset,
-        "parse_particle_tilt",
-        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0}),
-    )
-    out = cryo_dataset.tilt_series_to_images(np.array([0, 2]), "dummy.star", image_subset=np.array([1, 4]))
-    assert np.all(out == np.array([1, 4]))
-
-
-def test_tilt_series_to_images_with_subset_preserves_order_and_duplicates(monkeypatch):
-    monkeypatch.setattr(
-        cryo_dataset.TiltSeriesDataset,
-        "parse_particle_tilt",
-        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0}),
-    )
-    out = cryo_dataset.tilt_series_to_images(
-        np.array([1, 1], dtype=np.int32),
-        "dummy.star",
-        image_subset=np.array([3, 2], dtype=np.int32),
-    )
-    np.testing.assert_array_equal(out, np.array([2, 3, 2, 3], dtype=np.int32))
-
-
-def test_tilt_series_to_images_with_boolean_subset_mask(monkeypatch):
-    monkeypatch.setattr(
-        cryo_dataset.TiltSeriesDataset,
-        "parse_particle_tilt",
-        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0}),
-    )
-    mask = np.array([False, True, False, True, True], dtype=bool)
-    out = cryo_dataset.tilt_series_to_images(np.array([0, 2, 0], dtype=np.int32), "dummy.star", image_subset=mask)
-    np.testing.assert_array_equal(out, np.array([1, 4, 1], dtype=np.int32))
-
-
-def test_tilt_series_to_images_accepts_boolean_particle_mask(monkeypatch):
-    monkeypatch.setattr(
-        cryo_dataset.TiltSeriesDataset,
-        "parse_particle_tilt",
-        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0, 1: 0, 2: 1, 3: 1, 4: 2}),
-    )
-    particle_mask = np.array([True, False, True], dtype=bool)
-    out = cryo_dataset.tilt_series_to_images(particle_mask, "dummy.star")
-    np.testing.assert_array_equal(out, np.array([0, 1, 4], dtype=np.int32))
-
-
-def test_tilt_series_to_images_rejects_bad_particle_indices(monkeypatch):
-    monkeypatch.setattr(
-        cryo_dataset.TiltSeriesDataset,
-        "parse_particle_tilt",
-        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0, 1: 0, 2: 1, 3: 1, 4: 2}),
-    )
-    with pytest.raises(IndexError):
-        cryo_dataset.tilt_series_to_images(np.array([3], dtype=np.int32), "dummy.star")
-    with pytest.raises(IndexError):
-        cryo_dataset.tilt_series_to_images(np.array([-1], dtype=np.int32), "dummy.star")
-    with pytest.raises(ValueError, match="must be 1D"):
-        cryo_dataset.tilt_series_to_images(np.array([[0, 1]], dtype=np.int32), "dummy.star")
-    with pytest.raises(ValueError, match="must match total size"):
-        cryo_dataset.tilt_series_to_images(np.array([True, False], dtype=bool), "dummy.star")
-    with pytest.raises(TypeError, match="integer indices or boolean mask"):
-        cryo_dataset.tilt_series_to_images(np.array([0.0, 1.0], dtype=np.float32), "dummy.star")
-
-
-def test_tilt_series_to_images_rejects_non_1d_boolean_subset_mask(monkeypatch):
-    monkeypatch.setattr(
-        cryo_dataset.TiltSeriesDataset,
-        "parse_particle_tilt",
-        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0}),
-    )
-    bad_mask = np.array([[True, False], [False, True]], dtype=bool)
-    with pytest.raises(ValueError, match="boolean mask must be 1D"):
-        cryo_dataset.tilt_series_to_images(
-            np.array([0], dtype=np.int32),
-            "dummy.star",
-            image_subset=bad_mask,
-        )
-
-
-def test_tilt_series_to_images_rejects_wrong_length_boolean_subset_mask(monkeypatch):
-    monkeypatch.setattr(
-        cryo_dataset.TiltSeriesDataset,
-        "parse_particle_tilt",
-        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0}),
-    )
-    bad_mask = np.array([True, False, True], dtype=bool)  # should have length 5
-    with pytest.raises(ValueError, match="must match total size"):
-        cryo_dataset.tilt_series_to_images(
-            np.array([0, 2], dtype=np.int32),
-            "dummy.star",
-            image_subset=bad_mask,
-        )
-
-
-def test_tilt_series_to_images_rejects_out_of_range_image_subset_values(monkeypatch):
-    monkeypatch.setattr(
-        cryo_dataset.TiltSeriesDataset,
-        "parse_particle_tilt",
-        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0, 1: 0, 2: 1, 3: 1, 4: 2}),
-    )
-    with pytest.raises(IndexError, match="out-of-range"):
-        cryo_dataset.tilt_series_to_images(
-            np.array([0, 2], dtype=np.int32),
-            "dummy.star",
-            image_subset=np.array([0, 9], dtype=np.int32),
-        )
-
-
-def test_tilt_series_to_images_rejects_non_integer_image_subset_values(monkeypatch):
-    monkeypatch.setattr(
-        cryo_dataset.TiltSeriesDataset,
-        "parse_particle_tilt",
-        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0, 1: 0, 2: 1, 3: 1, 4: 2}),
-    )
-    with pytest.raises(TypeError, match="integer indices or boolean mask"):
-        cryo_dataset.tilt_series_to_images(
-            np.array([0, 2], dtype=np.int32),
-            "dummy.star",
-            image_subset=np.array([0.0, 1.0], dtype=np.float32),
-        )
-    with pytest.raises(TypeError, match="integer indices or boolean mask"):
-        cryo_dataset.tilt_series_to_images(
-            np.array([0], dtype=np.int32),
-            "dummy.star",
-            image_subset=np.array(1.5, dtype=np.float32),
-        )
-
-
-def test_tilt_series_to_images_accepts_scalar_integer_image_subset(monkeypatch):
-    monkeypatch.setattr(
-        cryo_dataset.TiltSeriesDataset,
-        "parse_particle_tilt",
-        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0, 1: 0, 2: 1, 3: 1, 4: 2}),
-    )
-    out = cryo_dataset.tilt_series_to_images(
-        np.array([0, 2], dtype=np.int32),
-        "dummy.star",
-        image_subset=np.array(1, dtype=np.int32),
-    )
-    np.testing.assert_array_equal(out, np.array([1], dtype=np.int32))
-
-
-def test_tilt_series_to_images_empty_and_duplicate_particle_indices(monkeypatch):
-    monkeypatch.setattr(
-        cryo_dataset.TiltSeriesDataset,
-        "parse_particle_tilt",
-        lambda _p: ([np.array([0, 1]), np.array([2, 3]), np.array([4])], {0: 0}),
-    )
-    empty = cryo_dataset.tilt_series_to_images(np.array([], dtype=np.int32), "dummy.star")
-    assert empty.shape == (0,)
-    assert empty.dtype == np.int32
-
-    dup = cryo_dataset.tilt_series_to_images(np.array([1, 1], dtype=np.int32), "dummy.star")
-    np.testing.assert_array_equal(dup, np.array([2, 3, 2, 3]))
-
-    with pytest.raises(IndexError):
-        cryo_dataset.tilt_series_to_images(np.array([9], dtype=np.int32), "dummy.star")
-
 
 def test_image_count_batch_loader_batches_and_padding():
     class _FakeTiltDataset:
@@ -941,7 +778,7 @@ def test_tiltseries_subset_generator_images_mode_batch_size_validation(monkeypat
         ds.get_dataset_subset_generator(batch_size=2, subset_indices=np.array([0], dtype=np.int32), mode="images")
 
 
-def test_simple_dataloader_forces_batch_size_one(monkeypatch):
+def test_tilt_series_generator_forces_batch_size_one(monkeypatch):
     class _Source:
         def __init__(self):
             self.n = 4
@@ -966,7 +803,7 @@ def test_simple_dataloader_forces_batch_size_one(monkeypatch):
     monkeypatch.setattr(cryo_dataset.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
     ds = cryo_dataset.TiltSeriesDataset("dummy.star", num_tilts=1, random_tilts=False, tilt_file_option="relion5")
-    loader = cryo_dataset.simple_dataloader(ds, batch_size=99)
+    loader = ds.get_dataset_generator(batch_size=99, mode="tilt_series")
     assert loader.batch_size == 1
 
 
@@ -1148,7 +985,7 @@ def test_tiltseries_subset_generator_preserves_subset_order_and_duplicates(monke
     loader = ds.get_dataset_subset_generator(batch_size=8, subset_indices=subset_indices, mode="tilt_series")
     batches = list(loader)
 
-    # simple_dataloader uses batch_size=1 for tilt_series mode.
+    # Tilt-series iteration remains particle-at-a-time.
     assert len(batches) == 3
     out_particle_ids = [int(np.array(b[1]).reshape(-1)[0]) for b in batches]
     out_tilt_ids = [int(np.array(b[2]).reshape(-1)[0]) for b in batches]

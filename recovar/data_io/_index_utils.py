@@ -110,6 +110,9 @@ def _normalize_index_array(values, *, name: str):
 
 
 def _build_last_write_inverse(original_indices):
+    # Reverse lookups in subset views need to cope with duplicate original ids.
+    # We intentionally keep the *last* local position for each original id so
+    # remaps match the historical subset behavior used elsewhere in recovar.
     original_indices = np.asarray(original_indices, dtype=np.int32).reshape(-1)
     if original_indices.size == 0:
         return np.full(0, -1, dtype=np.int32)
@@ -156,6 +159,8 @@ class DatasetIndexLayout:
         n_images = int(original_image_indices.size)
 
         if not bool(self.grouped):
+            # SPA: images and groups are the same domain, so every local image is
+            # its own local group.
             if self.original_group_indices is None:
                 original_group_indices = original_image_indices.copy()
             else:
@@ -170,6 +175,9 @@ class DatasetIndexLayout:
             image_local_to_group_local = np.arange(n_images, dtype=np.int32)
             group_local_image_indices = None
         else:
+            # Grouped datasets (cryo-ET tilt series): validate the explicit
+            # image->group partition and build a dense local image -> local
+            # group lookup table for fast remaps later on.
             if self.original_group_indices is None:
                 raise ValueError("grouped layouts require original_group_indices")
             if self.group_local_image_indices is None:
@@ -270,6 +278,10 @@ class DatasetIndexLayout:
         return self._image_local_to_group_local
 
     def subset(self, local_image_indices):
+        # Build a new layout in the child-local coordinate system:
+        # 1. keep only the selected local images
+        # 2. compact them to 0..N_child-1
+        # 3. rebuild grouped structure so parent-local image ids never leak out
         local_image_indices = normalize_indices(
             local_image_indices,
             self.n_images,
@@ -287,6 +299,8 @@ class DatasetIndexLayout:
             dtype=np.int32,
         )
 
+        # Keep only groups touched by the subset, then remap each group's old
+        # local-image list into the child's compact local-image numbering.
         selected_old_groups = np.unique(
             self._image_local_to_group_local[local_image_indices]
         ).astype(np.int32, copy=False)
@@ -326,6 +340,9 @@ class DatasetIndexLayout:
         return self.original_group_indices[local_group_indices].astype(np.int32, copy=False)
 
     def local_image_indices_from_original(self, original_image_indices, *, allow_missing=False):
+        # Reverse-map source-file image ids back into this dataset view.
+        # This is the main bridge used when a child dataset/view needs to turn
+        # "original file ids" back into the current local numbering.
         original_image_indices = _normalize_index_array(
             original_image_indices,
             name="original_image_indices",
@@ -342,6 +359,8 @@ class DatasetIndexLayout:
         return local_image_indices.astype(np.int32, copy=False)
 
     def local_group_indices_from_original(self, original_group_indices, *, allow_missing=False):
+        # Same as local_image_indices_from_original(), but in particle/tilt
+        # group space for grouped datasets.
         original_group_indices = _normalize_index_array(
             original_group_indices,
             name="original_group_indices",
@@ -358,6 +377,8 @@ class DatasetIndexLayout:
         return local_group_indices.astype(np.int32, copy=False)
 
     def local_group_indices_from_local_images(self, local_image_indices):
+        # Collapse image selections down to the unique local groups they touch.
+        # For SPA this is a no-op because image ids and group ids are identical.
         local_image_indices = normalize_indices(
             local_image_indices,
             self.n_images,
@@ -374,6 +395,8 @@ class DatasetIndexLayout:
         return self.original_group_indices_for_local(local_group_indices)
 
     def local_image_indices_from_local_groups(self, local_group_indices):
+        # Expand particle/tilt-group selections back to the concrete local image
+        # ids belonging to those groups.
         local_group_indices = normalize_indices(
             local_group_indices,
             self.n_groups,
@@ -415,6 +438,8 @@ class TiltSeriesOriginalIndexMap:
     def from_particles_file(cls, particles_file, *, datadir=None, ntilts=None):
         from recovar.data_io import cryo_dataset
 
+        # Parse the original file once and freeze the canonical
+        # particle<->image relationship before any dataset subsetting/view logic.
         particle_to_images, tilt_to_particle = cryo_dataset.TiltSeriesDataset.parse_particle_tilt(
             particles_file
         )
@@ -474,6 +499,9 @@ class TiltSeriesOriginalIndexMap:
         return self._image_to_particle
 
     def sanitize_particle_indices(self, values, *, name, allowed_particles=None):
+        # CLI/user-provided particle selections may arrive as boolean masks,
+        # integer lists, or preloaded arrays. Normalize them once here so the
+        # rest of the halfset logic can assume a clean int32 particle-id array.
         arr = np.asarray(values)
         if arr.dtype == bool:
             if arr.ndim != 1:
@@ -495,9 +523,13 @@ class TiltSeriesOriginalIndexMap:
             particle_indices = arr[in_bounds].astype(np.int32, copy=False)
         if allowed_particles is not None:
             particle_indices = filter_preserve_order(particle_indices, allowed_particles)
+        # Particle-domain selections should be unique: selecting the same
+        # particle twice should never duplicate the whole tilt series.
         return deduplicate_preserve_order(particle_indices, name=name)
 
     def sanitize_image_indices(self, values, *, name, allowed_images=None):
+        # Image selections stay in image space and preserve order. Unlike
+        # particles we intentionally do not deduplicate here.
         arr = np.asarray(values)
         if arr.dtype == bool:
             if arr.ndim != 1:
@@ -522,6 +554,8 @@ class TiltSeriesOriginalIndexMap:
         return image_indices.astype(np.int32, copy=False)
 
     def particle_indices_from_images(self, image_indices):
+        # Many tilt images can belong to the same particle, so image->particle
+        # always collapses duplicates to a unique particle-id list.
         image_indices = normalize_indices(image_indices, self.n_images, name="image_indices")
         if image_indices.size == 0:
             return np.array([], dtype=np.int32)
@@ -538,6 +572,9 @@ class TiltSeriesOriginalIndexMap:
         allowed_images=None,
         ntilts=None,
     ):
+        # Expand a particle selection back to the concrete image ids belonging
+        # to those particles, then optionally trim by allowed image set and
+        # tilt count.
         particle_indices = normalize_indices(
             particle_indices,
             self.n_particles,

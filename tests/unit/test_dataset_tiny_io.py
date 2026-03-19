@@ -8,9 +8,10 @@ pytest.importorskip("jax")
 from helpers import tiny_synthetic
 from recovar import core, utils
 from recovar.data_io import dataset, starfile, cryo_dataset
-from recovar.data_io import tilt_dataset
 
 pytestmark = pytest.mark.unit
+
+tilt_dataset = cryo_dataset
 
 
 @pytest.fixture(scope="module")
@@ -606,77 +607,6 @@ def test_load_dataset_tiny_tilt_series_from_simulator_files(sim_tiny_tilt_files)
     for batch in image_batches:
         got_images.extend(_batch_image_indices(batch).tolist())
     assert got_images == subset_images.tolist()
-
-
-def test_simulator_tiny_tilt_series_to_images_matches_particle_mapping(sim_tiny_tilt_files):
-    files = sim_tiny_tilt_files
-    particles_to_tilts, _ = tilt_dataset.TiltSeriesDataset.parse_particle_tilt(files["particles_star"])
-    subset_particles = np.array([2, 0, 2], dtype=np.int32)
-
-    mapped = tilt_dataset.tilt_series_to_images(subset_particles, files["particles_star"])
-    expected = np.concatenate(
-        [
-            np.asarray(particles_to_tilts[2], dtype=np.int32),
-            np.asarray(particles_to_tilts[0], dtype=np.int32),
-            np.asarray(particles_to_tilts[2], dtype=np.int32),
-        ]
-    )
-    np.testing.assert_array_equal(np.asarray(mapped, dtype=np.int32), expected)
-
-
-def test_simulator_tiny_tilt_series_to_images_with_subset_preserves_order_and_duplicates(sim_tiny_tilt_files):
-    files = sim_tiny_tilt_files
-    particles_to_tilts, _ = tilt_dataset.TiltSeriesDataset.parse_particle_tilt(files["particles_star"])
-    subset_particles = np.array([2, 0, 2], dtype=np.int32)
-    full = np.concatenate(
-        [
-            np.asarray(particles_to_tilts[2], dtype=np.int32),
-            np.asarray(particles_to_tilts[0], dtype=np.int32),
-            np.asarray(particles_to_tilts[2], dtype=np.int32),
-        ]
-    )
-
-    image_subset = np.array([int(full[1]), int(full[-1]), int(full[1])], dtype=np.int32)
-    mapped = tilt_dataset.tilt_series_to_images(
-        subset_particles,
-        files["particles_star"],
-        image_subset=image_subset,
-    )
-    expected = full[np.isin(full, image_subset)]
-    np.testing.assert_array_equal(np.asarray(mapped, dtype=np.int32), expected)
-
-
-def test_simulator_tiny_tilt_series_to_images_accepts_boolean_image_subset_mask(sim_tiny_tilt_files):
-    files = sim_tiny_tilt_files
-    particles_to_tilts, _ = tilt_dataset.TiltSeriesDataset.parse_particle_tilt(files["particles_star"])
-    subset_particles = np.array([1, 0], dtype=np.int32)
-    full = np.concatenate(
-        [
-            np.asarray(particles_to_tilts[1], dtype=np.int32),
-            np.asarray(particles_to_tilts[0], dtype=np.int32),
-        ]
-    )
-
-    mask = np.zeros(files["n_images"], dtype=bool)
-    mask[int(full[0])] = True
-    mask[int(full[-1])] = True
-    mapped = tilt_dataset.tilt_series_to_images(
-        subset_particles,
-        files["particles_star"],
-        image_subset=mask,
-    )
-    expected = full[np.isin(full, np.flatnonzero(mask))]
-    np.testing.assert_array_equal(np.asarray(mapped, dtype=np.int32), expected)
-
-
-def test_simulator_tiny_tilt_series_to_images_rejects_wrong_length_boolean_mask(sim_tiny_tilt_files):
-    files = sim_tiny_tilt_files
-    with pytest.raises(ValueError, match="must match total size"):
-        tilt_dataset.tilt_series_to_images(
-            np.array([0, 1], dtype=np.int32),
-            files["particles_star"],
-            image_subset=np.array([True, False, True], dtype=bool),
-        )
 
 
 def test_simulator_tilt_dataset_subset_generator_images_mode_preserves_particle_order_and_duplicates(sim_tiny_tilt_files):
@@ -1940,7 +1870,7 @@ def test_simulator_tiny_tilt_negative_num_tilts_matches_all_tilts(sim_tiny_tilt_
         assert np.asarray(imgs_neg).shape == np.asarray(imgs_all).shape
 
 
-def test_simulator_tiny_tilt_simple_dataloader_forces_batch_size_one_and_particle_order(sim_tiny_tilt_files):
+def test_simulator_tiny_tilt_series_generator_forces_batch_size_one_and_particle_order(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
     ds = tilt_dataset.TiltSeriesDataset(
@@ -1952,7 +1882,7 @@ def test_simulator_tiny_tilt_simple_dataloader_forces_batch_size_one_and_particl
         tilt_file_option="relion5",
     )
 
-    loader = cryo_dataset.simple_dataloader(ds, batch_size=128, shuffle=True, buffer_size=999)
+    loader = ds.get_dataset_generator(batch_size=128, mode="tilt_series")
     assert loader.batch_size == 1
 
     got_particles = []

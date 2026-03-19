@@ -37,7 +37,7 @@ import pytest
 pytest.importorskip("jax")
 
 from helpers import tiny_synthetic
-from recovar.data_io import dataset as recovar_dataset, tilt_dataset
+from recovar.data_io import dataset as recovar_dataset, cryo_dataset
 
 pytestmark = pytest.mark.unit
 
@@ -84,7 +84,7 @@ def _load_tilt_cryo(tilt_files, ind=None):
 
 def _parse_p2t(tilt_files):
     """Return (particles_to_tilts: List[ndarray], tilts_to_particles: dict)."""
-    return tilt_dataset.TiltSeriesDataset.parse_particle_tilt(
+    return cryo_dataset.TiltSeriesDataset.parse_particle_tilt(
         tilt_files["particles_star"]
     )
 
