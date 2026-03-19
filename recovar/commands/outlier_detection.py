@@ -12,7 +12,7 @@ from sklearn.covariance import EllipticEnvelope
 from sklearn.ensemble import IsolationForest
 from sklearn.neighbors import LocalOutlierFactor
 
-from recovar.data_io import cryo_dataset
+from recovar.data_io import image_backends
 from recovar.data_io._index_utils import TiltSeriesOriginalIndexMap
 from recovar.output import output
 
@@ -449,7 +449,7 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
         tilt_index_map = TiltSeriesOriginalIndexMap.from_particles_file(starfile)
         particle_to_tilts = tilt_index_map.particle_to_images
         tilts_to_particle = tilt_index_map.image_to_particle
-        micrographtilt_to_tilts, tilts_to_micrographtilt = cryo_dataset.TiltSeriesDataset.parse_micrograph_tilt_mapping(starfile)
+        micrographtilt_to_tilts, tilts_to_micrographtilt = image_backends.TiltSeriesDataset.parse_micrograph_tilt_mapping(starfile)
     else:
         logger.info("Starfile %s is not a .star file, skipping particle and micrograph-based outlier detection", starfile)
 

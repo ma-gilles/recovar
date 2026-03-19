@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-from recovar.data_io.downsample import downsample_images, downsample_images_batch
+from recovar.data_io.downsample import downsample_images
 
 pytestmark = pytest.mark.unit
 
@@ -92,16 +92,6 @@ def test_batch_matches_individual():
     ])
 
     assert_allclose(batch_result, individual, atol=1e-10)
-
-
-def test_downsample_images_batch_fn():
-    """downsample_images_batch produces same result as one-shot."""
-    images = np.random.randn(15, 64, 64).astype(np.float64)
-
-    result_oneshot = downsample_images(images, 32)
-    result_batched = downsample_images_batch(images, 32, batch_size=4)
-
-    assert_allclose(result_oneshot, result_batched, atol=1e-10)
 
 
 # ---------------------------------------------------------------------------

@@ -70,32 +70,3 @@ def downsample_images(
     result *= (target_D / D) ** 2
 
     return result.astype(images.dtype)
-
-## TODO: This seems like a bad implementation? needs all images loaded on numpy? That could be terrabytes?
-## IF not used, remove otherwise fix
-def downsample_images_batch(
-    images: np.ndarray,
-    target_D: int,
-    batch_size: int = 1000,
-) -> np.ndarray:
-    """Downsample a large stack in batches to limit peak memory.
-
-    Args:
-        images: ``(N, D, D)`` image stack.
-        target_D: Target box size.
-        batch_size: Number of images per batch.
-
-    Returns:
-        ``(N, target_D, target_D)`` downsampled stack.
-    """
-    if images.ndim != 3:
-        raise ValueError(f"Expected 3D array (N, D, D), got ndim={images.ndim}")
-
-    N = images.shape[0]
-    out = np.empty((N, target_D, target_D), dtype=images.dtype)
-
-    for start in range(0, N, batch_size):
-        end = min(start + batch_size, N)
-        out[start:end] = downsample_images(images[start:end], target_D)
-
-    return out

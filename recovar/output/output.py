@@ -15,7 +15,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.heterogeneity.latent_density as ld
 from recovar import utils
 from recovar.core import linalg
-from recovar.data_io import dataset
+from recovar.data_io import cryoem_dataset as dataset
 from recovar.heterogeneity import embedding, trajectory
 from recovar.output.output_paths import ResultPaths
 from recovar.reconstruction import regularization

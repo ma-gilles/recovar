@@ -8,7 +8,7 @@ import os, argparse, time, sys
 from recovar import utils
 from recovar.reconstruction import homogeneous, noise
 from recovar.output import output
-from recovar.data_io import dataset
+from recovar.data_io import cryoem_dataset as dataset
 from recovar.core import mask
 from recovar.heterogeneity import embedding, principal_components, covariance_estimation
 from recovar.output.output_paths import ResultPaths

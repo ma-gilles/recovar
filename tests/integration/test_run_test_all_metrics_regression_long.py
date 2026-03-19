@@ -72,8 +72,8 @@ def _resolve_output_dir(tmp_path: Path, name: str) -> Path:
 
 def _assert_cryo_et_subsampling_consistency(particles_star: Path):
     """Validate tilt/image/ntilts subsampling invariants on a real generated ET STAR."""
-    from recovar.data_io import dataset as recovar_dataset
-    from recovar.data_io import cryo_dataset
+    from recovar.data_io import cryoem_dataset as recovar_dataset
+    from recovar.data_io import image_backends as cryo_dataset
 
     particles_to_tilts, _ = cryo_dataset.TiltSeriesDataset.parse_particle_tilt(str(particles_star))
     n_particles = len(particles_to_tilts)

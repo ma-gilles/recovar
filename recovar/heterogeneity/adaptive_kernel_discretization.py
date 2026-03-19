@@ -16,7 +16,7 @@ import numpy as np
 
 from recovar import core, jax_config, utils
 from recovar.reconstruction import noise, regularization, relion_functions
-from recovar.data_io import dataset
+from recovar.data_io import cryoem_dataset as dataset
 from recovar.core import linalg
 from recovar.core.configs import ForwardModelConfig
 import recovar.core.forward as core_forward
@@ -887,7 +887,7 @@ def pick_best_heterogeneity_from_residual(estimates, full_test_dataset, heteroge
 
 
     # residuals to pick best one
-    from recovar.data_io import dataset
+    from recovar.data_io import cryoem_dataset as dataset
 
     if residual_threshold is not None:
         good_indices = heterogeneity_distances <= residual_threshold
@@ -1070,7 +1070,7 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, noise_varia
     first_estimates = first_estimates.reshape([*first_estimates.shape[:2], -1, first_estimates.shape[-1]])
 
 
-    from recovar.data_io import dataset
+    from recovar.data_io import cryoem_dataset as dataset
     if residual_threshold is not None:
         good_indices = heterogeneity_distances[1] < residual_threshold
         test_dataset = dataset.subsample_cryoem_dataset(experiment_datasets[1], good_indices)
@@ -1105,7 +1105,7 @@ def naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, 
     og_contrast = experiment_dataset.get_ctf_column(8)
     idx =0 
     for residual_threshold in heterogeneity_bins:
-        from recovar.data_io import dataset
+        from recovar.data_io import cryoem_dataset as dataset
         good_indices = heterogeneity_distances <= residual_threshold
         # utils.report_memory_device(logger=logger)
 

@@ -16,7 +16,7 @@ from typing import Literal, Optional
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar.data_io import cryo_dataset
+from recovar.data_io import image_backends
 from recovar.data_io._index_utils import DatasetIndexLayout, normalize_indices
 
 
@@ -203,7 +203,7 @@ class ImageSource:
 
 
 class BackendImageSource(ImageSource):
-    """Image source backed by the existing cryo_dataset loaders."""
+    """Image source backed by the low-level file/image backends."""
 
     def __init__(self, backend, *, info: ImageSourceInfo):
         self.backend = backend
@@ -271,9 +271,7 @@ class BackendImageSource(ImageSource):
         return self.backend.process_images(images, apply_image_mask=apply_image_mask)
 
     def process_images_half(self, images, apply_image_mask=False):
-        if hasattr(self.backend, "process_images_half"):
-            return self.backend.process_images_half(images, apply_image_mask=apply_image_mask)
-        return super().process_images_half(images, apply_image_mask=apply_image_mask)
+        return self.backend.process_images_half(images, apply_image_mask=apply_image_mask)
 
     def iter_batches(
         self,
@@ -286,29 +284,14 @@ class BackendImageSource(ImageSource):
     ):
         if batch_mode == "images":
             if subset_indices is None:
-                if hasattr(self.backend, "get_image_generator"):
-                    generator = self.backend.get_image_generator(batch_size, num_workers=num_workers)
-                elif hasattr(self.backend, "get_dataset_generator"):
-                    generator = self.backend.get_dataset_generator(
-                        batch_size, num_workers=num_workers, **kwargs
-                    )
-                else:
-                    all_indices = np.arange(self.n_images, dtype=np.int32)
-                    generator = self.backend.get_image_subset_generator(
-                        batch_size, all_indices, num_workers=num_workers
-                    )
+                generator = self.backend.get_image_generator(batch_size, num_workers=num_workers)
             else:
                 subset_indices = _normalize_indices(
                     subset_indices, self.n_images, name="subset_indices"
                 )
-                if hasattr(self.backend, "get_image_subset_generator"):
-                    generator = self.backend.get_image_subset_generator(
-                        batch_size, subset_indices, num_workers=num_workers
-                    )
-                else:
-                    generator = self.backend.get_dataset_subset_generator(
-                        batch_size, subset_indices, num_workers=num_workers, **kwargs
-                    )
+                generator = self.backend.get_image_subset_generator(
+                    batch_size, subset_indices, num_workers=num_workers
+                )
         else:
             if subset_indices is None:
                 generator = self.backend.get_dataset_generator(
@@ -509,7 +492,7 @@ def create_image_source(
 ):
     if tilt_series:
         tilt_file_option = "relion5" if tilt_series_ctf == "relion5" else "warp"
-        backend = cryo_dataset.TiltSeriesDataset(
+        backend = image_backends.TiltSeriesDataset(
             particles_file,
             ind=ind,
             lazy=lazy,
@@ -520,7 +503,7 @@ def create_image_source(
             sort_with_Bfac=sort_with_Bfac,
         )
     else:
-        backend = cryo_dataset.ParticleImageDataset(
+        backend = image_backends.ParticleImageDataset(
             particles_file,
             ind=ind,
             lazy=lazy,

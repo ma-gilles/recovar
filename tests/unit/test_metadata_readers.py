@@ -8,7 +8,7 @@ import pytest
 from numpy.testing import assert_allclose
 
 from recovar import utils
-from recovar.data_io import metadata_parsing
+from recovar.data_io import metadata_readers as metadata_parsing
 from recovar.data_io.starfile import StarFile, write_star
 
 # ---------------------------------------------------------------------------
@@ -295,15 +295,12 @@ class TestAutoDispatch:
 
     def test_can_extract_star(self):
         assert metadata_parsing.can_extract_poses("particles.star")
-        assert metadata_parsing.can_extract_ctf("particles.star")
 
     def test_can_extract_cs(self):
         assert metadata_parsing.can_extract_poses("data.cs")
-        assert metadata_parsing.can_extract_ctf("data.cs")
 
     def test_cannot_extract_mrcs(self):
         assert not metadata_parsing.can_extract_poses("particles.mrcs")
-        assert not metadata_parsing.can_extract_ctf("particles.mrcs")
 
     def test_auto_parse_star(self):
         star_path, rot_expected, _, _, _, grid_size = _make_test_star(n=5)

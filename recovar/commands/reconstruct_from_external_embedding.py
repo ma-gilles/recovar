@@ -7,7 +7,7 @@ import time
 import numpy as np
 
 from recovar import utils
-from recovar.data_io import dataset
+from recovar.data_io import cryoem_dataset as dataset
 from recovar.output import output as o
 from recovar.reconstruction import noise
 

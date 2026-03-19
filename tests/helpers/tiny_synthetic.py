@@ -4,7 +4,7 @@ import pandas as pd
 
 import recovar.simulation.simulator as simulator
 import recovar.simulation.synthetic_dataset as synthetic_dataset
-from recovar.data_io import dataset
+from recovar.data_io import cryoem_dataset as dataset
 from recovar import core
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import utils
@@ -86,9 +86,8 @@ def make_tiny_cryo_dataset(grid_size=4, n_images=8, seed=0):
     )
     return cryo
 
-##TODO why would this be useful when the real ones only store in real space. Delete?
 class TinyFTImageStack:
-    """In-memory Fourier-domain image stack for tiny end-to-end unit tests."""
+    """In-memory Fourier-domain stack that implements the image-backend contract."""
 
     def __init__(self, images_real):
         images_real = np.asarray(images_real)
@@ -108,6 +107,9 @@ class TinyFTImageStack:
             end = min(start + batch_size, self.n_images)
             idx = np.arange(start, end, dtype=np.int32)
             yield self._images_fourier[idx], idx, idx
+
+    def get_image_generator(self, batch_size, num_workers=0):
+        return self.get_dataset_generator(batch_size, num_workers=num_workers)
 
     def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
         subset_indices = np.asarray(subset_indices, dtype=np.int32)

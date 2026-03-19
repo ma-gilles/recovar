@@ -436,11 +436,11 @@ class TiltSeriesOriginalIndexMap:
 
     @classmethod
     def from_particles_file(cls, particles_file, *, datadir=None, ntilts=None):
-        from recovar.data_io import cryo_dataset
+        from recovar.data_io import image_backends
 
         # Parse the original file once and freeze the canonical
         # particle<->image relationship before any dataset subsetting/view logic.
-        particle_to_images, tilt_to_particle = cryo_dataset.TiltSeriesDataset.parse_particle_tilt(
+        particle_to_images, tilt_to_particle = image_backends.TiltSeriesDataset.parse_particle_tilt(
             particles_file
         )
         particle_to_images = tuple(
@@ -469,7 +469,7 @@ class TiltSeriesOriginalIndexMap:
 
         tilt_numbers = None
         if ntilts is not None and ntilts > 0:
-            tilt_dataset = cryo_dataset.TiltSeriesDataset(
+            tilt_dataset = image_backends.TiltSeriesDataset(
                 particles_file,
                 datadir=datadir,
                 lazy=True,

@@ -33,7 +33,7 @@ def _load_index_like(value):
 
 def _get_normalize_and_dedup():
     """Lazy import to avoid circular dependency with dataset.py."""
-    from recovar.data_io.dataset import _normalize_image_indices, _deduplicate_preserve_order
+    from recovar.data_io.cryoem_dataset import _normalize_image_indices, _deduplicate_preserve_order
     return _normalize_image_indices, _deduplicate_preserve_order
 
 
@@ -92,7 +92,7 @@ def get_split_indices(particles_file, datadir=None, strip_prefix=None,
     Returns:
         List of two numpy arrays containing indices for each halfset
     """
-    from recovar.data_io.dataset import get_num_images_in_dataset
+    from recovar.data_io.cryoem_dataset import get_num_images_in_dataset
     _normalize_image_indices, _deduplicate_preserve_order = _get_normalize_and_dedup()
 
     if ind_file is None:
@@ -311,7 +311,7 @@ def get_split_datasets(particles_file, poses_file=None, ctf_file=None, datadir=N
     CryoEMDataset
         The full dataset with ``halfset_indices`` set.
     """
-    from recovar.data_io.dataset import load_dataset
+    from recovar.data_io.cryoem_dataset import load_dataset
 
     all_indices = np.unique(np.concatenate(ind_split))
 
@@ -372,7 +372,7 @@ def figure_out_halfsets(args):
       2. _rlnRandomSubset column in the STAR file (RELION convention).
       3. Random 50/50 split of all valid images.
     """
-    from recovar.data_io.dataset import get_num_images_in_dataset
+    from recovar.data_io.cryoem_dataset import get_num_images_in_dataset
     _normalize_image_indices, _ = _get_normalize_and_dedup()
 
     is_tilt = getattr(args, 'tilt_series', False) or getattr(args, 'tilt_series_ctf', 'cryoem') != 'cryoem'

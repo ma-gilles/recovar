@@ -11,7 +11,7 @@ import recovar.heterogeneity.latent_density
 import recovar.jax_config
 from recovar import utils
 from recovar.core import mask
-from recovar.data_io import dataset
+from recovar.data_io import cryoem_dataset as dataset
 from recovar.heterogeneity import adaptive_kernel_discretization, locres
 from recovar.output import output as output_mod
 from recovar.utils.nvtx_shim import nvtx

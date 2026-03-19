@@ -5,7 +5,7 @@ pytest.importorskip("jax")
 
 import recovar.heterogeneity.principal_components as pc
 import recovar.core as core
-from recovar.data_io import dataset
+from recovar.data_io import cryoem_dataset as dataset
 from recovar.reconstruction.homogeneous import MeanEstimate
 from recovar.utils.helpers import AlgorithmOptions
 from helpers.tiny_synthetic import make_tiny_simulation, make_tiny_cryo_dataset_with_images

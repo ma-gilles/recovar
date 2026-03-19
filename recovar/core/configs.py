@@ -118,7 +118,7 @@ class ForwardModelConfig(eqx.Module):
             Computes the upsampled volume shape directly without
             mutating the dataset object.
         """
-        from recovar.data_io.dataset import CryoEMDataset
+        from recovar.data_io.cryoem_dataset import CryoEMDataset
 
         # Extract the CTFEvaluator directly (not the dtype-casting method).
         if isinstance(cryo, CryoEMDataset):

@@ -322,11 +322,6 @@ def can_extract_poses(filepath: str) -> bool:
     return filepath.lower().endswith(('.star', '.cs'))
 
 
-def can_extract_ctf(filepath: str) -> bool:
-    """Return True if CTF can be auto-extracted from this file type."""
-    return filepath.lower().endswith(('.star', '.cs'))
-
-
 def auto_parse_poses(
     filepath: str,
     D: int,

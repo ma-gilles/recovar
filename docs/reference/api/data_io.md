@@ -3,14 +3,26 @@
 Dataset loading, metadata extraction, and image access for cryo-EM and
 cryo-ET data.
 
-## Current hierarchy
+## Flow
+
+```mermaid
+flowchart TD
+    A[particles file<br/>.star / .cs / stack path] --> B[image_sources.py<br/>file access + lazy/eager subset views]
+    A --> C[metadata_readers.py<br/>poses + CTF extraction]
+    C --> D[image_metadata.py<br/>typed metadata arrays]
+    B --> E[cryoem_dataset.py<br/>CryoEMDataset]
+    D --> E
+    F[halfsets.py<br/>split policy] --> E
+    G[_index_utils.py<br/>local/original image/group/particle remaps] --> B
+    G --> E
+```
 
 ```text
 load_dataset(...)
   -> create_image_source(...)
-       -> image_loader.py / cryo_dataset.py backend access
-  -> metadata_parsing.py
-       -> metadata.py
+       -> image_loader.py / image_backends.py backend access
+  -> metadata_readers.py
+       -> image_metadata.py
   -> CryoEMDataset
        -> iter_batches(...)
        -> subset(...)
@@ -25,25 +37,25 @@ Cross-cutting indexing
 Keep these responsibilities separate:
 
 - `image_sources.py` owns raw image access, lazy/eager loading, and subset views.
-- `metadata.py` owns rotations, translations, and CTF rows.
-- `dataset.py` is the only high-level coordinator and batch iterator surface.
+- `image_metadata.py` owns rotations, translations, and CTF rows.
+- `cryoem_dataset.py` is the only high-level coordinator and batch iterator surface.
 - `halfsets.py` owns split policy and halfset bookkeeping.
 - `_index_utils.py` owns image/group/particle remapping logic.
-- `cryo_dataset.py` is the legacy backend adapter still used underneath some image sources.
+- `image_backends.py` owns the low-level stack and tilt-series loaders used underneath image sources.
 
-## dataset
+## cryoem_dataset
 
 Core dataset classes and loading functions.
 
-::: recovar.data_io.dataset
+::: recovar.data_io.cryoem_dataset
     options:
       members_order: source
 
-## cryo_dataset
+## image_backends
 
-Legacy Grain-backed backend used underneath some image-source paths.
+Low-level Grain-backed image backends.
 
-::: recovar.data_io.cryo_dataset
+::: recovar.data_io.image_backends
     options:
       members_order: source
 
@@ -55,11 +67,11 @@ Raw image loading abstraction and subset/image-group remapping.
     options:
       members_order: source
 
-## metadata
+## image_metadata
 
 Typed metadata container for poses and CTF rows.
 
-::: recovar.data_io.metadata
+::: recovar.data_io.image_metadata
     options:
       members_order: source
 
@@ -79,11 +91,11 @@ Canonical local/original image, group, and particle index mapping helpers.
     options:
       members_order: source
 
-## metadata_parsing
+## metadata_readers
 
 Extract poses and CTF parameters from RELION `.star` and cryoSPARC `.cs` files.
 
-::: recovar.data_io.metadata_parsing
+::: recovar.data_io.metadata_readers
     options:
       members_order: source
 

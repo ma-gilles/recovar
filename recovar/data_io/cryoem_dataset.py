@@ -1,8 +1,8 @@
-"""Dataset coordination for cryo-EM / cryo-ET loading and iteration.
+"""Top-level cryo-EM / cryo-ET dataset assembly and batch iteration.
 
 Architecture:
 - ``image_sources.py`` owns raw image loading, lazy/eager access, and subset views
-- ``metadata.py`` owns poses and CTF metadata only
+- ``image_metadata.py`` owns poses and CTF metadata only
 - ``CryoEMDataset`` coordinates both layers and exposes the single explicit
   batch iterator used by downstream code
 """
@@ -21,14 +21,13 @@ from numpy.typing import NDArray
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 from recovar.core import mask
-from recovar.data_io import cryo_dataset
 from recovar.data_io.image_sources import (
     BackendImageSource,
     ImageSource,
     ImageSourceInfo,
     create_image_source,
 )
-from recovar.data_io.metadata import MetadataStore, Metadata
+from recovar.data_io.image_metadata import MetadataStore, Metadata
 from recovar.output import plot_utils
 
 logger = logging.getLogger(__name__)
@@ -903,9 +902,9 @@ def _load_ctf_params(particles_file, ctf_file, D, ind, n_images):
             )
         ctf_params = ctf_params_all if dataset_indices is None else ctf_params_all[dataset_indices]
     else:
-        from recovar.data_io import metadata_parsing
+        from recovar.data_io import metadata_readers
         source_file = ctf_file if ctf_file is not None else particles_file
-        ctf_params = metadata_parsing.auto_parse_ctf(source_file, D)
+        ctf_params = metadata_readers.auto_parse_ctf(source_file, D)
         dataset_indices = _normalize_dataset_indices(ind, n_total=ctf_params.shape[0])
         if dataset_indices is not None:
             ctf_params = ctf_params[dataset_indices]
@@ -934,9 +933,9 @@ def _load_poses(particles_file, poses_file, D, n_images, dataset_indices):
         from recovar.data_io import load_utils
         rots, trans, _ = load_utils.load_poses(poses_file, n_images, D, ind=dataset_indices)
     else:
-        from recovar.data_io import metadata_parsing
+        from recovar.data_io import metadata_readers
         source_file = poses_file if poses_file is not None else particles_file
-        rots_raw, trans_frac = metadata_parsing.auto_parse_poses(source_file, D)
+        rots_raw, trans_frac = metadata_readers.auto_parse_poses(source_file, D)
         if dataset_indices is not None:
             rots_raw = rots_raw[dataset_indices]
             trans_frac = trans_frac[dataset_indices]
@@ -1093,8 +1092,8 @@ def load_dataset(
     """
     # ---- Validate auto-extraction capability ----
     if poses_file is None or ctf_file is None:
-        from recovar.data_io import metadata_parsing
-        if not metadata_parsing.can_extract_poses(particles_file):
+        from recovar.data_io import metadata_readers
+        if not metadata_readers.can_extract_poses(particles_file):
             raise ValueError(
                 f"Cannot auto-extract poses/CTF from '{particles_file}'. "
                 "Provide --poses and --ctf, or use a .star or .cs particles file."

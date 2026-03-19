@@ -14,7 +14,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-from recovar.data_io import dataset, load_utils
+from recovar.data_io import cryoem_dataset as dataset, load_utils
 from recovar.reconstruction import noise
 
 CONSTANT_CTF=False

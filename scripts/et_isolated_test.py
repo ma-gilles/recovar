@@ -36,7 +36,7 @@ def main():
         from recovar.output import plot_utils, metrics as gt_metrics
         from recovar.simulation import synthetic_dataset
         from recovar import utils
-        from recovar.data_io import dataset
+        from recovar.data_io import cryoem_dataset as dataset
         from recovar.reconstruction import homogeneous, noise
         from recovar.heterogeneity import covariance_estimation, principal_components, embedding
         from recovar.core import mask, linalg

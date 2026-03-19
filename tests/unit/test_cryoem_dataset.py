@@ -6,9 +6,9 @@ import pickle
 
 pytest.importorskip("jax")
 
-import recovar.data_io.dataset as dataset
+import recovar.data_io.cryoem_dataset as dataset
 from recovar import core
-from recovar.data_io import load_utils
+from recovar.data_io import load_utils, image_sources
 from recovar.data_io import halfsets
 from recovar.data_io._index_utils import DatasetIndexLayout
 
@@ -828,7 +828,7 @@ def test_load_dataset_cryoem_branch(monkeypatch):
         n_images = 4 if ind is None else len(np.asarray(ind))
         return _FakeImageStack(n_images=n_images, D=8, padding=2)
 
-    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", _particle_dataset)
+    monkeypatch.setattr(image_sources.image_backends, "ParticleImageDataset", _particle_dataset)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
@@ -849,7 +849,7 @@ def test_load_dataset_cryoem_branch(monkeypatch):
 
 def test_load_dataset_rejects_ctf_count_mismatch_when_no_subset(monkeypatch):
     fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
-    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: fake_stack)
+    monkeypatch.setattr(image_sources.image_backends, "ParticleImageDataset", lambda *a, **k: fake_stack)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
     def _short_ctf(D, ctf_file):
@@ -876,7 +876,7 @@ def test_load_dataset_rejects_ctf_count_mismatch_when_no_subset(monkeypatch):
 
 def test_load_dataset_propagates_premultiplied_ctf_flag(monkeypatch):
     fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
-    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: fake_stack)
+    monkeypatch.setattr(image_sources.image_backends, "ParticleImageDataset", lambda *a, **k: fake_stack)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
@@ -894,7 +894,7 @@ def test_load_dataset_propagates_premultiplied_ctf_flag(monkeypatch):
 
 def test_load_dataset_rotation_only_pose_defaults_zero_translations(monkeypatch):
     fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
-    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: fake_stack)
+    monkeypatch.setattr(image_sources.image_backends, "ParticleImageDataset", lambda *a, **k: fake_stack)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
 
     def _poses_no_trans(_poses_file, n_images, _D, ind=None):
@@ -917,7 +917,7 @@ def test_load_dataset_rotation_only_pose_defaults_zero_translations(monkeypatch)
 
 def test_load_dataset_rejects_translation_shape_mismatch(monkeypatch):
     fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
-    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: fake_stack)
+    monkeypatch.setattr(image_sources.image_backends, "ParticleImageDataset", lambda *a, **k: fake_stack)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
 
     def _poses_bad_trans(_poses_file, n_images, _D, ind=None):
@@ -941,7 +941,7 @@ def test_load_dataset_rejects_translation_shape_mismatch(monkeypatch):
 
 def test_load_dataset_from_dose_branch(monkeypatch):
     fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
-    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: fake_stack)
+    monkeypatch.setattr(image_sources.image_backends, "ParticleImageDataset", lambda *a, **k: fake_stack)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
@@ -951,7 +951,7 @@ def test_load_dataset_from_dose_branch(monkeypatch):
             self.ctfBfactor = np.array([-2.0, -4.0, -6.0, -8.0], dtype=np.float32)
             self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.int32)
 
-    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
+    monkeypatch.setattr(image_sources.image_backends, "TiltSeriesDataset", _FakeTiltSeriesData)
 
     out = dataset.load_dataset(
         particles_file="p.mrcs",
@@ -979,7 +979,7 @@ def test_load_dataset_tilt_series_relion5_branch(monkeypatch):
             self.dose = np.array([0.0, 1.5, 3.0, 4.5], dtype=np.float32)
             self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.float32)
 
-    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
+    monkeypatch.setattr(image_sources.image_backends, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
@@ -1014,7 +1014,7 @@ def test_load_dataset_tilt_series_warp_alias_maps_to_v2_scale(monkeypatch):
             self.ctfBfactor = np.array([-4.0, -8.0, -12.0, -16.0], dtype=np.float32)
             self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.float32)
 
-    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
+    monkeypatch.setattr(image_sources.image_backends, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
@@ -1051,8 +1051,8 @@ def test_load_dataset_defaults_tilt_series_ctf_by_mode(monkeypatch):
             self.tilt_numbers = np.arange(4, dtype=np.float32)
             self.dose = np.arange(4, dtype=np.float32)
 
-    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
-    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
+    monkeypatch.setattr(image_sources.image_backends, "ParticleImageDataset", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
+    monkeypatch.setattr(image_sources.image_backends, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
@@ -1093,8 +1093,8 @@ def test_load_dataset_from_star_branch_sets_contrast_and_bfactor(monkeypatch):
             self.ctfBfactor = np.array([-5.0, -10.0, -15.0, -20.0], dtype=np.float32)
             self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.float32)
 
-    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
-    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
+    monkeypatch.setattr(image_sources.image_backends, "ParticleImageDataset", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
+    monkeypatch.setattr(image_sources.image_backends, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
@@ -1128,8 +1128,8 @@ def test_load_dataset_v2_scale_from_star_uses_star_scaling_and_zero_angles(monke
             self.ctfBfactor = np.array([-4.0, -8.0, -12.0, -16.0], dtype=np.float32)
             self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.float32)
 
-    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
-    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
+    monkeypatch.setattr(image_sources.image_backends, "ParticleImageDataset", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
+    monkeypatch.setattr(image_sources.image_backends, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
@@ -1166,8 +1166,8 @@ def test_load_dataset_warp_alias_for_non_tilt_series_maps_to_v2_scale(monkeypatc
             self.ctfBfactor = np.array([-4.0, -8.0, -12.0, -16.0], dtype=np.float32)
             self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.float32)
 
-    monkeypatch.setattr(dataset.cryo_dataset, "ParticleImageDataset", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
-    monkeypatch.setattr(dataset.cryo_dataset, "TiltSeriesDataset", _FakeTiltSeriesData)
+    monkeypatch.setattr(image_sources.image_backends, "ParticleImageDataset", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
+    monkeypatch.setattr(image_sources.image_backends, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 

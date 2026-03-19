@@ -6,7 +6,7 @@ import numpy as np
 from sklearn.metrics import confusion_matrix
 
 from recovar import utils
-from recovar.data_io import dataset
+from recovar.data_io import cryoem_dataset as dataset
 from recovar.heterogeneity import image_assignment
 from recovar.output import output
 from recovar.reconstruction import noise

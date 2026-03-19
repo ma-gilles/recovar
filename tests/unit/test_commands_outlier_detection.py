@@ -94,7 +94,7 @@ def test_outlier_detection_from_contrast_tilt_uses_explicit_image_to_particle_ma
 
     monkeypatch.setattr(outlier_cmd, "TiltSeriesOriginalIndexMap", _FakeTiltIndexMap)
     monkeypatch.setattr(
-        outlier_cmd.cryo_dataset.TiltSeriesDataset,
+        outlier_cmd.image_backends.TiltSeriesDataset,
         "parse_micrograph_tilt_mapping",
         staticmethod(lambda _starfile: (None, None)),
     )

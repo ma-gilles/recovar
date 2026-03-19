@@ -129,8 +129,8 @@ PY
 
 If you'd like to use RECOVAR functions directly in Python (e.g., for custom analysis or integration with other tools), the key modules are:
 
-- `recovar.data_io.dataset` — dataset loading (`load_dataset`, `CryoEMDataset`, `CryoEMHalfsets`)
-- `recovar.data_io.metadata_parsing` — extract poses/CTF from `.star`/`.cs` files
+- `recovar.data_io.cryoem_dataset` — dataset loading (`load_dataset`, `CryoEMDataset`, `CryoEMHalfsets`)
+- `recovar.data_io.metadata_readers` — extract poses/CTF from `.star`/`.cs` files
 - `recovar.heterogeneity.heterogeneity_volume` — volume generation via kernel regression
 - `recovar.heterogeneity.embedding` — latent space embedding
 - `recovar.heterogeneity.covariance_estimation` — covariance estimation

@@ -1,8 +1,13 @@
-"""Legacy dataset/backends used by the image-source compatibility layer.
+"""File-backed image backends used underneath :mod:`recovar.data_io.image_sources`.
 
-This module still owns the direct Grain-backed loaders used by the old
-``ImageLoader`` / ``TiltSeriesDataset`` path, but higher-level batching now
-lives in ``recovar.data_io.dataset``.
+This module owns the low-level Grain-backed loaders for:
+
+- single-particle image stacks
+- cryo-ET tilt-series grouped by particle
+
+It does not own metadata, halfset policy, or the top-level dataset view.
+Those live in ``image_metadata.py``, ``halfsets.py``, and
+``cryoem_dataset.py`` respectively.
 """
 
 import logging
@@ -10,7 +15,7 @@ import queue
 import threading
 import time
 from collections import OrderedDict, Counter
-from typing import Optional, List, Dict
+from typing import Dict, List, Optional
 
 import numpy as np
 import jax.numpy as jnp
@@ -36,8 +41,8 @@ NVTX_DOMAIN_DATA_IO = "data_io"
 # Helpers
 # ---------------------------------------------------------------------------
 
-def create_window_mask(image_size: int, inner_radius: float = 0.85,
-                       outer_radius: float = 0.99, dtype=np.complex64) -> np.ndarray:
+def _create_window_mask(image_size: int, inner_radius: float = 0.85,
+                        outer_radius: float = 0.99, dtype=np.complex64) -> np.ndarray:
     """Generate a circular window mask for image processing."""
     return mask.window_mask(image_size, inner_radius, outer_radius)
 
@@ -123,7 +128,7 @@ class ParticleImageDataset:
         self.dtype = np.complex64
         self.image_shape = (self.image_size, self.image_size)
         self.total_pixels = self.image_size * self.image_size
-        self.image_mask = np.array(create_window_mask(self.image_size, dtype=self.dtype))
+        self.image_mask = np.array(_create_window_mask(self.image_size, dtype=self.dtype))
         self.data_multiplier = -1 if invert_data else 1
 
         # Compatibility aliases
@@ -131,12 +136,8 @@ class ParticleImageDataset:
         self.n_images = self.num_images
         self.D = self.image_size
         self.unpadded_D = self.image_size
-        self.unpadded_image_shape = self.image_shape
-        self.image_size_alias = self.total_pixels
         self.mask = self.image_mask
         self.mult = self.data_multiplier
-        self.ind = ind
-        self.src = self.source
 
     def __len__(self) -> int:
         return self.num_images
@@ -152,18 +153,14 @@ class ParticleImageDataset:
             images = images[np.newaxis, ...]
         return images, index, index
 
-    def get_slice(self, start: int, stop: int):
-        images = self.source.images(slice(start, stop), require_contiguous=True)
-        return images, None
-
-    def apply_preprocessing(self, images: np.ndarray, use_mask: bool = False) -> np.ndarray:
-        if use_mask:
+    def process_images(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:
+        if apply_image_mask:
             images = images * self.image_mask
         import recovar.core.padding as pad
         images = pad.padded_dft(images * self.data_multiplier, self.D, self.padding)
         return images.astype(self.dtype, copy=False)
 
-    def apply_preprocessing_half(self, images: np.ndarray, use_mask: bool = False) -> np.ndarray:
+    def process_images_half(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:
         """Return half-spectrum images using the legacy full-FFT path.
 
         The old pipeline applied ``process_images`` first and then converted
@@ -171,7 +168,7 @@ class ParticleImageDataset:
         mathematically close, but it is not numerically identical and that
         drift is enough to change downstream PCA / outlier regressions.
         """
-        processed = self.apply_preprocessing(images, use_mask=use_mask)
+        processed = self.process_images(images, apply_image_mask=apply_image_mask)
         import recovar.core.fourier_transform_utils as fourier_transform_utils
         half_images = fourier_transform_utils.full_image_to_half_image(
             processed,
@@ -179,22 +176,11 @@ class ParticleImageDataset:
         )
         return half_images.astype(self.dtype, copy=False)
 
-    def process_images(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:
-        """Compatibility alias for apply_preprocessing."""
-        return self.apply_preprocessing(images, use_mask=apply_image_mask)
-
-    def process_images_half(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:
-        """Like process_images but produces half-spectrum (rfft2) output."""
-        return self.apply_preprocessing_half(images, use_mask=apply_image_mask)
-
-    def create_dataloader(self, batch_size: int, num_workers: int = 0, **kwargs):
-        return JAXDataLoader(self, batch_size=batch_size, shuffle=False,
-                             num_workers=num_workers)
-
     def get_dataset_generator(self, batch_size: int, num_workers: int = 0,
                               pad_to_batch_size: bool = False, mode: str = 'tilt_series',
                               **kwargs):
-        return self.create_dataloader(batch_size, num_workers)
+        return JAXDataLoader(self, batch_size=batch_size, shuffle=False,
+                             num_workers=num_workers)
 
     def get_dataset_subset_generator(self, batch_size: int, subset_indices: np.ndarray,
                                      num_workers: int = 0, pad_to_batch_size: bool = False,
@@ -347,9 +333,6 @@ class TiltSeriesDataset(ParticleImageDataset):
         images = self.source.images(selected)
         return images, particle_index, selected
 
-    def get_tilt(self, tilt_index: int):
-        return ParticleImageDataset.__getitem__(self, tilt_index)
-
     @classmethod
     def parse_particle_tilt(cls, starfile_path: str,
                             indices: Optional[np.ndarray] = None):
@@ -398,18 +381,6 @@ class TiltSeriesDataset(ParticleImageDataset):
 
         return tomogram_tilts, reverse_map
 
-    @staticmethod
-    def particles_to_tilts(particle_tilt_map: List[np.ndarray],
-                           particle_indices: np.ndarray) -> np.ndarray:
-        tilts = [particle_tilt_map[int(i)] for i in particle_indices]
-        return np.concatenate(tilts)
-
-    @staticmethod
-    def tilts_to_particles(tilt_particle_map: Dict[int, int],
-                           tilt_indices: np.ndarray) -> np.ndarray:
-        particles = {tilt_particle_map[int(i)] for i in tilt_indices}
-        return np.array(sorted(particles))
-
     def _max_tilts_per_particle(self) -> int:
         max_tilts = 0
         for tilts in self._particle_tilts:
@@ -421,19 +392,15 @@ class TiltSeriesDataset(ParticleImageDataset):
             max_tilts = max(max_tilts, n_actual)
         return max_tilts
 
-    def create_image_dataloader(self, batch_size: int, num_workers: int = 0):
-        """Iterate over individual images (not particles)."""
+    def get_image_generator(self, batch_size: int, num_workers: int = 0):
         view = _ImageView(self.source, self.source.n)
         return JAXDataLoader(view, batch_size=batch_size, shuffle=False,
                              num_workers=num_workers)
 
-    def get_image_generator(self, batch_size: int, num_workers: int = 0):
-        return self.create_image_dataloader(batch_size, num_workers)
-
     def get_image_subset_generator(self, batch_size: int, subset_indices: np.ndarray,
                                    num_workers: int = 0):
         if subset_indices is None:
-            return self.create_image_dataloader(batch_size, num_workers)
+            return self.get_image_generator(batch_size, num_workers)
         subset_indices = _normalize_subset_indices(
             subset_indices, self.source.n, name="subset_indices"
         )
@@ -647,7 +614,6 @@ def _resolve_particle_tilts(dataset, effective_num_tilts):
 
     return None, effective_num_tilts
 
-## TODO Why are these things here? is there some we could delete
 class ImageCountBatchLoader:
     """DataLoader that batches by total image count across tilt series.
 
@@ -829,4 +795,3 @@ class ParticleSubset:
             )
             max_tilts = max(max_tilts, n_actual)
         return max_tilts
-

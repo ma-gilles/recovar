@@ -6,7 +6,7 @@ from pathlib import Path
 from recovar.data_io import image_loader
 from recovar.data_io import starfile
 from recovar import utils
-from recovar.data_io import cryo_dataset
+from recovar.data_io import image_backends as cryo_dataset
 
 pytestmark = pytest.mark.unit
 

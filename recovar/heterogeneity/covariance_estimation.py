@@ -1042,7 +1042,7 @@ def _compute_projected_covariance_single(experiment_dataset, mean_estimate, basi
 
 @nvtx.annotate("compute_projected_covariance", color="green")
 def compute_projected_covariance(dataset, mean_estimate, basis, volume_mask, batch_size, disc_type, disc_type_u, do_mask_images=True):
-    from recovar.data_io.dataset import CryoEMDataset
+    from recovar.data_io.cryoem_dataset import CryoEMDataset
     # Backward compat: accept list of datasets (legacy API from em/heterogeneity.py)
     if isinstance(dataset, (list, tuple)):
         dataset = dataset[0] if len(dataset) == 1 else dataset

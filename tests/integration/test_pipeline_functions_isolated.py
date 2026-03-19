@@ -159,7 +159,7 @@ def gt_data(dataset_dir):
 @pytest.fixture(scope="module")
 def cryos(dataset_dir, intermediates):
     """Create CryoEMDataset with halfset_indices from the shared dataset."""
-    from recovar.data_io import dataset
+    from recovar.data_io import cryoem_dataset as dataset
 
     grid_size = 128  # known for this dataset
     particles_file = str(dataset_dir / f"particles.{grid_size}.mrcs")
