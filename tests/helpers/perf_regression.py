@@ -157,19 +157,58 @@ def build_perf_record(stages: dict) -> dict:
 
 
 def save_perf_baseline(perf_record: dict, path: str):
-    """Save perf record to JSON file."""
+    """Save perf record to multi-hardware JSON file.
+
+    The file is a dict keyed by gpu_name.  Existing entries for other
+    hardware are preserved; only the current hardware's entry is
+    written/overwritten.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    gpu_name = perf_record.get("hardware", {}).get("gpu_name", "unknown")
+
+    # Load existing multi-hardware file (or migrate old single-record format)
+    existing = _load_multi_hw(path)
+    existing[gpu_name] = perf_record
+
     with open(path, "w") as f:
-        json.dump(perf_record, f, indent=2, default=str)
-    logger.info("Perf baseline saved to %s", path)
+        json.dump(existing, f, indent=2, default=str)
+    logger.info("Perf baseline saved for %s to %s", gpu_name, path)
 
 
-def load_perf_baseline(path: str) -> dict | None:
-    """Load perf baseline, return None if not found."""
+def _load_multi_hw(path: str) -> dict:
+    """Load a multi-hardware baseline file.
+
+    Handles three cases:
+      1. File does not exist → empty dict.
+      2. Old single-record format (has "hardware" key at top level) →
+         migrate to ``{gpu_name: record}`` on the fly.
+      3. Already multi-hardware → return as-is.
+    """
     if not os.path.exists(path):
-        return None
+        return {}
     with open(path) as f:
-        return json.load(f)
+        data = json.load(f)
+    # Old format: top-level dict has a "hardware" key
+    if "hardware" in data:
+        gpu_name = data["hardware"].get("gpu_name", "unknown")
+        return {gpu_name: data}
+    return data
+
+
+def load_perf_baseline(path: str, gpu_name: str | None = None) -> dict | None:
+    """Load perf baseline for a specific GPU, return None if not found.
+
+    Parameters
+    ----------
+    path : str
+        Path to the baseline JSON file.
+    gpu_name : str or None
+        GPU to look up.  If None, uses the current GPU.
+    """
+    if gpu_name is None:
+        gpu_name = get_gpu_name()
+    multi = _load_multi_hw(path)
+    return multi.get(gpu_name)
 
 
 def compare_perf(
@@ -185,15 +224,6 @@ def compare_perf(
     no regressions detected.
     """
     warns = []
-
-    # Check hardware match
-    cur_hw = current.get("hardware", {})
-    bl_hw = baseline.get("hardware", {})
-    if cur_hw.get("gpu_name") != bl_hw.get("gpu_name"):
-        warns.append(
-            f"Hardware mismatch: {cur_hw.get('gpu_name')} vs baseline {bl_hw.get('gpu_name')} — skipping perf comparison"
-        )
-        return warns
 
     cur_stages = current.get("stages", {})
     bl_stages = baseline.get("stages", {})
@@ -245,31 +275,36 @@ def compare_perf(
 def check_perf_regression(current: dict, baseline_path: str, test_name: str = ""):
     """Compare perf against committed baseline and warn on regression.
 
-    Baselines are stored in the repo and never auto-updated.
-    If no baseline exists, the test skips the perf check (does not create one).
-    To generate baselines, run with PERF_OVERWRITE_BASELINE=1.
+    If no baseline exists for the current hardware, the current perf is
+    saved alongside any existing entries for other hardware (which are
+    never deleted).  To force-overwrite all entries, set
+    PERF_OVERWRITE_BASELINE=1.
     """
+    cur_gpu = current.get("hardware", {}).get("gpu_name", "unknown")
+
     overwrite = os.environ.get("PERF_OVERWRITE_BASELINE")
     if overwrite:
         save_perf_baseline(current, baseline_path)
         logger.info("Wrote perf baseline: %s", baseline_path)
         return
 
-    baseline = load_perf_baseline(baseline_path)
-    if baseline is None:
-        logger.info("No perf baseline at %s — skipping perf check", baseline_path)
-        return
+    baseline = load_perf_baseline(baseline_path, gpu_name=cur_gpu)
 
     # Always print current perf for visibility
     cur_stages = current.get("stages", {})
-    hw = current.get("hardware", {}).get("gpu_name", "?")
-    lines = [f"\n  Perf: {test_name} ({hw})"]
+    lines = [f"\n  Perf: {test_name} ({cur_gpu})"]
     for k, v in cur_stages.items():
         if isinstance(v, dict):
             lines.append(f"    {k:30s} wall={v.get('wall_seconds',0):7.0f}s  "
                          f"gpu={v.get('peak_gpu_memory_gb',0):5.1f}GB  "
                          f"cpu={v.get('peak_cpu_memory_gb',0):5.1f}GB")
     print("\n".join(lines))
+
+    if baseline is None:
+        # No baseline for this hardware — add it (preserves other entries)
+        save_perf_baseline(current, baseline_path)
+        print(f"  No baseline for {cur_gpu} — saved as new baseline entry")
+        return
 
     warns = compare_perf(current, baseline)
     if warns:
