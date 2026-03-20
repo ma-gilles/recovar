@@ -82,23 +82,28 @@ def get_mean_conformation_relion(
     from recovar.reconstruction import relion_functions
 
     st_time = time.time()
+    halfset_datasets = dataset.materialize_halfset_datasets()
 
     ft_ctfs = [None, None]
     ft_ys = [None, None]
     corrected = [None, None]
 
-    for halfset_id in range(2):
+    for halfset_id, halfset_dataset in enumerate(halfset_datasets):
         ft_ctfs[halfset_id], ft_ys[halfset_id] = relion_functions.relion_style_triangular_kernel(
-            dataset, noise_variance.astype(np.float32), batch_size,
-            index_subset=dataset.halfset_local_image_indices(halfset_id),
+            halfset_dataset,
+            noise_variance.astype(np.float32),
+            batch_size,
             upsampling_factor=upsampling_factor,
         )
         corrected[halfset_id] = relion_functions.post_process_from_filter_v2(
-            ft_ctfs[halfset_id], ft_ys[halfset_id], dataset.volume_shape, upsampling_factor,
+            ft_ctfs[halfset_id],
+            ft_ys[halfset_id],
+            halfset_dataset.volume_shape,
+            upsampling_factor,
         )
 
     mean_prior, fsc, _ = regularization.compute_relion_prior(
-        dataset, noise_variance, corrected[0], corrected[1], batch_size,
+        halfset_datasets, noise_variance, corrected[0], corrected[1], batch_size,
     )
 
     corrected_reg = [

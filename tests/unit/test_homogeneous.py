@@ -10,6 +10,12 @@ from recovar.reconstruction import relion_functions
 pytestmark = pytest.mark.unit
 
 
+class _FakeHalfsetDataset:
+    def __init__(self, tag, volume_shape):
+        self.tag = tag
+        self.volume_shape = volume_shape
+
+
 class _FakeDataset:
     def __init__(self):
         self.volume_shape = (4,)
@@ -18,13 +24,16 @@ class _FakeDataset:
             np.array([2, 3], dtype=np.int32),
         ]
 
-    def halfset_local_image_indices(self, halfset_id):
-        return self.halfset_indices[halfset_id]
+    def materialize_halfset_datasets(self):
+        return (
+            _FakeHalfsetDataset(0, self.volume_shape),
+            _FakeHalfsetDataset(1, self.volume_shape),
+        )
 
 
 def test_get_mean_conformation_relion_flow_and_restore(monkeypatch):
     def fake_triangular_kernel(dataset, noise_variance, batch_size, index_subset=None, **kwargs):
-        tag = 0 if np.array_equal(index_subset, np.array([0, 1])) else 1
+        tag = dataset.tag
         return (
             np.ones(4, dtype=np.float32) * (1 + tag),
             np.ones(4, dtype=np.float32) * (10 + tag),

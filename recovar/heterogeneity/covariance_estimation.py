@@ -252,7 +252,6 @@ def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_rad
     sorted_frequencies = core.vec_indices_to_frequencies(sorted_idx, volume_shape)
     sorted_frequencies_norm = np.linalg.norm(sorted_frequencies, axis=-1)
     running_vec = np.asarray(sampling_vec).astype(np.float64)
-
     probs = running_vec/np.sum(running_vec)
     draw_size = min(running_vec.size, n_samples * 100)
     random_choices = np.random.choice(running_vec.size, size=draw_size, p=probs, replace=False)
@@ -499,9 +498,12 @@ def _variance_relion_kernel_trilinear_explicit(
 
 @nvtx.annotate("variance_relion_style_triangular_kernel", color="yellow")
 def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, batch_size, image_subset=None, volume_mask=None, disc_type=''):
+    volume_shape = tuple(
+        getattr(experiment_dataset, 'upsampled_volume_shape', (int(experiment_dataset.grid_size),) * 3)
+    )
     config = ForwardModelConfig(
         image_shape=tuple(experiment_dataset.image_shape),
-        volume_shape=tuple(experiment_dataset.upsampled_volume_shape),
+        volume_shape=volume_shape,
         grid_size=int(experiment_dataset.grid_size),
         voxel_size=float(experiment_dataset.voxel_size),
         padding=int(experiment_dataset.padding),
@@ -569,19 +571,26 @@ def compute_variance(
     #   noise_w — noise-normalisation denominator
     #   noise_s — |residuals|^2 accumulator (noise-normalisation numerator)
     ctf_w, signal, noise_w, noise_s = [], [], [], []
-    for halfset_id in range(2):
-        halfset_indices = dataset.halfset_local_image_indices(halfset_id)
+    halfset_datasets = dataset.materialize_halfset_datasets()
+    subset_original = None
+    if image_subset is not None:
+        subset_original = dataset.original_image_indices_from_local(image_subset)
+
+    for halfset_dataset in halfset_datasets:
         if noise_ind_subset is not None:
-            subset = halfset_indices[dataset.noise.dose_indices[halfset_indices] == noise_ind_subset]
-        elif image_subset is not None:
-            subset = np.intersect1d(halfset_indices, image_subset)
+            subset = np.where(halfset_dataset.noise.dose_indices == noise_ind_subset)[0]
+        elif subset_original is not None:
+            subset = halfset_dataset.local_image_indices_from_original(
+                subset_original,
+                allow_missing=True,
+            )
         else:
-            subset = halfset_indices
+            subset = None
         fw, sig, nw, ns = variance_relion_style_triangular_kernel(
-            dataset, mean_estimate, batch_size,
+            halfset_dataset, mean_estimate, batch_size,
             image_subset=subset, volume_mask=volume_mask, disc_type=disc_type,
         )
-        ctf_w.append(relion_functions.adjust_regularization_relion_style(fw, dataset.volume_shape))
+        ctf_w.append(relion_functions.adjust_regularization_relion_style(fw, halfset_dataset.volume_shape))
         signal.append(sig)
         noise_w.append(nw)
         noise_s.append(ns)

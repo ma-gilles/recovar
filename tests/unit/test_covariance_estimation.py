@@ -355,7 +355,8 @@ def test_compute_variance_orchestration_with_stubbed_kernels(monkeypatch):
     # Scale factor per half: half0 → 1.0, half1 → 2.0
     half0_idx = set(ds.halfset_indices[0].tolist())
     def _fake_var_kernel(cryo, mean_estimate, batch_size, image_subset=None, volume_mask=None, disc_type=""):
-        scale = 1.0 if set(image_subset.tolist()) == half0_idx else 2.0
+        original_indices = cryo.original_image_indices_from_local(np.arange(cryo.n_images))
+        scale = 1.0 if set(original_indices.tolist()) == half0_idx else 2.0
         lhs = np.ones(vol_size, dtype=np.float32) * (10.0 * scale)
         rhs = np.ones(vol_size, dtype=np.float32) * (4.0 * scale)
         noise_lhs = np.ones(vol_size, dtype=np.float32) * (2.0 * scale)
