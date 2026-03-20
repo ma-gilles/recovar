@@ -140,21 +140,14 @@ def test_compute_cluster_fsc_scores_uses_group_iteration_for_tilt_subsets(monkey
     volume_shape = (2, 2, 2)
     relion_calls = []
 
-    class _FakeHalfsetDataset:
-        def __init__(self):
-            self.volume_shape = volume_shape
-
-        def local_group_indices_from_original(self, original_group_indices):
-            return np.asarray(original_group_indices, dtype=np.int32) - 10
-
     class _FakeDataset:
         tilt_series_flag = True
 
         def __init__(self):
             self.volume_shape = volume_shape
 
-        def materialize_halfset_datasets(self):
-            return (_FakeHalfsetDataset(), _FakeHalfsetDataset())
+        def local_group_indices_from_original(self, original_group_indices):
+            return np.asarray(original_group_indices, dtype=np.int32) - 10
 
     class _FakePipelineOutput:
         def __init__(self):
