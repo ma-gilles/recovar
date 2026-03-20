@@ -16,13 +16,132 @@ import numpy as np
 
 from recovar import core, jax_config, utils
 from recovar.reconstruction import noise, regularization, relion_functions
-from recovar.data_io import cryoem_dataset as dataset
+from recovar.data_io import cryoem_dataset
 from recovar.core import linalg
 from recovar.core.configs import ForwardModelConfig
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
+
+_SENTINEL = object()
+
+
+def _pad_noise_variance_for_fixed_batch(noise_variance, current_batch_size, target_batch_size):
+    """Pad per-image noise rows so padded batch items contribute zero weight."""
+    if noise_variance is None:
+        return None
+
+    arr = np.asarray(noise_variance)
+    if arr.ndim == 1:
+        arr = arr.reshape(1, -1)
+    if arr.ndim != 2:
+        raise ValueError(
+            "noise_variance must be a 1D or 2D array when padding batches, "
+            f"got shape {arr.shape}"
+        )
+
+    if arr.shape[0] == 1:
+        arr = np.repeat(arr, current_batch_size, axis=0)
+    elif arr.shape[0] != current_batch_size:
+        raise ValueError(
+            "noise_variance rows must match batch size when padding batches: "
+            f"{arr.shape[0]} != {current_batch_size}"
+        )
+
+    if current_batch_size == target_batch_size:
+        return arr
+
+    padded = np.full((target_batch_size, arr.shape[1]), np.inf, dtype=arr.dtype)
+    padded[:current_batch_size] = arr
+    return padded
+
+
+def _pad_heterogeneity_kernel_batch(
+    images,
+    rotation_matrices,
+    translations,
+    ctf_params,
+    noise_variance,
+    *,
+    target_batch_size,
+):
+    """Pad the final image batch to a fixed size to avoid JIT recompilation.
+
+    The heterogeneity kernel accumulators are sums, so padded rows can be made
+    exactly neutral by assigning them infinite noise variance.
+    """
+    current_batch_size = int(images.shape[0])
+    if current_batch_size == target_batch_size:
+        return images, rotation_matrices, translations, ctf_params, noise_variance
+    if current_batch_size > target_batch_size:
+        raise ValueError(
+            f"batch size {current_batch_size} exceeds target_batch_size {target_batch_size}"
+        )
+
+    pad = target_batch_size - current_batch_size
+    images = np.concatenate(
+        [
+            np.asarray(images),
+            np.zeros((pad, *images.shape[1:]), dtype=np.asarray(images).dtype),
+        ],
+        axis=0,
+    )
+    rotation_matrices = np.concatenate(
+        [np.asarray(rotation_matrices), np.repeat(np.asarray(rotation_matrices[:1]), pad, axis=0)],
+        axis=0,
+    )
+    translations = np.concatenate(
+        [np.asarray(translations), np.repeat(np.asarray(translations[:1]), pad, axis=0)],
+        axis=0,
+    )
+    ctf_params = np.concatenate(
+        [np.asarray(ctf_params), np.repeat(np.asarray(ctf_params[:1]), pad, axis=0)],
+        axis=0,
+    )
+    noise_variance = _pad_noise_variance_for_fixed_batch(
+        noise_variance,
+        current_batch_size,
+        target_batch_size,
+    )
+    return images, rotation_matrices, translations, ctf_params, noise_variance
+
+
+def _iter_processed_half_batches(experiment_dataset, raw_batches):
+    """Prefetch raw batches and overlap half-spectrum preprocessing with GPU work.
+
+    Keeping preprocessing out of the generic dataset iterator keeps the data IO
+    API clean, but the heterogeneity kernel still needs the old overlap between
+    CPU-side FFT preprocessing and GPU backprojection.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    raw_iter = iter(raw_batches)
+
+    def _prepare_next():
+        batch = next(raw_iter, _SENTINEL)
+        if batch is _SENTINEL:
+            return _SENTINEL
+        images, rotation_matrices, translations, ctf_params, noise_variance, particle_indices, image_indices = batch
+        half_images = experiment_dataset.process_images_half(images)
+        return (
+            half_images,
+            rotation_matrices,
+            translations,
+            ctf_params,
+            noise_variance,
+            particle_indices,
+            image_indices,
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(_prepare_next)
+        while True:
+            result = future.result()
+            if result is _SENTINEL:
+                return
+            future = pool.submit(_prepare_next)
+            yield result
 
 
 def _heterogeneity_kernel_batch_from_fft(
@@ -887,11 +1006,11 @@ def pick_best_heterogeneity_from_residual(estimates, full_test_dataset, heteroge
 
 
     # residuals to pick best one
-    from recovar.data_io import cryoem_dataset as dataset
+    from recovar.data_io import cryoem_dataset
 
     if residual_threshold is not None:
         good_indices = heterogeneity_distances <= residual_threshold
-        test_dataset = dataset.subsample_cryoem_dataset(full_test_dataset, good_indices)
+        test_dataset = cryoem_dataset.subsample_cryoem_dataset(full_test_dataset, good_indices)
 
         if test_dataset.n_images <= 0:
             raise ValueError("No images in bin after applying residual threshold")
@@ -1070,13 +1189,13 @@ def heterogeneous_reconstruction_fixed_variance(experiment_datasets, noise_varia
     first_estimates = first_estimates.reshape([*first_estimates.shape[:2], -1, first_estimates.shape[-1]])
 
 
-    from recovar.data_io import cryoem_dataset as dataset
+    from recovar.data_io import cryoem_dataset
     if residual_threshold is not None:
         good_indices = heterogeneity_distances[1] < residual_threshold
-        test_dataset = dataset.subsample_cryoem_dataset(experiment_datasets[1], good_indices)
+        test_dataset = cryoem_dataset.subsample_cryoem_dataset(experiment_datasets[1], good_indices)
     else:
         good_indices = np.argsort(heterogeneity_distances[1])[:residual_num_images]
-        test_dataset = dataset.subsample_cryoem_dataset(experiment_datasets[1], good_indices)
+        test_dataset = cryoem_dataset.subsample_cryoem_dataset(experiment_datasets[1], good_indices)
 
     logger.info("Number of images used for residual computation: %s", test_dataset.n_images)
     residuals, _ = compute_residuals_many_weights_in_weight_batch(test_dataset, first_estimates[0], max_pol_degree )
@@ -1105,11 +1224,11 @@ def naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_variance, 
     og_contrast = experiment_dataset.get_ctf_column(8)
     idx =0 
     for residual_threshold in heterogeneity_bins:
-        from recovar.data_io import cryoem_dataset as dataset
+        from recovar.data_io import cryoem_dataset
         good_indices = heterogeneity_distances <= residual_threshold
         # utils.report_memory_device(logger=logger)
 
-        test_dataset = dataset.subsample_cryoem_dataset(experiment_dataset, good_indices)
+        test_dataset = cryoem_dataset.subsample_cryoem_dataset(experiment_dataset, good_indices)
         utils.report_memory_device(logger=logger)
         from recovar.reconstruction import relion_functions
 
@@ -1205,12 +1324,23 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
 
         Ft_y_acc = jnp.zeros_like(Ft_y_acc)
         Ft_ctf_acc = jnp.zeros_like(Ft_ctf_acc)
-        for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in experiment_dataset.iter_batches(
+        raw_batches = experiment_dataset.iter_batches(
             batch_size,
             noise_model=experiment_dataset.noise, noise_half=False,
             indices=image_inds,
+        )
+        for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in _iter_processed_half_batches(
+            experiment_dataset,
+            raw_batches,
         ):
-            images = experiment_dataset.process_images_half(images)
+            images, rotation_matrices, translations, ctf_params, noise_variance = _pad_heterogeneity_kernel_batch(
+                images,
+                rotation_matrices,
+                translations,
+                ctf_params,
+                noise_variance,
+                target_batch_size=batch_size,
+            )
             Ft_y_acc, Ft_ctf_acc = _heterogeneity_kernel_batch_from_fft(
                 config,
                 images,
@@ -1284,7 +1414,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal
 def compute_lhs_rhs(cryo,noise_variance, heterogeneity_distances, residual_threshold, batch_size  = 100, disc_type = 'linear_interp' ):
     
     good_indices = heterogeneity_distances <= residual_threshold
-    test_dataset = dataset.subsample_cryoem_dataset(cryo, good_indices)
+    test_dataset = cryoem_dataset.subsample_cryoem_dataset(cryo, good_indices)
     Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(test_dataset , noise_variance.astype(np.float32),  batch_size,  disc_type = disc_type, upsampling_factor=1)
     return Ft_ctf, F_ty
 

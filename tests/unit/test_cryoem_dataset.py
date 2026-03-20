@@ -33,8 +33,8 @@ def _iter_image_batches(cryo, batch_size, subset_indices=None):
 
 def test_split_index_list_deterministic_and_disjoint():
     indices = np.arange(11)
-    s1 = dataset.split_index_list(indices, split_random_seed=7)
-    s2 = dataset.split_index_list(indices, split_random_seed=7)
+    s1 = halfsets.split_index_list(indices, split_random_seed=7)
+    s2 = halfsets.split_index_list(indices, split_random_seed=7)
     np.testing.assert_array_equal(s1[0], s2[0])
     np.testing.assert_array_equal(s1[1], s2[1])
     assert len(np.intersect1d(s1[0], s1[1])) == 0
@@ -42,13 +42,13 @@ def test_split_index_list_deterministic_and_disjoint():
 
 
 def test_split_index_list_accepts_python_list():
-    split = dataset.split_index_list([5, 2, 9, 1], split_random_seed=0)
+    split = halfsets.split_index_list([5, 2, 9, 1], split_random_seed=0)
     merged = np.sort(np.concatenate(split))
     np.testing.assert_array_equal(merged, np.array([1, 2, 5, 9]))
 
 
 def test_split_index_list_matches_legacy_seed_zero_partition():
-    split = dataset.split_index_list(np.arange(20, dtype=np.int32), split_random_seed=0)
+    split = halfsets.split_index_list(np.arange(20, dtype=np.int32), split_random_seed=0)
     np.testing.assert_array_equal(
         split[0],
         np.array([1, 2, 4, 6, 8, 10, 13, 17, 18, 19], dtype=np.int32),
@@ -61,12 +61,12 @@ def test_split_index_list_matches_legacy_seed_zero_partition():
 
 def test_split_index_list_rejects_empty():
     with pytest.raises(ValueError):
-        dataset.split_index_list(np.array([], dtype=int))
+        halfsets.split_index_list(np.array([], dtype=int))
 
 
 def test_get_split_indices_from_ndarray_ind_file():
     ind = np.array([10, 30, 20, 40], dtype=int)
-    split = dataset.get_split_indices("unused.star", ind_file=ind, validate_split=True)
+    split = halfsets.get_split_indices("unused.star", ind_file=ind, validate_split=True)
     merged = np.sort(np.concatenate(split))
     np.testing.assert_array_equal(merged, np.sort(ind))
 
@@ -74,7 +74,7 @@ def test_get_split_indices_from_ndarray_ind_file():
 def test_get_split_indices_from_boolean_mask_ind_file(monkeypatch):
     monkeypatch.setattr(dataset, "get_num_images_in_dataset", lambda *args, **kwargs: 6)
     mask = np.array([True, False, True, False, False, True], dtype=bool)
-    split = dataset.get_split_indices("unused.star", ind_file=mask, validate_split=True, split_random_seed=0)
+    split = halfsets.get_split_indices("unused.star", ind_file=mask, validate_split=True, split_random_seed=0)
     merged = np.sort(np.concatenate(split))
     np.testing.assert_array_equal(merged, np.array([0, 2, 5], dtype=np.int32))
 
@@ -82,23 +82,23 @@ def test_get_split_indices_from_boolean_mask_ind_file(monkeypatch):
 def test_get_split_indices_rejects_non_1d_boolean_mask(monkeypatch):
     monkeypatch.setattr(dataset, "get_num_images_in_dataset", lambda *args, **kwargs: 4)
     with pytest.raises(ValueError, match="boolean mask must be 1D"):
-        dataset.get_split_indices("unused.star", ind_file=np.array([[True, False], [False, True]], dtype=bool))
+        halfsets.get_split_indices("unused.star", ind_file=np.array([[True, False], [False, True]], dtype=bool))
 
 
 def test_get_split_indices_rejects_negative_indices():
     with pytest.raises(ValueError, match="must be non-negative"):
-        dataset.get_split_indices("unused.star", ind_file=np.array([0, -1, 2], dtype=np.int32))
+        halfsets.get_split_indices("unused.star", ind_file=np.array([0, -1, 2], dtype=np.int32))
 
 
 def test_get_split_indices_deduplicates_duplicate_indices():
     ind = np.array([5, 1, 5, 2], dtype=np.int32)
-    split = dataset.get_split_indices("unused.star", ind_file=ind, validate_split=True, split_random_seed=0)
+    split = halfsets.get_split_indices("unused.star", ind_file=ind, validate_split=True, split_random_seed=0)
     merged = np.sort(np.concatenate(split))
     np.testing.assert_array_equal(merged, np.array([1, 2, 5], dtype=np.int32))
 
 
 def test_get_split_indices_accepts_python_list_ind_file():
-    split = dataset.get_split_indices("unused.star", ind_file=[8, 3, 1], validate_split=True, split_random_seed=0)
+    split = halfsets.get_split_indices("unused.star", ind_file=[8, 3, 1], validate_split=True, split_random_seed=0)
     merged = np.sort(np.concatenate(split))
     np.testing.assert_array_equal(merged, np.array([1, 3, 8], dtype=np.int32))
 
@@ -251,7 +251,7 @@ def test_cryoemdataset_halfset_original_group_indices_tilt():
     cryo = dataset.CryoEMDataset(
         image_source=image_source,
         voxel_size=1.0,
-        metadata=dataset.Metadata(rots, trans, ctf),
+        metadata=dataset.ImageMetadata(rots, trans, ctf),
         dataset_indices=np.array([10, 11, 12, 13, 14, 15], dtype=np.int32),
         tilt_series_flag=True,
     )
@@ -296,7 +296,7 @@ def test_reload_from_original_images_preserves_original_indices_and_noise_mappin
     cryo = dataset.CryoEMDataset(
         image_source=image_source,
         voxel_size=1.0,
-        metadata=dataset.Metadata(rots, trans, ctf),
+        metadata=dataset.ImageMetadata(rots, trans, ctf),
         dataset_indices=np.array([10, 11, 14, 15, 20, 21], dtype=np.int32),
         tilt_series_flag=True,
     )
@@ -369,6 +369,16 @@ def test_reload_from_original_images_preserves_original_indices_and_noise_mappin
         half0.noise.get_half(np.array([1], dtype=np.int32)),
         np.array([2], dtype=np.int32),
     )
+    assert cryo.noise.calls[0][0] == "full"
+    np.testing.assert_array_equal(
+        cryo.noise.calls[0][1],
+        np.array([0, 2, 4], dtype=np.int32),
+    )
+    assert cryo.noise.calls[1][0] == "half"
+    np.testing.assert_array_equal(
+        cryo.noise.calls[1][1],
+        np.array([2], dtype=np.int32),
+    )
     np.testing.assert_array_equal(
         half0.noise.dose_indices,
         np.array([3, 7, 10], dtype=np.int32),
@@ -385,19 +395,81 @@ def test_reload_from_original_images_preserves_original_indices_and_noise_mappin
         half0.CTF_params,
         ctf[[0, 2, 4]],
     )
-    assert cryo.noise.calls[0][0] == "full"
-    np.testing.assert_array_equal(
-        cryo.noise.calls[0][1],
-        np.array([0, 2, 4], dtype=np.int32),
-    )
-    assert cryo.noise.calls[1][0] == "half"
-    np.testing.assert_array_equal(
-        cryo.noise.calls[1][1],
-        np.array([2], dtype=np.int32),
-    )
 
 
-def test_make_dataset_loader_dict_uninvert_parsing():
+def test_materialize_halfset_datasets_prefers_independent_reloads_for_lazy_sources(monkeypatch):
+    fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
+    image_source = dataset.BackendImageSource(
+        fake_stack,
+        info=dataset.ImageSourceInfo(lazy=True),
+    )
+    metadata = dataset.ImageMetadata(
+        np.tile(np.eye(3, dtype=np.float32), (4, 1, 1)),
+        np.zeros((4, 2), dtype=np.float32),
+        np.zeros((4, 9), dtype=np.float32),
+    )
+    cryo = dataset.CryoEMDataset(
+        image_source=image_source,
+        voxel_size=1.0,
+        metadata=metadata,
+    )
+    cryo.halfset_indices = [
+        np.array([0, 2], dtype=np.int32),
+        np.array([1, 3], dtype=np.int32),
+    ]
+
+    calls = []
+
+    def fake_get_halfset_dataset(self, halfset_id, *, independent=False, lazy=None):
+        calls.append((halfset_id, independent, lazy))
+        return f"half{halfset_id}"
+
+    monkeypatch.setattr(dataset.CryoEMDataset, "get_halfset_dataset", fake_get_halfset_dataset)
+
+    assert cryo.materialize_halfset_datasets() == ("half0", "half1")
+    assert calls == [
+        (0, True, True),
+        (1, True, True),
+    ]
+
+
+def test_materialize_halfset_datasets_keeps_subset_views_for_eager_sources(monkeypatch):
+    fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
+    image_source = dataset.BackendImageSource(
+        fake_stack,
+        info=dataset.ImageSourceInfo(lazy=False),
+    )
+    metadata = dataset.ImageMetadata(
+        np.tile(np.eye(3, dtype=np.float32), (4, 1, 1)),
+        np.zeros((4, 2), dtype=np.float32),
+        np.zeros((4, 9), dtype=np.float32),
+    )
+    cryo = dataset.CryoEMDataset(
+        image_source=image_source,
+        voxel_size=1.0,
+        metadata=metadata,
+    )
+    cryo.halfset_indices = [
+        np.array([0, 2], dtype=np.int32),
+        np.array([1, 3], dtype=np.int32),
+    ]
+
+    calls = []
+
+    def fake_get_halfset_dataset(self, halfset_id, *, independent=False, lazy=None):
+        calls.append((halfset_id, independent, lazy))
+        return f"half{halfset_id}"
+
+    monkeypatch.setattr(dataset.CryoEMDataset, "get_halfset_dataset", fake_get_halfset_dataset)
+
+    assert cryo.materialize_halfset_datasets() == ("half0", "half1")
+    assert calls == [
+        (0, False, None),
+        (1, False, None),
+    ]
+
+
+def test_halfset_dataset_spec_from_args_parses_uninvert_and_defaults():
     args = SimpleNamespace(
         particles="p.star",
         ctf="c.pkl",
@@ -414,16 +486,17 @@ def test_make_dataset_loader_dict_uninvert_parsing():
         dose_per_tilt=2.9,
         premultiplied_ctf=False,
     )
-    out = dataset.make_dataset_loader_dict(args)
-    assert out["uninvert_data"] is False
+    out = halfsets.HalfsetDatasetSpec.from_args(args)
+    assert out.uninvert_data is False
+    assert out.strip_prefix is None
 
     args.uninvert_data = "true"
-    out2 = dataset.make_dataset_loader_dict(args)
-    assert out2["uninvert_data"] is True
+    out2 = halfsets.HalfsetDatasetSpec.from_args(args)
+    assert out2.uninvert_data is True
 
     args.uninvert_data = "bad"
     with pytest.raises(ValueError):
-        dataset.make_dataset_loader_dict(args)
+        halfsets.HalfsetDatasetSpec.from_args(args)
 
 
 def test_cryoemdataset_minimal_and_noise_access():
@@ -437,7 +510,7 @@ def test_cryoemdataset_minimal_and_noise_access():
     ds = dataset.CryoEMDataset(
         image_source=None,
         voxel_size=1.0,
-        metadata=dataset.Metadata(rots, trans, ctf_params),
+        metadata=dataset.ImageMetadata(rots, trans, ctf_params),
         ctf_evaluator=ctf_fun,
         grid_size=4,
     )
@@ -465,7 +538,7 @@ def test_cryoemdataset_casts_arrays_to_expected_dtypes():
     ds = dataset.CryoEMDataset(
         image_source=None,
         voxel_size=1.0,
-        metadata=dataset.Metadata(rots, trans, ctf_params),
+        metadata=dataset.ImageMetadata(rots, trans, ctf_params),
         grid_size=4,
     )
 
@@ -474,7 +547,7 @@ def test_cryoemdataset_casts_arrays_to_expected_dtypes():
     assert ds.CTF_params.dtype == np.float32
 
 
-def test_figure_out_halfsets_random_path(monkeypatch):
+def test_resolve_halfset_indices_random_path(monkeypatch):
     args = SimpleNamespace(
         halfsets=None,
         tilt_series=False,
@@ -490,12 +563,12 @@ def test_figure_out_halfsets_random_path(monkeypatch):
     expected = [np.array([0, 2]), np.array([1, 3])]
     monkeypatch.setattr(halfsets, "_read_relion_halfsets_from_star", lambda *a, **k: (None, None))
     monkeypatch.setattr(halfsets, "get_split_indices", lambda *a, **k: expected)
-    out = dataset.figure_out_halfsets(args)
+    out = halfsets.resolve_halfset_indices(args)
     np.testing.assert_array_equal(out[0], expected[0])
     np.testing.assert_array_equal(out[1], expected[1])
 
 
-def test_figure_out_halfsets_n_images_limit(monkeypatch):
+def test_resolve_halfset_indices_n_images_limit(monkeypatch):
     args = SimpleNamespace(
         halfsets=None,
         tilt_series=False,
@@ -510,12 +583,12 @@ def test_figure_out_halfsets_n_images_limit(monkeypatch):
     )
     monkeypatch.setattr(halfsets, "_read_relion_halfsets_from_star", lambda *a, **k: (None, None))
     monkeypatch.setattr(halfsets, "get_split_indices", lambda *a, **k: [np.array([0, 2]), np.array([1, 3])])
-    out = dataset.figure_out_halfsets(args)
+    out = halfsets.resolve_halfset_indices(args)
     np.testing.assert_array_equal(out[0], np.array([0]))
     np.testing.assert_array_equal(out[1], np.array([1]))
 
 
-def test_figure_out_halfsets_from_file_intersects_with_ind(tmp_path):
+def test_resolve_halfset_indices_from_file_intersects_with_ind(tmp_path):
     halfsets_file = tmp_path / "halfsets.pkl"
     ind_file = tmp_path / "ind.pkl"
     with open(halfsets_file, "wb") as f:
@@ -535,12 +608,12 @@ def test_figure_out_halfsets_from_file_intersects_with_ind(tmp_path):
         strip_prefix=None,
         n_images=-1,
     )
-    out = dataset.figure_out_halfsets(args)
+    out = halfsets.resolve_halfset_indices(args)
     np.testing.assert_array_equal(out[0], np.array([1, 2]))
     np.testing.assert_array_equal(out[1], np.array([4]))
 
 
-def test_figure_out_halfsets_from_file_intersects_with_ind_ndarray(tmp_path):
+def test_resolve_halfset_indices_from_file_intersects_with_ind_ndarray(tmp_path):
     halfsets_file = tmp_path / "halfsets.pkl"
     with open(halfsets_file, "wb") as f:
         pickle.dump([np.array([0, 1, 2]), np.array([3, 4, 5])], f)
@@ -557,12 +630,12 @@ def test_figure_out_halfsets_from_file_intersects_with_ind_ndarray(tmp_path):
         strip_prefix=None,
         n_images=-1,
     )
-    out = dataset.figure_out_halfsets(args)
+    out = halfsets.resolve_halfset_indices(args)
     np.testing.assert_array_equal(out[0], np.array([2], dtype=np.int32))
     np.testing.assert_array_equal(out[1], np.array([3, 5], dtype=np.int32))
 
 
-def test_figure_out_halfsets_from_file_intersects_with_ind_preserves_halfset_order(tmp_path):
+def test_resolve_halfset_indices_from_file_intersects_with_ind_preserves_halfset_order(tmp_path):
     halfsets_file = tmp_path / "halfsets.pkl"
     with open(halfsets_file, "wb") as f:
         pickle.dump([np.array([5, 2, 4]), np.array([3, 1, 0])], f)
@@ -579,12 +652,12 @@ def test_figure_out_halfsets_from_file_intersects_with_ind_preserves_halfset_ord
         strip_prefix=None,
         n_images=-1,
     )
-    out = dataset.figure_out_halfsets(args)
+    out = halfsets.resolve_halfset_indices(args)
     np.testing.assert_array_equal(out[0], np.array([5, 4], dtype=np.int32))
     np.testing.assert_array_equal(out[1], np.array([1, 0], dtype=np.int32))
 
 
-def test_figure_out_halfsets_from_file_intersects_with_boolean_mask_ind(tmp_path, monkeypatch):
+def test_resolve_halfset_indices_from_file_intersects_with_boolean_mask_ind(tmp_path, monkeypatch):
     halfsets_file = tmp_path / "halfsets.pkl"
     with open(halfsets_file, "wb") as f:
         pickle.dump([np.array([5, 2, 4]), np.array([3, 1, 0])], f)
@@ -603,12 +676,12 @@ def test_figure_out_halfsets_from_file_intersects_with_boolean_mask_ind(tmp_path
         strip_prefix=None,
         n_images=-1,
     )
-    out = dataset.figure_out_halfsets(args)
+    out = halfsets.resolve_halfset_indices(args)
     np.testing.assert_array_equal(out[0], np.array([5, 4], dtype=np.int32))
     np.testing.assert_array_equal(out[1], np.array([1, 0], dtype=np.int32))
 
 
-def test_figure_out_halfsets_from_file_accepts_boolean_halfset_masks(tmp_path, monkeypatch):
+def test_resolve_halfset_indices_from_file_accepts_boolean_halfset_masks(tmp_path, monkeypatch):
     halfsets_file = tmp_path / "halfsets.pkl"
     with open(halfsets_file, "wb") as f:
         pickle.dump(
@@ -633,12 +706,12 @@ def test_figure_out_halfsets_from_file_accepts_boolean_halfset_masks(tmp_path, m
         strip_prefix=None,
         n_images=-1,
     )
-    out = dataset.figure_out_halfsets(args)
+    out = halfsets.resolve_halfset_indices(args)
     np.testing.assert_array_equal(out[0], np.array([0, 3], dtype=np.int32))
     np.testing.assert_array_equal(out[1], np.array([1, 2, 4, 5], dtype=np.int32))
 
 
-def test_figure_out_halfsets_from_file_rejects_non_two_halfsets(tmp_path):
+def test_resolve_halfset_indices_from_file_rejects_non_two_halfsets(tmp_path):
     halfsets_file = tmp_path / "halfsets.pkl"
     with open(halfsets_file, "wb") as f:
         pickle.dump([np.array([0, 1], dtype=np.int32)], f)
@@ -656,7 +729,7 @@ def test_figure_out_halfsets_from_file_rejects_non_two_halfsets(tmp_path):
         n_images=-1,
     )
     with pytest.raises(ValueError, match="exactly two halfsets"):
-        dataset.figure_out_halfsets(args)
+        halfsets.resolve_halfset_indices(args)
 
 
 class _FakeImageStack:
@@ -774,7 +847,7 @@ def test_iter_batches_skips_outer_prefetch_when_image_source_already_prefetches(
                 np.array([0], dtype=np.int32),
             )
 
-    metadata = dataset.Metadata(
+    metadata = dataset.ImageMetadata(
         np.tile(np.eye(3, dtype=np.float32), (2, 1, 1)),
         np.zeros((2, 2), dtype=np.float32),
         np.zeros((2, 9), dtype=np.float32),
@@ -1196,7 +1269,7 @@ def test_cryoemdataset_predicted_image_and_generators(monkeypatch):
     ds = dataset.CryoEMDataset(
         image_source=stack,
         voxel_size=1.0,
-        metadata=dataset.Metadata(rots, trans, ctf_params),
+        metadata=dataset.ImageMetadata(rots, trans, ctf_params),
         tilt_series_flag=True,
     )
     assert ds.n_units == stack.Np
@@ -1228,7 +1301,7 @@ def test_get_split_indices_from_pickle_file_path(tmp_path, monkeypatch):
         pickle.dump(np.array([7, 1, 5, 3], dtype=int), f)
 
     monkeypatch.setattr(halfsets, "split_index_list", lambda idx, split_random_seed=0: [np.sort(idx[:2]), np.sort(idx[2:])])
-    out = dataset.get_split_indices("unused.star", ind_file=str(ind_file), validate_split=True)
+    out = halfsets.get_split_indices("unused.star", ind_file=str(ind_file), validate_split=True)
     np.testing.assert_array_equal(out[0], np.array([1, 7]))
     np.testing.assert_array_equal(out[1], np.array([3, 5]))
 
@@ -1237,10 +1310,10 @@ def test_get_split_indices_raises_on_overlapping_split(monkeypatch):
     monkeypatch.setattr(dataset, "get_num_images_in_dataset", lambda *args, **kwargs: 4)
     monkeypatch.setattr(halfsets, "split_index_list", lambda *_args, **_kwargs: [np.array([0, 1]), np.array([1, 2])])
     with pytest.raises(ValueError, match="overlapping indices"):
-        dataset.get_split_indices("particles.star", validate_split=True)
+        halfsets.get_split_indices("particles.star", validate_split=True)
 
 
-def test_load_dataset_from_args_uses_given_split(monkeypatch):
+def test_load_halfset_dataset_from_args_uses_given_split(monkeypatch):
     args = SimpleNamespace(
         particles="p.star",
         ctf="c.pkl",
@@ -1260,22 +1333,24 @@ def test_load_dataset_from_args_uses_given_split(monkeypatch):
     given_split = [np.array([0, 2]), np.array([1, 3])]
     captured = {}
 
-    monkeypatch.setattr(halfsets, "make_dataset_loader_dict", lambda _a: {"particles_file": "p.star"})
+    expected_spec = halfsets.HalfsetDatasetSpec(particles_file="p.star")
+    monkeypatch.setattr(halfsets.HalfsetDatasetSpec, "from_args", classmethod(lambda cls, _a: expected_spec))
 
-    def _fake_get_split(**kwargs):
+    def _fake_get_split(spec, **kwargs):
+        captured["spec"] = spec
         captured["call"] = kwargs
         return "sentinel"
 
-    monkeypatch.setattr(halfsets, "get_split_datasets", _fake_get_split)
+    monkeypatch.setattr(halfsets, "load_halfset_dataset", _fake_get_split)
 
-    out = dataset.load_dataset_from_args(args, lazy=True, ind_split=given_split)
+    out = halfsets.load_halfset_dataset_from_args(args, lazy=True, ind_split=given_split)
     assert out == "sentinel"
-    assert captured["call"]["particles_file"] == "p.star"
+    assert captured["spec"] == expected_spec
     assert captured["call"]["ind_split"] is given_split
     assert captured["call"]["lazy"] is True
 
 
-def test_load_dataset_from_args_computes_split_when_missing(monkeypatch):
+def test_load_halfset_dataset_from_args_computes_split_when_missing(monkeypatch):
     args = SimpleNamespace(
         particles="p.star",
         ctf="c.pkl",
@@ -1293,22 +1368,25 @@ def test_load_dataset_from_args_computes_split_when_missing(monkeypatch):
         premultiplied_ctf=False,
     )
     computed = [np.array([0, 2]), np.array([1, 3])]
-    monkeypatch.setattr(halfsets, "figure_out_halfsets", lambda _a: computed)
-    monkeypatch.setattr(halfsets, "make_dataset_loader_dict", lambda _a: {"particles_file": "p.star"})
+    monkeypatch.setattr(halfsets, "resolve_halfset_indices", lambda _a: computed)
+    expected_spec = halfsets.HalfsetDatasetSpec(particles_file="p.star")
+    monkeypatch.setattr(halfsets.HalfsetDatasetSpec, "from_args", classmethod(lambda cls, _a: expected_spec))
     called = {}
 
-    def _fake_get_split(**kwargs):
+    def _fake_get_split(spec, **kwargs):
+        called["spec"] = spec
         called["v"] = kwargs
         return "ok"
 
-    monkeypatch.setattr(halfsets, "get_split_datasets", _fake_get_split)
-    out = dataset.load_dataset_from_args(args, lazy=False, ind_split=None)
+    monkeypatch.setattr(halfsets, "load_halfset_dataset", _fake_get_split)
+    out = halfsets.load_halfset_dataset_from_args(args, lazy=False, ind_split=None)
     assert out == "ok"
+    assert called["spec"] == expected_spec
     assert called["v"]["ind_split"] is computed
     assert called["v"]["lazy"] is False
 
 
-def test_make_dataset_loader_dict_without_strip_prefix_attr():
+def test_halfset_dataset_spec_from_args_without_strip_prefix_attr():
     args = SimpleNamespace(
         particles="p.star",
         ctf="c.pkl",
@@ -1324,11 +1402,11 @@ def test_make_dataset_loader_dict_without_strip_prefix_attr():
         dose_per_tilt=2.9,
         premultiplied_ctf=False,
     )
-    out = dataset.make_dataset_loader_dict(args)
-    assert out["strip_prefix"] is None
+    out = halfsets.HalfsetDatasetSpec.from_args(args)
+    assert out.strip_prefix is None
 
 
-def test_get_split_datasets_calls_loader_once(monkeypatch):
+def test_load_halfset_dataset_calls_loader_once(monkeypatch):
     calls = []
 
     class _FakeDataset:
@@ -1344,15 +1422,18 @@ def test_get_split_datasets_calls_loader_once(monkeypatch):
 
     monkeypatch.setattr(dataset, "load_dataset", _fake_load)
     ind_split = [np.array([2, 0], dtype=np.int32), np.array([5], dtype=np.int32)]
-    out = dataset.get_split_datasets(
+    spec = halfsets.HalfsetDatasetSpec(
         particles_file="particles.mrcs",
         poses_file="poses.pkl",
         ctf_file="ctf.pkl",
         datadir="/tmp/data",
-        ind_split=ind_split,
-        lazy=True,
         tilt_series=True,
         tilt_series_ctf="relion5",
+    )
+    out = halfsets.load_halfset_dataset(
+        spec,
+        ind_split=ind_split,
+        lazy=True,
     )
     # Load-once: load_dataset called exactly once with the union
     assert len(calls) == 1
@@ -1389,7 +1470,7 @@ def test_subsample_cryoem_dataset_reindexes_and_slices_metadata():
     cryo = dataset.CryoEMDataset(
         image_source=stack,
         voxel_size=1.5,
-        metadata=dataset.Metadata(rots, trans, ctf_params),
+        metadata=dataset.ImageMetadata(rots, trans, ctf_params),
     )
 
     sub = dataset.subsample_cryoem_dataset(cryo, np.array([True, False, True, False, True]))
@@ -1433,7 +1514,7 @@ def test_subsample_cryoem_dataset_preserves_premultiplied_ctf_flag():
     cryo = dataset.CryoEMDataset(
         image_source=stack,
         voxel_size=1.5,
-        metadata=dataset.Metadata(rots, trans, ctf_params),
+        metadata=dataset.ImageMetadata(rots, trans, ctf_params),
         premultiplied_ctf=True,
     )
 
@@ -1450,7 +1531,7 @@ def _make_subset_cryo(backing_stack, subset_indices):
     cryo = dataset.CryoEMDataset(
         image_source=backing_stack,
         voxel_size=1.5,
-        metadata=dataset.Metadata(rots, trans, ctf_params),
+        metadata=dataset.ImageMetadata(rots, trans, ctf_params),
     )
     return cryo.subset(np.asarray(subset_indices, dtype=np.int32))
 
@@ -1609,7 +1690,7 @@ def test_subsampled_image_stack_prefers_backing_image_subset_generator_when_avai
     cryo = dataset.CryoEMDataset(
         image_source=backing,
         voxel_size=1.5,
-        metadata=dataset.Metadata(rots, trans, ctf_params),
+        metadata=dataset.ImageMetadata(rots, trans, ctf_params),
         tilt_series_flag=True,
     )
     sub = cryo.subset(np.array([7, 2, 4, 1], dtype=np.int32))
@@ -1870,7 +1951,7 @@ def test_subsample_cryoem_dataset_preserves_duplicate_requested_indices():
     cryo = dataset.CryoEMDataset(
         image_source=stack,
         voxel_size=1.5,
-        metadata=dataset.Metadata(rots, trans, ctf_params),
+        metadata=dataset.ImageMetadata(rots, trans, ctf_params),
     )
 
     requested = np.array([4, 1, 4], dtype=np.int32)
@@ -1890,7 +1971,7 @@ def test_subsample_cryoem_dataset_rejects_non_1d_boolean_mask():
     cryo = dataset.CryoEMDataset(
         image_source=None,
         voxel_size=1.5,
-        metadata=dataset.Metadata(rots, trans, ctf_params),
+        metadata=dataset.ImageMetadata(rots, trans, ctf_params),
         grid_size=4,
     )
 
@@ -1906,7 +1987,7 @@ def test_subsample_cryoem_dataset_rejects_wrong_length_boolean_mask():
     cryo = dataset.CryoEMDataset(
         image_source=None,
         voxel_size=1.5,
-        metadata=dataset.Metadata(rots, trans, ctf_params),
+        metadata=dataset.ImageMetadata(rots, trans, ctf_params),
         grid_size=4,
     )
 
@@ -1922,7 +2003,7 @@ def test_subsample_cryoem_dataset_rejects_out_of_range_indices():
     cryo = dataset.CryoEMDataset(
         image_source=None,
         voxel_size=1.5,
-        metadata=dataset.Metadata(rots, trans, ctf_params),
+        metadata=dataset.ImageMetadata(rots, trans, ctf_params),
         grid_size=4,
     )
 
@@ -1934,10 +2015,10 @@ def test_get_split_indices_from_empty_ind_file_raises(tmp_path):
     with open(ind_file, "wb") as f:
         pickle.dump(np.array([], dtype=np.int32), f)
     with pytest.raises(ValueError, match="No valid indices found"):
-        dataset.get_split_indices("unused.star", ind_file=str(ind_file))
+        halfsets.get_split_indices("unused.star", ind_file=str(ind_file))
 
 
-def test_figure_out_halfsets_tilt_series_with_halfsets_file_uses_tilt_splitter(monkeypatch):
+def test_resolve_halfset_indices_tilt_series_with_halfsets_file_uses_tilt_splitter(monkeypatch):
     captured = {}
 
     def _fake_get_split_tilt_indices(*args, **kwargs):
@@ -1958,7 +2039,7 @@ def test_figure_out_halfsets_tilt_series_with_halfsets_file_uses_tilt_splitter(m
     )
 
     monkeypatch.setattr(halfsets, "get_split_tilt_indices", _fake_get_split_tilt_indices)
-    out = dataset.figure_out_halfsets(args)
+    out = halfsets.resolve_halfset_indices(args)
 
     np.testing.assert_array_equal(out[0], np.array([0, 2], dtype=np.int32))
     np.testing.assert_array_equal(out[1], np.array([1, 3], dtype=np.int32))

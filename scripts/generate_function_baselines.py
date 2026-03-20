@@ -97,9 +97,14 @@ def main():
     ctf_file = os.path.join(dataset_dir, "ctf.pkl")
 
     ind_split = dataset.get_split_indices(particles_file)
-    cryos = dataset.get_split_datasets(
-        particles_file, poses_file, ctf_file,
-        datadir=None, ind_split=ind_split, lazy=True
+    dataset_spec = dataset.HalfsetDatasetSpec(
+        particles_file=particles_file,
+        poses_file=poses_file,
+        ctf_file=ctf_file,
+        datadir=None,
+    )
+    cryos = dataset.load_halfset_dataset(
+        dataset_spec, ind_split=ind_split, lazy=True
     )
     volume_shape = cryos[0].volume_shape
     volume_size = cryos[0].volume_size

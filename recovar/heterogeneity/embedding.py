@@ -183,19 +183,15 @@ def get_per_image_embedding(mean, u, s, basis_size, dataset, volume_mask, gpu_me
         from recovar.heterogeneity import covariance_estimation
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, dataset.volume_shape, gpu_memory= None)
 
-    # Iterate over half-sets. Tilt-series uses an independent reload so the
-    # grouped particle iterator exactly matches the original file-backed layout.
-    # SPA uses a lightweight local subset view.
+    # Materialize half-sets once per embedding call. Lazy datasets use
+    # independent halfset reloads because they avoid the per-batch remap work
+    # inside SubsetImageSource while preserving the same image ordering.
+    halfset_datasets = dataset.materialize_halfset_datasets()
     zs = [None, None]
     cov_zs = [None, None]
     est_contrasts = [None, None]
     bias = [None, None]
-    for halfset_id in range(2):
-        halfset_dataset = dataset.get_halfset_dataset(
-            halfset_id,
-            independent=bool(getattr(dataset, 'tilt_series_flag', False)),
-            lazy=True,
-        )
+    for halfset_id, halfset_dataset in enumerate(halfset_datasets):
         zs[halfset_id], cov_zs[halfset_id], est_contrasts[halfset_id], bias[halfset_id] = get_coords_in_basis_and_contrast_3(
             halfset_dataset, mean, basis, eigenvalues[:basis.shape[0]], volume_mask,
              contrast_grid, batch_size, disc_type,
@@ -1279,8 +1275,8 @@ def get_per_image_embedding_multi_zdim(
     zs_reg   = {k: _alloc(k) for k in n_pcs_list}
     zs_noreg = {k: _alloc(k) for k in n_pcs_list}
 
-    for halfset_id in range(2):
-        halfset_dataset = dataset.get_halfset_dataset(halfset_id, independent=False)
+    halfset_datasets = dataset.materialize_halfset_datasets()
+    for halfset_id, halfset_dataset in enumerate(halfset_datasets):
         config = ForwardModelConfig.from_dataset(
             halfset_dataset, disc_type=actual_disc_type,
             process_fn=halfset_dataset.process_images,

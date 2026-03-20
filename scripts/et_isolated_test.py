@@ -36,7 +36,7 @@ def main():
         from recovar.output import plot_utils, metrics as gt_metrics
         from recovar.simulation import synthetic_dataset
         from recovar import utils
-        from recovar.data_io import cryoem_dataset as dataset
+        from recovar.data_io import halfsets
         from recovar.reconstruction import homogeneous, noise
         from recovar.heterogeneity import covariance_estimation, principal_components, embedding
         from recovar.core import mask, linalg
@@ -73,14 +73,19 @@ def main():
         with open(args.halfsets, "rb") as f:
             ind_split = pickle.load(f)
         logger.info("Using pre-computed halfsets from %s", args.halfsets)
-    elif hasattr(dataset, 'get_split_tilt_indices'):
-        ind_split = dataset.get_split_tilt_indices(particles_file)
     else:
-        ind_split = dataset.get_split_indices(particles_file)
+        ind_split = halfsets.get_split_tilt_indices(particles_file)
     logger.info("half0: %d images, half1: %d images", len(ind_split[0]), len(ind_split[1]))
-    cryos = dataset.get_split_datasets(particles_file, poses_file, ctf_file,
-                                        datadir=None, ind_split=ind_split, lazy=True,
-                                        tilt_series=True)
+    dataset_spec = halfsets.HalfsetDatasetSpec(
+        particles_file=particles_file,
+        poses_file=poses_file,
+        ctf_file=ctf_file,
+        datadir=None,
+        tilt_series=True,
+    )
+    cryos = halfsets.load_halfset_dataset(
+        dataset_spec, ind_split=ind_split, lazy=True
+    )
     voxel_size = cryos[0].voxel_size
 
     # Step 1: Mean

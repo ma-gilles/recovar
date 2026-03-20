@@ -109,7 +109,11 @@ def test_analyze_reads_particles_halfsets_once(monkeypatch, tmp_path):
 
     monkeypatch.setattr(analyze_cmd.o, "PipelineOutput", _make_po)
     monkeypatch.setattr(analyze_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(analyze_cmd.dataset, "reorder_to_original_indexing_from_halfsets", lambda arr, _h: np.asarray(arr))
+    monkeypatch.setattr(
+        analyze_cmd.cryoem_dataset,
+        "reorder_to_original_indexing_from_halfsets",
+        lambda arr, _h: np.asarray(arr),
+    )
     monkeypatch.setattr(analyze_cmd.utils, "basic_config_logger", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         analyze_cmd.latent_density,
@@ -165,7 +169,11 @@ def test_analyze_runs_centers_and_trajectories_with_density(monkeypatch, tmp_pat
     }
     monkeypatch.setattr(analyze_cmd.o, "PipelineOutput", _fake_pipeline_output(payload))
     monkeypatch.setattr(analyze_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(analyze_cmd.dataset, "reorder_to_original_indexing_from_halfsets", lambda arr, _h: arr)
+    monkeypatch.setattr(
+        analyze_cmd.cryoem_dataset,
+        "reorder_to_original_indexing_from_halfsets",
+        lambda arr, _h: arr,
+    )
     monkeypatch.setattr(analyze_cmd.utils, "basic_config_logger", lambda *_args, **_kwargs: None)
 
     calls = {"reweighted": [], "traj": []}
@@ -272,7 +280,11 @@ def test_analyze_uses_embedding_component_api_when_available(monkeypatch, tmp_pa
         "set_contrasts_in_cryos",
         lambda _cryos, contrasts: captured.setdefault("contrast_dtype", np.asarray(contrasts).dtype),
     )
-    monkeypatch.setattr(analyze_cmd.dataset, "reorder_to_original_indexing_from_halfsets", lambda arr, _h: np.asarray(arr))
+    monkeypatch.setattr(
+        analyze_cmd.cryoem_dataset,
+        "reorder_to_original_indexing_from_halfsets",
+        lambda arr, _h: np.asarray(arr),
+    )
     monkeypatch.setattr(analyze_cmd.utils, "basic_config_logger", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         analyze_cmd.latent_density,

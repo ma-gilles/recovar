@@ -7,26 +7,42 @@ cryo-ET data.
 
 ```mermaid
 flowchart TD
-    A[particles file<br/>.star / .cs / stack path] --> B[image_sources.py<br/>file access + lazy/eager subset views]
-    A --> C[metadata_readers.py<br/>poses + CTF extraction]
-    C --> D[image_metadata.py<br/>typed metadata arrays]
-    B --> E[cryoem_dataset.py<br/>CryoEMDataset]
-    D --> E
-    F[halfsets.py<br/>split policy] --> E
-    G[_index_utils.py<br/>local/original image/group/particle remaps] --> B
-    G --> E
+    A[CLI / pipeline args] --> B[halfsets.py<br/>split policy + halfset loading]
+    A --> C[cryoem_dataset.py<br/>load_dataset(...)]
+    C --> D[image_sources.py<br/>image source assembly]
+    C --> E[metadata_readers.py<br/>STAR / CS metadata parsing]
+    D --> F[image_backends.py<br/>file-backed SPA / cryo-ET loaders]
+    F --> G[image_loader.py<br/>MRC / MRCS / HDF5 I/O]
+    E --> H[image_metadata.py<br/>ImageMetadata]
+    D --> I[_index_utils.py<br/>image/group remapping]
+    B --> I
+    D --> J[cryoem_dataset.py<br/>CryoEMDataset]
+    H --> J
+    I --> J
+    B --> J
+    J --> K[iter_batches(...)]
+    K --> L[pipeline / compute_state / analyze]
 ```
 
 ```text
-load_dataset(...)
-  -> create_image_source(...)
-       -> image_loader.py / image_backends.py backend access
-  -> metadata_readers.py
-       -> image_metadata.py
-  -> CryoEMDataset
-       -> iter_batches(...)
-       -> subset(...)
-       -> halfsets.py for split logic
+SPA / cryo-ET load path
+  -> cryoem_dataset.load_dataset(...)
+       -> image_sources.create_image_source(...)
+            -> image_backends.py
+            -> image_loader.py
+       -> metadata_readers.auto_parse_poses / auto_parse_ctf
+            -> image_metadata.ImageMetadata
+       -> CryoEMDataset(...)
+
+Halfset / subset path
+  -> halfsets.get_split_indices / get_split_tilt_indices
+  -> halfsets.load_halfset_dataset / load_halfset_dataset_from_args
+  -> CryoEMDataset with halfset_indices
+
+Downstream runtime path
+  -> CryoEMDataset.iter_batches(...)
+  -> explicit tuples:
+     (images, rotation_matrices, translations, ctf_params, noise_variance, particle_indices, image_indices)
 
 Cross-cutting indexing
   _index_utils.py
@@ -41,7 +57,15 @@ Keep these responsibilities separate:
 - `cryoem_dataset.py` is the only high-level coordinator and batch iterator surface.
 - `halfsets.py` owns split policy and halfset bookkeeping.
 - `_index_utils.py` owns image/group/particle remapping logic.
-- `image_backends.py` owns the low-level stack and tilt-series loaders used underneath image sources.
+- `image_backends.py` owns only the low-level stack and tilt-series loaders used underneath image sources.
+
+Public surface used by the main runtime:
+
+- `cryoem_dataset.load_dataset`
+- `halfsets.load_halfset_dataset`
+- `halfsets.load_halfset_dataset_from_args`
+- `CryoEMDataset.iter_batches`
+- `CryoEMDataset.subset`
 
 ## cryoem_dataset
 

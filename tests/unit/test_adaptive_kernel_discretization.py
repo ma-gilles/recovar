@@ -106,6 +106,60 @@ def test_find_diagonal_pol_indices_degree1():
     assert np.all(idx < n_flat)
 
 
+def test_pad_noise_variance_for_fixed_batch_marks_padded_rows_infinite():
+    noise = np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
+    padded = akd._pad_noise_variance_for_fixed_batch(
+        noise,
+        current_batch_size=2,
+        target_batch_size=4,
+    )
+
+    assert padded.shape == (4, 3)
+    np.testing.assert_array_equal(
+        padded[:2],
+        np.array([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]], dtype=np.float32),
+    )
+    assert np.isinf(padded[2:]).all()
+
+
+def test_pad_heterogeneity_kernel_batch_preserves_valid_rows_and_zero_weights_padding():
+    images = np.arange(2 * 4 * 4, dtype=np.float32).reshape(2, 4, 4)
+    rotation_matrices = np.tile(np.eye(3, dtype=np.float32), (2, 1, 1))
+    translations = np.arange(4, dtype=np.float32).reshape(2, 2)
+    ctf_params = np.arange(18, dtype=np.float32).reshape(2, 9)
+    noise_variance = np.array([[5.0, 6.0, 7.0, 8.0]], dtype=np.float32)
+
+    padded = akd._pad_heterogeneity_kernel_batch(
+        images,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        noise_variance,
+        target_batch_size=4,
+    )
+    padded_images, padded_rots, padded_trans, padded_ctf, padded_noise = padded
+
+    assert padded_images.shape == (4, 4, 4)
+    assert padded_rots.shape == (4, 3, 3)
+    assert padded_trans.shape == (4, 2)
+    assert padded_ctf.shape == (4, 9)
+    assert padded_noise.shape == (4, 4)
+
+    np.testing.assert_array_equal(padded_images[:2], images)
+    np.testing.assert_array_equal(padded_rots[:2], rotation_matrices)
+    np.testing.assert_array_equal(padded_trans[:2], translations)
+    np.testing.assert_array_equal(padded_ctf[:2], ctf_params)
+    np.testing.assert_array_equal(
+        padded_noise[:2],
+        np.array([[5.0, 6.0, 7.0, 8.0], [5.0, 6.0, 7.0, 8.0]], dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        padded_images[2:],
+        np.zeros((2, 4, 4), dtype=np.float32),
+    )
+    assert np.isinf(padded_noise[2:]).all()
+
+
 # ---------------------------------------------------------------------------
 # Tier 2 – JAX-traced functions on tiny synthetic inputs
 # ---------------------------------------------------------------------------

@@ -15,17 +15,12 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.heterogeneity.latent_density as ld
 from recovar import utils
 from recovar.core import linalg
-from recovar.data_io import cryoem_dataset as dataset
+from recovar.data_io import cryoem_dataset, halfsets
 from recovar.heterogeneity import embedding, trajectory
 from recovar.output.output_paths import ResultPaths
 from recovar.reconstruction import regularization
 
 logger = logging.getLogger(__name__)
-
-## TODO: this file needs some major refactoring, splitting functions etc, and removing the stales ones
-
-## TODO: These should probably be elsewhere or delelted. This are use for trajectories
-## Probably that trajectories stuff should have its own directory, along with estiamte conformational density stuff
 def get_resampled_distances(gt_vols):
     return trajectory.get_cum_curvelength(gt_vols)
 
@@ -948,7 +943,11 @@ class PipelineOutput:
             return utils.pickle_load(self.paths.covariance_cols)
 
         elif key in ('dataset', 'lazy_dataset'):
-            ds = dataset.load_dataset_from_args(self.get('input_args'), lazy='lazy' in key, ind_split=self.get('halfsets'))
+            ds = halfsets.load_halfset_dataset_from_args(
+                self.get('input_args'),
+                lazy='lazy' in key,
+                ind_split=self.get('halfsets'),
+            )
             add_noise_to_loaded_dataset(ds, self.get('noise_var_used'))
             return ds
 

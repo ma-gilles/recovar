@@ -149,6 +149,9 @@ class _DummyCryo:
         _ = (independent, lazy)
         return self.subset(self.halfset_local_image_indices(halfset_id))
 
+    def materialize_halfset_datasets(self):
+        return tuple(self.get_halfset_dataset(halfset_id) for halfset_id in range(2))
+
 
 def test_get_per_image_embedding_clamps_batch_size_to_at_least_one(monkeypatch):
     ds = _DummyCryo(volume_size=4, image_size=16, n_images=5)
@@ -292,6 +295,12 @@ def test_get_per_image_embedding_uses_independent_halfset_datasets_for_tilt_seri
         def get_halfset_dataset(self, halfset_id, *, independent=False, lazy=None):
             self.calls.append((halfset_id, independent, lazy))
             return _HalfsetCryo(len(self.halfset_indices[halfset_id]))
+
+        def materialize_halfset_datasets(self):
+            return tuple(
+                self.get_halfset_dataset(halfset_id, independent=True, lazy=True)
+                for halfset_id in range(2)
+            )
 
     ds = _TiltCryo()
     mean = np.zeros((4,), dtype=np.complex64)

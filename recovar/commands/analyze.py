@@ -8,7 +8,7 @@ import os
 import numpy as np
 
 from recovar import utils
-from recovar.data_io import cryoem_dataset as dataset
+from recovar.data_io import cryoem_dataset
 from recovar.heterogeneity import latent_density, embedding
 from recovar.output import output as o
 from recovar.utils import parser_args
@@ -178,7 +178,7 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     particles_halfsets = po.get("particles_halfsets")
 
     def reorder(array):
-        return dataset.reorder_to_original_indexing_from_halfsets(array, particles_halfsets)
+        return cryoem_dataset.reorder_to_original_indexing_from_halfsets(array, particles_halfsets)
 
     o.mkdir_safe(output_folder)
     utils.basic_config_logger(output_folder)

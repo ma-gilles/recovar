@@ -14,7 +14,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-from recovar.data_io import cryoem_dataset as dataset, load_utils
+from recovar.data_io import cryoem_dataset, load_utils
 from recovar.reconstruction import noise
 
 CONSTANT_CTF=False
@@ -554,8 +554,8 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
     else:
         ctf_evaluator = core.CTFEvaluator()
 
-    main_dataset = dataset.CryoEMDataset( None, voxel_size,
-                              dataset.Metadata(rots, trans, ctf_params), ctf_evaluator = ctf_evaluator, grid_size = grid_size)
+    main_dataset = cryoem_dataset.CryoEMDataset( None, voxel_size,
+                              cryoem_dataset.ImageMetadata(rots, trans, ctf_params), ctf_evaluator = ctf_evaluator, grid_size = grid_size)
     
     # cubic interpolation uses ~4x more GPU memory per image than linear
     mult = 0.5 if 'cubic' in disc_type else 5
@@ -581,8 +581,8 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         trans_2/= np.linalg.norm(trans_2, axis =-1,keepdims=True)
         # Move the center by around twice the radius
         trans_2 *= 2 * volume_radius * volume_shape[0] / 2
-        other_particles_dataset = dataset.CryoEMDataset( None, voxel_size,
-                                dataset.Metadata(rots_2, trans_2, ctf_params), ctf_evaluator = ctf_evaluator, grid_size = grid_size)
+        other_particles_dataset = cryoem_dataset.CryoEMDataset( None, voxel_size,
+                                cryoem_dataset.ImageMetadata(rots_2, trans_2, ctf_params), ctf_evaluator = ctf_evaluator, grid_size = grid_size)
         # No noise in this stack.
         extra_particles_image_stack = simulate_data(other_particles_dataset, volumes,  noise_variance * 0 ,  batch_size, image_assignments, per_image_noise_scale_2, per_image_noise_scale, seed =0, disc_type = disc_type, mrc_file = None, pad_before_translate= True, premultiplied_ctf=premultiplied_ctf )
 
@@ -600,8 +600,8 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         ctf_params_3, rots_3, trans_3 = dataset_param_generator(n_outlier_images, grid_size)
         outlier_contrast, outlier_noise_scale = generate_contrast_params(n_outlier_images, noise_scale_std, contrast_std )
 
-        outlier_particle_dataset = dataset.CryoEMDataset( None, voxel_size,
-                                dataset.Metadata(rots_3, trans_3, ctf_params_3), ctf_evaluator = ctf_evaluator, grid_size = grid_size)
+        outlier_particle_dataset = cryoem_dataset.CryoEMDataset( None, voxel_size,
+                                cryoem_dataset.ImageMetadata(rots_3, trans_3, ctf_params_3), ctf_evaluator = ctf_evaluator, grid_size = grid_size)
         
         outlier_particle_image_stack = simulate_data(outlier_particle_dataset, outlier_volume[None],  noise_variance ,  batch_size, np.zeros(n_outlier_images, dtype = int), outlier_noise_scale, outlier_contrast, seed =1, disc_type = disc_type, mrc_file = None , premultiplied_ctf=premultiplied_ctf)
 
@@ -630,8 +630,8 @@ def generate_simulated_dataset(volumes, voxel_size, volume_distribution, n_image
         tilt_outlier_contrast, tilt_outlier_noise_scale = generate_contrast_params(n_images_outliers, noise_scale_std, contrast_std)
         
         # Create dataset for tilt outliers
-        tilt_outlier_dataset = dataset.CryoEMDataset(None, voxel_size,
-                                                    dataset.Metadata(rots_tilt_outliers, trans_tilt_outliers, ctf_params_tilt_outliers),
+        tilt_outlier_dataset = cryoem_dataset.CryoEMDataset(None, voxel_size,
+                                                    cryoem_dataset.ImageMetadata(rots_tilt_outliers, trans_tilt_outliers, ctf_params_tilt_outliers),
                                                     ctf_evaluator=ctf_evaluator, grid_size=grid_size)
         
         # Generate tilt outlier images

@@ -744,7 +744,7 @@ def preprocess_covariance_batch(
         rotation_matrices, config.image_shape, config.volume_shape)
 
     # 6. Tilt labels (from particle_indices)
-    # particle_indices from JAXDataLoader(batch_size=1) is per-particle (shape (1,)),
+    # particle_indices from the per-particle tilt-series loader (batch_size=1) is shape (1,),
     # but we need per-image labels for the scatter-add in group_sum_by_labels.
     # Broadcast the single particle index to match all images in the tilt-series batch.
     tilt_labels = particle_indices

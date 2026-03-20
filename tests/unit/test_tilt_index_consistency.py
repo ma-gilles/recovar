@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from recovar.data_io import image_backends as cryo_dataset, cryoem_dataset as dataset, starfile
+from recovar.data_io import image_backends as cryo_dataset, cryoem_dataset as dataset, halfsets, starfile
 from recovar.data_io._index_utils import TiltSeriesOriginalIndexMap
 
 pytestmark = pytest.mark.unit
@@ -143,7 +143,7 @@ def test_get_split_tilt_indices_with_precomputed_particle_halfsets_is_stable(tmp
         # One half contains particle 0, other half contains particle 2.
         pickle.dump([np.array([0, 1], dtype=np.int32), np.array([2], dtype=np.int32)], f)
 
-    split = dataset.get_split_tilt_indices(
+    split = halfsets.get_split_tilt_indices(
         particles_file=str(star_path),
         ind_file=str(ind_file),
         tilt_ind_file=str(tilt_ind_file),
@@ -174,7 +174,7 @@ def test_get_split_tilt_indices_precomputed_halfsets_respected_with_image_filter
         # Explicit split: half0 has particles 0 and 2, half1 has particle 1.
         pickle.dump([np.array([0, 2], dtype=np.int32), np.array([1], dtype=np.int32)], f)
 
-    split = dataset.get_split_tilt_indices(
+    split = halfsets.get_split_tilt_indices(
         particles_file=str(star_path),
         ind_file=str(ind_file),
         datadir=str(tmp_path),
@@ -285,7 +285,7 @@ def test_get_split_tilt_indices_random_split_has_disjoint_complete_coverage(tmp_
     with open(ind_file, "wb") as f:
         pickle.dump(np.arange(8, dtype=np.int32), f)
 
-    split = dataset.get_split_tilt_indices(
+    split = halfsets.get_split_tilt_indices(
         particles_file=str(star_path),
         ind_file=str(ind_file),
         datadir=str(tmp_path),
@@ -301,7 +301,7 @@ def test_get_split_tilt_indices_with_ntilts_filters_per_particle(tmp_path):
     # gA -> [1,4], gB -> [0,3,6], gC -> [2,5,7]
     # RELION5 ordering in fixture (higher dose first):
     # gA keeps tilt-order ranks [4,1] => with ntilts=1 keep one per particle in get_split_tilt_indices by tilt_numbers < 1.
-    split = dataset.get_split_tilt_indices(
+    split = halfsets.get_split_tilt_indices(
         particles_file=str(star_path),
         ntilts=1,
         datadir=str(tmp_path),
@@ -323,6 +323,6 @@ def test_particle_subset_max_tilts_matches_parent_counts(tmp_path):
         random_tilts=False,
         tilt_file_option="relion5",
     )
-    subset = cryo_dataset.ParticleSubset(ds, np.array([1, 2], dtype=np.int32))
+    subset = cryo_dataset._SimpleSubset(ds, np.array([1, 2], dtype=np.int32))
     # both chosen particles have >=2 tilts; max should be 2 due to num_tilts cap.
-    assert subset._max_tilts_per_particle() == 2
+    assert cryo_dataset._max_tilts_per_dataset_view(subset) == 2

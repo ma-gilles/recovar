@@ -111,7 +111,7 @@ def test_compute_embedding_uses_saved_z_keys(monkeypatch):
     calls = []
 
     monkeypatch.setattr(compute_embedding.o, "load_results_new", lambda _p: fake_results)
-    monkeypatch.setattr(compute_embedding.dataset, "load_dataset_from_args", lambda _a: "cryos")
+    monkeypatch.setattr(compute_embedding.halfsets, "load_halfset_dataset_from_args", lambda _a: "cryos")
     monkeypatch.setattr(compute_embedding.utils, "make_algorithm_options", lambda _a: SimpleNamespace(contrast="none"))
     monkeypatch.setattr(compute_embedding.utils, "get_gpu_memory_total", lambda: 16)
 
@@ -156,7 +156,7 @@ def test_compute_embedding_falls_back_to_input_args_zdim(monkeypatch):
     calls = []
 
     monkeypatch.setattr(compute_embedding.o, "load_results_new", lambda _p: fake_results)
-    monkeypatch.setattr(compute_embedding.dataset, "load_dataset_from_args", lambda _a: "cryos")
+    monkeypatch.setattr(compute_embedding.halfsets, "load_halfset_dataset_from_args", lambda _a: "cryos")
     monkeypatch.setattr(compute_embedding.utils, "make_algorithm_options", lambda _a: SimpleNamespace(contrast="none"))
     monkeypatch.setattr(compute_embedding.utils, "get_gpu_memory_total", lambda: 16)
     monkeypatch.setattr(

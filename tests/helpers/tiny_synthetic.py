@@ -76,7 +76,7 @@ def make_tiny_cryo_dataset(grid_size=4, n_images=8, seed=0):
     _, ctf_params, rots, trans, _, voxel_size, _ = make_tiny_simulation(
         grid_size=grid_size, n_images=n_images, seed=seed
     )
-    metadata = dataset.Metadata(rots, trans, ctf_params)
+    metadata = dataset.ImageMetadata(rots, trans, ctf_params)
     cryo = dataset.CryoEMDataset(
         image_source=None,
         voxel_size=voxel_size,
@@ -143,7 +143,7 @@ def make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8, seed=0):
         seed=seed,
     )
     image_stack = TinyFTImageStack(images)
-    metadata = dataset.Metadata(rots, trans, ctf_params)
+    metadata = dataset.ImageMetadata(rots, trans, ctf_params)
     cryo = dataset.CryoEMDataset(
         image_source=image_stack,
         voxel_size=voxel_size,

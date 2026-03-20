@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 
-class MetadataStore:
+class ImageMetadata:
     """Per-image metadata store.
 
     This class owns only metadata arrays. It has no loading, iteration,
@@ -118,7 +118,7 @@ class MetadataStore:
         self._ctf_params[row_indices, col] *= multiplier
 
     def subset(self, indices):
-        return MetadataStore(
+        return ImageMetadata(
             self._rotation_matrices[indices],
             self._translations[indices],
             self._ctf_params[indices],
@@ -126,6 +126,3 @@ class MetadataStore:
             ctf_dtype=self.ctf_dtype,
             real_dtype=self.real_dtype,
         )
-
-
-Metadata = MetadataStore

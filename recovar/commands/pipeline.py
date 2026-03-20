@@ -8,7 +8,7 @@ import os, argparse, time, sys
 from recovar import utils
 from recovar.reconstruction import homogeneous, noise
 from recovar.output import output
-from recovar.data_io import cryoem_dataset as dataset
+from recovar.data_io import cryoem_dataset, halfsets
 from recovar.core import mask
 from recovar.heterogeneity import embedding, principal_components, covariance_estimation
 from recovar.output.output_paths import ResultPaths
@@ -647,27 +647,23 @@ def standard_recovar_pipeline(args):
             args.strip_prefix = None
 
     # --- Load dataset ---
-    # NOTE(refactor): the dict-based dataset loading (make_dataset_loader_dict →
-    # get_split_datasets_from_dict) is verbose but also used by standalone
-    # scripts in em/ and ppca/.  A future cleanup could wrap this in a single
-    # load_halfset_datasets(args) helper that returns (cryos, ind_split).
-    ind_split = dataset.figure_out_halfsets(args)
-    dataset_loader_dict = dataset.make_dataset_loader_dict(args)
+    ind_split = halfsets.resolve_halfset_indices(args)
+    dataset_spec = halfsets.HalfsetDatasetSpec.from_args(args)
     logger.info("Data loading configuration:")
-    logger.info("  Particles file: %s", dataset_loader_dict['particles_file'])
-    logger.info("  Poses file: %s", dataset_loader_dict.get('poses_file', '(auto-extract from particles)'))
-    logger.info("  CTF file: %s", dataset_loader_dict.get('ctf_file', '(auto-extract from particles)'))
-    if dataset_loader_dict.get('downsample_D'):
-        logger.info("  Downsample to: %s", dataset_loader_dict['downsample_D'])
-    if dataset_loader_dict.get('datadir'):
-        logger.info("  Datadir: %s", dataset_loader_dict['datadir'])
+    logger.info("  Particles file: %s", dataset_spec.particles_file)
+    logger.info("  Poses file: %s", dataset_spec.poses_file or "(auto-extract from particles)")
+    logger.info("  CTF file: %s", dataset_spec.ctf_file or "(auto-extract from particles)")
+    if dataset_spec.downsample_D:
+        logger.info("  Downsample to: %s", dataset_spec.downsample_D)
+    if dataset_spec.datadir:
+        logger.info("  Datadir: %s", dataset_spec.datadir)
 
     options = utils.make_algorithm_options(args)
 
     ## TODO this is a big one, so do with care. I wonder if there is a better way to handle this logic.
     ## Could we instead store 'one' dataset and the indices instead of two different objects, then do a clevery use of iterators
     ## The current way to just have two of these objects around which is not great.
-    ds = dataset.get_split_datasets(**dataset_loader_dict, ind_split=ind_split, lazy=args.lazy)
+    ds = halfsets.load_halfset_dataset(dataset_spec, ind_split=ind_split, lazy=args.lazy)
 
     ## TODO: log this. Also document it better. Also I'd like a warning or something if I say "allocate this much" and peak gpu memory ends up being more than that
     ## So that it can be fixed in the future
@@ -692,7 +688,7 @@ def standard_recovar_pipeline(args):
 
     # --- Initial noise estimate from half-map 0 ---
     # Preserve main-branch behavior exactly: the initial scalar noise estimate
-    # comes from the first halfset dataset, not from the unified full dataset.
+    # comes from the first halfset dataset, not from the unified full cryoem_dataset.
     noise_estimate_dataset = ds.get_halfset_dataset(
         0,
         independent=bool(ds.tilt_series_flag),
@@ -737,8 +733,8 @@ def standard_recovar_pipeline(args):
             contrasts_for_second /= np.mean(contrasts_for_second)
             # est_contrasts is in halfset-concatenated order (per-image);
             # reindex to original dataset order before applying to the
-            # unified dataset.  Always image-level, even for tilt-series.
-            contrasts_local = dataset.reorder_to_dataset_indexing(
+            # unified cryoem_dataset.  Always image-level, even for tilt-series.
+            contrasts_local = cryoem_dataset.reorder_to_dataset_indexing(
                 contrasts_for_second, ds,
                 use_tilt_indices=False)
             ds.set_contrasts(contrasts_local)
@@ -923,10 +919,10 @@ def standard_recovar_pipeline(args):
         n_pcs_to_use = (num_foc_masks - 1) * zdim_for_rest + zdim
         try:
             # Reorder halfset-concatenated arrays (per-image) to original
-            # dataset order for iteration over the unified dataset.
-            contrasts_local_resid = dataset.reorder_to_dataset_indexing(
+            # dataset order for iteration over the unified cryoem_dataset.
+            contrasts_local_resid = cryoem_dataset.reorder_to_dataset_indexing(
                 est_contrasts[zdim], ds, use_tilt_indices=False)
-            coords_local_resid = dataset.reorder_to_dataset_indexing(
+            coords_local_resid = cryoem_dataset.reorder_to_dataset_indexing(
                 latent_coords[zdim], ds, use_tilt_indices=False)
             noise_var_from_het_residual, _, _ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(
                 ds, dilated_volume_mask, means.combined, u['rescaled'][:, :n_pcs_to_use],
@@ -1012,10 +1008,10 @@ def standard_recovar_pipeline(args):
     for entry in embedding_dict:
         for key in embedding_dict[entry]:
             if entry.startswith('contrasts') and args.tilt_series and ('shared' not in options.contrast):
-                embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(
+                embedding_dict[entry][key] = cryoem_dataset.reorder_to_original_indexing_from_halfsets(
                     embedding_dict[entry][key], ind_split)
             else:
-                embedding_dict[entry][key] = dataset.reorder_to_original_indexing_from_halfsets(
+                embedding_dict[entry][key] = cryoem_dataset.reorder_to_original_indexing_from_halfsets(
                     embedding_dict[entry][key], particles_ind_split)
 
     args.halfsets = paths.particles_halfsets

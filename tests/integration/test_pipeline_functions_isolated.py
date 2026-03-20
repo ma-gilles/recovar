@@ -159,7 +159,7 @@ def gt_data(dataset_dir):
 @pytest.fixture(scope="module")
 def cryos(dataset_dir, intermediates):
     """Create CryoEMDataset with halfset_indices from the shared dataset."""
-    from recovar.data_io import cryoem_dataset as dataset
+    from recovar.data_io import halfsets
 
     grid_size = 128  # known for this dataset
     particles_file = str(dataset_dir / f"particles.{grid_size}.mrcs")
@@ -178,9 +178,14 @@ def cryos(dataset_dir, intermediates):
         perm = rng.permutation(n_images)
         ind_split = [perm[:n_images // 2], perm[n_images // 2:]]
 
-    ds = dataset.get_split_datasets(
-        particles_file, poses_file, ctf_file,
-        datadir=None, ind_split=ind_split, lazy=True,
+    dataset_spec = halfsets.HalfsetDatasetSpec(
+        particles_file=particles_file,
+        poses_file=poses_file,
+        ctf_file=ctf_file,
+        datadir=None,
+    )
+    ds = halfsets.load_halfset_dataset(
+        dataset_spec, ind_split=ind_split, lazy=True,
     )
     # Initialize noise model (same as pipeline.py line 737)
     ds.set_radial_noise_model(None)

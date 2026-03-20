@@ -271,7 +271,10 @@ class BackendImageSource(ImageSource):
         return self.backend.process_images(images, apply_image_mask=apply_image_mask)
 
     def process_images_half(self, images, apply_image_mask=False):
-        return self.backend.process_images_half(images, apply_image_mask=apply_image_mask)
+        if hasattr(self.backend, "process_images_half"):
+            return self.backend.process_images_half(images, apply_image_mask=apply_image_mask)
+        processed = self.backend.process_images(images, apply_image_mask=apply_image_mask)
+        return fourier_transform_utils.full_image_to_half_image(processed, self.image_shape)
 
     def iter_batches(
         self,

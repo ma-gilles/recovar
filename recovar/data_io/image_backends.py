@@ -20,10 +20,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import jax.numpy as jnp
 
-try:
-    import grain.python as grain
-except ImportError:
-    grain = None
+import grain.python as grain
 
 from recovar.data_io._index_utils import normalize_indices
 from recovar.data_io.image_loader import ImageLoader
@@ -37,27 +34,11 @@ logger = logging.getLogger(__name__)
 NVTX_DOMAIN_DATA_IO = "data_io"
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _create_window_mask(image_size: int, inner_radius: float = 0.85,
-                        outer_radius: float = 0.99, dtype=np.complex64) -> np.ndarray:
-    """Generate a circular window mask for image processing."""
-    return mask.window_mask(image_size, inner_radius, outer_radius)
-
-
-def _normalize_subset_indices(indices: Optional[np.ndarray], n_total: int,
-                              name: str = "subset_indices") -> np.ndarray:
-    """Normalize integer or boolean-mask subset indices with strict validation."""
-    return normalize_indices(indices, n_total=int(n_total), name=name)
-
-
 class _SimpleSubset:
     """Lightweight subset wrapper (replaces torch.utils.data.Subset).
 
     Exposes the same ``dataset`` and ``indices`` attributes that
-    ``ImageCountBatchLoader`` walks when resolving particle tilts.
+    ``_ImageCountBatchLoader`` walks when resolving particle tilts.
     """
 
     def __init__(self, dataset, indices):
@@ -128,7 +109,7 @@ class ParticleImageDataset:
         self.dtype = np.complex64
         self.image_shape = (self.image_size, self.image_size)
         self.total_pixels = self.image_size * self.image_size
-        self.image_mask = np.array(_create_window_mask(self.image_size, dtype=self.dtype))
+        self.image_mask = np.array(mask.window_mask(self.image_size, 0.85, 0.99))
         self.data_multiplier = -1 if invert_data else 1
 
         # Compatibility aliases
@@ -179,18 +160,18 @@ class ParticleImageDataset:
     def get_dataset_generator(self, batch_size: int, num_workers: int = 0,
                               pad_to_batch_size: bool = False, mode: str = 'tilt_series',
                               **kwargs):
-        return JAXDataLoader(self, batch_size=batch_size, shuffle=False,
-                             num_workers=num_workers)
+        return _GrainBatchLoader(self, batch_size=batch_size, shuffle=False,
+                                 num_workers=num_workers)
 
     def get_dataset_subset_generator(self, batch_size: int, subset_indices: np.ndarray,
                                      num_workers: int = 0, pad_to_batch_size: bool = False,
                                      mode: str = 'tilt_series', **kwargs):
-        subset_indices = _normalize_subset_indices(
-            subset_indices, self.num_images, name="subset_indices"
+        subset_indices = normalize_indices(
+            subset_indices, n_total=int(self.num_images), name="subset_indices"
         )
         subset = _SimpleSubset(self, subset_indices)
-        return JAXDataLoader(subset, batch_size=batch_size, shuffle=False,
-                             num_workers=num_workers)
+        return _GrainBatchLoader(subset, batch_size=batch_size, shuffle=False,
+                                 num_workers=num_workers)
 
     def get_image_generator(self, batch_size: int, num_workers: int = 0):
         return self.get_dataset_generator(batch_size, num_workers)
@@ -343,7 +324,7 @@ class TiltSeriesDataset(ParticleImageDataset):
             raise ValueError("STAR data is missing required column: _rlnGroupName")
 
         if indices is not None:
-            norm_indices = _normalize_subset_indices(indices, len(df), name="indices")
+            norm_indices = normalize_indices(indices, n_total=len(df), name="indices")
             df = df.loc[norm_indices]
 
         canonical_groups = sorted(df['_rlnGroupName'].unique())
@@ -394,34 +375,34 @@ class TiltSeriesDataset(ParticleImageDataset):
 
     def get_image_generator(self, batch_size: int, num_workers: int = 0):
         view = _ImageView(self.source, self.source.n)
-        return JAXDataLoader(view, batch_size=batch_size, shuffle=False,
-                             num_workers=num_workers)
+        return _GrainBatchLoader(view, batch_size=batch_size, shuffle=False,
+                                 num_workers=num_workers)
 
     def get_image_subset_generator(self, batch_size: int, subset_indices: np.ndarray,
                                    num_workers: int = 0):
         if subset_indices is None:
             return self.get_image_generator(batch_size, num_workers)
-        subset_indices = _normalize_subset_indices(
-            subset_indices, self.source.n, name="subset_indices"
+        subset_indices = normalize_indices(
+            subset_indices, n_total=int(self.source.n), name="subset_indices"
         )
         view = _ImageView(self.source, self.source.n)
         subset = _SimpleSubset(view, subset_indices)
-        return JAXDataLoader(subset, batch_size=batch_size, shuffle=False,
-                             num_workers=num_workers)
+        return _GrainBatchLoader(subset, batch_size=batch_size, shuffle=False,
+                                 num_workers=num_workers)
 
     def get_dataset_generator(self, batch_size: int, num_workers: int = 0,
                               pad_to_batch_size: bool = False, mode: str = 'tilt_series',
                               **kwargs):
         if mode == 'images':
-            max_tilts = self._max_tilts_per_particle()
+            max_tilts = _max_tilts_per_dataset_view(self)
             if batch_size < max_tilts:
                 raise ValueError(
                     f"Batch size ({batch_size}) < max tilts per particle ({max_tilts}). "
                     f"Use larger batch_size or mode='tilt_series'"
                 )
-            return ImageCountBatchLoader(self, batch_size, num_workers, pad_to_batch_size)
+            return _ImageCountBatchLoader(self, batch_size, num_workers, pad_to_batch_size)
         elif mode == 'tilt_series':
-            return JAXDataLoader(self, batch_size=1, shuffle=False, num_workers=num_workers)
+            return _GrainBatchLoader(self, batch_size=1, shuffle=False, num_workers=num_workers)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -430,19 +411,19 @@ class TiltSeriesDataset(ParticleImageDataset):
                                      mode: str = 'tilt_series', **kwargs):
         if subset_indices is None:
             return self.get_dataset_generator(batch_size, num_workers, pad_to_batch_size, mode)
-        subset_indices = _normalize_subset_indices(
-            subset_indices, len(self), name="subset_indices"
+        subset_indices = normalize_indices(
+            subset_indices, n_total=len(self), name="subset_indices"
         )
 
         if mode == 'images':
-            subset = ParticleSubset(self, subset_indices)
-            max_tilts = subset._max_tilts_per_particle()
+            subset = _SimpleSubset(self, subset_indices)
+            max_tilts = _max_tilts_per_dataset_view(subset)
             if batch_size < max_tilts:
                 raise ValueError(f"Batch size ({batch_size}) < max tilts ({max_tilts})")
-            return ImageCountBatchLoader(subset, batch_size, num_workers, pad_to_batch_size)
+            return _ImageCountBatchLoader(subset, batch_size, num_workers, pad_to_batch_size)
         else:
             subset = _SimpleSubset(self, subset_indices)
-            return JAXDataLoader(subset, batch_size=1, shuffle=False, num_workers=num_workers)
+            return _GrainBatchLoader(subset, batch_size=1, shuffle=False, num_workers=num_workers)
 
 
 # ---------------------------------------------------------------------------
@@ -450,7 +431,7 @@ class TiltSeriesDataset(ParticleImageDataset):
 # ---------------------------------------------------------------------------
 
 @nvtx.annotate("collate_to_jax", color="magenta", domain=NVTX_DOMAIN_DATA_IO)
-def collate_to_jax(batch):
+def _collate_batch_to_jax(batch):
     """Convert a batch of dataset items to JAX arrays.
 
     Handles multiple input formats:
@@ -470,7 +451,7 @@ def collate_to_jax(batch):
         return jnp.asarray(np.concatenate(batch, axis=0))
 
     if isinstance(batch[0], (tuple, list)):
-        return [collate_to_jax(list(samples)) for samples in zip(*batch)]
+        return [_collate_batch_to_jax(list(samples)) for samples in zip(*batch)]
 
     return jnp.asarray(batch)
 
@@ -482,7 +463,7 @@ def collate_to_jax(batch):
 _SENTINEL = object()
 
 
-class PrefetchIterator:
+class _PrefetchIterator:
     """Wraps any iterable with background-thread prefetching.
 
     While the consumer processes batch N, the background thread loads
@@ -520,10 +501,10 @@ class PrefetchIterator:
 
 
 # ---------------------------------------------------------------------------
-# JAXDataLoader (Grain-backed)
+# Grain Batch Loader
 # ---------------------------------------------------------------------------
 
-class JAXDataLoader:
+class _GrainBatchLoader:
     """Iterable that batches a dataset and yields JAX arrays with prefetching.
 
     Uses Grain's ``MapDataset`` for efficient batched iteration with
@@ -545,11 +526,6 @@ class JAXDataLoader:
 
     def _iter_batches(self):
         """Yield collated batches from Grain-backed iteration."""
-        if grain is None:
-            raise ImportError(
-                "JAXDataLoader requires 'grain' (pip install grain). "
-                "Install it or use a different data loader."
-            )
         ds = grain.MapDataset.source(self.dataset)
         if self.shuffle:
             ds = ds.shuffle(seed=42)
@@ -557,7 +533,7 @@ class JAXDataLoader:
         # dimension.  Our __getitem__ returns images as (1, D, D) so stacking
         # would give (batch, 1, D, D) instead of (batch, D, D).
         # Instead, iterate over individual items with Grain's prefetching
-        # and batch manually using collate_to_jax (which uses np.concatenate).
+        # and batch manually using _collate_batch_to_jax (which uses np.concatenate).
         it = ds.to_iter_dataset(
             grain.ReadOptions(
                 num_threads=self._num_threads,
@@ -568,22 +544,22 @@ class JAXDataLoader:
         for item in it:
             batch.append(item)
             if len(batch) == self.batch_size:
-                yield collate_to_jax(batch)
+                yield _collate_batch_to_jax(batch)
                 batch = []
         if batch:
-            yield collate_to_jax(batch)
+            yield _collate_batch_to_jax(batch)
 
     def __iter__(self):
         # Wrap with PrefetchIterator so the next collated batch is prepared
         # in a background thread while the GPU processes the current one.
-        return iter(PrefetchIterator(self._iter_batches(), buffer_size=2))
+        return iter(_PrefetchIterator(self._iter_batches(), buffer_size=2))
 
     def __len__(self) -> int:
         return (len(self.dataset) + self.batch_size - 1) // self.batch_size
 
 
 # ---------------------------------------------------------------------------
-# ImageCountBatchLoader
+# Image Count Batch Loader
 # ---------------------------------------------------------------------------
 def _resolve_particle_tilts(dataset, effective_num_tilts):
     """Walk dataset/subset chain to find ``_particle_tilts`` on the root."""
@@ -606,15 +582,44 @@ def _resolve_particle_tilts(dataset, effective_num_tilts):
         if subset_indices is None or parent is None:
             break
 
-        parent_idx = _normalize_subset_indices(
-            np.asarray(subset_indices), len(parent), name="subset indices"
+        parent_idx = normalize_indices(
+            np.asarray(subset_indices), n_total=len(parent), name="subset indices"
         )
         mapped_indices = parent_idx[mapped_indices]
         cursor = parent
 
     return None, effective_num_tilts
 
-class ImageCountBatchLoader:
+def _max_tilts_per_dataset_view(dataset) -> int:
+    """Return the largest per-particle tilt count visible through a dataset/subset view."""
+    effective_num_tilts = getattr(dataset, "num_tilts", None)
+    particle_tilts_list, effective_num_tilts = _resolve_particle_tilts(
+        dataset,
+        effective_num_tilts,
+    )
+
+    if particle_tilts_list is None:
+        particle_groups = getattr(dataset, "particle_groups", None)
+        if particle_groups is None:
+            raise AttributeError(
+                "dataset must expose _particle_tilts, or provide particle_groups "
+                "(or subset indices with parent _particle_tilts)"
+            )
+        particle_tilts_list = list(particle_groups.values())[:len(dataset)]
+
+    max_tilts = 0
+    for particle_tilts in particle_tilts_list:
+        n_available = len(particle_tilts)
+        n_actual = (
+            min(effective_num_tilts, n_available)
+            if effective_num_tilts is not None
+            else n_available
+        )
+        max_tilts = max(max_tilts, n_actual)
+    return max_tilts
+
+
+class _ImageCountBatchLoader:
     """DataLoader that batches by total image count across tilt series.
 
     Wraps iteration with ``PrefetchIterator`` for background I/O.
@@ -643,7 +648,7 @@ class ImageCountBatchLoader:
             particle_groups = getattr(dataset, "particle_groups", None)
             if particle_groups is None:
                 raise AttributeError(
-                    "ImageCountBatchLoader dataset must expose _particle_tilts, "
+                    "_ImageCountBatchLoader dataset must expose _particle_tilts, "
                     "or provide particle_groups (or subset indices with parent "
                     "_particle_tilts)."
                 )
@@ -749,49 +754,7 @@ class ImageCountBatchLoader:
                 yield batch_images, batch_particle_ids, batch_tilt_ids
 
     def __iter__(self):
-        return iter(PrefetchIterator(self._generate_batches(), buffer_size=2))
+        return iter(_PrefetchIterator(self._generate_batches(), buffer_size=2))
 
     def __len__(self) -> int:
         return self._n_batches
-
-
-# ---------------------------------------------------------------------------
-# ParticleSubset
-# ---------------------------------------------------------------------------
-
-class ParticleSubset:
-    """Subset of particles from tilt series dataset."""
-
-    def __init__(self, dataset, indices: np.ndarray):
-        self.dataset = dataset
-        self.indices = _normalize_subset_indices(indices, len(dataset), name="indices")
-        self.num_tilts = getattr(dataset, 'num_tilts', None)
-        self.particle_groups = getattr(dataset, 'particle_groups', None)
-
-    def __len__(self) -> int:
-        return len(self.indices)
-
-    def __getitem__(self, idx: int):
-        return self.dataset[self.indices[idx]]
-
-    def _max_tilts_per_particle(self) -> int:
-        particle_tilts_list = getattr(self.dataset, "_particle_tilts", None)
-        if particle_tilts_list is None:
-            particle_groups = getattr(self.dataset, "particle_groups", None)
-            if particle_groups is None:
-                raise AttributeError(
-                    "ParticleSubset parent dataset must expose "
-                    "_particle_tilts or particle_groups"
-                )
-            particle_tilts_list = list(particle_groups.values())
-        max_tilts = 0
-        for idx in self.indices:
-            particle_tilts = particle_tilts_list[idx]
-            n_available = len(particle_tilts)
-            n_actual = (
-                min(self.dataset.num_tilts, n_available)
-                if self.dataset.num_tilts is not None
-                else n_available
-            )
-            max_tilts = max(max_tilts, n_actual)
-        return max_tilts

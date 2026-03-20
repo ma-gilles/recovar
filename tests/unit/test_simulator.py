@@ -120,7 +120,7 @@ def test_generate_simulated_dataset_tilt_branch_wires_ctf_and_metadata(monkeypat
         created.append(obj)
         return obj
 
-    monkeypatch.setattr(simulator.dataset, "CryoEMDataset", _fake_cryo_dataset)
+    monkeypatch.setattr(simulator.cryoem_dataset, "CryoEMDataset", _fake_cryo_dataset)
     monkeypatch.setattr(simulator.utils, "get_gpu_memory_total", lambda: 10)
     monkeypatch.setattr(simulator.utils, "get_image_batch_size", lambda grid_size, gpu_mem: 2)
     monkeypatch.setattr(
@@ -184,7 +184,7 @@ def test_generate_simulated_dataset_extra_particles_and_outliers(monkeypatch):
     def _fake_cryo_dataset(image_stack, voxel_size, metadata, ctf_evaluator=None, grid_size=None, **kwargs):
         return _FakeDatasetObj(metadata.n_images, grid_size, ctf_evaluator, metadata._ctf_params, metadata._rotation_matrices, metadata._translations)
 
-    monkeypatch.setattr(simulator.dataset, "CryoEMDataset", _fake_cryo_dataset)
+    monkeypatch.setattr(simulator.cryoem_dataset, "CryoEMDataset", _fake_cryo_dataset)
     monkeypatch.setattr(simulator.utils, "get_gpu_memory_total", lambda: 10)
     monkeypatch.setattr(simulator.utils, "get_image_batch_size", lambda grid_size, gpu_mem: 2)
 

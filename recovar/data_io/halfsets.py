@@ -8,34 +8,69 @@ particle-level splitting.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
-import pickle
 
 import numpy as np
 
-from recovar.data_io._index_utils import TiltSeriesOriginalIndexMap, filter_preserve_order
+from recovar.data_io._index_utils import (
+    TiltSeriesOriginalIndexMap,
+    deduplicate_preserve_order,
+    filter_preserve_order,
+    load_index_like,
+    normalize_image_indices,
+)
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Helpers (imported lazily from dataset to avoid circular imports)
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class HalfsetDatasetSpec:
+    """Normalized file/loader settings for constructing a halfset dataset."""
 
-def _load_index_like(value):
-    if value is None:
-        return None
-    if isinstance(value, (np.ndarray, list, tuple)):
-        return value
-    with open(value, "rb") as f:
-        return pickle.load(f)
+    particles_file: str
+    poses_file: str | None = None
+    ctf_file: str | None = None
+    datadir: str | None = None
+    uninvert_data: bool = False
+    padding: int = 0
+    n_images: int | None = None
+    tilt_series: bool = False
+    tilt_series_ctf: str | None = None
+    angle_per_tilt: float | None = None
+    dose_per_tilt: float | None = None
+    premultiplied_ctf: bool = False
+    strip_prefix: str | None = None
+    downsample_D: int | None = None
 
+    @classmethod
+    def from_args(cls, args):
+        uninvert_data_str = getattr(args, "uninvert_data", "false")
+        if uninvert_data_str in ("automatic", "false"):
+            uninvert_data = False
+        elif uninvert_data_str == "true":
+            uninvert_data = True
+        else:
+            raise ValueError(
+                f"uninvert_data must be 'automatic', 'true', or 'false'; got {uninvert_data_str!r}"
+            )
 
-def _get_normalize_and_dedup():
-    """Lazy import to avoid circular dependency with dataset.py."""
-    from recovar.data_io.cryoem_dataset import _normalize_image_indices, _deduplicate_preserve_order
-    return _normalize_image_indices, _deduplicate_preserve_order
-
+        return cls(
+            particles_file=args.particles,
+            ctf_file=getattr(args, "ctf", None),
+            poses_file=getattr(args, "poses", None),
+            datadir=getattr(args, "datadir", None),
+            n_images=getattr(args, "n_images", -1),
+            padding=getattr(args, "padding", 0),
+            tilt_series=getattr(args, "tilt_series", False),
+            tilt_series_ctf=getattr(args, "tilt_series_ctf", "cryoem"),
+            angle_per_tilt=getattr(args, "angle_per_tilt", None),
+            dose_per_tilt=getattr(args, "dose_per_tilt", None),
+            premultiplied_ctf=getattr(args, "premultiplied_ctf", False),
+            strip_prefix=getattr(args, "strip_prefix", None),
+            downsample_D=getattr(args, "downsample", None),
+            uninvert_data=uninvert_data,
+        )
 
 # ---------------------------------------------------------------------------
 # Core splitting
@@ -93,19 +128,17 @@ def get_split_indices(particles_file, datadir=None, strip_prefix=None,
         List of two numpy arrays containing indices for each halfset
     """
     from recovar.data_io.cryoem_dataset import get_num_images_in_dataset
-    _normalize_image_indices, _deduplicate_preserve_order = _get_normalize_and_dedup()
-
     if ind_file is None:
         if n_images is None:
             n_images = get_num_images_in_dataset(particles_file, datadir=datadir, strip_prefix=strip_prefix)
         indices = np.arange(n_images, dtype=np.int32)
     else:
-        raw_indices = _load_index_like(ind_file)
+        raw_indices = load_index_like(ind_file)
         n_images_total = None
         if np.asarray(raw_indices).dtype == bool:
             n_images_total = get_num_images_in_dataset(particles_file, datadir=datadir, strip_prefix=strip_prefix)
-        indices = _normalize_image_indices(raw_indices, n_images_total=n_images_total, name="ind_file")
-        indices = _deduplicate_preserve_order(indices, name="ind_file").astype(np.int32, copy=False)
+        indices = normalize_image_indices(raw_indices, n_total=n_images_total, name="ind_file")
+        indices = deduplicate_preserve_order(indices, name="ind_file").astype(np.int32, copy=False)
 
     if len(indices) == 0:
         raise ValueError("No valid indices found for dataset splitting")
@@ -174,7 +207,7 @@ def get_split_tilt_indices(
 
     if tilt_ind_file is not None:
         particle_ind = _sanitize_particle_ids(
-            _load_index_like(tilt_ind_file),
+            load_index_like(tilt_ind_file),
             name="tilt_ind_file",
         )
     else:
@@ -186,7 +219,7 @@ def get_split_tilt_indices(
 
     allowed_image_indices = index_map.image_indices_from_particles(particle_ind)
     if ind_file is not None:
-        image_ind = _sanitize_image_ids(_load_index_like(ind_file), name="ind_file")
+        image_ind = _sanitize_image_ids(load_index_like(ind_file), name="ind_file")
         allowed_image_indices = filter_preserve_order(allowed_image_indices, image_ind)
 
     if allowed_image_indices.size == 0:
@@ -199,7 +232,7 @@ def get_split_tilt_indices(
         return [empty, empty]
 
     if particle_halfset_indices_file is not None:
-        split_particles_raw = _load_index_like(particle_halfset_indices_file)
+        split_particles_raw = load_index_like(particle_halfset_indices_file)
         if len(split_particles_raw) != 2:
             raise ValueError("particle_halfset_indices_file must contain exactly two halfsets")
         split_particles = [
@@ -236,22 +269,18 @@ def get_split_tilt_indices(
 
 def _read_relion_halfsets_from_star(particles_file, ind_file=None, datadir=None,
                                     strip_prefix=None):
-    """Try to read halfset assignments from _rlnRandomSubset in a STAR file.
+    """Read halfset assignments from `_rlnRandomSubset` when present.
 
     Returns ``(halfsets, n_total)`` where *halfsets* is a list of two index
     arrays when the column is present and valid, or ``None`` when the column
-    is absent or the file is not a STAR file.
+    is absent. Non-STAR inputs are ignored by design; malformed STAR inputs
+    fail loudly.
     """
-    _normalize_image_indices, _ = _get_normalize_and_dedup()
-
     if not str(particles_file).endswith('.star'):
         return None, None
 
-    try:
-        from recovar.data_io.starfile import read_star
-        df, _ = read_star(particles_file)
-    except (ImportError, FileNotFoundError, ValueError):
-        return None, None
+    from recovar.data_io.starfile import read_star
+    df, _ = read_star(particles_file)
 
     n_total = len(df)
 
@@ -274,9 +303,9 @@ def _read_relion_halfsets_from_star(particles_file, ind_file=None, datadir=None,
     ]
 
     if ind_file is not None:
-        raw_indices = _load_index_like(ind_file)
+        raw_indices = load_index_like(ind_file)
         n_images_total = len(subsets)
-        ind = _normalize_image_indices(raw_indices, n_images_total=n_images_total, name="ind_file")
+        ind = normalize_image_indices(raw_indices, n_total=n_images_total, name="ind_file")
         halfsets = [h[np.isin(h, ind)] for h in halfsets]
 
     if len(halfsets[0]) == 0 or len(halfsets[1]) == 0:
@@ -294,34 +323,29 @@ def _read_relion_halfsets_from_star(particles_file, ind_file=None, datadir=None,
 # High-level dataset splitting
 # ---------------------------------------------------------------------------
 
-def get_split_datasets(particles_file, poses_file=None, ctf_file=None, datadir=None,
-                       uninvert_data=False, ind_file=None,
-                       padding=0, n_images=None, tilt_series=False,
-                       tilt_series_ctf=None,
-                       angle_per_tilt=3, dose_per_tilt=2.9,
-                       ind_split=None, lazy=False, premultiplied_ctf=False,
-                       strip_prefix=None, downsample_D=None):
-    """Load a dataset and set halfset indices for half-set iteration.
-
-    Loads ONE full dataset and stores ``halfset_indices`` on it so that
-    ``dataset.iter_batches(halfset_id=..., ...)`` can be used.
-
-    Returns
-    -------
-    CryoEMDataset
-        The full dataset with ``halfset_indices`` set.
-    """
+def load_halfset_dataset(spec: HalfsetDatasetSpec, *, ind_split, lazy=False):
+    """Load one dataset view and attach halfset-local indices for iteration."""
     from recovar.data_io.cryoem_dataset import load_dataset
 
     all_indices = np.unique(np.concatenate(ind_split))
 
     full = load_dataset(
-        particles_file, poses_file, ctf_file, datadir=datadir,
-        n_images=n_images, ind=all_indices, lazy=lazy, padding=padding,
-        uninvert_data=uninvert_data, tilt_series=tilt_series,
-        tilt_series_ctf=tilt_series_ctf, angle_per_tilt=angle_per_tilt,
-        dose_per_tilt=dose_per_tilt, premultiplied_ctf=premultiplied_ctf,
-        strip_prefix=strip_prefix, downsample_D=downsample_D,
+        spec.particles_file,
+        spec.poses_file,
+        spec.ctf_file,
+        datadir=spec.datadir,
+        n_images=spec.n_images,
+        ind=all_indices,
+        lazy=lazy,
+        padding=spec.padding,
+        uninvert_data=spec.uninvert_data,
+        tilt_series=spec.tilt_series,
+        tilt_series_ctf=spec.tilt_series_ctf,
+        angle_per_tilt=spec.angle_per_tilt,
+        dose_per_tilt=spec.dose_per_tilt,
+        premultiplied_ctf=spec.premultiplied_ctf,
+        strip_prefix=spec.strip_prefix,
+        downsample_D=spec.downsample_D,
     )
 
     orig_to_local = np.empty(int(all_indices.max()) + 1, dtype=np.int32)
@@ -329,42 +353,11 @@ def get_split_datasets(particles_file, poses_file=None, ctf_file=None, datadir=N
 
     local_split = [orig_to_local[s] for s in ind_split]
 
-    full.halfset_indices = [np.asarray(s, dtype=np.int32) for s in local_split]
+    full.halfset_indices = [np.asarray(split, dtype=np.int32) for split in local_split]
     return full
 
 
-def make_dataset_loader_dict(args):
-    """Build the loader-configuration dict consumed by get_split_datasets."""
-    uninvert_data_str = getattr(args, 'uninvert_data', 'false')
-    if uninvert_data_str in ('automatic', 'false'):
-        uninvert_data = False
-    elif uninvert_data_str == 'true':
-        uninvert_data = True
-    else:
-        raise ValueError(
-            f"uninvert_data must be 'automatic', 'true', or 'false'; got {uninvert_data_str!r}"
-        )
-
-    return {
-        'particles_file':   args.particles,
-        'ctf_file':         getattr(args, 'ctf', None),
-        'poses_file':       getattr(args, 'poses', None),
-        'datadir':          getattr(args, 'datadir', None),
-        'n_images':         getattr(args, 'n_images', -1),
-        'ind_file':         getattr(args, 'ind', None),
-        'padding':          getattr(args, 'padding', 0),
-        'tilt_series':      getattr(args, 'tilt_series', False),
-        'tilt_series_ctf':  getattr(args, 'tilt_series_ctf', 'cryoem'),
-        'angle_per_tilt':   getattr(args, 'angle_per_tilt', None),
-        'dose_per_tilt':    getattr(args, 'dose_per_tilt', None),
-        'premultiplied_ctf': getattr(args, 'premultiplied_ctf', False),
-        'strip_prefix':     getattr(args, 'strip_prefix', None),
-        'downsample_D':     getattr(args, 'downsample', None),
-        'uninvert_data':    uninvert_data,
-    }
-
-
-def figure_out_halfsets(args):
+def resolve_halfset_indices(args):
     """Determine which images belong to each reconstruction half-set.
 
     Priority order:
@@ -373,7 +366,6 @@ def figure_out_halfsets(args):
       3. Random 50/50 split of all valid images.
     """
     from recovar.data_io.cryoem_dataset import get_num_images_in_dataset
-    _normalize_image_indices, _ = _get_normalize_and_dedup()
 
     is_tilt = getattr(args, 'tilt_series', False) or getattr(args, 'tilt_series_ctf', 'cryoem') != 'cryoem'
     datadir = getattr(args, 'datadir', None)
@@ -417,8 +409,7 @@ def figure_out_halfsets(args):
                 particle_halfset_indices_file=args.halfsets,
             )
         else:
-            with open(args.halfsets, 'rb') as f:
-                halfsets = pickle.load(f)
+            halfsets = load_index_like(args.halfsets)
             logger.info("Loaded halfsets from file")
             if len(halfsets) != 2:
                 raise ValueError("halfsets file must contain exactly two halfsets")
@@ -430,17 +421,17 @@ def figure_out_halfsets(args):
                     args.particles, datadir=datadir, strip_prefix=strip_prefix,
                 )
             halfsets = [
-                _normalize_image_indices(halfsets[0], n_images_total=n_images_total, name="halfsets[0]"),
-                _normalize_image_indices(halfsets[1], n_images_total=n_images_total, name="halfsets[1]"),
+                normalize_image_indices(halfsets[0], n_total=n_images_total, name="halfsets[0]"),
+                normalize_image_indices(halfsets[1], n_total=n_images_total, name="halfsets[1]"),
             ]
 
             if ind_file is not None:
-                ind_raw = _load_index_like(ind_file)
+                ind_raw = load_index_like(ind_file)
                 if n_images_total is None and np.asarray(ind_raw).dtype == bool:
                     n_images_total = get_num_images_in_dataset(
                         args.particles, datadir=datadir, strip_prefix=strip_prefix,
                     )
-                ind = _normalize_image_indices(ind_raw, n_images_total=n_images_total, name="ind")
+                ind = normalize_image_indices(ind_raw, n_total=n_images_total, name="ind")
                 halfsets = [
                     np.asarray(halfset)[np.isin(np.asarray(halfset), ind)]
                     for halfset in halfsets
@@ -452,9 +443,9 @@ def figure_out_halfsets(args):
     return halfsets
 
 
-def load_dataset_from_args(args, lazy=False, ind_split=None):
-    """Load a dataset split into halfsets from command-line args."""
+def load_halfset_dataset_from_args(args, lazy=False, ind_split=None):
+    """Resolve halfsets from args and load the shared dataset view."""
     if ind_split is None:
-        ind_split = figure_out_halfsets(args)
-    dataset_loader_dict = make_dataset_loader_dict(args)
-    return get_split_datasets(**dataset_loader_dict, ind_split=ind_split, lazy=lazy)
+        ind_split = resolve_halfset_indices(args)
+    dataset_spec = HalfsetDatasetSpec.from_args(args)
+    return load_halfset_dataset(dataset_spec, ind_split=ind_split, lazy=lazy)

@@ -37,7 +37,7 @@ import pytest
 pytest.importorskip("jax")
 
 from helpers import tiny_synthetic
-from recovar.data_io import cryoem_dataset as recovar_dataset, image_backends as cryo_dataset
+from recovar.data_io import cryoem_dataset as recovar_dataset, halfsets, image_backends as cryo_dataset
 
 pytestmark = pytest.mark.unit
 
@@ -232,7 +232,7 @@ def test_get_split_tilt_indices_particle_ind_only_no_overlap(tilt_files):
     n_keep = max(n_particles // 2, 1)
     particle_ind = np.arange(n_keep, dtype=np.int32)
 
-    half0, half1 = recovar_dataset.get_split_tilt_indices(
+    half0, half1 = halfsets.get_split_tilt_indices(
         particles_file=star,
         tilt_ind_file=particle_ind,
     )
@@ -253,7 +253,7 @@ def test_get_split_tilt_indices_particle_ind_all_images_accounted(tilt_files):
     p2t, _ = _parse_p2t(tilt_files)
     all_particle_ids = np.arange(len(p2t), dtype=np.int32)
 
-    half0, half1 = recovar_dataset.get_split_tilt_indices(
+    half0, half1 = halfsets.get_split_tilt_indices(
         particles_file=star,
         tilt_ind_file=all_particle_ids,
     )
@@ -277,7 +277,7 @@ def test_get_split_tilt_indices_image_ind_only_no_overlap(tilt_files):
     all_idx = np.sort(_all_image_indices(p2t))
     ind_file = all_idx[::2]
 
-    half0, half1 = recovar_dataset.get_split_tilt_indices(
+    half0, half1 = halfsets.get_split_tilt_indices(
         particles_file=star,
         ind_file=ind_file,
     )
@@ -310,7 +310,7 @@ def test_get_split_tilt_indices_combined_ind_is_intersection(tilt_files):
     # Image filter: keep only the very first tilt of the first particle
     ind_file = first_p_images[:1]
 
-    half0, half1 = recovar_dataset.get_split_tilt_indices(
+    half0, half1 = halfsets.get_split_tilt_indices(
         particles_file=star,
         ind_file=ind_file,
         tilt_ind_file=particle_ind,
@@ -332,7 +332,7 @@ def test_get_split_tilt_indices_combined_out_of_range_particle_ids_ignored(tilt_
     particle_ind = np.array([0, n_particles + 999], dtype=np.int32)
 
     # Should not raise
-    half0, half1 = recovar_dataset.get_split_tilt_indices(
+    half0, half1 = halfsets.get_split_tilt_indices(
         particles_file=star,
         tilt_ind_file=particle_ind,
     )
@@ -352,7 +352,7 @@ def test_get_split_tilt_indices_ntilts_caps_per_particle(tilt_files):
     star = tilt_files["particles_star"]
     p2t, _ = _parse_p2t(tilt_files)
 
-    half0, half1 = recovar_dataset.get_split_tilt_indices(
+    half0, half1 = halfsets.get_split_tilt_indices(
         particles_file=star,
         ntilts=1,
     )
@@ -382,7 +382,7 @@ def test_get_split_tilt_indices_precomputed_halfsets_are_respected(tilt_files):
     half0_particles = np.arange(0, n_particles, 2, dtype=np.int32)
     half1_particles = np.arange(1, n_particles, 2, dtype=np.int32)
 
-    half0_images, half1_images = recovar_dataset.get_split_tilt_indices(
+    half0_images, half1_images = halfsets.get_split_tilt_indices(
         particles_file=star,
         particle_halfset_indices_file=[half0_particles, half1_particles],
     )
@@ -413,7 +413,7 @@ def test_get_split_tilt_indices_precomputed_with_duplicates_deduped(tilt_files):
     half1_p = np.arange(2, n_particles, dtype=np.int32) if n_particles > 2 else np.array([], dtype=np.int32)
 
     # Should not raise; particle 0 images appear at most once in half0
-    half0_images, _ = recovar_dataset.get_split_tilt_indices(
+    half0_images, _ = halfsets.get_split_tilt_indices(
         particles_file=star,
         particle_halfset_indices_file=[dup_half0, half1_p],
     )

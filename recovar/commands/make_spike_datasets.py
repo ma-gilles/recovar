@@ -6,7 +6,7 @@ import numpy as np
 from sklearn.metrics import confusion_matrix
 
 from recovar import utils
-from recovar.data_io import cryoem_dataset as dataset
+from recovar.data_io import cryoem_dataset
 from recovar.heterogeneity import image_assignment
 from recovar.output import output
 from recovar.reconstruction import noise
@@ -99,7 +99,7 @@ def main(
         )
         gt_volumes = volumes * sim_info["scale_vol"]
 
-        cryo = dataset.load_dataset(
+        cryo = cryoem_dataset.load_dataset(
             particles_file=os.path.join(dataset_folder, f"particles.{grid_size}.mrcs"),
             ctf_file=os.path.join(dataset_folder, "ctf.pkl"),
             poses_file=os.path.join(dataset_folder, "poses.pkl"),

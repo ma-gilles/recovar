@@ -19,7 +19,7 @@ def main():
     cli_args = ap.parse_args()
 
     from recovar import utils
-    from recovar.data_io import cryoem_dataset as dataset
+    from recovar.data_io import halfsets
     from recovar.reconstruction import homogeneous, noise
     from recovar.heterogeneity import covariance_estimation, principal_components, embedding
     from recovar.output import plot_utils, metrics
@@ -51,9 +51,16 @@ def main():
     particles_file = os.path.join(DATASET_DIR, f"particles.{grid_size}.mrcs")
     poses_file = os.path.join(DATASET_DIR, "poses.pkl")
     ctf_file = os.path.join(DATASET_DIR, "ctf.pkl")
-    ind_split = dataset.get_split_indices(particles_file)
-    cryos = dataset.get_split_datasets(particles_file, poses_file, ctf_file,
-                                        datadir=None, ind_split=ind_split, lazy=True)
+    ind_split = halfsets.get_split_indices(particles_file)
+    dataset_spec = halfsets.HalfsetDatasetSpec(
+        particles_file=particles_file,
+        poses_file=poses_file,
+        ctf_file=ctf_file,
+        datadir=None,
+    )
+    cryos = halfsets.load_halfset_dataset(
+        dataset_spec, ind_split=ind_split, lazy=True
+    )
     volume_shape = cryos[0].volume_shape
     volume_size = cryos[0].volume_size
     vol_norm = np.sqrt(np.prod(volume_shape))

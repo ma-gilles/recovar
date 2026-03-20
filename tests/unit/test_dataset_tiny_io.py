@@ -7,7 +7,7 @@ pytest.importorskip("jax")
 
 from helpers import tiny_synthetic
 from recovar import core, utils
-from recovar.data_io import cryoem_dataset as dataset, starfile, image_backends as cryo_dataset
+from recovar.data_io import cryoem_dataset as dataset, halfsets, starfile, image_backends as cryo_dataset
 
 pytestmark = pytest.mark.unit
 
@@ -648,7 +648,7 @@ def test_get_split_tilt_indices_simulator_generated_with_ntilts_cap(sim_tiny_til
     half0 = np.arange(0, n_particles, 2, dtype=np.int32)
     half1 = np.arange(1, n_particles, 2, dtype=np.int32)
 
-    split = dataset.get_split_tilt_indices(
+    split = halfsets.get_split_tilt_indices(
         particles_file=files["particles_star"],
         datadir=str(Path(files["particles_star"]).parent),
         ntilts=1,
@@ -672,7 +672,7 @@ def test_get_split_tilt_indices_simulator_generated_with_ntilts_cap(sim_tiny_til
 
 def test_get_split_tilt_indices_simulator_with_zero_tilts_returns_empty_halves(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
-    split = dataset.get_split_tilt_indices(
+    split = halfsets.get_split_tilt_indices(
         particles_file=files["particles_star"],
         datadir=str(Path(files["particles_star"]).parent),
         ntilts=0,
@@ -684,7 +684,7 @@ def test_get_split_tilt_indices_simulator_with_zero_tilts_returns_empty_halves(s
 
 def test_get_split_tilt_indices_simulator_with_negative_tilts_returns_empty_halves(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
-    split = dataset.get_split_tilt_indices(
+    split = halfsets.get_split_tilt_indices(
         particles_file=files["particles_star"],
         datadir=str(Path(files["particles_star"]).parent),
         ntilts=-1,
@@ -702,7 +702,7 @@ def test_simulator_tiny_tilt_split_indices_sanitizes_tilt_ind_file_values(sim_ti
     keep_a = int(n_particles - 1)
     keep_b = 0
 
-    split = dataset.get_split_tilt_indices(
+    split = halfsets.get_split_tilt_indices(
         particles_file=files["particles_star"],
         datadir=datadir,
         # duplicate + invalid ids
@@ -726,7 +726,7 @@ def test_simulator_tiny_tilt_split_indices_with_only_invalid_tilt_ids_returns_em
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
 
-    split = dataset.get_split_tilt_indices(
+    split = halfsets.get_split_tilt_indices(
         particles_file=files["particles_star"],
         datadir=datadir,
         tilt_ind_file=np.array([-9, 10_000], dtype=np.int32),
@@ -818,7 +818,7 @@ def test_simulator_tiny_tilt_loading_with_duplicate_ind_preserves_image_identity
     np.testing.assert_allclose(got_images, original_images[duplicated_ind], atol=1e-5)
 
 
-def test_simulator_tiny_tilt_figure_out_halfsets_applies_n_images_cap(sim_tiny_tilt_files):
+def test_simulator_tiny_tilt_resolve_halfset_indices_applies_n_images_cap(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
 
@@ -837,7 +837,7 @@ def test_simulator_tiny_tilt_figure_out_halfsets_applies_n_images_cap(sim_tiny_t
     args.strip_prefix = None
     args.n_images = 6
 
-    full = dataset.get_split_tilt_indices(
+    full = halfsets.get_split_tilt_indices(
         args.particles,
         ind_file=args.ind,
         tilt_ind_file=args.tilt_ind,
@@ -845,7 +845,7 @@ def test_simulator_tiny_tilt_figure_out_halfsets_applies_n_images_cap(sim_tiny_t
         datadir=args.datadir,
     )
     expected = [h[: args.n_images // 2] for h in full]
-    got = dataset.figure_out_halfsets(args)
+    got = halfsets.resolve_halfset_indices(args)
 
     np.testing.assert_array_equal(got[0], expected[0])
     np.testing.assert_array_equal(got[1], expected[1])
@@ -875,7 +875,7 @@ def test_simulator_tiny_tilt_split_indices_with_halfset_file_and_filters_preserv
     with open(ind_path, "wb") as f:
         pickle.dump(np.asarray(allowed_images, dtype=np.int32), f)
 
-    split = dataset.get_split_tilt_indices(
+    split = halfsets.get_split_tilt_indices(
         particles_file=files["particles_star"],
         ind_file=str(ind_path),
         tilt_ind_file=str(tilt_ind_path),
@@ -904,7 +904,7 @@ def test_simulator_tiny_tilt_split_indices_ignores_out_of_range_particle_ids_in_
     particles_to_tilts, _ = tilt_dataset.TiltSeriesDataset.parse_particle_tilt(files["particles_star"])
     n_particles = len(particles_to_tilts)
 
-    split = dataset.get_split_tilt_indices(
+    split = halfsets.get_split_tilt_indices(
         particles_file=files["particles_star"],
         datadir=datadir,
         particle_halfset_indices_file=[
@@ -933,7 +933,7 @@ def test_simulator_tiny_tilt_split_indices_deduplicates_halfset_particle_ids(sim
     keep_a = int(n_particles - 1)
     keep_b = 0
 
-    split = dataset.get_split_tilt_indices(
+    split = halfsets.get_split_tilt_indices(
         particles_file=files["particles_star"],
         datadir=datadir,
         # keep_a appears twice and should be deduplicated.
@@ -989,7 +989,7 @@ def test_tiny_tilt_get_split_tilt_indices_with_particle_subset_file(tmp_path):
     with open(tilt_ind_file, "wb") as f:
         pickle.dump(np.array([0, 2], dtype=np.int32), f)
 
-    split = dataset.get_split_tilt_indices(
+    split = halfsets.get_split_tilt_indices(
         particles_file=files["particles_star"],
         tilt_ind_file=str(tilt_ind_file),
         datadir=str(tmp_path),
@@ -1002,7 +1002,7 @@ def test_tiny_tilt_get_split_tilt_indices_with_particle_subset_file(tmp_path):
     assert np.intersect1d(split[0], split[1]).size == 0
 
 
-def test_tiny_tilt_figure_out_halfsets_respects_ind_intersection(tmp_path):
+def test_tiny_tilt_resolve_halfset_indices_respects_ind_intersection(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
     import pickle
     halfsets_path = tmp_path / "halfsets.pkl"
@@ -1027,12 +1027,12 @@ def test_tiny_tilt_figure_out_halfsets_respects_ind_intersection(tmp_path):
     args.strip_prefix = None
     args.n_images = -1
 
-    hs = dataset.figure_out_halfsets(args)
+    hs = halfsets.resolve_halfset_indices(args)
     np.testing.assert_array_equal(hs[0], np.array([1], dtype=np.int32))
     np.testing.assert_array_equal(hs[1], np.array([4, 5], dtype=np.int32))
 
 
-def test_tiny_tilt_figure_out_halfsets_with_particle_halfsets_and_image_filter(tmp_path):
+def test_tiny_tilt_resolve_halfset_indices_with_particle_halfsets_and_image_filter(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
     import pickle
 
@@ -1060,7 +1060,7 @@ def test_tiny_tilt_figure_out_halfsets_with_particle_halfsets_and_image_filter(t
     args.strip_prefix = None
     args.n_images = -1
 
-    hs = dataset.figure_out_halfsets(args)
+    hs = halfsets.resolve_halfset_indices(args)
     np.testing.assert_array_equal(hs[0], np.array([0, 3, 2, 5], dtype=np.int32))
     np.testing.assert_array_equal(hs[1], np.array([], dtype=np.int32))
 
@@ -1135,7 +1135,7 @@ def test_tiny_tilt_particle_subset_generator_preserves_duplicates(tmp_path):
 def test_tiny_tilt_split_indices_accepts_in_memory_halfsets_and_arrays(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
 
-    split = dataset.get_split_tilt_indices(
+    split = halfsets.get_split_tilt_indices(
         particles_file=files["particles_star"],
         # Keep particle groups g1 and g3 only.
         tilt_ind_file=np.array([0, 2], dtype=np.int32),
@@ -1173,7 +1173,7 @@ def test_simulator_tiny_tilt_split_indices_accepts_boolean_masks(sim_tiny_tilt_f
     image_mask[half0_expected] = True
     image_mask[half1_expected] = True
 
-    split = dataset.get_split_tilt_indices(
+    split = halfsets.get_split_tilt_indices(
         particles_file=files["particles_star"],
         datadir=datadir,
         tilt_ind_file=particle_mask,
@@ -1193,14 +1193,14 @@ def test_simulator_tiny_tilt_split_indices_rejects_non_1d_masks(sim_tiny_tilt_fi
     datadir = str(Path(files["particles_star"]).parent)
 
     with pytest.raises(ValueError, match="boolean mask must be 1D"):
-        dataset.get_split_tilt_indices(
+        halfsets.get_split_tilt_indices(
             particles_file=files["particles_star"],
             datadir=datadir,
             tilt_ind_file=np.array([[True, False, True]], dtype=bool),
         )
 
     with pytest.raises(ValueError, match="ind_file boolean mask must be 1D"):
-        dataset.get_split_tilt_indices(
+        halfsets.get_split_tilt_indices(
             particles_file=files["particles_star"],
             datadir=datadir,
             tilt_ind_file=np.array([0, 1], dtype=np.int32),
@@ -1285,7 +1285,7 @@ def test_simulator_tiny_tilt_subsample_cryoem_dataset_preserves_local_order_and_
     np.testing.assert_allclose(got_subset_images, original_images[requested[local_subset]], atol=1e-6)
 
 
-def test_simulator_tiny_tilt_load_dataset_from_args_preserves_halfset_image_identity(sim_tiny_tilt_files):
+def test_simulator_tiny_tilt_load_halfset_dataset_from_args_preserves_halfset_image_identity(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
     args = SimpleNamespace(
@@ -1308,7 +1308,7 @@ def test_simulator_tiny_tilt_load_dataset_from_args_preserves_halfset_image_iden
         ntilts=None,
     )
 
-    cryos = dataset.load_dataset_from_args(args, lazy=True)
+    cryos = halfsets.load_halfset_dataset_from_args(args, lazy=True)
     assert len(cryos.halfset_indices) == 2
 
     half0 = np.asarray(cryos.halfset_indices[0], dtype=np.int32)
@@ -1332,23 +1332,22 @@ def test_simulator_tiny_tilt_load_dataset_from_args_preserves_halfset_image_iden
         )
 
 
-def test_simulator_tiny_tilt_get_split_datasets_preserves_half_order_and_duplicates(sim_tiny_tilt_files):
+def test_simulator_tiny_tilt_load_halfset_dataset_preserves_half_order_and_duplicates(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
     ind_split = [
         np.array([7, 2, 7, 1], dtype=np.int32),
         np.array([0, 5, 0], dtype=np.int32),
     ]
-    cryos = dataset.get_split_datasets(
+    dataset_spec = halfsets.HalfsetDatasetSpec(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
         datadir=datadir,
-        ind_split=ind_split,
-        lazy=True,
         tilt_series=True,
         tilt_series_ctf="relion5",
     )
+    cryos = halfsets.load_halfset_dataset(dataset_spec, ind_split=ind_split, lazy=True)
 
     assert len(cryos.halfset_indices) == 2
     original_images = utils.load_mrc(files["particles_mrcs"])
@@ -1388,7 +1387,7 @@ def test_simulator_tiny_tilt_load_dataset_preserves_ind_order_and_duplicates(sim
     np.testing.assert_allclose(got_images, original_images[requested], atol=1e-6)
 
 
-def test_simulator_tiny_tilt_get_split_datasets_matches_direct_api(sim_tiny_tilt_files):
+def test_simulator_tiny_tilt_load_halfset_dataset_matches_direct_api(sim_tiny_tilt_files):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
     ind_split = [
@@ -1404,8 +1403,9 @@ def test_simulator_tiny_tilt_get_split_datasets_matches_direct_api(sim_tiny_tilt
         "tilt_series_ctf": "relion5",
     }
 
-    by_wrapper = dataset.get_split_datasets(**loader_dict, ind_split=ind_split, lazy=True)
-    direct = dataset.get_split_datasets(ind_split=ind_split, lazy=True, **loader_dict)
+    dataset_spec = halfsets.HalfsetDatasetSpec(**loader_dict)
+    by_wrapper = halfsets.load_halfset_dataset(dataset_spec, ind_split=ind_split, lazy=True)
+    direct = halfsets.load_halfset_dataset(dataset_spec, ind_split=ind_split, lazy=True)
 
     assert len(by_wrapper.halfset_indices) == len(direct.halfset_indices) == 2
     np.testing.assert_array_equal(np.asarray(by_wrapper.dataset_indices), np.asarray(direct.dataset_indices))
@@ -1414,7 +1414,7 @@ def test_simulator_tiny_tilt_get_split_datasets_matches_direct_api(sim_tiny_tilt
         np.testing.assert_array_equal(h0, h1)
 
 
-def test_simulator_tiny_tilt_load_dataset_from_args_with_explicit_split_skips_halfset_builder(
+def test_simulator_tiny_tilt_load_halfset_dataset_from_args_with_explicit_split_skips_halfset_builder(
     sim_tiny_tilt_files, monkeypatch
 ):
     files = sim_tiny_tilt_files
@@ -1425,9 +1425,9 @@ def test_simulator_tiny_tilt_load_dataset_from_args_with_explicit_split_skips_ha
     ]
 
     def _should_not_be_called(_args):
-        raise AssertionError("figure_out_halfsets should not be called when ind_split is explicitly provided")
+        raise AssertionError("resolve_halfset_indices should not be called when ind_split is explicitly provided")
 
-    monkeypatch.setattr(dataset, "figure_out_halfsets", _should_not_be_called)
+    monkeypatch.setattr(halfsets, "resolve_halfset_indices", _should_not_be_called)
 
     args = SimpleNamespace(
         particles=files["particles_star"],
@@ -1449,7 +1449,7 @@ def test_simulator_tiny_tilt_load_dataset_from_args_with_explicit_split_skips_ha
         ntilts=None,
     )
 
-    cryos = dataset.load_dataset_from_args(args, lazy=True, ind_split=ind_split)
+    cryos = halfsets.load_halfset_dataset_from_args(args, lazy=True, ind_split=ind_split)
     assert len(cryos.halfset_indices) == 2
     original_images = utils.load_mrc(files["particles_mrcs"])
     dataset_indices = np.asarray(cryos.dataset_indices, dtype=np.int32)
@@ -1601,7 +1601,7 @@ def test_tiny_spa_with_tilt_ctf_preserves_pose_and_ctf_row_alignment(tmp_path):
     )
 
 
-def test_tiny_tilt_get_split_datasets_preserves_pose_and_ctf_alignment(tmp_path):
+def test_tiny_tilt_load_halfset_dataset_preserves_pose_and_ctf_alignment(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=8, n_particles=4)
     n = files["n_images"]
 
@@ -1632,16 +1632,15 @@ def test_tiny_tilt_get_split_datasets_preserves_pose_and_ctf_alignment(tmp_path)
         np.array([7, 1, 7, 3], dtype=np.int32),
         np.array([0, 5, 0], dtype=np.int32),
     ]
-    cryos = dataset.get_split_datasets(
+    dataset_spec = halfsets.HalfsetDatasetSpec(
         particles_file=files["particles_star"],
         poses_file=files["poses_pkl"],
         ctf_file=files["ctf_pkl"],
         datadir=str(tmp_path),
-        ind_split=ind_split,
-        lazy=True,
         tilt_series=True,
         tilt_series_ctf="relion5",
     )
+    cryos = halfsets.load_halfset_dataset(dataset_spec, ind_split=ind_split, lazy=True)
 
     assert len(cryos.halfset_indices) == 2
     dataset_indices = np.asarray(cryos.dataset_indices, dtype=np.int32)
@@ -1739,8 +1738,8 @@ def test_tiny_tilt_image_count_batch_loader_subset_len_matches_emitted_images(tm
     )
 
     # Duplicate/reordered subset over particles with uneven tilt counts.
-    subset = cryo_dataset.ParticleSubset(ds, np.array([2, 2], dtype=np.int32))
-    loader = cryo_dataset.ImageCountBatchLoader(subset, batch_size=4, pad_to_batch=False)
+    subset = cryo_dataset._SimpleSubset(ds, np.array([2, 2], dtype=np.int32))
+    loader = cryo_dataset._ImageCountBatchLoader(subset, batch_size=4, pad_to_batch=False)
 
     # Particle 2 has 2 tilts in this tiny STAR, duplicated twice => 4 total images.
     assert loader.total_images == 4
@@ -1768,8 +1767,8 @@ def test_simulator_tiny_tilt_image_count_batch_loader_reports_consistent_lengths
         random_tilts=False,
         tilt_file_option="relion5",
     )
-    subset = cryo_dataset.ParticleSubset(ds, np.array([2, 0, 2], dtype=np.int32))
-    loader = cryo_dataset.ImageCountBatchLoader(subset, batch_size=3, pad_to_batch=False)
+    subset = cryo_dataset._SimpleSubset(ds, np.array([2, 0, 2], dtype=np.int32))
+    loader = cryo_dataset._ImageCountBatchLoader(subset, batch_size=3, pad_to_batch=False)
 
     batches = list(loader)
     assert len(loader) == len(batches)
@@ -1791,7 +1790,7 @@ def test_simulator_tiny_tilt_image_count_batch_loader_nested_torch_subsets(sim_t
 
     subset_lvl1 = cryo_dataset._SimpleSubset(ds, [3, 1, 0])
     subset_lvl2 = cryo_dataset._SimpleSubset(subset_lvl1, [2, 0, 2])  # maps to base particle ids [0, 3, 0]
-    loader = cryo_dataset.ImageCountBatchLoader(subset_lvl2, batch_size=3, pad_to_batch=False)
+    loader = cryo_dataset._ImageCountBatchLoader(subset_lvl2, batch_size=3, pad_to_batch=False)
 
     batches = list(loader)
     assert len(loader) == len(batches)
@@ -1830,7 +1829,7 @@ def test_simulator_tiny_tilt_image_count_batch_loader_num_tilts_zero_emits_no_ba
     assert np.asarray(first_imgs).shape[0] == 0
     assert np.asarray(first_tilts).size == 0
 
-    loader = cryo_dataset.ImageCountBatchLoader(ds, batch_size=4, pad_to_batch=False)
+    loader = cryo_dataset._ImageCountBatchLoader(ds, batch_size=4, pad_to_batch=False)
     assert loader.total_images == 0
     assert len(loader) == 0
     assert list(loader) == []

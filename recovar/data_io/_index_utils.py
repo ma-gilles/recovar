@@ -14,6 +14,7 @@ series and expands to one or more local images.
 
 from __future__ import annotations
 
+import pickle
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
@@ -62,6 +63,45 @@ def normalize_indices(
             f"{name} contains out-of-range values for total size {int(n_total)}"
         )
 
+    return arr.astype(np.int32, copy=False)
+
+
+def load_index_like(value):
+    """Return an in-memory index selection from an array-like or pickle path."""
+    if value is None:
+        return None
+    if isinstance(value, (np.ndarray, list, tuple)):
+        return value
+    with open(value, "rb") as handle:
+        return pickle.load(handle)
+
+
+def normalize_image_indices(values, *, n_total: Optional[int] = None, name: str = "indices"):
+    """Normalize image indices, optionally without a known dataset size.
+
+    When ``n_total`` is known, this is strict bounds-checked normalization.
+    When it is unknown, the function still validates rank, dtype, and
+    non-negativity, but cannot reject out-of-range values.
+    """
+    if n_total is not None:
+        return normalize_indices(values, int(n_total), name=name)
+
+    if values is None:
+        raise ValueError(f"{name} must not be None")
+
+    arr = np.asarray(values)
+    if arr.dtype == bool:
+        raise ValueError(f"{name} boolean mask requires known dataset size for validation")
+    if arr.ndim == 0:
+        arr = arr.reshape(1)
+    if arr.ndim != 1:
+        raise ValueError(f"{name} indices must be 1D")
+    if arr.dtype.kind not in ("i", "u"):
+        raise TypeError(f"{name} indices must be integer or boolean mask")
+
+    arr = arr.astype(np.int64, copy=False).reshape(-1)
+    if arr.size > 0 and np.any(arr < 0):
+        raise ValueError(f"{name} indices must be non-negative")
     return arr.astype(np.int32, copy=False)
 
 

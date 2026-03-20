@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from helpers.tiny_synthetic import make_tiny_cryo_dataset
-from recovar.data_io.cryoem_dataset import _read_relion_halfsets_from_star
+from recovar.data_io.halfsets import _read_relion_halfsets_from_star
 
 pytestmark = pytest.mark.unit
 

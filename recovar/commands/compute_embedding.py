@@ -8,11 +8,10 @@ import numpy as np
 
 from recovar.output import output as o
 from recovar import utils
-from recovar.data_io import cryoem_dataset as dataset
+from recovar.data_io import halfsets
 from recovar.heterogeneity import embedding
 
 logger = logging.getLogger(__name__)
-## TODO: this is very out of date code. Fix? Delete?
 
 def add_args(parser: argparse.ArgumentParser):
     parser.add_argument(
@@ -60,7 +59,7 @@ def add_args(parser: argparse.ArgumentParser):
 
 def compute_embedding(recovar_result_dir):
     results = o.load_results_new(recovar_result_dir)
-    ds = dataset.load_dataset_from_args(results['input_args'])
+    ds = halfsets.load_halfset_dataset_from_args(results['input_args'])
     options = utils.make_algorithm_options(results['input_args'])
 
     gpu_memory = utils.get_gpu_memory_total()

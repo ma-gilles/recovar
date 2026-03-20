@@ -72,7 +72,7 @@ def _resolve_output_dir(tmp_path: Path, name: str) -> Path:
 
 def _assert_cryo_et_subsampling_consistency(particles_star: Path):
     """Validate tilt/image/ntilts subsampling invariants on a real generated ET STAR."""
-    from recovar.data_io import cryoem_dataset as recovar_dataset
+    from recovar.data_io import halfsets
     from recovar.data_io import image_backends as cryo_dataset
 
     particles_to_tilts, _ = cryo_dataset.TiltSeriesDataset.parse_particle_tilt(str(particles_star))
@@ -101,7 +101,7 @@ def _assert_cryo_et_subsampling_consistency(particles_star: Path):
         dtype=np.int32,
     )
 
-    split = recovar_dataset.get_split_tilt_indices(
+    split = halfsets.get_split_tilt_indices(
         particles_file=str(particles_star),
         ind_file=ind_file,
         tilt_ind_file=tilt_ind_file,
@@ -119,7 +119,7 @@ def _assert_cryo_et_subsampling_consistency(particles_star: Path):
     assert half1.size == 0
 
     # ntilts subsampling: at most one tilt kept per selected particle when ntilts=1.
-    split_ntilts = recovar_dataset.get_split_tilt_indices(
+    split_ntilts = halfsets.get_split_tilt_indices(
         particles_file=str(particles_star),
         tilt_ind_file=np.array([keep_a, keep_b], dtype=np.int32),
         ntilts=1,

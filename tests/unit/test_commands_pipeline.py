@@ -132,13 +132,18 @@ def test_standard_pipeline_estimates_initial_noise_from_halfset_zero(monkeypatch
 
     ds = _FakeDataset()
 
-    monkeypatch.setattr(pipeline_cmd.dataset, "figure_out_halfsets", lambda _args: "split")
-    monkeypatch.setattr(
-        pipeline_cmd.dataset,
-        "make_dataset_loader_dict",
-        lambda _args: {"particles_file": "particles.star", "poses_file": "poses.pkl", "ctf_file": "ctf.pkl"},
+    monkeypatch.setattr(pipeline_cmd.halfsets, "resolve_halfset_indices", lambda _args: "split")
+    dataset_spec = pipeline_cmd.halfsets.HalfsetDatasetSpec(
+        particles_file="particles.star",
+        poses_file="poses.pkl",
+        ctf_file="ctf.pkl",
     )
-    monkeypatch.setattr(pipeline_cmd.dataset, "get_split_datasets", lambda **_kwargs: ds)
+    monkeypatch.setattr(
+        pipeline_cmd.halfsets.HalfsetDatasetSpec,
+        "from_args",
+        classmethod(lambda cls, _args: dataset_spec),
+    )
+    monkeypatch.setattr(pipeline_cmd.halfsets, "load_halfset_dataset", lambda spec, **_kwargs: ds)
     monkeypatch.setattr(
         pipeline_cmd.utils,
         "make_algorithm_options",

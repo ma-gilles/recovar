@@ -19,12 +19,8 @@ def _normalize_pose_indices(ind: np.ndarray, n_total: int) -> np.ndarray:
     return normalize_indices(ind, n_total=int(n_total), name="pose indices")
 
 
-def print_ctf_params(params: np.ndarray) -> None:
-    """Log CTF parameters in a readable format.
-    
-    Args:
-        params: Array of 9 CTF parameters
-    """
+def _log_ctf_params(params: np.ndarray) -> None:
+    """Log one example CTF row after image-size rescaling."""
     if len(params) != 9:
         raise ValueError(f"Expected 9 CTF parameters, got {len(params)}")
     
@@ -80,7 +76,7 @@ def load_ctf_params(D: int, ctf_params_pkl: str) -> np.ndarray:
     ctf_params[:, 1] = new_Apix
     
     # Log the first entry as example
-    print_ctf_params(ctf_params[0])
+    _log_ctf_params(ctf_params[0])
     
     # Return without the image size column
     return ctf_params[:, 1:]

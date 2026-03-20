@@ -27,12 +27,6 @@ def test_load_ctf_params_rescales_apix_and_drops_size_column(monkeypatch):
     assert np.allclose(out[:, 0], 3.0)
     assert np.allclose(out[:, 1], [10000, 12000])
 
-
-def test_print_ctf_params_rejects_wrong_length():
-    with pytest.raises(ValueError, match="Expected 9 CTF parameters"):
-        load_utils.print_ctf_params(np.zeros((8,), dtype=np.float32))
-
-
 def test_load_ctf_params_rejects_odd_dimension():
     with pytest.raises(ValueError, match="must be even"):
         load_utils.load_ctf_params(D=65, ctf_params_pkl="dummy.pkl")

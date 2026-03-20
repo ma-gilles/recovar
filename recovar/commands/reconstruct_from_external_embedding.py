@@ -7,7 +7,7 @@ import time
 import numpy as np
 
 from recovar import utils
-from recovar.data_io import cryoem_dataset as dataset
+from recovar.data_io import cryoem_dataset, halfsets
 from recovar.output import output as o
 from recovar.reconstruction import noise
 
@@ -174,9 +174,9 @@ def generate(args):
         args.tilt_series_ctf = 'relion5' if args.tilt_series else 'cryoem'
         logger.info("Setting tilt_series_ctf to %s", args.tilt_series_ctf)
 
-    ind_split = dataset.figure_out_halfsets(args)
-    dataset_loader_dict = dataset.make_dataset_loader_dict(args)
-    ds = dataset.get_split_datasets(**dataset_loader_dict, ind_split=ind_split)
+    ind_split = halfsets.resolve_halfset_indices(args)
+    dataset_spec = halfsets.HalfsetDatasetSpec.from_args(args)
+    ds = halfsets.load_halfset_dataset(dataset_spec, ind_split=ind_split)
 
     zs = utils.pickle_load(args.embedding)
     zs_split = [zs[ds.halfset_local_image_indices(0)], zs[ds.halfset_local_image_indices(1)]]

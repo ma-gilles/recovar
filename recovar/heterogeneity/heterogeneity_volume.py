@@ -11,7 +11,7 @@ import recovar.heterogeneity.latent_density
 import recovar.jax_config
 from recovar import utils
 from recovar.core import mask
-from recovar.data_io import cryoem_dataset as dataset
+from recovar.data_io import cryoem_dataset, halfsets
 from recovar.heterogeneity import adaptive_kernel_discretization, locres
 from recovar.output import output as output_mod
 from recovar.utils.nvtx_shim import nvtx
@@ -58,7 +58,7 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
         metric_used: Volume quality metric for selection.
         n_min_particles: Minimum particles per bin.
     """
-    ds = dataset.load_dataset_from_args(results['input_args'], lazy = False) if cryos is None else cryos
+    ds = halfsets.load_halfset_dataset_from_args(results['input_args'], lazy=False) if cryos is None else cryos
     output_folder = results['input_args'].outdir + "/output/" if output_folder is None else output_folder
     logger.info("Dumping to %s", output_folder)
     output_mod.mkdir_safe(output_folder)
@@ -120,11 +120,13 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
     n_images_per_bin = [ int(np.sum(heterogeneity_distances[0] < b) + np.sum(heterogeneity_distances[1] < b)) for b in heterogeneity_bins ]
     logger.info("Particles per bin: %s", n_images_per_bin)
 
+    halfset_datasets = ds.materialize_halfset_datasets()
+
     estimates = [None, None]
     lhs, rhs = [None, None], [None, None]
     cross_validation_estimators = [None, None]
     for k in range(2):
-        half_ds = ds.get_halfset_dataset(k, independent=False)
+        half_ds = halfset_datasets[k]
         estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(
             half_ds, None, heterogeneity_distances[k], heterogeneity_bins, tau=tau,
             grid_correct=grid_correct_ests, use_spherical_mask=use_mask_ests,
@@ -164,7 +166,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
 
     for k in range(2):
         logger.info("Computing estimates start")
-        half_ds = ds.get_halfset_dataset(k, independent=False)
+        half_ds = halfset_datasets[k]
         estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(
             half_ds, None, heterogeneity_distances[k], heterogeneity_bins, tau=None,
             grid_correct=True, use_spherical_mask=True, heterogeneity_kernel=heterogeneity_kernel,
@@ -251,7 +253,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         recovar.utils.pickle_dump(output_dict ,  output_folder + name + "params.pkl")
 
 
-    distances_reordered = dataset.reorder_to_original_indexing(
+    distances_reordered = cryoem_dataset.reorder_to_original_indexing(
         heterogeneity_distances, ds, use_tilt_indices=ds.tilt_series_flag)
     np.savetxt(output_folder + "heterogeneity_distances.txt", distances_reordered)
     use_choice_and_filter(ml_choice, "")

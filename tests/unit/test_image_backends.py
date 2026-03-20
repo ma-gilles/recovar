@@ -201,7 +201,7 @@ def test_image_count_batch_loader_batches_and_padding():
             imgs = np.ones((len(t), 8, 8), dtype=np.float32) * (idx + 1)
             return imgs, idx, t
 
-    loader = image_backends.ImageCountBatchLoader(_FakeTiltDataset(), batch_size=4, pad_to_batch=True)
+    loader = image_backends._ImageCountBatchLoader(_FakeTiltDataset(), batch_size=4, pad_to_batch=True)
     batches = list(loader)
     assert len(batches) >= 1
     b0_img, b0_pid, b0_tid = batches[0]
@@ -226,11 +226,11 @@ def test_image_count_batch_loader_rejects_nonpositive_or_noninteger_batch_size()
             return imgs, 0, t
 
     with pytest.raises(ValueError, match="batch_size must be positive"):
-        image_backends.ImageCountBatchLoader(_FakeTiltDataset(), batch_size=0, pad_to_batch=False)
+        image_backends._ImageCountBatchLoader(_FakeTiltDataset(), batch_size=0, pad_to_batch=False)
     with pytest.raises(ValueError, match="batch_size must be positive"):
-        image_backends.ImageCountBatchLoader(_FakeTiltDataset(), batch_size=-3, pad_to_batch=False)
+        image_backends._ImageCountBatchLoader(_FakeTiltDataset(), batch_size=-3, pad_to_batch=False)
     with pytest.raises(TypeError, match="batch_size must be an integer"):
-        image_backends.ImageCountBatchLoader(_FakeTiltDataset(), batch_size=2.5, pad_to_batch=False)
+        image_backends._ImageCountBatchLoader(_FakeTiltDataset(), batch_size=2.5, pad_to_batch=False)
 
 
 def test_image_count_batch_loader_handles_oversized_single_particle():
@@ -247,7 +247,7 @@ def test_image_count_batch_loader_handles_oversized_single_particle():
             t = np.arange(5, dtype=np.int32)
             return imgs, idx, t
 
-    loader = image_backends.ImageCountBatchLoader(_OversizedDataset(), batch_size=2, pad_to_batch=False)
+    loader = image_backends._ImageCountBatchLoader(_OversizedDataset(), batch_size=2, pad_to_batch=False)
     batches = list(loader)
     assert len(batches) == 1
     imgs, pidx, tidx = batches[0]
@@ -269,7 +269,7 @@ def test_image_count_batch_loader_padding_marks_invalid_entries():
             imgs = np.ones((1, 8, 8), dtype=np.float32)
             return imgs, idx, np.array([idx], dtype=np.int32)
 
-    loader = image_backends.ImageCountBatchLoader(_TinyTiltDataset(), batch_size=3, pad_to_batch=True)
+    loader = image_backends._ImageCountBatchLoader(_TinyTiltDataset(), batch_size=3, pad_to_batch=True)
     imgs, pidx, tidx = next(iter(loader))
     assert imgs.shape[0] == 3
     np.testing.assert_array_equal(pidx, np.array([0, 1, -1], dtype=np.int32))
@@ -295,7 +295,7 @@ def test_image_count_batch_loader_skips_zero_image_particles():
             images = np.ones((len(tilts), 8, 8), dtype=np.float32) * (int(idx) + 1)
             return images, int(idx), tilts
 
-    loader = image_backends.ImageCountBatchLoader(_SparseTiltDataset(), batch_size=2, pad_to_batch=False)
+    loader = image_backends._ImageCountBatchLoader(_SparseTiltDataset(), batch_size=2, pad_to_batch=False)
 
     assert loader.total_images == 3
     assert len(loader) == 2
@@ -330,7 +330,7 @@ def test_image_count_batch_loader_all_zero_particles_emits_no_batches():
                 np.zeros((0,), dtype=np.int32),
             )
 
-    loader = image_backends.ImageCountBatchLoader(_AllZeroTiltDataset(), batch_size=3, pad_to_batch=True)
+    loader = image_backends._ImageCountBatchLoader(_AllZeroTiltDataset(), batch_size=3, pad_to_batch=True)
     assert loader.total_images == 0
     assert len(loader) == 0
     assert list(loader) == []
@@ -357,7 +357,7 @@ def test_image_count_batch_loader_subset_wrapper_preserves_duplicate_parent_mapp
     parent = _ParentTiltDataset()
     # Exercise Subset path with duplicate/reordered parent indices: [2, 0, 2].
     subset = image_backends._SimpleSubset(parent, [2, 0, 2])
-    loader = image_backends.ImageCountBatchLoader(subset, batch_size=3, pad_to_batch=False)
+    loader = image_backends._ImageCountBatchLoader(subset, batch_size=3, pad_to_batch=False)
 
     assert loader.total_images == 4  # 1 + 2 + 1
     assert len(loader) == 2
@@ -391,7 +391,7 @@ def test_image_count_batch_loader_subset_wrapper_uses_parent_num_tilts_cap():
             return images, int(idx), tilt_ids
 
     subset = image_backends._SimpleSubset(_ParentTiltDataset(), [0, 1, 0])
-    loader = image_backends.ImageCountBatchLoader(subset, batch_size=2, pad_to_batch=False)
+    loader = image_backends._ImageCountBatchLoader(subset, batch_size=2, pad_to_batch=False)
 
     assert loader.total_images == 3
     assert len(loader) == 2
@@ -424,7 +424,7 @@ def test_image_count_batch_loader_nested_subset_wrapper_preserves_mapping_and_du
     subset_lvl1 = image_backends._SimpleSubset(parent, [3, 1, 0])      # maps local->[3,1,0]
     subset_lvl2 = image_backends._SimpleSubset(subset_lvl1, [2, 0, 2]) # maps to base [0,3,0]
 
-    loader = image_backends.ImageCountBatchLoader(subset_lvl2, batch_size=3, pad_to_batch=False)
+    loader = image_backends._ImageCountBatchLoader(subset_lvl2, batch_size=3, pad_to_batch=False)
 
     assert loader.total_images == 5  # base[0]=2 + base[3]=1 + base[0]=2
     assert len(loader) == 2
@@ -437,7 +437,7 @@ def test_image_count_batch_loader_nested_subset_wrapper_preserves_mapping_and_du
     np.testing.assert_array_equal(emitted_tilts, np.array([0, 1, 30, 0, 1], dtype=np.int32))
 
 
-def test_particle_subset_max_tilts_uses_parent_particle_tilts_without_particle_groups():
+def test_max_tilts_per_dataset_view_uses_parent_particle_tilts_without_particle_groups():
     class _ParentTiltDataset:
         def __init__(self):
             self._particle_tilts = [
@@ -454,11 +454,11 @@ def test_particle_subset_max_tilts_uses_parent_particle_tilts_without_particle_g
             images = np.ones((len(tilt_ids), 8, 8), dtype=np.float32)
             return images, int(idx), tilt_ids
 
-    subset = image_backends.ParticleSubset(_ParentTiltDataset(), np.array([1, 0, 1], dtype=np.int32))
-    assert subset._max_tilts_per_particle() == 2
+    subset = image_backends._SimpleSubset(_ParentTiltDataset(), np.array([1, 0, 1], dtype=np.int32))
+    assert image_backends._max_tilts_per_dataset_view(subset) == 2
 
 
-def test_particle_subset_max_tilts_respects_zero_num_tilts():
+def test_max_tilts_per_dataset_view_respects_zero_num_tilts():
     class _ParentTiltDataset:
         def __init__(self):
             self._particle_tilts = [
@@ -474,11 +474,11 @@ def test_particle_subset_max_tilts_respects_zero_num_tilts():
             _ = idx
             return np.zeros((0, 8, 8), dtype=np.float32), int(idx), np.zeros((0,), dtype=np.int32)
 
-    subset = image_backends.ParticleSubset(_ParentTiltDataset(), np.array([1, 0, 1], dtype=np.int32))
-    assert subset._max_tilts_per_particle() == 0
+    subset = image_backends._SimpleSubset(_ParentTiltDataset(), np.array([1, 0, 1], dtype=np.int32))
+    assert image_backends._max_tilts_per_dataset_view(subset) == 0
 
 
-def test_particle_subset_max_tilts_raises_when_parent_has_no_group_metadata():
+def test_max_tilts_per_dataset_view_raises_when_parent_has_no_group_metadata():
     class _ParentNoGroups:
         num_tilts = None
 
@@ -489,9 +489,9 @@ def test_particle_subset_max_tilts_raises_when_parent_has_no_group_metadata():
             images = np.ones((1, 8, 8), dtype=np.float32)
             return images, int(idx), np.array([int(idx)], dtype=np.int32)
 
-    subset = image_backends.ParticleSubset(_ParentNoGroups(), np.array([0], dtype=np.int32))
-    with pytest.raises(AttributeError, match="must expose _particle_tilts or particle_groups"):
-        subset._max_tilts_per_particle()
+    subset = image_backends._SimpleSubset(_ParentNoGroups(), np.array([0], dtype=np.int32))
+    with pytest.raises(AttributeError, match="must expose _particle_tilts"):
+        image_backends._max_tilts_per_dataset_view(subset)
 
 
 def test_image_count_batch_loader_rejects_dataset_without_group_metadata():
@@ -505,7 +505,7 @@ def test_image_count_batch_loader_rejects_dataset_without_group_metadata():
             return np.ones((1, 8, 8), dtype=np.float32), int(idx), np.array([0], dtype=np.int32)
 
     with pytest.raises(AttributeError, match="must expose _particle_tilts"):
-        image_backends.ImageCountBatchLoader(_NoGroupDataset(), batch_size=2, pad_to_batch=False)
+        image_backends._ImageCountBatchLoader(_NoGroupDataset(), batch_size=2, pad_to_batch=False)
 
 
 def test_tiltseries_dataset_getitem_deterministic_selection(monkeypatch):
@@ -912,22 +912,22 @@ def test_tiltseries_image_subset_generator_none_matches_full(monkeypatch):
 def test_collate_to_jax_handles_none_scalar_ndarray_and_nested_sequences():
     # ndarray branch
     arr = [np.ones((1, 2), dtype=np.float32), np.zeros((1, 2), dtype=np.float32)]
-    out = image_backends.collate_to_jax(arr)
+    out = image_backends._collate_batch_to_jax(arr)
     np.testing.assert_array_equal(np.array(out), np.array([[1.0, 1.0], [0.0, 0.0]], dtype=np.float32))
 
     # scalar branch
-    out_scalar = image_backends.collate_to_jax([1, 2, 3])
+    out_scalar = image_backends._collate_batch_to_jax([1, 2, 3])
     np.testing.assert_array_equal(np.array(out_scalar), np.array([1, 2, 3]))
 
     # none branch
-    assert image_backends.collate_to_jax(None) is None
+    assert image_backends._collate_batch_to_jax(None) is None
 
     # tuple/list recursion branch
     nested = [
         (np.ones((1, 1), dtype=np.float32), np.array([5], dtype=np.int32)),
         (np.zeros((1, 1), dtype=np.float32), np.array([7], dtype=np.int32)),
     ]
-    out_nested = image_backends.collate_to_jax(nested)
+    out_nested = image_backends._collate_batch_to_jax(nested)
     assert isinstance(out_nested, list)
     np.testing.assert_array_equal(np.array(out_nested[0]), np.array([[1.0], [0.0]], dtype=np.float32))
     np.testing.assert_array_equal(np.array(out_nested[1]), np.array([5, 7], dtype=np.int32))
@@ -941,7 +941,7 @@ def test_collate_to_jax_single_numpy_batch_skips_concatenate(monkeypatch):
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("single-item fast path should skip concatenate")),
     )
 
-    out = image_backends.collate_to_jax([arr])
+    out = image_backends._collate_batch_to_jax([arr])
     np.testing.assert_array_equal(np.array(out), arr)
 
 

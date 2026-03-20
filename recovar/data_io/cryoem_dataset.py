@@ -10,7 +10,6 @@ Architecture:
 from __future__ import annotations
 
 import logging
-import pickle
 from typing import Callable, Optional, Tuple
 
 import jax
@@ -27,14 +26,14 @@ from recovar.data_io.image_sources import (
     ImageSourceInfo,
     create_image_source,
 )
-from recovar.data_io.image_metadata import MetadataStore, Metadata
+from recovar.data_io.image_metadata import ImageMetadata
 from recovar.output import plot_utils
 
 logger = logging.getLogger(__name__)
 
 from recovar.data_io._index_utils import (
     DatasetIndexLayout,
-    deduplicate_preserve_order,
+    normalize_image_indices,
     normalize_indices,
 )
 from recovar.data_io.image_loader import ImageLoader
@@ -59,48 +58,6 @@ def _prefetch_iter(iterable):
 
 def get_num_images_in_dataset(mrc_path, datadir=None, strip_prefix=None):
     return ImageLoader.image_count(mrc_path, datadir=datadir, strip_prefix=strip_prefix)
-
-
-def _load_index_like(value):
-    if value is None:
-        return None
-    if isinstance(value, (np.ndarray, list, tuple)):
-        return value
-    with open(value, "rb") as f:
-        return pickle.load(f)
-
-
-def _normalize_image_indices(values, n_images_total=None, name="indices"):
-    """Normalize image indices using the canonical implementation."""
-    if values is None:
-        raise ValueError(f"{name} must not be None")
-    if n_images_total is None:
-        # Legacy compatibility: when n_total is unknown, skip range check
-        arr = np.asarray(values)
-        if arr.dtype == bool:
-            raise ValueError(f"{name} boolean mask requires known dataset size for validation")
-        if arr.ndim == 0:
-            arr = arr.reshape(1)
-        if arr.ndim != 1:
-            raise ValueError(f"{name} indices must be 1D")
-        if arr.dtype.kind not in ("i", "u"):
-            raise TypeError(f"{name} indices must be integer or boolean mask")
-        arr = arr.astype(np.int64, copy=False).reshape(-1)
-        if arr.size > 0 and np.any(arr < 0):
-            raise ValueError(f"{name} indices must be non-negative")
-        return arr.astype(np.int32, copy=False)
-    return normalize_indices(values, n_total=int(n_images_total), name=name)
-
-
-def _deduplicate_preserve_order(values, name):
-    values = np.asarray(values)
-    if values.size == 0:
-        return values.astype(np.int32, copy=False)
-    deduped = deduplicate_preserve_order(values, name=name)
-    dropped = int(values.size - deduped.size)
-    if dropped > 0:
-        logger.warning("Dropping %d duplicate entries from %s.", dropped, name)
-    return deduped
 
 
 class _ImageIndexRemappedNoiseAdapter:
@@ -183,7 +140,7 @@ class CryoEMDataset:
         self,
         image_source,
         voxel_size: float,
-        metadata: MetadataStore,
+        metadata: ImageMetadata,
         ctf_evaluator=None,
         dtype: type = np.complex64,
         dataset_indices: Optional[NDArray[np.integer]] = None,
@@ -253,9 +210,9 @@ class CryoEMDataset:
                 dataset_indices = source_layout.original_image_indices
                 self._index_layout = source_layout
             else:
-                dataset_indices = _normalize_image_indices(
+                dataset_indices = normalize_image_indices(
                     dataset_indices,
-                    n_images_total=None,
+                    n_total=None,
                     name="dataset_indices",
                 )
                 dataset_indices = np.asarray(dataset_indices, dtype=np.int32)
@@ -282,9 +239,9 @@ class CryoEMDataset:
             if dataset_indices is None:
                 dataset_indices = np.arange(metadata.n_images, dtype=np.int32)
             else:
-                dataset_indices = _normalize_image_indices(
+                dataset_indices = normalize_image_indices(
                     dataset_indices,
-                    n_images_total=None,
+                    n_total=None,
                     name="dataset_indices",
                 )
             self._index_layout = DatasetIndexLayout.from_image_indices(dataset_indices)
@@ -445,7 +402,7 @@ class CryoEMDataset:
         subset/remap logic stays inside the image-loading layer rather than
         being duplicated in the dataset class.
         """
-        indices = _normalize_image_indices(indices, n_images_total=self.n_images, name="indices")
+        indices = normalize_image_indices(indices, n_total=self.n_images, name="indices")
 
         composed_indices = self._index_layout.original_image_indices_for_local(indices)
 
@@ -475,9 +432,9 @@ class CryoEMDataset:
         if self.particles_file is None:
             raise ValueError("Cannot reload dataset without stored loader paths")
 
-        original_image_indices = _normalize_image_indices(
+        original_image_indices = normalize_image_indices(
             original_image_indices,
-            n_images_total=None,
+            n_total=None,
             name="original_image_indices",
         )
 
@@ -529,6 +486,48 @@ class CryoEMDataset:
                 lazy=lazy,
             )
         return self.subset(self.halfset_local_image_indices(halfset_id))
+
+    def prefers_independent_halfset_datasets(self) -> bool:
+        """Return whether hot halfset iteration should reload independent datasets.
+
+        Lazy file-backed datasets pay extra per-batch remapping cost when they
+        iterate through subset views. Reloading each halfset directly from the
+        original files preserves the same batch contents while avoiding that
+        remap layer in heavy downstream loops.
+        """
+        if self.image_source is None:
+            return False
+        info = getattr(self.image_source, "info", None)
+        return bool(getattr(info, "lazy", False))
+
+    def materialize_halfset_datasets(self, *, independent=None, lazy=None):
+        """Build the two halfset datasets used by downstream kernels.
+
+        Parameters
+        ----------
+        independent : bool, optional
+            Whether to reload each halfset from the original files instead of
+            constructing subset views. Defaults to
+            :meth:`prefers_independent_halfset_datasets`.
+        lazy : bool, optional
+            Laziness flag used only for independent reloads. Defaults to the
+            parent dataset's image-source laziness.
+        """
+        if independent is None:
+            independent = self.prefers_independent_halfset_datasets()
+
+        if independent and lazy is None:
+            info = getattr(self.image_source, "info", None)
+            lazy = bool(getattr(info, "lazy", False))
+
+        return tuple(
+            self.get_halfset_dataset(
+                halfset_id,
+                independent=independent,
+                lazy=lazy,
+            )
+            for halfset_id in range(2)
+        )
 
     @property
     def ctf_evaluator(self):
@@ -863,7 +862,7 @@ def _normalize_dataset_indices(ind_value, n_total):
     """Normalize dataset selection indices (integer array or boolean mask)."""
     if ind_value is None:
         return None
-    return _normalize_image_indices(ind_value, n_images_total=n_total, name="ind")
+    return normalize_image_indices(ind_value, n_total=n_total, name="ind")
 
 
 def _create_image_source(particles_file, ind, lazy, tilt_series, tilt_series_ctf,
@@ -1151,7 +1150,7 @@ def load_dataset(
     ctf_params = ctf_params.astype(np.float32)
     dtype_real = np.complex64(0).real.dtype
 
-    meta = MetadataStore(rots, translations, ctf_params[:, 1:],
+    meta = ImageMetadata(rots, translations, ctf_params[:, 1:],
                          rotation_dtype=np.float32,
                          ctf_dtype=dtype_real,
                          real_dtype=dtype_real)
@@ -1166,26 +1165,6 @@ def load_dataset(
     ds.ctf_file = ctf_file
     ds.datadir = datadir
     return ds
-
-
-
-# ---------------------------------------------------------------------------
-# Half-set splitting — delegated to recovar.data_io.halfsets
-# ---------------------------------------------------------------------------
-
-from recovar.data_io.halfsets import (  # noqa: E402
-    split_index_list,
-    get_split_indices,
-    get_split_tilt_indices,
-    _read_relion_halfsets_from_star,
-    figure_out_halfsets,
-    get_split_datasets,
-    make_dataset_loader_dict,
-    load_dataset_from_args,
-)
-
-
-
 
 def reorder_to_original_indexing_from_halfsets(arr, halfsets, num_images = None ):
     if isinstance(arr, list):
