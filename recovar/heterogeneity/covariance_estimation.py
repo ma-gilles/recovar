@@ -640,22 +640,21 @@ def compute_both_H_B(dataset, means, dilated_volume_mask, picked_frequencies,
     Hs = []
     Bs = []
     st_time = time.time()
+    halfset_datasets = dataset.materialize_halfset_datasets()
 
-    for halfset_id in range(2):
+    for halfset_id, halfset_dataset in enumerate(halfset_datasets):
         mean = means.combined if options["use_combined_mean"] else means.corrected(halfset_id)
         if options.get('disc_type') == 'cubic':
             mean = cubic_interpolation.calculate_spline_coefficients(
-                jnp.array(mean).reshape(dataset.volume_shape))
+                jnp.array(mean).reshape(halfset_dataset.volume_shape))
         if use_multi_gpu:
             H, B = _compute_H_B_multi_gpu(
-                dataset, mean, dilated_volume_mask, picked_frequencies,
-                gpu_memory, options, n_gpus=n_gpus,
-                image_subset=dataset.halfset_local_image_indices(halfset_id))
+                halfset_dataset, mean, dilated_volume_mask, picked_frequencies,
+                gpu_memory, options, n_gpus=n_gpus)
         else:
             H, B = compute_H_B_for_halfset(
-                dataset, mean, dilated_volume_mask, picked_frequencies,
-                gpu_memory, options,
-                halfset_id=halfset_id)
+                halfset_dataset, mean, dilated_volume_mask, picked_frequencies,
+                gpu_memory, options)
         logger.info("Time to cov %s", time.time() - st_time)
         Hs.append(H)
         Bs.append(B)
