@@ -1221,3 +1221,48 @@ def test_apply_image_masks_half_matches_full():
     # Convert half result back to full for comparison
     result_half_full = fourier_transform_utils.half_image_to_full_image(result_half, image_shape)
     np.testing.assert_allclose(np.asarray(result_half_full), np.asarray(result_full), atol=1e-5, rtol=1e-5)
+
+
+def test_variance_relion_style_triangular_kernel_uses_upsampled_volume_shape(monkeypatch):
+    class _FakeDataset:
+        image_shape = (4, 4)
+        upsampled_volume_shape = (8, 8, 8)
+        grid_size = 4
+        voxel_size = 1.5
+        padding = 0
+        ctf_evaluator = staticmethod(lambda *args, **kwargs: None)
+        premultiplied_ctf = False
+        volume_mask_threshold = 0.5
+        noise = None
+        image_mask = np.ones((4, 4), dtype=np.float32)
+
+        def iter_batches(self, *args, **kwargs):
+            yield (
+                np.zeros((1, 4, 4), dtype=np.float32),
+                np.zeros((1, 3, 3), dtype=np.float32),
+                np.zeros((1, 2), dtype=np.float32),
+                np.zeros((1, 9), dtype=np.float32),
+                None,
+                np.zeros((1,), dtype=np.int32),
+                np.zeros((1,), dtype=np.int32),
+            )
+
+        def process_images_half(self, images):
+            return images
+
+    seen = {}
+
+    def _fake_kernel(config, *args, **kwargs):
+        seen['volume_shape'] = tuple(config.volume_shape)
+        raise RuntimeError('stop-after-config')
+
+    monkeypatch.setattr(cov_est, 'variance_relion_kernel_trilinear', _fake_kernel)
+
+    with pytest.raises(RuntimeError, match='stop-after-config'):
+        cov_est.variance_relion_style_triangular_kernel(
+            _FakeDataset(),
+            mean_estimate=np.zeros(8, dtype=np.complex64),
+            batch_size=1,
+        )
+
+    assert seen['volume_shape'] == (8, 8, 8)

@@ -501,7 +501,7 @@ def _variance_relion_kernel_trilinear_explicit(
 def variance_relion_style_triangular_kernel(experiment_dataset, mean_estimate, batch_size, image_subset=None, volume_mask=None, disc_type=''):
     config = ForwardModelConfig(
         image_shape=tuple(experiment_dataset.image_shape),
-        volume_shape=(int(experiment_dataset.grid_size),)*3,
+        volume_shape=tuple(experiment_dataset.upsampled_volume_shape),
         grid_size=int(experiment_dataset.grid_size),
         voxel_size=float(experiment_dataset.voxel_size),
         padding=int(experiment_dataset.padding),
