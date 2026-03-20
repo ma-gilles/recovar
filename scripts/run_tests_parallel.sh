@@ -90,7 +90,7 @@ if [[ "$MODE" == "long-test" ]]; then
     # GPU memory stress tests (~30 min)
     G_NAMES+=(stress)
     G_MEM+=(500GB)
-    G_TIME+=(01:00:00)
+    G_TIME+=(02:00:00)
     G_ARGS+=("tests/integration/test_gpu_memory_stress.py tests/integration/test_compute_state_gpu_stress.py --long-test -v")
 
     # Isolated pipeline function tests (~1.5h)

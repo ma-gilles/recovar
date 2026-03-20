@@ -417,6 +417,10 @@ def test_materialize_halfset_datasets_prefers_independent_reloads_for_lazy_sourc
         np.array([0, 2], dtype=np.int32),
         np.array([1, 3], dtype=np.int32),
     ]
+    cryo.particles_file = "particles.star"
+    cryo.poses_file = "poses.pkl"
+    cryo.ctf_file = "ctf.pkl"
+    cryo.datadir = "/data"
 
     calls = []
 
@@ -430,6 +434,42 @@ def test_materialize_halfset_datasets_prefers_independent_reloads_for_lazy_sourc
     assert calls == [
         (0, True, True),
         (1, True, True),
+    ]
+
+
+def test_materialize_halfset_datasets_keeps_subset_views_when_reload_is_unavailable(monkeypatch):
+    fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
+    image_source = dataset.BackendImageSource(
+        fake_stack,
+        info=dataset.ImageSourceInfo(lazy=True),
+    )
+    metadata = dataset.ImageMetadata(
+        np.tile(np.eye(3, dtype=np.float32), (4, 1, 1)),
+        np.zeros((4, 2), dtype=np.float32),
+        np.zeros((4, 9), dtype=np.float32),
+    )
+    cryo = dataset.CryoEMDataset(
+        image_source=image_source,
+        voxel_size=1.0,
+        metadata=metadata,
+    )
+    cryo.halfset_indices = [
+        np.array([0, 2], dtype=np.int32),
+        np.array([1, 3], dtype=np.int32),
+    ]
+
+    calls = []
+
+    def fake_get_halfset_dataset(self, halfset_id, *, independent=False, lazy=None):
+        calls.append((halfset_id, independent, lazy))
+        return f"half{halfset_id}"
+
+    monkeypatch.setattr(dataset.CryoEMDataset, "get_halfset_dataset", fake_get_halfset_dataset)
+
+    assert cryo.materialize_halfset_datasets() == ("half0", "half1")
+    assert calls == [
+        (0, False, None),
+        (1, False, None),
     ]
 
 
@@ -467,6 +507,36 @@ def test_materialize_halfset_datasets_keeps_subset_views_for_eager_sources(monke
         (0, False, None),
         (1, False, None),
     ]
+
+
+def test_subset_preserves_reload_provenance():
+    fake_stack = _FakeImageStack(n_images=4, D=8, padding=0)
+    image_source = dataset.BackendImageSource(
+        fake_stack,
+        info=dataset.ImageSourceInfo(lazy=True),
+    )
+    metadata = dataset.ImageMetadata(
+        np.tile(np.eye(3, dtype=np.float32), (4, 1, 1)),
+        np.zeros((4, 2), dtype=np.float32),
+        np.zeros((4, 9), dtype=np.float32),
+    )
+    cryo = dataset.CryoEMDataset(
+        image_source=image_source,
+        voxel_size=1.0,
+        metadata=metadata,
+    )
+    cryo.particles_file = "particles.star"
+    cryo.poses_file = "poses.pkl"
+    cryo.ctf_file = "ctf.pkl"
+    cryo.datadir = "/data"
+
+    sub = cryo.subset(np.array([1, 3], dtype=np.int32))
+
+    assert sub.particles_file == "particles.star"
+    assert sub.poses_file == "poses.pkl"
+    assert sub.ctf_file == "ctf.pkl"
+    assert sub.datadir == "/data"
+    assert sub.can_reload_from_original_images() is True
 
 
 def test_halfset_dataset_spec_from_args_parses_uninvert_and_defaults():

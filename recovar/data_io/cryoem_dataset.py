@@ -418,7 +418,15 @@ class CryoEMDataset:
         )
         if self.noise is not None:
             sub.noise = _ImageIndexRemappedNoiseAdapter(self.noise, indices)
+        sub.particles_file = self.particles_file
+        sub.poses_file = self.poses_file
+        sub.ctf_file = self.ctf_file
+        sub.datadir = self.datadir
         return sub
+
+    def can_reload_from_original_images(self) -> bool:
+        """Whether this dataset can rebuild a file-backed view by original ids."""
+        return self.image_source is not None and self.particles_file is not None
 
     def reload_from_original_images(self, original_image_indices, *, lazy=None):
         """Reload a dataset view from original file image indices.
@@ -427,9 +435,7 @@ class CryoEMDataset:
         The input indices are always in original file ordering, never this
         dataset's local ordering.
         """
-        if self.image_source is None:
-            raise ValueError("Cannot reload dataset without an image source")
-        if self.particles_file is None:
+        if not self.can_reload_from_original_images():
             raise ValueError("Cannot reload dataset without stored loader paths")
 
         original_image_indices = normalize_image_indices(
@@ -495,7 +501,7 @@ class CryoEMDataset:
         original files preserves the same batch contents while avoiding that
         remap layer in heavy downstream loops.
         """
-        if self.image_source is None:
+        if not self.can_reload_from_original_images():
             return False
         info = getattr(self.image_source, "info", None)
         return bool(getattr(info, "lazy", False))

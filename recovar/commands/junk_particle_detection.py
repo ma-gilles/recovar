@@ -132,7 +132,7 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
     - Maps global particle indices to local indices for each halfset dataset
     - If filter_resolution is provided, combined reconstructions are low-pass filtered
     """
-    cryos = pipeline_output.get('dataset')  # CryoEMDataset with halfset_indices
+    cryo_dataset = pipeline_output.get('dataset')
     coords_entry = 'latent_coords_noreg' if noreg else 'latent_coords'
     zs = pipeline_output.get(coords_entry)[zdim_key]
     volume_shape = pipeline_output.get('volume_shape')
@@ -157,7 +157,8 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
     # For tilt-series, embeddings are indexed by particle / group. Preserve
     # that grouped domain for reconstruction to match the halfset dataset
     # semantics used before the loader refactor.
-    is_tilt = cryos.tilt_series_flag
+    is_tilt = cryo_dataset.tilt_series_flag
+    halfset_datasets = cryo_dataset.materialize_halfset_datasets()
 
     # Create reconstructions directory if saving
     if save_reconstructions and output_folder is not None:
@@ -190,20 +191,18 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
 
         # Offset to convert local halfset index → dense zs index
         half_offsets = [0, n_half0]
-        for i, zs_subset in enumerate(zs_subsets):
+        for i, (zs_subset, halfset_dataset) in enumerate(zip(zs_subsets, halfset_datasets)):
             distances = np.linalg.norm(zs_subset - cluster_center, axis=1)
             closest_local = np.argsort(distances)[:n_particles_per_cluster]
             if len(closest_local) == 0:
                 logger.warning("Cluster %s: No particles available for half-map %s, skipping", cluster_idx, i)
                 used_particles[i] = np.array([], dtype=np.int32)
                 continue
-            # Map halfset-local embedding indices back to dataset-local
-            # reconstruction indices in the correct domain.
+            canonical_indices = particles_halfsets[i][closest_local]
             if is_tilt:
-                canonical_indices = particles_halfsets[i][closest_local]
-                selected_subset = cryos.local_group_indices_from_original(canonical_indices)
+                selected_subset = halfset_dataset.local_group_indices_from_original(canonical_indices)
             else:
-                selected_subset = cryos.halfset_local_image_indices(i)[closest_local]
+                selected_subset = halfset_dataset.local_image_indices_from_original(canonical_indices)
             # Store dense zs indices for downstream use (plotting, usage counts).
             # These index into the halfset-concatenated zs array.
             used_particles[i] = half_offsets[i] + closest_local
@@ -211,7 +210,7 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
             logger.info("Cluster %s: Using %s closest particles for half-map %s (min distance: %.3f, max distance: %.3f). Average distance over all particles: %.3f", cluster_idx, len(closest_local), i, distances[closest_local[0]], distances[closest_local[-1]], np.mean(distances))
 
             Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(
-                cryos, None, batch_size,
+                halfset_dataset, None, batch_size,
                 disc_type='linear_interp',
                 index_subset=selected_subset,
                 upsampling_factor=2,
@@ -219,7 +218,7 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
             )
             halfmap = relion_functions.post_process_from_filter_v2(
                 Ft_ctf, F_ty,
-                cryos.volume_shape, 2,
+                halfset_dataset.volume_shape, 2,
                 kernel='triangular',
                 use_spherical_mask=True,
                 grid_correct=True, gridding_correct="square",
@@ -2098,7 +2097,7 @@ def main():
         from recovar import utils
         gpu_memory = utils.get_gpu_memory_total()
         cryos = pipeline_output.get('dataset')
-        grid_size = cryos.grid_size
+        grid_size = cryo_dataset.grid_size
         
         # Calculate automatic batch size like in pipeline
         auto_batch_size = utils.get_image_batch_size(grid_size, gpu_memory)
