@@ -1760,3 +1760,80 @@ def test_compute_state_uses_nonlazy_dataset_when_lazy_false(monkeypatch, tmp_pat
 
     compute_state_cmd.compute_state(args)
     assert captured["cryos"] == ["dataset_obj"]
+
+
+def test_compute_state_builds_explicit_halfsets_for_reweighting(monkeypatch, tmp_path):
+    latent_points = np.array([[0.0, 1.0]], dtype=np.float32)
+    latent_path = tmp_path / "latent.txt"
+    np.savetxt(latent_path, latent_points)
+
+    class _Dataset:
+        def __init__(self):
+            self.halfset_indices = [np.array([0], dtype=np.int32), np.array([1], dtype=np.int32)]
+            self.materialize_calls = []
+
+        def can_reload_from_original_images(self):
+            return True
+
+        def materialize_halfset_datasets(self, *, independent=None, lazy=None):
+            self.materialize_calls.append((independent, lazy))
+            return ("half0", "half1")
+
+    dataset_obj = _Dataset()
+
+    class _PO:
+        def __init__(self, _path):
+            self.params = {
+                "input_args": SimpleNamespace(particles="p", datadir=None, strip_prefix=None),
+            }
+            self._payload = {
+                "latent_coords": {2: np.zeros((4, 2), dtype=np.float32)},
+                "latent_precision": {2: np.zeros((4, 2, 2), dtype=np.float32)},
+                "contrasts": {2: np.ones(4, dtype=np.float32)},
+                "dataset": dataset_obj,
+                "lazy_dataset": ["lazy_dataset_obj"],
+                "noise_var_used": np.ones(4, dtype=np.float32),
+            }
+
+        def get(self, key):
+            if key == "volume_mask":
+                raise KeyError("volume_mask not used here")
+            return self._payload[key]
+
+    monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _PO)
+    monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
+
+    captured = {}
+
+    def _capture(cryos, *_args, **kwargs):
+        captured["cryos"] = cryos
+        captured["halfset_datasets"] = kwargs.get("halfset_datasets")
+
+    monkeypatch.setattr(compute_state_cmd.o, "compute_and_save_reweighted", _capture)
+
+    args = SimpleNamespace(
+        result_dir=str(tmp_path / "pipeline_out"),
+        particles=None,
+        datadir=None,
+        strip_prefix=None,
+        latent_points=str(latent_path),
+        outdir=str(tmp_path / "state_out"),
+        zdim1=False,
+        no_z_regularization=False,
+        lazy=False,
+        n_bins=20,
+        Bfactor=0.0,
+        maskrad_fraction=0.5,
+        n_min_particles=1,
+        save_all_estimates=False,
+        apply_global_filtering=False,
+        fsc_mask_radius=None,
+        fsc_mask_edgewidth=None,
+    )
+
+    compute_state_cmd.compute_state(args)
+
+    assert captured["cryos"] is dataset_obj
+    assert captured["halfset_datasets"] == ("half0", "half1")
+    assert dataset_obj.materialize_calls == [(True, False)]

@@ -598,7 +598,7 @@ def plot_umap(output_folder, zs, centers):
 
 ## TODO this hsould move elsewhere
 
-def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state"):
+def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state", halfset_datasets=None):
     # cryos: CryoEMDataset (with halfset_indices)
     """Compute reweighted volume estimates and save with RELION-style organization.
 
@@ -629,6 +629,8 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
     mkdir_safe(output_folder)
     from recovar.heterogeneity import heterogeneity_volume, latent_density
     n_vols = path_subsampled.shape[0]
+    if halfset_datasets is None:
+        halfset_datasets = ds.materialize_halfset_datasets()
 
     for k in range(n_vols):
         vol_idx = k  # 0-indexed
@@ -658,7 +660,7 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
 
         locres_maskrad = ds.grid_size * ds.voxel_size / maskrad_fraction
         logger.info("Mask radius fraction = %s. Setting locres_maskrad = locres_sampling = box_size * voxel_size / %s = %.1f Angstroms. Using %d particles for template.", maskrad_fraction, maskrad_fraction, locres_maskrad, n_min_particles)
-        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, ds, diag_dir, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely')
+        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, ds, diag_dir, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely', halfset_datasets=halfset_datasets)
 
         ## TODO: this is really ugly logic and organization. Just have them pass a folder or something so we dont have to move, 
         ## And come up with better way to organize results for this

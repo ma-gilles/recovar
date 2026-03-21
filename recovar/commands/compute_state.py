@@ -111,6 +111,18 @@ def _get_embedding_components(pipeline_output, zdim, coords_entry, precision_ent
     )
 
 
+def _build_reweighted_halfset_datasets(dataset, *, lazy):
+    """Build direct halfset datasets for the reweighted-volume hot path."""
+    if not hasattr(dataset, "materialize_halfset_datasets"):
+        return None
+    if getattr(dataset, "halfset_indices", None) is None:
+        return None
+    can_reload = getattr(dataset, "can_reload_from_original_images", None)
+    if can_reload is None or not can_reload():
+        return None
+    return dataset.materialize_halfset_datasets(independent=True, lazy=lazy)
+
+
 def add_args(parser: argparse.ArgumentParser):
     parser = parser_args.standard_downstream_args(parser)
 
@@ -203,6 +215,7 @@ def compute_state(args):
 
     cryos = po.get('lazy_dataset') if lazy else po.get('dataset')
     embedding.set_contrasts_in_cryos(cryos, contrasts_key)
+    reweighted_halfset_datasets = _build_reweighted_halfset_datasets(cryos, lazy=lazy)
     zs = zs_key
     cov_zs = cov_zs_key
     o.mkdir_safe(output_folder)
@@ -224,7 +237,8 @@ def compute_state(args):
         apply_global_filtering=apply_global_filtering,
         fsc_mask=fsc_mask,
         fsc_mask_radius=fsc_mask_radius,
-        fsc_mask_edgewidth=fsc_mask_edgewidth
+        fsc_mask_edgewidth=fsc_mask_edgewidth,
+        halfset_datasets=reweighted_halfset_datasets,
     )
 
 def main():
