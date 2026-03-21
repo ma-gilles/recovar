@@ -13,7 +13,7 @@ import os
 import numpy as np
 import pytest
 
-from recovar.data_io.metadata_parsing import (
+from recovar.data_io.metadata_readers import (
     parse_poses_from_cs,
     parse_ctf_from_cs,
     _load_cs,
