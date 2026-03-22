@@ -333,7 +333,45 @@ def get_3d_realspcorrelation(half1, half2, kern, mask=None):
     reg_b = np.max(var3_B) / 1000
     var3_A = np.where(var3_A < reg_a, reg_a, var3_A)
     var3_B = np.where(var3_B < reg_b, reg_b, var3_B)
-    halfmaps_cc = cov3_AB / np.sqrt(var3_A * var3_B) 
+    halfmaps_cc = cov3_AB / np.sqrt(var3_A * var3_B)
     return halfmaps_cc
 
+
+def make_moving_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1,
+                        dilation_iters=None, kern_rad=3):
+    """Create a mask for the moving region across GT volumes.
+
+    The moving signal is defined as the RMS deviation from the mean GT volume.
+    Voxels with near-zero deviation are treated as static; the existing
+    GT-masking heuristic is then applied to the deviation volume.
+
+    Returns ``(soft_mask, binary_mask)``.
+    """
+    if dilation_iters is None:
+        dilation_iters = int(np.ceil(6 * volume_shape[0] / 128))
+
+    if isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 2:
+        gt_volumes_real = [gt_volumes_real[i].reshape(volume_shape)
+                           for i in range(gt_volumes_real.shape[0])]
+    elif isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 3:
+        gt_volumes_real = [gt_volumes_real]
+
+    if not gt_volumes_real:
+        raise ValueError('gt_volumes_real must contain at least one volume')
+
+    vols = np.asarray([np.asarray(vol).reshape(volume_shape) for vol in gt_volumes_real], dtype=np.float32)
+    mean_vol = np.mean(vols, axis=0)
+    moving_signal = np.sqrt(np.mean((vols - mean_vol[None]) ** 2, axis=0))
+
+    moving_mask = make_mask_from_gt(moving_signal, smax=smax, iter=iter, from_ft=False) > 0.5
+    if dilation_iters > 0 and np.any(moving_mask):
+        moving_mask = binary_dilation(moving_mask, iterations=dilation_iters)
+
+    binary_mask = np.asarray(moving_mask, dtype=bool)
+    if np.any(binary_mask):
+        soft_mask = soften_volume_mask(binary_mask, kern_rad=kern_rad)
+    else:
+        soft_mask = np.zeros(volume_shape, dtype=np.float32)
+
+    return np.asarray(soft_mask, dtype=np.float32), binary_mask
 

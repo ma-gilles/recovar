@@ -180,6 +180,24 @@ def make_union_gt_mask_from_hvd(gt_thing, volume_shape):
     return mask.make_union_gt_mask(real_vols, volume_shape)
 
 
+def make_moving_gt_mask_from_hvd(gt_thing, volume_shape):
+    """Build a moving-piece mask from GT volumes in a HeterogeneousReconstruction.
+
+    Isolates the region that differs across GT states. Uses
+    ``mask.make_moving_gt_mask`` on real-space GT volumes.
+    """
+    import recovar.core.fourier_transform_utils as ftu
+
+    real_vols = []
+    for i in range(gt_thing.volumes.shape[0]):
+        vol_real = ftu.get_idft3(
+            gt_thing.volumes[i].reshape(volume_shape)
+        ).real
+        real_vols.append(np.asarray(vol_real))
+
+    return mask.make_moving_gt_mask(real_vols, volume_shape)
+
+
 def compute_volume_error_metrics_from_gt(gt_map, estimate_map, voxel_size, mask , partial_mask = None , normalize_by_map1 = True ):
     
     if mask is None:
