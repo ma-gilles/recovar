@@ -20,7 +20,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-import mrcfile
+
 import numpy as np
 import pytest
 
@@ -237,33 +237,6 @@ def _run_old_compute_state(converted_pipeline_dir: Path, latent_points: np.ndarr
     return state_out
 
 
-def _extract_locres_metrics(state_dir: Path, n_vols: int,
-                            style: str = "new") -> dict:
-    metrics = {}
-    for i in range(n_vols):
-        if style == "new":
-            locres_path = state_dir / "diagnostics" / f"state{i:03d}" / "local_resolution.mrc"
-        else:
-            locres_path = state_dir / f"vol{i:04d}" / "locres.mrc"
-            if not locres_path.exists():
-                locres_path = state_dir / "all_volumes" / f"locres{i:04d}.mrc"
-
-        if not locres_path.exists():
-            continue
-
-        with mrcfile.open(str(locres_path), mode="r") as mrc:
-            locres_map = np.array(mrc.data, dtype=np.float32)
-
-        valid = locres_map[np.isfinite(locres_map) & (locres_map > 0)]
-        if valid.size == 0:
-            continue
-
-        metrics[f"state_{i}_locres_median"] = float(np.median(valid))
-        metrics[f"state_{i}_locres_90pct"] = float(np.percentile(valid, 90))
-
-    return metrics
-
-
 def _extract_volumes_real_space(state_dir: Path, n_vols: int,
                                 style: str = "new") -> list[np.ndarray]:
     from recovar import utils
@@ -285,32 +258,36 @@ def _extract_volumes_real_space(state_dir: Path, n_vols: int,
     return vols
 
 
-def _compute_fsc_vs_gt(reconstructed_vols: list[np.ndarray | None],
-                        gt_volumes_fourier: np.ndarray,
-                        volume_shape: tuple, voxel_size: float) -> dict:
-    from recovar.core.fourier_transform_utils import get_dft3
-    from recovar.output.plot_utils import FSC
+def _compute_gt_volume_metrics(reconstructed_vols: list[np.ndarray | None],
+                               gt_thing,
+                               volume_shape: tuple,
+                               voxel_size: float,
+                               state_labels: list[int]) -> dict:
+    from recovar.core.fourier_transform_utils import get_idft3
+    from recovar.output import metrics as output_metrics
+
+    _, moving_mask = output_metrics.make_moving_gt_mask_from_hvd(gt_thing, volume_shape)
 
     metrics = {}
-    grid_size = volume_shape[0]
-    n_gt = gt_volumes_fourier.shape[0]
-
     for i, recon_vol in enumerate(reconstructed_vols):
         if recon_vol is None:
             continue
-
-        recon_ft = get_dft3(recon_vol).reshape(-1)
-        best_auc = -1.0
-        for g in range(n_gt):
-            gt_vol_ft = gt_volumes_fourier[g].reshape(volume_shape)
-            recon_vol_ft_3d = recon_ft.reshape(volume_shape)
-            fsc_curve = FSC(np.array(gt_vol_ft), np.array(recon_vol_ft_3d))
-            auc = float(np.mean(fsc_curve[1:grid_size // 2]))
-            if auc > best_auc:
-                best_auc = auc
-
-        metrics[f"state_{i}_fsc_auc_vs_gt"] = best_auc
-
+        gt_label = int(state_labels[i])
+        gt_map = get_idft3(gt_thing.volumes[gt_label].reshape(volume_shape)).real
+        gt_metrics = output_metrics.compute_volume_error_metrics_from_gt(
+            gt_map,
+            recon_vol,
+            voxel_size,
+            mask=None,
+            partial_mask=moving_mask,
+            normalize_by_map1=True,
+        )
+        metrics[f"state_{i}_locres_median"] = float(gt_metrics["median_locres"])
+        metrics[f"state_{i}_locres_90pct"] = float(gt_metrics["ninety_pc_locres"])
+        metrics[f"state_{i}_moving_piece_locres_median"] = float(gt_metrics["partial_median_locres"])
+        metrics[f"state_{i}_moving_piece_locres_90pct"] = float(gt_metrics["partial_ninety_pc_locres"])
+        metrics[f"state_{i}_moving_piece_error_median"] = float(gt_metrics["partial_median_error"])
+        metrics[f"state_{i}_moving_piece_error_90pct"] = float(gt_metrics["partial_ninety_pc_error"])
     return metrics
 
 
@@ -356,12 +333,9 @@ def _run_and_collect_metrics(tmp_path: Path, tilt_series: bool = False) -> dict:
     new_state_dir = _run_new_compute_state(pipeline_dir, latent_points, out_base)
     perf_stages["compute_state"] = stage_perf(snap2, perf_snapshot())
 
-    new_locres = _extract_locres_metrics(new_state_dir, n_vols, style="new")
-
     sim_info_path = str(dataset_dir / "simulation_info.pkl")
     from recovar.simulation import synthetic_dataset
     gt = synthetic_dataset.load_heterogeneous_reconstruction(sim_info_path)
-    gt_vols_ft = gt.volumes
 
     from recovar.output import output
     po = output.PipelineOutput(str(pipeline_dir))
@@ -369,18 +343,14 @@ def _run_and_collect_metrics(tmp_path: Path, tilt_series: bool = False) -> dict:
     voxel_size = po.get("voxel_size")
 
     new_vols = _extract_volumes_real_space(new_state_dir, n_vols, style="new")
-    new_fsc = _compute_fsc_vs_gt(new_vols, gt_vols_ft, volume_shape, voxel_size)
-
-    current = {**new_locres, **new_fsc}
+    current = _compute_gt_volume_metrics(new_vols, gt, volume_shape, voxel_size, labels)
 
     # If regenerating, also run OLD code to produce new baselines
     if _REGENERATE and _OLD_RECOVAR.is_dir():
         converted_dir = _convert_for_old_code(pipeline_dir, out_base)
         old_state_dir = _run_old_compute_state(converted_dir, latent_points, out_base)
-        old_locres = _extract_locres_metrics(old_state_dir, n_vols, style="old")
         old_vols = _extract_volumes_real_space(old_state_dir, n_vols, style="old")
-        old_fsc = _compute_fsc_vs_gt(old_vols, gt_vols_ft, volume_shape, voxel_size)
-        baseline = {**old_locres, **old_fsc}
+        baseline = _compute_gt_volume_metrics(old_vols, gt, volume_shape, voxel_size, labels)
         _save_baseline(mode, baseline)
         print(f"Saved NEW baseline to {_BASELINE_DIR / f'{mode}.json'}")
 

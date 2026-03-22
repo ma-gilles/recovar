@@ -130,7 +130,7 @@ def main():
                       else f"{dataset_dir}/particles.{grid_size}.mrcs")
 
     old_cmd = [
-        "conda", "run", "-n", args.old_conda_env, "--no-banner",
+        "conda", "run", "-n", args.old_conda_env,
         "python", "-c", textwrap.dedent(f"""\
         import argparse, sys, os
         sys.path.insert(0, '{args.old_repo}')
