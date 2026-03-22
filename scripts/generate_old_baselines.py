@@ -169,8 +169,8 @@ def main():
     u_gt, s_gt, _ = gt_thing.get_vol_svd(contrasted=False, real_space=True, random_svd_pcs=200)
 
     po = output.PipelineOutput(old_pipe_dir)
-    cryos = po.get("lazy_dataset")
-    voxel_size = cryos[0].voxel_size
+    ds = po.get("lazy_dataset")
+    voxel_size = ds.voxel_size if not isinstance(ds, list) else ds[0].voxel_size
     vol_norm = np.sqrt(np.prod(volume_shape))
 
     scores = {}
