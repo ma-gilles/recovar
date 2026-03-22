@@ -201,16 +201,18 @@ def main():
         scores["svd_relative_variance_10"] = float(rel_var[10])
 
     # Contrasts + embedding
+    # Use unsorted (original image order) embeddings to match GT ordering.
+    from recovar.commands.run_test_all_metrics import load_unsorted_embedding_component
     with open(sim_info_path, "rb") as f:
         si = pickle.load(f)
     pa = np.asarray(si["image_assignment"]).ravel()
     gt_contrasts = np.asarray(si["per_image_contrast"]).ravel()
 
     for zdim in [4, 10]:
-        zs = np.asarray(po.get("latent_coords")[zdim])
+        zs = np.asarray(load_unsorted_embedding_component(po, "latent_coords", zdim))
         _, ratio = metrics.variance_of_zs(zs, pa)
         scores[f"embedding_squared_error_{zdim}"] = float(ratio)
-        c = np.asarray(po.get("contrasts_noreg")[zdim]).ravel()
+        c = np.asarray(load_unsorted_embedding_component(po, "contrasts_noreg", zdim)).ravel()
         scores[f"contrast_abs_error_{zdim}"] = float(np.mean(np.abs(gt_contrasts - c)))
 
     # Noise
