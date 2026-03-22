@@ -130,7 +130,7 @@ def main():
                       else f"{dataset_dir}/particles.{grid_size}.mrcs")
 
     old_cmd = [
-        "conda", "run", "-n", args.old_conda_env, "--no-banner",
+        "conda", "run", "-n", args.old_conda_env,
         "python", "-c", textwrap.dedent(f"""\
         import argparse, sys, os
         sys.path.insert(0, '{args.old_repo}')
@@ -169,8 +169,8 @@ def main():
     u_gt, s_gt, _ = gt_thing.get_vol_svd(contrasted=False, real_space=True, random_svd_pcs=200)
 
     po = output.PipelineOutput(old_pipe_dir)
-    cryos = po.get("lazy_dataset")
-    voxel_size = cryos[0].voxel_size
+    ds = po.get("lazy_dataset")
+    voxel_size = ds.voxel_size if not isinstance(ds, list) else ds[0].voxel_size
     vol_norm = np.sqrt(np.prod(volume_shape))
 
     scores = {}
@@ -201,16 +201,25 @@ def main():
         scores["svd_relative_variance_10"] = float(rel_var[10])
 
     # Contrasts + embedding
+    # Use unsorted (original image order) embeddings to match GT ordering.
+    from recovar.commands.run_test_all_metrics import load_unsorted_embedding_component
     with open(sim_info_path, "rb") as f:
         si = pickle.load(f)
     pa = np.asarray(si["image_assignment"]).ravel()
     gt_contrasts = np.asarray(si["per_image_contrast"]).ravel()
 
     for zdim in [4, 10]:
-        zs = np.asarray(po.get("latent_coords")[zdim])
+        # Try new key names, fall back to old (zs/contrasts) for old pipeline output
+        try:
+            zs = np.asarray(load_unsorted_embedding_component(po, "latent_coords", zdim))
+        except KeyError:
+            zs = np.asarray(load_unsorted_embedding_component(po, "zs", zdim))
         _, ratio = metrics.variance_of_zs(zs, pa)
         scores[f"embedding_squared_error_{zdim}"] = float(ratio)
-        c = np.asarray(po.get("contrasts_noreg")[zdim]).ravel()
+        try:
+            c = np.asarray(load_unsorted_embedding_component(po, "contrasts_noreg", zdim)).ravel()
+        except KeyError:
+            c = np.asarray(load_unsorted_embedding_component(po, "contrasts", zdim)).ravel()
         scores[f"contrast_abs_error_{zdim}"] = float(np.mean(np.abs(gt_contrasts - c)))
 
     # Noise
