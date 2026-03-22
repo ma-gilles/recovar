@@ -209,10 +209,17 @@ def main():
     gt_contrasts = np.asarray(si["per_image_contrast"]).ravel()
 
     for zdim in [4, 10]:
-        zs = np.asarray(load_unsorted_embedding_component(po, "latent_coords", zdim))
+        # Try new key names, fall back to old (zs/contrasts) for old pipeline output
+        try:
+            zs = np.asarray(load_unsorted_embedding_component(po, "latent_coords", zdim))
+        except KeyError:
+            zs = np.asarray(load_unsorted_embedding_component(po, "zs", zdim))
         _, ratio = metrics.variance_of_zs(zs, pa)
         scores[f"embedding_squared_error_{zdim}"] = float(ratio)
-        c = np.asarray(load_unsorted_embedding_component(po, "contrasts_noreg", zdim)).ravel()
+        try:
+            c = np.asarray(load_unsorted_embedding_component(po, "contrasts_noreg", zdim)).ravel()
+        except KeyError:
+            c = np.asarray(load_unsorted_embedding_component(po, "contrasts", zdim)).ravel()
         scores[f"contrast_abs_error_{zdim}"] = float(np.mean(np.abs(gt_contrasts - c)))
 
     # Noise
