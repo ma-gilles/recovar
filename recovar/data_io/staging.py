@@ -2,29 +2,29 @@
 
 Motivation
 ----------
-On HPC clusters with shared parallel filesystems (GPFS, Lustre, …), reading
+On HPC clusters with shared parallel filesystems (GPFS, Lustre, ...), reading
 a 300K-image particle stack 20 times over a pipeline run takes ~78 min of
 wall time at typical ~335 MB/s bandwidth.  The same reads from RAM or a fast
 local SSD take ~4 min.
 
 When ``RECOVAR_CACHE_DIR`` is set, every :class:`~recovar.data_io.image_loader.MRCLoader`
 silently copies its MRC file to that directory on first access.  Every
-subsequent read — across all pipeline passes, for the lifetime of the job —
+subsequent read -- across all pipeline passes, for the lifetime of the job --
 goes to the fast local copy.  No code changes are required outside of setting
 one environment variable.
 
 Quick start (SLURM)
 -------------------
-Option A — RAM-backed (``/dev/shm``, always available, fast as RAM)::
+Option A -- RAM-backed (``/dev/shm``, always available, fast as RAM)::
 
     export RECOVAR_CACHE_DIR=/dev/shm
 
-Option B — Node-local NVMe (if your cluster supports per-job local scratch)::
+Option B -- Node-local NVMe (if your cluster supports per-job local scratch)::
 
     #SBATCH --tmp=50G          # request 50 GB of local scratch
     export RECOVAR_CACHE_DIR=$TMPDIR
 
-Option C — Any fast local path::
+Option C -- Any fast local path::
 
     export RECOVAR_CACHE_DIR=/local/scratch/$(whoami)
 
@@ -48,12 +48,12 @@ Measured speedup (D=256, 300K images, 39 GB, A100-SXM4-80GB)
 | /dev/shm warm (2nd+ pass) | 1.5 s  | 3.3 s  | 107 s  | 112 s     |
 +---------------------------+--------+--------+--------+-----------+
 
-**6.3× total speedup** (warm vs baseline); **4.1× mean reconstruction**.
+**6.3x total speedup** (warm vs baseline); **4.1x mean reconstruction**.
 Cold pass pays ~97 s copy cost once; every subsequent pass reads from RAM.
 The residual ~107 s mean reconstruction time is the GPU compute floor.
 
-For a 20-pass pipeline the copy cost is amortised: 97 + 19×112 = 2225 s
-vs 20×708 = 14160 s baseline — **6.4× end-to-end speedup**.
+For a 20-pass pipeline the copy cost is amortised: 97 + 19x112 = 2225 s
+vs 20x708 = 14160 s baseline -- **6.4x end-to-end speedup**.
 
 Multi-file datasets
 -------------------
@@ -82,13 +82,13 @@ By default (no env vars set), ``get_cache_dir()`` falls back to ``$TMPDIR``.
 On Slurm, ``$TMPDIR`` is typically set to a per-job scratch directory, so
 **staging is enabled automatically on Slurm** with no user configuration.
 Outside Slurm (e.g. interactive login node), ``$TMPDIR`` is usually
-``/tmp``, which may or may not have enough space — set
+``/tmp``, which may or may not have enough space -- set
 ``RECOVAR_CACHE_DIR=/dev/shm`` explicitly for RAM-backed staging, or
 ``RECOVAR_CACHE_DIR=`` (empty) to disable staging entirely.
 
 When a job ends and a new job starts (possibly on a different node), the
 old ``$TMPDIR`` is gone, so staging happens again from scratch. This is
-by design — each Slurm job gets fresh local storage.
+by design -- each Slurm job gets fresh local storage.
 
 What gets staged
 ----------------
@@ -102,6 +102,7 @@ For one-shot reads (e.g. downsampling full-res images that are only
 read once), staging is wasteful.  Pass ``skip_staging=True`` to
 ``load_images()`` or ``MRCLoader`` to bypass it.  The
 ``downsample_to_disk`` function does this automatically.
+"""
 
 from __future__ import annotations
 
@@ -125,13 +126,13 @@ def get_cache_dir() -> Optional[str]:
     """Return the configured staging directory, or None if disabled.
 
     Resolution order:
-    1. ``RECOVAR_CACHE_DIR`` env var (empty string → disabled)
+    1. ``RECOVAR_CACHE_DIR`` env var (empty string -> disabled)
     2. ``TMPDIR`` env var (standard SLURM/HPC per-job local scratch)
     3. None (no staging)
     """
     val = os.environ.get("RECOVAR_CACHE_DIR")
     if val is not None:
-        return val or None   # '' → explicitly disabled
+        return val or None   # '' -> explicitly disabled
     return os.environ.get("TMPDIR")
 
 
@@ -139,7 +140,7 @@ def stage_mrc(src_path: str, cache_dir: str) -> str:
     """Copy *src_path* to *cache_dir* if not already staged; return staged path.
 
     The file is identified by its absolute path, mtime (nanoseconds), and
-    size — a fast staleness check that requires no content hashing.
+    size -- a fast staleness check that requires no content hashing.
 
     Two concurrent callers racing on the same file copy to independent
     temp files then ``os.replace`` atomically, so the final staged file
@@ -157,7 +158,7 @@ def stage_mrc(src_path: str, cache_dir: str) -> str:
     -------
     str
         Path to the staged file, or *src_path* unchanged if staging
-        fails for any reason (permission error, disk full, …).
+        fails for any reason (permission error, disk full, ...).
     """
     # Skip if source is already inside the cache directory.
     abs_src = os.path.abspath(src_path)
@@ -169,7 +170,7 @@ def stage_mrc(src_path: str, cache_dir: str) -> str:
     try:
         stat = os.stat(src_path)
     except OSError:
-        return src_path   # source missing — let the caller raise
+        return src_path   # source missing -- let the caller raise
 
     key = _cache_key(abs_src, stat)
     suffix = Path(src_path).suffix or ".mrcs"
@@ -184,7 +185,7 @@ def stage_mrc(src_path: str, cache_dir: str) -> str:
         return src_path
 
     if dest.exists() and sentinel.exists():
-        logger.debug("Cache hit: %s → %s", os.path.basename(src_path), dest)
+        logger.debug("Cache hit: %s -> %s", os.path.basename(src_path), dest)
         return str(dest)
 
     size_gb = stat.st_size / 1e9
