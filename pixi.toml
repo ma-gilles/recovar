@@ -59,7 +59,6 @@ jax = { extras = ["cuda12"], version = "==0.9.0.1" }
 # Build tools
 twine = "*"
 # Specialized packages not available in conda-forge
-scikit-fmm = "==2025.6.23"
 dataframe_image = "==0.2.7"
 finufft = "==2.3.1"
 healpy = "==1.18.0"
@@ -89,6 +88,7 @@ default = { features = ["cuda"] }
 [tasks]
 # Install RECOVAR in editable mode without dependencies
 install-recovar = "pip install -e . --no-deps --no-build-isolation --ignore-installed"
+build-native-fmm = "pip install -e . --no-deps --no-build-isolation --force-reinstall --ignore-installed"
 
 # Test installation
 test-recovar = "recovar run_test_dataset"
@@ -98,11 +98,13 @@ smoke-import-recovar = "python -c \"import recovar; print('recovar_import_ok')\"
 
 # Pytest tasks
 test-fast = "python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py"
+test-fast-marching-native = "python -m pytest tests/unit/test_fast_marching.py tests/unit/test_fast_marching_native.py -q"
 test-smoke = "python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py --run-integration -k smoke"
 test-gpu = "python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py --run-gpu"
 test-full = "XLA_PYTHON_CLIENT_PREALLOCATE=false python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py --run-integration --run-gpu --run-slow --run-tiny-metrics --long-test"
 test-parallel = "bash ./scripts/run_tests_parallel.sh full"
 test-parallel-long = "bash ./scripts/run_tests_parallel.sh long-test"
+bench-fast-marching = "python tests/benchmarks/bench_fast_marching.py"
 
 # Dataset creation tasks
 create-dataset-small = "bash ./scripts/run_test.sh create 128 100000"
