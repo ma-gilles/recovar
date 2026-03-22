@@ -27,12 +27,12 @@ NVTX_DOMAIN_NOISE = "noise"
 # Neither solution implemented here are very satisfying. Guessing noise in presence of heterogeneity is not trivial, since the residual doesn't seem like the correct way to do it.
 # It makes me think we should have "noise pickers".
 
-# Dead code audit (2026-03-21): 4 v1 functions removed (estimate_noise_from_
-# heterogeneity_residuals_inside_mask, get_average_residual_square,
-# get_average_residual_square_inner, basis_times_coords). All replaced by
-# v2 equivalents. Remaining v1 functions (estimate_noise_variance_from_outside_mask,
-# noise_variance_loss, predict_noise_variance, get_average_residual_square_just_mean)
-# are still reachable from externally-called entry points.
+# Dead code audit (2026-03-21): 3 v1 functions removed
+# (estimate_noise_from_heterogeneity_residuals_inside_mask,
+# get_average_residual_square, get_average_residual_square_inner). Remaining v1
+# helpers kept for compatibility include basis_times_coords,
+# estimate_noise_variance_from_outside_mask, noise_variance_loss,
+# predict_noise_variance, and get_average_residual_square_just_mean.
 
 
 def _default_image_shape_from_radial(radial_noise):
@@ -1044,6 +1044,17 @@ def batch_basis_times_coords2(basis, coords):
     summed = summed.T
     summed = summed.reshape(coords.shape[0], *basis_shape_inp[:-1])
     return summed
+
+
+def basis_times_coords(basis, coords):
+    """Contract basis and coordinates along the last axis.
+
+    This compatibility helper is still exercised by tests and older callers.
+    New batched paths should prefer ``batch_basis_times_coords2``.
+    """
+    if basis.shape[-1] != coords.shape[-1]:
+        raise ValueError(f"basis last dim ({basis.shape[-1]}) != coords last dim ({coords.shape[-1]})")
+    return jnp.sum(basis * coords, axis=-1)
 
 
 # ============================================================================
