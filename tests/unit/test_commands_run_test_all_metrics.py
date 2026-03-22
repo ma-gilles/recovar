@@ -135,6 +135,17 @@ def test_validate_storage_args_passes_with_equals_syntax():
     )
 
 
+def test_default_output_dir_prefers_tmp_recovar_dir(monkeypatch):
+    monkeypatch.setenv("TMP_RECOVAR_DIR", "/scratch/tmp_recovar")
+    assert rtam.default_output_dir() == "/scratch/tmp_recovar/recovar_test_all_metrics"
+
+
+def test_validate_storage_args_allows_tmp_recovar_dir_env(monkeypatch):
+    monkeypatch.setenv("TMP_RECOVAR_DIR", "/scratch/tmp_recovar")
+    args = SimpleNamespace(volume_input=None)
+    rtam.validate_storage_args_for_generated_volumes(args, ["--generate-pdb-volumes"])
+
+
 def test_validate_storage_args_raises_without_outdir():
     """When generating volumes without explicit --output-dir, should raise."""
     args = SimpleNamespace(volume_input=None)
@@ -217,6 +228,22 @@ def test_load_unsorted_embedding_component_caches():
     rtam.load_unsorted_embedding_component(FakePO(), "latent_coords", 4, legacy_cache=cache)
     # get() called once for __root__, then cached
     assert call_count["n"] == 1
+
+
+def test_load_unsorted_embedding_component_prefers_pipeline_output_method():
+    expected = np.array([1.0, 2.0], dtype=np.float32)
+
+    class FakePO:
+        def get_unsorted_embedding_component(self, entry, key):
+            assert entry == "latent_coords"
+            assert key == 4
+            return expected
+
+        def get(self, key):
+            raise AssertionError(f"legacy get() path should not be used, got {key}")
+
+    result = rtam.load_unsorted_embedding_component(FakePO(), "latent_coords", 4)
+    np.testing.assert_array_equal(result, expected)
 
 
 # ---------------------------------------------------------------------------

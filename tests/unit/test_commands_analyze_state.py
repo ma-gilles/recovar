@@ -22,6 +22,31 @@ def _fake_pipeline_output(payload):
     return FakePipelineOutput
 
 
+def test_get_halfset_order_prefers_local_image_indices():
+    class _Dataset:
+        def halfset_local_image_indices(self, half_id):
+            return np.array([2, 0], dtype=np.int32) if half_id == 0 else np.array([3, 1], dtype=np.int32)
+
+    order = compute_state_cmd._get_halfset_order(_Dataset(), 4)
+    np.testing.assert_array_equal(order, np.array([2, 0, 3, 1], dtype=np.int32))
+
+
+def test_get_halfset_order_falls_back_to_halfset_indices():
+    dataset = SimpleNamespace(
+        halfset_indices=[
+            np.array([1, 3], dtype=np.int32),
+            np.array([0, 2], dtype=np.int32),
+        ]
+    )
+    order = compute_state_cmd._get_halfset_order(dataset, 4)
+    np.testing.assert_array_equal(order, np.array([1, 3, 0, 2], dtype=np.int32))
+
+
+def test_get_halfset_order_falls_back_to_identity_for_minimal_dataset():
+    order = compute_state_cmd._get_halfset_order(["dataset_obj"], 3)
+    np.testing.assert_array_equal(order, np.array([0, 1, 2], dtype=np.int32))
+
+
 def test_pick_pairs_returns_requested_number_and_valid_indices():
     centers = np.array(
         [

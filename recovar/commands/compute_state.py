@@ -123,6 +123,37 @@ def _build_reweighted_halfset_datasets(dataset, *, lazy):
     return dataset.materialize_halfset_datasets(independent=True, lazy=lazy)
 
 
+def _get_halfset_order(dataset, n_embeddings):
+    """Return the embedding halfset concatenation order for a dataset.
+
+    Real datasets expose ``halfset_local_image_indices()``.  Some lightweight
+    test doubles only carry ``halfset_indices`` or neither; in those cases fall
+    back to the best available representation without failing the command path.
+    """
+    if hasattr(dataset, "halfset_local_image_indices"):
+        halfset_order = np.concatenate(
+            [
+                np.asarray(dataset.halfset_local_image_indices(0), dtype=np.int32),
+                np.asarray(dataset.halfset_local_image_indices(1), dtype=np.int32),
+            ]
+        )
+    elif getattr(dataset, "halfset_indices", None) is not None:
+        halfset_order = np.concatenate(
+            [np.asarray(dataset.halfset_indices[0]), np.asarray(dataset.halfset_indices[1])]
+        ).astype(np.int32, copy=False)
+    else:
+        return np.arange(n_embeddings, dtype=np.int32)
+
+    if halfset_order.shape[0] != n_embeddings:
+        logger.warning(
+            "Halfset order length %s does not match embedding length %s; using identity order.",
+            halfset_order.shape[0],
+            n_embeddings,
+        )
+        return np.arange(n_embeddings, dtype=np.int32)
+    return halfset_order
+
+
 def add_args(parser: argparse.ArgumentParser):
     parser = parser_args.standard_downstream_args(parser)
 
@@ -215,21 +246,15 @@ def compute_state(args):
 
     cryos = po.get('lazy_dataset') if lazy else po.get('dataset')
 
-    # Embeddings are loaded in halfset order (half-0 images first, half-1
-    # second).  The unified dataset stores CTF_params in original file order,
-    # so we scatter contrasts from halfset → original order before applying.
-    # Legacy list-of-two-datasets callers already have per-halfset ordering
-    # and set_contrasts_in_cryos handles the split internally.
-    if hasattr(cryos, 'halfset_local_image_indices'):
-        halfset_order = np.concatenate([
-            cryos.halfset_local_image_indices(0),
-            cryos.halfset_local_image_indices(1),
-        ])
-        contrasts_original_order = np.empty_like(contrasts_key)
-        contrasts_original_order[halfset_order] = contrasts_key
-        embedding.set_contrasts_in_cryos(cryos, contrasts_original_order)
-    else:
-        embedding.set_contrasts_in_cryos(cryos, contrasts_key)
+    # Embeddings are loaded in halfset order (half-0 images first, half-1 second),
+    # but the dataset stores CTF parameters in original image order. Scatter
+    # contrasts from halfset order to original order before applying them.
+    # Minimal/mock datasets used in tests may only expose halfset_indices or
+    # neither; _get_halfset_order handles those compat fallbacks.
+    halfset_order = _get_halfset_order(cryos, contrasts_key.shape[0])
+    contrasts_original_order = np.empty_like(contrasts_key)
+    contrasts_original_order[halfset_order] = contrasts_key
+    embedding.set_contrasts_in_cryos(cryos, contrasts_original_order)
     reweighted_halfset_datasets = _build_reweighted_halfset_datasets(cryos, lazy=lazy)
     zs = zs_key
     cov_zs = cov_zs_key

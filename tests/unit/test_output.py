@@ -255,6 +255,92 @@ def test_get_nearest_point_single_data_point():
     np.testing.assert_allclose(points, np.tile(data, (2, 1)))
 
 
+def test_get_nearest_point_chunked_matches_dense_path():
+    data = np.array([[0.0, 0.0], [1.0, 0.0], [3.0, 0.0]], dtype=np.float32)
+    query = np.array([[0.1, 0.0], [2.9, 0.0], [1.2, 0.0]], dtype=np.float32)
+    dense_points, dense_indices = output.get_nearest_point(data, query)
+    chunked_points, chunked_indices = output.get_nearest_point(data, query, chunk_size=1)
+    np.testing.assert_array_equal(chunked_indices, dense_indices)
+    np.testing.assert_allclose(chunked_points, dense_points)
+
+
+def test_promote_reweighted_volume_outputs_moves_primary_files(tmp_path):
+    diag_dir = tmp_path / "diagnostics" / "state000"
+    diag_dir.mkdir(parents=True)
+    for name in ("filtered.mrc", "half1_unfil.mrc", "half2_unfil.mrc"):
+        (diag_dir / name).write_text(name)
+
+    primary_stem = output._promote_reweighted_volume_outputs(
+        str(diag_dir),
+        str(tmp_path),
+        "state",
+        0,
+    )
+
+    assert primary_stem.endswith("state000")
+    assert not (diag_dir / "filtered.mrc").exists()
+    assert (tmp_path / "state000.mrc").exists()
+    assert (tmp_path / "state000_half1_unfil.mrc").exists()
+    assert (tmp_path / "state000_half2_unfil.mrc").exists()
+
+
+def test_make_trajectory_plots_from_results_uses_pipeline_output_helpers(monkeypatch, tmp_path):
+    captured = {}
+    fake_dataset = object()
+    zs = np.array([[0.0, 1.0], [2.0, 3.0]], dtype=np.float32)
+    cov_zs = np.zeros((2, 2, 2), dtype=np.float32)
+    density = np.ones((8, 8), dtype=np.float32)
+    bounds = np.array([[-1.0, 1.0], [-2.0, 2.0]], dtype=np.float32)
+    contrasts = np.array([0.2, 0.8], dtype=np.float32)
+
+    class FakePO:
+        def get_embedding_component(self, entry, key):
+            captured.setdefault("embedding_calls", []).append((entry, key))
+            values = {
+                ("latent_coords", 2): zs,
+                ("latent_precision", 2): cov_zs,
+                ("contrasts", 2): contrasts,
+            }
+            return values[(entry, key)]
+
+        def get(self, key):
+            captured.setdefault("get_calls", []).append(key)
+            values = {
+                "dataset": fake_dataset,
+                "density": density,
+            }
+            return values[key]
+
+    monkeypatch.setattr(output.ld, "compute_latent_space_bounds", lambda _zs: bounds)
+    monkeypatch.setattr(
+        output.embedding,
+        "set_contrasts_in_cryos",
+        lambda ds, vals: captured.setdefault("contrast_call", (ds, np.array(vals))),
+    )
+
+    def fake_make_trajectory_plots(density_arg, zs_arg, cov_arg, *args, **kwargs):
+        captured["make_args"] = (density_arg, zs_arg, cov_arg, args, kwargs)
+        return "full_path", "subsampled_path"
+
+    monkeypatch.setattr(output, "make_trajectory_plots", fake_make_trajectory_plots)
+
+    result = output.make_trajectory_plots_from_results(
+        pipeline_output=FakePO(),
+        basis_size=2,
+        output_folder=str(tmp_path) + "/",
+        z_st=np.array([0.0, 0.0], dtype=np.float32),
+        z_end=np.array([1.0, 1.0], dtype=np.float32),
+        plot_llh=True,
+    )
+
+    assert result == ("full_path", "subsampled_path")
+    assert captured["contrast_call"][0] is fake_dataset
+    np.testing.assert_array_equal(captured["contrast_call"][1], contrasts)
+    np.testing.assert_array_equal(captured["make_args"][0], density)
+    np.testing.assert_array_equal(captured["make_args"][1], zs)
+    np.testing.assert_array_equal(captured["make_args"][2], cov_zs)
+
+
 def test_cluster_kmeans_shapes_and_label_count():
     rng = np.random.default_rng(0)
     z = rng.standard_normal((60, 2)).astype(np.float32)
@@ -309,5 +395,4 @@ def test_scatter_annotate_with_explicit_centers():
     fig, ax = output.scatter_annotate(x, y, centers=centers, annotate=False)
     assert hasattr(fig, "savefig")
     plt.close(fig)
-
 

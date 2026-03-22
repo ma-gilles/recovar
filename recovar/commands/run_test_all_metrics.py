@@ -37,6 +37,8 @@ HIGHER_IS_BETTER_TOKENS = (
     "relative_variance",
 )
 
+DEFAULT_OUTPUT_DIRNAME = "recovar_test_all_metrics"
+
 # Canonical key renames: old_key -> new_key.
 # Both old and new keys are emitted for backward compatibility; regression
 # comparison deduplicates so each metric is only checked once.
@@ -67,6 +69,14 @@ def _resolve_canonical_key(key):
     if m:
         return f"{m.group(1)}_locres_median"
     return key
+
+
+def default_output_dir():
+    """Return the default output directory, preferring TMP_RECOVAR_DIR when set."""
+    tmp_root = os.environ.get("TMP_RECOVAR_DIR")
+    if tmp_root:
+        return str(Path(tmp_root) / DEFAULT_OUTPUT_DIRNAME)
+    return os.path.join("/tmp", DEFAULT_OUTPUT_DIRNAME)
 
 
 # Set up logging configuration
@@ -160,12 +170,13 @@ from recovar.simulation.trajectory_generation import (
     split_atom_group_by_chains as _split_atom_group_by_chains,
     generate_trajectory_volumes as generate_pdb_trajectory_volumes,
 )
-##TODO use TMP_RECOVAR_DIR if set? (see staging.py)
 def validate_storage_args_for_generated_volumes(args, argv):
     """
     Enforce explicit output location when auto-generating volumes.
     """
     if args.volume_input is not None:
+        return
+    if os.environ.get("TMP_RECOVAR_DIR"):
         return
     has_explicit_outdir = False
     for tok in argv:
@@ -178,7 +189,7 @@ def validate_storage_args_for_generated_volumes(args, argv):
     if not has_explicit_outdir:
         raise ValueError(
             "When --volume-input is omitted (auto-generated volumes), you must pass --output-dir/-o "
-            "explicitly to avoid unintended storage locations."
+            "explicitly, or set TMP_RECOVAR_DIR, to avoid unintended storage locations."
         )
 
 
@@ -593,6 +604,11 @@ def load_unsorted_embedding_component(pipeline_output, entry, key, legacy_cache=
     if cache_key in legacy_cache:
         return legacy_cache[cache_key]
 
+    if hasattr(pipeline_output, "get_unsorted_embedding_component"):
+        value = np.asarray(pipeline_output.get_unsorted_embedding_component(entry, key))
+        legacy_cache[cache_key] = value
+        return value
+
     if "__root__" not in legacy_cache:
         legacy_cache["__root__"] = pipeline_output.get('unsorted_embedding')
     value = np.asarray(legacy_cache["__root__"][entry][key])
@@ -685,7 +701,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run tests for recovar")
     parser.add_argument('--volume-input', '-i', required=False, default=None,
                         help='Input volume prefix containing files like <prefix>0000.mrc, <prefix>0001.mrc, ...')
-    parser.add_argument('--output-dir', '-o', default='/tmp/recovar_test_all_metrics')
+    parser.add_argument('--output-dir', '-o', default=default_output_dir())
     parser.add_argument('--no-delete', action='store_true',
                         help='Do not delete the test dataset directory after successful tests')
     parser.add_argument('--cpu', action='store_true', help='Run on CPU only (skip GPU check)')
