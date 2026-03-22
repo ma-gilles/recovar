@@ -29,9 +29,7 @@ from recovar.data_io import starfile
 
 logger = logging.getLogger(__name__)
 
-## TODO: I would like to have some tests for this related to a real dataset to see if we break something.
-## I need to find a real dataset for that to work, though.
-##
+# Real-data regression tests: tests/unit/test_parse_relion5_tomo_realdata.py
 # ---------------------------------------------------------------------------
 # Tomogram geometry
 # ---------------------------------------------------------------------------
