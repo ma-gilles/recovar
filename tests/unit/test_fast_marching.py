@@ -13,6 +13,22 @@ def _assert_matches_skfmm(phi, speed, dx, order):
     np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12)
 
 
+def _make_random_hyperplane_phi(shape, rng):
+    coords = np.indices(shape, dtype=np.float64)
+    weights = rng.normal(size=len(shape))
+    weights /= np.linalg.norm(weights)
+    offset = rng.uniform(-0.35, 0.35) * (len(shape) ** 0.5)
+
+    phi = np.zeros(shape, dtype=np.float64)
+    for axis, weight in enumerate(weights):
+        phi += weight * (coords[axis] - (shape[axis] - 1) / 2.0)
+    phi -= offset
+
+    if np.all(phi >= 0.0) or np.all(phi <= 0.0):
+        phi -= np.mean(phi)
+    return phi
+
+
 def test_travel_time_matches_known_order_one_reference():
     speed = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], dtype=np.float64)
     phi = np.ones_like(speed)
@@ -381,7 +397,7 @@ def test_optional_skfmm_parity_on_random_point_sources():
     rng = np.random.default_rng(0)
 
     for order in (1, 2):
-        for ndim in (2, 3):
+        for ndim in (2, 3, 4):
             for _ in range(5):
                 shape = (6,) * ndim
                 speed = 0.5 + rng.random(shape)
@@ -390,4 +406,16 @@ def test_optional_skfmm_parity_on_random_point_sources():
                 phi = np.ones(shape, dtype=np.float64)
                 phi[start] = -1.0
 
+                _assert_matches_skfmm(phi, speed, dx=dx, order=order)
+
+
+def test_optional_skfmm_parity_on_random_hyperplane_contours():
+    rng = np.random.default_rng(1234)
+
+    for order in (1, 2):
+        for shape in ((7, 6), (5, 4, 6), (4, 4, 4, 3)):
+            for _ in range(4):
+                phi = _make_random_hyperplane_phi(shape, rng)
+                speed = 0.4 + rng.random(shape)
+                dx = 0.25 + rng.random(len(shape)) * 1.5
                 _assert_matches_skfmm(phi, speed, dx=dx, order=order)

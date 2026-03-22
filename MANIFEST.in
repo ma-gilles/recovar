@@ -1,2 +1,1 @@
-include third_party/scikit_fmm_LICENSE.txt
-recursive-include recovar/heterogeneity/native_fast_marching *.cpp *.h
+include recovar/_fast_marching_native.cpp

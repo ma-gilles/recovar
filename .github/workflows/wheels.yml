@@ -12,7 +12,6 @@ on:
       - "MANIFEST.in"
       - "recovar/_fast_marching_native.cpp"
       - "recovar/heterogeneity/fast_marching.py"
-      - "recovar/heterogeneity/native_fast_marching/**"
       - "tests/unit/test_fast_marching.py"
       - "tests/unit/test_fast_marching_native.py"
   pull_request:
@@ -23,7 +22,6 @@ on:
       - "MANIFEST.in"
       - "recovar/_fast_marching_native.cpp"
       - "recovar/heterogeneity/fast_marching.py"
-      - "recovar/heterogeneity/native_fast_marching/**"
       - "tests/unit/test_fast_marching.py"
       - "tests/unit/test_fast_marching_native.py"
   workflow_dispatch:

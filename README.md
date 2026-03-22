@@ -71,7 +71,7 @@ Run commands only via `"$PIXI_PY" -m ...` or `pixi run ...` in this checkout.
 
 ### Fast marching backend
 
-The editable install above also builds RECOVAR's optional native fast marching extension. This replaces the old external `skfmm` runtime dependency for trajectory computations while keeping a pure-Python fallback in-tree.
+The editable install above also builds RECOVAR's optional native fast marching extension. Trajectory computations use this in-tree implementation, while a pure-Python fallback remains available for editable installs and unsupported platforms.
 
 - `RECOVAR_FORCE_PYTHON_FMM=1` forces the fallback implementation.
 - `RECOVAR_REQUIRE_NATIVE_FMM=1` makes import fail fast if the native extension is unavailable.

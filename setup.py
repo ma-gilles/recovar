@@ -12,7 +12,6 @@ from setuptools.command.build_ext import build_ext
 
 
 REPO_ROOT = Path(__file__).resolve().parent
-NATIVE_FAST_MARCHING_DIR = REPO_ROOT / "recovar" / "heterogeneity" / "native_fast_marching"
 
 
 def _env_flag(name: str) -> bool:
@@ -21,15 +20,10 @@ def _env_flag(name: str) -> bool:
 
 
 def _native_extension() -> Extension:
-    sources = ["recovar/_fast_marching_native.cpp"]
-    sources.extend(
-        str(path.relative_to(REPO_ROOT))
-        for path in sorted(NATIVE_FAST_MARCHING_DIR.glob("*.cpp"))
-    )
     extension = Extension(
         "recovar._fast_marching_native",
-        sources,
-        include_dirs=[numpy.get_include(), "recovar/heterogeneity/native_fast_marching"],
+        ["recovar/_fast_marching_native.cpp"],
+        include_dirs=[numpy.get_include()],
         extra_compile_args=["/std:c++17"] if sys.platform == "win32" else ["-std=c++17"],
         language="c++",
     )
