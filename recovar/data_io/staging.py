@@ -70,18 +70,38 @@ the directory to reclaim space.
 
 Implementation
 --------------
-The hook is 4 lines in :meth:`~recovar.data_io.image_loader.MRCLoader.__init__`
-that redirect ``self._filepath`` before any I/O.  All read paths (memory-mapped
+The hook is in :meth:`~recovar.data_io.image_loader.MRCLoader.__init__`
+which calls ``get_cache_dir()`` and ``stage_mrc()`` to redirect
+``self._filepath`` before any I/O.  All read paths (memory-mapped
 sequential, seek+fromfile random access, and ``load_all`` eager load) follow
 the redirect transparently.
-"""
 
-## TODO: make it more clear what is the default behavior. How is export RECOVAR_CACHE_DIR set by default?
-## Also, Does that mean no caching gets done?
-## A,sl What happens I run pipeline, job ends, then later I spawn a new job (possibly on a new node), does staging happen again?
-## Is everythign figure out automatically
-## TODO: Should anything else be staged besides MRC? I suppose right nor MRC are the only thing which are not kept in memory
-## Perhaps this should change and starfiles/mrc should be read in stream or something
+Default behavior
+----------------
+By default (no env vars set), ``get_cache_dir()`` falls back to ``$TMPDIR``.
+On Slurm, ``$TMPDIR`` is typically set to a per-job scratch directory, so
+**staging is enabled automatically on Slurm** with no user configuration.
+Outside Slurm (e.g. interactive login node), ``$TMPDIR`` is usually
+``/tmp``, which may or may not have enough space — set
+``RECOVAR_CACHE_DIR=/dev/shm`` explicitly for RAM-backed staging, or
+``RECOVAR_CACHE_DIR=`` (empty) to disable staging entirely.
+
+When a job ends and a new job starts (possibly on a different node), the
+old ``$TMPDIR`` is gone, so staging happens again from scratch. This is
+by design — each Slurm job gets fresh local storage.
+
+What gets staged
+----------------
+Only MRC/MRCS particle stacks are staged, because they are the only
+large files read repeatedly (10-20 passes over the data during the
+pipeline).  STAR files, pkl files, and other metadata are small
+(typically < 1 GB) and are read into memory once, so staging them
+would add complexity for negligible benefit.
+
+For one-shot reads (e.g. downsampling full-res images that are only
+read once), staging is wasteful.  Pass ``skip_staging=True`` to
+``load_images()`` or ``MRCLoader`` to bypass it.  The
+``downsample_to_disk`` function does this automatically.
 
 from __future__ import annotations
 
