@@ -215,16 +215,21 @@ def compute_state(args):
 
     cryos = po.get('lazy_dataset') if lazy else po.get('dataset')
 
-    # Embeddings are loaded in halfset order (half-0 images first, half-1 second),
-    # but the unified dataset stores CTF_params in original file order.
-    # Scatter contrasts from halfset order → original order before applying.
-    halfset_order = np.concatenate([
-        cryos.halfset_local_image_indices(0),
-        cryos.halfset_local_image_indices(1),
-    ])
-    contrasts_original_order = np.empty_like(contrasts_key)
-    contrasts_original_order[halfset_order] = contrasts_key
-    embedding.set_contrasts_in_cryos(cryos, contrasts_original_order)
+    # Embeddings are loaded in halfset order (half-0 images first, half-1
+    # second).  The unified dataset stores CTF_params in original file order,
+    # so we scatter contrasts from halfset → original order before applying.
+    # Legacy list-of-two-datasets callers already have per-halfset ordering
+    # and set_contrasts_in_cryos handles the split internally.
+    if hasattr(cryos, 'halfset_local_image_indices'):
+        halfset_order = np.concatenate([
+            cryos.halfset_local_image_indices(0),
+            cryos.halfset_local_image_indices(1),
+        ])
+        contrasts_original_order = np.empty_like(contrasts_key)
+        contrasts_original_order[halfset_order] = contrasts_key
+        embedding.set_contrasts_in_cryos(cryos, contrasts_original_order)
+    else:
+        embedding.set_contrasts_in_cryos(cryos, contrasts_key)
     reweighted_halfset_datasets = _build_reweighted_halfset_datasets(cryos, lazy=lazy)
     zs = zs_key
     cov_zs = cov_zs_key
