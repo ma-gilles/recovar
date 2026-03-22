@@ -79,7 +79,7 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
     
 
 @nvtx.annotate("make_volumes_kernel_estimate_local", color="yellow")
-def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_folder, ndim, bins, B_factor, tau = None, n_min_particles = 50, metric_used = "locshellmost_likely", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None, kernel_rad = 4, save_all_estimates = False, heterogeneity_kernel = "parabola" ):
+def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_folder, ndim, bins, B_factor, tau = None, n_min_particles = 50, metric_used = "locshellmost_likely", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None, kernel_rad = 4, save_all_estimates = False, heterogeneity_kernel = "parabola", halfset_datasets = None ):
     """Reconstruct volumes along a heterogeneity path using kernel regression.
 
     For each bin along the heterogeneity axis, selects nearby images
@@ -120,7 +120,8 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
     n_images_per_bin = [ int(np.sum(heterogeneity_distances[0] < b) + np.sum(heterogeneity_distances[1] < b)) for b in heterogeneity_bins ]
     logger.info("Particles per bin: %s", n_images_per_bin)
 
-    halfset_datasets = ds.materialize_halfset_datasets()
+    if halfset_datasets is None:
+        halfset_datasets = ds.materialize_halfset_datasets()
 
     estimates = [None, None]
     lhs, rhs = [None, None], [None, None]
