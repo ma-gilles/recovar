@@ -186,6 +186,47 @@ def test_make_volumes_kernel_estimate_local_smoke(tmp_path):
     )
 
 
+def test_make_volumes_kernel_estimate_local_uses_provided_halfset_datasets(tmp_path, monkeypatch):
+    """Provided half-set datasets should bypass rematerialization."""
+    noise_variance = np.ones(4 // 2 - 1, dtype=np.float32) * 0.1
+
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8, seed=1)
+    cryo.dataset_indices = np.arange(8, dtype=np.int32)
+    cryo.set_radial_noise_model(noise_variance)
+    cryo.halfset_indices = [
+        np.array([0, 1, 2, 3], dtype=np.int32),
+        np.array([4, 5, 6, 7], dtype=np.int32),
+    ]
+    halfset_datasets = cryo.materialize_halfset_datasets()
+
+    def _fail_materialize(self):
+        raise AssertionError("materialize_halfset_datasets should not be called")
+
+    monkeypatch.setattr(type(cryo), "materialize_halfset_datasets", _fail_materialize)
+
+    rng = np.random.default_rng(1)
+    het_dists = [
+        rng.exponential(scale=2.0, size=4).astype(np.float32),
+        rng.exponential(scale=2.0, size=4).astype(np.float32),
+    ]
+    bins = hv.pick_heterogeneity_bins2(ndim=2, log_likelihoods=np.concatenate(het_dists), n_bins=3)
+
+    hv.make_volumes_kernel_estimate_local(
+        heterogeneity_distances=het_dists,
+        cryos=cryo,
+        output_folder=str(tmp_path / "hv_output_halfsets"),
+        ndim=2,
+        bins=bins,
+        B_factor=0,
+        tau=None,
+        n_min_particles=2,
+        metric_used="locshellmost_likely",
+        locres_sampling=2,
+        kernel_rad=1,
+        halfset_datasets=halfset_datasets,
+    )
+
+
 def test_choice_most_likely_split_with_smoothing_runs():
     rng = np.random.default_rng(1)
     shape = (8, 8, 8)

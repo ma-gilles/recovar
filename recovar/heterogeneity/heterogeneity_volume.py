@@ -107,6 +107,8 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         kernel_rad: Radius of the heterogeneity kernel.
         save_all_estimates: Save all intermediate estimates.
         heterogeneity_kernel: Kernel shape (``'parabola'`` or ``'flat'``).
+        halfset_datasets: Optional pre-materialized half-set datasets. When
+            provided, avoids rematerializing the split datasets internally.
     """
     ds = cryos
 
