@@ -1,0 +1,34 @@
+{
+  "NVIDIA H100 80GB HBM3": {
+    "hardware": {
+      "gpu_name": "NVIDIA H100 80GB HBM3",
+      "cpu": "x86_64",
+      "hostname": "della-h19g2"
+    },
+    "code_version": "47cf7f5",
+    "package_versions": {
+      "jax": "0.9.0.1",
+      "jaxlib": "0.9.0.1",
+      "numpy": "2.2.6",
+      "scipy": "1.16.2",
+      "sklearn": "1.7.2"
+    },
+    "stages": {
+      "make_dataset": {
+        "wall_seconds": 26.28,
+        "peak_cpu_memory_gb": 1.818,
+        "peak_gpu_memory_gb": 0.0
+      },
+      "pipeline": {
+        "wall_seconds": 439.03,
+        "peak_cpu_memory_gb": 2.177,
+        "peak_gpu_memory_gb": 0.126
+      },
+      "compute_state": {
+        "wall_seconds": 159.99,
+        "peak_cpu_memory_gb": 2.177,
+        "peak_gpu_memory_gb": 0.0
+      }
+    }
+  }
+}
