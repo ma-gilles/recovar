@@ -134,7 +134,7 @@ def test_get_cov_svds_delegates_to_randomized_svd(monkeypatch):
     monkeypatch.setattr(pc, "randomized_real_svd_of_columns", fake_randomized_real_svd_of_columns)
 
     cov_cols = {"est_mask": np.ones((3, 2), dtype=np.complex64)}
-    u, s = pc.get_cov_svds(
+    u_real, s_real = pc.get_cov_svds(
         covariance_cols=cov_cols,
         picked_frequencies=np.array([0, 1]),
         volume_mask=np.ones(3, dtype=np.float32),
@@ -144,9 +144,8 @@ def test_get_cov_svds_delegates_to_randomized_svd(monkeypatch):
         ignore_zero_frequency=False,
         randomized_sketch_size=5,
     )
-    assert "real" in u and "real" in s
-    np.testing.assert_array_equal(u["real"], np.eye(3, dtype=np.float32))
-    np.testing.assert_array_equal(s["real"], np.array([3.0, 2.0, 1.0], dtype=np.float32))
+    np.testing.assert_array_equal(u_real, np.eye(3, dtype=np.float32))
+    np.testing.assert_array_equal(s_real, np.array([3.0, 2.0, 1.0], dtype=np.float32))
     assert called["kwargs"]["test_size"] == 5
 
 
@@ -298,8 +297,8 @@ def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
         pc,
         "get_cov_svds",
         lambda *args, **kwargs: (
-            {"real": np.ones((8, 2), dtype=np.float32)},
-            {"real": np.array([2.0, 1.0], dtype=np.float32)},
+            np.ones((8, 2), dtype=np.float32),
+            np.array([2.0, 1.0], dtype=np.float32),
         ),
     )
     monkeypatch.setattr(
@@ -370,8 +369,8 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
         pc,
         "get_cov_svds",
         lambda *args, **kwargs: (
-            {"real": np.ones((cryo.volume_size, 2), dtype=np.float32)},
-            {"real": np.array([2.0, 1.0], dtype=np.float32)},
+            np.ones((cryo.volume_size, 2), dtype=np.float32),
+            np.array([2.0, 1.0], dtype=np.float32),
         ),
     )
     monkeypatch.setattr(

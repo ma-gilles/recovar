@@ -106,7 +106,18 @@ def estimate_principal_components(dataset, options,  means, mean_prior, volume_m
             raise TypeError("covariance_cols is not of type np.complex64")
 
     # First approximation of eigenvalue decomposition
-    u,s = get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape, vol_batch_size, gpu_memory_to_use, False, covariance_options['randomized_sketch_size'])
+    u_real, s_real = get_cov_svds(
+        covariance_cols,
+        picked_frequencies,
+        volume_mask,
+        volume_shape,
+        vol_batch_size,
+        gpu_memory_to_use,
+        False,
+        covariance_options['randomized_sketch_size'],
+    )
+    u = {"real": u_real}
+    s = {"real": s_real}
     # Check for NaN or Inf values in u and s
     if np.any(np.isnan(u['real'])) or np.any(np.isinf(u['real'])):
         raise ValueError("u['real'] contains NaN or Inf values")
@@ -166,9 +177,7 @@ def get_cov_svds(
     ignore_zero_frequency,
     randomized_sketch_size,
 ):
-    u = {}
-    s = {}
-    u["real"], s["real"], _ = randomized_real_svd_of_columns(
+    u_real, s_real, _ = randomized_real_svd_of_columns(
         covariance_cols["est_mask"],
         picked_frequencies,
         volume_mask,
@@ -178,7 +187,7 @@ def get_cov_svds(
         gpu_memory_to_use=gpu_memory_to_use,
         ignore_zero_frequency=ignore_zero_frequency,
     )
-    return u, s
+    return u_real, s_real
 
 
 def _projected_covariance_batch_size(basis, image_size, basis_size, gpu_memory_to_use):
