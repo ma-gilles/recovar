@@ -150,6 +150,35 @@ def test_get_cov_svds_delegates_to_randomized_svd(monkeypatch):
     assert called["kwargs"]["test_size"] == 5
 
 
+def test_projected_covariance_batch_size_uses_requested_gpu_budget(monkeypatch):
+    calls = {}
+
+    def fake_get_embedding_batch_size(basis, image_size, contrast_grid, zdim, gpu_memory):
+        calls["gpu_memory"] = gpu_memory
+        calls["basis_shape"] = basis.shape
+        calls["image_size"] = image_size
+        calls["zdim"] = zdim
+        return 7
+
+    monkeypatch.setattr(pc.utils, "get_embedding_batch_size", fake_get_embedding_batch_size)
+    monkeypatch.setattr(pc.utils, "get_gpu_memory_total", lambda: 100.0)
+
+    basis = np.ones((8, 3), dtype=np.float32)
+    out = pc._projected_covariance_batch_size(
+        basis=basis,
+        image_size=16,
+        basis_size=3,
+        gpu_memory_to_use=8.0,
+    )
+
+    assert out == 7
+    assert calls["basis_shape"] == basis.shape
+    assert calls["image_size"] == 16
+    assert calls["zdim"] == 3
+    expected_budget = 8.0 - 2 * 3**4 * 8 / 1e9
+    assert calls["gpu_memory"] == pytest.approx(expected_budget)
+
+
 def test_pca_by_projected_covariance_sorts_and_clamps_eigs(monkeypatch):
     cryos = type("Cryo", (), {"image_size": 16})()
     basis = np.eye(3, dtype=np.float32)
@@ -179,6 +208,12 @@ def test_pca_by_projected_covariance_sorts_and_clamps_eigs(monkeypatch):
     assert s.shape == (3,)
     assert s[0] >= s[1] >= s[2]
     assert s[2] == pytest.approx(pc.jax_config.EPSILON)
+
+
+def test_unused_diagnostic_functions_removed():
+    assert not hasattr(pc, "test_different_embeddings")
+    assert not hasattr(pc, "test_different_embeddings_from_volumes")
+    assert not hasattr(pc, "test_different_embeddings_from_variance")
 
 
 def test_estimate_principal_components_high_snr_from_var_est_requires_variance():

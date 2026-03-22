@@ -120,12 +120,15 @@ def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape, half_images
         proj_eigen = fourier_transform_utils.get_dft2(proj_eigen).reshape([*proj_eigen.shape[0:2], -1])
     return proj_eigen
 
-## TODO: This is not ideal. The correct way to pass no mask should be to use mask = None
-## not an all ones mask but it might be happening because I was lazy. Fix this whereever
 def check_mask(mask):
-    no_mask = np.all(np.isclose(mask,1))
-    if no_mask:
+    if mask is None:
         logger.info("no mask used")
+        return True
+
+    mask = np.asarray(mask)
+    no_mask = bool(np.all(np.isclose(mask, 1)))
+    if no_mask:
+        logger.info("mask is all ones; treating it as no mask")
     return no_mask
 
 batch_forward_model = jax.vmap(
@@ -178,10 +181,9 @@ def batch_vol_forward_from_map(
 # Equinox-based API
 # ============================================================================
 
-## TODO: rename this function. centered would be understood as "translated" back to origin by most people, rather than mean subtracted
 @eqx.filter_jit
-@nvtx.annotate("centered_images", color="yellow", domain=NVTX_DOMAIN_COV_CORE)
-def centered_images(
+@nvtx.annotate("subtract_projected_mean", color="yellow", domain=NVTX_DOMAIN_COV_CORE)
+def subtract_projected_mean(
     config: ForwardModelConfig,
     images: jax.Array,
     mean: jax.Array,
@@ -207,7 +209,10 @@ def centered_images(
         centered = translated - projected
     return centered
 
-## TODO: are there multiple implementations of this? if so delete
+
+centered_images = subtract_projected_mean
+
+
 @eqx.filter_jit
 @nvtx.annotate("batch_vol_forward", color="blue", domain=NVTX_DOMAIN_COV_CORE)
 def batch_vol_forward(
@@ -216,12 +221,16 @@ def batch_vol_forward(
     ctf_params: jax.Array,
     rotation_matrices: jax.Array,
 ) -> jax.Array:
-    """Forward-model a batch of volumes (vmap over volume axis)."""
-    batch_grid_pt_vec_ind = core.batch_get_nearest_gridpoint_indices(
-        rotation_matrices, config.image_shape, config.volume_shape
+    """Compatibility wrapper around batch_vol_forward_from_map."""
+    return batch_vol_forward_from_map(
+        config,
+        volumes,
+        ctf_params,
+        rotation_matrices,
+        skip_ctf=False,
+        half_image=False,
+        half_volume=False,
     )
-    batch_CTF = config.compute_ctf(ctf_params)
-    return batch_forward_model(volumes, batch_CTF, batch_grid_pt_vec_ind)
 
 
 def triangular_kernel(gridpoints, gridpoint_target, kernel_width = 1):
@@ -251,6 +260,4 @@ def evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel = "triangular",
     else:
         raise ValueError("Kernel function not recognized")
     return kernel_vals
-
-
 

@@ -22,29 +22,32 @@ from recovar.reconstruction import regularization, relion_functions, noise
 
 logger = logging.getLogger(__name__)
 
-## TODO there is code like this in several places. It should be written somewhere as a fn and run instead.
+
+def _load_cuda_profiler():
+    """Best-effort CUDA profiler loader used by performance debugging."""
+    try:
+        import ctypes
+
+        cudart = ctypes.CDLL("libcudart.so")
+
+        def _cuda_profiler_start():
+            ret = cudart.cudaProfilerStart()
+            if ret != 0:
+                logger.warning("cudaProfilerStart returned error code: %s", ret)
+
+        def _cuda_profiler_stop():
+            ret = cudart.cudaProfilerStop()
+            if ret != 0:
+                logger.warning("cudaProfilerStop returned error code: %s", ret)
+
+        return True, _cuda_profiler_start, _cuda_profiler_stop
+    except (ImportError, OSError, AttributeError) as e:
+        logger.warning("CUDA profiler not available - profiling disabled: %s", e)
+        return False, None, None
 
 # CUDA Profiler for selective profiling with nsys
 # Uses ctypes to call CUDA runtime API directly (no PyTorch needed)
-try:
-    import ctypes
-    # Load CUDA runtime library
-    _cudart = ctypes.CDLL('libcudart.so')
-    
-    def cudaProfilerStart():
-        ret = _cudart.cudaProfilerStart()
-        if ret != 0:
-            logger.warning("cudaProfilerStart returned error code: %s", ret)
-    
-    def cudaProfilerStop():
-        ret = _cudart.cudaProfilerStop()
-        if ret != 0:
-            logger.warning("cudaProfilerStop returned error code: %s", ret)
-    
-    CUDA_PROFILER_AVAILABLE = True
-except (ImportError, OSError, AttributeError) as e:
-    CUDA_PROFILER_AVAILABLE = False
-    logger.warning("CUDA profiler not available - profiling disabled: %s", e)
+CUDA_PROFILER_AVAILABLE, cudaProfilerStart, cudaProfilerStop = _load_cuda_profiler()
 
 # ============================================================================
 # NVTX Domain Configuration for Selective Profiling
@@ -82,7 +85,6 @@ except (ImportError, OSError, AttributeError) as e:
 # Domain name for compute_H_B profiling (use as string in decorators)
 NVTX_DOMAIN_H_B = "compute_H_B"
 
-## TODO: not a big fan of the way options are handled, perhaps refactor this part.
 @nvtx.annotate("get_default_covariance_computation_options", color="red")
 def get_default_covariance_computation_options(grid_size=None):
     """Return default options dict for covariance computation.
@@ -188,7 +190,6 @@ def set_covariance_options(args, options):
     return options
 
 
-from recovar import core
 @nvtx.annotate("greedy_column_choice", color="orange")
 def greedy_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_radius = 1, keep_only_below_freq = 32):
     if avoid_in_radius < 0 or avoid_in_radius > 20:
@@ -380,8 +381,6 @@ def compute_regularized_covariance_columns(dataset, means, mean_prior, volume_ma
 # New Equinox-based variance estimation
 # ============================================================================
 
-## TODO there is clean up to be done here so that all functions use half images/half noise/half ctf etc, 
-## but another branch is already working on it so perhaps check with that
 @nvtx.annotate("variance_relion_kernel_trilinear", color="yellow")
 def variance_relion_kernel_trilinear(
     config: ForwardModelConfig,
@@ -631,8 +630,6 @@ def compute_variance(
         _to_cpu(noise_p_variance_est).real,
     )
 
-## TODO: The way H_B is computed needs to be refactored, there is a stack of 3-4 functions before we hit one 
-## that does something, others are just splitting the dataset/ columns etc
 @nvtx.annotate("compute_both_H_B", color="blue")
 def compute_both_H_B(dataset, means, dilated_volume_mask, picked_frequencies,
                      gpu_memory, options, use_multi_gpu=False, n_gpus=None):
@@ -720,9 +717,7 @@ def preprocess_covariance_batch(
     """
     # 1. Per-image tight mask (skip expensive 3D FFT + projection when not masking)
     if opts.mask_images:
-        ## TODO a big one: image_tight_mask and similar probably be using cubic discretization for the mask
-        ## I think currently it is using linear_interp + upsampled grid. I think that there is no need for upsampled grid
-        ## if using cubic. Also make sure inside of it it uses half-images when in fourier domain.
+        # Tight mask projection currently uses the linear-interpolation path.
         image_mask = covariance_core.get_per_image_tight_mask(
             volume_mask, rotation_matrices, image_stack_mask,
             config.volume_mask_threshold,
@@ -735,7 +730,7 @@ def preprocess_covariance_batch(
             dtype=jnp.float32)
 
     # 2. Center images: y_i - A_i * mu
-    images = covariance_core.centered_images(
+    images = covariance_core.subtract_projected_mean(
         config, images, mean_estimate,
         ctf_params, rotation_matrices,
         translations)
@@ -786,6 +781,26 @@ def _batched_stack_transfer(H, B, H_out, B_out, freq_offset, volume_size, n_item
         del H_batch_jax, B_batch_jax
 
 
+def _iter_column_batch_ranges(n_cols, batch_size):
+    """Yield ``(start, end)`` pairs covering ``range(n_cols)``."""
+    for start in range(0, n_cols, batch_size):
+        yield start, min(start + batch_size, n_cols)
+
+
+def _transposed_column_batch(matrix, start, end):
+    """Return the column slice ``matrix[:, start:end]`` as a row-major batch."""
+    return matrix[:, start:end].T
+
+
+def _vec_square_matrix(matrix):
+    return matrix.T.reshape(-1)
+
+
+def _unvec_square_matrix(vector):
+    n = np.sqrt(vector.size).astype(int)
+    return vector.reshape(n, n).T
+
+
 @nvtx.annotate("compute_H_B_for_halfset", color="blue", domain=NVTX_DOMAIN_H_B)
 def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies,
                             gpu_memory, options, image_subset=None, halfset_id=None):
@@ -823,12 +838,7 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
     H_out = np.empty([volume_size, n_picked], dtype=cryo.dtype)
     B_out = np.empty([volume_size, n_picked], dtype=cryo.dtype)
 
-    ## TODO: is there a cleaner way to implement these next few lines? justhe batching logic for columns.
-    ## Also is it still necessary? I thought that by default this function would acutlaly do a single batch (to save CPU memory), since might as well compute teh columns right away
-    ## If so, remove this forloop altogether
-    for freq_k in range(0, int(np.ceil(n_picked / column_batch_size))):
-        freq_st = int(freq_k * column_batch_size)
-        freq_end = int(np.min([(freq_k + 1) * column_batch_size, n_picked]))
+    for freq_st, freq_end in _iter_column_batch_ranges(n_picked, column_batch_size):
         freq_batch = picked_frequencies[freq_st:freq_end]
         n_freq_batch = freq_batch.size
 
@@ -865,6 +875,8 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
                 cryo.image_mask,
                 opts,
             )
+            if tilt_labels is not None and cryo.tilt_series_flag:
+                tilt_labels = preprocess_tilt_labels_for_batch(tilt_labels)
 
             # All frequencies in single XLA program (fori_loop, accumulates via .at[k].add)
             H_accum, B_accum = compute_freq_batch(
@@ -884,7 +896,6 @@ def compute_H_B_for_halfset(cryo, mean_estimate, volume_mask, picked_frequencies
 
     return H_out, B_out
 
-##TODO I would like the functions to be reorganized, perhaps in different files. Right now the H/B and regularization are intertwined which makes it hard to read
 @nvtx.annotate("compute_covariance_regularization_relion_style", color="cyan")
 def compute_covariance_regularization_relion_style(
     Hs, Bs, mean_prior, picked_frequencies, cov_noise,
@@ -910,17 +921,14 @@ def compute_covariance_regularization_relion_style(
     fscs = [None] * n_freqs
     combined_cov_cols = [None] * n_freqs
 
-    ## TODO: clean up loop syntax (just next 3 lines)
-    for batch_st in range(0, n_freqs, batch_size):
-        batch_end = min(batch_st + batch_size, n_freqs)
+    for batch_st, batch_end in _iter_column_batch_ranges(n_freqs, batch_size):
         indices = np.arange(batch_st, batch_end)
 
-        ## TODO: better way to implement this whole Hs[0][:, batch_st:batch_end].T, business perhaps?
         combined_cov_col, priors, fscs_this = regularization.prior_iteration_relion_style_batch(
-            Hs[0][:, batch_st:batch_end].T,
-            Hs[1][:, batch_st:batch_end].T,
-            Bs[0][:, batch_st:batch_end].T,
-            Bs[1][:, batch_st:batch_end].T,
+            _transposed_column_batch(Hs[0], batch_st, batch_end),
+            _transposed_column_batch(Hs[1], batch_st, batch_end),
+            _transposed_column_batch(Bs[0], batch_st, batch_end),
+            _transposed_column_batch(Bs[1], batch_st, batch_end),
             shifts[indices],
             _reg_init_batch(indices),
             options['substract_shell_mean'],
@@ -944,11 +952,10 @@ def compute_covariance_regularization_relion_style(
     combined_cov_cols = np.stack(combined_cov_cols, axis=0)
     return combined_cov_cols, fsc_priors, fscs
 
-# TODO: is this implemented multiple times in teh code? if so, remove. Perhap smove this function to a more reasonable file, too
-from recovar.core import cubic_interpolation
-vmap_calculate_spline_coefficients = jax.vmap(cubic_interpolation.calculate_spline_coefficients, in_axes = 0, out_axes = 0)
+_batch_calculate_spline_coefficients = jax.vmap(
+    cubic_interpolation.calculate_spline_coefficients, in_axes=0, out_axes=0
+)
 
-# TODO: Perhaps this one too
 @nvtx.annotate("compute_spline_coeffs_in_batch", color="magenta")
 def compute_spline_coeffs_in_batch(basis, volume_shape, gpu_memory=None):
     gpu_memory = utils.get_gpu_memory_total() if gpu_memory is None else gpu_memory
@@ -967,7 +974,7 @@ def compute_spline_coeffs_in_batch(basis, volume_shape, gpu_memory=None):
 
     coeffs = []
     for k in range(0, basis_4d.shape[0], vol_batch_size):
-        coeffs_block = vmap_calculate_spline_coefficients(
+        coeffs_block = _batch_calculate_spline_coefficients(
             basis_4d[k:k + vol_batch_size]
         )
         coeffs.append(np.asarray(coeffs_block))
@@ -1026,15 +1033,9 @@ def _compute_projected_covariance_single(experiment_dataset, mean_estimate, basi
         )
     del basis
 
-    def vec(X):
-        return X.T.reshape(-1)
-    def unvec(x):
-        n = np.sqrt(x.size).astype(int)
-        return x.reshape(n, n).T
-
     logger.info("end of covariance computation - before solve")
     utils.report_memory_device(logger=logger)
-    rhs = vec(rhs)
+    rhs = _vec_square_matrix(rhs)
 
     trace_val = jnp.trace(lhs)
     trace_val = jnp.where(jnp.isfinite(trace_val) & (trace_val > 0), trace_val, jnp.float32(1.0))
@@ -1043,7 +1044,7 @@ def _compute_projected_covariance_single(experiment_dataset, mean_estimate, basi
     lhs = lhs.at[diag_idx, diag_idx].add(reg)
 
     covar = jax.scipy.linalg.solve(lhs, rhs, assume_a='pos')
-    covar = unvec(covar)
+    covar = _unvec_square_matrix(covar)
     logger.info("end of solve")
     return covar
 
@@ -1075,8 +1076,6 @@ def compute_projected_covariance(dataset, mean_estimate, basis, volume_mask, bat
 
     if disc_type_u == 'cubic':
         basis = compute_spline_coeffs_in_batch(basis, dataset.volume_shape, gpu_memory= None)
-
-    change_device= False
 
     for halfset_id in range(2):
         config = ForwardModelConfig.from_dataset(
@@ -1120,24 +1119,9 @@ def compute_projected_covariance(dataset, mean_estimate, basis, volume_mask, bat
     del basis
     # Deallocate some memory?
 
-    ## TODO there is a few of these vec/unvec as well. Move somewhere and import, and also clean up a bit.
-    # Solve dense least squares?
-    def vec(X):
-        return X.T.reshape(-1)
-
-    ## Inverse of vec function.
-    def unvec(x):
-        n = np.sqrt(x.size).astype(int)
-        return x.reshape(n,n).T
-    
     logger.info("end of covariance computation - before solve")
     utils.report_memory_device(logger=logger)
-    rhs = vec(rhs)
-
-    #TODO: is this cpu safe?
-    if change_device:
-        rhs = jax.device_put(rhs, jax.devices("gpu")[0])
-        lhs = jax.device_put(lhs, jax.devices("gpu")[0])
+    rhs = _vec_square_matrix(rhs)
 
     # Tikhonov regularization: prevents NaN from near-singular LHS
     # (can happen when n_images is small relative to basis_size)
@@ -1147,8 +1131,8 @@ def compute_projected_covariance(dataset, mean_estimate, basis, volume_mask, bat
     diag_idx = jnp.arange(lhs.shape[0])
     lhs = lhs.at[diag_idx, diag_idx].add(reg)
 
-    covar = jax.scipy.linalg.solve( lhs ,rhs, assume_a='pos')
-    covar = unvec(covar)
+    covar = jax.scipy.linalg.solve(lhs, rhs, assume_a='pos')
+    covar = _unvec_square_matrix(covar)
     logger.info("end of solve")
 
     return covar
@@ -1335,7 +1319,6 @@ def _reduce_covariance_inner_explicit(
 
 
 batch_kron = jax.vmap(jnp.kron, in_axes=(0,0))
-## TODO: remove these functions if not used. I think they are not.
 @nvtx.annotate("summed_batch_kron", color="gray")
 def summed_batch_kron(X):
     return jnp.sum(batch_kron(X,X), axis=0)
@@ -1348,7 +1331,6 @@ def summed_batch_kron_scan(X):
     summed_kron = jax.lax.fori_loop(0, X.shape[0], fori_loop_body, init)
     return summed_kron
 
-## TODO this is same implementaiton as others, move or call from elsewhere or something
 batch_x_T_y = jax.vmap(  lambda x,y : jnp.conj(x).T @ y, in_axes = (0,0))
 
 @nvtx.annotate("summed_outer_products", color="gray")
@@ -1387,13 +1369,13 @@ def adjoint_kernel_slice(images, rotation_matrices, image_shape, volume_shape, k
     """Backproject images to volume(s).
 
     When *images* is 3-D ``(batch, n_images, n_pix)``, vmaps over the batch.
-    *volumes* is an optional accumulator: the backprojection is **added**
-    into *volumes* instead of starting from zeros.
+    When *images* is 2-D ``(n_images, n_pix)``, backprojects a single batch.
+    *volumes* is an optional accumulator: the backprojection is **added** into
+    *volumes* instead of starting from zeros.
     """
     disc_type = "linear_interp" if kernel == "triangular" else "nearest"
     if kernel not in ("triangular", "square"):
         raise ValueError("Kernel not implemented")
-    ## TODO: why is there an if statements here? why would htis ever be ndim2? clean
     if images.ndim == 3:
         return core.batch_adjoint_slice_volume(
             images, rotation_matrices, image_shape, volume_shape, disc_type, volumes=volumes)
@@ -1459,11 +1441,6 @@ def compute_freq_batch(
     else:
         ctfed_images = images * jnp.conj(ctf_on_grid)
     ctf_squared = ctf_on_grid * jnp.conj(ctf_on_grid)
-
-    # Pre-process tilt labels ONCE (not per-frequency)
-    ## TODO: this says should be called outside of jit in doc.. move?
-    if shared_label and tilt_labels is not None:
-        tilt_labels = preprocess_tilt_labels_for_batch(tilt_labels)
 
     max_groups = images.shape[0]
 
@@ -1541,8 +1518,8 @@ def preprocess_tilt_labels_for_batch(tilt_labels):
         tilt_labels: Array of arbitrary tilt label values
         
     Returns:
-        mapped_labels: Array of consecutive indices (0, 1, 2, ...)
-        max_tilt_n_groups: Number of unique tilt groups
+        Array of consecutive indices ``0, 1, 2, ...`` with the same grouping
+        structure as the input labels.
     """
     if tilt_labels is None:
         return None, None

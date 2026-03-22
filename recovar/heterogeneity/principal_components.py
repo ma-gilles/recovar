@@ -11,8 +11,7 @@ from recovar.utils.nvtx_shim import nvtx
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, jax_config, utils
 from recovar.core import linalg
-from recovar.heterogeneity import covariance_estimation, embedding
-from recovar.reconstruction import noise
+from recovar.heterogeneity import covariance_estimation
 
 logger = logging.getLogger(__name__)
 
@@ -156,14 +155,60 @@ def estimate_principal_components(dataset, options,  means, mean_prior, volume_m
     return u, s, covariance_cols, picked_frequencies, column_fscs
 
 
-# TODO: seems like a useless function, just move the inner one to other fn
+def _compute_real_cov_svds(
+    covariance_cols,
+    picked_frequencies,
+    volume_mask,
+    volume_shape,
+    vol_batch_size,
+    gpu_memory_to_use,
+    ignore_zero_frequency,
+    randomized_sketch_size,
+):
+    u = {}
+    s = {}
+    u["real"], s["real"], _ = randomized_real_svd_of_columns(
+        covariance_cols["est_mask"],
+        picked_frequencies,
+        volume_mask,
+        volume_shape,
+        vol_batch_size,
+        test_size=randomized_sketch_size,
+        gpu_memory_to_use=gpu_memory_to_use,
+        ignore_zero_frequency=ignore_zero_frequency,
+    )
+    return u, s
+
+
 @nvtx.annotate("get_cov_svds", color="blue", domain=NVTX_DOMAIN_PCA)
 def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,  vol_batch_size, gpu_memory_to_use, ignore_zero_frequency, randomized_sketch_size ):
-    u = {}; s = {}    
-    
-    u['real'], s['real'],_ = randomized_real_svd_of_columns(covariance_cols["est_mask"], picked_frequencies, volume_mask, volume_shape, vol_batch_size, test_size=randomized_sketch_size, gpu_memory_to_use=gpu_memory_to_use, ignore_zero_frequency=ignore_zero_frequency)
+    return _compute_real_cov_svds(
+        covariance_cols,
+        picked_frequencies,
+        volume_mask,
+        volume_shape,
+        vol_batch_size,
+        gpu_memory_to_use,
+        ignore_zero_frequency,
+        randomized_sketch_size,
+    )
 
-    return u, s
+
+def _projected_covariance_batch_size(basis, image_size, basis_size, gpu_memory_to_use):
+    available_gpu_memory = (
+        utils.get_gpu_memory_total()
+        if gpu_memory_to_use is None
+        else gpu_memory_to_use
+    )
+    memory_left_over_after_kron_allocate = available_gpu_memory - 2 * basis_size**4 * 8 / 1e9
+    batch_size = utils.get_embedding_batch_size(
+        basis,
+        image_size,
+        np.ones(1),
+        basis_size,
+        memory_left_over_after_kron_allocate,
+    )
+    return batch_size
 
 
 @nvtx.annotate("pca_by_projected_covariance", color="green", domain=NVTX_DOMAIN_PCA)
@@ -176,10 +221,9 @@ def pca_by_projected_covariance(dataset, basis, mean, volume_mask, disc_type , d
     basis_size = basis.shape[1] if n_pcs_to_compute is None else n_pcs_to_compute
     basis = basis[:,:basis_size]
 
-    ####
-    # TODO: Clean up this batch size computation, move elsewhere with other batch size comp. Also does the algebra make sense?
-    memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() -  2*basis_size**4*8/1e9
-    batch_size = utils.get_embedding_batch_size(basis, dataset.image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate )
+    batch_size = _projected_covariance_batch_size(
+        basis, dataset.image_size, basis_size, gpu_memory_to_use
+    )
 
     logger.info('batch size for covariance computation: ' + str(batch_size))
 
@@ -267,10 +311,9 @@ def knock_out_mean_component_2(u,s, mean, volume_mask, volume_shape, vol_batch_s
     return np.array(new_u.astype(u.dtype)), np.array(new_s.astype(s.dtype)**2)
 
 
-# A lot of implementation of the same things, having to do with taking the real SVD of
-# the columns of Sigma_col
-# - Third does a randomized SVD in the spatial domain.
-# TODO: unsured functions (if they can't be called by pipeline.py) should be cleaned out here. There are too many useless ones
+# A lot of implementation of the same things, having to do with taking the real
+# SVD of the columns of Sigma_col. The helpers below are used by the randomized
+# SVD path and by direct unit tests.
 def flip_vec(column, volume_shape):
     column = column.reshape(volume_shape)
     column_flipped = jnp.zeros_like(column)
@@ -357,7 +400,6 @@ def get_all_copied_columns(columns, picked_frequencies, volume_shape):
 
 
 # IMPLEMENTS THE TWO MATVECS WE NEED TO RUN THE RANDOMIZED SVD.
-## TODO: which veriosn is used? Should it be the other? Figure it out. Dlete the other ones
 @nvtx.annotate("right_matvec_with_spatial_Sigma", color="orange", domain=NVTX_DOMAIN_PCA)
 def right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40):
     st_time = time.time()
@@ -408,49 +450,14 @@ def right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices,
     return F_C_F_t
 
 def right_matvec_with_spatial_Sigma_v2(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40):
-    st_time = time.time()
-    # Some precompute
-
-    columns_flipped, minus_frequency_indices, good_idx = make_symmetric_columns_np(columns, picked_frequency_indices, volume_shape)
-    columns_flipped = columns_flipped[:,good_idx]
-
-    logger.info("make big mat 1 %s", time.time() - st_time)
-    # columns_flipped = np.array(columns_flipped)
-    utils.report_memory_device(logger=logger)
-
-    # Compute frequencies and all that stuff...
-    all_frequency_indices = np.concatenate([picked_frequency_indices, minus_frequency_indices[good_idx]])
-    all_frequencies = core.vec_indices_to_frequencies(all_frequency_indices, volume_shape)
-    
-    # Size of smaller grid.
-    smaller_size = int(2 * (np.max(np.abs(all_frequencies)) + 1))
-    smaller_vol_shape = tuple(3*[smaller_size])
-    smaller_vol_size = np.prod(smaller_vol_shape)
-    
-    # F_2r^* test_mat
-    F_t = linalg.batch_dft3(test_mat, smaller_vol_shape, vol_batch_size) / smaller_vol_size
-    logger.info("DFT time 1 %s", time.time() - st_time)
-
-    
-    original_frequencies = core.vec_indices_to_frequencies(picked_frequency_indices, volume_shape)
-    original_frequencies_indices_in_smaller = core.frequencies_to_vec_indices(original_frequencies, smaller_vol_shape)
-    utils.report_memory_device(logger=logger)
-
-    C_F_t = linalg.blockwise_A_X(columns, F_t[original_frequencies_indices_in_smaller,:], memory_to_use = memory_to_use)
-    logger.info("AX 1: %s", time.time() - st_time)
-
-    flipped_frequencies = core.vec_indices_to_frequencies(minus_frequency_indices[good_idx], volume_shape)
-    flipped_frequencies_indices_in_smaller = np.array(core.frequencies_to_vec_indices(flipped_frequencies, smaller_vol_shape))
-    logger.info("C_F_t shape: %s", C_F_t.shape)
-    C_F_t += linalg.blockwise_A_X(columns_flipped , F_t[flipped_frequencies_indices_in_smaller,:], memory_to_use = memory_to_use) 
-    # C_F_t += C_F_t_2 
-    logger.info("AX 2: %s", time.time() - st_time)
-
-    # Store FT in same array
-    C_F_t = linalg.batch_idft3(C_F_t, volume_shape, vol_batch_size)
-    logger.info("IDFT 1: %s", time.time() - st_time)
-
-    return C_F_t
+    return right_matvec_with_spatial_Sigma(
+        test_mat,
+        columns,
+        picked_frequency_indices,
+        volume_shape,
+        vol_batch_size,
+        memory_to_use=memory_to_use,
+    )
 
 
 @nvtx.annotate("left_matvec_with_spatial_Sigma", color="yellow", domain=NVTX_DOMAIN_PCA)
@@ -508,64 +515,14 @@ report_memory = True
 def left_matvec_with_spatial_Sigma_v2(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40):
     if report_memory:
         utils.report_memory_device(logger=logger)
-
-    st_time =time.time()
-    Q_shape_inp = Q.shape
-    # Some precompute
-    # Compute frequencies and all that stuff...
-    columns_flipped, minus_frequency_indices, good_idx = make_symmetric_columns_np(columns, picked_frequency_indices, volume_shape)
-    columns_flipped = columns_flipped[:,good_idx]
-
-    all_frequency_indices = np.concatenate([picked_frequency_indices, minus_frequency_indices[good_idx]])
-    all_frequencies = core.vec_indices_to_frequencies(all_frequency_indices, volume_shape)
-    if report_memory:
-        logger.info("after make symmetric columns")
-        utils.report_memory_device(logger=logger)
-
-    # Compute smallest grid that contains all picked frequencies
-    smaller_size = int(2 * (np.max(np.abs(all_frequencies)) + 1))
-    smaller_vol_shape = tuple(3*[smaller_size])
-    smaller_vol_size = np.prod(smaller_vol_shape)
-    
-    # Now do compute:
-    # F = IDFT here
-    # so F^* = DFT
-    
-    # Q should be real I think?
-    # 2x memory of Q
-    Q = linalg.batch_dft3( np.conj(Q), volume_shape, vol_batch_size) / np.prod(volume_shape)
-    logger.info("DFT: %s", time.time() - st_time)
-    utils.report_memory_device(logger=logger)
-
-
-    # Frequencies in new grid
-    original_frequencies = core.vec_indices_to_frequencies(picked_frequency_indices, volume_shape)
-    original_frequencies_indices_in_smaller = core.frequencies_to_vec_indices(original_frequencies, smaller_vol_shape)
-        
-    Q_F_C = np.zeros((Q_shape_inp[-1], smaller_vol_size), dtype = columns.dtype)
-    Q_F_C[:,original_frequencies_indices_in_smaller] = linalg.blockwise_Y_T_X(Q, columns, memory_to_use = memory_to_use)
-    logger.info("Y^T @ X: %s", time.time() - st_time)
-    utils.report_memory_device(logger=logger)
-
-    # Flipped Frequencies in new grid
-    flipped_frequencies = core.vec_indices_to_frequencies(minus_frequency_indices[good_idx], volume_shape)
-    flipped_frequencies_indices_in_smaller = core.frequencies_to_vec_indices(flipped_frequencies, smaller_vol_shape)
-    flipped_frequencies_indices_in_smaller = np.array(flipped_frequencies_indices_in_smaller)
-
-
-    Q_F_C[:,flipped_frequencies_indices_in_smaller] = linalg.blockwise_Y_T_X(Q, columns_flipped, memory_to_use = memory_to_use)
-    logger.info("Y^T @ X: %s", time.time() - st_time)
-    utils.report_memory_device(logger=logger)
-
-    del columns_flipped
-
-    # DFT back
-    # X F^* = (F X^*)^*
-    Q_F_C_F = np.conj(linalg.batch_idft3(np.conj(Q_F_C).T, smaller_vol_shape, vol_batch_size)).T
-    logger.info("DFT2: %s", time.time() - st_time)
-    utils.report_memory_device(logger=logger)
-
-    return Q_F_C_F
+    return left_matvec_with_spatial_Sigma(
+        Q,
+        columns,
+        picked_frequency_indices,
+        volume_shape,
+        vol_batch_size,
+        memory_to_use=memory_to_use,
+    )
 
 
 @nvtx.annotate("randomized_real_svd_of_columns", color="red", domain=NVTX_DOMAIN_PCA)
@@ -625,186 +582,4 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     # Factors due to IDFT on both sides
     S_fd = S * np.float32(np.sqrt(smaller_vol_size) * np.sqrt(volume_size))
     return np.array(Q), np.array(S_fd), np.array(V)
-
-
-### Legacy diagnostic functions — not used in the current pipeline
-
-
-def test_different_embeddings(cryos, volume_mask, mean_estimate, basis, eigenvalues, noise_variance, batch_size, disc_type = 'linear_interp', use_contrast = False, zdims= None):
-    
-    # noise.get_average_residual_square_v2(cryos[0], volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp')
-
-    # likelihoods = np.array([cryo.likelihood for cryo in cryos])
-    residuals = np.zeros(zdims.size)
-    cryo = cryos[0]
-    contrast_grid = np.ones([1])
-    residuals_flipped = np.zeros(zdims.size)
-    for zdim_idx, zdim in enumerate(zdims):
-        if zdim > 0:
-            basis_coordinates, image_latent_covariances, estimated_contrasts = embedding.get_coords_in_basis_and_contrast_3(cryo, mean_estimate, basis[:,:zdim], eigenvalues[:zdim], volume_mask, noise_variance, contrast_grid, batch_size, disc_type, compute_covariances = False )
-        else:
-            basis_coordinates = np.zeros((cryo.n_images, 0))
-        logger.info("embd ")#, end="")
-        contrasts = np.ones(cryo.n_images)
-        residuals[zdim_idx] = noise.get_average_residual_square_v3(cryos[0], volume_mask, mean_estimate, basis[:,:zdim].T, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp')
-
-        basis_flipped = basis[:,:zdim].copy()
-        basis_flipped[:,zdim-1] = basis[:,zdim-1] * (np.random.randint(0,2, size = basis[:,zdim-1].shape)*2 - 1)
-
-        if zdim > 0:
-            basis_coordinates, image_latent_covariances, estimated_contrasts = embedding.get_coords_in_basis_and_contrast_3(cryo, mean_estimate, basis_flipped, eigenvalues[:zdim], volume_mask, noise_variance, contrast_grid, batch_size, disc_type, compute_covariances = False )
-        else:
-            basis_coordinates = np.zeros((cryo.n_images, 0))
-        logger.info("embd ")#, end="")
-        contrasts = np.ones(cryo.n_images)
-        residuals_flipped[zdim_idx] = noise.get_average_residual_square_v3(cryos[0], volume_mask, mean_estimate, basis_flipped.T, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp')
-
-
-        logger.info("zdim %s", zdim)#, end="")
-    return residuals, residuals_flipped
-
-
-## TODO: move this elsewhere. This is a failed attempt at trying to predict which zs are the best. It's an interesting one but not used because it doesn't work
-def test_different_embeddings_from_volumes(cryos, zs, cov_zs, noise_variance, zdims= None, n_images = 1000, volume_mask= None):
-    
-    # noise.get_average_residual_square_v2(cryos[0], volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp')
-
-    # likelihoods = np.array([cryo.likelihood for cryo in cryos])
-    from recovar.heterogeneity import latent_density
-    metrics = {'locerr_median':np.zeros(zdims.size), 'locerr_90':np.zeros(zdims.size), 'locerr_mean':np.zeros(zdims.size)}
-
-    global_likely_choice1 = np.zeros(zdims.size)
-    global_likely_choice2 = np.zeros(zdims.size)
-    all_estimators = {}
-    all_lhs = {}
-
-    # First pick some points?
-    zdim_target = 4
-    zs_this = zs[zdim_target]#[:cryo.n_images]
-    covs_this = cov_zs[zdim_target]#[:cryo.n_images]
-
-    image_likelihoods = latent_density.compute_latent_space_density_at_pts(zs_this,zs_this,  covs_this)
-    most_likelihood_idx = np.argmax(image_likelihoods)
-
-    percentages = np.array([ 0, 0.1 ])#, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7])
-    index = np.round(percentages * zs_this.shape[0] ).astype(int)
-    likelihoods_sorted = np.flip(np.argsort(image_likelihoods))
-    images_chosen_index = likelihoods_sorted[index]
-
-
-
-
-    for zdim_idx, zdim in enumerate(zdims):
-        zs_this = zs[zdim]#[:cryo.n_images]
-        covs_this = cov_zs[zdim]#[:cryo.n_images]
-        zs_split = [zs_this[:cryos[0].n_images], zs_this[cryos[0].n_images:]]
-        cov_zs_split = [covs_this[:cryos[0].n_images], covs_this[cryos[0].n_images:]]
-
-        for most_likelihood_idx in images_chosen_index:
-            best_zs = zs_this[most_likelihood_idx]
-            lhs, rhs, estimators = {}, {}, {}
-            all_estimators[zdim] = {}
-            all_lhs[zdim] = {}
-            real_estimators = {}
-
-
-            for cryo_idx, cryo in enumerate(cryos):
-                # Compute likelihood to best_zs
-                # Take n_images most likely image for this point
-                best_likelihood = latent_density.compute_latent_quadratic_forms_in_batch(best_zs[None], zs_split[cryo_idx], cov_zs_split[cryo_idx]).reshape(-1)
-                single_bin = np.array(np.sort(best_likelihood)[n_images-1])[None]
-                inds = np.digitize(best_likelihood, single_bin, right = True)
-                images_used = inds == 0 
-
-                # Compute two estimators
-                from recovar.heterogeneity import adaptive_kernel_discretization
-                estimators[cryo_idx], lhs[cryo_idx], rhs[cryo_idx] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[cryo_idx], noise_variance.astype(np.float32), None, best_likelihood, single_bin, tau= None, grid_correct=False, use_spherical_mask=False, return_lhs_rhs=True)
-                lhs[cryo_idx] = adaptive_kernel_discretization.half_volume_to_full_volume(lhs[cryo_idx][0], cryos[cryo_idx].volume_shape)
-                lhs[cryo_idx] = (lhs[cryo_idx] * cryos[0].get_valid_frequency_indices())
-                real_estimators[cryo_idx] = fourier_transform_utils.get_idft3(estimators[cryo_idx].reshape(cryos[0].volume_shape))
-                all_estimators[zdim][cryo_idx] = estimators[cryo_idx]
-                all_lhs[zdim][cryo_idx] = lhs[cryo_idx]
-
-
-            weighting1 = 1/(1/lhs[0] + 1/lhs[1])
-            global_likely_choice1[zdim_idx] += jnp.linalg.norm(np.sqrt(weighting1) * (estimators[0] - estimators[1]) )**2
-            from recovar.heterogeneity import locres
-            weighting1 = weighting1.reshape(cryos[0].volume_shape)
-            loc_error = locres.expensive_local_error_with_cov(real_estimators[0], real_estimators[1], cryos[0].voxel_size, weighting1.reshape(real_estimators[0].shape), locres_sampling = 25, locres_maskrad= 25, locres_edgwidth= 0)
-            volume_mask = volume_mask > 1e-3
-            good_errors = loc_error.reshape(-1)[volume_mask.reshape(-1)]
-            metrics['locerr_median'][zdim_idx] += np.median(good_errors)
-            metrics['locerr_90'][zdim_idx] += np.percentile(good_errors, 90)
-            metrics['locerr_mean'][zdim_idx] += np.mean(good_errors)
-
-
-        logger.info("zdim %s", zdim)#, end="")
-    return global_likely_choice1, metrics, all_estimators, all_lhs
-
-## TODO Similar to function above
-def test_different_embeddings_from_variance(cryos, zs, cov_zs, noise_variance, zdims= None, n_images = 1000, tau = None):
-    
-    from recovar.heterogeneity import latent_density
-    zdims = np.asarray(zdims)
-    metrics = {'variance':np.zeros(zdims.size), 'filt_var': np.zeros(zdims.size) , 'var_avg': {}, 'variance_lp': np.zeros(zdims.size) }
-    for k in range(zdims.size):
-        metrics['var_avg'][k] = 0
-
-    all_estimators = {}
-    all_lhs = {}
-
-
-    images_chosen_index = np.random.randint(0, zs[zdims[0]].shape[0], 30)
-    first = True
-    for zdim_idx, zdim in enumerate(zdims):
-        zs_this = zs[zdim]#[:cryo.n_images]
-        covs_this = cov_zs[zdim]#[:cryo.n_images]
-        zs_split = [zs_this[:cryos[0].n_images], zs_this[cryos[0].n_images:]]
-        cov_zs_split = [covs_this[:cryos[0].n_images], covs_this[cryos[0].n_images:]]
-
-        for most_likelihood_idx in images_chosen_index:
-            best_zs = zs_this[most_likelihood_idx]
-            lhs, rhs, estimators = {}, {}, {}
-            all_estimators[zdim] = {}
-            all_lhs[zdim] = {}
-            real_estimators = {}
-
-
-            for cryo_idx, cryo in enumerate(cryos):
-                # Compute likelihood to best_zs
-                # Take n_images most likely image for this point
-                best_likelihood = latent_density.compute_latent_quadratic_forms_in_batch(best_zs[None], zs_split[cryo_idx], cov_zs_split[cryo_idx]).reshape(-1)
-                single_bin = np.array(np.sort(best_likelihood)[n_images-1])[None]
-                inds = np.digitize(best_likelihood, single_bin, right = True)
-                images_used = inds == 0 
-                import matplotlib.pyplot as plt
-
-                # Compute two estimators
-                from recovar import utils
-                from recovar.reconstruction import relion_functions, regularization
-                from recovar.heterogeneity import adaptive_kernel_discretization
-                estimators[cryo_idx], lhs[cryo_idx], rhs[cryo_idx] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(cryos[cryo_idx], noise_variance.astype(np.float32), None, best_likelihood, single_bin, tau= tau, grid_correct=True, use_spherical_mask=True, return_lhs_rhs=True)
-
-                image_subset = np.argwhere(images_used).reshape(-1)
-                Ft_ctf, Ft_y = relion_functions.residual_relion_style_triangular_kernel(cryos[cryo_idx], estimators[cryo_idx][0], noise_variance.astype(np.float32) * 0 ,  100,  index_subset = image_subset)
-                Ft_y = (Ft_y * cryos[0].get_valid_frequency_indices())
-
-                if first:
-                    Ft_ctf_avg = regularization.average_over_shells(Ft_ctf, cryos[0].volume_shape) / 10
-                    Ft_avg_radial = utils.make_radial_image(Ft_ctf_avg, cryos[0].volume_shape)
-                    first = False
-
-                variance_estimate = Ft_y / (Ft_ctf + Ft_avg_radial)
-                avg_variance = regularization.average_over_shells(variance_estimate, cryos[0].volume_shape)
-                plt.plot(avg_variance)
-
-
-            metrics['var_avg'][zdim_idx] = avg_variance
-            metrics['filt_var'][zdim_idx] += np.sum(Ft_y)
-            metrics['variance'][zdim_idx] += np.sum(variance_estimate)
-            metrics['variance_lp'][zdim_idx] += np.sum(variance_estimate * cryos[0].get_valid_frequency_indices(rad = 20))
-
-
-        logger.info("zdim %s", zdim)#, end="")
-    return metrics, all_estimators, all_lhs
 

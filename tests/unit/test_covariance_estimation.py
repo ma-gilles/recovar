@@ -255,6 +255,82 @@ def test_compute_both_h_b_selects_combined_or_corrected_mean(monkeypatch):
     assert chosen_means == [21.0, 31.0]
 
 
+def test_iter_column_batch_ranges_covers_all_columns():
+    ranges = list(cov_est._iter_column_batch_ranges(5, 2))
+    assert ranges == [(0, 2), (2, 4), (4, 5)]
+
+
+def test_transposed_column_batch_matches_expected_view():
+    matrix = np.arange(12, dtype=np.float32).reshape(3, 4)
+    out = cov_est._transposed_column_batch(matrix, 1, 3)
+    np.testing.assert_array_equal(out, matrix[:, 1:3].T)
+
+
+def test_vec_unvec_square_matrix_round_trip():
+    matrix = np.arange(9, dtype=np.float32).reshape(3, 3)
+    vec = cov_est._vec_square_matrix(matrix)
+    round_trip = cov_est._unvec_square_matrix(vec)
+    np.testing.assert_array_equal(round_trip, matrix)
+
+
+def test_compute_covariance_regularization_relion_style_uses_transposed_batches(monkeypatch):
+    monkeypatch.setattr(cov_est.utils, "get_column_batch_size", lambda *args, **kwargs: 16)
+
+    calls = []
+
+    def fake_prior_iteration_relion_style_batch(H0, H1, B0, B1, shifts, reg_init, *args):
+        calls.append((np.array(H0), np.array(H1), np.array(B0), np.array(B1), np.array(shifts), np.array(reg_init)))
+        batch_size, volume_size = H0.shape
+        combined = np.ones((batch_size, volume_size), dtype=np.complex64) * (len(calls))
+        priors = np.ones((batch_size, volume_size), dtype=np.float32) * (10 * len(calls))
+        fscs = np.ones((batch_size,), dtype=np.float32) * (100 * len(calls))
+        return combined, priors, fscs
+
+    monkeypatch.setattr(
+        cov_est.regularization,
+        "prior_iteration_relion_style_batch",
+        fake_prior_iteration_relion_style_batch,
+    )
+
+    H0 = np.arange(16, dtype=np.float32).reshape(4, 4)
+    H1 = H0 + 100
+    B0 = (H0 + 200).astype(np.complex64)
+    B1 = (H1 + 200).astype(np.complex64)
+    picked = np.array([0, 1, 2, 3], dtype=np.int32)
+    mean_prior = np.linspace(1.0, 2.0, 4, dtype=np.float32)
+    cov_noise = np.ones(4, dtype=np.float32)
+    options = {
+        "use_mask_in_fsc": False,
+        "shift_fsc": False,
+        "substract_shell_mean": False,
+        "left_kernel": "triangular",
+        "use_spherical_mask": False,
+        "grid_correct": False,
+        "prior_n_iterations": 1,
+        "downsample_from_fsc": False,
+    }
+
+    combined, priors, fscs = cov_est.compute_covariance_regularization_relion_style(
+        Hs=[H0, H1],
+        Bs=[B0, B1],
+        mean_prior=mean_prior,
+        picked_frequencies=picked,
+        cov_noise=cov_noise,
+        volume_mask=np.ones(4, dtype=np.float32),
+        volume_shape=(2, 2, 1),
+        gpu_memory=8,
+        reg_init_multiplier=2.0,
+        options=options,
+    )
+
+    assert len(calls) == 2
+    np.testing.assert_array_equal(calls[0][0], H0[:, 0:2].T)
+    np.testing.assert_array_equal(calls[1][0], H0[:, 2:4].T)
+    assert combined.shape == (4, 4)
+    assert priors.shape == (4, 4)
+    assert len(fscs) == 4
+
+
 def test_summed_batch_kron_matches_scan():
     x = jnp.array([[1.0, 2.0], [3.0, 4.0]], dtype=jnp.float32)
     out1 = cov_est.summed_batch_kron(x)
@@ -343,6 +419,81 @@ def test_compute_h_b_for_halfset_batches_frequency_chunks(monkeypatch):
     assert set(freq_calls) == {0, 1, 2, 3, 4}
     assert H.shape == (cryo.volume_size, picked_frequencies.size)
     assert B.shape == (cryo.volume_size, picked_frequencies.size)
+
+
+def test_compute_h_b_for_halfset_preprocesses_tilt_labels_before_freq_kernel(monkeypatch):
+    monkeypatch.setattr(cov_est.utils, "get_image_batch_size", lambda *args, **kwargs: 8)
+    monkeypatch.setattr(cov_est.utils, "get_column_batch_size", lambda *args, **kwargs: 8)
+
+    class FakeCryo:
+        volume_size = 4
+        dtype = np.complex64
+        grid_size = 4
+        noise = object()
+        tilt_series_flag = True
+        premultiplied_ctf = False
+        image_mask = np.ones((2, 2), dtype=np.float32)
+
+        def process_images(self, images):
+            return images
+
+        def iter_batches(self, batch_size, **kwargs):
+            yield (
+                np.zeros((3, 4), dtype=np.complex64),
+                np.zeros((3, 3, 3), dtype=np.float32),
+                np.zeros((3, 2), dtype=np.float32),
+                np.zeros((3, 9), dtype=np.float32),
+                np.zeros((3, 4), dtype=np.float32),
+                np.array([99], dtype=np.int32),
+                np.arange(3, dtype=np.int32),
+            )
+
+    config = SimpleNamespace(
+        volume_size=4,
+        image_shape=(2, 2),
+        volume_shape=(2, 2, 1),
+    )
+    monkeypatch.setattr(cov_est.ForwardModelConfig, "from_dataset", lambda *args, **kwargs: config)
+
+    monkeypatch.setattr(
+        cov_est,
+        "preprocess_covariance_batch",
+        lambda *args, **kwargs: (
+            np.zeros((3, 4), dtype=np.complex64),
+            np.zeros((3, 4), dtype=np.complex64),
+            np.zeros((3, 4, 3), dtype=np.float32),
+            np.ones((3, 2, 2), dtype=np.float32),
+            np.array([10, 20, 10], dtype=np.int32),
+        ),
+    )
+
+    seen_labels = []
+
+    def fake_compute_freq_batch(config, opts, freq_batch, images, ctf_on_grid,
+                                plane_coords, rotation_matrices, noise_variances,
+                                image_mask, tilt_labels, premultiplied_ctf,
+                                shared_label, no_mask, H_accum=None, B_accum=None):
+        seen_labels.append(np.array(tilt_labels))
+        assert shared_label is True
+        return H_accum, B_accum
+
+    monkeypatch.setattr(cov_est, "compute_freq_batch", fake_compute_freq_batch)
+
+    options = cov_est.get_default_covariance_computation_options(grid_size=4)
+    options["disc_type"] = "linear_interp"
+    options["mask_images_in_H_B"] = False
+
+    cov_est.compute_H_B_for_halfset(
+        cryo=FakeCryo(),
+        mean_estimate=np.zeros(4, dtype=np.complex64),
+        volume_mask=np.ones((2, 2, 1), dtype=np.float32),
+        picked_frequencies=np.array([0, 1], dtype=np.int32),
+        gpu_memory=8,
+        options=options,
+    )
+
+    assert len(seen_labels) == 1
+    np.testing.assert_array_equal(seen_labels[0], np.array([0, 1, 0], dtype=np.int32))
 
 
 def test_compute_variance_orchestration_with_stubbed_kernels(monkeypatch):
