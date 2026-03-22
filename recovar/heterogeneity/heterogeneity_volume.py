@@ -65,9 +65,8 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
     noise_variance = results['cov_noise']
     latent_points = latent_point[None]
 
-    # Support both new (latent_coords/latent_precision) and legacy (zs/cov_zs) dict formats
-    coords = results.get('latent_coords', results.get('zs', {}))
-    precision = results.get('latent_precision', results.get('cov_zs', {}))
+    coords = results['latent_coords']
+    precision = results['latent_precision']
     log_likelihoods = recovar.heterogeneity.latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], coords[ndim], precision[ndim])[...,0]
     heterogeneity_distances = ds.split_halfset_array(
         log_likelihoods, per_particle=ds.tilt_series_flag)

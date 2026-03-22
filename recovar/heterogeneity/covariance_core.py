@@ -210,29 +210,6 @@ def subtract_projected_mean(
     return centered
 
 
-centered_images = subtract_projected_mean
-
-
-@eqx.filter_jit
-@nvtx.annotate("batch_vol_forward", color="blue", domain=NVTX_DOMAIN_COV_CORE)
-def batch_vol_forward(
-    config: ForwardModelConfig,
-    volumes: jax.Array,
-    ctf_params: jax.Array,
-    rotation_matrices: jax.Array,
-) -> jax.Array:
-    """Compatibility wrapper around batch_vol_forward_from_map."""
-    return batch_vol_forward_from_map(
-        config,
-        volumes,
-        ctf_params,
-        rotation_matrices,
-        skip_ctf=False,
-        half_image=False,
-        half_volume=False,
-    )
-
-
 def triangular_kernel(gridpoints, gridpoint_target, kernel_width = 1):
     diff = jnp.abs(gridpoints - gridpoint_target)
     per_dim = jnp.where(diff < kernel_width, 1 - diff / kernel_width, 0)
@@ -260,4 +237,3 @@ def evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel = "triangular",
     else:
         raise ValueError("Kernel function not recognized")
     return kernel_vals
-

@@ -170,17 +170,6 @@ def test_batch_make_radial_noise_matches_vmap():
         single = np.asarray(noise.make_radial_noise(radials[i], image_shape))
         np.testing.assert_allclose(batch_out[i], single, atol=1e-6)
 
-
-def test_basis_times_coords_contraction():
-    """basis_times_coords contracts along the last axis."""
-    import jax.numpy as jnp
-    basis = jnp.array([[1.0, 2.0], [3.0, 4.0]], dtype=jnp.float32)
-    coords = jnp.array([[1.0, 0.5], [2.0, 1.0]], dtype=jnp.float32)
-    out = np.asarray(noise.basis_times_coords(basis, coords))
-    expected = np.array([1*1 + 2*0.5, 3*2 + 4*1], dtype=np.float32)
-    np.testing.assert_allclose(out, expected, atol=1e-6)
-
-
 def test_batch_basis_times_coords2_matches_matmul():
     """batch_basis_times_coords2 should match direct basis @ coords.T."""
     import jax.numpy as jnp

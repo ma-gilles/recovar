@@ -1,9 +1,8 @@
 """Fast marching travel-time solver used by latent-space trajectory code.
 
-The preferred implementation is a vendored native extension built from the
-BSD-licensed scikit-fmm C++ core. A pure-Python fallback is kept in-tree so
-editable installs and unsupported platforms still work without the old
-``skfmm`` runtime dependency.
+The normal code path uses the in-tree native extension. A pure-Python
+implementation remains available for editable installs and unsupported
+platforms.
 """
 
 from __future__ import annotations

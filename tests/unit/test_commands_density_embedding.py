@@ -150,7 +150,7 @@ def test_compute_embedding_falls_back_to_input_args_zdim(monkeypatch):
         "s": {"rescaled": np.ones(2, dtype=np.float32)},
         "cov_noise": np.ones(4, dtype=np.float32),
         "volume_mask": np.ones(4, dtype=np.float32),
-        "zs": {},
+        "latent_coords": {},
     }
 
     calls = []

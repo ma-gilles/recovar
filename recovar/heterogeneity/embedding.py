@@ -1267,13 +1267,13 @@ def get_per_image_embedding_multi_zdim(
     # Allocate per-halfset output arrays, concatenated at the end.
     def _alloc(n_pcs):
         return {
-            'zs':        [np.zeros((dataset.n_halfset_images(halfset_id), n_pcs),        dtype=dtype)    for halfset_id in range(2)],
-            'cov_zs':    [np.zeros((dataset.n_halfset_images(halfset_id), n_pcs, n_pcs), dtype=dtype)    for halfset_id in range(2)],
-            'contrasts': [np.zeros(dataset.n_halfset_images(halfset_id),                  dtype=np.float32) for halfset_id in range(2)],
+            'latent_coords': [np.zeros((dataset.n_halfset_images(halfset_id), n_pcs), dtype=dtype) for halfset_id in range(2)],
+            'latent_precision': [np.zeros((dataset.n_halfset_images(halfset_id), n_pcs, n_pcs), dtype=dtype) for halfset_id in range(2)],
+            'contrasts': [np.zeros(dataset.n_halfset_images(halfset_id), dtype=np.float32) for halfset_id in range(2)],
         }
 
-    zs_reg   = {k: _alloc(k) for k in n_pcs_list}
-    zs_noreg = {k: _alloc(k) for k in n_pcs_list}
+    embeddings_reg = {k: _alloc(k) for k in n_pcs_list}
+    embeddings_noreg = {k: _alloc(k) for k in n_pcs_list}
 
     halfset_datasets = dataset.materialize_halfset_datasets()
     for halfset_id, halfset_dataset in enumerate(halfset_datasets):
@@ -1339,32 +1339,33 @@ def get_per_image_embedding_multi_zdim(
                     im_norms_sq, im_T_Am, Am_norm_sq,
                     s_reg[n_pcs], cg_jax, contrast_mean_jax, contrast_variance_jax,
                 )
-                zs_reg[n_pcs]['zs']      [halfset_id][particles_ind] = np.asarray(xs_r).real
-                zs_reg[n_pcs]['cov_zs']  [halfset_id][particles_ind] = np.asarray(cov_r).real
-                zs_reg[n_pcs]['contrasts'][halfset_id][batch_image_ind] = np.asarray(c_r)
+                embeddings_reg[n_pcs]['latent_coords'][halfset_id][particles_ind] = np.asarray(xs_r).real
+                embeddings_reg[n_pcs]['latent_precision'][halfset_id][particles_ind] = np.asarray(cov_r).real
+                embeddings_reg[n_pcs]['contrasts'][halfset_id][batch_image_ind] = np.asarray(c_r)
 
                 xs_n, c_n, cov_n = _solve_batch_from_stats(
                     sub_AI, sub_AM, sub_AAU,
                     im_norms_sq, im_T_Am, Am_norm_sq,
                     s_noreg[n_pcs], cg_jax, contrast_mean_jax, contrast_variance_jax,
                 )
-                zs_noreg[n_pcs]['zs']      [halfset_id][particles_ind] = np.asarray(xs_n).real
-                zs_noreg[n_pcs]['cov_zs']  [halfset_id][particles_ind] = np.asarray(cov_n).real
-                zs_noreg[n_pcs]['contrasts'][halfset_id][batch_image_ind] = np.asarray(c_n)
+                embeddings_noreg[n_pcs]['latent_coords'][halfset_id][particles_ind] = np.asarray(xs_n).real
+                embeddings_noreg[n_pcs]['latent_precision'][halfset_id][particles_ind] = np.asarray(cov_n).real
+                embeddings_noreg[n_pcs]['contrasts'][halfset_id][batch_image_ind] = np.asarray(c_n)
 
-    # Concatenate across halfsets; return flat (xs, cov_zs, contrasts) tuples per n_pcs.
+    # Concatenate across halfsets; return flat (latent_coords, latent_precision, contrasts)
+    # tuples per n_pcs.
     result_reg   = {}
     result_noreg = {}
     for n_pcs in n_pcs_list:
         result_reg[n_pcs] = (
-            np.concatenate(zs_reg[n_pcs]['zs'],        axis=0),
-            np.concatenate(zs_reg[n_pcs]['cov_zs'],    axis=0),
-            np.concatenate(zs_reg[n_pcs]['contrasts'],  axis=0),
+            np.concatenate(embeddings_reg[n_pcs]['latent_coords'], axis=0),
+            np.concatenate(embeddings_reg[n_pcs]['latent_precision'], axis=0),
+            np.concatenate(embeddings_reg[n_pcs]['contrasts'], axis=0),
         )
         result_noreg[n_pcs] = (
-            np.concatenate(zs_noreg[n_pcs]['zs'],       axis=0),
-            np.concatenate(zs_noreg[n_pcs]['cov_zs'],   axis=0),
-            np.concatenate(zs_noreg[n_pcs]['contrasts'], axis=0),
+            np.concatenate(embeddings_noreg[n_pcs]['latent_coords'], axis=0),
+            np.concatenate(embeddings_noreg[n_pcs]['latent_precision'], axis=0),
+            np.concatenate(embeddings_noreg[n_pcs]['contrasts'], axis=0),
         )
 
     logger.info("multi-zdim embedding complete for n_pcs=%s", n_pcs_list)

@@ -196,8 +196,7 @@ def main():
                     with open(embedding_model_path, 'rb') as f:
                         embeddings = pickle.load(f)
                     with open(embedding_2_path, 'wb') as f:
-                        coords = embeddings.get('latent_coords', embeddings.get('zs', {}))
-                        pickle.dump(coords[2], f)
+                        pickle.dump(embeddings['latent_coords'][2], f)
                 except Exception as e:
                     logger.error("Failed: prepare embedding for reconstruction (%s)", e)
                     failed_functions.append('prepare_embedding_for_reconstruct')

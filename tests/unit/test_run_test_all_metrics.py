@@ -113,6 +113,9 @@ def _install_main_runtime_stubs(monkeypatch, tmp_path, *, mean_fsc=0.5, variance
         def get_embedding_component(self, entry, key):
             return self._embedding[entry][key]
 
+        def get_unsorted_embedding_component(self, entry, key):
+            return self._embedding[entry][key]
+
         def get_u_real(self, n_pcs):
             return self._u_real[: int(n_pcs)]
 
@@ -125,7 +128,6 @@ def _install_main_runtime_stubs(monkeypatch, tmp_path, *, mean_fsc=0.5, variance
                 "volume_shape": (2, 2, 2),
                 "s": self._s,
                 "noise_var_used": np.array([1.0, 1.0], dtype=np.float32),
-                "unsorted_embedding": self._embedding,
             }
             return mapping[key]
 
@@ -367,8 +369,8 @@ def test_main_explicit_volume_without_baseline_skips_regression_report(monkeypat
     assert not report_path.exists()
 
 
-def test_main_emits_canonical_keys_and_legacy_aliases_and_perf(monkeypatch, tmp_path):
-    """Check that a run emits both new canonical keys and legacy aliases, plus perf."""
+def test_main_emits_canonical_metric_keys_and_perf(monkeypatch, tmp_path):
+    """Check that a run emits canonical metric keys and perf metadata."""
     _install_main_runtime_stubs(monkeypatch, tmp_path, mean_fsc=0.55, variance_fsc=0.45)
     monkeypatch.setattr(
         rtam.sys,
@@ -396,18 +398,6 @@ def test_main_emits_canonical_keys_and_legacy_aliases_and_perf(monkeypatch, tmp_
     assert "contrast_abs_error_4_noreg" in scores
     assert "state_0_locres_90pct" in scores
     assert "state_0_locres_median" in scores
-
-    # Legacy aliases also present
-    assert "pcs_relative_variance_4" in scores
-    assert "contrasts_4" in scores
-    assert "constrasts_4" in scores
-    assert "state_0_ninety_pc_locres" in scores
-    assert "state_0_median_locres" in scores
-
-    # Canonical and legacy have same values
-    assert scores["svd_relative_variance_4"] == scores["pcs_relative_variance_4"]
-    assert scores["contrast_abs_error_4"] == scores["contrasts_4"]
-    assert scores["state_0_locres_90pct"] == scores["state_0_ninety_pc_locres"]
 
     # Perf dict present with expected structure
     perf = scores.get("perf")
@@ -737,8 +727,6 @@ def test_compare_metric_handles_non_finite_values():
 def test_metric_direction_recognizes_known_tokens_and_defaults_to_ignore():
     assert rtam.metric_direction("mean_fsc") == "higher"
     assert rtam.metric_direction("noise_mean_relative_error") == "lower"
-    # Keep backward compatibility for existing typo-ed keys.
-    assert rtam.metric_direction("constrasts_4") == "lower"
     assert rtam.metric_direction("unclassified_metric_name") == "ignore"
     # Canonical renamed keys
     assert rtam.metric_direction("svd_relative_variance_4") == "higher"
@@ -781,21 +769,17 @@ def test_load_u_real_for_metrics_rejects_nonpositive_request():
 
 
 def test_load_unsorted_embedding_component_caches_by_component():
-    """get('unsorted_embedding') is called once; components are cached by (entry, key)."""
+    """Components are cached by (entry, key)."""
     class _PO:
         def __init__(self):
             self.get_calls = 0
-            self.root = {
-                "latent_coords": {
-                    10: np.array([1.0, 10.0], dtype=np.float32),
-                    4: np.array([2.0, 4.0], dtype=np.float32),
-                },
-            }
 
-        def get(self, key):
-            assert key == "unsorted_embedding"
+        def get_unsorted_embedding_component(self, entry, key):
             self.get_calls += 1
-            return self.root
+            return {
+                ("latent_coords", 10): np.array([1.0, 10.0], dtype=np.float32),
+                ("latent_coords", 4): np.array([2.0, 4.0], dtype=np.float32),
+            }[(entry, key)]
 
     po = _PO()
     cache = {}
@@ -804,29 +788,22 @@ def test_load_unsorted_embedding_component_caches_by_component():
     second = rtam.load_unsorted_embedding_component(po, "latent_coords", 10, cache)
     third = rtam.load_unsorted_embedding_component(po, "latent_coords", 4, cache)
 
-    # Root loaded once; same (entry, key) returns cached result.
-    assert po.get_calls == 1
+    assert po.get_calls == 2
     np.testing.assert_array_equal(first, second)
     assert not np.array_equal(first, third)
 
 
-def test_load_unsorted_embedding_component_legacy_fallback_caches_root_and_component():
+def test_load_unsorted_embedding_component_caches_multiple_entries():
     class _PO:
         def __init__(self):
             self.get_calls = 0
-            self.root = {
-                "latent_coords": {
-                    4: np.array([[1.0, 2.0]], dtype=np.float32),
-                },
-                "contrasts": {
-                    4: np.array([0.5], dtype=np.float32),
-                },
-            }
 
-        def get(self, key):
-            assert key == "unsorted_embedding"
+        def get_unsorted_embedding_component(self, entry, key):
             self.get_calls += 1
-            return self.root
+            return {
+                ("latent_coords", 4): np.array([[1.0, 2.0]], dtype=np.float32),
+                ("contrasts", 4): np.array([0.5], dtype=np.float32),
+            }[(entry, key)]
 
     po = _PO()
     cache = {}
@@ -835,7 +812,7 @@ def test_load_unsorted_embedding_component_legacy_fallback_caches_root_and_compo
     c_first = rtam.load_unsorted_embedding_component(po, "contrasts", 4, cache)
     c_second = rtam.load_unsorted_embedding_component(po, "contrasts", 4, cache)
 
-    assert po.get_calls == 1
+    assert po.get_calls == 2
     np.testing.assert_array_equal(z_first, z_second)
     np.testing.assert_array_equal(c_first, c_second)
 
@@ -960,35 +937,28 @@ def test_load_u_real_for_metrics_legacy_get_handles_shorter_arrays():
     np.testing.assert_array_equal(out, np.arange(2 * 3, dtype=np.float32).reshape(2, 3))
 
 
-def test_compare_scores_against_baseline_deduplicates_aliased_keys():
-    """Aliased metric keys (e.g. pcs_relative_variance_4 / svd_relative_variance_4)
-    should only be checked once, not counted twice."""
+def test_compare_scores_against_baseline_checks_shared_canonical_keys():
     current = {
         "svd_relative_variance_4": 0.90,
-        "pcs_relative_variance_4": 0.90,  # legacy alias for same metric
         "mean_fsc": 0.80,
     }
     baseline = {
         "svd_relative_variance_4": 0.89,
-        "pcs_relative_variance_4": 0.89,
         "mean_fsc": 0.79,
     }
     checked, failures, details = rtam.compare_scores_against_baseline(current, baseline, tol_frac=0.05)
-    # svd_relative_variance_4 should be checked once (not twice counting the alias)
-    assert checked == 2  # mean_fsc + one of the variance keys
+    assert checked == 2
     assert failures == []
 
 
-def test_compare_scores_against_baseline_deduplicates_dynamic_locres_aliases():
+def test_compare_scores_against_baseline_checks_locres_metrics():
     current = {
         "state_0_locres_90pct": 5.0,
-        "state_0_ninety_pc_locres": 5.0,
         "state_0_locres_median": 4.0,
-        "state_0_median_locres": 4.0,
     }
     baseline = dict(current)
     checked, failures, details = rtam.compare_scores_against_baseline(current, baseline, tol_frac=0.01)
-    assert checked == 2  # one for each unique locres metric
+    assert checked == 2
 
 
 def test_compare_scores_against_baseline_skips_non_numeric_values():

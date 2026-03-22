@@ -154,7 +154,7 @@ def test_pipeline_output_get_embedding_component_dict_input_args_unshared_tilt_u
     np.testing.assert_array_equal(contrasts_sel, np.array([1.0, 3.0, 0.0, 2.0], dtype=np.float32))
 
 
-def test_pipeline_output_get_unsorted_embedding_component_migrates_legacy_keys(tmp_path):
+def test_pipeline_output_get_unsorted_embedding_component_returns_raw_component(tmp_path):
     result_path = tmp_path / "pipeline_output"
     model_dir = result_path / "model"
     model_dir.mkdir(parents=True)
@@ -163,8 +163,8 @@ def test_pipeline_output_get_unsorted_embedding_component_migrates_legacy_keys(t
     utils.pickle_dump(params, str(model_dir / "params.pkl"))
     utils.pickle_dump(
         {
-            "zs": {4: np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)},
-            "cov_zs": {4: np.zeros((2, 2, 2), dtype=np.float32)},
+            "latent_coords": {4: np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)},
+            "latent_precision": {4: np.zeros((2, 2, 2), dtype=np.float32)},
             "contrasts": {4: np.array([0.1, 0.9], dtype=np.float32)},
         },
         str(model_dir / "embeddings.pkl"),

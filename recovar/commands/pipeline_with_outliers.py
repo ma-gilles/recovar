@@ -157,20 +157,12 @@ def run_pipeline_with_outlier_removal():
         with open(embeddings_file, 'rb') as f:
             embeddings = pickle.load(f)
 
-        # Select the zs to use for outlier detection
+        # Select the latent coordinates to use for outlier detection.
         coords_key = 'latent_coords_noreg' if args.no_z_regularization else 'latent_coords'
-        # Handle both new and legacy embedding formats
-        if coords_key in embeddings:
-            coords_dict = embeddings[coords_key]
-        elif 'zs' in embeddings:
-            # Legacy format: split mixed-key dict
-            coords_dict = {k: v for k, v in embeddings['zs'].items()
-                          if not (isinstance(k, str) and k.endswith('_noreg'))} if not args.no_z_regularization else \
-                         {int(k.replace('_noreg', '')): v for k, v in embeddings['zs'].items()
-                          if isinstance(k, str) and k.endswith('_noreg')}
-        else:
+        if coords_key not in embeddings:
             logger.error("No embedding coordinates found")
             sys.exit(1)
+        coords_dict = embeddings[coords_key]
         zdim_key = zdim
         if zdim_key not in coords_dict:
             logger.error("zdim %s not found in embeddings", zdim_key)

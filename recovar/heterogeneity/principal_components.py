@@ -155,7 +155,8 @@ def estimate_principal_components(dataset, options,  means, mean_prior, volume_m
     return u, s, covariance_cols, picked_frequencies, column_fscs
 
 
-def _compute_real_cov_svds(
+@nvtx.annotate("get_cov_svds", color="blue", domain=NVTX_DOMAIN_PCA)
+def get_cov_svds(
     covariance_cols,
     picked_frequencies,
     volume_mask,
@@ -178,20 +179,6 @@ def _compute_real_cov_svds(
         ignore_zero_frequency=ignore_zero_frequency,
     )
     return u, s
-
-
-@nvtx.annotate("get_cov_svds", color="blue", domain=NVTX_DOMAIN_PCA)
-def get_cov_svds(covariance_cols, picked_frequencies, volume_mask, volume_shape,  vol_batch_size, gpu_memory_to_use, ignore_zero_frequency, randomized_sketch_size ):
-    return _compute_real_cov_svds(
-        covariance_cols,
-        picked_frequencies,
-        volume_mask,
-        volume_shape,
-        vol_batch_size,
-        gpu_memory_to_use,
-        ignore_zero_frequency,
-        randomized_sketch_size,
-    )
 
 
 def _projected_covariance_batch_size(basis, image_size, basis_size, gpu_memory_to_use):
@@ -449,17 +436,6 @@ def right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices,
 
     return F_C_F_t
 
-def right_matvec_with_spatial_Sigma_v2(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40):
-    return right_matvec_with_spatial_Sigma(
-        test_mat,
-        columns,
-        picked_frequency_indices,
-        volume_shape,
-        vol_batch_size,
-        memory_to_use=memory_to_use,
-    )
-
-
 @nvtx.annotate("left_matvec_with_spatial_Sigma", color="yellow", domain=NVTX_DOMAIN_PCA)
 def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40):
     st_time =time.time()
@@ -509,20 +485,7 @@ def left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_
 
     return Q_F_C_F
 
-use_v2_fn = False
 report_memory = True
-
-def left_matvec_with_spatial_Sigma_v2(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = 40):
-    if report_memory:
-        utils.report_memory_device(logger=logger)
-    return left_matvec_with_spatial_Sigma(
-        Q,
-        columns,
-        picked_frequency_indices,
-        volume_shape,
-        vol_batch_size,
-        memory_to_use=memory_to_use,
-    )
 
 
 @nvtx.annotate("randomized_real_svd_of_columns", color="red", domain=NVTX_DOMAIN_PCA)
@@ -540,10 +503,14 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     test_mat = np.random.randn(smaller_vol_size, test_size).real.astype(np.float32)
 
     st_time = time.time()
-    if use_v2_fn:
-        Q = right_matvec_with_spatial_Sigma_v2(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
-    else:
-        Q = right_matvec_with_spatial_Sigma(test_mat, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
+    Q = right_matvec_with_spatial_Sigma(
+        test_mat,
+        columns,
+        picked_frequency_indices,
+        volume_shape,
+        vol_batch_size,
+        memory_to_use=gpu_memory_to_use,
+    ).real.astype(np.float32)
     del test_mat
 
     ## Do masking here ?
@@ -559,10 +526,16 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     # In principle, should apply (I - mask mask.T / \|mask\|^2 )  again, but should already be orthogonal
     #
     utils.report_memory_device(logger=logger)
-    if use_v2_fn:
-        C_F_t_2 = left_matvec_with_spatial_Sigma_v2(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
-    else:
-        C_F_t_2 = left_matvec_with_spatial_Sigma(Q, columns, picked_frequency_indices, volume_shape, vol_batch_size, memory_to_use = gpu_memory_to_use).real.astype(np.float32)
+    if report_memory:
+        utils.report_memory_device(logger=logger)
+    C_F_t_2 = left_matvec_with_spatial_Sigma(
+        Q,
+        columns,
+        picked_frequency_indices,
+        volume_shape,
+        vol_batch_size,
+        memory_to_use=gpu_memory_to_use,
+    ).real.astype(np.float32)
     utils.report_memory_device(logger=logger)
     logger.info("left matvec %s", time.time() - st_time)
 
@@ -582,4 +555,3 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     # Factors due to IDFT on both sides
     S_fd = S * np.float32(np.sqrt(smaller_vol_size) * np.sqrt(volume_size))
     return np.array(Q), np.array(S_fd), np.array(V)
-

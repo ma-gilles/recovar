@@ -26,7 +26,6 @@ LOWER_IS_BETTER_TOKENS = (
     "rmse",
     "mse",
     "bias",
-    "constrast",
     "contrast",
 )
 
@@ -38,38 +37,6 @@ HIGHER_IS_BETTER_TOKENS = (
 )
 
 DEFAULT_OUTPUT_DIRNAME = "recovar_test_all_metrics"
-
-# Canonical key renames: old_key -> new_key.
-# Both old and new keys are emitted for backward compatibility; regression
-# comparison deduplicates so each metric is only checked once.
-CANONICAL_KEY_ALIASES = {
-    "pcs_relative_variance_4": "svd_relative_variance_4",
-    "pcs_relative_variance_10": "svd_relative_variance_10",
-    "contrasts_4": "contrast_abs_error_4",
-    "contrasts_4_noreg": "contrast_abs_error_4_noreg",
-    "contrasts_10": "contrast_abs_error_10",
-    "contrasts_10_noreg": "contrast_abs_error_10_noreg",
-    "constrasts_4": "contrast_abs_error_4",
-    "constrasts_4_noreg": "contrast_abs_error_4_noreg",
-    "constrasts_10": "contrast_abs_error_10",
-    "constrasts_10_noreg": "contrast_abs_error_10_noreg",
-}
-
-def _resolve_canonical_key(key):
-    """Map a key to its canonical name (handles both static aliases and dynamic locres patterns)."""
-    if key in CANONICAL_KEY_ALIASES:
-        return CANONICAL_KEY_ALIASES[key]
-    # Dynamic locres renames: state_N_ninety_pc_locres -> state_N_locres_90pct
-    #                         state_N_median_locres   -> state_N_locres_median
-    import re
-    m = re.match(r"^(state_\d+)_ninety_pc_locres$", key)
-    if m:
-        return f"{m.group(1)}_locres_90pct"
-    m = re.match(r"^(state_\d+)_median_locres$", key)
-    if m:
-        return f"{m.group(1)}_locres_median"
-    return key
-
 
 def default_output_dir():
     """Return the default output directory, preferring TMP_RECOVAR_DIR when set."""
@@ -536,9 +503,6 @@ def compare_scores_against_baseline(current_scores, baseline_scores, tol_frac, s
     checked = 0
     failures = []
     details = {}
-    # Track which canonical keys have already been checked so we don't
-    # double-count a metric that appears under both its old and new name.
-    seen_canonical = set()
     for key in sorted(set(current_scores.keys()) & set(baseline_scores.keys())):
         cur = current_scores[key]
         base = baseline_scores[key]
@@ -555,12 +519,6 @@ def compare_scores_against_baseline(current_scores, baseline_scores, tol_frac, s
             continue
         if skip_locres and "locres" in key.lower():
             continue
-        # Deduplicate: if this key is a legacy alias for a canonical key
-        # that was already checked, skip it.
-        canonical = _resolve_canonical_key(key)
-        if canonical in seen_canonical:
-            continue
-        seen_canonical.add(canonical)
         checked += 1
         ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac, metric_name=key)
         details[key] = {
@@ -592,10 +550,8 @@ def load_unsorted_embedding_component(pipeline_output, entry, key, legacy_cache=
     """
     Load one unsorted embedding component in original (simulation) order.
 
-    Uses ``get('unsorted_embedding')`` which returns the raw reordered embedding
-    indexed by original particle position.  Unlike ``get_embedding_component``,
-    this does NOT apply the halfset re-indexing that produces halfset-concatenated
-    order.
+    Uses ``PipelineOutput.get_unsorted_embedding_component`` so the caller gets
+    original dataset order without halfset re-indexing.
     """
     if legacy_cache is None:
         legacy_cache = {}
@@ -604,15 +560,7 @@ def load_unsorted_embedding_component(pipeline_output, entry, key, legacy_cache=
     if cache_key in legacy_cache:
         return legacy_cache[cache_key]
 
-    if hasattr(pipeline_output, "get_unsorted_embedding_component"):
-        value = np.asarray(pipeline_output.get_unsorted_embedding_component(entry, key))
-        legacy_cache[cache_key] = value
-        return value
-
-    if "__root__" not in legacy_cache:
-        legacy_cache["__root__"] = pipeline_output.get('unsorted_embedding')
-    value = np.asarray(legacy_cache["__root__"][entry][key])
-
+    value = np.asarray(pipeline_output.get_unsorted_embedding_component(entry, key))
     legacy_cache[cache_key] = value
     return value
 
@@ -1065,9 +1013,6 @@ def main():
         rv10 = rel_var[key][10] if rel_var[key].size > 10 else np.nan
         all_scores['svd_relative_variance_4'] = rv4
         all_scores['svd_relative_variance_10'] = rv10
-        # Legacy aliases for backward compatibility with old baselines.
-        all_scores['pcs_relative_variance_4'] = rv4
-        all_scores['pcs_relative_variance_10'] = rv10
 
     angles = {}
     for key in u:
@@ -1124,9 +1069,6 @@ def main():
             )
             contrast_abs_error = np.mean(np.abs(gt_contrasts - unsorted_contrast))
             all_scores[f'contrast_abs_error_{label}'] = contrast_abs_error
-            # Legacy aliases for backward compatibility with old baselines.
-            all_scores[f'contrasts_{label}'] = contrast_abs_error
-            all_scores[f'constrasts_{label}'] = contrast_abs_error
 
             # Create contrast comparison plot
             plt.figure(figsize=(10, 6))
@@ -1161,9 +1103,6 @@ def main():
         )
         all_scores[f'state_{l_idx}_locres_90pct'] = errors_metrics.get('ninety_pc_locres')
         all_scores[f'state_{l_idx}_locres_median'] = errors_metrics.get('median_locres')
-        # Legacy aliases for backward compatibility with old baselines.
-        all_scores[f'state_{l_idx}_ninety_pc_locres'] = errors_metrics.get('ninety_pc_locres')
-        all_scores[f'state_{l_idx}_median_locres'] = errors_metrics.get('median_locres')
 
         # write mask to file
         mask = errors_metrics.get('mask')

@@ -727,7 +727,6 @@ def load_results_new(datadir):
 
 class PipelineOutput:
     def __init__(self, result_path):
-        # Normalize trailing slash for backward compat
         self.result_path = result_path.rstrip('/') + '/'
         self.paths = ResultPaths(self.result_path.rstrip('/'))
         self.params = utils.pickle_load(self.paths.params)
@@ -740,31 +739,8 @@ class PipelineOutput:
     def _ensure_embedding_raw_loaded(self):
         if self.embedding is None:
             self.embedding = utils.pickle_load(self.paths.embeddings)
-            self._migrate_legacy_embedding()
 
-    def _migrate_legacy_embedding(self):
-        """Convert old-format embedding dict (zs/cov_zs with mixed keys) to new schema."""
-        if 'zs' in self.embedding and 'latent_coords' not in self.embedding:
-            old_to_new = [
-                ('zs', 'latent_coords'),
-                ('cov_zs', 'latent_precision'),
-                ('contrasts', 'contrasts'),
-            ]
-            new_emb = {}
-            for old_name, new_name in old_to_new:
-                if old_name not in self.embedding:
-                    continue
-                reg, noreg = {}, {}
-                for k, v in self.embedding[old_name].items():
-                    if isinstance(k, str) and k.endswith('_noreg'):
-                        noreg[int(k.replace('_noreg', ''))] = v
-                    else:
-                        reg[k] = v
-                new_emb[new_name] = reg
-                new_emb[f'{new_name}_noreg'] = noreg
-            self.embedding = new_emb
-
-    def _get_input_args_compat(self):
+    def _get_input_args(self):
         if not hasattr(self.params, "get") or "input_args" not in self.params:
             return None
         input_args = self.params["input_args"]
@@ -774,7 +750,7 @@ class PipelineOutput:
             return input_args
 
     def _use_image_halfsets_for_unshared_tilt_contrast(self):
-        input_args = self._get_input_args_compat()
+        input_args = self._get_input_args()
         if input_args is None:
             return False
         if isinstance(input_args, dict):
@@ -801,28 +777,26 @@ class PipelineOutput:
 
     def get_embedding_keys(self, entry):
         self._ensure_embedding_raw_loaded()
-        resolved = self._EMBEDDING_ALIASES.get(entry, entry)
-        return list(self.embedding[resolved].keys())
+        return list(self.embedding[entry].keys())
 
     def has_embedding_key(self, entry, key):
         return key in self.get_embedding_keys(entry)
 
     def get_embedding_component(self, entry, key):
-        resolved = self._EMBEDDING_ALIASES.get(entry, entry)
         if self.embedding_loaded:
-            return self.embedding[resolved][key]
-        cache_key = (resolved, key)
+            return self.embedding[entry][key]
+        cache_key = (entry, key)
         if cache_key in self._embedding_key_cache:
             return self._embedding_key_cache[cache_key]
 
         self._ensure_embedding_raw_loaded()
-        if key not in self.embedding[resolved]:
-            raise KeyError(f"Embedding key {key} not found in {resolved}.")
+        if key not in self.embedding[entry]:
+            raise KeyError(f"Embedding key {key} not found in {entry}.")
 
-        values = self.embedding[resolved][key]
+        values = self.embedding[entry][key]
         if self.version != '0':
             particle_halfsets, image_halfsets = self._get_embedding_halfsets()
-            if resolved.startswith('contrasts') and self._use_image_halfsets_for_unshared_tilt_contrast():
+            if entry.startswith('contrasts') and self._use_image_halfsets_for_unshared_tilt_contrast():
                 values = values[image_halfsets]
             else:
                 values = values[particle_halfsets]
@@ -831,11 +805,10 @@ class PipelineOutput:
 
     def get_unsorted_embedding_component(self, entry, key):
         """Return raw embedding values in original dataset order, without halfset reindexing."""
-        resolved = self._EMBEDDING_ALIASES.get(entry, entry)
         self._ensure_embedding_raw_loaded()
-        if key not in self.embedding[resolved]:
-            raise KeyError(f"Embedding key {key} not found in {resolved}.")
-        return np.asarray(self.embedding[resolved][key])
+        if key not in self.embedding[entry]:
+            raise KeyError(f"Embedding key {key} not found in {entry}.")
+        return np.asarray(self.embedding[entry][key])
 
     def load_embedding(self):
         self._ensure_embedding_raw_loaded()
@@ -896,12 +869,6 @@ class PipelineOutput:
             out[i] = np.asarray(fourier_transform_utils.get_dft3(vol), dtype=np.complex64).reshape(-1)
         return out
 
-    # Backward-compat aliases: old name -> new name
-    _EMBEDDING_ALIASES = {
-        'zs': 'latent_coords',
-        'cov_zs': 'latent_precision',
-    }
-
     _EMBEDDING_ENTRIES = (
         'latent_coords', 'latent_coords_noreg',
         'latent_precision', 'latent_precision_noreg',
@@ -909,13 +876,10 @@ class PipelineOutput:
     )
 
     def get(self, key):
-        # Resolve old embedding names
-        resolved = self._EMBEDDING_ALIASES.get(key, key)
-
-        if resolved in self._EMBEDDING_ENTRIES:
+        if key in self._EMBEDDING_ENTRIES:
             if not self.embedding_loaded:
                 self.load_embedding()
-            return self.embedding[resolved]
+            return self.embedding[key]
 
         elif key == 'unsorted_embedding':
             return utils.pickle_load(self.paths.embeddings)
@@ -972,7 +936,7 @@ class PipelineOutput:
                 return utils.pickle_load(self.paths.particles_halfsets)
 
         elif key == 'input_args':
-            return self._get_input_args_compat()
+            return self._get_input_args()
 
         # Backward compat: fields removed in v0.6 (were always None or redundant)
         elif key == 's_all':
