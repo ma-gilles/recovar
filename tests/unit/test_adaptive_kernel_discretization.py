@@ -50,13 +50,13 @@ def test_big_gram_matrix_size():
 def test_volume_shape_to_half_volume_shape_even():
     vs = (8, 8, 8)
     hvs = akd.volume_shape_to_half_volume_shape(vs)
-    assert hvs == (5, 8, 8)
+    assert hvs == (8, 8, 5)  # canonical: last axis truncated
 
 
 def test_volume_shape_to_half_volume_shape_four():
     vs = (4, 4, 4)
     hvs = akd.volume_shape_to_half_volume_shape(vs)
-    assert hvs == (3, 4, 4)
+    assert hvs == (4, 4, 3)  # canonical: last axis truncated
 
 
 def test_get_default_discretization_params_small_grid():

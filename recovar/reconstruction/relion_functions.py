@@ -293,38 +293,6 @@ def _as_flat_single_volume(arr, volume_shape):
     )
 
 
-@functools.partial(jax.jit, static_argnums=[1])
-def _legacy_vec_index_to_half_vec_index(indices, volume_shape):
-    """Map full-volume indices to the legacy packed half-volume layout."""
-    vol_indices_full = core.vec_indices_to_vol_indices(indices, volume_shape)
-    grid_size = volume_shape[0]
-    negative_frequencies = vol_indices_full[..., 0] < (grid_size // 2 + 1)
-    frequencies = core.vol_indices_to_frequencies(vol_indices_full, volume_shape)
-    frequencies_flipped = jnp.where(frequencies[..., 0:1] > 0, -frequencies, frequencies)
-    vol_indices_full_flipped = core.frequencies_to_vol_indices(frequencies_flipped, volume_shape)
-    in_bound = core.check_vol_indices_in_bound(vol_indices_full_flipped, grid_size)
-    vec_indices = core.vol_indices_to_vec_indices(vol_indices_full_flipped, volume_shape)
-    vec_indices = jnp.where(in_bound, vec_indices, -1 * jnp.ones_like(vec_indices))
-    return vec_indices, negative_frequencies
-
-
-@functools.partial(jax.jit, static_argnums=[1])
-def _legacy_half_volume_to_full_volume(half_volume, volume_shape):
-    """Expand the legacy packed half-volume layout to a full Fourier volume."""
-    volume_size = int(np.prod(volume_shape))
-    indices = jnp.arange(volume_size)
-    half_indices, negative_frequencies = _legacy_vec_index_to_half_vec_index(indices, volume_shape)
-    volume = half_volume[half_indices]
-    volume = jnp.where(negative_frequencies, volume, jnp.conj(volume))
-    return volume
-
-
-def _legacy_full_volume_to_half_volume(volume, volume_shape):
-    """Pack a full Fourier volume into the legacy half-volume layout."""
-    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
-    half_size = int(np.prod(half_shape))
-    return jnp.asarray(volume).reshape(-1)[:half_size]
-
 
 def adjust_regularization_relion_style(
     filter, volume_shape, tau=None, padding_factor=1, max_res_shell=None, half_volume=False
@@ -442,18 +410,15 @@ def post_process_from_filter_v2(
     if input_half_volume is None:
         input_half_volume = _infer_half_volume_layout(Ft_ctf, upsampled_volume_shape)
 
-    input_was_half_volume = bool(input_half_volume)
     if input_half_volume:
         packed_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(upsampled_volume_shape)
         Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, packed_shape)
         F_ty_flat, _ = _as_flat_single_volume(F_ty, packed_shape)
-        # The old heterogeneity reconstruction path first expanded packed
-        # half-volumes using the legacy layout before all downstream
-        # regularization and inverse transforms.
-        Ft_ctf_flat = _legacy_half_volume_to_full_volume(
+        # Expand canonical half-volume to full before regularization/iDFT.
+        Ft_ctf_flat = fourier_transform_utils.half_volume_to_full_volume(
             Ft_ctf_flat, upsampled_volume_shape
         ).reshape(-1).real
-        F_ty_flat = _legacy_half_volume_to_full_volume(
+        F_ty_flat = fourier_transform_utils.half_volume_to_full_volume(
             F_ty_flat, upsampled_volume_shape
         ).reshape(-1)
     else:
@@ -491,10 +456,7 @@ def post_process_from_filter_v2(
 
     vol = fourier_transform_utils.get_dft3(vol.reshape(og_volume_shape))
     if return_half_volume:
-        if input_was_half_volume:
-            vol = _legacy_full_volume_to_half_volume(vol, og_volume_shape)
-        else:
-            vol = fourier_transform_utils.full_volume_to_half_volume(vol, og_volume_shape)
+        vol = fourier_transform_utils.full_volume_to_half_volume(vol, og_volume_shape)
         return vol.reshape(-1).astype(F_ty_flat.dtype)
     return vol.astype(F_ty_flat.dtype)
 

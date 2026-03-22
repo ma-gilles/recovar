@@ -314,46 +314,89 @@ def find_diagonal_pol_indices(max_pol_degree):
 undo_keep_upper_triangular = jax.vmap(undo_keep_upper_triangular_one, in_axes = (0), out_axes = 0)
 
 
-def volume_shape_to_half_volume_shape(volume_shape):
-    return (volume_shape[0]//2 + 1, volume_shape[1], volume_shape[2] )
-
-def half_volume_shape_to_volume_shape(volume_shape): 
-    volume_shape[0] = volume_shape[0] * 2
-    return ((volume_shape[0]-1)*2, *volume_shape[1:])
-
-@functools.partial(jax.jit, static_argnums = [1,2])
-def vec_index_to_half_vec_index(indices, volume_shape, flip_positive = False):
-    vol_indices_full = core.vec_indices_to_vol_indices(indices, volume_shape)
-
-    grid_size = volume_shape[0]
-    negative_frequencies = vol_indices_full[...,0] < (grid_size // 2 + 1) 
-    if flip_positive:
-        frequencies = core.vol_indices_to_frequencies(vol_indices_full, volume_shape)
-        frequencies_flipped = jnp.where(frequencies[...,0:1] > 0, -frequencies , frequencies)
-        vol_indices_full_flipped = core.frequencies_to_vol_indices(frequencies_flipped, volume_shape)
-        vol_indices_full = vol_indices_full_flipped
-
-    in_bound = core.check_vol_indices_in_bound(vol_indices_full, grid_size)
-
-    vec_indices = core.vol_indices_to_vec_indices(vol_indices_full, volume_shape)
-    vec_indices = jnp.where(in_bound, vec_indices, -1*jnp.ones_like(vec_indices))
-    return vec_indices, negative_frequencies
-
-# Use the canonical rfft-aware implementations from fourier_transform_utils.
-# Legacy duplicates with different packing conventions were removed to prevent
-# packing-mismatch bugs (see commit fixing heterogeneity_volume.py:136).
+# Canonical half-volume layout: (N, N, N//2+1) — last axis truncated (rfft).
+# All half-volume helpers use this single convention from fourier_transform_utils.
+volume_shape_to_half_volume_shape = fourier_transform_utils.volume_shape_to_half_volume_shape
 half_volume_to_full_volume = fourier_transform_utils.half_volume_to_full_volume
 full_volume_to_half_volume = fourier_transform_utils.full_volume_to_half_volume
 batch_half_volume_to_full_volume = jax.vmap(half_volume_to_full_volume, in_axes=(0, None), out_axes=0)
 batch_full_volume_to_half_volume = jax.vmap(full_volume_to_half_volume, in_axes=(0, None), out_axes=0)
 
 
+def _build_inverse_packed_index(grid_size):
+    """Map full-grid last-axis column index → position in canonical packed array.
+
+    Returns an int32 array of length *grid_size*.  Non-redundant columns get
+    their packed position (0 … N//2); redundant columns get -1.
+    """
+    packed_idx = fourier_transform_utils.get_real_fft_packed_last_axis_indices(grid_size)
+    inv = jnp.full(grid_size, -1, dtype=jnp.int32)
+    inv = inv.at[packed_idx].set(jnp.arange(len(packed_idx), dtype=jnp.int32))
+    return inv
+
+
+@functools.partial(jax.jit, static_argnums=[1, 2])
+def vec_index_to_half_vec_index(indices, volume_shape, flip_positive=False):
+    """Map full-volume flat indices to canonical half-volume flat indices.
+
+    Returns ``(half_indices, non_redundant)`` where *non_redundant* is True
+    for voxels whose value is stored directly (no conjugation needed when
+    expanding back to the full volume).
+
+    When *flip_positive* is True, redundant voxels (negative last-axis
+    frequencies in the rfft sense) are mapped to their Hermitian conjugate
+    partner in the non-redundant half.
+    """
+    vol_indices = core.vec_indices_to_vol_indices(indices, volume_shape)
+    grid_size = volume_shape[-1]  # cubic volumes assumed
+    half_shape = volume_shape_to_half_volume_shape(volume_shape)
+    inv_packed = _build_inverse_packed_index(grid_size)
+
+    # Non-redundant = last-axis column is in the packed set.
+    non_redundant = inv_packed[vol_indices[..., 2]] >= 0
+
+    if flip_positive:
+        # For redundant voxels, negate all frequencies to reach the
+        # conjugate partner which lives in the non-redundant half.
+        # Skip Nyquist frequencies (±N/2) — they are self-conjugate and
+        # negation would produce an out-of-bounds index.
+        frequencies = core.vol_indices_to_frequencies(vol_indices, volume_shape)
+        is_redundant = ~non_redundant
+        has_nyquist = jnp.any(jnp.abs(frequencies) == grid_size // 2, axis=-1)
+        should_flip = is_redundant & ~has_nyquist
+        frequencies_flipped = jnp.where(
+            should_flip[..., None], -frequencies, frequencies
+        )
+        vol_indices = core.frequencies_to_vol_indices(frequencies_flipped, volume_shape)
+
+    in_bound = core.check_vol_indices_in_bound(vol_indices, grid_size)
+
+    # Look up packed position for the (possibly flipped) last-axis column.
+    packed_col = inv_packed[vol_indices[..., 2]]
+    half_vol_indices = jnp.stack(
+        [vol_indices[..., 0], vol_indices[..., 1], packed_col], axis=-1
+    )
+    vec_indices = core.vol_indices_to_vec_indices(half_vol_indices, half_shape)
+    vec_indices = jnp.where(
+        in_bound & (packed_col >= 0), vec_indices, -1 * jnp.ones_like(vec_indices)
+    )
+    return vec_indices, non_redundant
+
+
 def half_vec_index_to_vec_index(indices_half, volume_shape):
-    # For indices with negative frequencies, return -1 (out of bound, not used)
-    vol_indices_half = core.vec_indices_to_vol_indices(indices_half, volume_shape_to_half_volume_shape(volume_shape))
-    indices = core.vol_indices_to_vec_indices(vol_indices_half, volume_shape)
-    bad_indices = indices_half == -1
-    indices = indices.at[bad_indices].set(-1)
+    """Map canonical half-volume flat indices back to full-volume flat indices."""
+    half_shape = volume_shape_to_half_volume_shape(volume_shape)
+    vol_indices_half = core.vec_indices_to_vol_indices(indices_half, half_shape)
+    # The packed last-axis position j maps to full-grid column packed_idx[j].
+    grid_size = volume_shape[-1]
+    packed_idx = fourier_transform_utils.get_real_fft_packed_last_axis_indices(grid_size)
+    full_col = packed_idx[vol_indices_half[..., 2]]
+    full_vol_indices = jnp.stack(
+        [vol_indices_half[..., 0], vol_indices_half[..., 1], full_col], axis=-1
+    )
+    indices = core.vol_indices_to_vec_indices(full_vol_indices, volume_shape)
+    bad = indices_half == -1
+    indices = indices.at[bad].set(-1)
     return indices
 
 # ============================================================================
