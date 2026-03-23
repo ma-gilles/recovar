@@ -422,7 +422,8 @@ def test_compute_state_regression_spa(tmp_path):
 
 def test_compute_state_regression_et(tmp_path):
     """Check compute_state quality against committed baseline (ET)."""
-    current = _run_and_collect_metrics(tmp_path, tilt_series=True)
+    current = _run_and_collect_metrics(tmp_path, tilt_series=True,
+                                       pipeline_tilt_series=True)
     baseline = _load_baseline("et")
 
     checked, failures = log_comparison_table(
