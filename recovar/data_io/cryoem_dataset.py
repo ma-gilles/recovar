@@ -134,6 +134,8 @@ class CryoEMDataset:
         'halfset_indices',
         # Loader paths (for reloading independent half-datasets)
         'particles_file', 'poses_file', 'ctf_file', 'datadir',
+        # Cached halfset datasets (invalidated on mutation)
+        '_halfset_cache',
     )
 
     def __init__(
@@ -254,6 +256,7 @@ class CryoEMDataset:
         self.poses_file = None
         self.ctf_file = None
         self.datadir = None
+        self._halfset_cache = None
 
     # --- Metadata access (public API) ---
 
@@ -835,6 +838,26 @@ class CryoEMDataset:
             return _prefetch_iter(inner)
         return inner
 
+    # --- Halfset cache ---
+
+    def _invalidate_halfset_cache(self):
+        """Invalidate cached halfset datasets after mutable state changes."""
+        self._halfset_cache = None
+
+    def get_halfset(self, halfset_id: int) -> 'CryoEMDataset':
+        """Return a halfset dataset, lazily materializing and caching.
+
+        The cache is invalidated automatically when mutable state
+        (contrasts, noise, poses, CTF) changes on this dataset.
+        """
+        cache = getattr(self, '_halfset_cache', None)
+        if cache is None:
+            cache = self.materialize_halfset_datasets()
+            self._halfset_cache = cache
+        return cache[halfset_id]
+
+    # --- Mutable state setters (invalidate halfset cache) ---
+
     def set_contrasts(self, contrasts: NDArray):
         """Multiply per-image CTF contrast column by *contrasts*.
 
@@ -844,11 +867,11 @@ class CryoEMDataset:
         each particle's tilt images share a single contrast value.
         """
         if self.tilt_series_flag and contrasts.shape[0] != self.n_images:
-            # Per-particle contrast in tilt series
             for i, p in enumerate(self.tilt_particles):
                 self.CTF_params[p, core.CTFParamIndex.CONTRAST] *= contrasts[i]
         else:
             self.CTF_params[:, core.CTFParamIndex.CONTRAST] *= contrasts
+        self._invalidate_halfset_cache()
 
     def set_noise(self, noise_variance):
         """Set the radial noise model for this dataset.
@@ -861,6 +884,7 @@ class CryoEMDataset:
             self.set_variable_radial_noise_model(noise_variance)
         else:
             self.set_radial_noise_model(noise_variance)
+        self._invalidate_halfset_cache()
 
 
 

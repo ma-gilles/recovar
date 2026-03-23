@@ -206,10 +206,6 @@ def compute_state(args):
     # Embeddings are in dataset-local order (sorted original indices),
     # matching the unified dataset's CTF_params ordering.
     embedding.set_contrasts_in_cryos(dataset, contrasts_key)
-    if hasattr(dataset, 'materialize_halfset_datasets'):
-        halfset_datasets = dataset.materialize_halfset_datasets()
-    else:
-        halfset_datasets = None
     zs = zs_key
     cov_zs = cov_zs_key
     o.mkdir_safe(output_folder)
@@ -232,7 +228,6 @@ def compute_state(args):
         fsc_mask=fsc_mask,
         fsc_mask_radius=fsc_mask_radius,
         fsc_mask_edgewidth=fsc_mask_edgewidth,
-        halfset_datasets=halfset_datasets,
     )
 
 def main():

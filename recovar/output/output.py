@@ -596,31 +596,14 @@ def plot_umap(output_folder, zs, centers):
 
 
 
-def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state", halfset_datasets=None):
+def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state"):
     """Compute reweighted volume estimates and save with RELION-style organization.
 
     Parameters
     ----------
     dataset : CryoEMDataset
-        Unified dataset with ``halfset_indices`` set.
-
-    Output structure (flat primary volumes + diagnostics subdirectory)::
-
-        output_folder/
-            {vol_prefix}001.mrc              # primary filtered volume
-            {vol_prefix}001_half1_unfil.mrc   # half-map 1
-            {vol_prefix}001_half2_unfil.mrc   # half-map 2
-            {vol_prefix}002.mrc
-            ...
-            diagnostics/
-                {vol_prefix}001/              # per-volume diagnostics
-                    local_resolution.mrc
-                    filtered_noB.mrc
-                    unfil.mrc
-                    params.pkl
-                    latent_coords.txt
-                    ...
-            latent_coords.txt                 # all latent coordinates
+        Dataset with ``halfset_indices`` set.  Halfset datasets are
+        obtained lazily via ``dataset.get_halfset(k)``.
     """
     from recovar.output.output_paths import AnalysisPaths
     ds = dataset
@@ -631,8 +614,6 @@ def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_fo
     mkdir_safe(output_folder)
     from recovar.heterogeneity import heterogeneity_volume, latent_density
     n_vols = path_subsampled.shape[0]
-    if halfset_datasets is None:
-        halfset_datasets = ds.materialize_halfset_datasets()
 
     for k in range(n_vols):
         vol_idx = k  # 0-indexed
@@ -662,7 +643,7 @@ def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_fo
 
         locres_maskrad = ds.grid_size * ds.voxel_size / maskrad_fraction
         logger.info("Mask radius fraction = %s. Setting locres_maskrad = locres_sampling = box_size * voxel_size / %s = %.1f Angstroms. Using %d particles for template.", maskrad_fraction, maskrad_fraction, locres_maskrad, n_min_particles)
-        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, ds, diag_dir, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely', halfset_datasets=halfset_datasets)
+        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, ds, diag_dir, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely')
 
         primary_stem = _promote_reweighted_volume_outputs(diag_dir, output_folder, vol_prefix, vol_idx)
         logger.info("Done with volume %d: %s.mrc", vol_idx, primary_stem)

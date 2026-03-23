@@ -173,7 +173,7 @@ def test_make_volumes_kernel_estimate_local_smoke(tmp_path):
 
     hv.make_volumes_kernel_estimate_local(
         heterogeneity_distances=het_dists,
-        cryos=cryo,
+        dataset=cryo,
         output_folder=output_folder,
         ndim=2,
         bins=bins,
@@ -186,8 +186,8 @@ def test_make_volumes_kernel_estimate_local_smoke(tmp_path):
     )
 
 
-def test_make_volumes_kernel_estimate_local_uses_provided_halfset_datasets(tmp_path, monkeypatch):
-    """Provided half-set datasets should bypass rematerialization."""
+def test_make_volumes_kernel_estimate_local_uses_get_halfset_cache(tmp_path):
+    """get_halfset() should cache and reuse halfset datasets."""
     noise_variance = np.ones(4 // 2 - 1, dtype=np.float32) * 0.1
 
     cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8, seed=1)
@@ -197,12 +197,6 @@ def test_make_volumes_kernel_estimate_local_uses_provided_halfset_datasets(tmp_p
         np.array([0, 1, 2, 3], dtype=np.int32),
         np.array([4, 5, 6, 7], dtype=np.int32),
     ]
-    halfset_datasets = cryo.materialize_halfset_datasets()
-
-    def _fail_materialize(self):
-        raise AssertionError("materialize_halfset_datasets should not be called")
-
-    monkeypatch.setattr(type(cryo), "materialize_halfset_datasets", _fail_materialize)
 
     rng = np.random.default_rng(1)
     het_dists = [
@@ -213,7 +207,7 @@ def test_make_volumes_kernel_estimate_local_uses_provided_halfset_datasets(tmp_p
 
     hv.make_volumes_kernel_estimate_local(
         heterogeneity_distances=het_dists,
-        cryos=cryo,
+        dataset=cryo,
         output_folder=str(tmp_path / "hv_output_halfsets"),
         ndim=2,
         bins=bins,
@@ -223,8 +217,9 @@ def test_make_volumes_kernel_estimate_local_uses_provided_halfset_datasets(tmp_p
         metric_used="locshellmost_likely",
         locres_sampling=2,
         kernel_rad=1,
-        halfset_datasets=halfset_datasets,
     )
+    # Verify cache was populated
+    assert cryo._halfset_cache is not None
 
 
 def test_choice_most_likely_split_with_smoothing_runs():
