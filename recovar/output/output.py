@@ -596,9 +596,13 @@ def plot_umap(output_folder, zs, centers):
 
 
 
-def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state", halfset_datasets=None):
-    # cryos: CryoEMDataset (with halfset_indices)
+def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state", halfset_datasets=None):
     """Compute reweighted volume estimates and save with RELION-style organization.
+
+    Parameters
+    ----------
+    dataset : CryoEMDataset
+        Unified dataset with ``halfset_indices`` set.
 
     Output structure (flat primary volumes + diagnostics subdirectory)::
 
@@ -618,7 +622,8 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
                     ...
             latent_coords.txt                 # all latent coordinates
     """
-    ds = cryos
+    from recovar.output.output_paths import AnalysisPaths
+    ds = dataset
 
     if n_min_particles is None:
         n_min_particles = 100

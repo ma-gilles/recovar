@@ -1876,4 +1876,6 @@ def test_compute_state_builds_explicit_halfsets_for_reweighting(monkeypatch, tmp
 
     assert captured["cryos"] is dataset_obj
     assert captured["halfset_datasets"] == ("half0", "half1")
-    assert dataset_obj.materialize_calls == [(True, False)]
+    # materialize_halfset_datasets is called with defaults (independent/lazy
+    # resolved internally based on dataset properties).
+    assert len(dataset_obj.materialize_calls) == 1

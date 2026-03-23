@@ -78,7 +78,7 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
     
 
 @nvtx.annotate("make_volumes_kernel_estimate_local", color="yellow")
-def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_folder, ndim, bins, B_factor, tau = None, n_min_particles = 50, metric_used = "locshellmost_likely", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None, kernel_rad = 4, save_all_estimates = False, heterogeneity_kernel = "parabola", halfset_datasets = None ):
+def make_volumes_kernel_estimate_local(heterogeneity_distances, dataset, output_folder, ndim, bins, B_factor, tau = None, n_min_particles = 50, metric_used = "locshellmost_likely", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None, kernel_rad = 4, save_all_estimates = False, heterogeneity_kernel = "parabola", halfset_datasets = None ):
     """Reconstruct volumes along a heterogeneity path using kernel regression.
 
     For each bin along the heterogeneity axis, selects nearby images
@@ -87,8 +87,8 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
 
     Args:
         heterogeneity_distances: Per-half-set log-likelihood distances,
-            list of two arrays each of shape ``(n_images,)``.
-        cryos: Half-set datasets (``CryoEMDataset`` with ``halfset_indices``).
+            list of two arrays each of shape ``(n_images_half,)``.
+        dataset: ``CryoEMDataset`` with ``halfset_indices`` set.
         output_folder: Directory for output MRC files.
         ndim: Latent dimensionality (``-1`` for automatic).
         bins: Number of bins (int) or explicit bin edges (array).
@@ -105,10 +105,9 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         kernel_rad: Radius of the heterogeneity kernel.
         save_all_estimates: Save all intermediate estimates.
         heterogeneity_kernel: Kernel shape (``'parabola'`` or ``'flat'``).
-        halfset_datasets: Optional pre-materialized half-set datasets. When
-            provided, avoids rematerializing the split datasets internally.
+        halfset_datasets: Optional pre-materialized halfset pair.
     """
-    ds = cryos
+    ds = dataset
 
     if isinstance(bins, int):
         logger.warning("Picking bins based on number of particles only. n_min_particles = %s", n_min_particles) 
